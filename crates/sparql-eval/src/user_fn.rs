@@ -1229,6 +1229,9 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
         return Ok(None);
     }
 
+    // The body is copied, rewritten and evaluated from here, wherever in the caller's
+    // evaluation the call sits: see `crate::stack`.
+    crate::stack::check("user-defined function call")?;
     // Recursion-bounded child context (guards mutually-recursive functions).
     let Some(mut child) = ctx.child_for_user_fn()? else {
         return Ok(None);
@@ -1239,8 +1242,13 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     // Both of those were missing while this was a load-time parse: a relation call
     // was an ordinary triple pattern, and a body that needed reordering failed per
     // row rather than being ordered once.
+    #[cfg(test)]
+    crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(
+        crate::eval::query_pattern(body.query()),
+    ));
+    let copied = body.query().clone();
     let substituted = crate::substitute::apply_substitutions(
-        body.query().clone(),
+        copied,
         crate::substitute::Prebindings::Owned(&substitutions),
     )
     .map_err(|d| EvalError::function(d.to_string()))?;

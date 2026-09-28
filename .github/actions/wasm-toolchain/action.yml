@@ -54,21 +54,5 @@ runs:
         # `make wasm-test`, `make geo-determinism` and `make hnsw-determinism` are
         # held to this one wasm-bindgen pin rather than to a second one.
 
-    - name: Install binaryen (prebuilt, matched to BINARYEN_VERSION) and verify SIMD
-      shell: bash
-      run: |
-        set -euo pipefail
-        ver="${{ steps.pins.outputs.binaryen }}"
-        base="binaryen-version_${ver}-x86_64-linux"
-        url="https://github.com/WebAssembly/binaryen/releases/download/version_${ver}/${base}.tar.gz"
-        curl -fsSL "$url" -o /tmp/bn.tar.gz
-        curl -fsSL "${url}.sha256" -o /tmp/bn.sha256
-        echo "$(awk '{print $1}' /tmp/bn.sha256)  /tmp/bn.tar.gz" | sha256sum -c -
-        mkdir -p /tmp/binaryen && tar -xzf /tmp/bn.tar.gz -C /tmp/binaryen --strip-components=1
-        echo "/tmp/binaryen/bin" >> "$GITHUB_PATH"
-        export PATH="/tmp/binaryen/bin:$PATH"
-        found="$(wasm-opt --version | grep -oE '[0-9]+' | head -1)"
-        test "$found" = "$ver" || { echo "binaryen version mismatch: got $found, expected $ver"; exit 1; }
-        printf '(module)\n' | wasm-opt --enable-simd -o /dev/null - \
-          || { echo "FAIL: installed wasm-opt lacks --enable-simd support"; exit 1; }
-        echo "binaryen $found installed (wasm-opt --enable-simd verified)"
+    - name: Install the pinned Binaryen validator and optimizer
+      uses: ./.github/actions/binaryen-toolchain

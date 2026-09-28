@@ -387,11 +387,23 @@ pub enum GeometryBody {
 /// `GEOMETRYCOLLECTION`'s members share the collection's system and a nested
 /// member carrying its own would be a contradiction the model should not be able
 /// to express.
-#[derive(Clone, Debug, PartialEq, Eq)]
+///
+/// A collection nests as deep as its literal writes it — there is no depth bound —
+/// so `Clone`, `PartialEq`, `Debug` and `Drop` are the iterative impls in
+/// the `geom::tree` module, not the compiler's recursive glue, [`Geometry::is_empty`] and
+/// [`Geometry::coords`] walk the members off a heap work list, and every answer the
+/// crate derives from a whole tree is built by `tree::fold` bottom-up.
+#[derive(Eq)]
 pub struct Geometry {
     dim: CoordDim,
     body: GeometryBody,
 }
+
+#[cfg(test)]
+pub(crate) mod arbitrary;
+mod tree;
+
+pub(crate) use tree::{fold, try_fold};
 
 impl Geometry {
     /// A geometry of dimension `dim` with `body`, structurally checked.
@@ -463,17 +475,30 @@ impl Geometry {
     /// every member is itself empty — `MULTIPOINT(EMPTY)` denotes the empty set
     /// exactly as `MULTIPOINT EMPTY` does, and reporting the first as non-empty
     /// would be a classification the geometry does not support.
+    ///
+    /// Walks nested collections off a heap work list, so it answers for a collection
+    /// of any depth.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        match &self.body {
-            GeometryBody::Point(point) => point.is_none(),
-            GeometryBody::LineString(coords) => coords.is_empty(),
-            GeometryBody::Polygon(rings) => rings.is_empty(),
-            GeometryBody::MultiPoint(points) => points.iter().all(Option::is_none),
-            GeometryBody::MultiLineString(lines) => lines.iter().all(Vec::is_empty),
-            GeometryBody::MultiPolygon(polygons) => polygons.iter().all(Vec::is_empty),
-            GeometryBody::GeometryCollection(members) => members.iter().all(Self::is_empty),
+        let mut pending: Vec<&Self> = vec![self];
+        while let Some(geometry) = pending.pop() {
+            let empty = match &geometry.body {
+                GeometryBody::Point(point) => point.is_none(),
+                GeometryBody::LineString(coords) => coords.is_empty(),
+                GeometryBody::Polygon(rings) => rings.is_empty(),
+                GeometryBody::MultiPoint(points) => points.iter().all(Option::is_none),
+                GeometryBody::MultiLineString(lines) => lines.iter().all(Vec::is_empty),
+                GeometryBody::MultiPolygon(polygons) => polygons.iter().all(Vec::is_empty),
+                GeometryBody::GeometryCollection(members) => {
+                    pending.extend(members.iter());
+                    true
+                }
+            };
+            if !empty {
+                return false;
+            }
         }
+        true
     }
 
     /// Every position in this geometry, in written order.
@@ -481,28 +506,13 @@ impl Geometry {
     /// Ring closing positions are included, exactly as written — a consumer that
     /// wants each vertex once drops the last position of each ring itself, and one
     /// that wants a bounding box does not care.
+    ///
+    /// Nested collections are walked off a heap work list (`tree::Coords`); a
+    /// collection walk is not a per-row hot path (the predicate engine indexes into
+    /// the rings directly), so one boxed iterator per geometry that holds positions
+    /// is the cost.
     pub fn coords(&self) -> impl Iterator<Item = &Coord> + '_ {
-        // A boxed iterator because the recursion through GeometryCollection makes
-        // the concrete type infinite; a collection walk is not a per-row hot path
-        // (the predicate engine indexes into the rings directly), so one
-        // allocation per collection level is the right trade against an explicit
-        // hand-rolled stack machine that would have to be verified separately.
-        let iter: Box<dyn Iterator<Item = &Coord> + '_> = match &self.body {
-            GeometryBody::Point(point) => Box::new(point.iter()),
-            GeometryBody::LineString(coords) => Box::new(coords.iter()),
-            GeometryBody::Polygon(rings) => Box::new(rings.iter().flat_map(|r| r.iter())),
-            GeometryBody::MultiPoint(points) => Box::new(points.iter().flatten()),
-            GeometryBody::MultiLineString(lines) => Box::new(lines.iter().flat_map(|l| l.iter())),
-            GeometryBody::MultiPolygon(polygons) => Box::new(
-                polygons
-                    .iter()
-                    .flat_map(|p| p.iter().flat_map(|r| r.iter())),
-            ),
-            GeometryBody::GeometryCollection(members) => {
-                Box::new(members.iter().flat_map(Self::coords))
-            }
-        };
-        iter
+        tree::Coords::new(self)
     }
 
     /// The number of positions [`Self::coords`] yields.
@@ -512,8 +522,11 @@ impl Geometry {
     }
 }
 
-/// The structural checks [`Geometry::new`] applies, split out so the recursion
-/// through `GeometryCollection` is one function rather than a closure.
+/// The structural checks [`Geometry::new`] applies.
+///
+/// One level deep by construction: a collection's members are already geometries,
+/// each checked when it was built, so a collection is checked only for its members'
+/// dimensions and no walk descends into them.
 fn check_body(dim: CoordDim, body: &GeometryBody) -> Result<(), GeoError> {
     match body {
         GeometryBody::Point(point) => point.as_ref().map_or(Ok(()), |c| check_coord(dim, c)),

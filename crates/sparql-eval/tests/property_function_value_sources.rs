@@ -264,11 +264,7 @@ fn run_in(
                 base_iri: None,
                 substitutions,
             },
-            QueryOptions {
-                env,
-                prebinding: lane,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(env).with_prebinding(lane),
         )
         .map(|result| {
             let SparqlResult::Solutions { rows, .. } = result else {
@@ -703,10 +699,7 @@ fn a_lateral_after_a_call_is_driven_by_the_calls_rows() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &env,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&env),
         )
         .unwrap_or_else(|diagnostic| panic!("the query must evaluate: {}", diagnostic.message));
     let SparqlResult::Solutions { rows, .. } = result else {
@@ -1467,11 +1460,7 @@ fn run_with_host_function(variant: Variant, body: &str) -> Outcome {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &env,
-                functions: &bound,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&env).with_functions(&bound),
         )
         .map(|result| {
             let SparqlResult::Solutions { rows, .. } = result else {

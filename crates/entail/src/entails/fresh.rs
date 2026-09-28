@@ -37,6 +37,8 @@
 //! re-lowering performed by another.
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
+use std::ops::ControlFlow;
 
 use purrdf_core::{BlankScope, RdfDataset, TermValue};
 
@@ -121,22 +123,16 @@ impl FreshBlanks {
 /// is exactly the unsoundness the [module docs](self) exist to rule out. So the survey is
 /// the same enumeration the copy writes, and cannot drift from it.
 pub(crate) fn labels_of(ds: &RdfDataset) -> BTreeSet<String> {
-    fn walk(term: &TermValue, out: &mut BTreeSet<String>) {
-        match term {
-            TermValue::Blank { label, .. } => {
-                out.insert(label.clone());
-            }
-            TermValue::Triple { s, p, o } => {
-                walk(s, out);
-                walk(p, out);
-                walk(o, out);
-            }
-            TermValue::Iri(_) | TermValue::Literal { .. } => {}
-        }
-    }
     let mut out = BTreeSet::new();
     for id in crate::engine::term_positions(ds) {
-        walk(&ds.term_value(id), &mut out);
+        let ControlFlow::Continue(()) =
+            ds.term_value(id)
+                .visit_terms(|term| -> ControlFlow<Infallible> {
+                    if let TermValue::Blank { label, .. } = term {
+                        out.insert(label.clone());
+                    }
+                    ControlFlow::Continue(())
+                });
     }
     out
 }
@@ -160,6 +156,7 @@ pub(crate) fn mentions_any(term: &TermValue, labels: &BTreeSet<String>) -> bool 
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::TermBox;
     use std::collections::BTreeSet;
 
     use purrdf_core::{BlankScope, RdfDatasetBuilder, TermValue};
@@ -298,9 +295,9 @@ mod tests {
         let mut labels = BTreeSet::new();
         labels.insert("c".to_owned());
         let nested = TermValue::Triple {
-            s: Box::new(TermValue::iri("http://example.org/s")),
-            p: Box::new(TermValue::iri("http://example.org/p")),
-            o: Box::new(TermValue::blank("c")),
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(TermValue::blank("c")),
         };
         assert!(mentions_any(&nested, &labels));
         assert!(!mentions_any(&TermValue::blank("d"), &labels));
@@ -308,5 +305,54 @@ mod tests {
             &TermValue::iri("http://example.org/c"),
             &labels
         ));
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The label survey against its recursive reference.
+
+    use std::collections::BTreeSet;
+
+    use purrdf_core::backend::TermFactory as _;
+    use purrdf_core::{RdfDatasetBuilder, TermValue};
+
+    use super::labels_of;
+
+    fn reference(term: &TermValue, out: &mut BTreeSet<String>) {
+        match term {
+            TermValue::Blank { label, .. } => {
+                out.insert(label.clone());
+            }
+            TermValue::Triple { s, p, o } => {
+                reference(s, out);
+                reference(p, out);
+                reference(o, out);
+            }
+            TermValue::Iri(_) | TermValue::Literal { .. } => {}
+        }
+    }
+
+    /// The survey finds every blank label a generated stored term holds, nested in triple
+    /// terms included, exactly as the recursive reference does.
+    #[test]
+    fn the_survey_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..300_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::WellFormed,
+            );
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let ds = builder.freeze().expect("a generated term freezes");
+            let mut expected = BTreeSet::new();
+            reference(&value, &mut expected);
+            assert_eq!(labels_of(&ds), expected, "seed {seed}");
+        }
     }
 }

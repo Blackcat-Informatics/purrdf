@@ -24,7 +24,9 @@ use std::hash::{Hash, Hasher};
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
-use crate::{BlankScope, RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple, TermValue};
+use crate::{
+    BlankScope, RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple, TermBox, TermValue,
+};
 
 // ── Term model ──────────────────────────────────────────────────────────────────
 
@@ -685,9 +687,9 @@ pub(super) fn rdf_term_to_value_scoped(term: &RdfTerm, scope: BlankScope) -> Ter
             direction: lit.direction,
         },
         RdfTerm::Triple(t) => TermValue::Triple {
-            s: Box::new(rdf_term_to_value_scoped(&t.subject, scope)),
-            p: Box::new(TermValue::Iri(t.predicate.clone())),
-            o: Box::new(rdf_term_to_value_scoped(&t.object, scope)),
+            s: TermBox::new(rdf_term_to_value_scoped(&t.subject, scope)),
+            p: TermBox::new(TermValue::Iri(t.predicate.clone())),
+            o: TermBox::new(rdf_term_to_value_scoped(&t.object, scope)),
         },
     }
 }

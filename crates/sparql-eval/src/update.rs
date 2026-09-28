@@ -36,8 +36,11 @@
 //!   operation is a distinct blank from the same label in another operation
 //!   (SPARQL 1.1 Update §4.1.1 / §19.6).
 //! - **`LOAD` host seam.** The core is network-free. `LOAD <iri>` needs a host
-//!   [`GraphResolver`] to fetch + parse the source into a frozen dataset; with no
-//!   resolver, `LOAD` hard-fails unless `SILENT`.
+//!   [`GraphResolver`] to fetch + parse the source into a frozen dataset — the
+//!   request's own ([`QueryOptions::load`]) when it names one, otherwise the engine's.
+//!   With no resolver, or when the resolver fails ([`LoadError`]), `LOAD` fails;
+//!   `LOAD SILENT` succeeds with nothing loaded (SPARQL 1.1 Update §3.1.4) and records
+//!   the failure on the request's evidence.
 //!
 //! # Governors: what an UPDATE is charged for, and why a trip applies nothing
 //!
@@ -163,7 +166,9 @@ pub(crate) struct UpdateEvalConfig<'e> {
     /// The registries this request's `WHERE` clauses run under: the property-function
     /// registry (read at admission and applied to the `WHERE` [`EvalCtx`] through the
     /// same seam a governed query applies it — see [`apply_query_options`]), the
-    /// SHACL-AF function registry, and the blank-mint prefix. An UPDATE `WHERE` is a
+    /// SHACL-AF function registry, the blank-mint prefix, and the `SERVICE` source a
+    /// federated `WHERE` resolves through ([`QueryOptions::remote`]; `None` leaves a
+    /// `SERVICE` with no source, exactly as before the field existed). An UPDATE `WHERE` is a
     /// triple-pattern context exactly like a query's, so it takes the identical
     /// [`QueryOptions`] a query takes — [`QueryOptions::EMPTY`] is "configure nothing",
     /// what every UPDATE ran under before this seam existed.
@@ -253,6 +258,74 @@ fn charge_mutations(
         .map_err(UpdateAbort::Tripped)
 }
 
+/// Why a [`GraphResolver`] produced no document.
+///
+/// Every variant but [`Self::Governed`] is the `LOAD` failing: an error without `SILENT`,
+/// and under `LOAD SILENT` a success with nothing loaded, recorded on the request's
+/// evidence. [`Self::Governed`] is this request's own stop signal and is reported as the
+/// governor trip it is, `SILENT` or not.
+#[derive(Debug, Clone, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LoadError {
+    /// The document could not be fetched: unreachable, refused, an error status, a
+    /// timeout of the host's own.
+    Transport(String),
+    /// The document was fetched and could not be parsed.
+    Decode(String),
+    /// A service catalog withheld the capability the fetch needed.
+    Denied(crate::service::ServiceDenial),
+    /// The host refused the fetch by its own policy, naming no catalog capability.
+    HostDenied(String),
+    /// The host's source answered with something that is not an answer to the request.
+    Fault(String),
+    /// This request's stop signal fired while the host held the request.
+    Governed(TrippedGovernor),
+}
+
+impl LoadError {
+    /// The diagnostic code the failure is reported under.
+    #[must_use]
+    pub const fn code(&self) -> &'static str {
+        match self {
+            Self::Transport(_) => "native-sparql-load-failed",
+            Self::Decode(_) => "native-sparql-load-decode",
+            Self::Denied(_) => "native-sparql-load-denied",
+            Self::HostDenied(_) => "native-sparql-load-host-denied",
+            Self::Fault(_) => "native-sparql-load-fault",
+            Self::Governed(_) => "native-sparql-load-stopped",
+        }
+    }
+
+    /// The silenced-invocation kind this failure is recorded as under `LOAD SILENT`, or
+    /// `None` for [`Self::Governed`], which is never silenced.
+    const fn silenced_kind(&self) -> Option<purrdf_core::SilencedKind> {
+        use purrdf_core::SilencedKind;
+        match self {
+            Self::Transport(_) => Some(SilencedKind::Transport),
+            Self::Decode(_) => Some(SilencedKind::Decode),
+            Self::Denied(_) => Some(SilencedKind::Denied),
+            Self::HostDenied(_) => Some(SilencedKind::HostDenied),
+            Self::Fault(_) => Some(SilencedKind::Fault),
+            Self::Governed(_) => None,
+        }
+    }
+}
+
+impl core::fmt::Display for LoadError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::Transport(message) | Self::Decode(message) | Self::Fault(message) => {
+                f.write_str(message)
+            }
+            Self::Denied(denial) => write!(f, "denied: {denial}"),
+            Self::HostDenied(message) => write!(f, "the host denied the request: {message}"),
+            Self::Governed(governor) => write!(f, "{governor}"),
+        }
+    }
+}
+
+impl std::error::Error for LoadError {}
+
 /// One governed request handed to a SPARQL `LOAD` host resolver.
 #[derive(Clone, Copy)]
 pub struct GraphResolveRequest<'a> {
@@ -280,10 +353,22 @@ impl core::fmt::Debug for GraphResolveRequest<'_> {
 /// The evaluator core is **network-free** (it builds clean for wasm and pulls no
 /// HTTP/parse stack). A host that wants `LOAD` to dereference real documents injects
 /// a resolver: it is responsible for fetching the IRI and parsing the response into
-/// a frozen [`RdfDataset`]. Without a resolver, `LOAD` hard-fails (unless `SILENT`).
+/// a frozen [`RdfDataset`]. Without a resolver, `LOAD` fails.
+///
+/// A resolver reports why it produced no document as a [`LoadError`]: a document it
+/// could not fetch or parse, a refusal by a catalog or by the host's own policy, or a
+/// fault. SPARQL 1.1 Update §3.1.4 has `LOAD SILENT` "still return success" when the
+/// operation fails, so under `SILENT` every one of them — and the absence of a resolver
+/// — is a success with nothing loaded, recorded on the request's evidence as a
+/// [`purrdf_core::SilencedInvocation`]. Only this request's own stop signal
+/// ([`LoadError::Governed`]) is not.
 pub trait GraphResolver {
-    /// Resolve `request.iri` to a frozen dataset, or a diagnostic on fetch/parse failure.
-    fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, RdfDiagnostic>;
+    /// Resolve `request.iri` to a frozen dataset.
+    ///
+    /// # Errors
+    ///
+    /// The [`LoadError`] that explains why no document was produced.
+    fn resolve(&self, request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, LoadError>;
 }
 
 /// Apply a parsed [`Update`] to `m` in request order.
@@ -292,7 +377,7 @@ pub trait GraphResolver {
 /// [`RdfDiagnostic`] code on the boundary conditions (an unrecognized `VERSION`, `LOAD`
 /// with no resolver, a bad re-key destination, an internal eval error), or the
 /// [`TrippedGovernor`] that stopped the request. `resolver` supplies the `LOAD` host seam
-/// (see [`GraphResolver`]); pass `None` to make any non-`SILENT` `LOAD` a hard error.
+/// (see [`GraphResolver`]); with `None` a `LOAD` fails and a `LOAD SILENT` loads nothing.
 ///
 /// On **either** abort, `m` is left in whatever state the operations reached and is
 /// expected to be dropped rather than frozen — that discard is the request's rollback, and
@@ -522,13 +607,23 @@ fn delete_insert(
     .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
 
+    // The `WHERE` is held to the stack it is evaluated on, as a query's pattern is.
+    crate::governor::soundness::validate_graph_pattern_depth(pattern).map_err(|e| {
+        RdfDiagnostic::error(
+            crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),
+            e.to_string(),
+        )
+    })?;
+
     let ctx = EvalCtx::new(&snap).with_bounded_order_cache(cfg.order_cache);
-    // The property-function registry, the SHACL-AF function registry and the
-    // blank-mint prefix, applied through the SAME seam a governed/ungoverned query
-    // applies them — see `crate::engine::apply_query_options`. This is what lets a
-    // call node reach evaluation at all: without it `ctx` carries no registry and
-    // every call in this `WHERE` hard-errors "no property function is registered",
-    // regardless of whether one was configured for the request.
+    // The property-function registry, the SHACL-AF function registry, the
+    // blank-mint prefix and the `SERVICE` source, applied through the SAME seam a
+    // governed/ungoverned query applies them — see `crate::engine::apply_query_options`.
+    // This is what lets a call node reach evaluation at all: without it `ctx` carries no
+    // registry and every call in this `WHERE` hard-errors "no property function is
+    // registered", regardless of whether one was configured for the request. The same
+    // holds for a `SERVICE` in this `WHERE`: it federates through the request's source
+    // or, with none, fails exactly as a source-less query's does.
     let mut ctx = apply_query_options(ctx, cfg.options)?;
     // The request's governors, so the `WHERE` charges and stops exactly as the same
     // pattern would inside a governed `SELECT`. Without this the ceilings a caller set
@@ -575,6 +670,8 @@ fn delete_insert(
     //
     // Nothing has been written to `m` at this point (the mutations below are collected
     // first), so this return needs no undo of its own.
+    let tree = crate::plan::Tree::build(pattern);
+    ctx.install_plan(&tree);
     let seq = eval_evaluated(pattern, &mut ctx)
         .map_err(|e| {
             RdfDiagnostic::error(
@@ -714,7 +811,8 @@ fn admit_where<D: purrdf_core::DatasetView + Sync>(
     if !state.is_engaged_in(dimension) {
         return Ok(());
     }
-    let mut survey = crate::bgp::PlanSurvey::default();
+    let tree = crate::plan::Tree::build(pattern);
+    let mut survey = crate::bgp::PlanSurvey::for_shape(tree.shape());
     crate::bgp::survey_pattern_plans(
         snap,
         active_dataset,
@@ -770,10 +868,11 @@ fn admit_where<D: purrdf_core::DatasetView + Sync>(
 /// something the request could have declared.
 ///
 /// `SILENT` does **not** launder any of that into a no-op success. `SILENT` is a statement
-/// about the *source* — an unreachable or unparseable document is not a request failure —
-/// and it says nothing about the caller's budget. Swallowing a governor here would report a
-/// request as fully applied when a ceiling had in fact stopped it, which is the one outcome
-/// a governor exists to make impossible.
+/// about the *operation* — a source that cannot be fetched, parsed or asked for is not a
+/// request failure (SPARQL 1.1 Update §3.1.4) — and it says nothing about the caller's
+/// budget. Swallowing a governor here would report a request as fully applied when a
+/// ceiling had in fact stopped it, which is the one outcome a governor exists to make
+/// impossible. Each failure `SILENT` absorbs is recorded on the request's evidence.
 fn load(
     silent: bool,
     source: &str,
@@ -783,13 +882,14 @@ fn load(
     governors: Option<&Arc<GovernorState>>,
 ) -> Result<(), UpdateAbort> {
     let Some(resolver) = resolver else {
-        if silent {
-            return Ok(());
-        }
-        return Err(UpdateAbort::Failed(RdfDiagnostic::error(
-            "native-sparql-load-no-resolver",
-            format!("LOAD <{source}> needs a GraphResolver host seam, none was provided"),
-        )));
+        let message = format!("LOAD <{source}> needs a GraphResolver host seam, none was provided");
+        return silence_or_fail(
+            silent,
+            source,
+            purrdf_core::SilencedKind::Unconfigured,
+            RdfDiagnostic::error("native-sparql-load-no-resolver", message),
+            governors,
+        );
     };
     check_stop(governors)?;
     charge_host_fetch(governors)?;
@@ -803,14 +903,27 @@ fn load(
             }
             ds
         }
-        Err(e) => {
-            if silent {
-                if let Some(tripped) = post_return_trip {
-                    return Err(tripped);
-                }
-                return Ok(());
+        Err(error) => {
+            let diagnostic =
+                RdfDiagnostic::error(error.code(), format!("LOAD <{source}>: {error}"));
+            let Some(kind) = error.silenced_kind() else {
+                // The request's own stop signal, reported by the host: the trip, whatever
+                // `SILENT` says. An ungoverned request has no signal to have fired, so a
+                // host that claims one is reporting a failure.
+                return Err(match (post_return_trip, governors, error) {
+                    (Some(tripped), _, _) => tripped,
+                    (None, Some(state), LoadError::Governed(governor)) => {
+                        UpdateAbort::Tripped(state.record_trip(governor))
+                    }
+                    _ => UpdateAbort::Failed(diagnostic),
+                });
+            };
+            // Under `SILENT` the failure is erased, so a stop that fired during the same
+            // wait becomes the surviving fact; without it the failure is reported.
+            if silent && let Some(tripped) = post_return_trip {
+                return Err(tripped);
             }
-            return Err(UpdateAbort::Failed(e));
+            return silence_or_fail(silent, source, kind, diagnostic, governors);
         }
     };
 
@@ -826,6 +939,30 @@ fn load(
     for q in quads {
         m.insert(rekey_graph(q, dest.as_ref()))
             .map_err(|e| iri_abort(&e))?;
+    }
+    Ok(())
+}
+
+/// A `LOAD` of `source` that failed with `diagnostic`: under `SILENT` a success with
+/// nothing loaded, recorded on the request's evidence as `kind`; otherwise the failure.
+fn silence_or_fail(
+    silent: bool,
+    source: &str,
+    kind: purrdf_core::SilencedKind,
+    diagnostic: RdfDiagnostic,
+    governors: Option<&Arc<GovernorState>>,
+) -> Result<(), UpdateAbort> {
+    if !silent {
+        return Err(UpdateAbort::Failed(diagnostic));
+    }
+    if let Some(state) = governors {
+        state.record_silenced(purrdf_core::SilencedInvocation::new(
+            purrdf_core::SilencedTarget::Load {
+                iri: source.to_owned(),
+            },
+            kind,
+            diagnostic.message,
+        ));
     }
     Ok(())
 }
@@ -1088,7 +1225,7 @@ mod tests {
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
     use purrdf_sparql_algebra::SparqlParser;
 
-    const EX: &str = "http://ex/";
+    const EX: &str = "http://example.org/";
 
     fn iri(local: &str) -> TermValue {
         TermValue::Iri(format!("{EX}{local}"))
@@ -1602,7 +1739,7 @@ mod tests {
             )
             .unwrap_err(),
         );
-        assert_eq!(code, "native-sparql-update-eval");
+        assert_eq!(code, "native-sparql-unsupported");
         // The chokepoint runs before the blank-mint counter is even initialized, let
         // alone before any operation applies — the store must be exactly what it was.
         assert_eq!(quad_set(&m), before, "no mutation applied");
@@ -1644,7 +1781,7 @@ mod tests {
             )
             .unwrap_err(),
         );
-        assert_eq!(code, "native-sparql-update-eval");
+        assert_eq!(code, "native-sparql-unsupported");
         // Same admission chokepoint as the unrecognized-VERSION case: it runs before any
         // operation applies, so the store is exactly what it was.
         assert_eq!(quad_set(&m), before, "no mutation applied");
@@ -1671,10 +1808,7 @@ mod tests {
         ds: Arc<RdfDataset>,
     }
     impl GraphResolver for TestResolver {
-        fn resolve(
-            &self,
-            _request: GraphResolveRequest<'_>,
-        ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
+        fn resolve(&self, _request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, LoadError> {
             Ok(self.ds.clone())
         }
     }
@@ -1739,6 +1873,129 @@ mod tests {
         let cfg = ungoverned(&cache);
         eval_update(&parse("LOAD SILENT ex:doc"), &mut m, None, &cfg).expect("silent load no-ops");
         assert_eq!(quad_set(&m).len(), 1, "unchanged");
+    }
+
+    /// A resolver that fails every source with the error `failure` builds.
+    struct FailingResolver(fn() -> LoadError);
+    impl GraphResolver for FailingResolver {
+        fn resolve(&self, _request: GraphResolveRequest<'_>) -> Result<Arc<RdfDataset>, LoadError> {
+            Err((self.0)())
+        }
+    }
+
+    /// A resolver failure's constructor, beside the kind `LOAD SILENT` records it as.
+    type LoadFailure = (fn() -> LoadError, &'static str);
+
+    /// Every failure a resolver can report, beside the kind `LOAD SILENT` records it as.
+    fn load_failures() -> [LoadFailure; 5] {
+        [
+            (
+                || LoadError::Transport("unreachable".to_owned()),
+                "transport",
+            ),
+            (|| LoadError::Decode("not Turtle".to_owned()), "decode"),
+            (
+                || {
+                    LoadError::Denied(crate::service::ServiceDenial::new(
+                        format!("{EX}doc"),
+                        crate::service::ServiceCapability::Network,
+                        "no network for it",
+                    ))
+                },
+                "denied",
+            ),
+            (
+                || LoadError::HostDenied("blocked".to_owned()),
+                "host-denied",
+            ),
+            (|| LoadError::Fault("no answer".to_owned()), "fault"),
+        ]
+    }
+
+    /// The outcome of a `LOAD`, the store's size after it, and each silenced record as
+    /// `(iri, kind label)`.
+    type LoadRun = (Result<(), UpdateAbort>, usize, Vec<(String, &'static str)>);
+
+    /// Apply `update` governed (metered) over `(a, p, b)`.
+    fn load_governed(update: &str, resolver: Option<&dyn GraphResolver>) -> LoadRun {
+        let mut m = mut_with(&[("a", "p", "b")]);
+        let cache = BoundedOrderCache::default();
+        let state = Arc::new(GovernorState::new(
+            &crate::governor::QueryGovernors::METERED,
+        ));
+        let cfg = UpdateEvalConfig {
+            standpoint_predicates: None,
+            order_cache: &cache,
+            governors: Some(&state),
+            options: QueryOptions::EMPTY,
+        };
+        let outcome = eval_update(&parse(update), &mut m, resolver, &cfg);
+        let silenced = state
+            .evidence()
+            .silenced()
+            .iter()
+            .map(|record| (record.target.name().to_owned(), record.kind.label()))
+            .collect();
+        (outcome, quad_set(&m).len(), silenced)
+    }
+
+    #[test]
+    fn load_silent_succeeds_for_every_failure_and_records_it() {
+        for (failure, kind) in load_failures() {
+            let resolver = FailingResolver(failure);
+            let (outcome, quads, silenced) = load_governed("LOAD SILENT ex:doc", Some(&resolver));
+            assert!(outcome.is_ok(), "{kind}: SILENT succeeds");
+            assert_eq!(quads, 1, "{kind}: nothing loaded");
+            assert_eq!(silenced, [(format!("{EX}doc"), kind)]);
+            // Without SILENT: the failure, under its own code, and nothing recorded.
+            let (outcome, _, silenced) = load_governed("LOAD ex:doc", Some(&resolver));
+            match outcome {
+                Err(UpdateAbort::Failed(diagnostic)) => {
+                    assert_eq!(diagnostic.code, failure().code(), "{kind}");
+                    assert!(diagnostic.message.starts_with(&format!("LOAD <{EX}doc>: ")));
+                }
+                other => panic!("{kind}: expected the failure, got {other:?}"),
+            }
+            assert_eq!(silenced, Vec::<(String, &str)>::new(), "{kind}");
+        }
+        // No resolver at all: the same, recorded as unconfigured.
+        let (outcome, quads, silenced) = load_governed("LOAD SILENT ex:doc", None);
+        assert!(outcome.is_ok());
+        assert_eq!(quads, 1);
+        assert_eq!(silenced, [(format!("{EX}doc"), "unconfigured")]);
+        let (outcome, _, _) = load_governed("LOAD ex:doc", None);
+        assert!(
+            matches!(&outcome, Err(UpdateAbort::Failed(d)) if d.code == "native-sparql-load-no-resolver"),
+            "{outcome:?}"
+        );
+        // The neighbour: a resolver that answers loads its quad under SILENT too, and
+        // records nothing.
+        let resolver = TestResolver { ds: loadable() };
+        let (outcome, quads, silenced) = load_governed("LOAD SILENT ex:doc", Some(&resolver));
+        assert!(outcome.is_ok());
+        assert_eq!(quads, 2, "the loaded quad beside the original");
+        assert_eq!(silenced, Vec::<(String, &str)>::new());
+    }
+
+    #[test]
+    fn a_host_reported_stop_is_the_trip_under_silent_too() {
+        let resolver = FailingResolver(|| {
+            LoadError::Governed(TrippedGovernor::Stopped {
+                cause: purrdf_core::StopCause::Cancelled,
+            })
+        });
+        for update in ["LOAD SILENT ex:doc", "LOAD ex:doc"] {
+            let (outcome, quads, silenced) = load_governed(update, Some(&resolver));
+            assert!(
+                matches!(
+                    outcome,
+                    Err(UpdateAbort::Tripped(TrippedGovernor::Stopped { .. }))
+                ),
+                "{update}: {outcome:?}"
+            );
+            assert_eq!(quads, 1, "{update}");
+            assert_eq!(silenced, Vec::<(String, &str)>::new(), "{update}");
+        }
     }
 
     // ── USING ─────────────────────────────────────────────────────────────────
@@ -1931,13 +2188,13 @@ mod tests {
         };
         let parser_options = purrdf_sparql_algebra::ParserOptions {
             extension_fn_namespaces: vec![],
-            property_fn_namespaces: vec!["http://ex/pf/".to_owned()],
+            property_fn_namespaces: vec!["http://example.org/pf/".to_owned()],
             property_fn_iris: Vec::new(),
         };
         let upd = SparqlParser::new()
             .parse_update_with(
-                "PREFIX ex: <http://ex/>\n\
-                 INSERT { ex:x ex:p ?a } WHERE { ex:s <http://ex/pf/split> ?a }",
+                "PREFIX ex: <http://example.org/>\n\
+                 INSERT { ex:x ex:p ?a } WHERE { ex:s <http://example.org/pf/split> ?a }",
                 &parser_options,
             )
             .expect("update parses: the namespace claims the predicate as a call node");
@@ -1953,7 +2210,7 @@ mod tests {
         let mut m = mut_with(&[]);
         let cache = BoundedOrderCache::default();
         let mut registry = crate::agg_fn::AggregateRegistry::new();
-        registry.register_statistical_aggregates("http://ex/agg#");
+        registry.register_statistical_aggregates("http://example.org/agg#");
         let options = QueryOptions {
             env: &crate::extension_env::ExtensionEnv::over_aggregates(registry.clone())
                 .expect("the fixture declarations read cleanly"),
@@ -1969,7 +2226,7 @@ mod tests {
         // is an arity mismatch, not an unregistered IRI.
         let upd = parse(
             "INSERT { ex:x ex:p ?a } WHERE { \
-                 SELECT (AGG(<http://ex/agg#MEDIAN>, ?v, ?w) AS ?a) \
+                 SELECT (AGG(<http://example.org/agg#MEDIAN>, ?v, ?w) AS ?a) \
                  WHERE { ex:s ex:val ?v . ex:s ex:val2 ?w } GROUP BY ?v ?w \
              }",
         );

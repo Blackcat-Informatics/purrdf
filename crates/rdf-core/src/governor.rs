@@ -441,6 +441,117 @@ impl std::fmt::Display for TrippedGovernor {
     }
 }
 
+/// What a `SILENT` clause absorbed: the `SERVICE` endpoint or the `LOAD` source whose
+/// invocation did not succeed.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum SilencedTarget {
+    /// A `SERVICE SILENT` clause. `endpoint` is the service IRI, or — when a variable
+    /// endpoint was bound to a term that is not an IRI — that term's N-Triples-like
+    /// rendering.
+    Service {
+        /// The endpoint the invocation was addressed to.
+        endpoint: String,
+    },
+    /// A `LOAD SILENT` operation.
+    Load {
+        /// The source IRI the operation named.
+        iri: String,
+    },
+}
+
+impl SilencedTarget {
+    /// The endpoint or source IRI the target names.
+    #[must_use]
+    pub fn name(&self) -> &str {
+        match self {
+            Self::Service { endpoint } => endpoint,
+            Self::Load { iri } => iri,
+        }
+    }
+
+    /// `"service"` or `"load"`.
+    #[must_use]
+    pub const fn label(&self) -> &'static str {
+        match self {
+            Self::Service { .. } => "service",
+            Self::Load { .. } => "load",
+        }
+    }
+}
+
+/// Why a silenced invocation did not succeed.
+///
+/// Every kind is a failure of the invocation itself. This engine's own governors — a
+/// ceiling, a cancellation, a deadline — are never silenced and never appear here: they
+/// stop the operation whether or not `SILENT` is written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub enum SilencedKind {
+    /// The request failed at the transport: unreachable, refused, timed out remotely.
+    Transport,
+    /// A response arrived but could not be decoded.
+    Decode,
+    /// The configured source has federation disabled.
+    Disabled,
+    /// No source was configured that reaches the endpoint or document.
+    Unconfigured,
+    /// A service catalog withheld a capability the invocation needed.
+    Denied,
+    /// The host refused the request by its own policy.
+    HostDenied,
+    /// A variable endpoint was bound to a term that is not an IRI.
+    NotAnIri,
+    /// The host's source answered with something that is not an answer to the request.
+    Fault,
+}
+
+impl SilencedKind {
+    /// A stable kebab-case label for rendering and bindings.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Transport => "transport",
+            Self::Decode => "decode",
+            Self::Disabled => "disabled",
+            Self::Unconfigured => "unconfigured",
+            Self::Denied => "denied",
+            Self::HostDenied => "host-denied",
+            Self::NotAnIri => "not-an-iri",
+            Self::Fault => "fault",
+        }
+    }
+}
+
+/// One invocation a `SILENT` clause absorbed: a `SERVICE SILENT` that contributed the
+/// single empty solution, or a `LOAD SILENT` that succeeded with nothing loaded.
+///
+/// The answer such an operation returns is the one the specification defines, and it is
+/// indistinguishable from an endpoint that answered with nothing to add. This record is
+/// where the difference is kept.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
+pub struct SilencedInvocation {
+    /// The endpoint or source.
+    pub target: SilencedTarget,
+    /// Why the invocation did not succeed.
+    pub kind: SilencedKind,
+    /// The failure's own message, as the error would have rendered without `SILENT`.
+    pub message: String,
+}
+
+impl SilencedInvocation {
+    /// A record of `target` failing with `kind`, described by `message`.
+    #[must_use]
+    pub const fn new(target: SilencedTarget, kind: SilencedKind, message: String) -> Self {
+        Self {
+            target,
+            kind,
+            message,
+        }
+    }
+}
+
 /// Deterministic evidence accumulated by one governed operation.
 ///
 /// Evidence is returned on the complete path as well as the exhausted one: "completed,
@@ -459,6 +570,10 @@ pub struct GovernorEvidence {
     pub limits: ResourceVector,
     /// The governor that stopped the operation, or `None` on the complete path.
     pub tripped: Option<TrippedGovernor>,
+    /// Every invocation a `SILENT` clause absorbed, one record per failed invocation,
+    /// in ascending order ([`SilencedInvocation`]'s `Ord`) so the list does not depend on
+    /// how the evaluation was scheduled.
+    pub silenced: Vec<SilencedInvocation>,
 }
 
 impl GovernorEvidence {
@@ -472,7 +587,14 @@ impl GovernorEvidence {
             consumed: ResourceVector::ZERO,
             limits,
             tripped: None,
+            silenced: Vec::new(),
         }
+    }
+
+    /// Every invocation a `SILENT` clause absorbed, in the field's ascending order.
+    #[must_use]
+    pub fn silenced(&self) -> &[SilencedInvocation] {
+        &self.silenced
     }
 
     /// Consumption charged per dimension.

@@ -23,8 +23,10 @@
 //!   [`QuadPatternCursor`] that pins an [`Arc`] and lazily follows the selected
 //!   quad index without collecting matching rows.
 //!
+use crate::TermBox;
 use std::cmp::Ordering;
 use std::collections::HashMap;
+use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
@@ -41,6 +43,7 @@ use crate::{
 };
 
 use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
+use super::term_walk::fold_term;
 
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
 /// layer (`reifier rdf:reifies <<( s p o )>>`). Used to expose the reifier side-table
@@ -773,81 +776,133 @@ impl RdfDataset {
         self.named_graphs.iter().copied()
     }
 
-    /// Resolve a term id to the owned [`RdfTerm`] model, recursively for triple
-    /// terms. This allocates owned strings at the explicit owned-model boundary
+    /// Resolve a term id to the owned [`RdfTerm`] model, triple terms included.
+    /// This allocates owned strings at the explicit owned-model boundary
     /// used by serializers, oxigraph materialization, the C-ABI (`purrdf-capi`
     /// renders a cursor term to N-Triples through this), and tests.
+    ///
+    /// A triple term is assembled bottom-up over a work list: its subject, then its
+    /// predicate IRI, then its object, each resolved fully before the next, and the
+    /// owned triple once all three exist.
     pub fn to_owned_term(&self, id: TermId) -> RdfTerm {
-        match self.resolve(id) {
-            TermRef::Iri(iri) => RdfTerm::iri(iri),
-            TermRef::Blank { label, scope } => RdfTerm::blank_node(scope.qualify_label(label)),
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype_iri = match self.resolve(datatype) {
-                    TermRef::Iri(iri) => iri.to_owned(),
-                    other => {
-                        unreachable!("literal datatype must resolve to an IRI, got {other:?}")
+        enum Step {
+            Term(TermId),
+            Predicate(TermId),
+            Assemble,
+        }
+        let mut steps: Vec<Step> = vec![Step::Term(id)];
+        let mut terms: Vec<RdfTerm> = Vec::new();
+        let mut predicates: Vec<String> = Vec::new();
+        while let Some(step) = steps.pop() {
+            match step {
+                Step::Term(id) => match self.resolve(id) {
+                    TermRef::Iri(iri) => terms.push(RdfTerm::iri(iri)),
+                    TermRef::Blank { label, scope } => {
+                        terms.push(RdfTerm::blank_node(scope.qualify_label(label)));
                     }
-                };
-                RdfTerm::literal(RdfLiteral {
-                    lexical_form: lexical.to_owned(),
-                    datatype: Some(datatype_iri),
-                    language: language.map(str::to_owned),
-                    direction,
-                })
-            }
-            TermRef::Triple { s, p, o } => {
-                let subject = self.to_owned_term(s);
-                let predicate = self.iri_string(p);
-                let object = self.to_owned_term(o);
-                RdfTerm::triple(RdfTriple::new(subject, predicate, object))
+                    TermRef::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let datatype_iri = match self.resolve(datatype) {
+                            TermRef::Iri(iri) => iri.to_owned(),
+                            other => {
+                                unreachable!(
+                                    "literal datatype must resolve to an IRI, got {other:?}"
+                                )
+                            }
+                        };
+                        terms.push(RdfTerm::literal(RdfLiteral {
+                            lexical_form: lexical.to_owned(),
+                            datatype: Some(datatype_iri),
+                            language: language.map(str::to_owned),
+                            direction,
+                        }));
+                    }
+                    TermRef::Triple { s, p, o } => steps.extend([
+                        Step::Assemble,
+                        Step::Term(o),
+                        Step::Predicate(p),
+                        Step::Term(s),
+                    ]),
+                },
+                Step::Predicate(id) => predicates.push(self.iri_string(id)),
+                Step::Assemble => {
+                    let object = terms.pop().expect("a triple term's object is resolved");
+                    let predicate = predicates
+                        .pop()
+                        .expect("a triple term's predicate is resolved");
+                    let subject = terms.pop().expect("a triple term's subject is resolved");
+                    terms.push(RdfTerm::triple(RdfTriple::new(subject, predicate, object)));
+                }
             }
         }
+        terms
+            .pop()
+            .expect("the term's own owned form is the last one assembled")
     }
 
-    /// Resolve a term id to its dataset-independent [`TermValue`], recursing through
-    /// the literal datatype and triple components. The inverse of interning a value:
+    /// Resolve a term id to its dataset-independent [`TermValue`], through the
+    /// literal datatype and triple components. The inverse of interning a value:
     /// the literal datatype is expanded to its IRI string, the blank label is
-    /// scope-qualified, and triple terms recurse by value (C0.1/C0.2/C0.3).
+    /// scope-qualified, and triple terms are taken by value (C0.1/C0.2/C0.3).
     ///
     /// This is the value-model companion to [`to_owned_term`](Self::to_owned_term):
     /// consumers that key on the dataset-independent value identity (LOGIC's
     /// world-store, the SPARQL egress) resolve through this rather than the
     /// `RdfTerm` owned model.
+    ///
+    /// A triple term is assembled bottom-up over [`fold_term`]'s work list: its
+    /// subject, predicate and object are resolved in that order, each fully before
+    /// the next.
     pub fn term_value(&self, id: TermId) -> TermValue {
-        use crate::TermValue;
-        match self.resolve(id) {
-            TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-            TermRef::Blank { label, scope } => TermValue::Blank {
-                label: label.to_owned(),
-                scope,
+        match fold_term(
+            self,
+            id,
+            |_, term| {
+                Ok::<_, Infallible>(match term {
+                    TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+                    TermRef::Blank { label, scope } => TermValue::Blank {
+                        label: label.to_owned(),
+                        scope,
+                    },
+                    TermRef::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let datatype = match self.resolve(datatype) {
+                            TermRef::Iri(dt) => dt.to_owned(),
+                            other => {
+                                unreachable!(
+                                    "literal datatype must resolve to an IRI, got {other:?}"
+                                )
+                            }
+                        };
+                        TermValue::Literal {
+                            lexical_form: lexical.to_owned(),
+                            datatype,
+                            language: language.map(str::to_owned),
+                            direction,
+                        }
+                    }
+                    TermRef::Triple { .. } => {
+                        unreachable!("a triple term is assembled from its components")
+                    }
+                })
             },
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype = match self.resolve(datatype) {
-                    TermRef::Iri(dt) => dt.to_owned(),
-                    other => unreachable!("literal datatype must resolve to an IRI, got {other:?}"),
-                };
-                TermValue::Literal {
-                    lexical_form: lexical.to_owned(),
-                    datatype,
-                    language: language.map(str::to_owned),
-                    direction,
-                }
-            }
-            TermRef::Triple { s, p, o } => TermValue::Triple {
-                s: Box::new(self.term_value(s)),
-                p: Box::new(self.term_value(p)),
-                o: Box::new(self.term_value(o)),
+            |_, s, p, o| {
+                Ok(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
             },
+        ) {
+            Ok(value) => value,
         }
     }
 
@@ -1385,27 +1440,40 @@ impl RdfDataset {
     /// `None` if the dataset contains no such term.
     ///
     /// Lookup reuses the builder's store-once hash→id table, retained at freeze.
-    /// Compound dataset-independent values are first resolved recursively into
-    /// this dataset's local ids, then probed through that table. Keying the public
-    /// boundary on [`TermValue`] (not [`TermRef`]) remains the correctness rule: a
-    /// `TermRef`'s datatype/triple ids are local to whichever dataset minted them.
+    /// A triple term's components are resolved into this dataset's local ids first —
+    /// subject, predicate, object, each fully before the next, over a work list rather
+    /// than the call stack, and the lookup ends at the first component the dataset
+    /// lacks — then the triple is probed through that table by those ids. Keying the
+    /// public boundary on [`TermValue`] (not [`TermRef`]) remains the correctness rule:
+    /// a `TermRef`'s datatype/triple ids are local to whichever dataset minted them.
     #[must_use]
     pub fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
-        match value {
-            TermValue::Iri(iri) => self.term_id_by_iri(iri),
-            TermValue::Blank { label, scope } => self.term_id_by_blank(label, *scope),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => self.term_id_by_literal(lexical_form, datatype, language.as_deref(), *direction),
-            TermValue::Triple { s, p, o } => self.term_id_by_triple(
-                self.term_id_by_value(s)?,
-                self.term_id_by_value(p)?,
-                self.term_id_by_value(o)?,
-            ),
-        }
+        value
+            .try_fold(
+                |leaf| {
+                    match leaf {
+                        TermValue::Iri(iri) => self.term_id_by_iri(iri),
+                        TermValue::Blank { label, scope } => self.term_id_by_blank(label, *scope),
+                        TermValue::Literal {
+                            lexical_form,
+                            datatype,
+                            language,
+                            direction,
+                        } => self.term_id_by_literal(
+                            lexical_form,
+                            datatype,
+                            language.as_deref(),
+                            *direction,
+                        ),
+                        TermValue::Triple { .. } => {
+                            unreachable!("a triple term is assembled from its components")
+                        }
+                    }
+                    .ok_or(())
+                },
+                |s, p, o| self.term_id_by_triple(s, p, o).ok_or(()),
+            )
+            .ok()
     }
 
     /// Iterate quads as ID-native [`QuadIds`]. **Zero allocations, infallible, no
@@ -2120,6 +2188,7 @@ const _: fn() = || {
 mod tests {
     use super::*;
     use crate::RdfLiteral;
+    use crate::TermBox;
     use crate::ir::RdfDatasetBuilder;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
@@ -2186,9 +2255,9 @@ mod tests {
         );
         // A triple term resolves recursively by value.
         let triple_val = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Iri("http://example.org/p".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         assert_eq!(ds.term_id_by_value(&triple_val), Some(tr));
         assert_eq!(ds.term_id_by_iri("http://example.org/s"), Some(s));

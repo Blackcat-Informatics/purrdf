@@ -185,10 +185,7 @@ impl GraphDerivedRelations {
                 &self.query,
                 None,
                 &borrowed,
-                purrdf_sparql_eval::QueryOptions {
-                    env: &env,
-                    ..purrdf_sparql_eval::QueryOptions::EMPTY
-                },
+                purrdf_sparql_eval::QueryOptions::new().with_env(&env),
             )
             .map_err(|e| PyValueError::new_err(format!("query preparation failed: {e}")))?;
         Ok((execution, env))
@@ -374,10 +371,7 @@ impl PyPreparedQuery {
             // the engine's own `check_prepared_registries_unchanged` guard inside
             // `execute` refuses, and the pairing is what keeps that refusal a guard
             // against a caller's mistake rather than a trap this surface walks into.
-            let options = purrdf_sparql_eval::QueryOptions {
-                env: &self.env,
-                ..purrdf_sparql_eval::QueryOptions::EMPTY
-            };
+            let options = purrdf_sparql_eval::QueryOptions::new().with_env(&self.env);
             engine
                 .execute(&mut self.execution, &*dataset, options, |outcome| {
                     materialize_interned(&outcome)
@@ -467,10 +461,7 @@ pub(super) fn prepare(
             query,
             None,
             &borrowed,
-            purrdf_sparql_eval::QueryOptions {
-                env: &env,
-                ..purrdf_sparql_eval::QueryOptions::EMPTY
-            },
+            purrdf_sparql_eval::QueryOptions::new().with_env(&env),
         )
         .map_err(|e| PyValueError::new_err(format!("query preparation failed: {e}")))?;
     Ok(PyPreparedQuery {

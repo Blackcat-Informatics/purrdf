@@ -68,11 +68,10 @@ fn answer(registry: &PropertyFunctionRegistry, query: &str) -> usize {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
+            QueryOptions::new().with_env(
+                &purrdf_sparql_eval::ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .unwrap_or_else(|error| panic!("the query must evaluate: {error}"));
     let SparqlResult::Solutions { rows, .. } = result else {

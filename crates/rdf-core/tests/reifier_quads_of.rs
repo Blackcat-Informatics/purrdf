@@ -22,6 +22,7 @@
 //! the frozen sort order nor the id order, so the runs are contiguous because of the
 //! freeze sort, not by accident of push order.
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -63,9 +64,9 @@ fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
             }
         }
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(to_value(v, s)),
-            p: Box::new(to_value(v, p)),
-            o: Box::new(to_value(v, o)),
+            s: TermBox::new(to_value(v, s)),
+            p: TermBox::new(to_value(v, p)),
+            o: TermBox::new(to_value(v, o)),
         },
     }
 }

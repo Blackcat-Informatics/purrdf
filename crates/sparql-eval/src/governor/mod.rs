@@ -89,11 +89,12 @@ pub use ledger::{NodeCharges, PlanEstimate, ProfileIdentity, QueryExplanation};
 pub use lift::NonMonotoneBarrier;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, LazyLock, OnceLock};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock};
 use std::time::Duration;
 
 use purrdf_core::{
-    GovernorEvidence, ResourceDimension, ResourceVector, StopCause, TrippedGovernor,
+    GovernorEvidence, ResourceDimension, ResourceVector, SilencedInvocation, StopCause,
+    TrippedGovernor,
 };
 use sha2::Digest;
 
@@ -127,6 +128,29 @@ use crate::eval::MAX_UDF_DEPTH;
 pub trait StopSignal: Send + Sync + std::fmt::Debug {
     /// The cause, if this signal has fired. Latching: see the trait documentation.
     fn poll(&self) -> Option<StopCause>;
+
+    /// [`Self::poll`], at a checkpoint that stands for `work` units of evaluation since
+    /// the previous one.
+    ///
+    /// The evaluator does not poll at a uniform rate. A scan polls once per candidate,
+    /// but a charged row loop under an engaged fuel ceiling polls once every
+    /// [`STOP_POLL_FUEL`] units, and a forked row loop once every stride of rows. A
+    /// signal that slices evaluation by the amount of work done — rather than only
+    /// observing whether it should stop — reads `work` to keep one slice the same size
+    /// wherever it falls. The default ignores it.
+    ///
+    /// Every unit of work reaches exactly one poll. Under an engaged fuel ceiling a unit
+    /// is one unit of charged fuel: a charge that does not reach a poll is held in the
+    /// governor state's pending work and handed to the next poll, whichever checkpoint
+    /// makes it, and fuel a forked row loop's workers already reported is not reported
+    /// again when its admissions are committed. A checkpoint with no fuel behind it —
+    /// every checkpoint when fuel is not engaged — stands for one unit, its own. So
+    /// `work` is at least `1`, and the sum over an execution's polls is its reported
+    /// fuel plus the number of polls that had none behind them.
+    fn poll_after_work(&self, work: u64) -> Option<StopCause> {
+        let _ = work;
+        self.poll()
+    }
 }
 
 /// A shareable cancellation bit a host can flip from any thread.
@@ -319,7 +343,7 @@ impl StopSignal for WallDeadline {
 #[derive(Debug)]
 struct ScriptedClock {
     /// The reading every [`DeadlineClock::now_millis`] call returns until it is moved.
-    millis: std::sync::Mutex<f64>,
+    millis: Mutex<f64>,
 }
 
 #[cfg(test)]
@@ -327,7 +351,7 @@ impl ScriptedClock {
     /// A clock reading `millis`.
     fn new(millis: f64) -> Arc<Self> {
         Arc::new(Self {
-            millis: std::sync::Mutex::new(millis),
+            millis: Mutex::new(millis),
         })
     }
 
@@ -605,6 +629,31 @@ impl QueryGovernors {
     pub const fn is_engaged_in(&self, dimension: ResourceDimension) -> bool {
         self.limits.is_bounded(dimension)
     }
+
+    /// The ceiling a caller actually configured for `dimension`, as opposed to the
+    /// bookkeeping ceiling [`Self::METERED`] installs on every caller-settable dimension
+    /// purely to keep its counter running.
+    ///
+    /// A seam that leaves the evaluator and hands a ceiling to something outside it — a
+    /// `SERVICE` resolver sizing a remote `LIMIT`, for instance — must never see
+    /// `METERING_CEILING`: that value is not a bound anyone asked for, and reporting it
+    /// as one would size real infrastructure off a number chosen only so nothing could
+    /// reach it. Use this instead of [`Self::is_engaged_in`] combined with
+    /// [`Self::limits`] at any such seam. `None` covers both "unbounded" and "bounded
+    /// only by the metering sentinel"; `Some(ceiling)` is a ceiling a caller actually
+    /// narrowed below that.
+    #[must_use]
+    pub const fn caller_ceiling(&self, dimension: ResourceDimension) -> Option<u64> {
+        if !self.limits.is_bounded(dimension) {
+            return None;
+        }
+        let ceiling = self.limits.get(dimension);
+        if ceiling == METERING_CEILING {
+            None
+        } else {
+            Some(ceiling)
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -715,6 +764,19 @@ pub struct GovernorState {
     abandon: AtomicBool,
     /// The host-supplied stop signal, if any.
     stop: Option<Arc<dyn StopSignal>>,
+    /// Work done since the stop signal was last polled, not yet reported to it.
+    ///
+    /// A fuel charge adds its units here unless it crosses a poll interval, in which
+    /// case it polls and reports them itself; every poll drains this counter into the
+    /// work it reports ([`StopSignal::poll_after_work`]). So a unit of work is reported
+    /// once whichever checkpoint happens to be next — a charge's interval poll, a
+    /// scan's per-candidate poll, or a forked row loop's stride poll. Untouched when no
+    /// signal is attached.
+    pending_work: AtomicU64,
+    /// Every invocation a `SILENT` clause absorbed, in the order they were recorded.
+    /// Sorted when [`Self::evidence`] reads it, so the report does not depend on how a
+    /// forked evaluation was scheduled.
+    silenced: Mutex<Vec<SilencedInvocation>>,
 }
 
 impl GovernorState {
@@ -728,7 +790,17 @@ impl GovernorState {
             tripped: OnceLock::new(),
             abandon: AtomicBool::new(false),
             stop: governors.stop.clone(),
+            pending_work: AtomicU64::new(0),
+            silenced: Mutex::new(Vec::new()),
         }
+    }
+
+    /// Record an invocation a `SILENT` clause absorbed.
+    pub(crate) fn record_silenced(&self, invocation: SilencedInvocation) {
+        self.silenced
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(invocation);
     }
 
     /// The inclusive ceilings in force.
@@ -754,8 +826,28 @@ impl GovernorState {
     /// [`ResourceDimension::Fuel`], and additionally at the moment a ceiling is crossed,
     /// so that conditions true at the same charge point resolve through
     /// [`resolve_precedence`] rather than by whichever happened to be tested first.
+    ///
+    /// The fuel charged is work the stop signal is told about exactly once: see
+    /// [`StopSignal::poll_after_work`].
     pub fn charge(&self, dimension: ResourceDimension, amount: u64) -> Result<(), TrippedGovernor> {
-        if let Some(&tripped) = self.tripped.get() {
+        self.charge_work(dimension, amount, false)
+    }
+
+    /// [`Self::charge`], where `reported` marks the commit of an admission a forked row
+    /// loop's worker already made: the worker polled the stop signal for its work, at a
+    /// stride of its rows, while it did it, and it admitted the row only after observing
+    /// that no trip had latched. So such a charge counts and crosses a ceiling exactly as
+    /// [`Self::charge`] does, but neither polls the signal nor reports the work to it a
+    /// second time, and a trip latched since the row was admitted — the stop a later row
+    /// of the same loop observed — does not refuse it: on the sequential path that row's
+    /// charge was made before the stop was.
+    fn charge_work(
+        &self,
+        dimension: ResourceDimension,
+        amount: u64,
+        reported: bool,
+    ) -> Result<(), TrippedGovernor> {
+        if !reported && let Some(&tripped) = self.tripped.get() {
             return Err(tripped);
         }
 
@@ -780,14 +872,33 @@ impl GovernorState {
             }));
         }
 
-        if dimension == ResourceDimension::Fuel
-            && self.stop.is_some()
-            && previous / STOP_POLL_FUEL != updated / STOP_POLL_FUEL
-        {
-            self.check_stop()?;
+        if dimension == ResourceDimension::Fuel && self.stop.is_some() && !reported {
+            if previous / STOP_POLL_FUEL == updated / STOP_POLL_FUEL {
+                self.note_work(amount);
+            } else {
+                self.check_stop_after(amount)?;
+            }
         }
 
         Ok(())
+    }
+
+    /// Hold `units` of work for the next poll of the stop signal to report.
+    ///
+    /// For a checkpoint that does work between polls without charging fuel for it — a
+    /// forked row loop's worker, whose rows are admitted after the join. A no-op when
+    /// no signal is attached, so an execution without one pays nothing.
+    pub(crate) fn note_work(&self, units: u64) {
+        if units > 0 && self.stop.is_some() {
+            self.pending_work.fetch_add(units, Ordering::Relaxed);
+        }
+    }
+
+    /// Poll `signal` at a checkpoint that stands for `work` units of evaluation not yet
+    /// noted, draining the pending work into the same report.
+    fn poll_signal(&self, signal: &dyn StopSignal, work: u64) -> Option<StopCause> {
+        let pending = self.pending_work.swap(0, Ordering::Relaxed);
+        signal.poll_after_work(pending.saturating_add(work).max(1))
     }
 
     /// Record `observed` as a single observation of a peak-tracked `dimension`.
@@ -823,8 +934,18 @@ impl GovernorState {
     /// for the rest of the execution. If some other governor tripped first, that earlier
     /// trip stays the reported one: precedence is evaluated over conditions true at a
     /// charge point, and an earlier point's conditions were resolved when they were true.
+    ///
+    /// The poll reports the work pending since the previous one, or one unit — this
+    /// checkpoint's own — when none is (see [`StopSignal::poll_after_work`]).
     pub fn poll_stop(&self) -> Option<StopCause> {
-        let cause = self.stop.as_ref()?.poll()?;
+        self.poll_stop_after(0)
+    }
+
+    /// [`Self::poll_stop`] at a checkpoint that stands for `work` units of evaluation
+    /// that no charge has reported, on top of the pending work every poll drains (see
+    /// [`StopSignal::poll_after_work`]).
+    pub fn poll_stop_after(&self, work: u64) -> Option<StopCause> {
+        let cause = self.poll_signal(self.stop.as_deref()?, work)?;
         self.tripped
             .get_or_init(|| TrippedGovernor::Stopped { cause });
         self.abandon.store(true, Ordering::Relaxed);
@@ -886,6 +1007,13 @@ impl GovernorState {
                 .set(dimension, self.consumed_in(dimension));
         }
         evidence.tripped = self.tripped();
+        let mut silenced = self
+            .silenced
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        silenced.sort();
+        evidence.silenced = silenced;
         evidence
     }
 
@@ -904,20 +1032,18 @@ impl GovernorState {
     ///
     /// # Where the ordered fold does not reach
     ///
-    /// The fold covers the chunked row loops that carry an [`ItemCharge`] ledger. The
-    /// other parallel lane — the fork-per-worker one
-    /// (`parallel::par_chunk_try_map_init`, used by
-    /// `FILTER`, `BIND`, `OPTIONAL`'s inline condition and the per-group aggregate
-    /// compute) — has no ledger, because a forked worker shares this state through an
-    /// `Arc` and charges it directly. Exactness there is bought differently, by refusing
-    /// the fork rather than by ordering it: that lane is only entered when the row
-    /// expression **cannot charge**, which is decided once, in
-    /// `EvalCtx::may_fork_row_loop`. Ordinary
-    /// expression evaluation charges nothing (a row's whole cost is charged before the
-    /// loop, on the main thread), so the only expression excluded is one embedding an
-    /// `EXISTS`, which re-enters whole-pattern evaluation. So the reported consumption is
-    /// exact on both lanes, and neither buys it by giving up parallelism on a query shape
-    /// that did not need it.
+    /// The fold covers the chunked row loops that carry an [`ItemCharge`] ledger, and the
+    /// forked `FILTER` and `BIND` row loops, whose workers record each row's admission in
+    /// a ledger of their own (`crate::row_checkpoint::RowCheckpoint`) that is committed
+    /// through `Self::commit_reported_items` after the join. What the fork-per-worker
+    /// lane (`parallel::par_chunk_try_map_init`) must not do is charge from inside a
+    /// worker, because a worker shares this state through an `Arc` and would charge it
+    /// directly, in no order. That is bought by refusing the fork rather than by ordering
+    /// it: the lane is only entered when the row expression **cannot charge**, which is
+    /// decided once, in `EvalCtx::may_fork_row_loop`. Ordinary expression evaluation
+    /// charges nothing, so the only expression excluded is one that re-enters
+    /// evaluation. So the reported consumption is exact on both lanes, and neither buys
+    /// it by giving up parallelism on a query shape that did not need it.
     #[must_use]
     pub fn should_abandon(&self) -> bool {
         self.abandon.load(Ordering::Relaxed)
@@ -933,6 +1059,24 @@ impl GovernorState {
     #[must_use]
     pub const fn is_engaged_in(&self, dimension: ResourceDimension) -> bool {
         self.limits.is_bounded(dimension)
+    }
+
+    /// The ceiling a caller actually configured for `dimension`. The per-execution twin
+    /// of [`QueryGovernors::caller_ceiling`] — reads this state's captured limits rather
+    /// than the configuration it was built from, which is what a seam reached through
+    /// `EvalCtx::governor_state` (a `SERVICE` resolver, for instance) has
+    /// access to. See that method for why `Some` is withheld from the metering sentinel.
+    #[must_use]
+    pub const fn caller_ceiling(&self, dimension: ResourceDimension) -> Option<u64> {
+        if !self.limits.is_bounded(dimension) {
+            return None;
+        }
+        let ceiling = self.limits.get(dimension);
+        if ceiling == METERING_CEILING {
+            None
+        } else {
+            Some(ceiling)
+        }
     }
 
     /// Whether **any** caller-settable governor is engaged in this execution.
@@ -1061,14 +1205,61 @@ impl GovernorState {
         &self,
         per_item: &[ItemCharge],
     ) -> Option<(usize, u64, TrippedGovernor)> {
+        self.fold_ordered_items(per_item, false)
+    }
+
+    /// [`Self::commit_ordered_items`] for items whose work the stop signal was already
+    /// polled for by the workers that did it — a forked row loop polls at a stride of its
+    /// rows while it runs, and its admissions are committed here after the join. The fold
+    /// charges and trips exactly as [`Self::commit_ordered_items`] does, so the trip lands
+    /// at the item the sequential charge path trips at. It declines to poll and report the
+    /// same work a second time, and a trip latched after the items were admitted does not
+    /// refuse them (see `charge_work`).
+    pub(crate) fn commit_reported_items(
+        &self,
+        per_item: &[ItemCharge],
+    ) -> Option<(usize, u64, TrippedGovernor)> {
+        self.fold_ordered_items(per_item, true)
+    }
+
+    /// The one ordered fold behind [`Self::commit_ordered_items`] and
+    /// [`Self::commit_reported_items`].
+    fn fold_ordered_items(
+        &self,
+        per_item: &[ItemCharge],
+        reported: bool,
+    ) -> Option<(usize, u64, TrippedGovernor)> {
         let mut committed = 0_u64;
         for (index, item) in per_item.iter().enumerate() {
-            if let Err(tripped) = self.charge(ResourceDimension::Fuel, item.fuel) {
+            if let Err(tripped) = self.charge_work(ResourceDimension::Fuel, item.fuel, reported) {
                 return Some((index, committed, tripped));
             }
             committed = committed.saturating_add(item.committed);
         }
         None
+    }
+
+    /// How many successive charges of `cost` fuel the ceiling still admits, or `None`
+    /// when fuel is not engaged.
+    ///
+    /// A pure read: nothing is charged. The ceiling is inclusive, so the answer is the
+    /// whole number of `cost`s that fit between the consumption so far and the ceiling —
+    /// the index of the charge [`Self::charge`] would refuse, were nothing else charged
+    /// in between. A forked row loop reads it to fork only the rows it can admit; the
+    /// ordered commit after the join remains what decides.
+    pub(crate) fn fuel_admits(&self, cost: u64) -> Option<u64> {
+        if !self.is_engaged_in(ResourceDimension::Fuel) {
+            return None;
+        }
+        if self.tripped().is_some() {
+            return Some(0);
+        }
+        let consumed = self.consumed[Self::slot(ResourceDimension::Fuel)].load(Ordering::Relaxed);
+        let headroom = self
+            .limits
+            .get(ResourceDimension::Fuel)
+            .saturating_sub(consumed);
+        Some(headroom / cost.max(1))
     }
 
     /// The dense slot `dimension` occupies in the counter arrays.
@@ -1099,8 +1290,8 @@ impl GovernorState {
     fn trip(&self, candidate: TrippedGovernor) -> TrippedGovernor {
         let stopped = self
             .stop
-            .as_ref()
-            .and_then(|signal| signal.poll())
+            .as_deref()
+            .and_then(|signal| self.poll_signal(signal, 0))
             .map(|cause| TrippedGovernor::Stopped { cause });
         let winner = resolve_precedence(stopped.into_iter().chain(std::iter::once(candidate)))
             .unwrap_or(candidate);
@@ -1110,8 +1301,8 @@ impl GovernorState {
     }
 
     /// Poll the stop signal and convert a fired signal into a trip.
-    fn check_stop(&self) -> Result<(), TrippedGovernor> {
-        match self.poll_stop() {
+    fn check_stop_after(&self, work: u64) -> Result<(), TrippedGovernor> {
+        match self.poll_stop_after(work) {
             Some(cause) => Err(self.trip(TrippedGovernor::Stopped { cause })),
             None => Ok(()),
         }
@@ -1314,13 +1505,56 @@ pub const GOVERNOR_PROFILE_ID: &str = "purrdf-sparql-governors";
 ///   nothing, so a budget sized against v7 for such a query buys exactly the same
 ///   execution under v8. The number moves anyway, because the schedule moved and the
 ///   schedule is what the digest describes.
-pub const GOVERNOR_PROFILE_VERSION: u32 = 8;
+///
+/// # v9
+///
+/// [`CHARGE_SCHEDULE`] is byte-identical to v8 — no point moved and no cost changed — and
+/// a query that completes makes the same charges it made under v8. What v9 pins is their
+/// **order** in every per-row loop, and with it the row a ceiling trips at:
+///
+/// - **Admission is interleaved with the work it admits.** `FILTER`, `BIND` and `UNFOLD`
+///   charge [`ChargePoint::RowExpressionEvaluation`] for input row `i` immediately before
+///   row `i`'s own work — its expression, and for `UNFOLD` the ingest of every row its
+///   composite expands to — rather than charging every row in one sweep ahead of the
+///   loop. So the canonical order is `admission(0), work(0), admission(1), work(1), …`.
+///   Where the per-row work charges nothing, the charges themselves are the sweep's and
+///   the rows each fuel ceiling admits are unchanged. Where it charges — an expression
+///   embedding `EXISTS` or calling a SPARQL- or expression-bodied function, and every
+///   `UNFOLD` whose expansion meets the intermediate-cell ceiling — a ceiling now trips
+///   at the admission or the work of the row the budget actually ran out on, where v8
+///   admitted every row first and tripped inside the first row's work.
+/// - **A forked row loop trips at the sequential row.** A forked `FILTER` or `BIND`
+///   records each row's admission in its worker and commits the admissions in source
+///   order after the join (`GovernorState::commit_reported_items`), so it charges the
+///   same sequence, trips at the same row and certifies the same prefix as the same loop
+///   evaluated sequentially. Under an engaged fuel ceiling or an attached stop signal,
+///   every per-row checkpoint observes an already-latched trip before the row's work, on
+///   either path.
+/// - **Aggregate accumulation passes the same checkpoint.** A group's
+///   [`ChargePoint::AggregateAccumulation`] charges are made through the one per-row
+///   checkpoint the three operators above use; their points and order are v8's.
+/// - **Work reaches the stop signal once.** The work a poll reports
+///   ([`StopSignal::poll_after_work`]) is the fuel charged since the previous poll, held
+///   in the state between polls, rather than an estimate per checkpoint that two
+///   checkpoints could both claim. A forked loop's workers poll once a stride of their own
+///   rows — one row with only a signal attached, one [`STOP_POLL_FUEL`] interval's worth
+///   of admissions under fuel — while the work runs, and the commit after the join polls
+///   no more; v8 polled while charging the sweep, ahead of the work. This moves no
+///   charge; it moves where a signal is polled inside a forked loop under fuel, and so
+///   where a signal that fires after a given number of polls is observed there.
+///
+/// A budget sized against v8 for a query whose per-row work charges nothing buys the same
+/// execution under v9. One sized for a `FILTER EXISTS`, a function-calling `BIND` or a
+/// cell-bounded `UNFOLD` may now stop at a different row, and the number moves so that a
+/// consumer pinning v8 learns it.
+pub const GOVERNOR_PROFILE_VERSION: u32 = 9;
 
 /// The charge schedule, as data rather than as scattered literals.
 ///
 /// Byte-identical from v1 through v3; v4 appends `update-mutated-quad`, v5 appends the two
 /// property-function points, v6 appends the two aggregate points, v7 appends the three
-/// `EXISTS`-strategy evidence points, and v8 appends `property-function-work` — see
+/// `EXISTS`-strategy evidence points, and v8 appends `property-function-work`; v9 leaves
+/// it unchanged and moves only the order of charges in a per-row loop — see
 /// [`GOVERNOR_PROFILE_VERSION`] for what each version moved and why.
 ///
 /// Each entry is `(label, cost)`. The labels are a pinned contract — a frozen corpus and

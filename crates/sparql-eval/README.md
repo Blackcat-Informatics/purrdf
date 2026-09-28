@@ -84,9 +84,23 @@ Design pillars:
   memoized existence probe where a prepare-time proof licenses it and by the
   per-row definition otherwise, cost-based BGP planning (with an
   `explain_query` introspection API), SPARQL UPDATE, the SEP-0009 composite
-  datatypes (`FOLD`/`UNFOLD` and the `cdt:` function library), and a
-  host-injectable `SERVICE` resolver so federation stays wasm-portable (no
-  HTTP client ships; the host supplies the `HttpTransport` and the resolver).
+  datatypes (`FOLD`/`UNFOLD` and the `cdt:` function library), and
+  host-injectable `SERVICE` and `LOAD` sources so federation stays
+  wasm-portable (no HTTP client ships; the host supplies the `HttpTransport`
+  and the resolvers). A caller hands a request its sources through
+  `QueryOptions` — `remote` answers `SERVICE` in a query and in an UPDATE's
+  `WHERE` alike, and `load` answers `LOAD`, taking precedence over a resolver
+  installed on the engine — so every entry, governed or not, federates the
+  same way. The seam has two consumers: a Rust host that implements
+  `HttpTransport`, and the wasm package's asynchronous lane, whose resolvers
+  suspend the evaluation through JSPI while a JavaScript host answers each
+  `SERVICE` and `LOAD`.
+- **SPARQL 1.1 Protocol** — the `protocol` module reads an HTTP request's
+  method, `Content-Type`, query string and body into a query or update
+  operation, applies the dataset parameters (`default-graph-uri`,
+  `named-graph-uri`, `using-graph-uri`, `using-named-graph-uri`) to its text,
+  and negotiates the result format from an `Accept` header. It performs no
+  I/O; a refusal is a typed `ProtocolError` the host maps to its HTTP status.
 - **Caller-keyed extension seams** — scalar functions (`UserFunctionRegistry`,
   whose native bodies carry SPARQL's expression-error channel so a per-solution
   domain error drops the row under `FILTER` or leaves the variable unbound
@@ -103,6 +117,44 @@ Design pillars:
   answer.
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
+
+## How it evaluates
+
+- **A plan arena per evaluation.** Every entry builds a dense tree over the
+  query's algebra whose node ids are the governor ledger's own ordinals, so
+  charge receipts, `LIMIT` pushdown ceilings, `EXISTS` sites and the `SERVICE`
+  endpoint index are indexed tables rather than maps keyed by node address.
+- **Expressions compiled once, run per row.** Each `FILTER`, `BIND`, `OPTIONAL`
+  condition, `ORDER BY` key, aggregate argument and `UNFOLD` expression is
+  compiled into a flat program stored on its plan site. An operator call links
+  the program's variables to solution columns, its constants to a pool and its
+  constant regular expressions once; each row then runs the program on an
+  explicit value stack. Kleene `&&`/`||`, `IF`/`COALESCE`/`IN` laziness, `BNODE`
+  memoization and the order of every charge are the SPARQL evaluation order.
+- **A term's nesting costs no stack; a plan's height is admitted first.**
+  Nested triple terms, property paths (compiled into a flat path program with
+  reach caches indexed by program op) and CONSTRUCT templates run over explicit
+  work lists, so how deeply a term nests is bounded by memory and by the
+  governors. The evaluator's analyses and its evaluation proper recurse once
+  per level of the plan, so a plan is measured iteratively before they run,
+  at preparation and on every evaluation, against the stack the evaluating
+  thread has left above `purrdf_stack::MARGIN_BYTES`: a plan too tall for it
+  is refused with `EvalError::StackExhausted`
+  (`native-sparql-evaluation-stack-exhausted`), and on `wasm32` a plan past
+  the budget kept under the JavaScript engine's call stack with
+  `EvalError::HostStackExhausted` (`native-sparql-host-stack-exhausted`). A
+  correlated substitution copies its subtree inside a scope that discards the
+  half-built copy and refuses the same way when the stack runs low.
+- **One per-row checkpoint.** `FILTER`, `BIND`, `UNFOLD` and aggregate loops pass
+  every row through the same checkpoint: a latched trip is observed first, and a
+  loop that forks across threads forks only the rows the remaining fuel admits
+  and commits them in source order, so it trips on the row the sequential loop
+  would and spends the same fuel.
+
+The mechanisms are measured, not asserted: `benches/expr_vm.rs`,
+`pattern_dispatch.rs`, `deep_nesting.rs`, `governed_eval.rs` and
+`query_eval.rs` report the expression, dispatch, nesting and governed-loop costs
+(report-only).
 
 The engine is gated by the W3C SPARQL 1.1 and 1.2 conformance suites (run
 through the workspace harness), carries zero oxigraph-family dependencies, and

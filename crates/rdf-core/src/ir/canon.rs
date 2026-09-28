@@ -140,14 +140,17 @@
 //! `docs/RDF12-CANON-PROFILE.md` for the normative specification. A digest taken
 //! over this output must never be labelled "RDFC-1.0".
 
+use std::borrow::Cow;
 use std::cmp::Ordering;
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 
 use sha2::{Digest, Sha256, Sha384};
 
 use super::dataset::{QuadIds, RdfDataset, TermRef};
 use super::skolem::{TermMapper, rebuild_dataset};
 use super::term::{BlankScope, TermId, TermValue};
+use super::term_walk::fold_term;
 use crate::content_store::ContentDigest;
 use crate::dataset_view::{
     DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch, ViewTermId,
@@ -1300,31 +1303,39 @@ impl<Id: ViewTermId> Component<Id> {
     }
 }
 
-/// Invoke `f` for every blank id reachable at `id` — recursing triple
-/// terms, and descending into the lexical form of a composite (`cdt:List` /
-/// `cdt:Map`) literal.
+/// Invoke `f` for every blank id reachable at `id` — through triple terms, and
+/// into the lexical form of a composite (`cdt:List` / `cdt:Map`) literal.
 ///
 /// A blank node embedded in a composite literal is a blank node OF THE GRAPH
 /// (see [`crate::cdt_blank`]), so it must participate in canonical labeling like
 /// any other. Leaving it out would make two datasets that differ only by a
 /// consistent renaming of such a node canonicalize differently, and would let
 /// [`canonical_relabel`] emit a dangling label.
+///
+/// The walk is [`fold_term`]'s work list: a triple term's subject, predicate and
+/// object are visited in that order, each fully before the next, and `f` fires
+/// for each blank as the walk reaches it.
 fn blanks_in_term<D: DatasetView>(ds: &D, id: D::Id, f: &mut impl FnMut(D::Id)) {
-    match ds.resolve(id) {
-        TermRef::Blank { .. } => f(id),
-        TermRef::Triple { s, p, o } => {
-            blanks_in_term(ds, s, f);
-            blanks_in_term(ds, p, f);
-            blanks_in_term(ds, o, f);
-        }
-        TermRef::Literal {
-            lexical, datatype, ..
-        } => {
-            for id in composite_blanks(ds, lexical, datatype) {
-                f(id);
+    match fold_term(
+        ds,
+        id,
+        |id, term| {
+            match term {
+                TermRef::Blank { .. } => f(id),
+                TermRef::Literal {
+                    lexical, datatype, ..
+                } => {
+                    for id in composite_blanks(ds, lexical, datatype) {
+                        f(id);
+                    }
+                }
+                TermRef::Iri(_) | TermRef::Triple { .. } => {}
             }
-        }
-        TermRef::Iri(_) => {}
+            Ok::<(), Infallible>(())
+        },
+        |_, (), (), ()| Ok(()),
+    ) {
+        Ok(()) => {}
     }
 }
 
@@ -2103,26 +2114,38 @@ impl<E, Ev> From<DrainFailure<E, Ev>> for ViewCanonError<E, Ev> {
     }
 }
 
-/// The reserved IRI reachable at `id`, recursing into triple terms and literal
-/// datatypes, or `None`.
+/// The first reserved IRI reachable at `id` — through triple terms and literal
+/// datatypes — or `None`.
 ///
 /// The datatype slot is swept even though the overlay never lowers a sentinel into
 /// one: the rule a consumer audits is "no reserved IRI anywhere", and a rule with a
 /// carve-out for the one position that happens to be safe today is a rule nobody can
 /// check. Sweeping it costs a comparison on a term already resolved.
 ///
-/// Recursion mirrors [`blanks_in_term`], which already walks the same nesting on the
-/// same input: term ids are issued bottom-up so the structure is a DAG, and the depth
-/// it can reach is the depth the parser admitted before this function ever ran.
+/// The walk runs over a work list in depth-first order: a literal's datatype is
+/// visited next, and a triple term's subject is visited next with its predicate and
+/// object held back until the subject's whole nesting is done. The first reserved
+/// IRI met ends the walk. A term that is not a triple term pushes nothing, so the
+/// common case allocates nothing.
 fn reserved_in_term<D: DatasetView>(ds: &D, id: D::Id) -> Option<Box<str>> {
-    match ds.resolve(id) {
-        TermRef::Iri(iri) => iri.starts_with(RESERVED_NAMESPACE).then(|| Box::from(iri)),
-        TermRef::Literal { datatype, .. } => reserved_in_term(ds, datatype),
-        TermRef::Triple { s, p, o } => reserved_in_term(ds, s)
-            .or_else(|| reserved_in_term(ds, p))
-            .or_else(|| reserved_in_term(ds, o)),
-        TermRef::Blank { .. } => None,
+    let mut held: Vec<D::Id> = Vec::new();
+    let mut next = Some(id);
+    while let Some(id) = next.take().or_else(|| held.pop()) {
+        match ds.resolve(id) {
+            TermRef::Iri(iri) => {
+                if iri.starts_with(RESERVED_NAMESPACE) {
+                    return Some(Box::from(iri));
+                }
+            }
+            TermRef::Literal { datatype, .. } => next = Some(datatype),
+            TermRef::Triple { s, p, o } => {
+                held.extend([o, p]);
+                next = Some(s);
+            }
+            TermRef::Blank { .. } => {}
+        }
     }
+    None
 }
 
 /// The view's reserved-namespace violation within `scope`, or `None` if it is
@@ -2447,7 +2470,13 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         }
     }
 
-    /// Walk a slot for related blanks, recursing triple terms with a position path.
+    /// Walk a slot for related blanks, each nested triple term's components under
+    /// a position path.
+    ///
+    /// The walk runs over a work list in depth-first order: a triple term's subject
+    /// is visited next, under `{position}.s`, with its predicate and object held back
+    /// under `{position}.p` and `{position}.o` until the subject's whole nesting is
+    /// done. A slot holding no triple term pushes nothing.
     fn related_in_slot(
         &self,
         slot: Slot<D::Id>,
@@ -2463,62 +2492,48 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
             Slot::Term(id) | Slot::AnnotationGraph(Some(id)) => id,
             Slot::Sentinel(_) | Slot::AnnotationGraph(None) => return,
         };
-        match self.ds.resolve(id) {
-            TermRef::Blank { .. } => {
-                if id != focus {
-                    let h = self.hash_related_blank_node(id, position, predicate, issuer);
-                    f(id, h);
-                }
-            }
-            TermRef::Triple { s, p, o } => {
-                // Nested-triple blanks get a position path so role inside the quoted
-                // triple is distinguished (RDF-1.2 extension; never hit by the W3C suite).
-                self.related_in_slot(
-                    Slot::Term(s),
-                    &format!("{position}.s"),
-                    predicate,
-                    focus,
-                    issuer,
-                    f,
-                );
-                self.related_in_slot(
-                    Slot::Term(p),
-                    &format!("{position}.p"),
-                    predicate,
-                    focus,
-                    issuer,
-                    f,
-                );
-                self.related_in_slot(
-                    Slot::Term(o),
-                    &format!("{position}.o"),
-                    predicate,
-                    focus,
-                    issuer,
-                    f,
-                );
-            }
-            TermRef::Literal {
-                lexical, datatype, ..
-            } => {
-                // A blank embedded in a composite literal is related exactly as a
-                // blank in that slot would be. The position path gets a `.cdt`
-                // segment so the role "inside a composite value" is distinguished
-                // from the slot's own term, and the segment is label-independent,
-                // which is what canonicality requires.
-                for related in composite_blanks(self.ds, lexical, datatype) {
-                    if related != focus {
-                        let h = self.hash_related_blank_node(
-                            related,
-                            &format!("{position}.cdt"),
-                            predicate,
-                            issuer,
-                        );
-                        f(related, h);
+        let mut held: Vec<(D::Id, Cow<'_, str>)> = Vec::new();
+        let mut next = Some((id, Cow::Borrowed(position)));
+        while let Some((id, position)) = next.take().or_else(|| held.pop()) {
+            match self.ds.resolve(id) {
+                TermRef::Blank { .. } => {
+                    if id != focus {
+                        let h = self.hash_related_blank_node(id, &position, predicate, issuer);
+                        f(id, h);
                     }
                 }
+                TermRef::Triple { s, p, o } => {
+                    // Nested-triple blanks get a position path so role inside the
+                    // quoted triple is distinguished (RDF-1.2 extension; never hit by
+                    // the W3C suite).
+                    held.extend([
+                        (o, Cow::Owned(format!("{position}.o"))),
+                        (p, Cow::Owned(format!("{position}.p"))),
+                    ]);
+                    next = Some((s, Cow::Owned(format!("{position}.s"))));
+                }
+                TermRef::Literal {
+                    lexical, datatype, ..
+                } => {
+                    // A blank embedded in a composite literal is related exactly as a
+                    // blank in that slot would be. The position path gets a `.cdt`
+                    // segment so the role "inside a composite value" is distinguished
+                    // from the slot's own term, and the segment is label-independent,
+                    // which is what canonicality requires.
+                    for related in composite_blanks(self.ds, lexical, datatype) {
+                        if related != focus {
+                            let h = self.hash_related_blank_node(
+                                related,
+                                &format!("{position}.cdt"),
+                                predicate,
+                                issuer,
+                            );
+                            f(related, h);
+                        }
+                    }
+                }
+                TermRef::Iri(_) => {}
             }
-            TermRef::Iri(_) => {}
         }
     }
 
@@ -2643,55 +2658,80 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
     /// blank nodes that happen to live inside a literal, so two isomorphic
     /// datasets would serialize differently and the oracle would report a false
     /// negative. Every other byte of the lexical form is untouched.
+    ///
+    /// A triple term is written over a work list: its opening `<<( ` at once, then
+    /// its subject next, with the separators, the predicate, the object and the
+    /// closing ` )>>` held back in that order until the subject's whole nesting is
+    /// written. A term that is not a triple term pushes nothing.
     fn write_term(&self, id: D::Id, render: BlankRender<'_, D::Id>, out: &mut String) {
-        match self.ds.resolve(id) {
-            TermRef::Iri(iri) => {
-                out.push('<');
-                write_iri_escaped(iri, out);
-                out.push('>');
-            }
-            TermRef::Blank { .. } => {
-                out.push_str("_:");
-                out.push_str(render.label(id));
-            }
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let rendered = self.render_composite_lexical(lexical, datatype, render);
-                out.push('"');
-                write_literal_escaped(&rendered, out);
-                out.push('"');
-                if let Some(lang) = language {
-                    out.push('@');
-                    out.push_str(lang);
-                    if let Some(dir) = direction {
-                        out.push_str("--");
-                        out.push_str(dir.as_str());
-                    }
-                } else {
-                    let dt = match self.ds.resolve(datatype) {
-                        TermRef::Iri(iri) => iri,
-                        other => unreachable!("literal datatype must be an IRI, got {other:?}"),
-                    };
-                    if dt != XSD_STRING {
-                        out.push_str("^^<");
-                        write_iri_escaped(dt, out);
-                        out.push('>');
+        enum Step<Id> {
+            Term(Id),
+            Text(&'static str),
+        }
+        let mut held: Vec<Step<D::Id>> = Vec::new();
+        let mut next = Some(Step::Term(id));
+        while let Some(step) = next.take().or_else(|| held.pop()) {
+            let id = match step {
+                Step::Text(text) => {
+                    out.push_str(text);
+                    continue;
+                }
+                Step::Term(id) => id,
+            };
+            match self.ds.resolve(id) {
+                TermRef::Iri(iri) => {
+                    out.push('<');
+                    write_iri_escaped(iri, out);
+                    out.push('>');
+                }
+                TermRef::Blank { .. } => {
+                    out.push_str("_:");
+                    out.push_str(render.label(id));
+                }
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let rendered = self.render_composite_lexical(lexical, datatype, render);
+                    out.push('"');
+                    write_literal_escaped(&rendered, out);
+                    out.push('"');
+                    if let Some(lang) = language {
+                        out.push('@');
+                        out.push_str(lang);
+                        if let Some(dir) = direction {
+                            out.push_str("--");
+                            out.push_str(dir.as_str());
+                        }
+                    } else {
+                        let dt = match self.ds.resolve(datatype) {
+                            TermRef::Iri(iri) => iri,
+                            other => {
+                                unreachable!("literal datatype must be an IRI, got {other:?}")
+                            }
+                        };
+                        if dt != XSD_STRING {
+                            out.push_str("^^<");
+                            write_iri_escaped(dt, out);
+                            out.push('>');
+                        }
                     }
                 }
-            }
-            TermRef::Triple { s, p, o } => {
-                // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the form oxigraph/Jena parse).
-                out.push_str("<<( ");
-                self.write_term(s, render, out);
-                out.push(' ');
-                self.write_term(p, render, out);
-                out.push(' ');
-                self.write_term(o, render, out);
-                out.push_str(" )>>");
+                TermRef::Triple { s, p, o } => {
+                    // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the form
+                    // oxigraph/Jena parse).
+                    out.push_str("<<( ");
+                    held.extend([
+                        Step::Text(" )>>"),
+                        Step::Term(o),
+                        Step::Text(" "),
+                        Step::Term(p),
+                        Step::Text(" "),
+                    ]);
+                    next = Some(Step::Term(s));
+                }
             }
         }
     }
@@ -2704,9 +2744,9 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
         lexical: &'l str,
         datatype: D::Id,
         render: BlankRender<'_, D::Id>,
-    ) -> std::borrow::Cow<'l, str> {
+    ) -> Cow<'l, str> {
         let TermRef::Iri(iri) = self.ds.resolve(datatype) else {
-            return std::borrow::Cow::Borrowed(lexical);
+            return Cow::Borrowed(lexical);
         };
         crate::cdt_blank::rewrite_cdt_blank_terms(lexical, iri, &mut |label| {
             let (label, scope) = crate::blank_label::decode_blank_label(

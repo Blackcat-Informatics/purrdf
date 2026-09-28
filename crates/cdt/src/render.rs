@@ -35,16 +35,20 @@
 //! [`canonical_lexical`] takes `&CdtValue` and returns `String`: there is no failure
 //! mode, because every inhabitant of the type has a spelling. It walks the value
 //! with an explicit heap job stack and never recurses, so it is safe on a value of
-//! any admissible depth.
+//! any depth.
 //!
 //! # Measuring without materialising
 //!
 //! [`canonical_lexical_len`] answers "how many bytes would that be?" without
-//! allocating them. It is not a second, parallel spelling of the form — it drives
-//! the **same** walker through a different output sink, so the two can never drift.
-//! [`crate::functions`] needs it: a minted composite must be refused *before* it is
-//! built when its canonical form would exceed [`crate::MAX_LEXICAL_BYTES`], and
-//! rendering the very thing you are trying not to allocate is not a bound check.
+//! allocating them. It is not a second, parallel spelling of the form: every
+//! constructor measures the value it builds by driving the **same** walker through a
+//! measuring sink instead of a `String`, and the value carries that measure, so the
+//! two can never drift. The measuring sink stops at a nested composite and reads the
+//! measure it already carries, which is what makes building a value one level at a
+//! time linear in its depth. [`crate::functions`] needs the measure before the value
+//! exists: a minted composite must be refused *before* it is built when its canonical
+//! form would exceed [`crate::MAX_LEXICAL_BYTES`], and rendering the very thing you
+//! are trying not to allocate is not a bound check.
 
 use alloc::string::String;
 use alloc::vec::Vec;
@@ -76,6 +80,8 @@ trait Sink {
     fn put_str(&mut self, text: &str);
     /// Append one character.
     fn put_char(&mut self, ch: char);
+    /// A nested composite: schedule its rendering, or account for its length.
+    fn composite<'a>(&mut self, jobs: &mut Vec<Job<'a>>, value: &'a CdtValue);
 }
 
 impl Sink for String {
@@ -86,6 +92,10 @@ impl Sink for String {
     fn put_char(&mut self, ch: char) {
         self.push(ch);
     }
+
+    fn composite<'a>(&mut self, jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
+        push_value(jobs, value);
+    }
 }
 
 /// A [`Sink`] that materialises nothing and accumulates only the byte length.
@@ -93,6 +103,9 @@ impl Sink for String {
 /// Saturating rather than wrapping: a length that overflows `usize` is astronomically
 /// over every bound this crate enforces, and saturating keeps the comparison against
 /// [`crate::MAX_LEXICAL_BYTES`] correct instead of wrapping it to a small number.
+///
+/// A nested composite is not walked: it carries the length of its own canonical form
+/// from its construction, measured by this very sink, and that is what is added.
 struct Measure(usize);
 
 impl Sink for Measure {
@@ -102,6 +115,10 @@ impl Sink for Measure {
 
     fn put_char(&mut self, ch: char) {
         self.0 = self.0.saturating_add(ch.len_utf8());
+    }
+
+    fn composite<'a>(&mut self, _jobs: &mut Vec<Job<'a>>, value: &'a CdtValue) {
+        self.0 = self.0.saturating_add(value.extent().bytes);
     }
 }
 
@@ -137,12 +154,14 @@ pub fn canonical_lexical(value: &CdtValue) -> String {
     out
 }
 
-/// The **byte length** of [`canonical_lexical`], computed without allocating it.
+/// The **byte length** of [`canonical_lexical`], without allocating it.
 ///
-/// Exactly equal to `canonical_lexical(value).len()` for every value, because both
-/// drive the same walker (see the `Sink` trait); this one just never keeps the
-/// bytes. That is what lets [`crate::functions`] check a prospective composite
-/// against [`crate::MAX_LEXICAL_BYTES`] *before* deciding to build it.
+/// Exactly equal to `canonical_lexical(value).len()` for every value: the value
+/// carries the length from its construction, where it was measured by the same walker
+/// that renders (see the `Sink` trait) through a sink that keeps only the count. That
+/// is what lets [`crate::functions`] check a prospective composite against
+/// [`crate::MAX_LEXICAL_BYTES`] *before* deciding to build it, and what makes this
+/// answer cost the same for a value of any size.
 ///
 /// # Examples
 ///
@@ -155,11 +174,7 @@ pub fn canonical_lexical(value: &CdtValue) -> String {
 /// ```
 #[must_use]
 pub fn canonical_lexical_len(value: &CdtValue) -> usize {
-    let mut out = Measure(0);
-    let mut jobs: Vec<Job<'_>> = Vec::new();
-    push_value(&mut jobs, value);
-    run(&mut out, jobs);
-    out.0
+    value.extent().bytes
 }
 
 /// The canonical lexical form of a single map key, used by the duplicate-key
@@ -172,6 +187,8 @@ pub fn canonical_key_lexical(key: &CdtKey) -> String {
 }
 
 /// The byte length one element occupies in a canonical form, without allocating it.
+/// A nested composite answers from its carried measure, so this costs the element's
+/// own leaves and nothing below a composite.
 pub(crate) fn term_lexical_len(term: &CdtTerm) -> usize {
     let mut out = Measure(0);
     run(&mut out, alloc::vec![Job::Term(term)]);
@@ -193,7 +210,7 @@ fn run<S: Sink>(out: &mut S, mut jobs: Vec<Job<'_>>) {
             Job::Punct(text) => out.put_str(text),
             Job::Key(key) => write_key(out, key),
             Job::Term(term) => match term {
-                CdtTerm::Composite(inner) => push_value(&mut jobs, inner.as_ref()),
+                CdtTerm::Composite(inner) => out.composite(&mut jobs, inner.as_ref()),
                 CdtTerm::TripleTerm(triple) => push_triple(&mut jobs, triple.as_ref()),
                 CdtTerm::Iri(iri) => write_iri(out, iri),
                 CdtTerm::Blank(label) => {

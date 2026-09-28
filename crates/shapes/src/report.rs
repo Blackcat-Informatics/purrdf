@@ -12,6 +12,8 @@
 //! `tuples_from_ntriples()` round-trips back to the same tuple set for testing.
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use ::purrdf::RdfDatasetBuilder;
@@ -985,18 +987,15 @@ fn collect_minted_path_roots<'a>(r: &'a ValidationResult, roots: &mut FastSet<&'
 }
 
 /// Add every blank-node label reachable from `term`, descending through RDF 1.2
-/// triple terms (a quoted triple's own subject/object are carried nodes too).
+/// triple terms (a quoted triple's own subject/object are carried nodes too), over
+/// [`Term::visit_nested`]'s work list.
 fn collect_blank_labels<'a>(term: &'a Term, labels: &mut FastSet<&'a str>) {
-    match term {
-        Term::BlankNode(label) => {
+    let ControlFlow::Continue(()) = term.visit_nested(|term| -> ControlFlow<Infallible> {
+        if let Term::BlankNode(label) = term {
             labels.insert(label.as_str());
         }
-        Term::Triple(t) => {
-            collect_blank_labels(&t.subject, labels);
-            collect_blank_labels(&t.object, labels);
-        }
-        Term::NamedNode(_) | Term::Literal(_) => {}
-    }
+        ControlFlow::Continue(())
+    });
 }
 
 /// Whether `label` is one of the labels the report would mint under the EMPTY
@@ -2275,5 +2274,42 @@ mod tests {
                 .any(|a| a.role == AttributionRole::EvaluationScope),
             "must carry EvaluationScope attribution"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The blank-label survey against its recursive reference.
+
+    use crate::term::Term;
+    use crate::term::term_walk_tests::generated;
+    use purrdf_core::FastSet;
+
+    use super::collect_blank_labels;
+
+    fn reference<'a>(term: &'a Term, labels: &mut FastSet<&'a str>) {
+        match term {
+            Term::BlankNode(label) => {
+                labels.insert(label.as_str());
+            }
+            Term::Triple(t) => {
+                reference(&t.subject, labels);
+                reference(&t.object, labels);
+            }
+            Term::NamedNode(_) | Term::Literal(_) => {}
+        }
+    }
+
+    /// The survey finds every blank label a generated term carries, as the recursive
+    /// reference does.
+    #[test]
+    fn the_survey_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..400_u64 {
+            let term = generated(seed);
+            let (mut found, mut expected) = (FastSet::default(), FastSet::default());
+            collect_blank_labels(&term, &mut found);
+            reference(&term, &mut expected);
+            assert_eq!(found, expected, "seed {seed}");
+        }
     }
 }

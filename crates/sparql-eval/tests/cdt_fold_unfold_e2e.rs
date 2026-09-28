@@ -375,24 +375,60 @@ fn a_nested_composite_key_drops_its_entry_but_a_composite_value_is_kept() {
          FILTER(cdt:size(?l) = 2) FILTER(cdt:get(cdt:get(?l, 1), 2) = 2) }"));
 }
 
-/// A `FOLD` whose element would nest past `purrdf-cdt`'s depth bound is a HARD
-/// failure of the query, never an unbound answer — the same tri-state rule
-/// `cdt:List(…)` follows. Degrading a refused mint to unbound would let a resource
-/// refusal satisfy a `FILTER(!BOUND(?x))`.
+/// `purrdf-cdt` bounds a composite by its element count and its canonical byte
+/// length only — nesting is not a resource of its own — so a `FOLD` whose element is
+/// a list ten thousand levels deep mints a list one level deeper, far past the 64
+/// levels the removed nesting cap admitted. The expected lexical form is written
+/// from the definition: the folded list of one element is that element in brackets.
 #[test]
-fn a_fold_past_the_nesting_bound_is_a_hard_failure() {
-    // 64 nested lists is the deepest composite that can exist, so folding one into
-    // a 65th level has nowhere to go.
-    let mut deepest = "cdt:List()".to_owned();
-    for _ in 1..64 {
-        deepest = format!("cdt:List({deepest})");
-    }
-    let message = evaluate_err(
+fn a_fold_over_a_deeply_nested_list_mints_one_level_deeper() {
+    const DEPTH: usize = 10_000;
+    let deepest = format!("{}{}", "[".repeat(DEPTH), "]".repeat(DEPTH));
+    let result = evaluate(
         &empty(),
-        &format!("SELECT (FOLD(?v) AS ?l) WHERE {{ BIND({deepest} AS ?v) }}"),
+        &format!("SELECT (FOLD(?v) AS ?l) WHERE {{ BIND(\"{deepest}\"^^cdt:List AS ?v) }}"),
     );
+    let expected = format!("{}{}", "[".repeat(DEPTH + 1), "]".repeat(DEPTH + 1));
+    let got = rows(&result);
+    assert_eq!(got.len(), 1, "one group, one row");
     assert!(
-        message.contains("nesting"),
+        got[0].get("l") == Some(&expected),
+        "the fold is the element in brackets, {} levels deep",
+        DEPTH + 1
+    );
+}
+
+/// The bound that does remain — `purrdf-cdt`'s element count, 2^20 at every level —
+/// refuses a `FOLD` as a HARD failure of the query, never an unbound answer: the
+/// same tri-state rule `cdt:List(…)` follows. Degrading a refused mint to unbound
+/// would let a resource refusal satisfy a `FILTER(!BOUND(?x))`.
+///
+/// `?x0` is the empty list; `?xk+1` is `cdt:List(?xk, ?xk)`, so `?xk` holds
+/// `2^(k+1) - 2` elements and `?x19` holds `2^20 - 2`, inside the bound. A `FOLD` of
+/// one such row holds `2^20 - 1` and mints; a `FOLD` of two holds `2^21 - 2` and is
+/// refused. Both queries are run, so the refusal is shown to sit exactly at the bound.
+#[test]
+fn a_fold_past_the_element_bound_is_a_hard_failure_and_one_inside_it_mints() {
+    let binds: String = std::iter::once("BIND(cdt:List() AS ?x0) ".to_owned())
+        .chain((1..=19).map(|level| {
+            let below = level - 1;
+            format!("BIND(cdt:List(?x{below}, ?x{below}) AS ?x{level}) ")
+        }))
+        .collect();
+    let query = |rows: &str| {
+        format!("SELECT (cdt:size(FOLD(?x19)) AS ?n) WHERE {{ VALUES ?k {{ {rows} }} {binds}}}")
+    };
+
+    let inside = evaluate(&empty(), &query("1"));
+    assert_eq!(
+        rows(&inside),
+        vec![row(&[("n", "1")])],
+        "a fold of 2^20 - 1 elements mints"
+    );
+
+    let message = evaluate_err(&empty(), &query("1 2"));
+    assert!(
+        message.contains("elements"),
         "the refusal must name the bound it crossed: {message}"
     );
 }

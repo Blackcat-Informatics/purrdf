@@ -56,22 +56,53 @@ fn parse_quads(ttl: &str) -> Result<Vec<RdfQuad>, RdfDiagnostic> {
 /// oxigraph (RDF 1.1) types a bare `"x"` as `xsd:string`; the authored OWL graph
 /// (rdflib) keeps it as a plain literal, and rdflib's isomorphism treats the two
 /// as distinct. Jena and oxigraph both emit `xsd:string` literals bare — match
-/// that so the round-trip proof against the authored OWL holds. Applied
-/// recursively so triple-term components are normalized too.
+/// that so the round-trip proof against the authored OWL holds. Triple-term
+/// components are normalized too.
+///
+/// A triple term is rebuilt bottom-up over a work list: its subject, then its
+/// object, each normalized fully before the next, then the triple with its
+/// predicate unchanged.
 fn simplify_term(term: &RdfTerm) -> RdfTerm {
-    match term {
-        RdfTerm::Literal(literal)
-            if literal.language.is_none() && literal.datatype.as_deref() == Some(XSD_STRING) =>
-        {
-            RdfTerm::literal(RdfLiteral::simple(literal.lexical_form.clone()))
-        }
-        RdfTerm::Triple(triple) => RdfTerm::triple(RdfTriple::new(
-            simplify_term(&triple.subject),
-            triple.predicate.clone(),
-            simplify_term(&triple.object),
-        )),
-        other => other.clone(),
+    enum Step<'t> {
+        Term(&'t RdfTerm),
+        Triple(&'t str),
     }
+    let mut steps: Vec<Step<'_>> = vec![Step::Term(term)];
+    let mut simplified: Vec<RdfTerm> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(RdfTerm::Literal(literal))
+                if literal.language.is_none()
+                    && literal.datatype.as_deref() == Some(XSD_STRING) =>
+            {
+                simplified.push(RdfTerm::literal(RdfLiteral::simple(
+                    literal.lexical_form.clone(),
+                )));
+            }
+            Step::Term(RdfTerm::Triple(triple)) => steps.extend([
+                Step::Triple(&triple.predicate),
+                Step::Term(&triple.object),
+                Step::Term(&triple.subject),
+            ]),
+            Step::Term(other) => simplified.push(other.clone()),
+            Step::Triple(predicate) => {
+                let object = simplified
+                    .pop()
+                    .expect("a triple term's object is normalized");
+                let subject = simplified
+                    .pop()
+                    .expect("a triple term's subject is normalized");
+                simplified.push(RdfTerm::triple(RdfTriple::new(
+                    subject,
+                    predicate.to_owned(),
+                    object,
+                )));
+            }
+        }
+    }
+    simplified
+        .pop()
+        .expect("the term's own normalization is the last one made")
 }
 
 /// Serialize a term to Turtle, normalizing simple literals first. Total: the
@@ -480,5 +511,118 @@ ex:ax rdf:reifies <<( ex:s ex:p ex:o )>> ;
             .expect_err("conflicting rdf:reifies must hard-fail, not be silently dropped");
         assert_eq!(err.code, "statements-conflicting-structural");
         assert!(err.to_string().contains("conflicting"), "{err:?}");
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! Simple-literal normalization against its recursive reference, and at a hundred
+    //! thousand levels on a 128 KiB thread.
+
+    use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue};
+
+    use super::{XSD_STRING, simplify_term};
+
+    /// The recursive reference of [`simplify_term`].
+    fn reference(term: &RdfTerm) -> RdfTerm {
+        match term {
+            RdfTerm::Literal(literal)
+                if literal.language.is_none()
+                    && literal.datatype.as_deref() == Some(XSD_STRING) =>
+            {
+                RdfTerm::literal(RdfLiteral::simple(literal.lexical_form.clone()))
+            }
+            RdfTerm::Triple(triple) => RdfTerm::triple(RdfTriple::new(
+                reference(&triple.subject),
+                triple.predicate.clone(),
+                reference(&triple.object),
+            )),
+            other => other.clone(),
+        }
+    }
+
+    /// A test-only owned-model twin of a generated term value whose predicates are IRIs.
+    fn owned(value: &TermValue) -> RdfTerm {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                let TermValue::Iri(predicate) = &**p else {
+                    unreachable!("the generator was asked for IRI predicates")
+                };
+                RdfTerm::triple(RdfTriple::new(owned(s), predicate.clone(), owned(o)))
+            }
+            TermValue::Iri(iri) => RdfTerm::iri(iri.clone()),
+            TermValue::Blank { label, .. } => RdfTerm::blank_node(label.clone()),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => RdfTerm::literal(RdfLiteral {
+                lexical_form: lexical_form.clone(),
+                datatype: Some(datatype.clone()),
+                language: language.clone(),
+                direction: *direction,
+            }),
+        }
+    }
+
+    /// The work-list normalization answers every generated term exactly as the recursive
+    /// reference does, nested triple terms included.
+    #[test]
+    fn simplification_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::IriPredicates,
+            );
+            nested += usize::from(budget < 7);
+            let term = owned(&value);
+            assert_eq!(simplify_term(&term), reference(&term), "seed {seed}");
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+    }
+
+    /// A triple term a hundred thousand levels deep, its innermost subject an
+    /// `xsd:string` literal, is normalized on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_simplified_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut term = RdfTerm::literal(RdfLiteral {
+                    lexical_form: "x".to_owned(),
+                    datatype: Some(XSD_STRING.to_owned()),
+                    language: None,
+                    direction: None,
+                });
+                for _ in 0..LEVELS {
+                    term = RdfTerm::triple(RdfTriple::new(
+                        term,
+                        "http://example.org/p",
+                        RdfTerm::iri("http://example.org/o"),
+                    ));
+                }
+                let mut simplified = simplify_term(&term);
+                // The owned model's derived drop descends once per level, so both chains
+                // are taken apart one level at a time, the innermost subject checked.
+                let mut levels = 0;
+                while let RdfTerm::Triple(triple) = simplified {
+                    simplified = triple.subject;
+                    levels += 1;
+                }
+                assert_eq!(levels, LEVELS);
+                assert_eq!(simplified, RdfTerm::literal(RdfLiteral::simple("x")));
+                while let RdfTerm::Triple(triple) = term {
+                    term = triple.subject;
+                }
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the normalization did not overflow the thread's stack");
     }
 }

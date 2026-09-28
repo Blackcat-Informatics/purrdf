@@ -381,10 +381,7 @@ fn run_with_registry(
         .query_with_options_view(
             &**ds,
             request(&text),
-            QueryOptions {
-                env: registry,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(registry),
         )
         .unwrap_or_else(|e| panic!("query failed: {e:?}\nquery: {text}"))
 }

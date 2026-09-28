@@ -9,23 +9,24 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { ready, Dataset, QueryEngine, provenanceFromJson, provenanceFromXml } from "../index.mjs";
+import { HOST_STACK_REFUSAL, NESTING_SHAPES, NUMBERS, attempt, realEnd } from "./fixtures/nesting.mjs";
 
 // One-time wasm instantiation before any test runs.
 await ready();
 
 // A tiny two-graph TriG asset, the shape the docs playground loads offline.
 const TRIG = `
-@prefix ex: <https://e/> .
+@prefix ex: <https://example.org/> .
 ex:a ex:knows ex:b .
 ex:a ex:name "Ann" .
 ex:b ex:name "Bob" .
-graph <https://e/g> { ex:c ex:knows ex:a . }
+graph <https://example.org/g> { ex:c ex:knows ex:a . }
 `;
 
 test("SELECT returns SPARQL Results JSON bindings", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const json = JSON.parse(
-    ds.query("PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name"),
+    ds.query("PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name"),
   );
   assert.deepEqual(json.head.vars, ["name"]);
   const names = json.results.bindings.map((b) => b.name.value);
@@ -35,18 +36,18 @@ test("SELECT returns SPARQL Results JSON bindings", () => {
 test("SELECT over the default graph does not see named-graph triples", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const json = JSON.parse(
-    ds.query("PREFIX ex: <https://e/> SELECT ?o WHERE { ?s ex:knows ?o }"),
+    ds.query("PREFIX ex: <https://example.org/> SELECT ?o WHERE { ?s ex:knows ?o }"),
   );
   // Only ex:a ex:knows ex:b is in the default graph; ex:c ex:knows ex:a is in <g>.
   const objs = json.results.bindings.map((b) => b.o.value);
-  assert.deepEqual(objs, ["https://e/b"]);
+  assert.deepEqual(objs, ["https://example.org/b"]);
 });
 
 test("ASK returns a boolean result document", () => {
   const ds = Dataset.parse(TRIG, "trig");
-  const yes = JSON.parse(ds.query("PREFIX ex: <https://e/> ASK { ex:a ex:knows ex:b }"));
+  const yes = JSON.parse(ds.query("PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }"));
   assert.equal(yes.boolean, true);
-  const no = JSON.parse(ds.query("PREFIX ex: <https://e/> ASK { ex:b ex:knows ex:a }"));
+  const no = JSON.parse(ds.query("PREFIX ex: <https://example.org/> ASK { ex:b ex:knows ex:a }"));
   assert.equal(no.boolean, false);
 });
 
@@ -55,7 +56,7 @@ test("QueryEngine SELECT returns typed package-root bindings", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const result = engine.select(
     ds,
-    "PREFIX ex: <https://e/> SELECT ?person ?name WHERE { ?person ex:name ?name } ORDER BY ?name",
+    "PREFIX ex: <https://example.org/> SELECT ?person ?name WHERE { ?person ex:name ?name } ORDER BY ?name",
   );
   assert.equal(result.kind, "select");
   assert.deepEqual(result.variables, ["person", "name"]);
@@ -64,7 +65,7 @@ test("QueryEngine SELECT returns typed package-root bindings", () => {
   assert.equal(result.rows.remaining, 2);
   const first = result.rows.take(0);
   assert.equal(first.person.termType, "NamedNode");
-  assert.equal(first.person.value, "https://e/a");
+  assert.equal(first.person.value, "https://example.org/a");
   assert.equal(first.name.termType, "Literal");
   assert.equal(first.name.value, "Ann");
   assert.deepEqual([...result.rows].map((row) => row.name.value), ["Bob"]);
@@ -93,7 +94,7 @@ test("QueryEngine SELECT rows are a single-owner stream", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const result = engine.select(
     ds,
-    "PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name",
+    "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name",
   );
   assert.deepEqual(result.rows.toArray().map((row) => row.name.value), ["Ann", "Bob"]);
   assert.deepEqual(result.rows.toArray(), []);
@@ -103,12 +104,12 @@ test("QueryEngine SELECT rows are a single-owner stream", () => {
 test("QueryEngine query routes ASK and graph results into discriminated objects", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const ask = engine.query(ds, "PREFIX ex: <https://e/> ASK { ex:a ex:knows ex:b }");
+  const ask = engine.query(ds, "PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }");
   assert.deepEqual(ask, { kind: "ask", boolean: true });
 
   const graph = engine.query(
     ds,
-    "PREFIX ex: <https://e/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
+    "PREFIX ex: <https://example.org/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
   );
   assert.equal(graph.kind, "graph");
   assert.equal(graph.dataset.size, 2);
@@ -117,20 +118,25 @@ test("QueryEngine query routes ASK and graph results into discriminated objects"
 test("QueryEngine raw serialization supports result and graph formats", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const xml = engine.queryRaw(ds, "PREFIX ex: <https://e/> ASK { ex:a ex:knows ex:b }", {
+  const xml = engine.queryRaw(ds, "PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }", {
     format: "xml",
   });
   assert.match(xml, /^<\?xml/);
 
   const nquads = engine.queryRaw(
     ds,
-    "PREFIX ex: <https://e/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
+    "PREFIX ex: <https://example.org/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
     { format: "nquads" },
   );
-  assert.match(nquads, /https:\/\/e\/label/);
+  // Exact: the whole N-Quads document, not a substring that a wrong IRI could contain.
+  assert.equal(
+    nquads,
+    '<https://example.org/a> <https://example.org/label> "Ann" .\n' +
+      '<https://example.org/b> <https://example.org/label> "Bob" .\n',
+  );
 
   assert.throws(() =>
-    engine.queryRaw(ds, "PREFIX ex: <https://e/> ASK { ex:a ex:knows ex:b }", {
+    engine.queryRaw(ds, "PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }", {
       format: "nquads",
     }),
   );
@@ -139,7 +145,7 @@ test("QueryEngine raw serialization supports result and graph formats", () => {
 test("CONSTRUCT returns Turtle", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const ttl = ds.query(
-    "PREFIX ex: <https://e/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
+    "PREFIX ex: <https://example.org/> CONSTRUCT { ?p ex:label ?name } WHERE { ?p ex:name ?name }",
   );
   // The result is Turtle text (not JSON); re-parse it to prove it is well-formed.
   const back = Dataset.parse(ttl, "turtle");
@@ -155,7 +161,7 @@ test("a SERVICE clause hard-fails offline (no resolver in the browser)", () => {
   const ds = Dataset.parse(TRIG, "trig");
   assert.throws(() =>
     ds.query(
-      "PREFIX ex: <https://e/> SELECT ?o WHERE { SERVICE <https://remote/sparql> { ?s ex:knows ?o } }",
+      "PREFIX ex: <https://example.org/> SELECT ?o WHERE { SERVICE <https://remote.example.org/sparql> { ?s ex:knows ?o } }",
     ),
   );
 });
@@ -163,7 +169,7 @@ test("a SERVICE clause hard-fails offline (no resolver in the browser)", () => {
 test("QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolver", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(
-    "@prefix ex: <https://e/> . ex:a ex:p ex:b .",
+    "@prefix ex: <https://example.org/> . ex:a ex:p ex:b .",
     "turtle",
   );
   const before = ds.canonicalize();
@@ -171,7 +177,7 @@ test("QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolv
   assert.equal(
     engine.update(
       ds,
-      "INSERT DATA { <https://e/c> <https://e/p> <https://e/d> }",
+      "INSERT DATA { <https://example.org/c> <https://example.org/p> <https://example.org/d> }",
     ),
     ds,
   );
@@ -181,7 +187,7 @@ test("QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolv
   assert.throws(() =>
     engine.update(
       ds,
-      "INSERT DATA { <https://e/x> <https://e/p> <https://e/y> } ; LOAD <https://e/doc>",
+      "INSERT DATA { <https://example.org/x> <https://example.org/p> <https://example.org/y> } ; LOAD <https://example.org/doc>",
     ),
   );
   assert.equal(ds.canonicalize(), stable);
@@ -191,7 +197,7 @@ test("QueryEngine UPDATE mutates atomically and LOAD hard-fails without a resolv
 test("queryRaw provenanceNamespace populates and round-trips through JSON", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const query = "PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name";
+  const query = "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name";
 
   const json = engine.queryRaw(ds, query, {
     format: "json",
@@ -210,7 +216,7 @@ test("queryRaw provenanceNamespace populates and round-trips through JSON", () =
 test("queryRaw provenanceNamespace populates and round-trips through XML", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
-  const query = "PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name";
+  const query = "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name";
 
   const xml = engine.queryRaw(ds, query, {
     format: "xml",
@@ -228,7 +234,7 @@ test("omitting provenanceNamespace emits pure W3C output", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const json = engine.queryRaw(
     ds,
-    "PREFIX ex: <https://e/> SELECT ?name WHERE { ?p ex:name ?name }",
+    "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name }",
     { format: "json" },
   );
   assert.ok(!json.includes('"prov"'));
@@ -238,18 +244,23 @@ test("a lone provenanceNamespace half is refused", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
   assert.throws(() =>
-    engine.queryRaw(ds, "PREFIX ex: <https://e/> ASK { ex:a ex:knows ex:b }", {
+    engine.queryRaw(ds, "PREFIX ex: <https://example.org/> ASK { ex:a ex:knows ex:b }", {
       provenanceNamespace: { prefix: "prov" },
     }),
   );
 });
 
 test("serialize supports JSON-LD (the docs 'copy as' transcode surface)", () => {
-  const ds = Dataset.parse('@prefix ex: <https://e/> . ex:a ex:p ex:o .', "turtle");
+  const ds = Dataset.parse('@prefix ex: <https://example.org/> . ex:a ex:p ex:o .', "turtle");
   const jsonld = ds.serialize("jsonld");
   const doc = JSON.parse(jsonld); // must be valid JSON
-  assert.ok(
-    JSON.stringify(doc).includes("https://e/"),
+  // Exact: the document carries each term IRI in its own position, compared whole.
+  assert.deepEqual(
+    doc,
+    {
+      "@context": {},
+      "@graph": [{ "@id": "https://example.org/a", "https://example.org/p": { "@id": "https://example.org/o" } }],
+    },
     "the JSON-LD document must carry the term IRIs",
   );
 });
@@ -268,20 +279,23 @@ test("serialize supports JSON-LD (the docs 'copy as' transcode surface)", () => 
 // answering with Turtle bytes that omit the query's own statements is honest.
 
 const GRAPH_CONSTRUCT =
-  "PREFIX ex: <https://e/> CONSTRUCT { GRAPH ex:out { ?s ex:knows ?o } } WHERE { ?s ex:knows ?o }";
+  "PREFIX ex: <https://example.org/> CONSTRUCT { GRAPH ex:out { ?s ex:knows ?o } } WHERE { ?s ex:knows ?o }";
 const PLAIN_CONSTRUCT =
-  "PREFIX ex: <https://e/> CONSTRUCT { ?s ex:knows ?o } WHERE { ?s ex:knows ?o }";
+  "PREFIX ex: <https://example.org/> CONSTRUCT { ?s ex:knows ?o } WHERE { ?s ex:knows ?o }";
 
 test("the default query() format never returns an empty string for a named-graph CONSTRUCT", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const out = ds.query(GRAPH_CONSTRUCT);
   assert.notEqual(out.trim(), "", "the documented default must never be a silent empty result");
-  assert.ok(out.includes("https://e/out"), `the graph the query named must survive: ${out}`);
-  assert.ok(out.includes("https://e/a"), `the constructed statement must survive: ${out}`);
-  // TriG round-trips back into a dataset that still carries the graph.
+  // TriG round-trips back into a dataset that still carries the graph and the statement;
+  // every term is compared whole, never as a substring of the serialized text.
   const reparsed = Dataset.parse(out, "trig");
-  assert.equal(reparsed.size, 1);
-  assert.equal(reparsed.quads()[0].graph.value, "https://e/out");
+  assert.equal(reparsed.size, 1, `the constructed statement must survive: ${out}`);
+  const [quad] = reparsed.quads();
+  assert.equal(quad.graph.value, "https://example.org/out", `the graph the query named must survive: ${out}`);
+  assert.equal(quad.subject.value, "https://example.org/a");
+  assert.equal(quad.predicate.value, "https://example.org/knows");
+  assert.equal(quad.object.value, "https://example.org/b");
 });
 
 test("the default query() format is still Turtle for a default-graph CONSTRUCT", () => {
@@ -298,7 +312,7 @@ test("an explicit single-graph format throws for a named-graph CONSTRUCT", () =>
       () => engine.queryRaw(ds, GRAPH_CONSTRUCT, { format }),
       (error) => {
         assert.ok(
-          error.message.includes("carrying 1 named graph (<https://e/out>)"),
+          error.message.includes("carrying 1 named graph (<https://example.org/out>)"),
           `the refusal names the graph: ${error.message}`,
         );
         assert.ok(
@@ -320,7 +334,7 @@ test("an explicit quad-capable format carries a named-graph CONSTRUCT", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");
   const nquads = engine.queryRaw(ds, GRAPH_CONSTRUCT, { format: "nquads" });
-  assert.ok(nquads.includes("<https://e/out> ."), nquads);
+  assert.ok(nquads.includes("<https://example.org/out> ."), nquads);
 });
 
 test("an explicit single-graph format still serializes a default-graph CONSTRUCT", () => {
@@ -329,7 +343,7 @@ test("an explicit single-graph format still serializes a default-graph CONSTRUCT
   const ntriples = engine.queryRaw(ds, PLAIN_CONSTRUCT, { format: "ntriples" });
   assert.equal(
     ntriples.trim(),
-    "<https://e/a> <https://e/knows> <https://e/b> .",
+    "<https://example.org/a> <https://example.org/knows> <https://example.org/b> .",
   );
 });
 
@@ -343,25 +357,33 @@ test("an explicit single-graph format still serializes a default-graph CONSTRUCT
 // explicit single-graph format must throw rather than hand JS an empty document.
 
 const GRAPH_STAR_TRIG = `
-@prefix ex: <https://e/> .
-graph <https://e/g> { ex:s ex:p ex:o ~ex:r {| ex:note "n" |} . }
+@prefix ex: <https://example.org/> .
+graph <https://example.org/g> { ex:s ex:p ex:o ~ex:r {| ex:note "n" |} . }
 `;
-const GRAPH_DESCRIBE = "DESCRIBE <https://e/s>";
+const GRAPH_DESCRIBE = "DESCRIBE <https://example.org/s>";
 
 test("the default query() format carries a named-graph DESCRIBE instead of emptying it", () => {
   const ds = Dataset.parse(GRAPH_STAR_TRIG, "trig");
   const out = ds.query(GRAPH_DESCRIBE);
   assert.notEqual(out.trim(), "", "a description must never come back as a silent empty result");
-  assert.ok(out.includes("https://e/g"), `the graph the source asserted must survive: ${out}`);
+  // Every described statement stays in the graph the source asserted it in, compared whole.
+  assert.deepEqual(
+    Dataset.parse(out, "trig").quads().map((quad) => quad.graph.value),
+    ["https://example.org/g", "https://example.org/g", "https://example.org/g"],
+    `the graph the source asserted must survive: ${out}`,
+  );
   const engine = new QueryEngine();
   const nquads = engine.queryRaw(ds, GRAPH_DESCRIBE, { format: "nquads" });
-  for (const row of [
-    "<https://e/s> <https://e/p> <https://e/o> <https://e/g> .",
-    "<https://e/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://e/s> <https://e/p> <https://e/o> )>> <https://e/g> .",
-    '<https://e/r> <https://e/note> "n" <https://e/g> .',
-  ]) {
-    assert.ok(nquads.includes(row), `the description must carry \`${row}\`: ${nquads}`);
-  }
+  // Exactly these rows, each compared whole as a line — no more, no fewer.
+  assert.deepEqual(
+    nquads.split("\n").filter((line) => line !== "").sort(),
+    [
+      "<https://example.org/s> <https://example.org/p> <https://example.org/o> <https://example.org/g> .",
+      "<https://example.org/r> <http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies> <<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>> <https://example.org/g> .",
+      '<https://example.org/r> <https://example.org/note> "n" <https://example.org/g> .',
+    ].sort(),
+    `the description must carry exactly its rows: ${nquads}`,
+  );
 });
 
 test("an explicit single-graph format throws for a named-graph DESCRIBE", () => {
@@ -372,7 +394,7 @@ test("an explicit single-graph format throws for a named-graph DESCRIBE", () => 
       () => engine.queryRaw(ds, GRAPH_DESCRIBE, { format }),
       (error) => {
         assert.ok(
-          error.message.includes("carrying 1 named graph (<https://e/g>)"),
+          error.message.includes("carrying 1 named graph (<https://example.org/g>)"),
           `the refusal names the graph: ${error.message}`,
         );
         assert.ok(
@@ -402,7 +424,13 @@ test("serializeWithLoss reports the named-graph rows a single-graph syntax drops
   assert.equal(lossy.directionalLiteralsDropped, 0);
   // …and the named-graph count is the one that reports the vanished row.
   assert.equal(lossy.namedGraphRowsDropped, 1);
-  assert.ok(!lossy.text.includes("https://e/g"), lossy.text);
+  // Exactly the three default-graph rows: the named-graph row is gone, nothing else is.
+  assert.equal(
+    lossy.text,
+    "<https://example.org/a> <https://example.org/knows> <https://example.org/b> .\n" +
+      '<https://example.org/a> <https://example.org/name> "Ann" .\n' +
+      '<https://example.org/b> <https://example.org/name> "Bob" .\n',
+  );
   // The bytes are exactly what the plain entry point produces.
   assert.equal(lossy.text, ds.serialize("ntriples"));
   lossy.free();
@@ -411,35 +439,406 @@ test("serializeWithLoss reports the named-graph rows a single-graph syntax drops
   assert.equal(lossless.statementRowsDropped, 0);
   assert.equal(lossless.directionalLiteralsDropped, 0);
   assert.equal(lossless.namedGraphRowsDropped, 0);
-  assert.ok(lossless.text.includes("https://e/g"), lossless.text);
+  // Exactly the same rows plus the named-graph row, carried in its graph.
+  assert.equal(
+    lossless.text,
+    "<https://example.org/a> <https://example.org/knows> <https://example.org/b> .\n" +
+      '<https://example.org/a> <https://example.org/name> "Ann" .\n' +
+      '<https://example.org/b> <https://example.org/name> "Bob" .\n' +
+      "<https://example.org/c> <https://example.org/knows> <https://example.org/a> <https://example.org/g> .\n",
+  );
   lossless.free();
 });
 
-// The `SILENT` forms are the query author's own opt-out, and SPARQL 1.1 (§10 for
-// SERVICE, §3.1.4 for LOAD) requires them to succeed with nothing fetched. The
-// package docs claimed SERVICE / LOAD hard-fail unconditionally; they hard-fail only
-// without `SILENT`, and this pins both halves beside each other so the prose and the
+// The `SILENT` forms are the query author's own opt-out, and SPARQL 1.1 (Federated
+// Query §3.2 for SERVICE, Update §3.1.4 for LOAD) requires them to succeed with nothing
+// fetched when the invocation fails — including on this lane, which has no source to
+// reach anything with. This pins both halves beside each other so the prose and the
 // behaviour cannot drift apart again.
 test("SERVICE SILENT and LOAD SILENT succeed with nothing fetched", () => {
-  const ds = Dataset.parse("@prefix ex: <https://e/> . ex:a ex:p ex:b .", "turtle");
+  const ds = Dataset.parse("@prefix ex: <https://example.org/> . ex:a ex:p ex:b .", "turtle");
 
   // Without SILENT: a hard failure, because no resolver is installed.
   assert.throws(() =>
-    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://e/endpoint> { ?a ?b ?c } }"),
+    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE <https://example.org/endpoint> { ?a ?b ?c } }"),
   );
 
   // With SILENT: the surrounding pattern's own solutions come back, joined against
   // the identity — so the local row survives and nothing remote is bound.
   const json = JSON.parse(
-    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://e/endpoint> { ?a ?b ?c } }"),
+    ds.query("SELECT * WHERE { ?s ?p ?o SERVICE SILENT <https://example.org/endpoint> { ?a ?b ?c } }"),
   );
   assert.equal(json.results.bindings.length, 1);
   assert.equal("a" in json.results.bindings[0], false, "nothing remote may be bound");
-  assert.equal(json.results.bindings[0].s.value, "https://e/a");
+  assert.equal(json.results.bindings[0].s.value, "https://example.org/a");
 
   const engine = new QueryEngine();
   const before = ds.canonicalize();
-  assert.throws(() => engine.update(ds, "LOAD <https://e/doc>"));
-  engine.update(ds, "LOAD SILENT <https://e/doc>");
+  assert.throws(() => engine.update(ds, "LOAD <https://example.org/doc>"));
+  engine.update(ds, "LOAD SILENT <https://example.org/doc>");
   assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
+});
+
+// How deep a request may nest is bounded by what it builds, not by how it is written.
+// The parser is recursion-free: it keeps its nesting on heap stacks, so writing a level
+// costs neither the wasm shadow stack nor the JavaScript engine's call stack. A bracket
+// builds no node, and neither does a property-path group; a group whose only element is
+// a group parses to that inner group's pattern (joined with the empty basic graph
+// pattern, the join's identity). Those shapes therefore answer at any depth. A level that
+// does build a node — a call, a negation — is a level of the plan the evaluator recurses
+// over, and before evaluation the query plan's height is admitted against the host-stack
+// bounds (`crates/sparql-eval/src/stack/height.rs`): past 2 304 expression and path nodes
+// (`WASM_VALUE_LIMIT`), the request is the host-stack refusal and the instance answers
+// the next one.
+
+// Every shape at 128, 500 and 1 000 levels answers on the synchronous lane, each with the
+// answer its nesting computes; 20 000 levels of a shape that builds a node per level is a
+// typed refusal, and 20 000 levels of one that builds none answers.
+test("nesting answers on the synchronous lane as deep as its stacks hold it, and is a typed refusal past that", async () => {
+  const ds = Dataset.parse(NUMBERS, "nquads");
+  const engine = new QueryEngine();
+  const run = (query) => engine.select(ds, query);
+  const buildsNodes = new Set(["nested ABS(", "nested -("]);
+  for (const [what, text, expected] of NESTING_SHAPES) {
+    for (const depth of [128, 500, 1_000]) {
+      const outcome = await attempt(run, text(depth), `${what} ${depth} deep`);
+      assert.deepEqual(outcome.subjects, expected, `${what} ${depth} deep answers what it computes`);
+    }
+    const deep = await attempt(run, text(20_000), `${what} 20 000 deep`);
+    if (buildsNodes.has(what)) {
+      assert.match(deep.refused ?? "", HOST_STACK_REFUSAL, `${what} 20 000 deep is refused`);
+    } else {
+      assert.deepEqual(deep.subjects, expected, `${what} 20 000 deep answers what it computes`);
+    }
+  }
+});
+
+// The real limit of every shape that builds a node per level, on the synchronous lane,
+// found by bisection: the deepest level that answers holds its computed value and one
+// level more is the host-stack refusal — a refusal pair at the lane's real end. Measured
+// on this build, and bounded by `WASM_VALUE_LIMIT` (2 304 expression nodes): the `=`
+// comparison around the nesting is one node, so 2 303 negations answer; a call's argument
+// `?o - 3` is one more, so 2 302 calls answer. The asynchronous lane admits the same plan
+// heights, so a job ends at the same levels (see `async-concurrency.test.mjs`). The shapes
+// that build no node answer at 20 000 levels, where the bisection starts.
+test("on the synchronous lane the deepest answer and the first refusal are neighbours", async () => {
+  const ds = Dataset.parse(NUMBERS, "nquads");
+  const run = (query) => new QueryEngine().select(ds, query);
+  const limits = {};
+  for (const shape of NESTING_SHAPES) {
+    const [what, text, expected] = shape;
+    const deep = await attempt(run, text(20_000), what);
+    if (deep.subjects) {
+      assert.deepEqual(deep.subjects, expected, `${what}: 20 000 levels answer what they compute`);
+      continue;
+    }
+    const { deepest, refusal } = await realEnd(run, shape);
+    limits[what] = deepest;
+    assert.match(refusal, HOST_STACK_REFUSAL, what);
+    assert.match(refusal, /query algebra/, what);
+    assert.doesNotMatch(refusal, /asynchronous twin|thread/, what);
+  }
+  assert.deepEqual(limits, { "nested ABS(": 2302, "nested -(": 2303 });
+});
+
+// Brackets build no node: a FILTER nested 10 000 parentheses deep parses to the same
+// expression as one pair, so it answers exactly what one pair answers — twice, since a
+// trap would have left the instance unable to answer the second time.
+test("a FILTER nested 10 000 parentheses deep answers what one pair answers, and the engine answers afterwards", () => {
+  const ds = Dataset.parse(TRIG, "trig");
+  const engine = new QueryEngine();
+  const filter = (depth) => `SELECT ?s WHERE { ?s ?p ?o FILTER(${"(".repeat(depth)}?o${")".repeat(depth)} = ?o) }`;
+  const subjects = (query) =>
+    engine
+      .select(ds, query)
+      .rows.toArray()
+      .map((row) => row.s.value)
+      .sort();
+  const shallow = subjects(filter(1));
+  assert.ok(shallow.length > 0, "one pair answers rows");
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    assert.deepEqual(subjects(filter(10_000)), shallow);
+  }
+  // The instance is intact: an ordinary query answers exactly.
+  const names = engine
+    .select(ds, "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name")
+    .rows.toArray()
+    .map((row) => row.name.value);
+  assert.deepEqual(names, ["Ann", "Bob"]);
+});
+
+// The evaluator's stack refusal exactly as a wasm lane renders it: its own words, with no
+// remedy appended — an asynchronous job runs on a region exactly as large as this lane's
+// shadow stack, so neither lane has more stack to offer, and the native remedy (a thread
+// spawned with more stack) names nothing a JavaScript caller can act on.
+const EVALUATION_STACK_REFUSAL_EXACT =
+  /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \([a-zA-Z ]+ needs more stack than this thread has left above its 65536-byte reserve\)$/;
+
+// Nesting the parser admits can still be more than the stack can EVALUATE: one written
+// level of `LATERAL` costs the evaluator about 9 KB of shadow stack, so 126 of them ran
+// the synchronous lane's 1 MiB shadow stack below its floor — the call trapped ("memory
+// access out of bounds") and left the instance's memory in an unknown state. The
+// evaluator now measures the stack it has left at every recursive entry and refuses,
+// typed, before it runs out. (63 nested `FILTER NOT EXISTS` trapped the same way; a
+// nested `EXISTS` body is now substituted when it is evaluated rather than copied into
+// every level around it, so 63 levels answer — see the test after this one.)
+const STACK_REFUSAL = /native-sparql-evaluation-stack-exhausted.*evaluation stack exhausted/;
+const NEST_DATA = [1, 2, 3, 4]
+  .map((n) => `<https://example.org/s${n}> <https://example.org/p> <https://example.org/o${n}> .`)
+  .concat(["<https://example.org/s1> <https://example.org/q> <https://example.org/o1> ."])
+  .join("\n");
+/** `open` written `depth` times around `?s <q> ?z`, closed as often. */
+const nestedAround = (open, depth) =>
+  `SELECT ?s WHERE { ${open.repeat(depth)}?s <https://example.org/q> ?z${" }".repeat(depth)} }`;
+const nestedLateral = (depth) => nestedAround("?s <https://example.org/p> ?o LATERAL { ", depth);
+const subjectsOf = (result) =>
+  result.rows
+    .toArray()
+    .map((row) => row.s.value.replace("https://example.org/", ""))
+    .sort();
+
+for (const [what, deep, shallow, expected] of [
+  // Only `s1` has a `<q>`, at every level.
+  ["126 nested LATERAL", nestedLateral(126), nestedLateral(40), ["s1"]],
+]) {
+  test(`${what} is a typed refusal on the synchronous lane, and the engine answers afterwards`, () => {
+    const ds = Dataset.parse(NEST_DATA, "nquads");
+    const engine = new QueryEngine();
+    const before = ds.canonicalize();
+    // Twice: a trap would have left the instance unusable, so the second call would not
+    // reach the evaluator to refuse it the same way.
+    for (let attempt = 0; attempt < 2; attempt += 1) {
+      assert.throws(() => engine.select(ds, deep), STACK_REFUSAL);
+    }
+    // The evaluator's refusal keeps its code and its own words, with nothing appended.
+    assert.throws(() => engine.select(ds, deep), (error) => {
+      assert.match(error.message, EVALUATION_STACK_REFUSAL_EXACT);
+      return true;
+    });
+    // No memory was overwritten: the dataset's canonical form is byte-identical, and
+    // queries over it and over a freshly parsed one answer exactly.
+    assert.equal(ds.canonicalize(), before);
+    assert.deepEqual(subjectsOf(engine.select(ds, "SELECT ?s WHERE { ?s <https://example.org/q> ?o }")), ["s1"]);
+    const names = engine
+      .select(Dataset.parse(TRIG, "trig"), "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name")
+      .rows.toArray()
+      .map((row) => row.name.value);
+    assert.deepEqual(names, ["Ann", "Bob"]);
+    // The valid neighbour: the same form, nested as deep as the stack evaluates, answers
+    // with the rows its semantics give.
+    assert.deepEqual(subjectsOf(engine.select(ds, shallow)), expected);
+  });
+}
+
+// Nested `FILTER NOT EXISTS` on the synchronous lane: it answers as deep as the stack
+// evaluates it, with the rows its semantics give, and one level more is the evaluator's
+// typed stack refusal, after which the instance still answers.
+//
+// Level `k` steps along `<next>` from the node level `k - 1` reached, requires the step
+// not to land back on the outermost node `?x0`, and negates the level below. The graph
+// has a 3-cycle (`n0 n1 n2`), a tail into it (`n4 → n3 → n0`), and a line that ends
+// (`n9 → n8 → n5 → n6 → n7`). A walk from the tail never ends, so whether `n3`/`n4`
+// answer is the parity of the whole depth — every level counts; a walk from the line ends
+// where the line does; a walk from the cycle is cut by the `?x0` comparison three levels
+// down, an expression position reading the outermost row's binding.
+const WALK = [
+  ["n0", "n1"], ["n1", "n2"], ["n2", "n0"], ["n3", "n0"], ["n4", "n3"],
+  ["n5", "n6"], ["n6", "n7"], ["n8", "n5"], ["n9", "n8"],
+];
+const walkData = () =>
+  Dataset.parse(WALK.map(([from, to]) => `<https://example.org/${from}> <https://example.org/next> <https://example.org/${to}> .`).join("\n"), "nquads");
+const nestedWalk = (depth) => {
+  let body = "";
+  for (let k = depth; k >= 1; k -= 1) {
+    body = `FILTER NOT EXISTS { ?x${k} <https://example.org/next> ?x${k + 1} FILTER(?x${k + 1} != ?x0) ${body}}`;
+  }
+  return `SELECT ?x0 WHERE { ?x0 <https://example.org/next> ?x1 ${body}}`;
+};
+/** The rows of `nestedWalk(depth)`, read over `WALK` directly. */
+const walkByHand = (depth) => {
+  const next = new Map(WALK);
+  const holds = (k, x0, x) => {
+    if (k > depth) return true;
+    const y = next.get(x);
+    return !(y !== undefined && y !== x0 && holds(k + 1, x0, y));
+  };
+  return WALK.filter(([x0, x1]) => holds(1, x0, x1)).map(([x0]) => x0).sort();
+};
+const walkAnswer = (engine, ds, depth) => {
+  try {
+    return {
+      rows: engine
+        .select(ds, nestedWalk(depth))
+        .rows.toArray()
+        .map((row) => row.x0.value.replace("https://example.org/", ""))
+        .sort(),
+    };
+  } catch (error) {
+    // Far past the limit the host-stack budget refuses before evaluation starts; either
+    // refusal is typed, and the pair below asserts the evaluator's own refusal at the limit.
+    assert.match(
+      error.message,
+      /native-sparql-evaluation-stack-exhausted|native-sparql-host-stack-exhausted/,
+      `${depth} nested FILTER NOT EXISTS: a typed stack refusal, not a trap`,
+    );
+    return { refused: error.message };
+  }
+};
+
+test("nested FILTER NOT EXISTS answers on the synchronous lane as deep as its stack evaluates it, and one level more is a typed refusal", () => {
+  const ds = walkData();
+  const engine = new QueryEngine();
+  // The oracle itself, pinned: the rows differ between neighbouring depths.
+  assert.deepEqual(walkByHand(1), ["n6"]);
+  assert.deepEqual(walkByHand(2), ["n3", "n4", "n6", "n8", "n9"]);
+  assert.deepEqual(walkByHand(62), ["n3", "n4", "n6", "n8"]);
+  assert.deepEqual(walkByHand(63), ["n6", "n8"]);
+  for (const depth of [1, 2, 3, 4, 5, 6, 62, 63]) {
+    assert.deepEqual(walkAnswer(engine, ds, depth).rows, walkByHand(depth), `${depth} nested FILTER NOT EXISTS`);
+  }
+  // The real limit, by bisection between 63 levels (which answer) and 20 000 (refused by
+  // the host-stack admission of the query plan's height, before evaluation starts). 20 000
+  // levels parse in linear time and memory: every `EXISTS` body's in-scope set shares the
+  // enclosing ones' variables instead of copying them, which at this depth once took
+  // seconds and more memory than wasm32 addresses, and trapped the instance.
+  let [deepest, refused] = [63, 20_000];
+  assert.ok(walkAnswer(engine, ds, refused).refused, "20 000 levels are refused");
+  while (refused - deepest > 1) {
+    const mid = (deepest + refused) >> 1;
+    if (walkAnswer(engine, ds, mid).rows) deepest = mid;
+    else refused = mid;
+  }
+  // The pair at the lane's real end: the deepest level answers what it computes, and one
+  // level more is the evaluator's own refusal — twice, since a trap would have left the
+  // instance unable to refuse the same way again.
+  assert.deepEqual(walkAnswer(engine, ds, deepest).rows, walkByHand(deepest), `${deepest} levels answer`);
+  for (let attempt = 0; attempt < 2; attempt += 1) {
+    assert.match(walkAnswer(engine, ds, refused).refused ?? "", /native-sparql-evaluation-stack-exhausted/);
+  }
+  assert.equal(refused, deepest + 1);
+  // The depth is the evaluator's shadow-stack guard on the synchronous lane: the module's
+  // 1 MiB shadow stack, less the 64 KiB reserve the guard refuses inside, over the frames
+  // one level of this shape takes on the synchronous lane's evaluation path (no stop
+  // source, so the ungoverned dispatch). The compiler sizes those frames, so the exact
+  // pair moves between toolchains (77 levels on one build, 78 on CI's); a floor at the
+  // smallest measured depth fails when a change grows the frames, and not when a
+  // toolchain shrinks them.
+  assert.ok(deepest >= 77, `${deepest} levels answer; 77 did on the smallest build measured`);
+  // Not poisoned: the same engine answers an ordinary query exactly.
+  assert.deepEqual(
+    engine
+      .select(ds, "SELECT ?s WHERE { ?s <https://example.org/next> <https://example.org/n0> }")
+      .rows.toArray()
+      .map((row) => row.s.value.replace("https://example.org/", ""))
+      .sort(),
+    ["n2", "n3"],
+  );
+});
+
+// Triple terms nest as deep as the stacks hold them, like every other construct. A
+// pattern nested deeper than any triple term a dataset holds (16 levels) matches nothing
+// — the neighbour of the same shape at the stored depth matches the stored statement —
+// and a triple term written into the dataset past 16 levels is refused with the
+// dataset's own limit, while 16 are inserted and matched.
+const TT = "https://example.org/";
+/** `<<( <s> <p> … core … )>>`, `levels` triple terms deep. */
+const tripleChain = (levels, core) =>
+  `${`<<( <${TT}s> <${TT}p> `.repeat(levels)}${core}${" )>>".repeat(levels)}`;
+
+test("a pattern nested past the dataset's triple terms answers nothing, and its stored-depth neighbour matches", () => {
+  const ds = Dataset.parse("", "nquads");
+  const engine = new QueryEngine();
+  engine.update(ds, `INSERT DATA { <${TT}a> <${TT}q> ${tripleChain(16, `<${TT}o>`)} }`);
+  const select = (levels) =>
+    engine
+      .select(ds, `SELECT ?a ?o WHERE { ?a <${TT}q> ${tripleChain(levels, "?o")} }`)
+      .rows.toArray()
+      .map((row) => [row.a.value, row.o.value]);
+  assert.deepEqual(select(16), [[`${TT}a`, `${TT}o`]], "the stored depth matches");
+  assert.deepEqual(select(200), [], "200 levels match nothing");
+  assert.equal(engine.ask(ds, `ASK { ?a <${TT}q> ${tripleChain(200, "?o")} }`), false);
+  assert.equal(engine.ask(ds, `ASK { ?a <${TT}q> ${tripleChain(16, "?o")} }`), true);
+});
+
+test("inserting a triple term past the dataset's limit is the dataset's typed refusal, and 16 levels insert", () => {
+  const ds = Dataset.parse("", "nquads");
+  const engine = new QueryEngine();
+  const insert = (levels) => `INSERT DATA { <${TT}b> <${TT}q> ${tripleChain(levels, `<${TT}o>`)} }`;
+  assert.throws(() => engine.update(ds, insert(17)), (error) => {
+    assert.match(error.message, /^error rdf-ir-triple-nesting-limit: /);
+    return true;
+  });
+  assert.equal(ds.canonicalize(), "", "the refusal wrote nothing");
+  engine.update(ds, insert(16));
+  const rows = engine
+    .select(ds, `SELECT ?o WHERE { <${TT}b> <${TT}q> ${tripleChain(16, "?o")} }`)
+    .rows.toArray()
+    .map((row) => row.o.value);
+  assert.deepEqual(rows, [`${TT}o`], "the 16-deep insert is matched");
+});
+
+// Every error the synchronous lane throws carries its stable code as `error.code`, read
+// from the diagnostic rather than the message: a parse refusal and an evaluation
+// refusal differ in their codes, and the answered neighbour throws nothing.
+test("a synchronous failure carries its code; the well-formed neighbour answers", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  let parse;
+  try {
+    engine.select(ds, "SELECT WHERE {");
+  } catch (error) {
+    parse = error;
+  }
+  assert.ok(parse instanceof Error);
+  assert.equal(parse.code, "native-sparql-query-parse");
+  assert.match(parse.message, /^error native-sparql-query-parse: /);
+  let unconfigured;
+  try {
+    engine.select(ds, "SELECT * WHERE { SERVICE <https://example.org/sparql> { ?s ?p ?o } }");
+  } catch (error) {
+    unconfigured = error;
+  }
+  assert.equal(unconfigured.code, "native-sparql-service-unconfigured");
+  let update;
+  try {
+    engine.update(ds, "INSERT DATA {");
+  } catch (error) {
+    update = error;
+  }
+  assert.equal(update.code, "native-sparql-update-parse");
+  assert.equal(engine.select(ds, "SELECT ?s WHERE { ?s ?p ?o }").rowCount, 3);
+});
+
+// The synchronous and asynchronous lanes run one implementation of each operation, so
+// they answer — and refuse — the same request identically.
+test("the synchronous and asynchronous lanes answer and refuse identically", async () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const query = "PREFIX ex: <https://example.org/> SELECT ?name WHERE { ?p ex:name ?name } ORDER BY ?name";
+  assert.equal(await engine.queryRawAsync(ds, query), engine.queryRaw(ds, query));
+  const explained = engine.explainQuery(ds, query);
+  assert.equal(await engine.explainQueryAsync(ds, query), explained);
+  let syncError;
+  try {
+    engine.query(ds, "ASK {");
+  } catch (error) {
+    syncError = error;
+  }
+  await assert.rejects(engine.queryAsync(ds, "ASK {"), (error) => {
+    assert.equal(error.message, syncError.message);
+    assert.equal(error.code, syncError.code);
+    return true;
+  });
+});
+
+// `Dataset.snapshot()` is an independent copy: each side changes alone.
+test("a snapshot is an independent dataset with its own identity", () => {
+  const ds = Dataset.parse(TRIG, "trig");
+  const copy = ds.snapshot();
+  assert.notEqual(copy.id, ds.id);
+  assert.equal(copy.generation, 0);
+  assert.equal(copy.canonicalize(), ds.canonicalize());
+  copy.add(Dataset.parse("<https://example.org/x> <https://example.org/y> <https://example.org/z> .\n", "nquads").quads()[0]);
+  assert.equal(copy.size, ds.size + 1, "the copy changed alone");
+  assert.equal(ds.generation, 0);
 });

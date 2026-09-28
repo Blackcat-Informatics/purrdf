@@ -61,12 +61,14 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-iri`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash` | Zero-dependency foundations |
 | `purrdf-deflate` | Leaf over `purrdf-hash` alone |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
+| `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, read via target-gated `libc`/`windows-sys` declarations with no C toolchain needed; wasm32 shadow stack against an installable floor) and the margin the SPARQL evaluator refuses at |
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
 | `purrdf-cli` (`crates/cli`) | The `purrdf` command-line surface (`publish = false`) |
 | `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
 | `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
 | `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, and the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property); depends on no `purrdf-*` crate (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
+| `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
 
 ## 2. Hard constraints (violating these fails CI or review)
 
@@ -100,7 +102,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
   and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
   nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every release crate (all 28 publishable crates,
+* **Everything is wasm-able.** Every release crate (all 29 publishable crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -256,12 +258,12 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (28 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (29 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Eight members never reach
+is single-sourced in `[workspace.package]`. Nine members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,
 `purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`,
-`purrdf-testkit`, and `purrdf-python` (PyPI via maturin instead).
+`purrdf-testkit`, `wasm-link`, and `purrdf-python` (PyPI via maturin instead).
 `purrdf-alloc-probe` and `purrdf-testkit` are dev-dependencies of published
 crates, so their root `[workspace.dependencies]` entries are path-only with
 **no `version`** — cargo then strips them from the packaged manifest, which is

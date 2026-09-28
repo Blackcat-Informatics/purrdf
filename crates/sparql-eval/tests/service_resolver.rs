@@ -18,9 +18,10 @@ use std::time::Duration;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::{
-    HttpRemoteQuerySource, HttpRequest, InProcessServiceResolver, NativeSparqlEngine, QueryOptions,
-    RemoteError, ServiceCapabilities, ServiceCapability, ServiceCatalog, ServiceCredential,
-    ServiceProfile, ServiceRequest, ServiceResolver, ServiceRouter,
+    HttpRemoteQuerySource, HttpRequest, InProcessServiceResolver, NativeSparqlEngine,
+    QueryGovernors, QueryOptions, RemoteError, ServiceCapabilities, ServiceCapability,
+    ServiceCatalog, ServiceCredential, ServiceProfile, ServiceRequest, ServiceResolver,
+    ServiceRouter,
 };
 
 /// The in-process service, and the one every gated fixture lists.
@@ -115,6 +116,60 @@ fn run(
     query: &str,
 ) -> Result<SparqlResult, purrdf_core::RdfDiagnostic> {
     run_with_base(resolver, query, None)
+}
+
+/// A complete result and each silenced invocation as `(endpoint, kind label)`.
+type Recorded = (SparqlResult, Vec<(String, &'static str)>);
+
+/// Run `query` governed (metered) against [`local_dataset`] with `resolver` injected:
+/// the complete result, and each silenced invocation as `(endpoint, kind label)`.
+fn run_recorded(
+    resolver: &(dyn ServiceResolver + Sync),
+    query: &str,
+) -> Result<Recorded, purrdf_core::RdfDiagnostic> {
+    let outcome = NativeSparqlEngine::new().query_governed(
+        &local_dataset(),
+        SparqlRequest {
+            query,
+            base_iri: None,
+            substitutions: &[],
+        },
+        QueryOptions::new().with_remote(Some(resolver)),
+        &QueryGovernors::METERED,
+    )?;
+    let silenced = outcome
+        .evidence()
+        .silenced()
+        .iter()
+        .map(|record| (record.target.name().to_owned(), record.kind.label()))
+        .collect();
+    let result = outcome.into_complete().expect("a metered run completes");
+    Ok((result, silenced))
+}
+
+/// The `?n` column of every solution of `result`, rendered.
+fn names(result: &SparqlResult) -> Vec<Option<String>> {
+    match result {
+        SparqlResult::Solutions {
+            variables, rows, ..
+        } => {
+            let n = variables
+                .iter()
+                .position(|v| v == "n")
+                .expect("the query selects ?n");
+            rows.iter()
+                .map(|row| {
+                    row[n].as_ref().map(|term| match term {
+                        purrdf_core::TermValue::Literal { lexical_form, .. } => {
+                            lexical_form.clone()
+                        }
+                        other => format!("{other:?}"),
+                    })
+                })
+                .collect()
+        }
+        other => panic!("expected solutions, got {other:?}"),
+    }
 }
 
 /// The solution rows of `result`.
@@ -291,17 +346,20 @@ fn silent_swallows_an_unreachable_endpoint_through_both_resolvers() {
 }
 
 #[test]
-fn silent_never_swallows_a_capability_denial_through_either_resolver() {
-    // Row two of the contract table: a denial is a decision taken on THIS side of the
-    // seam, so `SILENT` — which promises only to tolerate an endpoint that does not
-    // answer — does not hide it. If it did, the surrounding join would become a no-op
-    // and the answer would look complete and be wrong on every single run.
+fn silent_answers_a_capability_denial_with_the_join_identity_through_either_resolver() {
+    // Row one of the contract table: a denial is an invocation that did not succeed, so
+    // `SILENT` answers it with the join identity — the local row survives with `?n`
+    // unbound — and the evidence records the denial. Without `SILENT` it is the error
+    // naming the withheld capability. Either way the network is never touched.
     let spy = SpyTransport::default();
     let network = HttpRemoteQuerySource::new(&spy).with_catalog(
         ServiceCatalog::new().with_service(NET_EP, profile(&[ServiceCapability::Query])),
     );
-    let err =
-        run(&network, &service_query(NET_EP, true)).expect_err("SILENT must not swallow a denial");
+    let (result, silenced) =
+        run_recorded(&network, &service_query(NET_EP, true)).expect("SILENT answers Ω0");
+    assert_eq!(names(&result), [None]);
+    assert_eq!(silenced, [(NET_EP.to_owned(), "denied")]);
+    let err = run(&network, &service_query(NET_EP, false)).expect_err("a denial is an error");
     assert!(
         err.message.contains("withholds the network capability"),
         "got {}",
@@ -312,41 +370,45 @@ fn silent_never_swallows_a_capability_denial_through_either_resolver() {
     let in_process = InProcessServiceResolver::new()
         .with_endpoint(LOCAL_EP, service_dataset())
         .with_catalog(ServiceCatalog::new());
-    let err = run(&in_process, &service_query(LOCAL_EP, true))
-        .expect_err("SILENT must not swallow a denial here either");
+    let (result, silenced) =
+        run_recorded(&in_process, &service_query(LOCAL_EP, true)).expect("SILENT answers Ω0");
+    assert_eq!(names(&result), [None]);
+    assert_eq!(silenced, [(LOCAL_EP.to_owned(), "denied")]);
+    let err = run(&in_process, &service_query(LOCAL_EP, false)).expect_err("a denial is an error");
     assert!(
         err.message.contains("withholds the query capability"),
         "got {}",
         err.message
     );
 
-    // The neighbouring VALID case for BOTH: grant the capability and the identical
-    // SILENT query answers. A refusal that fired for every SILENT query would pass the
-    // assertions above while proving nothing.
+    // The neighbouring granted case for BOTH: the identical SILENT query answers with
+    // the service's own value, and nothing is silenced.
     let in_process = InProcessServiceResolver::new()
         .with_endpoint(LOCAL_EP, service_dataset())
         .with_catalog(
             ServiceCatalog::new().with_service(LOCAL_EP, profile(&[ServiceCapability::Query])),
         );
-    let result = run(&in_process, &service_query(LOCAL_EP, true))
+    let (result, silenced) = run_recorded(&in_process, &service_query(LOCAL_EP, true))
         .expect("a granted SILENT service resolves normally");
-    assert_eq!(rows(&result), 1);
+    assert_eq!(names(&result), [Some("in-process".to_owned())]);
+    assert_eq!(silenced, Vec::<(String, &str)>::new());
 
     let network =
         HttpRemoteQuerySource::new(&spy).with_catalog(ServiceCatalog::new().with_service(
             NET_EP,
             profile(&[ServiceCapability::Query, ServiceCapability::Network]),
         ));
-    let result = run(&network, &service_query(NET_EP, true))
+    let (result, silenced) = run_recorded(&network, &service_query(NET_EP, true))
         .expect("a granted SILENT service resolves normally");
-    assert_eq!(rows(&result), 1);
+    assert_eq!(names(&result), [Some("from-the-network".to_owned())]);
+    assert_eq!(silenced, Vec::<(String, &str)>::new());
     assert_eq!(spy.posts(), 1);
 }
 
 #[test]
-fn an_unrouted_service_is_denied_by_the_router_even_under_silent() {
+fn an_unrouted_service_is_denied_by_the_router_and_silent_answers_it() {
     let router = ServiceRouter::new();
-    let err = run(&router, &service_query(NET_EP, true))
+    let err = run(&router, &service_query(NET_EP, false))
         .expect_err("a router with no route and no fallback denies");
     assert!(
         err.message
@@ -354,14 +416,20 @@ fn an_unrouted_service_is_denied_by_the_router_even_under_silent() {
         "got {}",
         err.message
     );
+    // Under SILENT the refusal is an invocation that failed: Ω0, recorded.
+    let (result, silenced) =
+        run_recorded(&router, &service_query(NET_EP, true)).expect("SILENT answers Ω0");
+    assert_eq!(names(&result), [None]);
+    assert_eq!(silenced.len(), 1, "{silenced:?}");
+    assert_eq!(silenced[0].0, NET_EP);
 
     // Neighbouring VALID case: add the route and the same query answers.
     let in_process = InProcessServiceResolver::new().with_endpoint(NET_EP, service_dataset());
     let router = ServiceRouter::new().with_route(NET_EP, &in_process);
-    assert_eq!(
-        rows(&run(&router, &service_query(NET_EP, true)).expect("the routed service answers")),
-        1
-    );
+    let (result, silenced) =
+        run_recorded(&router, &service_query(NET_EP, true)).expect("the routed service answers");
+    assert_eq!(names(&result), [Some("in-process".to_owned())]);
+    assert_eq!(silenced, Vec::<(String, &str)>::new());
 }
 
 // ── Per-service headers, credentials and overrides ───────────────────────────────
@@ -452,12 +520,11 @@ fn a_catalogued_profile_that_adds_nothing_also_sends_nothing_extra() {
 }
 
 #[test]
-fn an_outer_silent_service_does_not_swallow_a_nested_capability_denial() {
-    // The nested counterpart of the row-two contract, and the one place it can be lost:
-    // an in-process resolver evaluates the forwarded body ITSELF, so a nested denial
-    // travels back out through that inner evaluation's error channel. If it arrives as an
-    // ordinary endpoint failure, the OUTER `SERVICE SILENT` is entitled to swallow it to
-    // the join identity — and the query answers, completely and wrongly, on every run.
+fn a_nested_capability_denial_reaches_the_outer_clause_as_a_denial() {
+    // An in-process resolver evaluates the forwarded body ITSELF, so a nested denial
+    // travels back out through that inner evaluation's error channel. It arrives as the
+    // denial it is: an error naming the withheld capability without `SILENT`, and a
+    // silenced invocation recorded as a denial with it.
     let inner_ep = "https://example.org/in-process/inner";
     let in_process = InProcessServiceResolver::new()
         .with_endpoint(LOCAL_EP, service_dataset())
@@ -466,22 +533,26 @@ fn an_outer_silent_service_does_not_swallow_a_nested_capability_denial() {
         .with_catalog(
             ServiceCatalog::new().with_service(LOCAL_EP, profile(&[ServiceCapability::Query])),
         );
-    let nested = format!(
-        "SELECT ?o ?n WHERE {{ ?s <https://example.org/vocab#knows> ?o \
-         SERVICE SILENT <{LOCAL_EP}> {{ \
-         SERVICE <{inner_ep}> {{ ?x <https://example.org/vocab#name> ?n }} }} }}"
-    );
-    let err = run(&in_process, &nested)
-        .expect_err("a nested denial survives an outer SILENT rather than being swallowed");
+    let nested = |silent: &str| {
+        format!(
+            "SELECT ?o ?n WHERE {{ ?s <https://example.org/vocab#knows> ?o \
+             SERVICE {silent}<{LOCAL_EP}> {{ \
+             SERVICE <{inner_ep}> {{ ?x <https://example.org/vocab#name> ?n }} }} }}"
+        )
+    };
+    let err = run(&in_process, &nested("")).expect_err("a nested denial is an error");
     assert!(
         err.message.contains("withholds the query capability"),
-        "the surviving fact must still name the withheld capability: {}",
+        "the error names the withheld capability: {}",
         err.message
     );
+    let (result, silenced) =
+        run_recorded(&in_process, &nested("SILENT ")).expect("SILENT answers Ω0");
+    assert_eq!(names(&result), [None]);
+    assert_eq!(silenced, [(LOCAL_EP.to_owned(), "denied")]);
 
     // The neighbouring VALID case: list the inner service and the identical SILENT-outer
-    // query answers. Without this, the refusal above could be an outer `SERVICE SILENT`
-    // that simply never resolves a nested clause at all.
+    // query answers with the inner service's value.
     let in_process = InProcessServiceResolver::new()
         .with_endpoint(LOCAL_EP, service_dataset())
         .with_endpoint(inner_ep, service_dataset())
@@ -490,15 +561,13 @@ fn an_outer_silent_service_does_not_swallow_a_nested_capability_denial() {
                 .with_service(LOCAL_EP, profile(&[ServiceCapability::Query]))
                 .with_service(inner_ep, profile(&[ServiceCapability::Query])),
         );
-    assert_eq!(
-        rows(&run(&in_process, &nested).expect("a fully catalogued nested query answers")),
-        1
-    );
+    let (result, silenced) = run_recorded(&in_process, &nested("SILENT "))
+        .expect("a fully catalogued nested query answers");
+    assert_eq!(names(&result), [Some("in-process".to_owned())]);
+    assert_eq!(silenced, Vec::<(String, &str)>::new());
 
-    // …and the row-one neighbour, which must still behave the OPPOSITE way: an inner
-    // endpoint that is catalogued but simply absent is an endpoint failure, so the outer
-    // SILENT does swallow it to the join identity. This is what keeps the assertion above
-    // a statement about denials rather than about nesting.
+    // …and an inner endpoint that is catalogued but absent fails at the transport: also
+    // silenced under the outer SILENT, and recorded as the nested failure it was.
     let in_process = InProcessServiceResolver::new()
         .with_endpoint(LOCAL_EP, service_dataset())
         .with_catalog(
@@ -506,11 +575,11 @@ fn an_outer_silent_service_does_not_swallow_a_nested_capability_denial() {
                 .with_service(LOCAL_EP, profile(&[ServiceCapability::Query]))
                 .with_service(inner_ep, profile(&[ServiceCapability::Query])),
         );
-    assert_eq!(
-        rows(&run(&in_process, &nested).expect("an unreachable nested endpoint is silenceable")),
-        1,
-        "the join identity leaves the surrounding query's one row untouched"
-    );
+    let (result, silenced) = run_recorded(&in_process, &nested("SILENT "))
+        .expect("an unreachable nested endpoint is silenced");
+    assert_eq!(names(&result), [None]);
+    assert_eq!(silenced.len(), 1, "{silenced:?}");
+    assert_eq!(silenced[0].0, LOCAL_EP);
 }
 
 // ── A service IRI is resolved by the workspace's one base layer ──────────────────

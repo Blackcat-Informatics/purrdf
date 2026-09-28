@@ -533,6 +533,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8f42a60cbdf9a97f5d2305f08a87dc4e09308d1276d28c869c684d7777685682"
 
 [[package]]
+name = "leb128fmt"
+version = "0.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "09edd9e8b54e49e587e4f6295a7d29c3ea94d469cb40ab8ca70b288248a81db2"
+
+[[package]]
 name = "libc"
 version = "0.2.186"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -999,6 +1005,7 @@ version = "2.0.2"
 dependencies = [
  "criterion",
  "memchr",
+ "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-iri",
  "purrdf-testkit",
@@ -1037,6 +1044,7 @@ dependencies = [
  "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-results",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
@@ -1054,6 +1062,14 @@ dependencies = [
  "purrdf-core",
  "purrdf-iri",
  "purrdf-testkit",
+]
+
+[[package]]
+name = "purrdf-stack"
+version = "2.0.2"
+dependencies = [
+ "libc",
+ "windows-sys",
 ]
 
 [[package]]
@@ -1089,6 +1105,7 @@ dependencies = [
  "purrdf-rdf",
  "purrdf-shapes",
  "purrdf-sparql-eval",
+ "purrdf-testkit",
  "serde",
  "serde_json",
 ]
@@ -1102,8 +1119,12 @@ dependencies = [
  "purrdf-core",
  "purrdf-events",
  "purrdf-hash",
+ "purrdf-shapes",
+ "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-stack",
+ "purrdf-testkit",
  "purrdf-validate",
  "serde",
  "serde_json",
@@ -1512,6 +1533,22 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "23939e44bb9a5d7576fa2b563dc2e136628f1224e88a8deed09e04858b77871f"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "wasm-encoder"
+version = "0.259.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b1d0246511d901aacf25d2dc9111f0054947de5e093fe662099e709ff7530dc3"
+dependencies = [
+ "leb128fmt",
+]
+
+[[package]]
+name = "wasm-link"
+version = "2.0.2"
+dependencies = [
+ "wasm-encoder",
 ]
 
 [[package]]

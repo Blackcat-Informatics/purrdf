@@ -615,10 +615,7 @@ fn bound_candidate(
     pf: &str,
     term: &TermValue,
 ) -> Vec<TermValue> {
-    let options = QueryOptions {
-        env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(env);
     let text = format!(
         "SELECT ?d WHERE {{ ( ?n ) <{pf}> ( <{}> {OFFER} ?d ) }}",
         vector_term(0)
@@ -652,10 +649,7 @@ fn ranked_reading(
     dataset: &RdfDataset,
     pf: &str,
 ) -> BTreeMap<TermValue, TermValue> {
-    let options = QueryOptions {
-        env,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_env(env);
     let text = format!(
         "SELECT ?n ?d WHERE {{ ( ?n ) <{pf}> ( <{}> {OFFER} ?d ) }}",
         vector_term(0)

@@ -25,6 +25,7 @@ use crate::ast::{
     GroundTerm, Literal, NamedNode, NamedNodePattern, QuadPattern, TermPattern, TriplePattern,
     Variable,
 };
+use crate::tree::{Args, Chain, Child, NonEmpty};
 
 /// The closed SEP-0009 function registry and its argument-count signatures,
 /// re-exported so a consumer that matches on [`Function::Cdt`] can name
@@ -451,30 +452,56 @@ fn fmt_named_node_pattern(n: &NamedNodePattern) -> String {
     }
 }
 
-/// Render a [`TermPattern`] in SPARQL surface syntax.
-fn fmt_term_pattern(t: &TermPattern) -> String {
-    match t {
-        TermPattern::NamedNode(n) => format!("<{}>", n.as_str()),
-        TermPattern::BlankNode(b) => format!("_:{}", b.as_str()),
-        TermPattern::Literal(l) => fmt_literal(l),
-        TermPattern::Variable(v) => format!("?{}", v.as_str()),
-        TermPattern::Triple(t) => format!(
-            "<<( {} {} {} )>>",
-            fmt_term_pattern(&t.subject),
-            fmt_named_node_pattern(&t.predicate),
-            fmt_term_pattern(&t.object),
-        ),
-    }
-}
-
-/// Render a [`TriplePattern`] as `s p o`.
+/// Render a [`TriplePattern`] as `s p o`, its quoted triple terms `<<( s p o )>>`,
+/// over a work list: a term nested to any depth is written without recursion.
 fn fmt_triple_pattern(t: &TriplePattern) -> String {
-    format!(
-        "{} {} {}",
-        fmt_term_pattern(&t.subject),
-        fmt_named_node_pattern(&t.predicate),
-        fmt_term_pattern(&t.object),
-    )
+    enum Part<'a> {
+        Text(&'static str),
+        Term(&'a TermPattern),
+        Predicate(&'a NamedNodePattern),
+    }
+    let mut out = String::new();
+    let mut stack = vec![
+        Part::Term(&t.object),
+        Part::Text(" "),
+        Part::Predicate(&t.predicate),
+        Part::Text(" "),
+        Part::Term(&t.subject),
+    ];
+    while let Some(part) = stack.pop() {
+        match part {
+            Part::Text(text) => out.push_str(text),
+            Part::Predicate(p) => out.push_str(&fmt_named_node_pattern(p)),
+            Part::Term(term) => match term {
+                TermPattern::NamedNode(n) => {
+                    out.push('<');
+                    out.push_str(n.as_str());
+                    out.push('>');
+                }
+                TermPattern::BlankNode(b) => {
+                    out.push_str("_:");
+                    out.push_str(b.as_str());
+                }
+                TermPattern::Literal(l) => out.push_str(&fmt_literal(l)),
+                TermPattern::Variable(v) => {
+                    out.push('?');
+                    out.push_str(v.as_str());
+                }
+                TermPattern::Triple(inner) => {
+                    out.push_str("<<( ");
+                    stack.extend([
+                        Part::Text(" )>>"),
+                        Part::Term(&inner.object),
+                        Part::Text(" "),
+                        Part::Predicate(&inner.predicate),
+                        Part::Text(" "),
+                        Part::Term(&inner.subject),
+                    ]);
+                }
+            },
+        }
+    }
+    out
 }
 
 /// Render a [`Literal`] in SPARQL surface syntax.
@@ -651,7 +678,10 @@ impl core::fmt::Display for GraphUpdateOperation {
 
 /// A node of the SPARQL graph-pattern algebra (§18.2). The empty pattern (the
 /// identity table `Z`) is represented as `Bgp { patterns: vec![] }`.
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// `Clone`, `==`, `Hash`, `Debug` and the drop walk the tree over work lists (see
+/// [`crate::walk`] and [`crate::tree`]), so none of them needs more machine stack for
+/// a taller tree; `Debug` writes exactly what `#[derive(Debug)]` would.
 pub enum GraphPattern {
     /// A basic graph pattern: a conjunction of triple patterns.
     Bgp {
@@ -670,52 +700,61 @@ pub enum GraphPattern {
     /// Conjunction (`Join`) of two patterns.
     Join {
         /// Left operand.
-        left: Box<Self>,
+        left: Child<Self>,
         /// Right operand.
-        right: Box<Self>,
+        right: Child<Self>,
     },
     /// `OPTIONAL` (left outer join), with an optional join condition (a `FILTER`
     /// lifted into the `OPTIONAL` per §18.2.2.3).
     LeftJoin {
         /// Left (required) operand.
-        left: Box<Self>,
+        left: Child<Self>,
         /// Right (optional) operand.
-        right: Box<Self>,
+        right: Child<Self>,
         /// The join-condition expression, if the `OPTIONAL` had a `FILTER`.
         expression: Option<Expression>,
     },
     /// A correlated/lateral join (`LATERAL`), kept for algebra completeness.
     Lateral {
         /// Left operand.
-        left: Box<Self>,
+        left: Child<Self>,
         /// Right operand, evaluated per left solution.
-        right: Box<Self>,
+        right: Child<Self>,
     },
     /// `FILTER expr` over an inner pattern.
     Filter {
         /// The filter expression.
         expr: Expression,
         /// The pattern being filtered.
-        inner: Box<Self>,
+        inner: Child<Self>,
     },
-    /// `UNION` of two patterns.
+    /// `UNION` of its arms, in source order: `{ a } UNION { b } UNION { c }` is one
+    /// node with three arms.
+    ///
+    /// The SPARQL algebra's `Union` is binary and a written chain nests to the left,
+    /// `Union(Union(a, b), c)`. Bag union is associative and a left-nested chain
+    /// concatenates its arms' solutions in source order, so one node over the arms
+    /// in that order denotes the same sequence of solutions — and a chain of any
+    /// length is one level of the tree rather than one level per arm. Arms are
+    /// evaluated left to right; the output schema is the arms' schemas merged in
+    /// that order, exactly as the nested binary unions merged them.
+    ///
+    /// [`Self::union`] builds a chain the way the parser does.
     Union {
-        /// Left operand.
-        left: Box<Self>,
-        /// Right operand.
-        right: Box<Self>,
+        /// The arms, in source order: two or more.
+        arms: Chain<Self>,
     },
     /// `GRAPH name { ... }`.
     Graph {
         /// The named-graph IRI or variable.
         name: NamedNodePattern,
         /// The inner pattern scoped to that graph.
-        inner: Box<Self>,
+        inner: Child<Self>,
     },
     /// `BIND(expression AS variable)` — `Extend` in algebra.
     Extend {
         /// The pattern being extended.
-        inner: Box<Self>,
+        inner: Child<Self>,
         /// The newly bound variable.
         variable: Variable,
         /// The expression whose value it binds.
@@ -724,9 +763,9 @@ pub enum GraphPattern {
     /// `MINUS` (set difference on compatible solutions).
     Minus {
         /// Left operand.
-        left: Box<Self>,
+        left: Child<Self>,
         /// Right operand (solutions to subtract).
-        right: Box<Self>,
+        right: Child<Self>,
     },
     /// `SERVICE` (federated query). In scope structurally; the evaluator may
     /// reject it. `silent` is the `SILENT` flag.
@@ -734,7 +773,7 @@ pub enum GraphPattern {
         /// The service endpoint IRI or variable.
         name: NamedNodePattern,
         /// The pattern sent to the endpoint.
-        inner: Box<Self>,
+        inner: Child<Self>,
         /// Whether the `SILENT` keyword was present.
         silent: bool,
     },
@@ -748,31 +787,31 @@ pub enum GraphPattern {
     /// `ORDER BY`.
     OrderBy {
         /// The pattern being ordered.
-        inner: Box<Self>,
+        inner: Child<Self>,
         /// The ordered list of sort keys.
         expression: Vec<OrderExpression>,
     },
     /// Projection (`SELECT` variable list, or `SELECT *`).
     Project {
         /// The pattern being projected.
-        inner: Box<Self>,
+        inner: Child<Self>,
         /// The projected variables.
         variables: Vec<Variable>,
     },
     /// `DISTINCT`.
     Distinct {
         /// The pattern whose solutions are de-duplicated.
-        inner: Box<Self>,
+        inner: Child<Self>,
     },
     /// `REDUCED`.
     Reduced {
         /// The pattern whose solutions may be de-duplicated.
-        inner: Box<Self>,
+        inner: Child<Self>,
     },
     /// `LIMIT`/`OFFSET`.
     Slice {
         /// The pattern being sliced.
-        inner: Box<Self>,
+        inner: Child<Self>,
         /// The `OFFSET` (0 if absent).
         start: usize,
         /// The `LIMIT`, if present.
@@ -781,7 +820,7 @@ pub enum GraphPattern {
     /// `GROUP BY` + aggregates.
     Group {
         /// The pattern being grouped.
-        inner: Box<Self>,
+        inner: Child<Self>,
         /// The grouping key variables.
         variables: Vec<Variable>,
         /// The `(output variable, aggregate)` pairs.
@@ -879,7 +918,7 @@ pub enum GraphPattern {
     /// within one row.
     Unfold {
         /// The pattern being expanded — `BIND`'s `Extend` shape, see above.
-        inner: Box<Self>,
+        inner: Child<Self>,
         /// The expression whose composite value is expanded, evaluated once
         /// per input solution.
         expression: Expression,
@@ -928,22 +967,44 @@ pub struct NegatedPathElement {
 }
 
 /// A SPARQL property-path expression (§18.1.7 / §9).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// `Clone`, `==`, `Hash`, `Debug`, `Display` and the drop walk the path over work
+/// lists, so none of them needs more machine stack for a deeper path.
 pub enum PropertyPathExpression {
     /// A single predicate IRI.
     NamedNode(NamedNode),
     /// `^path` — inverse.
-    Reverse(Box<Self>),
-    /// `p1 / p2` — sequence.
-    Sequence(Box<Self>, Box<Self>),
-    /// `p1 | p2` — alternative.
-    Alternative(Box<Self>, Box<Self>),
+    Reverse(Child<Self>),
+    /// `p1 / p2 / …` — the sequence of its elements, in source order: `a/b/c` is one
+    /// node with three elements.
+    ///
+    /// The SPARQL operator is binary and a written chain nests to the left,
+    /// `Sequence(Sequence(a, b), c)`. Composition of path relations is associative,
+    /// and so is the unrolled join the operator denotes (§18.4: each `/` introduces
+    /// one fresh intermediate variable between its two sides), so one node over the
+    /// elements in that order denotes the same relation — with the same multiplicity
+    /// for every pair of endpoints, one per chain of matching triples, when the path
+    /// has no repetition operator. A chain of any length is one level of the tree.
+    ///
+    /// [`Self::sequence`] builds a chain the way the parser does.
+    Sequence(Chain<Self>),
+    /// `p1 | p2 | …` — the alternative of its elements, in source order: `a|b|c` is
+    /// one node with three elements.
+    ///
+    /// The SPARQL operator is binary and a written chain nests to the left,
+    /// `Alternative(Alternative(a, b), c)`, whose relation is the bag union of its
+    /// sides, left then right. Bag union is associative, so one node over the
+    /// elements in that order denotes the same relation, each element contributing
+    /// its own pairs in turn. A chain of any length is one level of the tree.
+    ///
+    /// [`Self::alternative`] builds a chain the way the parser does.
+    Alternative(Chain<Self>),
     /// `path*` — zero or more.
-    ZeroOrMore(Box<Self>),
+    ZeroOrMore(Child<Self>),
     /// `path+` — one or more.
-    OneOrMore(Box<Self>),
+    OneOrMore(Child<Self>),
     /// `path?` — zero or one.
-    ZeroOrOne(Box<Self>),
+    ZeroOrOne(Child<Self>),
     /// `!(p1|...|pn)` — negated property set, each element optionally inverted
     /// (`^pi`, SPARQL 1.1 §18.2/§18.3). See [`NegatedPathElement`].
     NegatedPropertySet(Vec<NegatedPathElement>),
@@ -953,7 +1014,7 @@ pub enum PropertyPathExpression {
     /// `max` is `Some`) is enforced at construction by the parser.
     Range {
         /// The repeated sub-path.
-        inner: Box<Self>,
+        inner: Child<Self>,
         /// Inclusive lower bound on repetitions.
         min: u32,
         /// Inclusive upper bound; `None` ⇒ unbounded.
@@ -978,168 +1039,22 @@ impl core::fmt::Display for PropertyPathExpression {
     /// evaluated directly by the engine (`sparql-eval::path`), but the parser has
     /// no grammar production for it, so this text does not round-trip back
     /// through [`crate::parser::SparqlParser`]).
+    ///
+    /// Operands are bracketed only where the bare text would re-parse differently
+    /// (see [`crate::serialize`]). The text is built over a work list, so a path of
+    /// any depth is written without recursion.
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self {
-            Self::NamedNode(n) => write!(f, "<{}>", n.as_str()),
-            Self::Reverse(a) => write!(f, "^{}", PathElt(a)),
-            // `/` (this arm) binds TIGHTER than `|`, and both are
-            // left-associative: an `Alternative` operand on EITHER side needs
-            // parens (it would otherwise mis-group into the surrounding `|`
-            // on re-parse — `crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`'s
-            // `property-path/path-p2.rq`/`path-p4.rq` findings, e.g.
-            // `(p1|p2)/(p3|p4)` rendered bare as `p1|p2/p3|p4` reparses as
-            // `(p1|(p2/p3))|p4`); a `Sequence` operand needs parens ONLY on
-            // the RIGHT (the left one reproduces via `/`'s own
-            // left-associativity — `a/b/c` IS `Sequence(Sequence(a,b),c)`
-            // already — but a RIGHT-nested `Sequence(a, Sequence(b,c))`
-            // rendered bare as `a/b/c` would reparse LEFT-nested instead).
-            Self::Sequence(a, b) => write!(f, "{}/{}", SeqLeft(a), SeqRight(b)),
-            // `|`'s own left operand never needs parens (lowest precedence,
-            // left-associative — any shape reproduces bare); the right
-            // operand needs them only for a nested `Alternative` (the same
-            // right-nesting-vs-left-associativity mismatch `Sequence` has).
-            Self::Alternative(a, b) => write!(f, "{a}|{}", AltRight(b)),
-            Self::ZeroOrMore(a) => write!(f, "{}*", QuantifierOperand(a)),
-            Self::OneOrMore(a) => write!(f, "{}+", QuantifierOperand(a)),
-            Self::ZeroOrOne(a) => write!(f, "{}?", QuantifierOperand(a)),
-            Self::Range { inner, min, max } => match max {
-                Some(m) if *m == *min => write!(f, "{}{{{min}}}", QuantifierOperand(inner)),
-                Some(m) => write!(f, "{}{{{min},{m}}}", QuantifierOperand(inner)),
-                None => write!(f, "{}{{{min},}}", QuantifierOperand(inner)),
-            },
-            Self::NegatedPropertySet(elems) => {
-                let inner = elems
-                    .iter()
-                    .map(|e| {
-                        if e.inverse {
-                            format!("^<{}>", e.predicate.as_str())
-                        } else {
-                            format!("<{}>", e.predicate.as_str())
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join("|");
-                write!(f, "!({inner})")
-            }
-            Self::Wildcard { namespace } => match namespace {
-                Some(ns) => write!(f, "<any:{}>", ns.as_str()),
-                None => write!(f, "<any>"),
-            },
-        }
-    }
-}
-
-/// Wraps a property path in parentheses when it must be grouped to sit as
-/// `^`'s (`Reverse`'s) operand — i.e. when it is a sequence or alternative
-/// path (lower precedence than `^`, needs disambiguating) or ITSELF another
-/// inverse (`^^p` needs `^(^p)` to stay two `Reverse`s rather than folding
-/// however a double-`^` might otherwise lex/parse).
-///
-/// A QUANTIFIED path (`ZeroOrMore`/`OneOrMore`/`ZeroOrOne`/`Range`) is
-/// DELIBERATELY NOT in this list: the postfix quantifiers bind tighter than
-/// `^` in the SPARQL grammar — `parse_path_elt_or_inverse` applies `^` and
-/// then delegates to `parse_path_elt` for the quantified primary, so
-/// `^<p>*` reparses as `Reverse(ZeroOrMore(<p>))` (not
-/// `ZeroOrMore(Reverse(<p>))`) WITHOUT any parens needed — the grammar rule
-/// `^` sits in already expects a possibly-quantified primary right after it.
-/// [`QuantifierOperand`] is the analogous wrapper for the OTHER context
-/// (a quantifier's own operand), which has different rules — see its doc.
-struct PathElt<'a>(&'a PropertyPathExpression);
-
-impl core::fmt::Display for PathElt<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self.0 {
-            PropertyPathExpression::Sequence(..)
-            | PropertyPathExpression::Alternative(..)
-            | PropertyPathExpression::Reverse(..) => {
-                write!(f, "({})", self.0)
-            }
-            other => write!(f, "{other}"),
-        }
-    }
-}
-
-/// Wraps a property path in parentheses when it must be grouped to sit as a
-/// postfix quantifier's (`*`/`+`/`?`/`{n,m}`) OWN operand — a DIFFERENT
-/// context from [`PathElt`] (`^`'s operand), with a wider parenthesize set:
-/// a `Sequence`/`Alternative`/`Reverse` operand needs the same
-/// disambiguation `PathElt` gives `^`, but ALSO a NESTED quantified path
-/// (`ZeroOrMore`/`OneOrMore`/`ZeroOrOne`/`Range`) does here, unlike under
-/// `^` — `PathMod` attaches to exactly one `PathPrimary`, and an
-/// already-quantified path is not one, so chaining two quantifiers directly
-/// (`p**`, the un-parenthesized spelling `(p*)*` would otherwise collapse
-/// to) is not even valid surface syntax
-/// (`crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`'s
-/// `property-path/pp37.rq` finding: `((:P)*)*` used to render as the
-/// un-reparseable `<P>**`). Parenthesizing the inner quantified path makes it
-/// a primary again, exactly like `PathElt` does for `Sequence`/`Alternative`.
-struct QuantifierOperand<'a>(&'a PropertyPathExpression);
-
-impl core::fmt::Display for QuantifierOperand<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self.0 {
-            PropertyPathExpression::Sequence(..)
-            | PropertyPathExpression::Alternative(..)
-            | PropertyPathExpression::Reverse(..)
-            | PropertyPathExpression::ZeroOrMore(..)
-            | PropertyPathExpression::OneOrMore(..)
-            | PropertyPathExpression::ZeroOrOne(..)
-            | PropertyPathExpression::Range { .. } => {
-                write!(f, "({})", self.0)
-            }
-            other => write!(f, "{other}"),
-        }
-    }
-}
-
-/// The LEFT operand of `/` (`Sequence`): parens only for `Alternative` (lower
-/// precedence — see [`PropertyPathExpression`]'s `Display`'s `Sequence` arm
-/// for the full precedence argument). A nested `Sequence` reproduces bare via
-/// `/`'s own left-associativity.
-struct SeqLeft<'a>(&'a PropertyPathExpression);
-
-impl core::fmt::Display for SeqLeft<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self.0 {
-            PropertyPathExpression::Alternative(..) => write!(f, "({})", self.0),
-            other => write!(f, "{other}"),
-        }
-    }
-}
-
-/// The RIGHT operand of `/` (`Sequence`): parens for `Alternative` (lower
-/// precedence) AND for a nested `Sequence` (right-nesting does not survive
-/// `/`'s left-associative re-parse — see the `Sequence` `Display` arm).
-struct SeqRight<'a>(&'a PropertyPathExpression);
-
-impl core::fmt::Display for SeqRight<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self.0 {
-            PropertyPathExpression::Alternative(..) | PropertyPathExpression::Sequence(..) => {
-                write!(f, "({})", self.0)
-            }
-            other => write!(f, "{other}"),
-        }
-    }
-}
-
-/// The RIGHT operand of `|` (`Alternative`): parens only for a nested
-/// `Alternative` (right-nesting does not survive `|`'s left-associative
-/// re-parse). `Sequence` binds tighter and never needs parens on either side
-/// of `|`.
-struct AltRight<'a>(&'a PropertyPathExpression);
-
-impl core::fmt::Display for AltRight<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        match self.0 {
-            PropertyPathExpression::Alternative(..) => write!(f, "({})", self.0),
-            other => write!(f, "{other}"),
-        }
+        let mut text = String::new();
+        crate::serialize::fmt_path(&mut text, self);
+        f.write_str(&text)
     }
 }
 
 /// A SPARQL expression (filter/bind/having/order/select-expression position).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// `Clone`, `==`, `Hash`, `Debug` and the drop walk the expression over work lists,
+/// so none of them needs more machine stack for a deeper expression; `Debug` writes
+/// exactly what `#[derive(Debug)]` would.
 pub enum Expression {
     /// An IRI constant.
     NamedNode(NamedNode),
@@ -1149,46 +1064,192 @@ pub enum Expression {
     Variable(Variable),
     /// `BOUND(?v)`.
     Bound(Variable),
-    /// Logical `||`.
-    Or(Box<Self>, Box<Self>),
-    /// Logical `&&`.
-    And(Box<Self>, Box<Self>),
+    /// Logical `||` over its operands, in source order: `a || b || c` is one node with
+    /// three operands.
+    ///
+    /// The SPARQL operator is binary and a written chain nests to the left; this node
+    /// is that left fold. Every operand is evaluated, left to right, and the result is
+    /// `true` if any operand's effective boolean value is `true`, `false` if every
+    /// operand's is `false`, and an error otherwise — the value
+    /// `((a || b) || c)` has under SPARQL's three-valued logic (§17.2), whose
+    /// disjunction is associative. A chain of any length is one level of the tree.
+    ///
+    /// [`Self::or`] builds a chain the way the parser does.
+    Or(Chain<Self>),
+    /// Logical `&&` over its operands, in source order: the left fold of the binary
+    /// operator, as [`Self::Or`] is of `||`. The result is `false` if any operand's
+    /// effective boolean value is `false`, `true` if every operand's is `true`, and an
+    /// error otherwise. [`Self::and`] builds a chain the way the parser does.
+    And(Chain<Self>),
     /// `=`.
-    Equal(Box<Self>, Box<Self>),
+    Equal(Child<Self>, Child<Self>),
     /// `sameTerm(a, b)`.
-    SameTerm(Box<Self>, Box<Self>),
+    SameTerm(Child<Self>, Child<Self>),
     /// `>`.
-    Greater(Box<Self>, Box<Self>),
+    Greater(Child<Self>, Child<Self>),
     /// `>=`.
-    GreaterOrEqual(Box<Self>, Box<Self>),
+    GreaterOrEqual(Child<Self>, Child<Self>),
     /// `<`.
-    Less(Box<Self>, Box<Self>),
+    Less(Child<Self>, Child<Self>),
     /// `<=`.
-    LessOrEqual(Box<Self>, Box<Self>),
-    /// `+`.
-    Add(Box<Self>, Box<Self>),
-    /// `-` (binary).
-    Subtract(Box<Self>, Box<Self>),
-    /// `*`.
-    Multiply(Box<Self>, Box<Self>),
-    /// `/`.
-    Divide(Box<Self>, Box<Self>),
+    LessOrEqual(Child<Self>, Child<Self>),
+    /// A chain of binary arithmetic operators, `first op₁ e₁ op₂ e₂ …`, folded
+    /// strictly left to right: `((first op₁ e₁) op₂ e₂) …`.
+    ///
+    /// Arithmetic is not reassociable — numeric type promotion, `xsd:decimal` and
+    /// floating-point rounding, and which operand raises an error all depend on the
+    /// order — so this node is exactly the left-nested tree of binary operators the
+    /// SPARQL grammar builds, stored as its left spine. Each step applies one binary
+    /// operator to the value the steps before it produced and the next operand, as
+    /// the node for that one operator would. Every operand is evaluated, left to
+    /// right, whether or not an earlier step raised an error. A chain of any length
+    /// is one level of the tree.
+    ///
+    /// A left spine is one node whatever the operators' precedence: `(a + b) * c`
+    /// is `a` followed by `+ b` and `* c`. The parser never builds a node whose first
+    /// operand is itself an `Arithmetic` node. [`Self::arithmetic`] extends a chain
+    /// the way the parser does.
+    Arithmetic(Child<Self>, NonEmpty<(ArithmeticOperator, Self)>),
     /// Unary `+`.
-    UnaryPlus(Box<Self>),
+    UnaryPlus(Child<Self>),
     /// Unary `-`.
-    UnaryMinus(Box<Self>),
+    UnaryMinus(Child<Self>),
     /// `!`.
-    Not(Box<Self>),
+    Not(Child<Self>),
     /// `expr IN (list)`.
-    In(Box<Self>, Vec<Self>),
+    In(Child<Self>, Args<Self>),
     /// `IF(cond, then, else)`.
-    If(Box<Self>, Box<Self>, Box<Self>),
+    If(Child<Self>, Child<Self>, Child<Self>),
     /// `COALESCE(list)`.
-    Coalesce(Vec<Self>),
+    Coalesce(Args<Self>),
     /// A built-in or custom function call.
-    FunctionCall(Function, Vec<Self>),
+    FunctionCall(Function, Args<Self>),
     /// `EXISTS { pattern }` (`NOT EXISTS` is `Not(Exists(...))`).
-    Exists(Box<GraphPattern>),
+    Exists(Child<GraphPattern>),
+}
+
+/// One of the four binary arithmetic operators of an [`Expression::Arithmetic`] chain.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum ArithmeticOperator {
+    /// `+`.
+    Add,
+    /// `-` (binary).
+    Subtract,
+    /// `*`.
+    Multiply,
+    /// `/`.
+    Divide,
+}
+
+impl ArithmeticOperator {
+    /// The operator's surface spelling.
+    #[must_use]
+    pub const fn symbol(self) -> &'static str {
+        match self {
+            Self::Add => "+",
+            Self::Subtract => "-",
+            Self::Multiply => "*",
+            Self::Divide => "/",
+        }
+    }
+
+    /// Whether the operator is multiplicative (`*`, `/`), which binds tighter than
+    /// the additive ones (`+`, `-`).
+    #[must_use]
+    pub const fn is_multiplicative(self) -> bool {
+        matches!(self, Self::Multiply | Self::Divide)
+    }
+}
+
+impl Expression {
+    /// `left || right`, as the parser builds it: a `left` that is already an
+    /// [`Self::Or`] chain is extended by one operand, so a written chain of any
+    /// length is one node. A `right` that is an `Or` stays one operand, as the
+    /// bracketted `a || (b || c)` it came from.
+    #[must_use]
+    pub fn or(left: Self, right: Self) -> Self {
+        match left {
+            Self::Or(mut operands) => {
+                operands.push(right);
+                Self::Or(operands)
+            }
+            left => Self::Or(Chain::new(left, right, [])),
+        }
+    }
+
+    /// `left && right`, as the parser builds it: see [`Self::or`].
+    #[must_use]
+    pub fn and(left: Self, right: Self) -> Self {
+        match left {
+            Self::And(mut operands) => {
+                operands.push(right);
+                Self::And(operands)
+            }
+            left => Self::And(Chain::new(left, right, [])),
+        }
+    }
+
+    /// `left op right`, as the parser builds it: a `left` that is already an
+    /// [`Self::Arithmetic`] chain is extended by one step, whatever its operators'
+    /// precedence, because the chain is the left spine of the binary tree and
+    /// `op` applies to the value of everything before it.
+    #[must_use]
+    pub fn arithmetic(left: Self, op: ArithmeticOperator, right: Self) -> Self {
+        match left {
+            Self::Arithmetic(first, mut steps) => {
+                steps.push((op, right));
+                Self::Arithmetic(first, steps)
+            }
+            left => Self::Arithmetic(Child::new(left), NonEmpty::new((op, right))),
+        }
+    }
+}
+
+impl PropertyPathExpression {
+    /// `left / right`, as the parser builds it: a `left` that is already a
+    /// [`Self::Sequence`] chain is extended by one element, so a written chain of any
+    /// length is one node. A `right` that is a `Sequence` stays one element, as the
+    /// bracketed `a/(b/c)` it came from.
+    #[must_use]
+    pub fn sequence(left: Self, right: Self) -> Self {
+        match left {
+            Self::Sequence(mut elements) => {
+                elements.push(right);
+                Self::Sequence(elements)
+            }
+            left => Self::Sequence(Chain::new(left, right, [])),
+        }
+    }
+
+    /// `left | right`, as the parser builds it: see [`Self::sequence`].
+    #[must_use]
+    pub fn alternative(left: Self, right: Self) -> Self {
+        match left {
+            Self::Alternative(mut elements) => {
+                elements.push(right);
+                Self::Alternative(elements)
+            }
+            left => Self::Alternative(Chain::new(left, right, [])),
+        }
+    }
+}
+
+impl GraphPattern {
+    /// `{ left } UNION { right }`, as the parser builds it: a `left` that is already
+    /// a [`Self::Union`] gains one arm, so a written chain of any length is one node.
+    /// A `right` that is a `Union` stays one arm, as the braced group it came from.
+    #[must_use]
+    pub fn union(left: Self, right: Self) -> Self {
+        match left {
+            Self::Union { mut arms } => {
+                arms.push(right);
+                Self::Union { arms }
+            }
+            left => Self::Union {
+                arms: Chain::new(left, right, []),
+            },
+        }
+    }
 }
 
 /// A SPARQL function: a built-in (`BuiltInCall`) or a custom IRI-named function.

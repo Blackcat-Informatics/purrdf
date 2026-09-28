@@ -134,37 +134,40 @@ use realize::is_instance;
 /// interleaving; within a kind the order is lexicographic over the term's own identity
 /// coordinates, including the RDF 1.2 base direction, so two literals that differ only in
 /// direction do not compare equal.
+///
+/// A triple term's key is assembled bottom-up over [`TermValue::fold`]'s work list from its
+/// subject's, predicate's and object's keys.
 pub(crate) fn term_key(term: &TermValue) -> (u8, String) {
-    match term {
-        TermValue::Iri(iri) => (0, iri.clone()),
-        TermValue::Blank { label, scope } => (1, format!("{}\u{1f}{label}", scope.0)),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => (
-            2,
-            format!(
-                "{datatype}\u{1f}{}\u{1f}{}\u{1f}{lexical_form}",
-                language.as_deref().unwrap_or(""),
-                match direction {
-                    Some(purrdf_core::RdfTextDirection::Ltr) => "ltr",
-                    Some(purrdf_core::RdfTextDirection::Rtl) => "rtl",
-                    None => "",
-                }
+    term.fold(
+        |term| match term {
+            TermValue::Iri(iri) => (0, iri.clone()),
+            TermValue::Blank { label, scope } => (1, format!("{}\u{1f}{label}", scope.0)),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => (
+                2,
+                format!(
+                    "{datatype}\u{1f}{}\u{1f}{}\u{1f}{lexical_form}",
+                    language.as_deref().unwrap_or(""),
+                    match direction {
+                        Some(purrdf_core::RdfTextDirection::Ltr) => "ltr",
+                        Some(purrdf_core::RdfTextDirection::Rtl) => "rtl",
+                        None => "",
+                    }
+                ),
             ),
-        ),
-        TermValue::Triple { s, p, o } => {
-            let (sk, sv) = term_key(s);
-            let (pk, pv) = term_key(p);
-            let (ok, ov) = term_key(o);
+            TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+        },
+        |(sk, sv), (pk, pv), (ok, ov)| {
             (
                 3,
                 format!("{sk}\u{1f}{sv}\u{1e}{pk}\u{1f}{pv}\u{1e}{ok}\u{1f}{ov}"),
             )
-        }
-    }
+        },
+    )
 }
 
 /// The OWL 2 Direct-Semantics reasoning services over one dataset.
@@ -1172,5 +1175,63 @@ mod tests {
         let ds = b.freeze().expect("freeze");
         let reasoner = Reasoner::with_proofs(&ds).expect("an ordinary dataset must still build");
         assert!(reasoner.records_proofs());
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The sort key against its recursive reference, and over a chain far deeper than a
+    //! 128 KiB thread could recurse.
+
+    use purrdf_core::TermValue;
+
+    use super::term_key;
+
+    fn reference(term: &TermValue) -> (u8, String) {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                let (sk, sv) = reference(s);
+                let (pk, pv) = reference(p);
+                let (ok, ov) = reference(o);
+                (
+                    3,
+                    format!("{sk}\u{1f}{sv}\u{1e}{pk}\u{1f}{pv}\u{1e}{ok}\u{1f}{ov}"),
+                )
+            }
+            leaf => term_key(leaf),
+        }
+    }
+
+    /// Every generated term keys exactly as the recursive reference keys it.
+    #[test]
+    fn the_key_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::Any,
+            );
+            assert_eq!(term_key(&value), reference(&value), "seed {seed}");
+        }
+    }
+
+    /// A chain several thousand triple terms deep is keyed on a thread whose whole
+    /// stack is 128 KiB. A triple's key copies its components' keys, so a key's length
+    /// grows with its depth and the chain is kept to a few thousand levels.
+    #[test]
+    fn a_deep_chain_is_keyed_on_a_128_kib_thread() {
+        const LEVELS: usize = 3_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let (kind, key) = term_key(&crate::test_terms::triple_chain(LEVELS));
+                assert_eq!(kind, 3);
+                assert_eq!(key.matches("http://example.org/p").count(), LEVELS);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the key did not overflow the thread's stack");
     }
 }

@@ -33,6 +33,7 @@
 //! * **F — page touches.** Over a counting page provider, `GRAPH ?g { ... }` pulls
 //!   exactly the pages that own a named graph, and no others.
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
@@ -215,9 +216,9 @@ fn page_with_data_and_declared_empties() -> Fixture {
 /// rows are real data, and a pattern can match them with the quad table empty.
 fn page_with_side_table_only_graph() -> Fixture {
     let reified = TermValue::Triple {
-        s: Box::new(iri("alice")),
-        p: Box::new(iri("p")),
-        o: Box::new(iri("o1")),
+        s: TermBox::new(iri("alice")),
+        p: TermBox::new(iri("p")),
+        o: TermBox::new(iri("o1")),
     };
     Fixture {
         reifiers: vec![(iri("r1"), reified, Some(iri("gside")))],

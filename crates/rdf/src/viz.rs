@@ -8,6 +8,7 @@
 //! reifiers, annotations, graph context, and dialect diagnostics. Renderers use
 //! this model; they do not rediscover RDF 1.2 statement structure from flat quads.
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
 
@@ -752,9 +753,9 @@ pub fn project_graph_input(
         builder.add_reifier(
             reifier.reifier.clone(),
             TermValue::Triple {
-                s: Box::new(reifier.statement.subject.clone()),
-                p: Box::new(TermValue::Iri(reifier.statement.predicate.clone())),
-                o: Box::new(reifier.statement.object.clone()),
+                s: TermBox::new(reifier.statement.subject.clone()),
+                p: TermBox::new(TermValue::Iri(reifier.statement.predicate.clone())),
+                o: TermBox::new(reifier.statement.object.clone()),
             },
             reifier.graph_name.clone(),
         )?;
@@ -910,8 +911,8 @@ impl<'a> ProjectionBuilder<'a> {
                 "rdf:reifies object must be a triple term".to_owned(),
             ));
         };
-        let predicate = predicate_iri(*p)?;
-        let statement = self.statement_id(*s, predicate, *o)?;
+        let predicate = predicate_iri(p.into_inner())?;
+        let statement = self.statement_id(s.into_inner(), predicate, o.into_inner())?;
         self.add_statement_role(&statement, VizRole::QuotedStatement);
         let graph = self.graph_id(graph_name)?;
         let relation_key = format!("{}|{}|{}", reifier_id.0, statement.0, graph.0);
@@ -1035,9 +1036,26 @@ impl<'a> ProjectionBuilder<'a> {
         object: TermValue,
     ) -> Result<VizStatementId, VizError> {
         let subject_ref = self.value_ref(subject)?;
+        let predicate_id = self.predicate_id(predicate)?;
+        let object_ref = self.value_ref(object)?;
+        self.finish_statement(subject_ref, predicate_id, object_ref)
+    }
+
+    /// The term id of a statement's predicate IRI, with its predicate role recorded.
+    fn predicate_id(&mut self, predicate: String) -> Result<VizTermId, VizError> {
         let predicate_id = self.term_id(TermValue::Iri(predicate))?;
         self.add_term_role(&predicate_id, VizRole::Predicate);
-        let object_ref = self.value_ref(object)?;
+        Ok(predicate_id)
+    }
+
+    /// The statement id of a subject, predicate and object whose references already
+    /// exist, minting the statement on first sight.
+    fn finish_statement(
+        &mut self,
+        subject_ref: VizValueRef,
+        predicate_id: VizTermId,
+        object_ref: VizValueRef,
+    ) -> Result<VizStatementId, VizError> {
         let key = statement_key(&subject_ref, &predicate_id, &object_ref);
         if let Some(id) = self.statement_by_key.get(&key) {
             return Ok(id.clone());
@@ -1103,17 +1121,50 @@ impl<'a> ProjectionBuilder<'a> {
         Ok(id)
     }
 
+    /// The reference to `value`: a term, or the statement a triple term names.
+    ///
+    /// A triple term's statement is built over a work list, in the order
+    /// [`Self::statement_id`] builds one: its predicate is checked to be an IRI, then
+    /// its subject is referenced with its whole nesting, then its predicate, then its
+    /// object, and the statement is minted once all three exist.
     fn value_ref(&mut self, value: TermValue) -> Result<VizValueRef, VizError> {
-        match value {
-            TermValue::Triple { s, p, o } => {
-                let predicate = predicate_iri(*p)?;
-                let statement = self.statement_id(*s, predicate, *o)?;
-                Ok(VizValueRef::Statement { id: statement })
-            }
-            other => Ok(VizValueRef::Term {
-                id: self.term_id(other)?,
-            }),
+        enum Step {
+            Value(TermValue),
+            Predicate(String),
+            Statement,
         }
+        let mut steps: Vec<Step> = vec![Step::Value(value)];
+        let mut refs: Vec<VizValueRef> = Vec::new();
+        let mut predicates: Vec<VizTermId> = Vec::new();
+        while let Some(step) = steps.pop() {
+            match step {
+                Step::Value(TermValue::Triple { s, p, o }) => {
+                    let predicate = predicate_iri(p.into_inner())?;
+                    steps.extend([
+                        Step::Statement,
+                        Step::Value(o.into_inner()),
+                        Step::Predicate(predicate),
+                        Step::Value(s.into_inner()),
+                    ]);
+                }
+                Step::Value(other) => refs.push(VizValueRef::Term {
+                    id: self.term_id(other)?,
+                }),
+                Step::Predicate(predicate) => predicates.push(self.predicate_id(predicate)?),
+                Step::Statement => {
+                    let object_ref = refs.pop().expect("a statement's object is referenced");
+                    let predicate_id = predicates
+                        .pop()
+                        .expect("a statement's predicate is referenced");
+                    let subject_ref = refs.pop().expect("a statement's subject is referenced");
+                    let id = self.finish_statement(subject_ref, predicate_id, object_ref)?;
+                    refs.push(VizValueRef::Statement { id });
+                }
+            }
+        }
+        Ok(refs
+            .pop()
+            .expect("the value's own reference is the last one made"))
     }
 
     fn term_id(&mut self, value: TermValue) -> Result<VizTermId, VizError> {
@@ -1650,7 +1701,16 @@ fn term_key(value: &TermValue) -> String {
     out
 }
 
+/// Write `value`'s key, each triple term spelled `triple(s|p|o)` over
+/// [`TermValue::try_write_nested`]'s work list.
 fn write_term_key(value: &TermValue, out: &mut String) -> fmt::Result {
+    value.try_write_nested(out, "triple(", "|", ")", write_leaf_key, |out, text| {
+        out.write_str(text)
+    })
+}
+
+/// Write the key of a term that is not a triple term.
+fn write_leaf_key(out: &mut String, value: &TermValue) -> fmt::Result {
     match value {
         TermValue::Iri(iri) => {
             out.write_str("iri:")?;
@@ -1680,15 +1740,7 @@ fn write_term_key(value: &TermValue, out: &mut String) -> fmt::Result {
             }
             Ok(())
         }
-        TermValue::Triple { s, p, o } => {
-            out.write_str("triple(")?;
-            write_term_key(s, out)?;
-            out.write_char('|')?;
-            write_term_key(p, out)?;
-            out.write_char('|')?;
-            write_term_key(o, out)?;
-            out.write_char(')')
-        }
+        TermValue::Triple { .. } => unreachable!("a triple term is written from its components"),
     }
 }
 
@@ -1726,7 +1778,31 @@ fn label_for_term(
     }
 }
 
+/// The full label of `value`, each triple term spelled `<<( s p o )>>` over
+/// [`TermValue::try_write_nested`]'s work list.
 fn full_term_label(value: &TermValue) -> String {
+    let mut out = String::new();
+    let written = value.try_write_nested(
+        &mut out,
+        "<<( ",
+        " ",
+        " )>>",
+        |out, leaf| {
+            out.push_str(&full_leaf_label(leaf));
+            Ok::<(), core::convert::Infallible>(())
+        },
+        |out, text| {
+            out.push_str(text);
+            Ok(())
+        },
+    );
+    match written {
+        Ok(()) => out,
+    }
+}
+
+/// The full label of a term that is not a triple term.
+fn full_leaf_label(value: &TermValue) -> String {
     match value {
         TermValue::Iri(iri) => format!("<{}>", escape_iri(iri)),
         // Visualization string, not Turtle — label syntax is deliberately not
@@ -1749,12 +1825,7 @@ fn full_term_label(value: &TermValue) -> String {
                 format!("{literal}^^<{}>", escape_iri(datatype))
             }
         }
-        TermValue::Triple { s, p, o } => format!(
-            "<<( {} {} {} )>>",
-            full_term_label(s),
-            full_term_label(p),
-            full_term_label(o)
-        ),
+        TermValue::Triple { .. } => unreachable!("a triple term is written from its components"),
     }
 }
 
@@ -1797,6 +1868,7 @@ pub fn stable_hash_hex(input: &str) -> String {
 mod tests {
     use super::*;
     use crate::{RdfDatasetBuilder, RdfLiteral};
+    use purrdf_core::TermBox;
 
     const EX: &str = "https://example.org/";
     const KNOWS: &str = "https://example.org/knows";
@@ -1948,9 +2020,9 @@ mod tests {
     #[test]
     fn triple_term_subject_gets_symmetric_dialect_diagnostic() {
         let nested = TermValue::Triple {
-            s: Box::new(iri("alice")),
-            p: Box::new(TermValue::Iri(KNOWS.to_owned())),
-            o: Box::new(iri("bob")),
+            s: TermBox::new(iri("alice")),
+            p: TermBox::new(TermValue::Iri(KNOWS.to_owned())),
+            o: TermBox::new(iri("bob")),
         };
         let input = VizGraphInput {
             quads: vec![VizInputQuad {
@@ -2109,9 +2181,9 @@ mod tests {
     #[test]
     fn references_record_exact_containing_sites() {
         let nested = TermValue::Triple {
-            s: Box::new(iri("alice")),
-            p: Box::new(TermValue::Iri(KNOWS.to_owned())),
-            o: Box::new(iri("bob")),
+            s: TermBox::new(iri("alice")),
+            p: TermBox::new(TermValue::Iri(KNOWS.to_owned())),
+            o: TermBox::new(iri("bob")),
         };
         let input = VizGraphInput {
             quads: vec![
@@ -2390,5 +2462,152 @@ mod tests {
                 graph_name: Some(iri("provenance")),
             }],
         }
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The term keys, the full labels and the statement references against their
+    //! recursive references, and at a hundred thousand levels on a 128 KiB thread.
+
+    use core::fmt::{self, Write as _};
+
+    use purrdf_core::TermValue;
+
+    use super::{
+        ProjectionBuilder, VizError, VizSpec, VizValueRef, full_term_label, predicate_iri,
+        term_key, write_json_string,
+    };
+
+    /// The recursive reference of [`term_key`].
+    fn reference_key(value: &TermValue, out: &mut String) -> fmt::Result {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                out.write_str("triple(")?;
+                reference_key(s, out)?;
+                out.write_char('|')?;
+                reference_key(p, out)?;
+                out.write_char('|')?;
+                reference_key(o, out)?;
+                out.write_char(')')
+            }
+            TermValue::Iri(iri) => {
+                out.write_str("iri:")?;
+                write_json_string(iri, out)
+            }
+            leaf => out.write_str(&term_key(leaf)),
+        }
+    }
+
+    /// The recursive reference of [`full_term_label`].
+    fn reference_label(value: &TermValue) -> String {
+        match value {
+            TermValue::Triple { s, p, o } => format!(
+                "<<( {} {} {} )>>",
+                reference_label(s),
+                reference_label(p),
+                reference_label(o)
+            ),
+            leaf => full_term_label(leaf),
+        }
+    }
+
+    /// The recursive reference of [`ProjectionBuilder::value_ref`].
+    fn reference_ref(
+        builder: &mut ProjectionBuilder<'_>,
+        value: TermValue,
+    ) -> Result<VizValueRef, VizError> {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                let predicate = predicate_iri(p.into_inner())?;
+                let subject_ref = reference_ref(builder, s.into_inner())?;
+                let predicate_id = builder.predicate_id(predicate)?;
+                let object_ref = reference_ref(builder, o.into_inner())?;
+                Ok(VizValueRef::Statement {
+                    id: builder.finish_statement(subject_ref, predicate_id, object_ref)?,
+                })
+            }
+            other => Ok(VizValueRef::Term {
+                id: builder.term_id(other)?,
+            }),
+        }
+    }
+
+    /// Everything a builder has recorded, spelled for comparison.
+    fn recorded(builder: &ProjectionBuilder<'_>) -> String {
+        format!(
+            "{:?} {:?} {:?} {:?}",
+            builder.terms, builder.statements, builder.references, builder.diagnostics
+        )
+    }
+
+    /// The work-list keys, labels and references answer every generated term exactly as
+    /// their recursive references do — the reference built, the statements minted and
+    /// the refusal of a non-IRI predicate included.
+    #[test]
+    fn the_walks_agree_with_their_recursive_references_on_generated_terms() {
+        let (mut nested, mut refused) = (0, 0);
+        let spec = VizSpec::default();
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::Any,
+            );
+            nested += usize::from(budget < 7);
+            let mut expected_key = String::new();
+            reference_key(&value, &mut expected_key).expect("a String accepts text");
+            assert_eq!(term_key(&value), expected_key, "seed {seed}");
+            assert_eq!(
+                full_term_label(&value),
+                reference_label(&value),
+                "seed {seed}"
+            );
+
+            let (mut built, mut expected) =
+                (ProjectionBuilder::new(&spec), ProjectionBuilder::new(&spec));
+            let found = built.value_ref(value.clone());
+            let reference = reference_ref(&mut expected, value);
+            assert_eq!(
+                format!("{found:?}"),
+                format!("{reference:?}"),
+                "seed {seed}"
+            );
+            assert_eq!(recorded(&built), recorded(&expected), "seed {seed}");
+            refused += usize::from(found.is_err());
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+        assert!(
+            refused > 0,
+            "some generated triple term has a non-IRI predicate"
+        );
+    }
+
+    /// A triple term a hundred thousand levels deep is keyed, labelled and referenced —
+    /// one statement minted a level — on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_walked_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = crate::test_terms::triple_chain(LEVELS);
+                assert_eq!(term_key(&value).matches("triple(").count(), LEVELS);
+                assert_eq!(full_term_label(&value).matches("<<( ").count(), LEVELS);
+                let spec = VizSpec {
+                    max_statements: 2 * LEVELS,
+                    max_terms: 6 * LEVELS,
+                    ..VizSpec::default()
+                };
+                let mut builder = ProjectionBuilder::new(&spec);
+                let reference = builder.value_ref(value).expect("every predicate is an IRI");
+                assert!(matches!(reference, VizValueRef::Statement { .. }));
+                assert_eq!(builder.statements.len(), LEVELS);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no walk overflowed the thread's stack");
     }
 }

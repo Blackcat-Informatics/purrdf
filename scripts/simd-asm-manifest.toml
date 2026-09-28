@@ -2640,12 +2640,12 @@ summary = "`loss::escape_json_into`, the loss ledger's JSON string body: the esc
 
 [[site]]
 id = "eval.regex-row-alloc"
-summary = "the per-row `String` a SPARQL `REGEX` argument is materialized into (`eval_string_arg_expr`)"
+summary = "the per-row `String` a SPARQL `REGEX` argument is materialized into (`string_arg_of_term`)"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_sparql_eval"
-  symbol = "purrdf_sparql_eval::expr::eval_string_arg_expr::<purrdf_core::ir::dataset::RdfDataset>"
+  symbol = "purrdf_sparql_eval::expr::string_arg_of_term::<purrdf_core::ir::dataset::RdfDataset>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2880,7 +2880,7 @@ summary = "`chase::chase_until`, the chase fixpoint"
 
 [[site]]
 id = "entail.escape"
-summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inlined into `write_surface`), delegated to the canonical N-Quads writers"
+summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inlined into `write_leaf_surface`), delegated to the canonical N-Quads writers"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v23.
   [[site.measure]]
@@ -3035,10 +3035,10 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
 
   # Delegates to `purrdf_core::ir::canon::write_literal_escaped`. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
   [[site.measure]]
-  label = "literal (in write_surface)"
+  label = "literal (in write_leaf_surface)"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
   crate = "purrdf_entail"
-  symbol = "purrdf_entail::engine::write_surface"
+  symbol = "purrdf_entail::engine::write_leaf_surface"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

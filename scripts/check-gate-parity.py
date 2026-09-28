@@ -27,8 +27,9 @@ Scope, stated rather than implied: only invocations of a ``scripts/`` (or in-rep
 ``crates/.../*.py``) program are compared. ``cargo`` steps and the ``node`` schema
 oracles are out of scope — CI distributes those across jobs (``wasm``, ``pytest``,
 ``capi``) and spells several differently on purpose, so requiring textual equality
-there would refuse a correct workflow. A gate that over-refuses gets disabled, and
-then it guards nothing.
+there would refuse a correct workflow. The explicit preserve-order consumer is a
+bounded exception: its three Cargo gates must remain in both lists because an
+excluded consumer does not run through any workspace command.
 
 ``$(MAKE)`` recursions ARE followed, within this Makefile. They were listed above
 as "deliberately out of scope" under the reason that applies to cargo and node —
@@ -755,8 +756,49 @@ def self_test() -> int:
     else:
         print("OK: self-test — a gate paired in both lists with both argument forms is accepted")
 
+    if consumer_gate_problems(real_makefile, real_workflows):
+        print("SELF-TEST FAIL: excluded consumer gates do not agree in the real tree")
+        ok = False
+    for command in CONSUMER_COMMANDS:
+        absent_ci = {name: text.replace(command, "true") for name, text in real_workflows.items()}
+        prose_ci = {name: text.replace(command, f'echo "{command}"') for name, text in real_workflows.items()}
+        absent_local = real_makefile.replace(command, "true")
+        if (not consumer_gate_problems(real_makefile, absent_ci)
+                or not consumer_gate_problems(real_makefile, prose_ci)
+                or not consumer_gate_problems(absent_local, real_workflows)):
+            print(f"SELF-TEST FAIL: excluded consumer omission accepted: {command}")
+            ok = False
+    print("OK: self-test — excluded consumer omissions and quoted prose are refused")
+
     print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
     return 0 if ok else 1
+
+
+# This excluded downstream consumer proves serde_json feature unification cannot
+# change uniqueItems semantics. Workspace Cargo commands never select it.
+CONSUMER_MANIFEST = "crates/jsonschema/tests/preserve_order_consumer/Cargo.toml"
+CONSUMER_COMMANDS = (
+    f"cargo fmt --manifest-path {CONSUMER_MANIFEST} --check",
+    f"cargo clippy --manifest-path {CONSUMER_MANIFEST} --all-targets --locked -- -D warnings",
+    f"cargo test --manifest-path {CONSUMER_MANIFEST} --locked",
+)
+
+
+def consumer_gate_problems(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
+    """Require each excluded-consumer gate locally and in a PR workflow."""
+    def live(text: str) -> str:
+        return " ".join(_drop_prose(strip_yaml_comments(_uncomment(
+            _join_continuations(text), ("#",)
+        ))).split())
+
+    local = live(check_recipe(makefile_text, "check"))
+    ci = " ".join(live(text) for text in merge_blocking(workflow_texts).values())
+    return [
+        f"excluded preserve-order consumer gate `{command}` is absent from {where}"
+        for command in CONSUMER_COMMANDS
+        for where, text in (("make check", local), ("pull-request workflows", ci))
+        if command not in text
+    ]
 
 
 def main() -> int:
@@ -766,7 +808,10 @@ def main() -> int:
     if args.self_test:
         return self_test()
 
-    problems = divergence(MAKEFILE.read_text(encoding="utf-8"), _workflow_texts())
+    makefile_text = MAKEFILE.read_text(encoding="utf-8")
+    workflow_texts = _workflow_texts()
+    problems = divergence(makefile_text, workflow_texts)
+    problems.extend(consumer_gate_problems(makefile_text, workflow_texts))
     if problems:
         sys.exit(
             "FAIL: `make check` and the CI workflows do not run the same gates:\n  "

@@ -24,7 +24,7 @@ workspace = true
 # rlib-only, wasm-clean leaf: the SPARQL front-end of the native query stack. It
 # must NOT pull any oxigraph-family crate (it replaces the oxigraph-family SPARQL
 # parser). It builds on the two CLOSED foundation leaves `purrdf-iri` and
-# `purrdf-xsd` plus `memchr` (a wasm-clean SIMD byte-scan primitive for the
+# `purrdf-xsd`, plus `memchr` (a wasm-clean SIMD byte-scan primitive for the
 # tokenizer hot paths — not a foundation leaf, the same class of infra dep as the
 # rayon edges elsewhere); it deliberately does NOT depend on `purrdf-core`
 # (whose terms are dataset-interned `TermId` and which pulls a `gts` default feature).
@@ -59,6 +59,9 @@ criterion = { workspace = true }
 # own parser. Dev-only: never a runtime or release dependency, so the wasm gate
 # is unaffected.
 regex = { workspace = true }
+# The counting allocator `tests/chain_parse_is_linear.rs` measures a chain's parse
+# with. Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-alloc-probe = { workspace = true }
 
 [[bench]]
 name = "tokenize"
@@ -70,4 +73,21 @@ harness = false
 
 [[bench]]
 name = "update_reparse"
+harness = false
+
+[[bench]]
+# Clone, Drop, `==`, Hash, Debug and the serializer over parsed algebra trees:
+# deep ones (an OPTIONAL spine, nested calls, nested groups) and wide ones (a
+# 4 096-pattern BGP, 1 024 UNION arms, a 4 096-row VALUES). Report-only; `make
+# bench` lane only — excluded from `make check`.
+name = "algebra_walks"
+harness = false
+
+[[bench]]
+# Parse throughput over thirty embedded, realistic queries spanning the four
+# query forms, joins, OPTIONAL/UNION/MINUS/GRAPH, FILTER built-ins, paths,
+# aggregates, sub-SELECTs, RDF 1.2 triple terms and LATERAL — the whole set and
+# each query alone. Report-only; `make bench` lane only — excluded from `make
+# check`.
+name = "parse"
 harness = false

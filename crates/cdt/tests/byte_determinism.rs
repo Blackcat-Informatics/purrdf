@@ -167,15 +167,15 @@ fn term_strategy() -> BoxedStrategy<CdtTerm> {
         .prop_recursive(3, 24, 3, |inner| {
             prop_oneof![
                 prop::collection::vec(inner.clone(), 0..4).prop_filter_map(
-                    "a generated list must be within the crate's three bounds",
+                    "a generated list must be within the crate's two bounds",
                     |items| CdtTerm::composite(CdtValue::list(items).ok()?).ok(),
                 ),
                 entries_strategy(inner.clone()).prop_filter_map(
-                    "a generated map must be within the crate's three bounds",
+                    "a generated map must be within the crate's two bounds",
                     |entries| CdtTerm::composite(CdtValue::map(entries).ok()?).ok(),
                 ),
                 (inner.clone(), inner.clone(), inner).prop_filter_map(
-                    "a generated triple term must be within the crate's three bounds",
+                    "a generated triple term must be within the crate's two bounds",
                     |(subject, predicate, object)| {
                         CdtTerm::triple(subject, predicate, object).ok()
                     },
@@ -188,11 +188,11 @@ fn term_strategy() -> BoxedStrategy<CdtTerm> {
 fn value_strategy() -> impl Strategy<Value = CdtValue> {
     prop_oneof![
         prop::collection::vec(term_strategy(), 0..5).prop_filter_map(
-            "a generated list must be within the crate's three bounds",
+            "a generated list must be within the crate's two bounds",
             |items| CdtValue::list(items).ok(),
         ),
         entries_strategy(term_strategy()).prop_filter_map(
-            "a generated map must be within the crate's three bounds",
+            "a generated map must be within the crate's two bounds",
             |entries| CdtValue::map(entries).ok(),
         ),
     ]

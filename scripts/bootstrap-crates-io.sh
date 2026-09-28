@@ -450,6 +450,26 @@ self_test() {
     [[ -n "$member" ]] && never_published+=("$member")
   done < <(workspace_never_published "${metadata_json}")
 
+  # The fixture split by whether a crate carries any path dependency at all.
+  # `purrdf-stack` is the case this split exists for: a leaf crate with NO
+  # path dependencies is creatable the instant its own record is missing — it
+  # has nothing to wait on — so it cannot take part in a "nothing creatable"
+  # ledger, and it needs its own "creatable with no dependencies" arm instead.
+  # Mixing it into a fixture built to have every dependency absent silently
+  # turns "nothing can be created" into "one thing can", which is exactly the
+  # gap: the premise below stopped being true the day a dependency-free crate
+  # joined the real ledger, and the arm went from refusing to passing (exit 0
+  # where 1 was expected) without anything about the split being visible here.
+  local -a fixture_with_deps=() fixture_no_deps=()
+  local crate
+  for crate in "${fixture[@]}"; do
+    if [[ -n "$(crate_path_deps "$crate")" ]]; then
+      fixture_with_deps+=("$crate")
+    else
+      fixture_no_deps+=("$crate")
+    fi
+  done
+
   # ledger_file <name> <crate>... : the real release set with the ledger replaced.
   ledger_file() {
     local name="$1"
@@ -542,55 +562,76 @@ self_test() {
     "New versions of this crate can only be published using Trusted Publishing"
 
   # 2. The ledger with every dependency absent at VERSION: refuse, naming
-  #    every missing dependency of every ledger crate. A ledger crate with no
-  #    dependency outside the ledger is creatable against ANY registry, so
-  #    "nothing creatable" is a claim about the ledger crates that have one;
-  #    the dependency-free ones are the valid neighbour, asserted in 2a.
-  mock="${tmp}/deps-absent"; mkdir -p "$mock"
-  local -a expect_missing=() waiting=() free=()
-  local crate dep_line dep outside
-  for crate in "${fixture[@]}"; do
-    outside=false
-    while IFS= read -r dep_line; do
-      [[ -z "$dep_line" ]] && continue
-      dep="${dep_line#* }"
-      in_list "$dep" "${fixture[@]}" && continue
-      outside=true
-      expect_missing+=("${crate} waits on" "${dep} ${VERSION} (${dep_line%% *})")
-    done < <(crate_path_deps "$crate")
-    if [[ "$outside" == "true" ]]; then waiting+=("$crate"); else free+=("$crate"); fi
-  done
-  if [[ "${#waiting[@]}" -eq 0 ]]; then
-    echo "  FAILED  no ledger crate has a dependency outside the ledger, so the refusal cannot be exercised"
+  #    every missing dependency of every ledger crate.
+  #
+  #    The ledger here is `fixture_with_deps`, NOT `fixture`: a dependency-free
+  #    crate is creatable however this mock answers, so "nothing can be
+  #    created" is only a true premise when every crate in the ledger actually
+  #    has a dependency to wait on. Arm 2a below is the other half — it proves
+  #    a dependency-free crate IS reported creatable rather than this refusal
+  #    silently absorbing it.
+  local -a expect_missing=()
+  local crate dep_line dep
+  if [[ "${#fixture_with_deps[@]}" -eq 0 ]]; then
+    echo "  FAILED  no fixture crate has a path dependency, so \"nothing creatable\" cannot be exercised"
     failures=$((failures + 1))
   else
+    mock="${tmp}/deps-absent"; mkdir -p "$mock"
+    for crate in "${fixture_with_deps[@]}"; do
+      while IFS= read -r dep_line; do
+        [[ -z "$dep_line" ]] && continue
+        dep="${dep_line#* }"
+        in_list "$dep" "${fixture_with_deps[@]}" || expect_missing+=("${crate} waits on")
+        in_list "$dep" "${fixture_with_deps[@]}" || expect_missing+=("${dep} ${VERSION} (${dep_line%% *})")
+      done < <(crate_path_deps "$crate")
+    done
     arm "every ledger crate's dependencies absent at ${VERSION}: nothing creatable" refuse \
-      "$mock" "$(ledger_file absent "${waiting[@]}")" \
+      "$mock" "$(ledger_file absent "${fixture_with_deps[@]}")" \
       "REFUSING: nothing can be created yet" \
       "failed to select a version for the requirement" \
       "scripts/publish-release-crates.sh" \
       "${expect_missing[@]}"
   fi
 
-  # 2a. The neighbour of 2: a ledger crate with no dependency outside the
-  #     ledger is created against the same empty registry. When the ledger has
-  #     none, one is FOUND in the release set, never named here.
-  local -a free_fixture=("${free[@]}")
-  if [[ "${#free_fixture[@]}" -eq 0 ]]; then
-    for candidate in "${release_set[@]}"; do
-      if [[ -z "$(crate_path_deps "$candidate")" ]]; then
-        free_fixture=("$candidate")
-        break
-      fi
-    done
-  fi
-  if [[ "${#free_fixture[@]}" -eq 0 ]]; then
-    echo "  FAILED  no release crate is free of dependencies, so the neighbour cannot be exercised"
+  # 2a. The creatable neighbour to arm 2: a dependency-free ledger crate mixed
+  #     in with dependency-having ones, every dependency absent — same mock
+  #     shape as arm 2, but with `fixture` (not `fixture_with_deps`) as the
+  #     ledger. This is the exact shape that broke: `purrdf-stack` (no path
+  #     dependencies) sitting in PURRDF_UNBOOTSTRAPPED_CRATES beside crates
+  #     that do have them. The dependency-free crate(s) must be reported
+  #     CREATE RECORD; crates whose dependencies those satisfy join them in the
+  #     same pass. Together they must be the only cargo args — the
+  #     args line is the oracle that tells "creatable, reported" from
+  #     "creatable, silently skipped": a plan that quietly dropped it from
+  #     PLAN_TO_CREATE could still print a CREATE RECORD line above and pass a
+  #     substring check on that alone.
+  if [[ "${#fixture_no_deps[@]}" -eq 0 ]]; then
+    echo "  FAILED  no fixture crate is dependency-free, so the creatable neighbour cannot be exercised"
     failures=$((failures + 1))
   else
-    arm "dependency-free ledger crate(s) against the same empty registry: created" pass \
-      "${tmp}/deps-absent" "$(ledger_file free "${free_fixture[@]}")" \
-      "${#free_fixture[@]} crate record(s) will be CREATED by this token in this pass: ${free_fixture[*]}"
+    mock="${tmp}/deps-absent-mixed"; mkdir -p "$mock"
+    local -a expect_create_free=() expect_defer_blocked=() created_mixed=()
+    local expect_free_args="cargo args:"
+    for crate in "${fixture[@]}"; do
+      local blocked_mixed=false
+      while IFS= read -r dep_line; do
+        [[ -z "$dep_line" ]] && continue
+        in_list "${dep_line#* }" "${created_mixed[@]}" || blocked_mixed=true
+      done < <(crate_path_deps "$crate")
+      if [[ "$blocked_mixed" == true ]]; then
+        expect_defer_blocked+=("DEFER          ${crate} (no record; its dependencies are not on crates.io yet")
+      else
+        created_mixed+=("$crate")
+        expect_create_free+=("CREATE RECORD  ${crate} (no crates.io record; dependencies on crates.io:")
+        expect_free_args+=" -p ${crate}"
+      fi
+    done
+    arm "dependency-free ledger crates and their ready dependents are created while blocked neighbours defer" pass \
+      "$mock" "$(ledger_file mixed "${fixture[@]}")" \
+      "$expect_free_args" \
+      "${expect_create_free[@]}" \
+      "${expect_defer_blocked[@]}"
+
   fi
 
   # 2b. Token step 1 of the interleave: the FIRST ledger crate's dependencies

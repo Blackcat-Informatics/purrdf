@@ -418,8 +418,8 @@ fn path_mode(iri: &str, value: &Bound<'_, PyAny>) -> PyResult<bool> {
 /// Read one envelope position as a non-negative integer of its own width, naming the
 /// field rather than reporting an anonymous extraction failure.
 ///
-/// The RANGE check that matters — a zero `min_hops`, an empty length interval, a
-/// `max_hops` past `purrdf_sparql_eval::MAX_HOPS_CAP`, a zero guard — belongs to
+/// The RANGE check that matters — a zero `min_hops`, an empty length interval, a zero
+/// guard — belongs to
 /// [`PathLimits::new`] and is left there rather than restated: a second copy of a bound
 /// is a second opinion about it.
 fn count<T>(iri: &str, value: &Bound<'_, PyAny>, field: &str) -> PyResult<T>
@@ -1186,9 +1186,9 @@ pub(crate) fn term_value_to_rdf(value: TermValue) -> RdfTerm {
             direction,
         }),
         TermValue::Triple { s, p, o } => RdfTerm::triple(RdfTriple::new(
-            term_value_to_rdf(*s),
-            term_value_predicate(*p),
-            term_value_to_rdf(*o),
+            term_value_to_rdf(s.into_inner()),
+            term_value_predicate(p.into_inner()),
+            term_value_to_rdf(o.into_inner()),
         )),
     }
 }

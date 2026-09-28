@@ -942,50 +942,84 @@ fn best_tagged(by_bcp: &BTreeMap<String, Vec<LitRow>>) -> Option<(&str, &LitRow)
 /// Render one term as its N-Quads token, resolving a quoted triple's components to
 /// the leaves.
 ///
+/// A quoted triple is written over a work list: its opening `<<( ` at once, then its
+/// subject next, with the separators, the predicate, the object and the closing ` )>>`
+/// held back in that order until the subject's whole nesting is written. A typed
+/// literal's datatype is written next after its `^^`.
+///
 /// # Termination
 ///
-/// This recurses on the two structural edges a term carries — a quoted triple's
+/// The walk follows the two structural edges a term carries — a quoted triple's
 /// `(s, p, o)` and a literal's datatype — with no depth bound and no visited set,
 /// because the graph it walks has already been proven to terminate. Every route to a
 /// `Graph` inside this module runs through [`GtsFoldView::with_config`], which
 /// refuses a self-reaching term table outright. Keep it that way: a new constructor
-/// that skips that check hands this function an input it will die on, and a stack
-/// overflow in Rust aborts the process rather than panicking.
+/// that skips that check hands this function an input it would never finish writing.
 fn render_term(graph: &Graph, tid: usize) -> String {
-    let term = &graph.terms[tid];
-    match term.kind {
-        TermKind::Iri => format!("<{}>", term.value.as_deref().unwrap_or("")),
-        TermKind::Bnode => term
-            .value
-            .as_ref()
-            .map_or_else(|| format!("_:b{tid}"), |value| format!("_:{value}")),
-        TermKind::Literal => render_literal(graph, term),
-        TermKind::Triple => graph.triple_of(tid).map_or_else(
-            || format!("_:unbound_triple_{tid}"),
-            |(s, p, o)| {
-                format!(
-                    "<<( {} {} {} )>>",
-                    render_term(graph, s),
-                    render_term(graph, p),
-                    render_term(graph, o)
-                )
+    enum Piece {
+        Term(usize),
+        Text(&'static str),
+    }
+    let mut out = String::new();
+    let mut held: Vec<Piece> = Vec::new();
+    let mut next = Some(Piece::Term(tid));
+    while let Some(piece) = next.take().or_else(|| held.pop()) {
+        let tid = match piece {
+            Piece::Text(text) => {
+                out.push_str(text);
+                continue;
+            }
+            Piece::Term(tid) => tid,
+        };
+        let term = &graph.terms[tid];
+        match term.kind {
+            TermKind::Iri => {
+                let _ = write!(out, "<{}>", term.value.as_deref().unwrap_or(""));
+            }
+            TermKind::Bnode => match term.value.as_ref() {
+                Some(value) => {
+                    let _ = write!(out, "_:{value}");
+                }
+                None => {
+                    let _ = write!(out, "_:b{tid}");
+                }
             },
-        ),
-    }
-}
-
-fn render_literal(graph: &Graph, term: &Term) -> String {
-    let lit = format!("\"{}\"", nt_escape(term.value.as_deref().unwrap_or("")));
-    if let Some(lang) = &term.lang {
-        if let Some(direction) = term.direction.as_deref() {
-            return format!("{lit}@{lang}--{direction}");
+            TermKind::Literal => {
+                let _ = write!(
+                    out,
+                    "\"{}\"",
+                    nt_escape(term.value.as_deref().unwrap_or(""))
+                );
+                if let Some(lang) = &term.lang {
+                    if let Some(direction) = term.direction.as_deref() {
+                        let _ = write!(out, "@{lang}--{direction}");
+                    } else {
+                        let _ = write!(out, "@{lang}");
+                    }
+                } else if let Some(datatype) = term.datatype {
+                    out.push_str("^^");
+                    next = Some(Piece::Term(datatype));
+                }
+            }
+            TermKind::Triple => match graph.triple_of(tid) {
+                Some((s, p, o)) => {
+                    out.push_str("<<( ");
+                    held.extend([
+                        Piece::Text(" )>>"),
+                        Piece::Term(o),
+                        Piece::Text(" "),
+                        Piece::Term(p),
+                        Piece::Text(" "),
+                    ]);
+                    next = Some(Piece::Term(s));
+                }
+                None => {
+                    let _ = write!(out, "_:unbound_triple_{tid}");
+                }
+            },
         }
-        return format!("{lit}@{lang}");
     }
-    if let Some(datatype) = term.datatype {
-        return format!("{lit}^^{}", render_term(graph, datatype));
-    }
-    lit
+    out
 }
 
 fn nt_escape(value: &str) -> String {
@@ -1296,5 +1330,158 @@ mod tests {
             rows.annotations,
             vec![(4, 5, 6, Some(8)), (4, 5, 7, Some(9))]
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The N-Quads token renderer against its recursive reference, and at a hundred
+    //! thousand levels on a 128 KiB thread.
+
+    use core::convert::Infallible;
+
+    use purrdf_core::{Nested, TermValue, try_fold_nested};
+    use purrdf_gts::model::{Graph, Term, TermKind};
+
+    use super::{nt_escape, render_term};
+
+    /// Lower `value` into `graph`'s term table, a triple term naming its own components,
+    /// and return its term id.
+    fn lower(graph: &mut Graph, value: &TermValue) -> usize {
+        fn push(graph: &mut Graph, kind: TermKind, value: Option<String>) -> usize {
+            graph.terms.push(Term {
+                kind,
+                value,
+                datatype: None,
+                lang: None,
+                direction: None,
+                reifier: None,
+                triple: None,
+            });
+            graph.terms.len() - 1
+        }
+        let lowered = try_fold_nested(
+            value,
+            graph,
+            |graph, value| {
+                Ok::<_, Infallible>(Nested::Leaf(match value {
+                    TermValue::Iri(iri) => push(graph, TermKind::Iri, Some(iri.clone())),
+                    TermValue::Blank { label, .. } => {
+                        push(graph, TermKind::Bnode, Some(label.clone()))
+                    }
+                    TermValue::Literal {
+                        lexical_form,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let datatype = language
+                            .is_none()
+                            .then(|| push(graph, TermKind::Iri, Some(datatype.clone())));
+                        let id = push(graph, TermKind::Literal, Some(lexical_form.clone()));
+                        let term = &mut graph.terms[id];
+                        term.datatype = datatype;
+                        term.lang.clone_from(language);
+                        term.direction = direction.map(|d| d.as_str().to_owned());
+                        id
+                    }
+                    TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
+                }))
+            },
+            |graph, _, s, p, o| {
+                let id = push(graph, TermKind::Triple, None);
+                graph.terms[id].triple = Some((s, p, o));
+                Ok(id)
+            },
+        );
+        match lowered {
+            Ok(id) => id,
+        }
+    }
+
+    /// The recursive reference of [`render_term`].
+    fn reference(graph: &Graph, tid: usize) -> String {
+        let term = &graph.terms[tid];
+        match term.kind {
+            TermKind::Iri => format!("<{}>", term.value.as_deref().unwrap_or("")),
+            TermKind::Bnode => term
+                .value
+                .as_ref()
+                .map_or_else(|| format!("_:b{tid}"), |value| format!("_:{value}")),
+            TermKind::Literal => {
+                let lit = format!("\"{}\"", nt_escape(term.value.as_deref().unwrap_or("")));
+                if let Some(lang) = &term.lang {
+                    return term.direction.as_deref().map_or_else(
+                        || format!("{lit}@{lang}"),
+                        |direction| format!("{lit}@{lang}--{direction}"),
+                    );
+                }
+                term.datatype.map_or_else(
+                    || lit.clone(),
+                    |datatype| format!("{lit}^^{}", reference(graph, datatype)),
+                )
+            }
+            TermKind::Triple => graph.triple_of(tid).map_or_else(
+                || format!("_:unbound_triple_{tid}"),
+                |(s, p, o)| {
+                    format!(
+                        "<<( {} {} {} )>>",
+                        reference(graph, s),
+                        reference(graph, p),
+                        reference(graph, o)
+                    )
+                },
+            ),
+        }
+    }
+
+    /// The work-list renderer spells every generated term exactly as the recursive
+    /// reference does, nested triple terms included.
+    #[test]
+    fn the_renderer_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::Any,
+            );
+            nested += usize::from(budget < 7);
+            let mut graph = Graph::default();
+            let id = lower(&mut graph, &value);
+            assert_eq!(
+                render_term(&graph, id),
+                reference(&graph, id),
+                "seed {seed}"
+            );
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+    }
+
+    /// A triple term a hundred thousand levels deep is rendered on a thread whose whole
+    /// stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_rendered_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = crate::test_terms::triple_chain(LEVELS);
+                let mut graph = Graph::default();
+                let id = lower(&mut graph, &value);
+                drop(value);
+                let rendered = render_term(&graph, id);
+                let level =
+                    "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
+                assert_eq!(
+                    rendered.len(),
+                    LEVELS * level + "<http://example.org/o>".len()
+                );
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the renderer did not overflow the thread's stack");
     }
 }

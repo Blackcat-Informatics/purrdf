@@ -5,6 +5,7 @@
 //! `{_ p FOCUS}` syntax, resolving selectors against the data graph
 //! (with dedup + deterministic order), and validating the expansion.
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
@@ -145,9 +146,9 @@ fn parses_quoted_triple_term() {
     assert_eq!(
         got,
         TermValue::Triple {
-            s: Box::new(iri("http://a.example/s")),
-            p: Box::new(iri("http://a.example/p")),
-            o: Box::new(iri("http://a.example/o")),
+            s: TermBox::new(iri("http://a.example/s")),
+            p: TermBox::new(iri("http://a.example/p")),
+            o: TermBox::new(iri("http://a.example/o")),
         }
     );
 }
@@ -159,9 +160,9 @@ fn parses_quoted_triple_term_tolerates_extra_whitespace() {
     assert_eq!(
         got,
         TermValue::Triple {
-            s: Box::new(iri("http://a.example/s")),
-            p: Box::new(iri("http://a.example/p")),
-            o: Box::new(iri("http://a.example/o")),
+            s: TermBox::new(iri("http://a.example/s")),
+            p: TermBox::new(iri("http://a.example/p")),
+            o: TermBox::new(iri("http://a.example/o")),
         }
     );
 }
@@ -172,16 +173,16 @@ fn parses_nested_quoted_triple_term() {
         "<< << <http://a.example/s> <http://a.example/p> <http://a.example/o> >> <http://a.example/p2> <http://a.example/o2> >>",
     );
     let inner = TermValue::Triple {
-        s: Box::new(iri("http://a.example/s")),
-        p: Box::new(iri("http://a.example/p")),
-        o: Box::new(iri("http://a.example/o")),
+        s: TermBox::new(iri("http://a.example/s")),
+        p: TermBox::new(iri("http://a.example/p")),
+        o: TermBox::new(iri("http://a.example/o")),
     };
     assert_eq!(
         got,
         TermValue::Triple {
-            s: Box::new(inner),
-            p: Box::new(iri("http://a.example/p2")),
-            o: Box::new(iri("http://a.example/o2")),
+            s: TermBox::new(inner),
+            p: TermBox::new(iri("http://a.example/p2")),
+            o: TermBox::new(iri("http://a.example/o2")),
         }
     );
 }
@@ -192,9 +193,9 @@ fn parses_quoted_triple_with_blank_and_literal_positions() {
     assert_eq!(
         got,
         TermValue::Triple {
-            s: Box::new(TermValue::blank("b1")),
-            p: Box::new(iri("http://a.example/p")),
-            o: Box::new(TermValue::lang_literal("lit", "en")),
+            s: TermBox::new(TermValue::blank("b1")),
+            p: TermBox::new(iri("http://a.example/p")),
+            o: TermBox::new(TermValue::lang_literal("lit", "en")),
         }
     );
 }

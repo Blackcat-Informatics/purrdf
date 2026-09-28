@@ -26,3 +26,24 @@ export function parsePackument(output, context = "npm pack") {
   }
   return record;
 }
+
+// Every path the manifest promises — each `files` entry and each `exports` target — that
+// the packed tarball does not contain. `npm pack` silently omits a `files` entry that
+// does not exist, so a missing module (the glue's `./purrdf_jspi.mjs` import, say) would
+// otherwise ship as a package that fails at import time.
+export function missingPackedFiles(manifest, packument) {
+  if (!Array.isArray(packument.files)) {
+    throw new Error("the npm pack record lists no files");
+  }
+  const packed = new Set(packument.files.map((file) => file.path));
+  const promised = new Set(manifest.files ?? []);
+  const collect = (target) => {
+    if (typeof target === "string") {
+      promised.add(target.replace(/^\.\//, ""));
+    } else if (target !== null && typeof target === "object") {
+      for (const value of Object.values(target)) collect(value);
+    }
+  };
+  collect(manifest.exports);
+  return [...promised].filter((path) => !packed.has(path)).sort();
+}

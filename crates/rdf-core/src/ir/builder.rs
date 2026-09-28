@@ -126,6 +126,17 @@ enum TermLookup<'a> {
     },
 }
 
+/// One pending step of an owned-term interning walk
+/// ([`RdfDatasetBuilder::intern_owned_term_scoped`] and
+/// [`RdfDatasetBuilder::intern_owned_term_bound`]): a term to intern, a triple
+/// term's predicate IRI to intern, or a triple term to assemble from the three ids
+/// its components left.
+enum OwnedStep<'t> {
+    Term(&'t RdfTerm),
+    Predicate(&'t str),
+    Assemble,
+}
+
 /// Whether `s` is its own lowercase image, tested WITHOUT building that image.
 ///
 /// `str::to_lowercase` always allocates, even when it is about to return a copy of
@@ -867,25 +878,45 @@ impl RdfDatasetBuilder {
     /// model is an internal bridge with no document to refuse — so a document
     /// ingress that must reject an ill-formed composite literal uses
     /// [`intern_owned_term_bound`](Self::intern_owned_term_bound) instead.
+    ///
+    /// A triple term is interned over a work list rather than the call stack: its
+    /// subject, then its predicate, then its object, each fully before the next, and
+    /// the triple itself once all three have ids — so a term nested to any depth
+    /// interns in the order a recursive descent would intern it, on constant stack.
     pub fn intern_owned_term_scoped(&mut self, term: &RdfTerm, scope: BlankScope) -> TermId {
-        match term {
-            RdfTerm::Iri(iri) => self.intern_iri(iri),
-            RdfTerm::BlankNode(label) if scope == BlankScope::DEFAULT => {
-                let (label, scope) = BlankScope::unqualify_label(label);
-                self.intern_blank(&label, scope)
-            }
-            RdfTerm::BlankNode(label) => self.intern_blank(label, scope),
-            RdfTerm::Literal(literal) => {
-                let literal = bind_owned_literal(literal, scope);
-                self.intern_literal(literal)
-            }
-            RdfTerm::Triple(triple) => {
-                let s = self.intern_owned_term_scoped(&triple.subject, scope);
-                let p = self.intern_iri(&triple.predicate);
-                let o = self.intern_owned_term_scoped(&triple.object, scope);
-                self.intern_triple(s, p, o)
+        let mut steps: Vec<OwnedStep<'_>> = vec![OwnedStep::Term(term)];
+        let mut ids: Vec<TermId> = Vec::new();
+        while let Some(step) = steps.pop() {
+            match step {
+                OwnedStep::Term(RdfTerm::Iri(iri)) => ids.push(self.intern_iri(iri)),
+                OwnedStep::Term(RdfTerm::BlankNode(label)) if scope == BlankScope::DEFAULT => {
+                    let (label, scope) = BlankScope::unqualify_label(label);
+                    ids.push(self.intern_blank(&label, scope));
+                }
+                OwnedStep::Term(RdfTerm::BlankNode(label)) => {
+                    ids.push(self.intern_blank(label, scope));
+                }
+                OwnedStep::Term(RdfTerm::Literal(literal)) => {
+                    let literal = bind_owned_literal(literal, scope);
+                    ids.push(self.intern_literal(literal));
+                }
+                OwnedStep::Term(RdfTerm::Triple(triple)) => steps.extend([
+                    OwnedStep::Assemble,
+                    OwnedStep::Term(&triple.object),
+                    OwnedStep::Predicate(&triple.predicate),
+                    OwnedStep::Term(&triple.subject),
+                ]),
+                OwnedStep::Predicate(predicate) => ids.push(self.intern_iri(predicate)),
+                OwnedStep::Assemble => {
+                    let o = ids.pop().expect("a triple term's object is interned");
+                    let p = ids.pop().expect("a triple term's predicate is interned");
+                    let s = ids.pop().expect("a triple term's subject is interned");
+                    ids.push(self.intern_triple(s, p, o));
+                }
             }
         }
+        ids.pop()
+            .expect("the term's own id is the last one interned")
     }
 
     /// [`intern_owned_term_scoped`](Self::intern_owned_term_scoped) for a term
@@ -900,25 +931,44 @@ impl RdfDatasetBuilder {
     /// [`CdtBlankError`](crate::cdt_blank::CdtBlankError) when a composite
     /// literal anywhere in `term` — including inside a quoted triple — does not
     /// parse. The caller must refuse the whole document.
+    ///
+    /// A triple term is interned over a work list in the same order as
+    /// [`intern_owned_term_scoped`](Self::intern_owned_term_scoped) — subject,
+    /// predicate, object, then the triple — and the first refused composite literal
+    /// ends the walk there, with everything interned before it left in place.
     pub fn intern_owned_term_bound(
         &mut self,
         term: &RdfTerm,
         scope: BlankScope,
     ) -> Result<TermId, crate::cdt_blank::CdtBlankError> {
-        match term {
-            RdfTerm::Literal(literal) => {
-                self.intern_literal_bound(literal.clone(), owned_binding(scope))
-            }
-            RdfTerm::Triple(triple) => {
-                let s = self.intern_owned_term_bound(&triple.subject, scope)?;
-                let p = self.intern_iri(&triple.predicate);
-                let o = self.intern_owned_term_bound(&triple.object, scope)?;
-                Ok(self.intern_triple(s, p, o))
-            }
-            RdfTerm::Iri(_) | RdfTerm::BlankNode(_) => {
-                Ok(self.intern_owned_term_scoped(term, scope))
+        let mut steps: Vec<OwnedStep<'_>> = vec![OwnedStep::Term(term)];
+        let mut ids: Vec<TermId> = Vec::new();
+        while let Some(step) = steps.pop() {
+            match step {
+                OwnedStep::Term(RdfTerm::Literal(literal)) => {
+                    ids.push(self.intern_literal_bound(literal.clone(), owned_binding(scope))?);
+                }
+                OwnedStep::Term(RdfTerm::Triple(triple)) => steps.extend([
+                    OwnedStep::Assemble,
+                    OwnedStep::Term(&triple.object),
+                    OwnedStep::Predicate(&triple.predicate),
+                    OwnedStep::Term(&triple.subject),
+                ]),
+                OwnedStep::Term(leaf @ (RdfTerm::Iri(_) | RdfTerm::BlankNode(_))) => {
+                    ids.push(self.intern_owned_term_scoped(leaf, scope));
+                }
+                OwnedStep::Predicate(predicate) => ids.push(self.intern_iri(predicate)),
+                OwnedStep::Assemble => {
+                    let o = ids.pop().expect("a triple term's object is interned");
+                    let p = ids.pop().expect("a triple term's predicate is interned");
+                    let s = ids.pop().expect("a triple term's subject is interned");
+                    ids.push(self.intern_triple(s, p, o));
+                }
             }
         }
+        Ok(ids
+            .pop()
+            .expect("the term's own id is the last one interned"))
     }
 
     /// Push one owned model quad into this builder.
@@ -1132,41 +1182,105 @@ impl RdfDatasetBuilder {
         self.interner.arena.len() - before
     }
 
+    /// Import one of `source`'s terms, memoised in `remap` by the source id.
+    ///
+    /// The walk runs over a work list rather than the call stack. A term is entered
+    /// by first consulting `remap`; a literal's datatype is imported before the
+    /// literal itself, and a triple term's subject, predicate and object are each
+    /// imported fully, in that order, before the triple. Every term is recorded in
+    /// `remap` as soon as its own id exists, so a component shared by several terms
+    /// is imported once and found in the memo on every later visit.
     fn import_builder_term(
         &mut self,
         source: &Self,
         id: TermId,
         remap: &mut [Option<TermId>],
     ) -> TermId {
-        if let Some(mapped) = remap[id.index()] {
-            return mapped;
+        enum Step<'s> {
+            /// Import this source term, unless `remap` already holds it.
+            Enter(TermId),
+            /// Intern this source literal from its imported datatype.
+            Literal {
+                id: TermId,
+                lexical: &'s str,
+                language: Option<&'s str>,
+                direction: Option<RdfTextDirection>,
+            },
+            /// Intern this source triple term from its three imported components.
+            Triple(TermId),
         }
-        let mapped = match source.resolve(id) {
-            TermRef::Iri(iri) => self.intern_iri(iri),
-            TermRef::Blank { label, scope } => self.intern_blank(label, scope),
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype = self.import_builder_term(source, datatype, remap);
-                self.interner.intern(TermLookup::Literal {
+        let mut steps: Vec<Step<'_>> = vec![Step::Enter(id)];
+        let mut imported: Vec<TermId> = Vec::new();
+        while let Some(step) = steps.pop() {
+            let (id, mapped) = match step {
+                Step::Enter(id) => {
+                    if let Some(mapped) = remap[id.index()] {
+                        imported.push(mapped);
+                        continue;
+                    }
+                    match source.resolve(id) {
+                        TermRef::Iri(iri) => (id, self.intern_iri(iri)),
+                        TermRef::Blank { label, scope } => (id, self.intern_blank(label, scope)),
+                        TermRef::Literal {
+                            lexical,
+                            datatype,
+                            language,
+                            direction,
+                        } => {
+                            steps.extend([
+                                Step::Literal {
+                                    id,
+                                    lexical,
+                                    language,
+                                    direction,
+                                },
+                                Step::Enter(datatype),
+                            ]);
+                            continue;
+                        }
+                        TermRef::Triple { s, p, o } => {
+                            steps.extend([
+                                Step::Triple(id),
+                                Step::Enter(o),
+                                Step::Enter(p),
+                                Step::Enter(s),
+                            ]);
+                            continue;
+                        }
+                    }
+                }
+                Step::Literal {
+                    id,
                     lexical,
-                    datatype,
                     language,
                     direction,
-                })
-            }
-            TermRef::Triple { s, p, o } => {
-                let s = self.import_builder_term(source, s, remap);
-                let p = self.import_builder_term(source, p, remap);
-                let o = self.import_builder_term(source, o, remap);
-                self.intern_triple(s, p, o)
-            }
-        };
-        remap[id.index()] = Some(mapped);
-        mapped
+                } => {
+                    let datatype = imported.pop().expect("a literal's datatype is imported");
+                    (
+                        id,
+                        self.interner.intern(TermLookup::Literal {
+                            lexical,
+                            datatype,
+                            language,
+                            direction,
+                        }),
+                    )
+                }
+                Step::Triple(id) => {
+                    let o = imported.pop().expect("a triple term's object is imported");
+                    let p = imported
+                        .pop()
+                        .expect("a triple term's predicate is imported");
+                    let s = imported.pop().expect("a triple term's subject is imported");
+                    (id, self.intern_triple(s, p, o))
+                }
+            };
+            remap[id.index()] = Some(mapped);
+            imported.push(mapped);
+        }
+        imported
+            .pop()
+            .expect("the term's own id is the last one imported")
     }
 
     /// Crate-internal read access to an interned term. [`freeze`](Self::freeze) and

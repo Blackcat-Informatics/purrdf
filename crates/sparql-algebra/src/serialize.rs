@@ -11,18 +11,29 @@
 //!
 //! # Design
 //!
-//! * Pure `core::fmt::Write` into a `String` — **wasm-clean**, no std-only deps,
-//!   reusing the existing [`crate::algebra::PropertyPathExpression`] `Display`
-//!   for paths.
+//! * Pure `core::fmt::Write` into a `String` — **wasm-clean**, no std-only deps.
+//!   The rendering is one loop over an explicit work list, which also renders
+//!   [`crate::algebra::PropertyPathExpression`]'s `Display`: it needs no more
+//!   machine stack for a taller tree.
 //! * **Round-trips** with the parser: `parse(pattern_to_select_query(p))`
 //!   reproduces `p` for every [`GraphPattern`]/[`Expression`] variant the parser
 //!   emits, INCLUDING an aggregate/`GROUP BY` chain with its own outer `Project`
 //!   already peeled away (the shape [`pattern_to_select_query`]'s own doctest
 //!   takes, and the shape a whole aggregate query is once a caller — federation or
 //!   otherwise — has stripped the query's top `SELECT` scaffold to reach the WHERE
-//!   body underneath it). Expressions are conservatively fully parenthesized —
-//!   over-parenthesization is a no-op on re-parse, so correctness never depends on
-//!   reproducing the exact precedence.
+//!   body underneath it).
+//! * **Admitted in, admitted out.** A bracket or a brace is a level the evaluator's
+//!   height admission measures a re-parsed body against. So the rendering spends a
+//!   bracket or a brace only where the grammar needs one to rebuild the same tree:
+//!   expressions follow the grammar's precedence and
+//!   associativity (`a + b + c` bare, `a - (b - c)` and `(a + b) * c`
+//!   bracketted — see `Level`), property paths do the same
+//!   ([`crate::algebra::PropertyPathExpression`]'s `Display`), a `UNION` chain
+//!   or a run of `OPTIONAL`/`MINUS`/`BIND` clauses is written as the one flat
+//!   sequence the parser rebuilds itself, and a sub-`SELECT` is never braced
+//!   twice. Such a brace is one the source text needed too, so the text
+//!   forwarded for a body the parser admitted is admitted again, and re-parses to
+//!   the same tree.
 //! * Solution-modifier nodes (`Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy`/
 //!   `Group`) re-materialize as a braced **sub-`SELECT`** `{ SELECT ... }`, the
 //!   shape the parser produces for an inline subquery; an aggregate's own
@@ -38,13 +49,18 @@
 use core::fmt::Write as _;
 
 use crate::algebra::{
-    AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, OrderExpression,
-    PropertyFunctionCall,
+    AggregateExpression, AggregateFunction, ArithmeticOperator, Expression, Function, GraphPattern,
+    OrderExpression, PropertyFunctionCall, PropertyPathExpression,
 };
 use crate::ast::{
-    BaseDirection, GroundTerm, GroundTriple, Literal, NamedNodePattern, RDF_LANG_STRING,
-    TermPattern, TriplePattern, Variable, XSD_STRING,
+    BaseDirection, GroundTerm, Literal, NamedNodePattern, RDF_LANG_STRING, TermPattern,
+    TriplePattern, Variable, XSD_STRING,
 };
+use crate::walk::{Flow, NodeRef, Visit, walk_pre_post};
+use crate::worklist::WorkList;
+
+/// The rendering's work list: a shallow tree's stays inline.
+type Items<'a> = WorkList<Item<'a>, 32>;
 
 /// A `GROUP BY` key + its `(output var, aggregate)` pairs, borrowed from a
 /// [`GraphPattern::Group`] node during sub-`SELECT` reconstruction.
@@ -71,6 +87,9 @@ type GroupSpec<'a> = (&'a [Variable], &'a [(Variable, AggregateExpression)]);
 /// re-parse or — for the implicit whole-table group, which has no `GROUP BY` clause
 /// to make the shape visible — silently drop the aggregate behind a `BIND`
 /// referencing a variable nothing in the rendered text binds.
+///
+/// The rendering is one loop over an explicit work list, so it needs no more machine
+/// stack for a taller tree.
 ///
 /// # Examples
 ///
@@ -103,47 +122,57 @@ pub fn pattern_to_select_query(inner: &GraphPattern) -> String {
         // `Slice`/`Distinct`/`Reduced`/`OrderBy`/`Extend` sitting at the very
         // top with nothing above it — the shape the parser's algebra takes
         // for a `GROUP`/`ORDER BY`/`LIMIT`/`DISTINCT`/`REDUCED`/SELECT-expression
-        // query once its own outer `Project` has already been peeled away
-        // (exactly what this function's doctest above does before calling
-        // it — and what a caller of THIS function that itself stripped an
-        // outer `Project`, e.g. the corpus round-trip sweep, does too).
-        // Render it through [`fmt_subselect`] DIRECTLY: that already
-        // reconstructs a complete `SELECT … WHERE { … } [GROUP BY] …` string
-        // on its own, so wrapping it in ANOTHER literal `SELECT * WHERE { … }`
-        // here would EITHER double-nest a needless subquery whose outer
-        // `Project` re-projects the identical variable set the inner one
-        // already declared (a real, if harmless, structural mismatch on
-        // re-parse — see `crates/sparql-algebra/tests/serializer_roundtrip_sweep.rs`'s
-        // `negation/full-minuend.rq` finding) OR — because a `Group`-containing
-        // pattern has no valid `SELECT *` reading — render `SELECT *` over an
-        // aggregate query, which SPARQL does not admit. Un-fixed, that second
-        // failure mode is exactly how an aggregate call could vanish behind a
-        // dangling reference to its synthetic output variable: seeing this
-        // shape and choosing NOT to reach for `fmt_subselect` is the bug, not
-        // a detail of how to call it.
-        fmt_subselect(&mut s, inner);
+        // query once its own outer `Project` has already been peeled away.
+        // Rendered as a sub-`SELECT` directly: that already reconstructs a
+        // complete `SELECT … WHERE { … } [GROUP BY] …` string on its own, so
+        // wrapping it in ANOTHER literal `SELECT * WHERE { … }` here would EITHER
+        // double-nest a needless subquery whose outer `Project` re-projects the
+        // identical variable set the inner one already declared OR — because a
+        // `Group`-containing pattern has no valid `SELECT *` reading — render
+        // `SELECT *` over an aggregate query, which SPARQL does not admit, and let
+        // an aggregate call vanish behind a dangling reference to its synthetic
+        // output variable.
+        emit(&mut s, Item::Subselect(inner));
     } else {
-        s.push_str("SELECT * WHERE { ");
-        fmt_group_body(&mut s, inner);
-        s.push_str(" }");
+        s.push_str("SELECT * WHERE ");
+        emit(&mut s, Item::BracedGroup(inner));
     }
     s
 }
 
-/// Whether `p`, with no `Project` above it, is a bare modifier-chain shape
-/// [`fmt_subselect`] must reconstruct directly rather than being wrapped in
-/// another `SELECT * WHERE { … }` (see [`pattern_to_select_query`]'s doc for
-/// why the wrap is wrong either way this predicate is true). `Slice`/
-/// `Distinct`/`Reduced`/`OrderBy`/`Extend` are UNCONDITIONALLY this shape at
-/// the top — none of them can legally appear as a bare (`Project`-less)
-/// element of an ORDINARY `{ … }` group (SPARQL's grammar only ever produces
-/// them as part of a `SELECT`/subselect's own solution-modifier chain, which
-/// always carries a `Project`), so reaching one here with no `Project` above
-/// it is exactly the "outer `Project` already peeled" shape, regardless of
-/// whether it goes on to reach a `Group`. `Filter`/`Group` still route through
-/// [`extend_chain_reaches_group`], which is the one case where "reaches a
-/// `Group`" (not "is one, unconditionally") is the right test — an ordinary
-/// WHERE-body `FILTER` (never wrapping a `Group`) must NOT trigger this.
+/// Render `p` as the body of a `{ … }` group.
+///
+/// `pub(crate)`: this is also the WHERE-clause renderer `Display for
+/// GraphUpdateOperation` (`algebra.rs`) reuses for `INSERT`/`DELETE … WHERE { … }`
+/// — the exact same shape [`crate::parser`]'s `parse_group_graph_pattern` produces
+/// for an UPDATE's WHERE clause (never the "bare aggregate chain" shape
+/// [`needs_subselect_reconstruction`] exists to catch, which only arises once an
+/// outer `Project` has been peeled from a top-level `SELECT`/subselect — an UPDATE
+/// WHERE clause never carries one).
+pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
+    emit(s, Item::GroupBody(p));
+}
+
+/// Render a property path in its SPARQL surface syntax — the text of
+/// [`PropertyPathExpression`]'s `Display`.
+pub(crate) fn fmt_path(s: &mut String, path: &PropertyPathExpression) {
+    emit(s, Item::Path(path));
+}
+
+/// Whether `p`, with no `Project` above it, is a bare modifier-chain shape the
+/// sub-`SELECT` reconstruction must render directly rather than being wrapped in
+/// another `SELECT * WHERE { … }` (see [`pattern_to_select_query`]'s doc for why
+/// the wrap is wrong either way this predicate is true). `Slice`/`Distinct`/
+/// `Reduced`/`OrderBy`/`Extend` are UNCONDITIONALLY this shape at the top — none of
+/// them can legally appear as a bare (`Project`-less) element of an ORDINARY
+/// `{ … }` group (SPARQL's grammar only ever produces them as part of a
+/// `SELECT`/subselect's own solution-modifier chain, which always carries a
+/// `Project`), so reaching one here with no `Project` above it is exactly the
+/// "outer `Project` already peeled" shape, regardless of whether it goes on to reach
+/// a `Group`. `Filter`/`Group` still route through [`extend_chain_reaches_group`],
+/// which is the one case where "reaches a `Group`" (not "is one, unconditionally")
+/// is the right test — an ordinary WHERE-body `FILTER` (never wrapping a `Group`)
+/// must NOT trigger this.
 fn needs_subselect_reconstruction(p: &GraphPattern) -> bool {
     matches!(
         p,
@@ -171,242 +200,31 @@ fn is_subselect_node(p: &GraphPattern) -> bool {
 
 /// Whether `p` is a leading chain of ONLY `Extend` (a SELECT-expression `(expr AS
 /// ?v)` bind) / `Filter` (`HAVING` — however many conditions are chained; `HAVING
-/// (a) (b) …` lifts to one nested `Filter` per condition, so this recurses through
-/// the whole chain rather than checking only the OUTERMOST `Filter`'s immediate
-/// `inner`) nodes that terminates at a `Group` — the shape an aggregate query's own
+/// (a) (b) …` lifts to one nested `Filter` per condition, so this follows the whole
+/// chain rather than checking only the OUTERMOST `Filter`'s immediate `inner`)
+/// nodes that terminates at a `Group` — the shape an aggregate query's own
 /// SELECT-expression/`HAVING` chain takes once its outer `Project` has already been
 /// peeled away.
 ///
-/// Deliberately narrower than [`is_subselect_node`]/[`fmt_subselect`]'s full peel
-/// loop: a `Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy` node anywhere in the chain
-/// means `p` is already one of [`is_subselect_node`]'s recognized shapes — a genuine,
+/// Deliberately narrower than [`is_subselect_node`] and the sub-`SELECT` peel: a
+/// `Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy` node anywhere in the chain means
+/// `p` is already one of [`is_subselect_node`]'s recognized shapes — a genuine,
 /// self-contained sub-`SELECT` meant to be embedded as one element of a forwarded
-/// WHERE body, which [`fmt_group_body`] continues to wrap in a nested `{ SELECT … }`
-/// exactly as it always has. Only the narrower, `Project`-less shape here needs
-/// [`pattern_to_select_query`]'s different (unwrapped) treatment — and it can ONLY
-/// arise there: an ordinary WHERE-body `BIND`/`HAVING` never wraps a bare `Group` (a
-/// `Group` node is minted only by the parser's aggregate-lifting, always immediately
-/// under the query's own modifier chain), and any `{ SELECT … }` written in source
-/// text parses to a `Project`-wrapped pattern, not a bare `Extend`/`Group` chain — so
-/// this predicate cannot mistake an ordinary body element for this shape.
-fn extend_chain_reaches_group(p: &GraphPattern) -> bool {
-    match p {
-        GraphPattern::Group { .. } => true,
-        // `HAVING (a) (b) …` lifts to a CHAIN of `Filter`s, one per condition
-        // (`parser.rs`'s `for expr in modifiers.having { p = Filter{expr,
-        // inner: p} }`), so recursing here — not just checking whether THIS
-        // Filter's immediate `inner` is the `Group` — is what makes a query
-        // with more than one `HAVING` condition recognized at all. Un-fixed,
-        // a second `HAVING` condition made this predicate return `false`,
-        // which sent `pattern_to_select_query` down the ordinary
-        // `SELECT * WHERE { … }` path over a `Group`-containing pattern — the
-        // exact "SPARQL has no `SELECT *` reading over `GROUP BY`" failure
-        // this function's own doc says choosing that path is the bug.
-        GraphPattern::Extend { inner, .. } | GraphPattern::Filter { inner, .. } => {
-            extend_chain_reaches_group(inner)
+/// WHERE body, which a group body wraps in a nested `{ SELECT … }`. Only the
+/// narrower, `Project`-less shape here needs [`pattern_to_select_query`]'s different
+/// (unwrapped) treatment — and it can ONLY arise there: an ordinary WHERE-body
+/// `BIND`/`HAVING` never wraps a bare `Group` (a `Group` node is minted only by the
+/// parser's aggregate-lifting, always immediately under the query's own modifier
+/// chain), and any `{ SELECT … }` written in source text parses to a
+/// `Project`-wrapped pattern, not a bare `Extend`/`Group` chain — so this predicate
+/// cannot mistake an ordinary body element for this shape.
+fn extend_chain_reaches_group(mut p: &GraphPattern) -> bool {
+    loop {
+        match p {
+            GraphPattern::Group { .. } => return true,
+            GraphPattern::Extend { inner, .. } | GraphPattern::Filter { inner, .. } => p = inner,
+            _ => return false,
         }
-        _ => false,
-    }
-}
-
-/// Emit a graph pattern as the body of a `{ … }` group. Modifier-wrapped patterns
-/// (subqueries) are emitted as a braced `{ SELECT … }` block.
-///
-/// `pub(crate)`: this is also the WHERE-clause renderer `Display for
-/// GraphUpdateOperation` (`algebra.rs`) reuses for `INSERT`/`DELETE … WHERE { … }`
-/// — the exact same shape [`crate::parser`]'s `parse_group_graph_pattern` produces
-/// for an UPDATE's WHERE clause (never the "bare aggregate chain" shape
-/// [`needs_subselect_reconstruction`] exists to catch, which only arises once an
-/// outer `Project` has been peeled from a top-level `SELECT`/subselect — an UPDATE
-/// WHERE clause never carries one). Reusing this function rather than writing a
-/// second pattern-to-text renderer is deliberate: see `algebra.rs`'s `Display for
-/// GraphUpdateOperation` doc.
-pub(crate) fn fmt_group_body(s: &mut String, p: &GraphPattern) {
-    if is_subselect_node(p) {
-        s.push_str("{ ");
-        fmt_subselect(s, p);
-        s.push_str(" }");
-        return;
-    }
-    match p {
-        GraphPattern::Bgp { patterns } => fmt_bgp(s, patterns),
-        GraphPattern::Path {
-            subject,
-            path,
-            object,
-        } => {
-            fmt_term(s, subject);
-            let _ = write!(s, " {path} ");
-            fmt_term(s, object);
-            s.push_str(" .");
-        }
-        GraphPattern::Join { left, right } => {
-            fmt_flattened_left(s, left);
-            s.push(' ');
-            fmt_join_right_operand(s, right);
-        }
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => {
-            fmt_flattened_left(s, left);
-            s.push_str(" OPTIONAL { ");
-            fmt_group_body(s, right);
-            if let Some(expr) = expression {
-                s.push_str(" FILTER(");
-                fmt_expr(s, expr);
-                s.push(')');
-            }
-            s.push_str(" }");
-        }
-        GraphPattern::Lateral { left, right } => {
-            fmt_flattened_left(s, left);
-            if parser_rebuilds_the_lateral(left, right) {
-                // Two right-operand shapes are surface forms the parser's OWN
-                // dispatch arms re-wrap into exactly this `Lateral` node without
-                // any `LATERAL` keyword in the text: a property function (written
-                // as a triple; the PF-triple-folding loop builds the chain) and a
-                // variable-endpoint `SERVICE ?g { … }` (the SERVICE dispatch arm
-                // auto-wraps a variable endpoint into a `Lateral` because it is
-                // correlated with the enclosing pattern). Emitting an explicit
-                // `LATERAL { … }` around either would double-nest on re-parse:
-                // the braced RHS parses to its OWN `Lateral` node first (rooted at
-                // the unit-table left), and the outer keyword would wrap that
-                // again. So both render unwrapped here, exactly like the
-                // fixed-IRI `SERVICE` case does for a plain `Join`.
-                if !is_empty_group_body(left) {
-                    s.push(' ');
-                }
-                fmt_group_body(s, right);
-                return;
-            }
-            s.push_str(" LATERAL { ");
-            fmt_group_body(s, right);
-            s.push_str(" }");
-        }
-        GraphPattern::PropertyFunction(call) => fmt_property_function(s, call),
-        GraphPattern::Filter { expr, inner } => {
-            fmt_group_body(s, inner);
-            s.push_str(" FILTER(");
-            fmt_expr(s, expr);
-            s.push(')');
-        }
-        GraphPattern::Union { left, right } => {
-            s.push_str("{ ");
-            fmt_group_body(s, left);
-            s.push_str(" } UNION { ");
-            fmt_group_body(s, right);
-            s.push_str(" }");
-        }
-        GraphPattern::Graph { name, inner } => {
-            s.push_str("GRAPH ");
-            fmt_named_node_pattern(s, name);
-            s.push_str(" { ");
-            fmt_group_body(s, inner);
-            s.push_str(" }");
-        }
-        GraphPattern::Extend {
-            inner,
-            variable,
-            expression,
-        } => {
-            fmt_group_body(s, inner);
-            s.push_str(" BIND(");
-            fmt_expr(s, expression);
-            let _ = write!(s, " AS {})", VarRef(variable));
-        }
-        // `[174] Unfold ::= 'UNFOLD' '(' Expression 'AS' Var ( ',' Var )? ')'`.
-        // Renders exactly like `BIND` — the inner pattern inline, then the
-        // clause — because the parser reads it the same way: as one more
-        // element of the running group, stacked above everything before it.
-        GraphPattern::Unfold {
-            inner,
-            expression,
-            element,
-            companion,
-        } => {
-            fmt_group_body(s, inner);
-            s.push_str(" UNFOLD(");
-            fmt_expr(s, expression);
-            let _ = write!(s, " AS {}", VarRef(element));
-            if let Some(companion) = companion {
-                let _ = write!(s, ", {}", VarRef(companion));
-            }
-            s.push(')');
-        }
-        GraphPattern::Minus { left, right } => {
-            fmt_flattened_left(s, left);
-            s.push_str(" MINUS { ");
-            fmt_group_body(s, right);
-            s.push_str(" }");
-        }
-        GraphPattern::Service {
-            name,
-            inner,
-            silent,
-        } => {
-            s.push_str("SERVICE ");
-            if *silent {
-                s.push_str("SILENT ");
-            }
-            fmt_named_node_pattern(s, name);
-            s.push_str(" { ");
-            fmt_group_body(s, inner);
-            s.push_str(" }");
-        }
-        GraphPattern::Values {
-            variables,
-            bindings,
-        } => fmt_values(s, variables, bindings),
-        // Subselect nodes are handled by the `is_subselect_node` branch above.
-        GraphPattern::Project { .. }
-        | GraphPattern::Distinct { .. }
-        | GraphPattern::Reduced { .. }
-        | GraphPattern::Slice { .. }
-        | GraphPattern::OrderBy { .. }
-        | GraphPattern::Group { .. } => unreachable!("handled by is_subselect_node"),
-    }
-}
-
-/// Emit the RIGHT operand of a `Join`, braced as its own group when leaving it
-/// unbraced would change the re-parsed tree's meaning.
-///
-/// Two independent reasons force a brace, both restated here rather than
-/// inferred from the flag names alone:
-///
-/// * **Contains a property function.** A property function renders as a plain
-///   triple, and the parser folds every property-function triple of ONE
-///   triples block into a single left-deep `Lateral` chain rooted at the
-///   triples written before it. A right operand that was a separate group
-///   (`{ … }`, a `GRAPH`, a nested join) would therefore be absorbed into the
-///   left operand's chain on re-parse; the explicit `{ … }` keeps it its own
-///   group and the round-trip exact.
-/// * **[`rendering_starts_with_a_reabsorbable_left`].** `LeftJoin` / `Lateral`
-///   / `Minus` / `Filter` / `Extend` all render by emitting their OWN left
-///   operand inline first; unbraced, that inline left operand splices onto the
-///   outer `Join`'s left operand in the running left-to-right parse, changing
-///   which elements the modifier applies over — a WIRE-FORMAT correctness bug,
-///   since [`pattern_to_select_query`] is what SERVICE federation forwards to
-///   a remote endpoint.
-///
-/// A LEFT operand needs no such brace in either case: the parser's own
-/// left-deep assembly reproduces it. `Join` itself is deliberately excluded
-/// from the second condition (see that function's docs); a plain `Join` right
-/// operand containing no property function keeps the historical brace-free
-/// rendering, which re-associates on re-parse into a semantically identical
-/// (not tree-identical) `Join` chain.
-fn fmt_join_right_operand(s: &mut String, p: &GraphPattern) {
-    if is_subselect_node(p) {
-        fmt_group_body(s, p);
-        return;
-    }
-    if contains_property_function(p) || rendering_starts_with_a_reabsorbable_left(p) {
-        s.push_str("{ ");
-        fmt_group_body(s, p);
-        s.push_str(" }");
-    } else {
-        fmt_group_body(s, p);
     }
 }
 
@@ -414,28 +232,17 @@ fn fmt_join_right_operand(s: &mut String, p: &GraphPattern) {
 /// group structure it renders inline (it does not descend into `Expression`s,
 /// which are always emitted inside their own braces)?
 fn contains_property_function(p: &GraphPattern) -> bool {
-    match p {
-        GraphPattern::PropertyFunction(_) => true,
-        GraphPattern::Join { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::Union { left, right }
-        | GraphPattern::Minus { left, right }
-        | GraphPattern::LeftJoin { left, right, .. } => {
-            contains_property_function(left) || contains_property_function(right)
+    let mut found = false;
+    walk_pre_post(NodeRef::Pattern(p), |visit, node| match (visit, node) {
+        (Visit::Exit, _) => Flow::Descend,
+        (Visit::Enter, NodeRef::Pattern(GraphPattern::PropertyFunction(_))) => {
+            found = true;
+            Flow::Stop
         }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::Extend { inner, .. }
-        | GraphPattern::Unfold { inner, .. }
-        | GraphPattern::Project { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Group { inner, .. } => contains_property_function(inner),
-        GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => false,
-    }
+        (Visit::Enter, NodeRef::Pattern(_)) => Flow::Descend,
+        (Visit::Enter, _) => Flow::Skip,
+    });
+    found
 }
 
 /// `true` for a group body that renders as the empty string (the identity table
@@ -492,18 +299,22 @@ fn parser_rebuilds_the_lateral(left: &GraphPattern, right: &GraphPattern) -> boo
 /// instead of keeping it as this node's left, changing the tree). The two
 /// combinators the fold builds around those leaves are `Join{prior, Bgp}`
 /// (residual triples appended after a PF call) and `Lateral{prior,
-/// PropertyFunction}` (the PF call itself) — so both recurse on their own
+/// PropertyFunction}` (the PF call itself) — so both continue down their own
 /// `left`/`prior` operand.
-fn is_pf_reabsorbable_left(p: &GraphPattern) -> bool {
-    match p {
-        GraphPattern::Bgp { .. } => true,
-        GraphPattern::Join { left, right } => {
-            matches!(**right, GraphPattern::Bgp { .. }) && is_pf_reabsorbable_left(left)
+fn is_pf_reabsorbable_left(mut p: &GraphPattern) -> bool {
+    loop {
+        match p {
+            GraphPattern::Bgp { .. } => return true,
+            GraphPattern::Join { left, right } if matches!(**right, GraphPattern::Bgp { .. }) => {
+                p = left;
+            }
+            GraphPattern::Lateral { left, right }
+                if matches!(**right, GraphPattern::PropertyFunction(_)) =>
+            {
+                p = left;
+            }
+            _ => return false,
         }
-        GraphPattern::Lateral { left, right } => {
-            matches!(**right, GraphPattern::PropertyFunction(_)) && is_pf_reabsorbable_left(left)
-        }
-        _ => false,
     }
 }
 
@@ -517,15 +328,13 @@ fn is_pf_reabsorbable_left(p: &GraphPattern) -> bool {
 ///
 /// A SIMILAR (not identical — see its own doc) hazard applies to a `Join`/
 /// `LeftJoin`/`Lateral`/`Minus` node's OWN LEFT operand; that side is decided
-/// by the narrower [`left_operand_needs_bracing`] instead, via
-/// [`fmt_flattened_left`].
+/// by the narrower [`left_operand_needs_bracing`] instead.
 ///
 /// [`GraphPattern::Join`] is deliberately **excluded**: join is associative, so
 /// re-associating a `Join` right operand into the running left-to-right chain
 /// produces a semantically identical tree — the round-trip contract this module
 /// promises is "semantics preserved", and tree-identity is asserted only where
-/// semantics actually require it (see `roundtrip_lateral_chain_shapes` beside
-/// this function's call site). Every modifier-rooted node
+/// semantics actually require it. Every modifier-rooted node
 /// (`Project`/`Distinct`/`Reduced`/`Slice`/`OrderBy`/`Group`) is also excluded:
 /// [`is_subselect_node`] already renders those as a self-contained braced
 /// sub-`SELECT`, so they never glue onto a preceding element in the first
@@ -563,126 +372,612 @@ fn rendering_starts_with_a_reabsorbable_left(p: &GraphPattern) -> bool {
     }
 }
 
-/// Emit the LEFT operand of a `Join`/`LeftJoin`/`Lateral`/`Minus` node,
-/// bracing it as its own group when [`left_operand_needs_bracing`] says
-/// leaving it unbraced would splice its own scope onto the outer group.
-/// Every other LEFT shape (an ordinary `Bgp`/`Path`/`Join`/`Lateral`/`Union`/
-/// `Graph`/`Service`/`Values`/property-function/…) keeps the historical
-/// unbraced rendering: the parser's own left-deep assembly reproduces those
-/// exactly.
-fn fmt_flattened_left(s: &mut String, left: &GraphPattern) {
-    if left_operand_needs_bracing(left) {
-        s.push_str("{ ");
-        fmt_group_body(s, left);
-        s.push_str(" }");
-    } else {
-        fmt_group_body(s, left);
+/// `true` for the one [`GraphPattern`] shape that cannot be written inline
+/// before a following group element: a [`GraphPattern::Filter`].
+///
+/// A `FILTER` constrains the whole group it is written in, wherever in the
+/// group it stands — the parser collects a group's filters and wraps them
+/// around everything else the group built. A `Filter` whose own group was
+/// followed by another element can therefore only have come from a braced
+/// sub-group, and written inline its condition would float out over the outer
+/// element too (found by the corpus round-trip sweep: `service/service05.rq`'s
+/// `FILTER`, scoped to a bracketed sub-group, re-associated onto the whole
+/// outer group — including a `SERVICE ?g` lateral join written after it).
+///
+/// Every other node is rebuilt exactly by the group loop from its inline
+/// rendering: `LeftJoin`/`Minus`/`Lateral` wrap the pattern before them in the
+/// order written, and `Extend`/`Unfold` wrap it the same way, so a
+/// `A OPTIONAL { B } BIND(e AS ?v) MINUS { C }` run reproduces its own
+/// left-deep chain. A `Filter` nested inside one of those is braced by that
+/// node's own rendering.
+const fn left_operand_needs_bracing(p: &GraphPattern) -> bool {
+    matches!(p, GraphPattern::Filter { .. })
+}
+
+/// The SPARQL expression grammar's binding strengths, loosest first
+/// (§19.8 `[110]`–`[119]`): the level a rendered expression occupies, and the
+/// level an operand position demands.
+///
+/// An operand whose own level is looser than its position demands is the one
+/// shape that needs brackets; every other operand is written bare. That is what
+/// keeps the forwarded text inside what the parser admitted: a bracket is one level
+/// of the parser's recursion and one level of tree height, so bracketing every
+/// operator turned a 440-operator chain the parser admitted into text it refused.
+/// Bracketing only where the grammar would otherwise build a different tree writes
+/// no bracket the source text did not also need, so the rendering of an admitted
+/// tree is admitted again.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum Level {
+    /// `ConditionalOrExpression`: `||`, left-associative.
+    Or,
+    /// `ConditionalAndExpression`: `&&`, left-associative.
+    And,
+    /// `RelationalExpression`: one optional `=`/`!=`/`<`/`>`/`<=`/`>=`/`IN`/
+    /// `NOT IN` between two `NumericExpression`s — non-associative.
+    Relational,
+    /// `AdditiveExpression`: `+`/`-`, left-associative.
+    Additive,
+    /// `MultiplicativeExpression`: `*`/`/`, left-associative.
+    Multiplicative,
+    /// `UnaryExpression`: a prefix `!`/`+`/`-` over another unary expression.
+    Unary,
+    /// `PrimaryExpression`: terms, calls, `EXISTS`, and anything bracketted.
+    Primary,
+}
+
+impl Level {
+    /// The level the next-tighter operand of a left-associative operator at
+    /// this level must reach: a right operand of equal level would re-parse
+    /// left-nested, so it demands one level tighter.
+    const fn tighter(self) -> Self {
+        match self {
+            Self::Or => Self::And,
+            Self::And => Self::Relational,
+            Self::Relational => Self::Additive,
+            Self::Additive => Self::Multiplicative,
+            Self::Multiplicative => Self::Unary,
+            Self::Unary | Self::Primary => Self::Primary,
+        }
     }
 }
 
-/// `true` for the [`GraphPattern`] variants that need bracing when they sit
-/// as the LEFT operand of a `Join`/`LeftJoin`/`Lateral`/`Minus` node — a
-/// NARROWER set than [`rendering_starts_with_a_reabsorbable_left`]'s (that
-/// predicate governs the RIGHT-operand hazard, a different question): a
-/// `Filter`/`Extend`/`LeftJoin`/`Minus` LEFT operand renders by emitting ITS
-/// OWN left operand inline first, so flattening it splices its own
-/// filter/bind/optional/minus scope onto the OUTER node's own group instead
-/// of keeping it as its own nested scope (found by the corpus round-trip
-/// sweep: `service/service05.rq`'s `FILTER`, scoped to a bracketed
-/// sub-group, re-associated onto the whole outer group — including a
-/// `SERVICE ?g` lateral join written after it — once flattened unbraced).
+/// The level `e` renders at — which is decided by how it is SPELLED, not only by
+/// its variant: `Not(Equal)` is written `a != b` and `Not(In)` `a NOT IN (…)` (both
+/// relational, and both exactly the trees the parser builds for those spellings),
+/// `Not(Exists)` is written `NOT EXISTS` (a primary), and any other `Not` is the
+/// prefix `!`.
 ///
-/// `Lateral` is DELIBERATELY EXCLUDED, unlike on the right-operand
-/// predicate: it chains left-deep the SAME way `Join` does (SEP-0006
-/// laterality is written left-to-right; both a user-written
-/// `A LATERAL { B } LATERAL { C }` chain and the parser's OWN
-/// property-function-triple folding build exactly this shape as `g`
-/// accumulates), so bracing it here would be WRONG for a PF-folded chain
-/// specifically: the parser's triples-block loop expects to read a
-/// continuous run of triples/PF-calls as ONE triples block, and a brace
-/// splits it, breaking the fold (`roundtrip_property_functions_mixed_with_data_triples`
-/// is what catches this — it round-trips a PF chain immediately followed by
-/// an ordinary triple sharing the same block).
-fn left_operand_needs_bracing(p: &GraphPattern) -> bool {
+/// A variable standing for an aggregate's synthetic output renders as the
+/// aggregate call, a primary — the same level the bare variable has.
+fn expr_level(e: &Expression) -> Level {
+    match e {
+        Expression::Or(_) => Level::Or,
+        Expression::And(_) => Level::And,
+        Expression::Arithmetic(_, steps) => arithmetic_level(steps.last().0),
+        Expression::Equal(..)
+        | Expression::Greater(..)
+        | Expression::GreaterOrEqual(..)
+        | Expression::Less(..)
+        | Expression::LessOrEqual(..)
+        | Expression::In(..) => Level::Relational,
+        Expression::Not(inner) => match **inner {
+            Expression::Equal(..) | Expression::In(..) => Level::Relational,
+            Expression::Exists(_) => Level::Primary,
+            _ => Level::Unary,
+        },
+        Expression::UnaryPlus(_) | Expression::UnaryMinus(_) => Level::Unary,
+        Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Variable(_)
+        | Expression::Bound(_)
+        | Expression::SameTerm(..)
+        | Expression::If(..)
+        | Expression::Coalesce(_)
+        | Expression::FunctionCall(..)
+        | Expression::Exists(_) => Level::Primary,
+    }
+}
+
+/// The level an arithmetic step's operator renders at.
+const fn arithmetic_level(op: ArithmeticOperator) -> Level {
+    if op.is_multiplicative() {
+        Level::Multiplicative
+    } else {
+        Level::Additive
+    }
+}
+
+/// One entry of the rendering's work list: text to write, or a node to render in a
+/// given position. A node's rendering writes the text that leads it at once and
+/// pushes the rest — its operands and the text between and after them — to be
+/// written in order.
+#[derive(Clone, Copy)]
+enum Item<'a> {
+    /// Literal text.
+    Str(&'static str),
+    /// Text borrowed from the tree, written verbatim: an IRI, a scalar-value name.
+    Raw(&'a str),
+    /// A literal.
+    Literal(&'a Literal),
+    /// A `GROUP_CONCAT` separator, escaped as a string literal's content.
+    Escaped(&'a str),
+    /// A bounded repetition's `{n}`, `{min,max}` or `{min,}`.
+    Bounds(u32, Option<u32>),
+    /// One character.
+    Char(char),
+    /// A variable, with its `?` sigil.
+    Var(&'a Variable),
+    /// An IRI or a variable in predicate, `GRAPH` or `SERVICE` position.
+    Named(&'a NamedNodePattern),
+    /// A `LIMIT`/`OFFSET` count, preceded by its keyword.
+    Count(&'static str, usize),
+    /// A pattern as the body of a `{ … }` group; a sub-`SELECT` renders as a braced
+    /// `{ SELECT … }` block.
+    GroupBody(&'a GraphPattern),
+    /// A pattern as a braced group `{ … }` — the body of a `WHERE`, an arm of a
+    /// `UNION`, or the group an `OPTIONAL`/`MINUS`/`LATERAL`/`GRAPH`/`SERVICE`/
+    /// `EXISTS` keyword takes. A sub-`SELECT` already renders braced, and the grammar
+    /// admits it directly in every one of these positions (`GroupGraphPattern ::= '{'
+    /// ( SubSelect | GroupGraphPatternSub ) '}'`), so it is written once rather than
+    /// wrapped in a second brace.
+    BracedGroup(&'a GraphPattern),
+    /// The operand a `Join`/`LeftJoin`/`Lateral`/`Minus` writes on its left, or the
+    /// pattern a `Filter`/`Extend`/`Unfold` writes before its own clause, braced as
+    /// its own group only when [`left_operand_needs_bracing`] says leaving it inline
+    /// would change the tree the parser rebuilds. Every other shape is written
+    /// inline, because the parser's group loop rebuilds it exactly: each element it
+    /// reads wraps everything read before it, which is precisely the left-deep spine
+    /// these nodes form. Bracing such an operand anyway would still round-trip, but
+    /// it costs one nesting level per link of the chain, so a run of
+    /// `OPTIONAL`/`MINUS`/`BIND` clauses the parser admitted would render into text
+    /// it refuses.
+    FlattenedLeft(&'a GraphPattern),
+    /// The right operand of a `Join`, braced as its own group when leaving it
+    /// unbraced would change the re-parsed tree's meaning: when it contains a
+    /// property function (which renders as a plain triple the parser would fold into
+    /// the left operand's triples block), or when
+    /// [`rendering_starts_with_a_reabsorbable_left`]. A left operand needs no such
+    /// brace: the parser's own left-deep assembly reproduces it.
+    JoinRight(&'a GraphPattern),
+    /// A solution-modifier chain, peeled and rendered as `SELECT [DISTINCT|REDUCED]
+    /// <vars|*> WHERE { <body> } [GROUP BY] [HAVING] [ORDER BY] [LIMIT] [OFFSET]`.
+    Subselect(&'a GraphPattern),
+    /// A `FILTER`'s constraint: an `EXISTS` or `NOT EXISTS` bare, as the built-in
+    /// call the grammar lets a constraint be, and anything else bracketted — the
+    /// source text of a nest of `FILTER NOT EXISTS { … }` has no bracket at any
+    /// level, and a bracket is a level of the parser's recursion.
+    Constraint(&'a Expression),
+    /// An expression in an operand position that demands at least this level:
+    /// bare when it renders at that level or tighter, bracketted otherwise. With a
+    /// `Group` in scope, a variable naming one of its aggregates' outputs renders as
+    /// that aggregate's call (see [`Item::Aggregate`]).
+    Expr(&'a Expression, Level, Option<GroupSpec<'a>>),
+    /// An expression at its own level ([`expr_level`]), with no bracket around it.
+    ExprBare(&'a Expression, Option<GroupSpec<'a>>),
+    /// An aggregate call.
+    Aggregate(&'a AggregateExpression),
+    /// A term in a pattern.
+    Term(&'a TermPattern),
+    /// A `VALUES` cell.
+    Ground(&'a GroundTerm),
+    /// A property path at its own level.
+    Path(&'a PropertyPathExpression),
+    /// A property path as `^`'s operand: a sequence, an alternative or another
+    /// inverse is bracketted (`^^p` needs `^(^p)` to stay two `Reverse`s). A
+    /// quantified path is not: the postfix quantifiers bind tighter than `^`, so
+    /// `^<p>*` re-parses as `Reverse(ZeroOrMore(<p>))` with no bracket.
+    PathElt(&'a PropertyPathExpression),
+    /// A property path as a postfix quantifier's operand: bracketted as `^`'s
+    /// operand is, and also when it is itself quantified — `PathMod` attaches to
+    /// exactly one `PathPrimary`, and an already-quantified path is not one, so
+    /// `p**` is not surface syntax and `(p*)*` needs its bracket.
+    QuantifierOperand(&'a PropertyPathExpression),
+}
+
+/// Render `first` onto `s`, and everything it pushes, until the work list is empty.
+fn emit(s: &mut String, first: Item<'_>) {
+    let mut stack = Items::with(first);
+    while let Some(item) = stack.pop() {
+        let queued = stack.len();
+        render(s, item, &mut stack);
+        stack.reverse_top(stack.len() - queued);
+    }
+}
+
+/// Write what `item` leads with onto `s`, and queue what follows on `next`, in order;
+/// the caller reverses what was queued, so it pops in that order.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one arm per work-list entry, each a transcription of its grammar"
+)]
+fn render<'a>(s: &mut String, item: Item<'a>, next: &mut Items<'a>) {
+    match item {
+        Item::Str(text) | Item::Raw(text) => s.push_str(text),
+        Item::Literal(l) => fmt_literal(s, l),
+        Item::Escaped(text) => push_escaped(s, text),
+        Item::Bounds(min, max) => {
+            let _ = match max {
+                Some(m) if m == min => write!(s, "{{{min}}}"),
+                Some(m) => write!(s, "{{{min},{m}}}"),
+                None => write!(s, "{{{min},}}"),
+            };
+        }
+        Item::Char(c) => s.push(c),
+        Item::Var(v) => {
+            s.push('?');
+            s.push_str(v.as_str());
+        }
+        Item::Named(n) => fmt_named_node_pattern(s, n),
+        Item::Count(keyword, n) => {
+            let _ = write!(s, "{keyword}{n}");
+        }
+        Item::GroupBody(p) => group_body(s, p, next),
+        Item::BracedGroup(p) => {
+            if is_subselect_node(p) {
+                next.push(Item::GroupBody(p));
+            } else {
+                next.extend([Item::Str("{ "), Item::GroupBody(p), Item::Str(" }")]);
+            }
+        }
+        Item::FlattenedLeft(p) => {
+            if left_operand_needs_bracing(p) {
+                next.extend([Item::Str("{ "), Item::GroupBody(p), Item::Str(" }")]);
+            } else {
+                next.push(Item::GroupBody(p));
+            }
+        }
+        Item::JoinRight(p) => {
+            if !is_subselect_node(p)
+                && (contains_property_function(p) || rendering_starts_with_a_reabsorbable_left(p))
+            {
+                next.extend([Item::Str("{ "), Item::GroupBody(p), Item::Str(" }")]);
+            } else {
+                next.push(Item::GroupBody(p));
+            }
+        }
+        Item::Subselect(p) => subselect(s, p, next),
+        Item::Constraint(expr) => {
+            let bare = match expr {
+                Expression::Exists(_) => true,
+                Expression::Not(inner) => matches!(**inner, Expression::Exists(_)),
+                _ => false,
+            };
+            if bare {
+                next.extend([Item::Char(' '), Item::Expr(expr, Level::Or, None)]);
+            } else {
+                next.extend([
+                    Item::Char('('),
+                    Item::Expr(expr, Level::Or, None),
+                    Item::Char(')'),
+                ]);
+            }
+        }
+        Item::Expr(e, min, group) => {
+            if expr_level(e) < min {
+                next.extend([Item::Char('('), Item::ExprBare(e, group), Item::Char(')')]);
+            } else {
+                next.push(Item::ExprBare(e, group));
+            }
+        }
+        Item::ExprBare(e, group) => expr_bare(s, e, group, next),
+        Item::Aggregate(agg) => aggregate(s, agg, next),
+        Item::Term(term) => match term {
+            TermPattern::Triple(t) => {
+                s.push_str("<<( ");
+                triple_items(t, next);
+                next.push(Item::Str(" )>>"));
+            }
+            leaf => fmt_leaf_term(s, leaf),
+        },
+        Item::Ground(term) => match term {
+            GroundTerm::NamedNode(n) => {
+                let _ = write!(s, "<{}>", n.as_str());
+            }
+            GroundTerm::Literal(l) => fmt_literal(s, l),
+            GroundTerm::Triple(t) => {
+                s.push_str("<<( ");
+                next.extend([
+                    Item::Ground(&t.subject),
+                    Item::Str(" <"),
+                    Item::Raw(t.predicate.as_str()),
+                    Item::Str("> "),
+                    Item::Ground(&t.object),
+                    Item::Str(" )>>"),
+                ]);
+            }
+            // Injection-only: emitted as a blank-node label. The parser never
+            // produces this variant, and `purrdf-sparql-eval`'s `SERVICE` forwarding
+            // path (`sanitize_forwarded_body` in `crates/sparql-eval/src/remote.rs`)
+            // strips every `Values` column carrying one before a substituted
+            // `SERVICE` body is serialized — a blank-node `VALUES` cell is not legal
+            // `DataBlockValue` syntax, so it must never reach the wire. This arm
+            // therefore stays live only for a hand-built pattern serialized directly
+            // through this crate's public API; the forwarding path never feeds it one.
+            GroundTerm::BlankNode(b) => {
+                let _ = write!(s, "_:{}", b.as_str());
+            }
+        },
+        Item::Path(path) => path_items(s, path, next),
+        Item::PathElt(path) => match path {
+            PropertyPathExpression::Sequence(..)
+            | PropertyPathExpression::Alternative(..)
+            | PropertyPathExpression::Reverse(..) => {
+                next.extend([Item::Char('('), Item::Path(path), Item::Char(')')]);
+            }
+            other => next.push(Item::Path(other)),
+        },
+        Item::QuantifierOperand(path) => match path {
+            PropertyPathExpression::Sequence(..)
+            | PropertyPathExpression::Alternative(..)
+            | PropertyPathExpression::Reverse(..)
+            | PropertyPathExpression::ZeroOrMore(..)
+            | PropertyPathExpression::OneOrMore(..)
+            | PropertyPathExpression::ZeroOrOne(..)
+            | PropertyPathExpression::Range { .. } => {
+                next.extend([Item::Char('('), Item::Path(path), Item::Char(')')]);
+            }
+            other => next.push(Item::Path(other)),
+        },
+    }
+}
+
+/// Queue `s p o` of a pattern triple term's triple (between `<<( ` and ` )>>`).
+fn triple_items<'a>(t: &'a TriplePattern, next: &mut Items<'a>) {
+    next.extend([
+        Item::Term(&t.subject),
+        Item::Char(' '),
+        Item::Named(&t.predicate),
+        Item::Char(' '),
+        Item::Term(&t.object),
+    ]);
+}
+
+/// Render a pattern as the body of a group (see [`Item::GroupBody`]).
+fn group_body<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
+    if is_subselect_node(p) {
+        next.extend([Item::Str("{ "), Item::Subselect(p), Item::Str(" }")]);
+        return;
+    }
     match p {
-        GraphPattern::LeftJoin { .. }
-        | GraphPattern::Minus { .. }
-        | GraphPattern::Filter { .. }
-        | GraphPattern::Extend { .. }
-        // Same reason as `Extend`: an `Unfold` LEFT operand renders its own
-        // inner pattern inline first, so flattening it unbraced would splice
-        // that pattern — and the `UNFOLD` clause's own scope — onto the OUTER
-        // node's group.
-        | GraphPattern::Unfold { .. } => true,
-        GraphPattern::Bgp { .. }
-        | GraphPattern::Path { .. }
-        | GraphPattern::Join { .. }
-        | GraphPattern::Lateral { .. }
-        | GraphPattern::Union { .. }
-        | GraphPattern::Graph { .. }
-        | GraphPattern::Service { .. }
-        | GraphPattern::Values { .. }
-        | GraphPattern::OrderBy { .. }
-        | GraphPattern::Project { .. }
+        GraphPattern::Bgp { patterns } => {
+            for (i, tp) in patterns.iter().enumerate() {
+                if i > 0 {
+                    next.push(Item::Char(' '));
+                }
+                triple_items(tp, next);
+                next.push(Item::Str(" ."));
+            }
+        }
+        GraphPattern::Path {
+            subject,
+            path,
+            object,
+        } => next.extend([
+            Item::Term(subject),
+            Item::Char(' '),
+            Item::Path(path),
+            Item::Char(' '),
+            Item::Term(object),
+            Item::Str(" ."),
+        ]),
+        GraphPattern::Join { left, right } => next.extend([
+            Item::FlattenedLeft(left),
+            Item::Char(' '),
+            Item::JoinRight(right),
+        ]),
+        GraphPattern::LeftJoin {
+            left,
+            right,
+            expression,
+        } => {
+            next.extend([Item::FlattenedLeft(left), Item::Str(" OPTIONAL ")]);
+            if let Some(expr) = expression {
+                // The trailing `FILTER` the parser splits back out into this
+                // node's expression, so the right operand stays a group of its
+                // own even when it is a sub-`SELECT`.
+                next.extend([
+                    Item::Str("{ "),
+                    Item::GroupBody(right),
+                    Item::Str(" FILTER"),
+                    Item::Constraint(expr),
+                    Item::Str(" }"),
+                ]);
+            } else {
+                next.push(Item::BracedGroup(right));
+            }
+        }
+        GraphPattern::Lateral { left, right } => {
+            next.push(Item::FlattenedLeft(left));
+            if parser_rebuilds_the_lateral(left, right) {
+                // Two right-operand shapes are surface forms the parser's OWN
+                // dispatch arms re-wrap into exactly this `Lateral` node without
+                // any `LATERAL` keyword in the text: a property function (written
+                // as a triple; the PF-triple-folding loop builds the chain) and a
+                // variable-endpoint `SERVICE ?g { … }` (the SERVICE dispatch arm
+                // auto-wraps a variable endpoint into a `Lateral` because it is
+                // correlated with the enclosing pattern). Emitting an explicit
+                // `LATERAL { … }` around either would double-nest on re-parse:
+                // the braced RHS parses to its OWN `Lateral` node first (rooted at
+                // the unit-table left), and the outer keyword would wrap that
+                // again. So both render unwrapped here, exactly like the
+                // fixed-IRI `SERVICE` case does for a plain `Join`.
+                if !is_empty_group_body(left) {
+                    next.push(Item::Char(' '));
+                }
+                next.push(Item::GroupBody(right));
+            } else {
+                next.extend([Item::Str(" LATERAL "), Item::BracedGroup(right)]);
+            }
+        }
+        GraphPattern::PropertyFunction(call) => property_function(call, next),
+        GraphPattern::Filter { expr, inner } => {
+            // A `FILTER` constrains its whole group wherever it is written, so
+            // a chain of them over one inner pattern is exactly what the parser
+            // builds from them written in a row; only a filter-free inner
+            // pattern — or another `Filter` — is written inline.
+            if matches!(**inner, GraphPattern::Filter { .. }) {
+                next.push(Item::GroupBody(inner));
+            } else {
+                next.push(Item::FlattenedLeft(inner));
+            }
+            next.extend([Item::Str(" FILTER"), Item::Constraint(expr)]);
+        }
+        GraphPattern::Union { arms } => {
+            // Written as the one flat `{ a } UNION { b } UNION …` chain the parser
+            // reads back into one node with the same arms. A leading arm that is
+            // itself a chain is written as the leading arms of this chain rather
+            // than as a braced arm of its own: the parser folds it into the same
+            // node, and bag union is associative, so the solutions are the same
+            // sequence either way. Every later arm is braced, as it must have been
+            // written.
+            let (first, rest) = arms.split_first();
+            match first {
+                GraphPattern::Union { .. } => next.push(Item::GroupBody(first)),
+                _ => next.push(Item::BracedGroup(first)),
+            }
+            for arm in rest {
+                next.extend([Item::Str(" UNION "), Item::BracedGroup(arm)]);
+            }
+        }
+        GraphPattern::Graph { name, inner } => {
+            s.push_str("GRAPH ");
+            fmt_named_node_pattern(s, name);
+            s.push(' ');
+            next.push(Item::BracedGroup(inner));
+        }
+        GraphPattern::Extend {
+            inner,
+            variable,
+            expression,
+        } => next.extend([
+            Item::FlattenedLeft(inner),
+            Item::Str(" BIND("),
+            Item::Expr(expression, Level::Or, None),
+            Item::Str(" AS "),
+            Item::Var(variable),
+            Item::Char(')'),
+        ]),
+        // `[174] Unfold ::= 'UNFOLD' '(' Expression 'AS' Var ( ',' Var )? ')'`.
+        // Renders exactly like `BIND` — the inner pattern inline, then the
+        // clause — because the parser reads it the same way: as one more
+        // element of the running group, stacked above everything before it.
+        GraphPattern::Unfold {
+            inner,
+            expression,
+            element,
+            companion,
+        } => {
+            next.extend([
+                Item::FlattenedLeft(inner),
+                Item::Str(" UNFOLD("),
+                Item::Expr(expression, Level::Or, None),
+                Item::Str(" AS "),
+                Item::Var(element),
+            ]);
+            if let Some(companion) = companion {
+                next.extend([Item::Str(", "), Item::Var(companion)]);
+            }
+            next.push(Item::Char(')'));
+        }
+        GraphPattern::Minus { left, right } => next.extend([
+            Item::FlattenedLeft(left),
+            Item::Str(" MINUS "),
+            Item::BracedGroup(right),
+        ]),
+        GraphPattern::Service {
+            name,
+            inner,
+            silent,
+        } => {
+            s.push_str("SERVICE ");
+            if *silent {
+                s.push_str("SILENT ");
+            }
+            fmt_named_node_pattern(s, name);
+            s.push(' ');
+            next.push(Item::BracedGroup(inner));
+        }
+        GraphPattern::Values {
+            variables,
+            bindings,
+        } => values(s, variables, bindings, next),
+        // Sub-select nodes are rendered by the `is_subselect_node` branch above.
+        GraphPattern::Project { .. }
         | GraphPattern::Distinct { .. }
         | GraphPattern::Reduced { .. }
         | GraphPattern::Slice { .. }
-        | GraphPattern::Group { .. }
-        | GraphPattern::PropertyFunction(_) => false,
+        | GraphPattern::OrderBy { .. }
+        | GraphPattern::Group { .. } => unreachable!("handled by is_subselect_node"),
     }
 }
 
-/// Emit a property-function call as the triple `subjectArgs <iri> objectArgs .`
+/// A property-function call as the triple `subjectArgs <iri> objectArgs .`
 ///
 /// The IRI is re-emitted byte-exact (PurRDF fabricates no namespace on output).
 /// A ONE-element argument vector renders as the bare term; a zero- or
 /// multi-element vector renders as collection syntax `( … )`, which the parser
 /// reads back as an argument list — never as an `rdf:first`/`rdf:rest` chain —
 /// because the predicate names a property function.
-fn fmt_property_function(s: &mut String, call: &PropertyFunctionCall) {
-    fmt_property_function_args(s, &call.subject_args);
-    let _ = write!(s, " <{}> ", call.iri);
-    fmt_property_function_args(s, &call.object_args);
-    s.push_str(" .");
+fn property_function<'a>(call: &'a PropertyFunctionCall, next: &mut Items<'a>) {
+    property_function_args(&call.subject_args, next);
+    next.extend([Item::Str(" <"), Item::Raw(&call.iri), Item::Str("> ")]);
+    property_function_args(&call.object_args, next);
+    next.push(Item::Str(" ."));
 }
 
-/// Emit one side of a property-function call (see [`fmt_property_function`]).
-fn fmt_property_function_args(s: &mut String, args: &[TermPattern]) {
+/// One side of a property-function call (see [`property_function`]).
+fn property_function_args<'a>(args: &'a [TermPattern], next: &mut Items<'a>) {
     if let [single] = args {
-        fmt_term(s, single);
+        next.push(Item::Term(single));
         return;
     }
     if args.is_empty() {
-        s.push_str("()");
+        next.push(Item::Str("()"));
         return;
     }
-    s.push('(');
+    next.push(Item::Char('('));
     for arg in args {
-        s.push(' ');
-        fmt_term(s, arg);
+        next.extend([Item::Char(' '), Item::Term(arg)]);
     }
-    s.push_str(" )");
+    next.push(Item::Str(" )"));
 }
 
-/// Emit a basic graph pattern (a conjunction of triple patterns).
-fn fmt_bgp(s: &mut String, patterns: &[TriplePattern]) {
-    for (i, tp) in patterns.iter().enumerate() {
+/// A `VALUES (?v …) { (term …) … }` block (always the parenthesized form).
+fn values<'a>(
+    s: &mut String,
+    variables: &'a [Variable],
+    bindings: &'a [Vec<Option<GroundTerm>>],
+    next: &mut Items<'a>,
+) {
+    s.push_str("VALUES (");
+    for (i, v) in variables.iter().enumerate() {
         if i > 0 {
             s.push(' ');
         }
-        fmt_term(s, &tp.subject);
-        s.push(' ');
-        fmt_named_node_pattern(s, &tp.predicate);
-        s.push(' ');
-        fmt_term(s, &tp.object);
-        s.push_str(" .");
+        s.push('?');
+        s.push_str(v.as_str());
     }
+    s.push_str(") {");
+    for row in bindings {
+        next.push(Item::Str(" ("));
+        for (i, cell) in row.iter().enumerate() {
+            if i > 0 {
+                next.push(Item::Char(' '));
+            }
+            match cell {
+                None => next.push(Item::Str("UNDEF")),
+                Some(gt) => next.push(Item::Ground(gt)),
+            }
+        }
+        next.push(Item::Char(')'));
+    }
+    next.push(Item::Str(" }"));
 }
 
-/// Peel the solution-modifier chain (outermost → innermost) and emit a
+/// Peel the solution-modifier chain (outermost → innermost) and render
 /// `SELECT [DISTINCT|REDUCED] <vars|*> WHERE { <body> } [GROUP BY] [HAVING]
 /// [ORDER BY] [LIMIT] [OFFSET]`.
-fn fmt_subselect(s: &mut String, p: &GraphPattern) {
+fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
     // Peel outer modifiers, recording each, until we reach the WHERE body.
     let mut cur = p;
     let mut distinct = false;
@@ -784,8 +1079,8 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
     //   meaningful past a grouping boundary (an ordinary WHERE-body variable
     //   is NOT visible above a `Group`). Caught by the corpus round-trip
     //   sweep: `SELECT ?s { … } GROUP BY ?s` (no aggregate function at all —
-    //   a plain `GROUP BY` key projection) used to re-emit `SELECT * …
-    //   GROUP BY ?s`, which the parser then correctly refused on re-parse.
+    //   a plain `GROUP BY` key projection) must not re-emit as `SELECT * …
+    //   GROUP BY ?s`, which the parser then correctly refuses on re-parse.
     // * Reaching a `Group` with an EMPTY key list (the implicit whole-table
     //   group an aggregate with no explicit `GROUP BY` gets): `None` —
     //   `cur` here sits BELOW the `Group`, and an ordinary WHERE-body
@@ -804,10 +1099,9 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
     //   from the projection just because it also carries a `(expr AS ?v)`
     //   bind. Also caught by the sweep: `SELECT (BNODE(?s1) AS ?b1) … WHERE
     //   { … FILTER (…) }` (a SELECT-expression bind over a filtered,
-    //   non-aggregating body) used to render as an in-body `BIND`, which the
+    //   non-aggregating body) must not render as an in-body `BIND`, which the
     //   parser's own "filters float to the group's end" rule then
-    //   re-associated the `Filter`/`Extend` nesting differently than the
-    //   original tree.
+    //   re-associates differently than the original tree.
     let no_project_vars: Option<Vec<Variable>> = match &group {
         Some((vars, _)) if !vars.is_empty() => Some(vars.to_vec()),
         Some(_) => None,
@@ -830,7 +1124,8 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
             if emitted {
                 s.push(' ');
             }
-            let _ = write!(s, "{}", VarRef(v));
+            s.push('?');
+            s.push_str(v.as_str());
             emitted = true;
         }
         emitted
@@ -860,94 +1155,451 @@ fn fmt_subselect(s: &mut String, p: &GraphPattern) {
     // Every select-expression/`HAVING`/`ORDER BY` render below sits ABOVE the
     // `Group` in the modifier chain, so each resolves an aggregate's synthetic
     // output variable to its rendered call form via `group` — see
-    // `fmt_expr_agg`'s docs for why this is required for correctness, not just
-    // cosmetics.
+    // `Item::ExprBare`'s rendering for why this is required for correctness, not
+    // just cosmetics.
     for (i, (var, expr)) in select_exprs.iter().enumerate() {
         if plain_emitted || i > 0 {
-            s.push(' ');
+            next.push(Item::Char(' '));
         }
-        s.push('(');
-        fmt_expr_agg(s, expr, group);
-        let _ = write!(s, " AS {})", VarRef(var));
+        next.extend([
+            Item::Char('('),
+            Item::Expr(expr, Level::Or, group),
+            Item::Str(" AS "),
+            Item::Var(var),
+            Item::Char(')'),
+        ]);
     }
 
-    s.push_str(" WHERE { ");
-    fmt_group_body(s, cur);
-    s.push_str(" }");
+    next.extend([Item::Str(" WHERE "), Item::BracedGroup(cur)]);
 
-    if let Some((vars, aggs)) = group {
+    if let Some((vars, _)) = group {
+        // An implicit single group (aggregates with no GROUP BY) has no clause.
         if !vars.is_empty() {
-            s.push_str(" GROUP BY");
+            next.push(Item::Str(" GROUP BY"));
             for v in vars {
-                let _ = write!(s, " {}", VarRef(v));
+                next.extend([Item::Char(' '), Item::Var(v)]);
             }
-        } else if !aggs.is_empty() {
-            // Implicit single group (aggregates with no GROUP BY): no clause.
         }
     }
     if !having.is_empty() {
-        s.push_str(" HAVING");
-        for expr in &having {
-            s.push('(');
-            fmt_expr_agg(s, expr, group);
-            s.push(')');
+        next.push(Item::Str(" HAVING"));
+        for expr in having {
+            next.extend([
+                Item::Char('('),
+                Item::Expr(expr, Level::Or, group),
+                Item::Char(')'),
+            ]);
         }
     }
-    if let Some(exprs) = order {
-        s.push_str(" ORDER BY");
-        for oe in exprs {
-            match oe {
-                OrderExpression::Asc(e) => {
-                    s.push_str(" ASC(");
-                    fmt_expr_agg(s, e, group);
-                    s.push(')');
-                }
-                OrderExpression::Desc(e) => {
-                    s.push_str(" DESC(");
-                    fmt_expr_agg(s, e, group);
-                    s.push(')');
-                }
-            }
-        }
+    if let Some(keys) = order {
+        next.push(Item::Str(" ORDER BY"));
+        order_keys(keys, group, next);
     }
     if let Some((start, length)) = slice {
         if let Some(len) = length {
-            let _ = write!(s, " LIMIT {len}");
+            next.push(Item::Count(" LIMIT ", len));
         }
         if start > 0 {
-            let _ = write!(s, " OFFSET {start}");
+            next.push(Item::Count(" OFFSET ", start));
         }
     }
 }
 
-/// Emit a `VALUES (?v …) { (term …) … }` block (always the parenthesized form).
-fn fmt_values(s: &mut String, variables: &[Variable], bindings: &[Vec<Option<GroundTerm>>]) {
-    s.push_str("VALUES (");
-    for (i, v) in variables.iter().enumerate() {
+/// Queue `ORDER BY` keys, each in its explicit `ASC(…)`/`DESC(…)` form.
+fn order_keys<'a>(keys: &'a [OrderExpression], group: Option<GroupSpec<'a>>, next: &mut Items<'a>) {
+    for key in keys {
+        let (keyword, e) = match key {
+            OrderExpression::Asc(e) => (" ASC(", e),
+            OrderExpression::Desc(e) => (" DESC(", e),
+        };
+        next.extend([
+            Item::Str(keyword),
+            Item::Expr(e, Level::Or, group),
+            Item::Char(')'),
+        ]);
+    }
+}
+
+/// Render `e` at its own level ([`expr_level`]), with no bracket around it.
+///
+/// With `group` in scope, a bare reference to one of its aggregates' synthetic
+/// output variables renders as that aggregate's call instead of the bare variable
+/// name. The WHERE body a sub-`SELECT` renders never binds such a variable
+/// (`__purrdf_agg_N`, minted by the parser's aggregate-lifting; see
+/// `Parser::fresh_agg_var`) — the aggregate FUNCTION CALL is what binds it, and
+/// that call has no surface-syntax home inside the WHERE clause itself (§18.2.4's
+/// algebra evaluates `Group` strictly after the WHERE body). So a projection
+/// `(expr AS ?v)`, a `HAVING(expr)`, or an `ORDER BY` key that mentions one of
+/// these synthetic variables — which is exactly how the parser represents
+/// `(COUNT(?x) AS ?c)`, `HAVING(COUNT(?x) > 5)`, or `ORDER BY DESC(COUNT(?x))` —
+/// must have that reference resolved back to the aggregate call on the way out, or
+/// the serialized query would be syntactically valid but reference a variable
+/// nothing binds.
+///
+/// `group` is `None` everywhere a WHERE-body expression is rendered, because an
+/// aggregate's synthetic variable cannot escape into the WHERE body: it is
+/// introduced by `Group`'s OWN aggregate list and consumed only by the
+/// SELECT-expression/`HAVING`/`ORDER BY` layer sitting directly above that `Group`
+/// in the modifier chain — never by a `FILTER`/`BIND` inside the body, and never by
+/// a nested `EXISTS` pattern (a fresh, self-contained WHERE scope, which is why the
+/// `Exists` arm below does not thread `group` through).
+fn expr_bare<'a>(
+    s: &mut String,
+    e: &'a Expression,
+    group: Option<GroupSpec<'a>>,
+    next: &mut Items<'a>,
+) {
+    if let Expression::Variable(v) = e
+        && let Some((_, aggs)) = group
+        && let Some((_, agg)) = aggs.iter().find(|(ov, _)| ov == v)
+    {
+        next.push(Item::Aggregate(agg));
+        return;
+    }
+    let operand = |e: &'a Expression, level: Level| Item::Expr(e, level, group);
+    match e {
+        Expression::NamedNode(n) => {
+            let _ = write!(s, "<{}>", n.as_str());
+        }
+        Expression::Literal(l) => fmt_literal(s, l),
+        Expression::Variable(v) => {
+            s.push('?');
+            s.push_str(v.as_str());
+        }
+        Expression::Bound(v) => {
+            let _ = write!(s, "BOUND(?{})", v.as_str());
+        }
+        // Written as the flat `a OP b OP c …` the parser folds back into one node
+        // with the same operands. The first operand may be any expression of the
+        // chain's level (a leading chain of the same operator is folded into this
+        // one on re-parse, which the three-valued fold makes the same value); every
+        // later operand must bind tighter.
+        Expression::Or(operands) | Expression::And(operands) => {
+            let (op, level) = if matches!(e, Expression::Or(_)) {
+                (" || ", Level::Or)
+            } else {
+                (" && ", Level::And)
+            };
+            let (first, rest) = operands.split_first();
+            next.push(operand(first, level));
+            for x in rest {
+                next.extend([Item::Str(op), operand(x, level.tighter())]);
+            }
+        }
+        // The left spine of a binary operator tree, written as the text the parser
+        // folds back into the same chain. Each step's operand must bind tighter
+        // than its operator, as the right operand of a left-associative operator
+        // does. The value before a step is written bare when its last operator
+        // binds at least as tightly as the step's, and bracketed otherwise: `a + b`
+        // followed by `* c` is `(a + b) * c`. All those brackets open at the start
+        // of the chain, one per additive-to-multiplicative change, and each closes
+        // before the step that needs it — the brackets the source text needed too,
+        // and no others, so a chain of any length the parser admitted renders into
+        // text it admits again.
+        Expression::Arithmetic(first, steps) => {
+            let brackets = steps
+                .windows(2)
+                .filter(|pair| !pair[0].0.is_multiplicative() && pair[1].0.is_multiplicative())
+                .count();
+            for _ in 0..brackets {
+                s.push('(');
+            }
+            next.push(operand(first, arithmetic_level(steps.first().0)));
+            let mut previous: Option<ArithmeticOperator> = None;
+            for (op, x) in steps {
+                if previous
+                    .is_some_and(|before| !before.is_multiplicative() && op.is_multiplicative())
+                {
+                    next.push(Item::Char(')'));
+                }
+                next.extend([
+                    Item::Char(' '),
+                    Item::Str(op.symbol()),
+                    Item::Char(' '),
+                    operand(x, arithmetic_level(*op).tighter()),
+                ]);
+                previous = Some(*op);
+            }
+        }
+        Expression::Equal(a, b) => relational(a, "=", b, group, next),
+        Expression::SameTerm(a, b) => {
+            s.push_str("sameTerm(");
+            next.extend([
+                operand(a, Level::Or),
+                Item::Str(", "),
+                operand(b, Level::Or),
+                Item::Char(')'),
+            ]);
+        }
+        Expression::Greater(a, b) => relational(a, ">", b, group, next),
+        Expression::GreaterOrEqual(a, b) => relational(a, ">=", b, group, next),
+        Expression::Less(a, b) => relational(a, "<", b, group, next),
+        Expression::LessOrEqual(a, b) => relational(a, "<=", b, group, next),
+        // A prefix operator is a token of its own however the operand begins (the
+        // lexer never merges a sign into what follows it, and every literal renders
+        // quoted), so no space is needed.
+        Expression::UnaryPlus(a) => {
+            s.push('+');
+            next.push(operand(a, Level::Unary));
+        }
+        Expression::UnaryMinus(a) => {
+            s.push('-');
+            next.push(operand(a, Level::Unary));
+        }
+        Expression::Not(a) => match &**a {
+            // The spellings the parser itself builds these two trees from.
+            Expression::Equal(l, r) => relational(l, "!=", r, group, next),
+            Expression::In(l, list) => in_list(l, " NOT IN (", list, group, next),
+            Expression::Exists(p) => {
+                s.push_str("NOT EXISTS ");
+                next.push(Item::BracedGroup(p));
+            }
+            other => {
+                s.push('!');
+                next.push(operand(other, Level::Unary));
+            }
+        },
+        Expression::In(a, list) => in_list(a, " IN (", list, group, next),
+        Expression::If(c, t, e2) => {
+            s.push_str("IF(");
+            next.extend([
+                operand(c, Level::Or),
+                Item::Str(", "),
+                operand(t, Level::Or),
+                Item::Str(", "),
+                operand(e2, Level::Or),
+                Item::Char(')'),
+            ]);
+        }
+        Expression::Coalesce(list) => {
+            s.push_str("COALESCE(");
+            expr_list(list, group, next);
+            next.push(Item::Char(')'));
+        }
+        Expression::FunctionCall(func, args) => {
+            fmt_function_name(s, func);
+            s.push('(');
+            expr_list(args, group, next);
+            next.push(Item::Char(')'));
+        }
+        Expression::Exists(p) => {
+            s.push_str("EXISTS ");
+            next.push(Item::BracedGroup(p));
+        }
+    }
+}
+
+/// Queue `a OP b` for a relational operator: both operands are
+/// `NumericExpression`s, so each must reach [`Level::Additive`].
+fn relational<'a>(
+    a: &'a Expression,
+    op: &'static str,
+    b: &'a Expression,
+    group: Option<GroupSpec<'a>>,
+    next: &mut Items<'a>,
+) {
+    next.extend([
+        Item::Expr(a, Level::Additive, group),
+        Item::Char(' '),
+        Item::Str(op),
+        Item::Char(' '),
+        Item::Expr(b, Level::Additive, group),
+    ]);
+}
+
+/// Queue `a IN (list)` / `a NOT IN (list)` (`keyword` carries the spaces and the
+/// opening bracket): the tested operand is a `NumericExpression`, each list entry
+/// any expression.
+fn in_list<'a>(
+    a: &'a Expression,
+    keyword: &'static str,
+    list: &'a [Expression],
+    group: Option<GroupSpec<'a>>,
+    next: &mut Items<'a>,
+) {
+    next.extend([Item::Expr(a, Level::Additive, group), Item::Str(keyword)]);
+    expr_list(list, group, next);
+    next.push(Item::Char(')'));
+}
+
+/// Queue a comma-separated expression list.
+fn expr_list<'a>(list: &'a [Expression], group: Option<GroupSpec<'a>>, next: &mut Items<'a>) {
+    for (i, e) in list.iter().enumerate() {
         if i > 0 {
-            s.push(' ');
+            next.push(Item::Str(", "));
         }
-        let _ = write!(s, "{}", VarRef(v));
+        next.push(Item::Expr(e, Level::Or, group));
     }
-    s.push_str(") {");
-    for row in bindings {
-        s.push_str(" (");
-        for (i, cell) in row.iter().enumerate() {
-            if i > 0 {
-                s.push(' ');
-            }
-            match cell {
-                None => s.push_str("UNDEF"),
-                Some(gt) => fmt_ground_term(s, gt),
-            }
-        }
-        s.push(')');
-    }
-    s.push_str(" }");
 }
 
-/// Emit a query-pattern term.
-fn fmt_term(s: &mut String, t: &TermPattern) {
+/// A SPARQL aggregate expression: `COUNT(*)`, `FUNC([DISTINCT] expr [;
+/// SEPARATOR="…"])`, or `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)` for a
+/// [`AggregateFunction::Custom`] aggregate.
+///
+/// Rendered wherever an aggregate's synthetic output variable is referenced in the
+/// SELECT projection, `HAVING`, or `ORDER BY` of a sub-`SELECT` — the production
+/// SERVICE-federation path this module exists for. An aggregate's own `args` are
+/// plain WHERE-body expressions (nested aggregates are not legal SPARQL), so they
+/// render with no `Group` in scope.
+fn aggregate<'a>(s: &mut String, agg: &'a AggregateExpression, next: &mut Items<'a>) {
+    let AggregateExpression {
+        function,
+        args,
+        distinct,
+        ..
+    } = agg;
+    let name = match function {
+        AggregateFunction::Count => "COUNT",
+        AggregateFunction::Sum => "SUM",
+        AggregateFunction::Avg => "AVG",
+        AggregateFunction::Min => "MIN",
+        AggregateFunction::Max => "MAX",
+        AggregateFunction::Sample => "SAMPLE",
+        AggregateFunction::GroupConcat => "GROUP_CONCAT",
+        AggregateFunction::Fold => "FOLD",
+        AggregateFunction::Custom(n) => {
+            // `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)` — the
+            // custom-aggregate surface (see `AggregateFunction::Custom`'s
+            // docs); the IRI is the FIRST positional argument, not a call
+            // prefix. `scalarvals` — populated ONLY by `parse_agg_scalarvals`
+            // for a `Custom` aggregate (a built-in's own scalarvals, e.g.
+            // GROUP_CONCAT's SEPARATOR, are rendered by the shared tail below,
+            // never here) — round-trips through `; NAME=value` clauses in the
+            // SAME order they were parsed, so a query that never wrote one
+            // never emits one either.
+            let _ = write!(s, "AGG(<{}>, ", n.as_str());
+            if *distinct {
+                s.push_str("DISTINCT ");
+            }
+            expr_list(args, None, next);
+            for (name, value) in &agg.scalarvals {
+                next.extend([
+                    Item::Str("; "),
+                    Item::Raw(name),
+                    Item::Char('='),
+                    Item::Literal(value),
+                ]);
+            }
+            next.push(Item::Char(')'));
+            return;
+        }
+    };
+    s.push_str(name);
+    s.push('(');
+    if *distinct {
+        s.push_str("DISTINCT ");
+    }
+    if args.is_empty() {
+        // The spec's empty exprlist: COUNT(*) / COUNT(DISTINCT *).
+        s.push('*');
+    } else {
+        expr_list(args, None, next);
+    }
+    if let Some(sep) = agg.separator() {
+        next.extend([
+            Item::Str("; SEPARATOR=\""),
+            Item::Escaped(sep),
+            Item::Char('"'),
+        ]);
+    }
+    // `FOLD`'s own sort keys — the ONE aggregate that has any
+    // (`AggregateExpression::new` refuses them anywhere else, which is what
+    // keeps this tail from ever emitting `SUM(?v ORDER BY ?k)`). They follow
+    // the LAST exprlist entry with NO separating comma, since a comma there
+    // would name a third argument on re-parse. Every condition is written in
+    // its explicit `ASC(…)`/`DESC(…)` form: `FOLD(?v ORDER BY ?a ?b)`'s two
+    // bare keys must not run together into one expression when re-read.
+    if !agg.order_by.is_empty() {
+        next.push(Item::Str(" ORDER BY"));
+        order_keys(&agg.order_by, None, next);
+    }
+    next.push(Item::Char(')'));
+}
+
+/// Queue a property path at its own level: the text of its `Display`.
+///
+/// The standard operators round-trip with the parser; the two PurRDF extensions
+/// render as `path{min,max}` (bounded repetition — round-trips) and `<any>` /
+/// `<any:ns>` (predicate wildcard — emit-only).
+fn path_items<'a>(s: &mut String, path: &'a PropertyPathExpression, next: &mut Items<'a>) {
+    use PropertyPathExpression as P;
+    match path {
+        P::NamedNode(n) => {
+            let _ = write!(s, "<{}>", n.as_str());
+        }
+        P::Reverse(a) => {
+            s.push('^');
+            next.push(Item::PathElt(a));
+        }
+        // `/` binds TIGHTER than `|`, and both are left-associative, so a chain is
+        // written flat, `a/b/c`, and re-parses into one node with the same
+        // elements. An `Alternative` element needs parens anywhere in a sequence
+        // (bare, `(p1|p2)/(p3|p4)` would mis-group as `p1|(p2/p3)|p4`). A nested
+        // `Sequence` needs them everywhere but first: as the first element it is
+        // written as the leading elements of this chain, which the parser folds
+        // into the same node — composition is associative, so the relation is the
+        // same — while a later one bare would join this chain instead of staying
+        // one element.
+        P::Sequence(elements) => path_chain(elements, '/', next, |i, e| {
+            matches!(e, P::Alternative(_)) || (i > 0 && matches!(e, P::Sequence(_)))
+        }),
+        // `|` has the lowest precedence, so only a nested `Alternative` needs parens,
+        // and only after the first element, for the same reason as a `Sequence`'s.
+        P::Alternative(elements) => path_chain(elements, '|', next, |i, e| {
+            i > 0 && matches!(e, P::Alternative(_))
+        }),
+        P::ZeroOrMore(a) => next.extend([Item::QuantifierOperand(a), Item::Char('*')]),
+        P::OneOrMore(a) => next.extend([Item::QuantifierOperand(a), Item::Char('+')]),
+        P::ZeroOrOne(a) => next.extend([Item::QuantifierOperand(a), Item::Char('?')]),
+        P::Range { inner, min, max } => {
+            next.push(Item::QuantifierOperand(inner));
+            next.push(Item::Bounds(*min, *max));
+        }
+        P::NegatedPropertySet(elems) => {
+            s.push_str("!(");
+            for (i, e) in elems.iter().enumerate() {
+                if i > 0 {
+                    s.push('|');
+                }
+                if e.inverse {
+                    s.push('^');
+                }
+                let _ = write!(s, "<{}>", e.predicate.as_str());
+            }
+            s.push(')');
+        }
+        P::Wildcard { namespace } => match namespace {
+            Some(ns) => {
+                let _ = write!(s, "<any:{}>", ns.as_str());
+            }
+            None => s.push_str("<any>"),
+        },
+    }
+}
+
+/// Queue a [`PropertyPathExpression::Sequence`] or `Alternative` chain as its
+/// elements joined by `op`, bracketing the element at index `i` when
+/// `parens(i, element)` says the bare text would re-parse differently.
+fn path_chain<'a>(
+    elements: &'a [PropertyPathExpression],
+    op: char,
+    next: &mut Items<'a>,
+    parens: impl Fn(usize, &PropertyPathExpression) -> bool,
+) {
+    for (i, element) in elements.iter().enumerate() {
+        if i > 0 {
+            next.push(Item::Char(op));
+        }
+        if parens(i, element) {
+            next.extend([Item::Char('('), Item::Path(element), Item::Char(')')]);
+        } else {
+            next.push(Item::Path(element));
+        }
+    }
+}
+
+/// Emit a leaf query-pattern term (any but a quoted triple term).
+fn fmt_leaf_term(s: &mut String, t: &TermPattern) {
     match t {
         TermPattern::NamedNode(n) => {
             let _ = write!(s, "<{}>", n.as_str());
@@ -957,21 +1609,11 @@ fn fmt_term(s: &mut String, t: &TermPattern) {
         }
         TermPattern::Literal(l) => fmt_literal(s, l),
         TermPattern::Variable(v) => {
-            let _ = write!(s, "{}", VarRef(v));
+            s.push('?');
+            s.push_str(v.as_str());
         }
-        TermPattern::Triple(t) => fmt_triple_pattern(s, t),
+        TermPattern::Triple(_) => unreachable!("a quoted triple term is queued, not a leaf"),
     }
-}
-
-/// Emit an RDF 1.2 quoted triple term `<<( s p o )>>`.
-fn fmt_triple_pattern(s: &mut String, t: &TriplePattern) {
-    s.push_str("<<( ");
-    fmt_term(s, &t.subject);
-    s.push(' ');
-    fmt_named_node_pattern(s, &t.predicate);
-    s.push(' ');
-    fmt_term(s, &t.object);
-    s.push_str(" )>>");
 }
 
 /// Emit an IRI-or-variable (predicate / `GRAPH`/`SERVICE` name position).
@@ -981,41 +1623,10 @@ fn fmt_named_node_pattern(s: &mut String, n: &NamedNodePattern) {
             let _ = write!(s, "<{}>", node.as_str());
         }
         NamedNodePattern::Variable(v) => {
-            let _ = write!(s, "{}", VarRef(v));
+            s.push('?');
+            s.push_str(v.as_str());
         }
     }
-}
-
-/// Emit a ground term (VALUES cell).
-fn fmt_ground_term(s: &mut String, gt: &GroundTerm) {
-    match gt {
-        GroundTerm::NamedNode(n) => {
-            let _ = write!(s, "<{}>", n.as_str());
-        }
-        GroundTerm::Literal(l) => fmt_literal(s, l),
-        GroundTerm::Triple(t) => fmt_ground_triple(s, t),
-        // Injection-only: emitted as a blank-node label. The parser never
-        // produces this variant, and `purrdf-sparql-eval`'s `SERVICE` forwarding path
-        // (`sanitize_forwarded_body` in `crates/sparql-eval/src/remote.rs`) strips every
-        // `Values` column carrying one before a substituted `SERVICE` body is
-        // serialized — a blank-node `VALUES` cell is not legal `DataBlockValue` syntax,
-        // so it must never reach the wire. This arm therefore stays live only for a
-        // hand-built pattern serialized directly through this crate's public API (e.g. a
-        // caller constructing a `GroundTerm::BlankNode` itself, or the round-trip tests
-        // below); the forwarding path never feeds it one.
-        GroundTerm::BlankNode(b) => {
-            let _ = write!(s, "_:{}", b.as_str());
-        }
-    }
-}
-
-/// Emit a ground RDF 1.2 quoted triple term.
-fn fmt_ground_triple(s: &mut String, t: &GroundTriple) {
-    s.push_str("<<( ");
-    fmt_ground_term(s, &t.subject);
-    let _ = write!(s, " <{}> ", t.predicate.as_str());
-    fmt_ground_term(s, &t.object);
-    s.push_str(" )>>");
 }
 
 /// Emit a literal, escaping the lexical form to mirror the lexer's string rules.
@@ -1059,175 +1670,6 @@ fn push_escaped(s: &mut String, value: &str) {
             '\u{000C}' => s.push_str("\\f"),
             other => s.push(other),
         }
-    }
-}
-
-/// A `Display` shim that renders a [`Variable`] with its `?` sigil.
-struct VarRef<'a>(&'a Variable);
-
-impl core::fmt::Display for VarRef<'_> {
-    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        write!(f, "?{}", self.0.as_str())
-    }
-}
-
-/// Emit an expression. Binary and unary operators are conservatively
-/// parenthesized so re-parse never depends on reproducing exact precedence.
-///
-/// This is a thin wrapper over [`fmt_expr_agg`] with no enclosing `Group` in
-/// scope; every call site outside [`fmt_subselect`]'s SELECT-expression/
-/// `HAVING`/`ORDER BY` rendering reaches only WHERE-body expressions, which can
-/// never reference an aggregate's synthetic output variable (see
-/// [`fmt_expr_agg`]'s docs).
-fn fmt_expr(s: &mut String, e: &Expression) {
-    fmt_expr_agg(s, e, None);
-}
-
-/// As [`fmt_expr`], but resolving any bare reference to a `Group` aggregate's
-/// synthetic output variable — recursively, wherever it appears in the
-/// expression tree — to that aggregate's rendered call form instead of the
-/// bare variable name.
-///
-/// # Why this exists
-///
-/// The WHERE body [`fmt_subselect`] emits never binds an aggregate's synthetic
-/// output variable (`__purrdf_agg_N`, minted by the parser's aggregate-lifting;
-/// see `Parser::fresh_agg_var`) — the aggregate FUNCTION CALL is what binds it,
-/// and that call has no surface-syntax home inside the WHERE clause itself
-/// (§18.2.4's algebra evaluates `Group` strictly after the WHERE body). So a
-/// projection `(expr AS ?v)`, a `HAVING(expr)`, or an `ORDER BY` key that
-/// mentions one of these synthetic variables — which is exactly how the parser
-/// represents `(COUNT(?x) AS ?c)`, `HAVING(COUNT(?x) > 5)`, or
-/// `ORDER BY DESC(COUNT(?x))` — must have that reference resolved back to the
-/// aggregate call on the way out, or the serialized query would be
-/// syntactically valid but reference a variable nothing binds (the exact
-/// "aggregates dropped" class of bug this module fixes, generalized to every
-/// expression position an aggregate can reach, not just a bare `(AGG AS ?v)`
-/// projection item).
-///
-/// `group` is `None` everywhere else in this module (plain `fmt_expr`) because
-/// an aggregate's synthetic variable cannot escape into the WHERE body: it is
-/// introduced by `Group`'s OWN aggregate list and consumed only by the
-/// SELECT-expression/`HAVING`/`ORDER BY` layer sitting directly above that
-/// `Group` in the modifier chain — never by a `FILTER`/`BIND` inside the body,
-/// and never by a nested `EXISTS` pattern (a fresh, self-contained WHERE scope
-/// reached via `fmt_group_body`, which is why the `Exists` arm below does not
-/// thread `group` through).
-fn fmt_expr_agg(s: &mut String, e: &Expression, group: Option<GroupSpec<'_>>) {
-    if let Expression::Variable(v) = e
-        && let Some((_, aggs)) = group
-        && let Some((_, agg)) = aggs.iter().find(|(ov, _)| ov == v)
-    {
-        fmt_aggregate(s, agg);
-        return;
-    }
-    match e {
-        Expression::NamedNode(n) => {
-            let _ = write!(s, "<{}>", n.as_str());
-        }
-        Expression::Literal(l) => fmt_literal(s, l),
-        Expression::Variable(v) => {
-            let _ = write!(s, "{}", VarRef(v));
-        }
-        Expression::Bound(v) => {
-            let _ = write!(s, "BOUND({})", VarRef(v));
-        }
-        Expression::Or(a, b) => fmt_binop(s, a, "||", b, group),
-        Expression::And(a, b) => fmt_binop(s, a, "&&", b, group),
-        Expression::Equal(a, b) => fmt_binop(s, a, "=", b, group),
-        Expression::SameTerm(a, b) => {
-            s.push_str("sameTerm(");
-            fmt_expr_agg(s, a, group);
-            s.push_str(", ");
-            fmt_expr_agg(s, b, group);
-            s.push(')');
-        }
-        Expression::Greater(a, b) => fmt_binop(s, a, ">", b, group),
-        Expression::GreaterOrEqual(a, b) => fmt_binop(s, a, ">=", b, group),
-        Expression::Less(a, b) => fmt_binop(s, a, "<", b, group),
-        Expression::LessOrEqual(a, b) => fmt_binop(s, a, "<=", b, group),
-        Expression::Add(a, b) => fmt_binop(s, a, "+", b, group),
-        Expression::Subtract(a, b) => fmt_binop(s, a, "-", b, group),
-        Expression::Multiply(a, b) => fmt_binop(s, a, "*", b, group),
-        Expression::Divide(a, b) => fmt_binop(s, a, "/", b, group),
-        Expression::UnaryPlus(a) => {
-            s.push_str("(+");
-            fmt_expr_agg(s, a, group);
-            s.push(')');
-        }
-        Expression::UnaryMinus(a) => {
-            s.push_str("(-");
-            fmt_expr_agg(s, a, group);
-            s.push(')');
-        }
-        Expression::Not(a) => {
-            s.push_str("(!");
-            fmt_expr_agg(s, a, group);
-            s.push(')');
-        }
-        Expression::In(a, list) => {
-            s.push('(');
-            fmt_expr_agg(s, a, group);
-            s.push_str(" IN (");
-            fmt_expr_list_agg(s, list, group);
-            s.push_str("))");
-        }
-        Expression::If(c, t, e2) => {
-            s.push_str("IF(");
-            fmt_expr_agg(s, c, group);
-            s.push_str(", ");
-            fmt_expr_agg(s, t, group);
-            s.push_str(", ");
-            fmt_expr_agg(s, e2, group);
-            s.push(')');
-        }
-        Expression::Coalesce(list) => {
-            s.push_str("COALESCE(");
-            fmt_expr_list_agg(s, list, group);
-            s.push(')');
-        }
-        Expression::FunctionCall(func, args) => {
-            fmt_function_name(s, func);
-            s.push('(');
-            fmt_expr_list_agg(s, args, group);
-            s.push(')');
-        }
-        Expression::Exists(p) => {
-            s.push_str("EXISTS { ");
-            fmt_group_body(s, p);
-            s.push_str(" }");
-        }
-    }
-}
-
-/// Emit `(a OP b)` with conservative parentheses.
-fn fmt_binop(
-    s: &mut String,
-    a: &Expression,
-    op: &str,
-    b: &Expression,
-    group: Option<GroupSpec<'_>>,
-) {
-    s.push('(');
-    fmt_expr_agg(s, a, group);
-    let _ = write!(s, " {op} ");
-    fmt_expr_agg(s, b, group);
-    s.push(')');
-}
-
-/// Emit a comma-separated expression list.
-fn fmt_expr_list(s: &mut String, list: &[Expression]) {
-    fmt_expr_list_agg(s, list, None);
-}
-
-/// As [`fmt_expr_list`], but resolving aggregate synthetic variables; see
-/// [`fmt_expr_agg`].
-fn fmt_expr_list_agg(s: &mut String, list: &[Expression], group: Option<GroupSpec<'_>>) {
-    for (i, e) in list.iter().enumerate() {
-        if i > 0 {
-            s.push_str(", ");
-        }
-        fmt_expr_agg(s, e, group);
     }
 }
 
@@ -1336,104 +1778,16 @@ pub(crate) fn function_keyword(f: &Function) -> Option<&'static str> {
     })
 }
 
-/// Emit a SPARQL aggregate expression: `COUNT(*)`, `FUNC([DISTINCT] expr
-/// [; SEPARATOR="…"])`, or `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`
-/// for a [`AggregateFunction::Custom`] aggregate.
-///
-/// Used by [`fmt_subselect`] (via [`fmt_expr_agg`]) wherever an aggregate's
-/// synthetic output variable is referenced in the SELECT projection, `HAVING`,
-/// or `ORDER BY` — the production SERVICE-federation path this module exists
-/// for. An aggregate's own `args` are plain WHERE-body expressions (nested
-/// aggregates are not legal SPARQL), so they render through the group-free
-/// [`fmt_expr`].
-fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
-    let AggregateExpression {
-        function,
-        args,
-        distinct,
-        ..
-    } = agg;
-    let name = match function {
-        AggregateFunction::Count => "COUNT",
-        AggregateFunction::Sum => "SUM",
-        AggregateFunction::Avg => "AVG",
-        AggregateFunction::Min => "MIN",
-        AggregateFunction::Max => "MAX",
-        AggregateFunction::Sample => "SAMPLE",
-        AggregateFunction::GroupConcat => "GROUP_CONCAT",
-        AggregateFunction::Fold => "FOLD",
-        AggregateFunction::Custom(n) => {
-            // `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)` — the
-            // custom-aggregate surface (see `AggregateFunction::Custom`'s
-            // docs); the IRI is the FIRST positional argument, not a call
-            // prefix. `scalarvals` — populated ONLY by `parse_agg_scalarvals`
-            // for a `Custom` aggregate (a built-in's own scalarvals, e.g.
-            // GROUP_CONCAT's SEPARATOR, are rendered by the shared tail below,
-            // never here) — round-trips through `; NAME=value` clauses in the
-            // SAME order they were parsed, so a query that never wrote one
-            // never emits one either.
-            let _ = write!(s, "AGG(<{}>, ", n.as_str());
-            if *distinct {
-                s.push_str("DISTINCT ");
-            }
-            fmt_expr_list(s, args);
-            for (name, value) in &agg.scalarvals {
-                s.push_str("; ");
-                s.push_str(name);
-                s.push('=');
-                fmt_literal(s, value);
-            }
-            s.push(')');
-            return;
-        }
-    };
-    s.push_str(name);
-    s.push('(');
-    if *distinct {
-        s.push_str("DISTINCT ");
-    }
-    if args.is_empty() {
-        // The spec's empty exprlist: COUNT(*) / COUNT(DISTINCT *).
-        s.push('*');
-    } else {
-        fmt_expr_list(s, args);
-    }
-    if let Some(sep) = agg.separator() {
-        s.push_str("; SEPARATOR=\"");
-        push_escaped(s, sep);
-        s.push('"');
-    }
-    // `FOLD`'s own sort keys — the ONE aggregate that has any
-    // (`AggregateExpression::new` refuses them anywhere else, which is what
-    // keeps this tail from ever emitting `SUM(?v ORDER BY ?k)`). They follow
-    // the LAST exprlist entry with NO separating comma, since a comma there
-    // would name a third argument on re-parse. Every condition is written in
-    // its explicit `ASC(…)`/`DESC(…)` form: `FOLD(?v ORDER BY ?a ?b)`'s two
-    // bare keys must not run together into one expression when re-read.
-    if !agg.order_by.is_empty() {
-        s.push_str(" ORDER BY");
-        for oe in &agg.order_by {
-            match oe {
-                OrderExpression::Asc(e) => {
-                    s.push_str(" ASC(");
-                    fmt_expr(s, e);
-                    s.push(')');
-                }
-                OrderExpression::Desc(e) => {
-                    s.push_str(" DESC(");
-                    fmt_expr(s, e);
-                    s.push(')');
-                }
-            }
-        }
-    }
-    s.push(')');
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::Query;
+    use crate::tree::{Chain, Child};
+
+    /// Render one aggregate call on its own.
+    fn fmt_aggregate(s: &mut String, agg: &AggregateExpression) {
+        emit(s, Item::Aggregate(agg));
+    }
     use crate::algebra::AggregateExpressionError;
     use crate::parser::{ParserOptions, SparqlParser};
 
@@ -1561,13 +1915,15 @@ mod tests {
 
     #[test]
     fn roundtrip_nested_service() {
-        assert_roundtrip("SELECT * WHERE { SERVICE <http://ep/sparql> { ?s <http://ex/p> ?o } }");
+        assert_roundtrip(
+            "SELECT * WHERE { SERVICE <https://example.org/sparql> { ?s <http://ex/p> ?o } }",
+        );
     }
 
     #[test]
     fn roundtrip_service_silent() {
         assert_roundtrip(
-            "SELECT * WHERE { SERVICE SILENT <http://ep/sparql> { ?s <http://ex/p> ?o } }",
+            "SELECT * WHERE { SERVICE SILENT <https://example.org/sparql> { ?s <http://ex/p> ?o } }",
         );
     }
 
@@ -1718,7 +2074,7 @@ mod tests {
         // `(?__purrdf_agg_N AS ?c)` reference to a variable nothing in the
         // forwarded query text binds.
         assert_roundtrip(
-            "SELECT * WHERE { SERVICE <http://ep/sparql> { \
+            "SELECT * WHERE { SERVICE <https://example.org/sparql> { \
              SELECT ?t (COUNT(?x) AS ?c) WHERE { ?x a ?t } GROUP BY ?t } }",
         );
     }
@@ -2290,7 +2646,7 @@ mod tests {
         // laterality is lost on re-parse as a plain `Join`.
         let text = assert_roundtrip(
             "SELECT * WHERE { ?s <http://ex/p> ?o \
-             LATERAL { SERVICE <http://ep/sparql> { ?o <http://ex/q> ?z } } }",
+             LATERAL { SERVICE <https://example.org/sparql> { ?o <http://ex/q> ?z } } }",
         );
         assert!(text.contains("LATERAL"), "got: {text}");
     }
@@ -2329,8 +2685,8 @@ mod tests {
                     right
                 } else {
                     GraphPattern::Lateral {
-                        left: Box::new(left),
-                        right: Box::new(right),
+                        left: Child::new(left),
+                        right: Child::new(right),
                     }
                 }
             }
@@ -2348,36 +2704,36 @@ mod tests {
             },
             GraphPattern::PropertyFunction(call) => GraphPattern::PropertyFunction(call.clone()),
             GraphPattern::Join { left, right } => GraphPattern::Join {
-                left: Box::new(normalize(left)),
-                right: Box::new(normalize(right)),
+                left: Child::new(normalize(left)),
+                right: Child::new(normalize(right)),
             },
             GraphPattern::LeftJoin {
                 left,
                 right,
                 expression,
             } => GraphPattern::LeftJoin {
-                left: Box::new(normalize(left)),
-                right: Box::new(normalize(right)),
+                left: Child::new(normalize(left)),
+                right: Child::new(normalize(right)),
                 expression: expression.clone(),
             },
             GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
                 expr: expr.clone(),
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
             },
-            GraphPattern::Union { left, right } => GraphPattern::Union {
-                left: Box::new(normalize(left)),
-                right: Box::new(normalize(right)),
+            GraphPattern::Union { arms } => GraphPattern::Union {
+                arms: Chain::try_from(arms.iter().map(normalize).collect::<Vec<_>>())
+                    .expect("two or more arms"),
             },
             GraphPattern::Graph { name, inner } => GraphPattern::Graph {
                 name: name.clone(),
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
             },
             GraphPattern::Extend {
                 inner,
                 variable,
                 expression,
             } => GraphPattern::Extend {
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
                 variable: variable.clone(),
                 expression: expression.clone(),
             },
@@ -2387,14 +2743,14 @@ mod tests {
                 element,
                 companion,
             } => GraphPattern::Unfold {
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
                 expression: expression.clone(),
                 element: element.clone(),
                 companion: companion.clone(),
             },
             GraphPattern::Minus { left, right } => GraphPattern::Minus {
-                left: Box::new(normalize(left)),
-                right: Box::new(normalize(right)),
+                left: Child::new(normalize(left)),
+                right: Child::new(normalize(right)),
             },
             GraphPattern::Service {
                 name,
@@ -2402,7 +2758,7 @@ mod tests {
                 silent,
             } => GraphPattern::Service {
                 name: name.clone(),
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
                 silent: *silent,
             },
             GraphPattern::Values {
@@ -2413,25 +2769,25 @@ mod tests {
                 bindings: bindings.clone(),
             },
             GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
                 expression: expression.clone(),
             },
             GraphPattern::Project { inner, variables } => GraphPattern::Project {
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
                 variables: variables.clone(),
             },
             GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
             },
             GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
             },
             GraphPattern::Slice {
                 inner,
                 start,
                 length,
             } => GraphPattern::Slice {
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
                 start: *start,
                 length: *length,
             },
@@ -2440,7 +2796,7 @@ mod tests {
                 variables,
                 aggregates,
             } => GraphPattern::Group {
-                inner: Box::new(normalize(inner)),
+                inner: Child::new(normalize(inner)),
                 variables: variables.clone(),
                 aggregates: aggregates.clone(),
             },
@@ -2469,8 +2825,8 @@ mod tests {
             subject_args: vec![TermPattern::Variable(Variable::new("o"))],
             object_args: vec![TermPattern::Variable(Variable::new("z"))],
         };
-        let union = GraphPattern::Union {
-            left: Box::new(GraphPattern::Bgp {
+        let union = GraphPattern::union(
+            GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(crate::ast::NamedNode::new_unchecked(
@@ -2478,8 +2834,8 @@ mod tests {
                     )),
                     object: TermPattern::Variable(Variable::new("o")),
                 }],
-            }),
-            right: Box::new(GraphPattern::Bgp {
+            },
+            GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(crate::ast::NamedNode::new_unchecked(
@@ -2487,11 +2843,11 @@ mod tests {
                     )),
                     object: TermPattern::Variable(Variable::new("o")),
                 }],
-            }),
-        };
+            },
+        );
         let body = GraphPattern::Lateral {
-            left: Box::new(union),
-            right: Box::new(GraphPattern::PropertyFunction(call)),
+            left: Child::new(union),
+            right: Child::new(GraphPattern::PropertyFunction(call)),
         };
         let text = pattern_to_select_query(&body);
         let reparsed = match SparqlParser::new()

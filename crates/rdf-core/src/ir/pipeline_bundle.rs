@@ -728,6 +728,11 @@ impl<D: DatasetView> DatasetView for ResidueView<'_, D> {
     type Id = D::Id;
     type ProbePlan = ();
 
+    /// A residue holds a subset of the inner view's quads.
+    fn triple_term_nesting_bound(&self) -> Option<usize> {
+        self.0.triple_term_nesting_bound()
+    }
+
     fn quads(&self) -> impl Iterator<Item = QuadIds<Self::Id>> + '_ {
         self.0.quads().filter(|q| self.keeps(q.g))
     }

@@ -13,8 +13,9 @@
 # necessary in the first place; there is now only one copy.
 #
 # `purrdf-python`, `purrdf-cli`, `purrdf-capi`, `purrdf-sparql-conformance`,
-# `purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe` and
-# `purrdf-testkit` are deliberately NOT here — see docs/RELEASE.md.
+# `purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`,
+# `purrdf-testkit` and `wasm-link`
+# are deliberately NOT here — see docs/RELEASE.md.
 #
 # `purrdf-alloc-probe` and `purrdf-testkit` are the ones of those that published
 # crates DEPEND ON, as dev-dependencies. That is safe only because their entries
@@ -51,6 +52,7 @@ PURRDF_RELEASE_CRATES=(
   purrdf-jsonschema
   purrdf-hash
   purrdf-deflate
+  purrdf-stack
   purrdf-gts
   purrdf-core
   purrdf-columnar
@@ -99,6 +101,7 @@ PURRDF_UNBOOTSTRAPPED_CRATES=(
   purrdf-jsonschema
   purrdf-hash
   purrdf-deflate
+  purrdf-stack
   purrdf-hnsw
   purrdf-retrieval
 )

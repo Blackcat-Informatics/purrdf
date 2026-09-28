@@ -119,12 +119,12 @@ pub enum Object {
 }
 
 /// The interior of a quoted triple term (RDF 1.2): its subject, predicate IRI, and
-/// object, each fully resolved through the same helpers as top-level terms (so a
-/// triple term nested in the subject or object resolves recursively).
+/// object, each fully resolved through the same helpers as top-level terms, a triple
+/// term nested in the subject or object included.
 ///
 /// Acyclicity is guaranteed by frozen-dataset validation — a triple term can never
-/// contain itself, transitively — so this recursive resolution always terminates
-/// and needs no depth guard.
+/// contain itself, transitively — so this resolution always terminates and needs no
+/// depth guard.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub struct TripleTerm {
     /// The subject of the quoted triple.
@@ -157,19 +157,35 @@ impl Object {
 
 fn subject_of(ds: &RdfDataset, id: TermId) -> Option<Subject> {
     match ds.resolve(id) {
-        TermRef::Iri(iri) => Some(Subject::Named(iri.to_owned())),
-        TermRef::Blank { label, scope } => {
-            Some(Subject::Blank(scope.qualify_label(label).into_owned()))
-        }
         TermRef::Triple { s, p, o } => Some(Subject::Triple(Box::new(triple_term_of(ds, s, p, o)))),
         // A literal cannot stand in subject position in well-formed RDF; the slice
         // never queries on one, so treat it as "no subject term".
         TermRef::Literal { .. } => None,
+        term => Some(subject_leaf(ds, id, term)),
     }
 }
 
 fn object_of(ds: &RdfDataset, id: TermId) -> Object {
     match ds.resolve(id) {
+        TermRef::Triple { s, p, o } => Object::Triple(Box::new(triple_term_of(ds, s, p, o))),
+        term => object_leaf(ds, term),
+    }
+}
+
+/// The subject a resolved term that is not a triple term stands for. A literal
+/// (malformed in subject position) falls back to its lexical text as a named subject.
+fn subject_leaf(ds: &RdfDataset, id: TermId, term: TermRef<'_>) -> Subject {
+    match term {
+        TermRef::Iri(iri) => Subject::Named(iri.to_owned()),
+        TermRef::Blank { label, scope } => Subject::Blank(scope.qualify_label(label).into_owned()),
+        TermRef::Literal { .. } => Subject::Named(iri_text_of(ds, id)),
+        TermRef::Triple { .. } => unreachable!("a triple term is resolved from its parts"),
+    }
+}
+
+/// The object a resolved term that is not a triple term stands for.
+fn object_leaf(ds: &RdfDataset, term: TermRef<'_>) -> Object {
+    match term {
         TermRef::Iri(iri) => Object::Named(iri.to_owned()),
         TermRef::Blank { label, scope } => Object::Blank(scope.qualify_label(label).into_owned()),
         TermRef::Literal {
@@ -183,19 +199,72 @@ fn object_of(ds: &RdfDataset, id: TermId) -> Object {
             language: language.map(str::to_owned),
             direction,
         },
-        TermRef::Triple { s, p, o } => Object::Triple(Box::new(triple_term_of(ds, s, p, o))),
+        TermRef::Triple { .. } => unreachable!("a triple term is resolved from its parts"),
     }
 }
 
-/// Resolve a triple term's `(s, p, o)` component ids to a [`TripleTerm`], recursing
-/// through [`subject_of`]/[`object_of`] for nested triple terms. A subject that
-/// resolves to a literal (malformed) falls back to its lexical text as a named
-/// subject rather than being dropped.
+/// Resolve a triple term's `(s, p, o)` component ids to a [`TripleTerm`], nested triple
+/// terms included. A subject that resolves to a literal (malformed) falls back to its
+/// lexical text as a named subject rather than being dropped.
+///
+/// The walk runs over a work list of triple terms being resolved: each resolves its
+/// subject — first resolving a nested triple term there fully — then its object the
+/// same way, and is finished once both exist.
 fn triple_term_of(ds: &RdfDataset, s: TermId, p: TermId, o: TermId) -> TripleTerm {
-    TripleTerm {
-        subject: subject_of(ds, s).unwrap_or_else(|| Subject::Named(iri_text_of(ds, s))),
-        predicate: iri_text_of(ds, p),
-        object: object_of(ds, o),
+    /// A triple term being resolved, and the subject found for it so far.
+    struct Frame {
+        s: TermId,
+        p: TermId,
+        o: TermId,
+        subject: Option<Subject>,
+    }
+    let mut frames = vec![Frame {
+        s,
+        p,
+        o,
+        subject: None,
+    }];
+    loop {
+        let frame = frames.last_mut().expect("a triple term is being resolved");
+        let (id, in_subject) = match frame.subject {
+            None => (frame.s, true),
+            Some(_) => (frame.o, false),
+        };
+        let resolved = ds.resolve(id);
+        if let TermRef::Triple { s, p, o } = resolved {
+            frames.push(Frame {
+                s,
+                p,
+                o,
+                subject: None,
+            });
+            continue;
+        }
+        if in_subject {
+            frame.subject = Some(subject_leaf(ds, id, resolved));
+            continue;
+        }
+        let mut object = object_leaf(ds, resolved);
+        // Finish the innermost triple term, and every enclosing one its finishing
+        // completes: a finished triple is its parent's subject or its parent's object.
+        loop {
+            let frame = frames.pop().expect("a triple term is being resolved");
+            let finished = TripleTerm {
+                subject: frame
+                    .subject
+                    .expect("the subject is resolved before the object"),
+                predicate: iri_text_of(ds, frame.p),
+                object,
+            };
+            let Some(parent) = frames.last_mut() else {
+                return finished;
+            };
+            if parent.subject.is_none() {
+                parent.subject = Some(Subject::Triple(Box::new(finished)));
+                break;
+            }
+            object = Object::Triple(Box::new(finished));
+        }
     }
 }
 
@@ -1483,5 +1552,76 @@ mod tests {
             message.contains("iri-relative-no-base") || message.contains("no base"),
             "the diagnostic must name the missing base, got: {message}"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The dataset term resolution against its recursive reference.
+
+    use purrdf::{RdfDataset, RdfDatasetBuilder, TermId, TermRef};
+    use purrdf_core::backend::TermFactory as _;
+
+    use super::{
+        Object, Subject, TripleTerm, iri_text_of, object_leaf, object_of, subject_leaf, subject_of,
+    };
+
+    fn reference_subject(ds: &RdfDataset, id: TermId) -> Option<Subject> {
+        match ds.resolve(id) {
+            TermRef::Triple { s, p, o } => {
+                Some(Subject::Triple(Box::new(reference_triple(ds, s, p, o))))
+            }
+            TermRef::Literal { .. } => None,
+            term => Some(subject_leaf(ds, id, term)),
+        }
+    }
+
+    fn reference_object(ds: &RdfDataset, id: TermId) -> Object {
+        match ds.resolve(id) {
+            TermRef::Triple { s, p, o } => Object::Triple(Box::new(reference_triple(ds, s, p, o))),
+            term => object_leaf(ds, term),
+        }
+    }
+
+    fn reference_triple(ds: &RdfDataset, s: TermId, p: TermId, o: TermId) -> TripleTerm {
+        TripleTerm {
+            subject: reference_subject(ds, s).unwrap_or_else(|| Subject::Named(iri_text_of(ds, s))),
+            predicate: iri_text_of(ds, p),
+            object: reference_object(ds, o),
+        }
+    }
+
+    /// Every generated stored term resolves in subject and object position exactly as
+    /// the recursive reference resolves it.
+    #[test]
+    fn resolution_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::WellFormed,
+            );
+            nested += usize::from(budget < 7);
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let ds = builder.freeze().expect("a generated term freezes");
+            let object = ds.quads().next().expect("one quad").o;
+            assert_eq!(
+                subject_of(&ds, object),
+                reference_subject(&ds, object),
+                "seed {seed}"
+            );
+            assert_eq!(
+                object_of(&ds, object),
+                reference_object(&ds, object),
+                "seed {seed}"
+            );
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
     }
 }

@@ -37,6 +37,9 @@
 //! 4. reinsert-after-removal is consistent with both orders (insert→remove→insert
 //!    and remove→insert→… both return to "present").
 
+use crate::TermBox;
+use std::convert::Infallible;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use purrdf_iri::IriError;
@@ -48,6 +51,7 @@ use crate::model::RdfLiteral;
 
 use super::dataset::{QuadHandle, TermRef};
 use super::term::TermId;
+use super::term_walk::{Nested, try_fold_nested};
 
 mod delta_view;
 pub use delta_view::{DeltaDatasetView, DeltaViewId};
@@ -237,51 +241,69 @@ impl MutableDataset {
 
     // -- value ↔ MutTermId resolution -------------------------------------------------
 
-    /// Resolve a base [`TermId`] to its dataset-independent [`TermValue`], recursing
-    /// through datatype ids and triple components. The inverse of interning a value.
+    /// Resolve a base [`TermId`] to its dataset-independent [`TermValue`], through
+    /// datatype ids and triple components. The inverse of interning a value.
     fn base_value(&self, id: TermId) -> TermValue {
         Self::base_value_of(&self.base, id)
     }
 
     /// `base_value` without `&self`, so it can be reused by `freeze`'s remap closures.
+    ///
+    /// A triple term is assembled bottom-up over [`try_fold_nested`]'s work list: its
+    /// subject, predicate and object are resolved in that order, each fully before
+    /// the next.
     fn base_value_of(base: &RdfDataset, id: TermId) -> TermValue {
-        match base.resolve(id) {
-            TermRef::Iri(iri) => TermValue::Iri(iri.to_string()),
-            TermRef::Blank { label, scope } => TermValue::Blank {
-                label: label.to_string(),
-                scope,
+        let value = try_fold_nested(
+            id,
+            &mut (),
+            |(), id| {
+                Ok::<_, Infallible>(Nested::Leaf(match base.resolve(id) {
+                    TermRef::Iri(iri) => TermValue::Iri(iri.to_string()),
+                    TermRef::Blank { label, scope } => TermValue::Blank {
+                        label: label.to_string(),
+                        scope,
+                    },
+                    TermRef::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        // The datatype id is a base IRI term; resolve it to its IRI string.
+                        // A frozen dataset's literal datatype is an IRI by construction:
+                        // `RdfDatasetBuilder::intern_literal` mints it through `intern_iri`,
+                        // and the pack decoder refuses a datatype entry that is not an IRI
+                        // before a pack ever becomes a dataset. Any other shape is a broken
+                        // invariant, stated exactly as `RdfDataset::term_value` states it —
+                        // never rendered into a datatype string, because a `Debug` rendering
+                        // used as an IRI does not fail HERE; it fails later as an `IriError`
+                        // about text nobody wrote.
+                        let datatype = match base.resolve(datatype) {
+                            TermRef::Iri(dt) => dt.to_string(),
+                            other => unreachable!(
+                                "literal datatype must resolve to an IRI, got {other:?}"
+                            ),
+                        };
+                        TermValue::Literal {
+                            lexical_form: lexical.to_string(),
+                            datatype,
+                            language: language.map(str::to_string),
+                            direction,
+                        }
+                    }
+                    TermRef::Triple { s, p, o } => return Ok(Nested::Triple(s, p, o)),
+                }))
             },
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                // The datatype id is a base IRI term; resolve it to its IRI string.
-                // A frozen dataset's literal datatype is an IRI by construction:
-                // `RdfDatasetBuilder::intern_literal` mints it through `intern_iri`,
-                // and the pack decoder refuses a datatype entry that is not an IRI
-                // before a pack ever becomes a dataset. Any other shape is a broken
-                // invariant, stated exactly as `RdfDataset::term_value` states it —
-                // never rendered into a datatype string, because a `Debug` rendering
-                // used as an IRI does not fail HERE; it fails later as an `IriError`
-                // about text nobody wrote.
-                let datatype = match base.resolve(datatype) {
-                    TermRef::Iri(dt) => dt.to_string(),
-                    other => unreachable!("literal datatype must resolve to an IRI, got {other:?}"),
-                };
-                TermValue::Literal {
-                    lexical_form: lexical.to_string(),
-                    datatype,
-                    language: language.map(str::to_string),
-                    direction,
-                }
-            }
-            TermRef::Triple { s, p, o } => TermValue::Triple {
-                s: Box::new(Self::base_value_of(base, s)),
-                p: Box::new(Self::base_value_of(base, p)),
-                o: Box::new(Self::base_value_of(base, o)),
+            |(), _, s, p, o| {
+                Ok(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
             },
+        );
+        match value {
+            Ok(value) => value,
         }
     }
 
@@ -736,7 +758,7 @@ impl MutableDataset {
 }
 
 /// Enforce the IR-boundary absoluteness invariant over every IRI a [`TermValue`]
-/// carries: the value itself, a literal's datatype, and — recursively — the
+/// carries: the value itself, a literal's datatype, and — at any depth — the
 /// components of a triple term, which the delta interns WHOLE rather than
 /// component-by-component.
 ///
@@ -752,49 +774,67 @@ impl MutableDataset {
 ///
 /// Blank-node labels and literal lexical forms are arbitrary strings and are
 /// deliberately untouched — only IRIs are IRIs.
+///
+/// The IRIs are checked in [`TermValue::visit_terms`]'s pre-order — a triple term's
+/// subject fully before its predicate, before its object — and the first one refused
+/// is the error.
 fn check_value_absolute(value: &TermValue) -> Result<(), IriError> {
-    match value {
-        TermValue::Iri(iri) => super::absolute::check_absolute(iri),
-        TermValue::Blank { .. } => Ok(()),
-        TermValue::Literal { datatype, .. } => super::absolute::check_absolute(datatype),
-        TermValue::Triple { s, p, o } => {
-            check_value_absolute(s)?;
-            check_value_absolute(p)?;
-            check_value_absolute(o)
+    let checked = value.visit_terms(|term| {
+        let checked = match term {
+            TermValue::Iri(iri) => super::absolute::check_absolute(iri),
+            TermValue::Literal { datatype, .. } => super::absolute::check_absolute(datatype),
+            TermValue::Blank { .. } | TermValue::Triple { .. } => Ok(()),
+        };
+        match checked {
+            Ok(()) => ControlFlow::Continue(()),
+            Err(error) => ControlFlow::Break(error),
         }
+    });
+    match checked {
+        ControlFlow::Continue(()) => Ok(()),
+        ControlFlow::Break(error) => Err(error),
     }
 }
 
-/// Re-intern a dataset-independent [`TermValue`] into a fresh builder, recursing for
-/// triple terms, and return the builder's dense [`TermId`]. The single remap
-/// primitive `freeze` drives every table through.
+/// Re-intern a dataset-independent [`TermValue`] into a fresh builder, triple terms
+/// included, and return the builder's dense [`TermId`]. The single remap primitive
+/// `freeze` drives every table through.
+///
+/// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
+/// predicate and object, each fully before the next, then the triple itself.
 fn intern_value(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
-    match value {
-        TermValue::Iri(iri) => builder.intern_iri(iri),
-        TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => {
-            // Rebuild the owned literal. The C0.1 policy was already applied when the
-            // value was produced (datatype expanded, language lowercased), and the
-            // builder re-applies it idempotently, so this round-trips to the same id.
-            let lit = RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            };
-            builder.intern_literal(lit)
-        }
-        TermValue::Triple { s, p, o } => {
-            let s = intern_value(builder, s);
-            let p = intern_value(builder, p);
-            let o = intern_value(builder, o);
-            builder.intern_triple(s, p, o)
-        }
+    let interned = try_fold_nested(
+        value,
+        builder,
+        |builder, value| {
+            Ok::<_, Infallible>(Nested::Leaf(match value {
+                TermValue::Iri(iri) => builder.intern_iri(iri),
+                TermValue::Blank { label, scope } => builder.intern_blank(label, *scope),
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    // Rebuild the owned literal. The C0.1 policy was already applied
+                    // when the value was produced (datatype expanded, language
+                    // lowercased), and the builder re-applies it idempotently, so
+                    // this round-trips to the same id.
+                    let lit = RdfLiteral {
+                        lexical_form: lexical_form.clone(),
+                        datatype: Some(datatype.clone()),
+                        language: language.clone(),
+                        direction: *direction,
+                    };
+                    builder.intern_literal(lit)
+                }
+                TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
+            }))
+        },
+        |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
+    );
+    match interned {
+        Ok(id) => id,
     }
 }
 
@@ -838,7 +878,7 @@ impl QuadValues {
     }
 
     /// Enforce the IR-boundary absoluteness invariant over this quad WITHOUT interning
-    /// it: every IRI in all four positions, each literal's datatype, and — recursively —
+    /// it: every IRI in all four positions, each literal's datatype, and — at any depth —
     /// the components of any triple term.
     ///
     /// # Why this is public
@@ -1093,7 +1133,7 @@ mod tests {
             direction: Some(RdfTextDirection::Rtl),
             ..RdfLiteral::language_tagged("مرحبا", "ar")
         });
-        // A literal nested inside a triple term resolves through the recursive arm.
+        // A literal nested inside a triple term resolves through the triple-term arm.
         let nested = b.intern_triple(s, p, typed);
         for o in [plain, typed, lang, directional, nested] {
             b.push_quad(s, p, o, None);
@@ -1617,5 +1657,142 @@ mod tests {
 
     fn val_str(v: &TermValue) -> String {
         iri_local(v)
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The base-value resolution, the absoluteness check and the re-interning against
+    //! their recursive references, and the latter two at a hundred thousand levels on a
+    //! 128 KiB thread.
+
+    use purrdf_iri::IriError;
+
+    use super::{MutableDataset, check_value_absolute, intern_value};
+    use crate::backend::TermFactory as _;
+    use crate::test_terms::TermShape;
+    use crate::{RdfDataset, RdfDatasetBuilder, TermBox, TermId, TermRef, TermValue};
+
+    fn reference_base(base: &RdfDataset, id: TermId) -> TermValue {
+        match base.resolve(id) {
+            TermRef::Triple { s, p, o } => TermValue::Triple {
+                s: TermBox::new(reference_base(base, s)),
+                p: TermBox::new(reference_base(base, p)),
+                o: TermBox::new(reference_base(base, o)),
+            },
+            _ => MutableDataset::base_value_of(base, id),
+        }
+    }
+
+    fn reference_absolute(value: &TermValue) -> Result<(), IriError> {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                reference_absolute(s)?;
+                reference_absolute(p)?;
+                reference_absolute(o)
+            }
+            leaf => check_value_absolute(leaf),
+        }
+    }
+
+    fn reference_intern(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                let s = reference_intern(builder, s);
+                let p = reference_intern(builder, p);
+                let o = reference_intern(builder, o);
+                builder.intern_triple(s, p, o)
+            }
+            leaf => intern_value(builder, leaf),
+        }
+    }
+
+    /// `value` with its IRI `http://example.org/i1` made relative, so the absoluteness
+    /// check meets a refusal wherever that IRI sits.
+    fn relativized(value: &TermValue) -> TermValue {
+        value.fold(
+            |leaf| match leaf {
+                TermValue::Iri(iri) if iri == "http://example.org/i1" => TermValue::iri("i1"),
+                other => other.clone(),
+            },
+            |s, p, o| TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            },
+        )
+    }
+
+    /// Every generated term is resolved from a base dataset, checked — as written and
+    /// with a relative IRI in it — and re-interned exactly as the recursive references do.
+    #[test]
+    fn the_walks_agree_with_their_recursive_references_on_generated_terms() {
+        let mut refused = 0;
+        for seed in 0..300_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value =
+                crate::test_terms::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let base = builder.freeze().expect("a generated term freezes");
+            let object = base.quads().next().expect("one quad").o;
+            assert_eq!(
+                MutableDataset::base_value_of(&base, object),
+                reference_base(&base, object),
+                "seed {seed}"
+            );
+            for candidate in [value.clone(), relativized(&value)] {
+                let found = check_value_absolute(&candidate);
+                assert_eq!(
+                    format!("{found:?}"),
+                    format!("{:?}", reference_absolute(&candidate)),
+                    "seed {seed}"
+                );
+                refused += usize::from(found.is_err());
+            }
+            let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
+            assert_eq!(
+                intern_value(&mut found, &value),
+                reference_intern(&mut expected, &value),
+                "seed {seed}"
+            );
+            let sentinel = "http://example.org/sentinel";
+            assert_eq!(
+                found.intern_iri(sentinel),
+                expected.intern_iri(sentinel),
+                "seed {seed}"
+            );
+        }
+        assert!(refused > 0, "some generated term holds a relative IRI");
+    }
+
+    /// A triple term a hundred thousand levels deep, its innermost object relative, is
+    /// checked and re-interned on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_checked_and_interned_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = crate::test_terms::triple_chain(LEVELS);
+                assert!(check_value_absolute(&value).is_ok());
+                let mut builder = RdfDatasetBuilder::new();
+                assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);
+                let mut relative = TermValue::iri("o");
+                for _ in 0..LEVELS {
+                    relative = TermValue::Triple {
+                        s: TermBox::new(TermValue::iri("http://example.org/s")),
+                        p: TermBox::new(TermValue::iri("http://example.org/p")),
+                        o: TermBox::new(relative),
+                    };
+                }
+                assert!(check_value_absolute(&relative).is_err());
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no walk overflowed the thread's stack");
     }
 }

@@ -197,33 +197,36 @@ pub fn relate_pattern(a: &Geometry, b: &Geometry, pattern: &Pattern) -> bool {
 // ---------------------------------------------------------------------------
 
 /// Append every planar edge of `geometry`: the edges of each curve and of each
-/// polygon ring.
+/// polygon ring, in written order. Nested collections are walked off a heap work
+/// list.
 fn collect_edges(geometry: &Geometry, out: &mut Vec<Edge>) {
-    match geometry.body() {
-        GeometryBody::LineString(coords) => push_chain(coords, out),
-        GeometryBody::Polygon(rings) => {
-            for ring in rings {
-                push_chain(ring, out);
-            }
-        }
-        GeometryBody::MultiLineString(members) => {
-            for member in members {
-                push_chain(member, out);
-            }
-        }
-        GeometryBody::MultiPolygon(members) => {
-            for rings in members {
+    let mut pending: Vec<&Geometry> = vec![geometry];
+    while let Some(geometry) = pending.pop() {
+        match geometry.body() {
+            GeometryBody::LineString(coords) => push_chain(coords, out),
+            GeometryBody::Polygon(rings) => {
                 for ring in rings {
                     push_chain(ring, out);
                 }
             }
-        }
-        GeometryBody::GeometryCollection(members) => {
-            for member in members {
-                collect_edges(member, out);
+            GeometryBody::MultiLineString(members) => {
+                for member in members {
+                    push_chain(member, out);
+                }
             }
+            GeometryBody::MultiPolygon(members) => {
+                for rings in members {
+                    for ring in rings {
+                        push_chain(ring, out);
+                    }
+                }
+            }
+            GeometryBody::GeometryCollection(members) => {
+                // Members are pushed last-first so they pop in written order.
+                pending.extend(members.iter().rev());
+            }
+            GeometryBody::Point(_) | GeometryBody::MultiPoint(_) => {}
         }
-        GeometryBody::Point(_) | GeometryBody::MultiPoint(_) => {}
     }
 }
 
@@ -1522,5 +1525,104 @@ mod tests {
                 "relate_pattern must be relate plus a match, with no second opinion"
             );
         }
+    }
+}
+
+/// The edge collector's walk over nested collections, against a recursive
+/// reference on generated trees, and the whole matrix a hundred thousand levels
+/// deep.
+#[cfg(test)]
+mod nesting_tests {
+    use super::{Edge, collect_edges, relate};
+    use crate::exact::Rat;
+    use crate::geom::arbitrary::{self, Lcg};
+    use crate::geom::{Coord, CoordDim, CoordSeq, Geometry, GeometryBody};
+
+    /// The recursive collection: a collection's edges are its members' in written
+    /// order, and a geometry that is not a collection is read by the one-node walk.
+    fn reference_collect_edges(geometry: &Geometry, out: &mut Vec<Edge>) {
+        match geometry.body() {
+            GeometryBody::GeometryCollection(members) => {
+                for member in members {
+                    reference_collect_edges(member, out);
+                }
+            }
+            _ => collect_edges(geometry, out),
+        }
+    }
+
+    fn c(x: i64, y: i64) -> Coord {
+        Coord::xy(Rat::from_i64(x), Rat::from_i64(y))
+    }
+
+    fn seq(points: &[(i64, i64)]) -> CoordSeq {
+        points.iter().map(|&(x, y)| c(x, y)).collect()
+    }
+
+    fn point(x: i64, y: i64) -> Geometry {
+        Geometry::new(CoordDim::Xy, GeometryBody::Point(Some(c(x, y))))
+            .expect("a well-formed point")
+    }
+
+    /// The axis-aligned box `[x0, x1] × [y0, y1]`, written counter-clockwise.
+    fn boxed(x0: i64, y0: i64, x1: i64, y1: i64) -> Geometry {
+        Geometry::new(
+            CoordDim::Xy,
+            GeometryBody::Polygon(vec![seq(&[
+                (x0, y0),
+                (x1, y0),
+                (x1, y1),
+                (x0, y1),
+                (x0, y0),
+            ])]),
+        )
+        .expect("a closed ring")
+    }
+
+    /// Over generated planar trees the work-list collector gathers the same edges,
+    /// in the same order, as the recursive reference.
+    #[test]
+    fn edge_collection_agrees_with_the_recursive_reference_on_generated_trees() {
+        let mut rng = Lcg::new(0x5eed_8001);
+        for round in 0..300 {
+            let tree = arbitrary::geometry(&mut rng, CoordDim::Xy, 4);
+            let (mut edges, mut reference) = (Vec::new(), Vec::new());
+            collect_edges(&tree, &mut edges);
+            reference_collect_edges(&tree, &mut reference);
+            assert_eq!(edges, reference, "round {round}: {tree:?}");
+        }
+    }
+
+    /// A single-member collection has its member's edges, positions, area and
+    /// locations, so its DE-9IM matrix against anything is its member's: the closed
+    /// form, pinned at depths one and two and then computed a hundred thousand
+    /// levels deep on a 128 KiB stack, on both sides of the relation.
+    #[test]
+    fn a_hundred_thousand_deep_collection_relates_like_its_member() {
+        let square = boxed(0, 0, 2, 2);
+        let overlapping = boxed(1, 1, 3, 3);
+        let inside = point(1, 1);
+        let square_point = relate(&square, &inside);
+        let square_box = relate(&square, &overlapping);
+        assert_eq!(square_point.to_string(), "0F2FF1FF2");
+        assert_eq!(square_box.to_string(), "212101212");
+        for levels in 1..=2 {
+            let nested = arbitrary::nest(square.clone(), levels);
+            assert_eq!(relate(&nested, &inside), square_point, "{levels} levels");
+            assert_eq!(relate(&nested, &overlapping), square_box, "{levels} levels");
+            assert_eq!(
+                relate(&nested, &arbitrary::nest(overlapping.clone(), levels)),
+                square_box,
+                "{levels} levels on both sides"
+            );
+        }
+
+        arbitrary::on_small_stack(move || {
+            let deep = arbitrary::nest(square, arbitrary::DEEP);
+            assert_eq!(relate(&deep, &inside), square_point);
+            assert_eq!(relate(&deep, &overlapping), square_box);
+            let deep_other = arbitrary::nest(overlapping, arbitrary::DEEP);
+            assert_eq!(relate(&deep, &deep_other), square_box);
+        });
     }
 }

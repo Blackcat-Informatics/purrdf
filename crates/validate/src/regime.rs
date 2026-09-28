@@ -81,6 +81,7 @@
 
 use core::fmt;
 use core::fmt::Write as _;
+use purrdf_core::TermBox;
 
 use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, display_term};
 use purrdf_datalog::chase::ChaseError;
@@ -1572,42 +1573,70 @@ impl ReasoningAnswer {
 /// the same term rendered by the native serializers escape identically. This is
 /// report/diagnostic identity text (answer and certificate lines), not RDF
 /// document egress, so blank-node label alphabets are deliberately not enforced
-/// here and the function stays total. Triple terms recurse HERE rather than
-/// through `display_term`'s owned model, because the owned model requires a
-/// triple term's predicate to be an IRI and this function must be total over
-/// [`TermValue`].
+/// here and the function stays total. A triple term whose nesting the owned model
+/// cannot hold is written HERE rather than through `display_term`'s owned model,
+/// because the owned model requires a triple term's predicate to be an IRI and this
+/// function must be total over [`TermValue`].
 ///
 /// N-Triples terms are self-delimiting — `<…>` ends at the unescaped `>`, `_:…` at
 /// whitespace, `"…"` at the unescaped closing quote — which is what makes a
 /// two-term line like `subclass <C> <D>` unambiguous even though a literal's
 /// lexical form may contain a space.
+///
+/// A triple term the owned model cannot hold is written over a work list: its opening
+/// `<<( ` at once, then its subject next, with the separators, the predicate, the object
+/// and the closing ` )>>` held back in that order until the subject is written. Each of
+/// its components is written by the same rule, so a well-formed one goes through
+/// `display_term` whole.
 fn emit(term: &TermValue) -> String {
-    match term {
-        TermValue::Iri(iri) => display_term(&RdfTerm::iri(iri.clone())),
-        TermValue::Blank { label, scope } => display_term(&RdfTerm::blank_node(
-            scope.qualify_label(label).into_owned(),
-        )),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => display_term(&RdfTerm::literal(RdfLiteral {
-            lexical_form: lexical_form.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: *direction,
-        })),
-        TermValue::Triple { s, p, o } => match to_owned_term(term) {
-            Some(owned) => display_term(&owned),
+    enum Piece<'t> {
+        Term(&'t TermValue),
+        Text(&'static str),
+    }
+    let mut out = String::new();
+    let mut held: Vec<Piece<'_>> = Vec::new();
+    let mut next = Some(Piece::Term(term));
+    while let Some(piece) = next.take().or_else(|| held.pop()) {
+        let term = match piece {
+            Piece::Text(text) => {
+                out.push_str(text);
+                continue;
+            }
+            Piece::Term(term) => term,
+        };
+        let TermValue::Triple { s, p, o } = term else {
+            out.push_str(&emit_leaf(term));
+            continue;
+        };
+        match to_owned_term(term) {
+            Some(owned) => out.push_str(&display_term(&owned)),
             // A triple term whose predicate is not an IRI — at THIS nesting level or
             // any level nested inside `s`/`o` — is not a well-formed RDF triple, so
             // the owned model cannot hold it anywhere along the chain. Rendering it
             // structurally is the honest option: the caller sees what the term
             // actually is, including the real offending predicate, rather than a
             // fabricated empty IRI standing in for it.
-            None => format!("<<( {} {} {} )>>", emit(s), emit(p), emit(o)),
-        },
+            None => {
+                out.push_str("<<( ");
+                held.extend([
+                    Piece::Text(" )>>"),
+                    Piece::Term(o),
+                    Piece::Text(" "),
+                    Piece::Term(p),
+                    Piece::Text(" "),
+                ]);
+                next = Some(Piece::Term(s));
+            }
+        }
+    }
+    out
+}
+
+/// [`emit`] for a term that is not a triple term.
+fn emit_leaf(term: &TermValue) -> String {
+    match to_owned_term(term) {
+        Some(owned) => display_term(&owned),
+        None => unreachable!("a term that is not a triple term has an owned twin"),
     }
 }
 
@@ -1618,32 +1647,40 @@ fn emit(term: &TermValue) -> String {
 /// predicate by construction, so there is no owned value to return for such a
 /// term; callers fall back to [`emit`]'s structural `<<( … )>>` rendering, which
 /// shows the real offending term instead of a fabricated placeholder.
+///
+/// A triple term is assembled bottom-up over [`TermValue::try_fold`]'s work list.
 fn to_owned_term(term: &TermValue) -> Option<RdfTerm> {
-    match term {
-        TermValue::Iri(iri) => Some(RdfTerm::iri(iri.clone())),
-        TermValue::Blank { label, scope } => {
-            Some(RdfTerm::blank_node(scope.qualify_label(label).into_owned()))
-        }
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => Some(RdfTerm::literal(RdfLiteral {
-            lexical_form: lexical_form.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: *direction,
-        })),
-        TermValue::Triple { s, p, o } => {
-            let predicate = p.as_iri()?;
-            Some(RdfTerm::triple(RdfTriple::new(
-                to_owned_term(s)?,
-                predicate.to_owned(),
-                to_owned_term(o)?,
-            )))
-        }
-    }
+    term.try_fold(
+        |leaf| {
+            Ok(match leaf {
+                TermValue::Iri(iri) => RdfTerm::iri(iri.clone()),
+                TermValue::Blank { label, scope } => {
+                    RdfTerm::blank_node(scope.qualify_label(label).into_owned())
+                }
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                } => RdfTerm::literal(RdfLiteral {
+                    lexical_form: lexical_form.clone(),
+                    datatype: Some(datatype.clone()),
+                    language: language.clone(),
+                    direction: *direction,
+                }),
+                TermValue::Triple { .. } => {
+                    unreachable!("a triple term is folded from its parts")
+                }
+            })
+        },
+        |subject, predicate, object| match predicate {
+            RdfTerm::Iri(predicate) => {
+                Ok(RdfTerm::triple(RdfTriple::new(subject, predicate, object)))
+            }
+            RdfTerm::BlankNode(_) | RdfTerm::Literal(_) | RdfTerm::Triple(_) => Err(()),
+        },
+    )
+    .ok()
 }
 
 /// Parse ONE N-Triples term — an IRI or a blank node — from `text`.
@@ -3472,7 +3509,7 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
 ///   an enum with no string at all; and `datatype` IS an IRI, which is why it is refused
 ///   here rather than walked — see [`parse_bgp`]'s own docs.
 /// * [`TermValue::Triple`] — three nested term slots, each of which is one of the above.
-///   Recursed into, so the audit holds at every depth. A triple term with a variable
+///   Walked into, so the audit holds at every depth. A triple term with a variable
 ///   anywhere inside it becomes [`QNode::Triple`]; a fully ground one stays a term.
 ///
 /// A graph name is not a slot of a term: [`parse_bgp`] refuses a pattern that names a graph
@@ -3492,15 +3529,29 @@ fn restore_query_vars(
     slot: &impl Fn(&str) -> Option<usize>,
     names: &[String],
 ) -> Result<purrdf_entail::QNode, String> {
-    match term {
-        TermValue::Iri(ref iri) => Ok(match slot(iri) {
-            Some(index) => purrdf_entail::QNode::Var(names[index].clone()),
-            None => purrdf_entail::QNode::Term(term),
-        }),
-        TermValue::Triple { s, p, o } => {
-            let s = restore_query_vars(*s, slot, names)?;
-            let p = restore_query_vars(*p, slot, names)?;
-            let o = restore_query_vars(*o, slot, names)?;
+    term.try_fold_owned(
+        |term| match term {
+            TermValue::Iri(ref iri) => Ok(match slot(iri) {
+                Some(index) => purrdf_entail::QNode::Var(names[index].clone()),
+                None => purrdf_entail::QNode::Term(term),
+            }),
+            TermValue::Literal {
+                ref lexical_form,
+                ref datatype,
+                ..
+            } => match slot(datatype) {
+                Some(index) => Err(format!(
+                    "a variable is not a datatype IRI: `?{}` stands in the datatype of the \
+                     literal \"{lexical_form}\", and a basic graph pattern admits a variable \
+                     only where a term can be bound",
+                    names[index]
+                )),
+                None => Ok(purrdf_entail::QNode::Term(term)),
+            },
+            TermValue::Blank { .. } => Ok(purrdf_entail::QNode::Term(term)),
+            TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+        },
+        |s, p, o| {
             // A triple term with no variable in it is a TERM, not a three-node question:
             // the pattern layer reads a ground `QNode::Term` and a ground `QNode::Triple`
             // the same way, and keeping the term shape keeps an RDF 1.2 pattern's own terms
@@ -3511,9 +3562,9 @@ fn restore_query_vars(
                     purrdf_entail::QNode::Term(p),
                     purrdf_entail::QNode::Term(o),
                 ) => purrdf_entail::QNode::Term(TermValue::Triple {
-                    s: Box::new(s),
-                    p: Box::new(p),
-                    o: Box::new(o),
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
                 }),
                 (s, p, o) => purrdf_entail::QNode::Triple {
                     s: Box::new(s),
@@ -3521,22 +3572,8 @@ fn restore_query_vars(
                     o: Box::new(o),
                 },
             })
-        }
-        TermValue::Literal {
-            ref lexical_form,
-            ref datatype,
-            ..
-        } => match slot(datatype) {
-            Some(index) => Err(format!(
-                "a variable is not a datatype IRI: `?{}` stands in the datatype of the literal \
-                 \"{lexical_form}\", and a basic graph pattern admits a variable only where a \
-                 term can be bound",
-                names[index]
-            )),
-            None => Ok(purrdf_entail::QNode::Term(term)),
         },
-        TermValue::Blank { .. } => Ok(purrdf_entail::QNode::Term(term)),
-    }
+    )
 }
 
 /// `text` with every N-Triples `UCHAR` escape — `\uXXXX` and `\UXXXXXXXX` — replaced by the
@@ -4979,6 +5016,7 @@ pub fn check_absent_proof_is_not_verifiable() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_core::TermBox;
 
     /// The backward re-derivation runs on the PRODUCTION surface and says so.
     ///
@@ -7900,16 +7938,16 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
             TermValue::blank("b0"),
         ] {
             let nested = TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/s")),
-                p: Box::new(bad_predicate.clone()),
-                o: Box::new(TermValue::iri("http://example.org/o")),
+                s: TermBox::new(TermValue::iri("http://example.org/s")),
+                p: TermBox::new(bad_predicate.clone()),
+                o: TermBox::new(TermValue::iri("http://example.org/o")),
             };
             // Wrap it two deep: the outer triple term's OWN predicate is a well-formed
             // IRI, so only the recursive check on the NESTED term can catch this.
             let outer = TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/subject")),
-                p: Box::new(TermValue::iri("http://example.org/wraps")),
-                o: Box::new(nested),
+                s: TermBox::new(TermValue::iri("http://example.org/subject")),
+                p: TermBox::new(TermValue::iri("http://example.org/wraps")),
+                o: TermBox::new(nested),
             };
             let rendered = emit(&outer);
             // The malformed nested triple renders structurally, carrying its real
@@ -8620,5 +8658,176 @@ mod proof_tests {
         sorted.sort_unstable();
         sorted.dedup();
         assert_eq!(sorted.len(), banners.len(), "every banner is distinct");
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The report rendering, the owned-model bridge and the query-variable restoration
+    //! against their recursive references, and deep on a 128 KiB thread where the result
+    //! holds no owned-model term.
+
+    use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermBox, TermValue, display_term};
+
+    use super::{emit, restore_query_vars, to_owned_term};
+
+    fn reference_owned(term: &TermValue) -> Option<RdfTerm> {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                let TermValue::Iri(predicate) = &**p else {
+                    return None;
+                };
+                Some(RdfTerm::triple(RdfTriple::new(
+                    reference_owned(s)?,
+                    predicate.clone(),
+                    reference_owned(o)?,
+                )))
+            }
+            TermValue::Iri(iri) => Some(RdfTerm::iri(iri.clone())),
+            TermValue::Blank { label, scope } => {
+                Some(RdfTerm::blank_node(scope.qualify_label(label).into_owned()))
+            }
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => Some(RdfTerm::literal(RdfLiteral {
+                lexical_form: lexical_form.clone(),
+                datatype: Some(datatype.clone()),
+                language: language.clone(),
+                direction: *direction,
+            })),
+        }
+    }
+
+    fn reference_emit(term: &TermValue) -> String {
+        match term {
+            TermValue::Triple { s, p, o } => match reference_owned(term) {
+                Some(owned) => display_term(&owned),
+                None => format!(
+                    "<<( {} {} {} )>>",
+                    reference_emit(s),
+                    reference_emit(p),
+                    reference_emit(o)
+                ),
+            },
+            leaf => display_term(&reference_owned(leaf).expect("a leaf has an owned twin")),
+        }
+    }
+
+    fn slot(iri: &str) -> Option<usize> {
+        match iri {
+            "http://example.org/i1" | "http://www.w3.org/2001/XMLSchema#integer" => Some(0),
+            "http://example.org/i2" => Some(1),
+            _ => None,
+        }
+    }
+
+    fn reference_restore(
+        term: TermValue,
+        names: &[String],
+    ) -> Result<purrdf_entail::QNode, String> {
+        match term {
+            TermValue::Iri(ref iri) => Ok(match slot(iri) {
+                Some(index) => purrdf_entail::QNode::Var(names[index].clone()),
+                None => purrdf_entail::QNode::Term(term),
+            }),
+            TermValue::Triple { s, p, o } => {
+                let s = reference_restore(s.into_inner(), names)?;
+                let p = reference_restore(p.into_inner(), names)?;
+                let o = reference_restore(o.into_inner(), names)?;
+                Ok(match (s, p, o) {
+                    (
+                        purrdf_entail::QNode::Term(s),
+                        purrdf_entail::QNode::Term(p),
+                        purrdf_entail::QNode::Term(o),
+                    ) => purrdf_entail::QNode::Term(TermValue::Triple {
+                        s: TermBox::new(s),
+                        p: TermBox::new(p),
+                        o: TermBox::new(o),
+                    }),
+                    (s, p, o) => purrdf_entail::QNode::Triple {
+                        s: Box::new(s),
+                        p: Box::new(p),
+                        o: Box::new(o),
+                    },
+                })
+            }
+            TermValue::Literal {
+                ref lexical_form,
+                ref datatype,
+                ..
+            } => match slot(datatype) {
+                Some(index) => Err(format!(
+                    "a variable is not a datatype IRI: `?{}` stands in the datatype of the \
+                     literal \"{lexical_form}\", and a basic graph pattern admits a variable \
+                     only where a term can be bound",
+                    names[index]
+                )),
+                None => Ok(purrdf_entail::QNode::Term(term)),
+            },
+            TermValue::Blank { .. } => Ok(purrdf_entail::QNode::Term(term)),
+        }
+    }
+
+    /// The rendering, the bridge and the restoration answer every generated term — a
+    /// non-IRI predicate and a stand-in datatype included — exactly as their recursive
+    /// references do.
+    #[test]
+    fn the_walks_agree_with_their_recursive_references_on_generated_terms() {
+        let names = ["x".to_owned(), "y".to_owned()];
+        let (mut malformed, mut refused) = (0, 0);
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::Any,
+            );
+            let owned = to_owned_term(&value);
+            assert_eq!(owned, reference_owned(&value), "seed {seed}");
+            malformed += usize::from(owned.is_none());
+            assert_eq!(emit(&value), reference_emit(&value), "seed {seed}");
+            let restored = restore_query_vars(value.clone(), &slot, &names);
+            refused += usize::from(restored.is_err());
+            assert_eq!(
+                format!("{restored:?}"),
+                format!("{:?}", reference_restore(value, &names)),
+                "seed {seed}"
+            );
+        }
+        assert!(malformed > 0, "some generated term has a non-IRI predicate");
+        assert!(refused > 0, "some generated term has a stand-in datatype");
+    }
+
+    /// A triple term two thousand levels deep, whose predicate is a blank node at every
+    /// level, is rendered structurally on a thread whose whole stack is 128 KiB — far
+    /// more levels than a recursion could take there. Each level asks for its own owned
+    /// twin, which walks the whole nesting below it before it is refused, so rendering
+    /// costs grow with the square of the depth and the chain is kept to two thousand
+    /// levels; no deep owned-model term is ever built.
+    #[test]
+    fn a_deep_malformed_term_renders_on_a_128_kib_thread() {
+        const LEVELS: usize = 2_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut value = TermValue::iri("http://example.org/o");
+                for _ in 0..LEVELS {
+                    value = TermValue::Triple {
+                        s: TermBox::new(TermValue::iri("http://example.org/s")),
+                        p: TermBox::new(TermValue::blank("p")),
+                        o: TermBox::new(value),
+                    };
+                }
+                let rendered = emit(&value);
+                assert_eq!(rendered.matches("<<( ").count(), LEVELS);
+                assert!(to_owned_term(&value).is_none());
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the rendering did not overflow the thread's stack");
     }
 }

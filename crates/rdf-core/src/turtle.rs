@@ -186,54 +186,80 @@ fn write_iri_escaped<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
 /// rendered string. The blank node's `(label, scope)` pair is encoded into the
 /// Turtle `BLANK_NODE_LABEL` alphabet in ONE step (via [`encode_blank_label`]),
 /// so the buffer always holds a re-parsable term.
+///
+/// A triple term is written over a work list: its opening `<<( ` at once, then its
+/// subject next, with the separators, the predicate, the object and the closing
+/// ` )>>` held back in that order until the subject's whole nesting is written.
 pub fn write_dataset_term<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId, out: &mut W) {
-    match dataset.resolve(id) {
-        TermRef::Iri(iri) => {
-            out.push('<');
-            write_iri_escaped(iri, out);
-            out.push('>');
-        }
-        TermRef::Blank { label, scope } => {
-            out.push_str("_:");
-            out.push_str(&encode_blank_label(
-                label,
-                scope,
-                LabelAlphabet::BlankNodeLabel,
-            ));
-        }
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            out.push('"');
-            write_literal_escaped(lexical, out);
-            out.push('"');
-            if let Some(language) = language {
-                out.push('@');
-                out.push_str(language);
-                if let Some(direction) = direction {
-                    out.push_str("--");
-                    out.push_str(direction.as_str());
-                }
-            } else {
-                let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
-                    unreachable!("literal datatype must resolve to an IRI")
-                };
-                out.push_str("^^<");
-                out.push_str(datatype);
+    enum Step {
+        Term(TermId),
+        Predicate(TermId),
+        Text(&'static str),
+    }
+    let mut held: Vec<Step> = Vec::new();
+    let mut next = Some(Step::Term(id));
+    while let Some(step) = next.take().or_else(|| held.pop()) {
+        let id = match step {
+            Step::Text(text) => {
+                out.push_str(text);
+                continue;
+            }
+            Step::Predicate(id) => {
+                write_dataset_predicate(dataset, id, out);
+                continue;
+            }
+            Step::Term(id) => id,
+        };
+        match dataset.resolve(id) {
+            TermRef::Iri(iri) => {
+                out.push('<');
+                write_iri_escaped(iri, out);
                 out.push('>');
             }
-        }
-        TermRef::Triple { s, p, o } => {
-            out.push_str("<<( ");
-            write_dataset_term(dataset, s, out);
-            out.push(' ');
-            write_dataset_predicate(dataset, p, out);
-            out.push(' ');
-            write_dataset_term(dataset, o, out);
-            out.push_str(" )>>");
+            TermRef::Blank { label, scope } => {
+                out.push_str("_:");
+                out.push_str(&encode_blank_label(
+                    label,
+                    scope,
+                    LabelAlphabet::BlankNodeLabel,
+                ));
+            }
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                out.push('"');
+                write_literal_escaped(lexical, out);
+                out.push('"');
+                if let Some(language) = language {
+                    out.push('@');
+                    out.push_str(language);
+                    if let Some(direction) = direction {
+                        out.push_str("--");
+                        out.push_str(direction.as_str());
+                    }
+                } else {
+                    let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                        unreachable!("literal datatype must resolve to an IRI")
+                    };
+                    out.push_str("^^<");
+                    out.push_str(datatype);
+                    out.push('>');
+                }
+            }
+            TermRef::Triple { s, p, o } => {
+                out.push_str("<<( ");
+                held.extend([
+                    Step::Text(" )>>"),
+                    Step::Term(o),
+                    Step::Text(" "),
+                    Step::Predicate(p),
+                    Step::Text(" "),
+                ]);
+                next = Some(Step::Term(s));
+            }
         }
     }
 }
@@ -390,12 +416,16 @@ pub fn write_dataset_reifier_nquad<W: TextOut + ?Sized>(
 /// caller's own label; [`emit_term`] is the egress form, which escapes it.
 #[must_use]
 pub fn display_term(term: &RdfTerm) -> String {
-    match term {
-        RdfTerm::Iri(iri) => format!("<{}>", escape_iri(iri)),
-        RdfTerm::BlankNode(label) => format!("_:{label}"),
-        RdfTerm::Literal(literal) => emit_literal(literal),
-        RdfTerm::Triple(triple) => display_triple_term(triple),
-    }
+    write_owned_term(term, |leaf, out| match leaf {
+        RdfTerm::Iri(iri) => {
+            let _ = write!(out, "<{}>", escape_iri(iri));
+        }
+        RdfTerm::BlankNode(label) => {
+            let _ = write!(out, "_:{label}");
+        }
+        RdfTerm::Literal(literal) => out.push_str(&emit_literal(literal)),
+        RdfTerm::Triple(_) => unreachable!("a triple term is written from its components"),
+    })
 }
 
 /// Serialize an [`RdfTerm`] to its Turtle form (full `<iri>`, `_:bnode`, literal,
@@ -407,29 +437,55 @@ pub fn display_term(term: &RdfTerm) -> String {
 /// co-reference is preserved exactly.
 #[must_use]
 pub fn emit_term(term: &RdfTerm) -> String {
-    match term {
-        RdfTerm::Iri(iri) => format!("<{}>", escape_iri(iri)),
-        RdfTerm::BlankNode(label) => format!("_:{}", emit_blank_label(label)),
-        RdfTerm::Literal(literal) => emit_literal(literal),
-        RdfTerm::Triple(triple) => emit_triple_term(triple),
-    }
+    write_owned_term(term, |leaf, out| match leaf {
+        RdfTerm::Iri(iri) => {
+            let _ = write!(out, "<{}>", escape_iri(iri));
+        }
+        RdfTerm::BlankNode(label) => {
+            let _ = write!(out, "_:{}", emit_blank_label(label));
+        }
+        RdfTerm::Literal(literal) => out.push_str(&emit_literal(literal)),
+        RdfTerm::Triple(_) => unreachable!("a triple term is written from its components"),
+    })
 }
 
-/// Render an [`RdfTriple`] as an RDF 1.2 triple-term: `<<( <s> <p> <o> )>>`,
-/// without the label escape (the display-layer twin of [`emit_triple_term`]).
+/// Write an owned term, with `leaf` writing every term that is not a triple term.
 ///
-/// The parens matter — the bare `<< s p o >>` form is a *reifying triple* that
-/// ALSO asserts `s p o` (and mints a reifier), so re-parsing it would grow the
-/// graph. A triple term denotes the triple without asserting it, which is what
-/// every embedded position (a triple-term object, or the `rdf:reifies` object
-/// via [`emit_reifier`]) requires.
-fn display_triple_term(triple: &RdfTriple) -> String {
-    format!(
-        "<<( {} <{}> {} )>>",
-        display_term(&triple.subject),
-        triple.predicate,
-        display_term(&triple.object)
-    )
+/// A triple term is written as an RDF 1.2 triple term, `<<( s <p> o )>>`. The parens
+/// matter — the bare `<< s p o >>` form is a *reifying triple* that ALSO asserts
+/// `s p o` (and mints a reifier), so re-parsing it would grow the graph. A triple term
+/// denotes the triple without asserting it, which is what every embedded position (a
+/// triple-term object, or the `rdf:reifies` object via [`emit_reifier`]) requires.
+///
+/// The walk runs over a work list: a triple term's opening `<<( ` is written at once,
+/// then its subject next, with the predicate, the object and the closing ` )>>` held
+/// back in that order until the subject's whole nesting is written.
+fn write_owned_term(term: &RdfTerm, mut leaf: impl FnMut(&RdfTerm, &mut String)) -> String {
+    enum Step<'t> {
+        Term(&'t RdfTerm),
+        Text(&'t str),
+    }
+    let mut out = String::new();
+    let mut held: Vec<Step<'_>> = Vec::new();
+    let mut next = Some(Step::Term(term));
+    while let Some(step) = next.take().or_else(|| held.pop()) {
+        match step {
+            Step::Text(text) => out.push_str(text),
+            Step::Term(RdfTerm::Triple(triple)) => {
+                out.push_str("<<( ");
+                held.extend([
+                    Step::Text(" )>>"),
+                    Step::Term(&triple.object),
+                    Step::Text("> "),
+                    Step::Text(&triple.predicate),
+                    Step::Text(" <"),
+                ]);
+                next = Some(Step::Term(&triple.subject));
+            }
+            Step::Term(term) => leaf(term, &mut out),
+        }
+    }
+    out
 }
 
 /// Serialize an [`RdfTriple`] as an RDF 1.2 triple-term (`<<( <s> <p> <o> )>>`),
@@ -896,5 +952,146 @@ mod tests {
             );
             assert_ne!(token, label, "an illegal label must be rewritten");
         }
+    }
+
+    // ── The walks over nested triple terms ─────────────────────────────────────────
+
+    /// A test-only owned-model twin of a generated term value whose triple-term
+    /// predicates are IRIs.
+    fn owned(value: &crate::TermValue) -> RdfTerm {
+        use crate::TermValue;
+        match value {
+            TermValue::Triple { s, p, o } => {
+                let TermValue::Iri(predicate) = &**p else {
+                    unreachable!("the generator was asked for IRI predicates")
+                };
+                RdfTerm::triple(RdfTriple::new(owned(s), predicate.clone(), owned(o)))
+            }
+            TermValue::Iri(iri) => RdfTerm::iri(iri.clone()),
+            TermValue::Blank { label, .. } => RdfTerm::blank_node(label.clone()),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => RdfTerm::literal(RdfLiteral {
+                lexical_form: lexical_form.clone(),
+                datatype: Some(datatype.clone()),
+                language: language.clone(),
+                direction: *direction,
+            }),
+        }
+    }
+
+    /// The recursive reference of [`display_term`] (`display`) and [`emit_term`].
+    fn reference_render(term: &RdfTerm, display: bool) -> String {
+        match term {
+            RdfTerm::Triple(triple) => format!(
+                "<<( {} <{}> {} )>>",
+                reference_render(&triple.subject, display),
+                triple.predicate,
+                reference_render(&triple.object, display)
+            ),
+            leaf if display => display_term(leaf),
+            leaf => emit_term(leaf),
+        }
+    }
+
+    /// The recursive reference of [`write_dataset_term`].
+    fn reference_dataset_term(dataset: &RdfDataset, id: TermId) -> String {
+        match dataset.resolve(id) {
+            TermRef::Triple { s, p, o } => {
+                let TermRef::Iri(predicate) = dataset.resolve(p) else {
+                    unreachable!("a stored triple term's predicate is an IRI")
+                };
+                format!(
+                    "<<( {} <{predicate}> {} )>>",
+                    reference_dataset_term(dataset, s),
+                    reference_dataset_term(dataset, o)
+                )
+            }
+            _ => {
+                let mut out = String::new();
+                write_dataset_term(dataset, id, &mut out);
+                out
+            }
+        }
+    }
+
+    /// The work-list writers spell every generated term exactly as their recursive
+    /// references do, nested triple terms included.
+    #[test]
+    fn the_term_writers_agree_with_their_recursive_references_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::WellFormed,
+            );
+            nested += usize::from(budget < 7);
+            let term = owned(&value);
+            assert_eq!(
+                display_term(&term),
+                reference_render(&term, true),
+                "seed {seed}"
+            );
+            assert_eq!(
+                emit_term(&term),
+                reference_render(&term, false),
+                "seed {seed}"
+            );
+
+            let mut builder = crate::RdfDatasetBuilder::new();
+            let id = builder.intern_owned_term(&term);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, id, None);
+            let dataset = builder.freeze().expect("a generated term freezes");
+            let id = dataset
+                .quads()
+                .next()
+                .expect("the dataset holds the one quad")
+                .o;
+            let mut written = String::new();
+            write_dataset_term(&dataset, id, &mut written);
+            assert_eq!(written, reference_dataset_term(&dataset, id), "seed {seed}");
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+    }
+
+    /// An owned triple term a hundred thousand levels deep is displayed and emitted on
+    /// a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_owned_term_is_written_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut term = iri("http://example.org/o");
+                for _ in 0..LEVELS {
+                    term = RdfTerm::triple(RdfTriple::new(
+                        term,
+                        "http://example.org/p",
+                        iri("http://example.org/o"),
+                    ));
+                }
+                let level =
+                    "<<( ".len() + " <http://example.org/p> <http://example.org/o> )>>".len();
+                let innermost = "<http://example.org/o>".len();
+                for written in [display_term(&term), emit_term(&term)] {
+                    assert_eq!(written.len(), LEVELS * level + innermost);
+                    assert!(written.starts_with("<<( <<( "));
+                }
+                // The owned model's derived drop descends once per level, so the chain
+                // is taken apart one level at a time.
+                while let RdfTerm::Triple(triple) = term {
+                    term = triple.subject;
+                }
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no writer overflowed the thread's stack");
     }
 }

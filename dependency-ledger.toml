@@ -429,9 +429,14 @@ category = "transitive:serde_json"
 reason = "integer formatting for serde_json"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
+[packages.leb128fmt]
+category = "transitive:wasm-encoder"
+reason = "LEB128 field emission for the private WASM post-link tool"
+metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
+
 [packages.libc]
 category = "runtime"
-reason = "mmap/memfd_create/fcntl syscalls for the CLI's race-free pack reads and immutable-seal writes (replaces filetime, memmap2, rustix); also reached transitively through getrandom"
+reason = "Native pthread stack bounds for purrdf-stack and mmap/memfd_create/fcntl for the CLI immutable input authority; platform declarations only, absent from wasm; also reached through getrandom"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
 
 [packages.memchr]
@@ -694,6 +699,11 @@ category = "transitive:wasm-bindgen"
 reason = "shared ABI definitions for wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
+[packages.wasm-encoder]
+category = "spec-codec"
+reason = "WebAssembly instruction and section emission for the private host linker; native structural reads and the already-required Binaryen validator avoid the parser/reencoder dependency closure"
+metrics = { direct = true, exclusive_closure = 2, release = false, wasm = false, build_script = false, proc_macro = false }
+
 [packages.winapi-util]
 category = "transitive:criterion"
 reason = "Windows API helpers for same-file"
@@ -702,12 +712,12 @@ metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false
 [packages.windows-link]
 category = "transitive:clap"
 reason = "Windows import linking for windows-sys"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
+metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.windows-sys]
-category = "transitive:clap"
-reason = "Windows API bindings for anstream and terminal detection"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
+category = "runtime"
+reason = "GetCurrentThreadStackLimits declarations for purrdf-stack on Windows; also terminal detection through anstream"
+metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.wit-bindgen]
 category = "transitive:getrandom"

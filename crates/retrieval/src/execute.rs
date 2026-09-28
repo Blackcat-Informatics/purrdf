@@ -995,10 +995,7 @@ impl<D: DatasetView + Sync> DatasetExclusion<'_, D> {
             }
         };
         bound.map_err(|diagnostic| failed(diagnostic.to_string()))?;
-        let options = QueryOptions {
-            env: &self.env,
-            ..QueryOptions::EMPTY
-        };
+        let options = QueryOptions::new().with_env(&self.env);
         // Ungoverned, and the governed ranking read's reasoning is why that is no
         // loss: that lane declines every caller-settable ceiling and is taken for
         // its receipt. A lookup's receipt is two facts — its row count, which the
@@ -1614,10 +1611,7 @@ pub async fn execute_within<'d, D: DatasetView + Sync>(
             reason: e.to_string(),
         }
     })?);
-    let options = || QueryOptions {
-        env: env.as_ref(),
-        ..QueryOptions::EMPTY
-    };
+    let options = || QueryOptions::new().with_env(env.as_ref());
 
     for unit in &compiled.units {
         // There is no empty-text arm here, and there is nothing left for one to catch.
@@ -2533,6 +2527,7 @@ fn term_candidate(value: &TermValue) -> Result<Term, RenderError> {
 
 #[cfg(test)]
 mod tests {
+    use purrdf_core::TermBox;
     use std::collections::BTreeMap;
 
     use purrdf_core::{RdfTextDirection, TermValue};
@@ -2560,9 +2555,9 @@ mod tests {
             TermValue::simple_literal("quick brown fox"),
             TermValue::typed_literal("3", "http://www.w3.org/2001/XMLSchema#integer"),
             TermValue::Triple {
-                s: Box::new(TermValue::iri("http://example.org/s")),
-                p: Box::new(TermValue::iri("http://example.org/p")),
-                o: Box::new(TermValue::simple_literal("o")),
+                s: TermBox::new(TermValue::iri("http://example.org/s")),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(TermValue::simple_literal("o")),
             },
         ] {
             let candidate = term_candidate(&value).expect("the fixture value is well-formed");
@@ -2650,9 +2645,9 @@ mod tests {
         ] {
             let value = if nested {
                 TermValue::Triple {
-                    s: Box::new(TermValue::blank("b0")),
-                    p: Box::new(TermValue::iri("http://example.org/p")),
-                    o: Box::new(value.clone()),
+                    s: TermBox::new(TermValue::blank("b0")),
+                    p: TermBox::new(TermValue::iri("http://example.org/p")),
+                    o: TermBox::new(value.clone()),
                 }
             } else {
                 value.clone()
@@ -2677,9 +2672,9 @@ mod tests {
             direction: Some(RdfTextDirection::Rtl),
         };
         let nested_blank = TermValue::Triple {
-            s: Box::new(TermValue::blank("b0")),
-            p: Box::new(TermValue::iri("http://example.org/p")),
-            o: Box::new(tagged.clone()),
+            s: TermBox::new(TermValue::blank("b0")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(tagged.clone()),
         };
         let ranked = rank_candidates(
             &variables(),

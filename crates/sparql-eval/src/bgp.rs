@@ -44,6 +44,7 @@ use crate::dataset_spec::{ActiveDataset, GraphScope};
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::governor::ledger::PlanEstimate;
+use crate::plan::PlanShape;
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 use crate::statement_layer::{self, StatementProbe};
@@ -75,6 +76,37 @@ enum Pos<I: ViewTermId = TermId> {
     /// id instead). Binding descends into the candidate row's triple-term value,
     /// unifying the inner positions and enforcing repeated-variable consistency.
     Triple(Box<TriplePos<I>>),
+}
+
+/// Release a position without descending into it: a nested quoted triple's components
+/// are moved onto a work list and released from there, so a position nested to any
+/// depth is dropped on constant machine stack.
+impl<I: ViewTermId> Drop for Pos<I> {
+    fn drop(&mut self) {
+        let Self::Triple(triple) = self else {
+            return;
+        };
+        if !matches!(triple.s, Self::Triple(_))
+            && !matches!(triple.p, Self::Triple(_))
+            && !matches!(triple.o, Self::Triple(_))
+        {
+            return;
+        }
+        let mut pending: Vec<Self> = vec![
+            std::mem::replace(&mut triple.s, Self::Slot(0)),
+            std::mem::replace(&mut triple.p, Self::Slot(0)),
+            std::mem::replace(&mut triple.o, Self::Slot(0)),
+        ];
+        while let Some(mut position) = pending.pop() {
+            if let Self::Triple(inner) = &mut position {
+                pending.extend([
+                    std::mem::replace(&mut inner.s, Self::Slot(0)),
+                    std::mem::replace(&mut inner.p, Self::Slot(0)),
+                    std::mem::replace(&mut inner.o, Self::Slot(0)),
+                ]);
+            }
+        }
+    }
 }
 
 /// A compiled nested quoted-triple position: its three component positions, each
@@ -314,7 +346,12 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
                 Some(ceiling) => {
                     crate::parallel::bounded_chunk_map_metered(&rows, metered, ceiling, expand)
                 }
-                None => crate::parallel::par_chunk_map_metered(&rows, metered, expand),
+                None => crate::parallel::par_chunk_map_metered(
+                    ctx.sequential_operation_required(),
+                    &rows,
+                    metered,
+                    expand,
+                ),
             };
             (next, ledger, false)
         };
@@ -388,14 +425,22 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
 /// This is the structural order `cost_based_order` replaced; it is intentionally
 /// deterministic and never materialises a plan as triples.
 fn structural_order<I: ViewTermId>(compiled: &[CompiledPattern<I>]) -> Vec<usize> {
+    /// Whether every slot reachable from `pos` is already bound, over a work list of
+    /// the nested positions in `(s, p, o)` order, stopping at the first unbound slot.
     fn constrained<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
-        match pos {
-            Pos::Bound(_) => true,
-            Pos::Slot(c) => bound[*c],
-            Pos::Triple(t) => {
-                constrained(&t.s, bound) && constrained(&t.p, bound) && constrained(&t.o, bound)
+        let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
+        while let Some(pos) = pending.pop() {
+            match pos {
+                Pos::Bound(_) => {}
+                Pos::Slot(c) => {
+                    if !bound[*c] {
+                        return false;
+                    }
+                }
+                Pos::Triple(t) => pending.extend([&t.o, &t.p, &t.s]),
             }
         }
+        true
     }
     let n = compiled.len();
     let mut n_cols = 0usize;
@@ -552,27 +597,34 @@ fn bgp_shape_key<I: ViewTermId>(compiled: &[CompiledPattern<I>], scope: &GraphSc
 
 /// Hash one compiled position structurally (tag + payload), descending into nested
 /// quoted triples — a helper for [`bgp_shape_key`].
+///
+/// The hasher is fed in pre-order over a work list: a nested triple's tag, then the
+/// whole of its subject, then its predicate, then its object — the sequence a
+/// recursive descent writes — so a position nested to any depth hashes on constant
+/// machine stack to the same value.
 fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
     use std::hash::Hash;
-    match pos {
-        Pos::Slot(c) => {
-            0u8.hash(h);
-            c.hash(h);
-        }
-        Pos::Bound(id) => {
-            1u8.hash(h);
-            // Hash the id via its join-key encoding: for `TermId` this is the 0-based
-            // index as `u64` (byte-identical to the historical `id.index().hash(h)` on a
-            // 64-bit target), and it is available for any `ViewTermId` id width. Only a
-            // join-order-cache discriminator (a collision is at worst a suboptimal order,
-            // never a wrong result), so the exact bytes need only be deterministic.
-            id.encode().hash(h);
-        }
-        Pos::Triple(t) => {
-            2u8.hash(h);
-            hash_pos(&t.s, h);
-            hash_pos(&t.p, h);
-            hash_pos(&t.o, h);
+    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
+    while let Some(pos) = pending.pop() {
+        match pos {
+            Pos::Slot(c) => {
+                0u8.hash(h);
+                c.hash(h);
+            }
+            Pos::Bound(id) => {
+                1u8.hash(h);
+                // Hash the id via its join-key encoding: for `TermId` this is the 0-based
+                // index as `u64` (byte-identical to the historical `id.index().hash(h)` on
+                // a 64-bit target), and it is available for any `ViewTermId` id width.
+                // Only a join-order-cache discriminator (a collision is at worst a
+                // suboptimal order, never a wrong result), so the exact bytes need only be
+                // deterministic.
+                id.encode().hash(h);
+            }
+            Pos::Triple(t) => {
+                2u8.hash(h);
+                pending.extend([&t.o, &t.p, &t.s]);
+            }
         }
     }
 }
@@ -919,15 +971,22 @@ fn pattern_connected<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &[bool]) -> 
         .any(|pos| pos_has_bound_slot(pos, bound))
 }
 
-/// Whether a position contains an already-bound slot anywhere (recursively).
+/// Whether a position contains an already-bound slot anywhere, over a work list of
+/// the nested positions in `(s, p, o)` order, stopping at the first bound slot.
 fn pos_has_bound_slot<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
-    match pos {
-        Pos::Bound(_) => false,
-        Pos::Slot(c) => bound[*c],
-        Pos::Triple(t) => [&t.s, &t.p, &t.o]
-            .into_iter()
-            .any(|p| pos_has_bound_slot(p, bound)),
+    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
+    while let Some(pos) = pending.pop() {
+        match pos {
+            Pos::Bound(_) => {}
+            Pos::Slot(c) => {
+                if bound[*c] {
+                    return true;
+                }
+            }
+            Pos::Triple(t) => pending.extend([&t.o, &t.p, &t.s]),
+        }
     }
+    false
 }
 
 /// Record a scheduled pattern's slot columns as now-bound (descending into nested
@@ -939,15 +998,14 @@ fn mark_bound<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &mut [bool]) {
 }
 
 /// Visit every slot column reachable from a position (itself, or the inner positions
-/// of a nested quoted triple).
+/// of a nested quoted triple), in `(s, p, o)` pre-order over a work list.
 fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
-    match pos {
-        Pos::Bound(_) => {}
-        Pos::Slot(c) => f(*c),
-        Pos::Triple(t) => {
-            for inner in [&t.s, &t.p, &t.o] {
-                for_each_slot(inner, f);
-            }
+    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
+    while let Some(pos) = pending.pop() {
+        match pos {
+            Pos::Bound(_) => {}
+            Pos::Slot(c) => f(*c),
+            Pos::Triple(t) => pending.extend([&t.o, &t.p, &t.s]),
         }
     }
 }
@@ -955,31 +1013,57 @@ fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
 /// The slot variables a triple pattern introduces, in `(s, p, o)` order — descending
 /// into any nested quoted-triple position so its inner variables become columns too. A
 /// ground position yields nothing; a blank node yields a synthetic slot variable.
-fn slot_keys(pattern: &TriplePattern) -> Vec<Variable> {
-    let mut keys = Vec::new();
+///
+/// Inline for a pattern of up to four slots, which every pattern without a quoted
+/// triple is.
+fn slot_keys(pattern: &TriplePattern) -> purrdf_core::SmallVec<[Variable; 4]> {
+    let mut keys = purrdf_core::SmallVec::new();
     collect_triple_slot_keys(pattern, &mut keys);
     keys
 }
 
-/// Append a triple pattern's slot variables (recursively through nested quoted
-/// triples) in `(s, p, o)` order.
-fn collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut Vec<Variable>) {
-    collect_term_slot_keys(&pattern.subject, keys);
-    if let NamedNodePattern::Variable(v) = &pattern.predicate {
-        keys.push(v.clone());
-    }
-    collect_term_slot_keys(&pattern.object, keys);
+/// Append a triple pattern's slot variables, through nested quoted triples, in
+/// `(s, p, o)` order.
+fn collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut impl Extend<Variable>) {
+    collect_slot_keys(
+        purrdf_core::smallvec![
+            SlotPosition::Term(&pattern.object),
+            SlotPosition::Predicate(&pattern.predicate),
+            SlotPosition::Term(&pattern.subject),
+        ],
+        keys,
+    );
 }
 
-/// Append a term position's slot variables: a real variable, a synthetic blank-node
-/// variable, or — for a quoted triple — its inner variables (recursively). Ground
-/// terms yield nothing.
-fn collect_term_slot_keys(term: &TermPattern, keys: &mut Vec<Variable>) {
-    match term {
-        TermPattern::Variable(v) => keys.push(v.clone()),
-        TermPattern::BlankNode(b) => keys.push(blank_var(b.as_str())),
-        TermPattern::Triple(t) => collect_triple_slot_keys(t, keys),
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+/// One position of a triple pattern still to be read for its slot variables.
+enum SlotPosition<'a> {
+    Term(&'a TermPattern),
+    Predicate(&'a NamedNodePattern),
+}
+
+/// Append the slot variables of the positions on `pending` — a work list whose top is
+/// the next position in `(s, p, o)` order — to `keys`: a real variable, a synthetic
+/// blank-node variable, or, for a quoted triple, its inner positions in the same
+/// order. Ground terms yield nothing.
+fn collect_slot_keys(
+    mut pending: purrdf_core::SmallVec<[SlotPosition<'_>; 8]>,
+    keys: &mut impl Extend<Variable>,
+) {
+    while let Some(position) = pending.pop() {
+        match position {
+            SlotPosition::Predicate(NamedNodePattern::Variable(v))
+            | SlotPosition::Term(TermPattern::Variable(v)) => keys.extend([v.clone()]),
+            SlotPosition::Term(TermPattern::BlankNode(b)) => {
+                keys.extend([blank_var(b.as_str())]);
+            }
+            SlotPosition::Term(TermPattern::Triple(t)) => pending.extend([
+                SlotPosition::Term(&t.object),
+                SlotPosition::Predicate(&t.predicate),
+                SlotPosition::Term(&t.subject),
+            ]),
+            SlotPosition::Predicate(NamedNodePattern::NamedNode(_))
+            | SlotPosition::Term(TermPattern::NamedNode(_) | TermPattern::Literal(_)) => {}
+        }
     }
 }
 
@@ -1002,11 +1086,25 @@ fn is_blank_var(var: &Variable) -> bool {
 
 /// Compile a triple pattern's positions. Returns `Ok(None)` if a ground constant is
 /// absent from the dataset (the pattern — and hence the BGP — cannot match).
+///
+/// So does a pattern whose subject or object holds triple terms nested deeper than any
+/// the dataset holds ([`DatasetView::triple_term_nesting_bound`]): no term it could
+/// match exists, and it is answered as matching nothing before any of it is converted,
+/// looked up or matched level by level. The nesting is counted without recursion. A
+/// dataset that vouches for no bound is matched the long way: its positions are
+/// compiled and bound over work lists, so a term of any depth costs no more machine
+/// stack.
 fn compile_pattern<D: DatasetView>(
     pattern: &TriplePattern,
     schema: &VarSchema,
     dataset: &D,
 ) -> Result<Option<CompiledPattern<D::Id>>, EvalError> {
+    if let Some(bound) = dataset.triple_term_nesting_bound()
+        && (pattern.subject.triple_term_nesting() > bound
+            || pattern.object.triple_term_nesting() > bound)
+    {
+        return Ok(None);
+    }
     let Some(s) = compile_term(&pattern.subject, schema, dataset)? else {
         return Ok(None);
     };
@@ -1033,8 +1131,9 @@ fn compile_term<D: DatasetView>(
         // that binds inner columns (`Pos::Triple`); a fully-ground quoted triple
         // resolves to a single interned id (`Pos::Bound`) exactly like any constant.
         TermPattern::Triple(t) => {
-            if triple_has_variable(t) {
-                match compile_triple_pos(t, schema, dataset)? {
+            let nested = index_nested_triples(t);
+            if nested[0].has_variable {
+                match compile_triple_pos(&nested, schema, dataset)? {
                     Some(tp) => Ok(Some(Pos::Triple(Box::new(tp)))),
                     None => Ok(None),
                 }
@@ -1050,23 +1149,159 @@ fn compile_term<D: DatasetView>(
     }
 }
 
-/// Compile a nested quoted-triple pattern's three positions. `Ok(None)` if any
-/// ground component is absent from the dataset (so the whole pattern cannot match).
+/// One quoted-triple pattern of a nested position, indexed by [`index_nested_triples`]:
+/// where its subject and object quoted triples sit in the same index, and whether a
+/// variable (or blank node) occurs anywhere inside it.
+struct NestedTriple<'a> {
+    triple: &'a TriplePattern,
+    subject: Option<usize>,
+    object: Option<usize>,
+    has_variable: bool,
+}
+
+/// Index every quoted-triple pattern reachable from `root` — `root` itself at index 0,
+/// each triple before the triples nested inside it — and mark which of them contain a
+/// variable, in two passes over the index rather than a descent per triple.
+fn index_nested_triples(root: &TriplePattern) -> Vec<NestedTriple<'_>> {
+    // The position a pending triple fills in its parent, so the parent's index entry
+    // can name it once the pending triple's own index is known.
+    enum Under {
+        Root,
+        Subject(usize),
+        Object(usize),
+    }
+    let mut nested: Vec<NestedTriple<'_>> = Vec::new();
+    let mut pending = vec![(root, Under::Root)];
+    while let Some((triple, under)) = pending.pop() {
+        let index = nested.len();
+        match under {
+            Under::Root => {}
+            Under::Subject(parent) => nested[parent].subject = Some(index),
+            Under::Object(parent) => nested[parent].object = Some(index),
+        }
+        nested.push(NestedTriple {
+            triple,
+            subject: None,
+            object: None,
+            has_variable: false,
+        });
+        if let TermPattern::Triple(object) = &triple.object {
+            pending.push((object, Under::Object(index)));
+        }
+        if let TermPattern::Triple(subject) = &triple.subject {
+            pending.push((subject, Under::Subject(index)));
+        }
+    }
+    // Every nested triple is indexed after the triple holding it, so reading the index
+    // backwards meets each triple's own nested triples before the triple itself.
+    for index in (0..nested.len()).rev() {
+        let entry = &nested[index];
+        let position_has_variable = |term: &TermPattern, nested_at: Option<usize>| match term {
+            TermPattern::Variable(_) | TermPattern::BlankNode(_) => true,
+            TermPattern::Triple(_) => {
+                nested[nested_at.expect("a nested triple is indexed")].has_variable
+            }
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) => false,
+        };
+        let has_variable = position_has_variable(&entry.triple.subject, entry.subject)
+            || matches!(entry.triple.predicate, NamedNodePattern::Variable(_))
+            || position_has_variable(&entry.triple.object, entry.object);
+        nested[index].has_variable = has_variable;
+    }
+    nested
+}
+
+/// Compile the variable-carrying quoted-triple pattern at index 0 of `nested` — the
+/// three positions of it and of every variable-carrying triple nested inside it,
+/// subject, predicate then object, each ground position looked up in the dataset as it
+/// is reached and each ground quoted triple looked up whole. `Ok(None)` if any ground
+/// position is absent from the dataset (so the whole pattern cannot match).
+///
+/// One frame per quoted triple still being compiled lives on an explicit stack, so a
+/// position nested to any depth compiles on constant machine stack; the dataset is
+/// consulted in exactly the order a descent would consult it.
 fn compile_triple_pos<D: DatasetView>(
-    triple: &TriplePattern,
+    nested: &[NestedTriple<'_>],
     schema: &VarSchema,
     dataset: &D,
 ) -> Result<Option<TriplePos<D::Id>>, EvalError> {
-    let Some(s) = compile_term(&triple.subject, schema, dataset)? else {
-        return Ok(None);
-    };
-    let Some(p) = compile_predicate(&triple.predicate, schema, dataset) else {
-        return Ok(None);
-    };
-    let Some(o) = compile_term(&triple.object, schema, dataset)? else {
-        return Ok(None);
-    };
-    Ok(Some(TriplePos { s, p, o }))
+    /// A quoted triple being compiled: the positions compiled so far.
+    struct Frame<I: ViewTermId> {
+        at: usize,
+        s: Option<Pos<I>>,
+        p: Option<Pos<I>>,
+    }
+    let mut frames: Vec<Frame<D::Id>> = vec![Frame {
+        at: 0,
+        s: None,
+        p: None,
+    }];
+    // A quoted triple compiled in full, on its way to the position that holds it.
+    let mut completed: Option<TriplePos<D::Id>> = None;
+    loop {
+        let frame = frames
+            .last_mut()
+            .expect("a frame is open until the root completes");
+        let entry = &nested[frame.at];
+        let position = if let Some(completed) = completed.take() {
+            Pos::Triple(Box::new(completed))
+        } else if frame.s.is_none() || frame.p.is_some() {
+            // The next term position: the subject first, the object once the predicate
+            // is compiled.
+            let (term, nested_at) = if frame.s.is_none() {
+                (&entry.triple.subject, entry.subject)
+            } else {
+                (&entry.triple.object, entry.object)
+            };
+            match term {
+                TermPattern::Variable(v) => Pos::Slot(slot_col(schema, v)),
+                TermPattern::BlankNode(b) => Pos::Slot(slot_col(schema, &blank_var(b.as_str()))),
+                TermPattern::Triple(_) => {
+                    let at = nested_at.expect("a nested triple is indexed");
+                    if nested[at].has_variable {
+                        frames.push(Frame {
+                            at,
+                            s: None,
+                            p: None,
+                        });
+                        continue;
+                    }
+                    let value = ground_term_pattern_to_value(term, "a BGP")?;
+                    match dataset.term_id_by_value(&value) {
+                        Some(id) => Pos::Bound(id),
+                        None => return Ok(None),
+                    }
+                }
+                TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
+                    let value = ground_term_pattern_to_value(term, "a BGP")?;
+                    match dataset.term_id_by_value(&value) {
+                        Some(id) => Pos::Bound(id),
+                        None => return Ok(None),
+                    }
+                }
+            }
+        } else {
+            let Some(p) = compile_predicate(&entry.triple.predicate, schema, dataset) else {
+                return Ok(None);
+            };
+            frame.p = Some(p);
+            continue;
+        };
+        if frame.s.is_none() {
+            frame.s = Some(position);
+            continue;
+        }
+        let Frame { s, p, .. } = frames.pop().expect("the frame is open");
+        let triple = TriplePos {
+            s: s.expect("the subject is compiled before the object"),
+            p: p.expect("the predicate is compiled before the object"),
+            o: position,
+        };
+        if frames.is_empty() {
+            return Ok(Some(triple));
+        }
+        completed = Some(triple);
+    }
 }
 
 /// The working-schema column of a slot variable (registered in pass 1).
@@ -1074,24 +1309,6 @@ fn slot_col(schema: &VarSchema, var: &Variable) -> usize {
     schema
         .index_of(var)
         .expect("every slot key was registered in pass 1")
-}
-
-/// Whether a quoted-triple pattern contains at least one variable anywhere (including
-/// nested quoted triples). A variable-free quoted triple is a ground constant.
-fn triple_has_variable(triple: &TriplePattern) -> bool {
-    term_has_variable(&triple.subject)
-        || matches!(triple.predicate, NamedNodePattern::Variable(_))
-        || term_has_variable(&triple.object)
-}
-
-/// Whether a term position contains a variable (recursively through quoted triples).
-/// A blank node is a non-distinguished variable, so it counts.
-fn term_has_variable(term: &TermPattern) -> bool {
-    match term {
-        TermPattern::Variable(_) | TermPattern::BlankNode(_) => true,
-        TermPattern::Triple(t) => triple_has_variable(t),
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) => false,
-    }
 }
 
 /// Compile a predicate position (IRI or variable). `None` = an absent ground IRI.
@@ -1177,41 +1394,56 @@ fn bind_row<D: DatasetView>(
     Some(out)
 }
 
+/// [`bind_pos`]'s work list: positions still to unify, each with its candidate id.
+type PosWork<'p, I> = purrdf_core::SmallVec<[(&'p Pos<I>, I); 4]>;
+
 /// Unify one compiled position against a candidate term id, mutating `out` with any
 /// newly bound slots. Returns `false` (caller rejects the row) on any disagreement:
 /// - a `Pos::Bound` constant that does not equal the candidate id;
 /// - a `Pos::Slot` repeated/previously-bound variable that disagrees;
 /// - a `Pos::Triple` whose candidate id is not a triple term, or whose components fail
-///   to unify recursively.
+///   to unify.
+///
+/// A nested position's components are unified subject, predicate then object, each
+/// resolved against the dataset as it is reached, over a work list rather than the
+/// call stack: the first disagreement ends the unification with `out` as written so
+/// far, which the caller discards.
 fn bind_pos<D: DatasetView>(
     out: &mut Solution<D::Id>,
     pos: &Pos<D::Id>,
     id: D::Id,
     dataset: &D,
 ) -> bool {
-    match pos {
-        Pos::Bound(want) => *want == id,
-        Pos::Slot(col) => {
-            let value = SolutionTerm::Existing(id);
-            match out[*col] {
-                Some(existing) => existing == value,
-                None => {
-                    out[*col] = Some(value);
-                    true
+    // Inline for a plain position and for a quoted triple of plain positions, so
+    // binding a row allocates nothing beyond the row it writes.
+    let mut pending: PosWork<'_, D::Id> = purrdf_core::smallvec![(pos, id)];
+    while let Some((pos, id)) = pending.pop() {
+        match pos {
+            Pos::Bound(want) => {
+                if *want != id {
+                    return false;
                 }
             }
-        }
-        Pos::Triple(t) => match dataset.resolve(id) {
-            TermRef::Triple { s, p, o } => {
-                bind_pos(out, &t.s, s, dataset)
-                    && bind_pos(out, &t.p, p, dataset)
-                    && bind_pos(out, &t.o, o, dataset)
+            Pos::Slot(col) => {
+                let value = SolutionTerm::Existing(id);
+                match out[*col] {
+                    Some(existing) => {
+                        if existing != value {
+                            return false;
+                        }
+                    }
+                    None => out[*col] = Some(value),
+                }
             }
-            // The candidate term is not a quoted triple, so a structural triple pattern
-            // cannot match it.
-            _ => false,
-        },
+            Pos::Triple(t) => match dataset.resolve(id) {
+                TermRef::Triple { s, p, o } => pending.extend([(&t.o, o), (&t.p, p), (&t.s, s)]),
+                // The candidate term is not a quoted triple, so a structural triple
+                // pattern cannot match it.
+                _ => return false,
+            },
+        }
     }
+    true
 }
 
 /// Emit the virtual triple candidates from the RDF 1.2 reification layer that match
@@ -1304,20 +1536,47 @@ fn triple_pattern_to_string(tp: &TriplePattern) -> String {
     )
 }
 
-/// Format a term pattern as a compact SPARQL-like string.
+/// Format a term pattern as a compact SPARQL-like string: a quoted triple as
+/// `<<(s p o)>>`, written left to right over a work list of the pieces still to
+/// emit, so a term nested to any depth is formatted on constant machine stack.
 fn term_pattern_to_string(term: &TermPattern) -> String {
-    match term {
-        TermPattern::Variable(v) => format!("?{}", v.as_str()),
-        TermPattern::BlankNode(b) => format!("_:{}", b.as_str()),
-        TermPattern::NamedNode(n) => format!("<{}>", n.as_str()),
-        TermPattern::Literal(l) => literal_to_string(l),
-        TermPattern::Triple(t) => format!(
-            "<<({} {} {})>>",
-            term_pattern_to_string(&t.subject),
-            named_node_pattern_to_string(&t.predicate),
-            term_pattern_to_string(&t.object)
-        ),
+    use std::fmt::Write as _;
+    /// One piece of the text still to emit.
+    enum Piece<'a> {
+        Term(&'a TermPattern),
+        Predicate(&'a NamedNodePattern),
+        Text(&'static str),
     }
+    let mut out = String::new();
+    let mut pending = vec![Piece::Term(term)];
+    while let Some(piece) = pending.pop() {
+        match piece {
+            Piece::Text(text) => out.push_str(text),
+            Piece::Predicate(nn) => out.push_str(&named_node_pattern_to_string(nn)),
+            Piece::Term(TermPattern::Variable(v)) => {
+                write!(out, "?{}", v.as_str()).expect("a String write cannot fail");
+            }
+            Piece::Term(TermPattern::BlankNode(b)) => {
+                write!(out, "_:{}", b.as_str()).expect("a String write cannot fail");
+            }
+            Piece::Term(TermPattern::NamedNode(n)) => {
+                write!(out, "<{}>", n.as_str()).expect("a String write cannot fail");
+            }
+            Piece::Term(TermPattern::Literal(l)) => out.push_str(&literal_to_string(l)),
+            Piece::Term(TermPattern::Triple(t)) => {
+                out.push_str("<<(");
+                pending.extend([
+                    Piece::Text(")>>"),
+                    Piece::Term(&t.object),
+                    Piece::Text(" "),
+                    Piece::Predicate(&t.predicate),
+                    Piece::Text(" "),
+                    Piece::Term(&t.subject),
+                ]);
+            }
+        }
+    }
+    out
 }
 
 /// Format a named-node pattern (IRI or variable) as a compact string.
@@ -1345,16 +1604,58 @@ fn literal_to_string(l: &Literal) -> String {
 /// Both halves come from one walk because both are read from the same probe of the
 /// dataset's statistics, and doing it twice would let the explained order and the refused
 /// estimate describe two different plans.
-#[derive(Debug, Default)]
 pub(crate) struct PlanSurvey {
     /// Human-readable triple-pattern strings, in the order the planner chose, for every
     /// BGP with at least two patterns. The historical `explain_query` output.
     pub(crate) orders: Vec<String>,
-    /// The planner's prediction per BGP node, keyed by the node's address in the plan.
-    pub(crate) estimates: crate::DetHashMap<usize, PlanEstimate>,
+    /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
+    /// walks; `None` where it predicts nothing.
+    pub(crate) estimates: Vec<Option<PlanEstimate>>,
+    /// The shape of that tree, which is where a surveyed node finds its id.
+    shape: Arc<PlanShape>,
+}
+
+impl std::fmt::Debug for PlanSurvey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlanSurvey")
+            .field("orders", &self.orders)
+            .field("estimates", &self.estimates)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PlanSurvey {
+    /// An empty survey of the tree `shape` numbers.
+    pub(crate) fn for_shape(shape: &Arc<PlanShape>) -> Self {
+        Self {
+            orders: Vec::new(),
+            estimates: vec![None; shape.len()],
+            shape: Arc::clone(shape),
+        }
+    }
+
+    /// The shape of the surveyed tree.
+    pub(crate) const fn shape(&self) -> &Arc<PlanShape> {
+        &self.shape
+    }
+
+    /// Record `estimate` as the prediction for `node`, a node of the surveyed tree.
+    fn record(&mut self, node: &GraphPattern, estimate: PlanEstimate) {
+        let id = self
+            .shape
+            .node_of(node)
+            .expect("the survey walks only nodes of the tree it was sized for");
+        self.estimates[id.index()] = Some(estimate);
+    }
+
+    /// The prediction for `node`, when it is a node of the surveyed tree and the survey
+    /// made one.
+    fn estimate_of(&self, node: &GraphPattern) -> Option<&PlanEstimate> {
+        self.shape
+            .node_of(node)
+            .and_then(|id| self.estimates[id.index()].as_ref())
+    }
+
     /// The largest predicted intermediate bag anywhere in the plan, in cells, together
     /// with nothing else — this is the single number admission control compares against
     /// the caller's intermediate-cardinality ceiling.
@@ -1365,16 +1666,17 @@ impl PlanSurvey {
     /// admit the single catastrophic one.
     pub(crate) fn peak_cells(&self) -> u64 {
         self.estimates
-            .values()
+            .iter()
+            .flatten()
             .map(PlanEstimate::peak_cells)
             .max()
             .unwrap_or(0)
     }
 }
 
-/// Recursively walk `pattern`, compute the cost-based order and cardinality estimate for
-/// every BGP, and record both into `survey`. Scope changes from `GRAPH` blocks are tracked
-/// so cardinality estimates use the right graph filter.
+/// Walk `pattern`, compute the cost-based order and cardinality estimate for every BGP,
+/// and record both into `survey`. Scope changes from `GRAPH` blocks are tracked so
+/// cardinality estimates use the right graph filter.
 ///
 /// This is a pure-introspection path: it does not evaluate the query, and it falls back to
 /// source order for BGPs whose constants are absent from the dataset (those BGPs are empty
@@ -1384,6 +1686,10 @@ impl PlanSurvey {
 /// because a one-pattern BGP has no order to choose. The **estimate** is recorded for every
 /// BGP, one-pattern ones included: a single unconstrained triple pattern over a large store
 /// is exactly the shape a cardinality ceiling exists to refuse.
+///
+/// The walk runs over an explicit work list in pre-order, each node's children left to
+/// right, so a plan of any height costs no machine stack; the join-order strings are
+/// appended, the estimates recorded and the first error raised in exactly that order.
 ///
 /// # How a property-function call is priced, and what that composition rule is
 ///
@@ -1419,161 +1725,164 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
     relations: &crate::property_fn::PropertyFunctionRegistry,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
-    match pattern {
-        GraphPattern::Bgp { patterns } => {
-            if patterns.is_empty() {
-                return Ok(());
-            }
-            let scope = active_dataset.scope_for(active_graph);
-            let mut working = VarSchema::new();
-            for pattern in patterns {
-                for key in slot_keys(pattern) {
-                    working.push(key);
-                }
-            }
-            let mut compiled = Vec::with_capacity(patterns.len());
-            let mut any_absent = false;
-            for pattern in patterns {
-                match compile_pattern(pattern, &working, dataset)? {
-                    Some(cp) => compiled.push(cp),
-                    None => {
-                        any_absent = true;
-                        break;
-                    }
-                }
-            }
-            let order: Vec<usize> = if any_absent {
-                (0..patterns.len()).collect()
-            } else {
-                cost_based_order(&compiled, dataset, &scope)
-            };
-            if patterns.len() >= 2 {
-                for &i in &order {
-                    survey.orders.push(triple_pattern_to_string(&patterns[i]));
-                }
-            }
-            let columns = real_var_schema(&working).len() as u64;
-            let estimate = if any_absent {
-                // A ground constant absent from the dataset makes the whole BGP empty, so
-                // the honest prediction is zero rows — not the product the cost model
-                // would compute from cardinalities it never probed.
-                PlanEstimate {
-                    rows: 0,
-                    peak_rows: 0,
-                    columns,
-                }
-            } else {
-                let (rows, peak_rows) = replay_cost_estimate(&compiled, dataset, &scope, &order);
-                PlanEstimate {
-                    rows,
-                    peak_rows,
-                    columns,
-                }
-            };
-            survey
-                .estimates
-                .insert(std::ptr::from_ref(pattern) as usize, estimate);
-        }
-        // The two shapes a property-function call is attached through, and therefore the
-        // only place a call's driving side is in scope.
-        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
-            survey_pattern_plans(
-                dataset,
-                active_dataset,
-                active_graph,
-                left,
-                relations,
-                survey,
-            )?;
-            if let GraphPattern::PropertyFunction(call) = &**right {
+    /// One pending step of the walk.
+    enum Step<'a, I> {
+        /// Survey the subtree rooted at the node, evaluated against the graph.
+        Visit(&'a GraphPattern, GraphMatch<I>),
+        /// Price the call `node` is, driven once per row of `left`'s bag: taken once
+        /// `left`'s whole subtree has been surveyed, so its prediction is on record.
+        Call {
+            node: &'a GraphPattern,
+            call: &'a PropertyFunctionCall,
+            left: &'a GraphPattern,
+        },
+    }
+
+    let mut steps: Vec<Step<'_, D::Id>> = vec![Step::Visit(pattern, active_graph)];
+    while let Some(step) = steps.pop() {
+        let (pattern, active_graph) = match step {
+            Step::Call { node, call, left } => {
                 let mut bound = DetHashSet::default();
                 crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
                 record_call_estimate(
-                    right,
+                    node,
                     call,
                     &bound,
                     predicted_rows(left, survey).unwrap_or(1),
                     relations,
                     survey,
                 )?;
-            } else {
-                survey_pattern_plans(
-                    dataset,
-                    active_dataset,
-                    active_graph,
-                    right,
-                    relations,
-                    survey,
-                )?;
+                continue;
+            }
+            Step::Visit(pattern, active_graph) => (pattern, active_graph),
+        };
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                survey_bgp(dataset, active_dataset, active_graph, pattern, patterns, survey)?;
+            }
+            // The two shapes a property-function call is attached through, and therefore the
+            // only place a call's driving side is in scope. The right side is pushed first so
+            // the left's whole subtree is surveyed before it.
+            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+                if let GraphPattern::PropertyFunction(call) = &**right {
+                    steps.push(Step::Call {
+                        node: right,
+                        call,
+                        left,
+                    });
+                } else {
+                    steps.push(Step::Visit(right, active_graph));
+                }
+                steps.push(Step::Visit(left, active_graph));
+            }
+            GraphPattern::Union { arms } => {
+                steps.extend(arms.iter().rev().map(|arm| Step::Visit(arm, active_graph)));
+            }
+            GraphPattern::LeftJoin { left, right, .. } | GraphPattern::Minus { left, right } => {
+                steps.push(Step::Visit(right, active_graph));
+                steps.push(Step::Visit(left, active_graph));
+            }
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            // `UNFOLD` predicts nothing of its own: how many rows one input row
+            // expands to is a property of a composite value this walk never sees, so
+            // the survey reports its inner pattern and stops — an honest under-count,
+            // which is the direction this survey is documented to fail in.
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Group { inner, .. } => {
+                steps.push(Step::Visit(inner, active_graph));
+            }
+            GraphPattern::Graph { name, inner } => {
+                let inner_graph = match name {
+                    NamedNodePattern::NamedNode(n) => dataset
+                        .term_id_by_value(&named_node_to_value(n))
+                        .map_or(GraphMatch::Default, GraphMatch::Named),
+                    NamedNodePattern::Variable(_) => GraphMatch::Any,
+                };
+                steps.push(Step::Visit(inner, inner_graph));
+            }
+            // A call with nothing written before it: its driving bag is the identity table,
+            // which is one row, so its whole prediction is the relation's declared bound.
+            GraphPattern::PropertyFunction(call) => {
+                record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey)?;
+            }
+            // Leaves that hold no BGP: there is no triple-pattern join order to choose and
+            // no base cardinality to probe.
+            GraphPattern::Path { .. } | GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
+        }
+    }
+    Ok(())
+}
+
+/// Survey one basic graph pattern — `node`, holding `patterns` — for
+/// [`survey_pattern_plans`]: its join order, when it has one to choose, and its estimate.
+///
+/// # Errors
+///
+/// [`EvalError`] from compiling a pattern against the dataset.
+fn survey_bgp<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    active_graph: GraphMatch<D::Id>,
+    node: &GraphPattern,
+    patterns: &[TriplePattern],
+    survey: &mut PlanSurvey,
+) -> Result<(), EvalError> {
+    if patterns.is_empty() {
+        return Ok(());
+    }
+    let scope = active_dataset.scope_for(active_graph);
+    let mut working = VarSchema::new();
+    for pattern in patterns {
+        for key in slot_keys(pattern) {
+            working.push(key);
+        }
+    }
+    let mut compiled = Vec::with_capacity(patterns.len());
+    let mut any_absent = false;
+    for pattern in patterns {
+        match compile_pattern(pattern, &working, dataset)? {
+            Some(cp) => compiled.push(cp),
+            None => {
+                any_absent = true;
+                break;
             }
         }
-        GraphPattern::Union { left, right }
-        | GraphPattern::LeftJoin { left, right, .. }
-        | GraphPattern::Minus { left, right } => {
-            survey_pattern_plans(
-                dataset,
-                active_dataset,
-                active_graph,
-                left,
-                relations,
-                survey,
-            )?;
-            survey_pattern_plans(
-                dataset,
-                active_dataset,
-                active_graph,
-                right,
-                relations,
-                survey,
-            )?;
-        }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Extend { inner, .. }
-        // `UNFOLD` predicts nothing of its own: how many rows one input row
-        // expands to is a property of a composite value this walk never sees, so
-        // the survey reports its inner pattern and stops — an honest under-count,
-        // which is the direction this survey is documented to fail in.
-        | GraphPattern::Unfold { inner, .. }
-        | GraphPattern::Project { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Group { inner, .. } => {
-            survey_pattern_plans(
-                dataset,
-                active_dataset,
-                active_graph,
-                inner,
-                relations,
-                survey,
-            )?;
-        }
-        GraphPattern::Graph { name, inner } => {
-            let inner_graph = match name {
-                NamedNodePattern::NamedNode(n) => dataset
-                    .term_id_by_value(&named_node_to_value(n))
-                    .map_or(GraphMatch::Default, GraphMatch::Named),
-                NamedNodePattern::Variable(_) => GraphMatch::Any,
-            };
-            survey_pattern_plans(
-                dataset,
-                active_dataset,
-                inner_graph,
-                inner,
-                relations,
-                survey,
-            )?;
-        }
-        // A call with nothing written before it: its driving bag is the identity table,
-        // which is one row, so its whole prediction is the relation's declared bound.
-        GraphPattern::PropertyFunction(call) => {
-            record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey)?;
-        }
-        // Leaves that hold no BGP: there is no triple-pattern join order to choose and
-        // no base cardinality to probe.
-        GraphPattern::Path { .. } | GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
     }
+    let order: Vec<usize> = if any_absent {
+        (0..patterns.len()).collect()
+    } else {
+        cost_based_order(&compiled, dataset, &scope)
+    };
+    if patterns.len() >= 2 {
+        for &i in &order {
+            survey.orders.push(triple_pattern_to_string(&patterns[i]));
+        }
+    }
+    let columns = real_var_schema(&working).len() as u64;
+    let estimate = if any_absent {
+        // A ground constant absent from the dataset makes the whole BGP empty, so
+        // the honest prediction is zero rows — not the product the cost model
+        // would compute from cardinalities it never probed.
+        PlanEstimate {
+            rows: 0,
+            peak_rows: 0,
+            columns,
+        }
+    } else {
+        let (rows, peak_rows) = replay_cost_estimate(&compiled, dataset, &scope, &order);
+        PlanEstimate {
+            rows,
+            peak_rows,
+            columns,
+        }
+    };
+    survey.record(node, estimate);
     Ok(())
 }
 
@@ -1611,8 +1920,8 @@ fn record_call_estimate(
     // bound cannot be denominated out of a cell ceiling; saturating, because a `usize`
     // arity beyond `u64` is already past any ceiling a caller can express.
     let columns = u64::try_from(arity.total()).unwrap_or(u64::MAX).max(1);
-    survey.estimates.insert(
-        std::ptr::from_ref(node) as usize,
+    survey.record(
+        node,
         PlanEstimate {
             rows,
             peak_rows: rows,
@@ -1627,17 +1936,18 @@ fn record_call_estimate(
 /// A direct estimate is the answer. Failing that, a chain spine's row count is its last
 /// member's, because each member's own estimate already carries the product of everything
 /// to its left — which is what lets a chain of calls compose without this walk inventing
-/// join arithmetic the cost model does not have.
+/// join arithmetic the cost model does not have. The spine is followed in a loop, so a
+/// chain of any length costs no machine stack.
 fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
-    if let Some(estimate) = survey
-        .estimates
-        .get(&(std::ptr::from_ref(pattern) as usize))
-    {
-        return Some(estimate.rows);
-    }
-    match pattern {
-        GraphPattern::Lateral { right, .. } => predicted_rows(right, survey),
-        _ => None,
+    let mut pattern = pattern;
+    loop {
+        if let Some(estimate) = survey.estimate_of(pattern) {
+            return Some(estimate.rows);
+        }
+        match pattern {
+            GraphPattern::Lateral { right, .. } => pattern = right,
+            _ => return None,
+        }
     }
 }
 
@@ -1704,7 +2014,7 @@ fn project_out_blanks<I: ViewTermId>(
     rows: Vec<Solution<I>>,
 ) -> SolutionSeq<I> {
     // The working columns that survive, in order.
-    let keep: Vec<usize> = working
+    let keep: purrdf_core::SmallVec<[usize; 8]> = working
         .vars()
         .iter()
         .enumerate()
@@ -1734,7 +2044,9 @@ fn project_out_blanks<I: ViewTermId>(
 mod tests {
     use super::*;
     use crate::scratch::ScratchInterner;
+    use purrdf_core::TermBox;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+    use purrdf_sparql_algebra::Child;
     use purrdf_sparql_algebra::{Literal, NamedNode};
 
     /// A small graph:
@@ -1996,7 +2308,7 @@ mod tests {
 
     /// A nested quoted-triple object pattern `<<( s p o )>>`.
     fn triple_obj(s: TermPattern, p: NamedNodePattern, o: TermPattern) -> TermPattern {
-        TermPattern::Triple(Box::new(TriplePattern {
+        TermPattern::Triple(Child::new(TriplePattern {
             subject: s,
             predicate: p,
             object: o,
@@ -2102,9 +2414,9 @@ mod tests {
                     iri_val("http://ex/r1"),
                     iri_val(reifies),
                     Some(TermValue::Triple {
-                        s: Box::new(TermValue::Iri("http://ex/alice".to_owned())),
-                        p: Box::new(TermValue::Iri("http://ex/age".to_owned())),
-                        o: Box::new(TermValue::Literal {
+                        s: TermBox::new(TermValue::Iri("http://ex/alice".to_owned())),
+                        p: TermBox::new(TermValue::Iri("http://ex/age".to_owned())),
+                        o: TermBox::new(TermValue::Literal {
                             lexical_form: "42".to_owned(),
                             datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
                             language: None,
@@ -2598,5 +2910,1574 @@ mod tests {
                 }
             }
         }
+    }
+}
+
+/// The work-list walks over compiled positions and term patterns — the bound-slot and
+/// constrained checks, slot visiting, the shape hash, slot-key collection,
+/// compilation, binding and the plan-introspection rendering — checked against
+/// recursive references over generated shapes (the same answers, and the same dataset
+/// lookups in the same order), and at a hundred thousand levels on a thread with a
+/// 128 KiB stack.
+#[cfg(test)]
+mod term_walk_tests {
+    use std::cell::RefCell;
+    use std::hash::{Hash, Hasher};
+    use std::sync::Arc;
+
+    use purrdf_core::{
+        DatasetView, GraphMatch, QuadIds, QuadRef, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+        RdfStoreCapabilities, TermId, TermRef, TermValue, ViewTermId,
+    };
+    use purrdf_sparql_algebra::{
+        BaseDirection, BlankNode, Child, Literal, NamedNode, NamedNodePattern, TermPattern,
+        TriplePattern, Variable,
+    };
+
+    use super::{
+        CompiledPattern, Pos, TriplePos, bind_pos, blank_var, collect_triple_slot_keys,
+        compile_predicate, compile_term, for_each_slot, hash_pos, literal_to_string,
+        named_node_pattern_to_string, pos_has_bound_slot, slot_col, slot_keys, structural_order,
+        term_pattern_to_string, triple_pattern_to_string,
+    };
+    use crate::convert::ground_term_pattern_to_value;
+    use crate::error::EvalError;
+    use crate::scratch::SolutionTerm;
+    use crate::solution::{Solution, VarSchema};
+
+    const EX: &str = "http://example.org/";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+    const COLUMNS: usize = 4;
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 24,
+            }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+
+        /// Whether another nesting level may be spent.
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    // ── The recursive references ───────────────────────────────────────────────────
+
+    fn reference_constrained(pos: &Pos, bound: &[bool]) -> bool {
+        match pos {
+            Pos::Bound(_) => true,
+            Pos::Slot(c) => bound[*c],
+            Pos::Triple(t) => {
+                reference_constrained(&t.s, bound)
+                    && reference_constrained(&t.p, bound)
+                    && reference_constrained(&t.o, bound)
+            }
+        }
+    }
+
+    fn reference_hash_pos<H: Hasher>(pos: &Pos, h: &mut H) {
+        match pos {
+            Pos::Slot(c) => {
+                0u8.hash(h);
+                c.hash(h);
+            }
+            Pos::Bound(id) => {
+                1u8.hash(h);
+                id.encode().hash(h);
+            }
+            Pos::Triple(t) => {
+                2u8.hash(h);
+                reference_hash_pos(&t.s, h);
+                reference_hash_pos(&t.p, h);
+                reference_hash_pos(&t.o, h);
+            }
+        }
+    }
+
+    fn reference_pos_has_bound_slot(pos: &Pos, bound: &[bool]) -> bool {
+        match pos {
+            Pos::Bound(_) => false,
+            Pos::Slot(c) => bound[*c],
+            Pos::Triple(t) => [&t.s, &t.p, &t.o]
+                .into_iter()
+                .any(|p| reference_pos_has_bound_slot(p, bound)),
+        }
+    }
+
+    fn reference_for_each_slot(pos: &Pos, f: &mut impl FnMut(usize)) {
+        match pos {
+            Pos::Bound(_) => {}
+            Pos::Slot(c) => f(*c),
+            Pos::Triple(t) => {
+                for inner in [&t.s, &t.p, &t.o] {
+                    reference_for_each_slot(inner, f);
+                }
+            }
+        }
+    }
+
+    fn reference_collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut Vec<Variable>) {
+        reference_collect_term_slot_keys(&pattern.subject, keys);
+        if let NamedNodePattern::Variable(v) = &pattern.predicate {
+            keys.push(v.clone());
+        }
+        reference_collect_term_slot_keys(&pattern.object, keys);
+    }
+
+    fn reference_collect_term_slot_keys(term: &TermPattern, keys: &mut Vec<Variable>) {
+        match term {
+            TermPattern::Variable(v) => keys.push(v.clone()),
+            TermPattern::BlankNode(b) => keys.push(blank_var(b.as_str())),
+            TermPattern::Triple(t) => reference_collect_triple_slot_keys(t, keys),
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+        }
+    }
+
+    fn reference_triple_has_variable(triple: &TriplePattern) -> bool {
+        reference_term_has_variable(&triple.subject)
+            || matches!(triple.predicate, NamedNodePattern::Variable(_))
+            || reference_term_has_variable(&triple.object)
+    }
+
+    fn reference_term_has_variable(term: &TermPattern) -> bool {
+        match term {
+            TermPattern::Variable(_) | TermPattern::BlankNode(_) => true,
+            TermPattern::Triple(t) => reference_triple_has_variable(t),
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) => false,
+        }
+    }
+
+    fn reference_compile_term<D: DatasetView>(
+        term: &TermPattern,
+        schema: &VarSchema,
+        dataset: &D,
+    ) -> Result<Option<Pos<D::Id>>, EvalError> {
+        match term {
+            TermPattern::Variable(v) => Ok(Some(Pos::Slot(slot_col(schema, v)))),
+            TermPattern::BlankNode(b) => {
+                Ok(Some(Pos::Slot(slot_col(schema, &blank_var(b.as_str())))))
+            }
+            TermPattern::Triple(t) => {
+                if reference_triple_has_variable(t) {
+                    match reference_compile_triple_pos(t, schema, dataset)? {
+                        Some(tp) => Ok(Some(Pos::Triple(Box::new(tp)))),
+                        None => Ok(None),
+                    }
+                } else {
+                    let value = ground_term_pattern_to_value(term, "a BGP")?;
+                    Ok(dataset.term_id_by_value(&value).map(Pos::Bound))
+                }
+            }
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) => {
+                let value = ground_term_pattern_to_value(term, "a BGP")?;
+                Ok(dataset.term_id_by_value(&value).map(Pos::Bound))
+            }
+        }
+    }
+
+    fn reference_compile_triple_pos<D: DatasetView>(
+        triple: &TriplePattern,
+        schema: &VarSchema,
+        dataset: &D,
+    ) -> Result<Option<TriplePos<D::Id>>, EvalError> {
+        let Some(s) = reference_compile_term(&triple.subject, schema, dataset)? else {
+            return Ok(None);
+        };
+        let Some(p) = compile_predicate(&triple.predicate, schema, dataset) else {
+            return Ok(None);
+        };
+        let Some(o) = reference_compile_term(&triple.object, schema, dataset)? else {
+            return Ok(None);
+        };
+        Ok(Some(TriplePos { s, p, o }))
+    }
+
+    fn reference_bind_pos<D: DatasetView>(
+        out: &mut Solution<D::Id>,
+        pos: &Pos<D::Id>,
+        id: D::Id,
+        dataset: &D,
+    ) -> bool {
+        match pos {
+            Pos::Bound(want) => *want == id,
+            Pos::Slot(col) => {
+                let value = SolutionTerm::Existing(id);
+                match out[*col] {
+                    Some(existing) => existing == value,
+                    None => {
+                        out[*col] = Some(value);
+                        true
+                    }
+                }
+            }
+            Pos::Triple(t) => match dataset.resolve(id) {
+                TermRef::Triple { s, p, o } => {
+                    reference_bind_pos(out, &t.s, s, dataset)
+                        && reference_bind_pos(out, &t.p, p, dataset)
+                        && reference_bind_pos(out, &t.o, o, dataset)
+                }
+                _ => false,
+            },
+        }
+    }
+
+    fn reference_term_pattern_to_string(term: &TermPattern) -> String {
+        match term {
+            TermPattern::Variable(v) => format!("?{}", v.as_str()),
+            TermPattern::BlankNode(b) => format!("_:{}", b.as_str()),
+            TermPattern::NamedNode(n) => format!("<{}>", n.as_str()),
+            TermPattern::Literal(l) => literal_to_string(l),
+            TermPattern::Triple(t) => format!(
+                "<<({} {} {})>>",
+                reference_term_pattern_to_string(&t.subject),
+                named_node_pattern_to_string(&t.predicate),
+                reference_term_pattern_to_string(&t.object)
+            ),
+        }
+    }
+
+    // ── A recording view ───────────────────────────────────────────────────────────
+
+    /// A view over a dataset that records every lookup made through it, so two walks
+    /// can be compared on WHICH terms they resolved and in WHAT order, not only on
+    /// their answers.
+    struct Recording<'a> {
+        inner: &'a RdfDataset,
+        log: RefCell<Vec<String>>,
+    }
+
+    impl<'a> Recording<'a> {
+        fn over(inner: &'a RdfDataset) -> Self {
+            Self {
+                inner,
+                log: RefCell::new(Vec::new()),
+            }
+        }
+
+        fn take_log(&self) -> Vec<String> {
+            std::mem::take(&mut *self.log.borrow_mut())
+        }
+    }
+
+    impl DatasetView for Recording<'_> {
+        type Id = TermId;
+        type ProbePlan = ();
+
+        fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            self.inner.quads()
+        }
+
+        fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
+            self.inner.quad_refs()
+        }
+
+        fn resolve(&self, id: TermId) -> TermRef<'_> {
+            self.log
+                .borrow_mut()
+                .push(format!("resolve {}", id.index()));
+            self.inner.resolve(id)
+        }
+
+        fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
+            self.log.borrow_mut().push(format!("lookup {value:?}"));
+            self.inner.term_id_by_value(value)
+        }
+
+        fn capabilities(&self) -> RdfStoreCapabilities {
+            self.inner.capabilities()
+        }
+
+        fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
+
+        fn quads_for_pattern_with_plan(
+            &self,
+            _plan: &(),
+            s: Option<TermId>,
+            p: Option<TermId>,
+            o: Option<TermId>,
+            g: GraphMatch,
+        ) -> impl Iterator<Item = QuadIds> + '_ {
+            self.inner.quads_for_pattern(s, p, o, g)
+        }
+
+        fn term_count(&self) -> usize {
+            self.inner.term_count()
+        }
+    }
+
+    /// A view whose terms are one chain of quoted triples `depth` levels deep: index 0
+    /// is the IRI every subject holds, index 1 the predicate, and index `k ≥ 2` the
+    /// triple whose object is index `k + 1` — the last one's object is index 0. No
+    /// frozen dataset holds a term this deep, so the chain is served by the view.
+    struct Chain {
+        depth: u32,
+        leaf: String,
+        predicate: String,
+    }
+
+    impl Chain {
+        fn new(depth: usize) -> Self {
+            Self {
+                depth: u32::try_from(depth).expect("the depth fits"),
+                leaf: format!("{EX}leaf"),
+                predicate: format!("{EX}p"),
+            }
+        }
+
+        /// The id of the outermost triple.
+        fn top(&self) -> TermId {
+            TermId::from_index(2)
+        }
+    }
+
+    impl DatasetView for Chain {
+        type Id = TermId;
+        type ProbePlan = ();
+
+        fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            std::iter::empty()
+        }
+
+        fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
+            std::iter::empty()
+        }
+
+        fn resolve(&self, id: TermId) -> TermRef<'_> {
+            let index = u32::try_from(id.index()).expect("the index fits");
+            match index {
+                0 => TermRef::Iri(&self.leaf),
+                1 => TermRef::Iri(&self.predicate),
+                _ => TermRef::Triple {
+                    s: TermId::from_index(0),
+                    p: TermId::from_index(1),
+                    o: if index == self.depth + 1 {
+                        TermId::from_index(0)
+                    } else {
+                        TermId::from_index(index + 1)
+                    },
+                },
+            }
+        }
+
+        fn term_id_by_value(&self, _value: &TermValue) -> Option<TermId> {
+            None
+        }
+
+        fn capabilities(&self) -> RdfStoreCapabilities {
+            RdfStoreCapabilities::default()
+        }
+
+        fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
+
+        fn quads_for_pattern_with_plan(
+            &self,
+            _plan: &(),
+            _s: Option<TermId>,
+            _p: Option<TermId>,
+            _o: Option<TermId>,
+            _g: GraphMatch,
+        ) -> impl Iterator<Item = QuadIds> + '_ {
+            std::iter::empty()
+        }
+
+        fn term_count(&self) -> usize {
+            usize::try_from(self.depth).expect("the depth fits") + 2
+        }
+    }
+
+    // ── Fixtures and generators ────────────────────────────────────────────────────
+
+    /// A dataset holding IRIs `a`..`d`, predicates `p`/`q`, a literal of each shape and
+    /// quoted triples nested three deep, so a generated pattern's ground positions
+    /// sometimes name a term the dataset holds and sometimes one it does not. Every
+    /// triple term nests only in the OBJECT of another triple term and every asserted
+    /// subject is an IRI, the RDF 1.2 term model the freeze gate enforces.
+    fn dataset() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri(&format!("{EX}a"));
+        let bb = b.intern_iri(&format!("{EX}b"));
+        let c = b.intern_iri(&format!("{EX}c"));
+        let p = b.intern_iri(&format!("{EX}p"));
+        let q = b.intern_iri(&format!("{EX}q"));
+        let plain = b.intern_literal(RdfLiteral::simple("plain"));
+        let one = b.intern_literal(RdfLiteral::typed(
+            "1",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        let t1 = b.intern_triple(a, p, bb);
+        let t2 = b.intern_triple(c, q, t1);
+        let t3 = b.intern_triple(a, p, t2);
+        let t4 = b.intern_triple(bb, p, t1);
+        b.push_quad(a, p, bb, None);
+        b.push_quad(bb, q, plain, None);
+        b.push_quad(c, p, one, None);
+        b.push_quad(a, q, t1, None);
+        b.push_quad(c, p, t2, None);
+        b.push_quad(a, q, t3, None);
+        b.push_quad(bb, q, t4, None);
+        b.freeze().expect("freeze")
+    }
+
+    /// Every term id `dataset` holds.
+    fn ids(dataset: &RdfDataset) -> Vec<TermId> {
+        (0..dataset.term_count())
+            .map(|index| TermId::from_index(u32::try_from(index).expect("the index fits")))
+            .collect()
+    }
+
+    /// A compiled position over `COLUMNS` slot columns and the ids of `ids`.
+    fn position(choices: &mut Choices, ids: &[TermId]) -> Pos {
+        if !choices.spend() {
+            return Pos::Slot(choices.choose(COLUMNS));
+        }
+        match choices.choose(5) {
+            0 | 1 => Pos::Slot(choices.choose(COLUMNS)),
+            2 => Pos::Bound(ids[choices.choose(ids.len())]),
+            _ => Pos::Triple(Box::new(TriplePos {
+                s: position(choices, ids),
+                p: if choices.choose(2) == 0 {
+                    Pos::Slot(choices.choose(COLUMNS))
+                } else {
+                    Pos::Bound(ids[choices.choose(ids.len())])
+                },
+                o: position(choices, ids),
+            })),
+        }
+    }
+
+    /// A compiled position that follows the structure of the term `id` names in
+    /// `dataset`, with a slot or a ground constant in place of some components, so a
+    /// binding against `id` sometimes succeeds and sometimes fails partway.
+    fn mirroring(choices: &mut Choices, dataset: &RdfDataset, id: TermId) -> Pos {
+        match choices.choose(6) {
+            0 => Pos::Slot(choices.choose(COLUMNS)),
+            1 => Pos::Bound(ids(dataset)[choices.choose(dataset.term_count())]),
+            _ => match dataset.resolve(id) {
+                TermRef::Triple { s, p, o } => Pos::Triple(Box::new(TriplePos {
+                    s: mirroring(choices, dataset, s),
+                    p: if choices.choose(3) == 0 {
+                        Pos::Slot(choices.choose(COLUMNS))
+                    } else {
+                        Pos::Bound(p)
+                    },
+                    o: mirroring(choices, dataset, o),
+                })),
+                _ => Pos::Bound(id),
+            },
+        }
+    }
+
+    /// A ground quoted triple spelling one of the four triple terms `dataset` interns,
+    /// so a generated ground quoted triple is sometimes one the dataset holds whole —
+    /// an arbitrary ground triple over the vocabulary almost never is.
+    fn held_triple(which: usize) -> TermPattern {
+        let triple = |s: TermPattern, p: &str, o: TermPattern| {
+            TermPattern::Triple(Child::new(TriplePattern {
+                subject: s,
+                predicate: NamedNodePattern::NamedNode(iri(p)),
+                object: o,
+            }))
+        };
+        let node = |local: &str| TermPattern::NamedNode(iri(local));
+        let t1 = || triple(node("a"), "p", node("b"));
+        let t2 = || triple(node("c"), "q", t1());
+        match which {
+            0 => t1(),
+            1 => t2(),
+            2 => triple(node("a"), "p", t2()),
+            _ => triple(node("b"), "p", t1()),
+        }
+    }
+
+    /// A term pattern over the fixture's vocabulary: variables, blank nodes, IRIs the
+    /// dataset holds or lacks, literals of every shape, nested quoted triples, and the
+    /// quoted triples the dataset holds.
+    fn term_pattern(choices: &mut Choices) -> TermPattern {
+        if !choices.spend() {
+            return TermPattern::Variable(Variable::new(format!("v{}", choices.choose(3))));
+        }
+        match choices.choose(10) {
+            9 => held_triple(choices.choose(4)),
+            0 => TermPattern::Variable(Variable::new(format!("v{}", choices.choose(3)))),
+            1 => TermPattern::BlankNode(BlankNode::new(format!("b{}", choices.choose(2)))),
+            2 | 3 => TermPattern::NamedNode(iri(["a", "b", "c", "d"][choices.choose(4)])),
+            4 => TermPattern::Literal(match choices.choose(4) {
+                0 => Literal::new_simple("plain"),
+                1 => Literal::new_typed(
+                    "1",
+                    NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#integer"),
+                ),
+                2 => Literal::new_lang("say \"hi\"", "en", None),
+                _ => Literal::new_lang("שלום", "he", Some(BaseDirection::Rtl)),
+            }),
+            _ => TermPattern::Triple(Child::new(triple_pattern(choices))),
+        }
+    }
+
+    fn predicate(choices: &mut Choices) -> NamedNodePattern {
+        match choices.choose(4) {
+            0 => NamedNodePattern::Variable(Variable::new(format!("v{}", choices.choose(3)))),
+            1 => NamedNodePattern::NamedNode(iri("q")),
+            2 => NamedNodePattern::NamedNode(iri("missing")),
+            _ => NamedNodePattern::NamedNode(iri("p")),
+        }
+    }
+
+    fn triple_pattern(choices: &mut Choices) -> TriplePattern {
+        TriplePattern {
+            subject: term_pattern(choices),
+            predicate: predicate(choices),
+            object: term_pattern(choices),
+        }
+    }
+
+    /// A position `depth` quoted triples deep: each level's subject is `leaf`, its
+    /// predicate slot 0 and its object the next level, the deepest object slot 1.
+    fn deep_position(depth: usize, leaf: TermId) -> Pos {
+        let mut pos = Pos::Slot(1);
+        for _ in 0..depth {
+            pos = Pos::Triple(Box::new(TriplePos {
+                s: Pos::Bound(leaf),
+                p: Pos::Slot(0),
+                o: pos,
+            }));
+        }
+        pos
+    }
+
+    /// A term pattern `depth` quoted triples deep: `<<(<a> <p> <<(… ?v …)>>)>>`.
+    fn deep_term_pattern(depth: usize) -> TermPattern {
+        let mut term = TermPattern::Variable(Variable::new("v"));
+        for _ in 0..depth {
+            term = TermPattern::Triple(Child::new(TriplePattern {
+                subject: TermPattern::NamedNode(iri("a")),
+                predicate: NamedNodePattern::NamedNode(iri("p")),
+                object: term,
+            }));
+        }
+        term
+    }
+
+    /// A rendering of a compiled position over a work list — `Pos` has no `Debug` —
+    /// so two compilations can be compared structurally.
+    fn render(pos: &Pos) -> String {
+        use std::fmt::Write as _;
+        enum Piece<'a> {
+            Pos(&'a Pos),
+            Text(&'static str),
+        }
+        let mut out = String::new();
+        let mut pending = vec![Piece::Pos(pos)];
+        while let Some(piece) = pending.pop() {
+            match piece {
+                Piece::Text(text) => out.push_str(text),
+                Piece::Pos(Pos::Slot(c)) => write!(out, "?{c}").expect("a String write"),
+                Piece::Pos(Pos::Bound(id)) => {
+                    write!(out, "#{}", id.index()).expect("a String write");
+                }
+                Piece::Pos(Pos::Triple(t)) => {
+                    out.push('(');
+                    pending.extend([
+                        Piece::Text(")"),
+                        Piece::Pos(&t.o),
+                        Piece::Text(" "),
+                        Piece::Pos(&t.p),
+                        Piece::Text(" "),
+                        Piece::Pos(&t.s),
+                    ]);
+                }
+            }
+        }
+        out
+    }
+
+    fn render_compiled(compiled: &Result<Option<Pos>, EvalError>) -> String {
+        match compiled {
+            Ok(Some(pos)) => render(pos),
+            Ok(None) => "none".to_owned(),
+            Err(error) => format!("error: {error}"),
+        }
+    }
+
+    /// How many quoted-triple levels `pos` nests, counted over a work list.
+    fn nesting(pos: &Pos) -> usize {
+        let mut deepest = 0;
+        let mut pending = vec![(pos, 0)];
+        while let Some((pos, depth)) = pending.pop() {
+            if let Pos::Triple(t) = pos {
+                deepest = deepest.max(depth + 1);
+                pending.extend([(&t.s, depth + 1), (&t.p, depth + 1), (&t.o, depth + 1)]);
+            }
+        }
+        deepest
+    }
+
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// The bound-slot test, the slot visit, the shape hash and — through the
+    /// structural order it decides — the constrained test answer as their recursive
+    /// references do, for every generated position.
+    #[test]
+    fn position_walks_agree_with_their_references_on_generated_positions() {
+        let dataset = dataset();
+        let ids = ids(&dataset);
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let pos = position(&mut choices, &ids);
+            nested += usize::from(matches!(pos, Pos::Triple(_)));
+            let bound: Vec<bool> = (0..COLUMNS).map(|_| choices.choose(2) == 0).collect();
+            let context = format!("seed {seed}: {}", render(&pos));
+            assert_eq!(
+                pos_has_bound_slot(&pos, &bound),
+                reference_pos_has_bound_slot(&pos, &bound),
+                "{context}"
+            );
+            let mut visited = Vec::new();
+            for_each_slot(&pos, &mut |c| visited.push(c));
+            let mut expected = Vec::new();
+            reference_for_each_slot(&pos, &mut |c| expected.push(c));
+            assert_eq!(visited, expected, "{context}");
+            let mut ours = std::collections::hash_map::DefaultHasher::new();
+            hash_pos(&pos, &mut ours);
+            let mut theirs = std::collections::hash_map::DefaultHasher::new();
+            reference_hash_pos(&pos, &mut theirs);
+            assert_eq!(ours.finish(), theirs.finish(), "{context}");
+            // `constrained` is private to `structural_order`: with nothing bound yet
+            // and neither pattern connected, the order puts first whichever of the two
+            // patterns has more constrained positions, the lower index on a tie — so
+            // the generated position's constrained count decides it.
+            let all_free = vec![false; COLUMNS];
+            let generated_constrained = usize::from(reference_constrained(&pos, &all_free));
+            let compiled = [
+                CompiledPattern {
+                    s: Pos::Slot(0),
+                    p: Pos::Slot(1),
+                    o: Pos::Slot(2),
+                },
+                CompiledPattern {
+                    s: Pos::Slot(3),
+                    p: Pos::Slot(3),
+                    o: pos,
+                },
+            ];
+            let expected_order = if generated_constrained > 0 {
+                vec![1, 0]
+            } else {
+                vec![0, 1]
+            };
+            assert_eq!(structural_order(&compiled), expected_order, "{context}");
+        }
+        assert!(
+            nested > 100,
+            "the generator nests positions ({nested} of 400 are quoted triples)"
+        );
+    }
+
+    /// Slot-key collection and the plan-introspection rendering answer as their
+    /// recursive references do, for every generated triple pattern.
+    #[test]
+    fn slot_keys_and_rendering_agree_with_their_references_on_generated_patterns() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let pattern = triple_pattern(&mut choices);
+            nested += usize::from(
+                matches!(pattern.subject, TermPattern::Triple(_))
+                    || matches!(pattern.object, TermPattern::Triple(_)),
+            );
+            let mut keys = Vec::new();
+            collect_triple_slot_keys(&pattern, &mut keys);
+            let mut expected = Vec::new();
+            reference_collect_triple_slot_keys(&pattern, &mut expected);
+            assert_eq!(keys, expected, "seed {seed}: {pattern:?}");
+            assert_eq!(slot_keys(&pattern).to_vec(), expected, "seed {seed}");
+            for term in [&pattern.subject, &pattern.object] {
+                assert_eq!(
+                    term_pattern_to_string(term),
+                    reference_term_pattern_to_string(term),
+                    "seed {seed}: {term:?}"
+                );
+            }
+            assert_eq!(
+                triple_pattern_to_string(&pattern),
+                format!(
+                    "{} {} {} .",
+                    reference_term_pattern_to_string(&pattern.subject),
+                    named_node_pattern_to_string(&pattern.predicate),
+                    reference_term_pattern_to_string(&pattern.object)
+                ),
+                "seed {seed}"
+            );
+        }
+        assert!(
+            nested > 100,
+            "the generator nests patterns ({nested} of 400)"
+        );
+    }
+
+    /// Compiling a term position gives the reference's answer AND makes the
+    /// reference's dataset lookups, in the reference's order, for every generated
+    /// pattern — nested structural triples, ground quoted triples looked up whole,
+    /// and constants the dataset lacks alike.
+    #[test]
+    fn compilation_agrees_with_its_reference_on_generated_patterns() {
+        let dataset = dataset();
+        let recording = Recording::over(&dataset);
+        let (mut structural, mut ground, mut absent) = (0, 0, 0);
+        for seed in 0..600_u64 {
+            let mut choices = Choices::new(seed);
+            let pattern = triple_pattern(&mut choices);
+            let schema = Arc::new(VarSchema::from_vars(slot_keys(&pattern)));
+            for term in [&pattern.subject, &pattern.object] {
+                let ours = compile_term(term, &schema, &recording);
+                let our_log = recording.take_log();
+                let theirs = reference_compile_term(term, &schema, &recording);
+                let their_log = recording.take_log();
+                assert_eq!(
+                    render_compiled(&ours),
+                    render_compiled(&theirs),
+                    "seed {seed}: {term:?}"
+                );
+                assert_eq!(our_log, their_log, "seed {seed}: {term:?}");
+                match &ours {
+                    Ok(Some(Pos::Triple(_))) => structural += 1,
+                    Ok(Some(Pos::Bound(_))) if matches!(term, TermPattern::Triple(_)) => {
+                        ground += 1;
+                    }
+                    Ok(None) => absent += 1,
+                    _ => {}
+                }
+            }
+        }
+        assert!(
+            structural > 50 && ground > 10 && absent > 50,
+            "the generator reaches every compilation outcome ({structural} structural, \
+             {ground} ground quoted triples, {absent} absent)"
+        );
+    }
+
+    /// Binding a position against a candidate gives the reference's verdict, leaves the
+    /// row as the reference leaves it, and resolves the same terms in the same order,
+    /// for every generated position and candidate.
+    #[test]
+    fn binding_agrees_with_its_reference_on_generated_positions() {
+        let dataset = dataset();
+        let all = ids(&dataset);
+        let recording = Recording::over(&dataset);
+        let (mut bound, mut refused) = (0, 0);
+        for seed in 0..600_u64 {
+            let mut choices = Choices::new(seed);
+            let candidate = all[choices.choose(all.len())];
+            let pos = if choices.choose(2) == 0 {
+                mirroring(&mut choices, &dataset, candidate)
+            } else {
+                position(&mut choices, &all)
+            };
+            let row: Solution = (0..COLUMNS)
+                .map(|_| {
+                    (choices.choose(3) == 0)
+                        .then(|| SolutionTerm::Existing(all[choices.choose(all.len())]))
+                })
+                .collect();
+            let mut ours = row.clone();
+            let our_verdict = bind_pos(&mut ours, &pos, candidate, &recording);
+            let our_log = recording.take_log();
+            let mut theirs = row;
+            let their_verdict = reference_bind_pos(&mut theirs, &pos, candidate, &recording);
+            let their_log = recording.take_log();
+            let context = format!(
+                "seed {seed}: {} against {}",
+                render(&pos),
+                candidate.index()
+            );
+            assert_eq!(our_verdict, their_verdict, "{context}");
+            assert_eq!(ours, theirs, "{context}");
+            assert_eq!(our_log, their_log, "{context}");
+            if our_verdict {
+                bound += 1;
+            } else {
+                refused += 1;
+            }
+        }
+        assert!(
+            bound > 50 && refused > 50,
+            "the generator binds and refuses ({bound} bound, {refused} refused)"
+        );
+    }
+
+    /// A position a hundred thousand quoted triples deep is tested for bound slots,
+    /// visited, hashed and released; a term pattern as deep has its slot keys
+    /// collected, is rendered and is compiled; and the compiled position is bound
+    /// against a term chain as deep — all on a thread with a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_position_is_walked_on_a_128_kib_stack() {
+        on_small_stack(|| {
+            let chain = Chain::new(DEPTH);
+            let leaf = TermId::from_index(0);
+            let deep = deep_position(DEPTH, leaf);
+            let bound = [false, true];
+            assert!(pos_has_bound_slot(&deep, &bound));
+            assert!(!pos_has_bound_slot(&deep, &[false, false]));
+            let mut slots = 0;
+            for_each_slot(&deep, &mut |_| slots += 1);
+            assert_eq!(slots, DEPTH + 1);
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            hash_pos(&deep, &mut hasher);
+            let hash = hasher.finish();
+            let mut again = std::collections::hash_map::DefaultHasher::new();
+            hash_pos(&deep_position(DEPTH, leaf), &mut again);
+            assert_eq!(hash, again.finish());
+            assert_eq!(
+                structural_order(&[CompiledPattern {
+                    s: Pos::Slot(0),
+                    p: Pos::Slot(1),
+                    o: deep_position(DEPTH, leaf),
+                }]),
+                vec![0]
+            );
+
+            // Binding: every level's subject is the leaf, every predicate binds slot 0
+            // to the chain's predicate, and the deepest object binds slot 1.
+            let mut row: Solution = [None, None].into_iter().collect();
+            assert!(bind_pos(&mut row, &deep, chain.top(), &chain));
+            assert_eq!(
+                row.as_slice(),
+                &[
+                    Some(SolutionTerm::Existing(TermId::from_index(1))),
+                    Some(SolutionTerm::Existing(leaf)),
+                ]
+            );
+            // A row whose slot 0 already disagrees is refused at the first level.
+            let mut disagreeing: Solution = [Some(SolutionTerm::Existing(leaf)), None]
+                .into_iter()
+                .collect();
+            assert!(!bind_pos(&mut disagreeing, &deep, chain.top(), &chain));
+            drop(deep);
+
+            let term = deep_term_pattern(DEPTH);
+            let mut keys = Vec::new();
+            collect_triple_slot_keys(
+                &TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: term.clone(),
+                },
+                &mut keys,
+            );
+            assert_eq!(keys, vec![Variable::new("s"), Variable::new("v")]);
+            let rendered = term_pattern_to_string(&term);
+            assert!(rendered.starts_with(&format!("<<(<{EX}a> <{EX}p> <<(<{EX}a> <{EX}p> ")));
+            assert!(rendered.ends_with(&format!("?v{}", ")>>".repeat(DEPTH))));
+            assert_eq!(
+                rendered.len(),
+                DEPTH * (format!("<<(<{EX}a> <{EX}p> )>>").len()) + 2
+            );
+
+            let dataset = dataset();
+            let schema = Arc::new(VarSchema::from_vars([Variable::new("v")]));
+            let compiled = compile_term(&term, &schema, dataset.as_ref())
+                .expect("compiles")
+                .expect("every constant is held");
+            assert_eq!(nesting(&compiled), DEPTH);
+            drop(compiled);
+        });
+    }
+}
+
+#[cfg(test)]
+mod survey_tests {
+    //! The plan survey against its recursive reference over generated plans, and at a
+    //! hundred thousand levels on a 128 KiB thread.
+
+    use std::sync::Arc;
+
+    use purrdf_core::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral};
+    use purrdf_sparql_algebra::{
+        Chain, Child, Expression, GraphPattern, GroundTerm, Literal, NamedNode, NamedNodePattern,
+        NodeRef, OrderExpression, PropertyFunctionCall, PropertyPathExpression, TermPattern,
+        TriplePattern, Variable,
+    };
+
+    use super::{PlanSurvey, record_call_estimate, survey_bgp, survey_pattern_plans};
+    use crate::DetHashSet;
+    use crate::dataset_spec::ActiveDataset;
+    use crate::error::EvalError;
+    use crate::governor::ledger::PlanEstimate;
+    use crate::property_fn::{
+        PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    };
+    use crate::user_fn::Volatility;
+    use purrdf_core::binding_pattern::BindingPattern;
+
+    const EX: &str = "http://example.org/";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+    /// The IRI of the one relation the registry holds.
+    const RELATION: &str = "http://example.org/rel";
+    /// An IRI no registry resolves.
+    const UNKNOWN: &str = "http://example.org/unknown";
+    /// What [`Declared`] declares it emits per invocation.
+    const ROWS_PER_INVOCATION: u64 = 7;
+
+    // ── The recursive reference ────────────────────────────────────────────────────
+
+    /// The survey as a recursion over the algebra: each node's children in written order,
+    /// a call priced after the whole subtree to its left.
+    fn reference_survey<D: DatasetView>(
+        dataset: &D,
+        active_dataset: &ActiveDataset<D::Id>,
+        active_graph: GraphMatch<D::Id>,
+        pattern: &GraphPattern,
+        relations: &PropertyFunctionRegistry,
+        survey: &mut PlanSurvey,
+    ) -> Result<(), EvalError> {
+        match pattern {
+            GraphPattern::Bgp { patterns } => survey_bgp(
+                dataset,
+                active_dataset,
+                active_graph,
+                pattern,
+                patterns,
+                survey,
+            ),
+            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+                reference_survey(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    left,
+                    relations,
+                    survey,
+                )?;
+                if let GraphPattern::PropertyFunction(call) = &**right {
+                    let mut bound = DetHashSet::default();
+                    crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
+                    record_call_estimate(
+                        right,
+                        call,
+                        &bound,
+                        reference_predicted_rows(left, survey).unwrap_or(1),
+                        relations,
+                        survey,
+                    )
+                } else {
+                    reference_survey(
+                        dataset,
+                        active_dataset,
+                        active_graph,
+                        right,
+                        relations,
+                        survey,
+                    )
+                }
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms {
+                    reference_survey(
+                        dataset,
+                        active_dataset,
+                        active_graph,
+                        arm,
+                        relations,
+                        survey,
+                    )?;
+                }
+                Ok(())
+            }
+            GraphPattern::LeftJoin { left, right, .. } | GraphPattern::Minus { left, right } => {
+                reference_survey(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    left,
+                    relations,
+                    survey,
+                )?;
+                reference_survey(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    right,
+                    relations,
+                    survey,
+                )
+            }
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Group { inner, .. } => reference_survey(
+                dataset,
+                active_dataset,
+                active_graph,
+                inner,
+                relations,
+                survey,
+            ),
+            GraphPattern::Graph { name, inner } => {
+                let inner_graph = match name {
+                    NamedNodePattern::NamedNode(n) => dataset
+                        .term_id_by_value(&crate::convert::named_node_to_value(n))
+                        .map_or(GraphMatch::Default, GraphMatch::Named),
+                    NamedNodePattern::Variable(_) => GraphMatch::Any,
+                };
+                reference_survey(
+                    dataset,
+                    active_dataset,
+                    inner_graph,
+                    inner,
+                    relations,
+                    survey,
+                )
+            }
+            GraphPattern::PropertyFunction(call) => {
+                record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey)
+            }
+            GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::Service { .. } => Ok(()),
+        }
+    }
+
+    /// [`super::predicted_rows`] as a recursion down a `LATERAL` chain's right spine.
+    fn reference_predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
+        if let Some(estimate) = survey.estimate_of(pattern) {
+            return Some(estimate.rows);
+        }
+        match pattern {
+            GraphPattern::Lateral { right, .. } => reference_predicted_rows(right, survey),
+            _ => None,
+        }
+    }
+
+    // ── Fixtures ───────────────────────────────────────────────────────────────────
+
+    /// A relation declaring one subject and one object argument, every mode free, and
+    /// [`ROWS_PER_INVOCATION`] rows per call; never dispatched.
+    #[derive(Debug)]
+    struct Declared {
+        modes: [BindingPattern; 1],
+    }
+
+    impl Declared {
+        fn new() -> Self {
+            Self {
+                modes: [PfArity::new(1, 1).all_free_mode()],
+            }
+        }
+    }
+
+    /// The empty cursor [`Declared::open`] hands out.
+    struct EmptyCursor;
+
+    impl PfCursor for EmptyCursor {
+        fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+            Ok(None)
+        }
+    }
+
+    impl PropertyFunction for Declared {
+        fn volatility(&self) -> Volatility {
+            Volatility::Stable
+        }
+
+        fn arity(&self) -> PfArity {
+            PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+            ROWS_PER_INVOCATION
+        }
+
+        fn open(
+            &self,
+            _args: &PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn PfCursor>, EvalError> {
+            Ok(Box::new(EmptyCursor))
+        }
+    }
+
+    fn relations() -> PropertyFunctionRegistry {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(RELATION, Arc::new(Declared::new()));
+        registry
+    }
+
+    /// `<a> <p> <b>` and `<a> <q> "1"` in the default graph, `<b> <p> <c>` in `<g>`.
+    fn dataset() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri(&format!("{EX}a"));
+        let bb = b.intern_iri(&format!("{EX}b"));
+        let c = b.intern_iri(&format!("{EX}c"));
+        let p = b.intern_iri(&format!("{EX}p"));
+        let q = b.intern_iri(&format!("{EX}q"));
+        let g = b.intern_iri(&format!("{EX}g"));
+        let one = b.intern_literal(RdfLiteral::typed(
+            "1",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        b.push_quad(a, p, bb, None);
+        b.push_quad(a, q, one, None);
+        b.push_quad(bb, p, c, Some(g));
+        b.freeze().expect("the fixture dataset")
+    }
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 24,
+            }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+
+        /// Whether another nesting level may be spent.
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    fn var(name: &str) -> Variable {
+        Variable::new(name)
+    }
+
+    fn call(iri_text: &str) -> GraphPattern {
+        GraphPattern::PropertyFunction(PropertyFunctionCall {
+            iri: iri_text.to_owned(),
+            subject_args: vec![TermPattern::Variable(var("s"))],
+            object_args: vec![TermPattern::Variable(var("o"))],
+        })
+    }
+
+    /// The one-pattern `?s <p> ?o`.
+    fn bgp() -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(var("s")),
+                predicate: NamedNodePattern::NamedNode(iri("p")),
+                object: TermPattern::Variable(var("o")),
+            }],
+        }
+    }
+
+    /// One to three triple patterns: subjects and objects variable or ground, one
+    /// predicate in five absent from the dataset, so both the ordered and the empty
+    /// estimate arise.
+    fn generated_bgp(choices: &mut Choices) -> GraphPattern {
+        let count = 1 + choices.choose(3);
+        let patterns = (0..count)
+            .map(|k| TriplePattern {
+                subject: if choices.choose(3) == 0 {
+                    TermPattern::NamedNode(iri("a"))
+                } else {
+                    TermPattern::Variable(var(&format!("s{}", k % 2)))
+                },
+                predicate: NamedNodePattern::NamedNode(match choices.choose(5) {
+                    0 => iri("missing"),
+                    1 => iri("q"),
+                    _ => iri("p"),
+                }),
+                object: match choices.choose(4) {
+                    0 => TermPattern::NamedNode(iri("b")),
+                    1 => TermPattern::Literal(Literal::new_simple("1")),
+                    _ => TermPattern::Variable(var(&format!("o{k}"))),
+                },
+            })
+            .collect();
+        GraphPattern::Bgp { patterns }
+    }
+
+    fn leaf(choices: &mut Choices) -> GraphPattern {
+        match choices.choose(8) {
+            0..=3 => generated_bgp(choices),
+            4 => call(RELATION),
+            5 => call(UNKNOWN),
+            6 => GraphPattern::Path {
+                subject: TermPattern::Variable(var("s")),
+                path: PropertyPathExpression::NamedNode(iri("p")),
+                object: TermPattern::Variable(var("o")),
+            },
+            _ => GraphPattern::Values {
+                variables: vec![var("s")],
+                bindings: vec![vec![Some(GroundTerm::NamedNode(iri("a")))]],
+            },
+        }
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return leaf(choices);
+        }
+        match choices.choose(18) {
+            0 | 1 => leaf(choices),
+            2 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            3 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(call(if choices.choose(3) == 0 {
+                    UNKNOWN
+                } else {
+                    RELATION
+                })),
+            },
+            4 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            5 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(call(RELATION)),
+            },
+            6 => {
+                let first = pattern(choices);
+                let second = pattern(choices);
+                let rest: Vec<GraphPattern> =
+                    (0..choices.choose(2)).map(|_| pattern(choices)).collect();
+                GraphPattern::Union {
+                    arms: Chain::new(first, second, rest),
+                }
+            }
+            7 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: None,
+            },
+            8 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            kind => {
+                let inner = pattern(choices);
+                wrapped(choices, kind, inner)
+            }
+        }
+    }
+
+    /// `inner` under the unary wrapper `kind` (9 to 17) names.
+    fn wrapped(choices: &mut Choices, kind: usize, inner: GraphPattern) -> GraphPattern {
+        let inner = Child::new(inner);
+        let variable = |name: &str| Expression::Variable(var(name));
+        match kind {
+            9 => GraphPattern::Filter {
+                expr: variable("s"),
+                inner,
+            },
+            10 => GraphPattern::Extend {
+                inner,
+                variable: var("x"),
+                expression: variable("s"),
+            },
+            11 => GraphPattern::Unfold {
+                inner,
+                expression: variable("s"),
+                element: var("e"),
+                companion: None,
+            },
+            12 => GraphPattern::Project {
+                inner,
+                variables: vec![var("s")],
+            },
+            13 => GraphPattern::Distinct { inner },
+            14 => GraphPattern::Slice {
+                inner,
+                start: 0,
+                length: Some(1),
+            },
+            15 => GraphPattern::OrderBy {
+                inner,
+                expression: vec![OrderExpression::Asc(variable("s"))],
+            },
+            16 => GraphPattern::Group {
+                inner,
+                variables: vec![var("s")],
+                aggregates: Vec::new(),
+            },
+            _ => GraphPattern::Graph {
+                name: match choices.choose(3) {
+                    0 => NamedNodePattern::Variable(var("g")),
+                    1 => NamedNodePattern::NamedNode(iri("g")),
+                    _ => NamedNodePattern::NamedNode(iri("nowhere")),
+                },
+                inner,
+            },
+        }
+    }
+
+    /// How many calls of the registered relation `plan` attaches to the right of a
+    /// `JOIN` or `LATERAL` whose left arm `survey` predicted: the calls priced against a
+    /// driving bag rather than the identity table.
+    fn driven_calls(plan: &GraphPattern, survey: &PlanSurvey) -> usize {
+        let mut driven = 0;
+        let mut pending = vec![NodeRef::Pattern(plan)];
+        while let Some(node) = pending.pop() {
+            if let NodeRef::Pattern(
+                GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right },
+            ) = node
+                && let GraphPattern::PropertyFunction(call) = &**right
+                && call.iri == RELATION
+                && survey.estimate_of(left).is_some()
+            {
+                driven += 1;
+            }
+            node.for_each_child(|child| pending.push(child));
+        }
+        driven
+    }
+
+    /// A survey's content in a comparable form: its join-order strings in order, and its
+    /// estimates by node id.
+    fn content(survey: &PlanSurvey) -> (Vec<String>, Vec<(usize, PlanEstimate)>) {
+        let estimates: Vec<(usize, PlanEstimate)> = survey
+            .estimates
+            .iter()
+            .enumerate()
+            .filter_map(|(id, estimate)| estimate.clone().map(|estimate| (id, estimate)))
+            .collect();
+        (survey.orders.clone(), estimates)
+    }
+
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// The work-list survey records the same join orders in the same order, the same
+    /// estimate at every node and the same outcome as the recursive reference, for
+    /// every generated plan — and the generator reaches priced calls, calls driven by a
+    /// surveyed left arm, `GRAPH`-scoped estimates and empty estimates.
+    #[test]
+    fn the_survey_agrees_with_its_recursive_reference_on_generated_plans() {
+        let dataset = dataset();
+        let active = ActiveDataset::store_default();
+        let relations = relations();
+        let mut priced_calls = 0;
+        let mut driven = 0;
+        let mut empty = 0;
+        let mut ordered = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let plan = pattern(&mut choices);
+            let tree = crate::plan::Tree::build(&plan);
+            let mut ours = PlanSurvey::for_shape(tree.shape());
+            let answered = survey_pattern_plans(
+                &*dataset,
+                &active,
+                GraphMatch::Default,
+                &plan,
+                &relations,
+                &mut ours,
+            );
+            let mut theirs = PlanSurvey::for_shape(tree.shape());
+            let expected = reference_survey(
+                &*dataset,
+                &active,
+                GraphMatch::Default,
+                &plan,
+                &relations,
+                &mut theirs,
+            );
+            let context = format!("seed {seed}: {plan:?}");
+            assert_eq!(
+                answered.as_ref().map_err(ToString::to_string),
+                expected.as_ref().map_err(ToString::to_string),
+                "{context}"
+            );
+            assert_eq!(content(&ours), content(&theirs), "{context}");
+            assert_eq!(ours.peak_cells(), theirs.peak_cells(), "{context}");
+            empty += ours
+                .estimates
+                .iter()
+                .flatten()
+                .filter(|estimate| estimate.rows == 0)
+                .count();
+            priced_calls += ours
+                .estimates
+                .iter()
+                .flatten()
+                .filter(|estimate| estimate.rows == ROWS_PER_INVOCATION)
+                .count();
+            driven += driven_calls(&plan, &ours);
+            ordered += usize::from(!ours.orders.is_empty());
+        }
+        assert!(priced_calls > 0, "some generated call is priced");
+        assert!(
+            driven > 0,
+            "some priced call is driven by a surveyed left arm"
+        );
+        assert!(empty > 0, "some generated BGP is predicted empty");
+        assert!(ordered > 0, "some generated BGP has an order to choose");
+    }
+
+    /// A plan a hundred thousand levels tall — wrappers around one BGP, a `LATERAL`
+    /// chain ending in a call, and a `JOIN` spine of BGPs — is surveyed whole on a
+    /// 128 KiB thread, with the estimate count each shape has by construction.
+    #[test]
+    fn a_hundred_thousand_levels_are_surveyed_on_a_128_kib_thread() {
+        on_small_stack(|| {
+            let dataset = dataset();
+            let active = ActiveDataset::store_default();
+            let relations = relations();
+            let survey = |plan: &GraphPattern| {
+                let tree = crate::plan::Tree::build(plan);
+                let mut survey = PlanSurvey::for_shape(tree.shape());
+                survey_pattern_plans(
+                    &*dataset,
+                    &active,
+                    GraphMatch::Default,
+                    plan,
+                    &relations,
+                    &mut survey,
+                )
+                .expect("the deep plan is surveyed");
+                survey
+            };
+
+            let mut wrapped = bgp();
+            for level in 0..DEPTH {
+                wrapped = if level.is_multiple_of(2) {
+                    GraphPattern::Project {
+                        inner: Child::new(wrapped),
+                        variables: vec![var("s")],
+                    }
+                } else {
+                    GraphPattern::Filter {
+                        expr: Expression::Variable(var("s")),
+                        inner: Child::new(wrapped),
+                    }
+                };
+            }
+            assert_eq!(
+                survey(&wrapped).estimates.iter().flatten().count(),
+                1,
+                "one BGP under the wrappers"
+            );
+            drop(wrapped);
+
+            // Every level's right side is the level below; the innermost is the call,
+            // driven by the BGP beside it.
+            let mut chain = GraphPattern::Lateral {
+                left: Child::new(bgp()),
+                right: Child::new(call(RELATION)),
+            };
+            for _ in 1..DEPTH {
+                chain = GraphPattern::Lateral {
+                    left: Child::new(bgp()),
+                    right: Child::new(chain),
+                };
+            }
+            let surveyed = survey(&chain);
+            assert_eq!(
+                surveyed.estimates.iter().flatten().count(),
+                DEPTH + 1,
+                "a BGP per level and the call"
+            );
+            let mut innermost = &chain;
+            while let GraphPattern::Lateral { right, .. } = innermost
+                && matches!(**right, GraphPattern::Lateral { .. })
+            {
+                innermost = right;
+            }
+            let GraphPattern::Lateral { left, right } = innermost else {
+                unreachable!("the chain's innermost node is a LATERAL");
+            };
+            let driving = surveyed
+                .estimate_of(left)
+                .expect("the left arm is predicted")
+                .rows;
+            assert_eq!(
+                surveyed
+                    .estimate_of(right)
+                    .expect("the call is priced")
+                    .rows,
+                ROWS_PER_INVOCATION * driving,
+                "the innermost call is priced against the BGP driving it"
+            );
+            drop(chain);
+
+            let mut spine = bgp();
+            for _ in 0..DEPTH {
+                spine = GraphPattern::Join {
+                    left: Child::new(spine),
+                    right: Child::new(bgp()),
+                };
+            }
+            assert_eq!(
+                survey(&spine).estimates.iter().flatten().count(),
+                DEPTH + 1,
+                "a BGP per level"
+            );
+            drop(spine);
+        });
     }
 }

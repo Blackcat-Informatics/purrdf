@@ -61,9 +61,11 @@
 //! child is explored to exhaustion before its parent advances, and the budget is spent one
 //! unit per candidate in the order the candidates are reached.
 
+use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
+use std::ops::ControlFlow;
 
-use purrdf_core::TermValue;
+use purrdf_core::{TermValue, visit_nested};
 
 use crate::EntailError;
 use crate::entails::graph::Triple;
@@ -167,26 +169,40 @@ impl Closure {
 /// Every key this newly binds is recorded on `trail`, so a caller whose later patterns fail
 /// can undo exactly the bindings this attempt introduced — and not the ones an earlier
 /// attempt is still relying on.
+///
+/// The pair is unified in [`visit_nested`]'s pre-order — a triple term's subject pair fully
+/// before its predicate pair, before its object pair — and the first mismatch ends it.
 fn try_unify(pat: &Pat, ground: &TermValue, bound: &mut Binding, trail: &mut Vec<VarKey>) -> bool {
-    match pat {
-        Pat::Var(key) => {
-            if let Some(previous) = bound.get(key) {
-                return previous == ground;
+    visit_nested((pat, ground), |(pat, ground)| {
+        let unified = match pat {
+            Pat::Var(key) => {
+                if let Some(previous) = bound.get(key) {
+                    previous == ground
+                } else {
+                    bound.insert(key.clone(), ground.clone());
+                    trail.push(key.clone());
+                    true
+                }
             }
-            bound.insert(key.clone(), ground.clone());
-            trail.push(key.clone());
-            true
+            Pat::Triple(inner) => match ground {
+                TermValue::Triple { s, p, o } => {
+                    return ControlFlow::Continue(Some([
+                        (&inner[0], &**s),
+                        (&inner[1], &**p),
+                        (&inner[2], &**o),
+                    ]));
+                }
+                _ => false,
+            },
+            Pat::Ground(term) => term == ground,
+        };
+        if unified {
+            ControlFlow::Continue(None)
+        } else {
+            ControlFlow::Break(())
         }
-        Pat::Triple(inner) => match ground {
-            TermValue::Triple { s, p, o } => {
-                try_unify(&inner[0], s, bound, trail)
-                    && try_unify(&inner[1], p, bound, trail)
-                    && try_unify(&inner[2], o, bound, trail)
-            }
-            _ => false,
-        },
-        Pat::Ground(term) => term == ground,
-    }
+    })
+    .is_continue()
 }
 
 /// The bucket a ground predicate term reads, if the closure has one.
@@ -555,16 +571,25 @@ pub(crate) fn find_all(
 /// that leaves a conclusion variable unbound produces no triple to look for, and
 /// [`verify`](super::verify) rejects it instead of quietly treating the pattern as
 /// satisfied.
+///
+/// A triple term is assembled bottom-up over [`Pat::try_fold`]'s work list, and the first
+/// open position ends it.
 pub(crate) fn substitute(pat: &Pat, bound: &Binding) -> Option<TermValue> {
-    match pat {
-        Pat::Ground(term) => Some(term.clone()),
-        Pat::Var(key) => bound.get(key).cloned(),
-        Pat::Triple(inner) => Some(TermValue::Triple {
-            s: Box::new(substitute(&inner[0], bound)?),
-            p: Box::new(substitute(&inner[1], bound)?),
-            o: Box::new(substitute(&inner[2], bound)?),
-        }),
-    }
+    pat.try_fold(
+        |pat| match pat {
+            Pat::Ground(term) => Ok(term.clone()),
+            Pat::Var(key) => bound.get(key).cloned().ok_or(()),
+            Pat::Triple(_) => unreachable!("a triple term is folded from its parts"),
+        },
+        |s, p, o| {
+            Ok(TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            })
+        },
+    )
+    .ok()
 }
 
 /// Render a pattern triple the way a diagnostic prints it.
@@ -903,5 +928,154 @@ mod tests {
         assert_eq!(closure.len(), 2, "a duplicate triple is one triple");
         assert!(closure.contains(&[iri("s"), iri("p"), iri("o")]));
         assert!(!closure.contains(&[iri("s"), iri("p"), iri("x")]));
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! Unification and substitution against their recursive references, and at a
+    //! hundred thousand levels on a 128 KiB thread.
+
+    use core::convert::Infallible;
+    use core::ops::ControlFlow;
+
+    use purrdf_core::{TermBox, TermValue};
+
+    use super::{Binding, substitute, try_unify};
+    use crate::entails::pattern::term_walk_tests::{dismantle, generated_pat, pattern_chain};
+    use crate::entails::pattern::{Pat, VarKey};
+
+    fn reference_unify(
+        pat: &Pat,
+        ground: &TermValue,
+        bound: &mut Binding,
+        trail: &mut Vec<VarKey>,
+    ) -> bool {
+        match pat {
+            Pat::Var(key) => {
+                if let Some(previous) = bound.get(key) {
+                    return previous == ground;
+                }
+                bound.insert(key.clone(), ground.clone());
+                trail.push(key.clone());
+                true
+            }
+            Pat::Triple(inner) => match ground {
+                TermValue::Triple { s, p, o } => {
+                    reference_unify(&inner[0], s, bound, trail)
+                        && reference_unify(&inner[1], p, bound, trail)
+                        && reference_unify(&inner[2], o, bound, trail)
+                }
+                _ => false,
+            },
+            Pat::Ground(term) => term == ground,
+        }
+    }
+
+    fn reference_substitute(pat: &Pat, bound: &Binding) -> Option<TermValue> {
+        match pat {
+            Pat::Ground(term) => Some(term.clone()),
+            Pat::Var(key) => bound.get(key).cloned(),
+            Pat::Triple(inner) => Some(TermValue::Triple {
+                s: TermBox::new(reference_substitute(&inner[0], bound)?),
+                p: TermBox::new(reference_substitute(&inner[1], bound)?),
+                o: TermBox::new(reference_substitute(&inner[2], bound)?),
+            }),
+        }
+    }
+
+    /// A binding of some of `pat`'s variables to small generated terms.
+    fn partial_binding(pat: &Pat, seed: u64) -> Binding {
+        let mut bound = Binding::new();
+        let mut state = seed;
+        let ControlFlow::Continue(()) = pat.visit(|pat| -> ControlFlow<Infallible> {
+            if let Pat::Var(key) = pat
+                && !purrdf_testkit::rng::splitmix64_next(&mut state).is_multiple_of(4)
+            {
+                let mut budget = 1;
+                let value = crate::test_terms::term_value(
+                    &mut state,
+                    &mut budget,
+                    crate::test_terms::TermShape::Any,
+                );
+                bound.entry(key.clone()).or_insert(value);
+            }
+            ControlFlow::Continue(())
+        });
+        bound
+    }
+
+    /// Unification of every generated pattern against a generated ground term, and
+    /// against the ground term its own substitution names, binds, trails and answers
+    /// exactly as the recursive reference does; substitution answers what the reference
+    /// does, an open position included.
+    #[test]
+    fn unification_and_substitution_agree_with_their_recursive_references() {
+        let (mut unified, mut open) = (0, 0);
+        for seed in 0..400_u64 {
+            let pat = generated_pat(seed);
+            let partial = partial_binding(&pat, seed);
+            let substituted = substitute(&pat, &partial);
+            assert_eq!(
+                substituted,
+                reference_substitute(&pat, &partial),
+                "seed {seed}"
+            );
+            open += usize::from(substituted.is_none());
+            let mut state = seed + 1_000;
+            let mut budget = 8;
+            let unrelated = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::Any,
+            );
+            for ground in substituted.iter().chain([&unrelated]) {
+                let (mut bound, mut trail) = (Binding::new(), Vec::new());
+                let (mut expected_bound, mut expected_trail) = (Binding::new(), Vec::new());
+                let found = try_unify(&pat, ground, &mut bound, &mut trail);
+                let expected =
+                    reference_unify(&pat, ground, &mut expected_bound, &mut expected_trail);
+                assert_eq!(found, expected, "seed {seed}");
+                assert_eq!(bound, expected_bound, "seed {seed}");
+                assert_eq!(trail, expected_trail, "seed {seed}");
+                unified += usize::from(found);
+            }
+        }
+        assert!(unified > 0, "some generated pair unifies");
+        assert!(open > 0, "some substitution leaves a position open");
+    }
+
+    /// A pattern a hundred thousand levels deep is substituted, and unified with the
+    /// term its substitution names, on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_pattern_unifies_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let pat = pattern_chain(LEVELS);
+                let mut bound = Binding::new();
+                bound.insert(
+                    VarKey::Projected("x".to_owned()),
+                    TermValue::iri("http://example.org/s"),
+                );
+                bound.insert(
+                    VarKey::Blank {
+                        label: "b".to_owned(),
+                        scope: purrdf_core::BlankScope::DEFAULT,
+                    },
+                    TermValue::iri("http://example.org/o"),
+                );
+                let ground = substitute(&pat, &bound).expect("every variable is bound");
+                assert_eq!(ground, crate::test_terms::triple_chain(LEVELS));
+                let (mut fresh, mut trail) = (Binding::new(), Vec::new());
+                assert!(try_unify(&pat, &ground, &mut fresh, &mut trail));
+                assert_eq!(fresh, bound);
+                assert_eq!(trail.len(), 2);
+                dismantle(pat);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no walk overflowed the thread's stack");
     }
 }

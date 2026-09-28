@@ -72,10 +72,7 @@ fn equal_results(left: SparqlResult, right: SparqlResult) {
 fn prepared_operations_match_text_with_shacl_prebinding_for_each_result_form() {
     let engine = NativeSparqlEngine::new();
     let dataset = data();
-    let options = QueryOptions {
-        prebinding: purrdf_sparql_eval::ShaclPrebinding::Applied,
-        ..QueryOptions::EMPTY
-    };
+    let options = QueryOptions::new().with_prebinding(purrdf_sparql_eval::ShaclPrebinding::Applied);
     for query in [
         SELECT,
         "ASK { ?this <http://example.org/p> ?value }",
@@ -244,10 +241,7 @@ fn fallible_prepared_checkpoints_discard_answers_and_preserve_operational_preced
     );
     let relation_env = purrdf_sparql_eval::ExtensionEnv::over_relations(registry)
         .expect("the fixture relation declares without panicking");
-    let relation_options = QueryOptions {
-        env: &relation_env,
-        ..QueryOptions::EMPTY
-    };
+    let relation_options = QueryOptions::new().with_env(&relation_env);
     let admission_mismatched = engine
         .prepare_query_with_options(
             "ASK { ?s <http://example.org/relation> ?o }",

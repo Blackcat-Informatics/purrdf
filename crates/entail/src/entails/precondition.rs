@@ -77,6 +77,8 @@
 //! being true without anything noticing.
 
 use std::collections::BTreeSet;
+use std::convert::Infallible;
+use std::ops::ControlFlow;
 
 use purrdf_core::RdfDataset;
 
@@ -354,23 +356,17 @@ fn is_container_membership(iri: &str) -> bool {
 /// A variable position is not a mention: a `?p` ranges over the closure's own predicates and
 /// binds to whichever of them exist, so it neither asks for nor misses an axiomatic triple.
 fn axiomatic_terms(pats: &[PatTriple]) -> Vec<String> {
-    fn walk(pat: &Pat, found: &mut Vec<String>) {
-        match pat {
-            Pat::Ground(purrdf_core::TermValue::Iri(iri)) if is_container_membership(iri) => {
-                found.push(iri.clone());
-            }
-            Pat::Triple(inner) => {
-                for position in &**inner {
-                    walk(position, found);
-                }
-            }
-            Pat::Ground(_) | Pat::Var(_) => {}
-        }
-    }
     let mut found = Vec::new();
     for triple in pats {
         for position in triple {
-            walk(position, &mut found);
+            let ControlFlow::Continue(()) = position.visit(|pat| -> ControlFlow<Infallible> {
+                if let Pat::Ground(purrdf_core::TermValue::Iri(iri)) = pat
+                    && is_container_membership(iri)
+                {
+                    found.push(iri.clone());
+                }
+                ControlFlow::Continue(())
+            });
         }
     }
     found.sort_unstable();
@@ -680,5 +676,55 @@ mod tests {
         ] {
             assert!(!reason.to_string().is_empty(), "{reason:?}");
         }
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The container-membership survey against its recursive reference.
+
+    use super::{Pat, axiomatic_terms, is_container_membership};
+    use crate::entails::pattern::term_walk_tests::generated_pat;
+    use purrdf_core::TermValue;
+
+    fn reference(pat: &Pat, found: &mut Vec<String>) {
+        match pat {
+            Pat::Ground(TermValue::Iri(iri)) if is_container_membership(iri) => {
+                found.push(iri.clone());
+            }
+            Pat::Triple(inner) => {
+                for position in &**inner {
+                    reference(position, found);
+                }
+            }
+            Pat::Ground(_) | Pat::Var(_) => {}
+        }
+    }
+
+    /// The survey finds, sorted and deduplicated, exactly the container-membership IRIs
+    /// the recursive reference finds, nested in triple terms included.
+    #[test]
+    fn the_survey_agrees_with_its_recursive_reference_on_generated_patterns() {
+        const MEMBER: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#_1";
+        let mut found_any = 0;
+        for seed in 0..400_u64 {
+            let member = Pat::Ground(TermValue::iri(MEMBER));
+            let nested = Pat::Triple(Box::new([
+                generated_pat(seed),
+                member,
+                generated_pat(seed + 1),
+            ]));
+            let triples = [[nested, generated_pat(seed + 2), generated_pat(seed + 3)]];
+            let mut expected = Vec::new();
+            for position in &triples[0] {
+                reference(position, &mut expected);
+            }
+            expected.sort_unstable();
+            expected.dedup();
+            let found = axiomatic_terms(&triples);
+            found_any += usize::from(!found.is_empty());
+            assert_eq!(found, expected, "seed {seed}");
+        }
+        assert!(found_any > 0, "the nested member IRI is found");
     }
 }

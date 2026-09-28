@@ -102,9 +102,8 @@ use purrdf_sparql_algebra::{Expression, GraphPattern, Variable};
 
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
-use crate::expr::eval_expr;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
-use crate::row_ingest::{GovernedRowIngest, RowAdmission};
+use crate::row_ingest::{GovernedRowIngest, IngestVerdict};
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -126,7 +125,7 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         // No rows cross, but the COLUMNS still do — this node's output schema is
         // syntactic (the inner's columns plus its own targets), exactly as
         // `Extend`'s is.
@@ -144,9 +143,16 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     // expression evaluation per input row is what this operator spends before it
     // knows how far that row expands. See `crate::expr::eval_filter` for why the
     // refused rows are cut before the expression runs rather than after.
-    let _ = ctx.admit_rows(
-        &mut seq.rows,
+    //
+    // The canonical order is admission(i), then the ingest of every row input row `i`
+    // expands to, then admission(i + 1): each input row passes the row checkpoint
+    // immediately before its own work, so a ceiling trips at the admission or the
+    // ingest of the row the budget ran out on. This loop is never forked.
+    let mut checkpoint = crate::row_checkpoint::RowCheckpoint::for_rows(
+        ctx,
         crate::governor::ChargePoint::RowExpressionEvaluation,
+        false,
+        seq.rows.len(),
     );
 
     let in_width = seq.schema.len();
@@ -164,16 +170,23 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     // actually bounds the expansion, since one literal can hold up to
     // `purrdf_cdt::MAX_ELEMENTS` elements.
     let ingest = GovernedRowIngest::new(ctx, width, None);
+    let program = crate::vm::program_at(ctx, node, expression);
+    let mut linked = crate::vm::Linked::link(program, expression, &seq.schema, ctx);
     let mut rows: Vec<Solution<D::Id>> = Vec::new();
     let mut tripped: Option<TrippedGovernor> = None;
 
     'input: for (idx, mu) in seq.rows.iter().enumerate() {
+        // Admission(i): a refusal ends the loop before this row's expression runs.
+        if let Err(governor) = checkpoint.pass(ctx) {
+            tripped = Some(governor);
+            break 'input;
+        }
         // §17.4.2.2: `BNODE(strExpr)` memoizes per solution — see `ctx.current_row`'s
         // doc. The position here is the INPUT row's, which is the solution the
         // expression is evaluated against, and it advances once per input row
         // however many output rows that row expands to.
         ctx.current_row = idx as u64;
-        let Some(value) = composite_of(expression, mu, &seq.schema, ctx)? else {
+        let Some(value) = composite_of(&mut linked, mu, &seq.schema, ctx)? else {
             // SEP-0009 §12.3, both definitions, verbatim: "If var ∉ dom(μ) and
             // expr(μ) is an error or an RDF term that is neither a well-formed
             // cdt:List literal nor a well-formed cdt:Map literal, then
@@ -193,11 +206,11 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
                 break 'input;
             }
             match ingest.admit(ctx, rows.len()) {
-                RowAdmission::Abandoned(governor) => {
+                IngestVerdict::Abandoned(governor) => {
                     tripped = governor;
                     break 'input;
                 }
-                RowAdmission::Admitted => {}
+                IngestVerdict::Admitted => {}
             }
             let mut row: Solution<D::Id> = purrdf_core::smallvec![None; width];
             row[..in_width].copy_from_slice(mu);
@@ -210,11 +223,11 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
                 break 'input;
             }
             match ingest.admit(ctx, rows.len()) {
-                RowAdmission::Abandoned(governor) => {
+                IngestVerdict::Abandoned(governor) => {
                     tripped = governor;
                     break 'input;
                 }
-                RowAdmission::Admitted => {}
+                IngestVerdict::Admitted => {}
             }
             let mut row: Solution<D::Id> = purrdf_core::smallvec![None; width];
             row[..in_width].copy_from_slice(mu);
@@ -263,19 +276,19 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     })
 }
 
-/// The composite value `expression` denotes for `mu`, or `None` when it denotes
-/// none (unbound, raised, not `cdt:`-typed, or an ill-formed composite literal).
+/// The composite value the linked `expression` denotes for `mu`, or `None` when it
+/// denotes none (unbound, raised, not `cdt:`-typed, or an ill-formed composite literal).
 ///
 /// # Errors
 ///
 /// Any hard failure `expression` itself raises.
 fn composite_of<D: DatasetView + Sync>(
-    expression: &Expression,
+    expression: &mut crate::vm::Linked<'_, D::Id>,
     mu: &Solution<D::Id>,
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<CdtValue>, EvalError> {
-    let Some(term) = eval_expr(expression, mu, schema, ctx)? else {
+    let Some(term) = expression.term(mu, schema, ctx)? else {
         return Ok(None);
     };
     let value = ctx.scratch.value_of(ctx.dataset, term);
@@ -367,6 +380,11 @@ fn bind<D: DatasetView + Sync>(
     //
     // `false` remains reserved for its one meaning: a produced binding that
     // DISAGREES with one the row already holds, below — a genuine non-match.
+    // The door judges the member's language tags over a work list and then walks the
+    // term — looks it up, hashes it, compares it — over work lists too, so a member
+    // nested to any depth costs no machine stack. A nested composite comes back as a
+    // single `cdt:`-typed literal, so the only nesting a member carries is that of the
+    // triple terms inside it; `purrdf-cdt` bounds that depth by its byte bound alone.
     let Some(term) = ctx.scratch.intern_checked(ctx.dataset, value) else {
         return true;
     };

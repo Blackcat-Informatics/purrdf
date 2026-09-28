@@ -33,6 +33,7 @@
 //!   composed view — freezing nothing, and shipping the bytes the materialized
 //!   flat path ships.
 
+use purrdf_core::TermBox;
 use std::cell::Cell;
 use std::sync::Arc;
 
@@ -561,9 +562,9 @@ fn quoted_triple_in_a_plain_slot() -> Arc<RdfDataset> {
     let p = builder.intern_iri("https://example.org/p");
     let o = builder.intern_iri("https://example.org/o");
     let quoted = builder.intern_value(&Value::Triple {
-        s: Box::new(Value::iri("https://example.org/qs")),
-        p: Box::new(Value::iri("https://example.org/qp")),
-        o: Box::new(Value::iri("https://example.org/qo")),
+        s: TermBox::new(Value::iri("https://example.org/qs")),
+        p: TermBox::new(Value::iri("https://example.org/qp")),
+        o: TermBox::new(Value::iri("https://example.org/qo")),
     });
     builder.push_quad(s, p, quoted, None);
     builder.push_quad(s, p, o, None);
@@ -1137,9 +1138,9 @@ fn a_delta_that_removes_the_bases_only_reifier_still_ingests() {
             s: TermValue::iri("https://example.org/claim"),
             p: TermValue::iri(RDF_REIFIES),
             o: TermValue::Triple {
-                s: Box::new(TermValue::iri("https://example.org/s")),
-                p: Box::new(TermValue::iri("https://example.org/p")),
-                o: Box::new(TermValue::iri("https://example.org/o")),
+                s: TermBox::new(TermValue::iri("https://example.org/s")),
+                p: TermBox::new(TermValue::iri("https://example.org/p")),
+                o: TermBox::new(TermValue::iri("https://example.org/o")),
             },
             g: None,
         }),

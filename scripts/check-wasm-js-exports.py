@@ -55,7 +55,21 @@ _INDEX_DTS = _REPO / "crates" / "rdf-wasm" / "js" / "index.d.ts"
 # indents four spaces under the `impl`.
 _ATTR_RE = re.compile(r"^#\[wasm_bindgen\b.*\]$")
 _JS_NAME_RE = re.compile(r"js_name\s*=\s*(\w+)")
+# `#[wasm_bindgen(start)]`: the module's own initializer, which the generated glue runs
+# once at instantiation. It is not a consumer API — calling it again from JavaScript would
+# re-run start-up work (today: resetting the stack floor the SPARQL guards measure
+# against, possibly while an asynchronous job is standing on its own region) — so it is
+# deliberately NOT re-exported from the package root, and this gate does not demand it.
+_START_RE = re.compile(r"^#\[wasm_bindgen\(\s*start\s*\)\]$")
 _PUB_FN_RE = re.compile(r"^pub fn (\w+)")
+# Declarative macros that expand each of their entries into a `#[wasm_bindgen(js_name =
+# JS)] pub fn RUST` free function. An entry line inside an invocation reads
+# `JS: fn RUST(` — `crates/rdf-wasm/src/shacl.rs`'s `shacl_entries!` declares every SHACL
+# entry point that way, once, and derives its synchronous binding, its job request and
+# its asynchronous twin from that one declaration. The expansion is exactly the
+# attribute this scanner reads elsewhere, so the entry line is the export.
+_EXPORT_MACROS = ("shacl_entries",)
+_MACRO_ENTRY_RE = re.compile(r"^\s+(\w+): fn (\w+)\(")
 
 
 def _read(path: Path) -> str:
@@ -70,7 +84,8 @@ def free_function_exports() -> dict[str, tuple[Path, int, str]]:
     follow it — collecting `js_name` from any of them — until it reaches the
     decorated item. If that item is `pub fn NAME`, the function is exported under its
     `js_name` if one was given, or under `NAME` verbatim otherwise (wasm-bindgen's own
-    default: it does not case-convert an un-renamed free function). If the item is
+    default: it does not case-convert an un-renamed free function). A
+    `#[wasm_bindgen(start)]` initializer is not recorded (see `_START_RE`). If the item is
     anything else (`pub struct`, `impl`), nothing is recorded — that free-function
     scoping is the whole point (see module docstring).
     """
@@ -84,6 +99,7 @@ def free_function_exports() -> dict[str, tuple[Path, int, str]]:
                 i += 1
                 continue
             attr_line = i + 1
+            is_start = bool(_START_RE.match(lines[i]))
             js_name: str | None = None
             match = _JS_NAME_RE.search(lines[i])
             if match:
@@ -102,13 +118,30 @@ def free_function_exports() -> dict[str, tuple[Path, int, str]]:
                         j += 1
                         depth += lines[j].count("[") - lines[j].count("]")
                 j += 1
-            if j < n:
+            if j < n and not is_start:
                 fn_match = _PUB_FN_RE.match(lines[j])
                 if fn_match:
                     rust_name = fn_match.group(1)
                     name = js_name or rust_name
                     exports[name] = (path, attr_line, rust_name)
             i = j
+    for path in sorted(_WASM_SRC.glob("*.rs")):
+        lines = _read(path).splitlines()
+        for macro in _EXPORT_MACROS:
+            opener = f"{macro}! {{"
+            inside = False
+            depth = 0
+            for number, line in enumerate(lines, start=1):
+                if not inside:
+                    if line.startswith(opener):
+                        inside, depth = True, 1
+                    continue
+                entry = _MACRO_ENTRY_RE.match(line) if depth == 1 else None
+                if entry:
+                    exports[entry.group(1)] = (path, number, entry.group(2))
+                depth += line.count("{") - line.count("}")
+                if depth <= 0:
+                    inside = False
     if not exports:
         raise SystemExit(
             f"check-wasm-js-exports: found no `#[wasm_bindgen]` free function under "

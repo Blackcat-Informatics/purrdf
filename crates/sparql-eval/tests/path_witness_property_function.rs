@@ -17,6 +17,7 @@
 //! traversal that diverges on a cycle, or that enumerates a walk twice, is a test that
 //! must go red rather than a test that quietly still passes.
 
+use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -82,9 +83,9 @@ fn iri(local: &str) -> TermValue {
 /// The asserted statement term a hop over `(ex:s, ex:p, ex:o)` records.
 fn stmt(s: &str, p: &str, o: &str) -> TermValue {
     TermValue::Triple {
-        s: Box::new(iri(s)),
-        p: Box::new(iri(p)),
-        o: Box::new(iri(o)),
+        s: TermBox::new(iri(s)),
+        p: TermBox::new(iri(p)),
+        o: TermBox::new(iri(o)),
     }
 }
 
@@ -206,10 +207,7 @@ fn run(
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions {
-            env: registry,
-            ..QueryOptions::EMPTY
-        },
+        QueryOptions::new().with_env(registry),
     )?;
     let SparqlResult::Solutions {
         variables, rows, ..
@@ -806,19 +804,19 @@ fn a8_a_triple_term_is_an_intermediate_node_of_a_walk() {
 
     // The triple term itself, as this crate's value model spells it.
     let tt = TermValue::Triple {
-        s: Box::new(iri("x")),
-        p: Box::new(iri("r")),
-        o: Box::new(iri("y")),
+        s: TermBox::new(iri("x")),
+        p: TermBox::new(iri("r")),
+        o: TermBox::new(iri("y")),
     };
     let into_tt = TermValue::Triple {
-        s: Box::new(iri("a")),
-        p: Box::new(iri("p")),
-        o: Box::new(tt.clone()),
+        s: TermBox::new(iri("a")),
+        p: TermBox::new(iri("p")),
+        o: TermBox::new(tt.clone()),
     };
     let out_of_tt = TermValue::Triple {
-        s: Box::new(iri("z")),
-        p: Box::new(iri("q")),
-        o: Box::new(tt.clone()),
+        s: TermBox::new(iri("z")),
+        p: TermBox::new(iri("q")),
+        o: TermBox::new(tt.clone()),
     };
 
     let tt_ids = distinct_column(&triple_rows, 1);
@@ -1387,9 +1385,9 @@ fn a20_a_step_over_rdf_reifies_walks_a_statement_to_its_reifier() {
     // The traversed statement is the reifier row itself, in asserted orientation:
     // `ex:rN rdf:reifies <<( s p o )>>`.
     let reifies_stmt = |reifier: &str, reified: TermValue| TermValue::Triple {
-        s: Box::new(iri(reifier)),
-        p: Box::new(TermValue::iri(RDF_REIFIES)),
-        o: Box::new(reified),
+        s: TermBox::new(iri(reifier)),
+        p: TermBox::new(TermValue::iri(RDF_REIFIES)),
+        o: TermBox::new(reified),
     };
     assert_eq!(
         answers.project(&["start", "end", "len", "step", "node", "edge"]),
@@ -1575,10 +1573,7 @@ fn a23_a_small_graph_is_not_refused_by_a_ceiling_far_above_its_true_cost() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &registry,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&registry),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(1_000),
         )
         .expect("a refusal would be an outcome, not an error");
@@ -1628,10 +1623,7 @@ fn a23b_a_ceiling_below_the_true_cost_still_refuses_at_admission() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &registry,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&registry),
             &QueryGovernors::UNBOUNDED.with_max_intermediate_cells(10),
         )
         .expect("a refusal is an outcome, not an error");

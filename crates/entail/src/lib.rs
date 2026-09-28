@@ -915,6 +915,7 @@ mod tests {
     use crate::vocab::{
         OWL_SYMMETRICPROPERTY, OWL_TRANSITIVEPROPERTY, RDF_PROPERTY, RDF_TYPE, RDFS_SUBCLASSOF,
     };
+    use purrdf_core::TermBox;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfTextDirection, TermRef, TermValue};
 
     fn iri(b: &mut RdfDatasetBuilder, s: &str) -> purrdf_core::TermId {
@@ -2611,9 +2612,9 @@ mod tests {
     /// A triple term over three IRIs, by value.
     fn quoted_value(s: &str, p: &str, o: TermValue) -> TermValue {
         TermValue::Triple {
-            s: Box::new(TermValue::iri(s)),
-            p: Box::new(TermValue::iri(p)),
-            o: Box::new(o),
+            s: TermBox::new(TermValue::iri(s)),
+            p: TermBox::new(TermValue::iri(p)),
+            o: TermBox::new(o),
         }
     }
 
@@ -2765,3 +2766,7 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+#[path = "../../rdf-core/tests/support/term_fixture.rs"]
+mod test_terms;

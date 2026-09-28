@@ -25,7 +25,7 @@ use purrdf_shapes::srl::{
 };
 use purrdf_shapes::term::{Literal, NamedNode, Term};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
-use purrdf_sparql_algebra::{Expression, Function, Variable};
+use purrdf_sparql_algebra::{Args, ArithmeticOperator, Child, Expression, Function, Variable};
 
 const PREFIXES: &str = r"
     @prefix sh:   <http://www.w3.org/ns/shacl#> .
@@ -816,10 +816,13 @@ fn element_rules_lower_filters_assignments_blanks_and_triple_terms() {
         ],
         vec![
             Element::Pattern(pattern(var("x"), "size", var("s"))),
-            Element::Filter(Expression::Greater(Box::new(v("s")), Box::new(ten.clone()))),
+            Element::Filter(Expression::Greater(
+                Child::new(v("s")),
+                Child::new(ten.clone()),
+            )),
             Element::Assign {
                 variable: "y".to_owned(),
-                expression: Expression::Multiply(Box::new(v("s")), Box::new(ten)),
+                expression: Expression::arithmetic(v("s"), ArithmeticOperator::Multiply, ten),
             },
         ],
     );
@@ -919,7 +922,7 @@ fn now_is_one_point_in_time_per_evaluation() {
                 Element::Pattern(pattern(var("x"), "type", constant(iri("Event")))),
                 Element::Assign {
                     variable: "t".to_owned(),
-                    expression: Expression::FunctionCall(Function::Now, Vec::new()),
+                    expression: Expression::FunctionCall(Function::Now, Args::default()),
                 },
             ],
         )

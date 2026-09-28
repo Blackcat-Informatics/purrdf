@@ -36,6 +36,7 @@
 //! translation) from `RdfDataset`'s own index-permutation choice, which is already
 //! covered elsewhere and is not a page-admission concern.
 
+use purrdf_core::TermBox;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -77,9 +78,9 @@ fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
             }
         }
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(to_value(v, s)),
-            p: Box::new(to_value(v, p)),
-            o: Box::new(to_value(v, o)),
+            s: TermBox::new(to_value(v, s)),
+            p: TermBox::new(to_value(v, p)),
+            o: TermBox::new(to_value(v, o)),
         },
     }
 }
@@ -124,6 +125,7 @@ mod fuzz {
         PageProvider, PagedDataset, PagedQueryLimits, QuadIds, RdfDataset, RdfDatasetBuilder,
         TermValue,
     };
+    use purrdf_core::TermBox;
     use purrdf_testkit::prop::prelude::*;
 
     const POOL_LEN: u8 = 5;
@@ -142,9 +144,9 @@ mod fuzz {
 
     fn triple_value() -> TermValue {
         TermValue::Triple {
-            s: Box::new(pool_value(0)),
-            p: Box::new(pool_value(1)),
-            o: Box::new(pool_value(2)),
+            s: TermBox::new(pool_value(0)),
+            p: TermBox::new(pool_value(1)),
+            o: TermBox::new(pool_value(2)),
         }
     }
 

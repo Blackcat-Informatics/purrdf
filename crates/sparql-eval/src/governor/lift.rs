@@ -599,7 +599,7 @@ impl ExpressionBarrier {
 mod tests {
     use purrdf_core::{ResourceDimension, TermId};
     use purrdf_sparql_algebra::{
-        NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
+        Child, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
     };
 
     use super::*;
@@ -625,8 +625,8 @@ mod tests {
         }
     }
 
-    fn boxed(pattern: GraphPattern) -> Box<GraphPattern> {
-        Box::new(pattern)
+    fn boxed(pattern: GraphPattern) -> Child<GraphPattern> {
+        Child::new(pattern)
     }
 
     /// One row over a one-column schema, so a test can tell "rows survived" from "rows
@@ -681,12 +681,12 @@ mod tests {
         // that node to the root must land on the class the plan-level walk assigns it.
         let plan = GraphPattern::Slice {
             inner: boxed(GraphPattern::Minus {
-                left: boxed(GraphPattern::Union {
-                    left: boxed(bgp()),
-                    right: boxed(GraphPattern::Distinct {
+                left: boxed(GraphPattern::union(
+                    bgp(),
+                    GraphPattern::Distinct {
                         inner: boxed(bgp()),
-                    }),
-                }),
+                    },
+                )),
                 right: boxed(GraphPattern::OrderBy {
                     inner: boxed(bgp()),
                     expression: vec![purrdf_sparql_algebra::OrderExpression::Asc(
@@ -878,10 +878,7 @@ mod tests {
         // from the middle of the concatenation: a sound sub-bag, but not a prefix. A
         // restricting LIMIT above selects BY POSITION, so it can pick rows the true query
         // never returns — and nothing may cross.
-        let union = GraphPattern::Union {
-            left: boxed(bgp()),
-            right: boxed(bgp()),
-        };
+        let union = GraphPattern::union(bgp(), bgp());
         let sliced = GraphPattern::Slice {
             inner: boxed(union.clone()),
             start: 0,

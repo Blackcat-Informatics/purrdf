@@ -55,7 +55,9 @@ use std::collections::HashMap;
 use ::purrdf::RdfTextDirection;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, LineIndex, langtag};
 use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize};
-use purrdf_sparql_algebra::{BaseDirection, Expression, Function, Variable};
+use purrdf_sparql_algebra::{
+    Args, ArithmeticOperator, BaseDirection, Child, Expression, Function, Variable,
+};
 
 use super::ir::{Element, ElementRule, PatternTerm, TriplePattern};
 use crate::model::{rdf, xsd};
@@ -1262,7 +1264,7 @@ impl<'t> SrlParser<'t> {
                         self.describe()
                     ));
                 }
-                let args = self.arg_list()?;
+                let args = self.arg_list()?.into();
                 Ok(Expression::FunctionCall(
                     Function::Custom(algebra_iri(&iri)),
                     args,
@@ -1295,7 +1297,7 @@ impl<'t> SrlParser<'t> {
         let mut left = self.conditional_and()?;
         while self.eat(&Token::Or) {
             let right = self.conditional_and()?;
-            left = Expression::Or(Box::new(left), Box::new(right));
+            left = Expression::or(left, right);
         }
         Ok(left)
     }
@@ -1306,7 +1308,7 @@ impl<'t> SrlParser<'t> {
         let mut left = self.relational()?;
         while self.eat(&Token::And) {
             let right = self.relational()?;
-            left = Expression::And(Box::new(left), Box::new(right));
+            left = Expression::and(left, right);
         }
         Ok(left)
     }
@@ -1328,26 +1330,26 @@ impl<'t> SrlParser<'t> {
         if let Some(op) = binary {
             self.pos += 1;
             let right = self.additive()?;
-            return Ok(op(Box::new(left), Box::new(right)));
+            return Ok(op(Child::new(left), Child::new(right)));
         }
         if self.eat(&Token::NotEq) {
             let right = self.additive()?;
-            return Ok(Expression::Not(Box::new(Expression::Equal(
-                Box::new(left),
-                Box::new(right),
+            return Ok(Expression::Not(Child::new(Expression::Equal(
+                Child::new(left),
+                Child::new(right),
             ))));
         }
         if self.eat_kw("IN") {
-            let list = self.expression_list()?;
-            return Ok(Expression::In(Box::new(left), list));
+            let list = self.expression_list()?.into();
+            return Ok(Expression::In(Child::new(left), list));
         }
         if self.at_kw("NOT")
             && matches!(self.peek_at(1), Some(Token::Word(w)) if w.eq_ignore_ascii_case("IN"))
         {
             self.pos += 2;
-            let list = self.expression_list()?;
-            return Ok(Expression::Not(Box::new(Expression::In(
-                Box::new(left),
+            let list = self.expression_list()?.into();
+            return Ok(Expression::Not(Child::new(Expression::In(
+                Child::new(left),
                 list,
             ))));
         }
@@ -1368,10 +1370,10 @@ impl<'t> SrlParser<'t> {
         loop {
             if self.eat(&Token::Plus) {
                 let right = self.multiplicative()?;
-                left = Expression::Add(Box::new(left), Box::new(right));
+                left = Expression::arithmetic(left, ArithmeticOperator::Add, right);
             } else if self.eat(&Token::Minus) {
                 let right = self.multiplicative()?;
-                left = Expression::Subtract(Box::new(left), Box::new(right));
+                left = Expression::arithmetic(left, ArithmeticOperator::Subtract, right);
             } else {
                 return Ok(left);
             }
@@ -1385,10 +1387,10 @@ impl<'t> SrlParser<'t> {
         loop {
             if self.eat(&Token::Star) {
                 let right = self.unary()?;
-                left = Expression::Multiply(Box::new(left), Box::new(right));
+                left = Expression::arithmetic(left, ArithmeticOperator::Multiply, right);
             } else if self.eat(&Token::Slash) {
                 let right = self.unary()?;
-                left = Expression::Divide(Box::new(left), Box::new(right));
+                left = Expression::arithmetic(left, ArithmeticOperator::Divide, right);
             } else {
                 return Ok(left);
             }
@@ -1399,13 +1401,13 @@ impl<'t> SrlParser<'t> {
     /// PrimaryExpression | PrimaryExpression`.
     fn unary(&mut self) -> Parse<Expression> {
         if self.eat(&Token::Bang) {
-            return Ok(Expression::Not(Box::new(self.primary()?)));
+            return Ok(Expression::Not(Child::new(self.primary()?)));
         }
         if self.eat(&Token::Plus) {
-            return Ok(Expression::UnaryPlus(Box::new(self.primary()?)));
+            return Ok(Expression::UnaryPlus(Child::new(self.primary()?)));
         }
         if self.eat(&Token::Minus) {
-            return Ok(Expression::UnaryMinus(Box::new(self.primary()?)));
+            return Ok(Expression::UnaryMinus(Child::new(self.primary()?)));
         }
         self.primary()
     }
@@ -1427,7 +1429,7 @@ impl<'t> SrlParser<'t> {
             Some(Token::Iri(_) | Token::PrefixedName(..)) => {
                 let iri = self.iri()?;
                 if self.at(&Token::LParen) {
-                    let args = self.arg_list()?;
+                    let args = self.arg_list()?.into();
                     Ok(Expression::FunctionCall(
                         Function::Custom(algebra_iri(&iri)),
                         args,
@@ -1461,7 +1463,7 @@ impl<'t> SrlParser<'t> {
         self.expect_triple_term_close()?;
         Ok(Expression::FunctionCall(
             Function::Triple,
-            vec![subject, predicate, object],
+            Args::from([subject, predicate, object]),
         ))
     }
 
@@ -1576,27 +1578,27 @@ impl<'t> SrlParser<'t> {
             }
         };
         Ok(match builtin.form {
-            Form::Call(function) => Expression::FunctionCall(function, args),
+            Form::Call(function) => Expression::FunctionCall(function, args.into()),
             Form::If => {
                 let mut args = args.into_iter();
                 let (Some(a), Some(b), Some(c)) = (args.next(), args.next(), args.next()) else {
                     unreachable!("IF's arity is checked above")
                 };
-                Expression::If(Box::new(a), Box::new(b), Box::new(c))
+                Expression::If(Child::new(a), Child::new(b), Child::new(c))
             }
             Form::SameTerm => {
                 let mut args = args.into_iter();
                 let (Some(a), Some(b)) = (args.next(), args.next()) else {
                     unreachable!("sameTerm's arity is checked above")
                 };
-                Expression::SameTerm(Box::new(a), Box::new(b))
+                Expression::SameTerm(Child::new(a), Child::new(b))
             }
         })
     }
 }
 
 /// A binary expression constructor.
-type BinaryOp = fn(Box<Expression>, Box<Expression>) -> Expression;
+type BinaryOp = fn(Child<Expression>, Child<Expression>) -> Expression;
 
 /// A literal as parsed, before it becomes a term or an expression constant.
 #[derive(Debug, Clone)]

@@ -38,6 +38,7 @@
 //! refuses the memo unless the result equals what the real rewrite produces. A query
 //! shape nobody wrote a case for here still cannot install a memo that disagrees.
 
+use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     BlankNode, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, ParserOptions, Query,
     SparqlParser, TermPattern,
@@ -88,7 +89,7 @@ fn quoted(local: &str) -> GroundTerm {
     let GroundTerm::NamedNode(predicate) = iri("p") else {
         unreachable!("iri built a NamedNode")
     };
-    GroundTerm::Triple(Box::new(GroundTriple {
+    GroundTerm::Triple(Child::new(GroundTriple {
         subject: iri(local),
         predicate,
         object: iri("o"),
@@ -189,7 +190,7 @@ fn memo_agrees_with_rewrite(parsed: &Query, text: &str) {
                 }
                 let expected = rewrite(parsed.clone(), lane, run_probes.clone());
                 assert_eq!(
-                    memo.bind(&run_probes),
+                    memo.bind(&run_probes).0,
                     &expected,
                     "memo built from {built_from:?} and bound to {bound_to:?} disagrees with \
                      the rewrite\n  lane: {lane:?}\n  query: {text}"
@@ -234,11 +235,11 @@ fn call_carries(pattern: &GraphPattern, constant: &TermPattern) -> bool {
             GraphPattern::Join { left, right }
             | GraphPattern::LeftJoin { left, right, .. }
             | GraphPattern::Lateral { left, right }
-            | GraphPattern::Union { left, right }
             | GraphPattern::Minus { left, right } => {
                 stack.push(left);
                 stack.push(right);
             }
+            GraphPattern::Union { arms } => stack.extend(arms),
             GraphPattern::Filter { inner, .. }
             | GraphPattern::Graph { inner, .. }
             | GraphPattern::Extend { inner, .. }

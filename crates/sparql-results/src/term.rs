@@ -24,72 +24,74 @@ const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 /// # Errors
 ///
 /// RDF 1.2 requires a triple-term predicate to be an IRI. Returns
-/// [`Error::MalformedTerm`] when a triple term (at any nesting depth, since
-/// subject/object are bridged recursively) carries a predicate that is a
-/// literal or blank node — that is malformed RDF, so it is rejected rather
+/// [`Error::MalformedTerm`] when a triple term at any nesting depth carries a
+/// predicate that is not an IRI — that is malformed RDF, so it is rejected rather
 /// than laundered into a fabricated IRI string.
+///
+/// A triple term is bridged bottom-up over [`TermValue::try_fold`]'s work list.
 // The shared TermValue → owned-model bridge every result-document writer
 // lexicalizes through, so term syntax has exactly one source of truth.
 pub(crate) fn term_value_to_rdf_term(value: &TermValue) -> Result<RdfTerm, Error> {
-    match value {
-        TermValue::Iri(s) => Ok(RdfTerm::iri(s.clone())),
-        // The owned model has ONE string slot for a blank node, so the
-        // `(label, scope)` pair is encoded into it under the unconstrained owned
-        // alphabet. The kernel emitter RE-TARGETS that spelling into
-        // `BLANK_NODE_LABEL` when it writes the `_:` token, so the CSV/TSV cell
-        // carries exactly what the JSON/XML writers encode directly.
-        TermValue::Blank { label, scope } => {
-            Ok(RdfTerm::blank_node(scope.qualify_label(label).into_owned()))
-        }
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => Ok(if language.is_some() {
-            RdfTerm::literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: None,
-                language: language.clone(),
-                direction: *direction,
+    value.try_fold(
+        |leaf| {
+            Ok(match leaf {
+                TermValue::Iri(s) => RdfTerm::iri(s.clone()),
+                // The owned model has ONE string slot for a blank node, so the
+                // `(label, scope)` pair is encoded into it under the unconstrained
+                // owned alphabet. The kernel emitter RE-TARGETS that spelling into
+                // `BLANK_NODE_LABEL` when it writes the `_:` token, so the CSV/TSV
+                // cell carries exactly what the JSON/XML writers encode directly.
+                TermValue::Blank { label, scope } => {
+                    RdfTerm::blank_node(scope.qualify_label(label).into_owned())
+                }
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    if language.is_some() {
+                        RdfTerm::literal(RdfLiteral {
+                            lexical_form: lexical_form.clone(),
+                            datatype: None,
+                            language: language.clone(),
+                            direction: *direction,
+                        })
+                    } else if datatype == XSD_STRING {
+                        RdfTerm::literal(RdfLiteral {
+                            lexical_form: lexical_form.clone(),
+                            datatype: None,
+                            language: None,
+                            direction: None,
+                        })
+                    } else {
+                        RdfTerm::literal(RdfLiteral {
+                            lexical_form: lexical_form.clone(),
+                            datatype: Some(datatype.clone()),
+                            language: None,
+                            direction: *direction,
+                        })
+                    }
+                }
+                TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
             })
-        } else if datatype == XSD_STRING {
-            RdfTerm::literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: None,
-                language: None,
-                direction: None,
-            })
-        } else {
-            RdfTerm::literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: None,
-                direction: *direction,
-            })
-        }),
-        TermValue::Triple { s, p, o } => {
+        },
+        |subject, predicate, object| {
             // RDF predicates must be IRIs; a non-IRI predicate has no valid
-            // lexicalization → hard-fail rather than fabricate one. Checked
-            // before recursing into `s`/`o` so the error message reflects the
-            // outermost offending triple term first; nested triple terms
-            // inside `s`/`o` are still validated because the recursive calls
-            // below run this same check at every depth.
-            let TermValue::Iri(predicate) = p.as_ref() else {
+            // lexicalization → hard-fail rather than fabricate one.
+            let RdfTerm::Iri(predicate) = predicate else {
                 return Err(Error::MalformedTerm(
                     "triple-term predicate is not an IRI".to_string(),
                 ));
             };
-            let subject = term_value_to_rdf_term(s)?;
-            let object = term_value_to_rdf_term(o)?;
             Ok(RdfTerm::triple(RdfTriple {
                 subject,
-                predicate: predicate.clone(),
+                predicate,
                 object,
                 location: None,
             }))
-        }
-    }
+        },
+    )
 }
 
 /// The N-Triples / TSV token for a result cell: the kernel `emit_term` over the
@@ -114,6 +116,7 @@ pub(crate) fn ntriples_token(value: &TermValue) -> Result<String, Error> {
 mod tests {
     use super::*;
     use purrdf_core::BlankScope;
+    use purrdf_core::TermBox;
 
     /// Test-only helper: unwrap the `Result` for the common well-formed case
     /// so existing assertions stay terse.
@@ -190,9 +193,9 @@ mod tests {
     #[test]
     fn triple_term_token() {
         let v = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Iri("http://example.org/p".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Iri("http://example.org/p".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         assert_eq!(
             token(&v),
@@ -220,14 +223,14 @@ mod tests {
     #[test]
     fn literal_predicate_is_malformed_term_error() {
         let v = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Literal {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Literal {
                 lexical_form: "not-a-predicate".to_string(),
                 datatype: XSD_STRING.to_string(),
                 language: None,
                 direction: None,
             }),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let err = ntriples_token(&v).expect_err("literal predicate must be rejected");
         assert!(
@@ -239,12 +242,12 @@ mod tests {
     #[test]
     fn blank_predicate_is_malformed_term_error() {
         let v = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Blank {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Blank {
                 label: "b0".to_string(),
                 scope: BlankScope(0),
             }),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let err = ntriples_token(&v).expect_err("blank-node predicate must be rejected");
         assert!(
@@ -259,22 +262,71 @@ mod tests {
         // non-IRI predicate; the outer triple term's own predicate is fine.
         // The recursive bridge must still reject this.
         let inner = TermValue::Triple {
-            s: Box::new(TermValue::Iri("http://example.org/s".to_string())),
-            p: Box::new(TermValue::Blank {
+            s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
+            p: TermBox::new(TermValue::Blank {
                 label: "b0".to_string(),
                 scope: BlankScope(0),
             }),
-            o: Box::new(TermValue::Iri("http://example.org/o".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o".to_string())),
         };
         let outer = TermValue::Triple {
-            s: Box::new(inner),
-            p: Box::new(TermValue::Iri("http://example.org/concludes".to_string())),
-            o: Box::new(TermValue::Iri("http://example.org/o2".to_string())),
+            s: TermBox::new(inner),
+            p: TermBox::new(TermValue::Iri("http://example.org/concludes".to_string())),
+            o: TermBox::new(TermValue::Iri("http://example.org/o2".to_string())),
         };
         let err = ntriples_token(&outer).expect_err("nested malformed predicate must be rejected");
         assert!(
             matches!(err, Error::MalformedTerm(_)),
             "expected MalformedTerm: {err:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The owned-model bridge against its recursive reference.
+
+    use purrdf_core::{RdfTerm, RdfTriple, TermValue};
+
+    use super::term_value_to_rdf_term;
+    use crate::error::Error;
+
+    fn reference(value: &TermValue) -> Result<RdfTerm, Error> {
+        let TermValue::Triple { s, p, o } = value else {
+            return term_value_to_rdf_term(value);
+        };
+        let TermValue::Iri(predicate) = p.as_ref() else {
+            return Err(Error::MalformedTerm(
+                "triple-term predicate is not an IRI".to_string(),
+            ));
+        };
+        let subject = reference(s)?;
+        let object = reference(o)?;
+        Ok(RdfTerm::triple(RdfTriple {
+            subject,
+            predicate: predicate.clone(),
+            object,
+            location: None,
+        }))
+    }
+
+    /// Every generated term bridges to exactly the owned term, or the refusal, the
+    /// recursive reference produces.
+    #[test]
+    fn the_bridge_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut refused = 0;
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::Any,
+            );
+            let found = term_value_to_rdf_term(&value);
+            assert_eq!(found, reference(&value), "seed {seed}");
+            refused += usize::from(found.is_err());
+        }
+        assert!(refused > 0, "some generated term has a non-IRI predicate");
     }
 }

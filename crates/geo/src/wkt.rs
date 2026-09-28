@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The `geo:wktLiteral` lexical form: a recursive-descent reader that never
-//! touches a float, and a writer whose bytes are a pure function of the geometry.
+//! The `geo:wktLiteral` lexical form: an iterative reader that never touches a
+//! float, and a writer whose bytes are a pure function of the geometry.
 //!
 //! # Why the reader is written against bytes rather than a number parser
 //!
@@ -65,21 +65,6 @@ use crate::geom::{
     Coord, CoordDim, CoordSeq, Crs, Geometry, GeometryBody, GeometryKind, GeometryLiteral, Rings,
 };
 
-/// How deeply `GEOMETRYCOLLECTION` may nest before the reader refuses.
-///
-/// The reader is recursive and a `wktLiteral` is untrusted input, so without a cap
-/// a literal consisting of nothing but ten thousand `GEOMETRYCOLLECTION(` tokens
-/// would exhaust the stack — an abort, which is not a failure mode a query
-/// evaluator can catch or report. The cap converts that into an ordinary
-/// [`GeoError::Literal`].
-///
-/// Sixty-four counts *geometries*, not collections: a `POINT` inside 63 nested
-/// collections is at depth 64 and is accepted. Real GeoSPARQL corpora nest two or
-/// three levels, so the limit is roughly twenty times the deepest thing anyone
-/// writes on purpose; it is a guard against a hostile literal, not a modelling
-/// constraint.
-const MAX_NESTING_DEPTH: usize = 64;
-
 /// The seven keywords, in the order [`GeometryKind`] declares them.
 ///
 /// Recognition reads [`GeometryKind::wkt_keyword`] rather than repeating the
@@ -116,9 +101,11 @@ const TAGGED_DIMS: [CoordDim; 3] = [CoordDim::Xyz, CoordDim::Xym, CoordDim::Xyzm
 /// keyword, a dimension tag fused to its keyword (`POINTZ`), an ordinate count
 /// that disagrees with the declared dimension, a token that is not a number
 /// (`NaN` and `INF` among them), empty or unbalanced parentheses, text after the
-/// geometry, an empty CRS prefix, a nesting depth past 64, or a body
-/// [`Geometry::new`] refuses structurally (a one-position line, an unclosed ring,
-/// a collection member whose dimension differs from the collection's).
+/// geometry, an empty CRS prefix, or a body [`Geometry::new`] refuses structurally
+/// (a one-position line, an unclosed ring, a collection member whose dimension
+/// differs from the collection's). Nesting has no bound: the reader keeps its open
+/// collections on a heap stack, so a `GEOMETRYCOLLECTION(` a hundred thousand deep
+/// is a geometry, not a refusal.
 ///
 /// # What it accepts that a stricter reader might not
 ///
@@ -225,7 +212,7 @@ pub fn parse(lexical: &str, default_crs: &Crs) -> Result<GeometryLiteral, GeoErr
     }
     let mut cursor = Cursor::new(lexical);
     let crs = parse_crs_prefix(&mut cursor)?;
-    let geometry = parse_geometry(&mut cursor, CoordDim::Xy, 1)?;
+    let geometry = parse_geometry(&mut cursor, CoordDim::Xy)?;
     cursor.skip_whitespace();
     if !cursor.is_at_end() {
         return Err(GeoError::literal(format!(
@@ -508,8 +495,17 @@ fn parse_crs_prefix(cursor: &mut Cursor<'_>) -> Result<Option<Crs>, GeoError> {
         .map_err(|err| GeoError::literal(err.detail().to_owned()))
 }
 
-/// Read one tagged geometry: keyword, optional dimension tag, then `EMPTY` or a
-/// coordinate body.
+/// What the head of a geometry — keyword, optional dimension tag, optional `EMPTY` —
+/// said about the geometry that follows.
+enum Head {
+    /// The geometry is complete: it was written `EMPTY`, of this kind and dimension.
+    Empty(GeometryKind, CoordDim),
+    /// A coordinate body of this kind and dimension follows.
+    Body(GeometryKind, CoordDim),
+}
+
+/// Read one geometry's head: keyword, optional dimension tag, then `EMPTY` or the
+/// start of a coordinate body.
 ///
 /// `inherited` is the dimension an untagged geometry takes. At the top level that
 /// is [`CoordDim::Xy`]; inside a collection it is the collection's own dimension,
@@ -517,14 +513,7 @@ fn parse_crs_prefix(cursor: &mut Cursor<'_>) -> Result<Option<Crs>, GeoError> {
 /// A member that writes a tag *disagreeing* with the collection is still refused —
 /// by [`Geometry::new`], which owns that rule — because the two statements cannot
 /// both be true.
-fn parse_geometry(
-    cursor: &mut Cursor<'_>,
-    inherited: CoordDim,
-    depth: usize,
-) -> Result<Geometry, GeoError> {
-    if depth > MAX_NESTING_DEPTH {
-        return Err(too_deep(cursor.pos));
-    }
+fn parse_head(cursor: &mut Cursor<'_>, inherited: CoordDim) -> Result<Head, GeoError> {
     cursor.skip_whitespace();
     let keyword_at = cursor.pos;
     let keyword = cursor.word();
@@ -540,7 +529,7 @@ fn parse_geometry(
         if let Some(tagged) = tag_dim(tag) {
             dim = tagged;
         } else if tag.eq_ignore_ascii_case("EMPTY") {
-            return Ok(Geometry::empty(inherited, kind));
+            return Ok(Head::Empty(kind, inherited));
         } else {
             return Err(bad_tag(kind, tag_at, tag));
         }
@@ -551,35 +540,70 @@ fn parse_geometry(
         let follower = cursor.word();
         if !follower.is_empty() {
             if follower.eq_ignore_ascii_case("EMPTY") {
-                return Ok(Geometry::empty(dim, kind));
+                return Ok(Head::Empty(kind, dim));
             }
             return Err(bad_tag_follower(tag, after_tag, follower));
         }
     }
-
-    let body = parse_body(cursor, kind, dim, depth)?;
-    Geometry::new(dim, body)
+    Ok(Head::Body(kind, dim))
 }
 
-/// The nesting refusal, built off the recursive frame.
+/// A `GEOMETRYCOLLECTION` whose `(` has been read and whose members are still being
+/// read.
+struct OpenCollection {
+    /// The collection's dimension, which its untagged members inherit.
+    dim: CoordDim,
+    /// The members read so far, in written order.
+    members: Vec<Geometry>,
+}
+
+/// Read one geometry, with every collection it nests.
 ///
-/// Every diagnostic on the collection recursion path is built in a `#[cold]`
-/// function like this one rather than inline. That is a *stack* decision, not a
-/// stylistic one: at `opt-level = 0` a `format!` expansion's temporaries occupy
-/// slots in the frame that holds them whether or not the branch is ever taken, and
-/// this frame is multiplied by the nesting depth. See `parse_body` for the same
-/// argument applied to the geometry bodies themselves.
-///
-/// This workspace's own gate no longer builds at `opt-level = 0` — profiles do
-/// not cross the crate boundary, so the configuration this guards against is a
-/// *consumer's* dev build, which is exactly the one we cannot choose.
-#[cold]
-#[inline(never)]
-fn too_deep(at: usize) -> GeoError {
-    GeoError::literal(format!(
-        "geometries are nested more than {MAX_NESTING_DEPTH} deep at byte {at}; the reader is \
-         recursive, so an unbounded nesting would exhaust the stack rather than fail"
-    ))
+/// Iterative: the open collections live in an explicit heap stack, and the loop
+/// alternates between reading the next geometry's head and closing the collections
+/// a finished member completes. Nesting therefore costs heap and never stack, so a
+/// literal is read however deep it nests, and a diagnostic anywhere inside it is the
+/// same diagnostic at the same byte as it would be at the top level.
+fn parse_geometry(cursor: &mut Cursor<'_>, inherited: CoordDim) -> Result<Geometry, GeoError> {
+    let mut open: Vec<OpenCollection> = Vec::new();
+    let mut dim = inherited;
+    loop {
+        let mut finished = match parse_head(cursor, dim)? {
+            Head::Empty(kind, empty_dim) => Geometry::empty(empty_dim, kind),
+            Head::Body(GeometryKind::GeometryCollection, collection_dim) => {
+                open_list(cursor, "a geometry collection")?;
+                open.push(OpenCollection {
+                    dim: collection_dim,
+                    members: Vec::new(),
+                });
+                dim = collection_dim;
+                continue;
+            }
+            Head::Body(kind, body_dim) => {
+                Geometry::new(body_dim, parse_body(cursor, kind, body_dim)?)?
+            }
+        };
+        // A finished geometry is the result, or a member of the innermost open
+        // collection: it is appended, and either the collection continues with the
+        // next member or it closes and is itself the finished geometry one level up.
+        loop {
+            let Some(top) = open.last_mut() else {
+                return Ok(finished);
+            };
+            top.members.push(finished);
+            cursor.skip_whitespace();
+            if cursor.eat(b',') {
+                dim = top.dim;
+                break;
+            }
+            cursor.expect(b')', "a geometry collection")?;
+            let OpenCollection {
+                dim: collection_dim,
+                members,
+            } = open.pop().expect("the collection just read is still open");
+            finished = Geometry::new(collection_dim, GeometryBody::GeometryCollection(members))?;
+        }
+    }
 }
 
 /// The refusal for a word that is not one of the seven keywords.
@@ -640,40 +664,16 @@ fn preview_word(cursor: &Cursor<'_>, at: usize, word: &str) -> String {
     }
 }
 
-/// Read the parenthesized body of `kind`, the cursor sitting before its `(`.
+/// Read the parenthesized body of one of the six kinds that hold positions, the
+/// cursor sitting before its `(`.
 ///
-/// # Why this is a bare dispatcher and every arm is its own uninlined function
-///
-/// This function sits on the `GEOMETRYCOLLECTION` recursion, so its frame is
-/// multiplied by the nesting depth — and a [`GeometryBody`] is not a small value.
-/// A [`CoordSeq`] is a `SmallVec<[Coord; 4]>` and a [`Coord`] is four exact
-/// rationals, each of which carries an inline limb buffer, so one `GeometryBody`
-/// is on the order of a kilobyte and a half. At `opt-level = 0` there is no stack
-/// slot reuse between match arms, so writing the arms inline with `?` would give
-/// this frame **seven** such temporaries — about eleven kilobytes per nesting
-/// level, which is what made a sixty-four-deep literal abort on a two-megabyte
-/// thread stack instead of parsing. A profile does not cross the crate boundary,
-/// so that is a *consumer's* unoptimized build, not one this workspace's gate
-/// still runs — which is precisely why the property has to hold structurally
-/// rather than by our own choice of `opt-level`.
-///
-/// Two properties fix that, and both are load-bearing rather than cosmetic:
-///
-/// * Every arm is a **tail call** with no `?`, so each arm's result is written
-///   straight into this function's return place and there is one such temporary
-///   rather than seven.
-/// * Every arm's callee is `#[inline(never)]`, so the six leaf bodies' locals
-///   cannot be hoisted into this frame. Their frames are large, but they are
-///   *leaves* — they pop before the recursion continues — and only
-///   `parse_collection_body` is on the recursive path.
-///
-/// The regression test is `nesting_is_capped_but_the_depth_just_below_the_cap_still_parses`,
-/// which parses at the cap on an ordinary test thread.
+/// A `GEOMETRYCOLLECTION` holds geometries rather than positions and is opened by
+/// [`parse_geometry`]'s own loop, which is the only caller of this function; it
+/// never asks for a collection body here.
 fn parse_body(
     cursor: &mut Cursor<'_>,
     kind: GeometryKind,
     dim: CoordDim,
-    depth: usize,
 ) -> Result<GeometryBody, GeoError> {
     match kind {
         GeometryKind::Point => parse_point_body(cursor, dim),
@@ -682,12 +682,13 @@ fn parse_body(
         GeometryKind::MultiPoint => parse_multipoint_body(cursor, dim),
         GeometryKind::MultiLineString => parse_multi_line_string_body(cursor, dim),
         GeometryKind::MultiPolygon => parse_multipolygon_body(cursor, dim),
-        GeometryKind::GeometryCollection => parse_collection_body(cursor, dim, depth),
+        GeometryKind::GeometryCollection => {
+            unreachable!("a collection is opened onto the reader's own stack, not read as a body")
+        }
     }
 }
 
 /// `POINT` — `( position )`.
-#[inline(never)]
 fn parse_point_body(cursor: &mut Cursor<'_>, dim: CoordDim) -> Result<GeometryBody, GeoError> {
     open_list(cursor, "a point")?;
     let coord = parse_coord(cursor, dim)?;
@@ -696,7 +697,6 @@ fn parse_point_body(cursor: &mut Cursor<'_>, dim: CoordDim) -> Result<GeometryBo
 }
 
 /// `LINESTRING` — `( position, ... )`.
-#[inline(never)]
 fn parse_line_string_body(
     cursor: &mut Cursor<'_>,
     dim: CoordDim,
@@ -709,7 +709,6 @@ fn parse_line_string_body(
 }
 
 /// `POLYGON` — `( ring, ... )`, a ring being a `<linestring text>`.
-#[inline(never)]
 fn parse_polygon_body(cursor: &mut Cursor<'_>, dim: CoordDim) -> Result<GeometryBody, GeoError> {
     Ok(GeometryBody::Polygon(parse_comma_list(
         cursor,
@@ -719,7 +718,6 @@ fn parse_polygon_body(cursor: &mut Cursor<'_>, dim: CoordDim) -> Result<Geometry
 }
 
 /// `MULTIPOINT` — `( member, ... )` in either admitted spelling.
-#[inline(never)]
 fn parse_multipoint_body(cursor: &mut Cursor<'_>, dim: CoordDim) -> Result<GeometryBody, GeoError> {
     Ok(GeometryBody::MultiPoint(parse_comma_list(
         cursor,
@@ -729,7 +727,6 @@ fn parse_multipoint_body(cursor: &mut Cursor<'_>, dim: CoordDim) -> Result<Geome
 }
 
 /// `MULTILINESTRING` — `( <linestring text>, ... )`.
-#[inline(never)]
 fn parse_multi_line_string_body(
     cursor: &mut Cursor<'_>,
     dim: CoordDim,
@@ -742,7 +739,6 @@ fn parse_multi_line_string_body(
 }
 
 /// `MULTIPOLYGON` — `( <polygon text>, ... )`.
-#[inline(never)]
 fn parse_multipolygon_body(
     cursor: &mut Cursor<'_>,
     dim: CoordDim,
@@ -751,20 +747,6 @@ fn parse_multipolygon_body(
         cursor,
         "a multipolygon",
         |item| parse_polygon_text(item, dim),
-    )?))
-}
-
-/// `GEOMETRYCOLLECTION` — `( geometry, ... )`, the one body that recurses.
-#[inline(never)]
-fn parse_collection_body(
-    cursor: &mut Cursor<'_>,
-    dim: CoordDim,
-    depth: usize,
-) -> Result<GeometryBody, GeoError> {
-    Ok(GeometryBody::GeometryCollection(parse_comma_list(
-        cursor,
-        "a geometry collection",
-        |item| parse_geometry(item, dim, depth + 1),
     )?))
 }
 
@@ -932,15 +914,56 @@ const fn dim_label(dim: CoordDim) -> &'static str {
 // Writer
 // ---------------------------------------------------------------------------
 
-/// Append the tagged text of `geometry`.
+/// One step of the writer: a geometry still to write, or a fixed piece of the text
+/// around a collection's members.
+enum Job<'a> {
+    Geometry(&'a Geometry),
+    Text(&'static str),
+}
+
+/// Append the tagged text of `geometry`, with every collection it nests.
+///
+/// Iterative: a collection's members and the `,` and `)` around them go onto a heap
+/// work list in reverse, so they pop in written order. Nesting costs heap and never
+/// stack, and the bytes are exactly the ones the members' own heads and bodies write.
 fn write_geometry(out: &mut String, geometry: &Geometry, scale: u32) {
+    let mut jobs: Vec<Job<'_>> = vec![Job::Geometry(geometry)];
+    while let Some(job) = jobs.pop() {
+        match job {
+            Job::Text(text) => out.push_str(text),
+            Job::Geometry(geometry) => {
+                write_head(out, geometry);
+                if has_no_members(geometry.body()) {
+                    out.push_str("EMPTY");
+                    continue;
+                }
+                match geometry.body() {
+                    GeometryBody::GeometryCollection(members) => {
+                        out.push('(');
+                        jobs.push(Job::Text(")"));
+                        for (index, member) in members.iter().enumerate().rev() {
+                            jobs.push(Job::Geometry(member));
+                            if index > 0 {
+                                jobs.push(Job::Text(","));
+                            }
+                        }
+                    }
+                    body => write_body(out, body, scale),
+                }
+            }
+        }
+    }
+}
+
+/// Append the keyword and, when the dimension has one, the tag — with the separator
+/// the `EMPTY` or `(` that follows needs.
+fn write_head(out: &mut String, geometry: &Geometry) {
     out.push_str(geometry.kind().wkt_keyword());
     let tag = geometry.dim().wkt_tag();
-    let empty = has_no_members(geometry.body());
     if tag.is_empty() {
         // Without a tag there is no separator yet, and `POINTEMPTY` would not
         // parse; `POINT(` needs none and canonical WKT does not write one.
-        if empty {
+        if has_no_members(geometry.body()) {
             out.push(' ');
         }
     } else {
@@ -948,11 +971,6 @@ fn write_geometry(out: &mut String, geometry: &Geometry, scale: u32) {
         out.push_str(tag);
         out.push(' ');
     }
-    if empty {
-        out.push_str("EMPTY");
-        return;
-    }
-    write_body(out, geometry.body(), scale);
 }
 
 /// Whether the body holds no members at all — the condition for writing `EMPTY`.
@@ -972,7 +990,9 @@ fn has_no_members(body: &GeometryBody) -> bool {
     }
 }
 
-/// Append the parenthesized part of a non-empty body.
+/// Append the parenthesized part of a non-empty body that holds positions. A
+/// collection's members are written by [`write_geometry`]'s own work list, which is
+/// the only caller of this function and never hands it a collection.
 fn write_body(out: &mut String, body: &GeometryBody, scale: u32) {
     match body {
         // The `None` arm is unreachable — `has_no_members` already routed the
@@ -1010,10 +1030,8 @@ fn write_body(out: &mut String, body: &GeometryBody, scale: u32) {
                 }
             });
         }
-        GeometryBody::GeometryCollection(members) => {
-            write_separated(out, members, |buf, member| {
-                write_geometry(buf, member, scale);
-            });
+        GeometryBody::GeometryCollection(_) => {
+            unreachable!("a collection's members are written from the writer's own work list")
         }
     }
 }
@@ -1066,7 +1084,7 @@ fn write_coord(out: &mut String, coord: &Coord, scale: u32) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MAX_NESTING_DEPTH, parse, write, write_bare};
+    use super::{parse, write, write_bare};
     use crate::error::GeoError;
     use crate::exact::Rat;
     use crate::geom::{
@@ -1938,53 +1956,106 @@ mod tests {
         );
     }
 
-    /// Nesting is capped so a hostile literal cannot exhaust the stack — but the
-    /// depth one below the cap must still parse, or the guard has become the bug
-    /// it was meant to prevent.
-    #[test]
-    fn nesting_is_capped_but_the_depth_just_below_the_cap_still_parses() {
-        fn nested(levels: usize) -> String {
-            let wrappers = levels - 1;
-            let mut text = String::with_capacity(wrappers * 20 + 16);
-            for _ in 0..wrappers {
-                text.push_str("GEOMETRYCOLLECTION(");
-            }
-            text.push_str("POINT(1 2)");
-            for _ in 0..wrappers {
-                text.push(')');
-            }
-            text
+    /// `wrappers` collections around `innermost`, written the way the writer writes
+    /// them, so a round trip must reproduce the text byte for byte.
+    fn nested(wrappers: usize, innermost: &str) -> String {
+        let mut text = String::with_capacity(wrappers * 20 + innermost.len());
+        for _ in 0..wrappers {
+            text.push_str("GEOMETRYCOLLECTION(");
         }
+        text.push_str(innermost);
+        for _ in 0..wrappers {
+            text.push(')');
+        }
+        text
+    }
 
-        // The over-refusal control: 63 collections around a point is 64 geometries
-        // deep, exactly the cap, and must be accepted.
-        let at_the_cap = nested(MAX_NESTING_DEPTH);
-        let parsed = good(&at_the_cap);
-        let just_below = nested(MAX_NESTING_DEPTH - 1);
+    /// Nesting has no bound: a point inside a hundred thousand collections parses,
+    /// renders back to the text it was read from, re-reads as an equal geometry and
+    /// drops — on a 128 KiB stack, so a walk that cost even a few bytes of stack
+    /// per level would abort here rather than pass.
+    ///
+    /// The expected text is the input itself: `nested` spells the collections and
+    /// the point exactly as the writer's table does, so the rendering is the input.
+    /// The point inside 99 999 collections is 100 000 geometries deep, and one
+    /// position deep in coordinates.
+    #[test]
+    fn a_hundred_thousand_deep_collection_parses_and_writes_on_a_128_kib_stack() {
+        let wrappers = 99_999usize;
+        let text = nested(wrappers, "POINT(1 2)");
+        assert_eq!(text.len(), wrappers * 20 + 10);
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                let parsed = good(&text);
+                assert_eq!(parsed.geometry().coord_count(), 1);
+                assert!(!parsed.geometry().is_empty());
+                let rendered = write_bare(parsed.geometry(), SCALE);
+                assert!(
+                    rendered == text,
+                    "the geometry must render back exactly as written"
+                );
+                let again = good(&rendered);
+                assert!(
+                    again.geometry() == parsed.geometry(),
+                    "and must re-read as itself"
+                );
+                drop(again);
+                drop(parsed);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the walks did not abort");
+    }
+
+    /// A malformed token at the bottom of a hundred thousand collections is refused
+    /// with the same diagnostic, at the same byte, as it would be at the top level,
+    /// and the refusal is reached on a 128 KiB stack too.
+    ///
+    /// Expected bytes from the shape: each `GEOMETRYCOLLECTION(` is 19 bytes, so
+    /// the innermost geometry starts at byte `wrappers * 19`; `PONT` is an unknown
+    /// keyword at exactly that byte, and in `POINT(1 x)` the second ordinate is
+    /// expected 8 bytes further on, where `x` stands.
+    #[test]
+    fn a_malformed_token_deep_inside_a_collection_is_refused_at_its_own_byte() {
+        let wrappers = 99_999usize;
+        let keyword_at = wrappers * 19;
+        let ordinate_at = keyword_at + "POINT(1 ".len();
+        let misspelled = nested(wrappers, "PONT(1 2)");
+        let not_a_number = nested(wrappers, "POINT(1 x)");
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(move || {
+                let error = refused(&misspelled);
+                assert!(
+                    error
+                        .detail()
+                        .contains(&format!("expected a geometry keyword at byte {keyword_at}")),
+                    "got {error}"
+                );
+                let error = refused(&not_a_number);
+                assert!(
+                    error
+                        .detail()
+                        .contains(&format!("expected a number at byte {ordinate_at}")),
+                    "got {error}"
+                );
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the walks did not abort");
+        // The same two refusals at the top level, so the diagnostic is shown to be
+        // the same one and not a depth-specific message.
         assert!(
-            read(&just_below).is_ok(),
-            "depth {} must parse",
-            MAX_NESTING_DEPTH - 1
+            refused("PONT(1 2)")
+                .detail()
+                .contains("expected a geometry keyword at byte 0")
         );
-
-        // The cap has to bound EVERY recursion over a geometry, not just the
-        // reader's. The writer recurses through the members and so does the
-        // model's structural check inside `Geometry::new`, so a depth the reader
-        // accepts but the writer cannot render would just move the abort one
-        // function along. Rendering and re-reading at the cap exercises both.
-        let rendered = write_bare(parsed.geometry(), SCALE);
-        assert_eq!(
-            rendered, at_the_cap,
-            "the geometry at the cap must render back exactly as written"
+        assert!(
+            refused("POINT(1 x)")
+                .detail()
+                .contains("expected a number at byte 8")
         );
-        assert_eq!(
-            good(&rendered).geometry(),
-            parsed.geometry(),
-            "and must re-read as itself, which walks the structural check at full depth too"
-        );
-        // One deeper is refused, as a literal error rather than a stack overflow.
-        assert_refused(&nested(MAX_NESTING_DEPTH + 1));
-        assert_refused(&nested(MAX_NESTING_DEPTH + 200));
     }
 
     // -----------------------------------------------------------------------

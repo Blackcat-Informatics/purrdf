@@ -96,10 +96,10 @@ fn list_get<D: DatasetView + Sync>(
     if idx < 0 {
         return Ok(None);
     }
-    match members.into_iter().nth(idx as usize) {
-        Some(value) => Ok(intern(ctx, value)),
-        None => Ok(None),
-    }
+    Ok(members
+        .into_iter()
+        .nth(idx as usize)
+        .and_then(|value| intern(ctx, value)))
 }
 
 /// `listIndexOf(list, value)` → the zero-based index of the first occurrence,

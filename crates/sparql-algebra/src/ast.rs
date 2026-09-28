@@ -16,6 +16,7 @@
 use std::sync::Arc;
 
 use crate::error::{ParseError, Result};
+use crate::tree::Child;
 
 /// A datatype IRI literal used for plain (non-typed) literals: `xsd:string`.
 pub const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -278,7 +279,9 @@ pub enum NamedNodePattern {
 
 /// A term in a query pattern: a concrete term, a variable, or — for RDF 1.2 — a
 /// quoted triple term (`<<( s p o )>>`).
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// `Clone`, `==`, `Hash`, `Debug` and the drop walk nested triple terms over work
+/// lists, so none of them needs more machine stack for a deeper nesting.
 pub enum TermPattern {
     /// An IRI.
     NamedNode(NamedNode),
@@ -289,7 +292,7 @@ pub enum TermPattern {
     /// A variable.
     Variable(Variable),
     /// An RDF 1.2 quoted triple term in term position.
-    Triple(Box<TriplePattern>),
+    Triple(Child<TriplePattern>),
 }
 
 /// A triple pattern `s p o`, where the predicate admits only an IRI or variable
@@ -307,14 +310,16 @@ pub struct TriplePattern {
 
 /// A ground term (no variables): the cell type of a `VALUES` block. RDF 1.2
 /// ground quoted triples are admitted via [`GroundTerm::Triple`].
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+///
+/// `Clone`, `==`, `Hash`, `Debug` and the drop walk nested triple terms over work
+/// lists, so none of them needs more machine stack for a deeper nesting.
 pub enum GroundTerm {
     /// An IRI.
     NamedNode(NamedNode),
     /// A literal.
     Literal(Literal),
     /// A ground RDF 1.2 quoted triple term.
-    Triple(Box<GroundTriple>),
+    Triple(Child<GroundTriple>),
     /// A blank node — **injection-only**. The SPARQL
     /// grammar forbids a blank node in a `VALUES`/`DataBlock` cell, so the
     /// [parser](crate::parser) NEVER produces this variant. It exists solely so

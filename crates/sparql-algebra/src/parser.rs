@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The public parse entry point and the recursive-descent parser that turns a
-//! SPARQL 1.1/1.2 query into the [`Query`] algebra.
+//! The public parse entry point and the parser that turns a SPARQL 1.1/1.2 query
+//! into the [`Query`] algebra.
 //!
 //! The parser translates *directly* into the W3C SPARQL algebra (§18.2) rather
 //! than building a separate syntax tree: group graph patterns accumulate into
@@ -11,21 +11,43 @@
 //! and aggregates are lifted to synthetic variables in a `Group` node (the
 //! standard §18.2.4 mechanism). Anything outside the corpus-driven scope is a
 //! hard [`ParseError::Unsupported`].
+//!
+//! # Nesting
+//!
+//! No production calls itself, directly or through another. Every construct that
+//! nests — a group graph pattern and each element that holds one, a sub-`SELECT`, an
+//! `EXISTS` body, a bracketted expression, a prefix operator, an argument or `IN`
+//! list, an aggregate, an expression triple term, a property-path group, a blank-node
+//! property list, a collection, a triple term, a reifying triple and an annotation
+//! block — is read by a loop that keeps what encloses the cursor on an explicit,
+//! heap-allocated stack: groups, sub-`SELECT`s, modifiers and expressions in one
+//! pushdown machine (`parser/machine.rs`), triples, paths and terms in loops of their
+//! own (`parser/triples.rs`). How deeply a request nests is therefore bounded by the
+//! memory those stacks grow into and nothing else, the same on every host and on a
+//! thread of any stack size; the tree it returns is walked, copied and dropped
+//! without recursion too (see [`crate::walk`]).
+
+mod machine;
+mod triples;
+
+use machine::Machine;
+use triples::{PathLevel, TFrame};
 
 use std::collections::HashMap;
 use std::ops::Range;
 
 use crate::algebra::{
-    AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, GraphTarget,
-    GraphUpdateOperation, NegatedPathElement, OrderExpression, PropertyFunctionCall,
-    PropertyPathExpression, Query, QueryDataset, SparqlVersion, Update, UsingClause,
+    AggregateFunction, Expression, Function, GraphPattern, GraphTarget, GraphUpdateOperation,
+    OrderExpression, PropertyFunctionCall, PropertyPathExpression, Query, QueryDataset,
+    SparqlVersion, Update, UsingClause,
 };
 use crate::ast::{
-    BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
-    QuadPattern, TermPattern, TriplePattern, Variable,
+    BaseDirection, BlankNode, GroundTerm, Literal, NamedNode, NamedNodePattern, QuadPattern,
+    TermPattern, TriplePattern, Variable,
 };
 use crate::error::{ParseError, Result};
 use crate::lexer::{Spanned, Token, tokenize};
+use crate::tree::Child;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, IriError, LineIndex, langtag};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -37,57 +59,6 @@ const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-
-/// Maximum number of nested group graph patterns accepted by the parser and evaluator.
-///
-/// This is a structural safety limit, not an execution governor: it rejects an algebra
-/// whose recursive evaluation would otherwise be able to exhaust the native stack before
-/// a fuel or stop check could run.
-pub const MAX_GRAPH_PATTERN_DEPTH: usize = 128;
-
-/// Maximum number of graph-pattern *combinator* nodes — `Join`/`LeftJoin`/
-/// `Lateral`/`Union`/`Filter`/`Extend`/`Graph`/`Service`/`Minus` — a single
-/// parse (one `SparqlParser::parse_query`/`parse_update` call) will construct.
-///
-/// [`MAX_GRAPH_PATTERN_DEPTH`] bounds `{ … }` BRACE nesting only. It does
-/// nothing for a run of SIBLING operators at one brace depth — `OPTIONAL { }
-/// OPTIONAL { } …`, a `LATERAL { } LATERAL { } …` chain, a `UNION`-arm run at
-/// one `{ … }` boundary, or a run of non-BGP triples-block elements (e.g.
-/// complex property-path triples, which `join` cannot flatten the way it
-/// flattens adjacent `Bgp`s) — each of which grows the algebra tree by one
-/// level PER SIBLING while `{ … }` nesting stays at 1. A query built from N
-/// such siblings therefore produces a tree of height ~N with no brace ever
-/// nesting past depth 1, invisible to `MAX_GRAPH_PATTERN_DEPTH`. The SAME
-/// shape arises from a long `SELECT (e1 AS ?v1) … (eN AS ?vN)` projection
-/// list, a long `GROUP BY` expression-condition list, or a long `HAVING`
-/// condition list — each lowers to a chain of `Extend`/`Filter` nodes wrapped
-/// around the WHERE pattern, built by a loop with no brace at all.
-///
-/// This limit closes that gap at its source: every site in this module that
-/// can grow the algebra tree by repetition — the group-parsing loop, its
-/// nested `UNION`-arm loop, a triples block's non-BGP (`Path`/property-function)
-/// elements, and the three projection/grouping/having list loops above —
-/// charges one unit against this budget per node it is about to build, and
-/// the parse hard-fails with a typed [`ParseError`] the instant the budget is
-/// exhausted, rather than building the (N+1)-th node. Because every node that
-/// could deepen the tree is charged, capping the TOTAL count also caps the
-/// tree's maximum root-to-leaf HEIGHT by the same number — which is what
-/// actually matters: that height is the native-stack recursion depth of
-/// every downstream consumer that walks the parsed tree by ordinary
-/// recursion (`collect_vars`/`visible_variables`, `find_scope_conflict`,
-/// the tree's own recursive `Drop`), none of which can be rewritten to an
-/// explicit-stack walk without also rewriting `Drop`, which recursion alone
-/// cannot avoid. Bounding construction is therefore the one fix that covers
-/// every present AND future consumer at once, `Drop` included.
-///
-/// The value is chosen with a wide safety margin under the depth at which a
-/// left-deep tree of this shape has been observed to exhaust a 2&nbsp;MiB
-/// stack (the size `cargo test` gives each test thread) while still leaving
-/// several orders of magnitude of headroom over any query in this crate's
-/// corpus: a single query with `MAX_GRAPH_PATTERN_NODES` non-BGP siblings is
-/// already far outside anything a hand- or tool-written SPARQL query
-/// resembles.
-pub const MAX_GRAPH_PATTERN_NODES: usize = 2048;
 
 /// Parse-time configuration for the SPARQL front-end.
 ///
@@ -212,6 +183,85 @@ pub struct QuerySplit {
     pub dataset_at: Option<Range<usize>>,
 }
 
+/// One parse of a query, with the position its **dataset clause** occupies — or,
+/// for a query that writes none, the position where one would be written.
+///
+/// This is what a layer needs to *replace* a query's dataset as text: the SPARQL 1.1
+/// Protocol's `default-graph-uri`/`named-graph-uri` parameters override every
+/// `FROM`/`FROM NAMED` the query itself declares (Protocol §2.1.4), and applying them
+/// without re-serializing the caller's text means cutting the query's own run out and
+/// writing the parameters' clauses in the same place. [`QuerySplit::dataset_at`] cannot
+/// serve that caller on its own: it is `None` for a query with no clause, and that is
+/// exactly the query whose insertion point is still needed.
+///
+/// Positional only, like [`QuerySplit`], and deliberately not `#[non_exhaustive]` for
+/// the same reason: a position a splicing caller fails to read is a clause its splice
+/// gets wrong.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct QueryDatasetSlot {
+    /// The algebra, exactly as [`SparqlParser::parse_query_with`] returns it.
+    pub query: Query,
+    /// The byte range of the query form's `DatasetClause*` run.
+    ///
+    /// For a query that writes one, exactly [`QuerySplit::dataset_at`]: from the first
+    /// `FROM` to the start of the token after the last clause. For a query that writes
+    /// none, the EMPTY range at the start of the token a dataset clause would precede
+    /// (`WHERE`, or the `{` of a `WHERE`-less group), so text inserted there becomes the
+    /// query's dataset clause. Always the whole query's own clause — never a
+    /// sub-`SELECT`'s position, which has no dataset clause to hold.
+    pub dataset_at: Range<usize>,
+}
+
+/// One parse of an update request, with the per-operation positions a layer needs in
+/// order to give each operation's `WHERE` a dataset as **text**.
+///
+/// The SPARQL 1.1 Protocol's `using-graph-uri`/`using-named-graph-uri` parameters mean
+/// what `USING`/`USING NAMED` clauses mean, applied to every operation that has a
+/// `WHERE` (Protocol §2.2.3). Writing them into the request without re-serializing it
+/// needs, per operation, where its `USING` run is (or would go), and whether it already
+/// has a `WITH` or `USING` a parameter would conflict with.
+///
+/// Positional only, like [`QuerySplit`], and deliberately not `#[non_exhaustive]`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct UpdateSplit {
+    /// The algebra, exactly as [`SparqlParser::parse_update_with`] returns it.
+    pub update: Update,
+    /// One entry per operation, index-aligned with `update.operations`.
+    pub operations: Vec<UpdateDatasetSlot>,
+}
+
+/// Where one update operation's dataset clause is written, by the production the
+/// operation was read under (SPARQL 1.1 Update §3.1.3 and the §19 grammar).
+///
+/// Deliberately not `#[non_exhaustive]`: see [`UpdateSplit`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum UpdateDatasetSlot {
+    /// An operation with no `WHERE` clause (`INSERT DATA`, `DELETE DATA`, `LOAD`,
+    /// `CLEAR`, `DROP`, `CREATE`, `ADD`, `MOVE`, `COPY`): there is no pattern for a
+    /// dataset to scope.
+    NoWhereClause,
+    /// `[WITH <iri>] ( DELETE {…} [INSERT {…}] | INSERT {…} ) UsingClause* WHERE {…}`.
+    Modify {
+        /// The byte range of the `WITH <iri>` clause, from `WITH` to the start of the
+        /// token after the IRI; `None` when the operation writes no `WITH`.
+        with_at: Option<Range<usize>>,
+        /// The byte range of the `UsingClause*` run, from the first `USING` to the start
+        /// of the token after the last clause. EMPTY, at the start of the `WHERE`
+        /// keyword, when the operation writes no `USING`.
+        using_at: Range<usize>,
+    },
+    /// `DELETE WHERE QuadPattern` — the shorthand whose grammar has no `UsingClause`,
+    /// defined (§3.1.3.3) as `DELETE QuadPattern WHERE QuadPattern` with the same
+    /// pattern in both places. A dataset is given to it by writing that long form.
+    DeleteWhere {
+        /// The byte offset of the `WHERE` keyword.
+        where_at: usize,
+        /// The byte range of the braced `QuadPattern`, from its `{` to just past its
+        /// matching `}` — the text the long form repeats as the `DELETE` template.
+        pattern_at: Range<usize>,
+    },
+}
+
 /// A reusable SPARQL query parser.
 ///
 /// Mirrors the prior oxigraph-family `SparqlParser` surface the existing
@@ -328,6 +378,34 @@ impl SparqlParser {
         })
     }
 
+    /// [`Self::parse_query_with`], also reporting the position of the query's dataset
+    /// clause, or of where one would be written: see [`QueryDatasetSlot`].
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::parse_query_with`]'s.
+    pub fn parse_query_dataset_slot(
+        &self,
+        query: &str,
+        options: &ParserOptions,
+    ) -> Result<QueryDatasetSlot> {
+        let mut p = self.parser_for(query, options)?;
+        p.parse_prologue()?;
+        let q = p.parse_query_form()?;
+        p.expect_eof()?;
+        // Every query form reads its `DatasetClause*` run through
+        // `parse_dataset_clauses`, so a parsed query always has a slot. A form that
+        // somehow did not would have nowhere for a dataset to go; that is reported as
+        // the parse error it is rather than guessed at.
+        let dataset_at = p.dataset_slot.ok_or_else(|| {
+            ParseError::syntax("the query form carries no dataset-clause position", 0)
+        })?;
+        Ok(QueryDatasetSlot {
+            query: q,
+            dataset_at,
+        })
+    }
+
     /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra, under
     /// [`ParserOptions::default`].
     ///
@@ -354,13 +432,27 @@ impl SparqlParser {
     /// Parse a SPARQL 1.1 Update request into the [`Update`] algebra with explicit
     /// [`ParserOptions`].
     pub fn parse_update_with(&self, update: &str, options: &ParserOptions) -> Result<Update> {
+        self.parse_update_split(update, options)
+            .map(|split| split.update)
+    }
+
+    /// [`Self::parse_update_with`], also reporting where each operation's dataset
+    /// clause is (or would be) written: see [`UpdateSplit`].
+    ///
+    /// # Errors
+    ///
+    /// Exactly [`Self::parse_update_with`]'s.
+    pub fn parse_update_split(&self, update: &str, options: &ParserOptions) -> Result<UpdateSplit> {
         let mut p = self.parser_for(update, options)?;
         let u = p.parse_update()?;
         p.expect_eof()?;
-        Ok(u)
+        Ok(UpdateSplit {
+            update: u,
+            operations: p.update_slots,
+        })
     }
 
-    /// Tokenize `text` and assemble the internal recursive-descent parser state.
+    /// Tokenize `text` and assemble the internal parser state.
     fn parser_for<'a, 'o>(
         &self,
         text: &'a str,
@@ -381,10 +473,11 @@ impl SparqlParser {
             anon_counter: 0,
             anon_prefix,
             group_counter: 0,
-            group_pattern_depth: 0,
-            pattern_node_budget: 0,
-            exists_scope_stack: Vec::new(),
+            exists_scope_stack: ExistsScopes::default(),
             dataset_at: None,
+            dataset_slot: None,
+            update_slots: Vec::new(),
+            op_slot: UpdateDatasetSlot::NoWhereClause,
             projection_scope_pending: false,
             in_aggregate_argument: false,
             projection_seen_targets: Vec::new(),
@@ -394,6 +487,9 @@ impl SparqlParser {
             blank_label_bgps: HashMap::new(),
             bgp_counter: 0,
             bgp_scope: None,
+            machine: Machine::default(),
+            triple_frames: Vec::new(),
+            path_levels: Vec::new(),
             options,
         })
     }
@@ -455,19 +551,15 @@ struct Parser<'a, 'o> {
     /// The label prefix [`Parser::fresh_anon`] mints under — see [`anon_label_prefix`].
     anon_prefix: String,
     group_counter: usize,
-    group_pattern_depth: usize,
-    /// Running count of graph-pattern combinator nodes charged so far against
-    /// [`MAX_GRAPH_PATTERN_NODES`] — see [`Parser::charge_pattern_nodes`].
-    pattern_node_budget: usize,
     /// The `EXISTS`/`NOT EXISTS` in-scope-set stack (SEP-0007 Part 3) — see
     /// [`Parser::exists_scope`] for what "in scope" means here and
     /// [`Parser::push_exists_scope_boundary`]/[`Parser::push_exists_scope_isolated`]
     /// for how frames are opened.
-    exists_scope_stack: Vec<VarScope>,
+    exists_scope_stack: ExistsScopes,
     /// True while parsing a `SELECT`'s own projection list — its `(expr AS
     /// ?v)` targets and any aggregate arguments lifted out of them — i.e. the
     /// window BEFORE `WHERE` is even read, where [`Parser::exists_scope`] is
-    /// necessarily still empty (see [`Parser::parse_exists_body`]'s doc for
+    /// necessarily still empty (see [`Parser::check_exists_body`]'s doc for
     /// why an immediate check there cannot be correct). An `EXISTS`/`NOT
     /// EXISTS` reached in this window is deferred into
     /// `pending_exists_scope_checks` instead of checked on the spot.
@@ -534,6 +626,21 @@ struct Parser<'a, 'o> {
     /// may have been recorded a moment earlier, and is never observed: the error
     /// propagates to the public entry point and this `Parser` is not consulted again.
     dataset_at: Option<Range<usize>>,
+    /// Where the WHOLE query's `DatasetClause*` run sits, empty or not, for
+    /// [`SparqlParser::parse_query_dataset_slot`] to report.
+    ///
+    /// Written by [`Parser::parse_dataset_clauses`] on every call; the one caller
+    /// that reads a run which is not the whole query's — the sub-`SELECT` site in
+    /// [`Parser::parse_select`] — restores the value it found, so a sub-select read
+    /// before the query's own clause (inside an `EXISTS` in the projection) or after
+    /// it (inside the `WHERE`) never displaces it.
+    dataset_slot: Option<Range<usize>>,
+    /// One [`UpdateDatasetSlot`] per update operation parsed so far, pushed by
+    /// [`Parser::parse_update`] for [`SparqlParser::parse_update_split`].
+    update_slots: Vec<UpdateDatasetSlot>,
+    /// The slot of the update operation being parsed, written by the operation's own
+    /// production and taken by [`Parser::parse_update`] once it returns.
+    op_slot: UpdateDatasetSlot,
     /// The basic graph pattern each author-written blank node label was first
     /// seen in, keyed by label — the state behind the rule that a label is
     /// scoped to ONE basic graph pattern (see [`Parser::scoped_blank_label`]).
@@ -542,13 +649,20 @@ struct Parser<'a, 'o> {
     /// body is caught too; one map per UPDATE operation, whose `WHERE` clauses
     /// are separate patterns ([`Parser::parse_update`] clears it between them).
     blank_label_bgps: HashMap<String, usize>,
-    /// The next basic-graph-pattern ordinal [`Parser::parse_group_graph_pattern_inner`]
-    /// hands out.
+    /// The next basic-graph-pattern ordinal a group's triples block is given.
     bgp_counter: usize,
     /// The basic graph pattern the triples block being parsed belongs to, or
     /// `None` outside a group's triples block — a template, a `VALUES` block or
     /// an expression, none of which is a basic graph pattern of the query.
     bgp_scope: Option<usize>,
+    /// The stacks of the machine that reads groups, sub-`SELECT`s, solution modifiers
+    /// and expressions (see [`machine`]), kept so later parses of this request reuse
+    /// them.
+    machine: Machine,
+    /// The frame stack of the triples machine (see [`triples`]), reused likewise.
+    triple_frames: Vec<TFrame>,
+    /// The open levels of the property path being read, reused likewise.
+    path_levels: Vec<PathLevel>,
     options: &'o ParserOptions,
 }
 
@@ -626,8 +740,6 @@ impl<'a> Parser<'a, '_> {
             anon_counter: self.anon_counter,
             anon_prefix: self.anon_prefix.clone(),
             group_counter: self.group_counter,
-            group_pattern_depth: self.group_pattern_depth,
-            pattern_node_budget: self.pattern_node_budget,
             // A fork reparses only a bounded braced block for a template/quad
             // reading (`CONSTRUCT`'s short-form template, `DELETE WHERE`'s
             // quad-pattern reading) — neither production can contain `EXISTS`,
@@ -639,7 +751,7 @@ impl<'a> Parser<'a, '_> {
             // `projection_scope_pending`/`in_aggregate_argument` start false
             // and the two buffers start empty regardless of `self`'s own
             // mid-projection-list state at the fork point.
-            exists_scope_stack: Vec::new(),
+            exists_scope_stack: ExistsScopes::default(),
             projection_scope_pending: false,
             in_aggregate_argument: false,
             projection_seen_targets: Vec::new(),
@@ -650,39 +762,24 @@ impl<'a> Parser<'a, '_> {
             // contain a dataset clause: the fork records none, and the position the
             // outer parse recorded stays the outer parse's, on the outer parser.
             dataset_at: None,
+            dataset_slot: None,
+            update_slots: Vec::new(),
+            op_slot: UpdateDatasetSlot::NoWhereClause,
             // A fork reads a template or quad-pattern block, which is not a basic
             // graph pattern of the query: nothing it reads is scoped to one, so it
             // starts with no scope and records nothing.
             blank_label_bgps: HashMap::new(),
             bgp_counter: 0,
             bgp_scope: None,
+            machine: Machine::default(),
+            triple_frames: Vec::new(),
+            path_levels: Vec::new(),
             options: self.options,
         }
     }
 
     fn set_counters(&mut self, counters: (usize, usize, usize)) {
         (self.agg_counter, self.anon_counter, self.group_counter) = counters;
-    }
-
-    /// Charge `n` graph-pattern combinator nodes against
-    /// [`MAX_GRAPH_PATTERN_NODES`], hard-failing the instant the running total
-    /// would exceed it. Every call site that is ABOUT TO build one more
-    /// `Join`/`LeftJoin`/`Lateral`/`Union`/`Filter`/`Extend`/`Graph`/`Service`/
-    /// `Minus` node calls this FIRST, so the budget is checked before the node
-    /// (and any input it borrows unboundedly, like a `LATERAL` right-hand
-    /// side) is built — never after.
-    fn charge_pattern_nodes(&mut self, n: usize) -> Result<()> {
-        self.pattern_node_budget += n;
-        if self.pattern_node_budget > MAX_GRAPH_PATTERN_NODES {
-            return Err(ParseError::syntax(
-                format!(
-                    "graph pattern combinator count exceeds the safety limit of \
-                     {MAX_GRAPH_PATTERN_NODES}"
-                ),
-                self.span(),
-            ));
-        }
-        Ok(())
     }
 
     /// Record one PRODUCTION consultation of a freshly-computed whole-pattern
@@ -737,16 +834,14 @@ impl<'a> Parser<'a, '_> {
     // operand is explicitly out of scope per §18.2.1), so the seeded frame is
     // POPPED AND DISCARDED, never merged back into what it was seeded from.
     fn exists_scope(&self) -> &[Variable] {
-        self.exists_scope_stack
-            .last()
-            .map_or(&[], VarScope::as_slice)
+        self.exists_scope_stack.top()
     }
 
     /// Open a fresh, EMPTY in-scope-set frame — nothing precedes it. Used at
     /// every query/update operation's own top-level `WHERE` clause and at a
     /// sub-`SELECT`'s (the one real scope boundary; see the module doc above).
     fn push_exists_scope_boundary(&mut self) {
-        self.exists_scope_stack.push(VarScope::new());
+        self.exists_scope_stack.push_boundary();
     }
 
     /// Open a fresh in-scope-set frame SEEDED with a copy of the frame beneath
@@ -754,11 +849,7 @@ impl<'a> Parser<'a, '_> {
     /// this frame goes on to introduce is written back once it is popped. Used
     /// at an `EXISTS`/`NOT EXISTS`/`MINUS` body (see the module doc above).
     fn push_exists_scope_isolated(&mut self) {
-        let mut seed = VarScope::new();
-        for v in self.exists_scope() {
-            seed.note(v);
-        }
-        self.exists_scope_stack.push(seed);
+        self.exists_scope_stack.push_isolated();
     }
 
     /// Close the innermost in-scope-set frame, discarding it — the caller is
@@ -776,17 +867,19 @@ impl<'a> Parser<'a, '_> {
     /// this for a `Minus` right operand, matching the group loop's own
     /// pre-existing non-call for its local `VarScope`).
     fn note_exists_scope(&mut self, pattern: &GraphPattern) {
-        if let Some(top) = self.exists_scope_stack.last_mut() {
-            collect_vars(pattern, top);
+        if self.exists_scope_stack.is_open() {
+            let mut noted = VarScope::new();
+            collect_vars(pattern, &mut noted);
+            for v in noted.as_slice() {
+                self.exists_scope_stack.note(v);
+            }
         }
     }
 
     /// Record a single fresh binding (a `BIND` target) into the current
     /// in-scope-set frame.
     fn note_exists_scope_var(&mut self, variable: &Variable) {
-        if let Some(top) = self.exists_scope_stack.last_mut() {
-            top.note(variable);
-        }
+        self.exists_scope_stack.note(variable);
     }
 
     /// Parse a query/update operation's own top-level `WHERE` group graph
@@ -801,109 +894,12 @@ impl<'a> Parser<'a, '_> {
     /// afterward.
     fn parse_where_clause(&mut self) -> Result<GraphPattern> {
         self.push_exists_scope_boundary();
-        let pattern = self.parse_group_graph_pattern()?;
-        self.note_exists_scope(&pattern);
-        self.pop_exists_scope_boundary();
-        Ok(pattern)
-    }
-
-    /// Parse an `EXISTS`/`NOT EXISTS` group graph pattern (both `"EXISTS"`
-    /// and `"NOT" "EXISTS"` call this — the SAME production, so both share
-    /// the SAME check; there is no separate "NOT EXISTS" wording), enforcing
-    /// SEP-0007 Part 3: neither `BIND`/a sub-`SELECT`'s `(expr AS ?v)`/a
-    /// `GROUP BY (expr AS ?v)` target NOR a `VALUES` variable inside it may
-    /// rebind a variable already in scope on the row this `EXISTS` is
-    /// testing.
-    ///
-    /// # The in-scope set consulted
-    ///
-    /// [`Parser::exists_scope`], READ BEFORE the body is parsed — the
-    /// current top in-scope-set frame, exactly as [`Parser::exists_scope`]
-    /// (and the frame taxonomy on `Parser::exists_scope_stack`'s doc)
-    /// defines it: the transitively scope-transparent accumulation (through
-    /// a plain nested group, `OPTIONAL`, `UNION`, `GRAPH`, `SERVICE`, either
-    /// side of `LATERAL`) of every variable introduced, left-to-right, since
-    /// the nearest enclosing TRUE scope boundary — a sub-`SELECT`'s own
-    /// `WHERE`, or the query/update operation's own top-level one. For an
-    /// `EXISTS` reached while parsing a `FILTER`'s constraint or a `BIND`'s
-    /// value expression mid-group, that is exactly the elements of the
-    /// SAME enclosing group parsed so far (this production runs inside
-    /// `parse_group_graph_pattern_inner`'s own loop, whose every
-    /// scope-transparent branch mirrors its contribution into this frame —
-    /// see `Parser::exists_scope_stack`'s doc); for a solution-modifier
-    /// expression (`GROUP BY`/`HAVING`/`ORDER BY`), it is the complete
-    /// `WHERE` clause's scope (parsed in full before modifiers run).
-    ///
-    /// For a `SELECT`-list `(expr AS ?v)` target — or an aggregate argument
-    /// lifted out of one — parsed BEFORE `WHERE` is even read,
-    /// [`Parser::exists_scope`] is necessarily still empty: the row this
-    /// `EXISTS` will actually be tested against (`WHERE`'s scope, or the
-    /// grouped scope, or the aggregate-fold scope — see
-    /// [`ExistsScopeBasis`]) cannot be known yet. Rather than skip the check
-    /// (nothing precedes it syntactically is NOT the same as nothing will
-    /// ever be in scope — SEP-0007 Part 3 is a SEMANTIC rule about the row at
-    /// EVALUATION time, not a textual-order one), `Parser::projection_scope_pending`
-    /// marks this window, and the check is DEFERRED into
-    /// `Parser::pending_exists_scope_checks` instead of run here — resolved
-    /// once `Parser::parse_select`'s post-`WHERE` block completes the
-    /// missing root scope. See [`PendingExistsScopeCheck`] for why a single
-    /// `local_scope ∪ root_scope` union, computed once the root is known,
-    /// suffices at ANY nesting depth reached during this window.
-    ///
-    /// A NESTED `EXISTS` is checked at its OWN call to this function, with
-    /// the in-scope set THAT nesting level sees — which, because this body
-    /// is parsed inside a freshly SEEDED (not merged-back) frame (see
-    /// `Parser::push_exists_scope_isolated`), already includes everything
-    /// visible to the outer `EXISTS` plus whatever this body's own elements
-    /// have introduced so far, without this body's OWN introductions ever
-    /// leaking to what the OUTER `EXISTS`'s LATER siblings see. (Immediately
-    /// or, under `projection_scope_pending`, at the SAME deferred resolution
-    /// point as its enclosing `EXISTS` — every nested occurrence reached
-    /// during that window is recorded as its OWN, independent
-    /// `PendingExistsScopeCheck`.)
-    fn parse_exists_body(&mut self) -> Result<GraphPattern> {
-        // Anchor the error at the body's own opening brace rather than
-        // wherever the cursor lands after parsing it, mirroring `LATERAL`'s
-        // own `at` capture.
-        let at = self.span();
-        let scope: Vec<Variable> = self.exists_scope().to_vec();
-        self.push_exists_scope_isolated();
-        let body = self.parse_group_graph_pattern()?;
-        self.pop_exists_scope_boundary();
-        if self.projection_scope_pending {
-            let mut local_scope = scope;
-            let basis = if self.in_aggregate_argument {
-                ExistsScopeBasis::AggregateArgument
-            } else {
-                // A later SELECT-list target sees every earlier one already
-                // bound (the `Extend` chain `Parser::parse_select` builds
-                // from `select_exprs` nests that way) — see
-                // `Parser::projection_seen_targets`'s doc.
-                local_scope.extend(self.projection_seen_targets.iter().cloned());
-                ExistsScopeBasis::Projection
-            };
-            self.pending_exists_scope_checks
-                .push(PendingExistsScopeCheck {
-                    local_scope,
-                    body: body.clone(),
-                    at,
-                    basis,
-                });
-            return Ok(body);
+        let group = self.parse_group()?;
+        for v in group.scope.as_slice() {
+            self.note_exists_scope_var(v);
         }
-        if let Some((var, intro)) = find_scope_conflict(&scope, &body) {
-            return Err(ParseError::syntax(
-                format!(
-                    "{} ?{} inside {} is already in scope on {}",
-                    intro.as_str(),
-                    var.as_str(),
-                    ScopeConstruct::Exists.keyword(),
-                    ScopeConstruct::Exists.already_in_scope_clause(),
-                ),
-                at,
-            ));
-        }
-        Ok(body)
+        self.pop_exists_scope_boundary();
+        Ok(group.pattern)
     }
 
     fn at(&self, t: &Token<'a>) -> bool {
@@ -979,7 +975,7 @@ impl<'a> Parser<'a, '_> {
     fn parse_query_form(&mut self) -> Result<Query> {
         let base_iri = self.base_named_node();
         if self.peek_kw("SELECT") {
-            self.parse_select(base_iri, SelectPosition::Query)
+            self.parse_select(base_iri)
         } else if self.peek_kw("CONSTRUCT") {
             self.parse_construct(base_iri)
         } else if self.peek_kw("ASK") {
@@ -1166,425 +1162,6 @@ impl<'a> Parser<'a, '_> {
 
     // ── query forms ──────────────────────────────────────────────────────────
 
-    fn parse_select(
-        &mut self,
-        base_iri: Option<NamedNode>,
-        position: SelectPosition,
-    ) -> Result<Query> {
-        self.expect_kw("SELECT")?;
-        let distinct = self.eat_kw("DISTINCT");
-        let reduced = !distinct && self.eat_kw("REDUCED");
-
-        // A fresh, EMPTY EXISTS in-scope-set frame for this SELECT/sub-SELECT —
-        // opened before the projection list is even read, so an `EXISTS`
-        // inside a `(expr AS ?v)` SELECT-list target (parsed here, BEFORE
-        // `WHERE`) sees no ambient scope leaked in from whatever query this
-        // one is nested inside (a sub-SELECT is not correlated with its outer
-        // query — see the module doc on `Parser::exists_scope_stack`). Stays
-        // open through `WHERE` and the solution modifiers (`GROUP BY`/
-        // `HAVING`/`ORDER BY` all read the current row `WHERE` produced), and
-        // is popped just once, at this function's single success return.
-        self.push_exists_scope_boundary();
-
-        // This SELECT's OWN deferred-EXISTS-scope window (SEP-0007 Part 3's
-        // projection-list position — see `Parser::projection_scope_pending`'s doc): save
-        // whatever the ENCLOSING parse had (this may itself be a sub-SELECT
-        // reached mid-projection-list of an outer one, via `EXISTS { SELECT
-        // ... }`), open a fresh one for the projection list about to be
-        // parsed, and restore the enclosing state at this function's single
-        // success return — matching `push_exists_scope_boundary`'s own
-        // pop-once-at-success-return discipline just above: on any parse
-        // error the whole request aborts (a single `Result` propagates all
-        // the way to the public entry point, and this `Parser` is never
-        // consulted again), so an unrestored window on an error path is, as
-        // with the unpopped `exists_scope_stack` frame in that same case,
-        // never observed.
-        let saved_projection_scope_pending = self.projection_scope_pending;
-        let saved_in_aggregate_argument = self.in_aggregate_argument;
-        let saved_projection_seen_targets = std::mem::take(&mut self.projection_seen_targets);
-        let saved_pending_exists_scope_checks =
-            std::mem::take(&mut self.pending_exists_scope_checks);
-        self.projection_scope_pending = true;
-        self.in_aggregate_argument = false;
-
-        // Projection: `*` or a list of Var / (Expr AS Var).
-        let mut star = false;
-        let mut projected: Vec<Variable> = Vec::new();
-        let mut select_exprs: Vec<(Variable, Expression)> = Vec::new();
-        let mut aggregates: Vec<(Variable, AggregateExpression)> = Vec::new();
-        if self.eat(&Token::Star) {
-            star = true;
-        } else {
-            loop {
-                if let Some(Token::Variable(_)) = self.peek() {
-                    projected.push(self.expect_var()?);
-                } else if self.at(&Token::LParen) {
-                    self.expect(&Token::LParen)?;
-                    let expr = self.parse_expression_lifting_aggs(&mut aggregates)?;
-                    self.expect_kw("AS")?;
-                    let var = self.expect_var()?;
-                    self.expect(&Token::RParen)?;
-                    projected.push(var.clone());
-                    // Recorded so a LATER projection-list `EXISTS` deferred
-                    // under `projection_scope_pending` sees this target as
-                    // already bound — see
-                    // `Parser::projection_seen_targets`'s doc.
-                    self.projection_seen_targets.push(var.clone());
-                    // A long `SELECT (e1 AS ?v1) … (eN AS ?vN)` list lowers to
-                    // a chain of N `Extend` nodes wrapped around the WHERE
-                    // pattern (below, near the query's assembly) — no brace
-                    // anywhere, so `MAX_GRAPH_PATTERN_DEPTH` never sees it.
-                    // Charged per condition, at the point each is parsed.
-                    self.charge_pattern_nodes(1)?;
-                    select_exprs.push((var, expr));
-                } else {
-                    break;
-                }
-            }
-            if projected.is_empty() {
-                return Err(ParseError::syntax("empty SELECT projection", self.span()));
-            }
-        }
-
-        // The projection list is fully parsed — leave the deferred-EXISTS-scope
-        // window. Every `EXISTS`/`NOT EXISTS` reached from here on (`WHERE`,
-        // `GROUP BY`/`HAVING`/`ORDER BY`) already has a correct
-        // `Parser::exists_scope` to check against immediately, exactly as
-        // before this window existed.
-        self.projection_scope_pending = false;
-
-        // Dataset clause (FROM / FROM NAMED), §13.2. Taken before the run is read, so
-        // the refusal below points at the caller's own `FROM` keyword rather than at
-        // wherever the parse happened to stop afterwards.
-        let dataset_at = self.span();
-        let dataset = self.parse_dataset_clauses()?;
-        // §18 `SubSelect ::= SelectClause WhereClause SolutionModifier ValuesClause`
-        // — there is no `DatasetClause` in it, and a dataset clause scopes a whole
-        // query rather than one group of one. Reading the run here and then dropping
-        // it at the sub-select site is the one outcome that cannot be right: the
-        // clause a caller wrote would decide nothing while the query still answered,
-        // which is a wrong answer under no diagnostic at all.
-        if position == SelectPosition::SubSelect
-            && !(dataset.default.is_empty() && dataset.named.is_empty())
-        {
-            return Err(ParseError::syntax(
-                "a sub-SELECT carries no dataset clause: FROM and FROM NAMED are \
-                 written on a whole query, which is the scope they apply to",
-                dataset_at,
-            ));
-        }
-
-        self.eat_kw("WHERE");
-        let where_pat = self.parse_group_graph_pattern()?;
-        // A belt-and-suspenders bulk mirror on top of the group loop's own
-        // incremental one (`Parser::note_exists_scope`/`_var`, called
-        // throughout `parse_group_graph_pattern_inner`): the incremental
-        // mirror alone already covers the ordinary case, but `where_pat` can
-        // also come back from `parse_group_graph_pattern_inner`'s early
-        // sub-SELECT return (a `WHERE` clause that IS just `{ SELECT ... }`,
-        // no loop iteration at this level at all) — this call guarantees the
-        // solution modifiers below see `where_pat`'s full scope regardless of
-        // which path built it. Idempotent with the incremental mirror in the
-        // ordinary case ([`VarScope::note`] dedupes).
-        self.note_exists_scope(&where_pat);
-
-        let modifiers = self.parse_solution_modifiers(&mut aggregates)?;
-
-        // A `GROUP BY (expr AS ?v)` target must be fresh too — not in scope in the
-        // `WHERE` clause, and not an earlier condition's target. §18.2.1 makes `?v`
-        // in scope by that very form and requires it not to be in scope already at
-        // the point of an `(expr AS ?v)`, and the condition lowers to an `Extend`
-        // (§18.2.4.1), which §18.5 leaves undefined for a variable the solution
-        // already binds: `BIND`'s and the `SELECT` list's rule, on the third place
-        // the grammar writes the form. A synthetic target (`GROUP BY (expr)`) is
-        // minted outside every name a query can write and never collides.
-        if !modifiers.group_extends.is_empty() {
-            // A PRODUCTION consultation of the whole WHERE pattern's scope — once
-            // per SELECT with expression-valued GROUP BY conditions (see
-            // `Parser::scope_consultations`'s doc).
-            self.note_scope_consultation();
-            let mut in_scope: std::collections::HashSet<Variable> =
-                visible_variables(&where_pat).into_iter().collect();
-            for (variable, _) in &modifiers.group_extends {
-                if !in_scope.insert(variable.clone()) {
-                    return Err(ParseError::syntax(
-                        format!(
-                            "GROUP BY target ?{} is already in scope in the WHERE clause or \
-                             an earlier GROUP BY condition",
-                            variable.as_str()
-                        ),
-                        self.span(),
-                    ));
-                }
-            }
-        }
-
-        // §19.8: each SELECT `(expr AS ?v)` target must be fresh — not already in
-        // scope. When the query aggregates (an explicit `GROUP BY` or any
-        // aggregate ⇒ implicit single group), only the grouping keys and
-        // group-expression targets stay visible to the projection; the raw WHERE
-        // pattern variables are projected away by grouping, so re-binding one via
-        // `(expr AS ?v)` is legal (e.g. `SELECT (123 AS ?z) … GROUP BY ?s`).
-        if !select_exprs.is_empty() {
-            let aggregating = !modifiers.group_by.is_empty()
-                || !modifiers.group_extends.is_empty()
-                || !aggregates.is_empty();
-            let mut in_scope: std::collections::HashSet<Variable> = if aggregating {
-                modifiers
-                    .group_by
-                    .iter()
-                    .cloned()
-                    .chain(modifiers.group_extends.iter().map(|(v, _)| v.clone()))
-                    .collect()
-            } else {
-                // A PRODUCTION consultation of the whole WHERE pattern's
-                // scope — once per SELECT with `(expr AS ?v)` targets, never
-                // once per element of that WHERE pattern (see
-                // `Parser::scope_consultations`'s doc).
-                self.note_scope_consultation();
-                visible_variables(&where_pat).into_iter().collect()
-            };
-
-            // SEP-0007 Part 3's projection-list position: resolve every `EXISTS`/`NOT EXISTS`
-            // deferred out of `Parser::parse_exists_body` while this
-            // projection list was being parsed — BEFORE the loop below
-            // folds this SELECT's own targets into `in_scope`, so
-            // `ExistsScopeBasis::Projection` entries resolve against the
-            // SAME root `in_scope` currently holds (the grouped keys, or the
-            // full `WHERE` scope) with no contamination from sibling
-            // targets `PendingExistsScopeCheck::local_scope` did not already
-            // capture. `ExistsScopeBasis::AggregateArgument` entries resolve
-            // against the raw `WHERE`/grouping-extend scope instead,
-            // computed lazily (at most once, only if this SELECT actually
-            // deferred an aggregate-argument `EXISTS`) since it differs from
-            // `in_scope` only when the query aggregates.
-            if !self.pending_exists_scope_checks.is_empty() {
-                // Taken (not drained-in-place): the loop below needs its own
-                // unborrowed `&mut self` to call `note_scope_consultation`
-                // while computing `agg_arg_scope` lazily.
-                let pending_checks = std::mem::take(&mut self.pending_exists_scope_checks);
-                let mut agg_arg_scope: Option<std::collections::HashSet<Variable>> = None;
-                for pending in pending_checks {
-                    let root: &std::collections::HashSet<Variable> = match pending.basis {
-                        ExistsScopeBasis::Projection => &in_scope,
-                        ExistsScopeBasis::AggregateArgument => {
-                            if aggregating {
-                                if agg_arg_scope.is_none() {
-                                    self.note_scope_consultation();
-                                    let scope: std::collections::HashSet<Variable> =
-                                        visible_variables(&where_pat)
-                                            .into_iter()
-                                            .chain(
-                                                modifiers
-                                                    .group_extends
-                                                    .iter()
-                                                    .map(|(v, _)| v.clone()),
-                                            )
-                                            .collect();
-                                    agg_arg_scope = Some(scope);
-                                }
-                                agg_arg_scope.as_ref().expect("just populated above")
-                            } else {
-                                // Not aggregating: the raw `WHERE` scope IS
-                                // the projection's own root already (no
-                                // grouping-extend targets exist to add).
-                                &in_scope
-                            }
-                        }
-                    };
-                    let scope: Vec<Variable> = pending
-                        .local_scope
-                        .iter()
-                        .cloned()
-                        .chain(root.iter().cloned())
-                        .collect();
-                    if let Some((var, intro)) = find_scope_conflict(&scope, &pending.body) {
-                        return Err(ParseError::syntax(
-                            format!(
-                                "{} ?{} inside {} is already in scope on {}",
-                                intro.as_str(),
-                                var.as_str(),
-                                ScopeConstruct::Exists.keyword(),
-                                ScopeConstruct::Exists.already_in_scope_clause(),
-                            ),
-                            pending.at,
-                        ));
-                    }
-                }
-            }
-
-            for (var, _) in &select_exprs {
-                if !in_scope.insert(var.clone()) {
-                    return Err(ParseError::syntax(
-                        format!(
-                            "SELECT expression target ?{} is already in scope",
-                            var.as_str()
-                        ),
-                        self.span(),
-                    ));
-                }
-            }
-        }
-
-        // §11.1 grammar note: the `SELECT *` shorthand is illegal in an aggregate
-        // query — an explicit `GROUP BY` (keys or expression conditions) or any
-        // aggregate makes the projection ill-defined, so it is a hard syntax
-        // error (vendored W3C `syntax-query` `syn-bad-01`: `SELECT * … GROUP BY`).
-        if star
-            && (!modifiers.group_by.is_empty()
-                || !modifiers.group_extends.is_empty()
-                || !aggregates.is_empty())
-        {
-            return Err(ParseError::syntax(
-                "SELECT * is not allowed in an aggregate query (GROUP BY or aggregation)",
-                self.span(),
-            ));
-        }
-
-        // §18.2.4.1 grouping constraint: when the query aggregates (an explicit
-        // `GROUP BY`, or one or more aggregates in the SELECT clause ⇒ an implicit
-        // single group), every BARE projected variable — one named directly as a
-        // `Var`, not the fresh target of a `(expr AS ?v)` — must be one of the
-        // `GROUP BY` keys (explicit or the synthetic var of an expression-valued
-        // GROUP BY condition). A bare projected variable that is neither a group
-        // key nor confined to an aggregate is a hard query error, not a silently
-        // wrong answer (this is the vendored W3C `grouping/group06`/`group07`
-        // negative-syntax cases: `SELECT ?s ?v { ... } GROUP BY ?s` projects the
-        // ungrouped, non-aggregated `?v`). `SELECT *` is exempted here: its
-        // projection is derived structurally from the (already-grouped) algebra
-        // node below, so it can only ever expose grouped/aggregate variables.
-        if !star {
-            let is_aggregating = !modifiers.group_by.is_empty() || !aggregates.is_empty();
-            if is_aggregating {
-                let as_targets: std::collections::HashSet<&Variable> =
-                    select_exprs.iter().map(|(v, _)| v).collect();
-                let group_vars: std::collections::HashSet<&Variable> =
-                    modifiers.group_by.iter().collect();
-                for var in &projected {
-                    if !as_targets.contains(var) && !group_vars.contains(var) {
-                        return Err(ParseError::syntax(
-                            format!(
-                                "SELECT projects ?{}, which is neither a GROUP BY key nor \
-                                 confined to an aggregate",
-                                var.as_str()
-                            ),
-                            self.span(),
-                        ));
-                    }
-                }
-            }
-        }
-
-        // Trailing `ValuesClause` (§18.2.4.3): a `VALUES DataBlock` after the
-        // solution modifiers — valid on both a top-level query and a `SubSelect`.
-        // It is joined with the WHERE group graph pattern *before* grouping and
-        // projection, so the inline data is visible to aggregation and `SELECT *`.
-        // Through the shared `join()` helper (not a raw `GraphPattern::Join`),
-        // matching the identity-absorbing construction every IN-BODY `VALUES`
-        // block already goes through (`parse_group_graph_pattern_inner`'s own
-        // `VALUES` arm) — an empty WHERE clause (`{}`) plus a trailing
-        // `VALUES` must reach the SAME `Values { .. }` node an in-body
-        // `{ VALUES … }` does, not a `Join { Bgp { [] }, Values { .. } }`
-        // the round-trip serializer has no way to reproduce (it has no
-        // surface form for a Join whose left operand is visibly, deliberately
-        // the identity table rather than an omitted one).
-        let where_pat = if self.peek_kw("VALUES") {
-            let values = self.parse_inline_data()?;
-            join(where_pat, values)
-        } else {
-            where_pat
-        };
-
-        // Build the algebra (§18.2.4 ordering).
-        let mut p = where_pat;
-        // Expression-valued GROUP BY conditions bind their synthetic/explicit
-        // grouping variable BELOW the Group, so `eval_group` sees a ready column.
-        for (var, expr) in modifiers.group_extends {
-            p = GraphPattern::Extend {
-                inner: Box::new(p),
-                variable: var,
-                expression: expr,
-            };
-        }
-        let has_group = !modifiers.group_by.is_empty() || !aggregates.is_empty();
-        if has_group {
-            p = GraphPattern::Group {
-                inner: Box::new(p),
-                variables: modifiers.group_by.clone(),
-                aggregates,
-            };
-        }
-        for expr in modifiers.having {
-            p = GraphPattern::Filter {
-                expr,
-                inner: Box::new(p),
-            };
-        }
-        for (var, expr) in select_exprs {
-            p = GraphPattern::Extend {
-                inner: Box::new(p),
-                variable: var,
-                expression: expr,
-            };
-        }
-        if !modifiers.order_by.is_empty() {
-            p = GraphPattern::OrderBy {
-                inner: Box::new(p),
-                expression: modifiers.order_by,
-            };
-        }
-        let variables = if star {
-            // A PRODUCTION consultation of the whole (modifier-wrapped) query
-            // pattern's scope — once per `SELECT *`, never once per element
-            // of the WHERE pattern it wraps.
-            self.note_scope_consultation();
-            visible_variables(&p)
-        } else {
-            projected
-        };
-        p = GraphPattern::Project {
-            inner: Box::new(p),
-            variables,
-        };
-        if distinct {
-            p = GraphPattern::Distinct { inner: Box::new(p) };
-        } else if reduced {
-            p = GraphPattern::Reduced { inner: Box::new(p) };
-        }
-        if modifiers.offset.is_some() || modifiers.limit.is_some() {
-            p = GraphPattern::Slice {
-                inner: Box::new(p),
-                start: modifiers.offset.unwrap_or(0),
-                length: modifiers.limit,
-            };
-        }
-        self.pop_exists_scope_boundary();
-        // Every deferred check this SELECT recorded is resolved inside the
-        // `!select_exprs.is_empty()` §19.8 block above — entries can exist
-        // ONLY if that block ran (an `EXISTS` can be parsed here solely from
-        // within a `(expr AS ?v)` target's own expression, which always
-        // pushes to `select_exprs`), so nothing should ever reach this point
-        // still unresolved. A debug-only guard, not a silent drop: were this
-        // invariant ever wrong, restoring the saved (unrelated, outer) list
-        // below would discard the unresolved checks instead of erroring.
-        debug_assert!(
-            self.pending_exists_scope_checks.is_empty(),
-            "a deferred EXISTS scope check was never resolved"
-        );
-        // Restore the enclosing parse's own deferred-EXISTS-scope window —
-        // see the save at this function's top.
-        self.projection_scope_pending = saved_projection_scope_pending;
-        self.in_aggregate_argument = saved_in_aggregate_argument;
-        self.projection_seen_targets = saved_projection_seen_targets;
-        self.pending_exists_scope_checks = saved_pending_exists_scope_checks;
-        Ok(Query::Select {
-            pattern: p,
-            dataset,
-            base_iri,
-            version: self.version.clone(),
-        })
-    }
-
     fn parse_construct(&mut self, base_iri: Option<NamedNode>) -> Result<Query> {
         self.expect_kw("CONSTRUCT")?;
         // `CONSTRUCT GRAPH VarOrIri …` — the whole-template shorthand of the
@@ -1667,13 +1244,13 @@ impl<'a> Parser<'a, '_> {
             let mut p = where_pat;
             if !modifiers.order_by.is_empty() {
                 p = GraphPattern::OrderBy {
-                    inner: Box::new(p),
+                    inner: Child::new(p),
                     expression: modifiers.order_by,
                 };
             }
             if modifiers.offset.is_some() || modifiers.limit.is_some() {
                 p = GraphPattern::Slice {
-                    inner: Box::new(p),
+                    inner: Child::new(p),
                     start: modifiers.offset.unwrap_or(0),
                     length: modifiers.limit,
                 };
@@ -1710,13 +1287,13 @@ impl<'a> Parser<'a, '_> {
         let mut p = where_pat;
         if !modifiers.order_by.is_empty() {
             p = GraphPattern::OrderBy {
-                inner: Box::new(p),
+                inner: Child::new(p),
                 expression: modifiers.order_by,
             };
         }
         if modifiers.offset.is_some() || modifiers.limit.is_some() {
             p = GraphPattern::Slice {
-                inner: Box::new(p),
+                inner: Child::new(p),
                 start: modifiers.offset.unwrap_or(0),
                 length: modifiers.limit,
             };
@@ -1812,9 +1389,11 @@ impl<'a> Parser<'a, '_> {
                 default.push(self.expect_iri_node()?);
             }
         }
+        let end = self.span();
         if !(default.is_empty() && named.is_empty()) {
-            self.dataset_at = Some(at..self.span());
+            self.dataset_at = Some(at..end);
         }
+        self.dataset_slot = Some(at..end);
         Ok(QueryDataset { default, named })
     }
 
@@ -1962,7 +1541,12 @@ impl<'a> Parser<'a, '_> {
             // Each operation's `WHERE` is a pattern of its own, so the labels its
             // basic graph patterns claim are its own too.
             self.blank_label_bgps.clear();
+            self.op_slot = UpdateDatasetSlot::NoWhereClause;
             let op = self.parse_update_operation()?;
+            self.update_slots.push(std::mem::replace(
+                &mut self.op_slot,
+                UpdateDatasetSlot::NoWhereClause,
+            ));
             this_op_labels.clear();
             if let GraphUpdateOperation::InsertData { data } = &op {
                 collect_quad_bnode_labels(data, &mut this_op_labels);
@@ -2032,7 +1616,7 @@ impl<'a> Parser<'a, '_> {
         }
         // INSERT { template } [USING ...] WHERE { ... } — an insert-only modify.
         let insert = self.parse_quad_pattern_block(false)?;
-        let using = self.parse_using_clauses()?;
+        let using = self.parse_using_clauses_at(None)?;
         self.expect_kw("WHERE")?;
         let pattern = self.parse_where_clause()?;
         Ok(GraphUpdateOperation::DeleteInsert {
@@ -2054,6 +1638,7 @@ impl<'a> Parser<'a, '_> {
             self.enforce_data_invariants(&data, true)?;
             return Ok(GraphUpdateOperation::DeleteData { data });
         }
+        let where_at = self.span();
         if self.eat_kw("WHERE") {
             // DELETE WHERE { QuadPattern } — the template IS the where pattern.
             // `fork_block` bounds the clone to this operation's braced block, so a
@@ -2061,6 +1646,17 @@ impl<'a> Parser<'a, '_> {
             // request being O(n²) in the number of `DELETE WHERE` operations.
             let (delete, counters) = {
                 let mut delete_parser = self.fork_block();
+                // The fork holds exactly the braced block, so its last token is the
+                // matching `}` and its end is the end of the pattern's text.
+                let pattern_end = delete_parser
+                    .tokens
+                    .last()
+                    .and_then(Option::as_ref)
+                    .map_or(self.end, |closing| closing.end);
+                self.op_slot = UpdateDatasetSlot::DeleteWhere {
+                    where_at,
+                    pattern_at: self.span()..pattern_end,
+                };
                 let delete = delete_parser.parse_quad_pattern_block(true)?;
                 let counters = (
                     delete_parser.agg_counter,
@@ -2087,7 +1683,7 @@ impl<'a> Parser<'a, '_> {
         } else {
             Vec::new()
         };
-        let using = self.parse_using_clauses()?;
+        let using = self.parse_using_clauses_at(None)?;
         self.expect_kw("WHERE")?;
         let pattern = self.parse_where_clause()?;
         Ok(GraphUpdateOperation::DeleteInsert {
@@ -2101,8 +1697,10 @@ impl<'a> Parser<'a, '_> {
 
     /// `WITH <iri> (DELETE { ... } | INSERT { ... }) [INSERT { ... }] WHERE { ... }`.
     fn parse_with_modify(&mut self) -> Result<GraphUpdateOperation> {
+        let with_start = self.span();
         self.expect_kw("WITH")?;
         let with = Some(self.expect_iri_node()?);
+        let with_at = with_start..self.span();
         let mut delete = Vec::new();
         let mut insert = Vec::new();
         if self.eat_kw("DELETE") {
@@ -2118,7 +1716,7 @@ impl<'a> Parser<'a, '_> {
                 self.span(),
             ));
         }
-        let using = self.parse_using_clauses()?;
+        let using = self.parse_using_clauses_at(Some(with_at))?;
         self.expect_kw("WHERE")?;
         let pattern = self.parse_where_clause()?;
         Ok(GraphUpdateOperation::DeleteInsert {
@@ -2133,6 +1731,24 @@ impl<'a> Parser<'a, '_> {
     /// Zero or more `USING [NAMED] <iri>` clauses (§3.1.3). The `NAMED` modifier is
     /// preserved: `USING <iri>` folds into the active default graph, `USING NAMED
     /// <iri>` becomes an addressable named graph for the `WHERE`.
+    ///
+    /// Also records the operation's [`UpdateDatasetSlot::Modify`] slot: the run's range
+    /// (empty, at the token after it, when there is none) beside the `WITH` range the
+    /// caller read, if any.
+    fn parse_using_clauses_at(
+        &mut self,
+        with_at: Option<Range<usize>>,
+    ) -> Result<Vec<UsingClause>> {
+        let at = self.span();
+        let using = self.parse_using_clauses()?;
+        self.op_slot = UpdateDatasetSlot::Modify {
+            with_at,
+            using_at: at..self.span(),
+        };
+        Ok(using)
+    }
+
+    /// The `UsingClause*` run itself.
     fn parse_using_clauses(&mut self) -> Result<Vec<UsingClause>> {
         let mut using = Vec::new();
         while self.eat_kw("USING") {
@@ -2305,11 +1921,11 @@ impl<'a> Parser<'a, '_> {
         }
         let mut sink = BlockSink::default();
         let (subject, standalone_ok) = if self.at(&Token::LBracket) {
-            (self.parse_blank_node_property_list(&mut sink)?, true)
+            (self.parse_graph_node(&mut sink)?, true)
         } else if self.at(&Token::LParen) {
-            (self.parse_collection(&mut sink)?, false)
+            (self.parse_graph_node(&mut sink)?, false)
         } else if self.at(&Token::TripleOpen) {
-            let node = self.parse_triple_node(&mut sink)?;
+            let node = self.parse_graph_node(&mut sink)?;
             let standalone = !matches!(node, TermPattern::Triple(_));
             (node, standalone)
         } else {
@@ -2318,7 +1934,7 @@ impl<'a> Parser<'a, '_> {
         let standalone = standalone_ok
             && (self.at(&Token::Dot) || self.at(&Token::RBrace) || self.at(&Token::LBrace));
         if !standalone {
-            self.parse_predicate_object_list(&SubjectArgs::Term(subject), &mut sink)?;
+            self.parse_predicate_object_list(SubjectArgs::Term(subject), &mut sink)?;
         }
         if !sink.paths.is_empty() {
             return Err(ParseError::syntax(
@@ -2396,388 +2012,47 @@ impl<'a> Parser<'a, '_> {
     }
 
     /// Walk one DATA triple pattern, rejecting variables (always) and blank nodes
-    /// (when `reject_blank`). Descends into RDF 1.2 quoted triples.
+    /// (when `reject_blank`). Descends into RDF 1.2 quoted triples over a work list,
+    /// reporting the first violation in written order.
     fn check_data_triple(&self, t: &TriplePattern, reject_blank: bool) -> Result<()> {
-        if let NamedNodePattern::Variable(_) = &t.predicate {
-            return Err(ParseError::syntax(
-                "variable predicate in INSERT/DELETE DATA is not allowed",
-                self.span(),
-            ));
-        }
-        self.check_data_term(&t.subject, reject_blank)?;
-        self.check_data_term(&t.object, reject_blank)
-    }
-
-    /// Walk one DATA term pattern, rejecting variables (always) and blank nodes
-    /// (when `reject_blank`). Descends into RDF 1.2 quoted triples.
-    fn check_data_term(&self, t: &TermPattern, reject_blank: bool) -> Result<()> {
-        match t {
-            TermPattern::NamedNode(_) | TermPattern::Literal(_) => Ok(()),
-            TermPattern::Triple(tp) => self.check_data_triple(tp, reject_blank),
-            TermPattern::Variable(_) => Err(ParseError::syntax(
-                "variable in INSERT/DELETE DATA is not allowed",
-                self.span(),
-            )),
-            TermPattern::BlankNode(_) => {
-                if reject_blank {
-                    Err(ParseError::syntax(
-                        "blank node in DELETE DATA is not allowed",
-                        self.span(),
-                    ))
-                } else {
-                    // INSERT DATA blanks are allowed (minted fresh per request).
-                    Ok(())
-                }
-            }
-        }
-    }
-
-    // ── group graph pattern → algebra (§18.2.2) ──────────────────────────────
-
-    fn parse_group_graph_pattern(&mut self) -> Result<GraphPattern> {
-        if self.group_pattern_depth >= MAX_GRAPH_PATTERN_DEPTH {
-            return Err(ParseError::syntax(
-                format!(
-                    "group graph pattern nesting exceeds the safety limit of \
-                     {MAX_GRAPH_PATTERN_DEPTH}"
-                ),
-                self.span(),
-            ));
-        }
-        self.group_pattern_depth += 1;
-        let result = self.parse_group_graph_pattern_inner();
-        self.group_pattern_depth -= 1;
-        result
-    }
-
-    fn parse_group_graph_pattern_inner(&mut self) -> Result<GraphPattern> {
-        self.expect(&Token::LBrace)?;
-
-        // A sub-SELECT group: `{ SELECT ... }`.
-        if self.peek_kw("SELECT") {
-            let sub = self.parse_select(None, SelectPosition::SubSelect)?;
-            self.expect(&Token::RBrace)?;
-            // Destructured field by field rather than through `..`: a sub-select
-            // keeps only the pattern, and the other three have to be accounted for
-            // HERE, where the `Query` is discarded, or a field added to `Query::Select`
-            // later would start being dropped silently. That is not hypothetical — a
-            // `..` here dropped a caller's `FROM` for exactly as long as it stood.
-            return match sub {
-                Query::Select {
-                    pattern,
-                    dataset,
-                    base_iri,
-                    version,
-                } => {
-                    // Refused above, at the clause's own offset, so it is empty here.
-                    debug_assert!(
-                        dataset.default.is_empty() && dataset.named.is_empty(),
-                        "a sub-SELECT's dataset clause is refused by parse_select"
-                    );
-                    // Passed as `None` one line up: `BASE` is prologue, parsed once at
-                    // the top, and a sub-select's algebra carries no base of its own.
-                    debug_assert!(
-                        base_iri.is_none(),
-                        "a sub-SELECT is parsed with no base of its own"
-                    );
-                    // NOT an absence: `VERSION` is prologue too, and every `SELECT`
-                    // this parse builds copies the one the prologue declared. The
-                    // enclosing form carries the same value, so the copy discarded here
-                    // states nothing the whole query does not already state.
-                    debug_assert_eq!(
-                        version, self.version,
-                        "a sub-SELECT copies the request's one prologue VERSION"
-                    );
-                    Ok(pattern)
-                }
-                _ => unreachable!("parse_select yields Query::Select"),
-            };
-        }
-
-        let mut g = GraphPattern::Bgp { patterns: vec![] };
-        let mut filters: Vec<Expression> = Vec::new();
-        // The incremental in-scope set: kept in lock-step with `g`, one
-        // `collect_vars` call over exactly the NEWLY-parsed element (never
-        // over the whole, growing `g`) per iteration — see [`VarScope`]'s
-        // doc. This is what turns the group loop from O(n²) into O(n log n)
-        // over a long run of `BIND`/`LATERAL` elements
-        // (`scope_set_stays_linear_over_two_thousand_binds`): the OLD code
-        // called `visible_variables(&g)` (a fresh whole-`g` walk) on every
-        // `BIND`/`LATERAL`, so the Nth element paid for re-walking the N-1
-        // before it.
-        let mut scope = VarScope::new();
-        // The basic graph pattern the next triples block extends, while one is
-        // open: a `FILTER` or a `.` leaves it open, every other element closes it
-        // (see [`Self::scoped_blank_label`]).
-        let mut open_bgp: Option<usize> = None;
-
+        let mut terms: Vec<&TermPattern> = Vec::new();
+        let mut triple = Some(t);
         loop {
-            if self.at(&Token::RBrace) {
-                break;
-            }
-            if self.block_boundary() && !self.peek_kw("FILTER") {
-                open_bgp = None;
-            }
-            // A structural charge against `MAX_GRAPH_PATTERN_NODES`, once per
-            // group ELEMENT — the choke point that closes the sibling-spine
-            // gap `MAX_GRAPH_PATTERN_DEPTH` (brace nesting only) leaves open:
-            // every branch below builds (or, for a bracketed sub-group, is
-            // about to fold in) exactly one more combinator node onto `g`.
-            self.charge_pattern_nodes(1)?;
-            if self.at(&Token::LBrace) {
-                let mut node = self.parse_group_graph_pattern()?;
-                while self.eat_kw("UNION") {
-                    // Each ADDITIONAL `UNION` arm is a hidden extra node the
-                    // outer per-element charge above does not see (they are
-                    // all consumed within this one loop iteration) — charged
-                    // here, one per arm past the first.
-                    self.charge_pattern_nodes(1)?;
-                    let right = self.parse_group_graph_pattern()?;
-                    node = GraphPattern::Union {
-                        left: Box::new(node),
-                        right: Box::new(right),
-                    };
-                }
-                // A bracketed sub-group (possibly a `{ SELECT ... }`, whose
-                // contribution is its OWN projection — `collect_vars`'s
-                // `Project` arm — not its inner WHERE pattern) or a chain of
-                // `UNION` arms: `collect_vars` already knows how to fold
-                // either shape into exactly the vars this element puts in
-                // scope, in one walk over `node` alone.
-                collect_vars(&node, &mut scope);
-                self.note_exists_scope(&node);
-                g = join(g, node);
-            } else if self.eat_kw("OPTIONAL") {
-                let inner = self.parse_group_graph_pattern()?;
-                let (right, expression) = split_trailing_filter(inner);
-                collect_vars(&right, &mut scope);
-                self.note_exists_scope(&right);
-                g = GraphPattern::LeftJoin {
-                    left: Box::new(g),
-                    right: Box::new(right),
-                    expression,
-                };
-            } else if self.eat_kw("LATERAL") {
-                // Position the error at the start of the RHS block rather than
-                // wherever the cursor lands after parsing it (the BIND-scope
-                // idiom above captures `self.span()` post hoc; here the RHS can
-                // be arbitrarily large, so the useful anchor is the keyword
-                // itself).
-                let at = self.span();
-                let right = self.parse_group_graph_pattern()?;
-                // A genuine PRODUCTION consultation (once per `LATERAL`
-                // keyword, never per element inside `right`): read the
-                // incremental set built so far — `g`'s vars, NOT yet
-                // `right`'s — as the LHS scope. Verified against a fresh
-                // walk (the non-counting entry point) under
-                // `debug_assertions` only.
-                self.note_scope_consultation();
-                debug_assert_eq!(
-                    scope.as_slice(),
-                    compute_lateral_left_scope(&g).as_slice(),
-                    "the incremental LATERAL left-scope drifted from a fresh visible_variables walk"
-                );
-                let lhs_scope = scope.as_slice();
-                if let Some((var, intro)) = find_scope_conflict(lhs_scope, &right) {
+            if let Some(t) = triple.take() {
+                if let NamedNodePattern::Variable(_) = &t.predicate {
                     return Err(ParseError::syntax(
-                        format!(
-                            "{} ?{} inside {} is already in scope on {}",
-                            intro.as_str(),
-                            var.as_str(),
-                            ScopeConstruct::Lateral.keyword(),
-                            ScopeConstruct::Lateral.already_in_scope_clause(),
-                        ),
-                        at,
-                    ));
-                }
-                collect_vars(&right, &mut scope);
-                self.note_exists_scope(&right);
-                g = GraphPattern::Lateral {
-                    left: Box::new(g),
-                    right: Box::new(right),
-                };
-            } else if self.eat_kw("MINUS") {
-                // A `MINUS` right operand contributes NOTHING to the
-                // enclosing group's EXISTS in-scope set either (mirrors the
-                // `collect_vars`/§18.2.1 exclusion just below) — but an
-                // `EXISTS` INSIDE this right operand must still see whatever
-                // the row being tested already has bound (the same injection
-                // ground `find_scope_conflict`'s rustdoc proves for
-                // `LATERAL`), so the frame is SEEDED, not fresh; it is popped
-                // and discarded, never merged back, so nothing this operand
-                // itself introduces ever escapes it.
-                self.push_exists_scope_isolated();
-                let right = self.parse_group_graph_pattern()?;
-                self.pop_exists_scope_boundary();
-                // SPARQL §18.2.1: `MINUS`'s right operand contributes NOTHING
-                // to the enclosing group's scope — no `collect_vars` call
-                // here, matching `collect_vars`'s own `Minus` arm.
-                g = GraphPattern::Minus {
-                    left: Box::new(g),
-                    right: Box::new(right),
-                };
-            } else if self.eat_kw("GRAPH") {
-                let name = self.parse_var_or_iri_name()?;
-                let inner = self.parse_group_graph_pattern()?;
-                let graph = GraphPattern::Graph {
-                    name,
-                    inner: Box::new(inner),
-                };
-                collect_vars(&graph, &mut scope);
-                self.note_exists_scope(&graph);
-                g = join(g, graph);
-            } else if self.eat_kw("SERVICE") {
-                let silent = self.eat_kw("SILENT");
-                let name = self.parse_var_or_iri_name()?;
-                let inner = self.parse_group_graph_pattern()?;
-                let is_var_endpoint = matches!(name, NamedNodePattern::Variable(_));
-                let service = GraphPattern::Service {
-                    name,
-                    inner: Box::new(inner),
-                    silent,
-                };
-                collect_vars(&service, &mut scope);
-                self.note_exists_scope(&service);
-                // A variable endpoint (`SERVICE ?g`) is correlated with the
-                // enclosing pattern — it must bind the endpoint from the
-                // surrounding solution before federating — so it becomes a
-                // LATERAL join. A fixed-IRI endpoint stays a plain join.
-                g = if is_var_endpoint {
-                    GraphPattern::Lateral {
-                        left: Box::new(g),
-                        right: Box::new(service),
-                    }
-                } else {
-                    join(g, service)
-                };
-            } else if self.eat_kw("FILTER") {
-                filters.push(self.parse_constraint()?);
-            } else if self.eat_kw("BIND") {
-                self.expect(&Token::LParen)?;
-                let expression = self.parse_expression()?;
-                self.expect_kw("AS")?;
-                let variable = self.expect_var()?;
-                self.expect(&Token::RParen)?;
-                // §19.6: the variable introduced by BIND must not already be
-                // in-scope in the group graph pattern up to this point — a
-                // re-binding is a hard syntax error, not a silent shadow
-                // (vendored W3C `syntax-query` `syntax-BINDscope6/7/8`). The
-                // incremental set answers this in O(log n) — NOT a
-                // production "consultation" (`note_scope_consultation` is
-                // NOT called here: this is the one site the linear-scan test
-                // exists to keep counter-invisible, since it fires once per
-                // `BIND` and must not scale the count with the group's
-                // element count). The equivalence check still runs, through
-                // the free-function (non-counting) `visible_variables`.
-                debug_assert_eq!(
-                    scope.contains(&variable),
-                    visible_variables(&g).contains(&variable),
-                    "the incremental BIND-scope check drifted from a fresh visible_variables walk"
-                );
-                if scope.contains(&variable) {
-                    return Err(ParseError::syntax(
-                        format!(
-                            "BIND target ?{} is already in scope in the group graph pattern",
-                            variable.as_str()
-                        ),
+                        "variable predicate in INSERT/DELETE DATA is not allowed",
                         self.span(),
                     ));
                 }
-                scope.note(&variable);
-                self.note_exists_scope_var(&variable);
-                g = GraphPattern::Extend {
-                    inner: Box::new(g),
-                    variable,
-                    expression,
-                };
-            } else if self.eat_kw("UNFOLD") {
-                // `[174] Unfold ::= 'UNFOLD' '(' Expression 'AS' Var ( ',' Var )? ')'`
-                // — the SEP-0009 row expander. Structurally `BIND`'s twin (one
-                // expression, one or two newly bound variables, stacked ABOVE the
-                // pattern parsed so far so it can read what that pattern bound),
-                // so it reuses `BIND`'s §19.6 scope rule verbatim on BOTH targets.
-                self.expect(&Token::LParen)?;
-                let expression = self.parse_expression()?;
-                self.expect_kw("AS")?;
-                let element = self.expect_var()?;
-                let companion = if self.eat(&Token::Comma) {
-                    Some(self.expect_var()?)
-                } else {
-                    None
-                };
-                self.expect(&Token::RParen)?;
-                for variable in std::iter::once(&element).chain(companion.as_ref()) {
-                    debug_assert_eq!(
-                        scope.contains(variable),
-                        visible_variables(&g).contains(variable),
-                        "the incremental UNFOLD-scope check drifted from a fresh \
-                         visible_variables walk"
-                    );
-                    if scope.contains(variable) {
+                terms.extend([&t.object, &t.subject]);
+            }
+            let Some(term) = terms.pop() else {
+                return Ok(());
+            };
+            match term {
+                TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+                TermPattern::Triple(tp) => triple = Some(tp),
+                TermPattern::Variable(_) => {
+                    return Err(ParseError::syntax(
+                        "variable in INSERT/DELETE DATA is not allowed",
+                        self.span(),
+                    ));
+                }
+                TermPattern::BlankNode(_) => {
+                    // INSERT DATA blanks are allowed (minted fresh per request).
+                    if reject_blank {
                         return Err(ParseError::syntax(
-                            format!(
-                                "UNFOLD target ?{} is already in scope in the group graph pattern",
-                                variable.as_str()
-                            ),
+                            "blank node in DELETE DATA is not allowed",
                             self.span(),
                         ));
                     }
                 }
-                // The two targets bind two DIFFERENT positions of one element
-                // (see `GraphPattern::Unfold`), so one variable in both slots
-                // would have to hold two values in one row. Refused here rather
-                // than resolved by a precedence rule nobody could guess.
-                if companion.as_ref() == Some(&element) {
-                    return Err(ParseError::syntax(
-                        format!(
-                            "UNFOLD binds ?{} twice; its two targets must be distinct variables",
-                            element.as_str()
-                        ),
-                        self.span(),
-                    ));
-                }
-                for variable in std::iter::once(&element).chain(companion.as_ref()) {
-                    scope.note(variable);
-                    self.note_exists_scope_var(variable);
-                }
-                g = GraphPattern::Unfold {
-                    inner: Box::new(g),
-                    expression,
-                    element,
-                    companion,
-                };
-            } else if self.peek_kw("VALUES") {
-                let values = self.parse_inline_data()?;
-                collect_vars(&values, &mut scope);
-                self.note_exists_scope(&values);
-                g = join(g, values);
-            } else if self.eat(&Token::Dot) {
-                // statement separator between blocks
-            } else {
-                // A triples block (BGP / path patterns).
-                let bgp = *open_bgp.get_or_insert_with(|| {
-                    self.bgp_counter += 1;
-                    self.bgp_counter
-                });
-                let enclosing = self.bgp_scope.replace(bgp);
-                let block = self.parse_triples_block();
-                self.bgp_scope = enclosing;
-                let block = block?;
-                collect_vars(&block, &mut scope);
-                self.note_exists_scope(&block);
-                g = join(g, block);
             }
         }
-
-        self.expect(&Token::RBrace)?;
-        for expr in filters {
-            g = GraphPattern::Filter {
-                expr,
-                inner: Box::new(g),
-            };
-        }
-        Ok(g)
     }
+
+    // ── triples blocks ───────────────────────────────────────────────────────
 
     /// Parse a run of triples (subject + predicate-object lists) into a BGP, any
     /// complex property-path `Path` nodes, and any property-function calls,
@@ -2789,10 +2064,7 @@ impl<'a> Parser<'a, '_> {
             // collection `( … )`, each of which emits its own triples and yields a
             // fresh node (the BNPL blank, or the collection's head).
             let (subject, standalone_capable) = if self.at(&Token::LBracket) {
-                (
-                    SubjectArgs::Term(self.parse_blank_node_property_list(&mut sink)?),
-                    true,
-                )
+                (SubjectArgs::Term(self.parse_graph_node(&mut sink)?), true)
             } else if self.at(&Token::LParen) {
                 // A parenthesized subject is an RDF collection — UNLESS the
                 // predicate that follows it is a configured property-function IRI,
@@ -2804,14 +2076,14 @@ impl<'a> Parser<'a, '_> {
                 if self.property_fn_after_group().is_some() {
                     (SubjectArgs::Args(self.parse_prop_fn_arg_list()?), false)
                 } else {
-                    (SubjectArgs::Term(self.parse_collection(&mut sink)?), false)
+                    (SubjectArgs::Term(self.parse_graph_node(&mut sink)?), false)
                 }
             } else if self.at(&Token::TripleOpen) {
                 // A reifying triple `<< s p o >>` emits its own reifier triples, so
                 // it may stand alone (`<< s p o >> .`) with no predicate-object
                 // list. A *triple term* `<<( s p o )>>` is a value: it may head a
                 // subject's predicate-object list but must not stand alone.
-                let node = self.parse_triple_node(&mut sink)?;
+                let node = self.parse_graph_node(&mut sink)?;
                 let standalone_ok = !matches!(node, TermPattern::Triple(_));
                 (SubjectArgs::Term(node), standalone_ok)
             } else {
@@ -2823,7 +2095,7 @@ impl<'a> Parser<'a, '_> {
             let standalone = standalone_capable
                 && (self.at(&Token::Dot) || self.at(&Token::RBrace) || self.block_boundary());
             if !standalone {
-                self.parse_predicate_object_list(&subject, &mut sink)?;
+                self.parse_predicate_object_list(subject, &mut sink)?;
             }
             if !self.eat(&Token::Dot) {
                 break;
@@ -2833,16 +2105,6 @@ impl<'a> Parser<'a, '_> {
                 break;
             }
         }
-        // `BlockSink::into_pattern` folds every `paths` entry and every
-        // `prop_fns` call onto the running pattern with its OWN `join`/
-        // `Lateral` node, one per entry — a left-deep spine entirely inside
-        // ONE triples block (e.g. a long run of dot-separated COMPLEX
-        // property-path triples, which `join` cannot flatten the way it
-        // flattens adjacent plain `Bgp` triples) that the group loop's own
-        // per-element charge never sees, because the whole block is one
-        // element to it. Charged here, once per node `into_pattern` is about
-        // to build, before it builds any of them.
-        self.charge_pattern_nodes(sink.paths.len() + sink.prop_fns.len())?;
         Ok(sink.into_pattern())
     }
 
@@ -3008,192 +2270,6 @@ impl<'a> Parser<'a, '_> {
         )
     }
 
-    /// Parse a blank-node property list `[ predicate object … ]` (RDF 1.1 §4.2,
-    /// SPARQL §19.6 `BlankNodePropertyListPath ::= '[' PropertyListPathNotEmpty ']'`).
-    /// Mints a fresh blank node, emits the embedded triples into the current
-    /// block's `triples`/`paths`, and returns the blank node as a term for use in
-    /// subject or object position.
-    ///
-    /// The production is `…NotEmpty`, so an empty pair is refused here — see
-    /// [`Self::empty_bracket_pair`] for why only the parser can refuse it. The
-    /// anonymous blank node `[]` is a different production (`ANON`), reaches the
-    /// parser as [`Token::Anon`], and is handled by
-    /// [`Self::parse_term_pattern`].
-    fn parse_blank_node_property_list(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
-        self.expect(&Token::LBracket)?;
-        if self.at(&Token::RBracket) {
-            return Err(self.empty_bracket_pair());
-        }
-        let node = TermPattern::BlankNode(self.fresh_anon());
-        self.parse_predicate_object_list(&SubjectArgs::Term(node.clone()), sink)?;
-        self.expect(&Token::RBracket)?;
-        Ok(node)
-    }
-
-    /// Parse an RDF collection `( n1 n2 … )` (RDF 1.1 §4.3, SPARQL §19.5
-    /// `Collection`). Desugars to the standard `rdf:first`/`rdf:rest` blank-node
-    /// chain terminated by `rdf:nil`, emitting those triples into the current
-    /// block's `triples` and returning the HEAD node as a term for use in subject
-    /// or object position. An empty list `()` is `rdf:nil` itself.
-    ///
-    /// Each element is a `GraphNode` — a plain term, a nested blank-node property
-    /// list `[ … ]`, or a nested collection `( … )` — so the recursion mirrors the
-    /// `parse_blank_node_property_list` object idiom.
-    fn parse_collection(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
-        self.expect(&Token::LParen)?;
-        // The SPARQL grammar requires at least one node inside the parentheses, but
-        // RDF's empty collection `()` is `rdf:nil`; accept it for robustness.
-        if self.eat(&Token::RParen) {
-            return Ok(TermPattern::NamedNode(NamedNode::new_unchecked(RDF_NIL)));
-        }
-        let first_pred = NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_FIRST));
-        let rest_pred = NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_REST));
-        let nil = TermPattern::NamedNode(NamedNode::new_unchecked(RDF_NIL));
-
-        let head = TermPattern::BlankNode(self.fresh_anon());
-        let mut node = head.clone();
-        loop {
-            let element = self.parse_graph_node(sink)?;
-            sink.triples.push(TriplePattern {
-                subject: node.clone(),
-                predicate: first_pred.clone(),
-                object: element,
-            });
-            if self.at(&Token::RParen) {
-                // Last element: terminate the chain with rdf:nil.
-                sink.triples.push(TriplePattern {
-                    subject: node,
-                    predicate: rest_pred,
-                    object: nil,
-                });
-                break;
-            }
-            // Another element follows: link to a fresh tail node.
-            let next = TermPattern::BlankNode(self.fresh_anon());
-            sink.triples.push(TriplePattern {
-                subject: node,
-                predicate: rest_pred.clone(),
-                object: next.clone(),
-            });
-            node = next;
-        }
-        self.expect(&Token::RParen)?;
-        Ok(head)
-    }
-
-    /// Parse one `GraphNode` (collection element / object): a nested blank-node
-    /// property list, a nested collection, or a plain term.
-    fn parse_graph_node(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
-        if self.at(&Token::LBracket) {
-            self.parse_blank_node_property_list(sink)
-        } else if self.at(&Token::LParen) {
-            self.parse_collection(sink)
-        } else if self.at(&Token::TripleOpen) {
-            self.parse_triple_node(sink)
-        } else {
-            self.parse_term_pattern()
-        }
-    }
-
-    /// Parse an RDF 1.2 triple node in a term position:
-    ///
-    /// * `<<( s p o )>>` — a **triple term** (a value), yielded directly; or
-    /// * `<< s p o [~ reifier] >>` — a **reifying triple**, desugared to a
-    ///   reifier `R` with `R rdf:reifies <<( s p o )>>` (R fresh unless given),
-    ///   and `R` is the term.
-    ///
-    /// The inner `s`/`o` may themselves be triple nodes (nesting is supported).
-    fn parse_triple_node(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
-        self.expect(&Token::TripleOpen)?;
-        let is_triple_term = self.eat(&Token::LParen);
-        let inner = self.parse_inner_triple(sink)?;
-        if is_triple_term {
-            self.expect(&Token::RParen)?;
-            self.expect(&Token::TripleClose)?;
-            return Ok(TermPattern::Triple(Box::new(inner)));
-        }
-        // Reifying triple: optional `~ reifier`, else a fresh blank reifier.
-        let reifier = if self.eat(&Token::Tilde) {
-            self.parse_reifier_id()?
-        } else {
-            TermPattern::BlankNode(self.fresh_anon())
-        };
-        self.expect(&Token::TripleClose)?;
-        self.emit_reifies(&reifier, &inner, &mut sink.triples);
-        Ok(reifier)
-    }
-
-    /// Parse the `s p o` inside a `<< … >>` (reifying triple) / `<<( … )>>`
-    /// (triple term), in **graph-pattern** position.
-    ///
-    /// One component parser serves the subject and the object of both spellings,
-    /// because in a pattern the two positions carry the SAME production: a nested
-    /// triple node is admissible in either. That is not laxity, it is the SPARQL 1.2
-    /// grammar — `TripleTermSubject` includes `TripleTerm`, exactly as SPARQL 1.1's
-    /// `VarOrTerm` includes a literal in subject position. The W3C SPARQL 1.2 suite
-    /// pins it as two **positive** syntax tests
-    /// (`syntax-triple-terms-positive/nested-tripleterm-02.rq`, whose second pattern
-    /// is `<<( <<(?S :p :o )>> :r :z )>> :q 1`, and
-    /// `syntax-triple-terms-positive/compound-tripleterm-subject.rq`), so refusing it
-    /// here would be a non-conformance, not a tightening. A pattern is a *matcher*:
-    /// one naming a term the RDF 1.2 term model cannot hold simply matches nothing.
-    ///
-    /// The term model is therefore enforced where a triple term becomes a **value**
-    /// rather than a matcher, and those positions ARE separate parsers:
-    ///
-    /// * ground data (`VALUES`, `BIND` of a constant) —
-    ///   [`parse_ground_triple`](Self::parse_ground_triple) refuses a literal or a
-    ///   nested triple term in the subject, which is what the suite's
-    ///   `tripleterm-subject-01`..`-06` **negative** syntax tests require;
-    /// * expression position (`ExprTripleTerm`, §17.4) —
-    ///   [`parse_triple_term_expr`](Self::parse_triple_term_expr) refuses the same;
-    /// * a `CONSTRUCT` / `UPDATE` template instantiated per solution row, where a
-    ///   variable can bind a triple term no syntax mentions, so no parser could
-    ///   decide it: `purrdf-sparql-eval`'s `template::positionally_ill_formed` skips
-    ///   the instantiation, which is what SPARQL §16.2 mandates for an ill-formed
-    ///   instantiation (skip the statement, keep the rest of the template).
-    ///
-    /// Neither spelling admits an RDF collection or a populated blank-node property
-    /// list in any position (both would emit auxiliary triples a single triple cannot
-    /// carry).
-    fn parse_inner_triple(&mut self, sink: &mut BlockSink) -> Result<TriplePattern> {
-        let subject = self.parse_triple_node_component(sink)?;
-        let predicate = self.parse_predicate_name()?;
-        let object = self.parse_triple_node_component(sink)?;
-        Ok(TriplePattern {
-            subject,
-            predicate,
-            object,
-        })
-    }
-
-    /// Parse one subject/object component of a triple node. A nested `<< … >>` /
-    /// `<<( … )>>` is admissible, but an RDF collection `( … )` or a populated
-    /// blank-node property list `[ p o … ]` is not (each would emit auxiliary
-    /// triples a single triple cannot carry); only the anonymous `[]` (a fresh
-    /// blank node) is.
-    fn parse_triple_node_component(&mut self, sink: &mut BlockSink) -> Result<TermPattern> {
-        match self.peek() {
-            Some(Token::TripleOpen) => self.parse_triple_node(sink),
-            Some(Token::LParen) => Err(ParseError::syntax(
-                "an RDF collection is not allowed inside a triple term or reifying triple",
-                self.span(),
-            )),
-            Some(Token::LBracket) => {
-                self.expect(&Token::LBracket)?;
-                if self.at(&Token::RBracket) {
-                    return Err(self.empty_bracket_pair());
-                }
-                Err(ParseError::syntax(
-                    "a populated blank-node property list is not allowed inside a \
-                     triple term or reifying triple",
-                    self.span(),
-                ))
-            }
-            _ => self.parse_term_pattern(),
-        }
-    }
-
     /// Emit `reifier rdf:reifies <<( t )>>` for a reification.
     fn emit_reifies(
         &self,
@@ -3204,7 +2280,7 @@ impl<'a> Parser<'a, '_> {
         triples.push(TriplePattern {
             subject: reifier.clone(),
             predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(RDF_REIFIES)),
-            object: TermPattern::Triple(Box::new(t.clone())),
+            object: TermPattern::Triple(Child::new(t.clone())),
         });
     }
 
@@ -3244,50 +2320,6 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
-    /// Parse RDF 1.2 annotation syntax trailing an asserted triple `(s, pred, o)`:
-    /// zero or more reifiers `~ [id]` and annotation blocks `{| predObjList |}`.
-    /// Each emits a fresh (or given) reifier `R` with `R rdf:reifies <<( s p o )>>`;
-    /// an annotation block additionally applies its predicate-object list to `R`.
-    fn parse_triple_annotations(
-        &mut self,
-        subject: &TermPattern,
-        pred: &NamedNodePattern,
-        object: &TermPattern,
-        sink: &mut BlockSink,
-    ) -> Result<()> {
-        let base = TriplePattern {
-            subject: subject.clone(),
-            predicate: pred.clone(),
-            object: object.clone(),
-        };
-        // An annotation block `{| … |}` binds to the reifier of the immediately
-        // preceding `~ id` if one is pending (so `~ :r {| … |}` annotates `:r`
-        // rather than a fresh node — important for DELETE templates, which forbid
-        // blank nodes); otherwise it mints a fresh blank reifier.
-        let mut pending: Option<TermPattern> = None;
-        loop {
-            if self.eat(&Token::Tilde) {
-                let reifier = self.parse_reifier_id()?;
-                self.emit_reifies(&reifier, &base, &mut sink.triples);
-                pending = Some(reifier);
-            } else if self.eat(&Token::AnnotationOpen) {
-                let reifier = match pending.take() {
-                    Some(r) => r,
-                    None => {
-                        let r = TermPattern::BlankNode(self.fresh_anon());
-                        self.emit_reifies(&r, &base, &mut sink.triples);
-                        r
-                    }
-                };
-                self.parse_predicate_object_list(&SubjectArgs::Term(reifier), sink)?;
-                self.expect(&Token::AnnotationClose)?;
-            } else {
-                break;
-            }
-        }
-        Ok(())
-    }
-
     /// True when the next token starts a non-triples element of a group.
     fn block_boundary(&self) -> bool {
         self.at(&Token::LBrace)
@@ -3302,344 +2334,7 @@ impl<'a> Parser<'a, '_> {
             || self.peek_kw("UNFOLD")
     }
 
-    fn parse_predicate_object_list(
-        &mut self,
-        subject: &SubjectArgs,
-        sink: &mut BlockSink,
-    ) -> Result<()> {
-        loop {
-            // Verb = VarOrIri | path. A bare variable predicate is a simple
-            // triple predicate, not a property path — and never a property
-            // function, which is only ever a plain IRI.
-            let verb = if let Some(Token::Variable(_)) = self.peek() {
-                Verb::Simple(NamedNodePattern::Variable(self.expect_var()?))
-            } else {
-                let path = self.parse_path()?;
-                match simple_predicate(&path) {
-                    // A length-1 path is a plain predicate IRI, so it is the one
-                    // shape that can name a property function; a complex path
-                    // (`p+`, `p1/p2`, `!(…)`, …) never is.
-                    Some(NamedNodePattern::NamedNode(n)) if self.is_property_fn(n.as_str()) => {
-                        Verb::PropertyFn(n.as_str().to_owned())
-                    }
-                    Some(pred) => Verb::Simple(pred),
-                    None => Verb::Path(path),
-                }
-            };
-            // object list
-            loop {
-                match &verb {
-                    Verb::PropertyFn(iri) => {
-                        // Both sides are argument VECTORS, captured structurally:
-                        // an object collection is the call's argument list, not a
-                        // cons-cell chain, so `parse_graph_node` is bypassed here.
-                        let object_args = self.parse_prop_fn_args()?;
-                        let subject_args = subject.as_args();
-                        sink.push_property_function(PropertyFunctionCall {
-                            iri: iri.clone(),
-                            subject_args,
-                            object_args,
-                        });
-                        if self.at(&Token::Tilde) || self.at(&Token::AnnotationOpen) {
-                            return Err(ParseError::syntax(
-                                "RDF 1.2 annotation syntax cannot annotate a \
-                                 property-function call (no triple is asserted)",
-                                self.span(),
-                            ));
-                        }
-                    }
-                    Verb::Simple(pred) => {
-                        let subject = subject.as_term(self.span())?;
-                        // An object may itself be a blank-node property list
-                        // `[ … ]` or an RDF collection `( … )` (both emit their
-                        // own triples here).
-                        let object = self.parse_graph_node(sink)?;
-                        sink.triples.push(TriplePattern {
-                            subject: subject.clone(),
-                            predicate: pred.clone(),
-                            object: object.clone(),
-                        });
-                        // RDF 1.2 annotation syntax (`~ reifier`, `{| … |}`) may
-                        // trail the object, reifying the triple just asserted.
-                        self.parse_triple_annotations(subject, pred, &object, sink)?;
-                    }
-                    Verb::Path(path) => {
-                        let subject = subject.as_term(self.span())?;
-                        let object = self.parse_graph_node(sink)?;
-                        sink.paths.push(GraphPattern::Path {
-                            subject: subject.clone(),
-                            path: path.clone(),
-                            object,
-                        });
-                    }
-                }
-                if !self.eat(&Token::Comma) {
-                    break;
-                }
-            }
-            if !self.eat(&Token::Semicolon) {
-                break;
-            }
-            // allow a trailing `;` before `.`/`}`/`]` (the last closes a
-            // blank-node property list).
-            if self.at(&Token::Dot)
-                || self.at(&Token::RBrace)
-                || self.at(&Token::RBracket)
-                || self.block_boundary()
-            {
-                break;
-            }
-        }
-        Ok(())
-    }
-
-    // ── property paths (§18.1.7 / §9) ────────────────────────────────────────
-
-    fn parse_path(&mut self) -> Result<PropertyPathExpression> {
-        self.parse_path_alternative()
-    }
-
-    fn parse_path_alternative(&mut self) -> Result<PropertyPathExpression> {
-        let mut left = self.parse_path_sequence()?;
-        while self.eat(&Token::Pipe) {
-            let right = self.parse_path_sequence()?;
-            left = PropertyPathExpression::Alternative(Box::new(left), Box::new(right));
-        }
-        Ok(left)
-    }
-
-    fn parse_path_sequence(&mut self) -> Result<PropertyPathExpression> {
-        let mut left = self.parse_path_elt_or_inverse()?;
-        while self.eat(&Token::Slash) {
-            let right = self.parse_path_elt_or_inverse()?;
-            left = PropertyPathExpression::Sequence(Box::new(left), Box::new(right));
-        }
-        Ok(left)
-    }
-
-    fn parse_path_elt_or_inverse(&mut self) -> Result<PropertyPathExpression> {
-        if self.eat(&Token::Caret) {
-            Ok(PropertyPathExpression::Reverse(Box::new(
-                self.parse_path_elt()?,
-            )))
-        } else {
-            self.parse_path_elt()
-        }
-    }
-
-    fn parse_path_elt(&mut self) -> Result<PropertyPathExpression> {
-        let primary = self.parse_path_primary()?;
-        Ok(match self.peek() {
-            Some(Token::Star) => {
-                self.pos += 1;
-                PropertyPathExpression::ZeroOrMore(Box::new(primary))
-            }
-            Some(Token::Plus) => {
-                self.pos += 1;
-                PropertyPathExpression::OneOrMore(Box::new(primary))
-            }
-            Some(Token::Question) => {
-                self.pos += 1;
-                PropertyPathExpression::ZeroOrOne(Box::new(primary))
-            }
-            // `{n}` / `{n,}` / `{n,m}` / `{,m}` — bounded repetition (a PurRDF
-            // extension beyond SPARQL 1.1 §9; symmetric parse for the serializer).
-            Some(Token::LBrace) => self.parse_path_range(primary)?,
-            _ => primary,
-        })
-    }
-
-    /// Parse a bounded-repetition postfix `{n}` / `{n,}` / `{n,m}` / `{,m}` — a
-    /// PurRDF extension beyond SPARQL 1.1 §9.  The opening `{` is the current token.
-    /// Hard-fails (no silent degradation) on an empty `{}`, a non-integer bound,
-    /// or a lower bound exceeding the upper bound.
-    fn parse_path_range(
-        &mut self,
-        primary: PropertyPathExpression,
-    ) -> Result<PropertyPathExpression> {
-        self.expect(&Token::LBrace)?;
-        let lower = self.eat_integer()?;
-        let has_comma = self.eat(&Token::Comma);
-        let upper = if has_comma { self.eat_integer()? } else { None };
-        self.expect(&Token::RBrace)?;
-
-        let (min, max) = if has_comma {
-            // `{,}` — both bounds absent — is a silent-degrade to `*`; hard-fail instead.
-            if lower.is_none() && upper.is_none() {
-                return Err(ParseError::syntax(
-                    "empty path range {,} is not allowed (use * for zero-or-more)",
-                    self.span(),
-                ));
-            }
-            // `{n,}` / `{n,m}` / `{,m}` (missing lower ⇒ 0).
-            (lower.unwrap_or(0), upper)
-        } else {
-            // `{n}` ⇒ exactly n; an empty `{}` is invalid.
-            match lower {
-                Some(n) => (n, Some(n)),
-                None => {
-                    return Err(ParseError::syntax(
-                        "empty path range {} is not allowed",
-                        self.span(),
-                    ));
-                }
-            }
-        };
-        if let Some(m) = max
-            && min > m
-        {
-            return Err(ParseError::syntax(
-                format!("path range lower bound {min} exceeds upper bound {m}"),
-                self.span(),
-            ));
-        }
-        Ok(PropertyPathExpression::Range {
-            inner: Box::new(primary),
-            min,
-            max,
-        })
-    }
-
-    /// Consume an `Integer` token and parse it to `u32`, returning `Ok(None)` when
-    /// the current token is not an integer (so the caller can distinguish a missing
-    /// bound from a present one).  An out-of-`u32`-range integer is a hard error.
-    fn eat_integer(&mut self) -> Result<Option<u32>> {
-        let Some(Token::Integer(lex)) = self.peek() else {
-            return Ok(None);
-        };
-        let lex = *lex;
-        match lex.parse::<u32>() {
-            Ok(n) => {
-                self.pos += 1;
-                Ok(Some(n))
-            }
-            Err(_) => Err(ParseError::syntax(
-                format!("path range bound {lex:?} is not a valid u32"),
-                self.span(),
-            )),
-        }
-    }
-
-    fn parse_path_primary(&mut self) -> Result<PropertyPathExpression> {
-        if self.peek_kw("a") && matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
-            self.pos += 1;
-            return Ok(PropertyPathExpression::NamedNode(NamedNode::new_unchecked(
-                RDF_TYPE,
-            )));
-        }
-        match self.peek() {
-            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
-                Ok(PropertyPathExpression::NamedNode(self.expect_iri_node()?))
-            }
-            Some(Token::LParen) => {
-                self.pos += 1;
-                let inner = self.parse_path()?;
-                self.expect(&Token::RParen)?;
-                Ok(inner)
-            }
-            Some(Token::Bang) => {
-                self.pos += 1;
-                self.parse_negated_property_set()
-            }
-            other => Err(ParseError::syntax(
-                format!("expected a property path, found {other:?}"),
-                self.span(),
-            )),
-        }
-    }
-
-    fn parse_negated_property_set(&mut self) -> Result<PropertyPathExpression> {
-        let mut nodes = Vec::new();
-        if self.eat(&Token::LParen) {
-            loop {
-                nodes.push(self.parse_path_one_in_set()?);
-                if !self.eat(&Token::Pipe) {
-                    break;
-                }
-            }
-            self.expect(&Token::RParen)?;
-        } else {
-            nodes.push(self.parse_path_one_in_set()?);
-        }
-        Ok(PropertyPathExpression::NegatedPropertySet(nodes))
-    }
-
-    fn parse_path_one_in_set(&mut self) -> Result<NegatedPathElement> {
-        // `^iri` — an inverse link inside a negated property set (SPARQL 1.1
-        // §18.2 `PathOneInPropertySet`) — excludes a *reverse* hop rather than a
-        // forward one; see `NegatedPathElement` and the evaluator's decomposition
-        // into a forward/reverse `Alternative`.
-        let inverse = self.eat(&Token::Caret);
-        if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
-            self.pos += 1;
-            return Ok(NegatedPathElement {
-                predicate: NamedNode::new_unchecked(RDF_TYPE),
-                inverse,
-            });
-        }
-        let predicate = self.expect_iri_node()?;
-        Ok(NegatedPathElement { predicate, inverse })
-    }
-
     // ── terms ────────────────────────────────────────────────────────────────
-
-    fn parse_term_pattern(&mut self) -> Result<TermPattern> {
-        match self.peek() {
-            Some(Token::Variable(_)) => Ok(TermPattern::Variable(self.expect_var()?)),
-            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
-                Ok(TermPattern::NamedNode(self.expect_iri_node()?))
-            }
-            Some(Token::BlankNodeLabel(_)) => {
-                let at = self.span();
-                let Some(Token::BlankNodeLabel(l)) = self.bump() else {
-                    unreachable!()
-                };
-                Ok(TermPattern::BlankNode(self.scoped_blank_label(l, at)?))
-            }
-            Some(Token::Anon) => {
-                self.pos += 1;
-                Ok(TermPattern::BlankNode(self.fresh_anon()))
-            }
-            Some(
-                Token::StringLit(_)
-                | Token::LongStringLit(_)
-                | Token::Integer(_)
-                | Token::Decimal(_)
-                | Token::Double(_)
-                | Token::Minus
-                | Token::Plus,
-            ) => Ok(TermPattern::Literal(self.parse_literal()?)),
-            Some(Token::Word(w)) if *w == "true" || *w == "false" => {
-                Ok(TermPattern::Literal(self.parse_literal()?))
-            }
-            Some(Token::TripleOpen) => {
-                let t = self.parse_quoted_triple()?;
-                Ok(TermPattern::Triple(Box::new(t)))
-            }
-            other => Err(ParseError::syntax(
-                format!("expected an RDF term, found {other:?}"),
-                self.span(),
-            )),
-        }
-    }
-
-    /// `<<( s p o )>>` or `<< s p o >>` (RDF 1.2 quoted triple / triple term).
-    fn parse_quoted_triple(&mut self) -> Result<TriplePattern> {
-        self.expect(&Token::TripleOpen)?;
-        let parens = self.eat(&Token::LParen);
-        let subject = self.parse_term_pattern()?;
-        let predicate = self.parse_predicate_name()?;
-        let object = self.parse_term_pattern()?;
-        if parens {
-            self.expect(&Token::RParen)?;
-        }
-        self.expect(&Token::TripleClose)?;
-        Ok(TriplePattern {
-            subject,
-            predicate,
-            object,
-        })
-    }
 
     /// A predicate in a triple position: an IRI, `a`, or a variable.
     fn parse_predicate_name(&mut self) -> Result<NamedNodePattern> {
@@ -3819,53 +2514,6 @@ impl<'a> Parser<'a, '_> {
         Ok(Some(self.parse_ground_term()?))
     }
 
-    fn parse_ground_term(&mut self) -> Result<GroundTerm> {
-        match self.peek() {
-            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => {
-                Ok(GroundTerm::NamedNode(self.expect_iri_node()?))
-            }
-            Some(Token::TripleOpen) => {
-                let t = self.parse_ground_triple()?;
-                Ok(GroundTerm::Triple(Box::new(t)))
-            }
-            // Every other legal ground term — a string, a boolean, or a numeral
-            // (optionally signed: `-1`, `+0.5`) — is `parse_literal`'s grammar;
-            // an illegal token surfaces through its own catch-all error.
-            _ => Ok(GroundTerm::Literal(self.parse_literal()?)),
-        }
-    }
-
-    fn parse_ground_triple(&mut self) -> Result<GroundTriple> {
-        self.expect(&Token::TripleOpen)?;
-        let parens = self.eat(&Token::LParen);
-        let subject = self.parse_ground_term()?;
-        // A ground triple term's subject is an `iri | BlankNode` — never a literal
-        // or a nested triple term (only the *object* may nest).
-        if matches!(subject, GroundTerm::Triple(_) | GroundTerm::Literal(_)) {
-            return Err(ParseError::syntax(
-                "a literal or nested triple term may not be the subject of a triple term",
-                self.span(),
-            ));
-        }
-        // The predicate is an IRI or the `a` keyword (rdf:type).
-        let predicate = if matches!(self.peek(), Some(Token::Word(w)) if *w == "a") {
-            self.pos += 1;
-            NamedNode::new_unchecked("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")
-        } else {
-            self.expect_iri_node()?
-        };
-        let object = self.parse_ground_term()?;
-        if parens {
-            self.expect(&Token::RParen)?;
-        }
-        self.expect(&Token::TripleClose)?;
-        Ok(GroundTriple {
-            subject,
-            predicate,
-            object,
-        })
-    }
-
     // ── solution modifiers ───────────────────────────────────────────────────
 
     /// True when the cursor is at a bare (non-parenthesized) `GROUP BY`
@@ -3909,114 +2557,6 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
-    fn parse_solution_modifiers(
-        &mut self,
-        aggregates: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Modifiers> {
-        let mut m = Modifiers::default();
-        if self.eat_kw("GROUP") {
-            self.expect_kw("BY")?;
-            loop {
-                if let Some(Token::Variable(_)) = self.peek() {
-                    m.group_by.push(self.expect_var()?);
-                } else if self.at(&Token::LParen) {
-                    // `( Expr [AS ?v] )` — SPARQL 1.1 §18.2.4 GroupCondition. Lower
-                    // to an Extend(?v := Expr) under the Group, then group by ?v.
-                    self.expect(&Token::LParen)?;
-                    // Non-lifting parse: an aggregate in a GROUP BY key is illegal
-                    // and surfaces here as `Unsupported`.
-                    let expr = self.parse_expression()?;
-                    let var = if self.eat_kw("AS") {
-                        self.expect_var()?
-                    } else {
-                        self.fresh_group_var()
-                    };
-                    self.expect(&Token::RParen)?;
-                    // An expression-valued `GROUP BY` condition list lowers to
-                    // a chain of `Extend` nodes placed directly under `Group`
-                    // (§18.2.4) — see `MAX_GRAPH_PATTERN_NODES`'s doc for why
-                    // this list is charged the same as the group loop.
-                    self.charge_pattern_nodes(1)?;
-                    m.group_extends.push((var.clone(), expr));
-                    m.group_by.push(var);
-                } else if self.at_bare_group_condition() {
-                    // A bare `BuiltInCall` / `FunctionCall` GroupCondition, e.g.
-                    // `GROUP BY STR(?x)` — lower to a synthetic-var Extend.
-                    let expr = self.parse_expression()?;
-                    let var = self.fresh_group_var();
-                    self.charge_pattern_nodes(1)?;
-                    m.group_extends.push((var.clone(), expr));
-                    m.group_by.push(var);
-                } else {
-                    break;
-                }
-            }
-        }
-        if self.eat_kw("HAVING") {
-            loop {
-                let expr = self.parse_having_constraint(aggregates)?;
-                // A long `HAVING (c1) (c2) … (cN)` condition list lowers to a
-                // chain of `Filter` nodes — same class, same budget. Each
-                // `cN` is itself a `Constraint` (`BrackettedExpression |
-                // BuiltInCall | FunctionCall`, §Constraint) — bracketed
-                // (`Token::LParen`) or bare (`Self::at_bare_constraint`).
-                self.charge_pattern_nodes(1)?;
-                m.having.push(expr);
-                if !(self.at(&Token::LParen) || self.at_bare_constraint()) {
-                    break;
-                }
-            }
-        }
-        if self.eat_kw("ORDER") {
-            self.expect_kw("BY")?;
-            loop {
-                let cond = if self.eat_kw("ASC") {
-                    self.expect(&Token::LParen)?;
-                    let e = self.parse_expression_lifting_aggs(aggregates)?;
-                    self.expect(&Token::RParen)?;
-                    OrderExpression::Asc(e)
-                } else if self.eat_kw("DESC") {
-                    self.expect(&Token::LParen)?;
-                    let e = self.parse_expression_lifting_aggs(aggregates)?;
-                    self.expect(&Token::RParen)?;
-                    OrderExpression::Desc(e)
-                } else if self.order_key_ahead() {
-                    OrderExpression::Asc(self.parse_primary_with_aggs(aggregates)?)
-                } else {
-                    break;
-                };
-                m.order_by.push(cond);
-            }
-        }
-        // `LimitOffsetClauses ::= LimitClause OffsetClause? | OffsetClause
-        // LimitClause?` — at most ONE of each, in either order. The loop reads
-        // both orders, and refuses a repeat instead of overwriting the earlier
-        // clause: a caller who wrote `LIMIT 2` and got every row back because a
-        // later `LIMIT 13` overwrote the bound has had their own bound silently
-        // dropped, and the query would mean one thing here and another to a
-        // conforming processor. It is not valid SPARQL, so accepting it is not
-        // leniency anyone can rely on. The offset is captured BEFORE the keyword
-        // is eaten so the diagnostic points at the repeated clause, not at its
-        // integer.
-        loop {
-            let at = self.span();
-            if self.eat_kw("LIMIT") {
-                if m.limit.is_some() {
-                    return Err(repeated_bound_clause("LIMIT", at));
-                }
-                m.limit = Some(self.expect_integer()?);
-            } else if self.eat_kw("OFFSET") {
-                if m.offset.is_some() {
-                    return Err(repeated_bound_clause("OFFSET", at));
-                }
-                m.offset = Some(self.expect_integer()?);
-            } else {
-                break;
-            }
-        }
-        Ok(m)
-    }
-
     /// True when an `OrderCondition`'s bare alternative starts here —
     /// `Constraint | Var` (SPARQL 1.1/1.2 §OrderCondition), where a bare
     /// `Constraint` is `Token::LParen` (`BrackettedExpression`) or
@@ -4039,639 +2579,13 @@ impl<'a> Parser<'a, '_> {
         }
     }
 
-    // ── expressions ──────────────────────────────────────────────────────────
-
-    /// FILTER constraint: a bracketted expression, a built-in call, or a
-    /// function call (§ Constraint).
-    fn parse_constraint(&mut self) -> Result<Expression> {
-        if self.at(&Token::LParen) {
-            self.pos += 1;
-            let e = self.parse_expression()?;
-            self.expect(&Token::RParen)?;
-            Ok(e)
-        } else {
-            self.parse_primary_expression()
-        }
-    }
-
-    /// One element of `HAVING`'s `Constraint+` list (§Constraint):
-    /// `BrackettedExpression | BuiltInCall | FunctionCall`. The bracketed
-    /// form is `'(' Expression ')'`; the bare forms (`BOUND(?x)`,
-    /// `EXISTS { ... }`, a custom `FunctionCall`, …) are parsed exactly like
-    /// any other primary expression, with aggregates lifted into `aggs` —
-    /// `HAVING (COUNT(?x) > 1)` needs that lift for the bracketed form, and a
-    /// bare aggregate `BuiltInCall` (e.g. `HAVING COUNT(?x)`, unusual but
-    /// grammar-legal) needs the same treatment.
-    fn parse_having_constraint(
-        &mut self,
-        aggregates: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        if self.at(&Token::LParen) {
-            self.pos += 1;
-            let e = self.parse_expression_lifting_aggs(aggregates)?;
-            self.expect(&Token::RParen)?;
-            Ok(e)
-        } else {
-            self.parse_primary_with_aggs(aggregates)
-        }
-    }
-
-    fn parse_expression(&mut self) -> Result<Expression> {
-        let mut sink = Vec::new();
-        let e = self.parse_or(&mut sink)?;
-        if !sink.is_empty() {
-            return Err(ParseError::unsupported(
-                "aggregate outside GROUP BY / SELECT / HAVING context",
-            ));
-        }
-        Ok(e)
-    }
-
-    fn parse_expression_lifting_aggs(
-        &mut self,
-        aggregates: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        self.parse_or(aggregates)
-    }
-
-    fn parse_or(&mut self, aggs: &mut Vec<(Variable, AggregateExpression)>) -> Result<Expression> {
-        let mut left = self.parse_and(aggs)?;
-        while self.eat(&Token::Or) {
-            let right = self.parse_and(aggs)?;
-            left = Expression::Or(Box::new(left), Box::new(right));
-        }
-        Ok(left)
-    }
-
-    fn parse_and(&mut self, aggs: &mut Vec<(Variable, AggregateExpression)>) -> Result<Expression> {
-        let mut left = self.parse_relational(aggs)?;
-        while self.eat(&Token::And) {
-            let right = self.parse_relational(aggs)?;
-            left = Expression::And(Box::new(left), Box::new(right));
-        }
-        Ok(left)
-    }
-
-    fn parse_relational(
-        &mut self,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        let left = self.parse_additive(aggs)?;
-        let op = match self.peek() {
-            Some(Token::Eq) => Some("="),
-            Some(Token::NotEq) => Some("!="),
-            Some(Token::Lt) => Some("<"),
-            Some(Token::Gt) => Some(">"),
-            Some(Token::LtEq) => Some("<="),
-            Some(Token::GtEq) => Some(">="),
-            _ => None,
-        };
-        if let Some(op) = op {
-            self.pos += 1;
-            let right = self.parse_additive(aggs)?;
-            let (l, r) = (Box::new(left), Box::new(right));
-            return Ok(match op {
-                "=" => Expression::Equal(l, r),
-                "!=" => Expression::Not(Box::new(Expression::Equal(l, r))),
-                "<" => Expression::Less(l, r),
-                ">" => Expression::Greater(l, r),
-                "<=" => Expression::LessOrEqual(l, r),
-                _ => Expression::GreaterOrEqual(l, r),
-            });
-        }
-        if self.peek_kw("IN") {
-            self.pos += 1;
-            let list = self.parse_expression_list(aggs)?;
-            return Ok(Expression::In(Box::new(left), list));
-        }
-        if self.peek_kw("NOT") && self.peek2_kw("IN") {
-            self.pos += 2;
-            let list = self.parse_expression_list(aggs)?;
-            return Ok(Expression::Not(Box::new(Expression::In(
-                Box::new(left),
-                list,
-            ))));
-        }
-        Ok(left)
-    }
-
-    fn parse_additive(
-        &mut self,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        let mut left = self.parse_multiplicative(aggs)?;
-        loop {
-            if self.eat(&Token::Plus) {
-                let right = self.parse_multiplicative(aggs)?;
-                left = Expression::Add(Box::new(left), Box::new(right));
-            } else if self.eat(&Token::Minus) {
-                let right = self.parse_multiplicative(aggs)?;
-                left = Expression::Subtract(Box::new(left), Box::new(right));
-            } else {
-                break;
-            }
-        }
-        Ok(left)
-    }
-
-    fn parse_multiplicative(
-        &mut self,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        let mut left = self.parse_unary(aggs)?;
-        loop {
-            if self.eat(&Token::Star) {
-                let right = self.parse_unary(aggs)?;
-                left = Expression::Multiply(Box::new(left), Box::new(right));
-            } else if self.eat(&Token::Slash) {
-                let right = self.parse_unary(aggs)?;
-                left = Expression::Divide(Box::new(left), Box::new(right));
-            } else {
-                break;
-            }
-        }
-        Ok(left)
-    }
-
-    fn parse_unary(
-        &mut self,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        if self.eat(&Token::Bang) {
-            Ok(Expression::Not(Box::new(self.parse_unary(aggs)?)))
-        } else if self.eat(&Token::Plus) {
-            Ok(Expression::UnaryPlus(Box::new(self.parse_unary(aggs)?)))
-        } else if self.eat(&Token::Minus) {
-            Ok(Expression::UnaryMinus(Box::new(self.parse_unary(aggs)?)))
-        } else {
-            self.parse_primary_with_aggs(aggs)
-        }
-    }
-
-    /// Parse an RDF 1.2 triple term `<<( s p o )>>` in *expression* position
-    /// (`ExprTripleTerm`, §17.4). It denotes the same value as `TRIPLE(s, p, o)`,
-    /// so it lowers to that function call. Only the triple-*term* form (`<<(`) is
-    /// valid here — a reifying triple `<< … >>` is not an expression.
-    fn parse_triple_term_expr(
-        &mut self,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        self.expect(&Token::TripleOpen)?;
-        if !self.eat(&Token::LParen) {
-            return Err(ParseError::syntax(
-                "a reifying triple `<< … >>` is not valid in expression position; \
-                 use a triple term `<<( s p o )>>`",
-                self.span(),
-            ));
-        }
-        // A triple term's subject is a `Var | iri` here — never a literal or a
-        // nested triple term.
-        if matches!(
-            self.peek(),
-            Some(
-                Token::TripleOpen
-                    | Token::StringLit(_)
-                    | Token::LongStringLit(_)
-                    | Token::Integer(_)
-                    | Token::Decimal(_)
-                    | Token::Double(_)
-            )
-        ) {
-            return Err(ParseError::syntax(
-                "a literal or nested triple term may not be the subject of a triple term",
-                self.span(),
-            ));
-        }
-        let s = self.parse_primary_with_aggs(aggs)?;
-        let p = self.parse_primary_with_aggs(aggs)?;
-        let o = self.parse_primary_with_aggs(aggs)?;
-        self.expect(&Token::RParen)?;
-        self.expect(&Token::TripleClose)?;
-        Ok(Expression::FunctionCall(Function::Triple, vec![s, p, o]))
-    }
-
-    fn parse_primary_expression(&mut self) -> Result<Expression> {
-        let mut sink = Vec::new();
-        let e = self.parse_primary_with_aggs(&mut sink)?;
-        if !sink.is_empty() {
-            return Err(ParseError::unsupported("aggregate in this position"));
-        }
-        Ok(e)
-    }
-
-    fn parse_primary_with_aggs(
-        &mut self,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        match self.peek() {
-            Some(Token::LParen) => {
-                self.pos += 1;
-                let e = self.parse_or(aggs)?;
-                self.expect(&Token::RParen)?;
-                Ok(e)
-            }
-            Some(Token::Variable(_)) => Ok(Expression::Variable(self.expect_var()?)),
-            Some(Token::Iri(_) | Token::PrefixedName(_, _)) => self.parse_iri_or_function(aggs),
-            Some(
-                Token::StringLit(_)
-                | Token::LongStringLit(_)
-                | Token::Integer(_)
-                | Token::Decimal(_)
-                | Token::Double(_),
-            ) => Ok(Expression::Literal(self.parse_literal()?)),
-            Some(Token::TripleOpen) => self.parse_triple_term_expr(aggs),
-            Some(Token::Word(w)) => {
-                let w = *w;
-                if w == "true" || w == "false" {
-                    // No sign precedes a bare boolean word here: `parse_unary` already
-                    // intercepts a leading `+`/`-` before a bare boolean word is ever
-                    // reached, so `parse_literal` observes none and takes its boolean arm.
-                    Ok(Expression::Literal(self.parse_literal()?))
-                } else {
-                    self.parse_builtin_or_aggregate(w, aggs)
-                }
-            }
-            other => Err(ParseError::syntax(
-                format!("expected an expression, found {other:?}"),
-                self.span(),
-            )),
-        }
-    }
-
-    /// Human-readable spelling of a SEP-0009 signature, for
-    /// [`ParseError::CdtArity`].
-    fn describe_cdt_arity(arity: crate::algebra::CdtArity) -> String {
-        use crate::algebra::CdtArity;
-        match arity {
-            CdtArity::Fixed(1) => "exactly 1 argument".to_owned(),
-            CdtArity::Fixed(n) => format!("exactly {n} arguments"),
-            CdtArity::Range { min, max } => format!("{min} to {max} arguments"),
-            CdtArity::AtLeast(0) => "any number of arguments".to_owned(),
-            CdtArity::AtLeast(min) => format!("at least {min} arguments"),
-            CdtArity::Pairs => "an even number of arguments (key/value pairs)".to_owned(),
-        }
-    }
-
-    fn parse_iri_or_function(
-        &mut self,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        let node = self.expect_iri_node()?;
-        if self.at(&Token::LParen) {
-            // A SEP-0009 composite-datatype function, by EXACT IRI match against the
-            // closed `CdtFn` registry. Checked FIRST and UNCONDITIONALLY: the spec
-            // fixes both the namespace and the local names, so there is no
-            // `ParserOptions` seam here and a configured extension namespace can
-            // never shadow one of these. Recognizing a spec-defined third-party IRI
-            // is not minting it — see `CdtCall`'s own docs.
-            if let Some(fn_kind) = crate::algebra::CdtFn::from_iri(node.as_str()) {
-                let at = self.span();
-                let iri = node.as_str().to_owned();
-                let args = self.parse_arg_list(aggs)?;
-                // SPARQL has no overloading on argument count, so a wrong-arity call
-                // can never evaluate to anything and is refused here rather than
-                // silently becoming an expression error at runtime.
-                if !fn_kind.arity().admits(args.len()) {
-                    return Err(ParseError::CdtArity {
-                        iri,
-                        expected: Self::describe_cdt_arity(fn_kind.arity()),
-                        found: args.len(),
-                        at,
-                    });
-                }
-                return Ok(Expression::FunctionCall(
-                    Function::Cdt(crate::algebra::CdtCall { fn_kind, iri }),
-                    args,
-                ));
-            }
-            // An IRI in call position under ANY configured extension-function namespace
-            // (default: NONE — the namespace set is caller configuration supplied via
-            // ParserOptions, e.g. the gmeow namespace) dispatches to the CLOSED
-            // extension-function seam, recognized here at parse time. The local-name
-            // MUST resolve; an unknown <ns>foo(...) under a configured namespace is a
-            // hard error (fail-fast), never a silent Function::Custom fallthrough. An
-            // IRI under NO configured namespace stays Function::Custom. The original
-            // IRI is recorded in the AST node so serialization round-trips exactly.
-            let ext_local = self
-                .options
-                .extension_fn_namespaces
-                .iter()
-                .find_map(|ns| node.as_str().strip_prefix(ns.as_str()));
-            let func = if let Some(local) = ext_local {
-                match crate::algebra::PurrdfFn::from_local_name(local) {
-                    Some(fn_kind) => Function::Purrdf(crate::algebra::PurrdfCall {
-                        fn_kind,
-                        iri: node.as_str().to_owned(),
-                    }),
-                    None => {
-                        return Err(ParseError::syntax(
-                            format!("unknown extension function <{}>", node.as_str()),
-                            self.span(),
-                        ));
-                    }
-                }
-            } else {
-                Function::Custom(node)
-            };
-            let args = self.parse_arg_list(aggs)?;
-            Ok(Expression::FunctionCall(func, args))
-        } else {
-            Ok(Expression::NamedNode(node))
-        }
-    }
-
-    fn parse_builtin_or_aggregate(
-        &mut self,
-        name: &str,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        let upper = name.to_ascii_uppercase();
-        // Aggregates lift to a synthetic Group variable.
-        if let Some(func) = aggregate_function(&upper) {
-            return self.parse_aggregate(func, &upper, aggs);
-        }
-        // `AGG(<iri>, [DISTINCT] arg, arg, …)` — the custom-aggregate surface;
-        // also lifts to a synthetic Group variable, exactly like a named built-in
-        // aggregate. Checked here (rather than added to `aggregate_function`)
-        // because it does not follow the `NAME(...)` dispatch table shape: its
-        // first token inside the parens is an IRI, not an expression.
-        if upper == "AGG" {
-            return self.parse_agg_call(aggs);
-        }
-        match upper.as_str() {
-            "BOUND" => {
-                self.pos += 1;
-                self.expect(&Token::LParen)?;
-                let v = self.expect_var()?;
-                self.expect(&Token::RParen)?;
-                Ok(Expression::Bound(v))
-            }
-            "IF" => {
-                self.pos += 1;
-                let args = self.parse_arg_list(aggs)?;
-                expect_arity(&args, 3, "IF", self.span())?;
-                let mut it = args.into_iter();
-                Ok(Expression::If(
-                    Box::new(it.next().unwrap()),
-                    Box::new(it.next().unwrap()),
-                    Box::new(it.next().unwrap()),
-                ))
-            }
-            "COALESCE" => {
-                self.pos += 1;
-                Ok(Expression::Coalesce(self.parse_arg_list(aggs)?))
-            }
-            "EXISTS" => {
-                self.pos += 1;
-                Ok(Expression::Exists(Box::new(self.parse_exists_body()?)))
-            }
-            "NOT" => {
-                self.pos += 1;
-                self.expect_kw("EXISTS")?;
-                Ok(Expression::Not(Box::new(Expression::Exists(Box::new(
-                    self.parse_exists_body()?,
-                )))))
-            }
-            "SAMETERM" => {
-                self.pos += 1;
-                let args = self.parse_arg_list(aggs)?;
-                expect_arity(&args, 2, "sameTerm", self.span())?;
-                let mut it = args.into_iter();
-                Ok(Expression::SameTerm(
-                    Box::new(it.next().unwrap()),
-                    Box::new(it.next().unwrap()),
-                ))
-            }
-            _ => {
-                if let Some(func) = builtin_function(&upper) {
-                    self.pos += 1;
-                    let args = self.parse_arg_list(aggs)?;
-                    // `builtin_function`'s generic dispatch path does not arity-check;
-                    // ADJUST(value, timezone) is fixed at 2 (SEP-0002's sole documented
-                    // signature — see the `Function::Adjust` rustdoc).
-                    if func == Function::Adjust {
-                        expect_arity(&args, 2, "ADJUST", self.span())?;
-                    }
-                    Ok(Expression::FunctionCall(func, args))
-                } else {
-                    Err(ParseError::unsupported(format!(
-                        "function or keyword {name}"
-                    )))
-                }
-            }
-        }
-    }
-
-    fn parse_aggregate(
-        &mut self,
-        func: AggregateFunction,
-        name: &str,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        self.pos += 1; // function name
-        self.expect(&Token::LParen)?;
-        // DISTINCT precedes `*` in `COUNT(DISTINCT *)`; consume it first so the
-        // star form carries the flag (an earlier shape hid the DISTINCT behind a
-        // separate CountStar variant, making `distinct: true` on the star form
-        // unreachable).
-        let distinct = self.eat_kw("DISTINCT");
-        let agg = if self.eat(&Token::Star) {
-            // `*` is the spec's empty exprlist, and the grammar admits it in
-            // exactly one production: `Count` (SPARQL 1.1 §18.5.1 / SPARQL 1.2
-            // §19.8). `SUM(*)`/`AVG(*)`/`MIN(*)`/`MAX(*)`/`SAMPLE(*)`/
-            // `GROUP_CONCAT(*)` — and, symmetrically, a zero-arity custom
-            // aggregate — are hard syntax errors, never a silent row count.
-            if func != AggregateFunction::Count {
-                return Err(ParseError::syntax(
-                    format!(
-                        "`*` is only valid inside COUNT(...); {name} does not accept an empty \
-                         exprlist"
-                    ),
-                    self.span(),
-                ));
-            }
-            AggregateExpression::new(func, Vec::new(), Vec::new(), Vec::new(), distinct)
-                .expect("COUNT accepts an empty exprlist")
-        } else if matches!(func, AggregateFunction::Fold) {
-            self.parse_fold_tail(distinct)?
-        } else {
-            // Marks any `EXISTS` reached while parsing THIS argument as
-            // `ExistsScopeBasis::AggregateArgument` if it is later deferred
-            // under `Parser::projection_scope_pending` (a SELECT-list
-            // aggregate, e.g. `SUM(IF(EXISTS { ... }, 1, 0))`) — irrelevant,
-            // and harmless, outside that window (`GROUP BY`/`HAVING`
-            // aggregate arguments check immediately either way). Restored
-            // right after: aggregates cannot themselves nest, but the
-            // `EXISTS` body this argument may contain can embed a
-            // sub-`SELECT` with its own, unrelated aggregate arguments.
-            let saved_in_aggregate_argument = self.in_aggregate_argument;
-            self.in_aggregate_argument = true;
-            let inner = self.parse_expression();
-            self.in_aggregate_argument = saved_in_aggregate_argument;
-            let inner = inner?;
-            let mut scalarvals = Vec::new();
-            if matches!(func, AggregateFunction::GroupConcat)
-                && let Some(sep) = self.parse_optional_separator()?
-            {
-                scalarvals.push(("separator".to_owned(), Literal::new_simple(sep)));
-            }
-            AggregateExpression::new(func, vec![inner], scalarvals, Vec::new(), distinct)
-                .expect("a one-element args list is always a valid AggregateExpression")
-        };
-        self.expect(&Token::RParen)?;
-        let synth = self.fresh_agg_var();
-        aggs.push((synth.clone(), agg));
-        Ok(Expression::Variable(synth))
-    }
-
-    /// Parse everything inside `FOLD(` after an already-consumed `DISTINCT`,
-    /// up to but not including the closing `)`:
-    ///
-    /// ```text
-    /// Expression ( ',' Expression )? ( 'ORDER' 'BY' OrderCondition+ )?
-    /// ```
-    ///
-    /// One expression is the `cdt:List` form, two the `cdt:Map` form (first is
-    /// the key). The optional `ORDER BY` follows the LAST expression with NO
-    /// separating comma — a comma there would name a third exprlist entry,
-    /// which [`AggregateExpression::new`] refuses.
-    ///
-    /// The sort keys are the AGGREGATION's own (see
-    /// [`AggregateFunction::Fold`]); they order the rows this `FOLD` folds and
-    /// are unrelated to the query's solution modifier, so they are parsed here
-    /// rather than by [`Self::parse_solution_modifiers`]. An aggregate inside
-    /// one of them would be a nested aggregate, which
-    /// [`Self::parse_primary_expression`] and [`Self::parse_expression`] both
-    /// already refuse — `FOLD(?v ORDER BY SUM(?w))` is a hard syntax error, not
-    /// a silently-lifted second aggregate.
-    fn parse_fold_tail(&mut self, distinct: bool) -> Result<AggregateExpression> {
-        // Marks any `EXISTS` reached below as `ExistsScopeBasis::AggregateArgument`
-        // when `Parser::projection_scope_pending` postpones its scope check,
-        // exactly as the single-argument path does; the sort keys are aggregate
-        // arguments too, evaluated per row against the group's own solutions.
-        let saved_in_aggregate_argument = self.in_aggregate_argument;
-        self.in_aggregate_argument = true;
-        let parsed = self.parse_fold_parts();
-        self.in_aggregate_argument = saved_in_aggregate_argument;
-        let (args, order_by) = parsed?;
-        AggregateExpression::new(
-            AggregateFunction::Fold,
-            args,
-            Vec::new(),
-            order_by,
-            distinct,
-        )
-        .map_err(|error| ParseError::syntax(error.to_string(), self.span()))
-    }
-
-    /// [`Self::parse_fold_tail`]'s body, split out so the
-    /// `in_aggregate_argument` flag is restored on the error path too.
-    fn parse_fold_parts(&mut self) -> Result<(Vec<Expression>, Vec<OrderExpression>)> {
-        let mut args = vec![self.parse_expression()?];
-        if self.eat(&Token::Comma) {
-            args.push(self.parse_expression()?);
-        }
-        let mut order_by = Vec::new();
-        if self.eat_kw("ORDER") {
-            self.expect_kw("BY")?;
-            loop {
-                let cond = if self.eat_kw("ASC") {
-                    self.expect(&Token::LParen)?;
-                    let e = self.parse_expression()?;
-                    self.expect(&Token::RParen)?;
-                    OrderExpression::Asc(e)
-                } else if self.eat_kw("DESC") {
-                    self.expect(&Token::LParen)?;
-                    let e = self.parse_expression()?;
-                    self.expect(&Token::RParen)?;
-                    OrderExpression::Desc(e)
-                } else if self.order_key_ahead() {
-                    OrderExpression::Asc(self.parse_primary_expression()?)
-                } else {
-                    break;
-                };
-                order_by.push(cond);
-            }
-            if order_by.is_empty() {
-                return Err(ParseError::syntax(
-                    "FOLD's ORDER BY requires at least one sort condition",
-                    self.span(),
-                ));
-            }
-        }
-        Ok((args, order_by))
-    }
-
-    /// Parse the `AGG(<iri>, [DISTINCT] arg, arg, … [; NAME=value]*)`
-    /// custom-aggregate surface (the normative spelling for a custom-aggregate
-    /// call — no `ParserOptions` gate, since it introduces no ambiguity with any
-    /// other production). `<iri>` may be any IRI, including a prefixed name, resolved
-    /// and retained byte-exact via [`Self::expect_iri_node`]. `DISTINCT`, if
-    /// present, precedes the first positional argument. At least one positional
-    /// argument is required — an empty argument list is a hard syntax error: the
-    /// positional surface is one or more arguments (there is no `AGG(<iri>)`
-    /// zero-arity form).
-    ///
-    /// After the positional arguments, zero or more trailing `; NAME=value`
-    /// scalarval clauses are admitted — see [`Self::parse_agg_scalarvals`] for
-    /// the grammar and its precedent. This is a purely STRUCTURAL parse: any
-    /// `NAME` is accepted here, and any literal `value`; whether a given custom
-    /// aggregate accepts a given name (and whether its value's type is right) is
-    /// validated at prepare time by the evaluator, against the registered
-    /// aggregate's own declaration — never by this parser.
-    fn parse_agg_call(
-        &mut self,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Expression> {
-        self.pos += 1; // `AGG`
-        self.expect(&Token::LParen)?;
-        let iri = self.expect_iri_node()?;
-        self.expect(&Token::Comma)?;
-        let distinct = self.eat_kw("DISTINCT");
-        let mut args = Vec::new();
-        // See the matching comment in `Parser::parse_aggregate`: marks any
-        // `EXISTS` reached while parsing these positional arguments as
-        // `ExistsScopeBasis::AggregateArgument`, restored once the whole
-        // argument list is parsed (or the first one fails).
-        let saved_in_aggregate_argument = self.in_aggregate_argument;
-        self.in_aggregate_argument = true;
-        let mut args_err = None;
-        loop {
-            match self.parse_expression() {
-                Ok(e) => args.push(e),
-                Err(e) => {
-                    args_err = Some(e);
-                    break;
-                }
-            }
-            if !self.eat(&Token::Comma) {
-                break;
-            }
-        }
-        self.in_aggregate_argument = saved_in_aggregate_argument;
-        if let Some(e) = args_err {
-            return Err(e);
-        }
-        let scalarvals = self.parse_agg_scalarvals()?;
-        self.expect(&Token::RParen)?;
-        let agg = AggregateExpression::new(
-            AggregateFunction::Custom(iri),
-            args,
-            scalarvals,
-            Vec::new(),
-            distinct,
-        )
-        .expect("the `args.push` loop above always runs at least once");
-        let synth = self.fresh_agg_var();
-        aggs.push((synth.clone(), agg));
-        Ok(Expression::Variable(synth))
-    }
+    // ── aggregate clauses and fresh names ────────────────────────────────────
 
     /// Parse the `AGG(<iri>, …)` surface's optional trailing named
     /// scalar-value clauses: zero or more `; NAME=value` pairs, generalizing
     /// `GROUP_CONCAT`'s own `; SEPARATOR="…"` — SPARQL's existing precedent for
     /// a named scalar aggregate parameter (see
-    /// [`AggregateExpression::scalarvals`]'s docs) — to an arbitrary custom
+    /// [`crate::algebra::AggregateExpression::scalarvals`]'s docs) — to an arbitrary custom
     /// aggregate's own named parameters (`AGG(<{NS}PERCENTILE>, ?v; P=0.95)`,
     /// `AGG(<{NS}TOPK>, ?v; K=3)`). `NAME` is any [`Token::Word`], matched
     /// case-insensitively and stored UPPER-CASED, so `; separator="…"` and
@@ -4775,50 +2689,6 @@ impl<'a> Parser<'a, '_> {
         self.anon_counter += 1;
         b
     }
-
-    fn parse_arg_list(
-        &mut self,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Vec<Expression>> {
-        self.expect(&Token::LParen)?;
-        let mut args = Vec::new();
-        if self.eat(&Token::Star) {
-            // e.g. COUNT(*) handled elsewhere; a bare `*` here is invalid.
-            return Err(ParseError::syntax(
-                "unexpected '*' in argument list",
-                self.span(),
-            ));
-        }
-        if !self.at(&Token::RParen) {
-            self.eat_kw("DISTINCT");
-            loop {
-                args.push(self.parse_or(aggs)?);
-                if !self.eat(&Token::Comma) {
-                    break;
-                }
-            }
-        }
-        self.expect(&Token::RParen)?;
-        Ok(args)
-    }
-
-    fn parse_expression_list(
-        &mut self,
-        aggs: &mut Vec<(Variable, AggregateExpression)>,
-    ) -> Result<Vec<Expression>> {
-        self.expect(&Token::LParen)?;
-        let mut list = Vec::new();
-        if !self.at(&Token::RParen) {
-            loop {
-                list.push(self.parse_or(aggs)?);
-                if !self.eat(&Token::Comma) {
-                    break;
-                }
-            }
-        }
-        self.expect(&Token::RParen)?;
-        Ok(list)
-    }
 }
 
 /// A parsed predicate: a simple verb (IRI/`a`/variable) yielding a triple, a
@@ -4895,8 +2765,8 @@ impl BlockSink {
             let residual: Vec<TriplePattern> = triples.by_ref().take(at - taken).collect();
             taken = at;
             g = GraphPattern::Lateral {
-                left: Box::new(join(g, GraphPattern::Bgp { patterns: residual })),
-                right: Box::new(GraphPattern::PropertyFunction(call)),
+                left: Child::new(join(g, GraphPattern::Bgp { patterns: residual })),
+                right: Child::new(GraphPattern::PropertyFunction(call)),
             };
         }
         g = join(
@@ -4956,8 +2826,8 @@ fn join(left: GraphPattern, right: GraphPattern) -> GraphPattern {
             GraphPattern::Bgp { patterns }
         }
         (l, r) => GraphPattern::Join {
-            left: Box::new(l),
-            right: Box::new(r),
+            left: Child::new(l),
+            right: Child::new(r),
         },
     }
 }
@@ -5006,13 +2876,17 @@ fn scope_template(
 /// `Join`/`Lateral` spines), which is all the template callers need to tell a
 /// property-function refusal from a property-path one.
 fn block_has_property_function(p: &GraphPattern) -> bool {
-    match p {
-        GraphPattern::PropertyFunction(_) => true,
-        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
-            block_has_property_function(left) || block_has_property_function(right)
+    let mut pending = vec![p];
+    while let Some(p) = pending.pop() {
+        match p {
+            GraphPattern::PropertyFunction(_) => return true,
+            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+                pending.extend([&**right, &**left]);
+            }
+            _ => {}
         }
-        _ => false,
     }
+    false
 }
 
 /// If a property path is length-1 (a single predicate), return it as a triple
@@ -5028,7 +2902,7 @@ fn simple_predicate(path: &PropertyPathExpression) -> Option<NamedNodePattern> {
 /// `LeftJoin` join condition (§18.2.2.3 "filter-in-optional").
 fn split_trailing_filter(p: GraphPattern) -> (GraphPattern, Option<Expression>) {
     match p {
-        GraphPattern::Filter { expr, inner } => (*inner, Some(expr)),
+        GraphPattern::Filter { expr, inner } => (inner.into_inner(), Some(expr)),
         other => (other, None),
     }
 }
@@ -5080,6 +2954,102 @@ impl VarScope {
     }
 }
 
+/// Every open `EXISTS` in-scope-set frame (see [`Parser::exists_scope`]), stored once.
+///
+/// Only the top frame is ever written, so the frames' variables form one trail: a
+/// frame owns the trail's tail from its `mark` on, and sees the trail from its `start`
+/// on. A boundary frame starts empty (`start` = `mark` = the trail's length); an
+/// isolated frame sees everything the frame beneath it sees (`start` = that frame's
+/// `start`) and owns only what it adds itself (`mark` = the trail's length). Popping a
+/// frame truncates the trail to its `mark`. Seeding an isolated frame therefore copies
+/// nothing, so `EXISTS`/`NOT EXISTS`/`MINUS` bodies nested `n` deep hold `O(n)`
+/// variables in all rather than a copy of every enclosing frame per level.
+#[derive(Default)]
+struct ExistsScopes {
+    /// The variables of every open frame, each frame's own after the frame beneath's.
+    trail: Vec<Variable>,
+    /// For every variable on the trail, its positions there, ascending.
+    positions: std::collections::BTreeMap<Variable, Vec<usize>>,
+    /// The open frames, innermost last.
+    frames: Vec<ExistsFrame>,
+}
+
+/// One open frame of [`ExistsScopes`].
+#[derive(Clone, Copy)]
+struct ExistsFrame {
+    /// Where on the trail the variables this frame sees begin.
+    start: usize,
+    /// Where on the trail the variables this frame added begin.
+    mark: usize,
+}
+
+impl ExistsScopes {
+    /// Whether any frame is open.
+    fn is_open(&self) -> bool {
+        !self.frames.is_empty()
+    }
+
+    /// The variables the top frame sees, in first-appearance order; empty when no frame
+    /// is open.
+    fn top(&self) -> &[Variable] {
+        self.frames
+            .last()
+            .map_or(&[], |frame| &self.trail[frame.start..])
+    }
+
+    /// Open an empty frame.
+    fn push_boundary(&mut self) {
+        let len = self.trail.len();
+        self.frames.push(ExistsFrame {
+            start: len,
+            mark: len,
+        });
+    }
+
+    /// Open a frame that sees everything the current top frame sees; with no frame open,
+    /// an empty one.
+    fn push_isolated(&mut self) {
+        let len = self.trail.len();
+        let start = self.frames.last().map_or(len, |frame| frame.start);
+        self.frames.push(ExistsFrame { start, mark: len });
+    }
+
+    /// Close the top frame, discarding what it added.
+    fn pop(&mut self) {
+        let Some(frame) = self.frames.pop() else {
+            return;
+        };
+        for variable in self.trail.drain(frame.mark..) {
+            if let Some(at) = self.positions.get_mut(&variable) {
+                at.pop();
+                if at.is_empty() {
+                    self.positions.remove(&variable);
+                }
+            }
+        }
+    }
+
+    /// Record `variable` in the top frame; a no-op when the top frame already sees it,
+    /// or when no frame is open.
+    fn note(&mut self, variable: &Variable) {
+        let Some(frame) = self.frames.last() else {
+            return;
+        };
+        let seen = self
+            .positions
+            .get(variable)
+            .and_then(|at| at.last())
+            .is_some_and(|&at| at >= frame.start);
+        if !seen {
+            self.positions
+                .entry(variable.clone())
+                .or_default()
+                .push(self.trail.len());
+            self.trail.push(variable.clone());
+        }
+    }
+}
+
 /// Collect the in-scope variables of a pattern in first-appearance order
 /// (used for `SELECT *` projection). `pub(crate)`: `crate::serialize` also
 /// needs this, to recover every variable a bare (`Project`-less) modifier
@@ -5092,124 +3062,139 @@ pub(crate) fn visible_variables(p: &GraphPattern) -> Vec<Variable> {
     scope.into_vec()
 }
 
-fn collect_term_vars(t: &TermPattern, out: &mut VarScope) {
-    match t {
-        TermPattern::Variable(v) => out.note(v),
-        TermPattern::Triple(tp) => {
-            collect_term_vars(&tp.subject, out);
-            if let NamedNodePattern::Variable(v) = &tp.predicate {
-                out.note(v);
-            }
-            collect_term_vars(&tp.object, out);
-        }
-        _ => {}
-    }
+/// One entry of [`collect_vars`]'s work list.
+enum VarStep<'a> {
+    /// A pattern whose in-scope variables are still to be noted.
+    Pattern(&'a GraphPattern),
+    /// A term whose variables are still to be noted.
+    Term(&'a TermPattern),
+    /// A variable to note.
+    Note(&'a Variable),
 }
 
-fn collect_triple_vars(tp: &TriplePattern, out: &mut VarScope) {
-    collect_term_vars(&tp.subject, out);
+/// Queue a triple pattern's variables: subject, predicate, object.
+fn push_triple_vars<'a>(tp: &'a TriplePattern, pending: &mut Vec<VarStep<'a>>) {
+    pending.push(VarStep::Term(&tp.object));
     if let NamedNodePattern::Variable(v) = &tp.predicate {
-        out.note(v);
+        pending.push(VarStep::Note(v));
     }
-    collect_term_vars(&tp.object, out);
+    pending.push(VarStep::Term(&tp.subject));
 }
 
+/// Note the variables `p` makes visible in its enclosing group, in the order a
+/// left-to-right reading of it introduces them.
 fn collect_vars(p: &GraphPattern, out: &mut VarScope) {
-    match p {
-        GraphPattern::Bgp { patterns } => {
-            for tp in patterns {
-                collect_triple_vars(tp, out);
-            }
-        }
-        GraphPattern::Path {
-            subject, object, ..
-        } => {
-            collect_term_vars(subject, out);
-            collect_term_vars(object, out);
-        }
-        // Every argument variable of a property function — on either side — is
-        // in scope in the enclosing group: the arguments are the call's inputs
-        // AND its bindings.
-        GraphPattern::PropertyFunction(call) => {
-            for t in call.subject_args.iter().chain(&call.object_args) {
-                collect_term_vars(t, out);
-            }
-        }
-        GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
-        | GraphPattern::Lateral { left, right } => {
-            collect_vars(left, out);
-            collect_vars(right, out);
-        }
-        // SPARQL §18.2.1: variables occurring only in the right operand of
-        // MINUS are not in scope in the enclosing group graph pattern, so we
-        // descend into `left` only.
-        GraphPattern::Minus { left, .. } => {
-            collect_vars(left, out);
-        }
-        GraphPattern::LeftJoin { left, right, .. } => {
-            collect_vars(left, out);
-            collect_vars(right, out);
-        }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => collect_vars(inner, out),
-        GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
-            if let NamedNodePattern::Variable(v) = name {
+    let mut pending = vec![VarStep::Pattern(p)];
+    note_vars(&mut pending, out);
+}
+
+/// Drain `pending`, noting each variable as it is reached. Every entry pushes what
+/// follows it in reverse, so the work list pops them in written order.
+fn note_vars(pending: &mut Vec<VarStep<'_>>, out: &mut VarScope) {
+    while let Some(step) = pending.pop() {
+        let p = match step {
+            VarStep::Note(v) => {
                 out.note(v);
+                continue;
             }
-            collect_vars(inner, out);
-        }
-        GraphPattern::Extend {
-            inner, variable, ..
-        } => {
-            collect_vars(inner, out);
-            out.note(variable);
-        }
-        // `UNFOLD`'s one or two targets are ordinary in-scope bindings of the
-        // enclosing group, exactly like `BIND`'s single one: `SELECT *`
-        // projects them and a later `FILTER` in the same group sees them.
-        GraphPattern::Unfold {
-            inner,
-            element,
-            companion,
-            ..
-        } => {
-            collect_vars(inner, out);
-            out.note(element);
-            if let Some(companion) = companion {
-                out.note(companion);
+            VarStep::Term(t) => {
+                match t {
+                    TermPattern::Variable(v) => out.note(v),
+                    TermPattern::Triple(tp) => push_triple_vars(tp, pending),
+                    _ => {}
+                }
+                continue;
             }
-        }
-        GraphPattern::Values { variables, .. } => {
-            for v in variables {
-                out.note(v);
+            VarStep::Pattern(p) => p,
+        };
+        match p {
+            GraphPattern::Bgp { patterns } => {
+                for tp in patterns.iter().rev() {
+                    push_triple_vars(tp, pending);
+                }
             }
-        }
-        GraphPattern::Project { variables, .. } => {
-            for v in variables {
-                out.note(v);
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                pending.extend([VarStep::Term(object), VarStep::Term(subject)]);
             }
-        }
-        GraphPattern::Group {
-            variables,
-            aggregates,
-            ..
-        } => {
-            for v in variables {
-                out.note(v);
+            // Every argument variable of a property function — on either side — is
+            // in scope in the enclosing group: the arguments are the call's inputs
+            // AND its bindings.
+            GraphPattern::PropertyFunction(call) => {
+                pending.extend(
+                    call.subject_args
+                        .iter()
+                        .chain(&call.object_args)
+                        .rev()
+                        .map(VarStep::Term),
+                );
             }
-            for (v, _) in aggregates {
-                out.note(v);
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::LeftJoin { left, right, .. } => {
+                pending.extend([VarStep::Pattern(right), VarStep::Pattern(left)]);
+            }
+            GraphPattern::Union { arms } => {
+                pending.extend(arms.iter().rev().map(VarStep::Pattern));
+            }
+            // SPARQL §18.2.1: variables occurring only in the right operand of
+            // MINUS are not in scope in the enclosing group graph pattern, so we
+            // descend into `left` only.
+            GraphPattern::Minus { left, .. } => pending.push(VarStep::Pattern(left)),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => pending.push(VarStep::Pattern(inner)),
+            GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+                pending.push(VarStep::Pattern(inner));
+                if let NamedNodePattern::Variable(v) = name {
+                    pending.push(VarStep::Note(v));
+                }
+            }
+            GraphPattern::Extend {
+                inner, variable, ..
+            } => {
+                pending.extend([VarStep::Note(variable), VarStep::Pattern(inner)]);
+            }
+            // `UNFOLD`'s one or two targets are ordinary in-scope bindings of the
+            // enclosing group, exactly like `BIND`'s single one: `SELECT *`
+            // projects them and a later `FILTER` in the same group sees them.
+            GraphPattern::Unfold {
+                inner,
+                element,
+                companion,
+                ..
+            } => {
+                if let Some(companion) = companion {
+                    pending.push(VarStep::Note(companion));
+                }
+                pending.extend([VarStep::Note(element), VarStep::Pattern(inner)]);
+            }
+            GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+                for v in variables {
+                    out.note(v);
+                }
+            }
+            GraphPattern::Group {
+                variables,
+                aggregates,
+                ..
+            } => {
+                for v in variables {
+                    out.note(v);
+                }
+                for (v, _) in aggregates {
+                    out.note(v);
+                }
             }
         }
     }
 }
 
 /// An `EXISTS`/`NOT EXISTS` scope check deferred out of
-/// [`Parser::parse_exists_body`] because it was reached while
+/// [`Parser::check_exists_body`] because it was reached while
 /// `Parser::projection_scope_pending` was set — a `SELECT`'s projection list
 /// is parsed BEFORE `WHERE`, so no correct in-scope set exists yet at the
 /// point the body itself is parsed. Resolved in [`Parser::parse_select`]'s
@@ -5232,7 +3217,7 @@ struct PendingExistsScopeCheck {
     /// [`find_scope_conflict`] once `local_scope` is completed by the root.
     body: GraphPattern,
     /// Where to anchor the syntax error, captured at the `EXISTS`/`NOT
-    /// EXISTS` keyword — mirrors [`Parser::parse_exists_body`]'s own `at`.
+    /// EXISTS` keyword — mirrors [`Parser::check_exists_body`]'s own `at`.
     at: usize,
     /// Which root scope this entry resolves against.
     basis: ExistsScopeBasis,
@@ -5510,116 +3495,123 @@ fn find_scope_conflict<'a>(
     scope: &[Variable],
     pattern: &'a GraphPattern,
 ) -> Option<(&'a Variable, ScopeIntro)> {
-    match pattern {
-        // Leaves: nothing is introduced.
-        GraphPattern::Bgp { .. }
-        | GraphPattern::Path { .. }
-        | GraphPattern::PropertyFunction(_) => None,
-        // Binary nodes are transparent to scope: recurse both operands at the
-        // SAME scope level (see the scope-level argument above).
-        GraphPattern::Join { left, right }
-        | GraphPattern::Union { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::LeftJoin { left, right, .. } => {
-            find_scope_conflict(scope, left).or_else(|| find_scope_conflict(scope, right))
-        }
-        // `MINUS` is the one binary node that is NOT scope-transparent on its
-        // right operand: §18.2.1 puts a MINUS-right-only variable out of
-        // scope, and §18.5's evaluation only ever uses the right side for the
-        // compatibility test — its bindings are discarded, never carried
-        // forward — so a `BIND`/`VALUES`/aggregate introduction confined to a
-        // MINUS right operand can never be observed as a rebinding, at ANY
-        // depth, not only under a `SELECT *` sub-select (which was one route
-        // to this same shape, not a separate rule). Only the left operand is
-        // walked.
-        GraphPattern::Minus { left, .. } => find_scope_conflict(scope, left),
-        // Unary wrappers are transparent to scope; any expression operand is
-        // never visited.
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Service { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => find_scope_conflict(scope, inner),
-        // `BIND`, a sub-SELECT's `(expr AS ?v)`, and a `GROUP BY (expr AS ?v)`
-        // condition all lower to `Extend` — a fresh binding at this scope
-        // level.
-        GraphPattern::Extend {
-            inner, variable, ..
-        } => {
-            if scope.contains(variable) {
-                Some((variable, ScopeIntro::Bind))
-            } else {
-                find_scope_conflict(scope, inner)
+    // Nothing in an empty scope can be rebound.
+    if scope.is_empty() {
+        return None;
+    }
+    // The scopes in force: the outer one, and each narrowing a sub-SELECT's
+    // projection made. A pending pattern names the scope it is checked against.
+    let mut scopes: Vec<Vec<Variable>> = vec![scope.to_vec()];
+    let mut pending: Vec<(&'a GraphPattern, usize)> = vec![(pattern, 0)];
+    while let Some((pattern, at)) = pending.pop() {
+        let scope = &scopes[at];
+        match pattern {
+            // Leaves: nothing is introduced.
+            GraphPattern::Bgp { .. }
+            | GraphPattern::Path { .. }
+            | GraphPattern::PropertyFunction(_) => {}
+            // Binary nodes are transparent to scope: both operands are checked at
+            // the SAME scope level (see the scope-level argument above), left first.
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::LeftJoin { left, right, .. } => {
+                pending.extend([(&**right, at), (&**left, at)]);
             }
-        }
-        // `UNFOLD` introduces one or two fresh bindings at this scope level,
-        // exactly as `BIND` introduces one — so a `LATERAL`/`EXISTS` right-hand
-        // side that re-introduces an outer variable through `UNFOLD` is the
-        // same conflict, reported in declaration order (element, then
-        // companion). Its expression operand is never visited, for the reason
-        // stated for `Extend`'s above.
-        GraphPattern::Unfold {
-            inner,
-            element,
-            companion,
-            ..
-        } => {
-            for variable in std::iter::once(element).chain(companion.as_ref()) {
+            GraphPattern::Union { arms } => pending.extend(arms.iter().rev().map(|arm| (arm, at))),
+            // `MINUS` is the one binary node that is NOT scope-transparent on its
+            // right operand: §18.2.1 puts a MINUS-right-only variable out of
+            // scope, and §18.5's evaluation only ever uses the right side for the
+            // compatibility test — its bindings are discarded, never carried
+            // forward — so a `BIND`/`VALUES`/aggregate introduction confined to a
+            // MINUS right operand can never be observed as a rebinding, at ANY
+            // depth, not only under a `SELECT *` sub-select (which was one route
+            // to this same shape, not a separate rule). Only the left operand is
+            // walked.
+            GraphPattern::Minus { left, .. } => pending.push((left, at)),
+            // Unary wrappers are transparent to scope; any expression operand is
+            // never visited.
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Service { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => pending.push((inner, at)),
+            // `BIND`, a sub-SELECT's `(expr AS ?v)`, and a `GROUP BY (expr AS ?v)`
+            // condition all lower to `Extend` — a fresh binding at this scope
+            // level.
+            GraphPattern::Extend {
+                inner, variable, ..
+            } => {
                 if scope.contains(variable) {
-                    return Some((variable, ScopeIntro::Unfold));
+                    return Some((variable, ScopeIntro::Bind));
                 }
+                pending.push((inner, at));
             }
-            find_scope_conflict(scope, inner)
-        }
-        // `VALUES`: the first declared column that collides, in declaration
-        // order.
-        GraphPattern::Values { variables, .. } => {
-            for v in variables {
-                if scope.contains(v) {
+            // `UNFOLD` introduces one or two fresh bindings at this scope level,
+            // exactly as `BIND` introduces one — so a `LATERAL`/`EXISTS` right-hand
+            // side that re-introduces an outer variable through `UNFOLD` is the
+            // same conflict, reported in declaration order (element, then
+            // companion). Its expression operand is never visited, for the reason
+            // stated for `Extend`'s above.
+            GraphPattern::Unfold {
+                inner,
+                element,
+                companion,
+                ..
+            } => {
+                for variable in std::iter::once(element).chain(companion.as_ref()) {
+                    if scope.contains(variable) {
+                        return Some((variable, ScopeIntro::Unfold));
+                    }
+                }
+                pending.push((inner, at));
+            }
+            // `VALUES`: the first declared column that collides, in declaration
+            // order.
+            GraphPattern::Values { variables, .. } => {
+                if let Some(v) = variables.iter().find(|v| scope.contains(v)) {
                     return Some((v, ScopeIntro::Values));
                 }
             }
-            None
-        }
-        // A sub-SELECT's projection is the one scope boundary in the
-        // grammar: narrow to the variables it actually carries out,
-        // preserving `scope`'s own order, and stop once nothing survives
-        // the narrowing — nothing beneath an empty narrowed scope could ever
-        // be observed as a rebinding of an outer variable. Projecting is not
-        // introducing: the projection's own `(expr AS ?v)` extends live
-        // beneath it and are caught, narrowed, by the `Extend` arm above.
-        GraphPattern::Project { inner, variables } => {
-            let narrowed: Vec<Variable> = scope
-                .iter()
-                .filter(|v| variables.contains(*v))
-                .cloned()
-                .collect();
-            if narrowed.is_empty() {
-                None
-            } else {
-                find_scope_conflict(&narrowed, inner)
-            }
-        }
-        // `GROUP BY`'s aggregate output variables are fresh bindings at this
-        // scope level (see "Group's synthetic targets" above); then the
-        // lowered chain of expression-valued `GROUP BY (expr AS ?v)`
-        // `Extend`s directly beneath `Group` — and nothing past it, the
-        // pattern being grouped is never walked.
-        GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } => {
-            for (v, _) in aggregates {
-                if scope.contains(v) {
-                    return Some((v, ScopeIntro::Bind));
+            // A sub-SELECT's projection is the one scope boundary in the
+            // grammar: narrow to the variables it actually carries out,
+            // preserving `scope`'s own order, and stop once nothing survives
+            // the narrowing — nothing beneath an empty narrowed scope could ever
+            // be observed as a rebinding of an outer variable. Projecting is not
+            // introducing: the projection's own `(expr AS ?v)` extends live
+            // beneath it and are caught, narrowed, by the `Extend` arm above.
+            GraphPattern::Project { inner, variables } => {
+                let narrowed: Vec<Variable> = scope
+                    .iter()
+                    .filter(|v| variables.contains(*v))
+                    .cloned()
+                    .collect();
+                if !narrowed.is_empty() {
+                    scopes.push(narrowed);
+                    pending.push((inner, scopes.len() - 1));
                 }
             }
-            find_group_extend_conflict(inner, variables, scope)
+            // `GROUP BY`'s aggregate output variables are fresh bindings at this
+            // scope level (see "Group's synthetic targets" above); then the
+            // lowered chain of expression-valued `GROUP BY (expr AS ?v)`
+            // `Extend`s directly beneath `Group` — and nothing past it, the
+            // pattern being grouped is never walked.
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => {
+                if let Some((v, _)) = aggregates.iter().find(|(v, _)| scope.contains(v)) {
+                    return Some((v, ScopeIntro::Bind));
+                }
+                if let Some(conflict) = find_group_extend_conflict(inner, variables, scope) {
+                    return Some(conflict);
+                }
+            }
         }
     }
+    None
 }
 
 /// Walk the chain of `Extend` nodes the parser lowers each expression-valued
@@ -5633,33 +3625,32 @@ fn find_scope_conflict<'a>(
 /// this walker never descends into (mirrors [`collect_vars`]'s own
 /// non-descent into `Group`'s `inner`).
 ///
-/// Recurses before checking the current node, so the first conflict
-/// reported is the earliest-DECLARED `GROUP BY (expr AS ?v)` condition
-/// (the innermost `Extend`, closest to the ungrouped pattern), preserving
-/// the walker's left-to-right determinism contract.
+/// The first conflict reported is the earliest-DECLARED `GROUP BY (expr AS ?v)`
+/// condition (the innermost `Extend`, closest to the ungrouped pattern),
+/// preserving the walker's left-to-right determinism contract.
 fn find_group_extend_conflict<'a>(
-    inner: &'a GraphPattern,
+    mut inner: &'a GraphPattern,
     variables: &[Variable],
     lhs_scope: &[Variable],
 ) -> Option<(&'a Variable, ScopeIntro)> {
-    let GraphPattern::Extend {
+    let mut chain: Vec<&'a Variable> = Vec::new();
+    while let GraphPattern::Extend {
         inner: next,
         variable,
         ..
     } = inner
-    else {
-        return None;
-    };
-    if !variables.contains(variable) {
-        return None;
-    }
-    find_group_extend_conflict(next, variables, lhs_scope).or_else(|| {
-        if lhs_scope.contains(variable) {
-            Some((variable, ScopeIntro::Bind))
-        } else {
-            None
+    {
+        if !variables.contains(variable) {
+            break;
         }
-    })
+        chain.push(variable);
+        inner = next;
+    }
+    chain
+        .into_iter()
+        .rev()
+        .find(|variable| lhs_scope.contains(variable))
+        .map(|variable| (variable, ScopeIntro::Bind))
 }
 
 /// Collect the labels of every blank node in a run of quad patterns, descending
@@ -5672,17 +3663,15 @@ fn collect_quad_bnode_labels(quads: &[QuadPattern], out: &mut std::collections::
 }
 
 fn collect_triple_bnode_labels(t: &TriplePattern, out: &mut std::collections::HashSet<String>) {
-    collect_term_bnode_labels(&t.subject, out);
-    collect_term_bnode_labels(&t.object, out);
-}
-
-fn collect_term_bnode_labels(t: &TermPattern, out: &mut std::collections::HashSet<String>) {
-    match t {
-        TermPattern::BlankNode(b) => {
-            out.insert(b.as_str().to_owned());
+    let mut pending = vec![&t.object, &t.subject];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(b) => {
+                out.insert(b.as_str().to_owned());
+            }
+            TermPattern::Triple(tp) => pending.extend([&tp.object, &tp.subject]),
+            _ => {}
         }
-        TermPattern::Triple(tp) => collect_triple_bnode_labels(tp, out),
-        _ => {}
     }
 }
 
@@ -5690,19 +3679,20 @@ fn collect_term_bnode_labels(t: &TermPattern, out: &mut std::collections::HashSe
 /// RDF 1.2 quoted triples) is a blank node. Blank nodes are disallowed in DELETE
 /// templates and `DELETE WHERE` (SPARQL 1.1 Update §3.1.3 / §3.1.3.2).
 fn reject_blank_in_triple_pattern(t: &TriplePattern, at: usize) -> Result<()> {
-    reject_blank_in_term_pattern(&t.subject, at)?;
-    reject_blank_in_term_pattern(&t.object, at)
-}
-
-fn reject_blank_in_term_pattern(t: &TermPattern, at: usize) -> Result<()> {
-    match t {
-        TermPattern::BlankNode(_) => Err(ParseError::syntax(
-            "blank node in a DELETE template is not allowed",
-            at,
-        )),
-        TermPattern::Triple(tp) => reject_blank_in_triple_pattern(tp, at),
-        _ => Ok(()),
+    let mut pending = vec![&t.object, &t.subject];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::BlankNode(_) => {
+                return Err(ParseError::syntax(
+                    "blank node in a DELETE template is not allowed",
+                    at,
+                ));
+            }
+            TermPattern::Triple(tp) => pending.extend([&tp.object, &tp.subject]),
+            _ => {}
+        }
     }
+    Ok(())
 }
 
 /// Render an [`IriError`] as a typed [`ParseError::Iri`].
@@ -5966,7 +3956,9 @@ fn builtin_function(upper: &str) -> Option<Function> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::algebra::{AggregateExpression, ArithmeticOperator};
     use crate::algebra::{PurrdfCall, PurrdfFn};
+    use crate::tree::{Chain, NonEmpty};
 
     const GM: &str =
         "PREFIX purrdf: <https://x/>\nPREFIX rdf: <http://r/>\nPREFIX rdfs: <http://s/>\n";
@@ -6180,155 +4172,264 @@ mod tests {
     /// Strip the outer `Project` wrapper to reach the WHERE algebra.
     fn unproject(p: GraphPattern) -> GraphPattern {
         match p {
-            GraphPattern::Project { inner, .. } => *inner,
+            GraphPattern::Project { inner, .. } => inner.into_inner(),
             other => other,
         }
     }
 
-    #[test]
-    fn group_graph_pattern_nesting_has_a_typed_limit() {
-        fn nested_query(depth: usize) -> String {
-            format!(
-                "SELECT * WHERE {} ?s ?p ?o {}",
-                "{ ".repeat(depth),
-                "} ".repeat(depth)
-            )
-        }
-
-        SparqlParser::new()
-            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH))
-            .expect("the documented maximum nesting depth parses");
-        let error = SparqlParser::new()
-            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH + 1))
-            .expect_err("one group beyond the safety limit must be refused");
-        assert!(
-            matches!(error, ParseError::Syntax { .. }),
-            "the nesting refusal remains a typed syntax error: {error}"
-        );
-        assert!(error.to_string().contains("nesting exceeds"));
+    /// The `FILTER` expression of a parsed `SELECT * WHERE { FILTER(…) }`.
+    fn filter_expr(q: &str) -> Expression {
+        let GraphPattern::Filter { expr, .. } = unproject(select_pattern(q)) else {
+            panic!("expected Filter");
+        };
+        expr
     }
 
-    /// Locate the EXACT repetition count at which a monotonic spine generator
-    /// — one more repetition of `spine` only ever charges MORE combinator
-    /// nodes, never fewer, true of every generator this helper is applied to
-    /// below — stops parsing, then assert the transition is exactly what
-    /// [`MAX_GRAPH_PATTERN_NODES`] demands: one repetition short of it parses
-    /// clean, and the very next repetition is refused with a typed
-    /// [`ParseError`] naming the limit — never an abort (reaching this
-    /// assertion at all, on either side, already demonstrates that this test
-    /// PROCESS did not crash; a real stack overflow would have taken the
-    /// whole process down before any assertion could run).
-    fn assert_spine_bound(spine: impl Fn(usize) -> String) {
+    /// An expression operator chain is ONE n-ary node however many operators it has:
+    /// a hundred thousand `||`, `&&`, `+`/`-` or `*`/`/` parse, with every operand
+    /// present, in source order, at a height of one level above the operands. A chain
+    /// is flat text, so charging a level per operator refused a generated
+    /// `?x = 1 || ?x = 2 || …` past 511 alternatives although it nests nothing.
+    #[test]
+    fn expression_operator_chains_of_any_length_are_one_node() {
+        const OPS: usize = 100_000;
+        let or = filter_expr(&format!(
+            "SELECT * WHERE {{ FILTER({}?y) }}",
+            "?x || ".repeat(OPS)
+        ));
+        let Expression::Or(operands) = &or else {
+            panic!("expected Or, got a different node");
+        };
+        assert_eq!(operands.len(), OPS + 1);
+        assert_eq!(operands[OPS], Expression::Variable(Variable::new("y")));
         assert!(
-            SparqlParser::new().parse_query(&spine(1)).is_ok(),
-            "the smallest spine must parse"
+            operands[..OPS]
+                .iter()
+                .all(|e| *e == Expression::Variable(Variable::new("x")))
         );
-        let (mut lo, mut hi) = (1usize, 2usize);
-        while SparqlParser::new().parse_query(&spine(hi)).is_ok() {
-            lo = hi;
-            hi *= 2;
+
+        let and = filter_expr(&format!(
+            "SELECT * WHERE {{ FILTER({}?y) }}",
+            "?x && ".repeat(OPS)
+        ));
+        assert!(matches!(&and, Expression::And(operands) if operands.len() == OPS + 1));
+
+        // Additive and multiplicative operators alternate by precedence: `?x + 1 * 2`
+        // is `?x + (1 * 2)`, so each `* 2` is its own two-operand chain, a step
+        // operand of the one additive chain.
+        let mixed = filter_expr(&format!(
+            "SELECT * WHERE {{ FILTER(?x{} > 0) }}",
+            " + 1 * 2 - ?z / 3".repeat(OPS / 2)
+        ));
+        let Expression::Greater(chain, _) = &mixed else {
+            panic!("expected Greater");
+        };
+        let Expression::Arithmetic(first, steps) = &**chain else {
+            panic!("expected Arithmetic");
+        };
+        assert_eq!(**first, Expression::Variable(Variable::new("x")));
+        assert_eq!(steps.len(), OPS);
+        for (i, (op, operand)) in steps.iter().enumerate() {
+            let (expected_op, expected_inner) = if i % 2 == 0 {
+                (ArithmeticOperator::Add, ArithmeticOperator::Multiply)
+            } else {
+                (ArithmeticOperator::Subtract, ArithmeticOperator::Divide)
+            };
+            assert_eq!(*op, expected_op, "step {i}");
             assert!(
-                hi < 1_000_000,
-                "spine never reaches the safety limit up to {hi} repetitions"
+                matches!(operand, Expression::Arithmetic(_, inner)
+                    if matches!(inner.as_slice(), [(o, _)] if *o == expected_inner)),
+                "step {i}"
             );
         }
-        while hi - lo > 1 {
-            let mid = lo + (hi - lo) / 2;
-            if SparqlParser::new().parse_query(&spine(mid)).is_ok() {
-                lo = mid;
-            } else {
-                hi = mid;
-            }
+    }
+
+    /// A left spine is one chain whatever its brackets say: `(a + b) * c` is the chain
+    /// `a`, `+ b`, `* c`, because the multiplication applies to the value of
+    /// everything before it — exactly the left fold the binary tree denotes. A bracket
+    /// on the right is a real level: `a - (b - c)` keeps its own chain as an operand.
+    #[test]
+    fn a_bracketed_left_operand_extends_the_chain_and_a_right_one_nests() {
+        let x = || Expression::Variable(Variable::new("x"));
+        let y = || Expression::Variable(Variable::new("y"));
+        let z = || Expression::Variable(Variable::new("z"));
+        assert_eq!(
+            filter_expr("SELECT * WHERE { FILTER((?x + ?y) * ?z > 0) }"),
+            Expression::Greater(
+                Child::new(Expression::Arithmetic(
+                    Child::new(x()),
+                    NonEmpty::try_from(vec![
+                        (ArithmeticOperator::Add, y()),
+                        (ArithmeticOperator::Multiply, z())
+                    ])
+                    .expect("a nonempty of enough nodes"),
+                )),
+                Child::new(Expression::Literal(Literal::new_typed(
+                    "0",
+                    NamedNode::new_unchecked(XSD_INTEGER)
+                ))),
+            )
+        );
+        assert_eq!(
+            filter_expr("SELECT * WHERE { FILTER(?x - (?y - ?z)) }"),
+            Expression::Arithmetic(
+                Child::new(x()),
+                NonEmpty::try_from(vec![(
+                    ArithmeticOperator::Subtract,
+                    Expression::Arithmetic(
+                        Child::new(y()),
+                        NonEmpty::try_from(vec![(ArithmeticOperator::Subtract, z())])
+                            .expect("one or more steps")
+                    )
+                )])
+                .expect("a nonempty of enough nodes"),
+            )
+        );
+        assert_eq!(
+            filter_expr("SELECT * WHERE { FILTER((?x || ?y) || ?z) }"),
+            Expression::Or(Chain::try_from(vec![x(), y(), z()]).expect("two or more nodes"))
+        );
+        assert_eq!(
+            filter_expr("SELECT * WHERE { FILTER(?x || (?y || ?z)) }"),
+            Expression::Or(
+                Chain::try_from(vec![
+                    x(),
+                    Expression::Or(Chain::try_from(vec![y(), z()]).expect("two or more nodes"))
+                ])
+                .expect("two or more nodes")
+            )
+        );
+    }
+
+    /// A property-path chain (`p1 / p2 / …`, `p1 | p2 | …`) is ONE n-ary node however
+    /// many operators it has: a hundred thousand `/` or `|` parse, with every element
+    /// present in source order. A chain is flat text, so charging a level per operator
+    /// refused a generated 512-step path although it nests nothing.
+    #[test]
+    fn property_path_chains_of_any_length_are_one_node() {
+        const OPS: usize = 100_000;
+        let step = |i: usize| format!("<http://example.org/p{i}>");
+        let element = |i: usize| {
+            PropertyPathExpression::NamedNode(NamedNode::new_unchecked(format!(
+                "http://example.org/p{i}"
+            )))
+        };
+        for (op, is_sequence) in [('/', true), ('|', false)] {
+            let text = (0..=OPS)
+                .map(step)
+                .collect::<Vec<_>>()
+                .join(&op.to_string());
+            let path = path_of(&format!("SELECT * WHERE {{ ?s {text} ?o }}"));
+            let ((PropertyPathExpression::Sequence(elements), true)
+            | (PropertyPathExpression::Alternative(elements), false)) = (&path, is_sequence)
+            else {
+                panic!("expected one {op} chain");
+            };
+            assert_eq!(elements.len(), OPS + 1, "{op}");
+            assert!(
+                elements.iter().enumerate().all(|(i, e)| *e == element(i)),
+                "{op}: every element in source order"
+            );
         }
-        SparqlParser::new()
-            .parse_query(&spine(lo))
-            .expect("one repetition short of the safety limit must parse");
-        let error = SparqlParser::new().parse_query(&spine(hi)).expect_err(
-            "one repetition past the safety limit must be a typed refusal, never an abort",
+    }
+
+    /// `/` binds tighter than `|`, so a mixed chain is an alternative of sequences; a
+    /// bracketed LEFT element of the same operator extends the chain (composition and
+    /// bag union are associative, so it is the same relation), and a bracketed later
+    /// one stays one element, as written.
+    #[test]
+    fn path_chains_keep_precedence_and_bracketing() {
+        use PropertyPathExpression::{Alternative as Alt, Sequence as Seq};
+        let p = |name: &str| {
+            PropertyPathExpression::NamedNode(NamedNode::new_unchecked(format!(
+                "http://example.org/{name}"
+            )))
+        };
+        let q = |path: &str| {
+            path_of(&format!(
+                "PREFIX ex: <http://example.org/> SELECT * WHERE {{ ?s {path} ?o }}"
+            ))
+        };
+        assert_eq!(
+            q("ex:a/ex:b|ex:c/ex:d|ex:e"),
+            Alt(Chain::try_from(vec![
+                Seq(Chain::try_from(vec![p("a"), p("b")]).expect("two or more nodes")),
+                Seq(Chain::try_from(vec![p("c"), p("d")]).expect("two or more nodes")),
+                p("e")
+            ])
+            .expect("a chain of enough nodes"))
         );
-        assert!(
-            matches!(error, ParseError::Syntax { .. }),
-            "the spine refusal remains a typed syntax error: {error}"
+        assert_eq!(
+            q("(ex:a/ex:b)|ex:c/ex:d"),
+            Alt(Chain::try_from(vec![
+                Seq(Chain::try_from(vec![p("a"), p("b")]).expect("two or more nodes")),
+                Seq(Chain::try_from(vec![p("c"), p("d")]).expect("two or more nodes"))
+            ])
+            .expect("two or more nodes"))
         );
-        assert!(
-            error.to_string().contains("combinator count exceeds"),
-            "the refusal should name the combinator-count limit, got: {error}"
+        assert_eq!(
+            q("(ex:a/ex:b)/ex:c"),
+            Seq(Chain::try_from(vec![p("a"), p("b"), p("c")]).expect("two or more nodes"))
+        );
+        assert_eq!(
+            q("ex:a/(ex:b/ex:c)"),
+            Seq(Chain::try_from(vec![
+                p("a"),
+                Seq(Chain::try_from(vec![p("b"), p("c")]).expect("two or more nodes"))
+            ])
+            .expect("two or more nodes"))
+        );
+        assert_eq!(
+            q("(ex:a|ex:b)|ex:c"),
+            Alt(Chain::try_from(vec![p("a"), p("b"), p("c")]).expect("two or more nodes"))
+        );
+        assert_eq!(
+            q("ex:a|(ex:b|ex:c)"),
+            Alt(Chain::try_from(vec![
+                p("a"),
+                Alt(Chain::try_from(vec![p("b"), p("c")]).expect("two or more nodes"))
+            ])
+            .expect("two or more nodes"))
+        );
+        assert_eq!(
+            q("(ex:a|ex:b)/ex:c"),
+            Seq(Chain::try_from(vec![
+                Alt(Chain::try_from(vec![p("a"), p("b")]).expect("two or more nodes")),
+                p("c")
+            ])
+            .expect("two or more nodes"))
         );
     }
 
-    /// A run of SIBLING `OPTIONAL { }` elements at ONE brace depth: each
-    /// keyword adds one `LeftJoin` level to a left-deep spine while
-    /// `group_pattern_depth` never exceeds 1 — the exact shape
-    /// `MAX_GRAPH_PATTERN_DEPTH` cannot see, and the shape
-    /// [`MAX_GRAPH_PATTERN_NODES`] exists to bound instead.
+    /// A run of `UNION` arms is ONE node, one level above its arms, so it is charged
+    /// as its tallest arm, not as the sum of them: twenty thousand arms parse into one
+    /// `Union` with every arm in source order.
     #[test]
-    fn sibling_spine_length_is_bounded_by_a_typed_error() {
-        assert_spine_bound(|n| {
-            let mut body = String::from("SELECT * WHERE { ?s <https://example.org/p> ?o ");
-            for _ in 0..n {
-                body.push_str("OPTIONAL { ?s <https://example.org/q> ?r } ");
-            }
-            body.push('}');
-            body
-        });
-    }
-
-    /// The SAME left-deep-spine hazard, reachable with no `OPTIONAL`/`UNION`/
-    /// `LATERAL` keyword at all: a long run of dot-separated COMPLEX
-    /// property-path triples inside ONE triples block. `join` flattens
-    /// adjacent plain `Bgp` triples into one node (so a triples-only spine of
-    /// this length is harmless), but a property path with a modifier
-    /// (`+`/`*`/`?`/a multi-step sequence) parses to its own
-    /// `GraphPattern::Path` node, and `BlockSink::into_pattern` folds each one
-    /// onto the block with its own `Join` — entirely inside what the
-    /// group-parsing loop counts as ONE element.
-    #[test]
-    fn dot_separated_path_spine_length_is_bounded_by_a_typed_error() {
-        use std::fmt::Write as _;
-        assert_spine_bound(|n| {
-            let mut body = String::from("SELECT * WHERE { ");
-            for i in 0..n {
-                let _ = write!(
-                    body,
-                    "<https://example.org/s{i}> <https://example.org/p>+ <https://example.org/o{i}> . "
-                );
-            }
-            body.push('}');
-            body
-        });
-    }
-
-    /// A single bracketed group with a long run of `UNION` arms — hidden from
-    /// the group loop's own per-element charge because the whole chain is
-    /// consumed inside ONE loop iteration (the nested `while eat_kw("UNION")`
-    /// loop), so it is charged separately, one unit per arm past the first.
-    #[test]
-    fn union_arm_spine_length_is_bounded_by_a_typed_error() {
-        assert_spine_bound(|n| {
-            let mut body = String::from("SELECT * WHERE { { ?s <https://example.org/p> ?o }");
-            for _ in 0..n {
-                body.push_str(" UNION { ?s <https://example.org/p> ?o }");
-            }
-            body.push('}');
-            body
-        });
-    }
-
-    /// A long `SELECT (e1 AS ?v1) … (eN AS ?vN)` projection list lowers to a
-    /// chain of `Extend` nodes with no brace involved at all — a THIRD shape
-    /// (alongside the group loop and its `UNION` arms) that
-    /// `MAX_GRAPH_PATTERN_DEPTH` cannot see, closed by the same budget.
-    #[test]
-    fn select_expression_list_length_is_bounded_by_a_typed_error() {
-        use std::fmt::Write as _;
-        assert_spine_bound(|n| {
-            let mut body = String::from("SELECT ");
-            for i in 0..n {
-                let _ = write!(body, "(1 AS ?v{i}) ");
-            }
-            body.push_str("WHERE { }");
-            body
-        });
+    fn a_union_arm_run_of_any_length_is_one_node() {
+        const ARMS: usize = 20_000;
+        let body = (0..ARMS)
+            .map(|i| format!("{{ ?s <https://example.org/p> {i} }}"))
+            .collect::<Vec<_>>()
+            .join(" UNION ");
+        let GraphPattern::Union { arms } =
+            unproject(select_pattern(&format!("SELECT * WHERE {{ {body} }}")))
+        else {
+            panic!("expected one Union");
+        };
+        assert_eq!(arms.len(), ARMS);
+        for (i, arm) in arms.iter().enumerate() {
+            let GraphPattern::Bgp { patterns } = arm else {
+                panic!("arm {i} is a BGP");
+            };
+            assert_eq!(
+                patterns[0].object,
+                TermPattern::Literal(Literal::new_typed(
+                    i.to_string(),
+                    NamedNode::new_unchecked(XSD_INTEGER)
+                )),
+                "arm {i} in source order"
+            );
+        }
     }
 
     #[test]
@@ -6520,7 +4621,7 @@ mod tests {
             variables,
             aggregates,
             ..
-        } = *inner
+        } = inner.into_inner()
         else {
             panic!("expected Group under Extend");
         };
@@ -6563,16 +4664,17 @@ mod tests {
             order[0]
         );
         // Walk down: Extend → Group.
+        let inner = inner.into_inner();
         let GraphPattern::Extend {
             inner: group_inner,
             variable,
             ..
-        } = *inner
+        } = inner
         else {
             panic!("expected Extend under OrderBy, got {inner:?}");
         };
         assert_eq!(variable, Variable::new("c"));
-        let GraphPattern::Group { aggregates, .. } = *group_inner else {
+        let GraphPattern::Group { aggregates, .. } = group_inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         // The aggregate lifted from ORDER BY DESC(COUNT(?x)) must appear in the
@@ -6614,7 +4716,8 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Filter { expr, inner: group } = *inner else {
+        let inner = inner.into_inner();
+        let GraphPattern::Filter { expr, inner: group } = inner else {
             panic!("expected Filter (HAVING), got {inner:?}");
         };
         assert!(
@@ -6642,10 +4745,11 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
+        let inner = inner.into_inner();
         let GraphPattern::Filter {
             expr: outer_expr,
             inner: mid,
-        } = *inner
+        } = inner
         else {
             panic!("expected outer Filter (2nd HAVING condition), got {inner:?}");
         };
@@ -6653,10 +4757,11 @@ mod tests {
             matches!(outer_expr, Expression::Exists(_)),
             "expected the 2nd condition (EXISTS) outermost, got {outer_expr:?}"
         );
+        let mid = mid.into_inner();
         let GraphPattern::Filter {
             expr: inner_expr,
             inner: group,
-        } = *mid
+        } = mid
         else {
             panic!("expected inner Filter (1st HAVING condition), got {mid:?}");
         };
@@ -7422,6 +5527,164 @@ mod tests {
         }
     }
 
+    /// **A query's dataset slot is its clause when it writes one, and the empty range a
+    /// clause would occupy when it does not — never a sub-`SELECT`'s position.**
+    ///
+    /// Inserting a clause at the empty slot is executed, and the algebra read back from
+    /// the spliced text is asserted to carry it, for every query form (both `CONSTRUCT`
+    /// forms, and a `WHERE`-less group).
+    #[test]
+    fn the_dataset_slot_is_reported_for_every_query_with_or_without_a_clause() {
+        let options = ParserOptions::default();
+        let parser = SparqlParser::new();
+
+        let written = "SELECT ?s FROM <http://example.org/g> WHERE { ?s ?p ?o }";
+        let slot = parser
+            .parse_query_dataset_slot(written, &options)
+            .expect("parses");
+        assert_eq!(&written[slot.dataset_at], "FROM <http://example.org/g> ");
+
+        for (form, before) in [
+            ("SELECT ?s WHERE { ?s ?p ?o }", "WHERE"),
+            ("SELECT ?s{ ?s ?p ?o }", "{"),
+            ("CONSTRUCT { ?s ?p ?o } WHERE { ?s ?p ?o }", "WHERE"),
+            ("CONSTRUCT WHERE { ?s ?p ?o }", "WHERE"),
+            ("ASK { ?s ?p ?o }", "{"),
+            ("DESCRIBE ?s WHERE { ?s ?p ?o }", "WHERE"),
+            // A sub-select inside the WHERE is read after the query's own slot, and one
+            // inside a projected EXISTS is read before it; neither displaces it.
+            (
+                "SELECT ?s WHERE { { SELECT ?s WHERE { ?s ?p ?o } } }",
+                "WHERE { {",
+            ),
+            (
+                "SELECT (EXISTS { { SELECT ?s WHERE { ?s ?p ?o } } } AS ?e) WHERE { ?s ?p ?o }",
+                "WHERE { ?s ?p ?o }",
+            ),
+        ] {
+            let slot = parser
+                .parse_query_dataset_slot(form, &options)
+                .unwrap_or_else(|err| panic!("`{form}` parses, got {err:?}"));
+            assert!(
+                slot.dataset_at.is_empty(),
+                "no clause is written in `{form}`"
+            );
+            assert!(
+                form[slot.dataset_at.start..].starts_with(before),
+                "`{form}`: the slot sits before `{before}`, got {:?}",
+                &form[slot.dataset_at.start..]
+            );
+            let spliced = format!(
+                "{} FROM <http://example.org/g> {}",
+                &form[..slot.dataset_at.start],
+                &form[slot.dataset_at.start..]
+            );
+            let query = parser
+                .parse_query_with(&spliced, &options)
+                .unwrap_or_else(|err| panic!("`{spliced}` parses, got {err:?}"));
+            let dataset = match query {
+                Query::Select { dataset, .. }
+                | Query::Construct { dataset, .. }
+                | Query::Ask { dataset, .. }
+                | Query::Describe { dataset, .. } => dataset,
+            };
+            assert_eq!(
+                dataset.default.len(),
+                1,
+                "`{spliced}` carries the inserted FROM"
+            );
+        }
+    }
+
+    /// **Each update operation reports where its dataset clause is or would go, by the
+    /// production it was read under.**
+    #[test]
+    fn the_update_split_reports_each_operations_dataset_slot() {
+        let options = ParserOptions::default();
+        let parser = SparqlParser::new();
+        let text = "PREFIX ex: <http://example.org/>\n\
+                    INSERT DATA { ex:a ex:p ex:b } ;\n\
+                    INSERT { ?s ex:q ?o } WHERE { ?s ex:p ?o } ;\n\
+                    DELETE { ?s ex:q ?o } INSERT { ?s ex:r ?o } USING ex:g USING NAMED ex:n WHERE { ?s ex:q ?o } ;\n\
+                    WITH ex:g DELETE { ?s ex:r ?o } WHERE { ?s ex:r ?o } ;\n\
+                    DELETE WHERE { ?s ex:p ?o } ;\n\
+                    CLEAR ALL";
+        let split = parser
+            .parse_update_split(text, &options)
+            .expect("the request parses");
+        assert_eq!(split.operations.len(), split.update.operations.len());
+        assert_eq!(split.operations.len(), 6);
+        assert_eq!(split.operations[0], UpdateDatasetSlot::NoWhereClause);
+        let UpdateDatasetSlot::Modify { with_at, using_at } = &split.operations[1] else {
+            panic!("INSERT … WHERE is a modify: {:?}", split.operations[1]);
+        };
+        assert_eq!(*with_at, None);
+        assert!(using_at.is_empty());
+        assert!(text[using_at.start..].starts_with("WHERE { ?s ex:p ?o } ;"));
+        let UpdateDatasetSlot::Modify { with_at, using_at } = &split.operations[2] else {
+            panic!(
+                "DELETE … INSERT … WHERE is a modify: {:?}",
+                split.operations[2]
+            );
+        };
+        assert_eq!(*with_at, None);
+        assert_eq!(&text[using_at.clone()], "USING ex:g USING NAMED ex:n ");
+        let UpdateDatasetSlot::Modify { with_at, using_at } = &split.operations[3] else {
+            panic!("WITH … is a modify: {:?}", split.operations[3]);
+        };
+        assert_eq!(&text[with_at.clone().expect("WITH")], "WITH ex:g ");
+        assert!(using_at.is_empty());
+        let UpdateDatasetSlot::DeleteWhere {
+            where_at,
+            pattern_at,
+        } = &split.operations[4]
+        else {
+            panic!(
+                "DELETE WHERE is its own shorthand: {:?}",
+                split.operations[4]
+            );
+        };
+        assert!(text[*where_at..].starts_with("WHERE { ?s ex:p ?o }"));
+        assert_eq!(&text[pattern_at.clone()], "{ ?s ex:p ?o }");
+        assert_eq!(split.operations[5], UpdateDatasetSlot::NoWhereClause);
+
+        // The long form the shorthand is defined as, written at the reported positions,
+        // parses to the same operation with a USING clause added.
+        let one = "DELETE WHERE { ?s <http://example.org/p> ?o }";
+        let split = parser.parse_update_split(one, &options).expect("parses");
+        let UpdateDatasetSlot::DeleteWhere {
+            where_at,
+            pattern_at,
+        } = split.operations[0].clone()
+        else {
+            panic!("DELETE WHERE: {:?}", split.operations[0]);
+        };
+        let long = format!(
+            "{}{}\nUSING <http://example.org/g> {}",
+            &one[..where_at],
+            &one[pattern_at],
+            &one[where_at..]
+        );
+        let update = parser
+            .parse_update_with(&long, &options)
+            .expect("long form parses");
+        let GraphUpdateOperation::DeleteInsert { delete, using, .. } = &update.operations[0] else {
+            panic!("a modify: {:?}", update.operations[0]);
+        };
+        let GraphUpdateOperation::DeleteInsert {
+            delete: short_delete,
+            ..
+        } = &split.update.operations[0]
+        else {
+            panic!("a modify: {:?}", split.update.operations[0]);
+        };
+        assert_eq!(
+            delete, short_delete,
+            "the template is the shorthand's pattern"
+        );
+        assert_eq!(using.len(), 1);
+    }
+
     #[test]
     fn version_basic_parses_to_typed_and_byte_exact_raw() {
         let q = "PREFIX : <http://example/>\nVERSION \"1.2-basic\"\n\nSELECT * { ?s ?p ?o . }";
@@ -7510,11 +5773,12 @@ mod tests {
         };
         assert_eq!(variable, Variable::new("n"));
         // Inner is the Group node.
+        let inner = inner.into_inner();
         let GraphPattern::Group {
             variables,
             aggregates,
             ..
-        } = *inner
+        } = inner
         else {
             panic!("expected Group under Extend, got {inner:?}");
         };
@@ -7560,7 +5824,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
@@ -7585,7 +5849,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
@@ -7607,7 +5871,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert!(matches!(
@@ -7624,7 +5888,7 @@ mod tests {
     }
 
     /// `AGG(<iri>, arg; NAME=value)` — the named scalarval clause — populates
-    /// [`AggregateExpression::scalarvals`] with the upper-cased name and the
+    /// [`crate::algebra::AggregateExpression::scalarvals`] with the upper-cased name and the
     /// literal's natural (here, decimal) datatype, exactly the surface
     /// `PERCENTILE`'s `p`/`TOPK`'s `k` are meant to reach the evaluator through.
     #[test]
@@ -7637,7 +5901,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
@@ -7668,7 +5932,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates[0].1.scalarvals[0].0, "P");
@@ -7685,7 +5949,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         let scalarvals = &aggregates[0].1.scalarvals;
@@ -7709,7 +5973,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         let scalarvals = &aggregates[0].1.scalarvals;
@@ -7756,10 +6020,12 @@ mod tests {
         let GraphPattern::Project { inner, .. } = where_pat else {
             panic!("expected Project, got {where_pat:?}");
         };
-        let GraphPattern::Join { right, .. } = *inner else {
+        let inner = inner.into_inner();
+        let GraphPattern::Join { right, .. } = inner else {
             panic!("expected the trailing VALUES joined in, got {inner:?}");
         };
-        let GraphPattern::Values { bindings, .. } = *right else {
+        let right = right.into_inner();
+        let GraphPattern::Values { bindings, .. } = right else {
             panic!("expected Values, got {right:?}");
         };
         assert_eq!(bindings.len(), 4);
@@ -7812,7 +6078,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
@@ -7850,7 +6116,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates.len(), 1);
@@ -7868,7 +6134,7 @@ mod tests {
         let GraphPattern::Extend { inner, .. } = where_pat else {
             panic!("expected Extend, got {where_pat:?}");
         };
-        let GraphPattern::Group { aggregates, .. } = *inner else {
+        let GraphPattern::Group { aggregates, .. } = inner.into_inner() else {
             panic!("expected Group under Extend");
         };
         assert_eq!(aggregates[0].1.separator(), Some("|"));
@@ -8245,7 +6511,8 @@ mod tests {
         let GraphPattern::Project { inner, .. } = pattern else {
             panic!("a projection");
         };
-        let GraphPattern::Bgp { patterns } = *inner else {
+        let inner = inner.into_inner();
+        let GraphPattern::Bgp { patterns } = inner else {
             panic!("one basic graph pattern, got {inner:?}");
         };
         let (TermPattern::BlankNode(anon), TermPattern::BlankNode(written)) =
@@ -8293,7 +6560,7 @@ mod tests {
         // §19.6 still applies when the blank label is nested inside an RDF 1.2
         // quoted triple term: reusing `_:b` across two INSERT DATA operations is
         // illegal even though the label never appears at top level. This exercises
-        // the `TermPattern::Triple` descent in `collect_term_bnode_labels`.
+        // the `TermPattern::Triple` descent in `collect_triple_bnode_labels`.
         let err = update_err(concat!(
             "INSERT DATA { purrdf:s rdf:reifies <<( _:b purrdf:p purrdf:o )>> } ; ",
             "INSERT DATA { purrdf:s rdf:reifies <<( _:b purrdf:p purrdf:o )>> }",
@@ -8842,7 +7109,7 @@ mod tests {
         );
         // Strip Project, then the select-expr Extend for ?c, to reach the Group.
         let group = match unproject(select_pattern(&q)) {
-            GraphPattern::Extend { inner, .. } => *inner,
+            GraphPattern::Extend { inner, .. } => inner.into_inner(),
             other => other,
         };
         match group {
@@ -8850,7 +7117,7 @@ mod tests {
                 inner, variables, ..
             } => {
                 assert_eq!(variables, vec![Variable::new("z")]);
-                match *inner {
+                match inner.into_inner() {
                     GraphPattern::Extend { variable, .. } => {
                         assert_eq!(variable, Variable::new("z"));
                     }
@@ -8866,7 +7133,7 @@ mod tests {
         // `GROUP BY STR(?a)` (no AS) mints a synthetic grouping variable.
         let q = format!("{GM}SELECT (COUNT(*) AS ?c) WHERE {{ ?r purrdf:a ?a }} GROUP BY STR(?a)");
         let group = match unproject(select_pattern(&q)) {
-            GraphPattern::Extend { inner, .. } => *inner,
+            GraphPattern::Extend { inner, .. } => inner.into_inner(),
             other => other,
         };
         match group {
@@ -9100,13 +7367,15 @@ mod tests {
         let GraphPattern::Lateral { left, right } = where_pat else {
             panic!("expected Lateral, got {where_pat:?}");
         };
-        let GraphPattern::Bgp { patterns: lp } = *left else {
+        let left = left.into_inner();
+        let GraphPattern::Bgp { patterns: lp } = left else {
             panic!("expected the left to be the preceding BGP");
         };
         assert_eq!(lp.len(), 1);
         assert_eq!(lp[0].subject, TermPattern::Variable(Variable::new("s")));
         assert_eq!(lp[0].object, TermPattern::Variable(Variable::new("o")));
-        let GraphPattern::Bgp { patterns: rp } = *right else {
+        let right = right.into_inner();
+        let GraphPattern::Bgp { patterns: rp } = right else {
             panic!("expected the right to be the LATERAL body's BGP");
         };
         assert_eq!(rp.len(), 1);
@@ -9124,22 +7393,24 @@ mod tests {
         let GraphPattern::Lateral { left, right } = where_pat else {
             panic!("expected the outermost node to be Lateral, got {where_pat:?}");
         };
-        let GraphPattern::Bgp { patterns } = *right else {
+        let right = right.into_inner();
+        let GraphPattern::Bgp { patterns } = right else {
             panic!("expected the outermost right to be `?c purrdf:r ?d`");
         };
         assert_eq!(
             patterns[0].subject,
             TermPattern::Variable(Variable::new("c"))
         );
+        let left = left.into_inner();
         let GraphPattern::Lateral {
             left: inner_left,
             right: inner_right,
-        } = *left
+        } = left
         else {
             panic!("expected the outermost left to itself be a Lateral");
         };
         assert!(matches!(*inner_left, GraphPattern::Bgp { .. }));
-        let GraphPattern::Bgp { patterns: irp } = *inner_right else {
+        let GraphPattern::Bgp { patterns: irp } = inner_right.into_inner() else {
             panic!("expected the inner right to be `?b purrdf:q ?c`");
         };
         assert_eq!(irp[0].subject, TermPattern::Variable(Variable::new("b")));
@@ -9206,28 +7477,6 @@ mod tests {
             matches!(*left, GraphPattern::Union { .. }),
             "LATERAL's left must be the whole UNION, got {left:?}"
         );
-    }
-
-    #[test]
-    fn lateral_right_hand_side_inherits_the_depth_limit() {
-        // The RHS parses via `parse_group_graph_pattern` (not `_inner`), so it
-        // counts toward `MAX_GRAPH_PATTERN_DEPTH` exactly like every other
-        // braced construct.
-        fn nested_query(extra_depth: usize) -> String {
-            format!(
-                "SELECT * WHERE {{ ?s ?p ?o LATERAL {} ?x ?y ?z {} }}",
-                "{ ".repeat(extra_depth),
-                "} ".repeat(extra_depth)
-            )
-        }
-        SparqlParser::new()
-            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH - 1))
-            .expect("depth budget reached exactly through a LATERAL right-hand side must parse");
-        let error = SparqlParser::new()
-            .parse_query(&nested_query(MAX_GRAPH_PATTERN_DEPTH))
-            .expect_err("one level beyond the limit through a LATERAL right-hand side must fail");
-        assert!(matches!(error, ParseError::Syntax { .. }));
-        assert!(error.to_string().contains("nesting exceeds"));
     }
 
     #[test]
@@ -9631,6 +7880,85 @@ mod tests {
             ),
             "unexpected message: {err}"
         );
+    }
+
+    #[test]
+    fn exists_scope_frames_share_the_enclosing_variables_and_discard_their_own() {
+        let var = |name: &str| Variable::new(name);
+        let mut scopes = ExistsScopes::default();
+        scopes.push_boundary();
+        scopes.note(&var("a"));
+        scopes.push_isolated();
+        assert_eq!(
+            scopes.top(),
+            [var("a")],
+            "an isolated frame sees the one beneath"
+        );
+        scopes.note(&var("a"));
+        scopes.note(&var("b"));
+        assert_eq!(
+            scopes.top(),
+            [var("a"), var("b")],
+            "a seen variable is not noted twice"
+        );
+        scopes.push_boundary();
+        assert_eq!(scopes.top(), [], "a boundary frame sees nothing beneath it");
+        scopes.note(&var("a"));
+        assert_eq!(
+            scopes.top(),
+            [var("a")],
+            "a boundary frame notes what it alone sees"
+        );
+        scopes.pop();
+        scopes.pop();
+        assert_eq!(
+            scopes.top(),
+            [var("a")],
+            "an isolated frame's own variables are discarded"
+        );
+        scopes.note(&var("b"));
+        assert_eq!(
+            scopes.top(),
+            [var("a"), var("b")],
+            "a discarded variable is noted again"
+        );
+        scopes.pop();
+        assert_eq!(scopes.top(), []);
+        assert_eq!(scopes.trail, []);
+        assert!(
+            scopes.positions.is_empty(),
+            "every position left the trail with its variable"
+        );
+    }
+
+    #[test]
+    fn deeply_nested_not_exists_parses_and_still_checks_its_scope() {
+        let nested = |depth: usize, innermost: &str| {
+            let mut body = innermost.to_owned();
+            for k in (1..=depth).rev() {
+                body = format!(
+                    "FILTER NOT EXISTS {{ ?x{k} <https://example.org/next> ?x{} {body} }}",
+                    k + 1
+                );
+            }
+            format!("SELECT ?x0 WHERE {{ ?x0 <https://example.org/next> ?x1 {body} }}")
+        };
+        SparqlParser::new()
+            .parse_query(&nested(20_000, ""))
+            .expect("20 000 nested FILTER NOT EXISTS parse");
+        // At the bottom of 2 000 levels, rebinding the outermost row's variable is refused,
+        // and binding a fresh one is its valid neighbour.
+        let err = SparqlParser::new()
+            .parse_query(&nested(2_000, "BIND(1 AS ?x0)"))
+            .expect_err("a BIND of a variable every enclosing row binds must fail");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?x0 inside EXISTS is already in scope"),
+            "unexpected message: {err}"
+        );
+        SparqlParser::new()
+            .parse_query(&nested(2_000, "BIND(1 AS ?fresh)"))
+            .expect("a BIND of a fresh variable parses");
     }
 
     #[test]
@@ -10158,7 +8486,11 @@ mod tests {
         // the `-` there follows `)`, not a word character.
         let sub = "SELECT ?h WHERE { ?s ?p ?o . BIND(STRLEN(SHA3-256(STR(?o))) - 4 AS ?h) }";
         assert!(
-            matches!(bound_expr(sub), Expression::Subtract(_, _)),
+            matches!(
+                bound_expr(sub),
+                Expression::Arithmetic(_, steps)
+                    if matches!(steps.as_slice(), [(ArithmeticOperator::Subtract, _)])
+            ),
             "an ordinary subtraction beside a SHA-3 call must stay a subtraction"
         );
     }
@@ -10618,7 +8950,7 @@ mod tests {
         let Expression::Less(left, _) = bound_expr(&q) else {
             panic!("expected a `<` comparison");
         };
-        let Expression::Literal(literal) = *left else {
+        let Expression::Literal(literal) = left.into_inner() else {
             panic!("expected a literal operand");
         };
         assert_eq!(literal.value(), "1");
@@ -10710,10 +9042,14 @@ mod tests {
                 GraphPattern::PropertyFunction(c) => out.push(c),
                 GraphPattern::Join { left, right }
                 | GraphPattern::Lateral { left, right }
-                | GraphPattern::Union { left, right }
                 | GraphPattern::Minus { left, right } => {
                     walk(left, out);
                     walk(right, out);
+                }
+                GraphPattern::Union { arms } => {
+                    for arm in arms {
+                        walk(arm, out);
+                    }
                 }
                 GraphPattern::LeftJoin { left, right, .. } => {
                     walk(left, out);
@@ -10832,8 +9168,8 @@ mod tests {
         assert_eq!(
             p,
             GraphPattern::Lateral {
-                left: Box::new(GraphPattern::Bgp { patterns: vec![] }),
-                right: Box::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+                left: Child::new(GraphPattern::Bgp { patterns: vec![] }),
+                right: Child::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
                     iri: format!("{PF_NS}related"),
                     subject_args: vec![pf_var("s")],
                     object_args: vec![pf_var("o")],

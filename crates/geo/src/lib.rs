@@ -84,6 +84,7 @@
 // would not — so flattening those would either collide outright or drop the
 // qualifier that makes the call site readable.
 mod de9im;
+mod debug_script;
 mod error;
 
 pub mod construct;
@@ -113,3 +114,7 @@ pub use topology::{
     orientation, relate, relate_pattern, topological_dimension,
 };
 pub use vocab::{CrsUnit, DEFAULT_COORDINATE_SCALE, GeoTerm, GeoVocab, GeoVocabBuilder};
+
+#[cfg(test)]
+#[path = "../../rdf-core/tests/support/term_fixture.rs"]
+mod test_terms;

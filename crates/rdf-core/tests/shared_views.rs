@@ -3,6 +3,7 @@
 
 //! Adversarial identity, statement-layer, projection and ownership checks.
 
+use purrdf_core::TermBox;
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -52,9 +53,9 @@ fn owned<D: DatasetView>(view: &D, id: D::Id) -> TermValue {
             }
         }
         TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: Box::new(owned(view, s)),
-            p: Box::new(owned(view, p)),
-            o: Box::new(owned(view, o)),
+            s: TermBox::new(owned(view, s)),
+            p: TermBox::new(owned(view, p)),
+            o: TermBox::new(owned(view, o)),
         },
     }
 }
@@ -535,9 +536,9 @@ fn adding_reifier_classifies_only_rows_in_the_same_graph() {
         s: iri("r"),
         p: TermValue::iri(REIFIES),
         o: TermValue::Triple {
-            s: Box::new(iri("s")),
-            p: Box::new(iri("p")),
-            o: Box::new(iri("o")),
+            s: TermBox::new(iri("s")),
+            p: TermBox::new(iri("p")),
+            o: TermBox::new(iri("o")),
         },
         g: Some(iri("g")),
     };
@@ -869,9 +870,9 @@ fn suppression_counts_every_native_table_occurrence_and_reclassification_dedupli
             iri("s"),
             TermValue::iri(REIFIES),
             TermValue::Triple {
-                s: Box::new(iri("s")),
-                p: Box::new(iri("p")),
-                o: Box::new(iri("o")),
+                s: TermBox::new(iri("s")),
+                p: TermBox::new(iri("p")),
+                o: TermBox::new(iri("o")),
             },
         ))
         .unwrap();

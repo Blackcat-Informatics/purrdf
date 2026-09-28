@@ -216,11 +216,10 @@ fn answer(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &ExtensionEnv::over_relations(registry.clone())
+            QueryOptions::new().with_env(
+                &ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .unwrap_or_else(|error| panic!("the query must evaluate: {error}"));
     solutions(&result)
@@ -249,15 +248,14 @@ fn answer_with_options(
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &ExtensionEnv::new(
+            QueryOptions::new().with_env(
+                &ExtensionEnv::new(
                     options,
                     registry.clone(),
                     purrdf_sparql_eval::AggregateRegistry::EMPTY,
                 )
                 .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .unwrap_or_else(|error| panic!("the query must evaluate: {error}"));
     solutions(&result)
@@ -278,15 +276,14 @@ fn refusal(
             base_iri: None,
             substitutions: &[],
         },
-        QueryOptions {
-            env: &ExtensionEnv::new(
+        QueryOptions::new().with_env(
+            &ExtensionEnv::new(
                 options,
                 registry.clone(),
                 purrdf_sparql_eval::AggregateRegistry::EMPTY,
             )
             .expect("the fixture declarations read cleanly"),
-            ..QueryOptions::EMPTY
-        },
+        ),
     );
     match outcome {
         Err(diagnostic) => diagnostic.message,
@@ -863,11 +860,10 @@ fn attested_generations(
         .prepare_query_with_options(
             query,
             None,
-            QueryOptions {
-                env: &ExtensionEnv::over_relations(registry.clone())
+            QueryOptions::new().with_env(
+                &ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
         )
         .expect("the query prepares against the registry");
     let outcome = engine
@@ -875,11 +871,10 @@ fn attested_generations(
             dataset,
             &prepared,
             &[],
-            QueryOptions {
-                env: &ExtensionEnv::over_relations(registry.clone())
+            QueryOptions::new().with_env(
+                &ExtensionEnv::over_relations(registry.clone())
                     .expect("the fixture declarations read cleanly"),
-                ..QueryOptions::EMPTY
-            },
+            ),
             &QueryGovernors::UNBOUNDED,
         )
         .expect("a governed run of a valid query is an outcome, never an error");

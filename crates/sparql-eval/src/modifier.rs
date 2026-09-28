@@ -60,7 +60,7 @@
 //! "solutions containing error values are removed at the end of evaluating the
 //! group and any aggregation functions").
 //!
-//! This crate's `eval_expr` cannot express that: its signature is
+//! This crate's expression evaluation (`crate::vm`) cannot express that: its result is
 //! `Result<Option<SolutionTerm>, EvalError>`, which has only three states — a
 //! bound value, an honestly UNBOUND variable (`Ok(None)`), or a HARD evaluation
 //! failure (`Err`, e.g. an XPath-function type error) — not the spec's single
@@ -119,7 +119,7 @@ use crate::agg_fn::AggregateAccumulator as _;
 use crate::convert::{ground_term_to_value, literal_to_value, named_node_to_value};
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
-use crate::expr::{eval_expr, xsd_of};
+use crate::expr::xsd_of;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
@@ -195,7 +195,8 @@ pub(crate) fn eval_project<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let evaluated = crate::service_endpoints::eval_projected(inner, variables, ctx)?;
+    let Some(seq) = lift.absorb(0, evaluated) else {
         let schema = VarSchema::interned(variables);
         return Ok(lift.finish(SolutionSeq::empty(schema)));
     };
@@ -318,11 +319,16 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     // O(n log n) comparator. Row `i`'s keys are `keys[i * width..][..width]`, and
     // sorting the PERMUTATION leaves them where their borrows point.
     let width = exprs.len();
+    let mut linked = Vec::with_capacity(width);
+    for oe in exprs {
+        let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = oe;
+        let program = crate::vm::program_at(ctx, node, e);
+        linked.push(crate::vm::Linked::link(program, e, &schema, ctx));
+    }
     let mut values: Vec<Option<TermValue>> = Vec::with_capacity(seq.rows.len() * width);
     for row in &seq.rows {
-        for oe in exprs {
-            let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = oe;
-            let term = eval_expr(e, row, &schema, ctx)?;
+        for key in &mut linked {
+            let term = key.term(row, &schema, ctx)?;
             values.push(term.map(|t| ctx.scratch.value_of(ctx.dataset, t)));
         }
     }
@@ -411,31 +417,81 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
 /// Whether a particular spelling of those could still be proven row-free is a question
 /// this predicate declines to answer — it reports only what it can prove, and an
 /// unproven path is simply evaluated.
+///
+/// The answer is a fold over the path's tree: a leaf answers for itself, `Sequence`
+/// needs an edge when ANY element does, `Alternative` when EVERY element does, and the
+/// unary operators pass their operand's answer through (`Range` only when it forbids
+/// zero repetitions). The fold runs over a work list of the nodes still to answer and a
+/// stack of the answers already given — each combinator's answer is computed once all
+/// of its elements' are on the stack — so a path of any depth is answered without a
+/// machine-stack frame per level. Nothing here has an effect, so answering every
+/// element (rather than stopping at the first decisive one) changes no answer.
 fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
-    match path {
-        // One hop over a named predicate, over ANY predicate, or over any predicate
-        // outside a named set: each reads exactly one row.
-        PropertyPathExpression::NamedNode(_)
-        | PropertyPathExpression::NegatedPropertySet(_)
-        | PropertyPathExpression::Wildcard { .. } => true,
-        // Direction and "at least once" both preserve the sub-path's own answer.
-        PropertyPathExpression::Reverse(inner) | PropertyPathExpression::OneOrMore(inner) => {
-            path_needs_an_edge(inner)
-        }
-        // A sequence traverses BOTH sides, so one edge-requiring side suffices.
-        PropertyPathExpression::Sequence(left, right) => {
-            path_needs_an_edge(left) || path_needs_an_edge(right)
-        }
-        // An alternative traverses EITHER side, so both sides must require an edge.
-        PropertyPathExpression::Alternative(left, right) => {
-            path_needs_an_edge(left) && path_needs_an_edge(right)
-        }
-        // A bounded repetition needs an edge only when it forbids zero repetitions.
-        PropertyPathExpression::Range { inner, min, max: _ } => {
-            *min >= 1 && path_needs_an_edge(inner)
-        }
-        PropertyPathExpression::ZeroOrMore(_) | PropertyPathExpression::ZeroOrOne(_) => false,
+    /// One step of the fold.
+    enum Step<'a> {
+        /// Answer for this node, or schedule its elements and the combinator over them.
+        Answer(&'a PropertyPathExpression),
+        /// Replace the top `count` answers by whether ANY of them is `true`.
+        Any(usize),
+        /// Replace the top `count` answers by whether ALL of them are `true`.
+        All(usize),
     }
+    let mut steps = vec![Step::Answer(path)];
+    let mut answers: Vec<bool> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Answer(path) => match path {
+                // One hop over a named predicate, over ANY predicate, or over any
+                // predicate outside a named set: each reads exactly one row.
+                PropertyPathExpression::NamedNode(_)
+                | PropertyPathExpression::NegatedPropertySet(_)
+                | PropertyPathExpression::Wildcard { .. } => answers.push(true),
+                // Direction and "at least once" both preserve the sub-path's own answer.
+                PropertyPathExpression::Reverse(inner)
+                | PropertyPathExpression::OneOrMore(inner) => steps.push(Step::Answer(inner)),
+                // A sequence traverses EVERY element, so one edge-requiring element
+                // suffices.
+                PropertyPathExpression::Sequence(elements) => {
+                    steps.push(Step::Any(elements.len()));
+                    steps.extend(elements.iter().rev().map(Step::Answer));
+                }
+                // An alternative traverses ANY one element, so every element must
+                // require an edge (an alternative of none relates nothing, so it needs
+                // one vacuously).
+                PropertyPathExpression::Alternative(elements) => {
+                    steps.push(Step::All(elements.len()));
+                    steps.extend(elements.iter().rev().map(Step::Answer));
+                }
+                // A bounded repetition needs an edge only when it forbids zero
+                // repetitions.
+                PropertyPathExpression::Range { inner, min, max: _ } => {
+                    if *min >= 1 {
+                        steps.push(Step::Answer(inner));
+                    } else {
+                        answers.push(false);
+                    }
+                }
+                PropertyPathExpression::ZeroOrMore(_) | PropertyPathExpression::ZeroOrOne(_) => {
+                    answers.push(false);
+                }
+            },
+            Step::Any(count) => {
+                let first = answers.len() - count;
+                let any = answers[first..].iter().any(|needs| *needs);
+                answers.truncate(first);
+                answers.push(any);
+            }
+            Step::All(count) => {
+                let first = answers.len() - count;
+                let all = answers[first..].iter().all(|needs| *needs);
+                answers.truncate(first);
+                answers.push(all);
+            }
+        }
+    }
+    answers
+        .pop()
+        .expect("the root's answer is the last one computed")
 }
 
 /// Whether `pattern` provably yields ZERO solutions when the active graph holds no
@@ -474,75 +530,116 @@ fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
 ///   reads another endpoint entirely;
 /// * `Values` carries its rows inline and `PropertyFunction` invokes a registered
 ///   relation, neither of which touches the active graph's rows at all.
+///
+/// The answer is a fold over the pattern's tree, run as [`path_needs_an_edge`]'s is:
+/// over a work list of the nodes still to answer and a stack of the answers already
+/// given, a `Join`'s answer computed once both operands' are on the stack, a `Union`'s
+/// once every arm's is, so a pattern of any depth is answered without a machine-stack
+/// frame per level. The match is exhaustive, so a new algebra node cannot silently
+/// inherit a proof.
 fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bool {
-    match pattern {
-        GraphPattern::Bgp { patterns } => !patterns.is_empty(),
-        GraphPattern::Path {
-            subject: _,
-            path,
-            object: _,
-        } => path_needs_an_edge(path),
-        GraphPattern::Join { left, right } => {
-            yields_nothing_without_rows_in_the_active_graph(left)
-                || yields_nothing_without_rows_in_the_active_graph(right)
-        }
-        GraphPattern::Union { left, right } => {
-            yields_nothing_without_rows_in_the_active_graph(left)
-                && yields_nothing_without_rows_in_the_active_graph(right)
-        }
-        GraphPattern::LeftJoin {
-            left,
-            right: _,
-            expression: _,
-        }
-        | GraphPattern::Lateral { left, right: _ }
-        | GraphPattern::Minus { left, right: _ } => {
-            yields_nothing_without_rows_in_the_active_graph(left)
-        }
-        GraphPattern::Filter { expr: _, inner }
-        | GraphPattern::Extend {
-            inner,
-            variable: _,
-            expression: _,
-        }
-        | GraphPattern::Unfold {
-            inner,
-            expression: _,
-            element: _,
-            companion: _,
-        }
-        | GraphPattern::Project {
-            inner,
-            variables: _,
-        }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::OrderBy {
-            inner,
-            expression: _,
-        }
-        | GraphPattern::Slice {
-            inner,
-            start: _,
-            length: _,
-        } => yields_nothing_without_rows_in_the_active_graph(inner),
-        GraphPattern::Group {
-            inner,
-            variables,
-            aggregates: _,
-        } => !variables.is_empty() && yields_nothing_without_rows_in_the_active_graph(inner),
-        GraphPattern::Values {
-            variables: _,
-            bindings,
-        } => bindings.is_empty(),
-        GraphPattern::Graph { name: _, inner: _ }
-        | GraphPattern::Service {
-            name: _,
-            inner: _,
-            silent: _,
-        }
-        | GraphPattern::PropertyFunction(_) => false,
+    /// One step of the fold.
+    enum Step<'a> {
+        /// Answer for this node, or schedule its operands and the combinator over them.
+        Answer(&'a GraphPattern),
+        /// Replace the top two answers by whether EITHER is `true`.
+        Either,
+        /// Replace the top `count` answers by whether ALL of them are `true`.
+        All(usize),
     }
+    let mut steps = vec![Step::Answer(pattern)];
+    let mut answers: Vec<bool> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Answer(pattern) => match pattern {
+                GraphPattern::Bgp { patterns } => answers.push(!patterns.is_empty()),
+                GraphPattern::Path {
+                    subject: _,
+                    path,
+                    object: _,
+                } => answers.push(path_needs_an_edge(path)),
+                GraphPattern::Join { left, right } => {
+                    steps.push(Step::Either);
+                    steps.push(Step::Answer(right));
+                    steps.push(Step::Answer(left));
+                }
+                GraphPattern::Union { arms } => {
+                    steps.push(Step::All(arms.len()));
+                    steps.extend(arms.iter().rev().map(Step::Answer));
+                }
+                GraphPattern::LeftJoin {
+                    left,
+                    right: _,
+                    expression: _,
+                }
+                | GraphPattern::Lateral { left, right: _ }
+                | GraphPattern::Minus { left, right: _ } => steps.push(Step::Answer(left)),
+                GraphPattern::Filter { expr: _, inner }
+                | GraphPattern::Extend {
+                    inner,
+                    variable: _,
+                    expression: _,
+                }
+                | GraphPattern::Unfold {
+                    inner,
+                    expression: _,
+                    element: _,
+                    companion: _,
+                }
+                | GraphPattern::Project {
+                    inner,
+                    variables: _,
+                }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::OrderBy {
+                    inner,
+                    expression: _,
+                }
+                | GraphPattern::Slice {
+                    inner,
+                    start: _,
+                    length: _,
+                } => steps.push(Step::Answer(inner)),
+                GraphPattern::Group {
+                    inner,
+                    variables,
+                    aggregates: _,
+                } => {
+                    if variables.is_empty() {
+                        answers.push(false);
+                    } else {
+                        steps.push(Step::Answer(inner));
+                    }
+                }
+                GraphPattern::Values {
+                    variables: _,
+                    bindings,
+                } => answers.push(bindings.is_empty()),
+                GraphPattern::Graph { name: _, inner: _ }
+                | GraphPattern::Service {
+                    name: _,
+                    inner: _,
+                    silent: _,
+                }
+                | GraphPattern::PropertyFunction(_) => answers.push(false),
+            },
+            Step::Either => {
+                let right = answers.pop().expect("the right operand's answer");
+                let left = answers.pop().expect("the left operand's answer");
+                answers.push(left || right);
+            }
+            Step::All(count) => {
+                let first = answers.len() - count;
+                let all = answers[first..].iter().all(|proven| *proven);
+                answers.truncate(first);
+                answers.push(all);
+            }
+        }
+    }
+    answers
+        .pop()
+        .expect("the root's answer is the last one computed")
 }
 
 /// Whether `dataset` holds NO row of any kind in named graph `g` — no base quad, no
@@ -904,11 +1001,11 @@ pub(crate) struct LiteralKey<'a> {
 ///
 /// # Adding a term category
 ///
-/// A new recursive category is one variant here plus one arm each in [`project`],
-/// [`SortKey::rank`] and [`total_order`]; its members recurse back through
-/// `total_order`, exactly as [`SortKey::Triple`] does, so the category inherits the
-/// whole relation instead of restating any of it. [`SortKey::Composite`] is the
-/// worked example.
+/// A new category is one variant here plus one arm each in [`project`],
+/// [`SortKey::rank`] and [`total_order`]; a category whose members are themselves
+/// keys puts them back through `total_order`'s pair walk, as [`SortKey::Triple`]
+/// does, so the category inherits the whole relation instead of restating any of
+/// it. [`SortKey::Composite`] is the worked example of a leaf category.
 pub(crate) enum SortKey<'a> {
     /// Unbound — sorts before every bound term.
     Unbound,
@@ -937,7 +1034,49 @@ pub(crate) enum SortKey<'a> {
     /// rank below every composite that does parse.
     Composite(purrdf_cdt::CdtValue),
     /// RDF 1.2 triple term, componentwise over `(s, p, o)`.
-    Triple(Box<[Self; 3]>),
+    Triple(TripleKey<'a>),
+}
+
+/// The three component keys of a triple term's [`SortKey`], boxed.
+///
+/// Reads like a `Box<[SortKey; 3]>` — it dereferences to the array — and its drop takes
+/// the nested keys apart over a work list, so the key of a term nested to any depth is
+/// dropped without recursion.
+pub(crate) struct TripleKey<'a>(Option<Box<[SortKey<'a>; 3]>>);
+
+impl<'a> TripleKey<'a> {
+    /// The key of a triple term whose components project to `components`.
+    fn new(components: [SortKey<'a>; 3]) -> Self {
+        Self(Some(Box::new(components)))
+    }
+}
+
+impl<'a> std::ops::Deref for TripleKey<'a> {
+    type Target = [SortKey<'a>; 3];
+
+    fn deref(&self) -> &Self::Target {
+        self.0
+            .as_deref()
+            .expect("a triple key is emptied only by its own drop")
+    }
+}
+
+impl Drop for TripleKey<'_> {
+    fn drop(&mut self) {
+        let Some(root) = self.0.take() else {
+            return;
+        };
+        let mut pending: Vec<Box<[SortKey<'_>; 3]>> = vec![root];
+        while let Some(mut components) = pending.pop() {
+            for component in &mut *components {
+                if let SortKey::Triple(nested) = component
+                    && let Some(inner) = nested.0.take()
+                {
+                    pending.push(inner);
+                }
+            }
+        }
+    }
 }
 
 impl SortKey<'_> {
@@ -956,7 +1095,41 @@ impl SortKey<'_> {
 }
 
 /// Project one (possibly unbound) term onto its sort key.
+///
+/// A triple term's key is assembled bottom-up over a work list — its components
+/// projected subject, predicate, object, and the triple's key built once all three
+/// exist — so a term nested to any depth costs no more machine stack. Every other
+/// term is projected directly.
 pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
+    enum Step<'v> {
+        Term(&'v TermValue),
+        Assemble,
+    }
+    let Some(root @ TermValue::Triple { .. }) = value else {
+        return project_shallow(value);
+    };
+    let mut steps: Vec<Step<'_>> = vec![Step::Term(root)];
+    let mut keys: Vec<SortKey<'_>> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Term(TermValue::Triple { s, p, o }) => {
+                steps.extend([Step::Assemble, Step::Term(o), Step::Term(p), Step::Term(s)]);
+            }
+            Step::Term(leaf) => keys.push(project_shallow(Some(leaf))),
+            Step::Assemble => {
+                let o = keys.pop().expect("a triple term's object is projected");
+                let p = keys.pop().expect("a triple term's predicate is projected");
+                let s = keys.pop().expect("a triple term's subject is projected");
+                keys.push(SortKey::Triple(TripleKey::new([s, p, o])));
+            }
+        }
+    }
+    keys.pop()
+        .expect("the root term's key is the last one assembled")
+}
+
+/// [`project`] for an unbound cell or a term that is not a triple term.
+fn project_shallow(value: Option<&TermValue>) -> SortKey<'_> {
     match value {
         None => SortKey::Unbound,
         Some(TermValue::Blank { label, scope }) => SortKey::Blank(scope.ordinal(), label),
@@ -990,8 +1163,8 @@ pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
                 lexical: lexical_form,
             })
         }
-        Some(TermValue::Triple { s, p, o }) => {
-            SortKey::Triple(Box::new([s, p, o].map(|t| project(Some(&**t)))))
+        Some(TermValue::Triple { .. }) => {
+            unreachable!("a triple term is projected over the work list")
         }
     }
 }
@@ -1014,7 +1187,36 @@ pub(crate) fn project(value: Option<&TermValue>) -> SortKey<'_> {
 /// order is a lexicographic product of total orders, so it is transitive by
 /// construction, and it is what the CDT crate already sorts map entries and renders
 /// canonical lexical forms with.
+///
+/// # Triple terms
+///
+/// Two triple terms compare subject, then predicate, then object, each pair by this
+/// same relation: the first pair of components that does not compare equal decides.
+/// The pairs are walked over a work list rather than the call stack — a pair of
+/// triple terms puts its three component pairs in front of whatever follows it — so
+/// two terms nested to any depth cost no more machine stack.
 pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
+    if !matches!((a, b), (SortKey::Triple(_), SortKey::Triple(_))) {
+        return shallow_order(a, b);
+    }
+    let mut pending: Vec<(&SortKey<'_>, &SortKey<'_>)> = vec![(a, b)];
+    while let Some((a, b)) = pending.pop() {
+        match (a, b) {
+            (SortKey::Triple(x), SortKey::Triple(y)) => {
+                pending.extend([(&x[2], &y[2]), (&x[1], &y[1]), (&x[0], &y[0])]);
+            }
+            _ => match shallow_order(a, b) {
+                Ordering::Equal => {}
+                decided => return decided,
+            },
+        }
+    }
+    Ordering::Equal
+}
+
+/// [`total_order`] on two keys of which at most one is a triple term's: two keys of
+/// the same kind by that kind's own order, two of different kinds by their rank.
+fn shallow_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
     match (a, b) {
         (SortKey::Blank(sa, la), SortKey::Blank(sb, lb)) => (sa, la).cmp(&(sb, lb)),
         (SortKey::Iri(x), SortKey::Iri(y)) => x.cmp(y),
@@ -1030,9 +1232,8 @@ pub(crate) fn total_order(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
             (x.datatype, x.language, x.lexical).cmp(&(y.datatype, y.language, y.lexical))
         }
         (SortKey::Composite(x), SortKey::Composite(y)) => purrdf_cdt::total_value_cmp(x, y),
-        (SortKey::Triple(x), SortKey::Triple(y)) => total_order(&x[0], &y[0])
-            .then_with(|| total_order(&x[1], &y[1]))
-            .then_with(|| total_order(&x[2], &y[2])),
+        // Two triple terms are decided by their components, which `total_order` walks.
+        (SortKey::Triple(_), SortKey::Triple(_)) => Ordering::Equal,
         _ => a.rank().cmp(&b.rank()),
     }
 }
@@ -1129,17 +1330,24 @@ pub enum ValueAggregate {
 /// # Errors
 ///
 /// Any [`EvalError`] the accumulator raises while folding.
+///
+/// A value fold runs outside any evaluation, so no evaluation's sequential decision
+/// applies to it: it forks by the bag's size alone, and the answer is the same either way.
 pub fn fold_values(
     aggregate: ValueAggregate,
     values: &[TermValue],
 ) -> Result<Option<TermValue>, EvalError> {
     match aggregate {
-        ValueAggregate::Count => fold_builtin(values, CountAccumulator::default, acc_step_one),
-        ValueAggregate::Sum => fold_numeric(values, NumericAggregate::Sum),
-        ValueAggregate::Avg => fold_numeric(values, NumericAggregate::Avg),
-        ValueAggregate::Min => fold_builtin(values, MinAccumulator::default, acc_step_one),
-        ValueAggregate::Max => fold_builtin(values, MaxAccumulator::default, acc_step_one),
-        ValueAggregate::Sample => fold_builtin(values, SampleAccumulator::default, acc_step_one),
+        ValueAggregate::Count => {
+            fold_builtin(false, values, CountAccumulator::default, acc_step_one)
+        }
+        ValueAggregate::Sum => fold_numeric(false, values, NumericAggregate::Sum),
+        ValueAggregate::Avg => fold_numeric(false, values, NumericAggregate::Avg),
+        ValueAggregate::Min => fold_builtin(false, values, MinAccumulator::default, acc_step_one),
+        ValueAggregate::Max => fold_builtin(false, values, MaxAccumulator::default, acc_step_one),
+        ValueAggregate::Sample => {
+            fold_builtin(false, values, SampleAccumulator::default, acc_step_one)
+        }
     }
 }
 
@@ -1232,6 +1440,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     let safe = aggregates
         .iter()
         .all(|(_, agg)| ctx.may_fork_aggregate(agg));
+    let mut links = link_aggregates(node, aggregates, &in_schema, ctx);
 
     let rows = if safe {
         let base = ctx.scratch.computed_count();
@@ -1239,20 +1448,28 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         // expression can reach a property function through an embedded `EXISTS`, and
         // the per-group worker's attestation must reach the parent's receipt.
         let (minted, witnesses) = crate::parallel::par_chunk_try_map_init(
+            ctx.sequential_operation_required(),
             &groups,
-            || ctx.fork_for_worker(),
-            |child, acc, (_, key, idxs)| {
+            || {
+                let fresh: Vec<Vec<_>> = links
+                    .iter()
+                    .map(|agg| agg.iter().map(crate::vm::Linked::fresh).collect())
+                    .collect();
+                (ctx.fork_for_worker(), fresh)
+            },
+            |(child, links), acc, (_, key, idxs)| {
                 let mut row = purrdf_core::smallvec![None; out_width];
                 // `key` was built from `key_cols` (one cell per GROUP BY variable), so
                 // `key.len() == var_count`: one memcpy replaces the indexed loop.
                 row[..var_count].copy_from_slice(key);
-                for (j, (_, agg)) in aggregates.iter().enumerate() {
-                    row[var_count + j] = eval_aggregate(agg, idxs, &seq.rows, &in_schema, child)?;
+                for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
+                    row[var_count + j] =
+                        eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, child)?;
                 }
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 Ok(())
             },
-            |child| core::mem::take(&mut child.witness),
+            |(child, _)| core::mem::take(&mut child.witness),
         )?;
         ctx.absorb_worker_witnesses(witnesses);
         minted
@@ -1265,8 +1482,8 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
             let mut row = purrdf_core::smallvec![None; out_width];
             // `key.len() == var_count` (built from `key_cols`): one memcpy, no index loop.
             row[..var_count].copy_from_slice(key);
-            for (j, (_, agg)) in aggregates.iter().enumerate() {
-                row[var_count + j] = eval_aggregate(agg, idxs, &seq.rows, &in_schema, ctx)?;
+            for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
+                row[var_count + j] = eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, ctx)?;
             }
             rows.push(row);
         }
@@ -1285,7 +1502,31 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     }))
 }
 
-/// Compute one aggregate over a group's rows in two phases: phase 1 evaluates
+/// Link every aggregate's expressions to the group input's schema, once per `GROUP`
+/// call: for each aggregate, its arguments in order, then its own `ORDER BY` keys.
+fn link_aggregates<'e, D: DatasetView + Sync>(
+    node: &GraphPattern,
+    aggregates: &'e [(Variable, AggregateExpression)],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Vec<Vec<crate::vm::Linked<'e, D::Id>>> {
+    aggregates
+        .iter()
+        .map(|(_, agg)| {
+            agg.args()
+                .iter()
+                .chain(agg.order_by().iter().map(order_sort_key))
+                .map(|expr| {
+                    let program = crate::vm::program_at(ctx, node, expr);
+                    crate::vm::Linked::link(program, expr, schema, ctx)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Compute one aggregate over a group's rows, its expressions evaluated through `links`
+/// ([`link_aggregates`]'s entry for it), in two phases: phase 1 evaluates
 /// every surviving row's argument(s) and materializes them into a per-group
 /// buffer (`survivors`, already `DISTINCT`-resolved and in row order); phase 2
 /// folds that buffer through an accumulator, sequentially or in parallel
@@ -1309,7 +1550,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 ///
 /// # Error-row skipping
 ///
-/// A row whose argument expression evaluates to unbound (`eval_expr` returns
+/// A row whose argument expression evaluates to unbound (its evaluation returns
 /// `Ok(None)`) never reaches a fold's `step` at all — for the single argument a
 /// built-in aggregate other than `COUNT(*)` takes, exactly as for every
 /// positional argument a [`AggregateFunction::Custom`] call takes (a `Custom`
@@ -1330,6 +1571,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 /// withhold the whole grouped output.
 fn eval_aggregate<D: DatasetView + Sync>(
     agg: &AggregateExpression,
+    links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
     rows: &[Solution<D::Id>],
     schema: &VarSchema,
@@ -1341,7 +1583,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
     }
 
     if let AggregateFunction::Custom(iri) = agg.function() {
-        return eval_custom_aggregate(iri.as_str(), agg, idxs, rows, schema, ctx);
+        return eval_custom_aggregate(iri.as_str(), agg, links, idxs, rows, schema, ctx);
     }
 
     // `FOLD` is dispatched away here for the same reason `Custom` is: its PHASE 1
@@ -1353,7 +1595,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
     // [`crate::agg_fn::AggregateAccumulator`] — one fold algebra, as the rest of
     // this module's dispatch promises. See [`crate::cdt_agg`].
     if matches!(agg.function(), AggregateFunction::Fold) {
-        return crate::cdt_agg::eval_fold(agg, idxs, rows, schema, ctx);
+        return crate::cdt_agg::eval_fold(agg, links, idxs, rows, schema, ctx);
     }
 
     // `COUNT(*)`/`COUNT(DISTINCT *)` is the spec's empty exprlist, and
@@ -1391,8 +1633,14 @@ fn eval_aggregate<D: DatasetView + Sync>(
         let mut seen: Option<DetHashSet<std::borrow::Cow<'_, Solution<D::Id>>>> =
             agg.distinct.then(DetHashSet::default);
         let mut survivors: usize = 0;
+        // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
+        // latched trip first, then the `aggregate-accumulation` charge and its poll.
+        let mut checkpoint = crate::row_checkpoint::RowCheckpoint::sequential(
+            ctx,
+            ChargePoint::AggregateAccumulation,
+        );
         for &i in idxs {
-            if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
+            if let Err(tripped) = checkpoint.pass(ctx) {
                 ctx.expression_barrier.record(tripped);
                 return Ok(None);
             }
@@ -1410,6 +1658,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             survivors += 1;
         }
         let value = fold_builtin(
+            ctx.sequential_operation_required(),
             &vec![(); survivors],
             CountAccumulator::default,
             |acc, ()| acc.step(&[]),
@@ -1433,7 +1682,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
     // its survivor count is unknowable up front.
     let mut survivors: Vec<TermValue> =
         Vec::with_capacity(if agg.distinct { 0 } else { idxs.len() });
-    if let Some(first_arg) = agg.args().first() {
+    if let Some(first_arg) = links[..agg.args().len()].first_mut() {
         // Phase 1: evaluate every row's argument expression against `ctx`, charge
         // `AggregateAccumulation` for each one, apply `DISTINCT`, and charge
         // `ScratchBytes` for each value actually retained into `survivors` (see
@@ -1462,11 +1711,17 @@ fn eval_aggregate<D: DatasetView + Sync>(
         // aggregate's own accumulator state is (see `eval_custom_aggregate`'s
         // matching charge), through the SAME deterministic per-value proxy
         // [`crate::scratch::value_bytes`] the arena's own automatic charge uses.
+        // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
+        // latched trip first, then the `aggregate-accumulation` charge and its poll.
+        let mut checkpoint = crate::row_checkpoint::RowCheckpoint::sequential(
+            ctx,
+            ChargePoint::AggregateAccumulation,
+        );
         for &i in idxs {
-            let Some(term) = eval_expr(first_arg, &rows[i], schema, ctx)? else {
+            let Some(term) = first_arg.term(&rows[i], schema, ctx)? else {
                 continue;
             };
-            if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
+            if let Err(tripped) = checkpoint.pass(ctx) {
                 ctx.expression_barrier.record(tripped);
                 return Ok(None);
             }
@@ -1496,20 +1751,38 @@ fn eval_aggregate<D: DatasetView + Sync>(
     // phase 1 above) and is therefore always safe to chunk regardless of any
     // volatility concern: nothing here can reach `RAND`/`BNODE`/an `EXISTS`
     // re-entry, because nothing here evaluates an expression.
+    let sequential = ctx.sequential_operation_required();
     let value = match agg.function() {
-        AggregateFunction::Count => {
-            fold_builtin(&survivors, CountAccumulator::default, acc_step_one)?
-        }
-        AggregateFunction::Sum => fold_numeric(&survivors, NumericAggregate::Sum)?,
-        AggregateFunction::Avg => fold_numeric(&survivors, NumericAggregate::Avg)?,
-        AggregateFunction::Min => fold_builtin(&survivors, MinAccumulator::default, acc_step_one)?,
-        AggregateFunction::Max => fold_builtin(&survivors, MaxAccumulator::default, acc_step_one)?,
-        AggregateFunction::Sample => {
-            fold_builtin(&survivors, SampleAccumulator::default, acc_step_one)?
-        }
+        AggregateFunction::Count => fold_builtin(
+            sequential,
+            &survivors,
+            CountAccumulator::default,
+            acc_step_one,
+        )?,
+        AggregateFunction::Sum => fold_numeric(sequential, &survivors, NumericAggregate::Sum)?,
+        AggregateFunction::Avg => fold_numeric(sequential, &survivors, NumericAggregate::Avg)?,
+        AggregateFunction::Min => fold_builtin(
+            sequential,
+            &survivors,
+            MinAccumulator::default,
+            acc_step_one,
+        )?,
+        AggregateFunction::Max => fold_builtin(
+            sequential,
+            &survivors,
+            MaxAccumulator::default,
+            acc_step_one,
+        )?,
+        AggregateFunction::Sample => fold_builtin(
+            sequential,
+            &survivors,
+            SampleAccumulator::default,
+            acc_step_one,
+        )?,
         AggregateFunction::GroupConcat => {
             let sep = agg.separator().unwrap_or(" ").to_owned();
             fold_builtin(
+                sequential,
                 &survivors,
                 || GroupConcatAccumulator::new(sep.clone()),
                 acc_step_one,
@@ -1587,11 +1860,13 @@ fn acc_step_one<A: crate::agg_fn::AggregateAccumulator>(
 /// downcast machinery `crate::agg_fn`'s own doc comments describe for that
 /// case, at a strictly narrower and provably-safe use.
 pub(crate) fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
+    sequential: bool,
     survivors: &[T],
     init: impl Fn() -> A + Sync,
     step: impl Fn(&mut A, &T) -> Result<(), EvalError> + Sync,
 ) -> Result<Option<TermValue>, EvalError> {
     let fold = crate::parallel::par_chunk_reduce_init(
+        sequential,
         survivors,
         || Ok(init()),
         step,
@@ -1600,7 +1875,8 @@ pub(crate) fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
     Box::new(fold).finish()
 }
 
-/// Fold a group through a registered [`crate::agg_fn::CustomAggregate`]:
+/// Fold a group through a registered [`crate::agg_fn::CustomAggregate`], its arguments
+/// evaluated through `links` ([`link_aggregates`]'s entry for it):
 /// resolve the IRI, meter its declared per-accumulator state bound, then stream
 /// every row's positional argument tuple through
 /// [`crate::agg_fn::step_contained`], deduping on the FULL tuple under
@@ -1617,6 +1893,7 @@ pub(crate) fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
 pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     iri: &str,
     agg: &AggregateExpression,
+    links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
     rows: &[Solution<D::Id>],
     schema: &VarSchema,
@@ -1656,11 +1933,15 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // survivors without `DISTINCT`, so reserve it once instead of growing by doubling.
     let mut survivors: Vec<Vec<TermValue>> =
         Vec::with_capacity(if agg.distinct { 0 } else { idxs.len() });
+    // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
+    // latched trip first, then the `aggregate-accumulation` charge and its poll.
+    let mut checkpoint =
+        crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
     for &i in idxs {
         tuple.clear();
         let mut every_position_bound = true;
-        for expression in agg.args() {
-            let Some(term) = eval_expr(expression, &rows[i], schema, ctx)? else {
+        for argument in &mut links[..agg.args().len()] {
+            let Some(term) = argument.term(&rows[i], schema, ctx)? else {
                 every_position_bound = false;
                 break;
             };
@@ -1674,7 +1955,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         // the built-in fold path in `eval_aggregate` charges it: producing and
         // inspecting the tuple is the work this point prices, whether or not
         // `DISTINCT` goes on to discard it.
-        if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
+        if let Err(tripped) = checkpoint.pass(ctx) {
             ctx.expression_barrier.record(tripped);
             return Ok(None);
         }
@@ -1724,11 +2005,9 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // [`crate::parallel::aggregate_chunk_size_for`]'s doc comment — so this charge,
     // unlike an earlier increment's, cannot vary with the host's thread count.
     let stable = crate::agg_fn::volatility_contained(custom.as_ref(), iri)? == Volatility::Stable;
-    let chunk_count = if stable {
-        crate::parallel::planned_aggregate_chunk_count(survivors.len())
-    } else {
-        1
-    };
+    // A `Volatile` aggregate folds on one accumulator whatever the evaluation decided.
+    let sequential = ctx.sequential_operation_required() || !stable;
+    let chunk_count = crate::parallel::planned_aggregate_chunk_count(sequential, survivors.len());
     if chunk_count > 1 {
         let extra = state_bound.saturating_mul(u64::try_from(chunk_count - 1).unwrap_or(u64::MAX));
         if let Err(tripped) = ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, extra)
@@ -1750,14 +2029,13 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         .iter()
         .map(|(name, literal)| (name.clone(), literal_to_value(literal)))
         .collect();
-    let force_sequential = (!stable).then(crate::parallel::force_sequential_operation);
     let accumulator = crate::parallel::par_chunk_reduce_init(
+        sequential,
         &survivors,
         || crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals),
         |accumulator, tuple| crate::agg_fn::step_contained(accumulator.as_mut(), iri, tuple),
         |accumulator, other| crate::agg_fn::combine_contained(accumulator.as_mut(), iri, other),
     )?;
-    drop(force_sequential);
 
     let value = crate::agg_fn::finish_contained(accumulator, iri)?;
     // THE custom-aggregate seam. `AggregateAccumulator::finish` returns an
@@ -2501,11 +2779,13 @@ enum NumericAggregate {
 /// group onto the chain — its operands parsed in parallel, its additions
 /// replayed one by one in source order.
 fn fold_numeric(
+    sequential: bool,
     values: &[TermValue],
     aggregate: NumericAggregate,
 ) -> Result<Option<TermValue>, EvalError> {
-    let fold = if crate::parallel::should_parallelize(values.len()) {
+    let fold = if crate::parallel::should_parallelize(sequential, values.len()) {
         crate::parallel::par_chunk_reduce_init(
+            sequential,
             values,
             || Ok(NumericSummary::default()),
             |summary, value| {
@@ -3058,6 +3338,8 @@ mod tests {
 
     use super::*;
     use crate::eval::eval;
+    use purrdf_core::TermBox;
+    use purrdf_sparql_algebra::Child;
 
     // ── value-level entry points ────────────────────────────────────────────
 
@@ -3083,9 +3365,9 @@ mod tests {
 
     fn triple(s: TermValue, p: TermValue, o: TermValue) -> TermValue {
         TermValue::Triple {
-            s: Box::new(s),
-            p: Box::new(p),
-            o: Box::new(o),
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
         }
     }
 
@@ -3212,7 +3494,7 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::OrderBy {
-                inner: Box::new(inner.clone()),
+                inner: Child::new(inner.clone()),
                 expression: exprs.to_vec(),
             },
             ctx,
@@ -3225,7 +3507,7 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::Distinct {
-                inner: Box::new(inner.clone()),
+                inner: Child::new(inner.clone()),
             },
             ctx,
         )
@@ -3238,7 +3520,7 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::Project {
-                inner: Box::new(inner.clone()),
+                inner: Child::new(inner.clone()),
                 variables: variables.to_vec(),
             },
             ctx,
@@ -3253,7 +3535,7 @@ mod tests {
     ) -> Result<SolutionSeq, EvalError> {
         eval(
             &GraphPattern::Slice {
-                inner: Box::new(inner.clone()),
+                inner: Child::new(inner.clone()),
                 start,
                 length,
             },
@@ -3343,7 +3625,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         // Project to ?n only → {30, 17, 30}; DISTINCT → {30, 17}.
         let project = GraphPattern::Project {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![Variable::new("n")],
         };
         let seq = eval_distinct(&project, &mut ctx).expect("distinct");
@@ -3355,7 +3637,7 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let ordered = GraphPattern::OrderBy {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             expression: vec![OrderExpression::Asc(Expression::Variable(Variable::new(
                 "n",
             )))],
@@ -3430,7 +3712,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         // GROUP BY ?n COUNT(*) — group by age: {30→2, 17→1}.
         let group = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![Variable::new("n")],
             aggregates: vec![(
                 Variable::new("c"),
@@ -3482,7 +3764,7 @@ mod tests {
         let ds = typed_ages();
         let mut ctx = EvalCtx::new(&ds);
         let group = GraphPattern::Group {
-            inner: Box::new(typed_age_bgp()),
+            inner: Child::new(typed_age_bgp()),
             variables: vec![Variable::new("t")],
             aggregates: vec![(
                 Variable::new("c"),
@@ -3540,7 +3822,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("c"),
@@ -3570,7 +3852,7 @@ mod tests {
         let mut ctx = EvalCtx::new(&ds);
         // MIN(?n) over the whole input → 17.
         let group_min = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("m"),
@@ -3613,7 +3895,7 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let group = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
@@ -3658,7 +3940,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
@@ -3693,7 +3975,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("s"),
@@ -3730,7 +4012,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("agg"),
@@ -3780,7 +4062,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("avg"),
@@ -3814,7 +4096,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("avg"),
@@ -3861,7 +4143,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![Variable::new("who")],
             aggregates: vec![(
                 Variable::new("total"),
@@ -4169,7 +4451,7 @@ mod tests {
         let expected = (ROWS - 2).to_string();
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold(&ds, AggregateFunction::Sum)
         };
         assert_eq!(sequential.as_deref(), Some(expected.as_str()));
@@ -4218,7 +4500,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("agg"),
@@ -4354,7 +4636,7 @@ mod tests {
         let ds = numeric_fold_dataset(&borrowed);
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold(&ds, AggregateFunction::Sum)
         };
         assert_eq!(sequential.as_deref(), Some("P2000D"));
@@ -4397,7 +4679,7 @@ mod tests {
         ]);
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold_term(&ds, AggregateFunction::Sum)
         };
         assert_eq!(
@@ -4463,7 +4745,7 @@ mod tests {
         let ds = numeric_fold_dataset(&borrowed);
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold_term(&ds, AggregateFunction::Sum)
         };
         let chunked = {
@@ -4495,7 +4777,7 @@ mod tests {
         ]);
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold(&ds, AggregateFunction::Sum)
         };
         assert_eq!(
@@ -4542,7 +4824,7 @@ mod tests {
         ]);
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold(&unrepresentable_mean, AggregateFunction::Avg)
         };
         assert_eq!(
@@ -4648,9 +4930,9 @@ mod tests {
             TermValue::typed_literal(lexical, format!("http://www.w3.org/2001/XMLSchema#{local}"))
         };
         let triple = |s: TermValue, p: TermValue, o: TermValue| TermValue::Triple {
-            s: Box::new(s),
-            p: Box::new(p),
-            o: Box::new(o),
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
         };
         let samples: Vec<Option<TermValue>> = vec![
             None,
@@ -4823,7 +5105,7 @@ mod tests {
         let ds = b.freeze().expect("freeze");
 
         let inner = GraphPattern::Join {
-            left: Box::new(GraphPattern::Bgp {
+            left: Child::new(GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
@@ -4832,7 +5114,7 @@ mod tests {
                     object: TermPattern::Variable(Variable::new("cat")),
                 }],
             }),
-            right: Box::new(GraphPattern::Bgp {
+            right: Child::new(GraphPattern::Bgp {
                 patterns: vec![TriplePattern {
                     subject: TermPattern::Variable(Variable::new("s")),
                     predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
@@ -4843,7 +5125,7 @@ mod tests {
             }),
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![Variable::new("cat")],
             aggregates: vec![
                 (
@@ -4942,7 +5224,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![
                 (
@@ -5046,7 +5328,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5095,7 +5377,7 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let group = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("m"),
@@ -5127,7 +5409,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("m"),
@@ -5158,7 +5440,7 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let group = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("smp"),
@@ -5189,7 +5471,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("smp"),
@@ -5220,7 +5502,7 @@ mod tests {
         let ds = ages();
         let mut ctx = EvalCtx::new(&ds);
         let group = GraphPattern::Group {
-            inner: Box::new(age_bgp()),
+            inner: Child::new(age_bgp()),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5252,7 +5534,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(empty_bgp),
+            inner: Child::new(empty_bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5297,7 +5579,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(bgp),
+            inner: Child::new(bgp),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5366,12 +5648,12 @@ mod tests {
             }],
         };
         let inner = GraphPattern::LeftJoin {
-            left: Box::new(required),
-            right: Box::new(optional),
+            left: Child::new(required),
+            right: Child::new(optional),
             expression: None,
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![
                 (
@@ -5487,7 +5769,7 @@ mod tests {
         ] {
             let run = || eval_numeric_fold(&ds, function.clone());
             let sequential = {
-                let _guard = crate::parallel::force_sequential_operation();
+                let _guard = crate::parallel::force_parallel_for_test(false);
                 run()
             };
             for threads in [1_usize, 2, 8, 32] {
@@ -5615,7 +5897,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5682,7 +5964,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -5755,7 +6037,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -6019,7 +6301,7 @@ mod tests {
             }],
         };
         let group = GraphPattern::Group {
-            inner: Box::new(inner),
+            inner: Child::new(inner),
             variables: vec![],
             aggregates: vec![(
                 Variable::new("g"),
@@ -6086,7 +6368,7 @@ mod numeric_chain_tests {
 
     /// The sequential chain's answer: every fork gate held shut.
     fn sequential(aggregate: ValueAggregate, values: &[TermValue]) -> Option<TermValue> {
-        let _guard = crate::parallel::force_sequential_operation();
+        let _guard = crate::parallel::force_parallel_for_test(false);
         fold_values(aggregate, values).expect("fold")
     }
 
@@ -6171,7 +6453,7 @@ mod numeric_chain_tests {
     fn a_large_group_containing_the_witness_sums_to_the_chain_value() {
         const ROWS: usize = 2048;
         const { assert!(ROWS > crate::parallel::PARALLEL_MIN_ROWS) };
-        let chunk = crate::parallel::planned_aggregate_chunk_count(ROWS);
+        let chunk = crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         let chunk_size = ROWS / chunk;
         let mut group = vec![lit("0.0e0", XDBL); ROWS];
         let [a, b, c, d] = witness();
@@ -6201,7 +6483,7 @@ mod numeric_chain_tests {
     #[test]
     fn a_decimal_overflow_the_chain_hits_is_hit_in_parallel_too() {
         const ROWS: usize = 2048;
-        let chunk_size = ROWS / crate::parallel::planned_aggregate_chunk_count(ROWS);
+        let chunk_size = ROWS / crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         let big = "100000000000000000000000000000000000000";
         let mut group = vec![lit("0", XDEC); ROWS];
         group[chunk_size - 1] = lit(big, XDEC);
@@ -6234,7 +6516,7 @@ mod numeric_chain_tests {
     #[test]
     fn exact_tiers_merge_in_parallel_and_only_unprovable_rows_replay() {
         const ROWS: usize = 4096;
-        let chunks = crate::parallel::planned_aggregate_chunk_count(ROWS);
+        let chunks = crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         assert!(chunks > 1);
 
         let integers: Vec<TermValue> = (0..ROWS)
@@ -6401,5 +6683,473 @@ mod numeric_chain_tests {
             tree_disagreements > 0,
             "no generated group separates the partial-sum tree from the chain"
         );
+    }
+}
+
+#[cfg(test)]
+mod sort_key_walk_tests {
+    //! The sort-key projection and the total order over nested triple terms, checked
+    //! against recursive references over every pair of generated terms; and two keys a
+    //! hundred thousand levels deep, projected, compared and released on a thread with
+    //! a 128 KiB stack.
+
+    use super::{SortKey, TripleKey, project, project_shallow, shallow_order, total_order};
+    use purrdf_core::{BlankScope, TermBox, TermValue};
+    use std::cmp::Ordering;
+
+    const EX: &str = "http://example.org/";
+    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self { state: seed }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+    }
+
+    fn literal(lexical: &str, datatype: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical.to_owned(),
+            datatype: datatype.to_owned(),
+            language: None,
+            direction: None,
+        }
+    }
+
+    /// A generated term of every kind the order ranks, triple terms nested while
+    /// `budget` lasts; `None` is an unbound cell.
+    fn value(choices: &mut Choices, budget: &mut usize) -> Option<TermValue> {
+        Some(match choices.choose(if *budget > 0 { 7 } else { 6 }) {
+            0 => return None,
+            1 => TermValue::Blank {
+                label: ["a", "b"][choices.choose(2)].to_owned(),
+                scope: BlankScope::DEFAULT,
+            },
+            2 => TermValue::Iri(format!("{EX}i{}", choices.choose(3))),
+            3 => literal(["1", "2", "10"][choices.choose(3)], XSD_INTEGER),
+            4 => literal(["a", "b"][choices.choose(2)], XSD_STRING),
+            5 => literal(["[1, 2]", "[2]"][choices.choose(2)], purrdf_cdt::CDT_LIST),
+            _ => {
+                *budget -= 1;
+                let component = |choices: &mut Choices, budget: &mut usize| {
+                    value(choices, budget).unwrap_or_else(|| literal("u", XSD_STRING))
+                };
+                let s = component(choices, budget);
+                let p = component(choices, budget);
+                let o = component(choices, budget);
+                TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                }
+            }
+        })
+    }
+
+    /// The recursive reference for [`project`].
+    fn project_reference(value: Option<&TermValue>) -> SortKey<'_> {
+        match value {
+            Some(TermValue::Triple { s, p, o }) => SortKey::Triple(TripleKey::new(
+                [s, p, o].map(|component| project_reference(Some(&**component))),
+            )),
+            other => project_shallow(other),
+        }
+    }
+
+    /// The recursive reference for [`total_order`].
+    fn total_order_reference(a: &SortKey<'_>, b: &SortKey<'_>) -> Ordering {
+        match (a, b) {
+            (SortKey::Triple(x), SortKey::Triple(y)) => total_order_reference(&x[0], &y[0])
+                .then_with(|| total_order_reference(&x[1], &y[1]))
+                .then_with(|| total_order_reference(&x[2], &y[2])),
+            _ => shallow_order(a, b),
+        }
+    }
+
+    /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    /// A triple-term chain `depth` levels deep whose innermost object is the string
+    /// `innermost`.
+    fn chain(depth: usize, innermost: &str) -> TermValue {
+        let mut term = literal(innermost, XSD_STRING);
+        for _ in 0..depth {
+            term = TermValue::Triple {
+                s: TermBox::new(TermValue::Iri(format!("{EX}s"))),
+                p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
+                o: TermBox::new(term),
+            };
+        }
+        term
+    }
+
+    #[test]
+    fn the_order_over_generated_terms_agrees_with_the_recursive_reference() {
+        let mut choices = Choices::new(7);
+        let values: Vec<Option<TermValue>> = (0..60)
+            .map(|_| {
+                let mut budget = 4;
+                value(&mut choices, &mut budget)
+            })
+            .collect();
+        let keys: Vec<SortKey<'_>> = values.iter().map(|v| project(v.as_ref())).collect();
+        let references: Vec<SortKey<'_>> = values
+            .iter()
+            .map(|v| project_reference(v.as_ref()))
+            .collect();
+        for (i, (key_a, ref_a)) in keys.iter().zip(&references).enumerate() {
+            for (j, (key_b, ref_b)) in keys.iter().zip(&references).enumerate() {
+                let walked = total_order(key_a, key_b);
+                assert_eq!(walked, total_order_reference(ref_a, ref_b), "{i} vs {j}");
+                assert_eq!(walked, total_order(key_b, key_a).reverse(), "{i} vs {j}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_key_is_projected_compared_and_released_on_a_128_kib_stack() {
+        on_small_stack(|| {
+            let a = chain(DEPTH, "a");
+            let b = chain(DEPTH, "b");
+            let again = chain(DEPTH, "a");
+            let shorter = chain(DEPTH - 1, "a");
+            let (key_a, key_b, key_again, key_shorter) = (
+                project(Some(&a)),
+                project(Some(&b)),
+                project(Some(&again)),
+                project(Some(&shorter)),
+            );
+            assert_eq!(total_order(&key_a, &key_b), Ordering::Less);
+            assert_eq!(total_order(&key_b, &key_a), Ordering::Greater);
+            assert_eq!(total_order(&key_a, &key_again), Ordering::Equal);
+            // At the innermost position the shorter chain holds a literal where the
+            // other holds a triple term, and a literal ranks below a triple term.
+            assert_eq!(total_order(&key_shorter, &key_a), Ordering::Less);
+            drop((key_a, key_b, key_again, key_shorter));
+        });
+    }
+}
+
+/// The two `GRAPH` emptiness proofs against recursive readings of the same paths and
+/// patterns, over generated shapes, and at a depth no recursive reading could reach on a
+/// small stack.
+#[cfg(test)]
+mod emptiness_proof_tests {
+    use purrdf_sparql_algebra::{
+        Chain, Child, Expression, GraphPattern, NamedNode, NamedNodePattern, NegatedPathElement,
+        PropertyFunctionCall, PropertyPathExpression as P, TermPattern, TriplePattern, Variable,
+    };
+
+    use super::{path_needs_an_edge, yields_nothing_without_rows_in_the_active_graph};
+
+    // ── The recursive references ───────────────────────────────────────────────────
+
+    fn reference_path(path: &P) -> bool {
+        match path {
+            P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => true,
+            P::Reverse(inner) | P::OneOrMore(inner) => reference_path(inner),
+            P::Sequence(elements) => elements.iter().any(reference_path),
+            P::Alternative(elements) => elements.iter().all(reference_path),
+            P::Range { inner, min, max: _ } => *min >= 1 && reference_path(inner),
+            P::ZeroOrMore(_) | P::ZeroOrOne(_) => false,
+        }
+    }
+
+    fn reference_pattern(pattern: &GraphPattern) -> bool {
+        match pattern {
+            GraphPattern::Bgp { patterns } => !patterns.is_empty(),
+            GraphPattern::Path { path, .. } => reference_path(path),
+            GraphPattern::Join { left, right } => {
+                reference_pattern(left) || reference_pattern(right)
+            }
+            GraphPattern::Union { arms } => arms.iter().all(reference_pattern),
+            GraphPattern::LeftJoin { left, .. }
+            | GraphPattern::Lateral { left, .. }
+            | GraphPattern::Minus { left, .. } => reference_pattern(left),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Slice { inner, .. } => reference_pattern(inner),
+            GraphPattern::Group {
+                inner, variables, ..
+            } => !variables.is_empty() && reference_pattern(inner),
+            GraphPattern::Values { bindings, .. } => bindings.is_empty(),
+            GraphPattern::Graph { .. }
+            | GraphPattern::Service { .. }
+            | GraphPattern::PropertyFunction(_) => false,
+        }
+    }
+
+    // ── A deterministic shape generator ────────────────────────────────────────────
+
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 30,
+            }
+        }
+
+        fn choose(&mut self, options: usize) -> usize {
+            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
+            usize::try_from(draw % options as u64).expect("a choice fits usize")
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("http://example.org/{local}"))
+    }
+
+    fn var(name: &str) -> TermPattern {
+        TermPattern::Variable(Variable::new(name))
+    }
+
+    fn path(choices: &mut Choices) -> P {
+        if !choices.spend() {
+            return P::NamedNode(iri("p"));
+        }
+        match choices.choose(11) {
+            0 => P::NamedNode(iri("p")),
+            1 => P::Reverse(Child::new(path(choices))),
+            2 => P::OneOrMore(Child::new(path(choices))),
+            3 => P::ZeroOrMore(Child::new(path(choices))),
+            4 => P::ZeroOrOne(Child::new(path(choices))),
+            5 => P::Sequence(Chain::try_from(vec![path(choices), path(choices)]).expect("two")),
+            6 => P::Alternative(
+                Chain::try_from(vec![path(choices), path(choices), path(choices)]).expect("three"),
+            ),
+            7 => P::NegatedPropertySet(vec![NegatedPathElement {
+                predicate: iri("q"),
+                inverse: choices.choose(2) == 0,
+            }]),
+            8 => P::Wildcard {
+                namespace: (choices.choose(2) == 0).then(|| iri("")),
+            },
+            _ => P::Range {
+                inner: Child::new(path(choices)),
+                min: u32::from(choices.choose(2) != 0),
+                max: Some(3),
+            },
+        }
+    }
+
+    fn bgp(choices: &mut Choices) -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: (0..choices.choose(3))
+                .map(|_| TriplePattern {
+                    subject: var("s"),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: var("o"),
+                })
+                .collect(),
+        }
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return bgp(choices);
+        }
+        let expression = Expression::Variable(Variable::new("v"));
+        match choices.choose(20) {
+            0 | 1 => bgp(choices),
+            2 | 3 => GraphPattern::Path {
+                subject: var("s"),
+                path: path(choices),
+                object: var("o"),
+            },
+            4 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            5 => GraphPattern::Union {
+                arms: Chain::try_from(vec![pattern(choices), pattern(choices)]).expect("two"),
+            },
+            6 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: None,
+            },
+            7 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            8 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::Filter {
+                expr: expression,
+                inner: Child::new(pattern(choices)),
+            },
+            10 => GraphPattern::Extend {
+                inner: Child::new(pattern(choices)),
+                variable: Variable::new("x"),
+                expression,
+            },
+            11 => GraphPattern::Unfold {
+                inner: Child::new(pattern(choices)),
+                expression,
+                element: Variable::new("e"),
+                companion: None,
+            },
+            12 => GraphPattern::Project {
+                inner: Child::new(pattern(choices)),
+                variables: vec![Variable::new("s")],
+            },
+            13 => GraphPattern::Distinct {
+                inner: Child::new(pattern(choices)),
+            },
+            14 => GraphPattern::Slice {
+                inner: Child::new(pattern(choices)),
+                start: 0,
+                length: Some(1),
+            },
+            15 => GraphPattern::Group {
+                inner: Child::new(pattern(choices)),
+                variables: (0..choices.choose(2)).map(|_| Variable::new("s")).collect(),
+                aggregates: Vec::new(),
+            },
+            16 => GraphPattern::Values {
+                variables: vec![Variable::new("s")],
+                bindings: (0..choices.choose(2)).map(|_| vec![None]).collect(),
+            },
+            17 => GraphPattern::Graph {
+                name: NamedNodePattern::Variable(Variable::new("g")),
+                inner: Child::new(pattern(choices)),
+            },
+            18 => GraphPattern::Service {
+                name: NamedNodePattern::NamedNode(iri("endpoint")),
+                inner: Child::new(pattern(choices)),
+                silent: false,
+            },
+            _ => GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: "http://example.org/rel".to_owned(),
+                subject_args: vec![var("s")],
+                object_args: vec![var("o")],
+            }),
+        }
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// Both proofs answer exactly what their recursive references answer, for every
+    /// generated path and pattern — and the generator produces both answers of each.
+    #[test]
+    fn the_proofs_agree_with_their_recursive_references_on_generated_shapes() {
+        let mut edge_needing = 0;
+        let mut proven_empty = 0;
+        for seed in 0..500_u64 {
+            let mut choices = Choices::new(seed);
+            let path = path(&mut choices);
+            let needs = path_needs_an_edge(&path);
+            assert_eq!(needs, reference_path(&path), "seed {seed}: {path:?}");
+            edge_needing += usize::from(needs);
+
+            let mut choices = Choices::new(seed.wrapping_mul(7919));
+            let pattern = pattern(&mut choices);
+            let proven = yields_nothing_without_rows_in_the_active_graph(&pattern);
+            assert_eq!(
+                proven,
+                reference_pattern(&pattern),
+                "seed {seed}: {pattern:?}"
+            );
+            proven_empty += usize::from(proven);
+        }
+        assert!(
+            edge_needing > 25 && edge_needing < 475,
+            "the generator produces paths that do and do not need an edge ({edge_needing} of 500)"
+        );
+        assert!(
+            proven_empty > 25 && proven_empty < 475,
+            "the generator produces patterns proven and not proven empty ({proven_empty} of 500)"
+        );
+    }
+
+    /// A hop under a hundred thousand reversals, a zero-length match under as many, a
+    /// pattern under a hundred thousand `DISTINCT`s and a join spine of that height are
+    /// each proven — or left unproven — on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_shape_is_proven_on_a_128_kib_thread() {
+        const DEPTH: usize = 100_000;
+        let answers = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut hop = P::NamedNode(iri("p"));
+                let mut zero = P::ZeroOrMore(Child::new(P::NamedNode(iri("p"))));
+                for _ in 0..DEPTH {
+                    hop = P::Reverse(Child::new(hop));
+                    zero = P::OneOrMore(Child::new(zero));
+                }
+                let mut distinct = GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: var("s"),
+                        predicate: NamedNodePattern::NamedNode(iri("p")),
+                        object: var("o"),
+                    }],
+                };
+                let mut spine = GraphPattern::Values {
+                    variables: vec![Variable::new("s")],
+                    bindings: vec![vec![None]],
+                };
+                for _ in 0..DEPTH {
+                    distinct = GraphPattern::Distinct {
+                        inner: Child::new(distinct),
+                    };
+                    spine = GraphPattern::Join {
+                        left: Child::new(spine),
+                        right: Child::new(GraphPattern::Bgp {
+                            patterns: Vec::new(),
+                        }),
+                    };
+                }
+                [
+                    path_needs_an_edge(&hop),
+                    path_needs_an_edge(&zero),
+                    yields_nothing_without_rows_in_the_active_graph(&distinct),
+                    yields_nothing_without_rows_in_the_active_graph(&spine),
+                ]
+            })
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned");
+        assert_eq!(answers, [true, false, true, false]);
     }
 }

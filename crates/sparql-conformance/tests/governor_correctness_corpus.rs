@@ -154,7 +154,7 @@ fn ungoverned(
     engine: &NativeSparqlEngine,
     dataset: &Arc<RdfDataset>,
     query: &str,
-    remote: Option<&purrdf_sparql_eval::InProcessServiceResolver>,
+    remote: &purrdf_sparql_eval::InProcessServiceResolver,
     aggregates: Option<&AggregateRegistry>,
 ) -> Result<SparqlResult, String> {
     // The declared parser options and both registries together, as the one
@@ -165,15 +165,10 @@ fn ungoverned(
         aggregates.map_or_else(|| AggregateRegistry::EMPTY, Clone::clone),
     )
     .map_err(|e| format!("extension environment: {e}"))?;
-    let options = QueryOptions {
-        env: &env,
-        ..QueryOptions::EMPTY
-    };
-    match remote {
-        Some(source) => engine.query_with_source(dataset, request(query), source, options),
-        None => engine.query_with_options_view(&**dataset, request(query), options),
-    }
-    .map_err(|error| error.to_string())
+    let options = QueryOptions::new().with_env(&env);
+    engine
+        .query_with_source(dataset, request(query), remote, options)
+        .map_err(|error| error.to_string())
 }
 
 #[test]
@@ -244,45 +239,26 @@ fn d0_governed_unbounded_is_byte_identical_to_ungoverned() {
             )
             .expect("the harness declarations read cleanly");
 
-            let expected = ungoverned(
-                &plain,
-                &dataset,
-                &query,
-                remote.as_ref(),
-                case_aggregates.as_ref(),
-            );
+            let expected = ungoverned(&plain, &dataset, &query, &remote, case_aggregates.as_ref());
 
             // The governed path, with every ceiling and every counter declined. A trip is
             // not merely unexpected here, it is unrepresentable: `UNBOUNDED` engages
             // nothing, so no charge site can refuse anything.
-            let actual = match remote.as_ref() {
-                Some(source) => governed_engine.query_governed_with_source(
+            // The relation table travels on the governed path too, in the same options
+            // every governed entry takes: a first-party relation case must be COMPARED
+            // here, and a governed run whose calls resolved to nothing would be comparing
+            // a different query against the oracle. The per-case aggregate registry
+            // (`case_aggregates`) travels alongside it for the identical reason — see
+            // `case_aggregates`'s doc comment.
+            let actual = governed_engine
+                .query_governed_with_source(
                     &dataset,
                     request(&query),
-                    source,
-                    QueryOptions {
-                        env: &governed_env,
-                        ..QueryOptions::EMPTY
-                    },
+                    &remote,
+                    QueryOptions::new().with_env(&governed_env),
                     &QueryGovernors::UNBOUNDED,
-                ),
-                // The relation table travels on the governed path too, in the same
-                // options every governed entry takes: a first-party relation case must
-                // be COMPARED here, and a governed run whose calls resolved to nothing
-                // would be comparing a different query against the oracle. The
-                // per-case aggregate registry (`case_aggregates`) travels alongside it
-                // for the identical reason — see `case_aggregates`'s doc comment.
-                None => governed_engine.query_governed(
-                    &dataset,
-                    request(&query),
-                    QueryOptions {
-                        env: &governed_env,
-                        ..QueryOptions::EMPTY
-                    },
-                    &QueryGovernors::UNBOUNDED,
-                ),
-            }
-            .map_err(|error| error.to_string());
+                )
+                .map_err(|error| error.to_string());
 
             match (expected, actual) {
                 (

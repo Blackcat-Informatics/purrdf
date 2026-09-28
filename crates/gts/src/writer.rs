@@ -1318,35 +1318,76 @@ pub struct TermRemap {
 /// term is depth `0`, so their relative order is untouched, and quoted triples
 /// already sorted after them (`"triple"` is last among the kind tags).
 ///
-/// A malformed cyclic graph cannot make this recurse forever: a term already on
-/// the stack contributes depth `0`.
+/// A malformed cyclic graph cannot make this walk forever: a term already on
+/// `stack` — the path from the term the walk started at — contributes depth `0`.
+///
+/// The walk runs over a work list: a quoted triple's subject, predicate and object
+/// are each walked fully, in that order, with the triple on `stack` while they are.
 fn term_nesting_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usize {
-    if stack.contains(&tid) {
-        return 0;
+    /// The depth of `tid` if it has no components to walk, or its components.
+    fn enter(graph: &Graph, tid: usize, stack: &[usize]) -> Result<usize, [usize; 3]> {
+        if stack.contains(&tid) {
+            return Ok(0);
+        }
+        let Some(term) = graph.terms.get(tid) else {
+            return Ok(0);
+        };
+        if term.kind != TermKind::Triple {
+            return Ok(0);
+        }
+        graph
+            .triple_of(tid)
+            .map_or(Ok(1), |components| Err(components.into()))
     }
-    let Some(term) = graph.terms.get(tid) else {
-        return 0;
-    };
-    if term.kind != TermKind::Triple {
-        return 0;
+    /// A quoted triple being walked: its components, how many have been entered, and
+    /// the deepest of those finished.
+    struct Frame {
+        components: [usize; 3],
+        entered: usize,
+        deepest: usize,
     }
-    let Some((s, p, o)) = graph.triple_of(tid) else {
-        return 1;
+    let components = match enter(graph, tid, stack) {
+        Ok(depth) => return depth,
+        Err(components) => components,
     };
     stack.push(tid);
-    let deepest = <[usize; 3]>::from((s, p, o))
-        .into_iter()
-        .map(|component| term_nesting_depth(graph, component, stack))
-        .max()
-        .unwrap_or(0);
-    stack.pop();
-    deepest + 1
+    let mut frames = vec![Frame {
+        components,
+        entered: 0,
+        deepest: 0,
+    }];
+    loop {
+        let frame = frames.last_mut().expect("a triple is being walked");
+        if frame.entered < 3 {
+            let component = frame.components[frame.entered];
+            frame.entered += 1;
+            match enter(graph, component, stack) {
+                Ok(depth) => frame.deepest = frame.deepest.max(depth),
+                Err(components) => {
+                    stack.push(component);
+                    frames.push(Frame {
+                        components,
+                        entered: 0,
+                        deepest: 0,
+                    });
+                }
+            }
+            continue;
+        }
+        let depth = frame.deepest + 1;
+        frames.pop();
+        stack.pop();
+        match frames.last_mut() {
+            Some(parent) => parent.deepest = parent.deepest.max(depth),
+            None => return depth,
+        }
+    }
 }
 
 /// Return the deterministic term-id remapping used by canonical graph writers.
 pub fn deterministic_term_remap(graph: &Graph) -> TermRemap {
     let mut old_by_new: Vec<usize> = (0..graph.terms.len()).collect();
-    // One recursion stack shared by every term: both walkers push/pop in
+    // One path stack shared by every term: both walkers push/pop in
     // balance on every return path, so the stack is empty at each entry and a
     // fresh `Vec` per term (two per term, here) bought nothing.
     let mut stack: Vec<usize> = Vec::new();
@@ -1355,7 +1396,7 @@ pub fn deterministic_term_remap(graph: &Graph) -> TermRemap {
         .map(|&tid| {
             (
                 term_nesting_depth(graph, tid, &mut stack),
-                canonical(&term_identity_value(graph, tid, &mut stack)),
+                term_identity_key(graph, tid, &mut stack),
             )
         })
         .collect();
@@ -1493,49 +1534,94 @@ pub fn snapshot_payload(graph: &Graph) -> Value {
     Value::Map(entries)
 }
 
-fn term_identity_value(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> Value {
-    if stack.contains(&tid) {
-        return Value::Array(vec!["cycle".into(), Value::from(tid as u64)]);
+/// The deterministic CBOR (RFC 8949 §4.2) of `tid`'s identity, the key canonical
+/// term order sorts by.
+///
+/// A term that is not a quoted triple, or a quoted triple with no components, is one
+/// flat array encoded by [`canonical`]: `["iri", value]`, `["literal", value, datatype,
+/// language, direction]`, `["bnode", label]`, `["triple", null, reifier]`, or
+/// `["cycle", id]` / `["missing", id]` for a term already on `stack` or out of range.
+/// A quoted triple with components is the four-element array `["triple", s, p, o]`,
+/// written directly: the array head (major type 4, length 4 — the one byte `0x84`),
+/// the text `"triple"`, then each component's identity in turn.
+///
+/// The walk runs over a work list: each component is written fully, in order, with
+/// the triple on `stack` — the path from the term the walk started at — while it is.
+fn term_identity_key(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> Vec<u8> {
+    /// A quoted triple being written: its components and how many have begun.
+    struct Frame {
+        components: [usize; 3],
+        entered: usize,
     }
-    let Some(term) = graph.terms.get(tid) else {
-        return Value::Array(vec!["missing".into(), Value::from(tid as u64)]);
+    /// Write `tid`'s identity if it is flat, or open its array and return its frame.
+    fn enter(graph: &Graph, tid: usize, stack: &[usize], out: &mut Vec<u8>) -> Option<Frame> {
+        let flat = if stack.contains(&tid) {
+            Value::Array(vec!["cycle".into(), Value::from(tid as u64)])
+        } else {
+            match graph.terms.get(tid) {
+                None => Value::Array(vec!["missing".into(), Value::from(tid as u64)]),
+                Some(term) => match term.kind {
+                    TermKind::Iri => {
+                        Value::Array(vec!["iri".into(), text_or_null(term.value.as_deref())])
+                    }
+                    TermKind::Literal => Value::Array(vec![
+                        "literal".into(),
+                        text_or_null(term.value.as_deref()),
+                        // Borrowed datatype IRI: the owned `String` was copied into
+                        // the `Value` and dropped immediately.
+                        graph.datatype_iri_str(term).into(),
+                        text_or_null(term.lang.as_deref()),
+                        text_or_null(term.direction.as_deref()),
+                    ]),
+                    TermKind::Bnode => Value::Array(vec![
+                        "bnode".into(),
+                        match term.value.as_deref() {
+                            Some(value) if !value.is_empty() => value.into(),
+                            _ => Value::Array(vec!["anonymous".into(), Value::from(tid as u64)]),
+                        },
+                    ]),
+                    TermKind::Triple => match graph.term_triple(term) {
+                        Some(components) => {
+                            out.push(0x84);
+                            append_canonical(&Value::Text("triple".into()), out);
+                            return Some(Frame {
+                                components: components.into(),
+                                entered: 0,
+                            });
+                        }
+                        None => Value::Array(vec![
+                            "triple".into(),
+                            Value::Null,
+                            term.reifier
+                                .map_or(Value::Null, |rid| Value::from(rid as u64)),
+                        ]),
+                    },
+                },
+            }
+        };
+        append_canonical(&flat, out);
+        None
+    }
+    let mut out = Vec::new();
+    let Some(root) = enter(graph, tid, stack, &mut out) else {
+        return out;
     };
     stack.push(tid);
-    let value = match term.kind {
-        TermKind::Iri => Value::Array(vec!["iri".into(), text_or_null(term.value.as_deref())]),
-        TermKind::Literal => Value::Array(vec![
-            "literal".into(),
-            text_or_null(term.value.as_deref()),
-            // Borrowed datatype IRI: the owned `String` was copied into the
-            // `Value` and dropped immediately.
-            graph.datatype_iri_str(term).into(),
-            text_or_null(term.lang.as_deref()),
-            text_or_null(term.direction.as_deref()),
-        ]),
-        TermKind::Bnode => Value::Array(vec![
-            "bnode".into(),
-            match term.value.as_deref() {
-                Some(value) if !value.is_empty() => value.into(),
-                _ => Value::Array(vec!["anonymous".into(), Value::from(tid as u64)]),
-            },
-        ]),
-        TermKind::Triple => match graph.term_triple(term) {
-            Some((s, p, o)) => Value::Array(vec![
-                "triple".into(),
-                term_identity_value(graph, s, stack),
-                term_identity_value(graph, p, stack),
-                term_identity_value(graph, o, stack),
-            ]),
-            None => Value::Array(vec![
-                "triple".into(),
-                Value::Null,
-                term.reifier
-                    .map_or(Value::Null, |rid| Value::from(rid as u64)),
-            ]),
-        },
-    };
-    stack.pop();
-    value
+    let mut frames = vec![root];
+    while let Some(frame) = frames.last_mut() {
+        if frame.entered == 3 {
+            frames.pop();
+            stack.pop();
+            continue;
+        }
+        let component = frame.components[frame.entered];
+        frame.entered += 1;
+        if let Some(inner) = enter(graph, component, stack, &mut out) {
+            stack.push(component);
+            frames.push(inner);
+        }
+    }
+    out
 }
 
 fn text_or_null(value: Option<&str>) -> Value {
@@ -1677,4 +1763,209 @@ fn value_idx(value: &Value) -> Option<usize> {
 /// ```
 pub fn digest_string(data: &[u8]) -> String {
     digest_str(data)
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The canonical-order walks — nesting depth and identity key — against their
+    //! recursive references, on generated term tables with cycles and dangling ids, and
+    //! over a chain far deeper than a 128 KiB thread could recurse.
+
+    use ciborium::value::Value;
+
+    use super::{canonical, term_identity_key, term_nesting_depth, text_or_null};
+    use crate::model::{Graph, Term, TermKind};
+
+    /// The recursive reference of [`term_nesting_depth`].
+    fn reference_depth(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> usize {
+        if stack.contains(&tid) {
+            return 0;
+        }
+        let Some(term) = graph.terms.get(tid) else {
+            return 0;
+        };
+        if term.kind != TermKind::Triple {
+            return 0;
+        }
+        let Some(components) = graph.triple_of(tid) else {
+            return 1;
+        };
+        stack.push(tid);
+        let deepest = <[usize; 3]>::from(components)
+            .into_iter()
+            .map(|component| reference_depth(graph, component, stack))
+            .max()
+            .unwrap_or(0);
+        stack.pop();
+        deepest + 1
+    }
+
+    /// The recursive reference of the identity value [`term_identity_key`] encodes.
+    fn reference_identity(graph: &Graph, tid: usize, stack: &mut Vec<usize>) -> Value {
+        if stack.contains(&tid) {
+            return Value::Array(vec!["cycle".into(), Value::from(tid as u64)]);
+        }
+        let Some(term) = graph.terms.get(tid) else {
+            return Value::Array(vec!["missing".into(), Value::from(tid as u64)]);
+        };
+        stack.push(tid);
+        let value = match term.kind {
+            TermKind::Iri => Value::Array(vec!["iri".into(), text_or_null(term.value.as_deref())]),
+            TermKind::Literal => Value::Array(vec![
+                "literal".into(),
+                text_or_null(term.value.as_deref()),
+                graph.datatype_iri_str(term).into(),
+                text_or_null(term.lang.as_deref()),
+                text_or_null(term.direction.as_deref()),
+            ]),
+            TermKind::Bnode => Value::Array(vec![
+                "bnode".into(),
+                match term.value.as_deref() {
+                    Some(value) if !value.is_empty() => value.into(),
+                    _ => Value::Array(vec!["anonymous".into(), Value::from(tid as u64)]),
+                },
+            ]),
+            TermKind::Triple => match graph.term_triple(term) {
+                Some((s, p, o)) => Value::Array(vec![
+                    "triple".into(),
+                    reference_identity(graph, s, stack),
+                    reference_identity(graph, p, stack),
+                    reference_identity(graph, o, stack),
+                ]),
+                None => Value::Array(vec![
+                    "triple".into(),
+                    Value::Null,
+                    term.reifier
+                        .map_or(Value::Null, |rid| Value::from(rid as u64)),
+                ]),
+            },
+        };
+        stack.pop();
+        value
+    }
+
+    /// A SplitMix64 draw from the counter at `state`.
+    const fn splitmix64(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn term(kind: TermKind, value: Option<&str>) -> Term {
+        Term {
+            kind,
+            value: value.map(str::to_owned),
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: None,
+            triple: None,
+        }
+    }
+
+    /// A generated term table: every kind, triple terms naming any id — themselves,
+    /// each other in cycles, or one past the end — and some unbound.
+    fn generated(seed: u64) -> Graph {
+        let mut state = seed;
+        let mut draw = |n: u64| splitmix64(&mut state) % n;
+        let len = 1 + draw(9);
+        let mut graph = Graph::default();
+        for _ in 0..len {
+            let mut term = match draw(6) {
+                0 => term(TermKind::Iri, Some("http://example.org/i")),
+                1 => term(TermKind::Bnode, if draw(2) == 0 { Some("b") } else { None }),
+                2 => {
+                    let mut literal = term(TermKind::Literal, Some("7"));
+                    literal.lang = (draw(2) == 0).then(|| "en".to_owned());
+                    literal
+                }
+                _ => term(TermKind::Triple, None),
+            };
+            if term.kind == TermKind::Triple && draw(5) != 0 {
+                let id = |n: u64| usize::try_from(n).expect("a small id fits");
+                term.triple = Some((id(draw(len + 1)), id(draw(len + 1)), id(draw(len + 1))));
+            }
+            graph.terms.push(term);
+        }
+        graph
+    }
+
+    /// Both work-list walks answer every term of every generated table exactly as their
+    /// recursive references do, and leave the shared path stack empty.
+    #[test]
+    fn the_walks_agree_with_their_recursive_references_on_generated_tables() {
+        let (mut cycles, mut nested) = (0, 0);
+        for seed in 0..500_u64 {
+            let graph = generated(seed);
+            for tid in 0..=graph.terms.len() {
+                let mut stack = Vec::new();
+                let depth = term_nesting_depth(&graph, tid, &mut stack);
+                assert_eq!(stack, Vec::<usize>::new(), "seed {seed}, term {tid}");
+                assert_eq!(
+                    depth,
+                    reference_depth(&graph, tid, &mut stack),
+                    "seed {seed}, term {tid}"
+                );
+                nested += usize::from(depth > 1);
+                let key = term_identity_key(&graph, tid, &mut stack);
+                assert_eq!(stack, Vec::<usize>::new(), "seed {seed}, term {tid}");
+                let identity = reference_identity(&graph, tid, &mut stack);
+                cycles += usize::from(format!("{identity:?}").contains("cycle"));
+                assert_eq!(key, canonical(&identity), "seed {seed}, term {tid}");
+            }
+        }
+        assert!(
+            nested > 0,
+            "some generated table nests a triple term in one"
+        );
+        assert!(cycles > 0, "some generated table has a cycle");
+    }
+
+    /// A chain several thousand triple terms deep is measured and keyed on a thread
+    /// whose whole stack is 128 KiB — a recursion that deep would need several times
+    /// that. The walks' path check is linear in the path, so the chain is kept to a
+    /// few thousand levels.
+    #[test]
+    fn a_deep_chain_is_measured_and_keyed_on_a_128_kib_thread() {
+        const LEVELS: usize = 3_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut graph = Graph::default();
+                graph
+                    .terms
+                    .push(term(TermKind::Iri, Some("http://example.org/s")));
+                graph
+                    .terms
+                    .push(term(TermKind::Iri, Some("http://example.org/p")));
+                graph
+                    .terms
+                    .push(term(TermKind::Iri, Some("http://example.org/o")));
+                let mut below = 2;
+                for _ in 0..LEVELS {
+                    let mut triple = term(TermKind::Triple, None);
+                    triple.triple = Some((0, 1, below));
+                    graph.terms.push(triple);
+                    below = graph.terms.len() - 1;
+                }
+                let mut stack = Vec::new();
+                assert_eq!(term_nesting_depth(&graph, below, &mut stack), LEVELS);
+                let key = term_identity_key(&graph, below, &mut stack);
+                assert_eq!(stack, Vec::<usize>::new());
+                let iri = |value: &str| canonical(&Value::Array(vec!["iri".into(), value.into()]));
+                let level = 1
+                    + canonical(&Value::Text("triple".into())).len()
+                    + iri("http://example.org/s").len()
+                    + iri("http://example.org/p").len();
+                assert_eq!(
+                    key.len(),
+                    LEVELS * level + iri("http://example.org/o").len()
+                );
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no walk overflowed the thread's stack");
+    }
 }

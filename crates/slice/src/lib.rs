@@ -59,3 +59,7 @@ pub use rdf_query::NamedNode;
 pub use retrieval::{file_iri_for_absolute_path, retrieval_base_iri};
 pub use standpoint_emit::emit_standpoint_sets;
 pub use vocab::SliceVocab;
+
+#[cfg(test)]
+#[path = "../../rdf-core/tests/support/term_fixture.rs"]
+mod test_terms;

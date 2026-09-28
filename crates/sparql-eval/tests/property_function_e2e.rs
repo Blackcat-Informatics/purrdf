@@ -131,10 +131,7 @@ fn a_configured_predicate_parses_to_a_call_and_answers_from_the_injected_relatio
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &relations(),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&relations()),
         )
         .expect("the call resolves and evaluates");
 
@@ -313,10 +310,7 @@ fn registering_a_relation_does_not_hijack_a_longer_sibling_data_predicate() {
                 base_iri: None,
                 substitutions: &[],
             },
-            QueryOptions {
-                env: &env_of(registry),
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&env_of(registry)),
         )
         .expect(
             "an unregistered, merely-prefix-sharing predicate must parse and evaluate as an \
@@ -454,10 +448,7 @@ fn env_of(relations: PropertyFunctionRegistry) -> ExtensionEnv {
 }
 
 fn with_relations(env: &ExtensionEnv) -> QueryOptions<'_> {
-    QueryOptions {
-        env,
-        ..QueryOptions::EMPTY
-    }
+    QueryOptions::new().with_env(env)
 }
 
 /// Render a solution result as `[[iri, iri], ..]` for comparison.
@@ -1052,10 +1043,7 @@ fn an_update_where_call_with_no_registry_hard_errors_precisely() {
         .update_with_options(
             &mut ds,
             request(UPDATE_TEXT),
-            QueryOptions {
-                env: &env,
-                ..QueryOptions::EMPTY
-            },
+            QueryOptions::new().with_env(&env),
         )
         .expect_err("a call with nothing to resolve against must not read the graph instead");
     assert_eq!(error.code, "native-sparql-property-function");

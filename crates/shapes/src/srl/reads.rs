@@ -34,8 +34,9 @@
 use std::collections::BTreeSet;
 
 use purrdf_sparql_algebra::{
-    AggregateFunction, Expression, Function, GraphPattern, NamedNodePattern, OrderExpression,
-    ParserOptions, PropertyPathExpression, Query, SparqlParser, TermPattern, TriplePattern,
+    AggregateFunction, Expression, Flow, Function, GraphPattern, NamedNodePattern, NodeRef,
+    ParserOptions, PropertyPathExpression, Query, SparqlParser, TermPattern, TriplePattern, Visit,
+    walk_pre_post,
 };
 
 use crate::expression::NodeExpr;
@@ -145,93 +146,30 @@ impl Reads {
         });
     }
 
-    /// A SPARQL property path: every step it takes, anywhere in the graph.
-    fn path(&mut self, path: &PropertyPathExpression) {
-        match path {
-            PropertyPathExpression::NamedNode(p) => self.predicate(p.as_str()),
-            PropertyPathExpression::Reverse(inner) | PropertyPathExpression::OneOrMore(inner) => {
-                self.path(inner);
-            }
-            PropertyPathExpression::Sequence(a, b) | PropertyPathExpression::Alternative(a, b) => {
-                self.path(a);
-                self.path(b);
-            }
-            // A zero-length step matches every node of the graph when neither end is
-            // bound, so it reads the graph's nodes, whatever their predicates.
-            PropertyPathExpression::ZeroOrMore(_) | PropertyPathExpression::ZeroOrOne(_) => {
-                self.any();
-            }
-            PropertyPathExpression::Range { inner, min, .. } => {
-                if *min == 0 {
-                    self.any();
-                }
-                self.path(inner);
-            }
-            PropertyPathExpression::NegatedPropertySet(_)
-            | PropertyPathExpression::Wildcard { .. } => self.any(),
-        }
+    /// A graph pattern: every triple shape it reads through.
+    fn pattern(&mut self, pattern: &GraphPattern) {
+        self.sparql(NodeRef::Pattern(pattern));
     }
 
-    /// A graph pattern, recursively.
-    fn pattern(&mut self, pattern: &GraphPattern) {
-        match pattern {
-            GraphPattern::Bgp { patterns } => {
-                for triple in patterns {
-                    self.triple(triple);
+    /// Every node of the SPARQL tree under `root`, over [`walk_pre_post`]'s work list:
+    /// a basic graph pattern reads its triples, a property path every step it takes,
+    /// `EXISTS` reads its pattern, and a slice, an order-dependent aggregate or a
+    /// function call may make the rule volatile.
+    fn sparql(&mut self, root: NodeRef<'_>) {
+        walk_pre_post(root, |step, node| {
+            if step == Visit::Exit {
+                return Flow::Descend;
+            }
+            match node {
+                NodeRef::Pattern(pattern) => self.pattern_node(pattern),
+                NodeRef::Path(path) => self.path_node(path),
+                NodeRef::Expr(expression) => {
+                    if let Expression::FunctionCall(function, _) = expression {
+                        self.function(function);
+                    }
+                    Flow::Descend
                 }
-            }
-            GraphPattern::Path { path, .. } => self.path(path),
-            GraphPattern::Join { left, right }
-            | GraphPattern::Lateral { left, right }
-            | GraphPattern::Union { left, right }
-            | GraphPattern::Minus { left, right } => {
-                self.pattern(left);
-                self.pattern(right);
-            }
-            GraphPattern::LeftJoin {
-                left,
-                right,
-                expression,
-            } => {
-                self.pattern(left);
-                self.pattern(right);
-                if let Some(expression) = expression {
-                    self.expression(expression);
-                }
-            }
-            GraphPattern::Filter { expr, inner } => {
-                self.expression(expr);
-                self.pattern(inner);
-            }
-            GraphPattern::Graph { inner, .. }
-            | GraphPattern::Project { inner, .. }
-            | GraphPattern::Distinct { inner }
-            | GraphPattern::Reduced { inner } => self.pattern(inner),
-            GraphPattern::Extend {
-                inner, expression, ..
-            }
-            | GraphPattern::Unfold {
-                inner, expression, ..
-            } => {
-                self.pattern(inner);
-                self.expression(expression);
-            }
-            GraphPattern::OrderBy { inner, expression } => {
-                self.pattern(inner);
-                for key in expression {
-                    self.order(key);
-                }
-            }
-            // Which solutions a slice keeps depends on an order the data need not fix.
-            GraphPattern::Slice { inner, .. } => {
-                self.volatile = true;
-                self.pattern(inner);
-            }
-            GraphPattern::Group {
-                inner, aggregates, ..
-            } => {
-                self.pattern(inner);
-                for (_, aggregate) in aggregates {
+                NodeRef::Aggregate(aggregate) => {
                     match aggregate.function() {
                         AggregateFunction::Count
                         | AggregateFunction::Sum
@@ -243,90 +181,100 @@ impl Reads {
                         | AggregateFunction::Fold
                         | AggregateFunction::Custom(_) => self.volatile = true,
                     }
-                    for argument in aggregate.args() {
-                        self.expression(argument);
-                    }
-                    for key in aggregate.order_by() {
-                        self.order(key);
-                    }
+                    Flow::Descend
                 }
+                NodeRef::Order(_) => Flow::Descend,
+                // A triple is read where its basic graph pattern is entered; the terms
+                // of a path's ends and of a quoted triple read nothing themselves.
+                NodeRef::Triple(_) | NodeRef::Term(_) | NodeRef::Ground(_) => Flow::Skip,
             }
-            GraphPattern::Values { .. } => {}
-            GraphPattern::Service { .. } | GraphPattern::PropertyFunction(_) => self.any(),
+        });
+    }
+
+    /// One graph-pattern node's own reads; its operands are walked after it.
+    fn pattern_node(&mut self, pattern: &GraphPattern) -> Flow {
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                for triple in patterns {
+                    self.triple(triple);
+                }
+                Flow::Skip
+            }
+            // Which solutions a slice keeps depends on an order the data need not fix.
+            GraphPattern::Slice { .. } => {
+                self.volatile = true;
+                Flow::Descend
+            }
+            GraphPattern::Values { .. } => Flow::Skip,
+            GraphPattern::Service { .. } | GraphPattern::PropertyFunction(_) => {
+                self.any();
+                Flow::Skip
+            }
+            GraphPattern::Path { .. }
+            | GraphPattern::Join { .. }
+            | GraphPattern::Lateral { .. }
+            | GraphPattern::Union { .. }
+            | GraphPattern::Minus { .. }
+            | GraphPattern::LeftJoin { .. }
+            | GraphPattern::Filter { .. }
+            | GraphPattern::Graph { .. }
+            | GraphPattern::Project { .. }
+            | GraphPattern::Distinct { .. }
+            | GraphPattern::Reduced { .. }
+            | GraphPattern::Extend { .. }
+            | GraphPattern::Unfold { .. }
+            | GraphPattern::OrderBy { .. }
+            | GraphPattern::Group { .. } => Flow::Descend,
         }
     }
 
-    /// An `ORDER BY` key.
-    fn order(&mut self, key: &OrderExpression) {
-        match key {
-            OrderExpression::Asc(expression) | OrderExpression::Desc(expression) => {
-                self.expression(expression);
+    /// One property-path node's own reads: every step it takes, anywhere in the graph.
+    fn path_node(&mut self, path: &PropertyPathExpression) -> Flow {
+        match path {
+            PropertyPathExpression::NamedNode(p) => {
+                self.predicate(p.as_str());
+                Flow::Skip
+            }
+            PropertyPathExpression::Reverse(_)
+            | PropertyPathExpression::OneOrMore(_)
+            | PropertyPathExpression::Sequence(_)
+            | PropertyPathExpression::Alternative(_) => Flow::Descend,
+            // A zero-length step matches every node of the graph when neither end is
+            // bound, so it reads the graph's nodes, whatever their predicates.
+            PropertyPathExpression::ZeroOrMore(_) | PropertyPathExpression::ZeroOrOne(_) => {
+                self.any();
+                Flow::Skip
+            }
+            PropertyPathExpression::Range { min, .. } => {
+                if *min == 0 {
+                    self.any();
+                }
+                Flow::Descend
+            }
+            PropertyPathExpression::NegatedPropertySet(_)
+            | PropertyPathExpression::Wildcard { .. } => {
+                self.any();
+                Flow::Skip
             }
         }
     }
 
-    /// An expression, recursively: `EXISTS` reads its pattern, and a function call may
-    /// make the rule volatile.
-    fn expression(&mut self, expression: &Expression) {
-        match expression {
-            Expression::NamedNode(_)
-            | Expression::Literal(_)
-            | Expression::Variable(_)
-            | Expression::Bound(_) => {}
-            Expression::Or(a, b)
-            | Expression::And(a, b)
-            | Expression::Equal(a, b)
-            | Expression::SameTerm(a, b)
-            | Expression::Greater(a, b)
-            | Expression::GreaterOrEqual(a, b)
-            | Expression::Less(a, b)
-            | Expression::LessOrEqual(a, b)
-            | Expression::Add(a, b)
-            | Expression::Subtract(a, b)
-            | Expression::Multiply(a, b)
-            | Expression::Divide(a, b) => {
-                self.expression(a);
-                self.expression(b);
-            }
-            Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-                self.expression(a);
-            }
-            Expression::In(a, list) => {
-                self.expression(a);
-                for item in list {
-                    self.expression(item);
-                }
-            }
-            Expression::If(a, b, c) => {
-                self.expression(a);
-                self.expression(b);
-                self.expression(c);
-            }
-            Expression::Coalesce(list) => {
-                for item in list {
-                    self.expression(item);
-                }
-            }
-            Expression::FunctionCall(function, arguments) => {
-                match function {
-                    // Fresh on every call.
-                    Function::BNode
-                    | Function::Rand
-                    | Function::Now
-                    | Function::Uuid
-                    | Function::StrUuid
-                    // Caller code the analysis does not read: a `sh:SPARQLFunction`
-                    // body, an extension function reading lists or standpoints (and
-                    // minting fresh lists).
-                    | Function::Custom(_)
-                    | Function::Purrdf(_) => self.volatile = true,
-                    _ => {}
-                }
-                for argument in arguments {
-                    self.expression(argument);
-                }
-            }
-            Expression::Exists(pattern) => self.pattern(pattern),
+    /// A function call makes the rule volatile when its answer is fresh on every call
+    /// or comes from caller code the analysis does not read.
+    fn function(&mut self, function: &Function) {
+        match function {
+            // Fresh on every call.
+            Function::BNode
+            | Function::Rand
+            | Function::Now
+            | Function::Uuid
+            | Function::StrUuid
+            // Caller code the analysis does not read: a `sh:SPARQLFunction`
+            // body, an extension function reading lists or standpoints (and
+            // minting fresh lists).
+            | Function::Custom(_)
+            | Function::Purrdf(_) => self.volatile = true,
+            _ => {}
         }
     }
 
@@ -433,13 +381,16 @@ impl Reads {
     }
 }
 
-/// Whether a CONSTRUCT template term mints a blank node per solution.
+/// Whether a CONSTRUCT template term mints a blank node per solution: it is or quotes
+/// a blank node, found over [`walk_pre_post`]'s work list.
 fn mints_blank(term: &TermPattern) -> bool {
-    match term {
-        TermPattern::BlankNode(_) => true,
-        TermPattern::Triple(inner) => mints_blank(&inner.subject) || mints_blank(&inner.object),
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::Variable(_) => false,
-    }
+    !walk_pre_post(NodeRef::Term(term), |_, node| {
+        if matches!(node, NodeRef::Term(TermPattern::BlankNode(_))) {
+            Flow::Stop
+        } else {
+            Flow::Descend
+        }
+    })
 }
 
 /// The read set of one execution of shape rule `rule` for one focus node.

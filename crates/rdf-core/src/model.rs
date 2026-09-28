@@ -240,6 +240,43 @@ impl RdfTerm {
             Self::Triple(_) => RdfTermKind::Triple,
         }
     }
+
+    /// Fold this term bottom-up over [`try_fold_nested`](crate::try_fold_nested)'s work
+    /// list: `leaf` answers for every term that is not a triple term, `predicate` for a
+    /// triple term's predicate IRI, and `triple` combines a triple term's subject,
+    /// predicate and object answers — each folded fully, in that order — into its own.
+    /// The first error ends the fold and is returned.
+    ///
+    /// # Errors
+    ///
+    /// The first error `leaf`, `predicate` or `triple` returns.
+    pub fn try_fold<T, E>(
+        &self,
+        mut leaf: impl FnMut(&Self) -> Result<T, E>,
+        mut predicate: impl FnMut(&str) -> Result<T, E>,
+        mut triple: impl FnMut(T, T, T) -> Result<T, E>,
+    ) -> Result<T, E> {
+        /// One node of a term's nesting: a term, or a triple term's predicate IRI.
+        #[derive(Clone, Copy)]
+        enum Node<'t> {
+            Term(&'t RdfTerm),
+            Predicate(&'t str),
+        }
+        crate::try_fold_nested(
+            Node::Term(self),
+            &mut (),
+            |(), node| match node {
+                Node::Term(Self::Triple(t)) => Ok(crate::Nested::Triple(
+                    Node::Term(&t.subject),
+                    Node::Predicate(&t.predicate),
+                    Node::Term(&t.object),
+                )),
+                Node::Term(term) => leaf(term).map(crate::Nested::Leaf),
+                Node::Predicate(iri) => predicate(iri).map(crate::Nested::Leaf),
+            },
+            |(), _, s, p, o| triple(s, p, o),
+        )
+    }
 }
 
 /// Renders the term in its canonical form (`<iri>`, `_:label`, a typed/lang literal,

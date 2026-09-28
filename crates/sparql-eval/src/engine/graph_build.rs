@@ -93,7 +93,14 @@ impl NativeSparqlEngine {
             bnode_mint_prefix: prefix.as_deref().or(options.bnode_mint_prefix),
             ..options
         };
-        let staged = self.stage_construct(dataset, prepared, substitutions, options, None)?;
+        let staged = self.stage_construct(
+            dataset,
+            prepared,
+            substitutions,
+            options,
+            None,
+            super::Sequencing::Free,
+        )?;
         Ok(publish(staged, destination, None))
     }
 
@@ -124,8 +131,14 @@ impl NativeSparqlEngine {
             bnode_mint_prefix: prefix.as_deref().or(options.bnode_mint_prefix),
             ..options
         };
-        let staged =
-            self.stage_construct(dataset, prepared, substitutions, options, Some(state))?;
+        let staged = self.stage_construct(
+            dataset,
+            prepared,
+            substitutions,
+            options,
+            Some(state),
+            super::Sequencing::Free,
+        )?;
         Ok(publish(staged, destination, Some(state.evidence())))
     }
 
@@ -161,14 +174,19 @@ impl NativeSparqlEngine {
                 evidence: GovernedEvidence::new(evidence, state.evidence()),
             });
         }
-        let _sequential = crate::parallel::force_sequential_operation();
         let prefix = destination_mint_prefix(destination, options.bnode_mint_prefix);
         let options = QueryOptions {
             bnode_mint_prefix: prefix.as_deref().or(options.bnode_mint_prefix),
             ..options
         };
-        let evaluation =
-            self.stage_construct(dataset, prepared, substitutions, options, Some(state));
+        let evaluation = self.stage_construct(
+            dataset,
+            prepared,
+            substitutions,
+            options,
+            Some(state),
+            super::Sequencing::Sequential,
+        );
         match dataset.operation_status() {
             ViewOperationStatus::Failed { error, evidence } => {
                 Err(FallibleSparqlError::Operational {
@@ -206,6 +224,7 @@ impl NativeSparqlEngine {
         substitutions: &[(String, TermValue)],
         options: QueryOptions<'d>,
         state: Option<&Arc<GovernorState>>,
+        sequencing: super::Sequencing,
     ) -> Result<ValidatedRdfDatasetBuilder, GraphBuildError> {
         self.admit_construct(dataset, prepared, options, state)?;
         let query = if substitutions.is_empty() {
@@ -226,10 +245,7 @@ impl NativeSparqlEngine {
         if let Some(state) = state {
             ctx = ctx.with_governors(Arc::clone(state));
         }
-        let _sequential = ctx
-            .options
-            .force_sequential
-            .then(crate::parallel::force_sequential_operation);
+        ctx.options.force_sequential |= sequencing == super::Sequencing::Sequential;
         let evaluated = (|| {
             crate::eval::prepare_query_context(&query, &mut ctx)?;
             let Query::Construct {

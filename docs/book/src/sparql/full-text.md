@@ -68,7 +68,7 @@ typed `TextError::Config`, not a guess.
 
 ```rust,ignore
 use std::sync::Arc;
-use purrdf::sparql::{NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions};
+use purrdf::sparql::{ExtensionEnv, NativeSparqlEngine, PropertyFunctionRegistry, QueryOptions};
 use purrdf::text::{
     GraphSelector, TermOccurrenceRelation, TextIndex, TextIndexConfig, TextSearchRelation,
 };
@@ -91,6 +91,9 @@ registry.register(
     "https://example.org/pf/occurs".to_owned(),
     Arc::new(TermOccurrenceRelation::new(index)),
 );
+// The environment a query text is read in: every registered IRI is claimed in
+// predicate position, and resolves against this registry.
+let env = ExtensionEnv::over_relations(registry)?;
 
 let result = NativeSparqlEngine::new().query_with_options_view(
     &dataset,
@@ -101,7 +104,7 @@ let result = NativeSparqlEngine::new().query_with_options_view(
         base_iri: None,
         substitutions: &[],
     },
-    QueryOptions { property_functions: &registry, ..QueryOptions::EMPTY },
+    QueryOptions::new().with_env(&env),
 )?;
 ```
 

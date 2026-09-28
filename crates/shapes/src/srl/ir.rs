@@ -35,7 +35,7 @@
 //! …) are evaluated inside a producer against the graph the rule runs over. So the IR
 //! has no aggregate literal and the stratifier needs no aggregation stratum.
 
-use purrdf_sparql_algebra::Expression;
+use purrdf_sparql_algebra::{Expression, Flow, NodeRef, Visit, walk_pre_post};
 
 use crate::rules::{OrderKey, Rule as ShaclRule};
 use crate::shapes::Shape;
@@ -330,50 +330,21 @@ pub fn expression_has_exists(expression: &Expression) -> bool {
     found
 }
 
-/// Visit `expression` and every sub-expression, pre-order.
+/// Visit `expression` and every sub-expression, pre-order. An `EXISTS` is visited
+/// itself, but the pattern it holds is not entered. The walk keeps its own work list,
+/// so a taller expression needs no more machine stack.
 pub(crate) fn visit_expression(expression: &Expression, f: &mut dyn FnMut(&Expression)) {
-    f(expression);
-    match expression {
-        Expression::NamedNode(_)
-        | Expression::Literal(_)
-        | Expression::Variable(_)
-        | Expression::Bound(_)
-        | Expression::Exists(_) => {}
-        Expression::Or(a, b)
-        | Expression::And(a, b)
-        | Expression::Equal(a, b)
-        | Expression::SameTerm(a, b)
-        | Expression::Greater(a, b)
-        | Expression::GreaterOrEqual(a, b)
-        | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b)
-        | Expression::Add(a, b)
-        | Expression::Subtract(a, b)
-        | Expression::Multiply(a, b)
-        | Expression::Divide(a, b) => {
-            visit_expression(a, f);
-            visit_expression(b, f);
-        }
-        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-            visit_expression(a, f);
-        }
-        Expression::In(a, list) => {
-            visit_expression(a, f);
-            for item in list {
-                visit_expression(item, f);
+    walk_pre_post(NodeRef::Expr(expression), |step, node| match (step, node) {
+        (Visit::Enter, NodeRef::Expr(e)) => {
+            f(e);
+            if matches!(e, Expression::Exists(_)) {
+                Flow::Skip
+            } else {
+                Flow::Descend
             }
         }
-        Expression::If(a, b, c) => {
-            visit_expression(a, f);
-            visit_expression(b, f);
-            visit_expression(c, f);
-        }
-        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
-            for item in list {
-                visit_expression(item, f);
-            }
-        }
-    }
+        _ => Flow::Descend,
+    });
 }
 
 // ── Well-formedness ─────────────────────────────────────────────────────────────

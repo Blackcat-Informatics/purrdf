@@ -1515,6 +1515,7 @@ fn validate_endpoint(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_core::TermBox;
 
     const EX: &str = "https://example.org/";
     const KNOWS: &str = "https://example.org/knows";
@@ -1663,9 +1664,9 @@ mod tests {
         let input = VizGraphInput {
             quads: vec![VizInputQuad {
                 subject: TermValue::Triple {
-                    s: Box::new(iri("alice")),
-                    p: Box::new(TermValue::Iri(KNOWS.to_owned())),
-                    o: Box::new(iri("bob")),
+                    s: TermBox::new(iri("alice")),
+                    p: TermBox::new(TermValue::Iri(KNOWS.to_owned())),
+                    o: TermBox::new(iri("bob")),
                 },
                 predicate: format!("{EX}reportedBy"),
                 object: iri("carol"),

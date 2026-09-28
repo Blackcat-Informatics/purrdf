@@ -40,7 +40,7 @@ use crate::solution::Solution;
 
 /// The verdict of [`GovernedRowIngest::admit`] for one candidate row.
 #[derive(Debug)]
-pub(crate) enum RowAdmission {
+pub(crate) enum IngestVerdict {
     /// The row may be interned and stored.
     Admitted,
     /// The ingest is over. The candidate is NOT stored, and the producer stops: its
@@ -115,12 +115,12 @@ impl GovernedRowIngest {
         &self,
         ctx: &EvalCtx<'_, D>,
         accepted: usize,
-    ) -> RowAdmission {
+    ) -> IngestVerdict {
         if self.cell_ceiling.is_some_and(|cap| accepted >= cap) {
             // The attempted peak, recorded exactly — and the ingest ends here whatever
             // the observation reports, because storing the row would put the bag past
             // the ceiling that was just consulted.
-            return RowAdmission::Abandoned(
+            return IngestVerdict::Abandoned(
                 ctx.observe_cells(accepted.saturating_add(1), self.width)
                     .err(),
             );
@@ -128,9 +128,9 @@ impl GovernedRowIngest {
         if let Some(point) = self.charge_point
             && let Err(tripped) = ctx.charge(point)
         {
-            return RowAdmission::Abandoned(Some(tripped));
+            return IngestVerdict::Abandoned(Some(tripped));
         }
-        RowAdmission::Admitted
+        IngestVerdict::Admitted
     }
 
     /// Intern one admitted row's owned values into the per-query scratch space,
@@ -145,7 +145,7 @@ impl GovernedRowIngest {
     /// and interns only the call's own positions — interns through the same
     /// [`ScratchInterner`](crate::scratch::ScratchInterner) at the same point in the
     /// sequence, immediately after [`Self::admit`] returned
-    /// [`RowAdmission::Admitted`].
+    /// [`IngestVerdict::Admitted`].
     pub(crate) fn intern_row<D: DatasetView + Sync>(
         &self,
         ctx: &mut EvalCtx<'_, D>,

@@ -102,6 +102,7 @@
 //! where a token STOPS, either direction re-tokenizes silently rather than
 //! erroring; see [`terminals`] for the worked counterexample.
 
+use purrdf_core::TermBox;
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag, terminals};
 
@@ -347,21 +348,23 @@ fn select_terms(
     values
 }
 
-/// A stable, dataset-independent sort key for a term.
+/// A stable, dataset-independent sort key for a term, each triple term keyed from its
+/// components' keys over [`TermValue::fold`]'s work list.
 fn term_key(value: &TermValue) -> String {
-    match value {
-        TermValue::Iri(iri) => format!("0<{iri}>"),
-        TermValue::Blank { label, .. } => format!("1_:{label}"),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            ..
-        } => format!("2{lexical_form}\u{1}{datatype}\u{1}{language:?}"),
-        TermValue::Triple { s, p, o } => {
-            format!("3{}\u{1}{}\u{1}{}", term_key(s), term_key(p), term_key(o))
-        }
-    }
+    value.fold(
+        |leaf| match leaf {
+            TermValue::Iri(iri) => format!("0<{iri}>"),
+            TermValue::Blank { label, .. } => format!("1_:{label}"),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                ..
+            } => format!("2{lexical_form}\u{1}{datatype}\u{1}{language:?}"),
+            TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+        },
+        |s, p, o| format!("3{s}\u{1}{p}\u{1}{o}"),
+    )
 }
 
 // ── the parser ────────────────────────────────────────────────────────────────
@@ -515,44 +518,64 @@ impl MapParser {
         }
     }
 
-    fn parse_term(&mut self) -> Result<TermValue> {
-        match self.peek() {
-            Some('<') if self.peek_at(1) == Some('<') => self.parse_triple_term(),
-            Some('<') => Ok(TermValue::iri(self.parse_iri()?)),
-            // `_` first: `_:label` is a blank node, and `peek_prefixed_name` excludes it.
-            Some('_') => self.parse_blank(),
-            Some('"') => self.parse_literal(),
-            _ => match self.peek_prefixed_name() {
-                Some(name) => Err(self.prefixed_name_err(&name, "a node must be an IRI")),
-                None => {
-                    Err(self.err("expected a term (<iri>, _:blank, \"literal\" or <<triple>>)"))
-                }
-            },
-        }
-    }
-
-    /// An RDF-1.2 quoted-triple term `<< subject predicate object >>`,
-    /// tolerating arbitrary whitespace between the tokens. Recurses so the
-    /// three inner positions accept any node the emitter can produce,
+    /// A term: an IRI, a blank node, a literal, or an RDF-1.2 quoted-triple term
+    /// `<< subject predicate object >>`, tolerating arbitrary whitespace between the
+    /// tokens. The three inner positions accept any node the emitter can produce,
     /// including nested `<< >>` terms.
-    fn parse_triple_term(&mut self) -> Result<TermValue> {
-        self.pos += 2; // '<<'
-        self.skip_ws();
-        let s = self.parse_term()?;
-        self.skip_ws();
-        let p = self.parse_term()?;
-        self.skip_ws();
-        let o = self.parse_term()?;
-        self.skip_ws();
-        if self.peek() != Some('>') || self.peek_at(1) != Some('>') {
-            return Err(self.err("expected '>>' to close a quoted-triple term"));
+    ///
+    /// Nested quoted triples are parsed by a loop over the triples opened and not yet
+    /// closed, each holding the components parsed so far: `<<` opens one, a finished
+    /// term becomes the next component of the innermost open one, and its third
+    /// component is followed by the `>>` that closes it.
+    fn parse_term(&mut self) -> Result<TermValue> {
+        let mut open: Vec<Vec<TermValue>> = Vec::new();
+        loop {
+            let mut term = match self.peek() {
+                Some('<') if self.peek_at(1) == Some('<') => {
+                    self.pos += 2; // '<<'
+                    self.skip_ws();
+                    open.push(Vec::with_capacity(3));
+                    continue;
+                }
+                Some('<') => TermValue::iri(self.parse_iri()?),
+                // `_` first: `_:label` is a blank node, and `peek_prefixed_name`
+                // excludes it.
+                Some('_') => self.parse_blank()?,
+                Some('"') => self.parse_literal()?,
+                _ => {
+                    return match self.peek_prefixed_name() {
+                        Some(name) => Err(self.prefixed_name_err(&name, "a node must be an IRI")),
+                        None => {
+                            Err(self
+                                .err("expected a term (<iri>, _:blank, \"literal\" or <<triple>>)"))
+                        }
+                    };
+                }
+            };
+            loop {
+                let Some(components) = open.last_mut() else {
+                    return Ok(term);
+                };
+                components.push(term);
+                self.skip_ws();
+                if components.len() < 3 {
+                    break;
+                }
+                if self.peek() != Some('>') || self.peek_at(1) != Some('>') {
+                    return Err(self.err("expected '>>' to close a quoted-triple term"));
+                }
+                self.pos += 2;
+                let [s, p, o] = <[TermValue; 3]>::try_from(
+                    open.pop().expect("the innermost quoted triple is open"),
+                )
+                .unwrap_or_else(|_| unreachable!("a quoted triple closes after three components"));
+                term = TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                };
+            }
         }
-        self.pos += 2;
-        Ok(TermValue::Triple {
-            s: Box::new(s),
-            p: Box::new(p),
-            o: Box::new(o),
-        })
     }
 
     fn parse_predicate(&mut self) -> Result<String> {
@@ -1131,5 +1154,138 @@ mod langtag_tests {
                 "`@{tag}` must refuse under {code}, got {error}"
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The term parser and the sort key against their recursive references, and at a
+    //! hundred thousand levels on a 128 KiB thread.
+
+    use purrdf_core::{TermBox, TermValue};
+    use purrdf_iri::BaseScope;
+
+    use super::{MapParser, Result, term_key};
+
+    fn parser(text: &str) -> MapParser {
+        MapParser {
+            chars: text.chars().collect(),
+            pos: 0,
+            base: BaseScope::empty(),
+        }
+    }
+
+    /// The recursive reference of [`MapParser::parse_term`]: a `<<` opens a triple
+    /// term whose three positions it parses in turn; anything else is one term, which
+    /// the parser under test reads without nesting.
+    fn reference_parse(p: &mut MapParser) -> Result<TermValue> {
+        if p.peek() != Some('<') || p.peek_at(1) != Some('<') {
+            return p.parse_term();
+        }
+        p.pos += 2;
+        p.skip_ws();
+        let s = reference_parse(p)?;
+        p.skip_ws();
+        let pr = reference_parse(p)?;
+        p.skip_ws();
+        let o = reference_parse(p)?;
+        p.skip_ws();
+        if p.peek() != Some('>') || p.peek_at(1) != Some('>') {
+            return Err(p.err("expected '>>' to close a quoted-triple term"));
+        }
+        p.pos += 2;
+        Ok(TermValue::Triple {
+            s: TermBox::new(s),
+            p: TermBox::new(pr),
+            o: TermBox::new(o),
+        })
+    }
+
+    fn reference_key(value: &TermValue) -> String {
+        match value {
+            TermValue::Triple { s, p, o } => format!(
+                "3{}\u{1}{}\u{1}{}",
+                reference_key(s),
+                reference_key(p),
+                reference_key(o)
+            ),
+            leaf => term_key(leaf),
+        }
+    }
+
+    /// The shape-map spelling of a generated term, `<< s p o >>` for a triple term: the
+    /// recursive reference of `validate::node_term_string`.
+    fn spelled(value: &TermValue) -> String {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                format!("<< {} {} {} >>", spelled(s), spelled(p), spelled(o))
+            }
+            leaf => crate::validate::node_term_string(leaf),
+        }
+    }
+
+    /// Every generated term's spelling — whole, cut short, and with its last `>>`
+    /// broken — parses to exactly the term, the refusal and the cursor the recursive
+    /// reference reaches; and every term keys and is spelled as the references key and
+    /// spell it.
+    #[test]
+    fn the_parser_and_the_key_agree_with_their_recursive_references() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::test_terms::term_value(
+                &mut state,
+                &mut budget,
+                crate::test_terms::TermShape::IriPredicates,
+            );
+            nested += usize::from(budget < 7);
+            assert_eq!(term_key(&value), reference_key(&value), "seed {seed}");
+            let text = spelled(&value);
+            assert_eq!(
+                crate::validate::node_term_string(&value),
+                text,
+                "seed {seed}"
+            );
+            let cut = text
+                .chars()
+                .take(text.chars().count() / 2)
+                .collect::<String>();
+            let broken = text.replacen(">>", "> >", 1);
+            for input in [text.as_str(), cut.as_str(), broken.as_str()] {
+                let (mut found, mut expected) = (parser(input), parser(input));
+                let parsed = found.parse_term();
+                let reference = reference_parse(&mut expected);
+                assert_eq!(
+                    format!("{parsed:?}"),
+                    format!("{reference:?}"),
+                    "seed {seed}: {input}"
+                );
+                assert_eq!(found.pos, expected.pos, "seed {seed}: {input}");
+            }
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+    }
+
+    /// A triple term a hundred thousand levels deep is parsed from its spelling on a
+    /// thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_parses_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let open = "<< <http://example.org/s> <http://example.org/p> ";
+                let text = format!(
+                    "{}<http://example.org/o>{}",
+                    open.repeat(LEVELS),
+                    " >>".repeat(LEVELS)
+                );
+                let parsed = parser(&text).parse_term().expect("the spelling parses");
+                assert_eq!(parsed, crate::test_terms::triple_chain(LEVELS));
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the parser did not overflow the thread's stack");
     }
 }

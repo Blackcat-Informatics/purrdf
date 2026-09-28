@@ -55,6 +55,7 @@
 //! literal subject or a non-IRI predicate produces no triple for that combination, and
 //! a SPARQL rule's CONSTRUCT already omits them by SPARQL's own CONSTRUCT semantics.
 
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
@@ -1024,15 +1025,17 @@ pub(crate) struct FocusRecord {
     executed: Vec<FastSet<Term>>,
 }
 
-/// Whether `term` is or nests a blank node.
+/// Whether `term` is or nests a blank node, found over [`Term::visit_nested`]'s work
+/// list.
 pub(crate) fn term_mentions_blank(term: &Term) -> bool {
-    match term {
-        Term::BlankNode(_) => true,
-        Term::Triple(inner) => {
-            term_mentions_blank(&inner.subject) || term_mentions_blank(&inner.object)
+    term.visit_nested(|term| {
+        if matches!(term, Term::BlankNode(_)) {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
         }
-        Term::NamedNode(_) | Term::Literal(_) => false,
-    }
+    })
+    .is_break()
 }
 
 /// Whether an IRI anchor admits `term`.
@@ -1153,8 +1156,13 @@ impl FocusRecord {
 /// order: the target nodes the rule is executed for.
 fn eligible_focus_nodes(data: &ShaclData, rule: &Rule, shape: &Shape) -> Result<Vec<Term>, String> {
     let plan = RulePlan::of(data, shape, &rule.conditions);
+    // Read once per resolution, polled per focus node: a governed rule application stops
+    // (and a host slicing its signal into yields gets the event loop back) between the
+    // condition checks of successive focus nodes; the ungoverned path pays one branch.
+    let governors = crate::sparql::current_governors();
     let mut focus_nodes = Vec::new();
     for focus in plan.focus_nodes(data)? {
+        crate::sparql::poll_between_evaluations(governors.as_deref())?;
         if conditions_hold(data, &focus, &plan)? {
             focus_nodes.push(focus);
         }
@@ -1339,7 +1347,12 @@ fn triple_rule_execution(
         .iter()
         .map(|expr| expr.as_ref().map(|expr| ExprPlan::of(data, expr)))
         .collect();
+    // Read once per execution, polled per focus node: a governed rule application stops
+    // (and a host slicing its signal into yields gets the event loop back) between focus
+    // nodes of a rule that runs no SPARQL; the ungoverned path pays one branch.
+    let governors = crate::sparql::current_governors();
     for focus in focus_nodes {
+        crate::sparql::poll_between_evaluations(governors.as_deref())?;
         let mut guard = RecursionGuard::new();
         let mut sets: Vec<Vec<Term>> = Vec::with_capacity(3);
         for plan in &plans {
@@ -1440,6 +1453,9 @@ fn sparql_rule_execution(
                 crate::sparql::this_and_shape_context_names(run.shapes_graph_iri, run.shape);
             let mut names: Vec<&str> = context.to_vec();
             names.extend(run.parameters.iter().map(|(name, _)| name.as_str()));
+            // Polled between focus nodes as well as inside each CONSTRUCT, as on the
+            // triple rule execution.
+            let governors = crate::sparql::current_governors();
             crate::sparql::with_cached_execution(
                 run.construct,
                 &names,
@@ -1459,6 +1475,7 @@ fn sparql_rule_execution(
                         if !*selected {
                             continue;
                         }
+                        crate::sparql::poll_between_evaluations(governors.as_deref())?;
                         let tag = mint_tag(Some(focus), execution_number);
                         execution.bind(THIS_SLOT, focus.to_term_value())?;
                         let graph = crate::sparql::run_bound_construct_with_shacl_prebinding_view(
@@ -4025,5 +4042,36 @@ mod tests {
             serialize(),
             "independent entailment runs must serialize byte-identically"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The blank-carrying test against its recursive reference.
+
+    use super::term_mentions_blank;
+    use crate::term::Term;
+    use crate::term::term_walk_tests::generated;
+
+    fn reference(term: &Term) -> bool {
+        match term {
+            Term::BlankNode(_) => true,
+            Term::Triple(inner) => reference(&inner.subject) || reference(&inner.object),
+            Term::NamedNode(_) | Term::Literal(_) => false,
+        }
+    }
+
+    /// Every generated term carries a blank node exactly when the recursive reference
+    /// says it does.
+    #[test]
+    fn the_test_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut carrying = 0;
+        for seed in 0..400_u64 {
+            let term = generated(seed);
+            let found = term_mentions_blank(&term);
+            assert_eq!(found, reference(&term), "seed {seed}");
+            carrying += usize::from(found);
+        }
+        assert!(carrying > 0, "some generated term carries a blank node");
     }
 }

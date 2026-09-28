@@ -23,14 +23,14 @@ test("literal(value, { language, direction }) builds an RDF 1.2 directional lite
 test("Dataset.from and DataFactory.dataset build chainable datasets from quads", () => {
   const f = new DataFactory();
   const q1 = f.quad(
-    f.namedNode("https://e/s1"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o1"),
+    f.namedNode("https://example.org/s1"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o1"),
   );
   const q2 = f.quad(
-    f.namedNode("https://e/s2"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o2"),
+    f.namedNode("https://example.org/s2"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o2"),
   );
 
   const fromStatic = Dataset.from([q1, q2]);
@@ -49,9 +49,9 @@ test("Dataset.from and DataFactory.dataset build chainable datasets from quads",
 test("Dataset#toStream is the instance form of datasetToStream", async () => {
   const f = new DataFactory();
   const q = f.quad(
-    f.namedNode("https://e/s"),
-    f.namedNode("https://e/p"),
-    f.namedNode("https://e/o"),
+    f.namedNode("https://example.org/s"),
+    f.namedNode("https://example.org/p"),
+    f.namedNode("https://example.org/o"),
   );
   const ds = Dataset.from([q]);
   const streamed = [];
