@@ -437,40 +437,6 @@ fn push_expression_parts<'a>(expr: &'a Expression, pending: &mut Vec<ExpressionP
     pending[first..].reverse();
 }
 
-/// Whether evaluating `expr` for one row can charge a governor at all.
-///
-/// Expression evaluation charges nothing of its own; the two ways out of it that do are
-/// an embedded `EXISTS`, which re-enters whole-pattern evaluation (see
-/// [`expression_re_enters_evaluation`]), and a call to a SPARQL-bodied or
-/// expression-bodied user function, which charges its invocation and evaluates a body.
-/// A native function is handed values and nothing else, so it charges nothing.
-///
-/// A row loop asks this to decide where it charges each row's admission: an expression
-/// that charges nothing can be admitted row by row, immediately before its own work,
-/// without moving any charge relative to any other; one that charges keeps every
-/// admission ahead of the work, so its own charges still follow them.
-///
-/// The walk is [`expression_re_enters_evaluation`]'s: a work list of the parts still to
-/// read, popped in depth-first order, stopping at the first part that charges.
-pub(crate) fn expression_may_charge(expr: &Expression, functions: &UserFunctionRegistry) -> bool {
-    let mut pending = vec![ExpressionPart::Sub(expr)];
-    while let Some(part) = pending.pop() {
-        match part {
-            ExpressionPart::Sub(expr) => push_expression_parts(expr, &mut pending),
-            ExpressionPart::Call(Function::Custom(iri)) => {
-                if functions.resolve(iri.as_str()).is_some()
-                    || functions.resolve_expr(iri.as_str()).is_some()
-                {
-                    return true;
-                }
-            }
-            ExpressionPart::Call(_) => {}
-            ExpressionPart::Exists(_) => return true,
-        }
-    }
-    false
-}
-
 /// Whether `pattern` (recursively) is safe to evaluate under the fork-join
 /// parallel model — the pattern-level twin of [`is_parallel_safe`], for callers
 /// (e.g. `UNION`) that must gate a whole sub-pattern rather than a single
@@ -2486,9 +2452,8 @@ mod walk_tests {
 
     use super::{
         ExistsVerdict, ExpressionPart, PatternPart, SafetyRegistries, expr_reaches_unsafe_builtin,
-        expression_may_charge, expression_re_enters_evaluation, function_is_unsafe,
-        pattern_reaches_unsafe_builtin, property_function_is_unsafe, visit_expression_parts,
-        visit_pattern_parts,
+        expression_re_enters_evaluation, function_is_unsafe, pattern_reaches_unsafe_builtin,
+        property_function_is_unsafe, visit_expression_parts, visit_pattern_parts,
     };
     use crate::agg_fn::AggregateRegistry;
     use crate::property_fn::PropertyFunctionRegistry;
@@ -2501,23 +2466,6 @@ mod walk_tests {
         visit_expression_parts(expr, &mut |part| {
             found |= match part {
                 ExpressionPart::Sub(sub) => reference_re_enters(sub),
-                ExpressionPart::Call(_) => false,
-                ExpressionPart::Exists(_) => true,
-            };
-            found
-        });
-        found
-    }
-
-    fn reference_may_charge(expr: &Expression, functions: &UserFunctionRegistry) -> bool {
-        let mut found = false;
-        visit_expression_parts(expr, &mut |part| {
-            found |= match part {
-                ExpressionPart::Sub(sub) => reference_may_charge(sub, functions),
-                ExpressionPart::Call(Function::Custom(iri)) => {
-                    functions.resolve(iri.as_str()).is_some()
-                        || functions.resolve_expr(iri.as_str()).is_some()
-                }
                 ExpressionPart::Call(_) => false,
                 ExpressionPart::Exists(_) => true,
             };
@@ -2839,7 +2787,6 @@ mod walk_tests {
         let mut unsafe_expressions = 0;
         let mut unsafe_patterns = 0;
         let mut re_entering = 0;
-        let mut charging = 0;
         for seed in 0..400_u64 {
             let mut choices = Choices::new(seed);
             let expr = expression(&mut choices);
@@ -2853,19 +2800,6 @@ mod walk_tests {
                 "seed {seed}: {expr:?}"
             );
             re_entering += usize::from(re_enters);
-
-            let charges = expression_may_charge(&expr, &functions);
-            assert_eq!(
-                charges,
-                reference_may_charge(&expr, &functions),
-                "seed {seed}: {expr:?}"
-            );
-            assert_eq!(
-                expression_may_charge(&expr, &UserFunctionRegistry::EMPTY),
-                reference_may_charge(&expr, &UserFunctionRegistry::EMPTY),
-                "seed {seed}: {expr:?}"
-            );
-            charging += usize::from(charges);
 
             for registries in registries {
                 for verdict in verdicts {
@@ -2890,7 +2824,6 @@ mod walk_tests {
             ("unsafe expressions", unsafe_expressions, 1600),
             ("unsafe patterns", unsafe_patterns, 1600),
             ("re-entering expressions", re_entering, 400),
-            ("charging expressions", charging, 400),
         ] {
             assert!(
                 count > total / 50 && count < total - total / 50,
@@ -2932,7 +2865,6 @@ mod walk_tests {
                     vec![Expression::Variable(Variable::new("v"))],
                 ));
                 let probing = negated(Expression::Exists(Child::new(bgp())));
-                let bodied = negated(call(custom(SPARQL_BODIED), Vec::new()));
                 let unknown_relation = filtered(relation_call(RELATION_UNKNOWN));
                 let stable_relation = filtered(relation_call(RELATION_STABLE));
                 [
@@ -2940,8 +2872,6 @@ mod walk_tests {
                     expr_reaches_unsafe_builtin(&pure, registries, &|_| None),
                     expression_re_enters_evaluation(&probing),
                     expression_re_enters_evaluation(&pure),
-                    expression_may_charge(&bodied, &functions),
-                    expression_may_charge(&pure, &functions),
                     pattern_reaches_unsafe_builtin(&unknown_relation, registries, &|_| None),
                     pattern_reaches_unsafe_builtin(&stable_relation, registries, &|_| None),
                     expr_reaches_unsafe_builtin(&probing, registries, &deciding_verdict),
@@ -2950,9 +2880,6 @@ mod walk_tests {
             .expect("spawn")
             .join()
             .expect("the 128 KiB thread returned");
-        assert_eq!(
-            answers,
-            [true, false, true, false, true, false, true, false, false]
-        );
+        assert_eq!(answers, [true, false, true, false, true, false, false]);
     }
 }

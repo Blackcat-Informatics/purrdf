@@ -1595,8 +1595,14 @@ fn eval_aggregate<D: DatasetView + Sync>(
         let mut seen: Option<DetHashSet<std::borrow::Cow<'_, Solution<D::Id>>>> =
             agg.distinct.then(DetHashSet::default);
         let mut survivors: usize = 0;
+        // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
+        // latched trip first, then the `aggregate-accumulation` charge and its poll.
+        let mut checkpoint = crate::row_checkpoint::RowCheckpoint::sequential(
+            ctx,
+            ChargePoint::AggregateAccumulation,
+        );
         for &i in idxs {
-            if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
+            if let Err(tripped) = checkpoint.pass(ctx) {
                 ctx.expression_barrier.record(tripped);
                 return Ok(None);
             }
@@ -1667,11 +1673,17 @@ fn eval_aggregate<D: DatasetView + Sync>(
         // aggregate's own accumulator state is (see `eval_custom_aggregate`'s
         // matching charge), through the SAME deterministic per-value proxy
         // [`crate::scratch::value_bytes`] the arena's own automatic charge uses.
+        // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
+        // latched trip first, then the `aggregate-accumulation` charge and its poll.
+        let mut checkpoint = crate::row_checkpoint::RowCheckpoint::sequential(
+            ctx,
+            ChargePoint::AggregateAccumulation,
+        );
         for &i in idxs {
             let Some(term) = eval_expr(first_arg, &rows[i], schema, ctx)? else {
                 continue;
             };
-            if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
+            if let Err(tripped) = checkpoint.pass(ctx) {
                 ctx.expression_barrier.record(tripped);
                 return Ok(None);
             }
@@ -1881,6 +1893,10 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // survivors without `DISTINCT`, so reserve it once instead of growing by doubling.
     let mut survivors: Vec<Vec<TermValue>> =
         Vec::with_capacity(if agg.distinct { 0 } else { idxs.len() });
+    // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
+    // latched trip first, then the `aggregate-accumulation` charge and its poll.
+    let mut checkpoint =
+        crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
     for &i in idxs {
         tuple.clear();
         let mut every_position_bound = true;
@@ -1899,7 +1915,7 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         // the built-in fold path in `eval_aggregate` charges it: producing and
         // inspecting the tuple is the work this point prices, whether or not
         // `DISTINCT` goes on to discard it.
-        if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
+        if let Err(tripped) = checkpoint.pass(ctx) {
             ctx.expression_barrier.record(tripped);
             return Ok(None);
         }

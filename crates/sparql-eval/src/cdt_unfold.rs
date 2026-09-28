@@ -104,7 +104,7 @@ use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::expr::eval_expr;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
-use crate::row_ingest::{GovernedRowIngest, RowAdmission};
+use crate::row_ingest::{GovernedRowIngest, IngestVerdict};
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -126,7 +126,7 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         // No rows cross, but the COLUMNS still do — this node's output schema is
         // syntactic (the inner's columns plus its own targets), exactly as
         // `Extend`'s is.
@@ -144,14 +144,17 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     // expression evaluation per input row is what this operator spends before it
     // knows how far that row expands. See `crate::expr::eval_filter` for why the
     // refused rows are cut before the expression runs rather than after.
-    // Where each input row is admitted is `EvalCtx::row_admission`'s decision; this
-    // loop is never forked.
-    let point = crate::governor::ChargePoint::RowExpressionEvaluation;
-    let admission = ctx.row_admission(point, expression, false);
-    if admission.is_ahead() {
-        let _ = ctx.admit_rows(&mut seq.rows, point);
-    }
-    let each_row = admission.is_each_row();
+    //
+    // The canonical order is admission(i), then the ingest of every row input row `i`
+    // expands to, then admission(i + 1): each input row passes the row checkpoint
+    // immediately before its own work, so a ceiling trips at the admission or the
+    // ingest of the row the budget ran out on. This loop is never forked.
+    let mut checkpoint = crate::row_checkpoint::RowCheckpoint::for_rows(
+        ctx,
+        crate::governor::ChargePoint::RowExpressionEvaluation,
+        false,
+        seq.rows.len(),
+    );
 
     let in_width = seq.schema.len();
     let mut schema = (*seq.schema).clone();
@@ -172,9 +175,9 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     let mut tripped: Option<TrippedGovernor> = None;
 
     'input: for (idx, mu) in seq.rows.iter().enumerate() {
-        // The row's admission, when it is charged here rather than ahead of the loop: a
-        // refusal ends the loop where the sweep would have truncated it.
-        if each_row && ctx.charge(point).is_err() {
+        // Admission(i): a refusal ends the loop before this row's expression runs.
+        if let Err(governor) = checkpoint.pass(ctx) {
+            tripped = Some(governor);
             break 'input;
         }
         // §17.4.2.2: `BNODE(strExpr)` memoizes per solution — see `ctx.current_row`'s
@@ -202,11 +205,11 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
                 break 'input;
             }
             match ingest.admit(ctx, rows.len()) {
-                RowAdmission::Abandoned(governor) => {
+                IngestVerdict::Abandoned(governor) => {
                     tripped = governor;
                     break 'input;
                 }
-                RowAdmission::Admitted => {}
+                IngestVerdict::Admitted => {}
             }
             let mut row: Solution<D::Id> = smallvec::smallvec![None; width];
             row[..in_width].copy_from_slice(mu);
@@ -219,11 +222,11 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
                 break 'input;
             }
             match ingest.admit(ctx, rows.len()) {
-                RowAdmission::Abandoned(governor) => {
+                IngestVerdict::Abandoned(governor) => {
                     tripped = governor;
                     break 'input;
                 }
-                RowAdmission::Admitted => {}
+                IngestVerdict::Admitted => {}
             }
             let mut row: Solution<D::Id> = smallvec::smallvec![None; width];
             row[..in_width].copy_from_slice(mu);

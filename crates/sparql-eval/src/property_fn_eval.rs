@@ -101,7 +101,7 @@ use crate::property_fn::{
     PfArgs, PfArity, PfAttestation, PfCursor, PropertyFunction, ServiceLevel, generation_contained,
     next_contained, open_contained, service_level_contained, take_work_contained,
 };
-use crate::row_ingest::{GovernedRowIngest, RowAdmission};
+use crate::row_ingest::{GovernedRowIngest, IngestVerdict};
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 use crate::witness::RelationWitness;
 
@@ -704,12 +704,12 @@ fn eval_call_over<D: DatasetView + Sync>(
                 continue;
             }
             match ingest.admit(ctx, rows.len()) {
-                RowAdmission::Abandoned(governor) => {
+                IngestVerdict::Abandoned(governor) => {
                     tripped = governor;
                     stop_input = true;
                     break;
                 }
-                RowAdmission::Admitted => {}
+                IngestVerdict::Admitted => {}
             }
             let mut row: Solution<D::Id> = smallvec::smallvec![None; width];
             row[..left_len].copy_from_slice(mu);

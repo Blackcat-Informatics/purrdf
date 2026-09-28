@@ -1177,11 +1177,11 @@ fn ingest<D: DatasetView + Sync>(
     let mut tripped = None;
     for binding in resolved_rows {
         match ingest.admit(ctx, rows.len()) {
-            crate::row_ingest::RowAdmission::Abandoned(governor) => {
+            crate::row_ingest::IngestVerdict::Abandoned(governor) => {
                 tripped = governor;
                 break;
             }
-            crate::row_ingest::RowAdmission::Admitted => {}
+            crate::row_ingest::IngestVerdict::Admitted => {}
         }
         let row = ingest.intern_row(ctx, binding);
         rows.push(row);

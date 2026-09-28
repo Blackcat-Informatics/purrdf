@@ -131,6 +131,9 @@ pub mod remote;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.
 pub mod remote_http;
+mod row_checkpoint;
+#[cfg(test)]
+mod row_checkpoint_gate;
 mod row_ingest;
 pub mod scratch;
 // Per-service context for the SERVICE seam: the capability/credential/header policy a

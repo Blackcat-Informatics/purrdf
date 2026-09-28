@@ -236,7 +236,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         return Ok(lift.withheld());
     };
     let schema = seq.schema.clone();
@@ -249,28 +249,27 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     // is latched in the governor state, which is where `eval` reads it to certify this
     // node's output.
     //
-    // Where each row is admitted — in a sweep ahead of the loop, or immediately before
-    // the row's own work — is `EvalCtx::row_admission`'s decision; either way the
-    // charges, their order and the row they trip at are the same.
+    // Each row passes the row checkpoint immediately before its own work (see
+    // `crate::row_checkpoint`): a forked loop records the admissions in its workers and
+    // commits them in source order after the join, so both paths charge the same
+    // sequence and trip at the same row.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
     let forked = ctx.may_fork_row_loop(expr);
-    let admission = ctx.row_admission(point, expr, forked);
-    if admission.is_ahead() {
-        let _ = ctx.admit_rows(&mut seq.rows, point);
-    }
+    let mut checkpoint =
+        crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let rows = if forked {
-        let checkpoint = admission.checkpoint();
+        let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
         // Harvesting, not plain: a predicate can reach a property function through an
         // embedded `EXISTS`, and that call's attestation is recorded on the WORKER's
         // context. Dropping it would make a governed receipt depend on whether the row
         // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
-        let (rows, harvests) = crate::parallel::par_chunk_try_map_init(
+        let (mut rows, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
-            &seq.rows,
-            || (ctx.fork_for_worker(), checkpoint),
+            admissible,
+            || (ctx.fork_for_worker(), checkpoint.clone()),
             |worker, acc, row| {
                 let (child, checkpoint) = worker;
-                if checkpoint.stops(child) {
+                if checkpoint.pass(child).is_err() {
                     return Ok(());
                 }
                 if eval_ebv(expr, row, &schema, child)? == Some(true) {
@@ -279,17 +278,21 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
                 }
                 Ok(())
             },
-            |worker| (core::mem::take(&mut worker.0.witness), worker.1),
+            |worker| {
+                (
+                    core::mem::take(&mut worker.0.witness),
+                    core::mem::replace(&mut worker.1, checkpoint.clone()),
+                )
+            },
         )?;
-        let mut rows = rows;
-        crate::eval::RowCheckpoint::keep_prefix(&mut rows, harvests.iter().map(|h| h.1));
-        ctx.absorb_worker_witnesses(harvests.into_iter().map(|h| h.0));
+        let (witnesses, chunks): (Vec<_>, Vec<_>) = harvests.into_iter().unzip();
+        checkpoint.commit(ctx, &mut rows, chunks);
+        ctx.absorb_worker_witnesses(witnesses);
         rows
     } else {
-        let each_row = admission.is_each_row();
         let mut rows = Vec::new();
         for row in seq.rows {
-            if each_row && ctx.charge(point).is_err() {
+            if checkpoint.pass(ctx).is_err() {
                 break;
             }
             if eval_ebv(expr, &row, &schema, ctx)? == Some(true) {
@@ -326,7 +329,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
-    let Some(mut seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
+    let Some(seq) = lift.absorb(0, eval_evaluated(inner, ctx)?) else {
         let mut schema = lift.absorbed_schema().map_or_else(
             || (*crate::eval::syntactic_schema(inner)).clone(),
             |s| (*s).clone(),
@@ -335,23 +338,20 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         return Ok(lift.finish(SolutionSeq::empty(Arc::new(schema))));
     };
     // The `row-expression-evaluation` charge point; see `eval_filter` for why it is per
-    // row rather than per sub-expression, and why the refused rows are cut before the
-    // expression runs rather than after.
-    // Where each row is admitted is `EvalCtx::row_admission`'s decision, as in
-    // `eval_filter`.
+    // row rather than per sub-expression, why the refused rows are cut before the
+    // expression runs rather than after, and how a forked loop's admissions are
+    // committed.
     let point = crate::governor::ChargePoint::RowExpressionEvaluation;
     let forked = ctx.may_fork_row_loop(expr);
-    let admission = ctx.row_admission(point, expr, forked);
-    if admission.is_ahead() {
-        let _ = ctx.admit_rows(&mut seq.rows, point);
-    }
+    let mut checkpoint =
+        crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
     let mut schema = (*seq.schema).clone();
     let col = schema.push(var.clone());
     let width = schema.len();
     let schema = Arc::new(schema);
 
     let rows = if forked {
-        let checkpoint = admission.checkpoint();
+        let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
         // Parallel path: `is_parallel_safe` excludes `BNODE` (every arity), so the
         // per-solution `BNODE(strExpr)` memo (`ctx.current_row`/`ctx.bnode_memo`) is
         // never observed here — no per-row `current_row` bookkeeping is needed.
@@ -359,13 +359,13 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         // Harvesting, for `eval_filter`'s reason: a `BIND` expression can reach a
         // property function through an embedded `EXISTS`, and the worker's attestation
         // must reach the parent's receipt.
-        let (minted, harvests) = crate::parallel::par_chunk_try_map_init(
+        let (mut minted, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
-            &seq.rows,
-            || (ctx.fork_for_worker(), checkpoint),
+            admissible,
+            || (ctx.fork_for_worker(), checkpoint.clone()),
             |worker, acc, in_row| {
                 let (child, checkpoint) = worker;
-                if checkpoint.stops(child) {
+                if checkpoint.pass(child).is_err() {
                     return Ok(());
                 }
                 let mut row = in_row.clone();
@@ -376,20 +376,24 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
                 checkpoint.keep();
                 Ok(())
             },
-            |worker| (core::mem::take(&mut worker.0.witness), worker.1),
+            |worker| {
+                (
+                    core::mem::take(&mut worker.0.witness),
+                    core::mem::replace(&mut worker.1, checkpoint.clone()),
+                )
+            },
         )?;
-        let mut minted = minted;
-        crate::eval::RowCheckpoint::keep_prefix(&mut minted, harvests.iter().map(|h| h.1));
-        ctx.absorb_worker_witnesses(harvests.into_iter().map(|h| h.0));
+        let (witnesses, chunks): (Vec<_>, Vec<_>) = harvests.into_iter().unzip();
+        checkpoint.commit(ctx, &mut minted, chunks);
+        ctx.absorb_worker_witnesses(witnesses);
         minted
             .into_iter()
             .map(|row| crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, row))
             .collect()
     } else {
-        let each_row = admission.is_each_row();
         let mut rows = Vec::with_capacity(seq.rows.len());
         for (idx, mut row) in seq.rows.into_iter().enumerate() {
-            if each_row && ctx.charge(point).is_err() {
+            if checkpoint.pass(ctx).is_err() {
                 break;
             }
             row.resize(width, None);

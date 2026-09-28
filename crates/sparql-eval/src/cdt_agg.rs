@@ -358,6 +358,10 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
     // the projected keys below can borrow one contiguous buffer.
     let mut sort_values: Vec<Option<TermValue>> = Vec::new();
 
+    // Each value folded passes the row checkpoint (`crate::row_checkpoint`): a
+    // latched trip first, then the `aggregate-accumulation` charge and its poll.
+    let mut checkpoint =
+        crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
     for &i in idxs {
         let row = &rows[i];
         let first = eval_expr(first_arg, row, schema, ctx)?;
@@ -368,7 +372,7 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
         // Charged for every row `FOLD` inspects, whether or not `DISTINCT` keeps
         // it — see `ChargePoint::AggregateAccumulation`'s doc for why the charge
         // precedes the dedup check in every aggregate.
-        if let Err(tripped) = ctx.charge(ChargePoint::AggregateAccumulation) {
+        if let Err(tripped) = checkpoint.pass(ctx) {
             ctx.expression_barrier.record(tripped);
             return Ok(None);
         }
