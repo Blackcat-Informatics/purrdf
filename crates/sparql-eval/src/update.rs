@@ -670,7 +670,8 @@ fn delete_insert(
     //
     // Nothing has been written to `m` at this point (the mutations below are collected
     // first), so this return needs no undo of its own.
-    ctx.endpoint_scan = crate::service_endpoints::scan(pattern);
+    let tree = crate::plan::Tree::build(pattern);
+    ctx.install_plan(&tree);
     let seq = eval_evaluated(pattern, &mut ctx)
         .map_err(|e| {
             RdfDiagnostic::error(
@@ -810,7 +811,8 @@ fn admit_where<D: purrdf_core::DatasetView + Sync>(
     if !state.is_engaged_in(dimension) {
         return Ok(());
     }
-    let mut survey = crate::bgp::PlanSurvey::default();
+    let tree = crate::plan::Tree::build(pattern);
+    let mut survey = crate::bgp::PlanSurvey::for_shape(tree.shape());
     crate::bgp::survey_pattern_plans(
         snap,
         active_dataset,

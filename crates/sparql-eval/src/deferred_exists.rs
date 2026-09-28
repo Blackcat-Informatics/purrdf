@@ -444,12 +444,14 @@ fn build_site<D: DatasetView + Sync>(
     let mut vars = DetHashSet::default();
     crate::expr::pattern_all_vars(body, &mut vars);
     let parallel_unsafe = !crate::parallel::is_parallel_safe_pattern(body, ctx.safety_registries());
-    let service_uses = match &ctx.endpoint_scan {
+    let service_uses = match ctx.endpoint_scan() {
         crate::service_endpoints::EndpointScan::Absent => Vec::new(),
-        crate::service_endpoints::EndpointScan::Present(index) => match index.exists_uses(body) {
-            Some(uses) => uses.to_vec(),
-            None => endpoint_uses(body),
-        },
+        crate::service_endpoints::EndpointScan::Present(index) => {
+            match ctx.plan_node(body).and_then(|body| index.exists_uses(body)) {
+                Some(uses) => uses.to_vec(),
+                None => endpoint_uses(body),
+            }
+        }
     };
     let plan_map = match (&ctx.ledger, prepared.as_ref()) {
         (Some(_), PreparedExists::Pattern { ledger_source, .. }) => {

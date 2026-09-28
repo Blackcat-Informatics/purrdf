@@ -2148,13 +2148,10 @@ impl NativeSparqlEngine {
         let aggregates = env.aggregates();
         let prepared = self.prepare_for(query_text, base_iri, env)?;
         let survey = self.survey_plan(dataset, &prepared.query, relations)?;
-        // The ledger's node table is fixed against the plan that is about to be evaluated.
-        // No substitutions are applied on this path, so the addresses the ledger records
-        // are the addresses the evaluator visits.
-        let ledger = Arc::new(ChargeLedger::for_plan(
-            query_pattern(&prepared.query),
-            &survey.estimates,
-        ));
+        // The ledger's node table is the survey's tree: the plan about to be evaluated,
+        // numbered in pre-order. No substitutions are applied on this path, so the nodes
+        // the ledger numbers are the nodes the evaluator visits.
+        let ledger = Arc::new(ChargeLedger::for_plan(survey.shape(), &survey.estimates));
         let governors = match stop {
             Some(signal) => QueryGovernors::METERED.with_stop_signal(signal),
             None => QueryGovernors::METERED,
@@ -2215,7 +2212,8 @@ impl NativeSparqlEngine {
     ) -> Result<crate::bgp::PlanSurvey, RdfDiagnostic> {
         let _ = self;
         let active_dataset = ActiveDataset::from_query_dataset(query.dataset(), dataset);
-        let mut survey = crate::bgp::PlanSurvey::default();
+        let tree = crate::plan::Tree::build(query_pattern(query));
+        let mut survey = crate::bgp::PlanSurvey::for_shape(tree.shape());
         crate::bgp::survey_pattern_plans(
             dataset,
             &active_dataset,

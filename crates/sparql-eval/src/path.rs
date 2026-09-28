@@ -341,7 +341,10 @@ struct PathCtx<'a, D: DatasetView + Sync> {
     /// one is installed. A traversal's fuel is spent well below the operator boundary, so
     /// without this the single most graph-dependent cost in the evaluator would be the one
     /// cost an EXPLAIN could not attribute.
-    ledger: Option<(Arc<crate::governor::ledger::ChargeLedger>, usize)>,
+    ledger: Option<(
+        Arc<crate::governor::ledger::ChargeLedger>,
+        crate::plan::NodeId,
+    )>,
 }
 
 impl<D: DatasetView + Sync> PathCtx<'_, D> {

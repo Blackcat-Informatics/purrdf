@@ -498,12 +498,14 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// Naturally per-query: a fresh [`EvalCtx`] is built for each `query()` call.
     pub(crate) exists_inner_cache: DetHashMap<ExistsCacheKey<D::Id>, Arc<ExistsInner<D::Id>>>,
     /// Per-query cache of [`PreparedExists`] (ENF normal form, the first-witness-wrapped
-    /// form, and the fourth structural analysis table), keyed by the `EXISTS`/`NOT EXISTS`
-    /// AST node's immutable address. Populated lazily, once per distinct site — see
-    /// [`Self::prepared_exists`], the sole accessor, for the substituted-temporary ABA
-    /// guard this cache observes: like [`Self::exists_inner_cache`] and
-    /// [`Self::const_atom_cache`], it is neither read nor written inside a substituted
-    /// window. A nested `EXISTS` inside a per-row copy does not need it: the copy holds a
+    /// form, and the fourth structural analysis table) for the `EXISTS`/`NOT EXISTS`
+    /// bodies that are NOT nodes of the evaluation's tree ([`Self::plan`]) — a body inside
+    /// a prepared, normalized `EXISTS` tree — keyed by the body's immutable address. A
+    /// body of the tree keeps its preparation on its [`crate::plan::ExistsSite`] instead.
+    /// Populated lazily, once per distinct site — see [`Self::prepared_exists`], the sole
+    /// accessor, for the substituted-temporary ABA guard this cache observes: like
+    /// [`Self::exists_inner_cache`] and [`Self::const_atom_cache`], it is neither read nor
+    /// written inside a substituted window. A nested `EXISTS` inside a per-row copy does not need it: the copy holds a
     /// placeholder whose body was prepared once, from the written body, and kept by the
     /// preparation (or plan node) the body was read from (see [`crate::deferred_exists`]).
     pub(crate) exists_prepared_cache: DetHashMap<usize, Arc<PreparedExists>>,
@@ -651,9 +653,12 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// [`crate::service_endpoints`]. Empty outside such an operand, which is always, for
     /// a query without a variable endpoint.
     pub(crate) endpoint_frames: Vec<crate::service_endpoints::EndpointFrame<D::Id>>,
-    /// Whether the query being evaluated has a variable-endpoint `SERVICE` at all, so a
-    /// query without one never analyses a join operand for one.
-    pub(crate) endpoint_scan: crate::service_endpoints::EndpointScan,
+    /// The numbered tree of the pattern being evaluated: its shape (the variable-endpoint
+    /// `SERVICE` analysis, the `EXISTS` sites) and the key its node ids are read against.
+    /// Installed with the tree by every evaluation entry ([`prepare_query_context`],
+    /// [`eval`], an UPDATE's `WHERE`); `None` on a context no entry prepared, which then
+    /// has no variable-endpoint analysis and no tree-resident `EXISTS` preparations.
+    pub(crate) plan: Option<crate::plan::PlanHandle>,
     /// The query's effective base IRI (see [`purrdf_sparql_algebra::Query::base_iri`]),
     /// set once per `evaluate_query` call. `IRI()`/`URI()` resolves a relative-reference
     /// string argument against this (SPARQL 1.1 §17.4.2.6); `None` means no base was
@@ -734,26 +739,28 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// worker, because a worker evaluating part of a node's rows is under the same ceiling
     /// the node is.
     pub(crate) cap_pushdown: Option<Arc<CapPushdown>>,
-    /// The address of the algebra node currently being evaluated, set by
-    /// [`eval_evaluated`] and restored on the way out.
+    /// The algebra node currently being evaluated, as the installed
+    /// [`Self::cap_pushdown`] numbers it — `None` when no pushdown is installed or it
+    /// numbers no such node. Set by [`Self::enter_node`] and restored on the way out.
     ///
-    /// The key both the pushdown and the ledger are looked up by. It is a plain scalar so
-    /// that a fork copies it: a worker charges the node its parent was charging, which is
-    /// what makes the ledger's per-node totals independent of how the work was split.
-    pub(crate) current_node: usize,
+    /// A plain `Copy` value so that a fork copies it: a worker reads the ceiling of the
+    /// node its parent was evaluating.
+    pub(crate) cap_at: Option<(crate::plan::TreeKey, crate::plan::NodeId)>,
     /// The per-node charge ledger, when one is installed. `None` on every ordinary query;
     /// the EXPLAIN path installs one.
     pub(crate) ledger: Option<Arc<ChargeLedger>>,
     /// The ledger ordinal of the nearest enclosing **plan** node.
     ///
-    /// Distinct from [`Self::current_node`] because not every pattern the evaluator
+    /// A plain `Copy` value so that a fork copies it: a worker charges the node its parent
+    /// was charging, which is what makes the ledger's per-node totals independent of how
+    /// the work was split. Distinct from [`Self::cap_at`] because not every pattern the evaluator
     /// enters is in the plan: a correlated `EXISTS` builds a substituted temporary tree
     /// per outer row, and a SHACL-AF function body is a separate query entirely. Those
     /// have no ordinal, so this cursor does not move for them and their charges accrue to
     /// the operator that owns the expression — which is what makes the ledger's fuel
     /// column sum to the evidence's fuel total exactly.
-    pub(crate) ledger_node: usize,
-    /// Whether [`Self::current_node`]'s own committed-output rows/cells ARE
+    pub(crate) ledger_node: crate::plan::NodeId,
+    /// Whether the current node's own committed-output rows/cells ARE
     /// [`Self::ledger_node`]'s true output for this evaluation, and should therefore be
     /// added to its ledger `rows`/`cells` columns.
     ///
@@ -839,6 +846,15 @@ impl<D: DatasetView + Sync> core::fmt::Debug for EvalCtx<'_, D> {
             .finish_non_exhaustive()
     }
 }
+
+/// The cursors [`EvalCtx::enter_node`] saves and [`EvalCtx::leave_node`] restores: the
+/// node the installed pushdown reads its ceiling at, the ledger node, and whether the
+/// current node's committed rows count as that ledger node's.
+pub(crate) type NodeCursors = (
+    Option<(crate::plan::TreeKey, crate::plan::NodeId)>,
+    crate::plan::NodeId,
+    bool,
+);
 
 /// RAII guard returned by [`EvalCtx::enter_substituted_exists`]; see there for
 /// why the flag it manages exists and what composes correctly because this is
@@ -940,9 +956,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             deferred_exists: None,
             plan_exists_sites: None,
             endpoint_frames: Vec::new(),
-            // The body's own scan is installed when it is prepared for evaluation
-            // (`prepare_query_context`); nothing of the caller's applies to it.
-            endpoint_scan: crate::service_endpoints::EndpointScan::Absent,
+            // The tree is installed when a pattern is prepared for evaluation
+            // (`prepare_query_context`, `eval`, an UPDATE's `WHERE`).
+            plan: None,
             base_iri: None,
             user_functions: &EMPTY_FUNCTIONS,
             property_functions: &EMPTY_RELATIONS,
@@ -952,9 +968,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             governors: None,
             expression_barrier: ExpressionBarrier::default(),
             cap_pushdown: None,
-            current_node: 0,
+            cap_at: None,
             ledger: None,
-            ledger_node: ChargeLedger::root_ordinal(),
+            ledger_node: crate::plan::NodeId::ROOT,
             ledger_counts_rows: true,
             witness: RelationWitness::default(),
             // A directly-built context is not a governed entry: it has no outcome type
@@ -1210,7 +1226,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     #[must_use]
     pub(crate) fn with_charge_ledger(mut self, ledger: Arc<ChargeLedger>) -> Self {
         self.ledger = Some(ledger);
-        self.ledger_node = ChargeLedger::root_ordinal();
+        self.ledger_node = crate::plan::NodeId::ROOT;
         self.ledger_counts_rows = true;
         self
     }
@@ -1223,7 +1239,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// a 32-bit or wasm32 target a ceiling above `usize::MAX` is one no execution can
     /// reach, so clamping it is exactly "no cut".
     pub(crate) fn row_ceiling(&self) -> Option<usize> {
-        let ceiling = self.cap_pushdown.as_ref()?.ceiling_at(self.current_node)?;
+        let ceiling = self.cap_pushdown.as_ref()?.ceiling_at(self.cap_at?)?;
         Some(usize::try_from(ceiling).unwrap_or(usize::MAX))
     }
 
@@ -1260,10 +1276,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// The ledger cursor and its `counts_rows` flag move together, and only when `pattern`
     /// resolves to a node of the plan the ledger was built for — see
     /// [`Self::resolve_ledger_ordinal`].
-    pub(crate) fn enter_node(&mut self, pattern: &GraphPattern) -> (usize, usize, bool) {
-        let restore = (self.current_node, self.ledger_node, self.ledger_counts_rows);
-        self.current_node = std::ptr::from_ref(pattern) as usize;
-        if let Some((ordinal, counts_rows)) = self.resolve_ledger_ordinal(self.current_node) {
+    pub(crate) fn enter_node(&mut self, pattern: &GraphPattern) -> NodeCursors {
+        let restore = (self.cap_at, self.ledger_node, self.ledger_counts_rows);
+        self.cap_at = self
+            .cap_pushdown
+            .as_ref()
+            .and_then(|pushdown| pushdown.locate(pattern, self.plan.as_ref()));
+        if let Some((ordinal, counts_rows)) =
+            self.resolve_ledger_ordinal(std::ptr::from_ref(pattern) as usize)
+        {
             self.ledger_node = ordinal;
             self.ledger_counts_rows = counts_rows;
         }
@@ -1322,7 +1343,10 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// resolves nowhere really is synthetic bookkeeping with no source of its own, and its
     /// charges are meant to fall to whatever node is already the ledger cursor — the
     /// nearest enclosing node that DID resolve.
-    pub(crate) fn resolve_ledger_ordinal(&self, address: usize) -> Option<(usize, bool)> {
+    pub(crate) fn resolve_ledger_ordinal(
+        &self,
+        address: usize,
+    ) -> Option<(crate::plan::NodeId, bool)> {
         let ledger = self.ledger.as_ref()?;
         if let Some(ordinal) = ledger.ordinal_of(address) {
             return Some((ordinal, true));
@@ -1352,10 +1376,30 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     }
 
     /// Restore the cursors [`Self::enter_node`] returned.
-    pub(crate) const fn leave_node(&mut self, restore: (usize, usize, bool)) {
-        self.current_node = restore.0;
+    pub(crate) const fn leave_node(&mut self, restore: NodeCursors) {
+        self.cap_at = restore.0;
         self.ledger_node = restore.1;
         self.ledger_counts_rows = restore.2;
+    }
+
+    /// Install `tree` as the tree this context evaluates: its node ids, its `EXISTS`
+    /// sites and its variable-endpoint analysis are read from here on.
+    pub(crate) fn install_plan(&mut self, tree: &crate::plan::Tree<'_>) {
+        self.plan = Some(tree.handle());
+    }
+
+    /// The id of `pattern` in the installed tree, when it is one of its nodes.
+    pub(crate) fn plan_node(&self, pattern: &GraphPattern) -> Option<crate::plan::NodeId> {
+        self.plan.as_ref()?.node_of(pattern)
+    }
+
+    /// The installed tree's variable-endpoint `SERVICE` analysis; absent when no tree is.
+    pub(crate) fn endpoint_scan(&self) -> &crate::service_endpoints::EndpointScan {
+        static ABSENT: crate::service_endpoints::EndpointScan =
+            crate::service_endpoints::EndpointScan::Absent;
+        self.plan
+            .as_ref()
+            .map_or(&ABSENT, |plan| plan.shape().endpoints())
     }
 
     /// The per-node charge ledger this execution records into, if one is installed.
@@ -2050,7 +2094,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // endpoints its parent would. The terms are the parent's, and a worker's
             // scratch is a clone of the parent's, so they read back the same.
             endpoint_frames: self.endpoint_frames.clone(),
-            endpoint_scan: self.endpoint_scan.clone(),
+            // SHARED: the worker evaluates part of the same tree.
+            plan: self.plan.clone(),
             // The query's effective base IRI is a read-only per-query constant.
             // `IRI()`/`URI()` (parallel-safe, so reachable in a parallel `Extend`)
             // resolve relative references against it, so every worker must see it.
@@ -2084,7 +2129,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // COPIED: a worker is evaluating part of its parent's node, so it charges the
             // parent's node. Resetting either cursor would scatter one node's charges
             // across the ledger by worker count.
-            current_node: self.current_node,
+            cap_at: self.cap_at,
             ledger: self.ledger.clone(),
             ledger_node: self.ledger_node,
             ledger_counts_rows: self.ledger_counts_rows,
@@ -2262,9 +2307,9 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // A function body is its own query: no join of the caller's encloses its
             // clauses, so no endpoint list of the caller's applies to them.
             endpoint_frames: Vec::new(),
-            // The body's own scan is installed when it is prepared for evaluation
+            // The body's own tree is installed when it is prepared for evaluation
             // (`prepare_query_context`); nothing of the caller's applies to it.
-            endpoint_scan: crate::service_endpoints::EndpointScan::Absent,
+            plan: None,
             base_iri: None,
             user_functions: self.user_functions,
             // Inherited with the function table: a function body is SPARQL like any
@@ -2292,7 +2337,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             // so the calling query's row ceilings say nothing about it. A body that wants
             // a ceiling gets one from its own `LIMIT`.
             cap_pushdown: None,
-            current_node: 0,
+            cap_at: None,
             // SHARED, and the cursor deliberately does NOT move: the body's nodes are not
             // in the calling plan, so its cost is reported against the call site — the one
             // node a reader of the ledger can act on.
@@ -2339,6 +2384,15 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     pub(crate) fn prepared_exists(&mut self, pattern: &GraphPattern) -> Arc<PreparedExists> {
         if self.in_substituted_exists {
             return Arc::new(PreparedExists::build(pattern));
+        }
+        if let Some(plan) = self.plan.as_ref()
+            && let Some(site) = plan
+                .node_of(pattern)
+                .and_then(|body| plan.shape().site_of(body))
+        {
+            return plan
+                .shape()
+                .prepared_exists(site, || PreparedExists::build(pattern));
         }
         let key = std::ptr::from_ref(pattern) as usize;
         if let Some(existing) = self.exists_prepared_cache.get(&key) {
@@ -2512,12 +2566,24 @@ fn install_local_slice_pushdown<D: DatasetView + Sync>(
         return false;
     }
 
-    let pushdown = crate::governor::soundness::plan_cap_pushdown(pattern, Some(u64::MAX));
-    if pushdown.is_empty() {
-        false
-    } else {
-        ctx.cap_pushdown = Some(Arc::new(pushdown));
-        true
+    // A slice of the evaluation's own tree is planned in that tree's ids; any other
+    // (a substituted temporary, a prepared `EXISTS` body) is numbered on its own.
+    let pushdown = match ctx.plan.as_ref() {
+        Some(plan) if plan.node_of(pattern).is_some() => {
+            CapPushdown::over_plan(plan, pattern, u64::MAX)
+        }
+        _ => Some(crate::governor::soundness::plan_cap_pushdown(
+            pattern,
+            Some(u64::MAX),
+        ))
+        .filter(|pushdown| !pushdown.is_empty()),
+    };
+    match pushdown {
+        Some(pushdown) => {
+            ctx.cap_pushdown = Some(Arc::new(pushdown));
+            true
+        }
+        None => false,
     }
 }
 
@@ -3008,7 +3074,8 @@ pub fn eval<D: DatasetView + Sync>(
     // See `crate::blank_scope`.
     let joined = crate::blank_scope::join_shared_blanks(pattern);
     let pattern = joined.as_ref().unwrap_or(pattern);
-    ctx.endpoint_scan = crate::service_endpoints::scan(pattern);
+    let tree = crate::plan::Tree::build(pattern);
+    ctx.install_plan(&tree);
     eval_evaluated(pattern, ctx)?
         .into_complete()
         .map(crate::blank_scope::without_joined_blanks)
@@ -3103,7 +3170,11 @@ pub(crate) const fn query_pattern(query: &Query) -> &GraphPattern {
 /// ([`crate::construct::commit_answer_triples`]), and one solution row can instantiate a
 /// whole template — so a row ceiling derived from a triple cap would be an arithmetic
 /// non-sequitur. Their semantic slices are still planned locally.
-fn install_answer_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut EvalCtx<'_, D>) {
+fn install_answer_cap_pushdown<D: DatasetView + Sync>(
+    query: &Query,
+    tree: &crate::plan::Tree<'_>,
+    ctx: &mut EvalCtx<'_, D>,
+) {
     ctx.cap_pushdown = None;
     let cap = match (query, ctx.governors.as_ref()) {
         (Query::Select { .. }, Some(state))
@@ -3117,10 +3188,9 @@ fn install_answer_cap_pushdown<D: DatasetView + Sync>(query: &Query, ctx: &mut E
         // No root cap: semantic slices install their local pushdown only if reached.
         _ => return,
     };
-    let pushdown = crate::governor::soundness::plan_cap_pushdown(query_pattern(query), Some(cap));
-    if !pushdown.is_empty() {
-        ctx.cap_pushdown = Some(Arc::new(pushdown));
-    }
+    let pushdown =
+        CapPushdown::over_plan(&tree.handle(), tree.pattern(crate::plan::NodeId::ROOT), cap);
+    ctx.cap_pushdown = pushdown.map(Arc::new);
 }
 
 /// What is being admitted at the `VERSION` boundary: a full query or an update
@@ -3245,8 +3315,11 @@ pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
     // string argument against it (SPARQL 1.1 §17.4.2.6).
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
-    ctx.endpoint_scan = crate::service_endpoints::scan(query_pattern(query));
-    install_answer_cap_pushdown(query, ctx);
+    // The tree every node of this evaluation is numbered in, built once here with its
+    // variable-endpoint analysis and `EXISTS` sites.
+    let tree = crate::plan::Tree::build(query_pattern(query));
+    ctx.install_plan(&tree);
+    install_answer_cap_pushdown(query, &tree, ctx);
     Ok(())
 }
 

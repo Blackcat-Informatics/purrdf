@@ -44,6 +44,7 @@ use crate::dataset_spec::{ActiveDataset, GraphScope};
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::governor::ledger::PlanEstimate;
+use crate::plan::PlanShape;
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 use crate::statement_layer::{self, StatementProbe};
@@ -1590,16 +1591,58 @@ fn literal_to_string(l: &Literal) -> String {
 /// Both halves come from one walk because both are read from the same probe of the
 /// dataset's statistics, and doing it twice would let the explained order and the refused
 /// estimate describe two different plans.
-#[derive(Debug, Default)]
 pub(crate) struct PlanSurvey {
     /// Human-readable triple-pattern strings, in the order the planner chose, for every
     /// BGP with at least two patterns. The historical `explain_query` output.
     pub(crate) orders: Vec<String>,
-    /// The planner's prediction per BGP node, keyed by the node's address in the plan.
-    pub(crate) estimates: crate::DetHashMap<usize, PlanEstimate>,
+    /// The planner's prediction per node, indexed by [`NodeId`] in the tree the survey
+    /// walks; `None` where it predicts nothing.
+    pub(crate) estimates: Vec<Option<PlanEstimate>>,
+    /// The shape of that tree, which is where a surveyed node finds its id.
+    shape: Arc<PlanShape>,
+}
+
+impl std::fmt::Debug for PlanSurvey {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PlanSurvey")
+            .field("orders", &self.orders)
+            .field("estimates", &self.estimates)
+            .finish_non_exhaustive()
+    }
 }
 
 impl PlanSurvey {
+    /// An empty survey of the tree `shape` numbers.
+    pub(crate) fn for_shape(shape: &Arc<PlanShape>) -> Self {
+        Self {
+            orders: Vec::new(),
+            estimates: vec![None; shape.len()],
+            shape: Arc::clone(shape),
+        }
+    }
+
+    /// The shape of the surveyed tree.
+    pub(crate) const fn shape(&self) -> &Arc<PlanShape> {
+        &self.shape
+    }
+
+    /// Record `estimate` as the prediction for `node`, a node of the surveyed tree.
+    fn record(&mut self, node: &GraphPattern, estimate: PlanEstimate) {
+        let id = self
+            .shape
+            .node_of(node)
+            .expect("the survey walks only nodes of the tree it was sized for");
+        self.estimates[id.index()] = Some(estimate);
+    }
+
+    /// The prediction for `node`, when it is a node of the surveyed tree and the survey
+    /// made one.
+    fn estimate_of(&self, node: &GraphPattern) -> Option<&PlanEstimate> {
+        self.shape
+            .node_of(node)
+            .and_then(|id| self.estimates[id.index()].as_ref())
+    }
+
     /// The largest predicted intermediate bag anywhere in the plan, in cells, together
     /// with nothing else — this is the single number admission control compares against
     /// the caller's intermediate-cardinality ceiling.
@@ -1610,7 +1653,8 @@ impl PlanSurvey {
     /// admit the single catastrophic one.
     pub(crate) fn peak_cells(&self) -> u64 {
         self.estimates
-            .values()
+            .iter()
+            .flatten()
             .map(PlanEstimate::peak_cells)
             .max()
             .unwrap_or(0)
@@ -1825,9 +1869,7 @@ fn survey_bgp<D: DatasetView>(
             columns,
         }
     };
-    survey
-        .estimates
-        .insert(std::ptr::from_ref(node) as usize, estimate);
+    survey.record(node, estimate);
     Ok(())
 }
 
@@ -1865,8 +1907,8 @@ fn record_call_estimate(
     // bound cannot be denominated out of a cell ceiling; saturating, because a `usize`
     // arity beyond `u64` is already past any ceiling a caller can express.
     let columns = u64::try_from(arity.total()).unwrap_or(u64::MAX).max(1);
-    survey.estimates.insert(
-        std::ptr::from_ref(node) as usize,
+    survey.record(
+        node,
         PlanEstimate {
             rows,
             peak_rows: rows,
@@ -1886,10 +1928,7 @@ fn record_call_estimate(
 fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
     let mut pattern = pattern;
     loop {
-        if let Some(estimate) = survey
-            .estimates
-            .get(&(std::ptr::from_ref(pattern) as usize))
-        {
+        if let Some(estimate) = survey.estimate_of(pattern) {
             return Some(estimate.rows);
         }
         match pattern {
@@ -3901,10 +3940,7 @@ mod survey_tests {
 
     /// [`super::predicted_rows`] as a recursion down a `LATERAL` chain's right spine.
     fn reference_predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
-        if let Some(estimate) = survey
-            .estimates
-            .get(&(std::ptr::from_ref(pattern) as usize))
-        {
+        if let Some(estimate) = survey.estimate_of(pattern) {
             return Some(estimate.rows);
         }
         match pattern {
@@ -4193,10 +4229,6 @@ mod survey_tests {
         }
     }
 
-    fn address(node: &GraphPattern) -> usize {
-        std::ptr::from_ref(node) as usize
-    }
-
     /// How many calls of the registered relation `plan` attaches to the right of a
     /// `JOIN` or `LATERAL` whose left arm `survey` predicted: the calls priced against a
     /// driving bag rather than the identity table.
@@ -4209,7 +4241,7 @@ mod survey_tests {
             ) = node
                 && let GraphPattern::PropertyFunction(call) = &**right
                 && call.iri == RELATION
-                && survey.estimates.contains_key(&address(left))
+                && survey.estimate_of(left).is_some()
             {
                 driven += 1;
             }
@@ -4219,14 +4251,14 @@ mod survey_tests {
     }
 
     /// A survey's content in a comparable form: its join-order strings in order, and its
-    /// estimates by node address, sorted.
+    /// estimates by node id.
     fn content(survey: &PlanSurvey) -> (Vec<String>, Vec<(usize, PlanEstimate)>) {
-        let mut estimates: Vec<(usize, PlanEstimate)> = survey
+        let estimates: Vec<(usize, PlanEstimate)> = survey
             .estimates
             .iter()
-            .map(|(address, estimate)| (*address, estimate.clone()))
+            .enumerate()
+            .filter_map(|(id, estimate)| estimate.clone().map(|estimate| (id, estimate)))
             .collect();
-        estimates.sort_by_key(|(address, _)| *address);
         (survey.orders.clone(), estimates)
     }
 
@@ -4257,7 +4289,8 @@ mod survey_tests {
         for seed in 0..400_u64 {
             let mut choices = Choices::new(seed);
             let plan = pattern(&mut choices);
-            let mut ours = PlanSurvey::default();
+            let tree = crate::plan::Tree::build(&plan);
+            let mut ours = PlanSurvey::for_shape(tree.shape());
             let answered = survey_pattern_plans(
                 &*dataset,
                 &active,
@@ -4266,7 +4299,7 @@ mod survey_tests {
                 &relations,
                 &mut ours,
             );
-            let mut theirs = PlanSurvey::default();
+            let mut theirs = PlanSurvey::for_shape(tree.shape());
             let expected = reference_survey(
                 &*dataset,
                 &active,
@@ -4285,12 +4318,14 @@ mod survey_tests {
             assert_eq!(ours.peak_cells(), theirs.peak_cells(), "{context}");
             empty += ours
                 .estimates
-                .values()
+                .iter()
+                .flatten()
                 .filter(|estimate| estimate.rows == 0)
                 .count();
             priced_calls += ours
                 .estimates
-                .values()
+                .iter()
+                .flatten()
                 .filter(|estimate| estimate.rows == ROWS_PER_INVOCATION)
                 .count();
             driven += driven_calls(&plan, &ours);
@@ -4315,7 +4350,8 @@ mod survey_tests {
             let active = ActiveDataset::store_default();
             let relations = relations();
             let survey = |plan: &GraphPattern| {
-                let mut survey = PlanSurvey::default();
+                let tree = crate::plan::Tree::build(plan);
+                let mut survey = PlanSurvey::for_shape(tree.shape());
                 survey_pattern_plans(
                     &*dataset,
                     &active,
@@ -4343,7 +4379,7 @@ mod survey_tests {
                 };
             }
             assert_eq!(
-                survey(&wrapped).estimates.len(),
+                survey(&wrapped).estimates.iter().flatten().count(),
                 1,
                 "one BGP under the wrappers"
             );
@@ -4363,7 +4399,7 @@ mod survey_tests {
             }
             let surveyed = survey(&chain);
             assert_eq!(
-                surveyed.estimates.len(),
+                surveyed.estimates.iter().flatten().count(),
                 DEPTH + 1,
                 "a BGP per level and the call"
             );
@@ -4376,9 +4412,15 @@ mod survey_tests {
             let GraphPattern::Lateral { left, right } = innermost else {
                 unreachable!("the chain's innermost node is a LATERAL");
             };
-            let driving = surveyed.estimates[&address(left)].rows;
+            let driving = surveyed
+                .estimate_of(left)
+                .expect("the left arm is predicted")
+                .rows;
             assert_eq!(
-                surveyed.estimates[&address(right)].rows,
+                surveyed
+                    .estimate_of(right)
+                    .expect("the call is priced")
+                    .rows,
                 ROWS_PER_INVOCATION * driving,
                 "the innermost call is priced against the BGP driving it"
             );
@@ -4391,7 +4433,11 @@ mod survey_tests {
                     right: Child::new(bgp()),
                 };
             }
-            assert_eq!(survey(&spine).estimates.len(), DEPTH + 1, "a BGP per level");
+            assert_eq!(
+                survey(&spine).estimates.iter().flatten().count(),
+                DEPTH + 1,
+                "a BGP per level"
+            );
             drop(spine);
         });
     }

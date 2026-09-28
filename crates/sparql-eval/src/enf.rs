@@ -452,8 +452,9 @@ fn copied(pattern: &GraphPattern) -> GraphPattern {
 ///
 /// # Why this is needed at all
 ///
-/// `ChargeLedger::for_plan`'s walk ([`crate::governor::ledger`]) assigns a ledger
-/// ordinal to every node [`crate::governor::soundness::walk_spine`] visits —
+/// The plan's numbering ([`crate::plan::Tree::build`], which is the charge ledger's node
+/// table — see [`crate::governor::ledger`]) assigns a ledger ordinal to every node
+/// [`crate::governor::soundness::walk_spine`] visits —
 /// including an `EXISTS`/`NOT EXISTS` inner pattern reached through an expression
 /// (`crate::governor::soundness::visit_exists_patterns`), so `original`'s own nodes
 /// already have ledger identity. But `normalize`'s `other` arm (a wholesale copy of

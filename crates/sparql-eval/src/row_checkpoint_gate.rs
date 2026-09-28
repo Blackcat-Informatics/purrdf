@@ -503,8 +503,8 @@ fn unfold_admits_each_input_row_then_ingests_it() {
     let admissions = |governors: &QueryGovernors| {
         let state = Arc::new(GovernorState::new(governors));
         let ledger = Arc::new(crate::governor::ledger::ChargeLedger::for_plan(
-            &pattern,
-            &crate::DetHashMap::default(),
+            crate::plan::Tree::build(&pattern).shape(),
+            &[],
         ));
         let mut ctx = EvalCtx::new(dataset.as_ref())
             .with_governors(Arc::clone(&state))

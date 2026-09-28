@@ -960,8 +960,8 @@ fn run_with_relations(
 ) -> (Run, Vec<crate::governor::NodeCharges>) {
     let state = Arc::new(GovernorState::new(governors));
     let ledger = Arc::new(crate::governor::ledger::ChargeLedger::for_plan(
-        pattern,
-        &crate::DetHashMap::default(),
+        crate::plan::Tree::build(pattern).shape(),
+        &[],
     ));
     let mut ctx = EvalCtx::new(dataset)
         .with_governors(Arc::clone(&state))
@@ -1443,8 +1443,8 @@ fn run_with_aggregates(
 ) -> (Run, Vec<crate::governor::NodeCharges>) {
     let state = Arc::new(GovernorState::new(governors));
     let ledger = Arc::new(crate::governor::ledger::ChargeLedger::for_plan(
-        pattern,
-        &crate::DetHashMap::default(),
+        crate::plan::Tree::build(pattern).shape(),
+        &[],
     ));
     let mut ctx = EvalCtx::new(dataset)
         .with_governors(Arc::clone(&state))

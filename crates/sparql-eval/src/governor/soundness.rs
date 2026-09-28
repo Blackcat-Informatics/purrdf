@@ -700,7 +700,7 @@ where
 
 /// Visit every `EXISTS` pattern reachable from `expr` without leaving the expression —
 /// i.e. without descending into a pattern. Stops as soon as `visit` returns `true`.
-fn visit_exists_patterns<'a, F>(expr: &'a Expression, visit: &mut F) -> bool
+pub(crate) fn visit_exists_patterns<'a, F>(expr: &'a Expression, visit: &mut F) -> bool
 where
     F: FnMut(&'a GraphPattern) -> bool,
 {
@@ -787,16 +787,17 @@ pub(crate) fn child_edges(pattern: &GraphPattern) -> ChildEdges {
 /// does not need this to *evaluate*: it composes the same [`SpineContext::descend`] along
 /// the path a truncation actually travelled, which is the same answer with no second
 /// traversal. This function is for holders of a plan who are not evaluating it — the
-/// answer-cap pushdown ([`plan_cap_pushdown`]) and the per-node charge ledger
-/// ([`crate::governor::ledger`]) both walk a plan exactly once, before evaluation, to fix
-/// a deterministic node order.
+/// plan arena ([`crate::plan::Tree::build`]) is this walk, once per evaluated tree, and
+/// the node order it fixes is the one the per-node charge ledger
+/// ([`crate::governor::ledger`]) and the answer-cap pushdown ([`plan_cap_pushdown`])
+/// number nodes by.
 ///
 /// The walk is a pre-order over [`visit_classified_children`], so the visit sequence is a
 /// pure function of the plan — which is what lets a ledger index a node by its ordinal in
 /// this walk and get the same number on every machine and every run.
-pub(crate) fn walk_spine<F>(root: &GraphPattern, visit: &mut F)
+pub(crate) fn walk_spine<'a, F>(root: &'a GraphPattern, visit: &mut F)
 where
-    F: FnMut(&GraphPattern, SpineContext, usize),
+    F: FnMut(&'a GraphPattern, SpineContext, usize),
 {
     let mut stack = vec![(root, SpineContext::ROOT, 0_usize)];
     while let Some((node, context, depth)) = stack.pop() {
@@ -1026,22 +1027,90 @@ pub(crate) const fn child_row_ceiling(
 /// A plan's answer-cap pushdown: for each node that may stop early, the number of output
 /// rows past which its work cannot affect the query's answer.
 ///
-/// Keyed by the node's **address** in the plan, which is stable for the immutable query
-/// algebra for as long as the plan is borrowed — the same key discipline
-/// [`crate::eval::EvalCtx`]'s address-memoized caches already use. Absent means "no
-/// ceiling": every node not named here evaluates exactly as it did before.
-#[derive(Debug, Default)]
-pub(crate) struct CapPushdown(DetHashMap<usize, u64>);
+/// Indexed by node id in one tree: `ceilings[i]` is the ceiling of the node `base + i`,
+/// the pushdown's root's subtree being the contiguous id range a pre-order numbering
+/// gives it. `None` means "no ceiling": every node without one evaluates exactly as it
+/// would with no pushdown installed.
+///
+/// A pushdown over the evaluation's own tree ([`Self::over_plan`]) finds a node's id
+/// through that tree. One over a pattern that is not a node of it — a substituted
+/// temporary, a prepared `EXISTS` body — numbers that pattern in a tree of its own
+/// ([`plan_cap_pushdown`]) and keeps, for the nodes that received a ceiling, the address
+/// each one lives at while the pattern is borrowed.
+#[derive(Debug)]
+pub(crate) struct CapPushdown {
+    /// The tree the ids are in.
+    tree: TreeKey,
+    /// The id of the pushdown's root in that tree.
+    base: NodeId,
+    /// Each node's ceiling, from `base` on, in pre-order.
+    ceilings: Vec<Option<u64>>,
+    /// Where a pushdown over a pattern outside the evaluation's tree finds its nodes.
+    transient: Option<DetHashMap<usize, NodeId>>,
+}
 
 impl CapPushdown {
-    /// The row ceiling for the node at `address`, if the plan admits one there.
-    pub(crate) fn ceiling_at(&self, address: usize) -> Option<u64> {
-        self.0.get(&address).copied()
+    /// The pushdown of `root_ceiling` from `root`, a node of `plan`'s tree, with its
+    /// ids in that tree; `None` when `root` is not a node of it or no node received a
+    /// ceiling.
+    pub(crate) fn over_plan(
+        plan: &PlanHandle,
+        root: &GraphPattern,
+        root_ceiling: u64,
+    ) -> Option<Self> {
+        let base = plan.node_of(root)?;
+        let ceilings = cap_ceilings(root, root_ceiling, |_, _| {});
+        debug_assert_eq!(
+            base.index() + ceilings.len(),
+            plan.shape().subtree_end(base).index(),
+            "the pushdown numbers the root's subtree exactly as the tree does"
+        );
+        ceilings.iter().any(Option::is_some).then_some(Self {
+            tree: plan.key(),
+            base,
+            ceilings,
+            transient: None,
+        })
+    }
+
+    /// The node `pattern` is, as this pushdown numbers it: `plan`'s id for it when the
+    /// pushdown is over that tree, and its own otherwise.
+    pub(crate) fn locate(
+        &self,
+        pattern: &GraphPattern,
+        plan: Option<&PlanHandle>,
+    ) -> Option<(TreeKey, NodeId)> {
+        let node = match &self.transient {
+            Some(addresses) => addresses
+                .get(&(std::ptr::from_ref(pattern) as usize))
+                .copied(),
+            None => plan
+                .filter(|plan| plan.key() == self.tree)
+                .and_then(|plan| plan.node_of(pattern)),
+        }?;
+        Some((self.tree, node))
+    }
+
+    /// The row ceiling for the node `at`, if the plan admits one there.
+    pub(crate) fn ceiling_at(&self, at: (TreeKey, NodeId)) -> Option<u64> {
+        let (tree, node) = at;
+        if tree != self.tree {
+            return None;
+        }
+        let offset = node.index().checked_sub(self.base.index())?;
+        self.ceilings.get(offset).copied().flatten()
+    }
+
+    /// The row ceiling for `pattern`, read as [`Self::locate`] finds it.
+    #[cfg(test)]
+    pub(crate) fn ceiling_of(&self, pattern: &GraphPattern) -> Option<u64> {
+        self.locate(pattern, None)
+            .and_then(|at| self.ceiling_at(at))
     }
 
     /// Whether the pushdown named any node at all.
     pub(crate) fn is_empty(&self) -> bool {
-        self.0.is_empty()
+        self.ceilings.iter().all(Option::is_none)
     }
 }
 
@@ -1055,8 +1124,12 @@ impl CapPushdown {
 /// descends, because a node further down cannot re-acquire a licence its ancestor lost and
 /// recording nothing for it is exactly right.
 ///
-/// `root_ceiling` of `None` yields an empty pushdown and does no work beyond the walk,
-/// which is the ungoverned, `LIMIT`-free case.
+/// `root_ceiling` of `None` yields an empty pushdown and does no walk at all, which is the
+/// ungoverned, `LIMIT`-free case.
+///
+/// The pushdown this returns numbers `root`'s subtree as a tree of its own, under a fresh
+/// [`TreeKey`] — the form for a pattern that is not a node of the evaluation's tree.
+/// [`CapPushdown::over_plan`] is the same descent read in that tree's ids.
 ///
 /// # A restricting `Slice` re-seeds the descent
 ///
@@ -1090,10 +1163,30 @@ impl CapPushdown {
 /// A ceiling that did survive the descent is never replaced: it is the tighter of the two
 /// (it already passed through this node's `min` with `len`) and it is equally sound.
 pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) -> CapPushdown {
-    let mut out = DetHashMap::default();
-    let Some(root_ceiling) = root_ceiling else {
-        return CapPushdown(out);
+    let mut transient = DetHashMap::default();
+    let ceilings = match root_ceiling {
+        Some(root_ceiling) => cap_ceilings(root, root_ceiling, |node, id| {
+            transient.insert(std::ptr::from_ref(node) as usize, id);
+        }),
+        None => Vec::new(),
     };
+    CapPushdown {
+        tree: TreeKey::fresh(),
+        base: NodeId::ROOT,
+        ceilings,
+        transient: Some(transient),
+    }
+}
+
+/// The ceilings [`plan_cap_pushdown`] describes, one per node of `root`'s subtree in
+/// [`walk_spine`]'s pre-order, each node that receives one reported to `recorded` with
+/// its offset from `root`.
+fn cap_ceilings<'a>(
+    root: &'a GraphPattern,
+    root_ceiling: u64,
+    mut recorded: impl FnMut(&'a GraphPattern, NodeId),
+) -> Vec<Option<u64>> {
+    let mut out = Vec::new();
     let mut stack = vec![(root, SpineContext::ROOT, Some(root_ceiling))];
     while let Some((node, context, ceiling)) = stack.pop() {
         // The licence is checked at the node the ceiling would be *applied* to, so a node
@@ -1119,12 +1212,14 @@ pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) 
         };
         // `u64::MAX` is the "no ceiling" carrier the descent starts from when the caller
         // has only a `LIMIT` to contribute, so it is not recorded: an entry saying "stop
-        // after more rows than can exist" would cost a hash probe per node to answer a
-        // question whose answer is no. The map is therefore empty — and the whole pushdown
-        // uninstalled — for every query without a restricting `Slice` or an answer cap.
-        if let Some(ceiling) = ceiling.filter(|ceiling| *ceiling != u64::MAX) {
-            out.insert(std::ptr::from_ref(node) as usize, ceiling);
+        // after more rows than can exist" answers a question whose answer is no. The
+        // pushdown is therefore empty — and uninstalled — for every query without a
+        // restricting `Slice` or an answer cap.
+        let kept = ceiling.filter(|ceiling| *ceiling != u64::MAX);
+        if kept.is_some() {
+            recorded(node, NodeId::from_index(out.len()));
         }
+        out.push(kept);
         let mut children = smallvec::SmallVec::<[(&GraphPattern, ChildEdge, usize); 4]>::new();
         visit_classified_children(node, &mut |child, edge| {
             let ordinal = children.len();
@@ -1137,7 +1232,7 @@ pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) 
             stack.push((child, context.descend(edge), child_ceiling));
         }
     }
-    CapPushdown(out)
+    out
 }
 
 /// The index of `pattern`'s variant in [`PATTERN_LABELS`].
@@ -1147,7 +1242,7 @@ pub(crate) fn plan_cap_pushdown(root: &GraphPattern, root_ceiling: Option<u64>) 
 /// index the moment [`pattern_label`] is called for it, which the coverage test below
 /// does for every variant — so the label table cannot silently fall behind the algebra
 /// either.
-const fn pattern_label_index(pattern: &GraphPattern) -> usize {
+pub(crate) const fn pattern_label_index(pattern: &GraphPattern) -> usize {
     match pattern {
         GraphPattern::Bgp { patterns: _ } => 0,
         GraphPattern::Path {
@@ -1275,6 +1370,7 @@ pub(crate) fn pattern_label(pattern: &GraphPattern) -> &'static str {
 use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, Variable};
 
 use crate::parallel::function_is_builtin_stateful;
+use crate::plan::{NodeId, PlanHandle, TreeKey};
 use crate::{DetHashMap, DetHashSet, VarSchema};
 
 /// One node's output from the fourth structural analysis: every variable free
@@ -3572,13 +3668,13 @@ mod tests {
         let pushdown = plan_cap_pushdown(&plan, Some(u64::MAX));
         let (lateral, call) = lateral_and_call(&plan);
         assert_eq!(
-            pushdown.ceiling_at(std::ptr::from_ref(lateral) as usize),
+            pushdown.ceiling_of(lateral),
             Some(2),
             "LIMIT 2 reaches the Lateral down a spine of Project and Slice, both of which \
              are 1:1 and position-for-position"
         );
         assert_eq!(
-            pushdown.ceiling_at(std::ptr::from_ref(call) as usize),
+            pushdown.ceiling_of(call),
             None,
             "the call node inherits the Lateral's bag-only right edge, so it admits no \
              pushdown of its own — which is right for the unfused path, where the node \
@@ -3591,14 +3687,8 @@ mod tests {
         let sorted_pushdown = plan_cap_pushdown(&sorted, Some(u64::MAX));
         let (sorted_lateral, sorted_call) = lateral_and_call(&sorted);
         assert!(!context_at(&sorted, &[0, 0, 0]).admits_cap_pushdown());
-        assert_eq!(
-            sorted_pushdown.ceiling_at(std::ptr::from_ref(sorted_lateral) as usize),
-            None
-        );
-        assert_eq!(
-            sorted_pushdown.ceiling_at(std::ptr::from_ref(sorted_call) as usize),
-            None
-        );
+        assert_eq!(sorted_pushdown.ceiling_of(sorted_lateral), None);
+        assert_eq!(sorted_pushdown.ceiling_of(sorted_call), None);
     }
 
     /// The multi-producer stratum shape: an outer `Slice` over a `Project` over a `UNION`
@@ -3692,7 +3782,7 @@ mod tests {
         let (left, right) = union_arms(&plan);
         for (arm, side) in [(left, "left"), (right, "right")] {
             assert_eq!(
-                pushdown.ceiling_at(std::ptr::from_ref(branch_leaf(arm)) as usize),
+                pushdown.ceiling_of(branch_leaf(arm)),
                 Some(4),
                 "the {side} arm's own LIMIT 4 must reach its leaf"
             );
@@ -3710,7 +3800,7 @@ mod tests {
         let (unbounded_left, unbounded_right) = union_arms(&unbounded);
         for (arm, side) in [(unbounded_left, "left"), (unbounded_right, "right")] {
             assert_eq!(
-                unbounded_pushdown.ceiling_at(std::ptr::from_ref(branch_leaf(arm)) as usize),
+                unbounded_pushdown.ceiling_of(branch_leaf(arm)),
                 Some(4),
                 "the {side} arm's LIMIT 4 stands on its own, with nothing above it"
             );
@@ -3733,12 +3823,12 @@ mod tests {
         let pushdown = plan_cap_pushdown(&plan, Some(u64::MAX));
         let (offset_limited, offset_only) = union_arms(&plan);
         assert_eq!(
-            pushdown.ceiling_at(std::ptr::from_ref(branch_leaf(offset_limited)) as usize),
+            pushdown.ceiling_of(branch_leaf(offset_limited)),
             Some(7),
             "OFFSET 3 LIMIT 4 needs its first seven input rows, not its first four"
         );
         assert_eq!(
-            pushdown.ceiling_at(std::ptr::from_ref(branch_leaf(offset_only)) as usize),
+            pushdown.ceiling_of(branch_leaf(offset_only)),
             None,
             "a bare OFFSET bounds nothing, so there is no number to re-seed with"
         );
@@ -3768,7 +3858,7 @@ mod tests {
             leaf = child.expect("the spine reaches the Bgp");
         }
         assert_eq!(
-            pushdown.ceiling_at(std::ptr::from_ref(leaf) as usize),
+            pushdown.ceiling_of(leaf),
             Some(2),
             "min(2, 9) is the surviving ceiling; a re-seed here would loosen it to 9"
         );
@@ -3808,7 +3898,7 @@ mod tests {
             panic!("the fixture's second node is an OrderBy");
         };
         assert_eq!(
-            pushdown.ceiling_at(std::ptr::from_ref(branch_leaf(sorted)) as usize),
+            pushdown.ceiling_of(branch_leaf(sorted)),
             Some(5),
             "the inner LIMIT 5 is the only bound below a sort, and it is a real one"
         );

@@ -88,6 +88,7 @@ use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
 use crate::governor::lift::{Evaluated, Truncation};
 use crate::governor::soundness::{ExpressionPart, PatternPart};
+use crate::plan::NodeId;
 use crate::remote::Invocation;
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
@@ -95,11 +96,10 @@ use crate::solution::{Solution, SolutionSeq, VarSchema};
 /// Whether the query being evaluated contains a variable-endpoint `SERVICE`, and if it
 /// does, where it is served.
 ///
-/// Computed once per evaluated query by [`crate::eval::prepare_query_context`] (and by
-/// [`crate::eval::eval`] for a bare pattern, and for an UPDATE's `WHERE`), so a query
-/// without one — nearly every query — pays one allocation-free walk of its algebra and
-/// nothing per join, and a query with one pays one more walk to build the
-/// [`ServedIndex`] and a map lookup per join.
+/// Computed once per evaluated tree, with the tree ([`crate::plan::Tree::build`]), so a
+/// query without one — nearly every query — pays one allocation-free walk of its algebra
+/// and nothing per join, and a query with one pays one more walk to build the
+/// [`ServedIndex`] and an index read per join.
 #[derive(Debug, Clone)]
 pub(crate) enum EndpointScan {
     /// The query has no variable-endpoint `SERVICE`: nothing to analyse.
@@ -115,31 +115,53 @@ impl EndpointScan {
     }
 }
 
-/// The endpoint analysis of one query's algebra, keyed by node address.
+/// The endpoint analysis of one tree's algebra, indexed by [`NodeId`].
 ///
-/// Only nodes of the query the scan walked are keys. A pattern built during evaluation —
-/// a `LATERAL`'s substituted right operand, a deferred `EXISTS` body's copy, a
-/// user-defined function's body — is not, and is analysed where it is evaluated, as is
-/// every operand evaluated while a deferred `EXISTS` placeholder is in scope (the
-/// placeholder's substitution decides what its body serves, and the scan cannot see it).
+/// Only nodes of the tree the scan walked have entries. A pattern built during evaluation
+/// — a `LATERAL`'s substituted right operand, a deferred `EXISTS` body's copy, a
+/// user-defined function's body — is not a node of it, and is analysed where it is
+/// evaluated, as is every operand evaluated while a deferred `EXISTS` placeholder is in
+/// scope (the placeholder's substitution decides what its body serves, and the scan
+/// cannot see it).
 #[derive(Debug, Default)]
 pub(crate) struct ServedIndex {
     /// Every operand of a group join (both sides), an `OPTIONAL` (right) and a `MINUS`
     /// (right): the endpoint variables served in it (see [`served_endpoint_variables`]).
-    served: crate::DetHashMap<usize, Arc<[Variable]>>,
+    served: Vec<Option<Arc<[Variable]>>>,
     /// Every `EXISTS` body: the variable-endpoint `SERVICE` variables in it that no
     /// `SELECT` inside it hides.
-    exists_uses: crate::DetHashMap<usize, Arc<[Variable]>>,
+    exists_uses: Vec<Option<Arc<[Variable]>>>,
 }
 
 impl ServedIndex {
-    /// The variable-endpoint `SERVICE` variables in `body`, an `EXISTS` body of the
-    /// scanned query, or `None` when `body` is not one.
-    pub(crate) fn exists_uses(&self, body: &GraphPattern) -> Option<&[Variable]> {
-        self.exists_uses
-            .get(&(std::ptr::from_ref(body) as usize))
-            .map(AsRef::as_ref)
+    /// An index with no entries over a tree of `len` nodes.
+    fn with_len(len: usize) -> Self {
+        Self {
+            served: vec![None; len],
+            exists_uses: vec![None; len],
+        }
     }
+
+    /// The variable-endpoint `SERVICE` variables in `body`, an `EXISTS` body of the
+    /// scanned tree, or `None` when `body` is not one.
+    pub(crate) fn exists_uses(&self, body: NodeId) -> Option<&[Variable]> {
+        self.exists_uses
+            .get(body.index())
+            .and_then(Option::as_deref)
+    }
+
+    /// The endpoint variables served in `operand`, an operand of the scanned tree, or
+    /// `None` when `operand` is not one.
+    fn served_at(&self, operand: NodeId) -> Option<&Arc<[Variable]>> {
+        self.served.get(operand.index()).and_then(Option::as_ref)
+    }
+}
+
+/// The id a scan records `node` under: every node the scan reaches is a node of the tree
+/// whose address map it was handed.
+fn scanned_id(ids: &crate::DetHashMap<usize, NodeId>, node: &GraphPattern) -> NodeId {
+    *ids.get(&(std::ptr::from_ref(node) as usize))
+        .expect("the endpoint scan walks only nodes of the tree it indexes")
 }
 
 /// What a variable-endpoint `SERVICE` finds for its variable in the enclosing frames.
@@ -472,13 +494,18 @@ pub(crate) fn mentions_variable_endpoint(pattern: &GraphPattern) -> bool {
     false
 }
 
-/// The scan [`crate::eval::prepare_query_context`] installs for `pattern`.
-pub(crate) fn scan(pattern: &GraphPattern) -> EndpointScan {
+/// The scan of the tree rooted at `pattern`, of `len` nodes, whose node addresses `ids`
+/// maps to their ids — built with the tree by [`crate::plan::Tree::build`].
+pub(crate) fn scan(
+    pattern: &GraphPattern,
+    ids: &crate::DetHashMap<usize, NodeId>,
+    len: usize,
+) -> EndpointScan {
     if !mentions_variable_endpoint(pattern) {
         return EndpointScan::Absent;
     }
-    let mut index = ServedIndex::default();
-    index.summarize(pattern);
+    let mut index = ServedIndex::with_len(len);
+    index.summarize(pattern, ids);
     EndpointScan::Present(Arc::new(index))
 }
 
@@ -520,14 +547,18 @@ fn indirect(mut summary: Vec<Occurrence>) -> Vec<Occurrence> {
 
 impl ServedIndex {
     /// Record `operand`'s served variables.
-    fn note(&mut self, operand: &GraphPattern, summary: &[Occurrence]) {
+    fn note(
+        &mut self,
+        operand: &GraphPattern,
+        summary: &[Occurrence],
+        ids: &crate::DetHashMap<usize, NodeId>,
+    ) {
         let served: Arc<[Variable]> = summary
             .iter()
             .filter(|o| o.direct && !o.conflict)
             .map(|o| o.variable.clone())
             .collect();
-        self.served
-            .insert(std::ptr::from_ref(operand) as usize, served);
+        self.served[scanned_id(ids, operand).index()] = Some(served);
     }
 
     /// The occurrences below `pattern`, indexing every operand and `EXISTS` body on the
@@ -539,7 +570,11 @@ impl ServedIndex {
     /// the summary stack the node is exited and combines them. The order the parts'
     /// summaries are merged in is the order the operator evaluates the parts, so the
     /// served lists and `EXISTS` uses come out in that order.
-    fn summarize(&mut self, pattern: &GraphPattern) -> Vec<Occurrence> {
+    fn summarize(
+        &mut self,
+        pattern: &GraphPattern,
+        ids: &crate::DetHashMap<usize, NodeId>,
+    ) -> Vec<Occurrence> {
         let mut frames = vec![SummaryFrame::Enter(SummaryNode::Pattern(pattern))];
         let mut summaries: Vec<Vec<Occurrence>> = Vec::new();
         while let Some(frame) = frames.pop() {
@@ -556,7 +591,7 @@ impl ServedIndex {
                 SummaryFrame::Exit(node, parts) => {
                     let start = summaries.len() - parts;
                     let mut kids = summaries.split_off(start).into_iter();
-                    let summary = self.combine(node, &mut kids);
+                    let summary = self.combine(node, &mut kids, ids);
                     summaries.push(summary);
                 }
             }
@@ -572,6 +607,7 @@ impl ServedIndex {
         &mut self,
         node: SummaryNode<'_>,
         kids: &mut std::vec::IntoIter<Vec<Occurrence>>,
+        ids: &crate::DetHashMap<usize, NodeId>,
     ) -> Vec<Occurrence> {
         fn part(kids: &mut std::vec::IntoIter<Vec<Occurrence>>) -> Vec<Occurrence> {
             kids.next().expect("every part pushed its summary")
@@ -593,8 +629,8 @@ impl ServedIndex {
                 GraphPattern::Join { left, right } => {
                     let mut summary = part(kids);
                     let right_summary = part(kids);
-                    self.note(left, &summary);
-                    self.note(right, &right_summary);
+                    self.note(left, &summary, ids);
+                    self.note(right, &right_summary, ids);
                     merge(&mut summary, right_summary);
                     summary
                 }
@@ -616,7 +652,7 @@ impl ServedIndex {
                 } => {
                     let mut summary = part(kids);
                     let right_summary = part(kids);
-                    self.note(right, &right_summary);
+                    self.note(right, &right_summary, ids);
                     merge(&mut summary, indirect(right_summary));
                     if expression.is_some() {
                         let expression_summary = part(kids);
@@ -627,7 +663,7 @@ impl ServedIndex {
                 GraphPattern::Minus { right, .. } => {
                     let mut summary = part(kids);
                     let right_summary = part(kids);
-                    self.note(right, &right_summary);
+                    self.note(right, &right_summary, ids);
                     merge(&mut summary, indirect(right_summary));
                     summary
                 }
@@ -688,8 +724,7 @@ impl ServedIndex {
                 let body_summary = part(kids);
                 let uses: Arc<[Variable]> =
                     body_summary.iter().map(|o| o.variable.clone()).collect();
-                self.exists_uses
-                    .insert(std::ptr::from_ref(body) as usize, uses);
+                self.exists_uses[scanned_id(ids, body).index()] = Some(uses);
                 indirect(body_summary)
             }
         }
@@ -815,7 +850,9 @@ fn served_in<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
 ) -> Arc<[Variable]> {
     if ctx.deferred_exists.is_none()
-        && let Some(served) = index.served.get(&(std::ptr::from_ref(operand) as usize))
+        && let Some(served) = ctx
+            .plan_node(operand)
+            .and_then(|operand| index.served_at(operand))
     {
         return Arc::clone(served);
     }
@@ -855,7 +892,7 @@ pub(crate) fn eval_right_operand<D: DatasetView + Sync>(
     role: FrameRole,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Evaluated<D::Id>, EvalError> {
-    let EndpointScan::Present(index) = &ctx.endpoint_scan else {
+    let EndpointScan::Present(index) = ctx.endpoint_scan() else {
         return eval_evaluated(right, ctx);
     };
     let index = Arc::clone(index);
@@ -926,7 +963,7 @@ pub(crate) fn minus_partitions<D: DatasetView + Sync>(
     right: &GraphPattern,
     ctx: &EvalCtx<'_, D>,
 ) -> Option<Vec<MinusPartition<D::Id>>> {
-    let EndpointScan::Present(index) = &ctx.endpoint_scan else {
+    let EndpointScan::Present(index) = ctx.endpoint_scan() else {
         return None;
     };
     let served = served_in(right, index, ctx);
@@ -1011,7 +1048,7 @@ pub(crate) fn binds_left_endpoints<D: DatasetView + Sync>(
     right: &GraphPattern,
     ctx: &EvalCtx<'_, D>,
 ) -> bool {
-    let EndpointScan::Present(index) = &ctx.endpoint_scan else {
+    let EndpointScan::Present(index) = ctx.endpoint_scan() else {
         return false;
     };
     let served = served_in(left, index, ctx);
@@ -1064,7 +1101,7 @@ pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
     right: &GraphPattern,
     ctx: &EvalCtx<'_, D>,
 ) -> Result<(), EvalError> {
-    if ctx.endpoint_scan.is_absent() || left.rows.is_empty() {
+    if ctx.endpoint_scan().is_absent() || left.rows.is_empty() {
         return Ok(());
     }
     let mut uses: Vec<(Variable, bool)> = Vec::new();
@@ -1948,7 +1985,8 @@ mod tests {
                 .parse_query(&query)
                 .expect("parse");
             let pattern = crate::eval::query_pattern(&parsed);
-            let super::EndpointScan::Present(index) = super::scan(pattern) else {
+            let tree = crate::plan::Tree::build(pattern);
+            let super::EndpointScan::Present(index) = tree.shape().endpoints() else {
                 panic!("{body}: the query has a variable endpoint");
             };
             let mut all = Vec::new();
@@ -1956,9 +1994,10 @@ mod tests {
             assert!(!all.is_empty(), "{body}");
             for operand in all {
                 let walked = super::served_endpoint_variables(operand, None);
-                let indexed = index
-                    .served
-                    .get(&(std::ptr::from_ref(operand) as usize))
+                let indexed = tree
+                    .shape()
+                    .node_of(operand)
+                    .and_then(|operand| index.served_at(operand))
                     .unwrap_or_else(|| panic!("{body}: an operand the scan did not index"));
                 assert_eq!(indexed.as_ref(), walked.as_slice(), "{body}");
             }
@@ -1967,7 +2006,12 @@ mod tests {
         let parsed = purrdf_sparql_algebra::SparqlParser::new()
             .parse_query(&q("{ ?g ex:endpoint ?e } { SERVICE ex:e1 { ?s ?p ?x } }"))
             .expect("parse");
-        assert!(super::scan(crate::eval::query_pattern(&parsed)).is_absent());
+        assert!(
+            crate::plan::Tree::build(crate::eval::query_pattern(&parsed))
+                .shape()
+                .endpoints()
+                .is_absent()
+        );
     }
 
     #[test]
@@ -2296,7 +2340,7 @@ mod tests {
 }
 
 #[cfg(test)]
-mod walk_tests {
+pub(crate) mod walk_tests {
     //! The loop-driven walks of this module against recursive references, over generated
     //! shapes and at a depth no thread stack holds.
 
@@ -2310,6 +2354,7 @@ mod walk_tests {
 
     use super::{EndpointUse, Occurrence, Scope, ServedIndex, indirect, merge, record};
     use crate::governor::soundness::{ExpressionPart, PatternPart};
+    use crate::plan::NodeId;
     use crate::test_rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
@@ -2457,7 +2502,11 @@ mod walk_tests {
 
     impl ServedIndex {
         /// [`Self::summarize`], as a recursion over the pattern.
-        fn summarize_reference(&mut self, pattern: &GraphPattern) -> Vec<Occurrence> {
+        fn summarize_reference(
+            &mut self,
+            pattern: &GraphPattern,
+            ids: &crate::DetHashMap<usize, NodeId>,
+        ) -> Vec<Occurrence> {
             match pattern {
                 GraphPattern::Bgp { .. }
                 | GraphPattern::Path { .. }
@@ -2472,23 +2521,23 @@ mod walk_tests {
                     NamedNodePattern::NamedNode(_) => Vec::new(),
                 },
                 GraphPattern::Join { left, right } => {
-                    let mut summary = self.summarize_reference(left);
-                    let right_summary = self.summarize_reference(right);
-                    self.note(left, &summary);
-                    self.note(right, &right_summary);
+                    let mut summary = self.summarize_reference(left, ids);
+                    let right_summary = self.summarize_reference(right, ids);
+                    self.note(left, &summary, ids);
+                    self.note(right, &right_summary, ids);
                     merge(&mut summary, right_summary);
                     summary
                 }
                 GraphPattern::Lateral { left, right } => {
-                    let mut summary = self.summarize_reference(left);
-                    let right_summary = self.summarize_reference(right);
+                    let mut summary = self.summarize_reference(left, ids);
+                    let right_summary = self.summarize_reference(right, ids);
                     merge(&mut summary, right_summary);
                     summary
                 }
                 GraphPattern::Union { arms } => {
                     let mut summary = Vec::new();
                     for arm in arms {
-                        let arm_summary = self.summarize_reference(arm);
+                        let arm_summary = self.summarize_reference(arm, ids);
                         merge(&mut summary, arm_summary);
                     }
                     summary
@@ -2498,26 +2547,27 @@ mod walk_tests {
                     right,
                     expression,
                 } => {
-                    let mut summary = self.summarize_reference(left);
-                    let right_summary = self.summarize_reference(right);
-                    self.note(right, &right_summary);
+                    let mut summary = self.summarize_reference(left, ids);
+                    let right_summary = self.summarize_reference(right, ids);
+                    self.note(right, &right_summary, ids);
                     merge(&mut summary, indirect(right_summary));
                     if let Some(expression) = expression {
-                        let expression_summary = self.summarize_expression_reference(expression);
+                        let expression_summary =
+                            self.summarize_expression_reference(expression, ids);
                         merge(&mut summary, expression_summary);
                     }
                     summary
                 }
                 GraphPattern::Minus { left, right } => {
-                    let mut summary = self.summarize_reference(left);
-                    let right_summary = self.summarize_reference(right);
-                    self.note(right, &right_summary);
+                    let mut summary = self.summarize_reference(left, ids);
+                    let right_summary = self.summarize_reference(right, ids);
+                    self.note(right, &right_summary, ids);
                     merge(&mut summary, indirect(right_summary));
                     summary
                 }
                 GraphPattern::Filter { expr, inner } => {
-                    let mut summary = self.summarize_reference(inner);
-                    let expression_summary = self.summarize_expression_reference(expr);
+                    let mut summary = self.summarize_reference(inner, ids);
+                    let expression_summary = self.summarize_expression_reference(expr, ids);
                     merge(&mut summary, expression_summary);
                     summary
                 }
@@ -2527,25 +2577,27 @@ mod walk_tests {
                 | GraphPattern::Unfold {
                     inner, expression, ..
                 } => {
-                    let mut summary = self.summarize_reference(inner);
-                    let expression_summary = self.summarize_expression_reference(expression);
+                    let mut summary = self.summarize_reference(inner, ids);
+                    let expression_summary = self.summarize_expression_reference(expression, ids);
                     merge(&mut summary, expression_summary);
                     summary
                 }
                 GraphPattern::Graph { inner, .. }
                 | GraphPattern::Distinct { inner }
-                | GraphPattern::Reduced { inner } => self.summarize_reference(inner),
+                | GraphPattern::Reduced { inner } => self.summarize_reference(inner, ids),
                 GraphPattern::OrderBy { inner, expression } => {
-                    let mut summary = self.summarize_reference(inner);
+                    let mut summary = self.summarize_reference(inner, ids);
                     for key in expression {
-                        let key_summary = self
-                            .summarize_expression_reference(crate::modifier::order_sort_key(key));
+                        let key_summary = self.summarize_expression_reference(
+                            crate::modifier::order_sort_key(key),
+                            ids,
+                        );
                         merge(&mut summary, key_summary);
                     }
                     summary
                 }
                 GraphPattern::Project { inner, variables } => {
-                    let mut summary = self.summarize_reference(inner);
+                    let mut summary = self.summarize_reference(inner, ids);
                     summary.retain(|o| variables.contains(&o.variable));
                     summary
                 }
@@ -2554,7 +2606,7 @@ mod walk_tests {
                     start,
                     length,
                 } => {
-                    let summary = self.summarize_reference(inner);
+                    let summary = self.summarize_reference(inner, ids);
                     if *start == 0 && length.is_none() {
                         summary
                     } else {
@@ -2566,7 +2618,7 @@ mod walk_tests {
                     variables,
                     aggregates,
                 } => {
-                    let mut summary = self.summarize_reference(inner);
+                    let mut summary = self.summarize_reference(inner, ids);
                     for occurrence in &mut summary {
                         if !variables.contains(&occurrence.variable) {
                             occurrence.conflict |= occurrence.direct;
@@ -2580,7 +2632,7 @@ mod walk_tests {
                                 .iter()
                                 .map(crate::modifier::order_sort_key),
                         ) {
-                            let expression_summary = self.summarize_expression_reference(e);
+                            let expression_summary = self.summarize_expression_reference(e, ids);
                             merge(&mut summary, expression_summary);
                         }
                     }
@@ -2590,20 +2642,23 @@ mod walk_tests {
         }
 
         /// The expression half of [`Self::summarize_reference`].
-        fn summarize_expression_reference(&mut self, expr: &Expression) -> Vec<Occurrence> {
+        fn summarize_expression_reference(
+            &mut self,
+            expr: &Expression,
+            ids: &crate::DetHashMap<usize, NodeId>,
+        ) -> Vec<Occurrence> {
             let mut summary = Vec::new();
             crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
                 match part {
                     ExpressionPart::Sub(sub) => {
-                        let sub_summary = self.summarize_expression_reference(sub);
+                        let sub_summary = self.summarize_expression_reference(sub, ids);
                         merge(&mut summary, sub_summary);
                     }
                     ExpressionPart::Exists(body) => {
-                        let body_summary = self.summarize_reference(body);
+                        let body_summary = self.summarize_reference(body, ids);
                         let uses: Arc<[Variable]> =
                             body_summary.iter().map(|o| o.variable.clone()).collect();
-                        self.exists_uses
-                            .insert(std::ptr::from_ref(body) as usize, uses);
+                        self.exists_uses[super::scanned_id(ids, body).index()] = Some(uses);
                         merge(&mut summary, indirect(body_summary));
                     }
                     ExpressionPart::Call(_) => {}
@@ -2654,8 +2709,8 @@ mod walk_tests {
     // ── The generator ───────────────────────────────────────────────────────────────
 
     /// A deterministic sequence of choices, drawn from one SplitMix64 counter stream.
-    struct Choices {
-        state: u64,
+    pub(crate) struct Choices {
+        pub(crate) state: u64,
     }
 
     impl Choices {
@@ -2729,7 +2784,7 @@ mod walk_tests {
     }
 
     /// A pattern of at most `budget` interior nodes, every variant of the algebra reachable.
-    fn pattern(choices: &mut Choices, budget: &mut usize) -> GraphPattern {
+    pub(crate) fn pattern(choices: &mut Choices, budget: &mut usize) -> GraphPattern {
         if *budget == 0 {
             return if choices.flag() {
                 service(choices)
@@ -2880,10 +2935,6 @@ mod walk_tests {
         }
     }
 
-    fn address(pattern: &GraphPattern) -> usize {
-        std::ptr::from_ref(pattern) as usize
-    }
-
     // ── The checks ──────────────────────────────────────────────────────────────────
 
     /// Every walk answers what its recursive reference answers, on two hundred generated
@@ -2904,8 +2955,9 @@ mod walk_tests {
                 "shape {shape}: {root:?}"
             );
             with_endpoint += usize::from(mentions);
+            let tree = crate::plan::Tree::build(&root);
             assert_eq!(
-                super::scan(&root).is_absent(),
+                tree.shape().endpoints().is_absent(),
                 !mentions,
                 "shape {shape}: the scan is present exactly when a variable endpoint is"
             );
@@ -2916,10 +2968,11 @@ mod walk_tests {
             classify_reference(&root, true, &mut Vec::new(), &mut reference_uses);
             assert_eq!(uses, reference_uses, "shape {shape}: {root:?}");
 
-            let mut index = ServedIndex::default();
-            let summary = index.summarize(&root);
-            let mut reference_index = ServedIndex::default();
-            let reference_summary = reference_index.summarize_reference(&root);
+            let ids = tree.shape().addresses();
+            let mut index = ServedIndex::with_len(tree.shape().len());
+            let summary = index.summarize(&root, ids);
+            let mut reference_index = ServedIndex::with_len(tree.shape().len());
+            let reference_summary = reference_index.summarize_reference(&root, ids);
             assert_eq!(summary, reference_summary, "shape {shape}: {root:?}");
             assert_eq!(
                 index.served, reference_index.served,
@@ -3009,19 +3062,23 @@ mod walk_tests {
 
                 let chain = direct_chain();
                 assert!(super::mentions_variable_endpoint(&chain));
-                let super::EndpointScan::Present(index) = super::scan(&chain) else {
+                let tree = crate::plan::Tree::build(&chain);
+                let super::EndpointScan::Present(index) = tree.shape().endpoints() else {
                     panic!("the chain holds a variable endpoint");
                 };
                 let GraphPattern::Join { right, .. } = &chain else {
                     panic!("the chain's root is a Join");
                 };
                 assert_eq!(
-                    index.served.get(&address(right)).map(AsRef::as_ref),
+                    tree.shape()
+                        .node_of(right)
+                        .and_then(|right| index.served_at(right))
+                        .map(AsRef::as_ref),
                     Some([e.clone()].as_slice()),
                     "the root's right operand serves ?e"
                 );
-                assert_eq!(index.served.len(), DEPTH / 3 * 2 + 2);
-                assert!(index.exists_uses.is_empty());
+                assert_eq!(index.served.iter().flatten().count(), DEPTH / 3 * 2 + 2);
+                assert!(index.exists_uses.iter().all(Option::is_none));
                 assert_eq!(
                     super::served_endpoint_variables(&chain, None),
                     std::slice::from_ref(&e)
@@ -3033,19 +3090,25 @@ mod walk_tests {
 
                 let nested = exists_chain();
                 assert!(super::mentions_variable_endpoint(&nested));
-                let super::EndpointScan::Present(index) = super::scan(&nested) else {
+                let tree = crate::plan::Tree::build(&nested);
+                let super::EndpointScan::Present(index) = tree.shape().endpoints() else {
                     panic!("the nested chain holds a variable endpoint");
                 };
-                assert_eq!(index.exists_uses.len(), DEPTH, "one entry per EXISTS body");
+                assert_eq!(
+                    index.exists_uses.iter().flatten().count(),
+                    DEPTH,
+                    "one entry per EXISTS body"
+                );
                 assert!(
                     index
                         .exists_uses
-                        .values()
+                        .iter()
+                        .flatten()
                         .all(|uses| uses.as_ref() == [e.clone()]),
                     "every body uses ?e"
                 );
                 assert!(
-                    index.served.is_empty(),
+                    index.served.iter().all(Option::is_none),
                     "no join operand: nothing is served"
                 );
                 assert!(

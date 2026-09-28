@@ -116,6 +116,7 @@ pub(crate) mod parallel;
 mod parallel_determinism_gate;
 mod path;
 pub mod path_relation;
+mod plan;
 mod plan_cache;
 mod plan_memory;
 mod prebind_memo;
