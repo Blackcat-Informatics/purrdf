@@ -116,7 +116,7 @@ pub fn fingerprint_terms<'a, I>(terms: I) -> Result<[u8; FINGERPRINT_BYTES], Tex
 where
     I: IntoIterator<Item = &'a TermValue>,
 {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
     let mut buffer = Vec::new();
     for term in terms {
         buffer.clear();

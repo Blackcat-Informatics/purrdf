@@ -129,24 +129,41 @@ pub fn append_canonical(v: &Value, out: &mut Vec<u8>) {
     ciborium::ser::into_writer(&Canonical(v), out).expect("CBOR encoding to a Vec cannot fail");
 }
 
-/// Input size at which BLAKE3 switches to multi-threaded hashing.
-///
-/// Follows the blake3 crate's guidance: `update_rayon` only pays for its
-/// fork-join overhead once the input spans enough chunks (~128 KiB). Below
-/// the threshold the single-threaded fast path is used. Both paths compute
-/// the same function, so every content id and blob digest is byte-identical
-/// regardless of thread count (rayon runs inline-sequential on targets
-/// without threads, e.g. wasm32).
+/// Input size at which native BLAKE3 subtrees use the shared Rayon pool.
 const PARALLEL_HASH_MIN: usize = 128 * 1024;
 
-/// The 32-byte BLAKE3-256 digest of `data`.
-pub fn blake3_256(data: &[u8]) -> Vec<u8> {
-    if data.len() >= PARALLEL_HASH_MIN {
-        let mut hasher = blake3::Hasher::new();
-        hasher.update_rayon(data);
-        return hasher.finalize().as_bytes().to_vec();
+struct RayonJoin;
+impl purrdf_hash::blake3::Join for RayonJoin {
+    fn join<A: Send, B: Send>(
+        &self,
+        left: impl FnOnce() -> A + Send,
+        right: impl FnOnce() -> B + Send,
+    ) -> (A, B) {
+        rayon::join(left, right)
     }
-    blake3::hash(data).as_bytes().to_vec()
+}
+
+/// The 32-byte BLAKE3-256 digest of `data`, without a digest allocation.
+pub fn blake3_256(data: &[u8]) -> [u8; 32] {
+    if data.len() < PARALLEL_HASH_MIN {
+        return *purrdf_hash::blake3::hash(data).as_bytes();
+    }
+    let workers = rayon::current_num_threads();
+    if workers == 1 {
+        return *purrdf_hash::blake3::hash(data).as_bytes();
+    }
+    // A split threshold is twice its power-of-two leaf size. Aim to occupy
+    // the caller's pool, with a 16 KiB minimum leaf to fill the widest SIMD
+    // batch and a bounded grain for load balancing on large inputs. The paired
+    // eight-worker measurements favor 32 KiB at 128 KiB, 256 KiB at 1 MiB,
+    // and 1 MiB at 16 MiB; a fixed threshold leaves small trees underused.
+    let grain = data
+        .len()
+        .div_ceil(workers)
+        .next_power_of_two()
+        .saturating_mul(2)
+        .clamp(32 * 1024, 1024 * 1024);
+    *purrdf_hash::blake3::hash_with_join(data, grain, &RayonJoin).as_bytes()
 }
 
 /// Lowercase hex of a byte string.
@@ -160,7 +177,7 @@ pub fn hex(data: &[u8]) -> String {
 
 /// A `blake3:<hex>` content digest for inline blob addressing (§12).
 pub fn digest_str(data: &[u8]) -> String {
-    format!("blake3:{}", hex(&blake3_256(data)))
+    format!("blake3:{}", purrdf_hash::hex::Lower(&blake3_256(data)))
 }
 
 /// Get a map entry by text key (first match, like Python `dict.get`).
@@ -172,23 +189,10 @@ pub fn map_get<'a>(entries: &'a [(Value, Value)], key: &str) -> Option<&'a Value
 }
 
 fn hash_excluding(entries: &[(Value, Value)], excluded: &[&str]) -> Vec<u8> {
-    struct HashWriter(blake3::Hasher);
-
-    impl std::io::Write for HashWriter {
-        fn write(&mut self, buffer: &[u8]) -> std::io::Result<usize> {
-            self.0.update(buffer);
-            Ok(buffer.len())
-        }
-
-        fn flush(&mut self) -> std::io::Result<()> {
-            Ok(())
-        }
-    }
-
-    let mut writer = HashWriter(blake3::Hasher::new());
+    let mut writer = purrdf_hash::blake3::Hasher::new();
     ciborium::ser::into_writer(&CanonicalMap { entries, excluded }, &mut writer)
         .expect("hash writer cannot fail");
-    writer.0.finalize().as_bytes().to_vec()
+    writer.finalize().as_bytes().to_vec()
 }
 
 /// Compute a frame's `"id"` over its content (excluding `"id"`/`"sig"`).
@@ -264,6 +268,47 @@ pub fn unwrap_header(item: &Value) -> Result<&Vec<(Value, Value)>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn parallel_hash_matches_frozen_answers() {
+        // Frozen blake3 1.8.5 public-API answers; input byte i is i % 251.
+        // Both sides of the scheduling threshold and a deeper tree are covered.
+        let data: Vec<u8> = (0..1_048_576).map(|i| (i % 251) as u8).collect();
+        let verify = || {
+            for (len, expected) in [
+                (
+                    131_071,
+                    "de433db299ce5940eb72f08f509f90fa93e8b8c38e26c927310b4f8b98e2f33c",
+                ),
+                (
+                    131_072,
+                    "306baba93b1a393cbd35172837c98b0f59a41f64e1b2682ae102d8b2534b9e1c",
+                ),
+                (
+                    131_073,
+                    "f837d4254d24ba3d50fe3743d46e4af6db5f5d6ab0469197d94e7ba1e906c4d8",
+                ),
+                (
+                    1_048_576,
+                    "74cb441fd087764ca9c3694da742ebe30cbeb3060a17009ca81825c7a8d10343",
+                ),
+            ] {
+                assert_eq!(
+                    purrdf_hash::hex::Lower(&blake3_256(&data[..len])).to_string(),
+                    expected
+                );
+            }
+        };
+        verify();
+        #[cfg(not(target_arch = "wasm32"))]
+        for workers in [1, 2, 8] {
+            rayon::ThreadPoolBuilder::new()
+                .num_threads(workers)
+                .build()
+                .expect("test pool")
+                .install(verify);
+        }
+    }
 
     fn nested_value() -> Value {
         Value::Tag(

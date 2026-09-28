@@ -425,20 +425,22 @@ build-profile-hygiene: ## Prove the gate really compiles at opt-level 3 with deb
 	python3 scripts/check-build-profiles.py
 
 rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core, zero-dep leaves.
-	@tree=$$(cargo tree -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
+	@tree=$$(cargo tree --color never -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
 	if echo "$$tree" | grep -Eq '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; then \
 		echo "FAIL: purrdf-core pulls an oxigraph-family or PyO3 crate as a NORMAL dependency"; \
 		echo "$$tree" | grep -E '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; exit 1; \
 	fi; \
 	echo "OK: purrdf-core has no oxigraph/PyO3 normal dependency"
 	@for leaf in purrdf-iri purrdf-xsd purrdf-events purrdf-hash; do \
-		deps=$$(cargo tree -p $$leaf --edges normal --depth 1 -f "{p}" | tail -n +2); \
+		tree=$$(cargo tree --color never --prefix none -p $$leaf --edges normal --depth 1 -f "{p}") || { echo "FAIL: cargo tree errored for $$leaf"; exit 1; }; \
+		deps=$$(printf '%s\n' "$$tree" | tail -n +2); \
 		if [ -n "$$deps" ]; then \
 			echo "FAIL: $$leaf must stay zero-dependency but depends on:"; echo "$$deps"; exit 1; \
 		fi; \
 		echo "OK: $$leaf is zero-dependency"; \
 	done
-	@deps=$$(cargo tree -p purrdf-deflate --edges normal --depth 1 -f "{p}" | tail -n +2 | sed 's/ v.*//; s/^[^a-z]*//'); \
+	@tree=$$(cargo tree --color never --prefix none -p purrdf-deflate --edges normal --depth 1 -f "{p}") || { echo "FAIL: cargo tree errored for purrdf-deflate"; exit 1; }; \
+	deps=$$(printf '%s\n' "$$tree" | tail -n +2 | sed 's/ v.*//'); \
 	if [ "$$deps" != "purrdf-hash" ]; then \
 		echo "FAIL: purrdf-deflate must depend on purrdf-hash alone but depends on:"; echo "$$deps"; exit 1; \
 	fi; \
@@ -750,10 +752,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
 	@# +simd128 is a PLATFORM target feature (not a Cargo feature): it turns on
 	@# the wasm SIMD instruction set so memchr's byte scan (the parser hot path)
-	@# runs vectorized instead of SWAR. BLAKE3 does not change: blake3 compiles
-	@# its own simd128 backend only under its `wasm32_simd` Cargo feature, which
-	@# this workspace does not enable, so it stays on its portable code here --
-	@# `make simd-asm` measures both, on this build and the baseline one. It is
+	@# runs vectorized instead of SWAR. Native BLAKE3 also selects its four-lane
+	@# SIMD128 kernel from this target feature, with no semantic Cargo feature.
+	@# `make simd-asm` measures this build and the portable baseline. It is
 	@# scoped to this npm-artifact build only, so `make wasm` stays baseline-clean.
 	@# This raises the artifact's browser baseline to engines with wasm SIMD
 	@# (all major browsers since ~2021; Node >= 18, the package's engine floor).

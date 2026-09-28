@@ -587,12 +587,12 @@ impl WitnessAddress {
 /// independent of the order witnesses were minted in.
 fn witness_surface(address: &WitnessAddress) -> String {
     /// Append `bytes` as its `u64` little-endian length followed by the bytes themselves.
-    fn frame(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+    fn frame(hasher: &mut purrdf_hash::blake3::RecordHasher, bytes: &[u8]) {
         hasher.update(&(bytes.len() as u64).to_le_bytes());
         hasher.update(bytes);
     }
 
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::RecordHasher::new();
     frame(&mut hasher, WITNESS_DIGEST_TAG.as_bytes());
     hasher.update(&(address.clause as u64).to_le_bytes());
     hasher.update(&(address.ordinal as u64).to_le_bytes());

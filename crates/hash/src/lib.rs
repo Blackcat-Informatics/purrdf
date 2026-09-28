@@ -5,6 +5,7 @@
 //!
 //! | Module | Algorithm | Specification | Output |
 //! |---|---|---|---|
+//! | [`blake3`] | Unkeyed BLAKE3-256 | BLAKE3 specification | 32 bytes |
 //! | [`md5`] | MD5 | RFC 1321 | 16 bytes |
 //! | [`sha1`] | SHA-1 | FIPS 180-4 | 20 bytes |
 //! | [`sha3`] | SHA3-224, SHA3-256, SHA3-384, SHA3-512 and Keccak-f\[1600\] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
@@ -59,6 +60,7 @@ mod arch;
 
 #[doc(hidden)]
 pub mod backend;
+pub mod blake3;
 pub mod crc32;
 pub mod fixed;
 pub mod hex;

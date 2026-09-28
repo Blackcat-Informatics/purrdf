@@ -3662,7 +3662,7 @@ impl DlProof {
     /// carries no thread pool.
     #[must_use]
     pub fn digest(&self) -> [u8; 32] {
-        *blake3::hash(&self.encode()).as_bytes()
+        *purrdf_hash::blake3::hash(&self.encode()).as_bytes()
     }
 
     /// [`Self::digest`] as 64 lowercase hex characters.
@@ -4778,14 +4778,17 @@ pub(crate) fn observe_completion(st: &State, blocks: &[(NodeRef, NodeRef)]) -> C
 /// bytes. The same shape [`Justification::digest`](crate::explain::Justification::digest)
 /// already uses.
 fn input_digest(ontology: &RdfDataset) -> [u8; 32] {
-    *blake3::hash(purrdf_core::canonicalize(ontology).nquads.as_bytes()).as_bytes()
+    *purrdf_hash::blake3::hash(purrdf_core::canonicalize(ontology).nquads.as_bytes()).as_bytes()
 }
 
 /// The fallible sibling of [`input_digest`] — the untrusted-input entry point, exactly as
 /// [`purrdf_core::try_canonicalize`] is [`purrdf_core::canonicalize`]'s. See
 /// [`try_ontology_identity`].
 fn try_input_digest(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_core::CanonError> {
-    Ok(*blake3::hash(purrdf_core::try_canonicalize(ontology)?.nquads.as_bytes()).as_bytes())
+    Ok(
+        *purrdf_hash::blake3::hash(purrdf_core::try_canonicalize(ontology)?.nquads.as_bytes())
+            .as_bytes(),
+    )
 }
 
 /// The PRODUCER-INDEPENDENT identity of an ontology, for a consumer to recompute.
@@ -4831,7 +4834,7 @@ pub fn try_ontology_identity(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_c
 /// [`input_digest`] is for. Conflating the two would let a producer's own compilation stand in
 /// for the caller's data.
 fn contract_digest(clauses: &ClauseSet) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::RecordHasher::new();
     frame_hash(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
     frame_hash(&mut hasher, CALCULUS_VERSION.as_bytes());
     hasher.update(&(clauses.count() as u64).to_le_bytes());
@@ -4882,7 +4885,7 @@ fn contract_digest(clauses: &ClauseSet) -> [u8; 32] {
 }
 
 /// Fold one head atom into the contract digest.
-fn head_atom_hash(hasher: &mut blake3::Hasher, atom: &HeadAtom) {
+fn head_atom_hash(hasher: &mut purrdf_hash::blake3::RecordHasher, atom: &HeadAtom) {
     match *atom {
         HeadAtom::Concept { var, concept } => {
             hasher.update(&[0_u8]);
@@ -4943,7 +4946,7 @@ fn frame(out: &mut Vec<u8>, bytes: &[u8]) {
 }
 
 /// Fold a length-prefixed byte string into a hasher.
-fn frame_hash(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+fn frame_hash(hasher: &mut purrdf_hash::blake3::RecordHasher, bytes: &[u8]) {
     hasher.update(&(bytes.len() as u64).to_le_bytes());
     hasher.update(bytes);
 }
@@ -5762,7 +5765,8 @@ mod tests {
     fn the_input_identity_is_the_canonical_ontology_and_not_the_clause_set() {
         let (ontology, proof, ctx) = refutation();
         let canonical =
-            *blake3::hash(purrdf_core::canonicalize(&ontology).nquads.as_bytes()).as_bytes();
+            *purrdf_hash::blake3::hash(purrdf_core::canonicalize(&ontology).nquads.as_bytes())
+                .as_bytes();
         assert_eq!(proof.input(), canonical, "the input digest is RDFC-1.0's");
         assert_eq!(ctx.input(), canonical, "and the consumer recomputes it");
         assert_ne!(

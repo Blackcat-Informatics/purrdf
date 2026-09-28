@@ -1330,7 +1330,7 @@ impl ServiceProof {
     /// A CONTENT digest, never an IRI: **PurRDF mints no vocabulary**.
     #[must_use]
     pub fn digest(&self) -> [u8; 32] {
-        *blake3::hash(&self.encode()).as_bytes()
+        *purrdf_hash::blake3::hash(&self.encode()).as_bytes()
     }
 
     /// [`Self::digest`] as 64 lowercase hex characters.

@@ -189,6 +189,13 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "futures-task": "js-sys with default-features = false (its `std` feature pulled it in)",
     "pin-project-lite": "js-sys with default-features = false (its `std` feature pulled it in)",
     "slab": "js-sys with default-features = false (its `std` feature pulled it in)",
+    "blake3": "purrdf_hash::blake3 (native streaming and caller-scheduled subtrees)",
+    "arrayref": "native BLAKE3 fixed-size array views",
+    "arrayvec": "native BLAKE3 fixed-capacity tree stack",
+    "constant_time_eq": "native unkeyed BLAKE3 content identities",
+    "cc": "Rust intrinsics for native hashing (no C or assembler build)",
+    "find-msvc-tools": "native Rust hashing kernels",
+    "shlex": "native Rust hashing kernels (old cc build closure)",
     "md-5": "purrdf_hash::md5 (RFC 1321)",
     "hex": 'core::fmt::LowerHex formatting (`format!("{digest:x}")`)',
     "sha1": "purrdf_hash::sha1 (FIPS 180-4)",
@@ -613,7 +620,7 @@ class ResolvedGraph:
     """One lockfile's resolved package graph, as ``cargo metadata`` reports it."""
 
     names: dict[str, str]  # package id -> name
-    external: set[str]  # ids of non-workspace packages
+    external: set[str]  # ids with a registry/git source; local path crates stay first-party
     workspace: set[str]
     published: set[str]  # workspace ids whose `publish` is not false
     build_script: set[str]
@@ -651,7 +658,7 @@ def graph_from_metadata(meta: dict) -> ResolvedGraph:
         ]
     return ResolvedGraph(
         names=names,
-        external=set(names) - workspace,
+        external={package["id"] for package in meta["packages"] if package.get("source")},
         workspace=workspace,
         published=published,
         build_script=build_script,
@@ -705,9 +712,21 @@ class LedgerFacts:
     metrics: dict[str, dict[str, object]] = field(default_factory=dict)
     # direct name -> external names its closure reaches (any edge kind).
     closure_of_direct: dict[str, set[str]] = field(default_factory=dict)
-    reachable: int = 0
-    release: int = 0
-    wasm: int = 0
+    reachable_ids: set[str] = field(default_factory=set)
+    release_ids: set[str] = field(default_factory=set)
+    wasm_ids: set[str] = field(default_factory=set)
+
+    @property
+    def reachable(self) -> int:
+        return len(self.reachable_ids)
+
+    @property
+    def release(self) -> int:
+        return len(self.release_ids)
+
+    @property
+    def wasm(self) -> int:
+        return len(self.wasm_ids)
 
 
 def lock_external_versions(lock_text: str) -> tuple[int, dict[str, set[str]]]:
@@ -741,9 +760,9 @@ def merge_facts(
     reachable = reach(full, full.workspace, ALL_KINDS)
     release = reach(full, full.published, RELEASE_KINDS)
     wasm_release = reach(wasm, wasm.published, RELEASE_KINDS)
-    facts.reachable += len(reachable & full.external)
-    facts.release += len(release & full.external)
-    facts.wasm += len(wasm_release & wasm.external)
+    facts.reachable_ids.update(reachable & full.external)
+    facts.release_ids.update(release & full.external)
+    facts.wasm_ids.update(wasm_release & wasm.external)
 
     direct = {
         full.names[dep]
@@ -1008,11 +1027,11 @@ def report_lines(facts: LedgerFacts) -> list[str]:
     external = len(facts.versions)
     rows = [
         ("lockfile packages ([[package]], all committed locks)", facts.lock_package_count),
-        ("  external (non-workspace) lockfile packages", external),
-        ("reachable non-workspace packages", facts.reachable),
+        ("external package names (union of committed locks)", external),
+        ("reachable external package ids (union of graphs)", facts.reachable),
         ("release graph (normal+build from published crates)", facts.release),
         (f"{WASM_TARGET} release graph", facts.wasm),
-        ("dev-only (reachable, outside the release graph)", facts.reachable - facts.release),
+        ("dev-only (reachable, outside every release graph)", len(facts.reachable_ids - facts.release_ids)),
     ]
     width = max(len(label) for label, _ in rows)
     return [f"{label:<{width}}  {value:>4}" for label, value in rows]
@@ -1028,6 +1047,7 @@ def fixture_metadata(dev_on_wasm: bool = True) -> dict:
         return {
             "id": pid,
             "name": pid,
+            "source": None if pid in {"a", "t"} else "registry+fixture",
             "publish": publish,
             "targets": [{"kind": [kind]} for kind in kinds],
         }
@@ -1131,6 +1151,20 @@ def ledger_self_test() -> list[str]:
     counts = (facts.lock_package_count, facts.reachable, facts.release, facts.wasm)
     if counts != (6, 4, 2, 2):
         failures.append(f"fixture report counts {counts}, expected (6, 4, 2, 2)")
+
+    # Shared dependencies in an excluded consumer's lock are the same package
+    # ids, and a local path dependency does not become third-party merely
+    # because that consumer is a separate workspace.
+    merged = fixture_facts(fixture_lock())
+    consumer = fixture_metadata()
+    consumer["workspace_members"] = ["a"]
+    graph = graph_from_metadata(consumer)
+    if "t" in graph.external:
+        failures.append("a local path dependency was counted as external")
+    merge_facts(merged, fixture_lock(), graph, graph)
+    merged_counts = (merged.lock_package_count, merged.reachable, merged.release, merged.wasm)
+    if merged_counts != (12, 4, 2, 2):
+        failures.append(f"two-lock union report counts {merged_counts}, expected (12, 4, 2, 2)")
 
     # --- the complete, categorized fixture ledger passes (the valid neighbour
     #     of every refusal below).

@@ -88,7 +88,7 @@ fn canonical_concat(corpus: &[&[u8]]) -> Vec<u8> {
 
 /// Derive a deterministic 64-bit seed from the canonical corpus bytes.
 fn derive_seed(concat: &[u8]) -> u64 {
-    let hash = blake3::hash(concat);
+    let hash = purrdf_hash::blake3::hash(concat);
     let bytes = hash.as_bytes();
     // BLAKE3 output is 32 bytes; the first eight are ample entropy for a seed.
     u64::from_le_bytes(

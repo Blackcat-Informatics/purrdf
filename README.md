@@ -543,7 +543,7 @@ triple pattern.
   `purrdf-core`, not the slice crate).
 - **Zero-dependency foundations** — `purrdf-iri` (RFC 3987/3986) and `purrdf-xsd`
   (XSD 1.1 value space) have no runtime dependencies at all; `purrdf-events` (the
-  object-safe ingestion seam) and `purrdf-hash` (MD5, SHA-1, SHA-3 and CRC-32
+  object-safe ingestion seam) and `purrdf-hash` (BLAKE3, MD5, SHA-1, SHA-3 and CRC-32
   digests) have none either, and `purrdf-cdt` is a `no_std` closed leaf over
   exactly the first two.
 
@@ -695,7 +695,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-iri`](./crates/iri/) | Zero-dependency IRI/URI parsing, normalization, CURIEs, and the workspace's single RFC 3986 base-resolution layer (`BaseIri`/`BaseScope`). |
 | [`purrdf-xsd`](./crates/xsd/) | Zero-dependency XSD 1.1 value space with SPARQL numeric promotion. |
 | [`purrdf-events`](./crates/rdf-events/) | Zero-dependency object-safe RDF event sink/source seam. |
-| [`purrdf-hash`](./crates/hash/) | Zero-dependency MD5, SHA-1, SHA-3 and CRC-32 digests, streaming and one-shot; SHA-1 and CRC-32 run on the processor's SHA and CRC instructions when it has them. |
+| [`purrdf-hash`](./crates/hash/) | Zero-dependency BLAKE3, MD5, SHA-1, SHA-3 and CRC-32 digests, streaming and one-shot; SHA-1 and CRC-32 run on the processor's SHA and CRC instructions when it has them. |
 | [`purrdf-deflate`](./crates/deflate/) | Native DEFLATE and gzip: a push-based streaming decoder that decodes every gzip member, verifies each trailer and refuses trailing garbage or output past a caller's limit, and a deterministic encoder whose bytes depend only on the input and level. Vector match copies and compares on SSE2/AVX2, NEON and wasm simd128; depends on `purrdf-hash` alone. |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | The wasm32 engine behind the `purrdf` ESM package. |
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI (unpublished; built via cargo-c). |

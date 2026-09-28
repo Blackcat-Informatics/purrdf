@@ -877,14 +877,17 @@ impl Memory {
         file_len: u64,
         parts: impl IntoIterator<Item = &'a str>,
     ) -> String {
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = purrdf_hash::blake3::RecordHasher::new();
         hasher.update(kind.as_bytes());
         hasher.update(&file_len.to_le_bytes());
         for part in parts {
             hasher.update(&[0]);
             hasher.update(part.as_bytes());
         }
-        format!("urn:purrdf:{kind}:blake3:{}", hasher.finalize().to_hex())
+        format!(
+            "urn:purrdf:{kind}:blake3:{}",
+            purrdf_hash::hex::Lower(hasher.finalize().as_bytes())
+        )
     }
 }
 

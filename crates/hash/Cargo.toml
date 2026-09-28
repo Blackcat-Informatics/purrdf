@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-hash"
-description = "Native, zero-dependency hashing for PurRDF: MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot, lowercase hex rendering, and the fixed-key table hasher"
+description = "Native, zero-dependency hashing for PurRDF: BLAKE3, MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot, lowercase hex rendering, and the fixed-key table hasher"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -11,7 +11,7 @@ license.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-hash"
 rust-version.workspace = true
-keywords = ["md5", "sha1", "sha3", "crc32", "hash"]
+keywords = ["blake3", "sha3", "crc32", "hash", "digest"]
 categories = ["algorithms", "cryptography", "no-std::no-alloc"]
 
 [package.metadata.docs.rs]
@@ -30,6 +30,7 @@ path = "src/lib.rs"
 name = "purrdf_hash"
 
 [dev-dependencies]
+purrdf-alloc-probe = { workspace = true }
 # The frozen differential vectors, the deterministic input stream they are
 # drawn from, and the `harness = false` runner `tests/fixed_hasher.rs` runs on,
 # natively and on wasm32-unknown-unknown alike. Path-only and unpublished, so
@@ -72,4 +73,9 @@ harness = false
 # named cases in Node through scripts/wasm-test-runner.sh.
 [[test]]
 name = "fixed_hasher"
+harness = false
+
+# Streaming tree boundaries replay the same frozen answers on native and wasm.
+[[test]]
+name = "blake3"
 harness = false

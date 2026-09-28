@@ -184,25 +184,10 @@ category = "transitive:clap"
 reason = "Windows console styling for anstream"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
-[packages.arrayref]
-category = "transitive:blake3"
-reason = "array slicing helpers for BLAKE3"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.arrayvec]
-category = "transitive:blake3"
-reason = "fixed-capacity vectors for BLAKE3"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.autocfg]
 category = "transitive:criterion"
 reason = "build-time rustc probing for num-traits"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
-[packages.blake3]
-category = "crypto"
-reason = "BLAKE3 content digests: GTS, text index and retrieval plan fingerprints, datalog/entail identities"
-metrics = { direct = true, exclusive_closure = 7, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.block-buffer]
 category = "transitive:sha2"
@@ -218,11 +203,6 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "transitive:criterion"
 reason = "numeric casts for criterion statistics"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
-[packages.cc]
-category = "transitive:blake3"
-reason = "C/assembly compilation for BLAKE3 SIMD kernels"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.cfg-if]
 category = "transitive:sha2"
@@ -282,11 +262,6 @@ metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false
 [packages.const-oid]
 category = "transitive:sha2"
 reason = "ASN.1 OIDs for RustCrypto digest identifiers"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.constant_time_eq]
-category = "transitive:blake3"
-reason = "constant-time comparison for BLAKE3 hashes"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.cpubits]
@@ -388,11 +363,6 @@ metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, b
 category = "transitive:ed25519-dalek"
 reason = "formally verified field arithmetic for curve25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
-
-[packages.find-msvc-tools]
-category = "transitive:blake3"
-reason = "MSVC toolchain discovery for cc"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.getrandom]
 category = "runtime"
@@ -542,7 +512,7 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false,
 [packages.rayon]
 category = "runtime"
 reason = "data-parallel parsing, reasoning and scans; inline-sequential on wasm32"
-metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 5, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.rayon-core]
 category = "transitive:rayon"
@@ -623,11 +593,6 @@ metrics = { direct = true, exclusive_closure = 5, release = true, wasm = true, b
 category = "crypto"
 reason = "SHA-2 family digests for SPARQL SHA256/384/512, RDF canonicalization and GTS"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.shlex]
-category = "transitive:blake3"
-reason = "shell-word splitting for cc"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.signature]
 category = "transitive:ed25519-dalek"

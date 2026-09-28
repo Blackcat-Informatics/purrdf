@@ -151,7 +151,7 @@ class Runner:
     def configuration(self, config, manifest, chooser):
         gate = self.gate
         start = time.monotonic()
-        env = gate.config_env(config, dict(os.environ), gate.host_triple())
+        env = gate.config_env(config, dict(os.environ))
         stats = dict(build_seconds=0.0, analysis_seconds=0.0, lock_seconds=0.0,
                      rustc_invocations=0, fresh_artifacts=0, parsed_units=0, reused_units=0)
         functions = []

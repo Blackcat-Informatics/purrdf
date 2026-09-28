@@ -107,9 +107,6 @@ purrdf-xsd = { path = "crates/xsd", version = "2.0.2" }
 proc-macro2 = "1"
 syn = { version = "2", features = ["full", "visit"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
-# rayon feature: multi-threaded hashing for large inputs (rayon executes
-# inline-sequentially on wasm32 without atomics, so the wasm gate holds).
-blake3 = { version = "1", features = ["rayon"] }
 ciborium = "0.2"
 # Argument parsing for the `purrdf` CLI (native-only binary crate `crates/cli`).
 # `derive` supplies the `Parser`/`Subcommand`/`ValueEnum` macros the CLI models

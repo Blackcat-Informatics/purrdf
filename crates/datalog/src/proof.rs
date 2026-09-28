@@ -786,7 +786,7 @@ impl ProofArena {
     ///
     /// Panics if `root` was not minted by this arena.
     pub fn digest(&self, root: ProofId) -> [u8; 32] {
-        *blake3::hash(&self.encode(root)).as_bytes()
+        *purrdf_hash::blake3::hash(&self.encode(root)).as_bytes()
     }
 
     /// The node indices reachable from `root`, in post-order first-visit order.

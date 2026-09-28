@@ -173,7 +173,7 @@ fn detached_signature_leaves_sort_by_frame_id_then_cose_for_rotation_cosigners()
         .into_iter()
         .map(|(mut frame_id, cose)| {
             frame_id.extend_from_slice(&cose);
-            blake3_256(&frame_id)
+            blake3_256(&frame_id).to_vec()
         })
         .collect();
 

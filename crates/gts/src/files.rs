@@ -445,7 +445,7 @@ fn guess_media_type(path: &Path) -> String {
 }
 
 struct HashingWriter<'a> {
-    hasher: &'a mut blake3::Hasher,
+    hasher: &'a mut purrdf_hash::blake3::Hasher,
 }
 
 impl Write for HashingWriter<'_> {
@@ -520,7 +520,7 @@ fn copy_counted_and_hash<R: Read, W: Write>(
     writer: &mut W,
     expected_size: u64,
 ) -> std::io::Result<(String, u64)> {
-    let mut digest = blake3::Hasher::new();
+    let mut digest = purrdf_hash::blake3::Hasher::new();
     let mut written = 0_u64;
     let mut buf = vec![0_u8; STREAM_CHUNK_SIZE];
     loop {
@@ -612,7 +612,7 @@ fn append_blob_path<W: Write>(
     let representation = source.representation.as_deref();
     let mut file =
         fs::File::open(&source.path).map_err(|e| format!("read {:?}: {e}", source.path))?;
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         let mut sink = HashingWriter {
             hasher: &mut hasher,
@@ -656,7 +656,7 @@ fn append_blob_bytes<W: Write>(
     source: FileBlobBytes<'_>,
     expected_digest: &str,
 ) -> Result<(), String> {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         let mut sink = HashingWriter {
             hasher: &mut hasher,
@@ -697,7 +697,7 @@ fn append_blob_range<R: Read + Seek, W: Write>(
     source: FileBlobRange<'_>,
     expected_digest: &str,
 ) -> Result<(), String> {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         reader
             .seek(SeekFrom::Start(source.offset))

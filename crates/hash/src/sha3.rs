@@ -102,40 +102,74 @@ const PI_SOURCE: [usize; LANES] = permutation_sources();
 
 /// One round, `ι(χ(π(ρ(θ(A)))), ir)` (FIPS 202 §3.3), with ρ and π fused:
 /// each destination lane takes its π source lane, θ-adjusted and ρ-rotated.
-#[inline]
-fn round(a: &mut [u64; LANES], round_constant: u64) {
-    // θ: column parities, then each lane absorbs two neighbouring columns.
-    let mut c = [0u64; 5];
-    for x in 0..5 {
-        c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
-    }
-    let mut d = [0u64; 5];
-    for x in 0..5 {
-        d[x] = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
-    }
-    // ρ and π.
-    let mut b = [0u64; LANES];
-    for (dest, lane) in b.iter_mut().enumerate() {
-        let source = PI_SOURCE[dest];
-        *lane = (a[source] ^ d[source % 5]).rotate_left(RHO[source]);
-    }
-    // χ, row by row.
-    for y in 0..5 {
-        let row = 5 * y;
+macro_rules! round {
+    ($state:expr, $constant:expr) => {{
+        let a = &mut *$state;
+        let round_constant = $constant;
+        // θ: column parities, then each lane absorbs two neighbouring columns.
+        let mut c = [0u64; 5];
         for x in 0..5 {
-            a[row + x] = b[row + x] ^ (!b[row + (x + 1) % 5] & b[row + (x + 2) % 5]);
+            c[x] = a[x] ^ a[x + 5] ^ a[x + 10] ^ a[x + 15] ^ a[x + 20];
         }
-    }
-    // ι.
-    a[0] ^= round_constant;
+        let mut d = [0u64; 5];
+        for x in 0..5 {
+            d[x] = c[(x + 4) % 5] ^ c[(x + 1) % 5].rotate_left(1);
+        }
+        // ρ and π use compile-time lane indices and rotations. LLVM otherwise
+        // retains indexed loads and variable shifts on baseline targets.
+        let mut b = [0u64; LANES];
+        macro_rules! rho_pi {
+            ($dest:literal) => {{
+                const SOURCE: usize = PI_SOURCE[$dest];
+                b[$dest] = (a[SOURCE] ^ d[SOURCE % 5]).rotate_left(RHO[SOURCE]);
+            }};
+        }
+        rho_pi!(0);
+        rho_pi!(1);
+        rho_pi!(2);
+        rho_pi!(3);
+        rho_pi!(4);
+        rho_pi!(5);
+        rho_pi!(6);
+        rho_pi!(7);
+        rho_pi!(8);
+        rho_pi!(9);
+        rho_pi!(10);
+        rho_pi!(11);
+        rho_pi!(12);
+        rho_pi!(13);
+        rho_pi!(14);
+        rho_pi!(15);
+        rho_pi!(16);
+        rho_pi!(17);
+        rho_pi!(18);
+        rho_pi!(19);
+        rho_pi!(20);
+        rho_pi!(21);
+        rho_pi!(22);
+        rho_pi!(23);
+        rho_pi!(24);
+        // χ, row by row.
+        for y in 0..5 {
+            let row = 5 * y;
+            for x in 0..5 {
+                a[row + x] = b[row + x] ^ (!b[row + (x + 1) % 5] & b[row + (x + 2) % 5]);
+            }
+        }
+        // ι.
+        a[0] ^= round_constant;
+    }};
 }
 
 /// Keccak-f\[1600\] (FIPS 202 Algorithm 7 with `nr = 24`) over a state whose
 /// lane `(x, y)` is `state[x + 5y]`, each lane holding bits `z = 0..64` from
 /// least to most significant.
 pub fn keccak_f1600(state: &mut [u64; LANES]) {
-    for &round_constant in &ROUND_CONSTANTS {
-        round(state, round_constant);
+    // Two rounds expose scheduling freedom without the instruction-cache
+    // footprint of expanding all 24 rounds. Every round remains unchanged.
+    for constants in ROUND_CONSTANTS.as_chunks::<2>().0 {
+        round!(state, constants[0]);
+        round!(state, constants[1]);
     }
 }
 

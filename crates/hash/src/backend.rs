@@ -249,3 +249,6 @@ crate::fixed::hasher!(
 /// [`FixedHasher`](crate::fixed::FixedHasher) computes: `"aes"` or
 /// `"portable"`.
 pub const FIXED_HASHER_PATH: &str = crate::fixed::SELECTED_NAME;
+
+/// Execution paths of the native unkeyed BLAKE3-256 implementation.
+pub use crate::blake3::Backend as Blake3Backend;

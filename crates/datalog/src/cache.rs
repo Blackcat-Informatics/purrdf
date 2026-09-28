@@ -15,9 +15,9 @@
 //!
 //! BLAKE3 rather than the crate's `FixedHasher` interner hasher: that is a table hasher
 //! whose function depends on the build's target features, so its output cannot address
-//! content — a `FixedHasher` key would silently change meaning between two builds. Only [`blake3::Hasher::update`] is used, never
-//! `update_rayon`, so hashing is sequential on every target and the `wasm32` build carries
-//! no thread pool.
+//! content — a `FixedHasher` key would silently change meaning between two builds. Only
+//! [`purrdf_hash::blake3::Hasher::update`] is used, so hashing is sequential on
+//! every target and the `wasm32` build carries no thread pool.
 //!
 //! # The contract hash is computed over DATA, never over source text
 //!
@@ -83,18 +83,18 @@ const PLAN_IDENTITY_TAG: &str = "purrdf-datalog-plan-identity-v1";
 ///
 /// Every variable-length field is framed, so no concatenation of two fields can be
 /// confused with a different split of the same bytes.
-fn frame(hasher: &mut blake3::Hasher, bytes: &[u8]) {
+fn frame(hasher: &mut purrdf_hash::blake3::Hasher, bytes: &[u8]) {
     hasher.update(&(bytes.len() as u64).to_le_bytes());
     hasher.update(bytes);
 }
 
 /// Length-prefix `value`'s UTF-8 bytes into `hasher`.
-fn frame_str(hasher: &mut blake3::Hasher, value: &str) {
+fn frame_str(hasher: &mut purrdf_hash::blake3::Hasher, value: &str) {
     frame(hasher, value.as_bytes());
 }
 
 /// Hash one clause term under an explicit variant tag.
-fn hash_term(hasher: &mut blake3::Hasher, term: &ClauseTerm) {
+fn hash_term(hasher: &mut purrdf_hash::blake3::Hasher, term: &ClauseTerm) {
     match term {
         ClauseTerm::Var(name) => {
             hasher.update(&[0]);
@@ -124,7 +124,7 @@ fn hash_term(hasher: &mut blake3::Hasher, term: &ClauseTerm) {
 ///
 /// The polarity byte is emitted for head atoms too, where it is always `0`: one atom
 /// encoder for both positions is cheaper to keep correct than two that must agree.
-fn hash_atom(hasher: &mut blake3::Hasher, atom: &ClauseAtom) {
+fn hash_atom(hasher: &mut purrdf_hash::blake3::Hasher, atom: &ClauseAtom) {
     for term in atom.terms() {
         hash_term(hasher, term);
     }
@@ -171,7 +171,7 @@ fn hash_atom(hasher: &mut blake3::Hasher, atom: &ClauseAtom) {
 /// Hashing any of the five order-insensitively would let two programs with different
 /// observable behaviour share a cached plan.
 pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
     frame_str(&mut hasher, CLAUSE_IR_DIGEST_TAG);
     hasher.update(&(rules.len() as u64).to_le_bytes());
     for rule in rules {
@@ -325,7 +325,7 @@ fn contract_digest(
     max_stored_facts: u64,
     max_term_arena_bytes: u64,
 ) -> ContractHash {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
     frame_str(&mut hasher, CONTRACT_DIGEST_TAG);
     frame_str(&mut hasher, calculus_version);
     hasher.update(&max_join_steps.to_le_bytes());
@@ -356,7 +356,7 @@ impl PlanIdentity {
     /// a program was derived from (a vocabulary selection, an entailment regime). It is
     /// hashed, never interpreted: this crate mints no vocabulary of its own.
     pub fn new(contract_hash: &str, rules: &[DlClause]) -> Self {
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = purrdf_hash::blake3::Hasher::new();
         frame_str(&mut hasher, PLAN_IDENTITY_TAG);
         frame_str(&mut hasher, PLAN_SOLVER_VERSION);
         frame_str(&mut hasher, contract_hash);

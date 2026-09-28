@@ -247,48 +247,201 @@ summary = "SHA-256 block compression (content digests): sha2's SHA-NI kernel on 
 
 [[site]]
 id = "blake3.hash-many-dispatch"
-summary = "BLAKE3 multi-chunk hashing (GTS content identity): run-time dispatch into blake3's own SIMD kernels"
+summary = "Native BLAKE3 chunk batches, transposes and canonical parent reduction"
 
-  # blake3's x86_64 kernels are hand-written assembly its build script assembles, not
-  # rustc output, so there is no vector body in rustc's asm to count. What rustc's asm
-  # does prove is that the dispatch reaches them: every width is called from the
-  # chunk-parallel path. Measured v0, all four calls present, on all three builds.
   [[site.measure]]
-  label = "asm kernels"
-  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
-  crate = "blake3"
-  symbol = "blake3::compress_chunks_parallel"
-  min_vector_ops = 0
-  require_mnemonics = [
-    "callq blake3_hash_many_sse2",
-    "callq blake3_hash_many_sse41",
-    "callq blake3_hash_many_avx2",
-    "callq blake3_hash_many_avx512",
-  ]
+  label = "sse2 chunks"
+  configs = ["x86_64"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_four"
+  min_vector_ops = 2000
+  require_mnemonics = ["paddd", "pshuflw"]
   max_fma = 0
   forbid_relaxed = true
 
-  # aarch64: blake3's NEON kernel is C its build script compiles; the chunk-parallel
-  # path calls it. Measured v0 with the call present on both configurations.
   [[site.measure]]
-  label = "neon (C)"
+  label = "avx2 chunks"
+  configs = ["x86_64"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_avx2::chunk_cvs"
+  min_vector_ops = 2000
+  require_mnemonics = ["vpaddd", "vpshufb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx512 tree"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_x86::subtree_16"
+  min_vector_ops = 575
+  require_mnemonics = ["vpaddd", "vprold"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx2 tree"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_eight"
+  min_vector_ops = 2000
+  require_mnemonics = ["vpaddd", "vpshufb"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx512 tree"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_x86::subtree"
+  min_vector_ops = 575
+  require_mnemonics = ["vpaddd", "vprold"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "neon chunks"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "blake3"
-  symbol = "blake3::compress_chunks_parallel"
-  min_vector_ops = 0
-  require_mnemonics = ["bl blake3_hash_many_neon"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_four"
+  min_vector_ops = 2000
+  require_mnemonics = ["rev32", "eor"]
   max_fma = 0
   forbid_relaxed = true
 
-  # wasm32: blake3's simd128 backend is compiled only under its `wasm32_simd` Cargo
-  # feature, which this workspace does not enable, so both wasm builds run the portable
-  # compression, and LLVM does not vectorize it. Measured v0 on both.
   [[site.measure]]
   label = "portable"
-  configs = ["wasm32", "wasm32-simd128"]
-  crate = "blake3"
-  symbol = "blake3::portable::compress_in_place"
+  configs = ["wasm32"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::blake3::compress_portable"
   min_vector_ops = 0
+  require_mnemonics = []
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "simd128 chunks"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_four"
+  min_vector_ops = 2100
+  require_mnemonics = ["i32x4.add", "v128.xor"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The chunk loop is outlined from the subtree's parent reduction. Both
+  # bodies must independently retain their ARX work and native rotations.
+  [[site.measure]]
+  label = "avx512 chunks"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_x86::chunk_columns16"
+  min_vector_ops = 600
+  require_mnemonics = ["vpaddd", "vprold"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx512 narrow chunks"
+  configs = ["x86_64", "x86_64-v3"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_sse2::avx512::chunk_cvs"
+  min_vector_ops = 1200
+  require_mnemonics = ["vpaddd", "vprold"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx512 narrow chunks"
+  configs = ["x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_four_avx512"
+  min_vector_ops = 1200
+  require_mnemonics = ["vpaddd", "vprold"]
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "blake3.single-block"
+summary = "Native BLAKE3 four-lane quarter rounds and portable compression"
+
+  [[site.measure]]
+  label = "sse2"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_sse2::single"
+  min_vector_ops = 200
+  require_mnemonics = []
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "ssse3"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_x86::single"
+  min_vector_ops = 200
+  require_mnemonics = []
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx2"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_x86::single_avx2"
+  min_vector_ops = 200
+  require_mnemonics = []
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "avx512"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_x86::single_avx512"
+  min_vector_ops = 200
+  require_mnemonics = []
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "neon"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_neon::single"
+  min_vector_ops = 200
+  require_mnemonics = ["rev32", "eor"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "portable"
+  configs = ["wasm32"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::blake3::compress_portable"
+  min_vector_ops = 0
+  require_mnemonics = []
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "simd128"
+  configs = ["wasm32-simd128"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::arch::blake3_wasm::single"
+  min_vector_ops = 200
+  require_mnemonics = ["i32x4.add", "v128.xor"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "scalar rotation"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::blake3::compress_portable"
+  min_vector_ops = 0
+  require_mnemonics = ["rorl"]
   max_fma = 0
   forbid_relaxed = true
 

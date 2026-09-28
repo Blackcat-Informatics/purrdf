@@ -192,79 +192,45 @@ enum GlobalTermLookup<'a> {
     },
 }
 
-/// Fixed-key hash of a non-IRI lookup. MUST hash byte-identically to
-/// [`hash_non_iri_stored`] for equal values.
-fn hash_non_iri_lookup<H: Hasher>(lookup: &GlobalTermLookup<'_>, state: &mut H) {
+fn hash_lookup_value(lookup: &GlobalTermLookup<'_>) -> u64 {
     match lookup {
-        GlobalTermLookup::Iri(_) => unreachable!("IRI uses the terminal-key hash"),
+        GlobalTermLookup::Iri(iri) => crate::hash::hash_iri_for_interner(iri),
         GlobalTermLookup::Blank { label, scope } => {
-            1u8.hash(state);
-            label.hash(state);
-            scope.hash(state);
+            crate::hash::hash_blank_for_interner(label, scope.0)
         }
         GlobalTermLookup::Literal {
             lexical,
             datatype,
             language,
             direction,
-        } => {
-            2u8.hash(state);
-            lexical.hash(state);
-            datatype.hash(state);
-            language.hash(state);
-            direction.hash(state);
-        }
+        } => crate::hash::hash_literal_for_interner(
+            lexical,
+            datatype.0.get() - 1,
+            *language,
+            *direction,
+        ),
         GlobalTermLookup::Triple { s, p, o } => {
-            3u8.hash(state);
-            s.hash(state);
-            p.hash(state);
-            o.hash(state);
+            crate::hash::hash_triple_for_interner(s.0.get() - 1, p.0.get() - 1, o.0.get() - 1)
         }
     }
-}
-
-/// Fixed-key `FixedHasher` hash of a stored term, resolving its `StrRange`s through `arena`
-/// (id-based dedup path). MUST match [`hash_lookup`] for equal values.
-fn hash_non_iri_stored<H: Hasher>(arena: &[u8], term: &GlobalInternedTerm, state: &mut H) {
-    match term {
-        GlobalInternedTerm::Iri(_) => unreachable!("IRI uses the terminal-key hash"),
-        GlobalInternedTerm::Blank { label, scope } => {
-            1u8.hash(state);
-            arena_str(arena, *label).hash(state);
-            scope.hash(state);
-        }
-        GlobalInternedTerm::Literal(lit) => {
-            2u8.hash(state);
-            arena_str(arena, lit.lexical_form).hash(state);
-            lit.datatype.hash(state);
-            lit.language.map(|r| arena_str(arena, r)).hash(state);
-            lit.direction.hash(state);
-        }
-        GlobalInternedTerm::Triple { s, p, o } => {
-            3u8.hash(state);
-            s.hash(state);
-            p.hash(state);
-            o.hash(state);
-        }
-    }
-}
-
-fn hash_lookup_value(lookup: &GlobalTermLookup<'_>) -> u64 {
-    if let GlobalTermLookup::Iri(iri) = lookup {
-        return crate::hash::hash_iri_for_interner(iri);
-    }
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    hash_non_iri_lookup(lookup, &mut hasher);
-    hasher.finish()
 }
 
 fn hash_stored_value(arena: &[u8], term: &GlobalInternedTerm) -> u64 {
-    if let GlobalInternedTerm::Iri(r) = term {
-        return crate::hash::hash_iri_for_interner(arena_str(arena, *r));
+    match term {
+        GlobalInternedTerm::Iri(r) => crate::hash::hash_iri_for_interner(arena_str(arena, *r)),
+        GlobalInternedTerm::Blank { label, scope } => {
+            crate::hash::hash_blank_for_interner(arena_str(arena, *label), scope.0)
+        }
+        GlobalInternedTerm::Literal(lit) => crate::hash::hash_literal_for_interner(
+            arena_str(arena, lit.lexical_form),
+            lit.datatype.0.get() - 1,
+            lit.language.map(|r| arena_str(arena, r)),
+            lit.direction,
+        ),
+        GlobalInternedTerm::Triple { s, p, o } => {
+            crate::hash::hash_triple_for_interner(s.0.get() - 1, p.0.get() - 1, o.0.get() - 1)
+        }
     }
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    hash_non_iri_stored(arena, term, &mut hasher);
-    hasher.finish()
 }
 
 /// Whether a stored term equals a lookup, resolving the stored ranges through

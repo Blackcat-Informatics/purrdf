@@ -42,3 +42,86 @@ pub type IdSet = FastSet<crate::TermId>;
 pub(crate) fn hash_iri_for_interner(iri: &str) -> u64 {
     purrdf_hash::fixed::FixedHasher::hash_terminal(0, iri.as_bytes())
 }
+
+/// The scope and variant share one word; the byte write already mixes its
+/// length, so a string terminator would add a redundant state transition.
+#[inline]
+pub(crate) fn hash_blank_for_interner(label: &str, scope: u32) -> u64 {
+    use core::hash::Hasher;
+    let mut hash = purrdf_hash::fixed::FixedHasher::default();
+    hash.write_u64(u64::from(scope) | (1 << 32));
+    hash.write(label.as_bytes());
+    hash.finish()
+}
+
+/// One protocol for borrowed, stored and frozen literal keys. Keep the full
+/// 64-bit datatype id for global dictionaries, beside packed variant,
+/// language-presence and direction fields. Each string write mixes its own
+/// length; `None` remains distinct from `Some("")` through the presence bit.
+#[inline]
+pub(crate) fn hash_literal_for_interner(
+    lexical: &str,
+    datatype: u64,
+    language: Option<&str>,
+    direction: Option<crate::RdfTextDirection>,
+) -> u64 {
+    use core::hash::Hasher;
+    let direction = match direction {
+        None => 0u128,
+        Some(crate::RdfTextDirection::Ltr) => 1,
+        Some(crate::RdfTextDirection::Rtl) => 2,
+    };
+    let metadata = 2 | (u128::from(language.is_some()) << 2) | (direction << 3);
+    let mut hash = purrdf_hash::fixed::FixedHasher::default();
+    hash.write_u128(u128::from(datatype) | (metadata << 64));
+    hash.write(lexical.as_bytes());
+    if let Some(language) = language {
+        hash.write(language.as_bytes());
+    }
+    hash.finish()
+}
+
+/// Triple ids retain separate word writes: packing them widened arithmetic
+/// without improving the measured lookup cost.
+#[inline]
+pub(crate) fn hash_triple_for_interner(s: u64, p: u64, o: u64) -> u64 {
+    use core::hash::Hasher;
+    let mut hash = purrdf_hash::fixed::FixedHasher::default();
+    hash.write_u8(3);
+    hash.write_u64(s);
+    hash.write_u64(p);
+    hash.write_u64(o);
+    hash.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{hash_blank_for_interner, hash_literal_for_interner};
+    use crate::RdfTextDirection::{Ltr, Rtl};
+
+    #[test]
+    fn packed_fields_preserve_boundaries_presence_and_high_id_bits() {
+        let mut seen = std::collections::HashSet::new();
+        for lexical in ["", "a", "ab", "abc", "a\0b", "a\u{ff}b"] {
+            for datatype in [0, 1, u64::from(u32::MAX), 1 << 32, 1 << 63, u64::MAX] {
+                for language in [None, Some(""), Some("a"), Some("ab"), Some("bc")] {
+                    for direction in [None, Some(Ltr), Some(Rtl)] {
+                        assert!(
+                            seen.insert(hash_literal_for_interner(
+                                lexical, datatype, language, direction
+                            )),
+                            "distinct literal fields collided: {lexical:?}/{datatype}/{language:?}/{direction:?}"
+                        );
+                    }
+                }
+            }
+            for scope in [0, 1, 1 << 31, u32::MAX] {
+                assert!(
+                    seen.insert(hash_blank_for_interner(lexical, scope)),
+                    "blank scope, label and variant must participate"
+                );
+            }
+        }
+        assert_eq!(seen.len(), 564);
+    }
+}

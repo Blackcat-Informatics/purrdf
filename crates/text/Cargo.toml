@@ -38,7 +38,7 @@ purrdf-core.workspace = true
 purrdf-sparql-eval.workspace = true
 # Fixed-output-length hashing for the index fingerprint. Deterministic and
 # keyless, so the same index yields the same digest on every target.
-blake3.workspace = true
+purrdf-hash.workspace = true
 
 [dev-dependencies]
 # Solution-sequence shapes for the ranked-row tests.

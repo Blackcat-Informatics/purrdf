@@ -94,5 +94,93 @@ fn hex(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, digests, hex);
+fn blake3(c: &mut Criterion) {
+    let mut group = c.benchmark_group("blake3");
+    for len in [0, 64, 1024, 4096, 16384, 65536, 1 << 20] {
+        let data = input(len);
+        group.throughput(Throughput::Bytes(len as u64));
+        group.bench_with_input(BenchmarkId::new("one-shot", len), &data, |b, data| {
+            b.iter(|| purrdf_hash::blake3::hash(black_box(data)));
+        });
+        for width in [8, 64, 1024, 16384, 65536] {
+            if width > len {
+                continue;
+            }
+            bench_stream::<16384>(&mut group, &data, width, "stream");
+            bench_stream::<1024>(&mut group, &data, width, "record");
+        }
+    }
+    group.finish();
+}
+
+fn bench_stream<const BUFFER: usize>(
+    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    data: &[u8],
+    width: usize,
+    name: &str,
+) {
+    use purrdf_hash::blake3::Streaming;
+    group.bench_function(
+        BenchmarkId::new(format!("{name}/fresh/{width}"), data.len()),
+        |b| {
+            b.iter(|| {
+                let mut state = Streaming::<BUFFER>::new();
+                for part in black_box(data).chunks(width) {
+                    state.update(part);
+                }
+                state.finalize()
+            });
+        },
+    );
+    let mut state = Streaming::<BUFFER>::new();
+    group.bench_function(
+        BenchmarkId::new(format!("{name}/reused/{width}"), data.len()),
+        |b| {
+            b.iter(|| {
+                state.reset();
+                for part in black_box(data).chunks(width) {
+                    state.update(part);
+                }
+                state.finalize()
+            });
+        },
+    );
+}
+
+fn blake3_backends(c: &mut Criterion) {
+    use purrdf_hash::backend::Blake3Backend;
+    let mut group = c.benchmark_group("blake3-backends");
+    for backend in Blake3Backend::ALL {
+        if !backend.is_available() {
+            continue;
+        }
+        for len in [0, 64, 1024, 4096, 16384, 65536, 1 << 20] {
+            let data = input(len);
+            group.throughput(Throughput::Bytes(len as u64));
+            group.bench_function(
+                BenchmarkId::new(format!("{backend:?}/one-shot"), len),
+                |b| {
+                    b.iter(|| backend.hash(black_box(&data)).expect("available backend"));
+                },
+            );
+            for width in [64, 16384] {
+                group.bench_function(
+                    BenchmarkId::new(format!("{backend:?}/stream/{width}"), len),
+                    |b| {
+                        b.iter(|| {
+                            let mut state = backend.hasher().expect("available backend");
+                            for part in black_box(&data).chunks(width) {
+                                state.update(part);
+                            }
+                            state.finalize()
+                        });
+                    },
+                );
+            }
+        }
+    }
+    group.finish();
+}
+
+criterion_group!(benches, digests, hex, blake3, blake3_backends);
 criterion_main!(benches);

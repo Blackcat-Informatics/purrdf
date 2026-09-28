@@ -44,21 +44,46 @@ fn hash_of<T: Hash>(value: &T) -> u64 {
 }
 
 fn hash_lookup_value(lookup: &TermLookup<'_>) -> u64 {
-    if let TermLookup::Iri(iri) = lookup {
-        return crate::hash::hash_iri_for_interner(iri);
+    match lookup {
+        TermLookup::Iri(iri) => crate::hash::hash_iri_for_interner(iri),
+        TermLookup::Blank { label, scope } => crate::hash::hash_blank_for_interner(label, scope.0),
+        TermLookup::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => crate::hash::hash_literal_for_interner(
+            lexical,
+            datatype.index() as u64,
+            *language,
+            *direction,
+        ),
+        TermLookup::Triple { s, p, o } => crate::hash::hash_triple_for_interner(
+            s.index() as u64,
+            p.index() as u64,
+            o.index() as u64,
+        ),
     }
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    hash_non_iri_lookup(lookup, &mut hasher);
-    hasher.finish()
 }
 
 fn hash_stored_value(arena: &[u8], term: &InternedTerm) -> u64 {
-    if let InternedTerm::Iri(r) = term {
-        return crate::hash::hash_iri_for_interner(arena_str(arena, *r));
+    match term {
+        InternedTerm::Iri(r) => crate::hash::hash_iri_for_interner(arena_str(arena, *r)),
+        InternedTerm::Blank { label, scope } => {
+            crate::hash::hash_blank_for_interner(arena_str(arena, *label), scope.0)
+        }
+        InternedTerm::Literal(lit) => crate::hash::hash_literal_for_interner(
+            arena_str(arena, lit.lexical_form),
+            lit.datatype.index() as u64,
+            lit.language.map(|r| arena_str(arena, r)),
+            lit.direction,
+        ),
+        InternedTerm::Triple { s, p, o } => crate::hash::hash_triple_for_interner(
+            s.index() as u64,
+            p.index() as u64,
+            o.index() as u64,
+        ),
     }
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    hash_non_iri_stored(arena, term, &mut hasher);
-    hasher.finish()
 }
 
 /// **Store-once** insert-or-find (P3c): `vec` is the sole owner of the values;
@@ -112,63 +137,6 @@ enum TermLookup<'a> {
 /// dataset holds, which is the disagreement the canonicalization exists to prevent.
 pub(crate) fn is_lowercase(s: &str) -> bool {
     s.chars().flat_map(char::to_lowercase).eq(s.chars())
-}
-
-/// Hash a borrowed non-IRI lookup. MUST hash byte-identically to
-/// [`hash_non_iri_stored`] for equal values.
-fn hash_non_iri_lookup<H: Hasher>(lookup: &TermLookup<'_>, state: &mut H) {
-    match lookup {
-        TermLookup::Iri(_) => unreachable!("IRI uses the terminal-key hash"),
-        TermLookup::Blank { label, scope } => {
-            1u8.hash(state);
-            label.hash(state);
-            scope.hash(state);
-        }
-        TermLookup::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            2u8.hash(state);
-            lexical.hash(state);
-            datatype.hash(state);
-            language.hash(state);
-            direction.hash(state);
-        }
-        TermLookup::Triple { s, p, o } => {
-            3u8.hash(state);
-            s.hash(state);
-            p.hash(state);
-            o.hash(state);
-        }
-    }
-}
-
-/// Hash a stored term, resolving its `StrRange`s through `arena`. MUST match
-/// [`hash_non_iri_lookup`] for equal values.
-fn hash_non_iri_stored<H: Hasher>(arena: &[u8], term: &InternedTerm, state: &mut H) {
-    match term {
-        InternedTerm::Iri(_) => unreachable!("IRI uses the terminal-key hash"),
-        InternedTerm::Blank { label, scope } => {
-            1u8.hash(state);
-            arena_str(arena, *label).hash(state);
-            scope.hash(state);
-        }
-        InternedTerm::Literal(lit) => {
-            2u8.hash(state);
-            arena_str(arena, lit.lexical_form).hash(state);
-            lit.datatype.hash(state);
-            lit.language.map(|r| arena_str(arena, r)).hash(state);
-            lit.direction.hash(state);
-        }
-        InternedTerm::Triple { s, p, o } => {
-            3u8.hash(state);
-            s.hash(state);
-            p.hash(state);
-            o.hash(state);
-        }
-    }
 }
 
 /// Whether a stored term equals a lookup, resolving the stored ranges through `arena`.

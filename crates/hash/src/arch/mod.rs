@@ -99,3 +99,246 @@ pub(crate) use x86_64::Block;
     target_feature = "aes"
 ))]
 pub(crate) use aarch64::Block;
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) mod blake3_x86;
+
+#[cfg(any(
+    target_arch = "x86_64",
+    target_arch = "x86",
+    all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_endian = "little"
+    ),
+    all(target_arch = "wasm32", target_feature = "simd128")
+))]
+mod blake3_lanes;
+#[cfg(all(
+    target_arch = "aarch64",
+    target_feature = "neon",
+    target_endian = "little"
+))]
+mod blake3_neon;
+#[cfg(any(target_arch = "x86_64", target_arch = "x86"))]
+mod blake3_sse2;
+#[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+mod blake3_wasm;
+
+pub(crate) fn blake3_four(bytes: &[u8], counter: u64) -> Option<[[u32; 8]; 4]> {
+    if bytes.is_empty() || bytes.len() > 4096 {
+        return None;
+    }
+    #[cfg(target_arch = "x86")]
+    {
+        if std::is_x86_feature_detected!("sse2") {
+            // SAFETY: runtime detection establishes SSE2; array/input bounds are checked.
+            return Some(unsafe { blake3_sse2::chunk_cvs(bytes, counter) });
+        }
+        None
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: SSE2 is baseline on x86-64 and input bounds are checked.
+        Some(unsafe { blake3_sse2::chunk_cvs(bytes, counter) })
+    }
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_endian = "little"
+    ))]
+    {
+        // SAFETY: NEON is enabled for this target; input bounds are checked.
+        Some(unsafe { blake3_neon::chunk_cvs(bytes, counter) })
+    }
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        Some(blake3_wasm::chunk_cvs(bytes, counter))
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "x86",
+        all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_endian = "little"
+        ),
+        all(target_arch = "wasm32", target_feature = "simd128")
+    )))]
+    {
+        let _ = counter;
+        None
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+mod blake3_avx2;
+pub(crate) fn blake3_eight(bytes: &[u8], counter: u64) -> Option<[[u32; 8]; 8]> {
+    #[cfg(target_arch = "x86_64")]
+    if !bytes.is_empty() && bytes.len() <= 8192 && std::is_x86_feature_detected!("avx2") {
+        // SAFETY: the processor has AVX2 and the input contains at most eight chunks.
+        return Some(unsafe { blake3_avx2::chunk_cvs(bytes, counter) });
+    }
+    let _ = (bytes, counter);
+    None
+}
+
+pub(crate) fn blake3_compress4(
+    cv: [u32; 8],
+    words: &[u32; 16],
+    counter: u64,
+    length: u32,
+    flags: u32,
+) -> Option<[u32; 8]> {
+    #[cfg(target_arch = "x86")]
+    {
+        if std::is_x86_feature_detected!("sse2") {
+            // SAFETY: runtime detection establishes SSE2; array/input bounds are checked.
+            return Some(unsafe { blake3_sse2::single(cv, words, counter, length, flags) });
+        }
+        None
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: SSE2 is baseline on x86-64; inputs are fixed-size arrays.
+        Some(unsafe { blake3_sse2::single(cv, words, counter, length, flags) })
+    }
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_endian = "little"
+    ))]
+    {
+        // SAFETY: NEON is enabled for this target; inputs are fixed-size arrays.
+        Some(unsafe { blake3_neon::single(cv, words, counter, length, flags) })
+    }
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        Some(blake3_wasm::single(cv, words, counter, length, flags))
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "x86",
+        all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_endian = "little"
+        ),
+        all(target_arch = "wasm32", target_feature = "simd128")
+    )))]
+    {
+        let _ = (cv, words, counter, length, flags);
+        None
+    }
+}
+
+#[inline]
+pub(crate) fn blake3_compress_on(
+    backend: crate::blake3::Backend,
+    cv: [u32; 8],
+    words: &[u32; 16],
+    counter: u64,
+    length: u32,
+    flags: u32,
+) -> Option<[u32; 8]> {
+    use crate::blake3::Backend;
+    if !backend.is_available() {
+        return None;
+    }
+    #[cfg(target_arch = "x86_64")]
+    match backend {
+        Backend::Avx512 => {
+            // SAFETY: availability checks AVX-512F and VL above.
+            return Some(unsafe { blake3_x86::single_avx512(cv, words, counter, length, flags) });
+        }
+        Backend::Avx2 => {
+            // SAFETY: availability checks AVX2 above.
+            return Some(unsafe { blake3_x86::single_avx2(cv, words, counter, length, flags) });
+        }
+        Backend::Ssse3 => {
+            // SAFETY: availability checks SSSE3 above.
+            return Some(unsafe { blake3_x86::single(cv, words, counter, length, flags) });
+        }
+        _ => {}
+    }
+    match backend {
+        Backend::Sse2 | Backend::Avx2 | Backend::Neon | Backend::Wasm128 => {
+            blake3_compress4(cv, words, counter, length, flags)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn blake3_parents4(children: &[[u32; 8]; 8]) -> Option<[[u32; 8]; 4]> {
+    #[cfg(target_arch = "x86")]
+    {
+        if std::is_x86_feature_detected!("sse2") {
+            // SAFETY: runtime detection establishes SSE2; array/input bounds are checked.
+            return Some(unsafe { blake3_sse2::parents(children) });
+        }
+        None
+    }
+    #[cfg(target_arch = "x86_64")]
+    {
+        // SAFETY: SSE2 is baseline, and the input has eight full child CVs.
+        Some(unsafe { blake3_sse2::parents(children) })
+    }
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_endian = "little"
+    ))]
+    {
+        // SAFETY: NEON is enabled; the array has every child CV.
+        Some(unsafe { blake3_neon::parents(children) })
+    }
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        Some(blake3_wasm::parents(children))
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        target_arch = "x86",
+        all(
+            target_arch = "aarch64",
+            target_feature = "neon",
+            target_endian = "little"
+        ),
+        all(target_arch = "wasm32", target_feature = "simd128")
+    )))]
+    {
+        let _ = children;
+        None
+    }
+}
+pub(crate) fn blake3_parents8(children: &[[u32; 8]; 16]) -> Option<[[u32; 8]; 8]> {
+    #[cfg(target_arch = "x86_64")]
+    if std::is_x86_feature_detected!("avx2") {
+        // SAFETY: AVX2 is available; the array has every child CV.
+        return Some(unsafe { blake3_avx2::parents(children) });
+    }
+    let _ = children;
+    None
+}
+
+/// Four live chunks with AVX-512VL rotations and 128-bit transposes.
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn blake3_four_avx512(bytes: &[u8], counter: u64) -> Option<[[u32; 8]; 4]> {
+    if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512vl") {
+        // SAFETY: both required features were detected; the kernel checks
+        // lengths and pads partial chunks before its fixed-size loads.
+        Some(unsafe { blake3_sse2::avx512::chunk_cvs(bytes, counter) })
+    } else {
+        None
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn blake3_parents4_avx512(children: &[[u32; 8]; 8]) -> Option<[[u32; 8]; 4]> {
+    if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512vl") {
+        // SAFETY: features were detected; every load reads a full input array.
+        Some(unsafe { blake3_sse2::avx512::parents(children) })
+    } else {
+        None
+    }
+}

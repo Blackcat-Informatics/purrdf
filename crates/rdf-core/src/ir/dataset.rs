@@ -1298,11 +1298,7 @@ impl RdfDataset {
     /// The id of an interned blank node, without allocating its label.
     #[must_use]
     pub fn term_id_by_blank(&self, label: &str, scope: BlankScope) -> Option<TermId> {
-        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-        1u8.hash(&mut hasher);
-        label.hash(&mut hasher);
-        scope.hash(&mut hasher);
-        self.find_term_hashed(hasher.finish(), |id| {
+        self.find_term_hashed(crate::hash::hash_blank_for_interner(label, scope.0), |id| {
             matches!(
                 &self.terms[id.index()],
                 InternedTerm::Blank { label: stored, scope: stored_scope }
@@ -1342,13 +1338,13 @@ impl RdfDataset {
         let language = lowered.as_deref().or(language);
 
         let datatype_id = self.term_id_by_iri(datatype)?;
-        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-        2u8.hash(&mut hasher);
-        lexical_form.hash(&mut hasher);
-        datatype_id.hash(&mut hasher);
-        language.hash(&mut hasher);
-        direction.hash(&mut hasher);
-        self.find_term_hashed(hasher.finish(), |id| {
+        let hash = crate::hash::hash_literal_for_interner(
+            lexical_form,
+            datatype_id.index() as u64,
+            language,
+            direction,
+        );
+        self.find_term_hashed(hash, |id| {
             let InternedTerm::Literal(lit) = &self.terms[id.index()] else {
                 return false;
             };
@@ -1371,12 +1367,12 @@ impl RdfDataset {
         {
             return None;
         }
-        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-        3u8.hash(&mut hasher);
-        s.hash(&mut hasher);
-        p.hash(&mut hasher);
-        o.hash(&mut hasher);
-        self.find_term_hashed(hasher.finish(), |id| {
+        let hash = crate::hash::hash_triple_for_interner(
+            s.index() as u64,
+            p.index() as u64,
+            o.index() as u64,
+        );
+        self.find_term_hashed(hash, |id| {
             matches!(
                 self.terms[id.index()],
                 InternedTerm::Triple { s: stored_s, p: stored_p, o: stored_o }

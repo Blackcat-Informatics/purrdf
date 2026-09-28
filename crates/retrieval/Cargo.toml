@@ -49,7 +49,7 @@ purrdf-sparql-algebra.workspace = true
 purrdf-text.workspace = true
 # Fixed-output-length hashing for the plan identity. Deterministic and keyless,
 # so the same canonical bytes yield the same digest on every target.
-blake3.workspace = true
+purrdf-hash.workspace = true
 # Serialization of the plan as a plain document. `derive` builds the impls.
 serde.workspace = true
 

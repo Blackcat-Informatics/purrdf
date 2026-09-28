@@ -26,8 +26,8 @@ rmeta and a ``.s`` per crate are all produced), LTO off and one codegen unit::
 
 That emits a ``.s`` for EVERY crate in the graph, dependencies included, so a
 dependency's own kernels (memchr's, sha2's) are measured in that dependency's symbols.
-The asm is per crate and before LTO; LTO can only inline further, never remove a vector
-body a crate already compiled.
+The asm is per crate and before LTO. LTO may inline, specialize or eliminate bodies;
+these counts prove this build's kernel lowering, not final-binary throughput.
 
 The flags travel in ``CARGO_TARGET_<TRIPLE>_RUSTFLAGS``. Cargo gives ``RUSTFLAGS`` and
 ``CARGO_ENCODED_RUSTFLAGS`` precedence over every target-scoped value, so a caller with
@@ -37,30 +37,10 @@ from ``cargo -v`` and must carry ``--emit=asm`` and exactly the configuration's
 ``target-cpu``/``target-feature`` values, so a flag injected by any other configuration
 layer is a failure rather than a different measurement.
 
-Build scripts in the graph compile C for their own crates (blake3's NEON and
-assembly backends). Those objects are never measured -- only rustc's emission is -- but
-the build scripts must still succeed. For a configuration whose target is not the host,
-the gate names one C toolchain for them through cc-rs's per-target variables: ``clang``
-(a cross compiler for every target it is given) and ``llvm-ar``, unless the caller has
-set ``CC_<triple>``/``AR_<triple>`` itself.
-
-Host-CPU C flags are stripped from cross builds, and only from them. cc-rs 1.2
-(``src/lib.rs``) reads a flag variable through ``envflags``, which walks
-``target_envs`` -- ``CFLAGS_<target>``, ``CFLAGS_<target_underscored>``,
-``TARGET_CFLAGS``, ``CFLAGS`` -- and appends EVERY one that is set ("Collect from all
-environment variables, in reverse order as in ``getenv_with_target_prefixes``
-precedence"), so a plain ``CFLAGS`` always reaches a cross compile line and no
-target-scoped variable can remove a token from it. A host-tuned ``-march=native`` is
-not a valid flag for a foreign target (clang: "unsupported argument 'native' to option
-'-march='"), and a later flag cannot repair an invalid one. So for a configuration
-whose triple is not the host's, the child's copy of ``CFLAGS`` and ``CXXFLAGS`` loses
-exactly ``-march=native``, ``-mtune=native`` and ``-mcpu=native`` (also split from
-``native``), every other token kept in order, and each removal is printed. Host
-configurations inherit both variables byte-for-byte, and the gate's own environment is
-never modified. The ``-D warnings`` that
-``build.rustflags`` would carry is restated in the per-target flags, which replace it. A
-missing target standard library or a missing tool is a hard failure, locally and in CI;
-nothing here skips.
+The audited graph is pure Rust, including BLAKE3. No C compiler or archiver is
+required, and unrelated CFLAGS/CXXFLAGS are preserved. The ``-D warnings`` that
+``build.rustflags`` would carry is restated in the per-target flags, which replace
+it. Missing Rust target libraries or required Rust tools remain hard failures.
 
 Parsing
 -------
@@ -1209,61 +1189,10 @@ def require_targets(configs: tuple[Config, ...]) -> None:
         )
 
 
-HOST_CPU_FLAGS = ("-march", "-mtune", "-mcpu")
-
-
-def strip_host_cpu_flags(value: str) -> tuple[str, list[str]]:
-    """``value`` without its host-CPU tokens, and the tokens removed, in order.
-
-    A host-CPU token is ``-march=native``, ``-mtune=native`` or ``-mcpu=native``, or the
-    same flag split from ``native`` across two tokens (``-march native``). Every other
-    token is kept in its original order. A value with nothing to remove is returned
-    byte-for-byte unchanged, whitespace included.
-    """
-    tokens = value.split()
-    kept: list[str] = []
-    removed: list[str] = []
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        if token in {f"{flag}=native" for flag in HOST_CPU_FLAGS}:
-            removed.append(token)
-            i += 1
-        elif token in HOST_CPU_FLAGS and i + 1 < len(tokens) and tokens[i + 1] == "native":
-            removed.append(f"{token} native")
-            i += 2
-        else:
-            kept.append(token)
-            i += 1
-    return (" ".join(kept), removed) if removed else (value, [])
-
-
-def config_env(config: Config, base: dict[str, str], host: str, which=shutil.which, log=print) -> dict[str, str]:
-    """The child environment for one configuration's build: a copy, never ``os.environ``."""
+def config_env(config: Config, base: dict[str, str]) -> dict[str, str]:
+    """Set this Rust target's flags without changing unrelated toolchain settings."""
     env = dict(base)
     env[f"CARGO_TARGET_{_env_triple(config.triple)}_RUSTFLAGS"] = config.rustflags()
-    if config.triple != host:
-        for var in ("CFLAGS", "CXXFLAGS"):
-            if var not in env:
-                continue
-            stripped, removed = strip_host_cpu_flags(env[var])
-            if removed:
-                env[var] = stripped
-                log(
-                    f"simd-asm: {config.triple}: removed host-CPU flag(s) {' '.join(removed)} "
-                    f"from {var} (cross build)"
-                )
-        suffix = config.triple.replace("-", "_")
-        for var, tool in (("CC", "clang"), ("AR", "llvm-ar")):
-            key = f"{var}_{suffix}"
-            if env.get(key) or env.get(f"{var}_{config.triple}"):
-                continue
-            if which(tool) is None:
-                raise GateError(
-                    f"`{tool}` is not on PATH. Build scripts in the graph compile C for "
-                    f"{config.triple}, and this gate names `{tool}` for that (or set {key})."
-                )
-            env[key] = tool
     return env
 
 
@@ -2099,45 +2028,17 @@ def self_test() -> int:
     expect("-D warnings" in v3.rustflags() and "--emit=asm" in v3.rustflags(), "the per-target rustflags carry --emit=asm and -D warnings")
     expect(bool(verify_command_lines(good[:-1] + " -C target-cpu=native`", v3)), "a second target-cpu must fail")
     expect(not verify_command_lines(good.replace("--crate-name memchr", "--crate-name build_script_build").replace(" --target x86_64-unknown-linux-gnu", ""), v3), "host units are out of scope")
-    cross = config_env(
-        CONFIG_BY_NAME["aarch64"], {"CFLAGS": "-march=native", "CC_aarch64_unknown_linux_gnu": "my-cc"},
-        "x86_64-unknown-linux-gnu", which=lambda tool: f"/bin/{tool}", log=lambda _line: None,
-    )
-    expect(cross.get("CC_aarch64_unknown_linux_gnu") == "my-cc", "a caller's CC_<triple> is kept")
-    logged: list[str] = []
-    cross_cfg = CONFIG_BY_NAME["aarch64"]
-    host_triple_name = "x86_64-unknown-linux-gnu"
-    tools = lambda tool: f"/bin/{tool}"  # noqa: E731
-    base_env = {"CFLAGS": "-O2 -march=native -pipe", "CXXFLAGS": "-O2 -pipe"}
-    stripped = config_env(cross_cfg, base_env, host_triple_name, which=tools, log=logged.append)
-    expect(stripped["CFLAGS"] == "-O2 -pipe", f"(a) cross CFLAGS loses -march=native: {stripped['CFLAGS']!r}")
-    expect(logged == ["simd-asm: aarch64-unknown-linux-gnu: removed host-CPU flag(s) -march=native from CFLAGS (cross build)"], f"(a) the removal is logged once, CXXFLAGS not at all: {logged}")
-    expect(base_env["CFLAGS"] == "-O2 -march=native -pipe", "(a) the caller's environment mapping is not mutated")
-    logged.clear()
-    host_env = config_env(CONFIG_BY_NAME["x86_64"], {"CFLAGS": "-O2 -march=native -pipe"}, host_triple_name, log=logged.append)
-    expect(host_env["CFLAGS"] == "-O2 -march=native -pipe" and not logged, "(b) a host configuration keeps CFLAGS byte-for-byte")
-    logged.clear()
-    untouched = config_env(cross_cfg, {"CFLAGS": "-O2  -pipe"}, host_triple_name, which=tools, log=logged.append)
-    expect(untouched["CFLAGS"] == "-O2  -pipe" and not logged, "(c) cross CFLAGS without a native token is unchanged, byte-for-byte, and silent")
-    logged.clear()
-    kept = config_env(cross_cfg, {"CFLAGS": "-march=armv8-a -O2"}, host_triple_name, which=tools, log=logged.append)
-    expect(kept["CFLAGS"] == "-march=armv8-a -O2" and not logged, "(d) a non-native -march is kept")
-    expect(strip_host_cpu_flags("-O2 -march native -mtune=native -mcpu=native -g") == ("-O2 -g", ["-march native", "-mtune=native", "-mcpu=native"]), "split and every host-CPU flag form is removed")
-    expect(strip_host_cpu_flags("-mcpu=cortex-a72 -mtune=generic")[1] == [], "non-native -mcpu/-mtune are kept")
-    wasm_env = config_env(CONFIG_BY_NAME["wasm32"], {"CXXFLAGS": "-mtune=native -O2"}, host_triple_name, which=tools, log=logged.append)
-    expect(wasm_env["CXXFLAGS"] == "-O2", "wasm32 is a cross configuration too")
-    try:
-        config_env(CONFIG_BY_NAME["aarch64"], {}, "x86_64-unknown-linux-gnu", which=lambda _tool: None)
-        failures.append("a cross build with no clang/llvm-ar must be refused")
-    except GateError:
-        pass
-    named = config_env(CONFIG_BY_NAME["aarch64"], {}, "x86_64-unknown-linux-gnu", which=lambda tool: f"/bin/{tool}")
-    expect(named.get("CC_aarch64_unknown_linux_gnu") == "clang" and named.get("AR_aarch64_unknown_linux_gnu") == "llvm-ar", "clang + llvm-ar are named for a cross target when present")
+    base_env = {"CFLAGS": "-O2 -march=native -pipe", "CC_aarch64_unknown_linux_gnu": "my-cc"}
+    for config in (CONFIG_BY_NAME["x86_64"], CONFIG_BY_NAME["aarch64"], CONFIG_BY_NAME["wasm32"]):
+        child = config_env(config, base_env)
+        expect(all(child[k] == v for k, v in base_env.items()), "unrelated C settings are preserved")
+        expect(child[f"CARGO_TARGET_{_env_triple(config.triple)}_RUSTFLAGS"] == config.rustflags(), "each target receives its exact Rust flags")
+        expect(not any(k.startswith("AR_") for k in child), "a pure-Rust build does not require a C archiver")
+    expect(base_env == {"CFLAGS": "-O2 -march=native -pipe", "CC_aarch64_unknown_linux_gnu": "my-cc"}, "the caller's mapping is not mutated")
     everything = frozenset(Path("/sysroot/lib/rustlib") / c.triple / "lib" for c in CONFIGS)
     expect(not missing_targets(CONFIGS, Path("/sysroot"), is_dir=lambda p: p in everything), "every installed target passes")
     expect(missing_targets(CONFIGS, Path("/sysroot"), is_dir=lambda p: "aarch64" not in str(p) and p in everything) == ["aarch64-unknown-linux-gnu"], "a missing aarch64 std is named, not skipped")
-    native = config_env(CONFIG_BY_NAME["x86_64"], {"CFLAGS": "-O2"}, "x86_64-unknown-linux-gnu")
-    expect(native.get("CFLAGS") == "-O2" and "CC_x86_64_unknown_linux_gnu" not in native, "a host-target build keeps the host C configuration")
+
 
     # -- locating each unit's asm: a hashed rlib's `.s`; an unhashed cdylib+rlib unit's
     # `.s` in its own output directory; a unit with no `.s` anywhere is refused

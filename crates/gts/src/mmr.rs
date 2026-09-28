@@ -94,6 +94,7 @@ fn leaf_hash(index: usize, frame_id: &[u8]) -> Vec<u8> {
         uint(index),
         Value::Bytes(frame_id.to_vec()),
     ])))
+    .to_vec()
 }
 
 fn parent_hash(parent_height: usize, left: &[u8], right: &[u8]) -> Vec<u8> {
@@ -103,6 +104,7 @@ fn parent_hash(parent_height: usize, left: &[u8], right: &[u8]) -> Vec<u8> {
         Value::Bytes(left.to_vec()),
         Value::Bytes(right.to_vec()),
     ])))
+    .to_vec()
 }
 
 fn root_hash(count: usize, peaks: &[MmrPeak]) -> Vec<u8> {
@@ -115,6 +117,7 @@ fn root_hash(count: usize, peaks: &[MmrPeak]) -> Vec<u8> {
         uint(count),
         Value::Array(peak_values),
     ])))
+    .to_vec()
 }
 
 fn build_nodes(frame_ids: &[Vec<u8>]) -> Vec<Node> {

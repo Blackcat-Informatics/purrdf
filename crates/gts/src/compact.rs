@@ -648,7 +648,7 @@ fn detached_signature_leaf(frame_id: &[u8], cose: &[u8]) -> Vec<u8> {
     let mut preimage = Vec::with_capacity(frame_id.len() + cose.len());
     preimage.extend_from_slice(frame_id);
     preimage.extend_from_slice(cose);
-    blake3_256(&preimage)
+    blake3_256(&preimage).to_vec()
 }
 
 /// A selective per-frame authorship proof: the detached inclusion proof for

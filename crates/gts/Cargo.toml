@@ -41,9 +41,8 @@ purrdf-xsd = { workspace = true }
 # emojihash + randomart visual fingerprints, published from
 # Blackcat-Informatics/visual-hashing.
 visual-hashing = { workspace = true }
-blake3 = { workspace = true }
 # Data-parallel BLAKE3 verification: per-frame content ids across a segment,
-# whole segments across a file, and `Hasher::update_rayon` for large payloads.
+# whole segments across a file, and native BLAKE3 subtrees for large payloads.
 # On targets without threads (wasm32) rayon degrades to inline-sequential
 # execution, so results are identical everywhere.
 rayon = { workspace = true }

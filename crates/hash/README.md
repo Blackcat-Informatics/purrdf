@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   </a>
 </p>
 
-# `purrdf-hash` — Zero-Dependency MD5, SHA-1, SHA-3, CRC-32 and a Fixed-Key Table Hasher
+# `purrdf-hash` — Zero-Dependency BLAKE3, MD5, SHA-1, SHA-3, CRC-32 and a Fixed-Key Table Hasher
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-hash.svg)](https://crates.io/crates/purrdf-hash)
 [![docs.rs](https://docs.rs/purrdf-hash/badge.svg)](https://docs.rs/purrdf-hash)
@@ -24,6 +24,7 @@ allocates nothing, and builds for `wasm32-unknown-unknown`.
 
 | Module | Algorithm | Specification | Output |
 |---|---|---|---|
+| `blake3` | Unkeyed BLAKE3-256 | BLAKE3 §2.1–2.5 | 32 bytes |
 | `md5` | MD5 | RFC 1321 | 16 bytes |
 | `sha1` | SHA-1 | FIPS 180-4 | 20 bytes |
 | `sha3` | SHA3-224 / 256 / 384 / 512, Keccak-f[1600] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
@@ -58,6 +59,7 @@ chosen at run time can be driven through `&mut dyn Digest`.
 
 | Algorithm | Paths | Selected when |
 |---|---|---|
+| BLAKE3 | SSE2 / SSSE3 / AVX2 / AVX-512, NEON, wasm SIMD128, portable | See the capability table below; streaming and one-shot use the same kernels |
 | SHA-1 | x86 SHA extensions (`sha1rnds4`, `sha1nexte`, `sha1msg1/2`) | x86-64 with `sha`, `ssse3`, `sse4.1` |
 | | Armv8 SHA1 instructions (`sha1c/p/m`, `sha1h`, `sha1su0/1`) | AArch64 with SHA1 |
 | | portable | otherwise |
@@ -82,6 +84,235 @@ the crate is
 
 MD5 and SHA-1 are here because protocols name them, not as security
 primitives: both are broken for collision resistance.
+
+## SHA-3: expose the fixed permutation to the compiler
+
+Keccak-f[1600] has 25 lanes of 64 bits and exactly 24 rounds. The implementation
+fuses the rho rotation and pi permutation: each destination takes a fixed
+source lane, applies its theta correction, and rotates by a fixed amount.
+Expanding those 25 lane expressions makes both indices and rotation counts
+compile-time constants, allowing immediate rotations and removing indexed
+schedule loads. The constants are still generated from the FIPS 202 equations.
+
+Two rounds are expanded per loop iteration to expose instruction scheduling
+across round boundaries. Expanding all 24 rounds increased code size and
+performed worse in the measured x86 workloads. This changes instruction
+scheduling only: every specified round and bit operation remains present.
+All four SHA-3 output widths replay independent frozen differential vectors.
+
+## BLAKE3: mathematics and implementation
+
+This module implements the unkeyed 256-bit mode from the
+[BLAKE3 specification, §2](https://github.com/BLAKE3-team/BLAKE3-specs/blob/master/blake3.pdf).
+All paths retain the specified **seven rounds**, 1,024-byte chunks, tree
+shape, counters and domain flags. Optimizations change how operations are
+scheduled and data is buffered; they never change the digest function.
+[PROVENANCE.md](PROVENANCE.md) records the specification and oracle sources.
+
+### Compression and message schedule
+
+A compression state has sixteen 32-bit words. A quarter round takes four
+state words `(a, b, c, d)` and two message words `(x, y)` and applies:
+
+```text
+a = a + b + x        d = rotr(d XOR a, 16)
+c = c + d            b = rotr(b XOR c, 12)
+a = a + b + y        d = rotr(d XOR a,  8)
+c = c + d            b = rotr(b XOR c,  7)
+```
+
+Every addition is modulo `2^32`. Four independent column quarter rounds
+precede four diagonal quarter rounds. Between rounds, the sixteen message
+words follow the permutation
+`[2, 6, 3, 10, 7, 0, 4, 13, 1, 11, 12, 5, 9, 14, 15, 8]`.
+The seven schedules are composed at compile time. Explicit round calls let
+the compiler resolve message indices without a dynamic scheduling loop.
+The first eight output words are `v[i] XOR v[i+8]`.
+
+The default x86 short-message and stream-finalization paths use scalar ARX.
+Four independent scalar quarter-round chains let the processor schedule work
+without the vector single-block dependency chain. On x86-64, a small inline
+assembly helper pins rotation to the two-operand `ROR` instruction. In the
+measured native-CPU build, LLVM's BMI2 `RORX` choice and register allocation
+nearly doubled the 1 KiB path's latency; retaining the destination register
+removed that regression. The helper declares its flag clobber and has no memory
+or stack effects. Native tests compare all four rotations with Rust integer
+arithmetic; other architectures and Miri use `rotate_right` directly.
+
+
+On x86, a single-block kernel places the four independent quarter rounds
+in four SIMD lanes. Lane shuffles turn columns into diagonals and back.
+SSSE3 implements the 8- and 16-bit rotations with byte shuffles, and the
+others with shifts and OR. The AVX-512F/VL path uses native lane rotations
+and selects message words with vector permutations. These are distinct
+schedules of the same arithmetic, checked against the portable compressor.
+
+### Independent chunks and SIMD tree reduction
+
+Blocks within a chunk form a serial chain. Different chunks are independent:
+chunk `j` uses counter `j`, starts with the specified IV, and sets
+`CHUNK_START` and `CHUNK_END` at its first and last block. A parent hashes
+its two 32-byte child chaining values with counter zero and `PARENT` set.
+Only the final compression sets `ROOT`. A root digest is consequently not
+interchangeable with an intermediate chaining value.
+
+The AVX-512F batch kernel puts the same state word from sixteen chunks into
+one vector. Contiguous block loads are transposed using 32-bit and 64-bit
+interleaves followed by 128-bit lane shuffles. This avoids sixteen strided
+gathers for every message block. Each vector arithmetic instruction then
+advances sixteen independent chunk computations.
+
+Parent reductions remain in vector registers. Even and odd child lanes
+become the left and right halves of each parent message. The live lane count
+contracts through the tree. For an incomplete batch, completed chunk lanes
+are preserved while longer chunks finish; an unmatched child is carried to
+the next level. This preserves BLAKE3's required tree: each left subtree is
+complete, has a power-of-two number of chunks, and is at least as large as
+its right sibling. Final child chaining values are retained so `ROOT` is
+applied exactly once, rather than trying to recover a root from a finalized
+non-root chaining value.
+
+Full AVX-512 batches additionally collect up to 256 chunk chaining values
+before reducing parents. Sixteen parent lanes can then combine children
+across neighbouring batches, avoiding repeated reductions with mostly idle
+lanes. The bounded CV workspace is 8 KiB; the narrower paths retain their
+64-chunk workspace.
+
+The narrower kernels share their ARX round schedule, length flags and
+chunk handling. AVX-512VL reuses the four-lane source for messages through
+4 KiB, avoiding a padded 16 KiB batch, and for four-parent reductions. SSE2 and NEON use four independent chunk lanes; AVX2 uses
+eight; wasm SIMD uses four. Full batches read directly from caller memory,
+with uniform block lengths and flags: they avoid both a padded copy and per-lane tail masks. Partial
+batches retain padding and masks to preserve exact final-chunk semantics.
+Their contiguous loads are transposed with 32-bit and 64-bit interleaves and
+lane shuffles. Up to 64 chunk chaining values are reduced together; an
+eight-lane parent level switches to four lanes before individual parent
+compressions become necessary. NEON and wasm SIMD also
+vectorize the four quarter rounds within a single block, so short identities
+benefit without needing multiple chunks.
+
+| Target capability | Chunk lanes | Single-block path |
+|---|---:|---|
+| x86 SSE2 (runtime detected on 32-bit; baseline on x86-64) | 4 | SSE2 shifts, OR and lane shuffles |
+| x86-64 SSSE3 | 4 | Byte-shuffle rotations |
+| x86-64 AVX2 | 8 | AVX2 message permutations and byte-shuffle rotations |
+| x86-64 AVX-512F/VL | 4 or 16 | Native lane rotations and vector permutations |
+| Little-endian AArch64 NEON | 4 | NEON quarter rounds |
+| wasm32 SIMD128 | 4 | SIMD quarter rounds |
+| Other targets, including baseline wasm32 | 1 | Portable 32-bit ARX |
+
+The portable compressor uses 32-bit wrapping addition, XOR and rotation;
+it does not require 64-bit multiplication or vector instructions. This is
+also the independent arithmetic reference for the hardware kernels.
+Runtime feature checks guard the x86 kernels. NEON and wasm SIMD are
+compiled only when enabled for those targets. SIMD width and CPU availability
+never affect bytes.
+Default x86 hashes through 1 KiB use scalar ARX: on the measured processor,
+four independent scalar quarter-round chains schedule faster than the single
+vector chain of within-block SIMD. Default streams use that same short-input
+path. Backend-forcing APIs retain the named single-block kernels for tests
+and measurement; the choice for other architectures remains their native path.
+The leaf crate creates no threads. `hash_with_join` accepts the caller's
+`Join` implementation and minimum input size for scheduling; below that
+threshold it runs the ordinary SIMD path. The crate still owns the canonical
+split, chunk counters and ROOT flag. GTS implements this seam with its shared
+Rayon pool, while a threadless caller can run both closures sequentially.
+The scheduler and threshold affect performance only.
+
+### Streaming is a first-class path
+
+```rust
+use purrdf_hash::blake3::{hash, Hasher, RecordHasher};
+
+let mut stream = Hasher::new();
+stream.update(b"ab");
+stream.update(b"");
+stream.update(b"c");
+assert_eq!(stream.finalize(), hash(b"abc"));
+
+// Finalization is a snapshot: appending remains valid.
+stream.update(b"d");
+assert_eq!(stream.finalize(), hash(b"abcd"));
+stream.reset(); // Reuses storage; this is not secure erasure.
+assert_eq!(stream.finalize(), hash(b""));
+
+// The same function with smaller state for short, framed identities.
+let mut record = RecordHasher::new();
+record.update(b"abc");
+assert_eq!(record.finalize(), hash(b"abc"));
+```
+
+`Hasher` accumulates small writes into a 16 KiB batch so they can fill sixteen
+parallel chunks. Large updates are processed directly from the input slice.
+If an update ends at a complete aligned subtree, its final compression inputs
+are retained as a pending `Output`; its message bytes need no copy into the
+buffer. Finalization adds ROOT, while a later nonempty update converts that
+output to a chaining value before appending. This also avoids repeatedly
+splitting a 16 KiB write into 8-, 4-, 2- and 1-chunk subtrees.
+
+`RecordHasher` uses the same streaming engine with a 1 KiB buffer. Its lower
+initialization and stack cost suit short identities; it does not batch small
+writes into sixteen chunks. Both expose `update`, non-consuming `finalize`,
+`reset`, cloning, the common `Digest` trait, and `std::io::Write`. Encoders
+can write directly into either hasher without a digest-specific writer adapter.
+`flush` preserves the message; a digest snapshot does not require flushing. Reset changes counters and
+valid lengths without clearing storage, making reuse across records cheap.
+Buffer capacity is an execution choice, not a digest or wire-format choice.
+
+The streaming tree stores at most 54 pending subtree chaining values for
+inputs shorter than `2^64` bytes. A completed aligned subtree is merged while
+its count has trailing zero bits, the same carry operation as binary
+addition. Storage is bounded independently of input length: a fixed input
+buffer and `54 * 32` bytes for tree chaining values, plus a pending output and counters. Large updates
+consume the largest complete subtree aligned to the current chunk counter
+directly from caller memory, retaining a partial suffix or final compression inputs for root finalization.
+This batches parent reductions without enlarging the streaming buffer. No whole
+message buffering or heap allocation is required. Input-length overflow is
+rejected before processing the update.
+
+### Evidence and performance boundaries
+
+The frozen oracle contains **18,214** public-API answers from `blake3` 1.8.5:
+8,214 patterned inputs cover every length through 8,192 bytes and
+power-of-two boundaries through 1 MiB; another 10,000 seeded random inputs
+cover irregular trees through 64 KiB, with starting offsets from 0 to 31.
+Both streaming buffer sizes replay it with irregular splits and empty
+updates on every backend the host can execute. `backend::Blake3Backend`
+allows tests and benchmarks to force a backend, so AVX-512 cannot mask an
+SSE2 or AVX2 defect. Counter-carry and unaligned-input tests independently
+compare the narrow kernels with scalar chunk computations. Separate checks cover snapshots, reset and cloned streams.
+The native, baseline wasm and SIMD wasm runners execute the same corpus.
+
+A paired measurement on an AMD Ryzen AI Max+ 395, compiling with
+`target-cpu=native`, opt-level 3, thin LTO and one codegen unit, compared fresh
+stream states over a 1 MiB message with `blake3` 1.8.5. Twelve samples alternated
+execution order. The [raw samples and per-algorithm distributions](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/benchmarks/hash-comparison-2026-09-28/README.md)
+include baseline and native builds and their source/compiler receipts.
+
+| Update size | Removed crate median | PurRDF stream median |
+|---|---:|---:|
+| 8 bytes | 1,793.4 µs | 517.0 µs |
+| 64 bytes | 1,250.3 µs | 154.9 µs |
+| 1 KiB | 1,243.2 µs | 117.5 µs |
+| 16 KiB | 110.5 µs | 113.4 µs |
+| 64 KiB | 95.7 µs | 95.8 µs |
+
+These measurements describe this workload and host, not a universal speedup
+or an ISA throughput guarantee. In particular, batching benefits tiny writes
+while large writes and fresh short messages have different costs.
+`benches/digests.rs` measures one-shot hashing and both stream capacities,
+with fresh and reused states, across message lengths and update sizes. The
+`blake3-backends` group forces each available backend for one-shot and
+streaming measurements. For an older x86 instruction baseline, compile with
+`RUSTFLAGS="-C target-cpu=x86-64"`; forcing SSE2 in a native-CPU build does
+not constrain the surrounding compiler-generated code to SSE2. These runs
+still measure the host microarchitecture, not an older processor:
+
+```sh
+cargo bench -p purrdf-hash --bench digests -- blake3
+cargo bench -p purrdf-hash --bench digests -- blake3-backends
+cargo test -p purrdf-hash --test blake3
+```
 
 ## Fixed-key table hasher
 

@@ -52,6 +52,15 @@ the criterion bench merely watches for regressions.
 planner decisions can be audited without running the query
 ([SPARQL: Querying](../sparql/querying.md)).
 
+## Rust, LLVM and hardware paths
+
+The [Rust and SIMD optimization guide](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/design/purrdf-simd.md)
+explains the source formulations, mathematical contracts, assembly checks and
+measurement discipline. Its hashing and compression sections cover constant
+indices and rotations, bounded round expansion, SIMD chunk and parent batching,
+streaming state, direct output sinks and allocation floors. It distinguishes
+instruction coverage from throughput measured on the target hardware.
+
 ## Reproducing locally
 
 ```sh

@@ -652,7 +652,7 @@ fn legal_public_digest_encodings_preserve_raw_metadata_and_native_identity() {
     for declaration in [
         Value::Text(digest.clone()),
         Value::Text(hex.to_owned()),
-        Value::Bytes(purrdf_gts::wire::blake3_256(data)),
+        Value::Bytes(purrdf_gts::wire::blake3_256(data).to_vec()),
     ] {
         let metadata = Value::Map(vec![
             ("digest".into(), declaration),
@@ -1333,9 +1333,7 @@ fn an_unverified_declared_digest_cannot_collapse_two_candidates() {
                     kid: "recipient".into(),
                     // Derived, not written: a fixed key literal is a finding in
                     // its own right, and a derived one replays exactly.
-                    key: purrdf_gts::wire::blake3_256(b"selected-blob decoy key")
-                        .try_into()
-                        .expect("a 256-bit digest is 32 bytes"),
+                    key: purrdf_gts::wire::blake3_256(b"selected-blob decoy key"),
                     iv: purrdf_gts::wire::blake3_256(b"selected-blob decoy nonce")[..12]
                         .try_into()
                         .expect("a 256-bit digest is at least 12 bytes"),
@@ -1588,9 +1586,7 @@ fn an_unverified_refusal_is_never_called_held_elsewhere() {
 
     // An encrypted payload is refused before decryption, so its identity is the
     // container's claim. Its own later declaration retags it away from "wanted".
-    let key: [u8; 32] = purrdf_gts::wire::blake3_256(b"unverified refusal key")
-        .try_into()
-        .expect("a 256-bit digest is 32 bytes");
+    let key: [u8; 32] = purrdf_gts::wire::blake3_256(b"unverified refusal key");
     let iv: [u8; 12] = purrdf_gts::wire::blake3_256(b"unverified refusal nonce")[..12]
         .try_into()
         .expect("a 256-bit digest is at least 12 bytes");
@@ -1999,9 +1995,7 @@ fn externality_is_not_asserted_over_an_unidentified_refusal() {
 
     // Same selection, but an encrypted frame was refused before identification.
     // Those bytes could be the ones named, so the claim is withheld.
-    let key: [u8; 32] = purrdf_gts::wire::blake3_256(b"externality probe key")
-        .try_into()
-        .expect("a 256-bit digest is 32 bytes");
+    let key: [u8; 32] = purrdf_gts::wire::blake3_256(b"externality probe key");
     let iv: [u8; 12] = purrdf_gts::wire::blake3_256(b"externality probe nonce")[..12]
         .try_into()
         .expect("a 256-bit digest is at least 12 bytes");
