@@ -1005,6 +1005,10 @@ pub struct RelationStore {
     /// insertion order, so at any point the live rows are exactly `0..row_count`. This
     /// is the single row-id source, and the id never enters a provenance identity.
     row_count: usize,
+    /// Every row's `(partition slot, subject, object)`, indexed by [`RowId`] — the row
+    /// ORDER the arrangements do not keep, so [`Self::rows_from`] reads the rows a round
+    /// added without scanning a partition.
+    row_log: Vec<(u32, TermId, TermId)>,
     /// A permanently-empty partition handed to [`select`](Self::select) on a partition
     /// miss, so an unknown key yields an empty [`RowCursor`] with NO `Option` branch on
     /// the per-row scan. Never inserted into.
@@ -1050,7 +1054,29 @@ impl RelationStore {
             .insert(&mut self.interner, subject, object, row_id)
             .map(|(s_id, o_id)| {
                 self.row_count += 1;
+                self.row_log.push((
+                    u32::try_from(slot).expect("partition slots fit u32"),
+                    s_id,
+                    o_id,
+                ));
                 (s_id, o_id, row_id)
+            })
+    }
+
+    /// The rows from row `since` on, in row order, as `(subject, predicate, object,
+    /// graph)` interned ids — the facts the store gained since it held `since` rows,
+    /// read in time proportional to their number.
+    pub fn rows_from(&self, since: usize) -> impl Iterator<Item = (RowId, [TermId; 4])> + '_ {
+        let since = since.min(self.row_log.len());
+        self.row_log[since..]
+            .iter()
+            .enumerate()
+            .map(move |(offset, &(slot, subject, object))| {
+                let (predicate, graph) = self.keys[slot as usize];
+                (
+                    RowId::from_index(since + offset),
+                    [subject, predicate, object, graph],
+                )
             })
     }
 
@@ -1773,6 +1799,34 @@ mod tests {
     /// intern, and is the same whichever order the terms arrive in — so the evaluator's
     /// arena ceiling is a property of the data, not of an insertion sequence. Predicate
     /// and graph surfaces are counted too: they are terms.
+    #[test]
+    fn rows_from_reads_the_rows_added_since_in_row_order() {
+        let mut s = RelationStore::new();
+        s.insert("<a>", "<p>", "<b>", RelationStore::DEFAULT_GRAPH);
+        s.insert("<b>", "<q>", "<c>", "<g>");
+        assert!(
+            s.insert("<a>", "<p>", "<b>", RelationStore::DEFAULT_GRAPH)
+                .is_none(),
+            "a duplicate adds no row"
+        );
+        s.insert("<c>", "<p>", "<d>", RelationStore::DEFAULT_GRAPH);
+        let surfaces = |since: usize| -> Vec<(usize, [&str; 4])> {
+            s.rows_from(since)
+                .map(|(row, ids)| (row.index(), ids.map(|id| s.interner().resolve(id))))
+                .collect()
+        };
+        assert_eq!(
+            surfaces(1),
+            vec![
+                (1, ["<b>", "<q>", "<c>", "<g>"]),
+                (2, ["<c>", "<p>", "<d>", RelationStore::DEFAULT_GRAPH]),
+            ]
+        );
+        assert_eq!(surfaces(0).len(), s.row_count());
+        assert_eq!(surfaces(3), Vec::new());
+        assert_eq!(surfaces(7), Vec::new());
+    }
+
     #[test]
     fn store_term_bytes_counts_each_distinct_surface_once() {
         let default = RelationStore::DEFAULT_GRAPH;
