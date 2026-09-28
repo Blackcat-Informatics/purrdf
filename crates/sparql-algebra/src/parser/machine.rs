@@ -311,13 +311,10 @@ enum Ctl {
     },
     /// `FOLD(…)`.
     Fold(Box<Fold>),
-    /// `[NOT] EXISTS`, waiting for its group: the offset of its `{` and the variables in
-    /// scope on the row it tests.
-    Exists {
-        at: usize,
-        scope: Vec<Variable>,
-        negated: bool,
-    },
+    /// `[NOT] EXISTS`, waiting for its group: the offset of its `{`. The variables in
+    /// scope on the row it tests are the top in-scope-set frame's once the body's own
+    /// frame is closed, since only the top frame is ever written.
+    Exists { at: usize, negated: bool },
     /// A bracketted constraint's `)`.
     Constraint,
     /// `{ SELECT … }`, waiting for the sub-`SELECT`.
@@ -607,10 +604,10 @@ impl Parser<'_, '_> {
                 self.finish_aggregate(agg)
             }
             Ctl::Fold(fold) => self.resume_fold(fold, val.expr().0),
-            Ctl::Exists { at, scope, negated } => {
+            Ctl::Exists { at, negated } => {
                 let body = val.group();
                 self.pop_exists_scope_boundary();
-                let body = self.check_exists_body(at, scope, body)?;
+                let body = self.check_exists_body(at, body)?;
                 let exists = Expression::Exists(Child::new(body));
                 Ok(Step::Operator(
                     if negated {
@@ -1303,9 +1300,8 @@ impl Parser<'_, '_> {
         // Anchor the error at the body's own opening brace rather than wherever the
         // cursor lands after parsing it, mirroring `LATERAL`'s own `at` capture.
         let at = self.span();
-        let scope: Vec<Variable> = self.exists_scope().to_vec();
         self.push_exists_scope_isolated();
-        self.machine.ctl.push(Ctl::Exists { at, scope, negated });
+        self.machine.ctl.push(Ctl::Exists { at, negated });
         self.start_group()
     }
 
@@ -1317,7 +1313,8 @@ impl Parser<'_, '_> {
     ///
     /// # The in-scope set consulted
     ///
-    /// `scope`, read BEFORE the body was parsed — the current top in-scope-set frame (see
+    /// The top in-scope-set frame once the body's own frame is closed — which is the one
+    /// the `EXISTS` keyword was read in, unchanged while its body was parsed (see
     /// `Parser::exists_scope_stack`'s doc): the transitively scope-transparent
     /// accumulation (through a plain nested group, `OPTIONAL`, `UNION`, `GRAPH`,
     /// `SERVICE`, either side of `LATERAL`) of every variable introduced, left-to-right,
@@ -1329,7 +1326,7 @@ impl Parser<'_, '_> {
     /// `WHERE` clause's scope (parsed in full before modifiers run).
     ///
     /// For a `SELECT`-list `(expr AS ?v)` target — or an aggregate argument lifted out of
-    /// one — parsed BEFORE `WHERE` is even read, `scope` is necessarily still empty: the
+    /// one — parsed BEFORE `WHERE` is even read, that set is necessarily still empty: the
     /// row this `EXISTS` will actually be tested against cannot be known yet. Rather than
     /// skip the check (SEP-0007 Part 3 is a SEMANTIC rule about the row at EVALUATION
     /// time, not a textual-order one), `Parser::projection_scope_pending` marks this
@@ -1348,12 +1345,7 @@ impl Parser<'_, '_> {
     ///
     /// A body that holds no fresh binding at all (`intro` false) can collide with
     /// nothing, and is neither walked nor deferred.
-    fn check_exists_body(
-        &mut self,
-        at: usize,
-        scope: Vec<Variable>,
-        body: GroupValue,
-    ) -> Result<GraphPattern> {
+    fn check_exists_body(&mut self, at: usize, body: GroupValue) -> Result<GraphPattern> {
         let GroupValue {
             pattern: body,
             intro,
@@ -1363,7 +1355,7 @@ impl Parser<'_, '_> {
             return Ok(body);
         }
         if self.projection_scope_pending {
-            let mut local_scope = scope;
+            let mut local_scope = self.exists_scope().to_vec();
             let basis = if self.in_aggregate_argument {
                 ExistsScopeBasis::AggregateArgument
             } else {
@@ -1382,7 +1374,7 @@ impl Parser<'_, '_> {
                 });
             return Ok(body);
         }
-        if let Some((var, intro)) = find_scope_conflict(&scope, &body) {
+        if let Some((var, intro)) = find_scope_conflict(self.exists_scope(), &body) {
             return Err(ParseError::syntax(
                 format!(
                     "{} ?{} inside {} is already in scope on {}",

@@ -188,7 +188,8 @@ async function resolveService(request, { signal }) {
       signal,
     });
   } catch (error) {
-    // A network error is a transport failure; a throw would report a handler bug (a fault).
+    // A network error is the endpoint's failure; a throw would be reported as this
+    // handler's own fault instead.
     return { kind: "transport", message: String(error) };
   }
 }

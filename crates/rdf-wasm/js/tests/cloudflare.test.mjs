@@ -1683,8 +1683,8 @@ test("refusal pair: an unbound SERVICE ?e is a 400 with the engine's refusal; a 
 
 // ---------------------------------------------------------------------------
 // A host bug — a resolveService/resolveLoad exception, or any other unclassified
-// exception — never reaches the client as its own words (gap G4, information exposure
-// through a stack trace). A typed engine error (the case above, and a tripped governor)
+// exception — never reaches the client as its own words (information exposure through a
+// stack trace). A typed engine error (the case above, and a tripped governor)
 // is the oracle this is a neighbour of: it still gets its own real detail.
 // ---------------------------------------------------------------------------
 

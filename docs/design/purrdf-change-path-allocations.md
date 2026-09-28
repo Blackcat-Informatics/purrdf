@@ -60,10 +60,10 @@ cargo test -p purrdf-shapes --test sparql_path_alloc -- --nocapture
 
 | surface | allocations per focus node |
 |---|---:|
-| `sh:sparql` constraint | 42 |
-| custom `sh:ask` component | 90 |
-| custom `sh:select` component | 50 |
-| `sh:expression` function call | 105 |
+| `sh:sparql` constraint | 40 |
+| custom `sh:ask` component | 86 |
+| custom `sh:select` component | 48 |
+| `sh:expression` function call | 101 |
 
 That table is the UNGOVERNED lane. The same file now also pins the GOVERNED one —
 the lane an incremental host with a budget runs, reached through
@@ -74,10 +74,10 @@ delta-backed view whose pattern probe is type-erased:
 
 | surface | allocations per focus node, governed |
 |---|---:|
-| `sh:sparql` constraint, governed | 63 |
-| custom `sh:ask` component, governed | 118 |
-| custom `sh:select` component, governed | 71 |
-| `sh:expression` function call, governed | 130 |
+| `sh:sparql` constraint, governed | 61 |
+| custom `sh:ask` component, governed | 114 |
+| custom `sh:select` component, governed | 69 |
+| `sh:expression` function call, governed | 126 |
 
 Until that second table existed the governed lane's per-focus-node term was
 measured by nothing at all, so a regression in it was invisible to every pin in
@@ -513,8 +513,8 @@ check now measures the tree through the evaluator's height admission
 (`purrdf_sparql_eval`'s `stack::height`), which walks patterns, expressions, paths
 and terms on one shared stack whose first thirty-two pending nodes live inline, so
 on these fixtures it allocates nothing at all: 47 / 106 / 60 / 119 ungoverned,
-64 / 128 / 77 / 144 governed, and 202 on the `&str`-door `sh:ask` fallback lane
-(from 212).
+64 / 128 / 77 / 144 governed, and 212, unchanged, on the `&str`-door `sh:ask` fallback
+lane.
 
 An id is meaningful only against the dataset that minted it, so the door makes a
 cross-dataset binding impossible rather than merely refused: the id and the view

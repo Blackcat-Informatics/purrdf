@@ -151,7 +151,7 @@ function deferredResolver() {
 }
 
 // ---------------------------------------------------------------------------
-// AC1 / AC2: an awaited SERVICE, and the host's answers
+// An awaited SERVICE, and the host's answers
 // ---------------------------------------------------------------------------
 
 test("queryAsync joins remote bindings with local rows", async () => {
@@ -368,7 +368,7 @@ test("SERVICE SILENT with a resolver still forwards the request", async () => {
 });
 
 // ---------------------------------------------------------------------------
-// AC3: variable and nested endpoints
+// Variable and nested endpoints
 // ---------------------------------------------------------------------------
 
 // The remote side of a variable endpoint: every endpoint answers with its own name, so a
@@ -657,7 +657,7 @@ test("a nested SERVICE is forwarded inside the outer request text", async () => 
 });
 
 // ---------------------------------------------------------------------------
-// AC4: the synchronous lane is unchanged
+// The synchronous lane is unchanged
 // ---------------------------------------------------------------------------
 
 test("queryAsync without resolveService fails like the sync path", async () => {

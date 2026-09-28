@@ -497,8 +497,8 @@ records the endpoint and the failure's `kind`.
 
 A handler that throws, rejects, or returns anything else has failed the invocation it
 was answering, and is delivered exactly as `{ kind: "fault" }`: the invocation's own
-failure, never the job's. The handler's words stay out of the error a query fails
-with. `ctx.silent` is for information only: an empty answer is not the handler's to
+failure, never the job's. The error a query fails with carries the handler's words,
+for the host that wrote the handler. `ctx.silent` is for information only: an empty answer is not the handler's to
 invent, and the failure it reports decides what `SILENT` does with it.
 
 This handler sends each request with `fetch`:

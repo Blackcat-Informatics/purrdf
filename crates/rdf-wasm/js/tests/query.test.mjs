@@ -462,95 +462,85 @@ test("SERVICE SILENT and LOAD SILENT succeed with nothing fetched", () => {
   assert.equal(ds.canonicalize(), before, "LOAD SILENT must leave the dataset untouched");
 });
 
-// How deep a request may nest is bounded by the stacks it runs on, not by a fixed count.
-// The parser is recursive descent, so before it measured its stack a FILTER nested about
-// 950 parentheses deep ran the wasm shadow stack out of linear memory and trapped the
-// instance. Every recursive level now measures the shadow stack it has left, and — since
-// V8's own call stack, which wasm code cannot read, runs out first for some constructs —
-// is also charged what it costs that stack against a host-stack budget
-// (`WASM_HOST_STACK_BUDGET`, 640 KiB: 2 304 bytes a group, 1 408 a function call, 1 024 a
-// bracket, 576 a path group, …). Past either, the request is a typed stack refusal and the
-// instance answers the next one.
+// How deep a request may nest is bounded by what it builds, not by how it is written.
+// The parser is recursion-free: it keeps its nesting on heap stacks, so writing a level
+// costs neither the wasm shadow stack nor the JavaScript engine's call stack. A bracket
+// builds no node, and neither does a property-path group; a group whose only element is
+// a group parses to that inner group's pattern (joined with the empty basic graph
+// pattern, the join's identity). Those shapes therefore answer at any depth. A level that
+// does build a node — a call, a negation — is a level of the plan the evaluator recurses
+// over, and before evaluation the query plan's height is admitted against the host-stack
+// bounds (`crates/sparql-eval/src/stack/height.rs`): past 2 304 expression and path nodes
+// (`WASM_VALUE_LIMIT`), the request is the host-stack refusal and the instance answers
+// the next one.
 
-// Every shape at 128, 500 and 1 000 levels on the synchronous lane: 128 levels of every
-// shape answer; 500 parentheses, negations and path groups answer, while 500 nested calls
-// or groups do not fit; of 1 000, only path groups answer. Each answer is the one the
-// nesting computes, and each refusal is typed.
+// Every shape at 128, 500 and 1 000 levels answers on the synchronous lane, each with the
+// answer its nesting computes; 20 000 levels of a shape that builds a node per level is a
+// typed refusal, and 20 000 levels of one that builds none answers.
 test("nesting answers on the synchronous lane as deep as its stacks hold it, and is a typed refusal past that", async () => {
   const ds = Dataset.parse(NUMBERS, "nquads");
   const engine = new QueryEngine();
   const run = (query) => engine.select(ds, query);
-  const answers = {
-    128: new Set(NESTING_SHAPES.map(([what]) => what)),
-    500: new Set(["nested parentheses", "nested -(", "nested property-path groups"]),
-    1000: new Set(["nested property-path groups"]),
-  };
+  const buildsNodes = new Set(["nested ABS(", "nested -("]);
   for (const [what, text, expected] of NESTING_SHAPES) {
     for (const depth of [128, 500, 1_000]) {
       const outcome = await attempt(run, text(depth), `${what} ${depth} deep`);
-      if (answers[depth].has(what)) {
-        assert.deepEqual(outcome.subjects, expected, `${what} ${depth} deep answers what it computes`);
-      } else {
-        assert.ok(outcome.refused, `${what} ${depth} deep is refused`);
-      }
+      assert.deepEqual(outcome.subjects, expected, `${what} ${depth} deep answers what it computes`);
+    }
+    const deep = await attempt(run, text(20_000), `${what} 20 000 deep`);
+    if (buildsNodes.has(what)) {
+      assert.match(deep.refused ?? "", HOST_STACK_REFUSAL, `${what} 20 000 deep is refused`);
+    } else {
+      assert.deepEqual(deep.subjects, expected, `${what} 20 000 deep answers what it computes`);
     }
   }
 });
 
-// The evaluator's stack refusal exactly as a wasm lane renders it: its own words, with no
-// remedy appended — an asynchronous job runs on a region exactly as large as this lane's
-// shadow stack, so neither lane has more stack to offer, and the native remedy (a thread
-// spawned with more stack) names nothing a JavaScript caller can act on.
-const EVALUATION_STACK_REFUSAL_EXACT =
-  /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \([a-zA-Z ]+ needs more stack than this thread has left above its 65536-byte reserve\)$/;
-// The real limit of every shape on the synchronous lane, found by bisection: the deepest
-// level that answers holds its computed value and one level more is the typed refusal —
-// a refusal pair at the lane's real end. Past the WHERE group's own 2 304 bytes, the
-// host-stack budget admits 637 brackets, 537 negations, 283 groups and 1 133 path groups,
-// and the next level is the host-stack refusal: the JavaScript engine's call stack is the
-// same size on the asynchronous lane (see `async-concurrency.test.mjs`, where a job ends
-// at the same levels). Nested calls run out of shadow stack in their evaluation first,
-// and that refusal is the evaluator's own words, exactly as an asynchronous job gives it.
+// The real limit of every shape that builds a node per level, on the synchronous lane,
+// found by bisection: the deepest level that answers holds its computed value and one
+// level more is the host-stack refusal — a refusal pair at the lane's real end. Measured
+// on this build, and bounded by `WASM_VALUE_LIMIT` (2 304 expression nodes): the `=`
+// comparison around the nesting is one node, so 2 303 negations answer; a call's argument
+// `?o - 3` is one more, so 2 302 calls answer. The asynchronous lane admits the same plan
+// heights, so a job ends at the same levels (see `async-concurrency.test.mjs`). The shapes
+// that build no node answer at 20 000 levels, where the bisection starts.
 test("on the synchronous lane the deepest answer and the first refusal are neighbours", async () => {
   const ds = Dataset.parse(NUMBERS, "nquads");
   const run = (query) => new QueryEngine().select(ds, query);
   const limits = {};
-  const refusals = {};
   for (const shape of NESTING_SHAPES) {
-    ({ deepest: limits[shape[0]], refusal: refusals[shape[0]] } = await realEnd(run, shape));
-  }
-  const calls = limits["nested ABS("];
-  assert.ok(calls >= 128 && calls <= 463, `nested ABS( answers ${calls} deep`);
-  assert.match(refusals["nested ABS("], EVALUATION_STACK_REFUSAL_EXACT);
-  delete limits["nested ABS("];
-  delete refusals["nested ABS("];
-  assert.deepEqual(limits, {
-    "nested parentheses": 637,
-    "nested -(": 537,
-    "nested groups": 283,
-    "nested property-path groups": 1133,
-  });
-  for (const [what, refusal] of Object.entries(refusals)) {
+    const [what, text, expected] = shape;
+    const deep = await attempt(run, text(20_000), what);
+    if (deep.subjects) {
+      assert.deepEqual(deep.subjects, expected, `${what}: 20 000 levels answer what they compute`);
+      continue;
+    }
+    const { deepest, refusal } = await realEnd(run, shape);
+    limits[what] = deepest;
     assert.match(refusal, HOST_STACK_REFUSAL, what);
+    assert.match(refusal, /query algebra/, what);
     assert.doesNotMatch(refusal, /asynchronous twin|thread/, what);
   }
+  assert.deepEqual(limits, { "nested ABS(": 2302, "nested -(": 2303 });
 });
 
-test("a FILTER nested 10 000 parentheses deep is the host-stack refusal, and the engine answers afterwards", () => {
+// Brackets build no node: a FILTER nested 10 000 parentheses deep parses to the same
+// expression as one pair, so it answers exactly what one pair answers — twice, since a
+// trap would have left the instance unable to answer the second time.
+test("a FILTER nested 10 000 parentheses deep answers what one pair answers, and the engine answers afterwards", () => {
   const ds = Dataset.parse(TRIG, "trig");
   const engine = new QueryEngine();
-  const deep = `SELECT ?s WHERE { ?s ?p ?o FILTER(${"(".repeat(10_000)}?o${")".repeat(10_000)} = ?o) }`;
-  // Twice: a trap would have left the instance unusable, so the second call would not
-  // reach the parser to refuse it the same way. The budget kept under the JavaScript
-  // engine's call stack binds first, and its refusal names the limit and no remedy the
-  // caller cannot use: no thread to spawn, and no asynchronous twin, which refuses it
-  // the same way.
+  const filter = (depth) => `SELECT ?s WHERE { ?s ?p ?o FILTER(${"(".repeat(depth)}?o${")".repeat(depth)} = ?o) }`;
+  const subjects = (query) =>
+    engine
+      .select(ds, query)
+      .rows.toArray()
+      .map((row) => row.s.value)
+      .sort();
+  const shallow = subjects(filter(1));
+  assert.ok(shallow.length > 0, "one pair answers rows");
   for (let attempt = 0; attempt < 2; attempt += 1) {
-    assert.throws(() => engine.select(ds, deep), (error) => {
-      assert.match(error.message, HOST_STACK_REFUSAL);
-      assert.match(error.message, /bracketted expression/);
-      return true;
-    });
+    assert.deepEqual(subjects(filter(10_000)), shallow);
   }
   // The instance is intact: an ordinary query answers exactly.
   const names = engine
@@ -559,6 +549,13 @@ test("a FILTER nested 10 000 parentheses deep is the host-stack refusal, and the
     .map((row) => row.name.value);
   assert.deepEqual(names, ["Ann", "Bob"]);
 });
+
+// The evaluator's stack refusal exactly as a wasm lane renders it: its own words, with no
+// remedy appended — an asynchronous job runs on a region exactly as large as this lane's
+// shadow stack, so neither lane has more stack to offer, and the native remedy (a thread
+// spawned with more stack) names nothing a JavaScript caller can act on.
+const EVALUATION_STACK_REFUSAL_EXACT =
+  /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \([a-zA-Z ]+ needs more stack than this thread has left above its 65536-byte reserve\)$/;
 
 // Nesting the parser admits can still be more than the stack can EVALUATE: one written
 // level of `LATERAL` costs the evaluator about 9 KB of shadow stack, so 126 of them ran
@@ -682,8 +679,11 @@ test("nested FILTER NOT EXISTS answers on the synchronous lane as deep as its st
   for (const depth of [1, 2, 3, 4, 5, 6, 62, 63]) {
     assert.deepEqual(walkAnswer(engine, ds, depth).rows, walkByHand(depth), `${depth} nested FILTER NOT EXISTS`);
   }
-  // The real limit, by bisection between 63 levels (which answer) and 20 000 (refused,
-  // by the parser).
+  // The real limit, by bisection between 63 levels (which answer) and 20 000 (refused by
+  // the host-stack admission of the query plan's height, before evaluation starts). 20 000
+  // levels parse in linear time and memory: every `EXISTS` body's in-scope set shares the
+  // enclosing ones' variables instead of copying them, which at this depth once took
+  // seconds and more memory than wasm32 addresses, and trapped the instance.
   let [deepest, refused] = [63, 20_000];
   assert.ok(walkAnswer(engine, ds, refused).refused, "20 000 levels are refused");
   while (refused - deepest > 1) {
@@ -699,10 +699,11 @@ test("nested FILTER NOT EXISTS answers on the synchronous lane as deep as its st
     assert.match(walkAnswer(engine, ds, refused).refused ?? "", /native-sparql-evaluation-stack-exhausted/);
   }
   assert.equal(refused, deepest + 1);
-  // Measured on this build: 85 levels answer and 86 are refused. The bound is the
-  // evaluator's shadow-stack frames, which the compiler sizes, so the test asserts the
-  // pair wherever it falls and only that it lies past the old 63-level trap.
-  assert.ok(deepest > 63, `${deepest} levels answer`);
+  // Measured on this build: 79 levels answer and 80 are refused. The bound is the
+  // evaluator's shadow-stack guard — 1 MiB of shadow stack, less its 64 KiB reserve, over
+  // frames the compiler sizes — so a compiler or evaluator change that resizes those
+  // frames moves the pair, and this pin is re-measured with it.
+  assert.equal(deepest, 79, `${deepest} levels answer`);
   // Not poisoned: the same engine answers an ordinary query exactly.
   assert.deepEqual(
     engine

@@ -473,7 +473,7 @@ impl SparqlParser {
             anon_counter: 0,
             anon_prefix,
             group_counter: 0,
-            exists_scope_stack: Vec::new(),
+            exists_scope_stack: ExistsScopes::default(),
             dataset_at: None,
             dataset_slot: None,
             update_slots: Vec::new(),
@@ -555,7 +555,7 @@ struct Parser<'a, 'o> {
     /// [`Parser::exists_scope`] for what "in scope" means here and
     /// [`Parser::push_exists_scope_boundary`]/[`Parser::push_exists_scope_isolated`]
     /// for how frames are opened.
-    exists_scope_stack: Vec<VarScope>,
+    exists_scope_stack: ExistsScopes,
     /// True while parsing a `SELECT`'s own projection list — its `(expr AS
     /// ?v)` targets and any aggregate arguments lifted out of them — i.e. the
     /// window BEFORE `WHERE` is even read, where [`Parser::exists_scope`] is
@@ -751,7 +751,7 @@ impl<'a> Parser<'a, '_> {
             // `projection_scope_pending`/`in_aggregate_argument` start false
             // and the two buffers start empty regardless of `self`'s own
             // mid-projection-list state at the fork point.
-            exists_scope_stack: Vec::new(),
+            exists_scope_stack: ExistsScopes::default(),
             projection_scope_pending: false,
             in_aggregate_argument: false,
             projection_seen_targets: Vec::new(),
@@ -834,16 +834,14 @@ impl<'a> Parser<'a, '_> {
     // operand is explicitly out of scope per §18.2.1), so the seeded frame is
     // POPPED AND DISCARDED, never merged back into what it was seeded from.
     fn exists_scope(&self) -> &[Variable] {
-        self.exists_scope_stack
-            .last()
-            .map_or(&[], VarScope::as_slice)
+        self.exists_scope_stack.top()
     }
 
     /// Open a fresh, EMPTY in-scope-set frame — nothing precedes it. Used at
     /// every query/update operation's own top-level `WHERE` clause and at a
     /// sub-`SELECT`'s (the one real scope boundary; see the module doc above).
     fn push_exists_scope_boundary(&mut self) {
-        self.exists_scope_stack.push(VarScope::new());
+        self.exists_scope_stack.push_boundary();
     }
 
     /// Open a fresh in-scope-set frame SEEDED with a copy of the frame beneath
@@ -851,11 +849,7 @@ impl<'a> Parser<'a, '_> {
     /// this frame goes on to introduce is written back once it is popped. Used
     /// at an `EXISTS`/`NOT EXISTS`/`MINUS` body (see the module doc above).
     fn push_exists_scope_isolated(&mut self) {
-        let mut seed = VarScope::new();
-        for v in self.exists_scope() {
-            seed.note(v);
-        }
-        self.exists_scope_stack.push(seed);
+        self.exists_scope_stack.push_isolated();
     }
 
     /// Close the innermost in-scope-set frame, discarding it — the caller is
@@ -873,17 +867,19 @@ impl<'a> Parser<'a, '_> {
     /// this for a `Minus` right operand, matching the group loop's own
     /// pre-existing non-call for its local `VarScope`).
     fn note_exists_scope(&mut self, pattern: &GraphPattern) {
-        if let Some(top) = self.exists_scope_stack.last_mut() {
-            collect_vars(pattern, top);
+        if self.exists_scope_stack.is_open() {
+            let mut noted = VarScope::new();
+            collect_vars(pattern, &mut noted);
+            for v in noted.as_slice() {
+                self.exists_scope_stack.note(v);
+            }
         }
     }
 
     /// Record a single fresh binding (a `BIND` target) into the current
     /// in-scope-set frame.
     fn note_exists_scope_var(&mut self, variable: &Variable) {
-        if let Some(top) = self.exists_scope_stack.last_mut() {
-            top.note(variable);
-        }
+        self.exists_scope_stack.note(variable);
     }
 
     /// Parse a query/update operation's own top-level `WHERE` group graph
@@ -2955,6 +2951,102 @@ impl VarScope {
 
     fn into_vec(self) -> Vec<Variable> {
         self.order
+    }
+}
+
+/// Every open `EXISTS` in-scope-set frame (see [`Parser::exists_scope`]), stored once.
+///
+/// Only the top frame is ever written, so the frames' variables form one trail: a
+/// frame owns the trail's tail from its `mark` on, and sees the trail from its `start`
+/// on. A boundary frame starts empty (`start` = `mark` = the trail's length); an
+/// isolated frame sees everything the frame beneath it sees (`start` = that frame's
+/// `start`) and owns only what it adds itself (`mark` = the trail's length). Popping a
+/// frame truncates the trail to its `mark`. Seeding an isolated frame therefore copies
+/// nothing, so `EXISTS`/`NOT EXISTS`/`MINUS` bodies nested `n` deep hold `O(n)`
+/// variables in all rather than a copy of every enclosing frame per level.
+#[derive(Default)]
+struct ExistsScopes {
+    /// The variables of every open frame, each frame's own after the frame beneath's.
+    trail: Vec<Variable>,
+    /// For every variable on the trail, its positions there, ascending.
+    positions: std::collections::BTreeMap<Variable, Vec<usize>>,
+    /// The open frames, innermost last.
+    frames: Vec<ExistsFrame>,
+}
+
+/// One open frame of [`ExistsScopes`].
+#[derive(Clone, Copy)]
+struct ExistsFrame {
+    /// Where on the trail the variables this frame sees begin.
+    start: usize,
+    /// Where on the trail the variables this frame added begin.
+    mark: usize,
+}
+
+impl ExistsScopes {
+    /// Whether any frame is open.
+    fn is_open(&self) -> bool {
+        !self.frames.is_empty()
+    }
+
+    /// The variables the top frame sees, in first-appearance order; empty when no frame
+    /// is open.
+    fn top(&self) -> &[Variable] {
+        self.frames
+            .last()
+            .map_or(&[], |frame| &self.trail[frame.start..])
+    }
+
+    /// Open an empty frame.
+    fn push_boundary(&mut self) {
+        let len = self.trail.len();
+        self.frames.push(ExistsFrame {
+            start: len,
+            mark: len,
+        });
+    }
+
+    /// Open a frame that sees everything the current top frame sees; with no frame open,
+    /// an empty one.
+    fn push_isolated(&mut self) {
+        let len = self.trail.len();
+        let start = self.frames.last().map_or(len, |frame| frame.start);
+        self.frames.push(ExistsFrame { start, mark: len });
+    }
+
+    /// Close the top frame, discarding what it added.
+    fn pop(&mut self) {
+        let Some(frame) = self.frames.pop() else {
+            return;
+        };
+        for variable in self.trail.drain(frame.mark..) {
+            if let Some(at) = self.positions.get_mut(&variable) {
+                at.pop();
+                if at.is_empty() {
+                    self.positions.remove(&variable);
+                }
+            }
+        }
+    }
+
+    /// Record `variable` in the top frame; a no-op when the top frame already sees it,
+    /// or when no frame is open.
+    fn note(&mut self, variable: &Variable) {
+        let Some(frame) = self.frames.last() else {
+            return;
+        };
+        let seen = self
+            .positions
+            .get(variable)
+            .and_then(|at| at.last())
+            .is_some_and(|&at| at >= frame.start);
+        if !seen {
+            self.positions
+                .entry(variable.clone())
+                .or_default()
+                .push(self.trail.len());
+            self.trail.push(variable.clone());
+        }
     }
 }
 
@@ -7789,6 +7881,85 @@ mod tests {
             ),
             "unexpected message: {err}"
         );
+    }
+
+    #[test]
+    fn exists_scope_frames_share_the_enclosing_variables_and_discard_their_own() {
+        let var = |name: &str| Variable::new(name);
+        let mut scopes = ExistsScopes::default();
+        scopes.push_boundary();
+        scopes.note(&var("a"));
+        scopes.push_isolated();
+        assert_eq!(
+            scopes.top(),
+            [var("a")],
+            "an isolated frame sees the one beneath"
+        );
+        scopes.note(&var("a"));
+        scopes.note(&var("b"));
+        assert_eq!(
+            scopes.top(),
+            [var("a"), var("b")],
+            "a seen variable is not noted twice"
+        );
+        scopes.push_boundary();
+        assert_eq!(scopes.top(), [], "a boundary frame sees nothing beneath it");
+        scopes.note(&var("a"));
+        assert_eq!(
+            scopes.top(),
+            [var("a")],
+            "a boundary frame notes what it alone sees"
+        );
+        scopes.pop();
+        scopes.pop();
+        assert_eq!(
+            scopes.top(),
+            [var("a")],
+            "an isolated frame's own variables are discarded"
+        );
+        scopes.note(&var("b"));
+        assert_eq!(
+            scopes.top(),
+            [var("a"), var("b")],
+            "a discarded variable is noted again"
+        );
+        scopes.pop();
+        assert_eq!(scopes.top(), []);
+        assert_eq!(scopes.trail, []);
+        assert!(
+            scopes.positions.is_empty(),
+            "every position left the trail with its variable"
+        );
+    }
+
+    #[test]
+    fn deeply_nested_not_exists_parses_and_still_checks_its_scope() {
+        let nested = |depth: usize, innermost: &str| {
+            let mut body = innermost.to_owned();
+            for k in (1..=depth).rev() {
+                body = format!(
+                    "FILTER NOT EXISTS {{ ?x{k} <https://example.org/next> ?x{} {body} }}",
+                    k + 1
+                );
+            }
+            format!("SELECT ?x0 WHERE {{ ?x0 <https://example.org/next> ?x1 {body} }}")
+        };
+        SparqlParser::new()
+            .parse_query(&nested(20_000, ""))
+            .expect("20 000 nested FILTER NOT EXISTS parse");
+        // At the bottom of 2 000 levels, rebinding the outermost row's variable is refused,
+        // and binding a fresh one is its valid neighbour.
+        let err = SparqlParser::new()
+            .parse_query(&nested(2_000, "BIND(1 AS ?x0)"))
+            .expect_err("a BIND of a variable every enclosing row binds must fail");
+        assert!(
+            err.to_string()
+                .contains("BIND target ?x0 inside EXISTS is already in scope"),
+            "unexpected message: {err}"
+        );
+        SparqlParser::new()
+            .parse_query(&nested(2_000, "BIND(1 AS ?fresh)"))
+            .expect("a BIND of a fresh variable parses");
     }
 
     #[test]

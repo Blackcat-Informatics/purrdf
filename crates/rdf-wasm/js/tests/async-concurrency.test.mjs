@@ -442,21 +442,17 @@ test("a FILTER nested 10 000 parentheses deep answers what one pair answers, on 
 });
 
 // Every shape at 128 levels answers on a job's region with the value its nesting
-// computes, and the real end of every shape is found there by bisection — the deepest
-// level that answers, and one level more a typed refusal. Brackets, negations, groups and
-// path groups end at the host-stack budget, the same on both lanes: 637 brackets, 537
-// negations, 283 groups and 1 133 path groups, each refused one level deeper with the
-// host-stack refusal. Nested calls run out of shadow stack in their evaluation first, on
-// the region as on the synchronous lane, and the job's refusal is the synchronous lane's
-// word for word. Each run is a fresh engine, so no cached plan spares a job its parse.
+// computes. Brackets, property-path groups and a group holding only a group build no node
+// (see `query.test.mjs`), so those shapes answer 20 000 levels deep on a job's region too.
+// Calls and negations build a node per level, and the real end of each is found on the
+// region by bisection — the deepest level that answers, and one level more the host-stack
+// refusal. Measured on this build, and bounded by the plan-height admission's
+// `WASM_VALUE_LIMIT` (2 304 expression nodes), which is the same on both lanes: 2 302
+// calls and 2 303 negations answer, as on the synchronous lane, and the job's refusal is
+// the synchronous lane's word for word. Each run is a fresh engine, so no cached plan
+// spares a job its parse.
 test("nesting answers on the asynchronous lane as deep as the job's stacks hold it, and is the synchronous lane's refusal past that", async () => {
   const data = Dataset.parse(NUMBERS, "nquads");
-  const HOST_LIMITS = {
-    "nested parentheses": 637,
-    "nested -(": 537,
-    "nested groups": 283,
-    "nested property-path groups": 1133,
-  };
   const run = (query) => new QueryEngine().queryAsync(data, query);
   const runSync = (query) => new QueryEngine().select(data, query);
   const limits = {};
@@ -467,21 +463,19 @@ test("nesting answers on the asynchronous lane as deep as the job's stacks hold 
       expected,
       `${what} 128 deep answers on a job's region`,
     );
-    const { deepest, refusal } = await realEnd(run, shape);
-    limits[what] = deepest;
-    if (what === "nested ABS(") {
-      assert.ok(deepest >= 128 && deepest <= 463, `${what} answers ${deepest} deep on a job's region`);
-      assert.match(refusal, /^error native-sparql-evaluation-stack-exhausted: /, what);
-      // The synchronous lane's refusal of the same shape reads the same.
+    const deep = await attempt(run, text(20_000), `${what} on a job's region`);
+    if (deep.subjects) {
+      assert.deepEqual(deep.subjects, expected, `${what}: 20 000 levels answer on a job's region`);
+    } else {
+      const { deepest, refusal } = await realEnd(run, shape);
+      limits[what] = deepest;
+      assert.match(refusal, HOST_STACK_REFUSAL, what);
       const { refusal: syncRefusal } = await realEnd(runSync, shape);
       assert.equal(refusal, syncRefusal, `${what}: the job's refusal is the synchronous lane's`);
-    } else {
-      assert.match(refusal, HOST_STACK_REFUSAL, what);
     }
     assert.equal(stackPointer(), IDLE);
   }
-  delete limits["nested ABS("];
-  assert.deepEqual(limits, HOST_LIMITS);
+  assert.deepEqual(limits, { "nested ABS(": 2302, "nested -(": 2303 });
   // Not poisoned: the synchronous lane answers after all of it.
   assert.equal(new QueryEngine().select(Dataset.parse(CHAIN, "nquads"), nestedOptional(8)).rowCount, 200);
 });
@@ -521,13 +515,11 @@ test("a trap poisons every entry point of the instance, and jobs that fault with
   assert.deepEqual(report.asyncAfterFaults, { settled: "resolved", subjects: [`${EX}a`, `${EX}b`] });
   assert.deepEqual(report.newEngineBefore, { settled: "resolved", subjects: [`${EX}c`] });
   assert.deepEqual(report.sizeBefore, { settled: "returned", value: 2 });
-  // Synchronously, the query that traps asynchronously is the parser's own typed refusal
-  // — twice, so it is an error and not a trap that poisoned anything, and the
-  // synchronous lane's stack is its own after the jobs above.
+  // Synchronously, the query that traps asynchronously answers on the main stack —
+  // twice, so the first run poisoned nothing, and the synchronous lane's stack is its own
+  // after the jobs above.
   for (const sync of [report.syncDeep, report.syncDeepAgain]) {
-    assert.equal(sync.settled, "rejected");
-    assert.match(sync.message, HOST_STACK_REFUSAL);
-    assert.match(sync.message, /group graph pattern/);
+    assert.deepEqual(sync, { settled: "resolved", subjects: [`${EX}a`, `${EX}b`] });
   }
 
   // The trap: the job and the one in flight reject with the poison, and so does every

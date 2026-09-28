@@ -258,10 +258,11 @@ fn plan_payload_bytes(
 /// It is the wrong place, for two reasons. The stack a plan is evaluated on is not
 /// the one it is admitted on — a prepared plan runs later, on whatever thread the
 /// caller evaluates it from — so only the evaluation can measure it. And on `wasm32`
-/// that guard also applies a graph-pattern count narrower than the parser's envelope,
+/// that guard also applies a graph-pattern count the parser, which has no nesting limit,
+/// does not,
 /// an acceptance boundary this crate states and tests — `prepared_admission.rs`'s
 /// `parsed_and_compiler_preparation_preserve_flat_operator_boundary_acceptance`.
-/// Preparation accepts **the parser's envelope**; the evaluator's guard belongs to
+/// Preparation accepts **everything the parser accepts**; the evaluator's guard belongs to
 /// EXECUTION. Moving a count guard here was tried and turned preparing a flat
 /// `OPTIONAL {} OPTIONAL {} …` spine — and one of this workspace's own generated corpus
 /// queries — into a refusal. That is over-refusal: nothing looks broken, a refusal

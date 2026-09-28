@@ -168,7 +168,9 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
                 )
             },
         )?;
-        let (witnesses, chunks): (Vec<_>, Vec<_>) = harvests.into_iter().unzip();
+        // Split inline, as `harvests` is: a loop that ran on one chunk harvests one pair.
+        let (witnesses, chunks): (smallvec::SmallVec<[_; 1]>, smallvec::SmallVec<[_; 1]>) =
+            harvests.into_iter().unzip();
         checkpoint.commit(ctx, &mut rows, chunks);
         ctx.absorb_worker_witnesses(witnesses);
         rows
@@ -268,7 +270,9 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
                 )
             },
         )?;
-        let (witnesses, chunks): (Vec<_>, Vec<_>) = harvests.into_iter().unzip();
+        // Split inline, as `harvests` is: a loop that ran on one chunk harvests one pair.
+        let (witnesses, chunks): (smallvec::SmallVec<[_; 1]>, smallvec::SmallVec<[_; 1]>) =
+            harvests.into_iter().unzip();
         checkpoint.commit(ctx, &mut minted, chunks);
         ctx.absorb_worker_witnesses(witnesses);
         minted
