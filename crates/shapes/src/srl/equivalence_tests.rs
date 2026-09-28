@@ -373,8 +373,7 @@ fn document(
             )
         };
         let condition = CONDITIONS[rule.condition]
-            .map(|shape| format!(" ; sh:condition {shape}"))
-            .unwrap_or_default();
+            .map_or_default(|shape| format!(" ; sh:condition {shape}"));
         writeln!(
             ttl,
             "ex:S{index} a sh:NodeShape ; {} ;\n  sh:rule [ {body}{condition} ; \
