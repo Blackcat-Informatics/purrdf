@@ -417,7 +417,10 @@ pub(crate) mod term_walk_tests {
                     visited += 1;
                     ControlFlow::Continue(())
                 });
-                assert_eq!(visited, 4 * LEVELS + 1);
+                // Each level is its triple term, its variable subject and its ground
+                // predicate — its object is the next level — and the innermost object is
+                // the one blank-node variable.
+                assert_eq!(visited, 3 * LEVELS + 1);
                 let depth = pat.try_fold(
                     |_| Ok::<_, Infallible>(0_usize),
                     |s, p, o| Ok(1 + s.max(p).max(o)),
