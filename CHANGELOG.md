@@ -343,9 +343,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   value every target used while the limit was fixed) and 4,194,304 natively
   (`DEFAULT_MAX_STORED_FACTS`, chosen from the target architecture at compile
   time). The join-step default stays 1,048,576 on every target
-  (`DEFAULT_MAX_JOIN_STEPS`): it is what refuses a rule minting a new term every
-  round promptly (about 9 s, against more than 590 s at 268,435,456), and a
-  body's candidates are materialised before the check. A program that needs
+  (`DEFAULT_MAX_JOIN_STEPS`): a body's candidates are materialised before the
+  check, and a Cartesian body over 20,000 nodes allocated about 20 GB, still
+  unrefused, under 268,435,456 where the default refuses it in about 2 s at under
+  half a gigabyte. A program that needs
   more work states it — the non-linear closure of a 1,000-node chain completes
   with `--max-join-steps` raised. A single rule copying a predicate over 70,000
   triples, and the transitive closure of a thousand-node chain through SHACL
@@ -1179,6 +1180,41 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the drain holds the answer.
 
 ### Fixed
+
+- **shapes, datalog, core:** a SHACL shape rule (linked to a shape, executed once per
+  focus node) re-executed EVERY focus node every iteration, so a rule minting one new
+  focus node per iteration cost one execution per focus node so far each time: the
+  corpus's `err-diverging-fresh-term` rule was stopped only by the join-step limit
+  (about 7 s at the default), and with that limit raised to 2^28 it ran for minutes
+  instead of reaching the term limits it is documented to meet. A shape rule is now
+  re-executed only for the focus nodes that are new or that a triple the previous
+  iteration added is about, as the rule's read set says (`srl::reads`: the triple
+  patterns, property paths and node-expression paths it reads, each with the positions
+  its constants and `$this` fix). A triple it reads a join step away from `$this`
+  re-executes every focus node; a rule whose answer is not repeatable (a template or
+  `BNODE()` blank node, `RAND()`, `NOW()`, `UUID()`, `STRUUID()`, `LIMIT`/`OFFSET`,
+  `SAMPLE`, `GROUP_CONCAT`, `FOLD`, a function the analysis does not read) is executed
+  for every focus node every iteration. For a rule with no condition whose shape's
+  targets only grow (`sh:targetClass`, `sh:targetSubjectsOf`, `sh:targetObjectsOf`,
+  `sh:targetNode`, an implicit class), the new focus nodes are found from the added
+  triples without resolving the targets again. The graph the rules read is extended by
+  each iteration's triples (a delta over the last compacted view, compacted by a
+  rent-or-buy rule in term bytes) rather than rebuilt from the whole store. The
+  inference is unchanged: the inferred triples, their blank-node labels and the proof
+  are byte-identical to executing every focus node every iteration over a rebuilt
+  graph, which unit tests compare on the rules corpus, on a 60-link discovery chain and
+  on 256 randomised rule sets each run. A per-focus rule minting a counter IRI per
+  iteration is now refused by the term-generating round limit (16,385 rounds) in about
+  2.5 s, and `err-diverging-fresh-term`, whose IRI grows a character per iteration, by
+  the fixed 16 MiB term-arena ceiling in about 2.5 s, both with the join-step limit at
+  its default and at 2^28 (before: join-step refusal after about 7 s, and no refusal
+  within 150 s at 2^28). `RelationStore::rows_from` reads the rows a store gained since
+  a row count in time proportional to them; `DeltaDatasetView::added_term_ids` lists a
+  snapshot's own terms without walking its base, and a SHACL view over a snapshot
+  numbers its base terms arithmetically. The `rules_divergence` bench gains
+  `refuse/per_focus_counter` and `complete/per_focus_chain`, and `srl_closure` gains a
+  per-focus closure. The native join-step default stays 2^20 (see above): with the
+  divergent rules no longer needing it, the reason left is memory.
 
 - **shapes, cli, python, wasm, capi (BREAKING for Rust):** an `unreached-import` refusal for a table entry that
   an `owl:imports` triple DOES name — on a subject that is no anchor, so the triple is

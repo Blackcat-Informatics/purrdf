@@ -79,19 +79,26 @@ refused ordinary terminating rule sets there — a single rule that copies
 each of 70,000 `ex:p` triples to `ex:q`. The default is chosen at compile time from the
 target architecture, never by a Cargo feature.
 
-The join-step default is the same on every target, for two measured reasons.
-It is the limit that refuses a divergent rule promptly when the rule adds one
-new term per round but re-derives every earlier one — a SHACL SPARQL rule
-minting a longer IRI for each focus node every round is refused in about nine
-seconds at 1,048,576 join steps, and was still running after 590 seconds at
-268,435,456 — and a body's candidate solutions for a round are materialised
-before the limit is checked, so a much larger default would let a Cartesian
-body allocate gigabytes before being refused. A larger default would trade that
-refusal time and memory for reach, and reach is the caller's to buy: the
-non-linear transitive closure of a thousand-node chain enumerates over 67
-million candidates and completes when the caller raises the limit
-(`--max-join-steps` on the command line), while the linear closure of the same
-chain fits the default.
+The join-step default is the same on every target, for a measured reason: a
+body's candidate solutions for a round are materialised before the limit is
+checked. A body joining two unrelated atoms over 20,000 nodes (400 million
+candidates) is refused at the default in about two seconds, holding under half
+a gigabyte; at 268,435,456 join steps it had allocated about 20 GB, still
+enumerating, when it was stopped at a 24 GB address-space cap. A larger default
+would let a Cartesian body exhaust memory before it could be refused. Reach is
+the caller's to buy: the non-linear transitive closure of a thousand-node chain
+enumerates over 67 million candidates and completes when the caller raises the
+limit (`--max-join-steps` on the command line), while the linear closure of the
+same chain fits the default.
+
+The join-step limit is not what stops a divergent rule. A SHACL shape rule
+minting a new focus node every round is re-executed only for the focus nodes
+whose inputs changed, not for every earlier one, so it is refused by the term
+limits below within a few seconds, whatever the join-step limit: by the
+term-generating round limit when its new terms are of bounded length, and by
+the term-arena ceiling when each is longer than the last (a rule minting an IRI
+one character longer every round reaches 16 MiB of term surfaces after about
+5,800 rounds).
 
 A limit can only refuse. A run inside its limits returns the program's least
 model, the same model under every limit that admits it; a run past one returns

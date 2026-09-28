@@ -16,10 +16,51 @@
 //!
 //! # The graph a SHACL rule reads
 //!
-//! A SHACL rule is executed by the SHACL machinery over a frozen dataset of the
-//! evaluation graph as it stands — "During execution of a rule, the evaluation graph is
-//! used as the active query graph" — rebuilt only when the model has changed since the
-//! last build, so every rule of one concurrently executed group reads one dataset.
+//! A SHACL rule is executed by the SHACL machinery over a frozen view of the evaluation
+//! graph as it stands — "During execution of a rule, the evaluation graph is used as the
+//! active query graph" — built anew only when the model has changed since the last one,
+//! so every rule of one concurrently executed group reads one view.
+//!
+//! Within a layer the evaluation graph only grows, so a new view is the last one plus
+//! the triples committed since: a delta over the last COMPACTED view, frozen on its own
+//! and read together with it. The view is compacted — rebuilt whole — when a retraction
+//! rebuilt the store, when a new triple is a reifier declaration or mentions a blank node
+//! (a delta cannot move an earlier triple into a reifier's annotations, and a compacted
+//! view is where a blank node keeps its label), and by the rent-or-buy rule: once the
+//! deltas frozen since the last compaction have cost, in term bytes, as much as the
+//! store holds. Every view reads the same triples a rebuilt one would; only what an
+//! iteration pays for it changes — the size of what the iteration added, not of the
+//! graph.
+//!
+//! # Re-executing a shape rule
+//!
+//! A shape rule — one linked to a shape, executed once per focus node — is re-executed
+//! each iteration only for the focus nodes whose answer can have changed since it was
+//! last executed for them: the new ones, and those a triple the iteration before added
+//! is ABOUT, as the rule's read set ([`super::reads`]) says. A focus node whose inputs
+//! gained nothing would yield exactly the triples it yielded before, all of them already
+//! in the graph, because the answer is a function of the focus node, the rule's constants
+//! and the graph. A gained triple the rule reads for every focus node — one a join step
+//! away from `$this`, a variable-predicate or zero-length pattern — re-executes every
+//! focus node, and a rule whose answer is not repeatable (fresh blank nodes, `RAND()`,
+//! `NOW()`, an order-dependent selection, a function the analysis does not read) is
+//! executed for every focus node every iteration, exactly as the specification reads.
+//!
+//! When the rule has no condition and its shape's targets only grow with the graph
+//! (`sh:targetClass`, `sh:targetSubjectsOf`, `sh:targetObjectsOf`, `sh:targetNode`, an
+//! implicit class), the new focus nodes themselves are found from the gained triples
+//! rather than by resolving the targets again. Every focus node draws its execution
+//! number (the label prefix of the blank nodes it mints) whether it is re-executed or
+//! not, so the labels of every rule's blank nodes are the same either way.
+//!
+//! The re-execution is proven against the specification's reading — every focus node,
+//! every iteration, over a view rebuilt whole — by comparing the two on the rules corpus
+//! and on randomised rule sets: the same inferred triples, blank-node labels included,
+//! the same proof, or the same refusal. What changes is the cost. A shape rule minting
+//! one focus node per iteration costs one execution per iteration rather than one per
+//! focus node so far, so a divergent one is refused by a term limit (or, when its
+//! terms grow longer every iteration, by the term-arena ceiling) within seconds, rather
+//! than running into the join-step limit — or, with that raised, for minutes.
 
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -27,7 +68,7 @@ use std::fmt::Write as _;
 use std::rc::Rc;
 use std::sync::Arc;
 
-use ::purrdf::{FastMap, FastSet, RdfDataset, RdfDatasetBuilder};
+use ::purrdf::{FastMap, FastSet, MutableDataset, RdfDataset, RdfDatasetBuilder};
 use purrdf_datalog::guard::{GuardCall, GuardEvaluator, GuardSite};
 use purrdf_datalog::schedule::{self, Layer, LayerHooks, Schedule};
 use purrdf_datalog::seminaive::{BudgetResource, EvalError};
@@ -35,7 +76,9 @@ use purrdf_datalog::store::{Fact, RelationStore};
 
 use super::ir::{IrRuleBody, RuleSet, Scheduling};
 use super::lower::{self, BASE_GRAPH, GuardImpl, LoweredPosition, LoweredTriple};
+use super::reads::{ReadPattern, RuleReads};
 use crate::data::ShaclData;
+use crate::data_view::ShaclDatasetView;
 use crate::model::{rdf, sh};
 use crate::rules;
 use crate::shapes::Shapes;
@@ -194,6 +237,30 @@ pub fn evaluate(
     shapes: &Shapes,
     options: &rules::RuleOptions,
 ) -> Result<Inference, rules::RulesError> {
+    evaluate_with(set, data, shapes, options, Reexecution::Incremental)
+}
+
+/// How an iterating shape rule is re-executed ([module docs](self), "Re-executing a
+/// shape rule").
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reexecution {
+    /// For the focus nodes that are new, or for every focus node once the graph gained a
+    /// triple the rule reads — the production evaluation.
+    Incremental,
+    /// For every focus node, every iteration, over a graph rebuilt from the whole store
+    /// whenever it grew — the SHACL execution read literally, which the incremental one
+    /// is proven equal to.
+    Full,
+}
+
+/// [`evaluate`], re-executing shape rules as `reexecution` says.
+pub(crate) fn evaluate_with(
+    set: &RuleSet<'_>,
+    data: &ShaclData,
+    shapes: &Shapes,
+    options: &rules::RuleOptions,
+    reexecution: Reexecution,
+) -> Result<Inference, rules::RulesError> {
     let source_rules = options.source_rules();
     let governors = options.eval_options();
     for rule in &set.rules {
@@ -263,6 +330,8 @@ pub fn evaluate(
         mints: Cell::new(0),
         mint_prefix,
         expectations,
+        reexecution,
+        records: RefCell::new(FastMap::default()),
     };
     // Every constant a clause mentions enters the store through its head or a probe, so
     // each is registered with the codec first.
@@ -604,8 +673,68 @@ impl Codec {
     }
 }
 
-/// An evaluation-graph view with the `(generation, row count)` it was built at.
-type CachedView = ((u64, usize), Rc<ShaclData>);
+/// The evaluation graph as the SHACL rules read it: the last compacted view with the
+/// triples committed since as a delta over it ([`Engine::view`]).
+struct LiveView {
+    /// The store generation the view was built at.
+    generation: u64,
+    /// The store row count the view reflects.
+    rows: usize,
+    /// The surface bytes of the triples in the delta.
+    delta_bytes: usize,
+    /// The surface bytes every extension since the last compaction re-froze.
+    spent: usize,
+    /// The Core graph: the compacted view plus the delta.
+    core: MutableDataset,
+    /// The SPARQL dataset (the Core graph plus the shapes graph), when it is a separate
+    /// dataset; `None` when it is the Core graph.
+    sparql: Option<MutableDataset>,
+    /// The view as SHACL data.
+    data: Rc<ShaclData>,
+}
+
+impl LiveView {
+    /// A view with no delta over the compacted `core` and `sparql` datasets.
+    fn compacted(
+        generation: u64,
+        rows: usize,
+        core: Arc<RdfDataset>,
+        sparql: Arc<RdfDataset>,
+        engine: &Engine<'_, '_>,
+    ) -> Self {
+        let shared = Arc::ptr_eq(&core, &sparql);
+        let data = Rc::new(ShaclData::new(
+            Arc::clone(&core),
+            Arc::clone(&sparql),
+            engine.shapes_graph_iri.clone(),
+        ));
+        Self {
+            generation,
+            rows,
+            delta_bytes: 0,
+            spent: 0,
+            core: MutableDataset::new(core),
+            sparql: (!shared).then(|| MutableDataset::new(sparql)),
+            data,
+        }
+    }
+}
+
+/// The store term bytes below which [`Engine::view`] never compacts on account of the
+/// delta's cost: a small store is cheap to rebuild, and a small delta cheap to freeze.
+const COMPACTION_FLOOR_BYTES: usize = 1 << 16;
+
+/// The surface bytes of `term`, the unit a view extension and a compaction are costed in.
+fn term_bytes(term: &Term) -> usize {
+    match term {
+        Term::NamedNode(node) => node.as_str().len(),
+        Term::BlankNode(label) => label.len(),
+        Term::Literal(literal) => literal.value().len() + literal.datatype_str().len(),
+        Term::Triple(inner) => {
+            term_bytes(&inner.subject) + inner.predicate.as_str().len() + term_bytes(&inner.object)
+        }
+    }
+}
 
 /// The evaluation state the guard evaluator and the layer hooks share.
 struct Engine<'r, 'a> {
@@ -623,8 +752,8 @@ struct Engine<'r, 'a> {
     shapes_graph_iri: Option<String>,
     /// The empty dataset a pure expression is evaluated over.
     empty: ShaclData,
-    /// The last evaluation-graph view built, by `(generation, row count)`.
-    view: RefCell<Option<CachedView>>,
+    /// The evaluation-graph view last built.
+    view: RefCell<Option<LiveView>>,
     /// Bumped whenever the store is rebuilt by a retraction.
     generation: Cell<u64>,
     /// Executions numbered so far, for blank-node minting.
@@ -634,6 +763,35 @@ struct Engine<'r, 'a> {
     mint_prefix: String,
     /// The expected predicates of each layer.
     expectations: Vec<Vec<String>>,
+    /// How an iterating shape rule is re-executed.
+    reexecution: Reexecution,
+    /// Per shape-rule producer (by rule index), what its re-execution is decided by.
+    /// `None` for a volatile rule, which keeps no record.
+    records: RefCell<FastMap<usize, Option<ProducerRecord>>>,
+}
+
+/// What one shape rule's next execution is decided by: its read set, the store it last
+/// ran against, and the focus nodes it ran for since.
+struct ProducerRecord {
+    /// The rule's read set ([`super::reads`]), plus every `r rdf:reifies t`: a new
+    /// reifier turns the triples about its subject into that reifier's annotations, a
+    /// different layer of the evaluation graph.
+    reads: Vec<ReadPattern>,
+    /// The `(generation, row count)` of the store the rule last ran against; `None`
+    /// before its first execution.
+    last: Option<(u64, usize)>,
+    /// The focus nodes executed since.
+    focus: rules::FocusRecord,
+}
+
+/// The read set of a non-volatile shape rule, `rdf:reifies` included (see
+/// [`ProducerRecord::reads`]), or `None` for a volatile one.
+fn read_patterns(rule: &rules::Rule) -> Option<Vec<ReadPattern>> {
+    let RuleReads::Patterns(mut patterns) = super::reads::rule_reads(rule) else {
+        return None;
+    };
+    patterns.push(ReadPattern::unanchored(Some(rdf::REIFIES)));
+    Some(patterns)
 }
 
 impl Engine<'_, '_> {
@@ -674,14 +832,43 @@ impl Engine<'_, '_> {
         }
     }
 
-    /// The evaluation graph as SHACL data, rebuilt only when the model changed.
+    /// The evaluation graph as SHACL data — see the [module docs](self), "The graph a
+    /// SHACL rule reads".
+    ///
+    /// The view is extended rather than rebuilt when the store has only grown since the
+    /// last one, by triples that change no triple's layer: a delta over the last
+    /// compacted view, holding every triple committed since. The view is compacted — rebuilt
+    /// from the whole store — when a retraction rebuilt the store, when a new triple is
+    /// an `r rdf:reifies t` declaration or mentions a blank node (whose identity the
+    /// compacted view keeps by label), and once re-freezing the delta has cost as much as
+    /// a compaction would.
     fn view(&self, model: &RelationStore) -> Result<Rc<ShaclData>, String> {
-        let key = (self.generation.get(), model.row_count());
-        if let Some((cached, view)) = self.view.borrow().as_ref()
-            && *cached == key
+        let generation = self.generation.get();
+        let rows = model.row_count();
+        let mut live = self.view.borrow_mut();
+        if let Some(view) = live.as_mut()
+            && view.generation == generation
         {
-            return Ok(Rc::clone(view));
+            // The full re-execution also rebuilds the graph it reads from the whole store
+            // every time the store grew: the evaluation as it ran before either was
+            // incremental, which the incremental one is proven against.
+            if view.rows == rows {
+                return Ok(Rc::clone(&view.data));
+            }
+            if self.reexecution == Reexecution::Incremental
+                && let Some(data) = self.extend(view, model)?
+            {
+                return Ok(data);
+            }
         }
+        let view = self.compact(model, generation)?;
+        let data = Rc::clone(&view.data);
+        *live = Some(view);
+        Ok(data)
+    }
+
+    /// The evaluation graph rebuilt from the whole store.
+    fn compact(&self, model: &RelationStore, generation: u64) -> Result<LiveView, String> {
         let facts = self.model_facts(model)?;
         let reifiers = rules::reifier_subjects(facts.iter());
         let mut builder = RdfDatasetBuilder::new();
@@ -691,9 +878,79 @@ impl Engine<'_, '_> {
         }
         let core = builder.freeze().map_err(|e| e.to_string())?;
         let sparql = rules::build_round_base(&core, self.shapes, self.shapes_graph_iri.as_deref())?;
-        let view = Rc::new(ShaclData::new(core, sparql, self.shapes_graph_iri.clone()));
-        *self.view.borrow_mut() = Some((key, Rc::clone(&view)));
-        Ok(view)
+        Ok(LiveView::compacted(
+            generation,
+            model.row_count(),
+            core,
+            sparql,
+            self,
+        ))
+    }
+
+    /// `view` extended by the store rows committed since it was built, or `None` when
+    /// they call for a compaction (see [`Self::view`]).
+    fn extend(
+        &self,
+        view: &mut LiveView,
+        model: &RelationStore,
+    ) -> Result<Option<Rc<ShaclData>>, String> {
+        let rows = model.row_count();
+        let reifies = Term::NamedNode(NamedNode::from(rdf::REIFIES));
+        let mut triples = self.new_triples(model, view.rows)?;
+        if triples
+            .iter()
+            .any(|triple| triple[1] == reifies || triple.iter().any(rules::term_mentions_blank))
+        {
+            return Ok(None);
+        }
+        triples.retain(|triple| !self.originals.contains(triple));
+        // Each extension re-freezes the whole delta; a compaction re-freezes the whole
+        // store. Once the extensions since the last compaction have cost as much as one
+        // more would, compact instead: the rent-or-buy rule, which keeps the total within
+        // twice the cheaper of the two strategies' costs whatever rate the graph grows at.
+        let delta_bytes =
+            view.delta_bytes + triples.iter().flatten().map(term_bytes).sum::<usize>();
+        let compact = view.spent + delta_bytes > model.term_bytes().max(COMPACTION_FLOOR_BYTES);
+        for [subject, predicate, object] in &triples {
+            let quad = ::purrdf::QuadValues::triple(
+                subject.to_term_value(),
+                predicate.to_term_value(),
+                object.to_term_value(),
+            );
+            for dataset in std::iter::once(&mut view.core).chain(view.sparql.as_mut()) {
+                ::purrdf::DatasetMut::insert(dataset, quad.clone()).map_err(|e| e.to_string())?;
+            }
+        }
+        view.rows = rows;
+        if compact {
+            // The delta holds no triple whose layer a compaction would change, so
+            // freezing the base and the delta together is the compaction.
+            let core = view.core.freeze().map_err(|e| e.to_string())?;
+            let sparql = match &view.sparql {
+                Some(sparql) => sparql.freeze().map_err(|e| e.to_string())?,
+                None => Arc::clone(&core),
+            };
+            *view = LiveView::compacted(view.generation, rows, core, sparql, self);
+            return Ok(Some(Rc::clone(&view.data)));
+        }
+        view.delta_bytes = delta_bytes;
+        view.spent += delta_bytes;
+        let snapshot = |dataset: &MutableDataset| -> Result<Arc<ShaclDatasetView>, String> {
+            let delta = dataset.snapshot_view().map_err(|e| e.to_string())?;
+            ShaclDatasetView::delta(Arc::new(delta), false, ::purrdf::ir::ViewLimits::default())
+                .map(Arc::new)
+        };
+        let core = snapshot(&view.core)?;
+        let sparql = match &view.sparql {
+            Some(sparql) => snapshot(sparql)?,
+            None => Arc::clone(&core),
+        };
+        view.data = Rc::new(ShaclData::from_views(
+            core,
+            sparql,
+            self.shapes_graph_iri.clone(),
+        ));
+        Ok(Some(Rc::clone(&view.data)))
     }
 
     /// The non-base triples to delete with `doomed`'s reifiers: every inferred
@@ -747,12 +1004,16 @@ impl GuardEvaluator for Engine<'_, '_> {
         match implementation {
             GuardImpl::Producer(producer) => {
                 let view = self.view(call.model)?;
+                let mut records = self.records.borrow_mut();
+                let selection =
+                    self.focus_selection(&mut records, call.rule, producer, call.model)?;
                 let triples = rules::execute_rule(
                     &view,
                     producer.rule,
                     &producer.shapes,
                     self.shapes_graph_iri.as_deref(),
                     &mut || self.mint(),
+                    selection,
                 )?;
                 Ok(triples
                     .iter()
@@ -825,6 +1086,68 @@ impl GuardEvaluator for Engine<'_, '_> {
 }
 
 impl Engine<'_, '_> {
+    /// Which focus nodes shape rule `rule` executes against `model` — see the [module
+    /// docs](self), "Re-executing a shape rule".
+    ///
+    /// # Errors
+    ///
+    /// An internal-invariant breach: a store surface the codec never saw.
+    fn focus_selection<'m>(
+        &self,
+        records: &'m mut FastMap<usize, Option<ProducerRecord>>,
+        rule: usize,
+        producer: &super::ir::ShaclProducer<'_>,
+        model: &RelationStore,
+    ) -> Result<rules::FocusSelection<'m>, String> {
+        if self.reexecution == Reexecution::Full || producer.shapes.is_empty() {
+            return Ok(rules::FocusSelection::Every);
+        }
+        let Some(record) = records
+            .entry(rule)
+            .or_insert_with(|| {
+                read_patterns(producer.rule).map(|reads| ProducerRecord {
+                    reads,
+                    last: None,
+                    focus: rules::FocusRecord::default(),
+                })
+            })
+            .as_mut()
+        else {
+            return Ok(rules::FocusSelection::Every);
+        };
+        let now = (self.generation.get(), model.row_count());
+        match record.last.replace(now) {
+            // A retraction rebuilt the store: nothing about the last run carries over.
+            Some((generation, rows)) if generation == now.0 => {
+                Ok(rules::FocusSelection::Incremental {
+                    gained: self.new_triples(model, rows)?,
+                    reads: &record.reads,
+                    record: &mut record.focus,
+                })
+            }
+            _ => Ok(rules::FocusSelection::Changed(&mut record.focus)),
+        }
+    }
+
+    /// The default-graph triples of `model`'s rows from `since` on, in row order.
+    ///
+    /// # Errors
+    ///
+    /// An internal-invariant breach: a store surface the codec never saw.
+    fn new_triples(&self, model: &RelationStore, since: usize) -> Result<Vec<[Term; 3]>, String> {
+        let Some(graph) = model.term_id(RelationStore::DEFAULT_GRAPH) else {
+            return Ok(Vec::new());
+        };
+        model
+            .rows_from(since)
+            .filter(|(_, [.., g])| *g == graph)
+            .map(|(_, [s, p, o, _])| {
+                let [s, p, o] = [s, p, o].map(|id| self.codec.term(model.interner().resolve(id)));
+                Ok([s?, p?, o?])
+            })
+            .collect()
+    }
+
     /// The SPARQL pre-bindings of a scalar query: canonical names with decoded values.
     fn arguments(
         &self,

@@ -27,8 +27,11 @@ pub mod ir;
 
 mod depend;
 mod document;
-mod eval;
+#[cfg(test)]
+mod equivalence_tests;
+pub(crate) mod eval;
 mod lower;
+pub(crate) mod reads;
 pub(crate) mod sparql_rule;
 mod syntax;
 

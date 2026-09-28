@@ -1332,3 +1332,82 @@ fn every_run_reports_an_empty_in_list() {
         assert_eq!(err.contains(line), flagged, "{name}: {err}");
     }
 }
+
+/// A shape rule minting one new focus node every iteration — the per-focus divergence
+/// the join-step limit used to stop after re-executing the rule for every earlier focus
+/// node each time — is refused by `rules` naming the TERM-GENERATING ROUND limit, with
+/// `--max-join-steps` at its default and raised 256-fold out of the way, and writes no
+/// graph. The corpus's rule minting a one-character-longer IRI every iteration is refused
+/// by the fixed term-arena ceiling, which its quadratically growing term surfaces reach
+/// before the round limit, again with the join-step limit at its default and raised. The
+/// counter's neighbour bounded at 1,000 counters completes under the defaults.
+#[test]
+fn cli_rules_per_focus_divergence_is_refused_by_a_term_limit() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let counter = |bound: &str| {
+        format!(
+            r#"@prefix ex: <http://example.org/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+ex:c1 a ex:C ; ex:n 1 .
+ex:Counter a sh:NodeShape ; sh:targetClass ex:C ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT {{ ?next a ex:C ; ex:n ?m . $this ex:next ?next . }}
+WHERE {{ $this ex:n ?n . {bound} BIND (?n + 1 AS ?m)
+        BIND (IRI(CONCAT("http://example.org/ns#c", STR(?m))) AS ?next) }}""" ] .
+"#
+        )
+    };
+    let divergent = write_file(dir.path(), "divergent.ttl", &counter(""));
+    let bounded = write_file(dir.path(), "bounded.ttl", &counter("FILTER (?n < 1000)"));
+    let longer = write_file(
+        dir.path(),
+        "longer.ttl",
+        include_str!("../../../vectors/shacl/af/rules/err-diverging-fresh-term/input.ttl"),
+    );
+    let rules = |document: &str, extra: &[&str]| {
+        let mut args = vec!["rules", "--shapes", document];
+        args.extend_from_slice(extra);
+        args.extend_from_slice(&["--to", "ntriples", document]);
+        run(&args)
+    };
+    for extra in [&[][..], &["--max-join-steps", "268435456"][..]] {
+        let refused = rules(&divergent, extra);
+        assert_eq!(code(&refused), 1, "{}", stderr(&refused));
+        assert!(
+            stderr(&refused).contains(
+                "the rules exceeded the term-generating round limit: 16385 rounds inferred a \
+                 term the evaluation graph did not hold, past the limit of 16384 (the default)"
+            ) && stderr(&refused)
+                .trim_end()
+                .ends_with("raise the limit with --max-term-generating-rounds"),
+            "{}",
+            stderr(&refused)
+        );
+        assert!(
+            !stderr(&refused).contains("join-step"),
+            "{}",
+            stderr(&refused)
+        );
+        assert!(stdout(&refused).is_empty(), "a refused run writes no graph");
+
+        let ceiling = rules(&longer, extra);
+        assert_eq!(code(&ceiling), 1, "{}", stderr(&ceiling));
+        assert!(
+            stderr(&ceiling).contains(
+                "evaluation exceeded the fixed term arena bytes ceiling: 16782539 observed, \
+                 16777216 permitted"
+            ),
+            "{}",
+            stderr(&ceiling)
+        );
+        assert!(
+            !stderr(&ceiling).contains("join-step"),
+            "{}",
+            stderr(&ceiling)
+        );
+        assert!(stdout(&ceiling).is_empty(), "a refused run writes no graph");
+    }
+    let completes = rules(&bounded, &[]);
+    assert_eq!(code(&completes), 0, "{}", stderr(&completes));
+    assert_eq!(stdout(&completes).lines().count(), 3 * 999);
+}

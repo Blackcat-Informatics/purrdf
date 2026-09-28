@@ -19,6 +19,12 @@
 //!   letters: the generated-term budget, reached as the strings double.
 //! * `refuse/srl_nest` — a SPARQL 1.2 RL rule nesting its matched triple term every
 //!   round.
+//! * `refuse/per_focus_counter` — a SHACL SHAPE rule minting one new focus node per
+//!   iteration (a counter IRI per step): the round limit, reached with one execution per
+//!   iteration because only the new focus node is executed.
+//! * `complete/per_focus_chain/<n>` — a SHACL shape rule walking an `n`-link chain one
+//!   link per iteration, each through a focus node the iteration before made an instance
+//!   of its target class.
 //! * `complete/depth/<n>` — a SHACL SPARQL rule counting depth along an `n`-edge chain:
 //!   a counter bounded by its data.
 //! * `complete/countdown/<n>` — a SHACL SPARQL rule counting down from `n` to 0.
@@ -64,6 +70,21 @@ ex:a a sh:SPARQLRule ; sh:construct
 ex:b a sh:SPARQLRule ; sh:construct
   "CONSTRUCT { ?s ex:name ?m } WHERE { ?s ex:name ?n BIND (CONCAT(?n, 'b') AS ?m) }" ."#;
 
+const PER_FOCUS_COUNTER: &str = r#"ex:c1 a ex:C ; ex:n 1 .
+ex:Counter a sh:NodeShape ; sh:targetClass ex:C ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT { ?next a ex:C ; ex:n ?m . $this ex:next ?next . }
+WHERE { $this ex:n ?n . BIND (?n + 1 AS ?m)
+        BIND (IRI(CONCAT("http://example.org/ns#c", STR(?m))) AS ?next) }""" ] ."#;
+
+const PER_FOCUS_WALK: &str = r#"ex:Walk a sh:NodeShape ; sh:targetClass ex:B ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct
+    "PREFIX ex: <http://example.org/ns#> CONSTRUCT { $this ex:q ?o . ?o a ex:B } WHERE { $this ex:p ?o }" ] .
+"#;
+
+/// Chain lengths for the per-focus walk.
+const WALKS: &[usize] = &[300, 3_000];
+
 const COUNTDOWN_RULE: &str = r#"ex:count a sh:SPARQLRule ; sh:construct
   "CONSTRUCT { ?s ex:n ?m } WHERE { ?s ex:n ?n FILTER (?n > 0) BIND (?n - 1 AS ?m) }" ."#;
 
@@ -95,6 +116,10 @@ fn bench_refuse(c: &mut Criterion) {
         ("concat", format!("{PREFIXES}{CONCAT}")),
         ("counter", format!("{PREFIXES}{COUNTER}")),
         ("doubling", format!("{PREFIXES}{DOUBLING}")),
+        (
+            "per_focus_counter",
+            format!("{PREFIXES}{PER_FOCUS_COUNTER}"),
+        ),
     ]
     .into_iter()
     .map(|(name, ttl)| (name, load(&ttl)))
@@ -260,9 +285,38 @@ fn bench_closure(c: &mut Criterion) {
     closure.finish();
 }
 
+/// Completion of a per-focus walk discovering one focus node per iteration.
+fn bench_per_focus_walk(c: &mut Criterion) {
+    let walks: Vec<(usize, (Shapes, ShaclData))> = WALKS
+        .iter()
+        .map(|&length| {
+            let mut ttl = format!("{PREFIXES}{PER_FOCUS_WALK}\nex:n0 a ex:B .\n");
+            for index in 0..length {
+                writeln!(ttl, "ex:n{index} ex:p ex:n{} .", index + 1).expect("write to String");
+            }
+            (length, load(&ttl))
+        })
+        .collect();
+    let mut walk = c.benchmark_group("rules_divergence/complete/per_focus_chain");
+    walk.sample_size(10);
+    for (length, (shapes, data)) in &walks {
+        let length = *length;
+        walk.bench_with_input(BenchmarkId::from_parameter(length), data, |b, data| {
+            b.iter(|| {
+                let inference = infer(black_box(data), shapes, &RuleOptions::default())
+                    .expect("a walk bounded by its chain completes");
+                assert_eq!(inference.inferred().len(), 2 * length);
+                inference
+            });
+        });
+    }
+    walk.finish();
+}
+
 criterion_group!(
     benches,
     bench_refuse,
+    bench_per_focus_walk,
     bench_complete,
     bench_countdown,
     bench_copy,

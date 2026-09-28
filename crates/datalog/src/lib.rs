@@ -38,8 +38,8 @@
 //!   ([`seminaive::DEFAULT_MAX_STORED_FACTS`], chosen at compile time from the target
 //!   architecture, never by a Cargo feature), and 1,048,576 join steps on every target
 //!   ([`seminaive::DEFAULT_MAX_JOIN_STEPS`]). The join-step default does not grow
-//!   natively because it is what refuses a divergent rule promptly, and because a body's
-//!   candidates are materialised before it is checked; see
+//!   natively because a body's candidates are materialised before it is checked, so a
+//!   Cartesian body under a larger default exhausts memory before it is refused; see
 //!   [`seminaive::NATIVE_DEFAULT_MAX_JOIN_STEPS`]. A program that needs more work states it.
 //! * the **term-arena** ceiling ([`seminaive::MAX_TERM_ARENA_BYTES`]) bounds the bytes of
 //!   interned term surfaces. It is a constant, the same on every target.

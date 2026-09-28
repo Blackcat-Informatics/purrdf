@@ -122,24 +122,28 @@ pub const NATIVE_DEFAULT_MAX_STORED_FACTS: u64 = 1 << 22;
 /// ([`DEFAULT_MAX_JOIN_STEPS`]): the same value as [`WASM_DEFAULT_MAX_JOIN_STEPS`].
 ///
 /// Unlike the stored-fact limit, the join-step limit does not grow with the target's
-/// memory, for two measured reasons.
+/// memory, and the reason is measured: a body's candidate solutions for one round are
+/// materialised before the limit is checked. A body joining two unrelated atoms over
+/// 20,000 nodes — 400 million candidates — is refused at this default after about two
+/// seconds, having held under half a gigabyte; at 268,435,456 join steps (2^28) it had
+/// allocated about 20 GB, and was still enumerating, when the process was stopped at a
+/// 24 GB address-space cap. A default a Cartesian body can exhaust memory under before it
+/// is refused is no limit at all.
 ///
-/// * It is the limit that refuses a divergent rule PROMPTLY when the rule adds one new
-///   term per round but re-derives every earlier one: a SHACL SPARQL rule minting a
-///   strictly longer IRI for every focus node, each round. The term limits admit such a
-///   rule for thousands of rounds, because a counter stepping to 10,000 must complete, and
-///   every round costs more than the last. It is refused in about nine seconds at
-///   1,048,576 join steps and was still running after 590 seconds at 268,435,456.
-/// * A body's candidate solutions for one round are materialised before the limit is
-///   checked, so a Cartesian body under a limit of hundreds of millions would allocate
-///   tens of gigabytes before it could be refused.
+/// It is no longer what stops a divergent rule. A SHACL shape rule minting one new focus
+/// node per iteration used to re-execute for every earlier focus node every iteration,
+/// and only the join-step limit refused it promptly (in about seven seconds, and still
+/// running after minutes at 2^28). Shape rules are now re-executed only for the focus
+/// nodes whose inputs changed, so such a rule is refused by the term limits within a few
+/// seconds under this default and under 2^28 alike: by the term-generating round limit
+/// when its new terms are of bounded length, and by the term-arena ceiling
+/// ([`MAX_TERM_ARENA_BYTES`]) when every term is longer than the last.
 ///
-/// A larger default would trade that refusal time and that memory for reach. Reach is the
-/// caller's to buy: a program that genuinely needs more work — the NON-linear transitive
-/// closure of a thousand-node chain, `connected(x, z) :- connected(x, y), connected(y,
-/// z)`, which enumerates more than 67 million candidates — completes when the caller raises
-/// the limit ([`EvalOptions::with_max_join_steps`]). The LINEAR closure of the same chain
-/// fits the default.
+/// Reach is the caller's to buy: a program that genuinely needs more work — the
+/// NON-linear transitive closure of a thousand-node chain, `connected(x, z) :-
+/// connected(x, y), connected(y, z)`, which enumerates more than 67 million candidates —
+/// completes when the caller raises the limit ([`EvalOptions::with_max_join_steps`]).
+/// The LINEAR closure of the same chain fits the default.
 pub const NATIVE_DEFAULT_MAX_JOIN_STEPS: u64 = 1 << 20;
 
 /// The stored-fact limit in force when the caller states none

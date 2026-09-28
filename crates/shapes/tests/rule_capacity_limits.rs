@@ -245,3 +245,110 @@ fn a_divergent_rule_set_is_refused_by_a_term_limit_with_the_capacity_limits_rais
              "CONSTRUCT { ?s ex:n ?m } WHERE { ?s ex:n ?n FILTER (?n < 1000) BIND (?n + 1 AS ?m) }" ."#;
     assert_eq!(shacl(&holder("ex:a ex:n 0 ."), bounded, &raised), Ok(1000));
 }
+
+/// A SHAPE rule (executed once per focus node) that mints one new focus node every
+/// iteration: each `ex:C` counts one past its `ex:n` and names the next counter by that
+/// number. `{bound}` is spliced into the `WHERE` clause.
+fn per_focus_counter(bound: &str) -> String {
+    format!(
+        r#"ex:Counter a sh:NodeShape ; sh:targetClass ex:C ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT {{ ?next a ex:C ; ex:n ?m . $this ex:next ?next . }}
+WHERE {{ $this ex:n ?n . {bound} BIND (?n + 1 AS ?m)
+        BIND (IRI(CONCAT("http://example.org/ns#c", STR(?m))) AS ?next) }}""" ] ."#
+    )
+}
+
+/// The per-focus divergence the join-step limit used to stop: a shape rule minting one
+/// new focus node per iteration. It is executed only for the focus node each iteration
+/// adds, so its work per iteration stays flat, and at the default limits — and with the
+/// join-step limit raised 256-fold out of the way — it is refused by the TERM-GENERATING
+/// ROUND limit after 16,384 rounds, never by the join-step limit. Its neighbour bounded
+/// at 1,000 counters completes under the defaults.
+#[test]
+fn a_divergent_shape_rule_is_refused_by_the_round_limit_not_the_join_step_limit() {
+    let data = holder("ex:c1 a ex:C ; ex:n 1 .");
+    let divergent = per_focus_counter("");
+    for options in [
+        RuleOptions::default(),
+        RuleOptions::default().with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS * 256),
+    ] {
+        let refused = shacl(&data, &divergent, &options).expect_err("never stops");
+        assert!(
+            refused.starts_with(
+                "SHACL rules did not complete: the rules exceeded the term-generating round \
+                 limit: 16385 rounds inferred a term the evaluation graph did not hold, past \
+                 the limit of 16384 (the default)"
+            ),
+            "{refused}"
+        );
+        assert!(!refused.contains("join-step"), "{refused}");
+    }
+    let bounded = per_focus_counter("FILTER (?n < 1000)");
+    assert_eq!(
+        shacl(&data, &bounded, &RuleOptions::default()),
+        Ok(3 * 999),
+        "the bounded neighbour completes: 999 new counters, each typed, numbered and linked"
+    );
+}
+
+/// The corpus's per-focus divergence, whose minted IRI grows one character every
+/// iteration: its term surfaces grow quadratically, so at the default limits the
+/// evaluation's fixed term-arena ceiling (16 MiB) is what it passes first — after about
+/// 5,800 iterations, fewer than the 16,384 the round limit permits — and it is refused
+/// by that ceiling, never by the join-step limit, with the join-step limit at its default
+/// and raised out of the way. A caller's round limit below that point refuses it by the
+/// round limit, and its neighbour bounded by IRI length completes.
+#[test]
+fn a_shape_rule_minting_ever_longer_iris_is_refused_by_a_term_ceiling_not_the_join_step_limit() {
+    let fixture =
+        include_str!("../../../vectors/shacl/af/rules/err-diverging-fresh-term/input.ttl");
+    let load = |ttl: &str| -> (purrdf_shapes::shapes::Shapes, ShaclData) {
+        let shapes = parse_shapes(ttl, None).expect("shapes parse");
+        let dataset = parse_turtle_to_dataset(ttl, None).expect("data parses");
+        let projected = engine::project_dataset(dataset.as_ref()).expect("projects");
+        (
+            shapes,
+            ShaclData::new(Arc::clone(&projected), projected, None),
+        )
+    };
+    let (shapes, data) = load(fixture);
+    let run = |options: &RuleOptions| {
+        infer(&data, &shapes, options).map(|inference| inference.inferred().len())
+    };
+    for options in [
+        RuleOptions::default(),
+        RuleOptions::default().with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS * 256),
+    ] {
+        assert_eq!(
+            run(&options),
+            Err(
+                "SHACL rules did not complete: evaluation exceeded the fixed term arena bytes \
+                 ceiling: 16782539 observed, 16777216 permitted"
+                    .to_owned()
+            )
+        );
+    }
+    let rounds = run(&RuleOptions::default().with_max_term_generating_rounds(2_000))
+        .expect_err("never stops");
+    assert!(
+        rounds.starts_with(
+            "SHACL rules did not complete: the rules exceeded the term-generating round limit: \
+             2001 rounds"
+        ),
+        "{rounds}"
+    );
+    let bounded = fixture.replace(
+        "WHERE { $this a ex:Counter .",
+        "WHERE { $this a ex:Counter . FILTER (STRLEN(STR($this)) < 1000)",
+    );
+    assert_ne!(bounded, fixture, "the bound is spliced in");
+    let (shapes, data) = load(&bounded);
+    let inferred = infer(&data, &shapes, &RuleOptions::default())
+        .expect("the bounded neighbour completes")
+        .inferred()
+        .len();
+    // `http://example.org/ns#c0` is 24 characters; a counter is minted for every length
+    // from 24 up to 999 characters, each with its type and its link.
+    assert_eq!(inferred, 2 * (1000 - 24));
+}

@@ -91,18 +91,47 @@ pub struct ShaclViewStats {
 #[derive(Debug)]
 struct Dense<D: DatasetView> {
     source: Arc<D>,
-    ids: Box<[D::Id]>,
-    local_ids: FastMap<D::Id, TermId>,
+    mapping: Mapping<D::Id>,
     auxiliary_bytes: usize,
 }
 
+/// How a [`Dense`] adapter numbers its source's terms: local handle `i` is the `i`-th
+/// term the source lists.
+#[derive(Debug)]
+enum Mapping<I> {
+    /// Both directions tabled: the general case.
+    Table {
+        /// Local handle → source id.
+        ids: Box<[I]>,
+        /// Source id → local handle.
+        local_ids: FastMap<I, TermId>,
+    },
+    /// A mutation snapshot, whose source lists its base's `base` terms first, as the
+    /// base's own dense ids, and then the terms it adds: the base half is numbered by
+    /// arithmetic and only the added half is tabled, so building the adapter costs time
+    /// in the size of the delta rather than of the base.
+    Layered {
+        /// The base's term count.
+        base: usize,
+        /// Local handle `base + i` → the `i`-th added term.
+        added: Box<[I]>,
+        /// Added term → local handle.
+        added_local: FastMap<I, TermId>,
+        /// A source id's base index, or `None` for an added term.
+        lower: fn(I) -> Option<usize>,
+        /// The source id of base index `i`.
+        lift: fn(usize) -> I,
+    },
+}
+
+/// A local handle from a position the admission check bounded.
+fn local_handle(index: usize) -> TermId {
+    TermId::from_index(u32::try_from(index).expect("admitted mapping fits"))
+}
+
 impl<D: DatasetView> Dense<D> {
-    fn new(
-        source: Arc<D>,
-        ids: impl FnOnce(&D) -> Box<[D::Id]>,
-        limits: ViewLimits,
-    ) -> Result<Self, String> {
-        let count = source.term_count();
+    /// The retention charge of a `count`-term adapter, refused past `limits`.
+    fn admit(count: usize, limits: ViewLimits) -> Result<usize, String> {
         let auxiliary_bytes = count
             .checked_mul(size_of::<D::Id>() * 3 + size_of::<TermId>() * 2 + 16)
             .ok_or("SHACL term mapping size overflow")?;
@@ -112,31 +141,96 @@ impl<D: DatasetView> Dense<D> {
         {
             return Err("SHACL view exceeds term or auxiliary retention limit".to_owned());
         }
+        Ok(auxiliary_bytes)
+    }
+
+    fn new(
+        source: Arc<D>,
+        ids: impl FnOnce(&D) -> Box<[D::Id]>,
+        limits: ViewLimits,
+    ) -> Result<Self, String> {
+        let auxiliary_bytes = Self::admit(source.term_count(), limits)?;
         let ids = ids(&source);
         let local_ids = ids
             .iter()
             .copied()
             .enumerate()
-            .map(|(index, id)| {
-                (
-                    id,
-                    TermId::from_index(u32::try_from(index).expect("admitted mapping fits")),
-                )
-            })
+            .map(|(index, id)| (id, local_handle(index)))
             .collect();
         Ok(Self {
             source,
-            ids,
-            local_ids,
+            mapping: Mapping::Table { ids, local_ids },
             auxiliary_bytes,
         })
     }
 
+    /// An adapter numbering the base half of a layered source arithmetically (see
+    /// [`Mapping::Layered`]).
+    fn layered(
+        source: Arc<D>,
+        base: usize,
+        added: Box<[D::Id]>,
+        lower: fn(D::Id) -> Option<usize>,
+        lift: fn(usize) -> D::Id,
+        limits: ViewLimits,
+    ) -> Result<Self, String> {
+        let auxiliary_bytes = Self::admit(source.term_count(), limits)?;
+        let added_local = added
+            .iter()
+            .copied()
+            .enumerate()
+            .map(|(index, id)| (id, local_handle(base + index)))
+            .collect();
+        Ok(Self {
+            source,
+            mapping: Mapping::Layered {
+                base,
+                added,
+                added_local,
+                lower,
+                lift,
+            },
+            auxiliary_bytes,
+        })
+    }
+
+    /// The local handle of a source id this adapter maps, or `None`.
+    fn local(&self, source: D::Id) -> Option<TermId> {
+        match &self.mapping {
+            Mapping::Table { local_ids, .. } => local_ids.get(&source).copied(),
+            Mapping::Layered {
+                base,
+                added_local,
+                lower,
+                ..
+            } => match lower(source) {
+                Some(index) => (index < *base).then(|| local_handle(index)),
+                None => added_local.get(&source).copied(),
+            },
+        }
+    }
+
     fn id(&self, source: D::Id) -> TermId {
-        self.local_ids[&source]
+        self.local(source)
+            .expect("a source id this adapter's source returned is mapped")
     }
     fn source_id(&self, id: TermId) -> D::Id {
-        self.ids[id.index()]
+        match &self.mapping {
+            Mapping::Table { ids, .. } => ids[id.index()],
+            Mapping::Layered {
+                base, added, lift, ..
+            } => match id.index().checked_sub(*base) {
+                None => lift(id.index()),
+                Some(offset) => added[offset],
+            },
+        }
+    }
+    /// The number of terms mapped.
+    fn len(&self) -> usize {
+        match &self.mapping {
+            Mapping::Table { ids, .. } => ids.len(),
+            Mapping::Layered { base, added, .. } => base + added.len(),
+        }
     }
     fn graph(&self, graph: GraphMatch) -> GraphMatch<D::Id> {
         match graph {
@@ -251,7 +345,19 @@ impl ShaclDatasetView {
         projected: bool,
         limits: ViewLimits,
     ) -> Result<Self, String> {
-        let dense = Dense::new(source, |source| source.term_ids().collect(), limits)?;
+        let base = source.base().term_count();
+        let added = source.added_term_ids().collect();
+        let dense = Dense::layered(
+            source,
+            base,
+            added,
+            |id| match id {
+                ::purrdf::ir::DeltaViewId::Base(id) => Some(id.index()),
+                ::purrdf::ir::DeltaViewId::Delta(_) => None,
+            },
+            |index| ::purrdf::ir::DeltaViewId::Base(local_handle(index)),
+            limits,
+        )?;
         Ok(Self::new(Source::Delta(dense), projected))
     }
 
@@ -419,13 +525,12 @@ impl ShaclDatasetView {
     /// one this view maps.
     pub(crate) fn local_delta_id(&self, id: ::purrdf::ir::DeltaViewId) -> Option<TermId> {
         match &self.source {
-            Source::Delta(dense) => dense.local_ids.get(&id).copied(),
+            Source::Delta(dense) => dense.local(id),
             // The wrapped snapshot is source 0 of the composite (see
             // `Self::with_extra_terms`).
-            Source::Composite(dense) if self.wrapped_delta.is_some() => dense
-                .local_ids
-                .get(&dense.source.delta_source_id(0, id))
-                .copied(),
+            Source::Composite(dense) if self.wrapped_delta.is_some() => {
+                dense.local(dense.source.delta_source_id(0, id))
+            }
             Source::Native(_) | Source::Composite(_) => None,
         }
     }
@@ -435,8 +540,8 @@ impl ShaclDatasetView {
     pub fn stats(&self) -> ShaclViewStats {
         let (mapped_terms, auxiliary_bytes) = match &self.source {
             Source::Native(_) => (0, 0),
-            Source::Composite(dense) => (dense.ids.len(), dense.auxiliary_bytes),
-            Source::Delta(dense) => (dense.ids.len(), dense.auxiliary_bytes),
+            Source::Composite(dense) => (dense.len(), dense.auxiliary_bytes),
+            Source::Delta(dense) => (dense.len(), dense.auxiliary_bytes),
         };
         ShaclViewStats {
             mapped_terms,
@@ -813,8 +918,8 @@ impl DatasetView for ShaclDatasetView {
     fn term_count(&self) -> usize {
         match &self.source {
             Source::Native(source) => source.term_count(),
-            Source::Composite(dense) => dense.ids.len(),
-            Source::Delta(dense) => dense.ids.len(),
+            Source::Composite(dense) => dense.len(),
+            Source::Delta(dense) => dense.len(),
         }
     }
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds> + '_ {

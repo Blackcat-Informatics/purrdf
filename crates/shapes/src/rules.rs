@@ -62,10 +62,14 @@ use purrdf_sparql_algebra::{Query, SparqlParser};
 
 use crate::constraints::conforms_with_plan;
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
+use crate::data_view::ShaclRead as _;
 use crate::engine::resolve_focus_nodes;
 use crate::expression::{NodeExpr, RecursionGuard, eval_planned_node_expr};
-use crate::shapes::{Path, PropertyShape, Shape, Shapes};
+use crate::model::{rdf, sh};
+use crate::shapes::{Path, PropertyShape, Shape, Shapes, Target};
+use crate::srl::reads::{Anchor, ReadPattern};
 use crate::srl::{self, Inference};
+use crate::term::canonical_cmp;
 use crate::term::{NamedNode, Term, term_id_to_native};
 
 /// The fixed non-default [`::purrdf::BlankScope`] the shapes document's blanks
@@ -785,6 +789,16 @@ pub fn infer(
     shapes: &Shapes,
     options: &RuleOptions,
 ) -> Result<Inference, String> {
+    infer_with(data, shapes, options, srl::eval::Reexecution::Incremental)
+}
+
+/// [`infer`], re-executing iterating shape rules as `reexecution` says.
+pub(crate) fn infer_with(
+    data: &ShaclData,
+    shapes: &Shapes,
+    options: &RuleOptions,
+    reexecution: srl::eval::Reexecution,
+) -> Result<Inference, String> {
     // Declared SHACL-AF functions, and any caller-injected custom aggregates, are in
     // scope for node expressions and CONSTRUCT bodies for the whole run; the guards
     // restore the previous tables on drop.
@@ -792,7 +806,7 @@ pub fn infer(
         crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let rule_set = shacl_rule_set(shapes, options)?;
-    srl::evaluate(&rule_set, data, shapes, options).map_err(String::from)
+    srl::eval::evaluate_with(&rule_set, data, shapes, options, reexecution).map_err(String::from)
 }
 
 /// Execute the shapes graph's rules over a frozen [`RdfDataset`]: build the SHACL
@@ -968,11 +982,193 @@ fn rule_set_members(sets: &[RuleSetDeclaration], iri: &NamedNode) -> Result<Vec<
 
 // ── Producers: one execution of one SHACL rule ──────────────────────────────────
 
+/// Which of a shape rule's focus nodes one execution runs the rule for.
+///
+/// The SHACL execution runs a shape rule for every focus node, every iteration. Within
+/// one layer the evaluation graph only grows, and the rule's answer for one focus node
+/// is a function of that node, the rule's constants and the triples its read set
+/// ([`crate::srl::reads`]) matches — so a focus node already executed, over a graph that
+/// has gained no triple the rule reads for it since, would yield only triples the graph
+/// already holds. [`Self::Changed`] and [`Self::Incremental`] carry the record that lets
+/// the rules engine skip exactly those executions.
+pub(crate) enum FocusSelection<'m> {
+    /// Every focus node, with no record kept: a global or volatile rule, or the full
+    /// re-execution the incremental one is proven against.
+    Every,
+    /// Every focus node, replacing the record: the record is fresh, or a retraction
+    /// rebuilt the evaluation graph since it was written.
+    Changed(&'m mut FocusRecord),
+    /// The graph has only grown, by `gained`, since the record was written: execute the
+    /// focus nodes the record does not hold and those a gained triple the rule `reads`
+    /// is about, and add them to it. A gained triple the rule reads for every focus node
+    /// makes this [`Self::Changed`].
+    Incremental {
+        /// The record.
+        record: &'m mut FocusRecord,
+        /// The rule's read set.
+        reads: &'m [ReadPattern],
+        /// The triples the evaluation graph gained since the record was written.
+        gained: Vec<[Term; 3]>,
+    },
+}
+
+/// The focus nodes a shape rule was executed for since the graph last gained a triple
+/// the rule reads for them, one set per linked shape.
+///
+/// For a shape whose focus nodes [`discover`] can find from the gained triples alone,
+/// the set is exactly the shape's eligible focus nodes, so it answers for them without
+/// resolving the shape's targets again.
+#[derive(Debug, Default)]
+pub(crate) struct FocusRecord {
+    /// Per linked shape, in [`crate::srl::ir::ShaclProducer::shapes`] order.
+    executed: Vec<FastSet<Term>>,
+}
+
+/// Whether `term` is or nests a blank node.
+pub(crate) fn term_mentions_blank(term: &Term) -> bool {
+    match term {
+        Term::BlankNode(_) => true,
+        Term::Triple(inner) => {
+            term_mentions_blank(&inner.subject) || term_mentions_blank(&inner.object)
+        }
+        Term::NamedNode(_) | Term::Literal(_) => false,
+    }
+}
+
+/// Whether an IRI anchor admits `term`.
+fn anchor_admits(anchor: &Anchor, term: &Term) -> bool {
+    match anchor {
+        Anchor::Any | Anchor::Focus => true,
+        Anchor::Iri(iri) => matches!(term, Term::NamedNode(node) if node.as_str() == iri),
+    }
+}
+
+/// The focus nodes the `gained` triples change the answer for, or `None` when one of
+/// them changes it for every focus node — it matches a pattern with no focus position,
+/// or mentions a blank node, whose label the analysis does not compare.
+fn affected_focus_nodes(reads: &[ReadPattern], gained: &[[Term; 3]]) -> Option<FastSet<Term>> {
+    let mut affected = FastSet::default();
+    for triple in gained {
+        let [subject, predicate, object] = triple;
+        for pattern in reads {
+            let predicate_matches = pattern.predicate.as_ref().is_none_or(
+                |iri| matches!(predicate, Term::NamedNode(node) if node.as_str() == iri),
+            );
+            if !predicate_matches
+                || !anchor_admits(&pattern.subject, subject)
+                || !anchor_admits(&pattern.object, object)
+            {
+                continue;
+            }
+            if triple.iter().any(term_mentions_blank) {
+                return None;
+            }
+            let focus_subject = pattern.subject == Anchor::Focus;
+            let focus_object = pattern.object == Anchor::Focus;
+            if !focus_subject && !focus_object {
+                return None;
+            }
+            if focus_subject {
+                affected.insert(subject.clone());
+            }
+            if focus_object {
+                affected.insert(object.clone());
+            }
+        }
+    }
+    Some(affected)
+}
+
+/// The focus nodes `shape` gains from the `gained` triples, found from those triples
+/// alone — or `None` when they cannot be: the shape has a target other than
+/// `sh:targetClass`, an implicit class, `sh:targetSubjectsOf`, `sh:targetObjectsOf` and
+/// `sh:targetNode`, the rule has a condition, or a gained triple is an `rdfs:subClassOf`
+/// (which can make every instance of a class an instance of another) or an `sh:shape`
+/// (an explicit shape target).
+///
+/// Those targets only grow as the graph does, so the shape's focus nodes are its
+/// earlier ones plus the nodes a gained triple makes targets: the subject of a gained
+/// `rdf:type` that is now a SHACL instance of a target class, the subject (object) of a
+/// gained triple with a `sh:targetSubjectsOf` (`sh:targetObjectsOf`) predicate.
+fn discover(
+    data: &ShaclData,
+    rule: &Rule,
+    shape: &Shape,
+    gained: &[[Term; 3]],
+) -> Option<Vec<Term>> {
+    if !rule.conditions.is_empty() {
+        return None;
+    }
+    let mut classes: Vec<&str> = Vec::new();
+    for target in &shape.targets {
+        match target {
+            Target::Class(class) | Target::ImplicitClass(Term::NamedNode(class)) => {
+                classes.push(class.as_str());
+            }
+            Target::SubjectsOf(_) | Target::ObjectsOf(_) | Target::Node(_) => {}
+            _ => return None,
+        }
+    }
+    let is = |term: &Term, iri: &str| matches!(term, Term::NamedNode(node) if node.as_str() == iri);
+    let view = data.core_view();
+    let mut found = Vec::new();
+    for [subject, predicate, object] in gained {
+        if is(predicate, crate::model::rdfs::SUB_CLASS_OF) || is(predicate, sh::SHAPE) {
+            return None;
+        }
+        for target in &shape.targets {
+            match target {
+                Target::SubjectsOf(p) if is(predicate, p.as_str()) => found.push(subject.clone()),
+                Target::ObjectsOf(p) if is(predicate, p.as_str()) => found.push(object.clone()),
+                _ => {}
+            }
+        }
+        if !classes.is_empty() && is(predicate, rdf::TYPE) {
+            let subject_id = crate::data::resolve_id(view, subject);
+            let instance = subject_id.is_some_and(|subject_id| {
+                classes.iter().any(|class| {
+                    view.term_id_by_iri(class)
+                        .is_some_and(|class_id| data.class_view().is_instance(subject_id, class_id))
+                })
+            });
+            if instance {
+                found.push(subject.clone());
+            }
+        }
+    }
+    Some(found)
+}
+
+impl FocusRecord {
+    /// The executed set of the `shape`-th linked shape.
+    fn slot(&mut self, shape: usize) -> &mut FastSet<Term> {
+        if self.executed.len() <= shape {
+            self.executed.resize_with(shape + 1, FastSet::default);
+        }
+        &mut self.executed[shape]
+    }
+}
+
+/// The focus nodes of `shape` that conform to every condition of `rule`, in canonical
+/// order: the target nodes the rule is executed for.
+fn eligible_focus_nodes(data: &ShaclData, rule: &Rule, shape: &Shape) -> Result<Vec<Term>, String> {
+    let plan = RulePlan::of(data, shape, &rule.conditions);
+    let mut focus_nodes = Vec::new();
+    for focus in plan.focus_nodes(data)? {
+        if conditions_hold(data, &focus, &plan)? {
+            focus_nodes.push(focus);
+        }
+    }
+    Ok(focus_nodes)
+}
+
 /// Execute one SHACL rule over the evaluation graph `data` and return the triples it
 /// infers, well-formed ones only.
 ///
 /// `mint` numbers this execution: every blank node the execution mints carries it, so no
-/// two executions ever mint the same blank node.
+/// two executions ever mint the same blank node. A SPARQL shape rule draws one number per
+/// ELIGIBLE focus node whether or not `selection` executes it, so the labels every
+/// execution mints are the same under every selection.
 ///
 /// # Errors
 ///
@@ -983,6 +1179,7 @@ pub(crate) fn execute_rule(
     shapes: &[&Shape],
     shapes_graph_iri: Option<&str>,
     mint: &mut dyn FnMut() -> u64,
+    mut selection: FocusSelection<'_>,
 ) -> Result<Vec<[Term; 3]>, String> {
     let mut out: Vec<[Term; 3]> = Vec::new();
     if shapes.is_empty() {
@@ -1017,20 +1214,90 @@ pub(crate) fn execute_rule(
         }
         return Ok(out);
     }
-    for shape in shapes {
-        let plan = RulePlan::of(data, shape, &rule.conditions);
-        let mut focus_nodes = Vec::new();
-        for focus in plan.focus_nodes(data)? {
-            if conditions_hold(data, &focus, &plan)? {
-                focus_nodes.push(focus);
-            }
+    let affected = match &selection {
+        FocusSelection::Incremental { reads, gained, .. } => affected_focus_nodes(reads, gained),
+        FocusSelection::Every | FocusSelection::Changed(_) => Some(FastSet::default()),
+    };
+    // A gained triple the rule reads for every focus node re-executes every one.
+    let affected = match (affected, selection) {
+        (Some(affected), kept) => {
+            selection = kept;
+            affected
         }
+        (None, FocusSelection::Incremental { record, .. } | FocusSelection::Changed(record)) => {
+            selection = FocusSelection::Changed(record);
+            FastSet::default()
+        }
+        (None, FocusSelection::Every) => {
+            selection = FocusSelection::Every;
+            FastSet::default()
+        }
+    };
+    for (index, shape) in shapes.iter().enumerate() {
+        let (focus_nodes, run, eligible) = match &mut selection {
+            FocusSelection::Every => {
+                let focus_nodes = eligible_focus_nodes(data, rule, shape)?;
+                let run = vec![true; focus_nodes.len()];
+                let eligible = focus_nodes.len();
+                (focus_nodes, run, eligible)
+            }
+            FocusSelection::Changed(record) => {
+                let focus_nodes = eligible_focus_nodes(data, rule, shape)?;
+                *record.slot(index) = focus_nodes.iter().cloned().collect();
+                let run = vec![true; focus_nodes.len()];
+                let eligible = focus_nodes.len();
+                (focus_nodes, run, eligible)
+            }
+            FocusSelection::Incremental { record, gained, .. } => {
+                let executed = record.slot(index);
+                match discover(data, rule, shape, gained) {
+                    Some(found) => {
+                        let mut focus_nodes: Vec<Term> = found
+                            .into_iter()
+                            .filter(|focus| executed.insert(focus.clone()))
+                            .collect();
+                        focus_nodes.extend(
+                            affected
+                                .iter()
+                                .filter(|focus| executed.contains(*focus))
+                                .cloned(),
+                        );
+                        focus_nodes.sort_by(canonical_cmp);
+                        focus_nodes.dedup();
+                        let run = vec![true; focus_nodes.len()];
+                        (focus_nodes, run, executed.len())
+                    }
+                    None => {
+                        let focus_nodes = eligible_focus_nodes(data, rule, shape)?;
+                        let run: Vec<bool> = focus_nodes
+                            .iter()
+                            .map(|focus| !executed.contains(focus) || affected.contains(focus))
+                            .collect();
+                        // After this execution every eligible focus node is up to date, and
+                        // only those: one no longer eligible (a condition that stopped
+                        // holding) is dropped, so it is executed afresh if it holds again
+                        // over a graph that has gained, meanwhile, what the rule reads.
+                        *executed = focus_nodes.iter().cloned().collect();
+                        let eligible = focus_nodes.len();
+                        (focus_nodes, run, eligible)
+                    }
+                }
+            }
+        };
         match &rule.body {
             RuleBody::Triple {
                 subject,
                 predicate,
                 object,
-            } => triple_rule_execution(data, [subject, predicate, object], &focus_nodes, &mut out)?,
+            } => {
+                let executed: Vec<Term> = focus_nodes
+                    .iter()
+                    .zip(&run)
+                    .filter(|(_, run)| **run)
+                    .map(|(focus, _)| focus.clone())
+                    .collect();
+                triple_rule_execution(data, [subject, predicate, object], &executed, &mut out)?;
+            }
             RuleBody::Sparql {
                 construct,
                 parameters,
@@ -1039,7 +1306,7 @@ pub(crate) fn execute_rule(
                 &SparqlExecution {
                     construct,
                     parameters,
-                    focus_nodes: Some(&focus_nodes),
+                    focus_nodes: Some((&focus_nodes, &run, eligible)),
                     shape: Some(&shape.id),
                     shapes_graph_iri,
                 },
@@ -1143,8 +1410,11 @@ struct SparqlExecution<'q> {
     construct: &'q str,
     /// The template parameters' pre-bindings.
     parameters: &'q [(String, Term)],
-    /// The focus nodes of a shape rule; `None` for a global rule.
-    focus_nodes: Option<&'q [Term]>,
+    /// For a shape rule: focus nodes, each with whether this execution runs the query
+    /// for it, and the number of focus nodes the shape has — one execution number is
+    /// drawn for each of those, executed or not (see [`execute_rule`]). `None` for a
+    /// global rule.
+    focus_nodes: Option<(&'q [Term], &'q [bool], usize)>,
     /// The linking shape of a shape rule.
     shape: Option<&'q Term>,
     /// The shapes graph IRI, pre-bound as `$shapesGraph` for a shape rule.
@@ -1160,7 +1430,7 @@ fn sparql_rule_execution(
     out: &mut Vec<[Term; 3]>,
 ) -> Result<(), String> {
     match run.focus_nodes {
-        Some(focus_nodes) => {
+        Some((focus_nodes, selected, eligible)) => {
             // SHACL-SPARQL pre-binds `$this`, `$shapesGraph` and `$currentShape`, and a
             // template instance its parameters. Everything but `$this` is a constant of
             // the RULE, so the query is PREPARED once for the whole focus set and only
@@ -1184,8 +1454,12 @@ fn sparql_rule_execution(
                     for (slot, (_, value)) in (first..).zip(run.parameters) {
                         execution.bind(slot, value.to_term_value())?;
                     }
-                    for focus in focus_nodes {
-                        let tag = mint_tag(Some(focus), mint());
+                    for (focus, selected) in focus_nodes.iter().zip(selected) {
+                        let execution_number = mint();
+                        if !*selected {
+                            continue;
+                        }
+                        let tag = mint_tag(Some(focus), execution_number);
                         execution.bind(THIS_SLOT, focus.to_term_value())?;
                         let graph = crate::sparql::run_bound_construct_with_shacl_prebinding_view(
                             data.sparql_view(),
@@ -1193,6 +1467,9 @@ fn sparql_rule_execution(
                             Some(tag.as_str()),
                         )?;
                         read_constructed(&graph, out);
+                    }
+                    for _ in focus_nodes.len()..eligible {
+                        mint();
                     }
                     Ok(())
                 },
@@ -1525,7 +1802,7 @@ pub(crate) fn base_triples(base: &RdfDataset) -> Vec<[Term; 3]> {
 pub(crate) fn reifier_subjects<'t>(facts: impl Iterator<Item = &'t [Term; 3]>) -> FastSet<Term> {
     facts
         .filter(|[_, p, o]| {
-            matches!(p, Term::NamedNode(p) if p.as_str() == crate::model::rdf::REIFIES)
+            matches!(p, Term::NamedNode(p) if p.as_str() == rdf::REIFIES)
                 && matches!(o, Term::Triple(_))
         })
         .map(|[r, _, _]| r.clone())
@@ -1552,7 +1829,7 @@ pub(crate) fn push_fact(
             "internal error: inferred triple has non-IRI predicate {p}"
         ));
     };
-    if predicate.as_str() == crate::model::rdf::REIFIES
+    if predicate.as_str() == rdf::REIFIES
         && let Term::Triple(statement) = o
     {
         builder.push_owned_reifier(&::purrdf::RdfReifier::new(
@@ -2361,8 +2638,9 @@ mod tests {
         assert!(has_iri(&out, "alice", "adult", "yes"));
         assert_eq!(
             crate::class_membership::thread_index_builds(),
-            2,
-            "the deriving round and terminating round each build one shared index"
+            1,
+            "the deriving round builds one shared index; the terminating round gained no \
+             triple the rule reads and no focus node, so it executes nothing and builds none"
         );
     }
 

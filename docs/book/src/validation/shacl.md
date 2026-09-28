@@ -1098,11 +1098,12 @@ which bounds its run exactly as the rules run does:
   `ex:q`, or the transitive closure of a thousand-node chain (500,500 triples), completes
   natively.
 - The **join-step limit** bounds the candidate solutions the rule bodies
-  enumerate. The default is 1,048,576 on every host. It is the limit that
-  refuses a rule minting a new term every round promptly, and it bounds a rule
-  body that enumerates far more candidates than it infers triples. A rule set
-  that needs more work — the non-linear transitive closure of a thousand-node
-  chain enumerates over 67 million candidates — states a larger limit.
+  enumerate. The default is 1,048,576 on every host. It bounds a rule body that
+  enumerates far more candidates than it infers triples: a body's candidates
+  for one round are held before the limit is checked, so a much larger default
+  would let a Cartesian body exhaust memory first. A rule set that needs more
+  work — the non-linear transitive closure of a thousand-node chain enumerates
+  over 67 million candidates — states a larger limit.
 
 A run past any limit is refused. The error names the limit, the numbers, the
 knob that raises it and, for the two term limits, the rules that inferred a new
@@ -1120,6 +1121,24 @@ rule set that keeps inferring new
 terms would stop is undecidable, so the error never calls it divergent. A
 stated limit is exact, and a limit can only refuse: a run it admits infers
 exactly what it would under any larger limit.
+
+A shape rule (a rule linked to a shape, run once per focus node) is re-run each
+iteration only for the focus nodes whose answer can have changed: the new ones,
+and those a triple added in the previous iteration is about, as the rule's
+triple patterns and paths read it. A triple the rule reads a join step away
+from `$this` re-runs it for every focus node, and a rule whose answer is not
+repeatable — one that mints blank nodes, calls `RAND()`, `NOW()`, `UUID()`,
+`STRUUID()` or a function PurRDF does not read, or picks solutions with
+`LIMIT`, `OFFSET`, `SAMPLE`, `GROUP_CONCAT` or `FOLD` — runs for every focus
+node every iteration, as the specification reads.
+The graph the rules read is extended by what each iteration added rather than
+rebuilt. The inferred triples, their blank-node labels and their proofs are the
+same as running every focus node every iteration. What changes is the cost: a
+shape rule that mints a new focus node every iteration pays for one run per
+iteration, not one per focus node so far, so a rule that never stops is
+refused within a few seconds by a term limit — the round limit when its new
+terms stay short, the fixed 16 MiB term-arena ceiling when each is longer than
+the last — and never by the join-step limit.
 
 A global SPARQL rule whose query is a conjunctive pattern (triple patterns,
 `FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or graph

@@ -19,6 +19,11 @@
 //!   closure first; 1,000 edges (500,500 triples) is past the `wasm32` default
 //!   stored-fact limit and inside the native one.
 //!
+//! * `shacl_per_focus/<n>` — the same linear closure as a SHACL SHAPE rule, executed once
+//!   per focus node (every node with a `:link`): each iteration re-executes it only for
+//!   the focus nodes whose `:connected` triples the iteration before extended, not for
+//!   every focus node.
+//!
 //! Report-only, `cargo bench -p purrdf-shapes --bench srl_closure` (the `make bench`
 //! lane) — excluded from `make check`. No timing is asserted.
 
@@ -27,6 +32,9 @@ use std::sync::Arc;
 
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf::RdfDataset;
+use purrdf_shapes::data::ShaclData;
+use purrdf_shapes::engine::{self, parse_shapes};
+use purrdf_shapes::rules::{RuleOptions, infer};
 use purrdf_shapes::srl::{self, InferOptions};
 
 const RULES: &str = "PREFIX : <https://example.org/srl-bench/>
@@ -95,5 +103,37 @@ fn bench_linear(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench, bench_linear);
+const PER_FOCUS_RULES: &str = r#"@prefix : <https://example.org/srl-bench/> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+:Closure a sh:NodeShape ; sh:targetSubjectsOf :link ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct
+    "PREFIX : <https://example.org/srl-bench/> CONSTRUCT { $this :connected ?y } WHERE { $this :link ?y }" ] ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct
+    "PREFIX : <https://example.org/srl-bench/> CONSTRUCT { $this :connected ?z } WHERE { $this :connected ?y . ?y :link ?z }" ] .
+"#;
+
+/// Chain lengths for the per-focus closure.
+const PER_FOCUS_CHAINS: &[usize] = &[64, 256];
+
+fn bench_per_focus(c: &mut Criterion) {
+    let shapes = parse_shapes(PER_FOCUS_RULES, None).expect("the shapes parse");
+    let mut group = c.benchmark_group("srl_closure/shacl_per_focus");
+    group.sample_size(10);
+    for &len in PER_FOCUS_CHAINS {
+        let projected = engine::project_dataset(chain(len).as_ref()).expect("projects");
+        let data = ShaclData::new(Arc::clone(&projected), projected, None);
+        group.throughput(Throughput::Elements((len * (len + 1) / 2) as u64));
+        group.bench_with_input(BenchmarkId::from_parameter(len), &data, |b, data| {
+            b.iter(|| {
+                let inference = infer(black_box(data), &shapes, &RuleOptions::default())
+                    .expect("evaluates under the default limits");
+                assert_eq!(inference.inferred().len(), len * (len + 1) / 2);
+                inference
+            });
+        });
+    }
+    group.finish();
+}
+
+criterion_group!(benches, bench, bench_linear, bench_per_focus);
 criterion_main!(benches);
