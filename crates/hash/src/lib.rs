@@ -33,8 +33,8 @@
 //! the build enables it.
 //!
 //! The table hasher [`fixed::FixedHasher`] is the exception to run-time
-//! selection. It hashes byte slices longer than 16 bytes with AES rounds
-//! when the *build's target* enables AES (x86-64 or little-endian AArch64).
+//! selection. It uses an AES accumulator when the *build's target* enables
+//! AES (x86-64 or little-endian AArch64).
 //! Otherwise it uses folded multiplies, on wasm32 and 32-bit targets too.
 //! Each build therefore has exactly one table-hash function, and that
 //! function is not the same on every build. A table hash is never persisted.

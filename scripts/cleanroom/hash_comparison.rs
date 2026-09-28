@@ -58,70 +58,127 @@ fn pair<A: FnMut() -> u64, B: FnMut() -> u64>(
         );
     }
 }
+// Select the protocol once, outside the key loop. Dispatch work must be
+// identical for the old and new hashers; at sub-nanosecond key costs even
+// one extra branch per key can dominate the function being measured.
 fn keys<H: Hasher + Default>(
     kind: &str,
     strings: &[String],
     bytes: &[Vec<u8>],
     native: bool,
 ) -> u64 {
-    let mut sum = 0u64;
-    for i in 0..N {
-        let n = black_box((i as u64).wrapping_mul(0x9e3779b97f4a7c15));
-        let text = black_box(strings[i].as_str());
-        if kind == "iri" && native {
-            sum ^= black_box(FixedHasher::hash_terminal(0, text.as_bytes()));
-            continue;
-        }
-        if native && ["blank", "literal", "language"].contains(&kind) {
-            let mut h = FixedHasher::default();
-            if kind == "blank" {
-                h.write_u64(1u64 << 32);
-                h.write(text.as_bytes());
-            } else {
-                let metadata = 2u128 | (u128::from(kind == "language") << 2);
-                h.write_u128(17 | (metadata << 64));
-                h.write(text.as_bytes());
-                if kind == "language" {
-                    h.write(b"en");
-                }
+    macro_rules! run {
+        ($hash:expr) => {{
+            let mut sum = 0u64;
+            for i in 0..N {
+                sum ^= black_box(($hash)(i));
             }
-            sum ^= black_box(h.finish());
-            continue;
-        }
-        let mut h = H::default();
-        match kind {
-            "u32" => h.write_u32(n as u32),
-            "u64" => h.write_u64(n),
-            "triple" => {
-                3u8.hash(&mut h);
-                (n as u32).hash(&mut h);
-                ((n >> 16) as u32).hash(&mut h);
-                ((n >> 32) as u32).hash(&mut h);
-            }
-            "blank" => {
-                1u8.hash(&mut h);
-                text.hash(&mut h);
-                0u64.hash(&mut h);
-            }
-            "literal" | "language" => {
-                2u8.hash(&mut h);
-                text.hash(&mut h);
-                17u32.hash(&mut h);
-                let lang = if kind == "language" { Some("en") } else { None };
-                lang.hash(&mut h);
-                Option::<u8>::None.hash(&mut h);
-            }
-            "iri" => {
-                0u8.hash(&mut h);
-                text.hash(&mut h);
-            }
-            "str" => text.hash(&mut h),
-            "bytes" => h.write(black_box(&bytes[i])),
-            _ => unreachable!(),
-        }
-        sum ^= black_box(h.finish());
+            sum
+        }};
     }
-    sum
+    macro_rules! feed {
+        ($body:expr) => {{
+            run!(|i: usize| {
+                let mut h = H::default();
+                ($body)(&mut h, i);
+                h.finish()
+            })
+        }};
+    }
+    match (kind, native) {
+        ("u32", _) => feed!(|h: &mut H, i: usize| h
+            .write_u32(black_box((i as u64).wrapping_mul(0x9e3779b97f4a7c15)) as u32)),
+        ("u64", _) => feed!(|h: &mut H, i: usize| h
+            .write_u64(black_box((i as u64).wrapping_mul(0x9e3779b97f4a7c15)))),
+        ("triple", true) => feed!(|h: &mut H, i: usize| {
+            let n = black_box((i as u64).wrapping_mul(0x9e3779b97f4a7c15));
+            h.write_u128(
+                u128::from(n as u32)
+                    | (u128::from((n >> 16) as u32) << 32)
+                    | (u128::from((n >> 32) as u32) << 64)
+                    | (3 << 96),
+            );
+        }),
+        ("triple", false) => feed!(|h: &mut H, i: usize| {
+            let n = black_box((i as u64).wrapping_mul(0x9e3779b97f4a7c15));
+            3u8.hash(h);
+            (n as u32).hash(h);
+            ((n >> 16) as u32).hash(h);
+            ((n >> 32) as u32).hash(h);
+        }),
+        ("iri", true) => {
+            run!(|i: usize| FixedHasher::hash_terminal(0, black_box(strings[i].as_bytes())))
+        }
+        ("blank", true) => feed!(|h: &mut H, i: usize| {
+            let text = black_box(strings[i].as_bytes());
+            if text.len() <= 16 {
+                let packed = purrdf_hash::fixed::pack_short_bytes(text);
+                let metadata = (1u64 << 32) | ((text.len() as u64) << 40);
+                if text.len() <= 8 {
+                    h.write_u128(packed | (u128::from(metadata) << 64));
+                } else {
+                    h.write_u64(metadata);
+                    h.write_u128(packed);
+                }
+            } else {
+                h.write_u64(1u64 << 32);
+                h.write(text);
+            }
+        }),
+        ("literal" | "language", true) => {
+            let language = kind == "language";
+            feed!(|h: &mut H, i: usize| {
+                let metadata = 2u128 | (u128::from(language) << 2);
+                let text = black_box(strings[i].as_bytes());
+                let lang: &[u8] = if language { b"en" } else { b"" };
+                if text.len() <= 16 && lang.len() <= 16 - text.len() {
+                    let first = purrdf_hash::fixed::pack_short_bytes(text);
+                    let packed = if lang.is_empty() {
+                        first
+                    } else {
+                        first | (purrdf_hash::fixed::pack_short_bytes(lang) << (8 * text.len()))
+                    };
+                    let metadata =
+                        metadata | ((text.len() as u128) << 8) | ((lang.len() as u128) << 13);
+                    if text.len() + lang.len() <= 8 {
+                        h.write_u128(packed | ((17 | (metadata << 32)) << 64));
+                    } else {
+                        h.write_u128(17 | (metadata << 64));
+                        h.write_u128(packed);
+                    }
+                } else {
+                    h.write_u128(17 | (metadata << 64));
+                    h.write(text);
+                    if language {
+                        h.write(lang);
+                    }
+                }
+            })
+        }
+        ("blank", false) => feed!(|h: &mut H, i: usize| {
+            1u8.hash(h);
+            black_box(strings[i].as_str()).hash(h);
+            0u64.hash(h);
+        }),
+        ("literal" | "language", false) => {
+            let language = kind == "language";
+            feed!(|h: &mut H, i: usize| {
+                2u8.hash(h);
+                black_box(strings[i].as_str()).hash(h);
+                17u32.hash(h);
+                let lang = if language { Some("en") } else { None };
+                lang.hash(h);
+                Option::<u8>::None.hash(h);
+            })
+        }
+        ("iri", false) => feed!(|h: &mut H, i: usize| {
+            0u8.hash(h);
+            black_box(strings[i].as_str()).hash(h);
+        }),
+        ("str", _) => feed!(|h: &mut H, i: usize| black_box(strings[i].as_str()).hash(h)),
+        ("bytes", _) => feed!(|h: &mut H, i: usize| h.write(black_box(&bytes[i]))),
+        _ => panic!("unknown table-key protocol: {kind}"),
+    }
 }
 fn maps<H: Hasher + Default>(strings: &[String], lookup: bool) -> u64 {
     let mut map: HashMap<&str, u64, BuildHasherDefault<H>> =
@@ -159,9 +216,12 @@ fn main() {
             ("u32", 4usize),
             ("u64", 8),
             ("triple", 12),
+            ("blank", 4),
             ("blank", 16),
+            ("literal", 2),
             ("literal", 16),
             ("literal", 256),
+            ("language", 8),
             ("language", 32),
             ("str", 26),
             ("str", 256),

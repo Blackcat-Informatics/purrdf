@@ -178,9 +178,22 @@ across neighbouring batches, avoiding repeated reductions with mostly idle
 lanes. The bounded CV workspace is 8 KiB; the narrower paths retain their
 64-chunk workspace.
 
+A complete four-chunk AVX-512 batch uses a different register basis: each
+512-bit state register holds four quarter-round lanes for each of four chunks.
+The message rows are `[0,2,4,6]`, `[1,3,5,7]`, `[14,8,10,12]` and
+`[15,9,11,13]` within each chunk. Conjugating the specification's permutation
+into this basis gives seven vector permutation operations between rounds.
+The `b` row finishes last in each quarter round. Leaving it stationary at the
+column/diagonal boundary lets the other three row shuffles overlap its final
+operations. Counters and block lengths are built once; only the START/END lanes
+change between blocks. A pair of parent nodes uses the corresponding 256-bit
+layout. A complete-subtree entry keeps this path separate from partial-input
+padding, avoiding a 4 KiB stack frame observed in the combined caller's assembly.
+These are scheduling and storage changes; all seven specified rounds remain.
+
 The narrower kernels share their ARX round schedule, length flags and
-chunk handling. AVX-512VL reuses the four-lane source for messages through
-4 KiB, avoiding a padded 16 KiB batch, and for four-parent reductions. SSE2 and NEON use four independent chunk lanes; AVX2 uses
+chunk handling. AVX-512VL reuses the four-lane source for partial batches through
+4 KiB and for four-parent reductions. SSE2 and NEON use four independent chunk lanes; AVX2 uses
 eight; wasm SIMD uses four. Full batches read directly from caller memory,
 with uniform block lengths and flags: they avoid both a padded copy and per-lane tail masks. Partial
 batches retain padding and masks to preserve exact final-chunk semantics.
@@ -337,19 +350,40 @@ map.insert("http://example.org/p", 1);
 assert_eq!(FixedState::new().hash_one(7u32), FixedState::new().hash_one(7u32));
 ```
 
-| Input | Function |
-|---|---|
-| integers, and byte slices of 0–16 bytes | folded multiplies (the low and high halves of a 128-bit product XOR-ed), every build |
-| byte slices of 17–32 bytes | two AES lanes with two rounds each when the build's target enables AES (x86-64, little-endian AArch64); two folded products plus two rotated words otherwise |
-| byte slices over 32 bytes | four AES-round lanes on AES builds; four folded-multiply lanes otherwise |
+| Input | Portable build | AES build |
+|---|---|---|
+| Integers | Folded multiply into a 64-bit state | One AES round into a 128-bit state |
+| 0–16 byte slices | Packed words, two folds and a length term | Packed words and length domain, one AES absorption |
+| 17–32 byte slices | Two folds plus rotated tail words | Sequential first/last 16-byte absorption |
+| Longer slices | Four independent multiply lanes | Four independent AES lanes, then absorption |
+| Streaming finalization | One folded multiply | Two AES rounds, then low 64 bits |
 
-The choice between the two is made at compile time, never at run time. On
-32-bit targets (i686, wasm32) the 128-bit product is built from 32-bit
-multiplies with identical output. The AES function was added because the
-bench (`benches/hasher.rs`) measured it faster on every length class where
-the two functions differ. Both functions are pinned by frozen self-vectors,
-which are replayed natively, on i686 and on wasm32. The test suite also
-measures avalanche, collisions and χ² uniformity.
+For an AES integer update, `S = R(S XOR block, K)`. Finalization is
+`low64(R(R(S, F0), F1))`, where `R` is the hardware AES encryption round.
+Thus the final integer passes through three rounds before truncation. Two
+rounds gave good average avalanche but failed structured high-bit collision
+tests. The 17–32-byte path absorbs the first and last blocks sequentially,
+mixing the byte length into the state before them. Merging one-round lanes
+by addition also failed sparse-key tests and is not used. Longer independent
+lanes retain their extra diffusion before merging. The terminal IRI operation
+uses the sequential AES path at 17–32 bytes and its separately tested folded
+finalizer at other lengths.
+
+RDF blank nodes, short literals and embedded triples pack their typed fields
+into one or two integer blocks. The metadata includes lengths, scope or full
+64-bit datatype identity, language presence and text direction. Packed triple
+IDs retain all 64 bits on the global path. `pack_short_bytes` uses fixed-size
+loads and shifts; variable-length copies were measurably more expensive.
+Borrowed, stored, global and frozen lookups share the same protocol.
+
+AES selection is made at compile time. On 32-bit targets (i686, wasm32), the
+portable 128-bit product is built from 32-bit multiplies with identical output.
+Both functions are pinned by their own frozen self-vectors. The portable vectors
+are unchanged; the AES vectors record the accumulator law above. Avalanche,
+collision and χ² distribution requirements are the same for both paths.
+Hardware width and instruction availability do not establish throughput: compare
+the concrete caller protocols and complete workloads using the maintained
+comparison scripts described in `docs/design/purrdf-simd.md`.
 
 Because the function depends on the build, a table hash must never be
 persisted, sent over the wire or used as a content address. Use a digest

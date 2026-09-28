@@ -35,6 +35,11 @@ sample spread, not a confidence interval or a guarantee.
 
 ## Digests and table keys
 
+**The table-key rows below are historical and are not valid acceptance evidence.**
+Review of the harness found candidate-only protocol dispatch inside the per-key
+loop. The corrected harness selects both protocols outside that loop. The retained
+raw files identify the original measurements; digest rows do not use that key loop.
+
 Table keys compare the previous protocol with the current typed interner protocol
 where applicable. They measure hashing only; map operations are separate cases.
 Small integer and short AES-reference keys remain slower, while the hot IRI

@@ -28,8 +28,8 @@
 //! run-time seeding, so equal inputs hash equal across runs and processes of
 //! one build, on every target including `wasm32-unknown-unknown`, which has
 //! no entropy source. The value is still **a property of the build**. A
-//! build whose target enables AES hashes byte slices longer than 16 bytes
-//! with AES rounds, and every other build uses folded multiplies. Because of
+//! build whose target enables AES uses an AES accumulator; every other
+//! build uses folded multiplies. Because of
 //! that, a hash must never be persisted, sent anywhere or used as a content
 //! address. Use a digest from this crate for any of those.
 //!
@@ -38,17 +38,21 @@
 //!
 //! # The function
 //!
-//! The state is one 64-bit accumulator. Each write folds its input into the
+//! The portable state is one 64-bit accumulator. Each write folds its input into the
 //! accumulator with a *folded multiply*: the low and high halves of a
 //! 128-bit product XOR-ed together, with a fixed odd key as the multiplier.
 //! The paths are:
 //!
 //! * integers are one fold;
 //! * slices of 0–16 bytes are two independent folds plus a length term;
-//! * slices of 17–32 bytes use two folded products or two AES lanes;
-//! * slices over 32 bytes use four independent lanes (folds, or AES rounds
-//!   on an AES build);
+//! * slices of 17–32 bytes use two folded products plus rotated tail words;
+//! * slices over 32 bytes use four independent folded-multiply lanes;
 //! * [`finish`](core::hash::Hasher::finish) is one final fold.
+//!
+//! The AES state is 128 bits: each integer takes one absorption round and
+//! finalization takes two more before truncating. Its 17–32-byte path absorbs
+//! the first and last blocks sequentially; longer strings use four lanes.
+//! See `fixed/aes.rs` for the compression and finalization laws.
 //!
 //! On 32-bit targets the 128-bit product is built from 32-bit multiplies
 //! with identical output.
@@ -62,13 +66,52 @@ use core::marker::PhantomData;
     target_endian = "little",
     target_feature = "aes"
 ))]
-mod aes;
+pub(crate) mod aes;
 mod fold;
 mod keys;
 mod portable;
 
 use fold::fold;
 use keys::{FIN_M, FIN_X, K_A, K_B, LEN_M, LEN_X, SEED};
+
+/// Zero-extend at most sixteen bytes to a little-endian integer.
+///
+/// Structured table keys can combine this integer with their metadata instead
+/// of writing each short field separately. Encode the field lengths separately:
+/// zero extension by itself does not distinguish a trailing zero byte.
+///
+/// # Panics
+/// Panics if `bytes` contains more than sixteen bytes.
+#[must_use]
+#[inline]
+pub fn pack_short_bytes(bytes: &[u8]) -> u128 {
+    let len = bytes.len();
+    match len {
+        0 => 0,
+        1 => u128::from(bytes[0]),
+        2 => u128::from(u16::from_le_bytes(bytes.try_into().expect("two bytes"))),
+        3 => {
+            u128::from(u16::from_le_bytes(
+                bytes[..2].try_into().expect("two bytes"),
+            )) | (u128::from(bytes[2]) << 16)
+        }
+        4..=7 => {
+            let first = u32::from_le_bytes(bytes[..4].try_into().expect("four bytes"));
+            let last = u32::from_le_bytes(bytes[len - 4..].try_into().expect("four bytes"));
+            if len == 4 {
+                u128::from(first)
+            } else {
+                u128::from(first) | (u128::from(last >> (8 * (8 - len))) << 32)
+            }
+        }
+        8 => u128::from(portable::read64(bytes, 0)),
+        9..=16 => {
+            u128::from(portable::read64(bytes, 0))
+                | (u128::from(portable::read64(bytes, len - 8) >> (8 * (16 - len))) << 64)
+        }
+        _ => panic!("at most sixteen bytes can be packed into one integer"),
+    }
+}
 
 /// How a path compresses a slice of more than 16 bytes to two words.
 pub(crate) trait Compress {
@@ -122,7 +165,7 @@ impl Compress for Aes {
     target_endian = "little",
     target_feature = "aes"
 ))]
-pub(crate) type Selected = Aes;
+pub(crate) type Selected = aes::Engine;
 
 /// The path this build's [`FixedHasher`] runs.
 #[cfg(not(all(
@@ -130,7 +173,7 @@ pub(crate) type Selected = Aes;
     target_endian = "little",
     target_feature = "aes"
 )))]
-pub(crate) type Selected = Portable;
+pub(crate) type Selected = Engine<Portable>;
 
 /// The accumulator and its update rules, over one compression path.
 pub(crate) struct Engine<P> {
@@ -149,7 +192,7 @@ impl<P> Copy for Engine<P> {}
 impl<P: Compress> fmt::Debug for Engine<P> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Engine")
-            .field("path", &P::NAME)
+            .field("path", &Self::NAME)
             .field("acc", &format_args!("{:#018x}", self.acc))
             .finish()
     }
@@ -163,6 +206,7 @@ const fn length_term(len: usize) -> u64 {
 }
 
 impl<P: Compress> Engine<P> {
+    pub(crate) const NAME: &str = P::NAME;
     pub(crate) const fn new() -> Self {
         Self {
             acc: SEED,
@@ -232,10 +276,10 @@ impl<P: Compress> Engine<P> {
 }
 
 macro_rules! hasher {
-    ($(#[$meta:meta])* $name:ident, $path:ty) => {
+    ($(#[$meta:meta])* $name:ident, $engine:ty) => {
         $(#[$meta])*
         #[derive(Clone, Debug)]
-        pub struct $name(crate::fixed::Engine<$path>);
+        pub struct $name($engine);
 
         impl $name {
             /// Hash a tagged byte slice that is the whole table key.
@@ -247,14 +291,14 @@ macro_rules! hasher {
             #[must_use]
             #[inline]
             pub fn hash_terminal(tag: u8, bytes: &[u8]) -> u64 {
-                crate::fixed::Engine::<$path>::terminal(tag, bytes)
+                <$engine>::terminal(tag, bytes)
             }
         }
 
         impl Default for $name {
             #[inline]
             fn default() -> Self {
-                Self(crate::fixed::Engine::new())
+                Self(<$engine>::new())
             }
         }
 
@@ -264,7 +308,10 @@ macro_rules! hasher {
                 self.0.finish()
             }
 
-            #[inline]
+            // Keep the trait boundary transparent: an outlined wrapper made
+            // string-keyed maps spill the SIMD accumulator around every write.
+            #[allow(clippy::inline_always)] // Confirmed in the paired map benchmark assembly.
+            #[inline(always)]
             fn write(&mut self, bytes: &[u8]) {
                 self.0.bytes(bytes);
             }
@@ -342,4 +389,4 @@ impl BuildHasher for FixedState {
 }
 
 /// The name of the path this build's [`FixedHasher`] runs.
-pub(crate) const SELECTED_NAME: &str = <Selected as Compress>::NAME;
+pub(crate) const SELECTED_NAME: &str = Selected::NAME;

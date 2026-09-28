@@ -582,6 +582,15 @@ fn joined_output(
 }
 
 fn tree_output(data: &[u8], counter: u64, backend: Backend) -> Output {
+    #[cfg(target_arch = "x86_64")]
+    if backend == Backend::Avx512 && data.len() == 4096 {
+        let parents = crate::arch::blake3_subtree_four(
+            data.try_into().expect("four complete chunks"),
+            counter,
+        )
+        .expect("available four-chunk backend");
+        return parent(parents[0], parents[1]);
+    }
     if data.len() <= CHUNK {
         return chunk(data, counter, backend);
     }
@@ -709,6 +718,13 @@ fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Back
             cvs[i..i + 4].copy_from_slice(&parents);
             i += 4;
         }
+        #[cfg(target_arch = "x86_64")]
+        if backend == Backend::Avx512 && i + 2 <= pairs {
+            let children = cvs[2 * i..2 * i + 4].try_into().expect("four child CVs");
+            let parents = crate::arch::blake3_parents2_avx512(children).expect("available backend");
+            cvs[i..i + 2].copy_from_slice(&parents);
+            i += 2;
+        }
         while i < pairs {
             let short = if cfg!(any(target_arch = "x86", target_arch = "x86_64")) {
                 Backend::Portable
@@ -801,6 +817,19 @@ mod tests {
                             &cvs[..expected.len()],
                             expected.as_slice(),
                             "four lanes counter={counter}, offset={offset}, len={len}"
+                        );
+                    }
+                    #[cfg(target_arch = "x86_64")]
+                    if let Ok(full) = <&[u8; 4096]>::try_from(bytes)
+                        && let Some(parents) = crate::arch::blake3_subtree_four(full, counter)
+                    {
+                        assert_eq!(
+                            parents,
+                            [
+                                parent(expected[0], expected[1]).chaining(Backend::Portable),
+                                parent(expected[2], expected[3]).chaining(Backend::Portable),
+                            ],
+                            "four-chunk parents counter={counter}, offset={offset}"
                         );
                     }
                     if let Some(cvs) = crate::arch::blake3_eight(bytes, counter) {

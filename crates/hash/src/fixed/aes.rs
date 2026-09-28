@@ -1,13 +1,12 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The AES-round compression of long slices, compiled only into builds whose
-//! target enables `aes` on x86-64 or little-endian AArch64.
+//! AES table hashing on builds targeting x86-64 or little-endian AArch64 AES.
 //!
-//! Only slices longer than 16 bytes reach it: integers, `finish` and 0–16-byte
-//! slices are the portable folds on every build, because the bench
-//! (`benches/hasher.rs`) measured AES rounds no faster there, and slower
-//! than folds as a latency chain.
+//! An integer enters a 128-bit accumulator through one AES round; finalization
+//! takes two more rounds before truncating to 64 bits. Short byte strings pack
+//! into one block, and 17–32 bytes use sequential first/last block absorption.
+//! Longer strings retain independent compression lanes before absorption.
 
 use super::keys::{AES_FINAL_KEY, AES_LANE_INIT, AES_LANE_KEY, AES_MERGE_KEY};
 use crate::arch::Block;
@@ -50,14 +49,15 @@ fn quad(bytes: &[u8], at: usize) -> [Block; 4] {
 /// `w = R(lane, f)`, before any lanes meet. The merge is
 /// `R(w0 ⊕ w1, m0) ⊕ R(w2 ⊕ w3, m1)`.
 ///
-/// The extra round is what makes the merge sound. The first design XOR-ed a
-/// lane that had one round into a lane that had two. Sparse inputs then
-/// produced equal differences on both sides, and the sparse-key test found
-/// full 128-bit collisions. After two rounds, a difference confined to one
-/// lane can reach far too many values to be matched by a difference in
-/// another lane. A difference in a single lane cannot cancel at all, because
-/// each round is a permutation.
-#[inline]
+/// The extra round removed the structured collisions found by the sparse-key
+/// tests. The first design XOR-ed a one-round lane into a two-round lane;
+/// sparse differences cancelled across those lanes, producing full 128-bit
+/// collisions. Each individual round is a permutation, but merging lanes and
+/// truncating the result are not. The quality tests provide empirical coverage,
+/// not a cryptographic collision-resistance claim.
+// Keep the long-slice body out of the short string Hash implementation.
+// Inlining it makes the standard library string wrapper exceed its inline budget.
+#[inline(never)]
 pub(crate) fn compress_long(bytes: &[u8]) -> (u64, u64) {
     let len = bytes.len();
     debug_assert!(len > 16);
@@ -101,4 +101,93 @@ pub(crate) fn compress_long(bytes: &[u8]) -> (u64, u64) {
     let [w0, w1, w2, w3] = [0, 1, 2, 3].map(|lane| lanes[lane].round(finals[lane]));
     let [m0, m1] = AES_MERGE_KEY.map(|(low, high)| Block::from_words(low, high));
     w0.xor(w1).round(m0).xor(w2.xor(w3).round(m1)).words()
+}
+
+/// Full-width AES state, truncated only after two final diffusion rounds.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct Engine {
+    state: Block,
+}
+
+impl Engine {
+    pub(crate) const NAME: &str = "aes";
+
+    #[inline]
+    pub(crate) fn new() -> Self {
+        Self {
+            state: Block::from_words(AES_LANE_INIT[0].0, AES_LANE_INIT[0].1),
+        }
+    }
+
+    #[inline]
+    fn absorb_integer(&mut self, low: u64, high: u64) {
+        self.state = self
+            .state
+            .xor(Block::from_words(low, high))
+            .round(Block::from_words(AES_LANE_KEY[0].0, AES_LANE_KEY[0].1));
+    }
+
+    #[inline]
+    pub(crate) fn word(&mut self, word: u64) {
+        self.absorb_integer(word, 0);
+    }
+
+    #[inline]
+    pub(crate) fn wide(&mut self, word: u128) {
+        self.absorb_integer(word as u64, (word >> 64) as u64);
+    }
+
+    // Assembly inspection found this outlined at monomorphic string call
+    // sites, forcing the otherwise register-only state through stack memory.
+    #[allow(clippy::inline_always)] // Preserve register state across the public Hasher wrapper.
+    #[inline(always)]
+    pub(crate) fn bytes(&mut self, bytes: &[u8]) {
+        if (17..=32).contains(&bytes.len()) {
+            self.state = self
+                .state
+                .xor(Block::from_words(
+                    (bytes.len() as u64).wrapping_mul(super::keys::LEN_M),
+                    0,
+                ))
+                .xor(block(bytes, 0))
+                .round(Block::from_words(AES_LANE_KEY[0].0, AES_LANE_KEY[0].1))
+                .xor(block(bytes, bytes.len() - 16))
+                .round(Block::from_words(AES_LANE_KEY[1].0, AES_LANE_KEY[1].1));
+            return;
+        }
+        let (low, high) = if bytes.len() <= 16 {
+            super::portable::pack_short(bytes)
+        } else {
+            compress_long(bytes)
+        };
+        let domain = (bytes.len() as u64).wrapping_mul(super::keys::LEN_M);
+        self.absorb_integer(low ^ domain, high);
+    }
+
+    #[inline]
+    pub(crate) fn finish(self) -> u64 {
+        // Three AES rounds after the last integer enters: one on absorption,
+        // then these two. Truncating after only two rounds left structured
+        // collisions among high-bit integer keys, even with good avalanche.
+        self.state
+            .round(Block::from_words(AES_FINAL_KEY[0].0, AES_FINAL_KEY[0].1))
+            .round(Block::from_words(AES_FINAL_KEY[1].0, AES_FINAL_KEY[1].1))
+            .words()
+            .0
+    }
+
+    #[inline]
+    pub(crate) fn terminal(tag: u8, bytes: &[u8]) -> u64 {
+        if (17..=32).contains(&bytes.len()) {
+            let mut hasher = Self::new();
+            hasher.state = hasher.state.xor(Block::from_words(
+                u64::from(tag).wrapping_mul(super::keys::K_A),
+                0,
+            ));
+            hasher.bytes(bytes);
+            hasher.finish()
+        } else {
+            super::Engine::<super::Aes>::terminal(tag, bytes)
+        }
+    }
 }

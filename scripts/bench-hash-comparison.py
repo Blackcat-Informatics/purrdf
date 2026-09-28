@@ -43,12 +43,12 @@ def main() -> None:
     parser.add_argument("--cpu", default="x86-64", help="rustc target-cpu (use generic for other ISAs)")
     parser.add_argument("--cpus", help="optional Linux CPU affinity, e.g. 8 or 8-15")
     parser.add_argument("--lto", choices=["fat", "thin", "off"], default="fat")
-    parser.add_argument("--jobs", type=int, default=2)
+    parser.add_argument("--jobs", type=int, help="build jobs (default: Cargo configuration)")
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--mode", choices=MODES, action="append")
     parser.add_argument("--baseline-isa", choices=["auto", "avx2", "sse2", "portable"], default="auto")
     args = parser.parse_args()
-    if args.jobs < 1 or args.threads < 1:
+    if (args.jobs is not None and args.jobs < 1) or args.threads < 1:
         parser.error("jobs and threads must be positive")
     output = args.output.resolve()
     if output.exists():
@@ -84,7 +84,9 @@ def main() -> None:
                "--config", "profile.release.opt-level=3",
                "--config", "profile.release.codegen-units=1"]
     command = ["cargo", "build", "--manifest-path", str(manifest), "--release",
-               "--jobs", str(args.jobs), "--message-format=json", *profile]
+               "--message-format=json", *profile]
+    if args.jobs is not None:
+        command.extend(["--jobs", str(args.jobs)])
     if features:
         command += ["--features", ",".join("blake3/" + f for f in features)]
     started = time.time()
@@ -97,6 +99,7 @@ def main() -> None:
         "head": subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=ROOT, text=True).strip(),
         "source_sha256": hashlib.sha256(source.read_bytes()).hexdigest(),
         "hash_sources_sha256": hash_sources(),
+        "core_protocol_sha256": hashlib.sha256((ROOT / "crates/rdf-core/src/hash.rs").read_bytes()).hexdigest(),
         "cargo_profile_environment": {k: v for k, v in env.items() if k.startswith("CARGO_PROFILE_")},
         "effective_profile_configuration": subprocess.run(
             ["cargo", "-Z", "unstable-options", "config", "get", "profile", "--show-origin", *profile],
@@ -109,13 +112,17 @@ def main() -> None:
         target = output / "sources" / relative
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / relative, target)
+    core_protocol = output / "sources/crates/rdf-core/src/hash.rs"
+    core_protocol.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(ROOT / "crates/rdf-core/src/hash.rs", core_protocol)
     if Path("/proc/cpuinfo").exists():
         (output / "cpuinfo.txt").write_text(Path("/proc/cpuinfo").read_text())
     (output / "working-tree.diff").write_bytes(subprocess.check_output(["git", "diff", "HEAD"], cwd=ROOT))
     (output / "metadata.json").write_text(json.dumps(metadata, indent=2))
     with (output / "build.log").open("w") as errors:
-        built = subprocess.run(command, env=env, text=True, stdout=subprocess.PIPE, stderr=errors, check=True)
+        built = subprocess.run(command, env=env, text=True, stdout=subprocess.PIPE, stderr=errors, check=False)
     (output / "build.jsonl").write_text(built.stdout)
+    built.check_returncode()
     binaries = [item["executable"] for line in built.stdout.splitlines()
                 if (item := json.loads(line)).get("executable") and item.get("target", {}).get("name") == "hash-comparison"]
     if len(binaries) != 1:

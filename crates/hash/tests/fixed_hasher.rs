@@ -384,30 +384,51 @@ fn integers_share_one_word() {
     );
 }
 
-/// The two functions differ only on slices longer than 16 bytes.
-#[cfg(all(
-    any(target_arch = "x86_64", target_arch = "aarch64"),
-    target_endian = "little",
-    target_feature = "aes"
-))]
-fn paths_share_integers_and_short_slices() {
-    let mut rng = Xoshiro256::from_seed(0x7368_6172_6564);
-    for _ in 0..1 << 16 {
-        let word = rng.next_u64();
-        assert_eq!(
-            one::<PortableFixedHasher>(|h| h.write_u64(word)),
-            one::<AesFixedHasher>(|h| h.write_u64(word))
-        );
-        let data = stream(rng.up_to(16) as usize, rng.next_u64());
-        assert_eq!(
-            one::<PortableFixedHasher>(|h| h.write(&data)),
-            one::<AesFixedHasher>(|h| h.write(&data))
-        );
-        let long = stream(17 + rng.up_to(200) as usize, rng.next_u64());
-        assert_ne!(
-            one::<PortableFixedHasher>(|h| h.write(&long)),
-            one::<AesFixedHasher>(|h| h.write(&long))
-        );
+/// Byte fields retain integer context on both sides, including empty fields.
+fn mixed_fields_preserve_context() {
+    fn check<H: Hasher + Default>() {
+        let mut rng = Xoshiro256::from_seed(0x7368_6172_6564);
+        for _ in 0..1 << 16 {
+            let prefix = rng.next_u64();
+            let suffix = rng.next_u64();
+            let bytes = stream(rng.up_to(65) as usize, rng.next_u64());
+            let hash = |left, right, data: &[u8]| {
+                one::<H>(|h| {
+                    h.write_u64(left);
+                    h.write(data);
+                    h.write_u64(right);
+                })
+            };
+            let expected = hash(prefix, suffix, &bytes);
+            assert_ne!(expected, hash(prefix ^ 1, suffix, &bytes));
+            assert_ne!(expected, hash(prefix, suffix ^ (1 << 63), &bytes));
+            let mut longer = bytes;
+            longer.resize(longer.len() + 1, 0);
+            assert_ne!(expected, hash(prefix, suffix, &longer));
+        }
+    }
+    check::<PortableFixedHasher>();
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    check::<AesFixedHasher>();
+}
+
+/// A literal byte-array model checks every packing width and unaligned start.
+fn short_packing_preserves_every_byte() {
+    let bytes = stream(64, 0x7061_636b_6279_7465);
+    for offset in 0..=32 {
+        for len in 0..=16 {
+            let input = &bytes[offset..offset + len];
+            let mut expected = [0; 16];
+            expected[..len].copy_from_slice(input);
+            assert_eq!(
+                purrdf_hash::fixed::pack_short_bytes(input),
+                u128::from_le_bytes(expected)
+            );
+        }
     }
 }
 
@@ -557,6 +578,19 @@ mod quality {
         ));
     }
 
+    pub(super) fn avalanche_wide<H: Hasher + Default>(path: &str) {
+        let (worst, _) = avalanche(&format!("{path} u128"), 16, &|bytes| {
+            one::<H>(|h| {
+                h.write_u128(u128::from_le_bytes(
+                    bytes.try_into().expect("sixteen bytes"),
+                ));
+            })
+        });
+        purrdf_testkit::harness::print_line(&format!(
+            "avalanche {path}: u128 worst |p - 0.5| = {worst:.5}"
+        ));
+    }
+
     pub(super) fn avalanche_slices<H: Hasher + Default>(path: &str, lengths: &[usize]) {
         for &len in lengths {
             let (worst, tolerance) = avalanche(&format!("{path} bytes"), len, &|bytes| {
@@ -602,6 +636,65 @@ mod quality {
         assert_distinct(
             &format!("{path} u64 (0..2^24)·2^40"),
             (0..n).map(|v| one::<H>(|h| h.write_u64(v << 40))).collect(),
+        );
+    }
+
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    pub(super) fn byte_field_quality<H: Hasher + Default>(path: &str) {
+        for len in [1, 2, 3, 8, 16] {
+            let (worst, tolerance) = avalanche(&format!("{path} byte fields"), len, &|bytes| {
+                one::<H>(|h| {
+                    for &byte in bytes {
+                        h.write_u8(byte);
+                    }
+                })
+            });
+            purrdf_testkit::harness::print_line(&format!(
+                "avalanche {path} byte fields: {len} bytes, {worst:.5} (tolerance {tolerance:.4})"
+            ));
+        }
+        assert_distinct(
+            &format!("{path} three byte fields 0..2^24"),
+            (0..1u64 << 24)
+                .map(|n| {
+                    one::<H>(|h| {
+                        h.write_u8(n as u8);
+                        h.write_u8((n >> 8) as u8);
+                        h.write_u8((n >> 16) as u8);
+                    })
+                })
+                .collect(),
+        );
+        let mut hashes = Vec::new();
+        for value in 0..=u8::MAX {
+            hashes.push(one::<H>(|h| h.write_u8(value)));
+            hashes.push(one::<H>(|h| {
+                h.write_u8(0);
+                h.write_u8(value);
+            }));
+            hashes.push(one::<H>(|h| {
+                h.write_u8(value);
+                h.write_u8(0);
+                h.write_u8(0);
+            }));
+        }
+        hashes.push(one::<H>(|_| {}));
+        assert_distinct(&format!("{path} byte field lengths"), hashes);
+        assert_distinct(
+            &format!("{path} zero byte field runs"),
+            (0..128)
+                .map(|n| {
+                    one::<H>(|h| {
+                        for _ in 0..n {
+                            h.write_u8(0);
+                        }
+                    })
+                })
+                .collect(),
         );
     }
 
@@ -780,6 +873,7 @@ mod quality {
 #[cfg(not(target_arch = "wasm32"))]
 fn portable_avalanche_integers() {
     quality::avalanche_integers::<PortableFixedHasher>("portable");
+    quality::avalanche_wide::<PortableFixedHasher>("portable");
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -848,24 +942,57 @@ fn aes_is_uniform() {
     quality::uniform_over_iris_and_integers::<AesFixedHasher>("aes");
 }
 
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    target_endian = "little",
+    target_feature = "aes"
+))]
+fn aes_avalanche_integers() {
+    quality::avalanche_integers::<AesFixedHasher>("aes");
+    quality::avalanche_wide::<AesFixedHasher>("aes");
+}
+
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    target_endian = "little",
+    target_feature = "aes"
+))]
+fn aes_avalanche_short_slices() {
+    quality::avalanche_slices::<AesFixedHasher>("aes", &quality::short_lengths());
+}
+
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    target_endian = "little",
+    target_feature = "aes"
+))]
+fn aes_has_no_integer_collisions() {
+    quality::no_integer_collisions::<AesFixedHasher>("aes");
+}
+
+#[cfg(all(
+    any(target_arch = "x86_64", target_arch = "aarch64"),
+    target_endian = "little",
+    target_feature = "aes"
+))]
+fn aes_byte_field_quality() {
+    quality::byte_field_quality::<AesFixedHasher>("aes");
+}
+
 purrdf_testkit::harness_main!(
     #[cfg(not(target_arch = "wasm32"))]
     record_vectors_when_asked,
     portable_vectors_are_reproduced,
+    short_packing_preserves_every_byte,
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),
         target_endian = "little",
         target_feature = "aes"
     ))]
     aes_vectors_are_reproduced,
+    mixed_fields_preserve_context,
     the_selected_function_answers_its_own_vectors,
     integers_share_one_word,
-    #[cfg(all(
-        any(target_arch = "x86_64", target_arch = "aarch64"),
-        target_endian = "little",
-        target_feature = "aes"
-    ))]
-    paths_share_integers_and_short_slices,
     #[cfg(not(target_arch = "wasm32"))]
     portable_avalanche_integers,
     #[cfg(not(target_arch = "wasm32"))]
@@ -878,6 +1005,24 @@ purrdf_testkit::harness_main!(
         target_feature = "aes"
     ))]
     aes_avalanche_long_slices,
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    aes_has_no_integer_collisions,
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    aes_avalanche_short_slices,
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    aes_avalanche_integers,
     #[cfg(not(target_arch = "wasm32"))]
     portable_has_no_integer_collisions,
     #[cfg(not(target_arch = "wasm32"))]
@@ -904,4 +1049,10 @@ purrdf_testkit::harness_main!(
         target_feature = "aes"
     ))]
     aes_is_uniform,
+    #[cfg(all(
+        any(target_arch = "x86_64", target_arch = "aarch64"),
+        target_endian = "little",
+        target_feature = "aes"
+    ))]
+    aes_byte_field_quality,
 );

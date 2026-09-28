@@ -1,0 +1,137 @@
+
+running 22 tests
+test record_vectors_when_asked ... ok
+test short_packing_preserves_every_byte ... ok
+fixed hasher: aes, 3676 records
+fixed hasher: portable, 3676 records
+fixed hasher: this build selects aes
+avalanche portable:   1 bytes, worst |p − ½| = 0.14062 (tolerance 0.2210)
+test aes_vectors_are_reproduced ... ok
+test integers_share_one_word ... ok
+test portable_vectors_are_reproduced ... ok
+test the_selected_function_answers_its_own_vectors ... ok
+avalanche portable:   2 bytes, worst |p − ½| = 0.00946 (tolerance 0.0138)
+test mixed_fields_preserve_context ... ok
+avalanche portable:   3 bytes, worst |p − ½| = 0.00154 (tolerance 0.0100)
+avalanche portable:   4 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+avalanche portable:   5 bytes, worst |p − ½| = 0.00182 (tolerance 0.0100)
+avalanche portable: u32 worst |p − ½| = 0.00150, u64 0.00181 (2^20 samples per cell)
+avalanche portable:   6 bytes, worst |p − ½| = 0.00216 (tolerance 0.0100)
+avalanche aes:  17 bytes, worst |p − ½| = 0.00182 (tolerance 0.0100)
+avalanche portable:   7 bytes, worst |p − ½| = 0.00171 (tolerance 0.0100)
+avalanche portable:  17 bytes, worst |p − ½| = 0.00204 (tolerance 0.0100)
+avalanche portable: u128 worst |p - 0.5| = 0.00189
+test portable_avalanche_integers ... ok
+avalanche portable:   8 bytes, worst |p − ½| = 0.00185 (tolerance 0.0100)
+aes u32 0..2^24: 16777216 keys, 0 collisions
+avalanche portable:   9 bytes, worst |p − ½| = 0.00215 (tolerance 0.0100)
+aes u64 0..2^24: 16777216 keys, 0 collisions
+avalanche aes:  24 bytes, worst |p − ½| = 0.00185 (tolerance 0.0100)
+avalanche portable:  10 bytes, worst |p − ½| = 0.00191 (tolerance 0.0100)
+aes u64 (0..2^24)·2^40: 16777216 keys, 0 collisions
+test aes_has_no_integer_collisions ... ok
+avalanche aes:   1 bytes, worst |p − ½| = 0.17969 (tolerance 0.2210)
+avalanche aes:   2 bytes, worst |p − ½| = 0.00854 (tolerance 0.0138)
+avalanche aes:   3 bytes, worst |p − ½| = 0.00199 (tolerance 0.0100)
+avalanche portable:  24 bytes, worst |p − ½| = 0.00189 (tolerance 0.0100)
+avalanche aes:   4 bytes, worst |p − ½| = 0.00158 (tolerance 0.0100)
+avalanche portable:  11 bytes, worst |p − ½| = 0.00186 (tolerance 0.0100)
+avalanche aes:   5 bytes, worst |p − ½| = 0.00179 (tolerance 0.0100)
+avalanche aes:   6 bytes, worst |p − ½| = 0.00178 (tolerance 0.0100)
+avalanche portable:  12 bytes, worst |p − ½| = 0.00198 (tolerance 0.0100)
+avalanche aes:   7 bytes, worst |p − ½| = 0.00247 (tolerance 0.0100)
+avalanche aes:  31 bytes, worst |p − ½| = 0.00193 (tolerance 0.0100)
+avalanche portable:  13 bytes, worst |p − ½| = 0.00171 (tolerance 0.0100)
+avalanche aes:   8 bytes, worst |p − ½| = 0.00183 (tolerance 0.0100)
+avalanche portable:  31 bytes, worst |p − ½| = 0.00212 (tolerance 0.0100)
+avalanche aes:   9 bytes, worst |p − ½| = 0.00174 (tolerance 0.0100)
+avalanche portable:  14 bytes, worst |p − ½| = 0.00189 (tolerance 0.0100)
+avalanche aes:  10 bytes, worst |p − ½| = 0.00192 (tolerance 0.0100)
+avalanche portable:  15 bytes, worst |p − ½| = 0.00195 (tolerance 0.0100)
+avalanche aes:  32 bytes, worst |p − ½| = 0.00187 (tolerance 0.0100)
+avalanche aes:  11 bytes, worst |p − ½| = 0.00173 (tolerance 0.0100)
+avalanche portable:  16 bytes, worst |p − ½| = 0.00204 (tolerance 0.0100)
+test portable_avalanche_short_slices ... ok
+avalanche aes:  12 bytes, worst |p − ½| = 0.00179 (tolerance 0.0100)
+avalanche portable:  32 bytes, worst |p − ½| = 0.00197 (tolerance 0.0100)
+avalanche aes: u32 worst |p − ½| = 0.00187, u64 0.00183 (2^20 samples per cell)
+avalanche aes:  13 bytes, worst |p − ½| = 0.00171 (tolerance 0.0100)
+avalanche aes:  14 bytes, worst |p − ½| = 0.00219 (tolerance 0.0100)
+avalanche aes:  33 bytes, worst |p − ½| = 0.00202 (tolerance 0.0100)
+avalanche aes: u128 worst |p - 0.5| = 0.00181
+test aes_avalanche_integers ... ok
+portable u32 0..2^24: 16777216 keys, 0 collisions
+portable u64 0..2^24: 16777216 keys, 0 collisions
+avalanche aes:  15 bytes, worst |p − ½| = 0.00196 (tolerance 0.0100)
+avalanche portable:  33 bytes, worst |p − ½| = 0.00203 (tolerance 0.0100)
+portable u64 (0..2^24)·2^40: 16777216 keys, 0 collisions
+test portable_has_no_integer_collisions ... ok
+portable sparse 256-bit keys: 2796417 keys, 0 collisions
+test portable_has_no_sparse_key_collisions ... ok
+aes sparse 256-bit keys: 2796417 keys, 0 collisions
+χ² portable corpus IRIs: 1000 keys, low 7 bits z = -0.08, top 7 bits z = -0.11
+test aes_has_no_sparse_key_collisions ... ok
+avalanche aes:  16 bytes, worst |p − ½| = 0.00207 (tolerance 0.0100)
+test aes_avalanche_short_slices ... ok
+avalanche portable terminal:  2 bytes, worst |p − ½| = 0.01108 (tolerance 0.0138)
+χ² portable corpus IRIs × 0..8192: 8192000 keys, low 20 bits z = -0.65, top 7 bits z = -0.30
+χ² portable u64 0..2^24: 16777216 keys, low 20 bits z = -0.65, top 7 bits z = -0.07
+test portable_is_uniform ... ok
+avalanche aes terminal:  2 bytes, worst |p − ½| = 0.01108 (tolerance 0.0138)
+avalanche portable terminal: 16 bytes, worst |p − ½| = 0.00188 (tolerance 0.0100)
+avalanche aes terminal: 16 bytes, worst |p − ½| = 0.00188 (tolerance 0.0100)
+avalanche aes:  48 bytes, worst |p − ½| = 0.00228 (tolerance 0.0100)
+avalanche portable terminal: 17 bytes, worst |p − ½| = 0.00198 (tolerance 0.0100)
+avalanche aes terminal: 17 bytes, worst |p − ½| = 0.00182 (tolerance 0.0100)
+avalanche portable:  48 bytes, worst |p − ½| = 0.00201 (tolerance 0.0100)
+avalanche portable terminal: 24 bytes, worst |p − ½| = 0.00210 (tolerance 0.0100)
+avalanche aes terminal: 24 bytes, worst |p − ½| = 0.00185 (tolerance 0.0100)
+avalanche portable terminal: 31 bytes, worst |p − ½| = 0.00199 (tolerance 0.0100)
+avalanche aes terminal: 31 bytes, worst |p − ½| = 0.00193 (tolerance 0.0100)
+avalanche aes:  63 bytes, worst |p − ½| = 0.00244 (tolerance 0.0100)
+avalanche aes terminal: 32 bytes, worst |p − ½| = 0.00187 (tolerance 0.0100)
+avalanche portable terminal: 32 bytes, worst |p − ½| = 0.00204 (tolerance 0.0100)
+avalanche portable:  63 bytes, worst |p − ½| = 0.00187 (tolerance 0.0100)
+avalanche aes terminal: 33 bytes, worst |p − ½| = 0.00235 (tolerance 0.0100)
+aes terminal sparse 256-bit keys: 2796417 keys, 0 collisions
+aes terminal tags and lengths: 254 keys, 0 collisions
+aes terminal corpus IRIs: 1000 keys, 0 collisions
+χ² aes terminal corpus IRIs: 1000 keys, low 7 bits z = 0.32, top 7 bits z = 0.31
+χ² aes terminal corpus IRIs × 0..8192: 8192000 keys, low 20 bits z = -0.06, top 7 bits z = 0.33
+χ² aes corpus IRIs: 1000 keys, low 7 bits z = -1.43, top 7 bits z = 0.04
+test aes_terminal_hash_quality ... ok
+avalanche portable terminal: 33 bytes, worst |p − ½| = 0.00197 (tolerance 0.0100)
+portable terminal sparse 256-bit keys: 2796417 keys, 0 collisions
+portable terminal tags and lengths: 254 keys, 0 collisions
+portable terminal corpus IRIs: 1000 keys, 0 collisions
+χ² portable terminal corpus IRIs: 1000 keys, low 7 bits z = 0.35, top 7 bits z = 0.46
+χ² aes corpus IRIs × 0..8192: 8192000 keys, low 20 bits z = 0.03, top 7 bits z = 1.75
+χ² aes u64 0..2^24: 16777216 keys, low 20 bits z = 0.90, top 7 bits z = -0.55
+test aes_is_uniform ... ok
+avalanche aes byte fields: 1 bytes, 0.15625 (tolerance 0.2210)
+avalanche aes byte fields: 2 bytes, 0.00903 (tolerance 0.0138)
+avalanche aes byte fields: 3 bytes, 0.00194 (tolerance 0.0100)
+avalanche aes byte fields: 8 bytes, 0.00182 (tolerance 0.0100)
+χ² portable terminal corpus IRIs × 0..8192: 8192000 keys, low 20 bits z = -1.84, top 7 bits z = 1.12
+test portable_terminal_hash_quality ... ok
+avalanche aes:  64 bytes, worst |p − ½| = 0.00203 (tolerance 0.0100)
+avalanche aes byte fields: 16 bytes, 0.00177 (tolerance 0.0100)
+aes three byte fields 0..2^24: 16777216 keys, 0 collisions
+aes byte field lengths: 769 keys, 0 collisions
+aes zero byte field runs: 128 keys, 0 collisions
+test aes_byte_field_quality ... ok
+avalanche portable:  64 bytes, worst |p − ½| = 0.00209 (tolerance 0.0100)
+avalanche aes:  65 bytes, worst |p − ½| = 0.00201 (tolerance 0.0100)
+avalanche portable:  65 bytes, worst |p − ½| = 0.00207 (tolerance 0.0100)
+avalanche aes:  96 bytes, worst |p − ½| = 0.00216 (tolerance 0.0100)
+avalanche portable:  96 bytes, worst |p − ½| = 0.00224 (tolerance 0.0100)
+avalanche aes: 100 bytes, worst |p − ½| = 0.00231 (tolerance 0.0100)
+avalanche portable: 100 bytes, worst |p − ½| = 0.00209 (tolerance 0.0100)
+avalanche aes: 127 bytes, worst |p − ½| = 0.00206 (tolerance 0.0100)
+avalanche portable: 127 bytes, worst |p − ½| = 0.00229 (tolerance 0.0100)
+avalanche aes: 128 bytes, worst |p − ½| = 0.00226 (tolerance 0.0100)
+test aes_avalanche_long_slices ... ok
+avalanche portable: 128 bytes, worst |p − ½| = 0.00208 (tolerance 0.0100)
+test portable_avalanche_long_slices ... ok
+
+test result: ok. 22 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 94.17s

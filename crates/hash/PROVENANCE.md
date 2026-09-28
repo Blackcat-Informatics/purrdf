@@ -54,8 +54,11 @@ was copied or ported.
   [`src/aes_hash.rs`](https://github.com/tkaitchuck/aHash/blob/v0.8.12/src/aes_hash.rs)
   and the method inventory in `src/fallback_hash.rs`. This confirmed the
   distinction between an AES accumulator design and PurRDF's folded-multiply
-  state. No code was copied or ported, and the existing fixed-hasher function
-  and its frozen self-vectors remain unchanged by that analysis.
+  state. No code was copied or ported. The subsequent AES accumulator and typed
+  short-key packing were derived for this workspace and tested against the
+  same avalanche, collision and distribution requirements. Changes to the
+  AES function are recorded in its own self-vectors; those are not external
+  conformance vectors.
 - **Instruction semantics** — the Rust `core::arch` reference
   (doc.rust-lang.org) for the x86 SHA, `pclmulqdq` and `aesenc` intrinsics
   and the AArch64 SHA1, CRC32, PMULL, `vaeseq_u8` and `vaesmcq_u8`
@@ -78,7 +81,13 @@ were consulted: [`src/lib.rs`](https://github.com/BLAKE3-team/BLAKE3/blob/1.8.5/
 [`src/platform.rs`](https://github.com/BLAKE3-team/BLAKE3/blob/1.8.5/src/platform.rs)
 (backend dispatch), and
 [`c/blake3_avx512.c`](https://github.com/BLAKE3-team/BLAKE3/blob/1.8.5/c/blake3_avx512.c)
-(the 16/8/4-input dispatch structure). The observation that AVX-512 supports
+(the 16/8/4-input dispatch structure), and
+[`c/blake3_avx512_x86-64_unix.S`](https://github.com/BLAKE3-team/BLAKE3/blob/1.8.5/c/blake3_avx512_x86-64_unix.S)
+(four-chunk register grouping, message permutation and round scheduling).
+The four-chunk kernel groups four quarter rounds per chunk and keeps the
+last-produced state row stationary at diagonal boundaries. Its seven
+message-permutation operations were derived from the specification in that
+register basis. The observation that AVX-512 supports
 narrower batches motivates testing 128- and 256-bit kernels with native rotate
 instructions. Their arithmetic and transposes are instantiated from PurRDF's
 existing first-party lane implementation. No implementation code, assembly,

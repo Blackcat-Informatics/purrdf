@@ -43,12 +43,35 @@ pub(crate) fn hash_iri_for_interner(iri: &str) -> u64 {
     purrdf_hash::fixed::FixedHasher::hash_terminal(0, iri.as_bytes())
 }
 
-/// The scope and variant share one word; the byte write already mixes its
-/// length, so a string terminator would add a redundant state transition.
+/// Pack up to sixteen bytes without allocation; callers encode both field
+/// lengths in metadata before using this in an integer-only hash protocol.
+#[inline]
+fn packed_text(first: &[u8], second: &[u8]) -> u128 {
+    let packed = purrdf_hash::fixed::pack_short_bytes(first);
+    if second.is_empty() {
+        packed
+    } else {
+        packed | (purrdf_hash::fixed::pack_short_bytes(second) << (8 * first.len()))
+    }
+}
+
+/// Short labels share integer blocks with scope, variant and length.
+/// Longer labels use a byte write that already incorporates its length.
 #[inline]
 pub(crate) fn hash_blank_for_interner(label: &str, scope: u32) -> u64 {
     use core::hash::Hasher;
     let mut hash = purrdf_hash::fixed::FixedHasher::default();
+    if label.len() <= 16 {
+        let metadata = u64::from(scope) | (1 << 32) | ((label.len() as u64) << 40);
+        let text = packed_text(label.as_bytes(), &[]);
+        if label.len() <= 8 {
+            hash.write_u128(text | (u128::from(metadata) << 64));
+        } else {
+            hash.write_u64(metadata);
+            hash.write_u128(text);
+        }
+        return hash.finish();
+    }
     hash.write_u64(u64::from(scope) | (1 << 32));
     hash.write(label.as_bytes());
     hash.finish()
@@ -56,8 +79,9 @@ pub(crate) fn hash_blank_for_interner(label: &str, scope: u32) -> u64 {
 
 /// One protocol for borrowed, stored and frozen literal keys. Keep the full
 /// 64-bit datatype id for global dictionaries, beside packed variant,
-/// language-presence and direction fields. Each string write mixes its own
-/// length; `None` remains distinct from `Some("")` through the presence bit.
+/// language-presence and direction fields. Short strings include explicit
+/// lengths in their metadata; longer strings use length-aware byte writes.
+/// `None` remains distinct from `Some("")` through the presence bit.
 #[inline]
 pub(crate) fn hash_literal_for_interner(
     lexical: &str,
@@ -73,6 +97,19 @@ pub(crate) fn hash_literal_for_interner(
     };
     let metadata = 2 | (u128::from(language.is_some()) << 2) | (direction << 3);
     let mut hash = purrdf_hash::fixed::FixedHasher::default();
+    let language_bytes = language.unwrap_or("").as_bytes();
+    if lexical.len() <= 16 && language_bytes.len() <= 16 - lexical.len() {
+        let text = packed_text(lexical.as_bytes(), language_bytes);
+        let lengths = ((lexical.len() as u128) << 8) | ((language_bytes.len() as u128) << 13);
+        if lexical.len() + language_bytes.len() <= 8 && u32::try_from(datatype).is_ok() {
+            let high = u128::from(datatype) | ((metadata | lengths) << 32);
+            hash.write_u128(text | (high << 64));
+        } else {
+            hash.write_u128(u128::from(datatype) | ((metadata | lengths) << 64));
+            hash.write_u128(text);
+        }
+        return hash.finish();
+    }
     hash.write_u128(u128::from(datatype) | (metadata << 64));
     hash.write(lexical.as_bytes());
     if let Some(language) = language {
@@ -81,30 +118,51 @@ pub(crate) fn hash_literal_for_interner(
     hash.finish()
 }
 
-/// Triple ids retain separate word writes: packing them widened arithmetic
-/// without improving the measured lookup cost.
+/// Local triple ids and their tag fit one block; full-width global ids take
+/// two blocks. Every bit is preserved, including the high half of global ids.
 #[inline]
 pub(crate) fn hash_triple_for_interner(s: u64, p: u64, o: u64) -> u64 {
     use core::hash::Hasher;
     let mut hash = purrdf_hash::fixed::FixedHasher::default();
-    hash.write_u8(3);
-    hash.write_u64(s);
-    hash.write_u64(p);
-    hash.write_u64(o);
+    if u32::try_from(s | p | o).is_ok() {
+        hash.write_u128(u128::from(s) | (u128::from(p) << 32) | (u128::from(o) << 64) | (3 << 96));
+    } else {
+        hash.write_u128(u128::from(s) | (u128::from(p) << 64));
+        hash.write_u128(u128::from(o) | (3 << 64));
+    }
     hash.finish()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_blank_for_interner, hash_literal_for_interner};
+    use super::{hash_blank_for_interner, hash_literal_for_interner, hash_triple_for_interner};
     use crate::RdfTextDirection::{Ltr, Rtl};
 
     #[test]
     fn packed_fields_preserve_boundaries_presence_and_high_id_bits() {
         let mut seen = std::collections::HashSet::new();
-        for lexical in ["", "a", "ab", "abc", "a\0b", "a\u{ff}b"] {
+        for lexical in [
+            "",
+            "a",
+            "ab",
+            "abc",
+            "a\0b",
+            "a\u{ff}b",
+            "12345678",
+            "123456789",
+            "1234567890123456",
+            "12345678901234567",
+        ] {
             for datatype in [0, 1, u64::from(u32::MAX), 1 << 32, 1 << 63, u64::MAX] {
-                for language in [None, Some(""), Some("a"), Some("ab"), Some("bc")] {
+                for language in [
+                    None,
+                    Some(""),
+                    Some("a"),
+                    Some("ab"),
+                    Some("bc"),
+                    Some("12345678"),
+                    Some("12345678901234567"),
+                ] {
                     for direction in [None, Some(Ltr), Some(Rtl)] {
                         assert!(
                             seen.insert(hash_literal_for_interner(
@@ -122,6 +180,17 @@ mod tests {
                 );
             }
         }
-        assert_eq!(seen.len(), 564);
+        assert_eq!(seen.len(), 1300);
+        for s in [0, 1, u64::from(u32::MAX), 1 << 32, 1 << 63, u64::MAX] {
+            for p in [0, 1, u64::from(u32::MAX), 1 << 32, 1 << 63, u64::MAX] {
+                for o in [0, 1, u64::from(u32::MAX), 1 << 32, 1 << 63, u64::MAX] {
+                    assert!(
+                        seen.insert(hash_triple_for_interner(s, p, o)),
+                        "triple fields collided: {s}/{p}/{o}"
+                    );
+                }
+            }
+        }
+        assert_eq!(seen.len(), 1516);
     }
 }

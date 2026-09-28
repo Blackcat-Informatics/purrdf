@@ -326,7 +326,13 @@ pub(crate) fn blake3_four_avx512(bytes: &[u8], counter: u64) -> Option<[[u32; 8]
     if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512vl") {
         // SAFETY: both required features were detected; the kernel checks
         // lengths and pads partial chunks before its fixed-size loads.
-        Some(unsafe { blake3_sse2::avx512::chunk_cvs(bytes, counter) })
+        Some(unsafe {
+            if let Ok(full) = <&[u8; 4096]>::try_from(bytes) {
+                blake3_rows::chunks(full, counter)
+            } else {
+                blake3_sse2::avx512::chunk_cvs(bytes, counter)
+            }
+        })
     } else {
         None
     }
@@ -337,6 +343,43 @@ pub(crate) fn blake3_parents4_avx512(children: &[[u32; 8]; 8]) -> Option<[[u32; 
     if std::is_x86_feature_detected!("avx512f") && std::is_x86_feature_detected!("avx512vl") {
         // SAFETY: features were detected; every load reads a full input array.
         Some(unsafe { blake3_sse2::avx512::parents(children) })
+    } else {
+        None
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+mod blake3_parents2;
+
+/// Two parents packed into two independent four-word SIMD groups.
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn blake3_parents2_avx512(children: &[[u32; 8]; 4]) -> Option<[[u32; 8]; 2]> {
+    if std::is_x86_feature_detected!("avx2")
+        && std::is_x86_feature_detected!("avx512f")
+        && std::is_x86_feature_detected!("avx512vl")
+    {
+        // SAFETY: every required feature is present; the input contains both
+        // complete parent blocks, with no alignment requirement.
+        Some(unsafe { blake3_parents2::parents(children) })
+    } else {
+        None
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+mod blake3_rows;
+
+/// Complete four-chunk subtree, retaining its two final children for ROOT.
+/// This entry avoids the partial-chunk kernel's padding frame entirely.
+#[cfg(target_arch = "x86_64")]
+pub(crate) fn blake3_subtree_four(bytes: &[u8; 4096], counter: u64) -> Option<[[u32; 8]; 2]> {
+    if std::is_x86_feature_detected!("avx2")
+        && std::is_x86_feature_detected!("avx512f")
+        && std::is_x86_feature_detected!("avx512vl")
+    {
+        // SAFETY: every required feature is present, all four chunks are
+        // complete, and the local child array contains both parent blocks.
+        Some(unsafe { blake3_parents2::parents(&blake3_rows::chunks(bytes, counter)) })
     } else {
         None
     }

@@ -229,7 +229,7 @@ crate::fixed::hasher!(
     /// [`FixedHasher`](crate::fixed::FixedHasher)'s portable function
     /// (folded multiplies on every length), available on every build.
     PortableFixedHasher,
-    crate::fixed::Portable
+    crate::fixed::Engine<crate::fixed::Portable>
 );
 
 #[cfg(all(
@@ -238,11 +238,11 @@ crate::fixed::hasher!(
     target_feature = "aes"
 ))]
 crate::fixed::hasher!(
-    /// [`FixedHasher`](crate::fixed::FixedHasher)'s AES function (AES rounds
-    /// on slices longer than 16 bytes), present only in builds whose target
+    /// [`FixedHasher`](crate::fixed::FixedHasher)'s AES accumulator function,
+    /// present only in builds whose target
     /// enables AES, where it is the selected function.
     AesFixedHasher,
-    crate::fixed::Aes
+    crate::fixed::aes::Engine
 );
 
 /// The name of the function this build's

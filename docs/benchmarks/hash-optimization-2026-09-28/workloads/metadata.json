@@ -1,0 +1,85 @@
+{
+  "utc": "2026-09-28T08:52:28Z",
+  "compiler": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)\nbinary: rustc\ncommit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad\ncommit-date: 2026-09-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.1\n",
+  "cpu": "native",
+  "cpus": "12",
+  "lto": "fat",
+  "threads": 1,
+  "flags": "-D warnings -C target-cpu=native",
+  "profile_overrides": [
+    "--config",
+    "profile.release.lto=\"fat\"",
+    "--config",
+    "profile.release.opt-level=3",
+    "--config",
+    "profile.release.codegen-units=1"
+  ],
+  "conditions": "shared host",
+  "load_before": [
+    6.28125,
+    9.15673828125,
+    10.74609375
+  ],
+  "available_cpus": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31
+  ],
+  "cargo_profile_environment": {},
+  "sources": {
+    "before": "/tmp/purrdf-pr361-workload-base",
+    "checkpoint": "/tmp/purrdf-pr361-performance-control",
+    "candidate": "/tmp/purrdf-final-hash-candidate"
+  },
+  "harness_sha256": {
+    "hash-workloads.rs": "577e5de4be705f03ded9d093ed09fd6c5caf0a3abd8e6e95f4435bffcbe43977",
+    "bench-hash-workloads.py": "58d37f0c027eea7960835f3e69892e32185652a9c3bbc4bba65074b4b4c8f066"
+  },
+  "completed_cases": [
+    "intern-iri",
+    "intern-mixed",
+    "parse-nquads",
+    "parse-turtle",
+    "query-join",
+    "gts-author-4k",
+    "gts-read-4k",
+    "gts-author-1m",
+    "gts-read-1m"
+  ],
+  "hardware_counters": true,
+  "load_after": [
+    6.98828125,
+    7.27880859375,
+    9.41357421875
+  ],
+  "completed_utc": "2026-09-28T08:57:37Z"
+}
