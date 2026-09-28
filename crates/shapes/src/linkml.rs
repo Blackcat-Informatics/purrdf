@@ -430,10 +430,15 @@ pub fn parse_linkml(input: &str) -> Result<LinkmlDocument, LinkmlError> {
 /// serialization fails.
 pub fn write_linkml(document: &LinkmlDocument) -> Result<String, LinkmlError> {
     validate_document(document.as_value())?;
-    let serialized = serde_yaml::to_string(document.as_value())
+    let serialized = serde_yaml::to_string(&purrdf::json_value::Binary64(document.as_value()))
         .map_err(|error| LinkmlError::new(format!("cannot serialize LinkML YAML: {error}")))?;
     let mut canonical = serialized.trim_end_matches('\n').to_owned();
     canonical.push('\n');
+    if parse_linkml(&canonical)? != *document {
+        return Err(LinkmlError::new(
+            "LinkML numbers would lose precision or lexical identity in YAML",
+        ));
+    }
     Ok(canonical)
 }
 
@@ -1186,6 +1191,22 @@ classes:
         let reparsed = parse_linkml(&yaml).expect("parse");
         assert_eq!(reparsed, document);
         assert_eq!(reparsed.into_value(), valid_value());
+    }
+
+    #[test]
+    fn yaml_writer_preserves_marker_keys_and_refuses_numeric_loss() {
+        let mut value = valid_value();
+        value["x-extension"] = json!({"$serde_json::private::Number": "123", "n": 0.25});
+        let document = LinkmlDocument::from_value(value.clone()).expect("document");
+        assert_eq!(
+            parse_linkml(&write_linkml(&document).expect("write")).expect("read"),
+            document
+        );
+        for lexical in ["18446744073709551617", "0.123456789012345678901", "1e400"] {
+            value["x-extension"]["n"] = serde_json::from_str(lexical).expect("exact number");
+            let document = LinkmlDocument::from_value(value.clone()).expect("document");
+            assert!(write_linkml(&document).is_err(), "{lexical}");
+        }
     }
 
     #[test]

@@ -13,8 +13,22 @@
 
 use purrdf_xsd::ieee::Binary64Scope;
 
-mod strict;
-pub(crate) use strict::parse as parse_strict;
+pub(crate) fn parse_strict(
+    bytes: &[u8],
+    values: usize,
+    depth: usize,
+) -> Result<serde_json::Value, serde_json::Error> {
+    crate::json_value::parse(
+        bytes,
+        crate::json_value::Limits {
+            bytes: usize::MAX,
+            values,
+            depth,
+            string_bytes: usize::MAX,
+        },
+    )
+    .map_err(<serde_json::Error as serde::de::Error>::custom)
+}
 
 /// Run a `serde_json` read whose numbers reach a literal, serialized bytes or an identity,
 /// with every binary64 operation inside it rounded once.

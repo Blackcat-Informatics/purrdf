@@ -11,9 +11,7 @@
 use std::error::Error;
 use std::fmt;
 
-use purrdf_xsd::ieee::Binary64Scope;
-use serde::de::{self, DeserializeSeed, MapAccess, SeqAccess, Visitor};
-use serde_json::{Map, Number, Value};
+use serde_json::{Map, Value};
 
 use crate::json_schema::CompiledSchema;
 
@@ -77,19 +75,18 @@ impl CompiledSchemaCatalog {
                 limits.input_bytes
             )));
         }
-        // The catalog's numbers are the bounds instance validation compares against: read
-        // them inside a binary64 scope so the x87 rounds `serde_json`'s exact fast path
-        // once, like every other unit (the workspace's `float_roundtrip` makes the rest
-        // correctly rounded).
-        let document = {
-            let _binary64 = Binary64Scope::enter();
-            if let Some(limits) = limits {
-                parse_bounded_document(&compiled.schema_json, limits)?
-            } else {
-                serde_json::from_str(&compiled.schema_json)
-                    .map_err(|error| invalid_json_error(&error))?
-            }
-        };
+        // Bounds remain exact decimals. Both catalog entry points use the same
+        // typed-scalar parser, including duplicate rejection and the safety depth cap.
+        let document = parse_bounded_document(
+            &compiled.schema_json,
+            limits.unwrap_or(SchemaCatalogLimits {
+                input_bytes: usize::MAX,
+                definitions: usize::MAX,
+                depth: 128,
+                nodes: usize::MAX,
+                string_bytes: usize::MAX,
+            }),
+        )?;
         let root = document.as_object().ok_or_else(|| {
             SchemaCatalogError::new("CompiledSchema.schema_json root must be a JSON object")
         })?;
@@ -132,223 +129,19 @@ fn parse_bounded_document(
     input: &str,
     limits: SchemaCatalogLimits,
 ) -> Result<Value, SchemaCatalogError> {
-    let mut state = BoundedParseState {
-        limits,
-        nodes: 0,
-        violation: None,
-    };
-    let mut deserializer = serde_json::Deserializer::from_str(input);
-    let document = match (BoundedValueSeed {
-        state: &mut state,
-        depth: 0,
+    purrdf::json_value::parse(
+        input.as_bytes(),
+        purrdf::json_value::Limits {
+            bytes: limits.input_bytes,
+            values: limits.nodes,
+            depth: limits.depth,
+            string_bytes: limits.string_bytes,
+        },
+    )
+    .map_err(|error| match error {
+        purrdf::json_value::Error::Limit(message) => SchemaCatalogError::new(message),
+        purrdf::json_value::Error::Syntax(error) => invalid_json_error(&error),
     })
-    .deserialize(&mut deserializer)
-    {
-        Ok(document) => document,
-        Err(error) => {
-            return Err(state
-                .violation
-                .map_or_else(|| invalid_json_error(&error), SchemaCatalogError::new));
-        }
-    };
-    deserializer
-        .end()
-        .map_err(|error| invalid_json_error(&error))?;
-    Ok(document)
-}
-
-struct BoundedParseState {
-    limits: SchemaCatalogLimits,
-    nodes: usize,
-    violation: Option<String>,
-}
-
-impl BoundedParseState {
-    fn enter_node<E: de::Error>(&mut self, depth: usize) -> Result<(), E> {
-        if depth > self.limits.depth {
-            return self.reject(format!(
-                "CompiledSchema exceeds JSON nesting limit {}",
-                self.limits.depth
-            ));
-        }
-        let Some(nodes) = self.nodes.checked_add(1) else {
-            return self.reject("CompiledSchema JSON node count exceeds usize".to_owned());
-        };
-        if nodes > self.limits.nodes {
-            return self.reject(format!(
-                "CompiledSchema contains more than {} JSON nodes",
-                self.limits.nodes
-            ));
-        }
-        self.nodes = nodes;
-        Ok(())
-    }
-
-    fn check_string<E: de::Error>(&mut self, bytes: usize) -> Result<(), E> {
-        if bytes > self.limits.string_bytes {
-            return self.reject(format!(
-                "CompiledSchema contains a {bytes}-byte string; limit is {}",
-                self.limits.string_bytes
-            ));
-        }
-        Ok(())
-    }
-
-    fn reject<T, E: de::Error>(&mut self, message: String) -> Result<T, E> {
-        self.violation = Some(message.clone());
-        Err(E::custom(message))
-    }
-}
-
-struct BoundedValueSeed<'a> {
-    state: &'a mut BoundedParseState,
-    depth: usize,
-}
-
-impl<'de> DeserializeSeed<'de> for BoundedValueSeed<'_> {
-    type Value = Value;
-
-    fn deserialize<D: de::Deserializer<'de>>(
-        self,
-        deserializer: D,
-    ) -> Result<Self::Value, D::Error> {
-        self.state.enter_node::<D::Error>(self.depth)?;
-        deserializer.deserialize_any(BoundedValueVisitor {
-            state: self.state,
-            depth: self.depth,
-        })
-    }
-}
-
-struct BoundedValueVisitor<'a> {
-    state: &'a mut BoundedParseState,
-    depth: usize,
-}
-
-impl<'de> Visitor<'de> for BoundedValueVisitor<'_> {
-    type Value = Value;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a JSON value within the configured structural limits")
-    }
-
-    fn visit_unit<E: de::Error>(self) -> Result<Self::Value, E> {
-        Ok(Value::Null)
-    }
-
-    fn visit_bool<E: de::Error>(self, value: bool) -> Result<Self::Value, E> {
-        Ok(Value::Bool(value))
-    }
-
-    fn visit_i64<E: de::Error>(self, value: i64) -> Result<Self::Value, E> {
-        Ok(Value::Number(value.into()))
-    }
-
-    fn visit_i128<E: de::Error>(self, value: i128) -> Result<Self::Value, E> {
-        Number::from_i128(value)
-            .map(Value::Number)
-            .ok_or_else(|| E::custom("JSON integer is out of range"))
-    }
-
-    fn visit_u64<E: de::Error>(self, value: u64) -> Result<Self::Value, E> {
-        Ok(Value::Number(value.into()))
-    }
-
-    fn visit_u128<E: de::Error>(self, value: u128) -> Result<Self::Value, E> {
-        Number::from_u128(value)
-            .map(Value::Number)
-            .ok_or_else(|| E::custom("JSON integer is out of range"))
-    }
-
-    fn visit_f64<E: de::Error>(self, value: f64) -> Result<Self::Value, E> {
-        Number::from_f64(value)
-            .map(Value::Number)
-            .ok_or_else(|| E::custom("JSON number is not finite"))
-    }
-
-    fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
-        self.state.check_string::<E>(value.len())?;
-        Ok(Value::String(value.to_owned()))
-    }
-
-    fn visit_borrowed_str<E: de::Error>(self, value: &'de str) -> Result<Self::Value, E> {
-        self.state.check_string::<E>(value.len())?;
-        Ok(Value::String(value.to_owned()))
-    }
-
-    fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
-        self.state.check_string::<E>(value.len())?;
-        Ok(Value::String(value))
-    }
-
-    fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<Self::Value, A::Error> {
-        let remaining_nodes = self.state.limits.nodes.saturating_sub(self.state.nodes);
-        let mut values = Vec::with_capacity(sequence.size_hint().unwrap_or(0).min(remaining_nodes));
-        while let Some(value) = sequence.next_element_seed(BoundedValueSeed {
-            state: &mut *self.state,
-            depth: self.depth + 1,
-        })? {
-            values.push(value);
-        }
-        Ok(Value::Array(values))
-    }
-
-    fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<Self::Value, A::Error> {
-        let remaining_nodes = self.state.limits.nodes.saturating_sub(self.state.nodes);
-        let mut object = Map::with_capacity(map.size_hint().unwrap_or(0).min(remaining_nodes));
-        while let Some(key) = map.next_key_seed(BoundedStringSeed {
-            state: &mut *self.state,
-        })? {
-            let value = map.next_value_seed(BoundedValueSeed {
-                state: &mut *self.state,
-                depth: self.depth + 1,
-            })?;
-            object.insert(key, value);
-        }
-        Ok(Value::Object(object))
-    }
-}
-
-struct BoundedStringSeed<'a> {
-    state: &'a mut BoundedParseState,
-}
-
-impl<'de> DeserializeSeed<'de> for BoundedStringSeed<'_> {
-    type Value = String;
-
-    fn deserialize<D: de::Deserializer<'de>>(
-        self,
-        deserializer: D,
-    ) -> Result<Self::Value, D::Error> {
-        deserializer.deserialize_string(BoundedStringVisitor { state: self.state })
-    }
-}
-
-struct BoundedStringVisitor<'a> {
-    state: &'a mut BoundedParseState,
-}
-
-impl<'de> Visitor<'de> for BoundedStringVisitor<'_> {
-    type Value = String;
-
-    fn expecting(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str("a JSON object key within the configured string limit")
-    }
-
-    fn visit_str<E: de::Error>(self, value: &str) -> Result<Self::Value, E> {
-        self.state.check_string::<E>(value.len())?;
-        Ok(value.to_owned())
-    }
-
-    fn visit_borrowed_str<E: de::Error>(self, value: &'de str) -> Result<Self::Value, E> {
-        self.state.check_string::<E>(value.len())?;
-        Ok(value.to_owned())
-    }
-
-    fn visit_string<E: de::Error>(self, value: String) -> Result<Self::Value, E> {
-        self.state.check_string::<E>(value.len())?;
-        Ok(value)
-    }
 }
 
 fn validate_definition_limit(
@@ -784,6 +577,18 @@ mod tests {
     }
 
     #[test]
+    fn bounded_parser_rejects_decoded_duplicate_keys() {
+        let limits = SchemaCatalogLimits {
+            input_bytes: 100,
+            definitions: 100,
+            depth: 10,
+            nodes: 100,
+            string_bytes: 100,
+        };
+        assert!(parse_bounded_document(r#"{"a":1,"\u0061":2}"#, limits).is_err());
+    }
+
+    #[test]
     fn bounded_parser_matches_serde_json_value_semantics() {
         for source in [
             "null",
@@ -793,7 +598,7 @@ mod tests {
             "1.25e-7",
             r#""escaped\nvalue""#,
             r#"[null,true,-1,2.5,"x"]"#,
-            r#"{"a":1,"a":2,"nested":{"items":[false,"z"]}}"#,
+            r#"{"a":2,"nested":{"items":[false,"z"]}}"#,
         ] {
             let expected = serde_json::from_str::<Value>(source).expect("serde JSON fixture");
             let actual = parse_bounded_document(

@@ -285,13 +285,16 @@ impl Converter<'_> {
                 if *value { "true" } else { "false" },
                 self.config.vocabulary().xsd("boolean"),
             )]),
-            Value::Number(value) => {
-                let datatype = if value.is_i64() || value.is_u64() {
+            Value::Number(number) => {
+                let datatype = if number.is_i64() || number.is_u64() {
                     self.config.vocabulary().xsd("integer")
                 } else {
                     self.config.vocabulary().xsd("double")
                 };
-                Ok(vec![self.typed_literal(&value.to_string(), datatype)])
+                let lexical = serde_json::to_string(&crate::json_value::Binary64(value)).map_err(
+                    |error| ProjectionError::integrity(format!("CSVW numeric annotation: {error}")),
+                )?;
+                Ok(vec![self.typed_literal(&lexical, datatype)])
             }
             Value::Null => Ok(Vec::new()),
         }
@@ -307,7 +310,10 @@ impl Converter<'_> {
         let lexical = match value {
             Value::String(value) => value.clone(),
             Value::Bool(value) => value.to_string(),
-            Value::Number(value) => value.to_string(),
+            Value::Number(_) => serde_json::to_string(&crate::json_value::Binary64(value))
+                .map_err(|error| {
+                    ProjectionError::integrity(format!("CSVW numeric annotation: {error}"))
+                })?,
             _ => {
                 return Err(ProjectionError::integrity(
                     "CSVW annotation @value is not atomic",
