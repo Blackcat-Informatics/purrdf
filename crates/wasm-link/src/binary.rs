@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Byte-preserving core WebAssembly reader. Instruction boundaries follow the
-//! WebAssembly binary grammar, https://webassembly.github.io/spec/core/binary/.
+//! WebAssembly binary grammar, <https://webassembly.github.io/spec/core/binary/>.
 //! Unknown opcodes fail closed; semantic validation is delegated to Binaryen.
 use crate::{LinkError, template::Op};
 use wasm_encoder::{AbstractHeapType, HeapType, RefType, ValType};
