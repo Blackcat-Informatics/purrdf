@@ -3301,13 +3301,10 @@ summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_e
 id = "core.csv-field"
 summary = "`purrdf_core::csv`'s field scanner: the first byte of a run-time stop set (delimiter, quote, escape, line-terminator lead bytes) for the row splitter, the cell parser and the writer's quoting decision"
 
-  # PENDING MEASUREMENT. Unlike every other entry, the floors below were not read from
-  # emitted asm: they are the source-level minimum of each kernel -- eight byte
-  # compares, seven ORs and one mask extraction per chunk, so sixteen vector
-  # operations, halved to eight by this file's rule -- and the mnemonics are the
-  # intrinsics the kernels call. The configurations whose encoding the source does not
-  # fix (AVX-512 builds, SVE builds) carry floor 0 and no mnemonic until measured.
-  # Replace every floor with half the measured count on the next full gate run.
+  # Measured vector operations: baseline SSE2 34, VEX/AVX2 17, AVX-512
+  # mask compares 8, NEON 19 on both Arm configurations, and wasm SIMD128 18.
+  # Floors retain half each measured count; required mnemonics pin the byte
+  # comparisons and mask extraction used by each emitted implementation.
 
   # Explicit SSE2 kernel (`#[target_feature(enable = "sse2")]`).
   [[site.measure]]
@@ -3315,7 +3312,7 @@ summary = "`purrdf_core::csv`'s field scanner: the first byte of a run-time stop
   configs = ["x86_64"]
   crate = "purrdf_core"
   symbol = "purrdf_core::csv::arch::x86::find_sse2"
-  min_vector_ops = 8
+  min_vector_ops = 17
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
   forbid_relaxed = true
@@ -3343,42 +3340,45 @@ summary = "`purrdf_core::csv`'s field scanner: the first byte of a run-time stop
   max_fma = 0
   forbid_relaxed = true
 
-  # AVX-512 builds may lower the compares to mask registers: unmeasured, floor 0.
+  # AVX-512 lowers the eight byte compares directly to mask registers.
   [[site.measure]]
-  label = "scan avx512 (pending)"
+  label = "scan avx512 masks"
   configs = ["x86_64-v4"]
   crate = "purrdf_core"
   symbol = "purrdf_core::csv::arch::x86::find_sse2"
-  min_vector_ops = 0
+  min_vector_ops = 4
+  require_mnemonics = ["vpcmpeqb", "korw", "kmovd"]
   max_fma = 0
   forbid_relaxed = true
 
   [[site.measure]]
-  label = "scan avx2 on avx512 (pending)"
+  label = "scan avx2 masks"
   configs = ["x86_64-v4"]
   crate = "purrdf_core"
   symbol = "purrdf_core::csv::arch::x86::find_avx2"
-  min_vector_ops = 0
+  min_vector_ops = 4
+  require_mnemonics = ["vpcmpeqb", "kord", "kmovd"]
   max_fma = 0
   forbid_relaxed = true
 
-  # Explicit NEON kernel: `cmeq .16b` per needle, `orr`, `umaxv`.
+  # Explicit NEON kernel: `cmeq .16b` per needle, `orr`, narrowing mask.
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64"]
   crate = "purrdf_core"
   symbol = "purrdf_core::csv::arch::neon::find"
-  min_vector_ops = 8
+  min_vector_ops = 9
   require_mnemonics = ["cmeq .16b"]
   max_fma = 0
   forbid_relaxed = true
 
   [[site.measure]]
-  label = "scan neon on sve (pending)"
+  label = "scan neon on sve"
   configs = ["aarch64-neoverse-v1"]
   crate = "purrdf_core"
   symbol = "purrdf_core::csv::arch::neon::find"
-  min_vector_ops = 0
+  min_vector_ops = 9
+  require_mnemonics = ["cmeq .16b"]
   max_fma = 0
   forbid_relaxed = true
 
@@ -3398,7 +3398,7 @@ summary = "`purrdf_core::csv`'s field scanner: the first byte of a run-time stop
   configs = ["wasm32-simd128"]
   crate = "purrdf_core"
   symbol = "purrdf_core::csv::arch::simd128::find"
-  min_vector_ops = 8
+  min_vector_ops = 9
   require_mnemonics = ["i8x16.eq", "i8x16.bitmask"]
   max_fma = 0
   forbid_relaxed = true
