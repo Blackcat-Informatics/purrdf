@@ -101,6 +101,7 @@ mod projection;
 mod protocol;
 mod query;
 pub mod shacl;
+mod shadow_stack;
 mod stream;
 mod term;
 
@@ -109,6 +110,7 @@ pub use async_query::purrdf_jspi_run;
 pub use async_query::{
     AsyncEffect, AsyncEvidence, AsyncJob, AsyncJobOptions, AsyncOperationKind, DeliveryStatus,
     EffectKind, RunStatus, ServiceCatalog, ShaclAsyncOperation, SuspendStatus,
+    async_stack_region_bytes,
 };
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;
@@ -125,29 +127,19 @@ pub use query::{
 pub use stream::Sink;
 pub use term::{Quad, Term};
 
-#[cfg(target_arch = "wasm32")]
-unsafe extern "C" {
-    /// The low end of this module's shadow stack, where `wasm-ld` placed it. Only its
-    /// address is ever taken; the byte is never read.
-    safe static __stack_low: u8;
-}
-
 /// Runs once, when the instance starts: installs the synchronous shadow stack's floor
 /// in [`purrdf_stack`], the measurement the SPARQL evaluator's stack guards refuse
 /// against, and the panic hook that poisons the instance (the `panic_poison` module).
 ///
 /// The floor's default is address 0, the floor rustc's `--stack-first` layout gives the
-/// stack; this reads the linker's own record of it instead, so the guards measure against
-/// wherever the stack really ends however this module was linked. The
-/// asynchronous lane switches away from this floor onto each job's region and back
+/// stack; this reads the linker's own record of it instead (`shadow_stack`), so the
+/// guards measure against wherever the stack really ends however this module was linked.
+/// The asynchronous lane switches away from this floor onto each job's region and back
 /// (`async_query`), and puts this value back whenever a job suspends or returns.
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen(start)]
 pub fn install_stack_floor() {
-    // `black_box`: the low end may be address 0, and nothing may be inferred from an
-    // address the compiler assumes is not null.
-    let low = core::hint::black_box(&raw const __stack_low) as usize;
-    purrdf_stack::replace_floor(low);
+    purrdf_stack::replace_floor(shadow_stack::read().low);
     panic_poison::install();
 }
 

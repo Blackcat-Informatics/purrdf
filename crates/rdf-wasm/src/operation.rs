@@ -33,8 +33,8 @@ use purrdf::{
 use purrdf_core::{RdfDiagnostic, SparqlResult};
 use purrdf_sparql_eval::protocol::{FailureCode, negotiate};
 use purrdf_sparql_eval::{
-    EvalError, GovernedOutcome, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine,
-    QueryGovernors, QueryOptions, ServiceResolver, StopCause, StopSignal, TrippedGovernor,
+    GovernedOutcome, GovernedUpdateOutcome, GraphResolver, NativeSparqlEngine, QueryGovernors,
+    QueryOptions, ServiceResolver, StopCause, StopSignal, TrippedGovernor,
 };
 use purrdf_sparql_results::ProvenanceNamespace;
 use wasm_bindgen::prelude::*;
@@ -109,26 +109,11 @@ enum ErrorText {
     Message,
 }
 
-/// Which lane a failure is rendered for. A stack refusal names the remedy of the lane
-/// that ran it: a larger stack is reached differently on each.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Lane {
-    /// The synchronous lane, on the instance's own shadow stack.
-    Sync,
-    /// An asynchronous job, on a stack region of `region_bytes`.
-    Async {
-        /// The size of the region the job ran on.
-        region_bytes: usize,
-    },
-}
-
-/// What the synchronous lane appends to a stack refusal a larger stack answers: the
-/// asynchronous twin of the call runs on a region the caller sizes.
-const SYNC_STACK_REMEDY: &str = "; the synchronous lane runs on the instance's own stack — run \
-     this request with the asynchronous twin of this call (selectAsync, queryAsync, \
-     updateAsync, …) and a larger stackBytes region";
-
 /// Why an operation failed: its kind, and the diagnostic whose code says why.
+///
+/// A failure reads the same on both lanes. An asynchronous job runs on a stack region
+/// exactly as large as the synchronous lane's shadow stack, so the evaluator's stack
+/// refusal falls at the same depth on each and carries no lane-specific remedy.
 #[derive(Debug, Clone)]
 pub(crate) struct JobError {
     kind: JobErrorKind,
@@ -224,41 +209,17 @@ impl JobError {
         &self.diagnostic.code
     }
 
-    /// Whether this is the shadow-stack refusal a larger stack answers: the evaluator's,
-    /// measured against the stack the lane ran on. The host-stack refusal is not one: no
-    /// lane's stack size changes the JavaScript engine's own.
-    fn is_shadow_stack_refusal(&self) -> bool {
-        self.kind == JobErrorKind::Error && self.code() == EvalError::STACK_EXHAUSTED_CODE
-    }
-
-    /// The message a JavaScript caller reads, with `lane`'s remedy appended to a stack
-    /// refusal a larger stack answers.
-    pub(crate) fn rendered(&self, lane: Lane) -> String {
-        let mut text = match self.text {
+    /// The message a JavaScript caller reads.
+    pub(crate) fn rendered(&self) -> String {
+        match self.text {
             ErrorText::Diagnostic => self.diagnostic.to_string(),
             ErrorText::Message => self.diagnostic.message.clone(),
-        };
-        if self.is_shadow_stack_refusal() {
-            match lane {
-                Lane::Sync => text.push_str(SYNC_STACK_REMEDY),
-                Lane::Async { region_bytes } => {
-                    // Writing to a `String` cannot fail.
-                    let _ = fmt::Write::write_fmt(
-                        &mut text,
-                        format_args!(
-                            "; this asynchronous job ran on a stack region of {region_bytes} \
-                             bytes — run it with a larger stackBytes"
-                        ),
-                    );
-                }
-            }
         }
-        text
     }
 
-    /// The JavaScript error this failure is thrown as on `lane`.
-    pub(crate) fn to_js(&self, lane: Lane) -> JsValue {
-        coded_error(&self.rendered(lane), self.code())
+    /// The JavaScript error this failure is thrown as.
+    pub(crate) fn to_js(&self) -> JsValue {
+        coded_error(&self.rendered(), self.code())
     }
 }
 
@@ -302,7 +263,7 @@ pub(crate) fn coded_type_error(message: &str, code: &str) -> JsValue {
 
 /// An engine diagnostic thrown on the synchronous lane, as the error carrying its code.
 pub(crate) fn diagnostic_to_js(diagnostic: RdfDiagnostic) -> JsValue {
-    JobError::diagnostic(diagnostic).to_js(Lane::Sync)
+    JobError::diagnostic(diagnostic).to_js()
 }
 
 // ---------------------------------------------------------------------------
@@ -740,7 +701,7 @@ impl OperationInput<'_> {
         stop: Option<Arc<dyn StopSignal>>,
     ) -> Result<JobOutcome, JsValue> {
         self.execute(&JobRun::offline(stop))
-            .map_err(|error| error.to_js(Lane::Sync))
+            .map_err(|error| error.to_js())
     }
 }
 
@@ -748,27 +709,17 @@ impl OperationInput<'_> {
 mod tests {
     use super::*;
 
-    /// The stack refusal gains its lane's remedy by its code; every neighbour — the
-    /// host-stack refusal, another parse failure, an evaluation failure, a fault quoting
-    /// the code — keeps its words.
+    /// Every failure renders in its own words, the stack refusals included: the
+    /// evaluator's shadow-stack refusal and the host-stack refusal read exactly as the
+    /// engine renders them, with nothing appended, and so does every neighbour — a parse
+    /// failure, an evaluation failure, a fault quoting the code.
     #[test]
-    fn only_the_shadow_stack_refusal_gains_its_lanes_remedy() {
-        let region = Lane::Async {
-            region_bytes: 524_288,
-        };
+    fn a_stack_refusal_renders_as_the_evaluator_gives_it() {
+        use purrdf_sparql_eval::EvalError;
+
         let code = EvalError::STACK_EXHAUSTED_CODE;
         let error = JobError::diagnostic(RdfDiagnostic::error(code, "nested too deeply"));
-        assert_eq!(
-            error.rendered(region),
-            format!(
-                "error {code}: nested too deeply; this asynchronous job ran on a stack \
-                 region of 524288 bytes — run it with a larger stackBytes"
-            )
-        );
-        assert_eq!(
-            error.rendered(Lane::Sync),
-            format!("error {code}: nested too deeply{SYNC_STACK_REMEDY}")
-        );
+        assert_eq!(error.rendered(), format!("error {code}: nested too deeply"));
         for error in [
             JobError::diagnostic(RdfDiagnostic::error(
                 EvalError::HOST_STACK_EXHAUSTED_CODE,
@@ -782,17 +733,13 @@ mod tests {
                 "native-sparql-query-eval",
                 "the example.org function failed",
             )),
-            JobError::fault(format!(
-                "error {}: a host fault quoting it",
-                EvalError::STACK_EXHAUSTED_CODE
-            )),
+            JobError::fault(format!("error {code}: a host fault quoting it")),
         ] {
             let plain = match error.text {
                 ErrorText::Diagnostic => error.diagnostic.to_string(),
                 ErrorText::Message => error.diagnostic.message.clone(),
             };
-            assert_eq!(error.rendered(region), plain);
-            assert_eq!(error.rendered(Lane::Sync), plain);
+            assert_eq!(error.rendered(), plain);
         }
     }
 
@@ -886,7 +833,7 @@ mod tests {
         assert_eq!(cancelled.kind(), JobErrorKind::Cancelled);
         assert_eq!(failure(&cancelled), FailureCode::Cancelled);
         assert_eq!(
-            cancelled.rendered(Lane::Sync),
+            cancelled.rendered(),
             "the asynchronous operation was cancelled"
         );
         let deadline = JobError::stopped(TrippedGovernor::Stopped {
@@ -897,12 +844,12 @@ mod tests {
         let fault = JobError::fault("resolver returned nothing");
         assert_eq!(fault.kind(), JobErrorKind::Fault);
         assert_eq!(failure(&fault), FailureCode::HostFault);
-        assert_eq!(fault.rendered(Lane::Sync), "resolver returned nothing");
+        assert_eq!(fault.rendered(), "resolver returned nothing");
         let refused = JobError::not_acceptable("no format".to_owned());
         assert_eq!(failure(&refused), FailureCode::NotAcceptable);
         // A failure with its own words keeps its code apart from them.
         let serialize = JobError::message(SERIALIZE_CODE, "unsupported format");
-        assert_eq!(serialize.rendered(Lane::Sync), "unsupported format");
+        assert_eq!(serialize.rendered(), "unsupported format");
         assert_eq!(serialize.code(), SERIALIZE_CODE);
         assert_eq!(failure(&serialize), FailureCode::Evaluation);
     }

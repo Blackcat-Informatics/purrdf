@@ -40,13 +40,20 @@
 //! # Stack regions and the `suspend` epilogue invariant
 //!
 //! A suspended job's frames stay live in linear memory, so two jobs cannot share the one
-//! shadow stack. Every job owns a heap-allocated region ([`AsyncJob::stack_top`] /
-//! [`AsyncJob::stack_base`], 16-byte aligned, a canary word [`AsyncJob::stack_canary`] at
-//! the base). The package's post-link step, `wasm-link`, wraps the job runner so it sets
-//! the stack pointer to the job's top before the job's first frame and restores the idle
-//! value after the run returns, and routes every call of the suspending import through
-//! one linked function that parks the job on the idle pointer for the duration of the
-//! import.
+//! shadow stack. Every job owns a heap region exactly as large as the module's own shadow
+//! stack — [`crate::shadow_stack`] reads the size off the linker's layout, and the lane
+//! refuses to run on a module laid out any other way ([`async_stack_region_bytes`]) —
+//! 16-byte aligned, allocated raw and left uninitialized (a frame writes a slot before
+//! it reads it), with one canary word ([`STACK_CANARY`]) at its base. Rust holds no
+//! reference to the region's bytes: while the job runs its frames own them, and a
+//! `&`- or `&mut`-derived view held on this side would let the compiler assume bytes a
+//! frame has since written are unchanged — undefined behaviour — so the runtime keeps the
+//! region's address alone and touches the canary, the one word it reads, through a raw
+//! pointer with volatile accesses. The package's post-link step, `wasm-link`, wraps the
+//! job runner so it sets the stack pointer to the job's top ([`AsyncJob::stack_top`])
+//! before the job's first frame and restores the idle value after the run returns, and
+//! routes every call of the suspending import through one linked function that parks
+//! the job on the idle pointer for the duration of the import.
 //!
 //! Parking is not enough on its own: between one job's promise settling and its
 //! resumption reaction running, another job's continuation may run and move the global.
@@ -57,13 +64,13 @@
 //! resumption, whatever `wasm-opt` inlined. [`suspend`] is a plain call of the import; the
 //! linker refuses a module in which the import is reached any other way.
 //!
-//! Inside the region two guards read one measurement. The run installs the region's base
-//! as the stack floor the evaluator's guards measure against, with no walk
-//! scope open (`purrdf_stack::replace_context`, which swaps the floor and the evaluator's
-//! walk-scope state together), puts the context's own back before every suspension,
-//! reinstalls the job's on every resumption (recording the resuming context's as the one
-//! to put back next), and puts the context's own back when the run returns — so every
-//! stack measurement on the job is against its own region, every one made while it is
+//! Equal stacks make the two lanes refuse alike. The run installs the region's base as
+//! the stack floor the evaluator's guards measure against, with no walk scope open
+//! (`purrdf_stack::replace_context`, which swaps the floor and the evaluator's walk-scope
+//! state together), puts the context's own back before every suspension, reinstalls the
+//! job's on every resumption (recording the resuming context's as the one to put back
+//! next), and puts the context's own back when the run returns — so every stack
+//! measurement on the job is against its own region, every one made while it is
 //! suspended is against the stack actually running, and a walk scope the job suspends
 //! inside (a property path's traversal polls, and so yields) stays the job's: nothing
 //! that runs while it waits latches a refusal in it, and the jobs close their scopes in
@@ -71,31 +78,13 @@
 //! recursive step — an operator chain, a nested `EXISTS` walk, a property path's
 //! traversal — and refuses with its own typed error
 //! (`native-sparql-evaluation-stack-exhausted`) while
-//! `purrdf_stack::MARGIN_BYTES` (64 KiB) are still left: the very refusal the synchronous
-//! twin gives, with the region's size and `stackBytes` named as the remedy. The
-//! [`JspiStopWatch`] is the last resort beneath them, for polling frames no check guards:
-//! every poll measures how far its frame is above the region's base and, inside a guard
-//! band of half the margin ([`STACK_GUARD_BYTES`]), latches a fault ("asynchronous job
-//! stack region exhausted …; raise stackBytes") and stops the job cleanly — before a
-//! deeper frame could run off the region into the heap. The band lies below the point
-//! every check refuses at, so a frame that checks is always refused, typed, before a poll
-//! could see the band; and the band is measured from the base itself, not from the
-//! floor, so neither the stack an evaluation reserves above the floor nor the exhausted
-//! floor a refusing walk installs while it unwinds turns the evaluator's own refusal
-//! into the region's fault. The poll also records the low-water mark, reported as
-//! [`AsyncEvidence::stack_high_water_bytes`].
-//!
-//! Work that neither polls nor is the evaluator's can still recurse past the base between
-//! two polls. Beneath every base lies an overrun zone
-//! ([`STACK_OVERRUN_ZONE_BYTES`], filled with a known byte) that absorbs such frames
-//! inside the job's own allocation. The first poll after one sees the canary it
-//! overwrote and stops the job with the same typed exhaustion error; when the run
-//! returns, the zone is inspected: an overrun that stayed above its floor
-//! ([`STACK_OVERRUN_FLOOR_BYTES`]) is that typed error, and one that reached the floor
-//! may have left the allocation, so the run reports status 4 and the host poisons the
-//! instance rather than let it run on over memory that may be corrupt. The zone is as
-//! large as the synchronous lane's whole stack, so any request the synchronous lane runs
-//! without trapping ends here answered or typed, never in corruption.
+//! `purrdf_stack::MARGIN_BYTES` (64 KiB) are still left: on a region the size of the
+//! shadow stack that is the very refusal, at the very depth, the synchronous twin gives,
+//! and it carries no lane-specific remedy. Every poll records how deep its frame stands
+//! (the low-water mark, reported as [`AsyncEvidence::stack_high_water_bytes`]) and faults
+//! a frame outside the region. The canary is the one check beneath the evaluator's: it is
+//! read before every suspension — a job whose frames overwrote it does not suspend — and
+//! when the run returns, and a changed word latches the job's fault, naming the region.
 //!
 //! # Faults, statuses, and the rule that nothing crosses a suspended frame
 //!
@@ -229,10 +218,12 @@
 //! | Reasoner state (`purrdf-entail`'s tableau `RefCell`s, the datalog engines) | No sharing: every closure run owns its own. |
 //! | This module's own [`JobSlots`] mutexes | No. Each is locked inside one helper that returns owned values, and none is held when [`suspend`] is called or while an exchange's answer is delivered. |
 
+use std::alloc::{Layout, alloc, dealloc, handle_alloc_error};
 use std::borrow::Cow;
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
 use std::fmt;
+use std::ptr::{self, NonNull};
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
@@ -258,8 +249,8 @@ use crate::codec::resolve_media_type;
 use crate::dataset::{Dataset, UpdateClaim};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
-    JobError, JobOutcome, JobRun, Lane, OPTIONS_CODE, OperationInput, SHACL_CODE,
-    SHACL_REFUSAL_CODE, USAGE_CODE, coded_error, coded_type_error,
+    JobError, JobOutcome, JobRun, OPTIONS_CODE, OperationInput, SHACL_CODE, SHACL_REFUSAL_CODE,
+    USAGE_CODE, coded_error, coded_type_error,
 };
 use crate::query::{
     EntailmentQueryOutcome, GovernorArgs, NegotiatedOutcome, QueryEngine, QueryOutcome,
@@ -273,6 +264,7 @@ use crate::shacl::{
     product_validate_rebuild_expecting_impl, product_validate_rebuild_impl,
     validate_changes_to_sarif_impl, validate_to_sarif_impl,
 };
+use crate::shadow_stack::STACK_ALIGN;
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -281,64 +273,13 @@ use crate::shacl::{
 /// Polls between yields when the caller names no `yieldEveryPolls`.
 const DEFAULT_YIELD_EVERY_POLLS: u32 = 65_536;
 
-/// A job's stack region when the caller names no `stackBytes`: 2 MiB.
-const DEFAULT_STACK_BYTES: u32 = 2 * 1024 * 1024;
-
-/// The smallest region a job may run on: 512 KiB, so a job always has at least 448 KiB
-/// of stack above the point the evaluator's checks refuse at.
-const MIN_STACK_BYTES: u32 = 512 * 1024;
-
-/// The guard band at the base of a region: half the margin the evaluator's checks refuse
-/// at. A poll whose frame reaches it stops the job — with the region's
-/// fault — before a deeper frame can leave the region.
-///
-/// It must lie below the margin. Every check measures against the region's base (the
-/// floor [`JobInner::run`] installs, raised by whatever the evaluation reserved) and
-/// refuses once less than [`purrdf_stack::MARGIN_BYTES`] are left, so a frame that
-/// checks is refused with the evaluator's own typed error — the refusal
-/// its synchronous twin gives — at least `MARGIN_BYTES - STACK_GUARD_BYTES` above the
-/// band. Only frames that poll but never check can reach the band; a band wider than the
-/// margin would pre-empt every typed refusal with this fault instead.
-const STACK_GUARD_BYTES: usize = purrdf_stack::MARGIN_BYTES / 2;
-
-const _: () = assert!(
-    STACK_GUARD_BYTES < purrdf_stack::MARGIN_BYTES,
-    "the guard band must lie below the point every stack check refuses at"
-);
-
-/// The overrun zone below every region's base: 1 MiB.
-///
-/// The guard band only stops frames that *poll*, and the evaluator's own stack guards only
-/// frames that evaluate. Work that is neither can recurse past the region's base, and
-/// below the base lies other heap memory: an overrun there would corrupt it silently. So
-/// every region is allocated with this many bytes beneath its base, filled with
-/// [`STACK_ZONE_FILL`], and inspected when the run returns (see [`StackRegion::overrun`]):
-/// an overrun that stayed above the zone's floor ([`STACK_OVERRUN_FLOOR_BYTES`]) touched
-/// nothing but the job's own allocation, and fails the job with the typed exhaustion
-/// error; one that reached the floor may have left the allocation, and poisons the
-/// instance.
-///
-/// Sized from the synchronous lane: its whole shadow stack is the linker's 1 MiB, so the
-/// non-polling frames of any request it runs without trapping fit in 1 MiB, and on a
-/// region of at least [`MIN_STACK_BYTES`] they overrun the base by at most 512 KiB plus
-/// the runner's own few frames — well above the floor. A request the synchronous lane
-/// can run is therefore never corruption here: it answers, or fails typed.
-const STACK_OVERRUN_ZONE_BYTES: usize = 1024 * 1024;
-
-/// The lowest part of the overrun zone. A byte changed here means the frames may have
-/// run past the whole zone — out of the job's allocation — so the instance is poisoned.
-const STACK_OVERRUN_FLOOR_BYTES: usize = 256 * 1024;
-
-/// The byte the overrun zone is filled with. Not zero: frames routinely write zeros, and
-/// an overrun that wrote only the fill would go unseen.
-const STACK_ZONE_FILL: u8 = 0xA5;
-
 /// Work between clock reads for the wall deadline, counted as polls are (see
 /// [`JspiStopWatch::poll_after_work`]).
 const CLOCK_EVERY_POLLS: u64 = 1_024;
 
-/// The word written at the base of every region, checked by the host at every
-/// suspension. ASCII `PurD`, little-endian.
+/// The word written at the base of every region when it is allocated, read before every
+/// suspension and when the run returns; a frame that ran past the base overwrote it.
+/// ASCII `PurD`, little-endian.
 const STACK_CANARY: u32 = 0x4472_7550;
 
 /// The most redirect hops one `LOAD` follows: generous enough for a real document
@@ -362,10 +303,6 @@ pub enum RunStatus {
     UnknownJob = 2,
     /// The job had already been started.
     AlreadyStarted = 3,
-    /// The job's frames ran past its region's overrun zone. Memory outside the job's
-    /// allocation may have been overwritten, so the host must poison the instance; the
-    /// job's error names what happened.
-    Overran = 4,
 }
 
 /// What `purrdf_jspi_suspend` reports when the host resumes the job.
@@ -935,6 +872,13 @@ impl AsyncCounters {
         add_ms(wait, waited_ms);
     }
 
+    /// Record a frame standing at `sp`: the evidence keeps the lowest, and reports it as
+    /// the depth below the region's top ([`AsyncEvidence::stack_high_water_bytes`]).
+    fn record_depth(&self, sp: usize) {
+        self.stack_low_water.fetch_min(sp, Ordering::Relaxed);
+    }
+
+    /// The evidence so far, its stack depth measured from `stack_top`.
     pub(crate) fn snapshot(&self, stack_top: usize) -> AsyncEvidence {
         let low = self.stack_low_water.load(Ordering::Relaxed);
         let high_water = if low == usize::MAX {
@@ -1102,7 +1046,7 @@ struct ServiceContext {
     max_intermediate_cells: Option<u64>,
 }
 
-/// A region's address range, `[base, top)`.
+/// A region's address range, `[base, top)`; the canary word lies at `base`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct StackBounds {
     base: usize,
@@ -1110,33 +1054,45 @@ struct StackBounds {
 }
 
 impl StackBounds {
-    /// Whether a frame at `sp` may keep running: inside the region and above its guard
-    /// band. The error is the fault to latch.
-    ///
-    /// The band is measured from the region's base itself, not from
-    /// [`purrdf_stack::remaining`]: the floor that reads against is raised by the stack
-    /// an evaluation reserves, and replaced by `purrdf_stack::EXHAUSTED` while a refusing
-    /// walk unwinds — both are the evaluator's business, and reading either here would
-    /// turn the evaluator's own typed refusal into this fault.
+    /// The region's size.
+    const fn bytes(self) -> usize {
+        self.top - self.base
+    }
+
+    /// Whether a frame at `sp` stands inside the region. The error is the fault to latch.
     fn check(self, sp: usize) -> Result<(), String> {
         if sp < self.base || sp > self.top {
             return Err(format!(
-                "asynchronous job is not running on its stack region (stack pointer {sp:#x} \
-                 outside [{:#x}, {:#x}]); the host did not switch the stack pointer",
+                "asynchronous job frame is outside its stack region (stack pointer {sp:#x}, \
+                 region [{:#x}, {:#x}])",
                 self.base, self.top
             ));
-        }
-        if sp - self.base < STACK_GUARD_BYTES {
-            return Err(self.exhausted());
         }
         Ok(())
     }
 
-    /// The typed error of a job that ran out of its region.
-    fn exhausted(self) -> String {
+    /// Whether the word at the base still reads [`STACK_CANARY`].
+    ///
+    /// # Safety
+    ///
+    /// The region `[base, top)` must be a live allocation: the [`StackRegion`] that owns
+    /// it must not have been dropped.
+    unsafe fn canary_intact(self) -> bool {
+        // SAFETY: the caller keeps the region alive; `base` is 16-byte aligned and the
+        // region holds at least one word, so the load is aligned and inside it; and it is
+        // a volatile load through a raw pointer — the frames that own the region may have
+        // written the word, and no reference to it is ever formed.
+        unsafe { ptr::read_volatile(self.base as *const u32) == STACK_CANARY }
+    }
+
+    /// The fault of a run whose frames overwrote the canary: they ran past the base.
+    fn overrun(self) -> String {
         format!(
-            "asynchronous job stack region exhausted ({} bytes); raise stackBytes",
-            self.top - self.base
+            "asynchronous job frames ran past the base of its stack region ({} bytes at \
+             [{:#x}, {:#x}]): the canary word at the base was overwritten",
+            self.bytes(),
+            self.base,
+            self.top
         )
     }
 }
@@ -1158,9 +1114,11 @@ struct JobSlots {
     deadline_tripped: AtomicBool,
     /// The run has returned; deliveries are refused.
     finished: AtomicBool,
-    /// Whether polls may compare the stack pointer with [`Self::bounds`]: set only while
-    /// the job runs on its region, which is only ever on `wasm32`.
+    /// Whether the job is running on its region — so its polls measure the stack pointer
+    /// against [`Self::bounds`] and its suspensions read the canary. Set only between the
+    /// run's start and its return, which is only ever on `wasm32`.
     region_armed: AtomicBool,
+    /// The region's bounds; the [`StackRegion`] itself belongs to the job.
     bounds: StackBounds,
     /// The per-thread ambient state ([`JobAmbient`]) of the context the job was started
     /// or last resumed from, put back whenever the job leaves its region: at every
@@ -1196,6 +1154,24 @@ impl JobSlots {
 
     fn fault(&self) -> Option<&str> {
         self.fault.get().map(String::as_str)
+    }
+
+    /// Read the canary before the job leaves its frames standing: `Err` (the fault to
+    /// latch) when they overwrote the word at the region's base. `Ok` while the job is
+    /// not running on its region.
+    fn check_canary(&self) -> Result<(), String> {
+        if !self.region_armed.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        // SAFETY: the region is armed only from the run's start to its return, both
+        // inside `JobInner::run`, a method of the job that owns the region; an armed
+        // region is therefore alive, and this is called only from the job's own frames
+        // during that run.
+        if unsafe { self.bounds.canary_intact() } {
+            Ok(())
+        } else {
+            Err(self.bounds.overrun())
+        }
     }
 
     /// Post an effect for the host and make it the outstanding one, to be abandoned per
@@ -1380,8 +1356,8 @@ impl JobAmbient {
 }
 
 /// The job's [`StopSignal`]: cancellation, the wall deadline (read off the clock, and
-/// latched when an effect outlives it), the fault latch, the stack guard — and the poll
-/// counter that slices evaluation into yields.
+/// latched when an effect outlives it), the fault latch, the stack depth record — and the
+/// poll counter that slices evaluation into yields.
 #[derive(Debug)]
 struct JspiStopWatch {
     slots: Arc<JobSlots>,
@@ -1451,33 +1427,28 @@ impl JspiStopWatch {
         })
     }
 
-    /// The stack guard, while the job runs on its region.
-    fn stack_check(&self) -> Result<(), String> {
+    /// Record how deep this frame stands, while the job runs on its region — the same
+    /// measurement the evaluator's own guard reads — and fault a frame outside it.
+    fn record_depth(&self) -> Result<(), String> {
         if !self.slots.region_armed.load(Ordering::Relaxed) {
             return Ok(());
         }
-        // A frame that never polled may have run past the base since the last poll (see
-        // `STACK_OVERRUN_ZONE_BYTES`); the canary it overwrote on the way stops the job at
-        // the first poll after, before anything suspends on a damaged region.
-        // SAFETY: the region is armed only while the job runs on it, and the job's
-        // `StackRegion` — which owns the word at `base` — outlives every run.
-        let canary = unsafe { core::ptr::read_volatile(self.slots.bounds.base as *const u32) };
-        if canary != STACK_CANARY {
-            return Err(self.slots.bounds.exhausted());
-        }
-        // The evaluator's own measurement of this frame's depth, read against the region's
-        // bounds.
         let sp = purrdf_stack::stack_pointer();
-        self.slots
-            .counters
-            .stack_low_water
-            .fetch_min(sp, Ordering::Relaxed);
+        self.slots.counters.record_depth(sp);
         self.slots.bounds.check(sp)
     }
 
     /// Suspend on the already-issued effect `seq`, count it, and return the host's
     /// status (an unknown status is latched as a fault and reported as one).
+    ///
+    /// The canary is read first: a job whose frames ran past its base does not suspend —
+    /// its fault is latched and reported as the status, and the evaluator winds down
+    /// through the stop signal the fault fires.
     fn suspend_on(&self, seq: u32, kind: EffectKind) -> SuspendStatus {
+        if let Err(fault) = self.slots.check_canary() {
+            self.slots.latch_fault(fault);
+            return SuspendStatus::Fault;
+        }
         let started = now_ms();
         // Leaving the region: whatever runs while the job is suspended runs on the
         // context's own stack, so it gets that stack's context back — its floor, and its
@@ -1581,7 +1552,7 @@ impl StopSignal for JspiStopWatch {
         if let Some(cause) = self.peek() {
             return Some(cause);
         }
-        if let Err(fault) = self.stack_check() {
+        if let Err(fault) = self.record_depth() {
             self.slots.latch_fault(fault);
             return Some(self.latch(StopCause::Cancelled));
         }
@@ -2545,76 +2516,80 @@ enum JobState {
     Done,
 }
 
-/// A job's stack region: owned heap memory the job's frames live in while it runs, above
-/// an overrun zone of [`STACK_OVERRUN_ZONE_BYTES`].
+/// A job's stack region: the heap memory the job's frames live in while it runs, exactly
+/// as large as the module's own shadow stack, with [`STACK_CANARY`] at its base.
+///
+/// The region is a raw allocation — never a `Box<[u8]>`, a slice or any other Rust
+/// reference to its bytes. While the job runs, its frames own the region: every load and
+/// store the compiled code makes through the stack pointer lands in it, and a `&`- or
+/// `&mut`-derived view held on this side would let the compiler assume that the bytes it
+/// points at are unchanged between two of its own uses, which is undefined behaviour the
+/// moment a frame writes them. So the runtime keeps only the region's address and its
+/// layout, touches one word of it — the canary — through a raw pointer with volatile
+/// accesses, and initializes nothing else: a frame writes a slot before it reads it.
 struct StackRegion {
-    /// The allocation: alignment padding, the overrun zone, then the region. While the
-    /// job runs its frames own the region's bytes; Rust reads the zone only after a run
-    /// returns ([`Self::overrun`]).
-    memory: Box<[u8]>,
-    /// Where the overrun zone starts inside `memory`.
-    zone_offset: usize,
-    bounds: StackBounds,
-}
-
-/// How far a finished run's frames reached below its region's base.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Overrun {
-    /// Never past the base: the canary and the whole zone are intact.
-    None,
-    /// Past the base, but never into the zone's floor: nothing outside the job's own
-    /// allocation was touched.
-    Absorbed,
-    /// Into the zone's floor: the frames may have left the allocation.
-    Escaped,
+    /// The region's base, the lowest address a frame may reach; the allocation is
+    /// `layout.size()` bytes from it.
+    memory: NonNull<u8>,
+    /// The allocation's layout, handed back to the allocator on drop.
+    layout: Layout,
 }
 
 impl fmt::Debug for StackRegion {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("StackRegion")
-            .field("bounds", &self.bounds)
+            .field("bounds", &self.bounds())
             .finish_non_exhaustive()
     }
 }
 
 impl StackRegion {
-    /// A zeroed region of `bytes` rounded down to 16, its base and top aligned to 16,
-    /// the canary written at the base and the filled overrun zone beneath it. The
-    /// region's size depends only on `bytes`, never on where the allocator put it.
+    /// Allocate a region of `bytes`, its base and top aligned to [`STACK_ALIGN`], with the
+    /// canary written at the base and nothing else initialized. `bytes` is the module's
+    /// shadow stack size ([`crate::shadow_stack::region_bytes`]), which the layout check
+    /// has already proven positive and aligned; the allocator failing is fatal.
     fn new(bytes: usize) -> Self {
-        let usable = bytes & !15;
-        let mut memory = vec![0u8; 15 + STACK_OVERRUN_ZONE_BYTES + usable].into_boxed_slice();
-        let start = memory.as_ptr() as usize;
-        let zone_offset = start.next_multiple_of(16) - start;
-        let base_offset = zone_offset + STACK_OVERRUN_ZONE_BYTES;
-        memory[zone_offset..base_offset].fill(STACK_ZONE_FILL);
-        memory[base_offset..base_offset + 4].copy_from_slice(&STACK_CANARY.to_le_bytes());
-        let base = start + base_offset;
-        Self {
-            memory,
-            zone_offset,
-            bounds: StackBounds {
-                base,
-                top: base + usable,
-            },
+        assert!(
+            bytes >= STACK_ALIGN && bytes.is_multiple_of(STACK_ALIGN),
+            "a stack region is a positive multiple of {STACK_ALIGN} bytes, not {bytes}"
+        );
+        let layout = Layout::from_size_align(bytes, STACK_ALIGN)
+            .expect("a region the size of the shadow stack fits an allocation layout");
+        // SAFETY: `layout` has a non-zero size, asserted above.
+        let memory = unsafe { alloc(layout) };
+        let Some(memory) = NonNull::new(memory) else {
+            handle_alloc_error(layout)
+        };
+        // SAFETY: `memory` is the start of a live allocation of at least `STACK_ALIGN`
+        // bytes, aligned to it, so the first word is aligned and inside the allocation;
+        // no reference to the allocation's bytes exists, and the write goes through a raw
+        // pointer.
+        unsafe { ptr::write_volatile(memory.cast::<u32>().as_ptr(), STACK_CANARY) };
+        Self { memory, layout }
+    }
+
+    /// The region's address range.
+    fn bounds(&self) -> StackBounds {
+        let base = self.memory.as_ptr() as usize;
+        StackBounds {
+            base,
+            top: base + self.layout.size(),
         }
     }
 
-    /// How far the finished run's frames reached below the base. Read only once the run
-    /// has returned, when no frame lives in the region any more.
-    fn overrun(&self) -> Overrun {
-        let zone = &self.memory[self.zone_offset..self.zone_offset + STACK_OVERRUN_ZONE_BYTES];
-        let (floor, upper) = zone.split_at(STACK_OVERRUN_FLOOR_BYTES);
-        if floor.iter().any(|&byte| byte != STACK_ZONE_FILL) {
-            return Overrun::Escaped;
-        }
-        let base_offset = self.zone_offset + STACK_OVERRUN_ZONE_BYTES;
-        let canary = &self.memory[base_offset..base_offset + 4];
-        if canary != STACK_CANARY.to_le_bytes() || upper.iter().any(|&byte| byte != STACK_ZONE_FILL)
-        {
-            return Overrun::Absorbed;
-        }
-        Overrun::None
+    /// Whether the canary at the base is intact: whether no frame ran past the base.
+    fn canary_intact(&self) -> bool {
+        // SAFETY: `self` owns the allocation, which is alive until `self` is dropped.
+        unsafe { self.bounds().canary_intact() }
+    }
+}
+
+impl Drop for StackRegion {
+    fn drop(&mut self) {
+        // SAFETY: `memory` was returned by `alloc` with exactly `layout`, and is
+        // deallocated once, here. A job's region is dropped only when the job leaves the
+        // registry, which `AsyncJob::finish` refuses while the run stands on it.
+        unsafe { dealloc(self.memory.as_ptr(), self.layout) };
     }
 }
 
@@ -2657,13 +2632,6 @@ impl fmt::Debug for JobInner {
 }
 
 impl JobInner {
-    /// The lane the job's failures are rendered for.
-    const fn lane(&self) -> Lane {
-        Lane::Async {
-            region_bytes: self.region.bounds.top - self.region.bounds.base,
-        }
-    }
-
     fn run(&self) -> RunStatus {
         if self.state.get() != JobState::Pending {
             return RunStatus::AlreadyStarted;
@@ -2671,20 +2639,20 @@ impl JobInner {
         self.state.set(JobState::Running);
         let operation = self.operation.borrow_mut().take();
         let slots = &self.watch.slots;
-        // Only on wasm32 is the job actually running on its region (the host switched the
-        // stack pointer before the promising call); the native build never arms the guard.
+        // Only on wasm32 is the job actually running on its region (the linked run
+        // wrapper switched the stack pointer to its top); the native build never arms it.
         slots
             .region_armed
             .store(cfg!(target_arch = "wasm32"), Ordering::Relaxed);
         // The region's base is the floor every stack measurement on this job reads — the
-        // poll-time guard band and the evaluator's own guard alike — and the job starts
-        // with no walk scope open and no SHACL scope installed, whatever the context that
-        // started it has open or installed, until it suspends or returns (see
-        // `JspiStopWatch::leave_region`).
+        // evaluator's own guard, which therefore refuses at the depth the synchronous lane
+        // does — and the job starts with no walk scope open and no SHACL scope installed,
+        // whatever the context that started it has open or installed, until it suspends
+        // or returns (see `JspiStopWatch::leave_region`).
         if cfg!(target_arch = "wasm32") {
-            *lock(&slots.outer) = JobAmbient::fresh(self.region.bounds.base).install();
+            *lock(&slots.outer) = JobAmbient::fresh(self.region.bounds().base).install();
         }
-        let outcome = match (operation, self.watch.stack_check()) {
+        let outcome = match (operation, self.watch.record_depth()) {
             (_, Err(fault)) => {
                 slots.latch_fault(fault);
                 JobOutcome::Failed(JobError::fault("the job did not start"))
@@ -2702,24 +2670,10 @@ impl JobInner {
             let outer = std::mem::replace(&mut *lock(&slots.outer), JobAmbient::fresh(0));
             drop(outer.install());
         }
-        match self.region.overrun() {
-            Overrun::None => {}
-            // Frames that never polled ran past the base into the zone: nothing outside
-            // the job's allocation was touched, so this is the job's typed exhaustion.
-            Overrun::Absorbed => slots.latch_fault(self.region.bounds.exhausted()),
-            Overrun::Escaped => {
-                slots.finished.store(true, Ordering::Relaxed);
-                *self.error.borrow_mut() = Some(JobError::fault(format!(
-                    "asynchronous job {} ran more than {} bytes past the base of its stack \
-                     region ({} bytes), so memory outside it may be overwritten; raise \
-                     stackBytes",
-                    self.id,
-                    STACK_OVERRUN_ZONE_BYTES - STACK_OVERRUN_FLOOR_BYTES,
-                    self.region.bounds.top - self.region.bounds.base
-                )));
-                self.state.set(JobState::Done);
-                return RunStatus::Overran;
-            }
+        // The operation's frames are gone; the one word this side reads of the region says
+        // whether they all stayed above its base.
+        if !self.region.canary_intact() {
+            slots.latch_fault(self.region.bounds().overrun());
         }
         slots.finished.store(true, Ordering::Relaxed);
         // A latched fault outranks whatever the operation reached: that outcome was
@@ -2987,22 +2941,11 @@ impl AsyncJob {
         self.inner.kind
     }
 
-    /// The region's top: the stack pointer to install before the promising call.
+    /// The region's top: the stack pointer the linked run wrapper installs for the run,
+    /// passed as the last argument of `purrdf_jspi_run`.
     #[wasm_bindgen(getter, js_name = stackTop)]
     pub fn stack_top(&self) -> u32 {
-        u32::try_from(self.inner.region.bounds.top).unwrap_or(u32::MAX)
-    }
-
-    /// The region's lowest usable address, where [`Self::stack_canary`] is written.
-    #[wasm_bindgen(getter, js_name = stackBase)]
-    pub fn stack_base(&self) -> u32 {
-        u32::try_from(self.inner.region.bounds.base).unwrap_or(u32::MAX)
-    }
-
-    /// The little-endian `u32` at [`Self::stack_base`] while the region is intact.
-    #[wasm_bindgen(getter, js_name = stackCanary)]
-    pub fn stack_canary(&self) -> u32 {
-        STACK_CANARY
+        u32::try_from(self.inner.region.bounds().top).unwrap_or(u32::MAX)
     }
 
     /// Whether the run has returned.
@@ -3038,12 +2981,7 @@ impl AsyncJob {
     /// finished).
     #[wasm_bindgen(getter, js_name = errorMessage)]
     pub fn error_message(&self) -> Option<String> {
-        let lane = self.inner.lane();
-        self.inner
-            .error
-            .borrow()
-            .as_ref()
-            .map(|error| error.rendered(lane))
+        self.inner.error.borrow().as_ref().map(JobError::rendered)
     }
 
     /// The effect the job is suspended on, once; `undefined` when there is none.
@@ -3406,7 +3344,7 @@ impl AsyncJob {
             .watch
             .slots
             .counters
-            .snapshot(self.inner.region.bounds.top)
+            .snapshot(self.inner.region.bounds().top)
     }
 
     /// Apply a finished update's result to `dataset` — refused, with the dataset left
@@ -3416,7 +3354,7 @@ impl AsyncJob {
     pub fn commit_update(&self, dataset: &mut Dataset) -> Result<(), JsValue> {
         self.inner
             .commit_into(dataset)
-            .map_err(|error| error.to_js(self.inner.lane()))
+            .map_err(|error| error.to_js())
     }
 
     /// Remove the job from the registry once it has finished, and release an update's
@@ -3438,7 +3376,7 @@ impl AsyncJob {
     fn take(&self, what: &str, kinds: &[AsyncOperationKind]) -> Result<JobOutcome, JsValue> {
         self.inner
             .take_outcome(what, kinds)
-            .map_err(|error| error.to_js(self.inner.lane()))
+            .map_err(|error| error.to_js())
     }
 }
 
@@ -3489,7 +3427,7 @@ enum OptionShape {
 }
 
 /// Every option key an asynchronous operation reads, and its shape.
-const OPTION_SHAPES: [(&str, OptionShape); 17] = [
+const OPTION_SHAPES: [(&str, OptionShape); 16] = [
     ("base", OptionShape::Text),
     ("format", OptionShape::Text),
     ("provenanceNamespace", OptionShape::Provenance),
@@ -3505,7 +3443,6 @@ const OPTION_SHAPES: [(&str, OptionShape); 17] = [
     ("maxScratchBytes", OptionShape::Ceiling),
     ("maxRemoteRequests", OptionShape::Ceiling),
     ("yieldEveryPolls", OptionShape::Count),
-    ("stackBytes", OptionShape::Count),
     ("catalog", OptionShape::Catalog),
 ];
 
@@ -3521,7 +3458,7 @@ fn option_shape(key: &str) -> Option<OptionShape> {
 }
 
 /// The keys every asynchronous operation accepts beside its own: the job's host options.
-const HOST_KEYS: [&str; 4] = ["yieldEveryPolls", "stackBytes", "catalog", "localServices"];
+const HOST_KEYS: [&str; 3] = ["yieldEveryPolls", "catalog", "localServices"];
 
 /// The keys the package root reads itself and never passes on: the host's handlers and
 /// its signal. Named in a refusal's list of accepted keys.
@@ -3704,8 +3641,10 @@ impl fmt::Display for OptionsError {
 /// Every option a kind would ignore is refused by name rather than dropped: an option a
 /// caller believes applies and that nothing enforces is the silent hole this surface
 /// exists to close. The ceilings are 64-bit integers exactly as the synchronous governed
-/// entries take them; `yieldEveryPolls` and `stackBytes` are refused unless they are
-/// integers in range, so a negative never wraps into a huge value.
+/// entries take them; `yieldEveryPolls` is refused unless it is an integer in range, so a
+/// negative never wraps into a huge value. The job's stack region is not an option: every
+/// job runs on a region the size of the module's own shadow stack, so the two lanes run
+/// out of stack at the same depth.
 #[wasm_bindgen]
 #[derive(Debug, Default, Clone)]
 pub struct AsyncJobOptions {
@@ -3721,7 +3660,6 @@ pub struct AsyncJobOptions {
     accept: Option<String>,
     ceilings: GovernorArgs,
     quantum: u32,
-    stack_bytes: u32,
     catalog: Option<NativeServiceCatalog>,
     local_services: Vec<(String, Arc<RdfDataset>)>,
     service_handler: Option<u32>,
@@ -4092,13 +4030,6 @@ impl AsyncJobOptions {
             DEFAULT_YIELD_EVERY_POLLS,
         )
         .map_err(OptionsError::refused)?;
-        options.stack_bytes = count_option(
-            "stackBytes",
-            counts.get("stackBytes").copied(),
-            MIN_STACK_BYTES,
-            DEFAULT_STACK_BYTES,
-        )
-        .map_err(OptionsError::refused)?;
         options.check()?;
         Ok(options)
     }
@@ -4425,14 +4356,38 @@ fn begin_job(
         program: options.program.clone(),
         accept: options.accept.clone(),
     };
-    Ok(register_operation(
+    register_operation(
         kind,
         sparql_operation(input),
         options,
         freeze_ms,
         (dataset.identity(), dataset.current_generation()),
         update_claim,
-    ))
+    )
+}
+
+/// The size of every job's stack region: the module's own shadow stack's, in bytes.
+///
+/// The refusal is the module's: its layout is not the stack-first one the lane assumes,
+/// so no job can be given a region and no job begins.
+fn region_bytes() -> Result<usize, JobError> {
+    crate::shadow_stack::region_bytes().map_err(JobError::fault)
+}
+
+/// The size of every job's stack region, in bytes: the module's own shadow stack's.
+///
+/// The package root reads it once, when it installs the asynchronous lane, and refuses to
+/// install the lane when this throws.
+///
+/// # Errors
+///
+/// The module's layout is not the stack-first one the lane assumes; the error carries the
+/// host-fault code and names the layout that was found.
+#[wasm_bindgen(js_name = asyncStackRegionBytes)]
+pub fn async_stack_region_bytes() -> Result<u32, JsValue> {
+    region_bytes()
+        .map(|bytes| u32::try_from(bytes).unwrap_or(u32::MAX))
+        .map_err(|error| error.to_js())
 }
 
 /// Register a job of `kind` that runs `operation` under `options`. `dataset` is the
@@ -4445,10 +4400,10 @@ fn register_operation(
     freeze_ms: f64,
     dataset: (u64, u64),
     update_claim: Option<UpdateClaim>,
-) -> AsyncJob {
-    let region = StackRegion::new(options.stack_bytes as usize);
+) -> Result<AsyncJob, JobError> {
+    let region = StackRegion::new(region_bytes()?);
     let inner = register_job(|id| {
-        let slots = Arc::new(JobSlots::new(id, region.bounds));
+        let slots = Arc::new(JobSlots::new(id, region.bounds()));
         add_ms(&slots.counters.freeze_ms, freeze_ms);
         let watch = Arc::new(JspiStopWatch::new(
             slots,
@@ -4475,7 +4430,7 @@ fn register_operation(
             refusal: RefCell::new(None),
         }
     });
-    AsyncJob { inner }
+    Ok(AsyncJob { inner })
 }
 
 /// Match the arguments to `operation` and register the SHACL job `options` were
@@ -4490,21 +4445,19 @@ fn begin_shacl_job(
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
     let request = ShaclRequest::build(operation, arguments)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
-    Ok(register_operation(
+    register_operation(
         AsyncOperationKind::Shacl,
         Box::new(move |run| execute_shacl(request, run)),
         options,
         0.0,
         (0, 0),
         None,
-    ))
+    )
 }
 
 /// A refusal to begin a job, thrown before any job exists.
 fn begin_refused(error: &JobError) -> JsValue {
-    error.to_js(Lane::Async {
-        region_bytes: DEFAULT_STACK_BYTES as usize,
-    })
+    error.to_js()
 }
 
 #[wasm_bindgen]
@@ -4840,28 +4793,18 @@ mod tests {
         assert_eq!(default.quantum, DEFAULT_YIELD_EVERY_POLLS);
     }
 
+    /// The region is not an option: the host keys are the yield quantum and the two
+    /// `SERVICE`/`LOAD` sources, nothing sizes a stack, and a count under any other name
+    /// is refused by name as a key no operation reads.
     #[test]
-    fn stack_bytes_refuses_a_region_below_the_minimum_and_accepts_the_minimum() {
+    fn the_stack_region_is_not_an_option() {
+        assert_eq!(HOST_KEYS, ["yieldEveryPolls", "catalog", "localServices"]);
+        assert!(option_shape("regionBytes").is_none());
         let error = options()
-            .count("stackBytes", 4096.0)
+            .count("regionBytes", 2_097_152.0)
             .validate(AsyncOperationKind::Query)
-            .expect_err("a 4 KiB region is refused");
-        assert!(
-            error.contains("stackBytes") && error.contains("524288"),
-            "{error}"
-        );
-        let minimum = options()
-            .count("stackBytes", 524_288.0)
-            .validate(AsyncOperationKind::Query)
-            .expect("the minimum is accepted");
-        assert_eq!(minimum.stack_bytes, 524_288);
-        assert_eq!(
-            options()
-                .validate(AsyncOperationKind::Query)
-                .expect("defaults")
-                .stack_bytes,
-            DEFAULT_STACK_BYTES
-        );
+            .expect_err("a count no operation reads is refused");
+        assert!(error.contains("regionBytes"), "{error}");
     }
 
     #[test]
@@ -6170,125 +6113,134 @@ mod tests {
         timed_out.finish();
     }
 
+    /// A frame anywhere inside the region — at its top, one byte above its base, at the
+    /// base itself — passes; a frame just outside either end is the fault, and the fault
+    /// names the pointer and the region.
     #[test]
-    fn the_stack_guard_stops_a_frame_in_the_guard_band() {
+    fn a_frame_outside_the_region_is_a_fault() {
         let bounds = StackBounds {
             base: 0x10_0000,
             top: 0x18_0000,
         };
         let check = |sp: usize| bounds.check(sp);
+        assert!(check(bounds.top).is_ok());
         assert!(check(bounds.top - 64).is_ok());
-        assert!(
-            check(bounds.base + STACK_GUARD_BYTES).is_ok(),
-            "the first byte above the guard band is usable"
-        );
-        let exhausted =
-            check(bounds.base + STACK_GUARD_BYTES - 1).expect_err("inside the guard band");
+        assert!(check(bounds.base + 1).is_ok());
+        assert!(check(bounds.base).is_ok());
+        let below = check(bounds.base - 1).expect_err("below the base");
         assert_eq!(
-            exhausted,
-            "asynchronous job stack region exhausted (524288 bytes); raise stackBytes"
+            below,
+            "asynchronous job frame is outside its stack region (stack pointer 0xfffff, \
+             region [0x100000, 0x180000])"
         );
-        // The band lies below the point the evaluator's checks refuse at: a frame the
-        // margin has just run out under is still above it.
-        assert!(check(bounds.base + purrdf_stack::MARGIN_BYTES - 1).is_ok());
         assert!(
             check(bounds.top + 16)
-                .expect_err("outside the region")
-                .contains("not running on its stack region")
+                .expect_err("above the top")
+                .contains("outside its stack region")
         );
+        assert_eq!(bounds.bytes(), 524_288);
     }
 
+    /// A region is exactly the size asked for, its base and top 16-byte aligned wherever
+    /// the allocator put it, and it carries its canary; every one of several allocated at
+    /// once does.
     #[test]
-    fn a_region_is_aligned_and_carries_its_canary() {
-        let region = StackRegion::new(524_288 + 7);
-        assert_eq!(region.bounds.base % 16, 0);
-        assert_eq!(region.bounds.top % 16, 0);
-        assert_eq!(region.bounds.top - region.bounds.base, 524_288);
-        let offset = region.bounds.base - region.memory.as_ptr() as usize;
-        assert_eq!(
-            region.memory[offset..offset + 4],
-            STACK_CANARY.to_le_bytes(),
-            "the canary sits at the base"
-        );
-    }
-
-    #[test]
-    fn a_region_size_and_its_exhaustion_message_depend_only_on_the_request() {
-        // Allocations land at different alignments; the region (and so the message a
-        // host sees) must not follow them.
-        let regions: Vec<StackRegion> = (0..8).map(|_| StackRegion::new(524_288 + 7)).collect();
+    fn a_region_is_aligned_sized_and_carries_its_canary() {
+        let regions: Vec<StackRegion> = (0..8).map(|_| StackRegion::new(524_288)).collect();
         for region in &regions {
-            assert_eq!(region.bounds.top - region.bounds.base, 524_288);
-            assert_eq!(
-                region.bounds.exhausted(),
-                "asynchronous job stack region exhausted (524288 bytes); raise stackBytes"
-            );
+            let bounds = region.bounds();
+            assert!(bounds.base.is_multiple_of(STACK_ALIGN));
+            assert!(bounds.top.is_multiple_of(STACK_ALIGN));
+            assert_eq!(bounds.bytes(), 524_288);
+            assert!(region.canary_intact(), "the canary sits at the base");
         }
-        let larger = StackRegion::new(4 * 1024 * 1024);
+        let module_sized = StackRegion::new(region_bytes().expect("this build has a layout"));
         assert_eq!(
-            larger.bounds.exhausted(),
-            "asynchronous job stack region exhausted (4194304 bytes); raise stackBytes",
-            "a different request is a different message"
+            module_sized.bounds().bytes(),
+            crate::shadow_stack::region_bytes().expect("the same layout")
         );
     }
 
+    /// A suspension reads the canary first. The valid neighbour: with the canary intact
+    /// the check passes; with the word overwritten — as a frame that ran past the base
+    /// leaves it — the check is the region's fault, and the run's own read of the region
+    /// says the same. Off the region (not armed) nothing is read.
     #[test]
-    fn an_overrun_the_zone_absorbs_is_told_apart_from_one_that_escapes() {
-        let base_offset = |region: &StackRegion| region.zone_offset + STACK_OVERRUN_ZONE_BYTES;
-
-        // The valid neighbour: frames anywhere inside the region leave no trace below it.
-        let mut inside = StackRegion::new(524_288);
-        let offset = base_offset(&inside);
-        inside.memory[offset + 4..offset + 4096].fill(0);
-        assert_eq!(inside.overrun(), Overrun::None);
-
-        // A frame that overwrote only the canary.
-        let mut canary = StackRegion::new(524_288);
-        let offset = base_offset(&canary);
-        canary.memory[offset] ^= 0xFF;
-        assert_eq!(canary.overrun(), Overrun::Absorbed);
-
-        // Frames down to the floor, the canary rewritten by chance.
-        let mut upper = StackRegion::new(524_288);
-        let offset = base_offset(&upper);
-        upper.memory[offset - (STACK_OVERRUN_ZONE_BYTES - STACK_OVERRUN_FLOOR_BYTES)..offset]
-            .fill(0);
-        assert_eq!(upper.overrun(), Overrun::Absorbed);
-
-        // One byte in the floor: the frames may have left the allocation.
-        let mut floor = StackRegion::new(524_288);
-        let zone = floor.zone_offset;
-        floor.memory[zone + STACK_OVERRUN_FLOOR_BYTES - 1] = 0;
-        assert_eq!(floor.overrun(), Overrun::Escaped);
-        let mut bottom = StackRegion::new(524_288);
-        let zone = bottom.zone_offset;
-        bottom.memory[zone] = 0;
-        assert_eq!(bottom.overrun(), Overrun::Escaped);
+    fn a_suspension_after_frames_overwrote_the_canary_is_the_regions_fault() {
+        let region = StackRegion::new(524_288);
+        let slots = Arc::new(JobSlots::new(1, region.bounds()));
+        assert_eq!(slots.check_canary(), Ok(()), "not armed: nothing is read");
+        slots.region_armed.store(true, Ordering::Relaxed);
+        assert_eq!(slots.check_canary(), Ok(()));
+        assert!(region.canary_intact());
+        // What a frame that ran past the base does to the word there.
+        // SAFETY: `region` is alive, its base is aligned, and the write goes through a
+        // raw pointer; nothing holds a reference to the region's bytes.
+        unsafe { ptr::write_volatile(region.bounds().base as *mut u32, 0) };
+        let fault = slots.check_canary().expect_err("the canary is gone");
+        assert_eq!(
+            fault,
+            format!(
+                "asynchronous job frames ran past the base of its stack region (524288 bytes \
+                 at [{:#x}, {:#x}]): the canary word at the base was overwritten",
+                region.bounds().base,
+                region.bounds().top
+            )
+        );
+        assert!(!region.canary_intact());
+        slots.region_armed.store(false, Ordering::Relaxed);
+        drop(slots);
+        drop(region);
     }
 
+    /// A poll on an armed region records the frame's depth; on the native build the
+    /// frame is never inside the region, so the record is the fault.
     #[test]
-    fn a_poll_after_frames_overwrote_the_canary_stops_with_the_typed_exhaustion() {
+    fn a_poll_off_the_region_is_a_fault_and_an_unarmed_one_records_nothing() {
         let region = StackRegion::new(524_288);
-        let slots = Arc::new(JobSlots::new(1, region.bounds));
-        slots.region_armed.store(true, Ordering::Relaxed);
+        let slots = Arc::new(JobSlots::new(1, region.bounds()));
         let watch = JspiStopWatch::new(Arc::clone(&slots), None, u32::MAX);
-        // The valid neighbour: the canary is intact, so the guard goes on to the frame's
-        // own address — which on the native build is never inside the region.
+        assert_eq!(watch.record_depth(), Ok(()));
+        assert_eq!(
+            slots
+                .counters
+                .snapshot(region.bounds().top)
+                .stack_high_water_bytes(),
+            0.0,
+            "nothing is recorded while the job is not on its region"
+        );
+        slots.region_armed.store(true, Ordering::Relaxed);
         assert!(
             watch
-                .stack_check()
+                .record_depth()
                 .expect_err("a native frame is outside the region")
-                .contains("not running on its stack region")
+                .contains("outside its stack region")
         );
-        let mut region = region;
-        let offset = region.zone_offset + STACK_OVERRUN_ZONE_BYTES;
-        region.memory[offset..offset + 4].fill(0);
-        assert_eq!(
-            watch.stack_check().expect_err("the canary is gone"),
-            "asynchronous job stack region exhausted (524288 bytes); raise stackBytes"
-        );
+        slots.region_armed.store(false, Ordering::Relaxed);
         drop(watch);
+        drop(slots);
         drop(region);
+    }
+
+    /// The evidence's high-water mark is the deepest recorded frame's distance below the
+    /// region's top: `0` before any frame is recorded, the lowest pointer wins however
+    /// the frames are ordered, and a shallower frame after a deeper one changes nothing.
+    #[test]
+    fn stack_high_water_is_the_deepest_frame_below_the_top() {
+        let top = 0x18_0000;
+        let counters = AsyncCounters::default();
+        assert_eq!(counters.snapshot(top).stack_high_water_bytes(), 0.0);
+        counters.record_depth(top - 100);
+        assert_eq!(counters.snapshot(top).stack_high_water_bytes(), 100.0);
+        counters.record_depth(top - 4096);
+        counters.record_depth(top - 1000);
+        assert_eq!(counters.snapshot(top).stack_high_water_bytes(), 4096.0);
+        counters.record_depth(top);
+        assert_eq!(counters.snapshot(top).stack_high_water_bytes(), 4096.0);
+        // A frame at the top itself is a depth of zero, and the first record.
+        let fresh = AsyncCounters::default();
+        fresh.record_depth(top);
+        assert_eq!(fresh.snapshot(top).stack_high_water_bytes(), 0.0);
     }
 
     // ── Jobs, end to end on the native build (no effect is issued) ───────────────────
@@ -6324,7 +6276,7 @@ mod tests {
             job.inner
                 .take_outcome("takeRawBytes", &[AsyncOperationKind::Raw])
                 .expect_err("an outcome is taken once")
-                .rendered(Lane::Sync),
+                .rendered(),
             "takeRawBytes: the outcome was already taken"
         );
         assert_eq!(run_job(job.id()), RunStatus::AlreadyStarted);
@@ -6537,7 +6489,7 @@ mod tests {
             job.inner
                 .take_outcome("takeQueryResult", &[AsyncOperationKind::Query])
                 .expect_err("a take of the wrong kind is refused")
-                .rendered(Lane::Sync),
+                .rendered(),
             "takeQueryResult is not available on a explain job"
         );
         job.finish();
@@ -6640,7 +6592,7 @@ mod tests {
             job.inner
                 .take_outcome("takeRawBytes", &[AsyncOperationKind::Raw])
                 .expect_err("a take of the wrong kind is refused")
-                .rendered(Lane::Sync),
+                .rendered(),
             "takeRawBytes is not available on a governed job"
         );
         job.finish();
@@ -6665,7 +6617,7 @@ mod tests {
             job.inner
                 .commit_into(&mut dataset)
                 .expect_err("nothing to commit")
-                .rendered(Lane::Sync),
+                .rendered(),
             "host bug"
         );
         assert_eq!(dataset.current_generation(), before);
@@ -6739,7 +6691,7 @@ mod tests {
             job.inner
                 .commit_into(&mut dataset)
                 .expect_err("a second commit")
-                .rendered(Lane::Sync),
+                .rendered(),
             "nothing to commit: the update was not applied, or was already committed"
         );
         assert_eq!(dataset.size(), 3);
@@ -6769,7 +6721,7 @@ mod tests {
             .inner
             .commit_into(&mut dataset)
             .expect_err("stale")
-            .rendered(Lane::Sync);
+            .rendered();
         assert_eq!(
             error,
             "dataset mutated while an asynchronous update was in flight (generation 0 → 1); \
@@ -6796,7 +6748,7 @@ mod tests {
             .inner
             .commit_into(&mut other)
             .expect_err("wrong dataset")
-            .rendered(Lane::Sync);
+            .rendered();
         assert!(
             error.starts_with("commit targets a different dataset"),
             "{error}"
@@ -6825,7 +6777,7 @@ mod tests {
             job.inner
                 .commit_into(&mut dataset)
                 .expect_err("not applied")
-                .rendered(Lane::Sync)
+                .rendered()
                 .starts_with("nothing to commit")
         );
         assert_eq!(dataset.size(), 2);
