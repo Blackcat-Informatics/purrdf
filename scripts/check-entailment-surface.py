@@ -176,6 +176,22 @@ _HOST_NAMES: dict[str, dict[str, str]] = {
         "capi": "purrdf_entail_graph_entails",
         "cli": "--conclusion",
     },
+    # The limit-taking forms: every host reaches them through the same entry point, whose
+    # stored-fact and join-step limit arguments are what select them.
+    "certain_answers_with": {
+        "boundary": "certain_answers_to_string",
+        "python": "certain_answers",
+        "wasm": "entailCertainAnswers",
+        "capi": "purrdf_entail_certain_answers",
+        "cli": "--pattern",
+    },
+    "entails_with": {
+        "boundary": "graph_entails_to_string",
+        "python": "graph_entails",
+        "wasm": "entailGraphEntails",
+        "capi": "purrdf_entail_graph_entails",
+        "cli": "--conclusion",
+    },
     "verify": {
         "boundary": "verify_entailment_to_string",
         "python": "verify_entailment",
@@ -239,6 +255,15 @@ _PARAM_SPELLINGS: dict[str, dict[str, tuple[str, ...]]] = {
         "dts": ("conclusion",),
         "capi": ("conclusion",),
         "cli": ("--conclusion",),
+    },
+    # The evaluation limits, one `MaterializeLimits` on the boundary: every host spells
+    # the stored-fact and join-step limits as its own two arguments.
+    "limits": {
+        "python": ("max_stored_facts", "max_join_steps"),
+        "wasm": ("max_stored_facts", "max_join_steps"),
+        "dts": ("maxStoredFacts", "maxJoinSteps"),
+        "capi": ("max_stored_facts", "max_join_steps"),
+        "cli": ("--max-stored-facts", "--max-join-steps"),
     },
     "imports": {
         "python": ("imports",),
@@ -336,6 +361,9 @@ def _named_params(text: str, opener: str, what: str, trailing: bool) -> list[str
     chunks = _params_between_parens(text, start + len(opener) - 1, what)
     names: list[str] = []
     for chunk in chunks:
+        # A Python stub's bare `*` marks the keyword-only arguments; it names no parameter.
+        if chunk.strip() == "*":
+            continue
         pattern = r"(\w+)\s*(?:\[\s*\])?\s*$" if trailing else r"^(?:mut\s+)?(\w+)"
         found = re.search(pattern, chunk) if trailing else re.match(pattern, chunk)
         if not found:
@@ -413,7 +441,7 @@ def _pyo3_signature(text: str, function: str) -> list[str]:
     # skipped rather than assumed absent. What is NOT allowed between is another `fn`.
     found = re.search(
         rf"#\[pyo3\(signature = \((?P<params>[^()]*)\)\)\]\s*"
-        rf"(?:#\[[^\n]*\][^\n]*\s*)*fn {function}\(",
+        rf"(?:#\[(?:[^\[\]]|\[[^\[\]]*\])*\][^\n]*\s*)*fn {function}\(",
         text,
     )
     if not found:
@@ -422,7 +450,12 @@ def _pyo3_signature(text: str, function: str) -> list[str]:
             "above it; without one the Python call shape is whatever PyO3 infers, which "
             "this gate cannot check"
         )
-    return [chunk.strip().split("=")[0].strip() for chunk in found.group("params").split(",") if chunk.strip()]
+    # A bare `*` marks the keyword-only arguments that follow; it names no parameter.
+    return [
+        chunk.strip().split("=")[0].strip()
+        for chunk in found.group("params").split(",")
+        if chunk.strip() and chunk.strip() != "*"
+    ]
 
 
 def _wasm_params(text: str, js_name: str) -> list[str]:
@@ -1197,7 +1230,12 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
     (
         "the header declaration loses a parameter",
         "crates/rdf-capi/include/purrdf.h",
-        lambda text: _swap(text, "                                      size_t import_count,\n", ""),
+        lambda text: _swap_after(
+            text,
+            "int32_t purrdf_entail_certain_answers(",
+            "                                      size_t import_count,\n",
+            "",
+        ),
     ),
     # ── the command line ──
     (
