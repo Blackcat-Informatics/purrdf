@@ -54,6 +54,7 @@ use crate::ir::TermRef;
 use crate::{DatasetView, FastHasher, FastMap, RdfDiagnostic, RdfTextDirection, SerializeGraph};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::sink::{TextSink, WriterDrain};
+use purrdf_core::{Nested, try_fold_nested};
 use purrdf_iri::BaseIri;
 
 /// The blank-node label alphabet the TARGET format's codec can legally emit —
@@ -902,15 +903,42 @@ impl<I: ViewTermId> SerGraphInterner<I> {
     }
 
     /// Intern an IR term id into the first-party term table, returning its index.
+    ///
+    /// A quoted triple is interned over [`try_fold_nested`]'s work list: its subject,
+    /// predicate and object, each fully before the next, then the triple itself. Every
+    /// term is recorded in `id_memo` as soon as its index exists, and the first
+    /// refusal ends the walk.
     fn intern<D: DatasetView<Id = I>>(
         &mut self,
         dataset: &D,
         id: D::Id,
     ) -> Result<usize, RdfDiagnostic> {
+        try_fold_nested(
+            id,
+            self,
+            |this, id| this.intern_leaf(dataset, id),
+            |this, id, s, p, o| {
+                // A quoted-triple term is a `Triple` term whose `reifier` points at a
+                // self-reifier binding holding `(s, p, o)`. This self-reifier sentinel
+                // is what the N-Quads serializer skips.
+                let idx = this.intern_triple(s, p, o);
+                this.id_memo.insert(id, idx);
+                Ok(idx)
+            },
+        )
+    }
+
+    /// The index of term `id` if it is memoised or not a quoted triple — interning it
+    /// on a miss — or a quoted triple's three component ids.
+    fn intern_leaf<D: DatasetView<Id = I>>(
+        &mut self,
+        dataset: &D,
+        id: D::Id,
+    ) -> Result<Nested<D::Id, usize>, RdfDiagnostic> {
         // Repeat occurrences of an id are answered here without materializing the
         // term's value (see `id_memo`).
         if let Some(&idx) = self.id_memo.get(&id) {
-            return Ok(idx);
+            return Ok(Nested::Leaf(idx));
         }
         // The emitted shape is built ONCE and is what the memo probes against. On a
         // miss it becomes the `terms` entry; on a hit it is dropped. Either way the
@@ -966,18 +994,10 @@ impl<I: ViewTermId> SerGraphInterner<I> {
                     reifier: None,
                 })
             }
-            TermRef::Triple { s, p, o } => {
-                // A quoted-triple term is a `Triple` term whose `reifier` points at a
-                // self-reifier binding holding `(s, p, o)`. This self-reifier sentinel
-                // is what the N-Quads serializer skips.
-                let s = self.intern(dataset, s)?;
-                let p = self.intern(dataset, p)?;
-                let o = self.intern(dataset, o)?;
-                self.intern_triple(s, p, o)
-            }
+            TermRef::Triple { s, p, o } => return Ok(Nested::Triple(s, p, o)),
         };
         self.id_memo.insert(id, idx);
-        Ok(idx)
+        Ok(Nested::Leaf(idx))
     }
 
     /// Intern a non-triple term by its emitted shape, pushing it only on a miss.
@@ -1345,5 +1365,71 @@ mod build_residency {
             80_001,
             "the interned term table changed size, so the dedup relation moved"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The view-to-graph interner against its recursive reference.
+
+    use purrdf_core::backend::TermFactory as _;
+    use purrdf_core::blank_label::LabelAlphabet;
+    use purrdf_core::{Nested, RdfDataset, RdfDatasetBuilder, TermId};
+
+    use super::{RdfDiagnostic, SerGraphInterner, TermRef};
+
+    /// The recursive reference of [`SerGraphInterner::intern`].
+    fn reference(
+        interner: &mut SerGraphInterner<TermId>,
+        dataset: &RdfDataset,
+        id: TermId,
+    ) -> Result<usize, RdfDiagnostic> {
+        if let Some(&idx) = interner.id_memo.get(&id) {
+            return Ok(idx);
+        }
+        if let TermRef::Triple { s, p, o } = dataset.resolve(id) {
+            let s = reference(interner, dataset, s)?;
+            let p = reference(interner, dataset, p)?;
+            let o = reference(interner, dataset, o)?;
+            let idx = interner.intern_triple(s, p, o);
+            interner.id_memo.insert(id, idx);
+            return Ok(idx);
+        }
+        match interner.intern_leaf(dataset, id)? {
+            Nested::Leaf(idx) => Ok(idx),
+            Nested::Triple(..) => unreachable!("a term that is not a triple term is a leaf"),
+        }
+    }
+
+    /// The work-list interner lowers every generated stored term — twice, the second
+    /// time through its memo — into exactly the term table the recursive reference does.
+    #[test]
+    fn the_interner_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..300_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::WellFormed,
+            );
+            nested += usize::from(budget < 7);
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let dataset = builder.freeze().expect("a generated term freezes");
+            let object = dataset.quads().next().expect("one quad").o;
+            let mut interned = SerGraphInterner::with_capacity(0, LabelAlphabet::BlankNodeLabel);
+            let mut expected = SerGraphInterner::with_capacity(0, LabelAlphabet::BlankNodeLabel);
+            for _ in 0..2 {
+                let found = interned.intern(&*dataset, object).expect("interns");
+                let wanted = reference(&mut expected, &dataset, object).expect("interns");
+                assert_eq!(found, wanted, "seed {seed}");
+            }
+            assert_eq!(interned.terms, expected.terms, "seed {seed}");
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
     }
 }

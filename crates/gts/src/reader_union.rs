@@ -19,8 +19,8 @@ use crate::wire::map_get;
 // by result-id.
 //
 // TERMINATION (§7.3, normative) — a quoted triple's VALUE is its `(s, p, o)`
-// binding, so interning one walks its components and `key_for` -> `map_term`
-// -> `key_for` is mutually recursive with NO bound of its own. It terminates
+// binding, so interning one walks its components, and `map_term`'s walk has NO
+// bound of its own. It terminates
 // because a term can never reach itself:
 //
 //   * `tt` and `dt` components must name an ALREADY-INTRODUCED term, and `rf`
@@ -57,22 +57,61 @@ struct Unioner {
     intern: HashMap<InternKey, usize>,
 }
 
+/// Where a term being mapped by [`Unioner::map_term`] stands: each stage waits for the
+/// mappings it asked for, in the order the stages are listed.
+enum MapStage {
+    /// Nothing is known yet.
+    Start,
+    /// The quoted triple's key components are being mapped.
+    KeyComponents,
+    /// The key is known; the union is consulted for it.
+    Lookup,
+    /// The datatype, if any, is being mapped.
+    Datatype,
+    /// The reifier, if any and not the term itself, is being mapped.
+    Reifier,
+    /// The stated `tt` components, if any, are being mapped.
+    Components,
+}
+
+/// A term being mapped by [`Unioner::map_term`].
+struct MapFrame {
+    tid: usize,
+    stage: MapStage,
+    /// Terms still to map before the stage advances, the next one last.
+    calls: Vec<usize>,
+    /// The union ids the calls of the current stage produced, in call order.
+    results: Vec<usize>,
+    key: Option<InternKey>,
+    datatype: Option<usize>,
+    reifier: Option<usize>,
+}
+
+impl MapFrame {
+    const fn new(tid: usize) -> Self {
+        Self {
+            tid,
+            stage: MapStage::Start,
+            calls: Vec::new(),
+            results: Vec::new(),
+            key: None,
+            datatype: None,
+            reifier: None,
+        }
+    }
+
+    /// The three results of a stage that mapped a triple's `(s, p, o)`.
+    fn triple_results(&mut self) -> Triple3 {
+        <[usize; 3]>::try_from(std::mem::take(&mut self.results))
+            .expect("a triple's three components are mapped")
+            .into()
+    }
+}
+
 impl Unioner {
-    /// # Termination
-    ///
-    /// `key_for` ↔ `map_term` recurse through a term's triple components and its
-    /// datatype with no depth bound and no visited set — see the module-level
-    /// rationale above for why: `union_segments` is `pub(crate)` in a private
-    /// module, so `reader::read_with_options` is its only caller, and every
-    /// `Graph` reaching it has already passed `reader::read`'s per-segment
-    /// refusal of a self-reaching triple term (`reifier_binding_is_recursive`,
-    /// `DamagedFrame`, covering the implicit self-bound spelling of §7.1 too). A
-    /// guard was considered and rejected here: it would put two hash lookups per
-    /// term on the fold's hot path to defend against a shape the reader cannot
-    /// produce — a closed decision, not deferred work. Any future path into this
-    /// union that does not run through `reader::read` must establish its own
-    /// acyclicity before calling in; this walk will not.
-    fn key_for(&mut self, seg: &Graph, seg_idx: usize, tid: usize) -> InternKey {
+    /// The intern key of a segment term that is not a quoted triple with bound
+    /// components — those key on their components' union ids instead.
+    fn leaf_key(seg: &Graph, seg_idx: usize, tid: usize) -> InternKey {
         let t = &seg.terms[tid];
         match t.kind {
             TermKind::Iri => InternKey::Iri(t.value.clone()),
@@ -89,84 +128,140 @@ impl Unioner {
                 let anon_tid = label.is_none().then_some(tid);
                 InternKey::Bnode(seg_idx, label, anon_tid)
             }
-            // Quoted triple: identity is the interned SPO binding, taken from
-            // the term's own `tt` when it has one and otherwise through the
-            // legacy reifier indirection. Self-bound triple terms use
-            // `rf == tid`; do not recursively map the reifier.
-            TermKind::Triple => InternKey::Qt(seg.term_triple(t).map(|(s, p, o)| {
-                (
-                    self.map_term(seg, seg_idx, s),
-                    self.map_term(seg, seg_idx, p),
-                    self.map_term(seg, seg_idx, o),
-                )
-            })),
+            TermKind::Triple => InternKey::Qt(None),
         }
     }
 
+    /// Map segment term `tid` into the union, returning its union id.
+    ///
+    /// A term's key is found first. A quoted triple keys on its interned SPO
+    /// binding, taken from the term's own `tt` when it has one and otherwise through
+    /// the legacy reifier indirection, so its subject, predicate and object are
+    /// mapped first, in that order. A self-bound triple term uses `rf == tid` and its
+    /// reifier is not mapped. A term whose key the union already holds is that union
+    /// term; any other has its datatype, then its reifier, then its `tt` components
+    /// mapped, and is pushed once all of them are, so its union id is the length of
+    /// the union's term table at that moment. Every nested mapping runs to completion
+    /// before the next begins, over a work list of [`MapFrame`]s.
+    ///
     /// # Termination
     ///
-    /// Mirrors [`key_for`](Self::key_for)'s unguarded recursion into a term's
-    /// triple/datatype edges, and rests on the same invariant — reachable only
-    /// through a `reader::read`-validated segment. See `key_for` for the full
-    /// rationale.
+    /// The walk follows a term's triple components, its datatype and its reifier
+    /// with no depth bound and no visited set — see the module-level rationale above
+    /// for why: `union_segments` is `pub(crate)` in a private module, so
+    /// `reader::read_with_options` is its only caller, and every `Graph` reaching it
+    /// has already passed `reader::read`'s per-segment refusal of a self-reaching
+    /// triple term (`reifier_binding_is_recursive`, `DamagedFrame`, covering the
+    /// implicit self-bound spelling of §7.1 too). A guard was considered and rejected
+    /// here: it would put two hash lookups per term on the fold's hot path to defend
+    /// against a shape the reader cannot produce — a closed decision. Any path into
+    /// this union that does not run through `reader::read` must establish its own
+    /// acyclicity before calling in; this walk will not.
     fn map_term(&mut self, seg: &Graph, seg_idx: usize, tid: usize) -> usize {
-        let key = self.key_for(seg, seg_idx, tid);
-        if let Some(&got) = self.intern.get(&key) {
-            return got;
+        let mut frames = vec![MapFrame::new(tid)];
+        loop {
+            let frame = frames.last_mut().expect("a term is being mapped");
+            if let Some(call) = frame.calls.pop() {
+                frames.push(MapFrame::new(call));
+                continue;
+            }
+            // `seg` is a parameter, not a field of `self`, so the term can be
+            // borrowed across the `&mut self` mappings; only the two `Option<String>`
+            // fields that move into the pushed `Term` are cloned below.
+            let t = &seg.terms[frame.tid];
+            let self_bound = t.kind == TermKind::Triple && t.reifier == Some(frame.tid);
+            let mapped = match frame.stage {
+                MapStage::Start => {
+                    match (t.kind, seg.term_triple(t)) {
+                        (TermKind::Triple, Some((s, p, o))) => {
+                            frame.calls = vec![o, p, s];
+                            frame.stage = MapStage::KeyComponents;
+                        }
+                        _ => {
+                            frame.key = Some(Self::leaf_key(seg, seg_idx, frame.tid));
+                            frame.stage = MapStage::Lookup;
+                        }
+                    }
+                    continue;
+                }
+                MapStage::KeyComponents => {
+                    frame.key = Some(InternKey::Qt(Some(frame.triple_results())));
+                    frame.stage = MapStage::Lookup;
+                    continue;
+                }
+                MapStage::Lookup => {
+                    let key = frame.key.as_ref().expect("the key is found first");
+                    if let Some(&got) = self.intern.get(key) {
+                        got
+                    } else {
+                        frame.calls.extend(t.datatype);
+                        frame.stage = MapStage::Datatype;
+                        continue;
+                    }
+                }
+                MapStage::Datatype => {
+                    frame.datatype = frame.results.pop();
+                    if !self_bound {
+                        frame.calls.extend(t.reifier);
+                    }
+                    frame.stage = MapStage::Reifier;
+                    continue;
+                }
+                MapStage::Reifier => {
+                    frame.reifier = frame.results.pop();
+                    if let Some((s, p, o)) = t.triple {
+                        frame.calls = vec![o, p, s];
+                    }
+                    frame.stage = MapStage::Components;
+                    continue;
+                }
+                MapStage::Components => {
+                    let triple = t.triple.map(|_| frame.triple_results());
+                    // Mapping the datatype, reifier and components can push terms, so
+                    // this term's output id is taken only now that they are done.
+                    let new_id = self.out.terms.len();
+                    let reifier = if self_bound {
+                        Some(new_id)
+                    } else {
+                        frame.reifier
+                    };
+                    // Blank nodes are relabelled with a segment prefix (§7.1 permits
+                    // isomorphism-preserving relabeling): within a segment,
+                    // byte-identical entries already intern to one union term (§7.8);
+                    // ACROSS segments the same label names DIFFERENT nodes, and
+                    // emitting the raw label from the union would merge them.
+                    // Label-less nodes (absent or empty "v") are distinct TERMS under
+                    // the intern key, so their serialized labels must stay distinct
+                    // too — the union id disambiguates them. Computed after dt/rf
+                    // mapping so out.terms.len() IS this term's id.
+                    let value = if t.kind == TermKind::Bnode {
+                        Some(match t.value.as_deref() {
+                            Some(label) if !label.is_empty() => format!("s{seg_idx}.{label}"),
+                            _ => format!("s{seg_idx}._anon{new_id}"),
+                        })
+                    } else {
+                        t.value.clone()
+                    };
+                    self.out.terms.push(Term {
+                        kind: t.kind,
+                        value,
+                        datatype: frame.datatype,
+                        lang: t.lang.clone(),
+                        direction: t.direction.clone(),
+                        reifier,
+                        triple,
+                    });
+                    let key = frame.key.take().expect("the key is found first");
+                    self.intern.insert(key, new_id);
+                    new_id
+                }
+            };
+            frames.pop();
+            match frames.last_mut() {
+                Some(parent) => parent.results.push(mapped),
+                None => return mapped,
+            }
         }
-        // `seg` is a parameter, not a field of `self`, so the term can be
-        // borrowed across the `&mut self` recursion; only the two `Option<String>`
-        // fields that move into the pushed `Term` are cloned below.
-        let t = &seg.terms[tid];
-        let datatype = t.datatype.map(|d| self.map_term(seg, seg_idx, d));
-        let self_bound = t.kind == TermKind::Triple && t.reifier == Some(tid);
-        let mapped_reifier = if self_bound {
-            None
-        } else {
-            t.reifier.map(|r| self.map_term(seg, seg_idx, r))
-        };
-        let triple = t.triple.map(|(s, p, o)| {
-            (
-                self.map_term(seg, seg_idx, s),
-                self.map_term(seg, seg_idx, p),
-                self.map_term(seg, seg_idx, o),
-            )
-        });
-        // Recursive datatype/reifier/triple-component mapping can push terms, so
-        // capture this term's output id only after those mappings have completed.
-        let new_id = self.out.terms.len();
-        let reifier = if self_bound {
-            Some(new_id)
-        } else {
-            mapped_reifier
-        };
-        // Blank nodes are relabelled with a segment prefix (§7.1 permits
-        // isomorphism-preserving relabeling): within a segment, byte-identical
-        // entries already intern to one union term (§7.8); ACROSS segments the
-        // same label names DIFFERENT nodes, and emitting the raw label from
-        // the union would merge them. Label-less nodes (absent or empty "v")
-        // are distinct TERMS under the intern key, so their serialized labels
-        // must stay distinct too — the union id disambiguates them. Computed
-        // after dt/rf mapping so out.terms.len() IS this term's id.
-        let value = if t.kind == TermKind::Bnode {
-            Some(match t.value.as_deref() {
-                Some(label) if !label.is_empty() => format!("s{seg_idx}.{label}"),
-                _ => format!("s{seg_idx}._anon{new_id}"),
-            })
-        } else {
-            t.value.clone()
-        };
-        self.out.terms.push(Term {
-            kind: t.kind,
-            value,
-            datatype,
-            lang: t.lang.clone(),
-            direction: t.direction.clone(),
-            reifier,
-            triple,
-        });
-        self.intern.insert(key, new_id);
-        new_id
     }
 
     /// Re-intern a suppression's id-addressed targets (§11).
@@ -298,4 +393,213 @@ pub(crate) fn union_segments(segments: &[Graph]) -> Graph {
             .extend(seg.segment_streamable.iter().cloned());
     }
     u.out
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The union's term mapping against its recursive reference, on generated segment
+    //! term tables, and at a hundred thousand levels on a 128 KiB thread.
+
+    use super::{InternKey, Unioner};
+    use crate::model::{Graph, Term, TermKind};
+
+    /// The recursive reference of [`Unioner::map_term`], with its key.
+    fn reference_map(union: &mut Unioner, seg: &Graph, seg_idx: usize, tid: usize) -> usize {
+        let t = &seg.terms[tid];
+        let key = match (t.kind, seg.term_triple(t)) {
+            (TermKind::Triple, Some((s, p, o))) => InternKey::Qt(Some((
+                reference_map(union, seg, seg_idx, s),
+                reference_map(union, seg, seg_idx, p),
+                reference_map(union, seg, seg_idx, o),
+            ))),
+            _ => Unioner::leaf_key(seg, seg_idx, tid),
+        };
+        if let Some(&got) = union.intern.get(&key) {
+            return got;
+        }
+        let datatype = t.datatype.map(|d| reference_map(union, seg, seg_idx, d));
+        let self_bound = t.kind == TermKind::Triple && t.reifier == Some(tid);
+        let mapped_reifier = if self_bound {
+            None
+        } else {
+            t.reifier.map(|r| reference_map(union, seg, seg_idx, r))
+        };
+        let triple = t.triple.map(|(s, p, o)| {
+            (
+                reference_map(union, seg, seg_idx, s),
+                reference_map(union, seg, seg_idx, p),
+                reference_map(union, seg, seg_idx, o),
+            )
+        });
+        let new_id = union.out.terms.len();
+        let reifier = if self_bound {
+            Some(new_id)
+        } else {
+            mapped_reifier
+        };
+        let value = if t.kind == TermKind::Bnode {
+            Some(match t.value.as_deref() {
+                Some(label) if !label.is_empty() => format!("s{seg_idx}.{label}"),
+                _ => format!("s{seg_idx}._anon{new_id}"),
+            })
+        } else {
+            t.value.clone()
+        };
+        union.out.terms.push(Term {
+            kind: t.kind,
+            value,
+            datatype,
+            lang: t.lang.clone(),
+            direction: t.direction.clone(),
+            reifier,
+            triple,
+        });
+        union.intern.insert(key, new_id);
+        new_id
+    }
+
+    /// A SplitMix64 draw from the counter at `state`.
+    const fn splitmix64(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    fn term(kind: TermKind, value: Option<String>) -> Term {
+        Term {
+            kind,
+            value,
+            datatype: None,
+            lang: None,
+            direction: None,
+            reifier: None,
+            triple: None,
+        }
+    }
+
+    /// A generated segment term table as the reader leaves one: every component,
+    /// datatype and reifier names an earlier term (or, for a self-bound triple term, the
+    /// term itself), triple terms state their components or reach them through a
+    /// reifier row, and labels, values and shapes repeat so the union deduplicates.
+    fn generated(seed: u64) -> Graph {
+        /// A draw below `n` from the counter at `state`.
+        fn draw(state: &mut u64, n: usize) -> usize {
+            let n = u64::try_from(n).expect("a small bound fits");
+            usize::try_from(splitmix64(state) % n).expect("a draw below a small bound fits")
+        }
+        let mut state = seed;
+        let mut graph = Graph::default();
+        let len = 2 + draw(&mut state, 12);
+        for index in 0..len {
+            let kind = if index == 0 { 0 } else { draw(&mut state, 6) };
+            let next = match kind {
+                0 => term(
+                    TermKind::Iri,
+                    Some(format!("http://example.org/i{}", index % 2)),
+                ),
+                1 => term(
+                    TermKind::Bnode,
+                    (index % 3 != 0).then(|| format!("b{}", index % 2)),
+                ),
+                2 => {
+                    let mut literal = term(TermKind::Literal, Some("7".to_owned()));
+                    literal.datatype = Some(draw(&mut state, index));
+                    literal
+                }
+                3 => {
+                    let mut triple = term(TermKind::Triple, None);
+                    triple.triple = Some((
+                        draw(&mut state, index),
+                        draw(&mut state, index),
+                        draw(&mut state, index),
+                    ));
+                    triple.reifier = (index % 2 == 0).then(|| draw(&mut state, index));
+                    triple
+                }
+                4 => {
+                    // Self-bound: the reifier row is keyed by the term's own id.
+                    let mut triple = term(TermKind::Triple, None);
+                    triple.reifier = Some(index);
+                    let components = (
+                        draw(&mut state, index),
+                        draw(&mut state, index),
+                        draw(&mut state, index),
+                    );
+                    graph.reifiers.push((index, components, None));
+                    triple
+                }
+                _ => {
+                    let mut triple = term(TermKind::Triple, None);
+                    let components = (
+                        draw(&mut state, index),
+                        draw(&mut state, index),
+                        draw(&mut state, index),
+                    );
+                    let rid = draw(&mut state, index);
+                    graph.reifiers.push((rid, components, None));
+                    triple.reifier = Some(rid);
+                    triple
+                }
+            };
+            graph.terms.push(next);
+        }
+        graph
+    }
+
+    /// Mapping every term of two generated segments, in order, answers the union ids and
+    /// builds the union term table exactly as the recursive reference does.
+    #[test]
+    fn term_mapping_agrees_with_its_recursive_reference_on_generated_segments() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let (first, second) = (generated(seed), generated(seed + 10_000));
+            let (mut union, mut expected) = (Unioner::default(), Unioner::default());
+            for (seg_idx, seg) in [&first, &second].into_iter().enumerate() {
+                for tid in 0..seg.terms.len() {
+                    nested += usize::from(seg.terms[tid].kind == TermKind::Triple);
+                    assert_eq!(
+                        union.map_term(seg, seg_idx, tid),
+                        reference_map(&mut expected, seg, seg_idx, tid),
+                        "seed {seed}, segment {seg_idx}, term {tid}"
+                    );
+                }
+            }
+            assert_eq!(union.out.terms, expected.out.terms, "seed {seed}");
+        }
+        assert!(nested > 0, "some generated segment holds a triple term");
+    }
+
+    /// A chain of triple terms a hundred thousand levels deep, each naming the next in
+    /// its object slot, is mapped into a union on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_chain_maps_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut seg = Graph::default();
+                for iri in ["s", "p", "o"] {
+                    seg.terms.push(term(
+                        TermKind::Iri,
+                        Some(format!("http://example.org/{iri}")),
+                    ));
+                }
+                let mut below = 2;
+                for _ in 0..LEVELS {
+                    let mut triple = term(TermKind::Triple, None);
+                    triple.triple = Some((0, 1, below));
+                    seg.terms.push(triple);
+                    below = seg.terms.len() - 1;
+                }
+                let mut union = Unioner::default();
+                let mapped = union.map_term(&seg, 0, below);
+                assert_eq!(mapped, LEVELS + 2, "every component precedes its triple");
+                assert_eq!(union.out.terms.len(), LEVELS + 3);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the mapping did not overflow the thread's stack");
+    }
 }

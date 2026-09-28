@@ -33,6 +33,7 @@ use crate::{
 };
 use purrdf_core::blank_label::LabelAlphabet;
 use purrdf_core::cdt_blank::BlankBinding;
+use purrdf_core::{Nested, try_fold_nested};
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, ScopedBase};
 
 /// The `rdf:reifies` predicate IRI: a triple-term object under this predicate is the
@@ -594,35 +595,58 @@ struct SerInterner<'a> {
 impl SerInterner<'_> {
     /// Intern a term id into the builder, returning its [`TermId`]. A quoted-triple
     /// term resolves its `(s, p, o)` through the reifier table and interns as a triple.
+    ///
+    /// A quoted triple is interned over [`try_fold_nested`]'s work list: its subject,
+    /// predicate and object, each fully before the next, then the triple itself, and
+    /// the first refusal ends the walk.
+    ///
+    /// # Termination
+    ///
+    /// The walk follows a quoted triple's components with no depth bound and no
+    /// visited set. It terminates because the term table it walks does: every
+    /// producer of a [`SerGraph`] guarantees that, and the one that takes a
+    /// caller-supplied graph (`crate::gts::gts_to_ser`) proves it, refusing a
+    /// self-reaching table with `gts-self-reaching-term`. The IR's own acyclicity
+    /// check runs at `freeze()`, which is far too late to stop a walk around a cycle.
     fn intern(
         &self,
         builder: &mut RdfDatasetBuilder,
         gts_id: usize,
     ) -> Result<TermId, RdfDiagnostic> {
-        match self.intern_node(builder, gts_id)? {
-            FoldNode::Term(id) => Ok(id),
-            FoldNode::Triple { s, p, o } => Ok(builder.intern_triple(s, p, o)),
-        }
+        try_fold_nested(
+            gts_id,
+            builder,
+            |builder, gts_id| self.resolve_node(builder, gts_id),
+            |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
+        )
     }
 
     /// Intern a GTS term id, returning a [`FoldNode`]: a leaf becomes `Term`, a
     /// quoted-triple term becomes `Triple` (its components already interned) so a
     /// caller can fold it as a reifier binding rather than re-interning it.
-    ///
-    /// # Termination
-    ///
-    /// `intern_node` → `intern` → `intern_node` recurses on a quoted triple's
-    /// components with no depth bound and no visited set. It terminates because the
-    /// term table it walks does: every producer of a [`SerGraph`] guarantees that, and
-    /// the one that takes a caller-supplied graph (`crate::gts::gts_to_ser`) proves it,
-    /// refusing a self-reaching table with `gts-self-reaching-term`. The IR's own
-    /// acyclicity check runs at `freeze()`, which is far too late — this walk would
-    /// have overflowed the stack, and aborted, long before reaching it.
     fn intern_node(
         &self,
         builder: &mut RdfDatasetBuilder,
         gts_id: usize,
     ) -> Result<FoldNode, RdfDiagnostic> {
+        match self.resolve_node(builder, gts_id)? {
+            Nested::Leaf(id) => Ok(FoldNode::Term(id)),
+            Nested::Triple(s, p, o) => {
+                let s = self.intern(builder, s)?;
+                let p = self.intern(builder, p)?;
+                let o = self.intern(builder, o)?;
+                Ok(FoldNode::Triple { s, p, o })
+            }
+        }
+    }
+
+    /// Intern a GTS term id that is not a quoted triple, or find a quoted triple's
+    /// three component GTS ids through the reifier table, interning none of them.
+    fn resolve_node(
+        &self,
+        builder: &mut RdfDatasetBuilder,
+        gts_id: usize,
+    ) -> Result<Nested<usize, TermId>, RdfDiagnostic> {
         let term = self.graph.terms.get(gts_id).ok_or_else(|| {
             RdfDiagnostic::error(
                 "native-codec-term-out-of-range",
@@ -641,7 +665,7 @@ impl SerInterner<'_> {
                             "GTS IRI term requires a non-empty value",
                         )
                     })?;
-                Ok(FoldNode::Term(builder.intern_iri(iri)))
+                Ok(Nested::Leaf(builder.intern_iri(iri)))
             }
             SerTermKind::Bnode => {
                 // The label is only ever read through `&label`: borrow the table's
@@ -650,7 +674,7 @@ impl SerInterner<'_> {
                     .value
                     .as_deref()
                     .map_or_else(|| Cow::Owned(format!("gts_bnode_{gts_id}")), Cow::Borrowed);
-                Ok(FoldNode::Term(match self.blanks {
+                Ok(Nested::Leaf(match self.blanks {
                     BlankIngress::Opaque => builder.intern_blank(&label, BlankScope::DEFAULT),
                     BlankIngress::TextDecoded(alphabet) => {
                         builder.intern_text_blank(&label, alphabet)
@@ -668,7 +692,7 @@ impl SerInterner<'_> {
                 // SAME rule the bare `_:` tokens above use — that agreement is
                 // what makes `_:b` written as a subject and `_:b` written inside
                 // a `cdt:List` the same node.
-                Ok(FoldNode::Term(builder.intern_literal_bound(
+                Ok(Nested::Leaf(builder.intern_literal_bound(
                     RdfLiteral {
                         lexical_form: term.value.clone().unwrap_or_default(),
                         datatype,
@@ -691,10 +715,7 @@ impl SerInterner<'_> {
                         format!("GTS triple term references missing reifier {reifier_id}"),
                     )
                 })?;
-                let s = self.intern(builder, s)?;
-                let p = self.intern(builder, p)?;
-                let o = self.intern(builder, o)?;
-                Ok(FoldNode::Triple { s, p, o })
+                Ok(Nested::Triple(s, p, o))
             }
         }
     }
@@ -1101,5 +1122,102 @@ mod tests {
             tracked.quads().collect::<Vec<_>>() == plain.quads().collect::<Vec<_>>(),
             "tracked dataset has identical quads"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The GTS-graph interner against its recursive reference, and at a hundred thousand
+    //! levels on a 128 KiB thread.
+
+    use purrdf_core::{Nested, RdfDatasetBuilder, TermId};
+
+    use super::super::ser_model::SerGraph;
+    use super::super::ser_model::term_walk_tests::lower;
+    use super::{BlankIngress, RdfDiagnostic, SerInterner};
+
+    /// The recursive reference of [`SerInterner::intern`].
+    fn reference_intern(
+        interner: &SerInterner<'_>,
+        builder: &mut RdfDatasetBuilder,
+        id: usize,
+    ) -> Result<TermId, RdfDiagnostic> {
+        match interner.resolve_node(builder, id)? {
+            Nested::Leaf(id) => Ok(id),
+            Nested::Triple(s, p, o) => {
+                let s = reference_intern(interner, builder, s)?;
+                let p = reference_intern(interner, builder, p)?;
+                let o = reference_intern(interner, builder, o)?;
+                Ok(builder.intern_triple(s, p, o))
+            }
+        }
+    }
+
+    /// The work-list interner interns every generated term into a fresh builder in the
+    /// order the recursive reference does: the same id, the same number of terms.
+    #[test]
+    fn the_interner_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::IriPredicates,
+            );
+            nested += usize::from(budget < 7);
+            let mut graph = SerGraph::default();
+            let root = lower(&mut graph, &value);
+            let interner = SerInterner {
+                graph: &graph,
+                blanks: BlankIngress::Opaque,
+            };
+            let (mut interned, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
+            let id = interner
+                .intern(&mut interned, root)
+                .expect("a lowered term interns");
+            let reference = reference_intern(&interner, &mut expected, root).expect("interns");
+            assert_eq!(id, reference, "seed {seed}");
+            // Ids are dense, so one more term's id counts the terms before it.
+            let sentinel = "http://example.org/sentinel";
+            assert_eq!(
+                interned.intern_iri(sentinel),
+                expected.intern_iri(sentinel),
+                "seed {seed}"
+            );
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+    }
+
+    /// A triple term a hundred thousand levels deep is interned on a thread whose whole
+    /// stack is 128 KiB: one term per level beside the chain's three distinct leaves.
+    #[test]
+    fn a_hundred_thousand_level_term_interns_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let mut graph = SerGraph::default();
+                let root = lower(&mut graph, &value);
+                drop(value);
+                let interner = SerInterner {
+                    graph: &graph,
+                    blanks: BlankIngress::Opaque,
+                };
+                let mut builder = RdfDatasetBuilder::new();
+                interner
+                    .intern(&mut builder, root)
+                    .expect("a lowered chain interns");
+                // Ids are dense, so one more term's id counts the terms before it.
+                assert_eq!(
+                    builder.intern_iri("http://example.org/sentinel").index(),
+                    LEVELS + 3
+                );
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the interner did not overflow the thread's stack");
     }
 }

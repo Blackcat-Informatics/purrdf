@@ -27,9 +27,11 @@
 //! exactly as oxigraph's N-Triples literal writer.
 
 use crate::data_view::ShaclRead;
-use purrdf_core::TermBox;
+use purrdf_core::{Nested, TermBox, try_fold_nested, visit_nested};
 
 use std::cmp::Ordering;
+use std::convert::Infallible;
+use std::ops::ControlFlow;
 
 use ::purrdf::blank_label::ESCAPE_MARKER;
 use ::purrdf::{BlankScope, RdfLiteral, TermRef};
@@ -786,63 +788,146 @@ impl Term {
 
     /// Convert this native term into the owned [`RdfTerm`](purrdf::RdfTerm) model — used when
     /// building a report dataset for serialization.
+    ///
+    /// A quoted triple is converted bottom-up over [`Self::fold_nested`]'s work list.
     pub fn to_rdf_term(&self) -> ::purrdf::RdfTerm {
         use purrdf::{RdfLiteral, RdfTerm, RdfTriple};
-        match self {
-            Self::NamedNode(n) => RdfTerm::iri(n.0.clone()),
-            Self::BlankNode(b) => RdfTerm::blank_node(b.clone()),
-            Self::Literal(l) => {
-                // The owned model carries `datatype: None` for a plain `xsd:string`
-                // and for a language-tagged literal (the tag implies rdf:langString);
-                // an explicit datatype otherwise — matching how the codec round-trips.
-                let datatype = if l.language.is_some() || l.datatype == XSD_STRING {
-                    None
-                } else {
-                    Some(l.datatype.clone())
-                };
-                RdfTerm::Literal(RdfLiteral {
-                    lexical_form: l.lexical.clone(),
-                    datatype,
-                    language: l.language.clone(),
-                    direction: l.direction,
+        let converted = self.fold_nested(
+            &mut (),
+            |(), term| {
+                Ok::<_, Infallible>(match term {
+                    Self::NamedNode(n) => RdfTerm::iri(n.0.clone()),
+                    Self::BlankNode(b) => RdfTerm::blank_node(b.clone()),
+                    Self::Literal(l) => {
+                        // The owned model carries `datatype: None` for a plain
+                        // `xsd:string` and for a language-tagged literal (the tag
+                        // implies rdf:langString); an explicit datatype otherwise —
+                        // matching how the codec round-trips.
+                        let datatype = if l.language.is_some() || l.datatype == XSD_STRING {
+                            None
+                        } else {
+                            Some(l.datatype.clone())
+                        };
+                        RdfTerm::Literal(RdfLiteral {
+                            lexical_form: l.lexical.clone(),
+                            datatype,
+                            language: l.language.clone(),
+                            direction: l.direction,
+                        })
+                    }
+                    Self::Triple(_) => unreachable!("a quoted triple is folded from its parts"),
                 })
-            }
-            Self::Triple(t) => RdfTerm::triple(RdfTriple::new(
-                t.subject.to_rdf_term(),
-                t.predicate.0.clone(),
-                t.object.to_rdf_term(),
-            )),
+            },
+            |(), predicate| Ok(RdfTerm::iri(predicate.0.clone())),
+            |(), subject, predicate, object| {
+                let RdfTerm::Iri(predicate) = predicate else {
+                    unreachable!("a quoted triple's predicate folds to an IRI")
+                };
+                Ok(RdfTerm::triple(RdfTriple::new(subject, predicate, object)))
+            },
+        );
+        match converted {
+            Ok(term) => term,
         }
     }
 
     /// Convert this native term into a dataset-independent [`TermValue`] — the SPARQL
     /// substitution value and the canonical lookup key.
+    ///
+    /// A quoted triple is converted bottom-up over [`Self::fold_nested`]'s work list.
     pub fn to_term_value(&self) -> TermValue {
-        match self {
-            Self::NamedNode(n) => TermValue::Iri(n.0.clone()),
-            // [`term_ref_to_native`] scope-qualified the label on the way out of the
-            // IR; decoding it here is the exact inverse, so a native term used as a
-            // SPARQL pre-binding denotes the SAME node the dataset holds rather than
-            // a second, doubly-qualified one.
-            Self::BlankNode(b) => {
-                let (label, scope) = ::purrdf::BlankScope::unqualify_label(b);
-                TermValue::Blank {
-                    label: label.into_owned(),
-                    scope,
-                }
-            }
-            Self::Literal(l) => TermValue::Literal {
-                lexical_form: l.lexical.clone(),
-                datatype: l.datatype.clone(),
-                language: l.language.clone(),
-                direction: l.direction,
+        let converted = self.fold_nested(
+            &mut (),
+            |(), term| {
+                Ok::<_, Infallible>(match term {
+                    Self::NamedNode(n) => TermValue::Iri(n.0.clone()),
+                    // [`term_ref_to_native`] scope-qualified the label on the way out
+                    // of the IR; decoding it here is the exact inverse, so a native
+                    // term used as a SPARQL pre-binding denotes the SAME node the
+                    // dataset holds rather than a second, doubly-qualified one.
+                    Self::BlankNode(b) => {
+                        let (label, scope) = ::purrdf::BlankScope::unqualify_label(b);
+                        TermValue::Blank {
+                            label: label.into_owned(),
+                            scope,
+                        }
+                    }
+                    Self::Literal(l) => TermValue::Literal {
+                        lexical_form: l.lexical.clone(),
+                        datatype: l.datatype.clone(),
+                        language: l.language.clone(),
+                        direction: l.direction,
+                    },
+                    Self::Triple(_) => unreachable!("a quoted triple is folded from its parts"),
+                })
             },
-            Self::Triple(t) => TermValue::Triple {
-                s: TermBox::new(t.subject.to_term_value()),
-                p: TermBox::new(t.predicate.to_term_value_iri()),
-                o: TermBox::new(t.object.to_term_value()),
+            |(), predicate| Ok(predicate.to_term_value_iri()),
+            |(), s, p, o| {
+                Ok(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
             },
+        );
+        match converted {
+            Ok(value) => value,
         }
+    }
+
+    /// Fold this term bottom-up over [`try_fold_nested`]'s work list: `leaf` answers
+    /// for every term that is not a quoted triple, `predicate` for a quoted triple's
+    /// predicate IRI, and `triple` combines a quoted triple's subject, predicate and
+    /// object answers — each folded fully, in that order — into its own. All three
+    /// share `ctx`, and the first error ends the fold.
+    ///
+    /// # Errors
+    ///
+    /// The first error `leaf`, `predicate` or `triple` returns.
+    pub(crate) fn fold_nested<C, T, E>(
+        &self,
+        ctx: &mut C,
+        mut leaf: impl FnMut(&mut C, &Self) -> Result<T, E>,
+        mut predicate: impl FnMut(&mut C, &NamedNode) -> Result<T, E>,
+        mut triple: impl FnMut(&mut C, T, T, T) -> Result<T, E>,
+    ) -> Result<T, E> {
+        try_fold_nested(
+            TermNode::Term(self),
+            ctx,
+            |ctx, node| match node {
+                TermNode::Term(Self::Triple(t)) => Ok(Nested::Triple(
+                    TermNode::Term(&t.subject),
+                    TermNode::Predicate(&t.predicate),
+                    TermNode::Term(&t.object),
+                )),
+                TermNode::Term(term) => leaf(ctx, term).map(Nested::Leaf),
+                TermNode::Predicate(iri) => predicate(ctx, iri).map(Nested::Leaf),
+            },
+            |ctx, _, s, p, o| triple(ctx, s, p, o),
+        )
+    }
+
+    /// Visit every term of this one in pre-order over [`visit_nested`]'s work list —
+    /// a quoted triple first, then its subject with everything below it, then its
+    /// object. The first `Break` ends the visit and is returned.
+    pub(crate) fn visit_nested<'t, B>(
+        &'t self,
+        mut visit: impl FnMut(&'t Self) -> ControlFlow<B>,
+    ) -> ControlFlow<B> {
+        visit_nested(TermNode::Term(self), |node| match node {
+            TermNode::Term(term) => {
+                visit(term)?;
+                ControlFlow::Continue(match term {
+                    Self::Triple(t) => Some([
+                        TermNode::Term(&t.subject),
+                        TermNode::Predicate(&t.predicate),
+                        TermNode::Term(&t.object),
+                    ]),
+                    Self::NamedNode(_) | Self::BlankNode(_) | Self::Literal(_) => None,
+                })
+            }
+            TermNode::Predicate(_) => ControlFlow::Continue(None),
+        })
     }
 
     /// The candidate [`TermValue`] lookup keys to resolve this pattern term against a
@@ -915,14 +1000,45 @@ impl NamedNode {
 impl std::fmt::Display for Term {
     /// Render byte-for-byte as `oxigraph::model::Term::to_string()` — the engine's
     /// deterministic sort key and report identity depend on this.
+    ///
+    /// A quoted triple is written over a work list: its opening `<<( ` at once, then
+    /// its subject next, with its predicate, its object and the closing ` )>>` held
+    /// back in that order until the subject's whole nesting is written.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::NamedNode(n) => write!(f, "<{}>", n.0),
-            Self::BlankNode(b) => write!(f, "_:{b}"),
-            Self::Literal(l) => write!(f, "{}", render_literal(l)),
-            Self::Triple(t) => write!(f, "<<( {} <{}> {} )>>", t.subject, t.predicate.0, t.object),
+        enum Piece<'t> {
+            Term(&'t Term),
+            Text(&'t str),
         }
+        let mut held: Vec<Piece<'_>> = Vec::new();
+        let mut next = Some(Piece::Term(self));
+        while let Some(piece) = next.take().or_else(|| held.pop()) {
+            match piece {
+                Piece::Text(text) => f.write_str(text)?,
+                Piece::Term(Self::NamedNode(n)) => write!(f, "<{}>", n.0)?,
+                Piece::Term(Self::BlankNode(b)) => write!(f, "_:{b}")?,
+                Piece::Term(Self::Literal(l)) => f.write_str(&render_literal(l))?,
+                Piece::Term(Self::Triple(t)) => {
+                    f.write_str("<<( ")?;
+                    held.extend([
+                        Piece::Text(" )>>"),
+                        Piece::Term(&t.object),
+                        Piece::Text("> "),
+                        Piece::Text(&t.predicate.0),
+                        Piece::Text(" <"),
+                    ]);
+                    next = Some(Piece::Term(&t.subject));
+                }
+            }
+        }
+        Ok(())
     }
+}
+
+/// One node of a native term's nesting: a term, or a quoted triple's predicate IRI.
+#[derive(Clone, Copy)]
+enum TermNode<'t> {
+    Term(&'t Term),
+    Predicate(&'t NamedNode),
 }
 
 /// Render a literal exactly as oxigraph's `Term::to_string()` does.
@@ -964,44 +1080,75 @@ fn escape_literal(s: &str) -> String {
     out
 }
 
-/// Convert a resolved IR [`TermRef`] into a native [`Term`], recursing into triple
+/// Convert a resolved IR [`TermRef`] into a native [`Term`], through triple
 /// components via the dataset's [`resolve`](::purrdf::RdfDataset::resolve).
 ///
 /// Blank labels are scope-qualified so two same-label blanks from different
 /// [`BlankScope`]s never conflate (C0.2); a DEFAULT-scope
 /// label outside the reserved marker namespace stays bare so single-scope data
 /// is byte-unchanged.
+///
+/// A triple term is converted bottom-up over [`try_fold_nested`]'s work list: its
+/// subject, predicate and object are resolved in that order, each fully before the
+/// next.
 pub fn term_ref_to_native(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
-    match term {
-        TermRef::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri)),
-        TermRef::Blank { label, scope } => Term::BlankNode(scope.qualify_label(label).into_owned()),
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let datatype_iri = match dataset.resolve(datatype) {
-                TermRef::Iri(iri) => iri.to_owned(),
-                other => unreachable!("a literal datatype must resolve to an IRI, got {other:?}"),
-            };
-            Term::Literal(Literal {
-                lexical: lexical.to_owned(),
-                datatype: datatype_iri,
-                language: language.map(str::to_owned),
+    /// The native form of a resolved term that is not a triple term.
+    fn leaf(dataset: &impl ShaclRead, term: TermRef<'_>) -> Term {
+        match term {
+            TermRef::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri)),
+            TermRef::Blank { label, scope } => {
+                Term::BlankNode(scope.qualify_label(label).into_owned())
+            }
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
                 direction,
-            })
-        }
-        TermRef::Triple { s, p, o } => {
-            let subject = term_ref_to_native(dataset, dataset.resolve(s));
-            let predicate = match term_ref_to_native(dataset, dataset.resolve(p)) {
-                Term::NamedNode(n) => n,
-                other => unreachable!("a triple predicate must be an IRI, got {other:?}"),
-            };
-            let object = term_ref_to_native(dataset, dataset.resolve(o));
-            Term::Triple(Box::new(Triple::new(subject, predicate, object)))
+            } => {
+                let datatype_iri = match dataset.resolve(datatype) {
+                    TermRef::Iri(iri) => iri.to_owned(),
+                    other => {
+                        unreachable!("a literal datatype must resolve to an IRI, got {other:?}")
+                    }
+                };
+                Term::Literal(Literal {
+                    lexical: lexical.to_owned(),
+                    datatype: datatype_iri,
+                    language: language.map(str::to_owned),
+                    direction,
+                })
+            }
+            TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
         }
     }
+    /// Assemble a native quoted triple from its three converted components.
+    fn triple(subject: Term, predicate: Term, object: Term) -> Term {
+        let predicate = match predicate {
+            Term::NamedNode(n) => n,
+            other => unreachable!("a triple predicate must be an IRI, got {other:?}"),
+        };
+        Term::Triple(Box::new(Triple::new(subject, predicate, object)))
+    }
+    let TermRef::Triple { s, p, o } = term else {
+        return leaf(dataset, term);
+    };
+    let convert = |id: TermId| {
+        let converted = try_fold_nested(
+            id,
+            &mut (),
+            |(), id| {
+                Ok::<_, Infallible>(match dataset.resolve(id) {
+                    TermRef::Triple { s, p, o } => Nested::Triple(s, p, o),
+                    resolved => Nested::Leaf(leaf(dataset, resolved)),
+                })
+            },
+            |(), _, s, p, o| Ok(triple(s, p, o)),
+        );
+        match converted {
+            Ok(term) => term,
+        }
+    };
+    triple(convert(s), convert(p), convert(o))
 }
 
 /// Convert a resolved IR term id into a native [`Term`].
@@ -1012,33 +1159,35 @@ pub fn term_id_to_native(dataset: &impl ShaclRead, id: TermId) -> Term {
 
 /// Convert a dataset-independent [`TermValue`] (e.g. a SPARQL egress binding) into a
 /// native [`Term`].
+///
+/// A triple term is converted bottom-up over [`TermValue::fold`]'s work list: its
+/// subject, predicate and object, each fully before the next.
 pub fn term_value_to_native(value: &TermValue) -> Term {
-    match value {
-        TermValue::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri.clone())),
-        TermValue::Blank { label, .. } => Term::BlankNode(label.clone()),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => Term::Literal(Literal {
-            lexical: lexical_form.clone(),
-            datatype: datatype.clone(),
-            language: language.clone(),
-            direction: *direction,
-        }),
-        TermValue::Triple { s, p, o } => {
-            let predicate = match term_value_to_native(p) {
+    value.fold(
+        |leaf| match leaf {
+            TermValue::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri.clone())),
+            TermValue::Blank { label, .. } => Term::BlankNode(label.clone()),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => Term::Literal(Literal {
+                lexical: lexical_form.clone(),
+                datatype: datatype.clone(),
+                language: language.clone(),
+                direction: *direction,
+            }),
+            TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+        },
+        |subject, predicate, object| {
+            let predicate = match predicate {
                 Term::NamedNode(n) => n,
                 other => unreachable!("a triple predicate must be an IRI, got {other:?}"),
             };
-            Term::Triple(Box::new(Triple::new(
-                term_value_to_native(s),
-                predicate,
-                term_value_to_native(o),
-            )))
-        }
-    }
+            Term::Triple(Box::new(Triple::new(subject, predicate, object)))
+        },
+    )
 }
 
 #[cfg(test)]
@@ -1306,5 +1455,239 @@ mod tests {
             "the fixture must be interned out of canonical order, or comparing ids by number \
              would look correct"
         );
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod term_walk_tests {
+    //! The native term's conversions, rendering and walks against their recursive
+    //! references, and at a hundred thousand levels on a 128 KiB thread.
+
+    use core::convert::Infallible;
+    use core::ops::ControlFlow;
+
+    use ::purrdf::{RdfTerm, RdfTriple, TermRef, TermValue};
+    use purrdf_core::backend::TermFactory as _;
+    use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermBox, TermId};
+
+    use super::{
+        Literal, NamedNode, Term, Triple, render_literal, term_ref_to_native, term_value_to_native,
+    };
+
+    /// A test-only native twin of a generated term value whose predicates are IRIs.
+    pub(crate) fn native(value: &TermValue) -> Term {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                let TermValue::Iri(predicate) = &**p else {
+                    unreachable!("the generator was asked for IRI predicates")
+                };
+                Term::Triple(Box::new(Triple::new(
+                    native(s),
+                    NamedNode::new_unchecked(predicate.clone()),
+                    native(o),
+                )))
+            }
+            TermValue::Iri(iri) => Term::NamedNode(NamedNode::new_unchecked(iri.clone())),
+            TermValue::Blank { label, .. } => Term::BlankNode(label.clone()),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => Term::Literal(Literal {
+                lexical: lexical_form.clone(),
+                datatype: datatype.clone(),
+                language: language.clone(),
+                direction: *direction,
+            }),
+        }
+    }
+
+    /// A generated native term.
+    pub(crate) fn generated(seed: u64) -> Term {
+        let mut state = seed;
+        let mut budget = 8;
+        native(&purrdf_core::test_rng::term_value(
+            &mut state,
+            &mut budget,
+            purrdf_core::test_rng::TermShape::WellFormed,
+        ))
+    }
+
+    /// Take a native chain nested in its subject slot apart one level at a time: the
+    /// native term's own drop is derived, and descends once per level.
+    pub(crate) fn dismantle(mut term: Term) {
+        while let Term::Triple(triple) = term {
+            term = triple.subject;
+        }
+    }
+
+    fn reference_display(term: &Term) -> String {
+        match term {
+            Term::NamedNode(n) => format!("<{}>", n.0),
+            Term::BlankNode(b) => format!("_:{b}"),
+            Term::Literal(l) => render_literal(l),
+            Term::Triple(t) => format!(
+                "<<( {} <{}> {} )>>",
+                reference_display(&t.subject),
+                t.predicate.0,
+                reference_display(&t.object)
+            ),
+        }
+    }
+
+    fn reference_rdf(term: &Term) -> RdfTerm {
+        match term {
+            Term::Triple(t) => RdfTerm::triple(RdfTriple::new(
+                reference_rdf(&t.subject),
+                t.predicate.0.clone(),
+                reference_rdf(&t.object),
+            )),
+            leaf => leaf.to_rdf_term(),
+        }
+    }
+
+    fn reference_value(term: &Term) -> TermValue {
+        match term {
+            Term::Triple(t) => TermValue::Triple {
+                s: TermBox::new(reference_value(&t.subject)),
+                p: TermBox::new(TermValue::Iri(t.predicate.0.clone())),
+                o: TermBox::new(reference_value(&t.object)),
+            },
+            leaf => leaf.to_term_value(),
+        }
+    }
+
+    fn reference_from_value(value: &TermValue) -> Term {
+        match value {
+            TermValue::Triple { s, p, o } => {
+                let Term::NamedNode(predicate) = reference_from_value(p) else {
+                    unreachable!("a generated predicate is an IRI")
+                };
+                Term::Triple(Box::new(Triple::new(
+                    reference_from_value(s),
+                    predicate,
+                    reference_from_value(o),
+                )))
+            }
+            leaf => term_value_to_native(leaf),
+        }
+    }
+
+    fn reference_from_ref(dataset: &RdfDataset, id: TermId) -> Term {
+        match dataset.resolve(id) {
+            TermRef::Triple { s, p, o } => {
+                let Term::NamedNode(predicate) = reference_from_ref(dataset, p) else {
+                    unreachable!("a stored predicate is an IRI")
+                };
+                Term::Triple(Box::new(Triple::new(
+                    reference_from_ref(dataset, s),
+                    predicate,
+                    reference_from_ref(dataset, o),
+                )))
+            }
+            resolved => term_ref_to_native(dataset, resolved),
+        }
+    }
+
+    fn reference_visit(term: &Term, out: &mut Vec<String>) {
+        out.push(format!("{term:?}"));
+        if let Term::Triple(t) = term {
+            reference_visit(&t.subject, out);
+            reference_visit(&t.object, out);
+        }
+    }
+
+    /// Every conversion, the rendering and the pre-order visit answer every generated
+    /// term exactly as their recursive references do.
+    #[test]
+    fn the_native_walks_agree_with_their_recursive_references_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let term = generated(seed);
+            nested += usize::from(
+                matches!(&term, Term::Triple(t) if matches!(t.subject, Term::Triple(_)) || matches!(t.object, Term::Triple(_))),
+            );
+            assert_eq!(term.to_string(), reference_display(&term), "seed {seed}");
+            assert_eq!(term.to_rdf_term(), reference_rdf(&term), "seed {seed}");
+            let value = term.to_term_value();
+            assert_eq!(value, reference_value(&term), "seed {seed}");
+            assert_eq!(
+                term_value_to_native(&value),
+                reference_from_value(&value),
+                "seed {seed}"
+            );
+            let mut visited = Vec::new();
+            let ControlFlow::Continue(()) = term.visit_nested(|term| -> ControlFlow<Infallible> {
+                visited.push(format!("{term:?}"));
+                ControlFlow::Continue(())
+            });
+            let mut expected = Vec::new();
+            reference_visit(&term, &mut expected);
+            assert_eq!(visited, expected, "seed {seed}");
+
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let dataset = builder.freeze().expect("a generated term freezes");
+            let object = dataset.quads().next().expect("one quad").o;
+            assert_eq!(
+                term_ref_to_native(&*dataset, dataset.resolve(object)),
+                reference_from_ref(&dataset, object),
+                "seed {seed}"
+            );
+        }
+        assert!(nested > 0, "some generated term nests a triple term in one");
+    }
+
+    /// A native triple term a hundred thousand levels deep is rendered, converted both
+    /// ways and visited on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_walked_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let mut term = Term::NamedNode(NamedNode::new_unchecked("http://example.org/o"));
+                for _ in 0..LEVELS {
+                    term = Term::Triple(Box::new(Triple::new(
+                        term,
+                        NamedNode::new_unchecked("http://example.org/p"),
+                        Term::NamedNode(NamedNode::new_unchecked("http://example.org/s")),
+                    )));
+                }
+                let level =
+                    "<<( ".len() + " <http://example.org/p> <http://example.org/s> )>>".len();
+                assert_eq!(
+                    term.to_string().len(),
+                    LEVELS * level + "<http://example.org/o>".len()
+                );
+                let mut visited = 0_usize;
+                let ControlFlow::Continue(()) = term.visit_nested(|_| -> ControlFlow<Infallible> {
+                    visited += 1;
+                    ControlFlow::Continue(())
+                });
+                assert_eq!(visited, 2 * LEVELS + 1);
+                let depth = term
+                    .to_term_value()
+                    .fold(|_| 0_usize, |s, p, o| 1 + s.max(p).max(o));
+                assert_eq!(depth, LEVELS);
+                let mut owned = term.to_rdf_term();
+                while let RdfTerm::Triple(triple) = owned {
+                    owned = triple.subject;
+                }
+                dismantle(term);
+                let converted = term_value_to_native(&value);
+                assert!(matches!(&converted, Term::Triple(_)));
+                let mut object_chain = converted;
+                while let Term::Triple(triple) = object_chain {
+                    object_chain = triple.object;
+                }
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no walk overflowed the thread's stack");
     }
 }

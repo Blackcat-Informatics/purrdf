@@ -68,6 +68,7 @@
 //! term rather than looping forever.
 
 use std::cmp::Ordering;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use ::purrdf::{FastSet, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
@@ -292,15 +293,17 @@ pub fn node_expr_mints_blank(expr: &NodeExpr) -> bool {
     }
 }
 
-/// Whether `term` is a blank node, or an RDF 1.2 quoted triple nesting one.
+/// Whether `term` is a blank node, or an RDF 1.2 quoted triple nesting one, found
+/// over [`Term::visit_nested`]'s work list.
 fn term_carries_blank(term: &Term) -> bool {
-    match term {
-        Term::BlankNode(_) => true,
-        Term::Triple(inner) => {
-            term_carries_blank(&inner.subject) || term_carries_blank(&inner.object)
+    term.visit_nested(|term| {
+        if matches!(term, Term::BlankNode(_)) {
+            ControlFlow::Break(())
+        } else {
+            ControlFlow::Continue(())
         }
-        Term::NamedNode(_) | Term::Literal(_) => false,
-    }
+    })
+    .is_break()
 }
 
 /// A single SHACL-AF rule attached to a shape.
@@ -3231,5 +3234,36 @@ mod tests {
             serialize(),
             "independent entailment runs must serialize byte-identically"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The blank-carrying test against its recursive reference.
+
+    use super::term_carries_blank;
+    use crate::term::Term;
+    use crate::term::term_walk_tests::generated;
+
+    fn reference(term: &Term) -> bool {
+        match term {
+            Term::BlankNode(_) => true,
+            Term::Triple(inner) => reference(&inner.subject) || reference(&inner.object),
+            Term::NamedNode(_) | Term::Literal(_) => false,
+        }
+    }
+
+    /// Every generated term carries a blank node exactly when the recursive reference
+    /// says it does.
+    #[test]
+    fn the_test_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut carrying = 0;
+        for seed in 0..400_u64 {
+            let term = generated(seed);
+            let found = term_carries_blank(&term);
+            assert_eq!(found, reference(&term), "seed {seed}");
+            carrying += usize::from(found);
+        }
+        assert!(carrying > 0, "some generated term carries a blank node");
     }
 }

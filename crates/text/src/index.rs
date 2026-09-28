@@ -73,13 +73,15 @@
 use purrdf_core::TermBox;
 use std::cmp::Ordering;
 
-use purrdf_core::{DatasetView, FastMap, GraphMatch, RdfTextDirection, TermRef, TermValue};
+use purrdf_core::{
+    DatasetView, FastMap, GraphMatch, RdfTextDirection, TermRef, TermValue, fold_term,
+};
 
 use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
 use crate::error::TextError;
 use crate::fixed::Fixed;
 use crate::ranking::{FIELD_LENGTH_MAX, FieldInput, MAX_FIELDS, PreparedCorpus, RankingProfile};
-use crate::term_bytes::{FINGERPRINT_BYTES, MAX_TRIPLE_DEPTH, encode_term, push_str};
+use crate::term_bytes::{FINGERPRINT_BYTES, encode_term, push_str};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
 const INDEX_DIGEST_DOMAIN: &str = "purrdf-text/index/v2";
@@ -593,7 +595,7 @@ impl TextIndex {
         config: &TextIndexConfig,
     ) -> Result<Self, TextError> {
         let (rows, coverage) = collect_rows(dataset, config)?;
-        let source_fingerprint = digest_rows(&rows)?;
+        let source_fingerprint = digest_rows(&rows);
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         Self::assemble(
             config.clone(),
@@ -619,7 +621,7 @@ impl TextIndex {
             profile.field_for(predicate)?;
         }
         let (rows, coverage) = collect_rows(dataset, config)?;
-        let source_fingerprint = digest_rows(&rows)?;
+        let source_fingerprint = digest_rows(&rows);
         let (documents, dictionary) = analyze_rows(&rows, config)?;
         Self::assemble(
             config.clone(),
@@ -641,7 +643,7 @@ impl TextIndex {
     pub fn with_ranking_profile(mut self, profile: RankingProfile) -> Result<Self, TextError> {
         self.ranking = profile;
         self.rebuild_field_statistics()?;
-        self.fingerprint = self.compute_fingerprint()?;
+        self.fingerprint = self.compute_fingerprint();
         Ok(self)
     }
 
@@ -1094,12 +1096,12 @@ impl TextIndex {
             coverage,
         };
         index.rebuild_field_statistics()?;
-        index.fingerprint = index.compute_fingerprint()?;
+        index.fingerprint = index.compute_fingerprint();
         Ok(index)
     }
 
     /// Digest the whole index, in the order [`Self::fingerprint`] documents.
-    fn compute_fingerprint(&self) -> Result<[u8; FINGERPRINT_BYTES], TextError> {
+    fn compute_fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
         let mut digest = Digest::new(INDEX_DIGEST_DOMAIN);
         digest.text(crate::ANALYZER_PROFILE_ID);
         for byte in self.ranking.fingerprint() {
@@ -1108,14 +1110,14 @@ impl TextIndex {
 
         digest.count(self.config.predicates.len());
         for predicate in &self.config.predicates {
-            digest.term(predicate)?;
+            digest.term(predicate);
         }
         match &self.config.graph {
             GraphSelector::Any => digest.tag(SELECTOR_ANY),
             GraphSelector::Default => digest.tag(SELECTOR_DEFAULT),
             GraphSelector::Named(name) => {
                 digest.tag(SELECTOR_NAMED);
-                digest.term(name)?;
+                digest.term(name);
             }
         }
 
@@ -1132,8 +1134,8 @@ impl TextIndex {
 
         digest.count(self.documents.len());
         for document in &self.documents {
-            digest.optional_term(document.graph.as_ref())?;
-            digest.term(&document.subject)?;
+            digest.optional_term(document.graph.as_ref());
+            digest.term(&document.subject);
             digest.optional_text(document.language.as_deref());
             digest.number(document.length);
             digest.count(document.predicate_lengths.len());
@@ -1164,14 +1166,14 @@ impl TextIndex {
 
         digest.count(self.partitions.len());
         for (key, stats) in &self.partitions {
-            digest.optional_term(key.graph.as_ref())?;
+            digest.optional_term(key.graph.as_ref());
             digest.optional_text(key.language.as_deref());
             digest.number(stats.document_count);
             digest.number(stats.total_tokens);
             digest.raw(stats.average_document_length.into_raw());
         }
 
-        Ok(digest.finish())
+        digest.finish()
     }
 }
 
@@ -1419,17 +1421,17 @@ fn push_row<D: DatasetView>(
         datatype,
         language,
         direction,
-    } = resolve_value(dataset, object, 0)?
+    } = resolve_value(dataset, object)?
     else {
         return Ok(());
     };
     let graph = match graph {
-        Some(id) => Some(resolve_value(dataset, id, 0)?),
+        Some(id) => Some(resolve_value(dataset, id)?),
         None => None,
     };
     rows.push(SourceRow {
         graph,
-        subject: resolve_value(dataset, subject, 0)?,
+        subject: resolve_value(dataset, subject)?,
         predicate: predicate.clone(),
         datatype,
         lexical_form,
@@ -1459,54 +1461,53 @@ fn resolve_graph<D: DatasetView>(
     })
 }
 
-/// Resolve a dataset-local id to its dataset-independent [`TermValue`],
-/// recursing through a literal's datatype and a triple term's `(s, p, o)`.
+/// Resolve a dataset-local id to its dataset-independent [`TermValue`], through a
+/// literal's datatype and a triple term's `(s, p, o)`.
 ///
-/// The recursion is the reason a subject may be a triple term without any
-/// special case here. `depth` bounds it at the same
-/// [`MAX_TRIPLE_DEPTH`](crate::term_bytes::MAX_TRIPLE_DEPTH) the encoder uses:
-/// this walks a heap-linked structure with ordinary recursion, and a stack
-/// overflow aborts the process rather than raising anything a caller can handle.
-fn resolve_value<D: DatasetView>(
-    dataset: &D,
-    id: D::Id,
-    depth: u32,
-) -> Result<TermValue, TextError> {
-    if depth > MAX_TRIPLE_DEPTH {
-        return Err(TextError::data(format!(
-            "triple term nests deeper than the resolver's bound of {MAX_TRIPLE_DEPTH}"
-        )));
-    }
-    Ok(match dataset.resolve(id) {
-        TermRef::Iri(iri) => TermValue::iri(iri),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
+/// A triple term is assembled bottom-up over [`fold_term`]'s work list: its
+/// subject, predicate and object are resolved in that order, each fully before the
+/// next. That is why a subject may be a triple term, nested to any depth, without
+/// any special case here.
+fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, TextError> {
+    fold_term(
+        dataset,
+        id,
+        |_, term| {
+            Ok(match term {
+                TermRef::Iri(iri) => TermValue::iri(iri),
+                TermRef::Blank { label, scope } => TermValue::Blank {
+                    label: label.to_owned(),
+                    scope,
+                },
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                        return Err(TextError::data(
+                            "a literal's datatype did not resolve to an IRI".to_owned(),
+                        ));
+                    };
+                    TermValue::Literal {
+                        lexical_form: lexical.to_owned(),
+                        datatype: datatype.to_owned(),
+                        language: language.map(str::to_owned),
+                        direction,
+                    }
+                }
+                TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+            })
         },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
-                return Err(TextError::data(
-                    "a literal's datatype did not resolve to an IRI".to_owned(),
-                ));
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype: datatype.to_owned(),
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: TermBox::new(resolve_value(dataset, s, depth + 1)?),
-            p: TermBox::new(resolve_value(dataset, p, depth + 1)?),
-            o: TermBox::new(resolve_value(dataset, o, depth + 1)?),
+        |_, s, p, o| {
+            Ok(TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            })
         },
-    })
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1787,20 +1788,20 @@ pub(crate) fn source_digest<D: DatasetView>(
     config: &TextIndexConfig,
 ) -> Result<([u8; FINGERPRINT_BYTES], SourceCoverage), TextError> {
     let (rows, coverage) = collect_rows(dataset, config)?;
-    Ok((digest_rows(&rows)?, coverage))
+    Ok((digest_rows(&rows), coverage))
 }
 
 /// Digest the source rows: what the index actually walked, and nothing else.
-fn digest_rows(rows: &[SourceRow]) -> Result<[u8; FINGERPRINT_BYTES], TextError> {
+fn digest_rows(rows: &[SourceRow]) -> [u8; FINGERPRINT_BYTES] {
     let mut digest = Digest::new(SOURCE_DIGEST_DOMAIN);
     digest.count(rows.len());
     for row in rows {
-        digest.optional_term(row.graph.as_ref())?;
-        digest.term(&row.subject)?;
-        digest.term(&row.predicate)?;
-        digest.term(&row.literal())?;
+        digest.optional_term(row.graph.as_ref());
+        digest.term(&row.subject);
+        digest.term(&row.predicate);
+        digest.term(&row.literal());
     }
-    Ok(digest.finish())
+    digest.finish()
 }
 
 /// A streaming digest over the crate's one term encoding.
@@ -1869,23 +1870,21 @@ impl Digest {
     }
 
     /// Absorb a term in the crate's injective encoding.
-    fn term(&mut self, value: &TermValue) -> Result<(), TextError> {
+    fn term(&mut self, value: &TermValue) {
         self.scratch.clear();
-        encode_term(value, &mut self.scratch)?;
+        encode_term(value, &mut self.scratch);
         self.hasher.update(&self.scratch);
-        Ok(())
     }
 
     /// Absorb an optional term, presence byte first.
-    fn optional_term(&mut self, value: Option<&TermValue>) -> Result<(), TextError> {
+    fn optional_term(&mut self, value: Option<&TermValue>) {
         match value {
             Some(value) => {
                 self.tag(PRESENT);
-                self.term(value)?;
+                self.term(value);
             }
             None => self.tag(ABSENT),
         }
-        Ok(())
     }
 
     /// The finished digest.

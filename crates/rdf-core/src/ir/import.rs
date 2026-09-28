@@ -3,11 +3,20 @@
 
 //! Typed, memoized transfer from one read view into a native dataset builder.
 
+use core::convert::Infallible;
+
+use super::term_walk::{Nested, try_fold_nested};
 use crate::hash::FastMap;
 use crate::{DatasetView, RdfDatasetBuilder, TermId, TermRef};
 
 /// Resolve a source term in another native dictionary without an owned term
 /// tree. The memo belongs to this exact source/target/scope translation.
+///
+/// The walk runs over [`try_fold_nested`]'s work list. A term is entered by first
+/// consulting `memo`; a triple term's subject, predicate and object are each looked
+/// up fully, in that order — every one of them, whether or not an earlier one was
+/// found — and the triple is looked up by their answers once all three exist. Every
+/// term's answer is recorded in `memo` as soon as it is known.
 pub(crate) fn lookup_native_term(
     source: &crate::RdfDataset,
     target: &crate::RdfDataset,
@@ -15,38 +24,47 @@ pub(crate) fn lookup_native_term(
     scope: impl Fn(crate::BlankScope) -> Option<crate::BlankScope> + Copy,
     memo: &mut FastMap<TermId, Option<TermId>>,
 ) -> Option<TermId> {
-    if let Some(found) = memo.get(&id) {
-        return *found;
-    }
-    let found = match source.resolve(id) {
-        TermRef::Iri(iri) => target.term_id_by_iri(iri),
-        TermRef::Blank {
-            label,
-            scope: original,
-        } => scope(original).and_then(|scope| target.term_id_by_blank(label, scope)),
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let TermRef::Iri(datatype) = source.resolve(datatype) else {
-                unreachable!("native datatype is an IRI")
+    let found = try_fold_nested(
+        id,
+        memo,
+        |memo, id| {
+            if let Some(found) = memo.get(&id) {
+                return Ok::<_, Infallible>(Nested::Leaf(*found));
+            }
+            let found = match source.resolve(id) {
+                TermRef::Iri(iri) => target.term_id_by_iri(iri),
+                TermRef::Blank {
+                    label,
+                    scope: original,
+                } => scope(original).and_then(|scope| target.term_id_by_blank(label, scope)),
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let TermRef::Iri(datatype) = source.resolve(datatype) else {
+                        unreachable!("native datatype is an IRI")
+                    };
+                    target.term_id_by_literal(lexical, datatype, language, direction)
+                }
+                TermRef::Triple { s, p, o } => return Ok(Nested::Triple(s, p, o)),
             };
-            target.term_id_by_literal(lexical, datatype, language, direction)
-        }
-        TermRef::Triple { s, p, o } => {
-            let s = lookup_native_term(source, target, s, scope, memo);
-            let p = lookup_native_term(source, target, p, scope, memo);
-            let o = lookup_native_term(source, target, o, scope, memo);
-            match (s, p, o) {
+            memo.insert(id, found);
+            Ok(Nested::Leaf(found))
+        },
+        |memo, id, s, p, o| {
+            let found = match (s, p, o) {
                 (Some(s), Some(p), Some(o)) => target.term_id_by_triple(s, p, o),
                 _ => None,
-            }
-        }
-    };
-    memo.insert(id, found);
-    found
+            };
+            memo.insert(id, found);
+            Ok(found)
+        },
+    );
+    match found {
+        Ok(found) => found,
+    }
 }
 
 /// Operational counts for a typed import. These describe work performed, never
@@ -70,7 +88,7 @@ pub struct DatasetImportStats {
 /// An import bound to exactly one immutable source and one destination builder.
 ///
 /// Repeated source IDs reuse the destination ID without constructing an owned
-/// term tree. Triple components are transferred recursively once; blank labels
+/// term tree. Triple components are transferred once each; blank labels
 /// retain their explicit scopes. A fresh importer is required for each source,
 /// so equal numeric IDs in unrelated datasets never alias. The destination
 /// builder still deduplicates equal RDF values across imports.
@@ -123,42 +141,65 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
 
     /// Transfer one source-local term, preserving its complete RDF 1.2 value.
     /// The ID must belong to the source passed to [`Self::new`].
+    ///
+    /// The walk runs over [`try_fold_nested`]'s work list. A term is entered by first
+    /// consulting the memo; a triple term's subject, predicate and object are each
+    /// transferred fully, in that order, before the triple. Every term is recorded in
+    /// the memo as soon as its own id exists.
     pub fn term(&mut self, id: D::Id) -> TermId {
-        if let Some(mapped) = self.terms.get(&id) {
-            self.stats.reused_terms += 1;
-            return *mapped;
-        }
         // The source outlives this importer, so its resolved strings can be handed to
         // the destination interner BORROWED: the interner keys on `&str` and owns the
         // bytes in its own arena, so an owned `RdfLiteral` here would allocate a
         // lexical form, a datatype IRI and a language tag per literal for the interner
         // to immediately copy and drop.
         let view = self.view;
-        let mapped = match view.resolve(id) {
-            TermRef::Iri(iri) => self.builder.intern_iri(iri),
-            TermRef::Blank { label, scope } => self.builder.intern_blank(label, scope),
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let TermRef::Iri(datatype) = view.resolve(datatype) else {
-                    unreachable!("a literal datatype must resolve to an IRI");
+        let mapped = try_fold_nested(
+            id,
+            self,
+            |this, id| {
+                if let Some(mapped) = this.terms.get(&id) {
+                    this.stats.reused_terms += 1;
+                    return Ok::<_, Infallible>(Nested::Leaf(*mapped));
+                }
+                let mapped = match view.resolve(id) {
+                    TermRef::Iri(iri) => this.builder.intern_iri(iri),
+                    TermRef::Blank { label, scope } => this.builder.intern_blank(label, scope),
+                    TermRef::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let TermRef::Iri(datatype) = view.resolve(datatype) else {
+                            unreachable!("a literal datatype must resolve to an IRI");
+                        };
+                        this.builder.intern_literal_parts(
+                            lexical,
+                            Some(datatype),
+                            language,
+                            direction,
+                        )
+                    }
+                    TermRef::Triple { s, p, o } => return Ok(Nested::Triple(s, p, o)),
                 };
-                self.builder
-                    .intern_literal_parts(lexical, Some(datatype), language, direction)
-            }
-            TermRef::Triple { s, p, o } => {
-                let s = self.term(s);
-                let p = self.term(p);
-                let o = self.term(o);
-                self.builder.intern_triple(s, p, o)
-            }
-        };
+                this.record(id, mapped);
+                Ok(Nested::Leaf(mapped))
+            },
+            |this, id, s, p, o| {
+                let mapped = this.builder.intern_triple(s, p, o);
+                this.record(id, mapped);
+                Ok(mapped)
+            },
+        );
+        match mapped {
+            Ok(mapped) => mapped,
+        }
+    }
+
+    /// Record that source term `id` was transferred as `mapped`.
+    fn record(&mut self, id: D::Id, mapped: TermId) {
         self.terms.insert(id, mapped);
         self.stats.terms += 1;
-        mapped
     }
 
     /// Replay the complete RDF surface exposed by the source view, keeping base
@@ -213,5 +254,120 @@ impl<'builder, 'view, D: DatasetView> DatasetImporter<'builder, 'view, D> {
     #[must_use]
     pub const fn stats(&self) -> DatasetImportStats {
         self.stats
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The cross-dictionary lookup and the typed import against their recursive
+    //! references.
+
+    use super::{DatasetImporter, lookup_native_term};
+    use crate::backend::TermFactory as _;
+    use crate::hash::FastMap;
+    use crate::test_rng::TermShape;
+    use crate::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue};
+
+    fn reference_lookup(
+        source: &RdfDataset,
+        target: &RdfDataset,
+        id: TermId,
+        memo: &mut FastMap<TermId, Option<TermId>>,
+    ) -> Option<TermId> {
+        if let Some(found) = memo.get(&id) {
+            return *found;
+        }
+        let found = match source.resolve(id) {
+            TermRef::Triple { s, p, o } => {
+                let s = reference_lookup(source, target, s, memo);
+                let p = reference_lookup(source, target, p, memo);
+                let o = reference_lookup(source, target, o, memo);
+                match (s, p, o) {
+                    (Some(s), Some(p), Some(o)) => target.term_id_by_triple(s, p, o),
+                    _ => None,
+                }
+            }
+            _ => {
+                let mut leaf = FastMap::default();
+                lookup_native_term(source, target, id, Some, &mut leaf)
+            }
+        };
+        memo.insert(id, found);
+        found
+    }
+
+    fn reference_term<D: DatasetView>(
+        importer: &mut DatasetImporter<'_, '_, D>,
+        id: D::Id,
+    ) -> TermId {
+        if let Some(mapped) = importer.terms.get(&id) {
+            importer.stats.reused_terms += 1;
+            return *mapped;
+        }
+        let mapped = match importer.view.resolve(id) {
+            TermRef::Triple { s, p, o } => {
+                let s = reference_term(importer, s);
+                let p = reference_term(importer, p);
+                let o = reference_term(importer, o);
+                importer.builder.intern_triple(s, p, o)
+            }
+            _ => {
+                let mut single = DatasetImporter::new(importer.builder, importer.view);
+                single.term(id)
+            }
+        };
+        importer.terms.insert(id, mapped);
+        importer.stats.terms += 1;
+        mapped
+    }
+
+    /// A frozen dataset holding `value` as the object of one quad, and that object's id.
+    fn holding(value: &TermValue) -> (std::sync::Arc<RdfDataset>, TermId) {
+        let mut builder = RdfDatasetBuilder::new();
+        let object = builder.intern_value(value);
+        let holder = builder.intern_iri("http://example.org/holder");
+        builder.push_quad(holder, holder, object, None);
+        let dataset = builder.freeze().expect("a generated term freezes");
+        let object = dataset.quads().next().expect("one quad").o;
+        (dataset, object)
+    }
+
+    /// Every generated stored term is looked up in a dictionary that holds it and in one
+    /// that holds another, and imported twice into a fresh builder, exactly as the
+    /// recursive references do: the same answers, memos, ids and counts.
+    #[test]
+    fn the_lookup_and_the_import_agree_with_their_recursive_references() {
+        let mut found_any = 0;
+        for seed in 0..300_u64 {
+            let (mut state, mut budget) = (seed, 8);
+            let value = crate::test_rng::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let (mut state, mut budget) = (seed + 9_000, 8);
+            let other = crate::test_rng::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let (source, id) = holding(&value);
+            for (target, _) in [holding(&value), holding(&other)] {
+                let (mut memo, mut expected_memo) = (FastMap::default(), FastMap::default());
+                let found = lookup_native_term(&source, &target, id, Some, &mut memo);
+                assert_eq!(
+                    found,
+                    reference_lookup(&source, &target, id, &mut expected_memo),
+                    "seed {seed}"
+                );
+                assert_eq!(memo, expected_memo, "seed {seed}");
+                found_any += usize::from(found.is_some());
+            }
+            let (mut into, mut expected_into) =
+                (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
+            let mut importer = DatasetImporter::new(&mut into, &*source);
+            let mut expected = DatasetImporter::new(&mut expected_into, &*source);
+            for _ in 0..2 {
+                assert_eq!(
+                    importer.term(id),
+                    reference_term(&mut expected, id),
+                    "seed {seed}"
+                );
+            }
+            assert_eq!(importer.stats(), expected.stats(), "seed {seed}");
+        }
+        assert!(found_any > 0, "some generated term is found");
     }
 }

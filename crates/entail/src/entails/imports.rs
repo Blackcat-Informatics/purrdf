@@ -63,9 +63,13 @@
 //! two consumers stay separate.
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::convert::Infallible;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
+use purrdf_core::{
+    BlankScope, Nested, RdfDataset, RdfDatasetBuilder, TermId, TermValue, try_fold_nested,
+};
 
 use crate::EntailError;
 use crate::rif_xml::RifImport;
@@ -219,30 +223,44 @@ fn max_scope(ds: &RdfDataset) -> u32 {
         .unwrap_or(0)
 }
 
-/// The highest blank-node scope a term mentions, recursing into triple terms.
+/// The highest blank-node scope a term mentions, through triple terms, found over
+/// [`TermValue::visit_terms`]'s work list.
 fn scope_of(term: &TermValue) -> u32 {
-    match term {
-        TermValue::Blank { scope, .. } => scope.ordinal(),
-        TermValue::Triple { s, p, o } => scope_of(s).max(scope_of(p)).max(scope_of(o)),
-        TermValue::Iri(_) | TermValue::Literal { .. } => 0,
-    }
+    let mut highest = 0;
+    let ControlFlow::Continue(()) = term.visit_terms(|term| -> ControlFlow<Infallible> {
+        if let TermValue::Blank { scope, .. } = term {
+            highest = highest.max(scope.ordinal());
+        }
+        ControlFlow::Continue(())
+    });
+    highest
 }
 
 /// Intern `value` into `b`, rewriting every blank-node scope through `rescope`.
+///
+/// A triple term is interned over [`try_fold_nested`]'s work list: its subject, predicate
+/// and object, each fully before the next, then the triple itself.
 fn intern_rescoped(
     b: &mut RdfDatasetBuilder,
     value: &TermValue,
     rescope: &mut ScopeMap<'_>,
 ) -> TermId {
-    match value {
-        TermValue::Blank { label, scope } => b.intern_blank(label, rescope.map(*scope)),
-        TermValue::Triple { s, p, o } => {
-            let s = intern_rescoped(b, s, rescope);
-            let p = intern_rescoped(b, p, rescope);
-            let o = intern_rescoped(b, o, rescope);
-            b.intern_triple(s, p, o)
-        }
-        other => crate::interner::intern_into(b, other),
+    let interned = try_fold_nested(
+        value,
+        &mut (b, rescope),
+        |(b, rescope), value| {
+            Ok::<_, Infallible>(match value {
+                TermValue::Blank { label, scope } => {
+                    Nested::Leaf(b.intern_blank(label, rescope.map(*scope)))
+                }
+                TermValue::Triple { s, p, o } => Nested::Triple(&**s, &**p, &**o),
+                other => Nested::Leaf(crate::interner::intern_into(b, other)),
+            })
+        },
+        |(b, _), _, s, p, o| Ok(b.intern_triple(s, p, o)),
+    );
+    match interned {
+        Ok(id) => id,
     }
 }
 
@@ -703,5 +721,113 @@ mod tests {
             scopes.contains(&BlankScope::DEFAULT.ordinal()),
             "the premise's own scope must survive the merge unmoved"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The scope survey and the rescoping re-intern against their recursive references,
+    //! and at a hundred thousand levels on a 128 KiB thread.
+
+    use std::collections::BTreeMap;
+
+    use purrdf_core::{RdfDatasetBuilder, TermId, TermValue};
+
+    use super::{ScopeMap, intern_rescoped, scope_of};
+
+    fn reference_scope(term: &TermValue) -> u32 {
+        match term {
+            TermValue::Blank { scope, .. } => scope.ordinal(),
+            TermValue::Triple { s, p, o } => reference_scope(s)
+                .max(reference_scope(p))
+                .max(reference_scope(o)),
+            TermValue::Iri(_) | TermValue::Literal { .. } => 0,
+        }
+    }
+
+    fn reference_intern(
+        b: &mut RdfDatasetBuilder,
+        value: &TermValue,
+        rescope: &mut ScopeMap<'_>,
+    ) -> TermId {
+        match value {
+            TermValue::Blank { label, scope } => b.intern_blank(label, rescope.map(*scope)),
+            TermValue::Triple { s, p, o } => {
+                let s = reference_intern(b, s, rescope);
+                let p = reference_intern(b, p, rescope);
+                let o = reference_intern(b, o, rescope);
+                b.intern_triple(s, p, o)
+            }
+            other => crate::interner::intern_into(b, other),
+        }
+    }
+
+    /// Both walks answer every generated term as their recursive references do — the
+    /// same highest scope, the same interned id, the same scopes assigned.
+    #[test]
+    fn the_walks_agree_with_their_recursive_references_on_generated_terms() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::Any,
+            );
+            assert_eq!(scope_of(&value), reference_scope(&value), "seed {seed}");
+            let (mut next, mut expected_next) = (7, 7);
+            let mut map = ScopeMap {
+                assigned: BTreeMap::new(),
+                next: &mut next,
+            };
+            let mut expected_map = ScopeMap {
+                assigned: BTreeMap::new(),
+                next: &mut expected_next,
+            };
+            let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
+            assert_eq!(
+                intern_rescoped(&mut found, &value, &mut map),
+                reference_intern(&mut expected, &value, &mut expected_map),
+                "seed {seed}"
+            );
+            assert_eq!(map.assigned, expected_map.assigned, "seed {seed}");
+        }
+    }
+
+    /// A triple term a hundred thousand levels deep, its innermost object a scoped blank
+    /// node, is surveyed and re-interned on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_rescoped_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut value = TermValue::Blank {
+                    label: "b".to_owned(),
+                    scope: purrdf_core::BlankScope(3),
+                };
+                for _ in 0..LEVELS {
+                    value = TermValue::Triple {
+                        s: purrdf_core::TermBox::new(TermValue::iri("http://example.org/s")),
+                        p: purrdf_core::TermBox::new(TermValue::iri("http://example.org/p")),
+                        o: purrdf_core::TermBox::new(value),
+                    };
+                }
+                assert_eq!(scope_of(&value), 3);
+                let mut next = 10;
+                let mut map = ScopeMap {
+                    assigned: BTreeMap::new(),
+                    next: &mut next,
+                };
+                let mut builder = RdfDatasetBuilder::new();
+                assert_eq!(
+                    intern_rescoped(&mut builder, &value, &mut map).index(),
+                    LEVELS + 2
+                );
+                assert_eq!(map.assigned.len(), 1);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no walk overflowed the thread's stack");
     }
 }

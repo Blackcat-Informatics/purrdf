@@ -21,11 +21,13 @@
 //! and their variable positions — still compare exactly. See
 //! [`encode_solution_set`].
 
+use std::convert::Infallible;
 use std::path::Path;
 use std::sync::Arc;
 
 use purrdf_core::{
-    BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId, TermValue,
+    BlankScope, Nested, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult, TermId, TermValue,
+    try_fold_nested,
 };
 use purrdf_sparql_results::ParsedSolutions;
 
@@ -401,27 +403,35 @@ pub fn canonical_solutions(
 /// engine and the SRX/SRJ/`rs:ResultSet` readers mint them in the default
 /// scope, so forcing one scope here cannot merge two originally-distinct
 /// blanks.)
+///
+/// A triple term is interned over [`try_fold_nested`]'s work list: its subject,
+/// predicate and object, each fully before the next, then the triple itself.
 fn intern_term_value(builder: &mut RdfDatasetBuilder, term: &TermValue) -> TermId {
-    match term {
-        TermValue::Iri(iri) => builder.intern_iri(iri),
-        TermValue::Blank { label, .. } => builder.intern_blank(label, VALUE_SCOPE),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => builder.intern_literal(RdfLiteral {
-            lexical_form: lexical_form.clone(),
-            datatype: Some(datatype.clone()),
-            language: language.clone(),
-            direction: *direction,
-        }),
-        TermValue::Triple { s, p, o } => {
-            let s = intern_term_value(builder, s);
-            let p = intern_term_value(builder, p);
-            let o = intern_term_value(builder, o);
-            builder.intern_triple(s, p, o)
-        }
+    let interned = try_fold_nested(
+        term,
+        builder,
+        |builder, term| {
+            Ok::<_, Infallible>(Nested::Leaf(match term {
+                TermValue::Iri(iri) => builder.intern_iri(iri),
+                TermValue::Blank { label, .. } => builder.intern_blank(label, VALUE_SCOPE),
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                } => builder.intern_literal(RdfLiteral {
+                    lexical_form: lexical_form.clone(),
+                    datatype: Some(datatype.clone()),
+                    language: language.clone(),
+                    direction: *direction,
+                }),
+                TermValue::Triple { s, p, o } => return Ok(Nested::Triple(&**s, &**p, &**o)),
+            }))
+        },
+        |builder, _, s, p, o| Ok(builder.intern_triple(s, p, o)),
+    );
+    match interned {
+        Ok(id) => id,
     }
 }
 
@@ -736,5 +746,80 @@ mod tests {
         assert!(err.contains("ordered sequence"), "message: {err}");
         // Same rows, opposite order, compare EQUAL when unordered.
         assert!(compare_solutions(&vars, &two_rows, &reversed_expected, false).is_ok());
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! Result-value interning against its recursive reference, and at a hundred thousand
+    //! levels on a 128 KiB thread.
+
+    use purrdf_core::test_rng::TermShape;
+    use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermId, TermValue};
+
+    use super::{VALUE_SCOPE, intern_term_value};
+
+    fn reference(builder: &mut RdfDatasetBuilder, term: &TermValue) -> TermId {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                let s = reference(builder, s);
+                let p = reference(builder, p);
+                let o = reference(builder, o);
+                builder.intern_triple(s, p, o)
+            }
+            TermValue::Blank { label, .. } => builder.intern_blank(label, VALUE_SCOPE),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => builder.intern_literal(RdfLiteral {
+                lexical_form: lexical_form.clone(),
+                datatype: Some(datatype.clone()),
+                language: language.clone(),
+                direction: *direction,
+            }),
+            TermValue::Iri(iri) => builder.intern_iri(iri),
+        }
+    }
+
+    /// Every generated value interns into a fresh builder as the recursive reference
+    /// interns it: the same id, and the same next id after it.
+    #[test]
+    fn interning_agrees_with_its_recursive_reference_on_generated_values() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(&mut state, &mut budget, TermShape::Any);
+            let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
+            assert_eq!(
+                intern_term_value(&mut found, &value),
+                reference(&mut expected, &value),
+                "seed {seed}"
+            );
+            let sentinel = "http://example.org/sentinel";
+            assert_eq!(
+                found.intern_iri(sentinel),
+                expected.intern_iri(sentinel),
+                "seed {seed}"
+            );
+        }
+    }
+
+    /// A value a hundred thousand triple terms deep interns on a thread whose whole
+    /// stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_value_interns_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let mut builder = RdfDatasetBuilder::new();
+                assert_eq!(intern_term_value(&mut builder, &value).index(), LEVELS + 2);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("interning did not overflow the thread's stack");
     }
 }

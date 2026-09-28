@@ -65,6 +65,7 @@
 
 use crate::TermBox;
 use std::cmp::Ordering;
+use std::convert::Infallible;
 use std::fmt;
 
 use purrdf_iri::IriError;
@@ -73,6 +74,7 @@ use crate::dataset_view::DatasetView;
 use crate::hash::{FastMap, FastSet};
 use crate::ir::composite::owned_value;
 use crate::ir::term::{StrRange, arena_str};
+use crate::ir::term_walk::{Nested, try_fold_nested};
 use crate::{BlankScope, RdfTextDirection, TermRef, TermValue};
 
 use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for, read_varint, write_varint};
@@ -792,9 +794,7 @@ pub struct PackDict {
 
 /// The deepest triple-term (RDF 1.2 quoted triple) nesting a decoded dictionary will
 /// resolve. Real quoted-triple nesting is only a handful of levels; a chain deeper
-/// than this is malformed or hostile, and is rejected at decode so the recursive
-/// [`term_value`](PackDict::term_value)/`resolve` can never overflow the stack. Chosen
-/// far above any legitimate document yet well within a comfortable call-stack budget.
+/// than this is refused at decode as malformed.
 pub(crate) const MAX_TRIPLE_TERM_DEPTH: usize = 128;
 
 impl PackDict {
@@ -1049,44 +1049,59 @@ impl PackDict {
     }
 
     /// Resolve a unified id to its self-contained, dataset-independent
-    /// [`TermValue`], recursing through a literal's datatype and a triple term's
-    /// components (the inverse of the value→id assignment in
-    /// [`encode`](Self::encode)).
+    /// [`TermValue`], through a literal's datatype and a triple term's components
+    /// (the inverse of the value→id assignment in [`encode`](Self::encode)).
+    ///
+    /// A triple term is assembled bottom-up over [`try_fold_nested`]'s work list: its
+    /// subject, predicate and object are resolved in that order, each fully before
+    /// the next.
     ///
     /// # Panics
     ///
     /// Panics if `id` is out of range — see [`entry`](Self::entry).
     #[must_use]
     pub fn term_value(&self, id: PackTermId) -> TermValue {
-        match self.entry(id) {
-            DictEntry::Iri(r) => TermValue::Iri(arena_str(&self.arena, *r).to_owned()),
-            DictEntry::Blank { label, scope } => TermValue::Blank {
-                label: arena_str(&self.arena, *label).to_owned(),
-                scope: *scope,
+        let value = try_fold_nested(
+            id,
+            &mut (),
+            |(), id| {
+                Ok::<_, Infallible>(Nested::Leaf(match self.entry(id) {
+                    DictEntry::Iri(r) => TermValue::Iri(arena_str(&self.arena, *r).to_owned()),
+                    DictEntry::Blank { label, scope } => TermValue::Blank {
+                        label: arena_str(&self.arena, *label).to_owned(),
+                        scope: *scope,
+                    },
+                    DictEntry::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let datatype_id = *datatype;
+                        let datatype_str = match self.entry(datatype_id) {
+                            DictEntry::Iri(r) => arena_str(&self.arena, *r).to_owned(),
+                            _ => unreachable!("dict: a literal's datatype entry must be an IRI"),
+                        };
+                        TermValue::Literal {
+                            lexical_form: arena_str(&self.arena, *lexical).to_owned(),
+                            datatype: datatype_str,
+                            language: language.map(|r| arena_str(&self.arena, r).to_owned()),
+                            direction: *direction,
+                        }
+                    }
+                    DictEntry::Triple { s, p, o } => return Ok(Nested::Triple(*s, *p, *o)),
+                }))
             },
-            DictEntry::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype_id = *datatype;
-                let datatype_str = match self.entry(datatype_id) {
-                    DictEntry::Iri(r) => arena_str(&self.arena, *r).to_owned(),
-                    _ => unreachable!("dict: a literal's datatype entry must be an IRI"),
-                };
-                TermValue::Literal {
-                    lexical_form: arena_str(&self.arena, *lexical).to_owned(),
-                    datatype: datatype_str,
-                    language: language.map(|r| arena_str(&self.arena, r).to_owned()),
-                    direction: *direction,
-                }
-            }
-            DictEntry::Triple { s, p, o } => TermValue::Triple {
-                s: TermBox::new(self.term_value(*s)),
-                p: TermBox::new(self.term_value(*p)),
-                o: TermBox::new(self.term_value(*o)),
+            |(), _, s, p, o| {
+                Ok(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
             },
+        );
+        match value {
+            Ok(value) => value,
         }
     }
 
@@ -1183,15 +1198,13 @@ impl PackDict {
         }
         // Every id reference is now in range. The last hazard is the SHAPE of the
         // triple-term reference graph: [`term_value`](Self::term_value) and the
-        // reasoner's `resolve` recurse through a triple term's `s`/`p`/`o`, so a
-        // CYCLE (an id whose component transitively references it) or an adversarially
-        // DEEP chain — neither of which any `encode` of a finite dataset can produce,
-        // but both of which hostile pack bytes can — would recurse without bound and
-        // overflow the stack: a denial of service on an ordinary pack open. Reject
-        // them here so every id a decoded dictionary hands out resolves in bounded
-        // depth. (Component ids are NOT ordered relative to their triple's own id — a
-        // triple term's object may itself be a triple term that sorts after it — so a
-        // plain id-comparison cannot stand in for this reachability check.)
+        // reasoner's `resolve` follow a triple term's `s`/`p`/`o`, so a CYCLE (an id
+        // whose component transitively references it) — which no `encode` of a finite
+        // dataset can produce, but hostile pack bytes can — would never finish
+        // resolving. A chain nested past `MAX_TRIPLE_TERM_DEPTH` is refused here too,
+        // as malformed. (Component ids are NOT ordered relative to their triple's own
+        // id — a triple term's object may itself be a triple term that sorts after it —
+        // so a plain id-comparison cannot stand in for this reachability check.)
         self.validate_triple_terms_bounded()
     }
 
@@ -1272,11 +1285,10 @@ impl PackDict {
     /// Reject a cyclic or over-deep triple-term reference graph — see the tail of
     /// [`validate_references`](Self::validate_references) for why.
     ///
-    /// Both the traversal and the resolver it protects are bounded to
-    /// [`MAX_TRIPLE_TERM_DEPTH`] frames: a descending depth budget stops before the
-    /// stack can blow, and a per-entry memo means a sub-term shared by many triple
-    /// terms (a "diamond" DAG) is expanded ONCE rather than exponentially. The pass is
-    /// therefore `O(n_terms)` and cannot itself be a denial of service.
+    /// The traversal runs over a work list with a descending depth budget of
+    /// [`MAX_TRIPLE_TERM_DEPTH`], and a per-entry memo means a sub-term shared by many
+    /// triple terms (a "diamond" DAG) is expanded ONCE rather than exponentially. The
+    /// pass is therefore `O(n_terms)` and cannot itself be a denial of service.
     fn validate_triple_terms_bounded(&self) -> Result<(), PackDictError> {
         // A dictionary with no triple-term entry has no reference graph to walk: every
         // entry is a leaf, so the traversal would visit each one, record depth 0, and
@@ -1299,9 +1311,14 @@ impl PackDict {
     }
 
     /// The triple-term nesting depth reachable from `id`, or [`PackDictError::Malformed`]
-    /// if a cycle or a chain deeper than `budget` frames is found. Memoized in `depth`;
-    /// `on_path` is the cycle-detection coloring. See
+    /// if a cycle or a chain deeper than `budget` triple terms is found. Memoized in
+    /// `depth`; `on_path` is the cycle-detection coloring. See
     /// [`validate_triple_terms_bounded`](Self::validate_triple_terms_bounded).
+    ///
+    /// The search runs over a work list in depth-first order: a triple term's subject,
+    /// predicate and object are each searched fully, in that order, and the triple's
+    /// own depth is recorded once all three are known. A refusal is found at the same
+    /// entry a recursive search would find it.
     fn triple_term_depth(
         &self,
         id: PackTermId,
@@ -1309,44 +1326,71 @@ impl PackDict {
         depth: &mut [Option<usize>],
         on_path: &mut [bool],
     ) -> Result<usize, PackDictError> {
-        let idx = usize::try_from(id - 1).expect("PackDict: id exceeds usize on this platform");
-        if let Some(d) = depth[idx] {
-            return Ok(d);
+        enum Step {
+            /// Search this entry with this much budget left.
+            Enter(PackTermId, usize),
+            /// Record this triple entry's depth from its three components' depths.
+            Finish(usize),
         }
-        if on_path[idx] {
-            return Err(PackDictError::Malformed(
-                "dict: cyclic triple-term reference",
-            ));
+        let mut steps: Vec<Step> = vec![Step::Enter(id, budget)];
+        let mut depths: Vec<usize> = Vec::new();
+        while let Some(step) = steps.pop() {
+            match step {
+                Step::Enter(id, budget) => {
+                    let idx = usize::try_from(id - 1)
+                        .expect("PackDict: id exceeds usize on this platform");
+                    if let Some(d) = depth[idx] {
+                        depths.push(d);
+                        continue;
+                    }
+                    if on_path[idx] {
+                        return Err(PackDictError::Malformed(
+                            "dict: cyclic triple-term reference",
+                        ));
+                    }
+                    // A non-triple entry is a leaf: an IRI/blank is atomic, and a
+                    // literal resolves its datatype IRI directly, so its depth is 0.
+                    let DictEntry::Triple { s, p, o } = self.entries[idx] else {
+                        depth[idx] = Some(0);
+                        depths.push(0);
+                        continue;
+                    };
+                    // Stop BEFORE descending past the ceiling.
+                    let Some(child_budget) = budget.checked_sub(1) else {
+                        return Err(PackDictError::Malformed(
+                            "dict: triple-term nesting exceeds the depth ceiling",
+                        ));
+                    };
+                    on_path[idx] = true;
+                    steps.extend([
+                        Step::Finish(idx),
+                        Step::Enter(o, child_budget),
+                        Step::Enter(p, child_budget),
+                        Step::Enter(s, child_budget),
+                    ]);
+                }
+                Step::Finish(idx) => {
+                    let dobj = depths.pop().expect("a triple's object is searched");
+                    let dp = depths.pop().expect("a triple's predicate is searched");
+                    let ds = depths.pop().expect("a triple's subject is searched");
+                    on_path[idx] = false;
+                    let d = 1 + ds.max(dp).max(dobj);
+                    // A memoized sub-term reached via a short path can still push a
+                    // triple built ON it past the ceiling; re-check the assembled depth
+                    // so every cached value is within the bound.
+                    if d > MAX_TRIPLE_TERM_DEPTH {
+                        return Err(PackDictError::Malformed(
+                            "dict: triple-term nesting exceeds the depth ceiling",
+                        ));
+                    }
+                    depth[idx] = Some(d);
+                    depths.push(d);
+                }
+            }
         }
-        // A non-triple entry is a leaf: an IRI/blank is atomic, and a literal resolves
-        // its datatype IRI in O(1) without recursing, so its depth is 0.
-        let DictEntry::Triple { s, p, o } = self.entries[idx] else {
-            depth[idx] = Some(0);
-            return Ok(0);
-        };
-        // Stop BEFORE descending past the ceiling, so neither this pass nor the
-        // resolver it mirrors can exceed `MAX_TRIPLE_TERM_DEPTH` stack frames.
-        let Some(child_budget) = budget.checked_sub(1) else {
-            return Err(PackDictError::Malformed(
-                "dict: triple-term nesting exceeds the depth ceiling",
-            ));
-        };
-        on_path[idx] = true;
-        let ds = self.triple_term_depth(s, child_budget, depth, on_path)?;
-        let dp = self.triple_term_depth(p, child_budget, depth, on_path)?;
-        let dobj = self.triple_term_depth(o, child_budget, depth, on_path)?;
-        on_path[idx] = false;
-        let d = 1 + ds.max(dp).max(dobj);
-        // A memoized sub-term reached via a short path can still push a triple built
-        // ON it past the ceiling; re-check the assembled depth so every cached value —
-        // and thus every `term_value` recursion — is provably within the bound.
-        if d > MAX_TRIPLE_TERM_DEPTH {
-            return Err(PackDictError::Malformed(
-                "dict: triple-term nesting exceeds the depth ceiling",
-            ));
-        }
-        depth[idx] = Some(d);
-        Ok(d)
+        Ok(depths
+            .pop()
+            .expect("the root entry's depth is the last one recorded"))
     }
 }
 
@@ -2081,9 +2125,9 @@ mod tests {
     #[test]
     fn validate_references_rejects_a_self_referential_triple_term() {
         // A triple term at id 1 whose components all point at id 1 (itself). No encoder
-        // of a finite dataset could mint this, and resolving it would recurse forever.
+        // of a finite dataset could mint this, and resolving it would never finish.
         // Validation must reject it at open: the fail-closed guard against a
-        // stack-overflow denial of service on hostile pack bytes.
+        // denial of service on hostile pack bytes.
         let dict = PackDict {
             arena: Vec::new(),
             entries: vec![DictEntry::Triple { s: 1, p: 1, o: 1 }],
@@ -2205,8 +2249,8 @@ mod tests {
     #[test]
     fn validate_references_rejects_nesting_past_the_depth_ceiling() {
         // One level deeper than the ceiling: the same linear chain with an extra triple
-        // term on top. A chain this deep would overflow the resolver's stack, so it is
-        // rejected before any id it decodes can be resolved.
+        // term on top. A chain this deep is malformed, so it is rejected before any id
+        // it decodes can be resolved.
         let mut entries = vec![DictEntry::Iri(StrRange { offset: 0, len: 0 })];
         for _ in 0..=MAX_TRIPLE_TERM_DEPTH {
             let below = entries.len() as u64;
@@ -2284,5 +2328,94 @@ mod tests {
                 common_prefix_len_bytewise(&shared, &a)
             );
         }
+    }
+
+    // ── The triple-term depth search ───────────────────────────────────────────────
+
+    /// The recursive reference of [`PackDict::triple_term_depth`].
+    fn reference_depth(
+        dict: &PackDict,
+        id: PackTermId,
+        budget: usize,
+        depth: &mut [Option<usize>],
+        on_path: &mut [bool],
+    ) -> Result<usize, PackDictError> {
+        let idx = usize::try_from(id - 1).expect("a test id fits usize");
+        if let Some(d) = depth[idx] {
+            return Ok(d);
+        }
+        if on_path[idx] {
+            return Err(PackDictError::Malformed(
+                "dict: cyclic triple-term reference",
+            ));
+        }
+        let DictEntry::Triple { s, p, o } = dict.entries[idx] else {
+            depth[idx] = Some(0);
+            return Ok(0);
+        };
+        let Some(child_budget) = budget.checked_sub(1) else {
+            return Err(PackDictError::Malformed(
+                "dict: triple-term nesting exceeds the depth ceiling",
+            ));
+        };
+        on_path[idx] = true;
+        let ds = reference_depth(dict, s, child_budget, depth, on_path)?;
+        let dp = reference_depth(dict, p, child_budget, depth, on_path)?;
+        let dobj = reference_depth(dict, o, child_budget, depth, on_path)?;
+        on_path[idx] = false;
+        let d = 1 + ds.max(dp).max(dobj);
+        if d > MAX_TRIPLE_TERM_DEPTH {
+            return Err(PackDictError::Malformed(
+                "dict: triple-term nesting exceeds the depth ceiling",
+            ));
+        }
+        depth[idx] = Some(d);
+        Ok(d)
+    }
+
+    /// On generated reference graphs — cycles, shared components and chains included —
+    /// the work-list search answers every root exactly as the recursive reference does,
+    /// under budgets small enough to be exhausted, and leaves the same memo behind.
+    #[test]
+    fn the_depth_search_agrees_with_its_recursive_reference_on_generated_graphs() {
+        let mut refusals = 0;
+        for seed in 0..500_u64 {
+            let mut state = seed;
+            let mut draw = |n: u64| crate::test_rng::splitmix64_next(&mut state) % n;
+            let len = 1 + draw(10);
+            let entries: Vec<DictEntry> = (0..len)
+                .map(|_| {
+                    if draw(3) == 0 {
+                        DictEntry::Iri(StrRange { offset: 0, len: 0 })
+                    } else {
+                        DictEntry::Triple {
+                            s: 1 + draw(len),
+                            p: 1 + draw(len),
+                            o: 1 + draw(len),
+                        }
+                    }
+                })
+                .collect();
+            let dict = PackDict {
+                arena: Vec::new(),
+                entries,
+            };
+            let budget = usize::try_from(1 + draw(6)).expect("a small budget fits");
+            let n = dict.entries.len();
+            let (mut depth, mut on_path) = (vec![None; n], vec![false; n]);
+            let (mut ref_depth, mut ref_on_path) = (vec![None; n], vec![false; n]);
+            for root in 1..=dict.n_terms() {
+                let found = dict.triple_term_depth(root, budget, &mut depth, &mut on_path);
+                let expected =
+                    reference_depth(&dict, root, budget, &mut ref_depth, &mut ref_on_path);
+                assert_eq!(found, expected, "seed {seed}, root {root}");
+                if found.is_err() {
+                    refusals += 1;
+                    break;
+                }
+                assert_eq!(depth, ref_depth, "seed {seed}, root {root}");
+            }
+        }
+        assert!(refusals > 0, "some generated graph is refused");
     }
 }

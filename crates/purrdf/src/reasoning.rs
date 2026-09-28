@@ -1574,15 +1574,28 @@ fn label_is_surrogate(label: &str, surrogates: &BTreeSet<String>) -> bool {
 }
 
 /// Whether `term` IS a chase-minted witness, or quotes one at any depth.
+///
+/// The walk runs over a work list in depth-first order: a quoted triple's subject is
+/// examined next, with its object held back until the subject's whole nesting is done,
+/// and the first witness found ends it.
 fn term_mentions_surrogate(term: &RdfTerm, surrogates: &BTreeSet<String>) -> bool {
-    match term {
-        RdfTerm::BlankNode(label) => label_is_surrogate(label, surrogates),
-        RdfTerm::Iri(_) | RdfTerm::Literal(_) => false,
-        RdfTerm::Triple(triple) => {
-            term_mentions_surrogate(&triple.subject, surrogates)
-                || term_mentions_surrogate(&triple.object, surrogates)
+    let mut held: Vec<&RdfTerm> = Vec::new();
+    let mut next = Some(term);
+    while let Some(term) = next.take().or_else(|| held.pop()) {
+        match term {
+            RdfTerm::BlankNode(label) => {
+                if label_is_surrogate(label, surrogates) {
+                    return true;
+                }
+            }
+            RdfTerm::Iri(_) | RdfTerm::Literal(_) => {}
+            RdfTerm::Triple(triple) => {
+                held.push(&triple.object);
+                next = Some(&triple.subject);
+            }
         }
     }
+    false
 }
 
 /// The report for the identity closure — what `materialize(ds, Materialization::Simple)` returns.
@@ -2704,5 +2717,98 @@ mod tests {
                 .any(|cell| cell.contains(&format!("{COMBINED_NS}a")))),
             "ex:a is a certain answer through q and must arrive via the fallback: {rows:?}"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The witness search against its recursive reference, and at a hundred thousand
+    //! levels on a 128 KiB thread.
+
+    use std::collections::BTreeSet;
+
+    use purrdf_rdf::{RdfTerm, RdfTriple};
+
+    use super::{label_is_surrogate, term_mentions_surrogate};
+
+    fn reference(term: &RdfTerm, surrogates: &BTreeSet<String>) -> bool {
+        match term {
+            RdfTerm::BlankNode(label) => label_is_surrogate(label, surrogates),
+            RdfTerm::Iri(_) | RdfTerm::Literal(_) => false,
+            RdfTerm::Triple(triple) => {
+                reference(&triple.subject, surrogates) || reference(&triple.object, surrogates)
+            }
+        }
+    }
+
+    /// A SplitMix64 draw from the counter at `state`.
+    const fn splitmix64(state: &mut u64) -> u64 {
+        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
+        let mut z = *state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
+        z ^ (z >> 31)
+    }
+
+    /// A generated owned term of at most `budget` triple terms, its blank nodes drawn
+    /// from `w0`, `w1` and `b`.
+    fn generated(state: &mut u64, budget: &mut usize) -> RdfTerm {
+        if *budget > 0 && splitmix64(state).is_multiple_of(3) {
+            *budget -= 1;
+            let subject = generated(state, budget);
+            let object = generated(state, budget);
+            return RdfTerm::triple(RdfTriple::new(subject, "http://example.org/p", object));
+        }
+        match splitmix64(state) % 4 {
+            0 => RdfTerm::iri("http://example.org/i"),
+            1 => RdfTerm::blank_node("w0"),
+            2 => RdfTerm::blank_node("w1"),
+            _ => RdfTerm::blank_node("b"),
+        }
+    }
+
+    /// Every generated term mentions a witness exactly when the recursive reference says
+    /// it does.
+    #[test]
+    fn the_search_agrees_with_its_recursive_reference_on_generated_terms() {
+        let surrogates = BTreeSet::from(["w1".to_owned()]);
+        let mut mentioning = 0;
+        for seed in 0..400_u64 {
+            let (mut state, mut budget) = (seed, 8);
+            let term = generated(&mut state, &mut budget);
+            let found = term_mentions_surrogate(&term, &surrogates);
+            assert_eq!(found, reference(&term, &surrogates), "seed {seed}");
+            mentioning += usize::from(found);
+        }
+        assert!(mentioning > 0, "some generated term mentions a witness");
+    }
+
+    /// A triple term a hundred thousand levels deep, its innermost object a witness, is
+    /// searched on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_searched_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let surrogates = BTreeSet::from(["w".to_owned()]);
+                let mut term = RdfTerm::blank_node("w");
+                for _ in 0..LEVELS {
+                    term = RdfTerm::triple(RdfTriple::new(
+                        RdfTerm::iri("http://example.org/s"),
+                        "http://example.org/p",
+                        term,
+                    ));
+                }
+                assert!(term_mentions_surrogate(&term, &surrogates));
+                // The owned model's derived drop descends once per level, so the chain
+                // is taken apart one level at a time.
+                while let RdfTerm::Triple(triple) = term {
+                    term = triple.object;
+                }
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the search did not overflow the thread's stack");
     }
 }

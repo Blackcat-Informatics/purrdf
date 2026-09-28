@@ -276,8 +276,8 @@ fn triple_term_subjects_are_indexed() {
     let dataset = builder.freeze().expect("the fixture must validate");
 
     // The disguise must not name `s` itself: a term that contains its own id is
-    // an infinite structure, and the resolver's depth bound would (correctly)
-    // refuse it.
+    // an infinite structure, which no view may present and no resolver could
+    // finish walking.
     let view = TripleSubjectView {
         inner: Arc::clone(&dataset),
         disguised: s,

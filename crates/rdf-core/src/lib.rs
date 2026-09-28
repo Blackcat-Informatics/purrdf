@@ -181,7 +181,7 @@ pub use ir::{
     CanonicalRelabeling, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
     DeltaDatasetView, DeltaViewId, FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary,
     GlobalTermId, GraphLayer, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider,
-    MutableDataset, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind, PageGeneration, PageId,
+    MutableDataset, Nested, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind, PageGeneration, PageId,
     PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
     PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
     PagedQueryView, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds,
@@ -194,7 +194,7 @@ pub use ir::{
     dataset_diff, datasets_isomorphic, deskolemize, fold_term, graph_digest_view, skolemize,
     try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
     try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
-    try_flat_digest_view, try_graph_digest_view,
+    try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
 };
 pub use ir::{
     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,

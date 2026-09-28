@@ -20,8 +20,15 @@
 //! [`TermValue::try_fold_owned`] does so while consuming the term,
 //! [`TermValue::visit_terms`] visits every term in pre-order, and
 //! [`TermValue::visit_terms_pre_post`] brackets each triple term around its components,
-//! so a writer can open and close it. [`fold_term`] is the same bottom-up fold over the
+//! so a writer can open and close it, and [`TermValue::try_write_nested`] writes a term
+//! with each triple term spelled between an opening, separators and a closing. [`fold_term`] is the same bottom-up fold over the
 //! ids a [`DatasetView`] resolves.
+//!
+//! Underneath all of them sit two walks over any nested structure whose only nesting
+//! is a triple term's three components — a term value, an id a dictionary resolves, a
+//! term of some other crate's model: [`try_fold_nested`] folds one bottom-up and
+//! [`visit_nested`] visits one in pre-order. A caller says what it finds at one node,
+//! and the walk supplies the order a recursive descent would take.
 
 use core::cmp::Ordering;
 use core::convert::Infallible;
@@ -228,7 +235,7 @@ pub enum TermVisit<'a> {
 /// the three answers its components left.
 enum FoldStep<T> {
     Enter(T),
-    Assemble,
+    Assemble(T),
 }
 
 impl TermValue {
@@ -245,33 +252,15 @@ impl TermValue {
         mut leaf: impl FnMut(&Self) -> Result<T, E>,
         mut triple: impl FnMut(T, T, T) -> Result<T, E>,
     ) -> Result<T, E> {
-        let Self::Triple { .. } = self else {
-            return leaf(self);
-        };
-        let mut steps: Pending<FoldStep<&Self>, 32> = Pending::with(FoldStep::Enter(self));
-        let mut answers: Vec<T> = Vec::with_capacity(3);
-        while let Some(step) = steps.pop() {
-            match step {
-                FoldStep::Enter(Self::Triple { s, p, o }) => {
-                    steps.extend([
-                        FoldStep::Assemble,
-                        FoldStep::Enter(o),
-                        FoldStep::Enter(p),
-                        FoldStep::Enter(s),
-                    ]);
-                }
-                FoldStep::Enter(term) => answers.push(leaf(term)?),
-                FoldStep::Assemble => {
-                    let o = answers.pop().expect("a triple's object is folded");
-                    let p = answers.pop().expect("a triple's predicate is folded");
-                    let s = answers.pop().expect("a triple's subject is folded");
-                    answers.push(triple(s, p, o)?);
-                }
-            }
-        }
-        Ok(answers
-            .pop()
-            .expect("the root's answer is the last one assembled"))
+        try_fold_nested(
+            self,
+            &mut (),
+            |(), term| match term {
+                Self::Triple { s, p, o } => Ok(Nested::Triple(&**s, &**p, &**o)),
+                term => leaf(term).map(Nested::Leaf),
+            },
+            |(), _, s, p, o| triple(s, p, o),
+        )
     }
 
     /// [`Self::try_fold`] for a fold that cannot fail.
@@ -297,23 +286,27 @@ impl TermValue {
         mut leaf: impl FnMut(Self) -> Result<T, E>,
         mut triple: impl FnMut(T, T, T) -> Result<T, E>,
     ) -> Result<T, E> {
+        enum Step {
+            Enter(TermValue),
+            Assemble,
+        }
         let Self::Triple { .. } = self else {
             return leaf(self);
         };
-        let mut steps: Vec<FoldStep<Self>> = vec![FoldStep::Enter(self)];
+        let mut steps: Vec<Step> = vec![Step::Enter(self)];
         let mut answers: Vec<T> = Vec::with_capacity(3);
         while let Some(step) = steps.pop() {
             match step {
-                FoldStep::Enter(Self::Triple { s, p, o }) => {
+                Step::Enter(Self::Triple { s, p, o }) => {
                     steps.extend([
-                        FoldStep::Assemble,
-                        FoldStep::Enter(o.into_inner()),
-                        FoldStep::Enter(p.into_inner()),
-                        FoldStep::Enter(s.into_inner()),
+                        Step::Assemble,
+                        Step::Enter(o.into_inner()),
+                        Step::Enter(p.into_inner()),
+                        Step::Enter(s.into_inner()),
                     ]);
                 }
-                FoldStep::Enter(term) => answers.push(leaf(term)?),
-                FoldStep::Assemble => {
+                Step::Enter(term) => answers.push(leaf(term)?),
+                Step::Assemble => {
                     let o = answers.pop().expect("a triple's object is folded");
                     let p = answers.pop().expect("a triple's predicate is folded");
                     let s = answers.pop().expect("a triple's subject is folded");
@@ -366,6 +359,60 @@ impl TermValue {
         }
         ControlFlow::Continue(())
     }
+
+    /// Write this term into `out` through `leaf` and `text`, spelling each triple term
+    /// as `open`, its subject, `separator`, its predicate, `separator`, its object, and
+    /// `close`. `leaf` writes every term that is not a triple term; `text` writes the
+    /// brackets and separators. The walk is [`Self::visit_terms_pre_post`]'s work
+    /// list, so the pieces arrive in the order a recursive writer would produce them,
+    /// and the first error ends the write.
+    ///
+    /// # Errors
+    ///
+    /// The first error `leaf` or `text` returns.
+    pub fn try_write_nested<W: ?Sized, E>(
+        &self,
+        out: &mut W,
+        open: &str,
+        separator: &str,
+        close: &str,
+        mut leaf: impl FnMut(&mut W, &Self) -> Result<(), E>,
+        mut text: impl FnMut(&mut W, &str) -> Result<(), E>,
+    ) -> Result<(), E> {
+        // For each triple term being written, how many of its components have begun.
+        let mut begun: Vec<u8> = Vec::new();
+        let written = self.visit_terms_pre_post(|event| {
+            if !matches!(event, TermVisit::Close(_))
+                && let Some(count) = begun.last_mut()
+            {
+                if *count > 0
+                    && let Err(error) = text(out, separator)
+                {
+                    return ControlFlow::Break(error);
+                }
+                *count += 1;
+            }
+            let piece = match event {
+                TermVisit::Open(_) => {
+                    begun.push(0);
+                    text(out, open)
+                }
+                TermVisit::Leaf(term) => leaf(out, term),
+                TermVisit::Close(_) => {
+                    begun.pop();
+                    text(out, close)
+                }
+            };
+            match piece {
+                Ok(()) => ControlFlow::Continue(()),
+                Err(error) => ControlFlow::Break(error),
+            }
+        });
+        match written {
+            ControlFlow::Continue(()) => Ok(()),
+            ControlFlow::Break(error) => Err(error),
+        }
+    }
 }
 
 /// Fold the term `id` names in `view` bottom-up over a work list: `leaf` answers for
@@ -384,37 +431,103 @@ pub fn fold_term<D: DatasetView + ?Sized, T, E>(
     mut leaf: impl FnMut(D::Id, TermRef<'_, D::Id>) -> Result<T, E>,
     mut triple: impl FnMut(D::Id, T, T, T) -> Result<T, E>,
 ) -> Result<T, E> {
-    let mut steps: Pending<FoldStep<D::Id>, 32> = Pending::with(FoldStep::Enter(id));
-    let mut assembling: Vec<D::Id> = Vec::new();
+    try_fold_nested(
+        id,
+        &mut (),
+        |(), id| match view.resolve(id) {
+            TermRef::Triple { s, p, o } => Ok(Nested::Triple(s, p, o)),
+            resolved => leaf(id, resolved).map(Nested::Leaf),
+        },
+        |(), id, s, p, o| triple(id, s, p, o),
+    )
+}
+
+/// What a nested walk finds at one node: the answer for a node that is not a triple
+/// term, or a triple term's subject, predicate and object.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Nested<N, T> {
+    /// A node that is not a triple term, with its answer.
+    Leaf(T),
+    /// A triple term's subject, predicate and object, in that order.
+    Triple(N, N, N),
+}
+
+/// Fold the nested structure at `root` bottom-up over a work list.
+///
+/// `enter` is called once per node, in the order a recursive descent would reach
+/// them — a triple term before its subject, the subject's whole nesting before the
+/// predicate, the predicate's before the object — and says what the node is: an
+/// answer, or a triple term's three components. `triple` combines a triple term and
+/// its three answers into its own once all three exist. Both receive `ctx`, so the
+/// two may share one piece of mutable state such as an interner. The first error
+/// ends the fold and is returned.
+///
+/// A node is anything `Copy` that names one term — a reference into a term value, an
+/// id a dictionary resolves — so the walk serves every term model alike. A node that
+/// is not a triple term allocates nothing.
+///
+/// # Errors
+///
+/// The first error `enter` or `triple` returns.
+pub fn try_fold_nested<N: Copy, C: ?Sized, T, E>(
+    root: N,
+    ctx: &mut C,
+    mut enter: impl FnMut(&mut C, N) -> Result<Nested<N, T>, E>,
+    mut triple: impl FnMut(&mut C, N, T, T, T) -> Result<T, E>,
+) -> Result<T, E> {
+    let (s, p, o) = match enter(ctx, root)? {
+        Nested::Leaf(answer) => return Ok(answer),
+        Nested::Triple(s, p, o) => (s, p, o),
+    };
+    let mut steps: Pending<FoldStep<N>, 32> = Pending::with(FoldStep::Assemble(root));
+    steps.extend([FoldStep::Enter(o), FoldStep::Enter(p), FoldStep::Enter(s)]);
     let mut answers: Vec<T> = Vec::with_capacity(3);
     while let Some(step) = steps.pop() {
         match step {
-            FoldStep::Enter(id) => match view.resolve(id) {
-                TermRef::Triple { s, p, o } => {
-                    assembling.push(id);
-                    steps.extend([
-                        FoldStep::Assemble,
-                        FoldStep::Enter(o),
-                        FoldStep::Enter(p),
-                        FoldStep::Enter(s),
-                    ]);
-                }
-                resolved => answers.push(leaf(id, resolved)?),
+            FoldStep::Enter(node) => match enter(ctx, node)? {
+                Nested::Leaf(answer) => answers.push(answer),
+                Nested::Triple(s, p, o) => steps.extend([
+                    FoldStep::Assemble(node),
+                    FoldStep::Enter(o),
+                    FoldStep::Enter(p),
+                    FoldStep::Enter(s),
+                ]),
             },
-            FoldStep::Assemble => {
-                let id = assembling
-                    .pop()
-                    .expect("a triple term is assembled once its components are");
+            FoldStep::Assemble(node) => {
                 let o = answers.pop().expect("a triple's object is folded");
                 let p = answers.pop().expect("a triple's predicate is folded");
                 let s = answers.pop().expect("a triple's subject is folded");
-                answers.push(triple(id, s, p, o)?);
+                answers.push(triple(ctx, node, s, p, o)?);
             }
         }
     }
     Ok(answers
         .pop()
         .expect("the root's answer is the last one assembled"))
+}
+
+/// Visit the nested structure at `root` in pre-order over a work list: a triple term
+/// first, then its subject with everything below it, then its predicate, then its
+/// object.
+///
+/// `visit` is called once per node and answers `Continue(Some([s, p, o]))` for a
+/// triple term whose components the walk should descend into, or `Continue(None)` for
+/// a node with nothing below it. The first `Break` ends the visit and is returned.
+pub fn visit_nested<N: Copy, B>(
+    root: N,
+    mut visit: impl FnMut(N) -> ControlFlow<B, Option<[N; 3]>>,
+) -> ControlFlow<B> {
+    let Some([s, p, o]) = visit(root)? else {
+        return ControlFlow::Continue(());
+    };
+    let mut pending: Pending<N, 16> = Pending::with(o);
+    pending.extend([p, s]);
+    while let Some(node) = pending.pop() {
+        if let Some([s, p, o]) = visit(node)? {
+            pending.extend([o, p, s]);
+        }
+    }
+    ControlFlow::Continue(())
 }
 
 impl Clone for TermValue {
@@ -846,6 +959,7 @@ fn close(out: &mut Pad<'_, '_>, pretty: bool) -> fmt::Result {
 mod tests {
     use core::cmp::Ordering;
     use core::convert::Infallible;
+    use core::fmt::Write as _;
     use core::hash::{Hash, Hasher};
     use core::ops::ControlFlow;
 
@@ -1336,5 +1450,277 @@ mod tests {
             .expect("the thread starts")
             .join()
             .expect("no walk overflowed the thread's stack");
+    }
+
+    // ── The generic walks ──────────────────────────────────────────────────────────
+
+    /// The recursive reference of [`super::try_fold_nested`] over a term value: every
+    /// node's spelling in the order a recursive descent enters it, and the folded
+    /// answer.
+    fn reference_enter_order(term: &TermValue, entered: &mut Vec<String>) -> String {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                entered.push("triple".to_owned());
+                let s = reference_enter_order(s, entered);
+                let p = reference_enter_order(p, entered);
+                let o = reference_enter_order(o, entered);
+                format!("({s} {p} {o})")
+            }
+            leaf => {
+                entered.push(format!("{leaf:?}"));
+                format!("{leaf:?}")
+            }
+        }
+    }
+
+    /// The recursive reference of [`TermValue::try_write_nested`]: `[` s `,` p `,` o `]`.
+    fn reference_write(term: &TermValue, out: &mut String) {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                out.push('[');
+                reference_write(s, out);
+                out.push(',');
+                reference_write(p, out);
+                out.push(',');
+                reference_write(o, out);
+                out.push(']');
+            }
+            leaf => {
+                let _ = write!(out, "{leaf:?}");
+            }
+        }
+    }
+
+    /// A test-only owned-model twin of a term value: a triple term's predicate is
+    /// spelled as the IRI of its value's `Debug` form.
+    fn owned(term: &TermValue) -> crate::RdfTerm {
+        match term {
+            TermValue::Triple { s, p, o } => crate::RdfTerm::triple(crate::RdfTriple::new(
+                owned(s),
+                format!("{:?}", **p),
+                owned(o),
+            )),
+            TermValue::Iri(iri) => crate::RdfTerm::iri(iri.clone()),
+            leaf => crate::RdfTerm::blank_node(format!("{leaf:?}")),
+        }
+    }
+
+    /// The recursive reference of [`crate::RdfTerm::try_fold`].
+    fn reference_owned_fold(term: &crate::RdfTerm) -> String {
+        match term {
+            crate::RdfTerm::Triple(t) => format!(
+                "({} <{}> {})",
+                reference_owned_fold(&t.subject),
+                t.predicate,
+                reference_owned_fold(&t.object)
+            ),
+            leaf => format!("{leaf:?}"),
+        }
+    }
+
+    proptest! {
+        /// `try_fold_nested` enters every node in the order a recursive descent does
+        /// and assembles the same answer; `visit_nested` visits in the same pre-order;
+        /// `try_write_nested` writes what a recursive writer writes, and its first
+        /// refused leaf is the reference's first leaf of that kind.
+        #[test]
+        fn the_generic_walks_agree_with_their_recursive_references(a in term()) {
+            let mut expected_entered = Vec::new();
+            let expected = reference_enter_order(&a, &mut expected_entered);
+
+            let mut entered = Vec::new();
+            let folded = super::try_fold_nested(
+                &a,
+                &mut entered,
+                |entered, node| {
+                    Ok::<_, Infallible>(match node {
+                        TermValue::Triple { s, p, o } => {
+                            entered.push("triple".to_owned());
+                            super::Nested::Triple(&**s, &**p, &**o)
+                        }
+                        leaf => {
+                            entered.push(format!("{leaf:?}"));
+                            super::Nested::Leaf(format!("{leaf:?}"))
+                        }
+                    })
+                },
+                |_, _, s, p, o| Ok(format!("({s} {p} {o})")),
+            );
+            prop_assert_eq!(folded, Ok(expected));
+            prop_assert_eq!(&entered, &expected_entered);
+
+            let mut visited = Vec::new();
+            let ControlFlow::Continue(()) =
+                super::visit_nested(&a, |node| -> ControlFlow<Infallible, _> {
+                    ControlFlow::Continue(match node {
+                        TermValue::Triple { s, p, o } => {
+                            visited.push("triple".to_owned());
+                            Some([&**s, &**p, &**o])
+                        }
+                        leaf => {
+                            visited.push(format!("{leaf:?}"));
+                            None
+                        }
+                    })
+                });
+            prop_assert_eq!(&visited, &expected_entered);
+
+            let mut written = String::new();
+            let ok = a.try_write_nested(
+                &mut written,
+                "[",
+                ",",
+                "]",
+                |out, leaf| {
+                    let _ = write!(out, "{leaf:?}");
+                    Ok::<(), Infallible>(())
+                },
+                |out, text| {
+                    out.push_str(text);
+                    Ok(())
+                },
+            );
+            prop_assert_eq!(ok, Ok(()));
+            let mut expected_written = String::new();
+            reference_write(&a, &mut expected_written);
+            prop_assert_eq!(&written, &expected_written);
+
+            // A writer refusing every blank node stops at the first one, having written
+            // exactly the reference's text before it.
+            let mut partial = String::new();
+            let refused = a.try_write_nested(
+                &mut partial,
+                "[",
+                ",",
+                "]",
+                |out, leaf| match leaf {
+                    TermValue::Blank { label, .. } => Err(label.clone()),
+                    other => {
+                        let _ = write!(out, "{other:?}");
+                        Ok(())
+                    }
+                },
+                |out, text| {
+                    out.push_str(text);
+                    Ok(())
+                },
+            );
+            match refused {
+                Ok(()) => prop_assert_eq!(&partial, &expected_written),
+                Err(label) => {
+                    let first_blank = expected_entered
+                        .iter()
+                        .position(|node| node.starts_with("Blank"))
+                        .expect("a refusal names a blank the term holds");
+                    let spelled = format!("{label:?}");
+                    prop_assert!(expected_entered[first_blank].contains(&spelled));
+                    prop_assert!(expected_written.starts_with(&partial));
+                }
+            }
+
+            let owned_term = owned(&a);
+            let owned_fold = owned_term.try_fold(
+                |leaf| Ok::<_, Infallible>(format!("{leaf:?}")),
+                |predicate| Ok(format!("<{predicate}>")),
+                |s, p, o| Ok(format!("({s} {p} {o})")),
+            );
+            prop_assert_eq!(owned_fold, Ok(reference_owned_fold(&owned_term)));
+        }
+    }
+
+    /// The generic walks over a hundred thousand levels on a thread whose whole stack is
+    /// 128 KiB: a fold and a visit over integer ids naming a chain, a nested write, and a
+    /// fold of the owned model.
+    #[test]
+    fn a_hundred_thousand_level_chain_is_walked_generically_without_recursion() {
+        const LEVELS: u32 = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                // Id `n > 0` names a triple term whose object is `n - 1`; ids `u32::MAX`
+                // and `0` are leaves.
+                let enter = |id: u32| match id {
+                    0 | u32::MAX => super::Nested::Leaf(1_u32),
+                    id => super::Nested::Triple(u32::MAX, u32::MAX, id - 1),
+                };
+                let depth = super::try_fold_nested(
+                    LEVELS,
+                    &mut (),
+                    |(), id| {
+                        Ok::<_, Infallible>(match enter(id) {
+                            super::Nested::Leaf(_) => super::Nested::Leaf(0_u32),
+                            triple @ super::Nested::Triple(..) => triple,
+                        })
+                    },
+                    |(), _, s, p, o| Ok(1 + s.max(p).max(o)),
+                );
+                assert_eq!(depth, Ok(LEVELS));
+                let mut visited = 0_u64;
+                let ControlFlow::Continue(()) =
+                    super::visit_nested(LEVELS, |id| -> ControlFlow<Infallible, _> {
+                        visited += 1;
+                        ControlFlow::Continue(match enter(id) {
+                            super::Nested::Triple(s, p, o) => Some([s, p, o]),
+                            super::Nested::Leaf(_) => None,
+                        })
+                    });
+                assert_eq!(visited, 3 * u64::from(LEVELS) + 1);
+
+                let mut term = TermValue::iri("o");
+                for _ in 0..LEVELS {
+                    term = TermValue::Triple {
+                        s: TermBox::new(TermValue::iri("s")),
+                        p: TermBox::new(TermValue::iri("p")),
+                        o: TermBox::new(term),
+                    };
+                }
+                let mut written = String::new();
+                let ok = term.try_write_nested(
+                    &mut written,
+                    "(",
+                    " ",
+                    ")",
+                    |out, leaf| {
+                        if let TermValue::Iri(iri) = leaf {
+                            out.push_str(iri);
+                        }
+                        Ok::<(), Infallible>(())
+                    },
+                    |out, text| {
+                        out.push_str(text);
+                        Ok(())
+                    },
+                );
+                assert_eq!(ok, Ok(()));
+                assert_eq!(written.len(), LEVELS as usize * "(s p )".len() + 1);
+                assert!(written.starts_with("(s p (s p "));
+
+                let mut owned_chain = crate::RdfTerm::iri("o");
+                for _ in 0..LEVELS {
+                    owned_chain = crate::RdfTerm::triple(crate::RdfTriple::new(
+                        crate::RdfTerm::iri("s"),
+                        "p",
+                        owned_chain,
+                    ));
+                }
+                let owned_depth = owned_chain.try_fold(
+                    |_| Ok::<_, Infallible>(0_u32),
+                    |_| Ok(0),
+                    |s, p, o| Ok(1 + s.max(p).max(o)),
+                );
+                assert_eq!(owned_depth, Ok(LEVELS));
+                dismantle(owned_chain);
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no generic walk overflowed the thread's stack");
+    }
+
+    /// Drop an owned-model chain nested in its object slot one level at a time: the
+    /// owned model's own drop is derived, and descends once per level.
+    fn dismantle(mut term: crate::RdfTerm) {
+        while let crate::RdfTerm::Triple(triple) = term {
+            term = triple.object;
+        }
     }
 }

@@ -774,19 +774,24 @@ fn collect_slice_depends_on(record: &SliceRecord) -> BTreeSet<SliceIri> {
 /// A blank node contributes no IRI. The frozen IR always expands a literal's
 /// datatype (C0.1), so a plain `xsd:string` / `rdf:langString` literal mines the
 /// expanded datatype exactly as oxigraph's `lit.datatype()` did.
+///
+/// The walk runs over a work list in depth-first order: a literal's datatype is visited
+/// next, and a quoted triple's subject is visited next with its predicate and object held
+/// back until the subject's whole nesting is done.
 fn collect_term_iri_refs<'a>(store: &'a RdfDataset, term: TermId, out: &mut BTreeSet<&'a str>) {
-    match store.resolve(term) {
-        TermRef::Iri(iri) => {
-            out.insert(iri);
-        }
-        TermRef::Blank { .. } => {}
-        TermRef::Literal { datatype, .. } => {
-            collect_term_iri_refs(store, datatype, out);
-        }
-        TermRef::Triple { s, p, o } => {
-            collect_term_iri_refs(store, s, out);
-            collect_term_iri_refs(store, p, out);
-            collect_term_iri_refs(store, o, out);
+    let mut held: Vec<TermId> = Vec::new();
+    let mut next = Some(term);
+    while let Some(term) = next.take().or_else(|| held.pop()) {
+        match store.resolve(term) {
+            TermRef::Iri(iri) => {
+                out.insert(iri);
+            }
+            TermRef::Blank { .. } => {}
+            TermRef::Literal { datatype, .. } => next = Some(datatype),
+            TermRef::Triple { s, p, o } => {
+                held.extend([o, p]);
+                next = Some(s);
+            }
         }
     }
 }
@@ -1177,5 +1182,56 @@ mod rdf_fact_tests {
         assert_eq!(facts.is_defined_by, [] as [_; 0]);
         assert!(facts.declared_terms.is_empty());
         assert!(facts.referenced_iris.contains(&quantity));
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The IRI mining walk against its recursive reference.
+
+    use std::collections::BTreeSet;
+
+    use purrdf::{RdfDataset, RdfDatasetBuilder, TermId, TermRef};
+    use purrdf_core::backend::TermFactory as _;
+
+    use super::collect_term_iri_refs;
+
+    fn reference<'a>(store: &'a RdfDataset, term: TermId, out: &mut BTreeSet<&'a str>) {
+        match store.resolve(term) {
+            TermRef::Iri(iri) => {
+                out.insert(iri);
+            }
+            TermRef::Blank { .. } => {}
+            TermRef::Literal { datatype, .. } => reference(store, datatype, out),
+            TermRef::Triple { s, p, o } => {
+                reference(store, s, out);
+                reference(store, p, out);
+                reference(store, o, out);
+            }
+        }
+    }
+
+    /// Every generated stored term mines exactly the IRIs the recursive reference mines.
+    #[test]
+    fn mining_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::WellFormed,
+            );
+            let mut builder = RdfDatasetBuilder::new();
+            let object = builder.intern_value(&value);
+            let holder = builder.intern_iri("http://example.org/holder");
+            builder.push_quad(holder, holder, object, None);
+            let ds = builder.freeze().expect("a generated term freezes");
+            let object = ds.quads().next().expect("one quad").o;
+            let (mut found, mut expected) = (BTreeSet::new(), BTreeSet::new());
+            collect_term_iri_refs(&ds, object, &mut found);
+            reference(&ds, object, &mut expected);
+            assert_eq!(found, expected, "seed {seed}");
+        }
     }
 }

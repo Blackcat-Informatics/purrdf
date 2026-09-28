@@ -66,6 +66,8 @@
 
 use purrdf_core::TermBox;
 use purrdf_core::{RdfDataset, TermValue};
+use std::convert::Infallible;
+use std::ops::ControlFlow;
 
 use super::axiom::DlAxiom;
 use super::certificate::{DlCertificate, DlCompleteness, Verdict};
@@ -1607,42 +1609,43 @@ const fn answer_ordinal(answer: ProofAnswer) -> u8 {
 ///
 /// The kind byte's ordering agrees with [`term_key`]'s discriminant, so the four term kinds
 /// still do not interleave.
+///
+/// The terms are appended in [`TermValue::visit_terms`]'s pre-order: a triple term's kind
+/// byte, then its subject's whole encoding, then its predicate's, then its object's.
 fn encode_term(out: &mut Vec<u8>, term: &TermValue) {
-    match term {
-        TermValue::Iri(iri) => {
-            out.push(TERM_IRI);
-            frame(out, iri.as_bytes());
-        }
-        TermValue::Blank { label, scope } => {
-            out.push(TERM_BLANK);
-            out.extend_from_slice(&scope.ordinal().to_le_bytes());
-            frame(out, label.as_bytes());
-        }
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => {
-            out.push(TERM_LITERAL);
-            frame(out, datatype.as_bytes());
-            match language.as_deref() {
-                Some(tag) => {
-                    out.push(1);
-                    frame(out, tag.as_bytes());
-                }
-                None => out.push(0),
+    let ControlFlow::Continue(()) = term.visit_terms(|term| -> ControlFlow<Infallible> {
+        match term {
+            TermValue::Iri(iri) => {
+                out.push(TERM_IRI);
+                frame(out, iri.as_bytes());
             }
-            out.push(direction_ordinal(*direction));
-            frame(out, lexical_form.as_bytes());
+            TermValue::Blank { label, scope } => {
+                out.push(TERM_BLANK);
+                out.extend_from_slice(&scope.ordinal().to_le_bytes());
+                frame(out, label.as_bytes());
+            }
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                out.push(TERM_LITERAL);
+                frame(out, datatype.as_bytes());
+                match language.as_deref() {
+                    Some(tag) => {
+                        out.push(1);
+                        frame(out, tag.as_bytes());
+                    }
+                    None => out.push(0),
+                }
+                out.push(direction_ordinal(*direction));
+                frame(out, lexical_form.as_bytes());
+            }
+            TermValue::Triple { .. } => out.push(TERM_TRIPLE),
         }
-        TermValue::Triple { s, p, o } => {
-            out.push(TERM_TRIPLE);
-            encode_term(out, s);
-            encode_term(out, p);
-            encode_term(out, o);
-        }
-    }
+        ControlFlow::Continue(())
+    });
 }
 
 /// The wire ordinal of an RDF 1.2 base direction: `0` absent, `1` `ltr`, `2` `rtl`.
@@ -4215,5 +4218,65 @@ mod tests {
             ServiceProof::decode(&honest.encode()).expect("a known construct decodes"),
             honest
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The structural term encoding against its recursive reference, and at a hundred
+    //! thousand levels on a 128 KiB thread.
+
+    use purrdf_core::TermValue;
+
+    use super::{TERM_TRIPLE, encode_term};
+
+    fn reference(out: &mut Vec<u8>, term: &TermValue) {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                out.push(TERM_TRIPLE);
+                reference(out, s);
+                reference(out, p);
+                reference(out, o);
+            }
+            leaf => encode_term(out, leaf),
+        }
+    }
+
+    /// Every generated term encodes to exactly the bytes the recursive reference writes.
+    #[test]
+    fn the_encoding_agrees_with_its_recursive_reference_on_generated_terms() {
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::Any,
+            );
+            let (mut found, mut expected) = (Vec::new(), Vec::new());
+            encode_term(&mut found, &value);
+            reference(&mut expected, &value);
+            assert_eq!(found, expected, "seed {seed}");
+        }
+    }
+
+    /// A triple term a hundred thousand levels deep encodes on a thread whose whole stack
+    /// is 128 KiB: its kind byte first, then each level's subject and predicate.
+    #[test]
+    fn a_hundred_thousand_level_term_encodes_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut leaf = Vec::new();
+                encode_term(&mut leaf, &TermValue::iri("http://example.org/s"));
+                let mut out = Vec::new();
+                encode_term(&mut out, &purrdf_core::test_rng::triple_chain(LEVELS));
+                assert_eq!(out.len(), LEVELS * (1 + 2 * leaf.len()) + leaf.len());
+                assert_eq!(out.first(), Some(&TERM_TRIPLE));
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the encoding did not overflow the thread's stack");
     }
 }

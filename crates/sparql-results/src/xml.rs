@@ -81,6 +81,7 @@ use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::sink::TextOut;
 use purrdf_core::{SparqlResult, TermValue};
+use std::ops::ControlFlow;
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
 /// bare (no `datatype` attribute), matching the JSON/Turtle abbreviation.
@@ -105,18 +106,17 @@ fn result_has_directional_literal(result: &SparqlResult) -> bool {
     }
 }
 
-/// Whether `value` is, or recursively contains (as a triple-term component),
-/// a directional literal.
+/// Whether `value` is, or contains at any depth (as a triple-term component), a
+/// directional literal, found over [`TermValue::visit_terms`]'s work list.
 fn term_has_directional_literal(value: &TermValue) -> bool {
-    match value {
-        TermValue::Literal { direction, .. } => direction.is_some(),
-        TermValue::Triple { s, p, o } => {
-            term_has_directional_literal(s)
-                || term_has_directional_literal(p)
-                || term_has_directional_literal(o)
-        }
-        TermValue::Iri(_) | TermValue::Blank { .. } => false,
-    }
+    value
+        .visit_terms(|term| match term {
+            TermValue::Literal {
+                direction: Some(_), ..
+            } => ControlFlow::Break(()),
+            _ => ControlFlow::Continue(()),
+        })
+        .is_break()
 }
 
 /// Serialize a [`SparqlResult`] to SPARQL Results XML, appending the additive
@@ -261,68 +261,90 @@ fn write_results<W: TextOut + ?Sized>(
 }
 
 /// Write a single bound term element (`<uri>`/`<bnode>`/`<literal>`/`<triple>`).
+///
+/// A triple term is written over a work list: its predicate is checked and its opening
+/// written at once, then its subject next, with the element boundaries, the predicate,
+/// the object and the closing held back in that order until the subject's whole nesting
+/// is written.
 fn write_term<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(), Error> {
-    match value {
-        TermValue::Iri(iri) => {
-            out.push_str("<uri>");
-            xml_escape_text(iri, out)?;
-            out.push_str("</uri>");
-        }
-        TermValue::Blank { label, scope } => {
-            // A `<bnode>` id is a blank-node LABEL, not free text, so the
-            // `(label, scope)` pair is encoded into the W3C BLANK_NODE_LABEL
-            // alphabet — matching the JSON/CSV/TSV writers, and incidentally
-            // removing every character XML 1.0 cannot represent.
-            out.push_str("<bnode>");
-            xml_escape_text(
-                &encode_blank_label(label, *scope, LabelAlphabet::BlankNodeLabel),
-                out,
-            )?;
-            out.push_str("</bnode>");
-        }
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => {
-            out.push_str("<literal");
-            if let Some(language) = language {
-                out.push_str(" xml:lang=\"");
-                xml_escape_attr(language, out)?;
-                out.push('"');
-            } else if datatype != XSD_STRING {
-                out.push_str(" datatype=\"");
-                xml_escape_attr(datatype, out)?;
-                out.push('"');
+    enum Piece<'t> {
+        Term(&'t TermValue),
+        Text(&'static str),
+    }
+    let mut held: Vec<Piece<'_>> = Vec::new();
+    let mut next = Some(Piece::Term(value));
+    while let Some(piece) = next.take().or_else(|| held.pop()) {
+        let value = match piece {
+            Piece::Text(text) => {
+                out.push_str(text);
+                continue;
             }
-            if let Some(direction) = direction {
-                // No inline `xmlns:its` declaration here — it is declared
-                // once on the document root when needed (see the module
-                // docs' "Where the `xmlns:its` declaration lives" section).
-                out.push_str(" its:dir=\"");
-                out.push_str(direction.as_str());
-                out.push('"');
+            Piece::Term(value) => value,
+        };
+        match value {
+            TermValue::Iri(iri) => {
+                out.push_str("<uri>");
+                xml_escape_text(iri, out)?;
+                out.push_str("</uri>");
             }
-            out.push('>');
-            xml_escape_text(lexical_form, out)?;
-            out.push_str("</literal>");
-        }
-        TermValue::Triple { s, p, o } => {
-            // RDF predicates must be IRIs; a non-IRI predicate has no valid SRX
-            // <predicate> form → hard-fail per the serializer contract.
-            if !matches!(p.as_ref(), TermValue::Iri(_)) {
-                return Err(Error::MalformedTerm(
-                    "triple-term predicate is not an IRI".to_string(),
-                ));
+            TermValue::Blank { label, scope } => {
+                // A `<bnode>` id is a blank-node LABEL, not free text, so the
+                // `(label, scope)` pair is encoded into the W3C BLANK_NODE_LABEL
+                // alphabet — matching the JSON/CSV/TSV writers, and incidentally
+                // removing every character XML 1.0 cannot represent.
+                out.push_str("<bnode>");
+                xml_escape_text(
+                    &encode_blank_label(label, *scope, LabelAlphabet::BlankNodeLabel),
+                    out,
+                )?;
+                out.push_str("</bnode>");
             }
-            out.push_str("<triple><subject>");
-            write_term(s, out)?;
-            out.push_str("</subject><predicate>");
-            write_term(p, out)?;
-            out.push_str("</predicate><object>");
-            write_term(o, out)?;
-            out.push_str("</object></triple>");
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                out.push_str("<literal");
+                if let Some(language) = language {
+                    out.push_str(" xml:lang=\"");
+                    xml_escape_attr(language, out)?;
+                    out.push('"');
+                } else if datatype != XSD_STRING {
+                    out.push_str(" datatype=\"");
+                    xml_escape_attr(datatype, out)?;
+                    out.push('"');
+                }
+                if let Some(direction) = direction {
+                    // No inline `xmlns:its` declaration here — it is declared
+                    // once on the document root when needed (see the module
+                    // docs' "Where the `xmlns:its` declaration lives" section).
+                    out.push_str(" its:dir=\"");
+                    out.push_str(direction.as_str());
+                    out.push('"');
+                }
+                out.push('>');
+                xml_escape_text(lexical_form, out)?;
+                out.push_str("</literal>");
+            }
+            TermValue::Triple { s, p, o } => {
+                // RDF predicates must be IRIs; a non-IRI predicate has no valid SRX
+                // <predicate> form → hard-fail per the serializer contract.
+                if !matches!(p.as_ref(), TermValue::Iri(_)) {
+                    return Err(Error::MalformedTerm(
+                        "triple-term predicate is not an IRI".to_string(),
+                    ));
+                }
+                out.push_str("<triple><subject>");
+                held.extend([
+                    Piece::Text("</object></triple>"),
+                    Piece::Term(o),
+                    Piece::Text("</predicate><object>"),
+                    Piece::Term(p),
+                    Piece::Text("</subject><predicate>"),
+                ]);
+                next = Some(Piece::Term(s));
+            }
         }
     }
     Ok(())
@@ -1034,5 +1056,99 @@ mod tests {
             !text.contains("&#xA;"),
             "text content must NOT use &#xA; for newline, got: {text}"
         );
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The term writer and the direction scan against their recursive references, and at
+    //! a hundred thousand levels on a 128 KiB thread.
+
+    use purrdf_core::TermValue;
+
+    use super::{term_has_directional_literal, write_term};
+    use crate::error::Error;
+
+    fn reference_write(value: &TermValue, out: &mut String) -> Result<(), Error> {
+        let TermValue::Triple { s, p, o } = value else {
+            return write_term(value, out);
+        };
+        if !matches!(p.as_ref(), TermValue::Iri(_)) {
+            return Err(Error::MalformedTerm(
+                "triple-term predicate is not an IRI".to_string(),
+            ));
+        }
+        out.push_str("<triple><subject>");
+        reference_write(s, out)?;
+        out.push_str("</subject><predicate>");
+        reference_write(p, out)?;
+        out.push_str("</predicate><object>");
+        reference_write(o, out)?;
+        out.push_str("</object></triple>");
+        Ok(())
+    }
+
+    fn reference_directional(value: &TermValue) -> bool {
+        match value {
+            TermValue::Literal { direction, .. } => direction.is_some(),
+            TermValue::Triple { s, p, o } => {
+                reference_directional(s) || reference_directional(p) || reference_directional(o)
+            }
+            TermValue::Iri(_) | TermValue::Blank { .. } => false,
+        }
+    }
+
+    /// Every generated term writes exactly what the recursive reference writes — the
+    /// partial text and the refusal of a non-IRI predicate included — and is scanned for
+    /// a directional literal as the reference scans it.
+    #[test]
+    fn the_walks_agree_with_their_recursive_references_on_generated_terms() {
+        let (mut refused, mut directional) = (0, 0);
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = purrdf_core::test_rng::term_value(
+                &mut state,
+                &mut budget,
+                purrdf_core::test_rng::TermShape::Any,
+            );
+            let (mut written, mut expected) = (String::new(), String::new());
+            let result = write_term(&value, &mut written);
+            assert_eq!(
+                result,
+                reference_write(&value, &mut expected),
+                "seed {seed}"
+            );
+            assert_eq!(written, expected, "seed {seed}");
+            refused += usize::from(result.is_err());
+            let found = term_has_directional_literal(&value);
+            assert_eq!(found, reference_directional(&value), "seed {seed}");
+            directional += usize::from(found);
+        }
+        assert!(refused > 0, "some generated term has a non-IRI predicate");
+        assert!(
+            directional > 0,
+            "some generated term holds a directional literal"
+        );
+    }
+
+    /// A triple term a hundred thousand levels deep is written and scanned on a thread
+    /// whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_term_is_written_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                assert!(!term_has_directional_literal(&value));
+                let mut written = String::new();
+                write_term(&value, &mut written).expect("every predicate is an IRI");
+                assert_eq!(written.matches("<triple>").count(), LEVELS);
+                assert!(written.ends_with("</object></triple>"));
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no walk overflowed the thread's stack");
     }
 }

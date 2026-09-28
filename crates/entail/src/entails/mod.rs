@@ -183,6 +183,8 @@
 
 use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
@@ -871,23 +873,15 @@ fn as_graph(pats: &[PatTriple], names: &[String]) -> Option<AsGraph> {
 
 /// Every blank-node label `pats` names, at any depth — what a substitution must avoid.
 fn blank_labels(pats: &[PatTriple]) -> BTreeSet<String> {
-    fn walk(pat: &Pat, out: &mut BTreeSet<String>) {
-        match pat {
-            Pat::Var(VarKey::Blank { label, .. }) => {
-                out.insert(label.clone());
-            }
-            Pat::Triple(inner) => {
-                for position in &**inner {
-                    walk(position, out);
-                }
-            }
-            Pat::Var(VarKey::Projected(_)) | Pat::Ground(_) => {}
-        }
-    }
     let mut out = BTreeSet::new();
     for triple in pats {
         for position in triple {
-            walk(position, &mut out);
+            let ControlFlow::Continue(()) = position.visit(|pat| -> ControlFlow<Infallible> {
+                if let Pat::Var(VarKey::Blank { label, .. }) = pat {
+                    out.insert(label.clone());
+                }
+                ControlFlow::Continue(())
+            });
         }
     }
     out
@@ -898,20 +892,29 @@ fn blank_labels(pats: &[PatTriple]) -> BTreeSet<String> {
 /// `None` for a projected variable `substitution` does not name, which cannot happen for a
 /// substitution built from [`projected_vars`] of the same patterns and is refused rather than
 /// defaulted so it stays that way.
+///
+/// A triple term is assembled bottom-up over [`Pat::try_fold`]'s work list, and the first
+/// unnamed variable ends it.
 fn substituted(pat: &Pat, substitution: &BTreeMap<String, TermValue>) -> Option<TermValue> {
-    Some(match pat {
-        Pat::Ground(term) => term.clone(),
-        Pat::Var(VarKey::Blank { label, scope }) => TermValue::Blank {
-            label: label.clone(),
-            scope: *scope,
+    pat.try_fold(
+        |pat| match pat {
+            Pat::Ground(term) => Ok(term.clone()),
+            Pat::Var(VarKey::Blank { label, scope }) => Ok(TermValue::Blank {
+                label: label.clone(),
+                scope: *scope,
+            }),
+            Pat::Var(VarKey::Projected(name)) => substitution.get(name).cloned().ok_or(()),
+            Pat::Triple(_) => unreachable!("a triple term is folded from its parts"),
         },
-        Pat::Var(VarKey::Projected(name)) => substitution.get(name)?.clone(),
-        Pat::Triple(inner) => TermValue::Triple {
-            s: TermBox::new(substituted(&inner[0], substitution)?),
-            p: TermBox::new(substituted(&inner[1], substitution)?),
-            o: TermBox::new(substituted(&inner[2], substitution)?),
+        |s, p, o| {
+            Ok(TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            })
         },
-    })
+    )
+    .ok()
 }
 
 /// Decide one conclusion-directed question against a prepared run.
@@ -2452,5 +2455,86 @@ mod tests {
             );
             assert!(!answers.is_complete(), "{name}");
         }
+    }
+}
+
+#[cfg(test)]
+mod term_walk_tests {
+    //! The substitution walks of the conclusion-directed spine against their recursive
+    //! references.
+
+    use std::collections::{BTreeMap, BTreeSet};
+
+    use purrdf_core::{TermBox, TermValue};
+
+    use super::{blank_labels, substituted};
+    use crate::entails::pattern::term_walk_tests::generated_pat;
+    use crate::entails::pattern::{Pat, VarKey};
+
+    fn reference_labels(pat: &Pat, out: &mut BTreeSet<String>) {
+        match pat {
+            Pat::Var(VarKey::Blank { label, .. }) => {
+                out.insert(label.clone());
+            }
+            Pat::Triple(inner) => {
+                for position in &**inner {
+                    reference_labels(position, out);
+                }
+            }
+            Pat::Var(VarKey::Projected(_)) | Pat::Ground(_) => {}
+        }
+    }
+
+    fn reference_substituted(
+        pat: &Pat,
+        substitution: &BTreeMap<String, TermValue>,
+    ) -> Option<TermValue> {
+        Some(match pat {
+            Pat::Ground(term) => term.clone(),
+            Pat::Var(VarKey::Blank { label, scope }) => TermValue::Blank {
+                label: label.clone(),
+                scope: *scope,
+            },
+            Pat::Var(VarKey::Projected(name)) => substitution.get(name)?.clone(),
+            Pat::Triple(inner) => TermValue::Triple {
+                s: TermBox::new(reference_substituted(&inner[0], substitution)?),
+                p: TermBox::new(reference_substituted(&inner[1], substitution)?),
+                o: TermBox::new(reference_substituted(&inner[2], substitution)?),
+            },
+        })
+    }
+
+    /// Both walks answer every generated pattern exactly as their recursive references
+    /// do, under a substitution naming `?x` only, so an unnamed `?y` is met too.
+    #[test]
+    fn the_spine_walks_agree_with_their_recursive_references_on_generated_patterns() {
+        let substitution =
+            BTreeMap::from([("x".to_owned(), TermValue::iri("http://example.org/x"))]);
+        let mut open = 0;
+        for seed in 0..400_u64 {
+            let triple = [
+                generated_pat(seed),
+                generated_pat(seed + 1),
+                generated_pat(seed + 2),
+            ];
+            let mut expected = BTreeSet::new();
+            for position in &triple {
+                reference_labels(position, &mut expected);
+            }
+            for position in &triple {
+                let found = substituted(position, &substitution);
+                assert_eq!(
+                    found,
+                    reference_substituted(position, &substitution),
+                    "seed {seed}"
+                );
+                open += usize::from(found.is_none());
+            }
+            assert_eq!(blank_labels(&[triple]), expected, "seed {seed}");
+        }
+        assert!(
+            open > 0,
+            "some generated pattern names an unsubstituted variable"
+        );
     }
 }

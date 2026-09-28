@@ -644,15 +644,27 @@ fn joined_groups_100k() {
     assert_deep("joined groups", DEPTH);
 }
 
+// Nothing between the parser and the answer recurses over a nested expression's depth.
+// Both expression vectors are one `FILTER` over one triple pattern — two operator levels
+// — and their path is: parse (heap frames) → algebra (copied, compared and dropped over
+// work lists) → `stack::height` admission (iterative; an expression is a `values` level,
+// never a structural one) → the fork-safety walk `parallel::is_parallel_safe` (a work
+// list) → `vm::ExprProgram::compile`, which compiles the expression into a flat program
+// over a work list → the `FILTER` row loop, where each row runs the program on the VM's
+// explicit value stack → the answer. What still holds both back on a 128 KiB thread is
+// the evaluator's own stack guard, which measures the thread rather than the plan: on a
+// thread with less than `purrdf_stack::MARGIN_BYTES` (128 KiB natively) left,
+// `stack::height::walkable` admits no level at all, so `stack::height` refuses every plan,
+// and `eval::eval_evaluated`'s `stack::is_low` check refuses its first operator the same way.
 #[test]
-#[ignore = "stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and expr::eval_expr evaluates the operand of a negation by recursing into itself"]
+#[ignore = "stack::height refuses every plan, and eval::eval_evaluated its first operator, on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; nothing on the path recurses over the expression's depth"]
 fn negations_100k() {
     assert_deep("negations", DEPTH);
     assert_deep("negations", DEPTH + 1);
 }
 
 #[test]
-#[ignore = "stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and expr::eval_expr evaluates the operands of arithmetic by recursing into itself"]
+#[ignore = "stack::height refuses every plan, and eval::eval_evaluated its first operator, on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; nothing on the path recurses over the expression's depth"]
 fn filter_arithmetic_100k() {
     assert_deep("FILTER arithmetic", DEPTH);
     assert_deep("FILTER arithmetic", DEPTH + 1);
@@ -671,7 +683,7 @@ fn inverse_paths_100k() {
     assert_deep("inverse paths", DEPTH + 1);
 }
 
-// Nothing between the parser and the answer recurses over a triple term's depth any more.
+// Nothing between the parser and the answer recurses over a triple term's depth.
 // The pattern vector's path: parse (heap frames) → algebra → `stack::height` admission
 // (iterative, and a term is no level of it) → `blank_scope`, the endpoint scan and the
 // soundness analyses (work lists) → the one-operator plan's BGP leaf, where
@@ -682,11 +694,13 @@ fn inverse_paths_100k() {
 // over a work list, `ScratchInterner::intern` hashes it (`TermValue::hash`, a work list),
 // looks it up (`RdfDataset::term_id_by_value`, a bottom-up fold) and measures it
 // (`scratch::value_bytes`, a work list) → the row's cell is cloned out (`TermValue::clone`,
-// a work list) → the answer. The evaluator's operator recursion is one level for a single
-// leaf, so it does not bind either vector. What still holds both back on a 128 KiB thread
-// is the evaluator's own stack guard, which measures the thread rather than the plan:
-// `stack::height` refuses every plan when less than `purrdf_stack::MARGIN_BYTES` is left,
-// and `eval::eval_evaluated` refuses its first operator there the same way.
+// a work list) → the answer, read here by `unwind`, a loop, and dropped through `TermBox`'s
+// work list. The evaluator's operator recursion is one level for a single leaf, so it does
+// not bind either vector. What still holds both back on a 128 KiB thread is the
+// evaluator's own stack guard, which measures the thread rather than the plan: on a thread
+// with less than `purrdf_stack::MARGIN_BYTES` (128 KiB natively) left,
+// `stack::height::walkable` admits no level at all, so `stack::height` refuses every plan,
+// and `eval::eval_evaluated`'s `stack::is_low` check refuses its first operator the same way.
 #[test]
 #[ignore = "stack::height refuses every plan, and eval::eval_evaluated its first operator, on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; nothing on the path recurses over the term's depth"]
 fn triple_term_in_a_pattern_100k() {
