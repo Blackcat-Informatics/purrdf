@@ -103,6 +103,10 @@ pub(crate) fn term_value_to_rdf_term(value: &TermValue) -> Result<RdfTerm, Strin
 /// is not cloned while crossing the wasm boundary.
 ///
 /// A triple term is lifted bottom-up over [`TermValue::try_fold_owned`]'s work list.
+///
+/// Out of line, so the per-cell marshalling is one compiled function rather than a
+/// fragment of the SELECT row loop.
+#[inline(never)]
 pub(crate) fn term_value_into_rdf_term(value: TermValue) -> Result<RdfTerm, String> {
     value.try_fold_owned(|leaf| Ok(leaf_rdf_term(leaf)), triple_rdf_term)
 }

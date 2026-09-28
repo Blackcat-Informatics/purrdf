@@ -1411,6 +1411,10 @@ fn write_surface(value: &TermValue, out: &mut String) {
 }
 
 /// Append the surface of a term that is not a triple term to `out`.
+///
+/// Out of line, so the IRI and literal escape calls are one compiled function
+/// rather than a fragment of [`write_surface`]'s work list.
+#[inline(never)]
 fn write_leaf_surface(value: &TermValue, out: &mut String) {
     match value {
         TermValue::Iri(iri) => {

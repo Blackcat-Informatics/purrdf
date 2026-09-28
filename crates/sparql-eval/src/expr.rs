@@ -4413,6 +4413,10 @@ pub(crate) fn lang_matches(tag: &str, range: &str) -> bool {
 
 /// A term read as a string argument: its lexical form and language tag, when it is a
 /// simple, `xsd:string`, `rdf:langString` or `rdf:dirLangString` literal.
+///
+/// Out of line, so the per-row `String` it materializes is one compiled function
+/// rather than a fragment of each expression-VM caller.
+#[inline(never)]
 pub(crate) fn string_arg_of_term<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,

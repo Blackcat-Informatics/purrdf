@@ -266,6 +266,10 @@ fn write_results<W: TextOut + ?Sized>(
 /// written at once, then its subject next, with the element boundaries, the predicate,
 /// the object and the closing held back in that order until the subject's whole nesting
 /// is written.
+///
+/// Out of line, so the term writer and the `xml_escape_text` calls it inlines are
+/// one compiled function rather than a fragment of the results writer.
+#[inline(never)]
 fn write_term<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(), Error> {
     enum Piece<'t> {
         Term(&'t TermValue),

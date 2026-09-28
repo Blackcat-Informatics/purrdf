@@ -368,7 +368,11 @@ impl<I: ViewTermId> SolutionSeq<I> {
 /// `shared` is the precomputed `(a_ordinal, b_ordinal)` column pairing (see
 /// [`VarSchema::shared_columns`]). This is the predicate underlying `Join`,
 /// `LeftJoin`, and `Minus`.
+///
+/// Out of line, so the join check is one compiled function rather than a fragment
+/// of each `Join`, `LeftJoin` and `Minus` loop.
 #[must_use]
+#[inline(never)]
 pub fn compatible<I: ViewTermId>(
     a: &[Option<SolutionTerm<I>>],
     b: &[Option<SolutionTerm<I>>],
