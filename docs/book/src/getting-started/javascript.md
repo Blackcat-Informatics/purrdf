@@ -279,8 +279,9 @@ before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
 - Each job evaluates on its own stack region, exactly as large as the module's
   own shadow stack — the stack the synchronous lane runs on; no option sizes it.
   `evidence.async.stackHighWaterBytes` reports how deep the job went, and a
-  request too deep for the region is too deep for the synchronous lane too: both
-  fail with the same typed stack refusal, word for word.
+  request too deep for the region fails with the same typed stack refusal as one
+  too deep for the synchronous lane. Each lane spends a little stack on its own
+  frames, so the deepest request each evaluates can differ by a few levels.
 - A region is the size of the shadow stack only. V8 gives a job's own call stack
   the same size as the synchronous lane's (984 KiB by default, set for the whole
   process), and PurRDF keeps a fixed budget of it for evaluating a request, so on

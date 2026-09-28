@@ -716,11 +716,12 @@ never shared or reused.
 Each job evaluates on its own stack region, exactly as large as the module's own shadow
 stack — the stack the synchronous lane runs on (1 MiB in the shipped module). No option
 sizes it. `evidence.async.stackHighWaterBytes` reports the deepest the job went below the
-region's top. Because the two stacks are the same size, a request the synchronous lane
-evaluates a job evaluates too, and a request too deep for one is too deep for the other:
-it fails on both lanes with the evaluator's own typed stack refusal,
-`native-sparql-evaluation-stack-exhausted`, whose message is word for word the same on
-each and names no lane-specific remedy. The evaluator checks the stack left above the
+region's top. The two stacks are the same size, so the two lanes evaluate requests to
+nearly the same depth — each spends a little stack on its own frames, so the deepest
+request each evaluates can differ by a few levels — and a request too deep for either
+fails with the evaluator's own typed stack refusal,
+`native-sparql-evaluation-stack-exhausted`, which names no lane-specific remedy. The
+construct its message names is the one whose frame found the stack low. The evaluator checks the stack left above the
 region's base at every recursive step and refuses while 64 KiB remain. Parsing keeps a
 request's nesting in linear memory and spends neither stack on it.
 

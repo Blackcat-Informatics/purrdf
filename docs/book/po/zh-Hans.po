@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-28T05:31:31-06:00\n"
+"POT-Creation-Date: 2026-09-28T06:08:09-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1746,15 +1746,18 @@ msgid ""
 "Each job evaluates on its own stack region, exactly as large as the module's "
 "own shadow stack — the stack the synchronous lane runs on; no option sizes "
 "it. `evidence.async.stackHighWaterBytes` reports how deep the job went, and "
-"a request too deep for the region is too deep for the synchronous lane too: "
-"both fail with the same typed stack refusal, word for word."
+"a request too deep for the region fails with the same typed stack refusal as "
+"one too deep for the synchronous lane. Each lane spends a little stack on "
+"its own frames, so the deepest request each evaluates can differ by a few "
+"levels."
 msgstr ""
 "每个作业在自己的栈区域上求值，其大小与模块自身的影子栈——同步通道运行所用的栈"
 "——完全相同；没有任何选项可以改变它。`evidence.async.stackHighWaterBytes` 报告"
-"作业用到了多深；对该区域而言嵌套过深的请求，对同步通道也同样过深：两者都以同"
-"一个带类型的栈拒绝错误失败，措辞一字不差。"
+"作业用到了多深；对该区域而言嵌套过深的请求，与对同步通道而言嵌套过深的请求一"
+"样，以同一个带类型的栈拒绝错误失败。每个通道都会在自身的帧上花费少量栈，因此"
+"两者各自能求值的最深请求可能相差几层。"
 
-#: src/getting-started/javascript.md:284
+#: src/getting-started/javascript.md:285
 msgid ""
 "A region is the size of the shadow stack only. V8 gives a job's own call "
 "stack the same size as the synchronous lane's (984 KiB by default, set for "
@@ -1770,7 +1773,7 @@ msgstr ""
 "sparql-host-stack-exhausted`，两条通道都会在求值之前拒绝：请减少请求的嵌套深"
 "度。解析把请求的嵌套保存在线性内存中，不消耗这两种栈。"
 
-#: src/getting-started/javascript.md:291
+#: src/getting-started/javascript.md:292
 msgid ""
 "A job whose frames overwrite the canary word at its region's base fails with "
 "a fault naming the region. A trap, a Rust panic or a JavaScript exception "
@@ -1788,11 +1791,11 @@ msgstr ""
 "（`free()`、`[Symbol.dispose]()`）什么也不做。只有全新的 JavaScript realm（新"
 "的页面、Worker isolate 或进程）才能再次加载本包。"
 
-#: src/getting-started/javascript.md:299
+#: src/getting-started/javascript.md:300
 msgid "Cloudflare Workers"
 msgstr "Cloudflare Workers"
 
-#: src/getting-started/javascript.md:301
+#: src/getting-started/javascript.md:302
 msgid ""
 "`@blackcatinformatics/purrdf/cloudflare` provides "
 "`createFetchServiceResolver`, `createFetchLoadResolver` and "
@@ -1860,7 +1863,7 @@ msgstr ""
 "`LOAD` 解析器把重定向交回作业，由作业在每一跳之前按目录重新为该位置鉴权，最多"
 "五跳。一个完整的 Worker："
 
-#: src/getting-started/javascript.md:339
+#: src/getting-started/javascript.md:340
 msgid ""
 "```js worker-recipe\n"
 "import wasm from \"@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm\";\n"
@@ -1942,7 +1945,7 @@ msgstr ""
 "};\n"
 "```"
 
-#: src/getting-started/javascript.md:375
+#: src/getting-started/javascript.md:376
 msgid ""
 "Workers limits how many subrequests one invocation may make, and "
 "`maxRemoteRequests` is the exact control for it: every `SERVICE` request and "
@@ -1975,7 +1978,7 @@ msgstr ""
 "在 CPU 密集的工作中触发；异步通道则在每一次让出和每一次宿主请求时检查截止时"
 "间。"
 
-#: src/getting-started/javascript.md:392
+#: src/getting-started/javascript.md:393
 msgid ""
 "The package [README](https://github.com/Blackcat-Informatics/purrdf/tree/"
 "main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
@@ -1985,11 +1988,11 @@ msgstr ""
 "crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
 "adapter) 是这些约定的完整参考。"
 
-#: src/getting-started/javascript.md:396
+#: src/getting-started/javascript.md:397
 msgid "Scope and current limitations"
 msgstr "范围与当前限制"
 
-#: src/getting-started/javascript.md:398
+#: src/getting-started/javascript.md:399
 msgid ""
 "**In-memory only.** SPARQL queries run over the in-memory dataset. The "
 "synchronous methods install no `SERVICE` or `LOAD` source, so there a remote "
@@ -2001,7 +2004,7 @@ msgstr ""
 "或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 会显式失败，除非写了 "
 "`SILENT`；异步孪生方法只能经由宿主传入的处理函数到达远程端点。"
 
-#: src/getting-started/javascript.md:403
+#: src/getting-started/javascript.md:404
 msgid ""
 "**Triple terms per format.** `serialize` is the writer-native lane: an "
 "object-position quoted-triple term and the RDF 1.2 statement layer survive "
@@ -2019,11 +2022,11 @@ msgstr ""
 "因此把携带三元组项的数据集序列化为二者之一时会**抛出异常**，而不是静默丢弃这"
 "一层。单图目标格式（Turtle、N-Triples、RDF/XML）只输出默认图。"
 
-#: src/getting-started/javascript.md:412
+#: src/getting-started/javascript.md:413
 msgid "Building from source"
 msgstr "从源码构建"
 
-#: src/getting-started/javascript.md:414
+#: src/getting-started/javascript.md:415
 msgid ""
 "The Rust cdylib lives in [`crates/rdf-wasm`](https://github.com/Blackcat-"
 "Informatics/purrdf/tree/main/crates/rdf-wasm); the published ESM package is "
@@ -2032,15 +2035,15 @@ msgstr ""
 "Rust cdylib 位于 [`crates/rdf-wasm`](https://github.com/Blackcat-Informatics/"
 "purrdf/tree/main/crates/rdf-wasm)；发布的 ESM 包由它生成："
 
-#: src/getting-started/javascript.md:419
+#: src/getting-started/javascript.md:420
 msgid "# release wasm + wasm-bindgen ESM bindings → js/pkg/\n"
 msgstr "# 发布版 wasm + wasm-bindgen ESM 绑定 → js/pkg/\n"
 
-#: src/getting-started/javascript.md:420
+#: src/getting-started/javascript.md:421
 msgid "# the above + TypeScript, Node, and packed-tarball gates\n"
 msgstr "# 上述内容 + TypeScript、Node 与打包 tarball 门禁\n"
 
-#: src/getting-started/javascript.md:423
+#: src/getting-started/javascript.md:424
 msgid ""
 "This requires the `wasm32-unknown-unknown` Rust target and a `wasm-bindgen-"
 "cli` pinned to the crate's `wasm-bindgen` version."

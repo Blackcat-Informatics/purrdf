@@ -194,8 +194,8 @@ the parsing, the evaluation, the joins, the `SILENT` semantics and the result en
   `generation`) did not change while it ran;
   `configureAsync({ maxConcurrentJobs })` bounds the jobs in flight. Each job runs on a
   stack region exactly as large as the module's own shadow stack, so no option sizes it
-  and a stack refusal (`native-sparql-evaluation-stack-exhausted`) reads word for word
-  the same on both lanes; `evidence.async` reports what the job did, its stack high-water
+  and a request nested too deeply is the same typed stack refusal
+  (`native-sparql-evaluation-stack-exhausted`) on both lanes; `evidence.async` reports what the job did, its stack high-water
   mark included. The budget kept under V8's own call stack is the same size on both
   lanes: a request past it (`native-sparql-host-stack-exhausted`, graph patterns nested
   past 284 levels on either lane) must nest less deeply. A job that traps poisons the

@@ -359,9 +359,12 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
   const before = data.canonicalize();
   const lateral = (depth) => nestedAround(`?s <${EX}p> ?o LATERAL { `, depth);
 
-  // The refusal: the synchronous lane's message, and the job's, twice — a trap or a
-  // region fault would poison the instance or fail the job, and the second job would
-  // reject with something else.
+  // The refusal: the synchronous lane's typed refusal, and the job's, twice — a trap or
+  // a region fault would poison the instance or fail the job, and the second job would
+  // reject with something else. Both lanes refuse with the evaluator's own typed error;
+  // the construct it names is the one whose frame found the stack low, which depends on
+  // where each lane's stack runs out, so the two messages share their code and their
+  // statement, not necessarily the construct.
   let syncRefusal;
   assert.throws(() => engine.select(data, lateral(126)), (error) => {
     syncRefusal = error.message;
@@ -372,7 +375,8 @@ test("admitted nesting answers or is refused on a job's region exactly as on the
     await assert.rejects(
       engine.selectAsync(data, lateral(126)),
       (error) => {
-        assert.equal(error.message, syncRefusal, "the job's refusal is the synchronous lane's, word for word");
+        assert.match(error.message, /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: /);
+        assert.equal(error.code, "native-sparql-evaluation-stack-exhausted", "the job's refusal carries the synchronous lane's code");
         assert.doesNotMatch(error.message, REGION_FAULT);
         return true;
       },
