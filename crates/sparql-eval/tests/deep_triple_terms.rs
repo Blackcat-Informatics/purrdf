@@ -13,8 +13,9 @@
 //!   graph) is refused with the dataset's own limit, `rdf-ir-triple-nesting-limit`,
 //!   past 16 levels, and admitted at 16;
 //! * however deep they nest, the answer is the value the request computes or the typed
-//!   stack refusal, never an abort — however deep the evaluation stands when it walks
-//!   the term.
+//!   stack refusal of the evaluation's own nesting, never an abort — however deep the
+//!   evaluation stands when it walks the term, because every walk over a term runs over
+//!   a work list.
 
 use purrdf_core::TermBox;
 use std::sync::Arc;
@@ -508,10 +509,11 @@ fn exists_around_a_deep_term(nesting: usize, term: &str) -> String {
 /// room to spare, evaluated with less and less stack left until the evaluation of its
 /// `EXISTS` nesting is refused. With the least stack that still answers, the innermost
 /// level passed its check with barely the margin left and then walked a term thousands of
-/// levels deep, far more than the margin holds: it answers whole because the stack those
-/// walks take was reserved when the evaluation started, so no check can leave less. A
-/// stack one step smaller is the typed refusal. Without the reserve the walk at that edge
-/// runs past the margin, and this process aborts rather than failing an assertion.
+/// levels deep: it answers whole because every walk over the term — its conversion, its
+/// copy, its hash, its comparison — runs over a work list and takes no stack per level.
+/// A stack one step smaller is the typed refusal of the `EXISTS` nesting. A walk that
+/// recursed at that edge would run past the margin, and this process would abort rather
+/// than fail an assertion.
 #[test]
 fn a_deep_term_walked_at_the_deepest_evaluation_fits_the_stack_left() {
     const LEVELS: usize = 3_000;
@@ -643,13 +645,13 @@ fn exists_around_a_built_term(nesting: usize, levels: usize) -> String {
     )
 }
 
-/// A triple term built at run time, far deeper than the margin holds, walked where the
+/// A triple term built at run time, thousands of levels deep, walked where the
 /// evaluation stands deepest: evaluated with less and less stack left, every run answers
-/// the whole term or is the typed stack refusal — never an abort. The term is admitted
-/// when the top-level `BIND` builds it: the evaluation keeps stack for walks over it from
-/// then on, so the innermost level — which passed its check with barely the margin left —
-/// still has room to build, hash and compare it. Without that admission the walk at the
-/// edge runs off the stack, and the child process aborts.
+/// the whole term or is the typed stack refusal of the `EXISTS` nesting — never an abort.
+/// The innermost level — which passed its check with barely the margin left — still
+/// builds, hashes and compares the whole term, because those walks run over work lists
+/// and take no stack per level. A walk that recursed at the edge would run off the
+/// stack, and the child process would abort.
 #[test]
 fn a_term_built_at_run_time_answers_whole_or_is_refused_never_aborts() {
     const LEVELS: usize = 5_000;
@@ -729,8 +731,8 @@ fn a_term_built_at_run_time_answers_whole_or_is_refused_never_aborts() {
 }
 
 /// On a small thread, a host function's 100 000-level chain built into a term at run time
-/// answers the whole term or is the typed stack refusal naming triple terms, never an
-/// abort; and the neighbour, the same call at 100 levels, answers the whole term.
+/// answers the whole term or is the typed stack refusal, never an abort; and the
+/// neighbour, the same call at 100 levels, answers the whole term.
 #[test]
 fn a_term_built_a_hundred_thousand_deep_answers_whole_or_is_the_typed_refusal() {
     if !in_child_process(
@@ -770,7 +772,6 @@ fn a_term_built_a_hundred_thousand_deep_answers_whole_or_is_the_typed_refusal() 
                 }
                 Err(refused) => {
                     assert_eq!(refused.code, EvalError::STACK_EXHAUSTED_CODE, "{refused:?}");
-                    assert!(refused.message.contains("triple term"), "{refused:?}");
                 }
             }
             let (_, mut rows) = solutions(run(100).expect("the neighbour answers"));
@@ -791,9 +792,9 @@ fn a_term_built_a_hundred_thousand_deep_answers_whole_or_is_the_typed_refusal() 
 
 /// `TRIPLE` calls feeding each other through a chain of `LATERAL` levels build a term one
 /// level deeper per level, each one where the evaluation stands one level deeper: a
-/// moderate chain of 20 answers exactly the term it builds, and one of 300 — past the
-/// 128 levels the margin holds, with no triple term written in the request and no host
-/// code — answers whole too, the evaluation having kept stack for it as it grew.
+/// moderate chain of 20 answers exactly the term it builds, and one of 300 — with no
+/// triple term written in the request and no host code — answers whole too, every walk
+/// over the growing term running over a work list.
 #[test]
 fn triple_calls_chained_at_run_time_answer_the_whole_term() {
     std::thread::Builder::new()
@@ -830,13 +831,13 @@ fn triple_calls_chained_at_run_time_answer_the_whole_term() {
 }
 
 /// A `FILTER` over more rows than the evaluator forks for, whose expression builds a term
-/// deeper than the margin holds: a fork-join worker cannot keep stack for it past its own
-/// work, so it refuses the term, and the filter runs again on the evaluating thread —
-/// every row answers, exactly as the same filter over a handful of rows does. The
-/// observing neighbour: at 100 levels, within the margin, the host function is called off
-/// the evaluating thread (so the filter really forks) and every row answers too.
+/// hundreds of levels deep on a fork-join worker: the worker builds, hashes and compares
+/// it over work lists like any other value, and every row answers, exactly as the same
+/// filter over a handful of rows does. The observing neighbour: at 100 levels the host
+/// function is called off the evaluating thread (so the filter really forks) and every
+/// row answers too.
 #[test]
-fn a_term_too_deep_for_a_worker_is_built_on_the_evaluating_thread() {
+fn a_term_built_on_a_worker_answers_every_row() {
     std::thread::Builder::new()
         .stack_size(64 << 20)
         .spawn(|| {
@@ -890,12 +891,12 @@ fn a_term_too_deep_for_a_worker_is_built_on_the_evaluating_thread() {
                     .unwrap_or_else(|refusal| panic!("{levels} levels: {refusal:?}"));
                 solutions(result).1.len()
             };
-            assert_eq!(count(100, 10_000), 4_000, "within the margin: every row");
+            assert_eq!(count(100, 10_000), 4_000, "a hundred levels: every row");
             assert!(
                 elsewhere.swap(0, Ordering::Relaxed) > 0,
                 "the filter forked: the function ran off the evaluating thread"
             );
-            assert_eq!(count(500, 10_000), 4_000, "past it: every row, never a refusal");
+            assert_eq!(count(500, 10_000), 4_000, "deeper: every row, never a refusal");
             assert_eq!(count(500, 3), 3, "a handful of rows");
         })
         .expect("spawn")

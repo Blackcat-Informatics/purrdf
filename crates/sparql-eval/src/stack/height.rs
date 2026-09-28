@@ -11,8 +11,14 @@
 //! stack left above [`purrdf_stack::MARGIN_BYTES`], and a plan too tall for it is refused
 //! with [`EvalError::StackExhausted`] naming `"query algebra"`. On `wasm32` the host
 //! engine's call stack, which no measurement reaches, bounds the recursion too: a plan
-//! past [`WASM_STRUCTURAL_LIMIT`], [`WASM_VALUE_LIMIT`] or [`WASM_TRIPLE_TERM_DEPTH`] is
-//! refused with [`EvalError::HostStackExhausted`].
+//! past [`WASM_STRUCTURAL_LIMIT`] or [`WASM_VALUE_LIMIT`] is refused with
+//! [`EvalError::HostStackExhausted`].
+//!
+//! A quoted triple term is not a level of anything measured here. Every walk the
+//! evaluator makes over one — its interning, matching, instantiation, comparison and
+//! conversion — runs over a work list, so a term's nesting costs no stack on any host and
+//! is bounded by memory alone; the terms a plan holds are visited so the nodes below them
+//! are, and charged nothing.
 
 use purrdf_sparql_algebra::{GraphPattern, NodeRef, Query};
 
@@ -37,28 +43,19 @@ pub(crate) const WASM_HOST_STACK_BUDGET: usize = 640 * 1024;
 /// `EXISTS` groups, the costliest, exhausted it, rounded up.
 const WASM_GROUP_LEVEL_BYTES: usize = 2304;
 
-/// What one triple-term level costs the host engine's call stack on `wasm32`, in bytes.
-const WASM_TRIPLE_TERM_LEVEL_BYTES: usize = 320;
-
 /// How deeply graph patterns may nest on `wasm32`: as deep as
 /// [`WASM_HOST_STACK_BUDGET`] admits groups, 284 levels.
 pub(crate) const WASM_GRAPH_PATTERN_DEPTH: usize = WASM_HOST_STACK_BUDGET / WASM_GROUP_LEVEL_BYTES;
-
-/// How deeply triple terms may nest on `wasm32`: as deep as [`WASM_HOST_STACK_BUDGET`]
-/// admits them, 2 048 levels.
-const WASM_TRIPLE_TERM_DEPTH: usize = WASM_HOST_STACK_BUDGET / WASM_TRIPLE_TERM_LEVEL_BYTES;
 
 /// The tallest run of levels a plan may hold between two nested constructs on `wasm32`
 /// (an operator above its operands, `^` or a path modifier, a run of sibling group
 /// elements): 2 048.
 const WASM_TREE_HEIGHT: usize = 2048;
 
-/// The tallest tree admitted on `wasm32`, in every node kind: [`WASM_TREE_HEIGHT`], with
-/// room for what a tree holds that a count of written levels does not see — a triple
-/// term is two levels here (its term and its triple), and each nested group may carry
-/// up to eight wrapper nodes.
-const WASM_STRUCTURAL_LIMIT: usize =
-    WASM_TREE_HEIGHT + 2 * WASM_TRIPLE_TERM_DEPTH + 8 * WASM_GRAPH_PATTERN_DEPTH;
+/// The tallest tree admitted on `wasm32`, in every node kind but the triple terms:
+/// [`WASM_TREE_HEIGHT`], with room for what a tree holds that a count of written levels
+/// does not see — each nested group may carry up to eight wrapper nodes.
+const WASM_STRUCTURAL_LIMIT: usize = WASM_TREE_HEIGHT + 8 * WASM_GRAPH_PATTERN_DEPTH;
 
 /// The tallest run of expression and path nodes admitted on `wasm32`:
 /// [`WASM_TREE_HEIGHT`], with room for the second node some written levels build.
@@ -72,7 +69,11 @@ const WASM_VALUE_LIMIT: usize = WASM_TREE_HEIGHT + 256;
 /// per-level walk over any node kind is about 400 bytes; the charge is about 1.3 times
 /// that. A `wasm32` level costs 0.37 to 0.45 of its native size on the shadow stack the
 /// guard measures.
-const LEVEL_WALK_BYTES: usize = super::TERM_LEVEL_BYTES;
+const LEVEL_WALK_BYTES: usize = if cfg!(target_arch = "wasm32") {
+    256
+} else {
+    512
+};
 
 /// Whether a walk `height` levels tall fits the stack left above
 /// [`purrdf_stack::MARGIN_BYTES`], at [`LEVEL_WALK_BYTES`] a level.
@@ -81,31 +82,36 @@ fn walkable(height: usize) -> bool {
         <= purrdf_stack::remaining().saturating_sub(purrdf_stack::MARGIN_BYTES)
 }
 
-/// How deep a node sits: in every node kind (`structural`, the height a walk over the
-/// tree descends), in expression and path nodes (`values`), and in triple terms
-/// (`terms`: pattern and `VALUES` triple terms, and `TRIPLE` calls, which build one).
+/// How deep a node sits: in the node kinds the evaluator recurses over (`structural`,
+/// the height a recursive walk over the tree descends), and in expression and path nodes
+/// (`values`).
 #[derive(Clone, Copy)]
 struct Depth {
     structural: usize,
     values: usize,
-    terms: usize,
 }
 
 impl Depth {
     const ROOT: Self = Self {
         structural: 1,
         values: 0,
-        terms: 0,
     };
 
     /// The depth of `node`'s children. An `ORDER BY` key and an aggregate are counted as
-    /// part of the node that holds them, not as a level of their own.
+    /// part of the node that holds them, not as a level of their own; a triple pattern
+    /// and the terms inside it are walked over work lists, so they are no level either.
     fn below(self, node: NodeRef<'_>) -> Self {
         Self {
             structural: self.structural
-                + usize::from(!matches!(node, NodeRef::Order(_) | NodeRef::Aggregate(_))),
+                + usize::from(!matches!(
+                    node,
+                    NodeRef::Order(_)
+                        | NodeRef::Aggregate(_)
+                        | NodeRef::Triple(_)
+                        | NodeRef::Term(_)
+                        | NodeRef::Ground(_)
+                )),
             values: self.values + usize::from(matches!(node, NodeRef::Expr(_) | NodeRef::Path(_))),
-            terms: self.terms + usize::from(node.is_triple_term()),
         }
     }
 
@@ -122,9 +128,7 @@ impl Depth {
             *fits = self.structural;
         }
         if cfg!(target_arch = "wasm32")
-            && (self.structural > WASM_STRUCTURAL_LIMIT
-                || self.values > WASM_VALUE_LIMIT
-                || self.terms > WASM_TRIPLE_TERM_DEPTH)
+            && (self.structural > WASM_STRUCTURAL_LIMIT || self.values > WASM_VALUE_LIMIT)
         {
             return Err(EvalError::HostStackExhausted {
                 construct: "query algebra",
@@ -134,34 +138,29 @@ impl Depth {
     }
 }
 
-/// Admit the trees rooted at `roots`, iteratively, and return how deeply their triple
-/// terms nest — pattern and `VALUES` triple terms, and `TRIPLE` calls — so an evaluation
-/// can reserve the stack walks over them take ([`purrdf_stack::reserve`]); `0` when they
-/// hold none.
+/// Admit the trees rooted at `roots`, iteratively.
 ///
 /// # Errors
 ///
-/// [`EvalError::StackExhausted`] when a walk as tall as a tree (every node kind counted:
-/// patterns, expressions, paths, terms) does not fit the stack left on the calling thread;
-/// on `wasm32`, [`EvalError::HostStackExhausted`] when it is also past the host-stack
-/// bounds.
-fn admit<'a>(roots: impl IntoIterator<Item = NodeRef<'a>>) -> Result<usize, EvalError> {
+/// [`EvalError::StackExhausted`] when a walk as tall as a tree (patterns, expressions and
+/// paths counted; triple patterns and terms not) does not fit the stack left on the
+/// calling thread; on `wasm32`, [`EvalError::HostStackExhausted`] when it is also past
+/// the host-stack bounds.
+fn admit<'a>(roots: impl IntoIterator<Item = NodeRef<'a>>) -> Result<(), EvalError> {
     // The pending nodes of a shallow plan stay inline: admitting it allocates nothing.
     let mut stack: smallvec::SmallVec<[(NodeRef<'a>, Depth); 32]> =
         roots.into_iter().map(|root| (root, Depth::ROOT)).collect();
     let mut fits = 0;
-    let mut terms = 0;
     while let Some((node, depth)) = stack.pop() {
         depth.admit(&mut fits)?;
         let below = depth.below(node);
-        terms = terms.max(below.terms);
         node.for_each_child(|child| stack.push((child, below)));
     }
-    Ok(terms)
+    Ok(())
 }
 
 /// Admit `pattern` for evaluation: see [`admit`].
-pub(crate) fn admit_pattern(pattern: &GraphPattern) -> Result<usize, EvalError> {
+pub(crate) fn admit_pattern(pattern: &GraphPattern) -> Result<(), EvalError> {
     admit([NodeRef::Pattern(pattern)])
 }
 
@@ -179,5 +178,4 @@ pub(crate) fn admit_query(query: &Query) -> Result<(), EvalError> {
         | Query::Ask { pattern, .. }
         | Query::Describe { pattern, .. } => admit([NodeRef::Pattern(pattern)]),
     }
-    .map(drop)
 }

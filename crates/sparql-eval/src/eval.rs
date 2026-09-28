@@ -1587,17 +1587,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     /// Whether every fork site of this evaluation runs its sequential implementation:
     /// the evaluation was opened sequential ([`EvalOptions::force_sequential`] — set by
     /// the fallible lazy-view entries, whose page request order and exact budget boundary
-    /// are observable evidence no fork may race, and by the measurement seams), or it
-    /// holds triple terms deeper than the stack margin covers.
-    ///
-    /// Those terms are covered only on the thread that measured them: the running
-    /// evaluation kept stack for walks over them ([`crate::stack::admit_term`], the
-    /// request's own reserve), and a fork-join worker — which clones the scratch interner
-    /// holding them and walks them on a stack of its own — has kept none. So an evaluation
-    /// with anything reserved stays on its thread. A worker that builds such a term itself
-    /// is refused ([`crate::stack::UNSCOPED_TRIPLE_TERM`]), and the fork-join primitives
-    /// run their work sequentially on the evaluating thread instead
-    /// ([`crate::parallel::is_unscoped_refusal`]).
+    /// are observable evidence no fork may race, and by the measurement seams).
     ///
     /// The decision is a field of this context, copied into every worker fork, so one
     /// evaluation's answer never reaches another evaluation interleaved on the same
@@ -1609,7 +1599,7 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         if crate::parallel::forced_parallel_for_test() == Some(false) {
             return true;
         }
-        self.options.force_sequential || purrdf_stack::reserved() > 0
+        self.options.force_sequential
     }
 
     /// The live governor accounting state, if this execution is governed at all.
@@ -3096,8 +3086,7 @@ pub fn eval<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<SolutionSeq<D::Id>, EvalError> {
-    let terms = crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
-    let _terms = crate::stack::reserve_terms(terms)?;
+    crate::governor::soundness::validate_graph_pattern_depth(pattern)?;
     // Raw algebra has not passed admission, which is where a blank node label shared
     // by two pieces of one basic graph pattern is made the one variable it is — so
     // that is done here, and the renamed column is dropped from the bag handed back.
@@ -3330,19 +3319,12 @@ pub(crate) fn admit_version(request: AdmittedRequest<'_>) -> Result<(), EvalErro
 }
 
 /// Shared admission and dataset/base setup for all graph publication forms.
-///
-/// Returns the stack reserved for walks over the query's triple terms
-/// ([`crate::stack::reserve_terms`]), which the caller holds for as long as it evaluates.
 pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<purrdf_stack::Reserve, EvalError> {
+) -> Result<(), EvalError> {
     admit_version(AdmittedRequest::Query(query))?;
-    let mut terms = crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
-    if let Query::Construct { template, .. } = query {
-        terms = terms.max(crate::stack::template_nesting(template));
-    }
-    let reserve = crate::stack::reserve_terms(terms)?;
+    crate::governor::soundness::validate_graph_pattern_depth(query_pattern(query))?;
     // Install the query's FROM / FROM NAMED active dataset (§13) before evaluating.
     ctx.active_dataset = ActiveDataset::from_query_dataset(query.dataset(), ctx.dataset);
     // Install the query's effective base IRI so IRI()/URI() can resolve a relative
@@ -3350,7 +3332,7 @@ pub(crate) fn prepare_query_context<D: DatasetView + Sync>(
     ctx.base_iri = query.base_iri().map(|nn| nn.as_str().to_owned());
     ctx.endpoint_scan = crate::service_endpoints::scan(query_pattern(query));
     install_answer_cap_pushdown(query, ctx);
-    Ok(reserve)
+    Ok(())
 }
 
 /// Evaluate a top-level [`Query`] form over `ctx`'s dataset, trip-aware.
@@ -3373,7 +3355,7 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     // Criterion and differential tests can hold the operation on the sequential branch
     // (`EvalOptions::force_sequential`, read by every fork gate through
     // `EvalCtx::sequential_operation_required`); production keeps the ordered parallel fold.
-    let _terms = prepare_query_context(query, ctx)?;
+    prepare_query_context(query, ctx)?;
     match query {
         // A parsed `SELECT` ends in a projection, which already names only the
         // pattern's variables; a caller-built one need not, so a shared blank's column

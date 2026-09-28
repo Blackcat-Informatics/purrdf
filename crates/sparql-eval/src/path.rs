@@ -553,7 +553,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
                 // query text by the SPARQL parser, a hand-built `Query` by
                 // `purrdf_sparql_algebra`'s algebra validator on this same
                 // profile. See `ScratchInterner::intern`.
-                let term = ctx.scratch.try_intern(dataset, sval)?;
+                let term = ctx.scratch.intern(dataset, sval);
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }
@@ -574,7 +574,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
         // to the subject-absent case above.
         (Endpoint::Free { .. }, Endpoint::BoundAbsent(oval)) => {
             if pctx.program.is_reflexive() {
-                let term = ctx.scratch.try_intern(dataset, oval)?;
+                let term = ctx.scratch.intern(dataset, oval);
                 let _ = push_pair(ctx, &mut rows, Some(term), Some(term));
             }
         }

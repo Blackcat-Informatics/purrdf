@@ -828,11 +828,8 @@ where
 /// evaluation's recursion too, so graph patterns nested deeper than
 /// [`crate::stack::height::WASM_GRAPH_PATTERN_DEPTH`] are refused there as well, with
 /// [`crate::EvalError::HostStackExhausted`].
-///
-/// Returns how deeply the pattern's triple terms nest, for the reserve walks over them
-/// take ([`crate::stack::reserve_terms`]).
-pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<usize, crate::EvalError> {
-    let terms = crate::stack::height::admit_pattern(root)?;
+pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<(), crate::EvalError> {
+    crate::stack::height::admit_pattern(root)?;
     if cfg!(target_arch = "wasm32") {
         let limit = crate::stack::height::WASM_GRAPH_PATTERN_DEPTH;
         let mut stack = vec![(root, 1_usize)];
@@ -848,7 +845,7 @@ pub(crate) fn validate_graph_pattern_depth(root: &GraphPattern) -> Result<usize,
             });
         }
     }
-    Ok(terms)
+    Ok(())
 }
 
 // ---------------------------------------------------------------------------

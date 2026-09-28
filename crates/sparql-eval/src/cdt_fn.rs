@@ -200,7 +200,7 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
             };
             match purrdf_cdt::remove(&value, &key) {
                 CdtOutcome::Value(MapRemoval::Removed(value)) => {
-                    intern(ctx, composite_literal(&value))
+                    Ok(intern(ctx, composite_literal(&value)))
                 }
                 // Nothing was removed, so the answer is the caller's OWN term, with
                 // its own lexical form — `map-functions/remove-01.rq` asserts it
@@ -209,7 +209,7 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
                     let original = vals[0]
                         .clone()
                         .ok_or_else(|| EvalError::internal("cdt:remove lost its map argument"))?;
-                    intern(ctx, original)
+                    Ok(intern(ctx, original))
                 }
                 CdtOutcome::Error(_) => Ok(None),
                 CdtOutcome::Bound(error) => Err(bound(&error)),
@@ -235,7 +235,7 @@ fn value_result<D: DatasetView + Sync>(
     outcome: CdtOutcome<CdtValue>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match outcome {
-        CdtOutcome::Value(value) => intern(ctx, composite_literal(&value)),
+        CdtOutcome::Value(value) => Ok(intern(ctx, composite_literal(&value))),
         CdtOutcome::Error(_) => Ok(None),
         CdtOutcome::Bound(error) => Err(bound(&error)),
     }
@@ -249,10 +249,7 @@ fn term_result<D: DatasetView + Sync>(
     outcome: CdtOutcome<CdtTerm>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match outcome {
-        CdtOutcome::Value(term) => match from_cdt_term(&term) {
-            Some(value) => intern(ctx, value),
-            None => Ok(None),
-        },
+        CdtOutcome::Value(term) => Ok(from_cdt_term(&term).and_then(|value| intern(ctx, value))),
         CdtOutcome::Error(_) => Ok(None),
         CdtOutcome::Bound(error) => Err(bound(&error)),
     }
@@ -702,16 +699,11 @@ fn cdt_literal(
 /// the kernel ever admitted — so this is a real seam, not a formality. See
 /// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked); the CDT
 /// functions are expressions, so the refusal is §17.2's unbound result.
-///
-/// # Errors
-///
-/// [`EvalError::StackExhausted`] when the value is a triple term nested deeper than the
-/// evaluation can keep stack for (see [`crate::stack::admit_term`]).
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    ctx.scratch.try_intern_checked(ctx.dataset, value)
+) -> Option<SolutionTerm<D::Id>> {
+    ctx.scratch.intern_checked(ctx.dataset, value)
 }
 
 /// Intern a typed (no-language) literal. Infallible: there is no tag to judge.

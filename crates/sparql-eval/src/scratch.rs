@@ -46,8 +46,6 @@
 use purrdf_core::TermBox;
 use purrdf_core::{DatasetView, TermId, TermRef, TermValue, ViewTermId};
 
-use crate::error::EvalError;
-
 use std::hash::{Hash, Hasher};
 
 use hashbrown::HashTable;
@@ -390,11 +388,10 @@ impl ScratchInterner {
     ///
     /// # Depth
     ///
-    /// Nor does it admit the value's depth: a triple term is walked here — looked up,
-    /// hashed, compared — by recursion, so a caller handing it one nested deeper than its
-    /// thread's stack holds walks off that stack. The evaluator interns through
-    /// a crate-internal door that measures the stack first; a caller of this one owns the depth of
-    /// what it hands over, as it owned building it.
+    /// A triple term is walked here — looked up, hashed, compared — over work lists, so
+    /// a value nested to any depth costs no machine stack: its depth is bounded by memory
+    /// alone, and every value the evaluator builds or receives at run time enters through
+    /// this door or [`Self::intern_checked`] without being measured first.
     pub fn intern<D: DatasetView>(&mut self, dataset: &D, value: TermValue) -> SolutionTerm<D::Id> {
         self.intern_value(dataset, value)
     }
@@ -428,7 +425,7 @@ impl ScratchInterner {
     /// requires — **one binding, never a whole row or solution** — and none of
     /// them may turn it back into a term.
     ///
-    /// The tags are judged recursively through an RDF-1.2 triple term, because a
+    /// The tags are judged through every level of an RDF-1.2 triple term, because a
     /// tag one level down is still a tag that reaches the writer. [`TermValue::Iri`]
     /// and [`TermValue::Blank`] carry none, so for them this is a discriminant
     /// test and the two doors are the same door.
@@ -441,39 +438,6 @@ impl ScratchInterner {
             return None;
         }
         Some(self.intern_value(dataset, value))
-    }
-
-    /// [`Self::intern`], the evaluator's own door: the value is admitted into the running
-    /// evaluation first ([`crate::stack::admit_term`]), before anything here walks it —
-    /// the dataset lookup, the hash, the equality probe. Every value the evaluator builds
-    /// or receives at run time enters through this door or [`Self::try_intern_checked`],
-    /// so no walk over a triple term, however it was built, runs past the stack the
-    /// evaluation measured for it.
-    ///
-    /// # Errors
-    ///
-    /// [`EvalError::StackExhausted`] when the thread cannot keep the stack walks over the
-    /// value need; the value is then released without being walked.
-    pub(crate) fn try_intern<D: DatasetView>(
-        &mut self,
-        dataset: &D,
-        value: TermValue,
-    ) -> Result<SolutionTerm<D::Id>, EvalError> {
-        Ok(self.intern_value(dataset, admitted(value)?))
-    }
-
-    /// [`Self::intern_checked`], the evaluator's own door: admitted like
-    /// [`Self::try_intern`] before the language grammar is asked.
-    ///
-    /// # Errors
-    ///
-    /// As [`Self::try_intern`].
-    pub(crate) fn try_intern_checked<D: DatasetView>(
-        &mut self,
-        dataset: &D,
-        value: TermValue,
-    ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-        Ok(self.intern_checked(dataset, admitted(value)?))
     }
 
     /// Intern an IRI. Infallible by construction: an IRI carries no language tag,
@@ -586,18 +550,6 @@ impl ScratchInterner {
     #[must_use]
     pub fn computed_count(&self) -> usize {
         self.values.len()
-    }
-}
-
-/// `value`, admitted into the running evaluation ([`crate::stack::admit_term`]), or the
-/// refusal — with `value` released without the walk it was refused for.
-fn admitted(value: TermValue) -> Result<TermValue, EvalError> {
-    match crate::stack::admit_term(&value) {
-        Ok(()) => Ok(value),
-        Err(refusal) => {
-            crate::stack::drop_term(value);
-            Err(refusal)
-        }
     }
 }
 

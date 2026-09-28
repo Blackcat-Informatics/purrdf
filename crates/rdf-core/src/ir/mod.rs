@@ -99,7 +99,7 @@ pub use pipeline_bundle::{
 };
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
 pub use term::{BlankScope, TermId, TermValue};
-pub use term_walk::TermBox;
+pub use term_walk::{TermBox, TermVisit, fold_term};
 
 pub use composite::{
     CompositeDatasetView, CompositeSource, CompositeViewId, GraphPlacement, ScopeBinding,

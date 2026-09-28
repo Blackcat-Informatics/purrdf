@@ -671,14 +671,30 @@ fn inverse_paths_100k() {
     assert_deep("inverse paths", DEPTH + 1);
 }
 
+// Nothing between the parser and the answer recurses over a triple term's depth any more.
+// The pattern vector's path: parse (heap frames) → algebra → `stack::height` admission
+// (iterative, and a term is no level of it) → `blank_scope`, the endpoint scan and the
+// soundness analyses (work lists) → the one-operator plan's BGP leaf, where
+// `bgp::compile_term` indexes the nested triples flat and `compile_triple_pos` compiles
+// them over an explicit frame stack, answered empty before any lookup where the dataset
+// vouches for a shallower bound → no rows. The `VALUES` vector's path: the same admission
+// → the `VALUES` leaf, where `convert::ground_term_to_value` assembles the term bottom-up
+// over a work list, `ScratchInterner::intern` hashes it (`TermValue::hash`, a work list),
+// looks it up (`RdfDataset::term_id_by_value`, a bottom-up fold) and measures it
+// (`scratch::value_bytes`, a work list) → the row's cell is cloned out (`TermValue::clone`,
+// a work list) → the answer. The evaluator's operator recursion is one level for a single
+// leaf, so it does not bind either vector. What still holds both back on a 128 KiB thread
+// is the evaluator's own stack guard, which measures the thread rather than the plan:
+// `stack::height` refuses every plan when less than `purrdf_stack::MARGIN_BYTES` is left,
+// and `eval::eval_evaluated` refuses its first operator there the same way.
 #[test]
-#[ignore = "stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and bgp::compile_term compiles a pattern triple term by recursing into its subject and object"]
+#[ignore = "stack::height refuses every plan, and eval::eval_evaluated its first operator, on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; nothing on the path recurses over the term's depth"]
 fn triple_term_in_a_pattern_100k() {
     assert_deep("triple term in a pattern", DEPTH);
 }
 
 #[test]
-#[ignore = "stack::height refuses every plan on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; and scratch::value_bytes measures a triple term the VALUES operator interns by recursing into its subject and object"]
+#[ignore = "stack::height refuses every plan, and eval::eval_evaluated its first operator, on a thread with less than purrdf_stack::MARGIN_BYTES (128 KiB) left; nothing on the path recurses over the term's depth"]
 fn triple_term_in_values_100k() {
     assert_deep("triple term in VALUES", DEPTH);
     assert_deep("triple term in VALUES", DEPTH + 1);

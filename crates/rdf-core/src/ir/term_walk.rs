@@ -14,13 +14,24 @@
 //! cannot be destructured by value, and `TermValue::Triple { s, p, o } => …` is how
 //! every consumer takes a triple term apart. What that moves out is three `TermBox`es,
 //! whose drop — or [`TermBox::into_inner`] — takes over from there.
+//!
+//! The same work lists are offered to every consumer that walks a term of its own
+//! accord: [`TermValue::fold`] and [`TermValue::try_fold`] assemble an answer bottom-up,
+//! [`TermValue::try_fold_owned`] does so while consuming the term,
+//! [`TermValue::visit_terms`] visits every term in pre-order, and
+//! [`TermValue::visit_terms_pre_post`] brackets each triple term around its components,
+//! so a writer can open and close it. [`fold_term`] is the same bottom-up fold over the
+//! ids a [`DatasetView`] resolves.
 
 use core::cmp::Ordering;
+use core::convert::Infallible;
 use core::fmt::{self, Write as _};
 use core::hash::{Hash, Hasher};
-use core::ops::{Deref, DerefMut};
+use core::ops::{ControlFlow, Deref, DerefMut};
 
+use super::dataset::TermRef;
 use super::term::TermValue;
+use crate::dataset_view::DatasetView;
 
 /// A stack holding its first `N` entries inline and the rest on the heap: a walk over
 /// a shallowly nested term allocates nothing of its own.
@@ -200,6 +211,210 @@ impl fmt::Debug for TermBox {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         TermValue::fmt(self, f)
     }
+}
+
+/// One event of [`TermValue::visit_terms_pre_post`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TermVisit<'a> {
+    /// A term that is not a triple term.
+    Leaf(&'a TermValue),
+    /// A triple term, before its components.
+    Open(&'a TermValue),
+    /// The same triple term, after its components.
+    Close(&'a TermValue),
+}
+
+/// A pending step of a bottom-up fold: enter a term, or assemble a triple term from
+/// the three answers its components left.
+enum FoldStep<T> {
+    Enter(T),
+    Assemble,
+}
+
+impl TermValue {
+    /// Fold this term bottom-up over a work list: `leaf` answers for every term that is
+    /// not a triple term, and `triple` combines a triple term's three answers — its
+    /// subject, predicate and object, each folded fully in that order — into its own.
+    /// The first error ends the fold and is returned.
+    ///
+    /// # Errors
+    ///
+    /// The first error `leaf` or `triple` returns.
+    pub fn try_fold<T, E>(
+        &self,
+        mut leaf: impl FnMut(&Self) -> Result<T, E>,
+        mut triple: impl FnMut(T, T, T) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let Self::Triple { .. } = self else {
+            return leaf(self);
+        };
+        let mut steps: Pending<FoldStep<&Self>, 32> = Pending::with(FoldStep::Enter(self));
+        let mut answers: Vec<T> = Vec::with_capacity(3);
+        while let Some(step) = steps.pop() {
+            match step {
+                FoldStep::Enter(Self::Triple { s, p, o }) => {
+                    steps.extend([
+                        FoldStep::Assemble,
+                        FoldStep::Enter(o),
+                        FoldStep::Enter(p),
+                        FoldStep::Enter(s),
+                    ]);
+                }
+                FoldStep::Enter(term) => answers.push(leaf(term)?),
+                FoldStep::Assemble => {
+                    let o = answers.pop().expect("a triple's object is folded");
+                    let p = answers.pop().expect("a triple's predicate is folded");
+                    let s = answers.pop().expect("a triple's subject is folded");
+                    answers.push(triple(s, p, o)?);
+                }
+            }
+        }
+        Ok(answers
+            .pop()
+            .expect("the root's answer is the last one assembled"))
+    }
+
+    /// [`Self::try_fold`] for a fold that cannot fail.
+    pub fn fold<T>(
+        &self,
+        mut leaf: impl FnMut(&Self) -> T,
+        mut triple: impl FnMut(T, T, T) -> T,
+    ) -> T {
+        match self.try_fold::<T, Infallible>(|term| Ok(leaf(term)), |s, p, o| Ok(triple(s, p, o))) {
+            Ok(answer) => answer,
+        }
+    }
+
+    /// [`Self::try_fold`], consuming the term: `leaf` receives each non-triple term by
+    /// value, so its strings move into the answer rather than being copied.
+    ///
+    /// # Errors
+    ///
+    /// The first error `leaf` or `triple` returns. Whatever of the term is still
+    /// unvisited is dropped over a work list.
+    pub fn try_fold_owned<T, E>(
+        self,
+        mut leaf: impl FnMut(Self) -> Result<T, E>,
+        mut triple: impl FnMut(T, T, T) -> Result<T, E>,
+    ) -> Result<T, E> {
+        let Self::Triple { .. } = self else {
+            return leaf(self);
+        };
+        let mut steps: Vec<FoldStep<Self>> = vec![FoldStep::Enter(self)];
+        let mut answers: Vec<T> = Vec::with_capacity(3);
+        while let Some(step) = steps.pop() {
+            match step {
+                FoldStep::Enter(Self::Triple { s, p, o }) => {
+                    steps.extend([
+                        FoldStep::Assemble,
+                        FoldStep::Enter(o.into_inner()),
+                        FoldStep::Enter(p.into_inner()),
+                        FoldStep::Enter(s.into_inner()),
+                    ]);
+                }
+                FoldStep::Enter(term) => answers.push(leaf(term)?),
+                FoldStep::Assemble => {
+                    let o = answers.pop().expect("a triple's object is folded");
+                    let p = answers.pop().expect("a triple's predicate is folded");
+                    let s = answers.pop().expect("a triple's subject is folded");
+                    answers.push(triple(s, p, o)?);
+                }
+            }
+        }
+        Ok(answers
+            .pop()
+            .expect("the root's answer is the last one assembled"))
+    }
+
+    /// Visit every term of this one in pre-order — a triple term first, then its
+    /// subject, predicate and object, each with everything below it — over a work
+    /// list. The first `Break` ends the visit and is returned.
+    pub fn visit_terms<B>(&self, mut visit: impl FnMut(&Self) -> ControlFlow<B>) -> ControlFlow<B> {
+        let mut pending: Pending<&Self, 16> = Pending::with(self);
+        while let Some(term) = pending.pop() {
+            visit(term)?;
+            if let Self::Triple { s, p, o } = term {
+                pending.extend([&**o, &**p, &**s]);
+            }
+        }
+        ControlFlow::Continue(())
+    }
+
+    /// Visit every term of this one in pre-order, with each triple term reported once
+    /// before its components ([`TermVisit::Open`]) and once after them
+    /// ([`TermVisit::Close`]), so a writer can bracket it. The first `Break` ends the
+    /// visit and is returned.
+    pub fn visit_terms_pre_post<B>(
+        &self,
+        mut visit: impl FnMut(TermVisit<'_>) -> ControlFlow<B>,
+    ) -> ControlFlow<B> {
+        let mut pending: Pending<TermVisit<'_>, 16> = Pending::with(TermVisit::Open(self));
+        while let Some(event) = pending.pop() {
+            match event {
+                TermVisit::Open(term @ Self::Triple { s, p, o }) => {
+                    visit(TermVisit::Open(term))?;
+                    pending.extend([
+                        TermVisit::Close(term),
+                        TermVisit::Open(o),
+                        TermVisit::Open(p),
+                        TermVisit::Open(s),
+                    ]);
+                }
+                TermVisit::Open(leaf) => visit(TermVisit::Leaf(leaf))?,
+                event @ (TermVisit::Leaf(_) | TermVisit::Close(_)) => visit(event)?,
+            }
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+/// Fold the term `id` names in `view` bottom-up over a work list: `leaf` answers for
+/// every term that is not a triple term, given its id and what it resolves to, and
+/// `triple` combines a triple term's id and its three answers — its subject, predicate
+/// and object, each resolved and folded fully in that order — into its own. The view is
+/// consulted in exactly the order a recursive descent would consult it, and the first
+/// error ends the fold.
+///
+/// # Errors
+///
+/// The first error `leaf` or `triple` returns.
+pub fn fold_term<D: DatasetView + ?Sized, T, E>(
+    view: &D,
+    id: D::Id,
+    mut leaf: impl FnMut(D::Id, TermRef<'_, D::Id>) -> Result<T, E>,
+    mut triple: impl FnMut(D::Id, T, T, T) -> Result<T, E>,
+) -> Result<T, E> {
+    let mut steps: Pending<FoldStep<D::Id>, 32> = Pending::with(FoldStep::Enter(id));
+    let mut assembling: Vec<D::Id> = Vec::new();
+    let mut answers: Vec<T> = Vec::with_capacity(3);
+    while let Some(step) = steps.pop() {
+        match step {
+            FoldStep::Enter(id) => match view.resolve(id) {
+                TermRef::Triple { s, p, o } => {
+                    assembling.push(id);
+                    steps.extend([
+                        FoldStep::Assemble,
+                        FoldStep::Enter(o),
+                        FoldStep::Enter(p),
+                        FoldStep::Enter(s),
+                    ]);
+                }
+                resolved => answers.push(leaf(id, resolved)?),
+            },
+            FoldStep::Assemble => {
+                let id = assembling
+                    .pop()
+                    .expect("a triple term is assembled once its components are");
+                let o = answers.pop().expect("a triple's object is folded");
+                let p = answers.pop().expect("a triple's predicate is folded");
+                let s = answers.pop().expect("a triple's subject is folded");
+                answers.push(triple(id, s, p, o)?);
+            }
+        }
+    }
+    Ok(answers
+        .pop()
+        .expect("the root's answer is the last one assembled"))
 }
 
 impl Clone for TermValue {
@@ -630,11 +845,13 @@ fn close(out: &mut Pad<'_, '_>, pretty: bool) -> fmt::Result {
 #[cfg(test)]
 mod tests {
     use core::cmp::Ordering;
+    use core::convert::Infallible;
     use core::hash::{Hash, Hasher};
+    use core::ops::ControlFlow;
 
     use proptest::prelude::*;
 
-    use super::{TermBox, TermValue};
+    use super::{TermBox, TermValue, TermVisit};
     use crate::RdfTextDirection;
     use crate::ir::term::BlankScope;
 
@@ -861,6 +1078,233 @@ mod tests {
             let (ba, bb) = (a.to_canonical_bytes(), b.to_canonical_bytes());
             prop_assert_eq!(ba == bb, a == b);
         }
+    }
+
+    // ── The folds and visits ───────────────────────────────────────────────────────
+
+    /// The recursive reference of [`TermValue::try_fold`].
+    fn reference_try_fold<T, E>(
+        term: &TermValue,
+        leaf: &mut impl FnMut(&TermValue) -> Result<T, E>,
+        triple: &mut impl FnMut(T, T, T) -> Result<T, E>,
+    ) -> Result<T, E> {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                let s = reference_try_fold(s, leaf, triple)?;
+                let p = reference_try_fold(p, leaf, triple)?;
+                let o = reference_try_fold(o, leaf, triple)?;
+                triple(s, p, o)
+            }
+            leaf_term => leaf(leaf_term),
+        }
+    }
+
+    /// The recursive reference of [`TermValue::visit_terms_pre_post`], recorded as the
+    /// events' spelling.
+    fn reference_visit(term: &TermValue, out: &mut Vec<String>) {
+        match term {
+            TermValue::Triple { s, p, o } => {
+                out.push("open".to_owned());
+                reference_visit(s, out);
+                reference_visit(p, out);
+                reference_visit(o, out);
+                out.push("close".to_owned());
+            }
+            leaf => out.push(format!("{leaf:?}")),
+        }
+    }
+
+    /// A leaf that errs on the empty IRI, so a generated term errs at a place the
+    /// reference and the fold must agree on.
+    fn leaf_spelling(term: &TermValue) -> Result<String, usize> {
+        match term {
+            TermValue::Iri(iri) if iri.is_empty() => Err(0),
+            other => Ok(format!("{other:?}")),
+        }
+    }
+
+    fn assemble(s: &str, p: &str, o: &str) -> Result<String, usize> {
+        if s.len() + p.len() + o.len() > 4_000 {
+            return Err(s.len());
+        }
+        Ok(format!("({s} {p} {o})"))
+    }
+
+    proptest! {
+        /// The fold, the consuming fold and both visits answer what their recursive
+        /// references answer, on every generated term.
+        #[test]
+        fn the_folds_and_visits_agree_with_their_recursive_references(a in term()) {
+            let folded = a.try_fold(leaf_spelling, |s, p, o| assemble(&s, &p, &o));
+            let expected =
+                reference_try_fold(&a, &mut leaf_spelling, &mut |s, p, o| assemble(&s, &p, &o));
+            prop_assert_eq!(&folded, &expected);
+            let owned = a
+                .clone()
+                .try_fold_owned(|leaf| leaf_spelling(&leaf), |s, p, o| assemble(&s, &p, &o));
+            prop_assert_eq!(&owned, &expected);
+            let infallible = a.fold(|leaf| format!("{leaf:?}"), |s, p, o| format!("({s} {p} {o})"));
+            let reference_infallible: Result<String, Infallible> = reference_try_fold(
+                &a,
+                &mut |leaf| Ok(format!("{leaf:?}")),
+                &mut |s, p, o| Ok(format!("({s} {p} {o})")),
+            );
+            prop_assert_eq!(Ok(infallible), reference_infallible);
+
+            let mut events = Vec::new();
+            let ControlFlow::Continue(()) = a.visit_terms_pre_post(|event| -> ControlFlow<Infallible> {
+                events.push(match event {
+                    TermVisit::Open(_) => "open".to_owned(),
+                    TermVisit::Close(_) => "close".to_owned(),
+                    TermVisit::Leaf(leaf) => format!("{leaf:?}"),
+                });
+                ControlFlow::Continue(())
+            });
+            let mut expected_events = Vec::new();
+            reference_visit(&a, &mut expected_events);
+            prop_assert_eq!(&events, &expected_events);
+
+            let mut visited = Vec::new();
+            let ControlFlow::Continue(()) = a.visit_terms(|term| -> ControlFlow<Infallible> {
+                visited.push(if matches!(term, TermValue::Triple { .. }) {
+                    "open".to_owned()
+                } else {
+                    format!("{term:?}")
+                });
+                ControlFlow::Continue(())
+            });
+            let pre_order: Vec<String> = expected_events
+                .iter()
+                .filter(|event| event.as_str() != "close")
+                .cloned()
+                .collect();
+            prop_assert_eq!(visited, pre_order);
+
+            // A visit that breaks at the first leaf stops there and hands the leaf back.
+            let first_leaf = a.visit_terms(|term| match term {
+                TermValue::Triple { .. } => ControlFlow::Continue(()),
+                leaf => ControlFlow::Break(format!("{leaf:?}")),
+            });
+            let expected_first = expected_events
+                .iter()
+                .find(|event| event.as_str() != "open")
+                .cloned()
+                .expect("every term has a leaf");
+            prop_assert_eq!(first_leaf, ControlFlow::Break(expected_first));
+        }
+    }
+
+    /// The fold and the visits over the ids of a dataset's triple term agree with a
+    /// recursive resolution, at the deepest nesting the store admits.
+    #[test]
+    fn fold_term_resolves_a_stored_triple_term_bottom_up() {
+        use crate::RdfDatasetBuilder;
+        use crate::ir::dataset::TermRef;
+
+        fn reference(dataset: &crate::RdfDataset, id: crate::TermId) -> String {
+            match dataset.resolve(id) {
+                TermRef::Triple { s, p, o } => format!(
+                    "({} {} {})",
+                    reference(dataset, s),
+                    reference(dataset, p),
+                    reference(dataset, o)
+                ),
+                TermRef::Iri(iri) => iri.to_owned(),
+                other => format!("{other:?}"),
+            }
+        }
+
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/s");
+        let p = builder.intern_iri("http://example.org/p");
+        let mut o = builder.intern_iri("http://example.org/o");
+        for _ in 0..16 {
+            o = builder.intern_triple(s, p, o);
+        }
+        builder.push_quad(s, p, o, None);
+        let dataset = builder
+            .freeze()
+            .expect("sixteen levels are within the IR's cap");
+        let folded: Result<String, Infallible> = super::fold_term(
+            &*dataset,
+            o,
+            |_, resolved| {
+                Ok(match resolved {
+                    TermRef::Iri(iri) => iri.to_owned(),
+                    other => format!("{other:?}"),
+                })
+            },
+            |_, s, p, o| Ok(format!("({s} {p} {o})")),
+        );
+        let Ok(folded) = folded;
+        assert_eq!(folded, reference(&dataset, o));
+        assert_eq!(folded.matches('(').count(), 16);
+
+        let missing = super::fold_term(
+            &*dataset,
+            o,
+            |id, _| if id == s { Err("subject") } else { Ok(()) },
+            |_, (), (), ()| Ok(()),
+        );
+        assert_eq!(
+            missing,
+            Err("subject"),
+            "the first leaf error ends the fold"
+        );
+    }
+
+    /// A triple term a hundred thousand levels deep is folded, folded by value and
+    /// visited both ways on a thread whose whole stack is 128 KiB.
+    #[test]
+    fn a_hundred_thousand_level_triple_term_is_folded_and_visited_without_recursion() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut term = TermValue::iri("o");
+                for _ in 0..LEVELS {
+                    term = TermValue::Triple {
+                        s: TermBox::new(TermValue::iri("s")),
+                        p: TermBox::new(TermValue::iri("p")),
+                        o: TermBox::new(term),
+                    };
+                }
+                let depth = term.fold(|_| 0_usize, |s, p, o| 1 + s.max(p).max(o));
+                assert_eq!(depth, LEVELS);
+                let mut opened = 0_usize;
+                let mut closed = 0_usize;
+                let mut leaves = 0_usize;
+                let ControlFlow::Continue(()) =
+                    term.visit_terms_pre_post(|event| -> ControlFlow<Infallible> {
+                        match event {
+                            TermVisit::Open(_) => opened += 1,
+                            TermVisit::Close(_) => closed += 1,
+                            TermVisit::Leaf(_) => leaves += 1,
+                        }
+                        ControlFlow::Continue(())
+                    });
+                assert_eq!((opened, closed, leaves), (LEVELS, LEVELS, 2 * LEVELS + 1));
+                let mut visited = 0_usize;
+                let ControlFlow::Continue(()) = term.visit_terms(|_| -> ControlFlow<Infallible> {
+                    visited += 1;
+                    ControlFlow::Continue(())
+                });
+                assert_eq!(visited, 3 * LEVELS + 1);
+                let stopped = term.visit_terms(|t| match t {
+                    TermValue::Iri(iri) => ControlFlow::Break(iri.clone()),
+                    TermValue::Triple { .. } => ControlFlow::Continue(()),
+                    _ => unreachable!("the chain holds IRIs and triple terms"),
+                });
+                assert_eq!(stopped, ControlFlow::Break("s".to_owned()));
+                let owned_depth = term.try_fold_owned(
+                    |_| Ok::<usize, Infallible>(0),
+                    |s, p, o| Ok(1 + s.max(p).max(o)),
+                );
+                assert_eq!(owned_depth, Ok(LEVELS));
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("no fold or visit overflowed the thread's stack");
     }
 
     /// A triple term a million levels deep is copied, compared, ordered, hashed,

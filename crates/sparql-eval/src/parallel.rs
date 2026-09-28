@@ -193,17 +193,6 @@ fn aggregate_chunk_size_for(len: usize) -> usize {
     (len / (AGGREGATE_CHUNK_REFERENCE_THREADS * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
 }
 
-/// Whether `result` is a worker's refusal of a triple term deeper than a thread with no
-/// evaluation scope can hold: work the fork-join primitives redo sequentially, on the
-/// evaluating thread, where the term is measured and kept like any other.
-pub(crate) fn is_unscoped_refusal<T>(result: &Result<T, EvalError>) -> bool {
-    matches!(
-        result,
-        Err(EvalError::StackExhausted { construct })
-            if *construct == crate::stack::UNSCOPED_TRIPLE_TERM
-    )
-}
-
 #[cfg(test)]
 std::thread_local! {
     /// Test-only override for [`should_parallelize`], so a bench/test can force
@@ -309,9 +298,8 @@ pub(crate) fn planned_aggregate_chunk_count(sequential: bool, len: usize) -> usi
 /// rayon thread hand-off cost would dominate the actual work.
 ///
 /// `sequential` is the running evaluation's own decision
-/// (`EvalCtx::sequential_operation_required`: the evaluation was opened sequential, or it
-/// holds triple terms only its own thread keeps stack for), and it outranks every other
-/// gate here, the test override included. It is a field of the evaluation context rather
+/// (`EvalCtx::sequential_operation_required`: the evaluation was opened sequential), and
+/// it outranks every other gate here, the test override included. It is a field of the evaluation context rather
 /// than per-thread state, so an evaluation suspended on a thread and another run on it
 /// in the meantime never read each other's decision.
 pub(crate) fn should_parallelize(sequential: bool, work_items: usize) -> bool {
@@ -1261,15 +1249,6 @@ where
             Ok((acc, harvested))
         })
         .collect();
-    // A worker built a triple term deeper than a thread with no evaluation scope holds:
-    // the whole batch is redone here, on the evaluating thread, where the term is
-    // measured and kept like any other. A fork nested inside the redo decides for
-    // itself, and a worker of its own that builds such a term is refused and redone the
-    // same way.
-    if per_chunk.iter().any(is_unscoped_refusal) {
-        drop(per_chunk);
-        return run_sequentially();
-    }
 
     let mut out = Vec::with_capacity(
         per_chunk
@@ -1382,15 +1361,6 @@ where
             Ok(state)
         })
         .collect();
-    // A worker built a triple term deeper than a thread with no evaluation scope holds:
-    // the whole batch is redone here, on the evaluating thread, where the term is
-    // measured and kept like any other. A fork nested inside the redo decides for
-    // itself, and a worker of its own that builds such a term is refused and redone the
-    // same way.
-    if per_chunk.iter().any(is_unscoped_refusal) {
-        drop(per_chunk);
-        return run_sequentially();
-    }
 
     // Reduce strictly in chunk-index order: the first `Err` **by chunk index**
     // wins (via `?` on the sequential `for` below), regardless of which worker
@@ -1502,19 +1472,7 @@ pub(crate) fn reintern_portable_row<D: DatasetView>(
             // function of the value, so this call cannot refuse what the child
             // accepted. Propagating the `Option` rather than asserting keeps the
             // cell shape honest if that ever stops being true.
-            //
-            // Nor can it refuse the value's depth: a worker holds no triple term deeper
-            // than the margin covers (it refuses one, and the primitive reruns the work
-            // on the evaluating thread — see `EvalCtx::sequential_operation_required`), so the
-            // value is within what every thread covers, and admitting it changes
-            // nothing.
-            Some(PortableTerm::Fresh(value)) => {
-                debug_assert!(
-                    crate::stack::term_nesting(&value) <= crate::stack::MARGIN_TERM_LEVELS
-                        || purrdf_stack::reserved() > 0
-                );
-                main.intern_checked(dataset, value)
-            }
+            Some(PortableTerm::Fresh(value)) => main.intern_checked(dataset, value),
         })
         .collect()
 }

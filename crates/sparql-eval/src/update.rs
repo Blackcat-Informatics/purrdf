@@ -607,18 +607,8 @@ fn delete_insert(
     .map_err(|e| RdfDiagnostic::error(e.diagnostic_code(), e.to_string()))?;
     let pattern: &purrdf_sparql_algebra::GraphPattern = planned.as_ref().unwrap_or(pattern);
 
-    // The `WHERE` is held to the stack it is evaluated on, as a query's pattern is, and
-    // the walks over its triple terms and the templates' — instantiated once per row —
-    // are reserved for the whole operation.
-    let reserved =
-        crate::governor::soundness::validate_graph_pattern_depth(pattern).and_then(|terms| {
-            crate::stack::reserve_terms(
-                terms
-                    .max(crate::stack::template_nesting(delete))
-                    .max(crate::stack::template_nesting(insert)),
-            )
-        });
-    let _terms = reserved.map_err(|e| {
+    // The `WHERE` is held to the stack it is evaluated on, as a query's pattern is.
+    crate::governor::soundness::validate_graph_pattern_depth(pattern).map_err(|e| {
         RdfDiagnostic::error(
             crate::engine::eval_diagnostic_code(&e, "native-sparql-update-eval"),
             e.to_string(),

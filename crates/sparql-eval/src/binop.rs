@@ -531,16 +531,6 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         use rayon::prelude::*;
         arms.par_iter().map(eval_branch).collect()
     };
-    // An arm that built a triple term deeper than a worker can hold is evaluated again,
-    // with every arm, on this thread (see `crate::parallel::is_unscoped_refusal`).
-    if results.iter().any(crate::parallel::is_unscoped_refusal) {
-        drop(results);
-        let previous = ctx.options.force_sequential;
-        ctx.options.force_sequential = true;
-        let redone = eval_union(node, arms, ctx);
-        ctx.options.force_sequential = previous;
-        return redone;
-    }
     // Errors reduce in source order, as the binary chain's `left?, right?` did at every
     // level: the first arm's error is the union's.
     let mut branches = results.into_iter().collect::<Result<Vec<_>, EvalError>>()?;

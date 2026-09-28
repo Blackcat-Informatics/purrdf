@@ -1617,9 +1617,9 @@ impl PlanSurvey {
     }
 }
 
-/// Recursively walk `pattern`, compute the cost-based order and cardinality estimate for
-/// every BGP, and record both into `survey`. Scope changes from `GRAPH` blocks are tracked
-/// so cardinality estimates use the right graph filter.
+/// Walk `pattern`, compute the cost-based order and cardinality estimate for every BGP,
+/// and record both into `survey`. Scope changes from `GRAPH` blocks are tracked so
+/// cardinality estimates use the right graph filter.
 ///
 /// This is a pure-introspection path: it does not evaluate the query, and it falls back to
 /// source order for BGPs whose constants are absent from the dataset (those BGPs are empty
@@ -1629,6 +1629,10 @@ impl PlanSurvey {
 /// because a one-pattern BGP has no order to choose. The **estimate** is recorded for every
 /// BGP, one-pattern ones included: a single unconstrained triple pattern over a large store
 /// is exactly the shape a cardinality ceiling exists to refuse.
+///
+/// The walk runs over an explicit work list in pre-order, each node's children left to
+/// right, so a plan of any height costs no machine stack; the join-order strings are
+/// appended, the estimates recorded and the first error raised in exactly that order.
 ///
 /// # How a property-function call is priced, and what that composition rule is
 ///
@@ -1664,174 +1668,166 @@ pub(crate) fn survey_pattern_plans<D: DatasetView>(
     relations: &crate::property_fn::PropertyFunctionRegistry,
     survey: &mut PlanSurvey,
 ) -> Result<(), EvalError> {
-    // One level per algebra node, and a governed evaluation surveys its whole plan
-    // before the first operator runs: see `crate::stack`.
-    crate::stack::check("plan survey")?;
-    match pattern {
-        GraphPattern::Bgp { patterns } => {
-            if patterns.is_empty() {
-                return Ok(());
-            }
-            let scope = active_dataset.scope_for(active_graph);
-            let mut working = VarSchema::new();
-            for pattern in patterns {
-                for key in slot_keys(pattern) {
-                    working.push(key);
-                }
-            }
-            let mut compiled = Vec::with_capacity(patterns.len());
-            let mut any_absent = false;
-            for pattern in patterns {
-                match compile_pattern(pattern, &working, dataset)? {
-                    Some(cp) => compiled.push(cp),
-                    None => {
-                        any_absent = true;
-                        break;
-                    }
-                }
-            }
-            let order: Vec<usize> = if any_absent {
-                (0..patterns.len()).collect()
-            } else {
-                cost_based_order(&compiled, dataset, &scope)
-            };
-            if patterns.len() >= 2 {
-                for &i in &order {
-                    survey.orders.push(triple_pattern_to_string(&patterns[i]));
-                }
-            }
-            let columns = real_var_schema(&working).len() as u64;
-            let estimate = if any_absent {
-                // A ground constant absent from the dataset makes the whole BGP empty, so
-                // the honest prediction is zero rows — not the product the cost model
-                // would compute from cardinalities it never probed.
-                PlanEstimate {
-                    rows: 0,
-                    peak_rows: 0,
-                    columns,
-                }
-            } else {
-                let (rows, peak_rows) = replay_cost_estimate(&compiled, dataset, &scope, &order);
-                PlanEstimate {
-                    rows,
-                    peak_rows,
-                    columns,
-                }
-            };
-            survey
-                .estimates
-                .insert(std::ptr::from_ref(pattern) as usize, estimate);
-        }
-        // The two shapes a property-function call is attached through, and therefore the
-        // only place a call's driving side is in scope.
-        GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
-            survey_pattern_plans(
-                dataset,
-                active_dataset,
-                active_graph,
-                left,
-                relations,
-                survey,
-            )?;
-            if let GraphPattern::PropertyFunction(call) = &**right {
+    /// One pending step of the walk.
+    enum Step<'a, I> {
+        /// Survey the subtree rooted at the node, evaluated against the graph.
+        Visit(&'a GraphPattern, GraphMatch<I>),
+        /// Price the call `node` is, driven once per row of `left`'s bag: taken once
+        /// `left`'s whole subtree has been surveyed, so its prediction is on record.
+        Call {
+            node: &'a GraphPattern,
+            call: &'a PropertyFunctionCall,
+            left: &'a GraphPattern,
+        },
+    }
+
+    let mut steps: Vec<Step<'_, D::Id>> = vec![Step::Visit(pattern, active_graph)];
+    while let Some(step) = steps.pop() {
+        let (pattern, active_graph) = match step {
+            Step::Call { node, call, left } => {
                 let mut bound = DetHashSet::default();
                 crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
                 record_call_estimate(
-                    right,
+                    node,
                     call,
                     &bound,
                     predicted_rows(left, survey).unwrap_or(1),
                     relations,
                     survey,
                 )?;
-            } else {
-                survey_pattern_plans(
-                    dataset,
-                    active_dataset,
-                    active_graph,
-                    right,
-                    relations,
-                    survey,
-                )?;
+                continue;
             }
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                survey_pattern_plans(
-                    dataset,
-                    active_dataset,
-                    active_graph,
-                    arm,
-                    relations,
-                    survey,
-                )?;
+            Step::Visit(pattern, active_graph) => (pattern, active_graph),
+        };
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                survey_bgp(dataset, active_dataset, active_graph, pattern, patterns, survey)?;
             }
+            // The two shapes a property-function call is attached through, and therefore the
+            // only place a call's driving side is in scope. The right side is pushed first so
+            // the left's whole subtree is surveyed before it.
+            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+                if let GraphPattern::PropertyFunction(call) = &**right {
+                    steps.push(Step::Call {
+                        node: right,
+                        call,
+                        left,
+                    });
+                } else {
+                    steps.push(Step::Visit(right, active_graph));
+                }
+                steps.push(Step::Visit(left, active_graph));
+            }
+            GraphPattern::Union { arms } => {
+                steps.extend(arms.iter().rev().map(|arm| Step::Visit(arm, active_graph)));
+            }
+            GraphPattern::LeftJoin { left, right, .. } | GraphPattern::Minus { left, right } => {
+                steps.push(Step::Visit(right, active_graph));
+                steps.push(Step::Visit(left, active_graph));
+            }
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            // `UNFOLD` predicts nothing of its own: how many rows one input row
+            // expands to is a property of a composite value this walk never sees, so
+            // the survey reports its inner pattern and stops — an honest under-count,
+            // which is the direction this survey is documented to fail in.
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Group { inner, .. } => {
+                steps.push(Step::Visit(inner, active_graph));
+            }
+            GraphPattern::Graph { name, inner } => {
+                let inner_graph = match name {
+                    NamedNodePattern::NamedNode(n) => dataset
+                        .term_id_by_value(&named_node_to_value(n))
+                        .map_or(GraphMatch::Default, GraphMatch::Named),
+                    NamedNodePattern::Variable(_) => GraphMatch::Any,
+                };
+                steps.push(Step::Visit(inner, inner_graph));
+            }
+            // A call with nothing written before it: its driving bag is the identity table,
+            // which is one row, so its whole prediction is the relation's declared bound.
+            GraphPattern::PropertyFunction(call) => {
+                record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey)?;
+            }
+            // Leaves that hold no BGP: there is no triple-pattern join order to choose and
+            // no base cardinality to probe.
+            GraphPattern::Path { .. } | GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
         }
-        GraphPattern::LeftJoin { left, right, .. } | GraphPattern::Minus { left, right } => {
-            survey_pattern_plans(
-                dataset,
-                active_dataset,
-                active_graph,
-                left,
-                relations,
-                survey,
-            )?;
-            survey_pattern_plans(
-                dataset,
-                active_dataset,
-                active_graph,
-                right,
-                relations,
-                survey,
-            )?;
-        }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Extend { inner, .. }
-        // `UNFOLD` predicts nothing of its own: how many rows one input row
-        // expands to is a property of a composite value this walk never sees, so
-        // the survey reports its inner pattern and stops — an honest under-count,
-        // which is the direction this survey is documented to fail in.
-        | GraphPattern::Unfold { inner, .. }
-        | GraphPattern::Project { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Group { inner, .. } => {
-            survey_pattern_plans(
-                dataset,
-                active_dataset,
-                active_graph,
-                inner,
-                relations,
-                survey,
-            )?;
-        }
-        GraphPattern::Graph { name, inner } => {
-            let inner_graph = match name {
-                NamedNodePattern::NamedNode(n) => dataset
-                    .term_id_by_value(&named_node_to_value(n))
-                    .map_or(GraphMatch::Default, GraphMatch::Named),
-                NamedNodePattern::Variable(_) => GraphMatch::Any,
-            };
-            survey_pattern_plans(
-                dataset,
-                active_dataset,
-                inner_graph,
-                inner,
-                relations,
-                survey,
-            )?;
-        }
-        // A call with nothing written before it: its driving bag is the identity table,
-        // which is one row, so its whole prediction is the relation's declared bound.
-        GraphPattern::PropertyFunction(call) => {
-            record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey)?;
-        }
-        // Leaves that hold no BGP: there is no triple-pattern join order to choose and
-        // no base cardinality to probe.
-        GraphPattern::Path { .. } | GraphPattern::Values { .. } | GraphPattern::Service { .. } => {}
     }
+    Ok(())
+}
+
+/// Survey one basic graph pattern — `node`, holding `patterns` — for
+/// [`survey_pattern_plans`]: its join order, when it has one to choose, and its estimate.
+///
+/// # Errors
+///
+/// [`EvalError`] from compiling a pattern against the dataset.
+fn survey_bgp<D: DatasetView>(
+    dataset: &D,
+    active_dataset: &ActiveDataset<D::Id>,
+    active_graph: GraphMatch<D::Id>,
+    node: &GraphPattern,
+    patterns: &[TriplePattern],
+    survey: &mut PlanSurvey,
+) -> Result<(), EvalError> {
+    if patterns.is_empty() {
+        return Ok(());
+    }
+    let scope = active_dataset.scope_for(active_graph);
+    let mut working = VarSchema::new();
+    for pattern in patterns {
+        for key in slot_keys(pattern) {
+            working.push(key);
+        }
+    }
+    let mut compiled = Vec::with_capacity(patterns.len());
+    let mut any_absent = false;
+    for pattern in patterns {
+        match compile_pattern(pattern, &working, dataset)? {
+            Some(cp) => compiled.push(cp),
+            None => {
+                any_absent = true;
+                break;
+            }
+        }
+    }
+    let order: Vec<usize> = if any_absent {
+        (0..patterns.len()).collect()
+    } else {
+        cost_based_order(&compiled, dataset, &scope)
+    };
+    if patterns.len() >= 2 {
+        for &i in &order {
+            survey.orders.push(triple_pattern_to_string(&patterns[i]));
+        }
+    }
+    let columns = real_var_schema(&working).len() as u64;
+    let estimate = if any_absent {
+        // A ground constant absent from the dataset makes the whole BGP empty, so
+        // the honest prediction is zero rows — not the product the cost model
+        // would compute from cardinalities it never probed.
+        PlanEstimate {
+            rows: 0,
+            peak_rows: 0,
+            columns,
+        }
+    } else {
+        let (rows, peak_rows) = replay_cost_estimate(&compiled, dataset, &scope, &order);
+        PlanEstimate {
+            rows,
+            peak_rows,
+            columns,
+        }
+    };
+    survey
+        .estimates
+        .insert(std::ptr::from_ref(node) as usize, estimate);
     Ok(())
 }
 
@@ -1885,17 +1881,21 @@ fn record_call_estimate(
 /// A direct estimate is the answer. Failing that, a chain spine's row count is its last
 /// member's, because each member's own estimate already carries the product of everything
 /// to its left — which is what lets a chain of calls compose without this walk inventing
-/// join arithmetic the cost model does not have.
+/// join arithmetic the cost model does not have. The spine is followed in a loop, so a
+/// chain of any length costs no machine stack.
 fn predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
-    if let Some(estimate) = survey
-        .estimates
-        .get(&(std::ptr::from_ref(pattern) as usize))
-    {
-        return Some(estimate.rows);
-    }
-    match pattern {
-        GraphPattern::Lateral { right, .. } => predicted_rows(right, survey),
-        _ => None,
+    let mut pattern = pattern;
+    loop {
+        if let Some(estimate) = survey
+            .estimates
+            .get(&(std::ptr::from_ref(pattern) as usize))
+        {
+            return Some(estimate.rows);
+        }
+        match pattern {
+            GraphPattern::Lateral { right, .. } => pattern = right,
+            _ => return None,
+        }
     }
 }
 
@@ -3736,6 +3736,663 @@ mod term_walk_tests {
                 .expect("every constant is held");
             assert_eq!(nesting(&compiled), DEPTH);
             drop(compiled);
+        });
+    }
+}
+
+#[cfg(test)]
+mod survey_tests {
+    //! The plan survey against its recursive reference over generated plans, and at a
+    //! hundred thousand levels on a 128 KiB thread.
+
+    use std::sync::Arc;
+
+    use purrdf_core::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral};
+    use purrdf_sparql_algebra::{
+        Chain, Child, Expression, GraphPattern, GroundTerm, Literal, NamedNode, NamedNodePattern,
+        NodeRef, OrderExpression, PropertyFunctionCall, PropertyPathExpression, TermPattern,
+        TriplePattern, Variable,
+    };
+
+    use super::{PlanSurvey, record_call_estimate, survey_bgp, survey_pattern_plans};
+    use crate::DetHashSet;
+    use crate::dataset_spec::ActiveDataset;
+    use crate::error::EvalError;
+    use crate::governor::ledger::PlanEstimate;
+    use crate::property_fn::{
+        PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
+    };
+    use crate::user_fn::Volatility;
+    use purrdf_core::binding_pattern::BindingPattern;
+
+    const EX: &str = "http://example.org/";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+    /// The IRI of the one relation the registry holds.
+    const RELATION: &str = "http://example.org/rel";
+    /// An IRI no registry resolves.
+    const UNKNOWN: &str = "http://example.org/unknown";
+    /// What [`Declared`] declares it emits per invocation.
+    const ROWS_PER_INVOCATION: u64 = 7;
+
+    // ── The recursive reference ────────────────────────────────────────────────────
+
+    /// The survey as a recursion over the algebra: each node's children in written order,
+    /// a call priced after the whole subtree to its left.
+    fn reference_survey<D: DatasetView>(
+        dataset: &D,
+        active_dataset: &ActiveDataset<D::Id>,
+        active_graph: GraphMatch<D::Id>,
+        pattern: &GraphPattern,
+        relations: &PropertyFunctionRegistry,
+        survey: &mut PlanSurvey,
+    ) -> Result<(), EvalError> {
+        match pattern {
+            GraphPattern::Bgp { patterns } => survey_bgp(
+                dataset,
+                active_dataset,
+                active_graph,
+                pattern,
+                patterns,
+                survey,
+            ),
+            GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right } => {
+                reference_survey(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    left,
+                    relations,
+                    survey,
+                )?;
+                if let GraphPattern::PropertyFunction(call) = &**right {
+                    let mut bound = DetHashSet::default();
+                    crate::property_fn_plan::collect_certainly_bound(left, &mut bound);
+                    record_call_estimate(
+                        right,
+                        call,
+                        &bound,
+                        reference_predicted_rows(left, survey).unwrap_or(1),
+                        relations,
+                        survey,
+                    )
+                } else {
+                    reference_survey(
+                        dataset,
+                        active_dataset,
+                        active_graph,
+                        right,
+                        relations,
+                        survey,
+                    )
+                }
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms {
+                    reference_survey(
+                        dataset,
+                        active_dataset,
+                        active_graph,
+                        arm,
+                        relations,
+                        survey,
+                    )?;
+                }
+                Ok(())
+            }
+            GraphPattern::LeftJoin { left, right, .. } | GraphPattern::Minus { left, right } => {
+                reference_survey(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    left,
+                    relations,
+                    survey,
+                )?;
+                reference_survey(
+                    dataset,
+                    active_dataset,
+                    active_graph,
+                    right,
+                    relations,
+                    survey,
+                )
+            }
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Group { inner, .. } => reference_survey(
+                dataset,
+                active_dataset,
+                active_graph,
+                inner,
+                relations,
+                survey,
+            ),
+            GraphPattern::Graph { name, inner } => {
+                let inner_graph = match name {
+                    NamedNodePattern::NamedNode(n) => dataset
+                        .term_id_by_value(&crate::convert::named_node_to_value(n))
+                        .map_or(GraphMatch::Default, GraphMatch::Named),
+                    NamedNodePattern::Variable(_) => GraphMatch::Any,
+                };
+                reference_survey(
+                    dataset,
+                    active_dataset,
+                    inner_graph,
+                    inner,
+                    relations,
+                    survey,
+                )
+            }
+            GraphPattern::PropertyFunction(call) => {
+                record_call_estimate(pattern, call, &DetHashSet::default(), 1, relations, survey)
+            }
+            GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::Service { .. } => Ok(()),
+        }
+    }
+
+    /// [`super::predicted_rows`] as a recursion down a `LATERAL` chain's right spine.
+    fn reference_predicted_rows(pattern: &GraphPattern, survey: &PlanSurvey) -> Option<u64> {
+        if let Some(estimate) = survey
+            .estimates
+            .get(&(std::ptr::from_ref(pattern) as usize))
+        {
+            return Some(estimate.rows);
+        }
+        match pattern {
+            GraphPattern::Lateral { right, .. } => reference_predicted_rows(right, survey),
+            _ => None,
+        }
+    }
+
+    // ── Fixtures ───────────────────────────────────────────────────────────────────
+
+    /// A relation declaring one subject and one object argument, every mode free, and
+    /// [`ROWS_PER_INVOCATION`] rows per call; never dispatched.
+    #[derive(Debug)]
+    struct Declared {
+        modes: [BindingPattern; 1],
+    }
+
+    impl Declared {
+        fn new() -> Self {
+            Self {
+                modes: [PfArity::new(1, 1).all_free_mode()],
+            }
+        }
+    }
+
+    /// The empty cursor [`Declared::open`] hands out.
+    struct EmptyCursor;
+
+    impl PfCursor for EmptyCursor {
+        fn next(&mut self) -> Result<Option<PfRow>, EvalError> {
+            Ok(None)
+        }
+    }
+
+    impl PropertyFunction for Declared {
+        fn volatility(&self) -> Volatility {
+            Volatility::Stable
+        }
+
+        fn arity(&self) -> PfArity {
+            PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: BindingPattern) -> u64 {
+            ROWS_PER_INVOCATION
+        }
+
+        fn open(
+            &self,
+            _args: &PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn PfCursor>, EvalError> {
+            Ok(Box::new(EmptyCursor))
+        }
+    }
+
+    fn relations() -> PropertyFunctionRegistry {
+        let mut registry = PropertyFunctionRegistry::new();
+        registry.register(RELATION, Arc::new(Declared::new()));
+        registry
+    }
+
+    /// `<a> <p> <b>` and `<a> <q> "1"` in the default graph, `<b> <p> <c>` in `<g>`.
+    fn dataset() -> Arc<RdfDataset> {
+        let mut b = RdfDatasetBuilder::new();
+        let a = b.intern_iri(&format!("{EX}a"));
+        let bb = b.intern_iri(&format!("{EX}b"));
+        let c = b.intern_iri(&format!("{EX}c"));
+        let p = b.intern_iri(&format!("{EX}p"));
+        let q = b.intern_iri(&format!("{EX}q"));
+        let g = b.intern_iri(&format!("{EX}g"));
+        let one = b.intern_literal(RdfLiteral::typed(
+            "1",
+            "http://www.w3.org/2001/XMLSchema#integer",
+        ));
+        b.push_quad(a, p, bb, None);
+        b.push_quad(a, q, one, None);
+        b.push_quad(bb, p, c, Some(g));
+        b.freeze().expect("the fixture dataset")
+    }
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 24,
+            }
+        }
+
+        /// One choice below `n`.
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+
+        /// Whether another nesting level may be spent.
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    fn var(name: &str) -> Variable {
+        Variable::new(name)
+    }
+
+    fn call(iri_text: &str) -> GraphPattern {
+        GraphPattern::PropertyFunction(PropertyFunctionCall {
+            iri: iri_text.to_owned(),
+            subject_args: vec![TermPattern::Variable(var("s"))],
+            object_args: vec![TermPattern::Variable(var("o"))],
+        })
+    }
+
+    /// The one-pattern `?s <p> ?o`.
+    fn bgp() -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(var("s")),
+                predicate: NamedNodePattern::NamedNode(iri("p")),
+                object: TermPattern::Variable(var("o")),
+            }],
+        }
+    }
+
+    /// One to three triple patterns: subjects and objects variable or ground, one
+    /// predicate in five absent from the dataset, so both the ordered and the empty
+    /// estimate arise.
+    fn generated_bgp(choices: &mut Choices) -> GraphPattern {
+        let count = 1 + choices.choose(3);
+        let patterns = (0..count)
+            .map(|k| TriplePattern {
+                subject: if choices.choose(3) == 0 {
+                    TermPattern::NamedNode(iri("a"))
+                } else {
+                    TermPattern::Variable(var(&format!("s{}", k % 2)))
+                },
+                predicate: NamedNodePattern::NamedNode(match choices.choose(5) {
+                    0 => iri("missing"),
+                    1 => iri("q"),
+                    _ => iri("p"),
+                }),
+                object: match choices.choose(4) {
+                    0 => TermPattern::NamedNode(iri("b")),
+                    1 => TermPattern::Literal(Literal::new_simple("1")),
+                    _ => TermPattern::Variable(var(&format!("o{k}"))),
+                },
+            })
+            .collect();
+        GraphPattern::Bgp { patterns }
+    }
+
+    fn leaf(choices: &mut Choices) -> GraphPattern {
+        match choices.choose(8) {
+            0..=3 => generated_bgp(choices),
+            4 => call(RELATION),
+            5 => call(UNKNOWN),
+            6 => GraphPattern::Path {
+                subject: TermPattern::Variable(var("s")),
+                path: PropertyPathExpression::NamedNode(iri("p")),
+                object: TermPattern::Variable(var("o")),
+            },
+            _ => GraphPattern::Values {
+                variables: vec![var("s")],
+                bindings: vec![vec![Some(GroundTerm::NamedNode(iri("a")))]],
+            },
+        }
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return leaf(choices);
+        }
+        match choices.choose(18) {
+            0 | 1 => leaf(choices),
+            2 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            3 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(call(if choices.choose(3) == 0 {
+                    UNKNOWN
+                } else {
+                    RELATION
+                })),
+            },
+            4 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            5 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(call(RELATION)),
+            },
+            6 => {
+                let first = pattern(choices);
+                let second = pattern(choices);
+                let rest: Vec<GraphPattern> =
+                    (0..choices.choose(2)).map(|_| pattern(choices)).collect();
+                GraphPattern::Union {
+                    arms: Chain::new(first, second, rest),
+                }
+            }
+            7 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: None,
+            },
+            8 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            kind => {
+                let inner = pattern(choices);
+                wrapped(choices, kind, inner)
+            }
+        }
+    }
+
+    /// `inner` under the unary wrapper `kind` (9 to 17) names.
+    fn wrapped(choices: &mut Choices, kind: usize, inner: GraphPattern) -> GraphPattern {
+        let inner = Child::new(inner);
+        let variable = |name: &str| Expression::Variable(var(name));
+        match kind {
+            9 => GraphPattern::Filter {
+                expr: variable("s"),
+                inner,
+            },
+            10 => GraphPattern::Extend {
+                inner,
+                variable: var("x"),
+                expression: variable("s"),
+            },
+            11 => GraphPattern::Unfold {
+                inner,
+                expression: variable("s"),
+                element: var("e"),
+                companion: None,
+            },
+            12 => GraphPattern::Project {
+                inner,
+                variables: vec![var("s")],
+            },
+            13 => GraphPattern::Distinct { inner },
+            14 => GraphPattern::Slice {
+                inner,
+                start: 0,
+                length: Some(1),
+            },
+            15 => GraphPattern::OrderBy {
+                inner,
+                expression: vec![OrderExpression::Asc(variable("s"))],
+            },
+            16 => GraphPattern::Group {
+                inner,
+                variables: vec![var("s")],
+                aggregates: Vec::new(),
+            },
+            _ => GraphPattern::Graph {
+                name: match choices.choose(3) {
+                    0 => NamedNodePattern::Variable(var("g")),
+                    1 => NamedNodePattern::NamedNode(iri("g")),
+                    _ => NamedNodePattern::NamedNode(iri("nowhere")),
+                },
+                inner,
+            },
+        }
+    }
+
+    fn address(node: &GraphPattern) -> usize {
+        std::ptr::from_ref(node) as usize
+    }
+
+    /// How many calls of the registered relation `plan` attaches to the right of a
+    /// `JOIN` or `LATERAL` whose left arm `survey` predicted: the calls priced against a
+    /// driving bag rather than the identity table.
+    fn driven_calls(plan: &GraphPattern, survey: &PlanSurvey) -> usize {
+        let mut driven = 0;
+        let mut pending = vec![NodeRef::Pattern(plan)];
+        while let Some(node) = pending.pop() {
+            if let NodeRef::Pattern(
+                GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right },
+            ) = node
+                && let GraphPattern::PropertyFunction(call) = &**right
+                && call.iri == RELATION
+                && survey.estimates.contains_key(&address(left))
+            {
+                driven += 1;
+            }
+            node.for_each_child(|child| pending.push(child));
+        }
+        driven
+    }
+
+    /// A survey's content in a comparable form: its join-order strings in order, and its
+    /// estimates by node address, sorted.
+    fn content(survey: &PlanSurvey) -> (Vec<String>, Vec<(usize, PlanEstimate)>) {
+        let mut estimates: Vec<(usize, PlanEstimate)> = survey
+            .estimates
+            .iter()
+            .map(|(address, estimate)| (*address, estimate.clone()))
+            .collect();
+        estimates.sort_by_key(|(address, _)| *address);
+        (survey.orders.clone(), estimates)
+    }
+
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// The work-list survey records the same join orders in the same order, the same
+    /// estimate at every node and the same outcome as the recursive reference, for
+    /// every generated plan — and the generator reaches priced calls, calls driven by a
+    /// surveyed left arm, `GRAPH`-scoped estimates and empty estimates.
+    #[test]
+    fn the_survey_agrees_with_its_recursive_reference_on_generated_plans() {
+        let dataset = dataset();
+        let active = ActiveDataset::store_default();
+        let relations = relations();
+        let mut priced_calls = 0;
+        let mut driven = 0;
+        let mut empty = 0;
+        let mut ordered = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let plan = pattern(&mut choices);
+            let mut ours = PlanSurvey::default();
+            let answered = survey_pattern_plans(
+                &*dataset,
+                &active,
+                GraphMatch::Default,
+                &plan,
+                &relations,
+                &mut ours,
+            );
+            let mut theirs = PlanSurvey::default();
+            let expected = reference_survey(
+                &*dataset,
+                &active,
+                GraphMatch::Default,
+                &plan,
+                &relations,
+                &mut theirs,
+            );
+            let context = format!("seed {seed}: {plan:?}");
+            assert_eq!(
+                answered.as_ref().map_err(ToString::to_string),
+                expected.as_ref().map_err(ToString::to_string),
+                "{context}"
+            );
+            assert_eq!(content(&ours), content(&theirs), "{context}");
+            assert_eq!(ours.peak_cells(), theirs.peak_cells(), "{context}");
+            empty += ours
+                .estimates
+                .values()
+                .filter(|estimate| estimate.rows == 0)
+                .count();
+            priced_calls += ours
+                .estimates
+                .values()
+                .filter(|estimate| estimate.rows == ROWS_PER_INVOCATION)
+                .count();
+            driven += driven_calls(&plan, &ours);
+            ordered += usize::from(!ours.orders.is_empty());
+        }
+        assert!(priced_calls > 0, "some generated call is priced");
+        assert!(
+            driven > 0,
+            "some priced call is driven by a surveyed left arm"
+        );
+        assert!(empty > 0, "some generated BGP is predicted empty");
+        assert!(ordered > 0, "some generated BGP has an order to choose");
+    }
+
+    /// A plan a hundred thousand levels tall — wrappers around one BGP, a `LATERAL`
+    /// chain ending in a call, and a `JOIN` spine of BGPs — is surveyed whole on a
+    /// 128 KiB thread, with the estimate count each shape has by construction.
+    #[test]
+    fn a_hundred_thousand_levels_are_surveyed_on_a_128_kib_thread() {
+        on_small_stack(|| {
+            let dataset = dataset();
+            let active = ActiveDataset::store_default();
+            let relations = relations();
+            let survey = |plan: &GraphPattern| {
+                let mut survey = PlanSurvey::default();
+                survey_pattern_plans(
+                    &*dataset,
+                    &active,
+                    GraphMatch::Default,
+                    plan,
+                    &relations,
+                    &mut survey,
+                )
+                .expect("the deep plan is surveyed");
+                survey
+            };
+
+            let mut wrapped = bgp();
+            for level in 0..DEPTH {
+                wrapped = if level.is_multiple_of(2) {
+                    GraphPattern::Project {
+                        inner: Child::new(wrapped),
+                        variables: vec![var("s")],
+                    }
+                } else {
+                    GraphPattern::Filter {
+                        expr: Expression::Variable(var("s")),
+                        inner: Child::new(wrapped),
+                    }
+                };
+            }
+            assert_eq!(
+                survey(&wrapped).estimates.len(),
+                1,
+                "one BGP under the wrappers"
+            );
+            drop(wrapped);
+
+            // Every level's right side is the level below; the innermost is the call,
+            // driven by the BGP beside it.
+            let mut chain = GraphPattern::Lateral {
+                left: Child::new(bgp()),
+                right: Child::new(call(RELATION)),
+            };
+            for _ in 1..DEPTH {
+                chain = GraphPattern::Lateral {
+                    left: Child::new(bgp()),
+                    right: Child::new(chain),
+                };
+            }
+            let surveyed = survey(&chain);
+            assert_eq!(
+                surveyed.estimates.len(),
+                DEPTH + 1,
+                "a BGP per level and the call"
+            );
+            let mut innermost = &chain;
+            while let GraphPattern::Lateral { right, .. } = innermost
+                && matches!(**right, GraphPattern::Lateral { .. })
+            {
+                innermost = right;
+            }
+            let GraphPattern::Lateral { left, right } = innermost else {
+                unreachable!("the chain's innermost node is a LATERAL");
+            };
+            let driving = surveyed.estimates[&address(left)].rows;
+            assert_eq!(
+                surveyed.estimates[&address(right)].rows,
+                ROWS_PER_INVOCATION * driving,
+                "the innermost call is priced against the BGP driving it"
+            );
+            drop(chain);
+
+            let mut spine = bgp();
+            for _ in 0..DEPTH {
+                spine = GraphPattern::Join {
+                    left: Child::new(spine),
+                    right: Child::new(bgp()),
+                };
+            }
+            assert_eq!(survey(&spine).estimates.len(), DEPTH + 1, "a BGP per level");
+            drop(spine);
         });
     }
 }

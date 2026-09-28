@@ -187,13 +187,14 @@ pub use ir::{
     PagedQueryView, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds,
     QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE,
     RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SkolemError,
-    SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue,
+    SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
     ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_relabel,
     canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
     canonicalize_with, check_admissible, check_admissible_flat_view, check_admissible_view,
-    dataset_diff, datasets_isomorphic, deskolemize, graph_digest_view, skolemize, try_canonicalize,
-    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
-    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_graph_digest_view,
+    dataset_diff, datasets_isomorphic, deskolemize, fold_term, graph_digest_view, skolemize,
+    try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
+    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
+    try_flat_digest_view, try_graph_digest_view,
 };
 pub use ir::{
     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,

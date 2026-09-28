@@ -376,14 +376,11 @@ fn bind<D: DatasetView + Sync>(
     //
     // `false` remains reserved for its one meaning: a produced binding that
     // DISAGREES with one the row already holds, below — a genuine non-match.
-    // This is the plain door: it judges the member's language tags over a work list
-    // and then walks the term — looks it up, hashes it, compares it — as
-    // `ScratchInterner::intern` walks it, without admitting its depth first
-    // (`crate::stack::admit_term`). A nested composite comes back as a single
-    // `cdt:`-typed literal, so the only nesting a member carries is that of the triple
-    // terms inside it, and a member lifted out of a composite literal nests exactly as
-    // deep as the triple terms in that literal did; `purrdf-cdt` bounds that depth by
-    // its byte bound alone.
+    // The door judges the member's language tags over a work list and then walks the
+    // term — looks it up, hashes it, compares it — over work lists too, so a member
+    // nested to any depth costs no machine stack. A nested composite comes back as a
+    // single `cdt:`-typed literal, so the only nesting a member carries is that of the
+    // triple terms inside it; `purrdf-cdt` bounds that depth by its byte bound alone.
     let Some(term) = ctx.scratch.intern_checked(ctx.dataset, value) else {
         return true;
     };

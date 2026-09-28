@@ -739,44 +739,60 @@ fn term_target_id(
     term_value_target_id(&value, dataset, labels, dataset_target)
 }
 
+/// The target id of a reconstructed term value.
+///
+/// A triple term's id is derived bottom-up over [`TermValue::try_fold`]'s work list:
+/// its subject, predicate and object are each derived fully, in that order, and the
+/// first failure ends the derivation; the triple's own id is derived from the three.
 fn term_value_target_id(
     value: &TermValue,
     dataset: &RdfDataset,
     labels: &BTreeMap<TermId, Box<str>>,
     dataset_target: TargetId,
 ) -> Result<TargetId, EmbeddingError> {
-    let target = match value {
-        TermValue::Iri(iri) => RdfTermTargetRef::Iri(iri),
-        TermValue::Blank { .. } => {
-            let id = dataset
-                .term_id_by_value(value)
-                .ok_or(EmbeddingError::MissingReference("reconstructed blank term"))?;
-            let label = labels
-                .get(&id)
-                .ok_or(EmbeddingError::MissingReference("canonical blank label"))?;
-            RdfTermTargetRef::Blank {
-                dataset_id: dataset_target,
-                canonical_label: label,
+    value.try_fold(
+        |leaf| {
+            let target = match leaf {
+                TermValue::Iri(iri) => RdfTermTargetRef::Iri(iri),
+                TermValue::Blank { .. } => {
+                    let id = dataset
+                        .term_id_by_value(leaf)
+                        .ok_or(EmbeddingError::MissingReference("reconstructed blank term"))?;
+                    let label = labels
+                        .get(&id)
+                        .ok_or(EmbeddingError::MissingReference("canonical blank label"))?;
+                    RdfTermTargetRef::Blank {
+                        dataset_id: dataset_target,
+                        canonical_label: label,
+                    }
+                }
+                TermValue::Literal {
+                    lexical_form,
+                    datatype,
+                    language,
+                    direction,
+                } => RdfTermTargetRef::Literal {
+                    lexical: lexical_form,
+                    datatype,
+                    language: language.as_deref(),
+                    direction: *direction,
+                },
+                TermValue::Triple { .. } => {
+                    unreachable!("a triple term is assembled from its components")
+                }
+            };
+            Ok(target.into_target(false, None)?.id)
+        },
+        |subject, predicate, object| {
+            Ok(RdfTermTargetRef::Triple {
+                subject,
+                predicate,
+                object,
             }
-        }
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => RdfTermTargetRef::Literal {
-            lexical: lexical_form,
-            datatype,
-            language: language.as_deref(),
-            direction: *direction,
+            .into_target(false, None)?
+            .id)
         },
-        TermValue::Triple { s, p, o } => RdfTermTargetRef::Triple {
-            subject: term_value_target_id(s, dataset, labels, dataset_target)?,
-            predicate: term_value_target_id(p, dataset, labels, dataset_target)?,
-            object: term_value_target_id(o, dataset, labels, dataset_target)?,
-        },
-    };
-    Ok(target.into_target(false, None)?.id)
+    )
 }
 
 fn graph_target_id(

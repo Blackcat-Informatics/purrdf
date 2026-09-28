@@ -1183,7 +1183,7 @@ fn ingest<D: DatasetView + Sync>(
             }
             crate::row_ingest::RowAdmission::Admitted => {}
         }
-        let row = ingest.intern_row(ctx, binding)?;
+        let row = ingest.intern_row(ctx, binding);
         rows.push(row);
     }
     if tripped.is_none()

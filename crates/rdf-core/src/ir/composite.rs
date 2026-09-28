@@ -3,6 +3,7 @@
 
 //! Immutable composition over shared native dictionaries and indexes.
 
+use super::term_walk::fold_term;
 use super::view_accounting::WorkCounter;
 use crate::TermBox;
 use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
@@ -14,6 +15,7 @@ use crate::{
     TermValue, ViewLimits, ViewStats, ViewTermId, ViewWork,
 };
 use std::collections::{BTreeMap, BTreeSet};
+use std::convert::Infallible;
 use std::hash::BuildHasher;
 use std::sync::{Arc, LazyLock};
 
@@ -1408,26 +1410,43 @@ impl CompositeDatasetView {
                     .filter(move |q| !(0..index).any(|earlier| self.contains(earlier, table, *q)))
             })
     }
+    /// The handle source `index` holds for `value`, or `None`.
+    ///
+    /// A triple term's components are looked up over [`TermValue::try_fold`]'s work
+    /// list — subject, predicate, object, each fully before the next, and the lookup
+    /// ends at the first component the source lacks — then the triple is looked up by
+    /// those handles.
     fn lookup_value(&self, index: usize, value: &TermValue) -> Option<LocalId> {
         let source = &self.sources[index];
-        match value {
-            TermValue::Iri(iri) => source.lookup_iri(iri),
-            TermValue::Blank { label, scope } => self.scopes[index]
-                .iter()
-                .find_map(|(original, mapped)| (*mapped == *scope).then_some(*original))
-                .and_then(|scope| source.lookup_blank(label, scope)),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => source.lookup_literal(lexical_form, datatype, language.as_deref(), *direction),
-            TermValue::Triple { s, p, o } => source.lookup_triple(
-                self.lookup_value(index, s)?,
-                self.lookup_value(index, p)?,
-                self.lookup_value(index, o)?,
-            ),
-        }
+        value
+            .try_fold(
+                |leaf| {
+                    match leaf {
+                        TermValue::Iri(iri) => source.lookup_iri(iri),
+                        TermValue::Blank { label, scope } => self.scopes[index]
+                            .iter()
+                            .find_map(|(original, mapped)| (*mapped == *scope).then_some(*original))
+                            .and_then(|scope| source.lookup_blank(label, scope)),
+                        TermValue::Literal {
+                            lexical_form,
+                            datatype,
+                            language,
+                            direction,
+                        } => source.lookup_literal(
+                            lexical_form,
+                            datatype,
+                            language.as_deref(),
+                            *direction,
+                        ),
+                        TermValue::Triple { .. } => {
+                            unreachable!("a triple term is assembled from its components")
+                        }
+                    }
+                    .ok_or(())
+                },
+                |s, p, o| source.lookup_triple(s, p, o).ok_or(()),
+            )
+            .ok()
     }
 }
 
@@ -1948,7 +1967,7 @@ impl DatasetView for CompositeDatasetView {
 /// checkpoint is [`Ready`](crate::ViewOperationStatus::Ready) — the same standing
 /// [`RdfDataset`] reports, preserved through composition rather than lost at it.
 impl crate::FallibleDatasetView for CompositeDatasetView {
-    type Error = std::convert::Infallible;
+    type Error = Infallible;
     type Evidence = ();
 
     #[inline]
@@ -2040,6 +2059,14 @@ fn local_native_graph(g: GraphMatch<LocalId>) -> Option<GraphMatch<TermId>> {
         GraphMatch::Named(LocalId::Delta(_)) => None,
     }
 }
+/// The handle `target` holds for `source`'s term `id`, or `None`, memoised in
+/// `memo` by the source handle.
+///
+/// The walk runs over a work list rather than the call stack. A term is entered by
+/// first consulting `memo`; a triple term's subject, predicate and object are each
+/// looked up fully, in that order — every one of them, whether or not an earlier one
+/// was found — and the triple is looked up by their handles once all three answers
+/// exist. Every term's answer is recorded in `memo` as soon as it is known.
 fn lookup_source_term(
     source: &CompositeSource,
     target: &CompositeSource,
@@ -2047,65 +2074,115 @@ fn lookup_source_term(
     scope: impl Fn(BlankScope) -> Option<BlankScope> + Copy,
     memo: &mut FastMap<LocalId, Option<LocalId>>,
 ) -> Option<LocalId> {
-    if let Some(found) = memo.get(&id) {
-        return *found;
+    enum Step {
+        /// Look this source term up, unless `memo` already answers for it.
+        Enter(LocalId),
+        /// Look this source triple term up by its three components' answers.
+        Assemble(LocalId),
     }
-    let found = match source.resolve(id) {
-        TermRef::Iri(iri) => target.lookup_iri(iri),
-        TermRef::Blank { label, scope: old } => {
-            scope(old).and_then(|scope| target.lookup_blank(label, scope))
-        }
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let TermRef::Iri(datatype) = source.resolve(datatype) else {
-                unreachable!("native literal datatype is IRI")
-            };
-            target.lookup_literal(lexical, datatype, language, direction)
-        }
-        TermRef::Triple { s, p, o } => {
-            let s = lookup_source_term(source, target, s, scope, memo);
-            let p = lookup_source_term(source, target, p, scope, memo);
-            let o = lookup_source_term(source, target, o, scope, memo);
-            match (s, p, o) {
-                (Some(s), Some(p), Some(o)) => target.lookup_triple(s, p, o),
-                _ => None,
+    let mut steps: Vec<Step> = vec![Step::Enter(id)];
+    let mut answers: Vec<Option<LocalId>> = Vec::new();
+    while let Some(step) = steps.pop() {
+        let (id, found) = match step {
+            Step::Enter(id) => {
+                if let Some(found) = memo.get(&id) {
+                    answers.push(*found);
+                    continue;
+                }
+                match source.resolve(id) {
+                    TermRef::Iri(iri) => (id, target.lookup_iri(iri)),
+                    TermRef::Blank { label, scope: old } => (
+                        id,
+                        scope(old).and_then(|scope| target.lookup_blank(label, scope)),
+                    ),
+                    TermRef::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let TermRef::Iri(datatype) = source.resolve(datatype) else {
+                            unreachable!("native literal datatype is IRI")
+                        };
+                        (
+                            id,
+                            target.lookup_literal(lexical, datatype, language, direction),
+                        )
+                    }
+                    TermRef::Triple { s, p, o } => {
+                        steps.extend([
+                            Step::Assemble(id),
+                            Step::Enter(o),
+                            Step::Enter(p),
+                            Step::Enter(s),
+                        ]);
+                        continue;
+                    }
+                }
             }
-        }
-    };
-    memo.insert(id, found);
-    found
+            Step::Assemble(id) => {
+                let o = answers.pop().expect("a triple term's object is looked up");
+                let p = answers
+                    .pop()
+                    .expect("a triple term's predicate is looked up");
+                let s = answers.pop().expect("a triple term's subject is looked up");
+                let found = match (s, p, o) {
+                    (Some(s), Some(p), Some(o)) => target.lookup_triple(s, p, o),
+                    _ => None,
+                };
+                (id, found)
+            }
+        };
+        memo.insert(id, found);
+        answers.push(found);
+    }
+    answers
+        .pop()
+        .expect("the term's own answer is the last one found")
 }
+/// The dataset-independent value of the term `id` names in `view`, assembled
+/// bottom-up over [`fold_term`]'s work list: a triple term's subject, predicate and
+/// object are resolved in that order, each fully before the next.
 pub(crate) fn owned_value<D: DatasetView>(view: &D, id: D::Id) -> TermValue {
-    match view.resolve(id) {
-        TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-        TermRef::Blank { label, scope } => TermValue::Blank {
-            label: label.to_owned(),
-            scope,
+    match fold_term(
+        view,
+        id,
+        |_, term| {
+            Ok::<_, Infallible>(match term {
+                TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+                TermRef::Blank { label, scope } => TermValue::Blank {
+                    label: label.to_owned(),
+                    scope,
+                },
+                TermRef::Literal {
+                    lexical,
+                    datatype,
+                    language,
+                    direction,
+                } => {
+                    let TermRef::Iri(datatype) = view.resolve(datatype) else {
+                        unreachable!("native literal datatype is IRI")
+                    };
+                    TermValue::Literal {
+                        lexical_form: lexical.to_owned(),
+                        datatype: datatype.to_owned(),
+                        language: language.map(str::to_owned),
+                        direction,
+                    }
+                }
+                TermRef::Triple { .. } => {
+                    unreachable!("a triple term is assembled from its components")
+                }
+            })
         },
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let TermRef::Iri(datatype) = view.resolve(datatype) else {
-                unreachable!("native literal datatype is IRI")
-            };
-            TermValue::Literal {
-                lexical_form: lexical.to_owned(),
-                datatype: datatype.to_owned(),
-                language: language.map(str::to_owned),
-                direction,
-            }
-        }
-        TermRef::Triple { s, p, o } => TermValue::Triple {
-            s: TermBox::new(owned_value(view, s)),
-            p: TermBox::new(owned_value(view, p)),
-            o: TermBox::new(owned_value(view, o)),
+        |_, s, p, o| {
+            Ok(TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(o),
+            })
         },
+    ) {
+        Ok(value) => value,
     }
 }

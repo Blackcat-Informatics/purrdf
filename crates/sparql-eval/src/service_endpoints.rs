@@ -76,9 +76,12 @@
 //! and the rewrite, with or without `SILENT`: `SILENT` absorbs an invocation that fails,
 //! and there is none.
 
+use std::convert::Infallible;
+use std::fmt::Write as _;
+use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, TermValue};
+use purrdf_core::{DatasetView, TermValue, TermVisit};
 use purrdf_sparql_algebra::{Expression, GraphPattern, NamedNodePattern, Variable};
 
 use crate::error::EvalError;
@@ -1283,37 +1286,64 @@ fn describe_non_iri(value: &TermValue) -> String {
 }
 
 /// `value` written out as the endpoint of a silenced-invocation record: an IRI as
-/// itself, any other term in N-Triples form.
+/// itself, any other term in N-Triples form — a triple term as `<<( s p o )>>`, its
+/// components in N-Triples form with an IRI bracketed, written over a work list so a
+/// term nested to any depth costs no machine stack.
 fn endpoint_text(value: &TermValue) -> String {
-    match value {
-        TermValue::Iri(iri) => iri.clone(),
-        TermValue::Blank { label, .. } => format!("_:{label}"),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            ..
-        } => match language {
-            Some(language) => format!("\"{lexical_form}\"@{language}"),
-            None if datatype == XSD_STRING => format!("\"{lexical_form}\""),
-            None => format!("\"{lexical_form}\"^^<{datatype}>"),
-        },
-        TermValue::Triple { s, p, o } => {
-            format!("<<( {} {} {} )>>", term_text(s), term_text(p), term_text(o))
-        }
+    let mut out = String::new();
+    let mut first = true;
+    let ControlFlow::Continue(()) =
+        value.visit_terms_pre_post(|event: TermVisit<'_>| -> ControlFlow<Infallible> {
+            match event {
+                TermVisit::Open(_) => {
+                    separate(&mut out, &mut first);
+                    out.push_str("<<(");
+                    first = false;
+                }
+                TermVisit::Close(_) => out.push_str(" )>>"),
+                TermVisit::Leaf(term) => {
+                    let nested = !first;
+                    separate(&mut out, &mut first);
+                    match term {
+                        // The record's own endpoint is written bare; inside a triple
+                        // term an IRI is bracketed.
+                        TermValue::Iri(iri) if nested => write!(out, "<{iri}>"),
+                        TermValue::Iri(iri) => write!(out, "{iri}"),
+                        TermValue::Blank { label, .. } => write!(out, "_:{label}"),
+                        TermValue::Literal {
+                            lexical_form,
+                            datatype,
+                            language,
+                            ..
+                        } => match language {
+                            Some(language) => write!(out, "\"{lexical_form}\"@{language}"),
+                            None if datatype == XSD_STRING => write!(out, "\"{lexical_form}\""),
+                            None => write!(out, "\"{lexical_form}\"^^<{datatype}>"),
+                        },
+                        TermValue::Triple { .. } => {
+                            unreachable!("a triple term is opened and closed, never a leaf")
+                        }
+                    }
+                    .expect("a String accepts text");
+                }
+            }
+            ControlFlow::Continue(())
+        });
+    out
+}
+
+/// Put the space that separates a triple term's components before the next one:
+/// nothing before the record's own endpoint, a space before everything after it.
+fn separate(out: &mut String, first: &mut bool) {
+    if *first {
+        *first = false;
+    } else {
+        out.push(' ');
     }
 }
 
 /// The datatype a simple literal carries.
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-
-/// [`endpoint_text`] inside a triple term, where an IRI is bracketed.
-fn term_text(value: &TermValue) -> String {
-    match value {
-        TermValue::Iri(iri) => format!("<{iri}>"),
-        other => endpoint_text(other),
-    }
-}
 
 /// What one endpoint contributed to the clause.
 enum Block<I: purrdf_core::ViewTermId> {
@@ -3030,5 +3060,185 @@ mod walk_tests {
             .expect("spawn")
             .join();
         checked.expect("the 128 KiB thread returned");
+    }
+}
+
+#[cfg(test)]
+mod endpoint_text_tests {
+    //! The silenced-invocation endpoint text against its recursive reference, and at a
+    //! hundred thousand levels on a 128 KiB thread.
+
+    use purrdf_core::{TermBox, TermValue};
+
+    use super::{XSD_STRING, endpoint_text};
+
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// The reference: the endpoint text as a recursion, an IRI bare at the top and
+    /// bracketed inside a triple term.
+    fn reference_endpoint_text(value: &TermValue) -> String {
+        match value {
+            TermValue::Iri(iri) => iri.clone(),
+            TermValue::Blank { label, .. } => format!("_:{label}"),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                ..
+            } => match language {
+                Some(language) => format!("\"{lexical_form}\"@{language}"),
+                None if datatype == XSD_STRING => format!("\"{lexical_form}\""),
+                None => format!("\"{lexical_form}\"^^<{datatype}>"),
+            },
+            TermValue::Triple { s, p, o } => format!(
+                "<<( {} {} {} )>>",
+                reference_term_text(s),
+                reference_term_text(p),
+                reference_term_text(o)
+            ),
+        }
+    }
+
+    fn reference_term_text(value: &TermValue) -> String {
+        match value {
+            TermValue::Iri(iri) => format!("<{iri}>"),
+            other => reference_endpoint_text(other),
+        }
+    }
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 12,
+            }
+        }
+
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn leaf(choices: &mut Choices) -> TermValue {
+        match choices.choose(5) {
+            0 => TermValue::iri("http://example.org/a"),
+            1 => TermValue::Blank {
+                label: "b1".to_owned(),
+                scope: purrdf_core::BlankScope::DEFAULT,
+            },
+            2 => TermValue::Literal {
+                lexical_form: "plain".to_owned(),
+                datatype: XSD_STRING.to_owned(),
+                language: None,
+                direction: None,
+            },
+            3 => TermValue::Literal {
+                lexical_form: "tagged".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                language: Some("en".to_owned()),
+                direction: None,
+            },
+            _ => TermValue::Literal {
+                lexical_form: "7".to_owned(),
+                datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                language: None,
+                direction: None,
+            },
+        }
+    }
+
+    fn term(choices: &mut Choices) -> TermValue {
+        if !choices.spend() || choices.choose(3) == 0 {
+            return leaf(choices);
+        }
+        TermValue::Triple {
+            s: TermBox::new(term(choices)),
+            p: TermBox::new(term(choices)),
+            o: TermBox::new(term(choices)),
+        }
+    }
+
+    /// The work-list writer spells every generated term exactly as the reference does,
+    /// IRIs bare at the top and bracketed inside, nested triple terms included.
+    #[test]
+    fn endpoint_text_agrees_with_its_recursive_reference_on_generated_terms() {
+        let mut nested = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let value = term(&mut choices);
+            let mut depth = 0;
+            let mut pending = vec![(&value, 1_usize)];
+            while let Some((term, level)) = pending.pop() {
+                if let TermValue::Triple { s, p, o } = term {
+                    depth = depth.max(level);
+                    pending.extend([(&**s, level + 1), (&**p, level + 1), (&**o, level + 1)]);
+                }
+            }
+            nested += usize::from(depth >= 2);
+            assert_eq!(
+                endpoint_text(&value),
+                reference_endpoint_text(&value),
+                "seed {seed}: {value:?}"
+            );
+        }
+        assert!(
+            nested > 0,
+            "some generated term nests a triple term in a triple term"
+        );
+        assert_eq!(
+            endpoint_text(&TermValue::iri("http://example.org/e")),
+            "http://example.org/e",
+            "the endpoint's own IRI is bare"
+        );
+    }
+
+    /// A triple term a hundred thousand levels deep is spelled on a 128 KiB thread: every
+    /// level opens with its subject and predicate and closes after its object, the
+    /// innermost object bracketed.
+    #[test]
+    fn a_hundred_thousand_level_term_is_spelled_on_a_128_kib_thread() {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(|| {
+                let mut value = TermValue::iri("http://example.org/o");
+                for _ in 0..DEPTH {
+                    value = TermValue::Triple {
+                        s: TermBox::new(TermValue::iri("http://example.org/s")),
+                        p: TermBox::new(TermValue::iri("http://example.org/p")),
+                        o: TermBox::new(value),
+                    };
+                }
+                let text = endpoint_text(&value);
+                let level = "<<( <http://example.org/s> <http://example.org/p> ";
+                let close = " )>>";
+                let innermost = "<http://example.org/o>";
+                assert_eq!(
+                    text.len(),
+                    DEPTH * (level.len() + close.len()) + innermost.len()
+                );
+                assert!(text.starts_with(&level.repeat(2)));
+                assert!(text.ends_with(&format!("{innermost}{}", close.repeat(2))));
+                drop(value);
+            })
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned");
     }
 }

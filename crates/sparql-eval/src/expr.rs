@@ -434,16 +434,11 @@ fn lookup<I: ViewTermId>(
 /// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked). Every
 /// caller here is inside an expression, so the mapping is the one §17.2 already
 /// states and `eval_str_lang` already performs: the expression is unbound.
-///
-/// # Errors
-///
-/// [`EvalError::StackExhausted`] when the value is a triple term nested deeper than the
-/// evaluation can keep stack for (see [`crate::stack::admit_term`]).
 fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    ctx.scratch.try_intern_checked(ctx.dataset, value)
+) -> Option<SolutionTerm<D::Id>> {
+    ctx.scratch.intern_checked(ctx.dataset, value)
 }
 
 /// Intern a value that is no triple term — a constant atom the query wrote, a literal a
@@ -893,34 +888,58 @@ fn eval_in<D: DatasetView + Sync>(
 }
 
 /// RDF term value-equality (`=`). `None` = type error (two literals not comparable).
+///
+/// RDF 1.2 triple terms compare *structurally*, componentwise, under this SAME `=`
+/// relation — not by identity (SPARQL §17.4.1.7 extended to RDF 1.2 triple terms):
+/// two triple terms are equal iff their subjects, predicates and objects are pairwise
+/// `=`-equal, however deeply that nests. A component pair that is definitely unequal
+/// decides the whole comparison `false`, whatever another component answered;
+/// otherwise a component pair that errors makes the whole comparison an error
+/// (`None`); otherwise the terms are equal. The pairs are walked over a work list,
+/// subject, predicate then object at every level, so a term nested to any depth costs
+/// no machine stack.
 fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+    let mut pending: Vec<(&TermValue, &TermValue)> = vec![(a, b)];
+    let mut errored = false;
+    while let Some((a, b)) = pending.pop() {
+        // A triple-term pair is compared by its components, before the XSD/literal
+        // path so it never falls through to the "distinct non-literal kind ⇒ unequal"
+        // default, which would wrongly treat e.g. `<<(:a :b 123)>>` and
+        // `<<(:a :b 123.0)>>` as unequal even though `123 = 123.0` in the XSD value
+        // space (W3C `eval-triple-terms` `op-2`).
+        if let (
+            TermValue::Triple {
+                s: s1,
+                p: p1,
+                o: o1,
+            },
+            TermValue::Triple {
+                s: s2,
+                p: p2,
+                o: o2,
+            },
+        ) = (a, b)
+        {
+            pending.extend([(&**o1, &**o2), (&**p1, &**p2), (&**s1, &**s2)]);
+            continue;
+        }
+        match leaf_equal(a, b) {
+            Some(false) => return Some(false),
+            None => errored = true,
+            Some(true) => {}
+        }
+    }
+    if errored { None } else { Some(true) }
+}
+
+/// [`rdf_equal`] for a pair of which at most one is a triple term.
+fn leaf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
     // SEP-0009 composite equality, for the value-space paths that reach this
     // function rather than [`equal`]: `IN` (§17.4.1.9) and the componentwise
-    // triple-term recursion below. The same diversion, on the same rule, so a
+    // triple-term comparison. The same diversion, on the same rule, so a
     // `cdt:List` inside a triple term compares the way it does outside one.
     if crate::cdt_fn::is_composite_typed(a) || crate::cdt_fn::is_composite_typed(b) {
         return crate::cdt_fn::compare(crate::cdt_fn::CdtRelation::Equal, a, b);
-    }
-    // RDF 1.2 triple terms compare *structurally*, componentwise, under this SAME
-    // `=` relation (recursively) — not by identity. Checked before the XSD/literal
-    // path so a triple-term pair never falls through to the "distinct non-literal
-    // kind ⇒ unequal" default, which would wrongly treat e.g. `<<(:a :b 123)>>` and
-    // `<<(:a :b 123.0)>>` as unequal even though `123 = 123.0` in the XSD value
-    // space (W3C `eval-triple-terms` `op-2`).
-    if let (
-        TermValue::Triple {
-            s: s1,
-            p: p1,
-            o: o1,
-        },
-        TermValue::Triple {
-            s: s2,
-            p: p2,
-            o: o2,
-        },
-    ) = (a, b)
-    {
-        return triple_equal(s1, p1, o1, s2, p2, o2);
     }
     match (xsd_of(a), xsd_of(b)) {
         (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
@@ -966,31 +985,6 @@ pub(crate) fn sparql_value_eq(ax: &XsdValue, bx: &XsdValue) -> Option<bool> {
         return Some(true);
     }
     value_equal(ax, bx)
-}
-
-/// Componentwise `=` over two triple terms (SPARQL §17.4.1.7 extended to RDF 1.2
-/// triple terms): equal iff subject, predicate, and object are pairwise `=`-equal.
-/// A component that is definitely unequal short-circuits the whole comparison to
-/// `false` (even if another component errored); otherwise any component error
-/// propagates as an error (`None`).
-fn triple_equal(
-    s1: &TermValue,
-    p1: &TermValue,
-    o1: &TermValue,
-    s2: &TermValue,
-    p2: &TermValue,
-    o2: &TermValue,
-) -> Option<bool> {
-    let rs = rdf_equal(s1, s2);
-    let rp = rdf_equal(p1, p2);
-    let ro = rdf_equal(o1, o2);
-    if rs == Some(false) || rp == Some(false) || ro == Some(false) {
-        Some(false)
-    } else if rs.is_none() || rp.is_none() || ro.is_none() {
-        None
-    } else {
-        Some(true)
-    }
 }
 
 fn is_literal(v: &TermValue) -> bool {
@@ -4243,7 +4237,7 @@ fn eval_function<D: DatasetView + Sync>(
             if let Some((func, body)) = ctx.user_functions.resolve(iri.as_str()) {
                 let result =
                     crate::user_fn::eval_user_function(func, body, iri.as_str(), &vals, ctx)?;
-                return result.map_or(Ok(None), |value| intern(ctx, value));
+                return Ok(result.and_then(|value| intern(ctx, value)));
             }
             // A caller-injected native (host-Rust closure) function, resolved from
             // the same registry's second table. Checked after the SPARQL-bodied
@@ -4253,7 +4247,7 @@ fn eval_function<D: DatasetView + Sync>(
             // datatype IRI.
             if let Some(native) = ctx.user_functions.resolve_native(iri.as_str()) {
                 let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
-                return result.map_or(Ok(None), |value| intern(ctx, value));
+                return Ok(result.and_then(|value| intern(ctx, value)));
             }
             // A caller-injected DATASET-AWARE (expression-bodied) function — SHACL 1.2
             // SPARQL Extensions §7.3's "SPARQL engines SHOULD register a function for
@@ -4265,7 +4259,7 @@ fn eval_function<D: DatasetView + Sync>(
             // ordering, not a precedence rule.
             if let Some(expr_fn) = ctx.user_functions.resolve_expr(iri.as_str()) {
                 let result = crate::user_fn::eval_expr_function(expr_fn, iri.as_str(), &vals, ctx)?;
-                return result.map_or(Ok(None), |value| intern(ctx, value));
+                return Ok(result.and_then(|value| intern(ctx, value)));
             }
             if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
                 return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
@@ -5300,7 +5294,7 @@ fn eval_triple_ctor<D: DatasetView + Sync>(
         p: TermBox::new(p.clone()),
         o: TermBox::new(o.clone()),
     };
-    intern(ctx, triple)
+    Ok(intern(ctx, triple))
 }
 
 /// Extract a component of a triple term (`SUBJECT`/`PREDICATE`/`OBJECT`).
@@ -5312,7 +5306,7 @@ fn triple_part<D: DatasetView + Sync>(
     match arg(vals, 0) {
         Some(TermValue::Triple { s, p, o }) => {
             let part = pick((**s).clone(), (**p).clone(), (**o).clone());
-            intern(ctx, part)
+            Ok(intern(ctx, part))
         }
         _ => Ok(None),
     }
@@ -11683,5 +11677,246 @@ mod walk_tests {
         assert_eq!(deferred, (1, Vec::new()));
         assert_eq!(direct.0, 0);
         assert_eq!(direct.1, direct.2);
+    }
+}
+
+#[cfg(test)]
+mod rdf_equal_tests {
+    //! `=` over nested triple terms against its recursive reference, and at a hundred
+    //! thousand levels on a 128 KiB thread.
+
+    use purrdf_core::{TermBox, TermValue};
+
+    use super::{is_literal, rdf_equal, sparql_value_eq, xsd_of};
+
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// The reference: `=` as a recursion over the two terms' components, every component
+    /// pair compared, `false` outranking an error and an error outranking `true`.
+    fn reference_rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
+        if crate::cdt_fn::is_composite_typed(a) || crate::cdt_fn::is_composite_typed(b) {
+            return crate::cdt_fn::compare(crate::cdt_fn::CdtRelation::Equal, a, b);
+        }
+        if let (
+            TermValue::Triple {
+                s: s1,
+                p: p1,
+                o: o1,
+            },
+            TermValue::Triple {
+                s: s2,
+                p: p2,
+                o: o2,
+            },
+        ) = (a, b)
+        {
+            let rs = reference_rdf_equal(s1, s2);
+            let rp = reference_rdf_equal(p1, p2);
+            let ro = reference_rdf_equal(o1, o2);
+            return if rs == Some(false) || rp == Some(false) || ro == Some(false) {
+                Some(false)
+            } else if rs.is_none() || rp.is_none() || ro.is_none() {
+                None
+            } else {
+                Some(true)
+            };
+        }
+        match (xsd_of(a), xsd_of(b)) {
+            (Some(ax), Some(bx)) => sparql_value_eq(&ax, &bx),
+            _ => {
+                if a == b {
+                    Some(true)
+                } else if is_literal(a) && is_literal(b) {
+                    None
+                } else {
+                    Some(false)
+                }
+            }
+        }
+    }
+
+    /// A deterministic choice sequence.
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 12,
+            }
+        }
+
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn typed(lexical: &str, datatype: &str) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical.to_owned(),
+            datatype: format!("http://www.w3.org/2001/XMLSchema#{datatype}"),
+            language: None,
+            direction: None,
+        }
+    }
+
+    /// A leaf from a small alphabet holding equal values with different lexical forms
+    /// (`1` and `1.0`), literals no value space compares (`"a"^^ex:dt` and
+    /// `"b"^^ex:dt`, whose `=` is an error), a composite literal, and IRIs.
+    fn leaf(choices: &mut Choices) -> TermValue {
+        match choices.choose(9) {
+            0 => TermValue::iri("http://example.org/a"),
+            1 => TermValue::iri("http://example.org/b"),
+            2 => typed("1", "integer"),
+            3 => typed("1.0", "decimal"),
+            4 => typed("2", "integer"),
+            5 | 6 => TermValue::Literal {
+                lexical_form: if choices.choose(2) == 0 { "a" } else { "b" }.to_owned(),
+                datatype: "http://example.org/dt".to_owned(),
+                language: None,
+                direction: None,
+            },
+            7 => TermValue::Literal {
+                lexical_form: "[1, 2]".to_owned(),
+                datatype: "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List".to_owned(),
+                language: None,
+                direction: None,
+            },
+            _ => TermValue::Blank {
+                label: "b".to_owned(),
+                scope: purrdf_core::BlankScope::DEFAULT,
+            },
+        }
+    }
+
+    fn term(choices: &mut Choices) -> TermValue {
+        if !choices.spend() || choices.choose(3) == 0 {
+            return leaf(choices);
+        }
+        TermValue::Triple {
+            s: TermBox::new(term(choices)),
+            p: TermBox::new(term(choices)),
+            o: TermBox::new(term(choices)),
+        }
+    }
+
+    /// Put `replacement` where `term`'s leftmost leaf — down its subjects — stands.
+    fn replace_leftmost_leaf(term: &mut TermValue, replacement: TermValue) {
+        let mut cursor = term;
+        loop {
+            match cursor {
+                TermValue::Triple { s, .. } => cursor = &mut **s,
+                leaf => {
+                    *leaf = replacement;
+                    return;
+                }
+            }
+        }
+    }
+
+    /// A pair whose second term is the first itself, the first with its leftmost leaf
+    /// changed, or an independent term — so equal pairs, unequal pairs and erroring
+    /// pairs all arise.
+    fn pair(seed: u64) -> (TermValue, TermValue) {
+        let mut choices = Choices::new(seed);
+        let a = term(&mut choices);
+        let b = match choices.choose(3) {
+            0 => a.clone(),
+            1 => {
+                let mut changed = a.clone();
+                let replacement = leaf(&mut choices);
+                replace_leftmost_leaf(&mut changed, replacement);
+                changed
+            }
+            _ => term(&mut Choices::new(seed.wrapping_mul(7919))),
+        };
+        (a, b)
+    }
+
+    fn chain(levels: usize, innermost: &str) -> TermValue {
+        let mut term = TermValue::iri(innermost);
+        for _ in 0..levels {
+            term = TermValue::Triple {
+                s: TermBox::new(TermValue::iri("http://example.org/s")),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(term),
+            };
+        }
+        term
+    }
+
+    /// The work-list `=` answers exactly what the recursive reference answers for every
+    /// generated pair, and the pairs cover all three answers.
+    #[test]
+    fn rdf_equal_agrees_with_its_recursive_reference_on_generated_pairs() {
+        let mut equal = 0;
+        let mut unequal = 0;
+        let mut errored = 0;
+        let mut nested = 0;
+        for seed in 0..600_u64 {
+            let (a, b) = pair(seed);
+            let answer = rdf_equal(&a, &b);
+            assert_eq!(
+                answer,
+                reference_rdf_equal(&a, &b),
+                "seed {seed}: {a:?} = {b:?}"
+            );
+            assert_eq!(
+                rdf_equal(&a, &a),
+                reference_rdf_equal(&a, &a),
+                "seed {seed}: {a:?}"
+            );
+            nested += usize::from(
+                matches!(a, TermValue::Triple { .. }) && matches!(b, TermValue::Triple { .. }),
+            );
+            match answer {
+                Some(true) => equal += 1,
+                Some(false) => unequal += 1,
+                None => errored += 1,
+            }
+        }
+        assert!(
+            equal > 0 && unequal > 0 && errored > 0,
+            "{equal} {unequal} {errored}"
+        );
+        assert!(nested > 0, "some pair is two triple terms");
+    }
+
+    /// Two triple terms a hundred thousand levels deep compare equal, and two differing
+    /// only in the innermost object compare unequal, on a 128 KiB thread.
+    #[test]
+    fn a_hundred_thousand_level_pair_compares_on_a_128_kib_thread() {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(|| {
+                let a = chain(DEPTH, "http://example.org/o");
+                let same = chain(DEPTH, "http://example.org/o");
+                let other = chain(DEPTH, "http://example.org/x");
+                let shorter = chain(DEPTH - 1, "http://example.org/o");
+                assert_eq!(rdf_equal(&a, &same), Some(true));
+                assert_eq!(rdf_equal(&a, &other), Some(false));
+                assert_eq!(rdf_equal(&a, &shorter), Some(false));
+                drop(shorter);
+                drop(other);
+                drop(same);
+                drop(a);
+            })
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned");
     }
 }
