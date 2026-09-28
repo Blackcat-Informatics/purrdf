@@ -2456,7 +2456,10 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   resolve out of nested `cdt:`-typed literals instead of re-entering the comparator,
   and `canonical_lexical_len` reads a length every value carries. `purrdf_geo` reads
   and writes nested geometry collections over explicit stacks, its `Geometry` drops,
-  clones, compares and prints iteratively, and the 64-deep WKT nesting cap is gone.
+  clones, compares and prints iteratively, and the 64-deep WKT nesting cap is gone; its
+  GeoJSON reader and writer, its JSON reader and writer (`purrdf_geo::json::MAX_DEPTH`
+  and the 128-container cap are removed), and its measure, boundary, location and
+  relation walks run over explicit stacks.
 
 - **BREAKING** **sparql-eval:** `MAX_HOPS_CAP` is removed and `PathLimits::new`
   accepts any `max_hops` a `u32` holds. The path-relation traversal keeps every piece

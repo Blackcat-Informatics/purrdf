@@ -43,7 +43,7 @@
 //! because segment lengths are irrational. See each function for the specifics.
 
 use crate::exact::{Int, Rat};
-use crate::geom::{Coord, CoordDim, CoordSeq, Geometry, GeometryBody, GeometryKind};
+use crate::geom::{Coord, CoordDim, CoordSeq, Geometry, GeometryBody, GeometryKind, fold};
 use crate::measure::{Parts, bounds, from_scaled, scaled_segment_length, signed_ring_area};
 use crate::topology::{curve_boundary_points, orientation};
 
@@ -93,8 +93,19 @@ fn run(points: &[Coord]) -> CoordSeq {
 /// two-dimensional `MULTILINESTRING`: Clause 10.2 projects the polygon onto
 /// `Z=0` before anything is computed, and the projected polygon's boundary has
 /// no elevation.
+///
+/// Iterative: a bottom-up fold over the tree assembles each collection's boundary
+/// from its members' boundaries in written order, so nesting costs heap and never
+/// stack.
 #[must_use]
 pub fn boundary(geometry: &Geometry) -> Geometry {
+    fold(geometry, member_boundary, |_, boundaries| {
+        planar(GeometryBody::GeometryCollection(boundaries))
+    })
+}
+
+/// The boundary of a geometry that is not a collection.
+fn member_boundary(geometry: &Geometry) -> Geometry {
     match geometry.body() {
         GeometryBody::Point(_) | GeometryBody::MultiPoint(_) => nothing(),
         GeometryBody::LineString(_) | GeometryBody::MultiLineString(_) => {
@@ -108,9 +119,9 @@ pub fn boundary(geometry: &Geometry) -> Geometry {
         GeometryBody::Polygon(_) | GeometryBody::MultiPolygon(_) => {
             surface_boundary(&Parts::of(geometry))
         }
-        GeometryBody::GeometryCollection(members) => planar(GeometryBody::GeometryCollection(
-            members.iter().map(boundary).collect(),
-        )),
+        GeometryBody::GeometryCollection(_) => {
+            unreachable!("a collection's boundary is assembled from its members' boundaries")
+        }
     }
 }
 
@@ -1086,5 +1097,96 @@ mod tests {
                 g.kind()
             );
         }
+    }
+}
+
+/// The boundary's walk over nested collections, against a recursive reference on
+/// generated trees and a hundred thousand levels deep.
+#[cfg(test)]
+mod nesting_tests {
+    use super::{boundary, centroid, convex_hull, envelope, member_boundary, planar};
+    use crate::exact::Rat;
+    use crate::geom::arbitrary::{self, Lcg};
+    use crate::geom::{Coord, CoordDim, CoordSeq, Geometry, GeometryBody};
+    use crate::wkt;
+
+    /// The recursive boundary: a collection's is the collection of its members'.
+    fn reference_boundary(geometry: &Geometry) -> Geometry {
+        match geometry.body() {
+            GeometryBody::GeometryCollection(members) => planar(GeometryBody::GeometryCollection(
+                members.iter().map(reference_boundary).collect(),
+            )),
+            _ => member_boundary(geometry),
+        }
+    }
+
+    fn triangle() -> Geometry {
+        let ring: CoordSeq = [(0, 0), (1, 0), (1, 1), (0, 0)]
+            .iter()
+            .map(|&(x, y)| Coord::xy(Rat::from_i64(x), Rat::from_i64(y)))
+            .collect();
+        Geometry::new(CoordDim::Xy, GeometryBody::Polygon(vec![ring])).expect("a closed ring")
+    }
+
+    /// Over generated planar and elevated trees the fold and the recursive
+    /// reference build the same boundary.
+    #[test]
+    fn the_boundary_agrees_with_the_recursive_reference_on_generated_trees() {
+        let mut rng = Lcg::new(0x5eed_6001);
+        for round in 0..300 {
+            let dim = if round % 2 == 0 {
+                CoordDim::Xy
+            } else {
+                CoordDim::Xyz
+            };
+            let tree = arbitrary::geometry(&mut rng, dim, 4);
+            assert_eq!(
+                boundary(&tree),
+                reference_boundary(&tree),
+                "round {round}: {tree:?}"
+            );
+        }
+    }
+
+    /// The boundary of a triangle nested a hundred thousand collections deep is its
+    /// ring as a `MULTILINESTRING`, nested as deep, written on a 128 KiB stack; the
+    /// expected text is a closed form pinned at depths one and two by literal
+    /// strings, and the envelope, hull and centroid see through the nesting.
+    #[test]
+    fn a_hundred_thousand_deep_collection_has_its_boundary_envelope_hull_and_centroid() {
+        const OPEN: &str = "GEOMETRYCOLLECTION(";
+        const INNER: &str = "MULTILINESTRING((0 0,1 0,1 1,0 0))";
+        const ONE: &str = "GEOMETRYCOLLECTION(MULTILINESTRING((0 0,1 0,1 1,0 0)))";
+        const TWO: &str =
+            "GEOMETRYCOLLECTION(GEOMETRYCOLLECTION(MULTILINESTRING((0 0,1 0,1 1,0 0))))";
+        assert_eq!(format!("{OPEN}{INNER})"), ONE);
+        assert_eq!(format!("{OPEN}{OPEN}{INNER}))"), TWO);
+        let triangle = triangle();
+        assert_eq!(wkt::write_bare(&boundary(&triangle), 0), INNER);
+        assert_eq!(
+            wkt::write_bare(&boundary(&arbitrary::nest(triangle.clone(), 1)), 0),
+            ONE
+        );
+        assert_eq!(
+            wkt::write_bare(&boundary(&arbitrary::nest(triangle.clone(), 2)), 0),
+            TWO
+        );
+        let depth = arbitrary::DEEP;
+        let mut expected = String::with_capacity(OPEN.len() * depth + INNER.len() + depth);
+        for _ in 0..depth {
+            expected.push_str(OPEN);
+        }
+        expected.push_str(INNER);
+        for _ in 0..depth {
+            expected.push(')');
+        }
+
+        arbitrary::on_small_stack(move || {
+            let deep = arbitrary::nest(triangle.clone(), depth);
+            assert_eq!(wkt::write_bare(&boundary(&deep), 0), expected);
+            assert_eq!(envelope(&deep), envelope(&triangle));
+            assert_eq!(convex_hull(&deep), convex_hull(&triangle));
+            assert_eq!(centroid(&deep), centroid(&triangle));
+        });
     }
 }

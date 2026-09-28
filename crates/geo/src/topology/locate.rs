@@ -82,7 +82,7 @@ use core::cmp::Ordering;
 use super::segment::{cmp_xy, on_segment, plane};
 use crate::de9im::Set;
 use crate::exact::Rat;
-use crate::geom::{Coord, CoordSeq, Geometry, GeometryBody, Rings};
+use crate::geom::{Coord, CoordSeq, Geometry, GeometryBody, Rings, fold};
 
 /// Where `point` lies relative to `geometry`: its interior, its boundary, or its
 /// exterior.
@@ -90,7 +90,23 @@ use crate::geom::{Coord, CoordSeq, Geometry, GeometryBody, Rings};
 /// Exact and total: every position is in exactly one of the three sets, and an
 /// empty geometry puts every position in its exterior. Only `x` and `y` are read,
 /// per Clause 10.2.
+///
+/// A collection's location is its members' combined, level by level: a bottom-up
+/// fold over the tree, so nesting costs heap and never stack. A geometry that is
+/// not a collection is located directly, with nothing allocated.
 pub fn locate(point: &Coord, geometry: &Geometry) -> Set {
+    match geometry.body() {
+        GeometryBody::GeometryCollection(_) => fold(
+            geometry,
+            |member| locate_in_member(point, member),
+            |_, parts| combine(parts.into_iter()),
+        ),
+        _ => locate_in_member(point, geometry),
+    }
+}
+
+/// Where `point` lies relative to a geometry that is not a collection.
+fn locate_in_member(point: &Coord, geometry: &Geometry) -> Set {
     match geometry.body() {
         GeometryBody::Point(member) => locate_in_point(point, member.as_ref()),
         GeometryBody::LineString(coords) => locate_in_curve(point, coords),
@@ -108,8 +124,8 @@ pub fn locate(point: &Coord, geometry: &Geometry) -> Set {
                 .iter()
                 .map(|member| locate_in_surface(point, member)),
         ),
-        GeometryBody::GeometryCollection(members) => {
-            combine(members.iter().map(|member| locate(point, member)))
+        GeometryBody::GeometryCollection(_) => {
+            unreachable!("a collection's location is combined from its members' locations")
         }
     }
 }
@@ -248,24 +264,27 @@ pub fn curve_boundary_points(geometry: &Geometry) -> Vec<Coord> {
     boundary
 }
 
-/// Append the endpoints of every non-closed curve component, planar-projected.
+/// Append the endpoints of every non-closed curve component, planar-projected, in
+/// written order. Nested collections are walked off a heap work list.
 fn push_curve_endpoints(geometry: &Geometry, out: &mut Vec<Coord>) {
-    match geometry.body() {
-        GeometryBody::LineString(coords) => push_chain_endpoints(coords, out),
-        GeometryBody::MultiLineString(members) => {
-            for member in members {
-                push_chain_endpoints(member, out);
+    let mut pending: Vec<&Geometry> = vec![geometry];
+    while let Some(geometry) = pending.pop() {
+        match geometry.body() {
+            GeometryBody::LineString(coords) => push_chain_endpoints(coords, out),
+            GeometryBody::MultiLineString(members) => {
+                for member in members {
+                    push_chain_endpoints(member, out);
+                }
             }
-        }
-        GeometryBody::GeometryCollection(members) => {
-            for member in members {
-                push_curve_endpoints(member, out);
+            GeometryBody::GeometryCollection(members) => {
+                // Members are pushed last-first so they pop in written order.
+                pending.extend(members.iter().rev());
             }
+            GeometryBody::Point(_)
+            | GeometryBody::Polygon(_)
+            | GeometryBody::MultiPoint(_)
+            | GeometryBody::MultiPolygon(_) => {}
         }
-        GeometryBody::Point(_)
-        | GeometryBody::Polygon(_)
-        | GeometryBody::MultiPoint(_)
-        | GeometryBody::MultiPolygon(_) => {}
     }
 }
 
@@ -287,16 +306,29 @@ fn push_chain_endpoints(coords: &CoordSeq, out: &mut Vec<Coord>) {
 /// counted: it contributes no interior for a scan line to find, and counting it
 /// would make [`super::relate`]'s area pass run over geometries that provably
 /// cannot raise a two-dimensional entry.
+///
+/// Nested collections are walked off a heap work list, and the walk stops at the
+/// first surface found.
 pub fn has_area(geometry: &Geometry) -> bool {
-    match geometry.body() {
-        GeometryBody::Polygon(rings) => !rings.is_empty(),
-        GeometryBody::MultiPolygon(members) => members.iter().any(|rings| !rings.is_empty()),
-        GeometryBody::GeometryCollection(members) => members.iter().any(has_area),
-        GeometryBody::Point(_)
-        | GeometryBody::LineString(_)
-        | GeometryBody::MultiPoint(_)
-        | GeometryBody::MultiLineString(_) => false,
+    let mut pending: Vec<&Geometry> = vec![geometry];
+    while let Some(geometry) = pending.pop() {
+        let found = match geometry.body() {
+            GeometryBody::Polygon(rings) => !rings.is_empty(),
+            GeometryBody::MultiPolygon(members) => members.iter().any(|rings| !rings.is_empty()),
+            GeometryBody::GeometryCollection(members) => {
+                pending.extend(members.iter().rev());
+                false
+            }
+            GeometryBody::Point(_)
+            | GeometryBody::LineString(_)
+            | GeometryBody::MultiPoint(_)
+            | GeometryBody::MultiLineString(_) => false,
+        };
+        if found {
+            return true;
+        }
     }
+    false
 }
 
 /// The largest topological dimension present: `-1` for empty, else `0`, `1` or
@@ -305,7 +337,28 @@ pub fn has_area(geometry: &Geometry) -> bool {
 /// This is the value the dimension-dependent GeoSPARQL relations (`sfOverlaps`,
 /// `sfCrosses`) branch on, and `-1` for empty is the specification's own
 /// convention rather than a sentinel invented here.
+///
+/// A collection's dimension is the largest of its members', through every level:
+/// nested collections are walked off a heap work list, and an empty collection
+/// contributes `-1`, the identity of that maximum.
 pub fn topological_dimension(geometry: &Geometry) -> i32 {
+    let mut highest = -1;
+    let mut pending: Vec<&Geometry> = vec![geometry];
+    while let Some(geometry) = pending.pop() {
+        let dimension = match geometry.body() {
+            GeometryBody::GeometryCollection(members) => {
+                pending.extend(members.iter().rev());
+                -1
+            }
+            _ => member_dimension(geometry),
+        };
+        highest = highest.max(dimension);
+    }
+    highest
+}
+
+/// The topological dimension of a geometry that is not a collection.
+fn member_dimension(geometry: &Geometry) -> i32 {
     match geometry.body() {
         GeometryBody::Point(member) => {
             if member.is_some() {
@@ -349,11 +402,9 @@ pub fn topological_dimension(geometry: &Geometry) -> i32 {
                 -1
             }
         }
-        GeometryBody::GeometryCollection(members) => members
-            .iter()
-            .map(topological_dimension)
-            .max()
-            .unwrap_or(-1),
+        GeometryBody::GeometryCollection(_) => {
+            unreachable!("a collection's dimension is the largest of its members'")
+        }
     }
 }
 
@@ -955,5 +1006,195 @@ mod tests {
             Some(r(1)),
             "the answer does not depend on the endpoint order"
         );
+    }
+}
+
+/// The four walks over nested collections — location, curve endpoints, area and
+/// dimension — against recursive references on generated trees and a hundred
+/// thousand levels deep.
+#[cfg(test)]
+mod nesting_tests {
+    use super::{
+        combine, curve_boundary_points, has_area, locate, locate_in_member, push_chain_endpoints,
+        push_curve_endpoints, topological_dimension,
+    };
+    use crate::de9im::Set;
+    use crate::exact::Rat;
+    use crate::geom::arbitrary::{self, Lcg};
+    use crate::geom::{Coord, CoordDim, CoordSeq, Geometry, GeometryBody, GeometryKind};
+
+    fn reference_locate(point: &Coord, geometry: &Geometry) -> Set {
+        match geometry.body() {
+            GeometryBody::GeometryCollection(members) => {
+                combine(members.iter().map(|member| reference_locate(point, member)))
+            }
+            _ => locate_in_member(point, geometry),
+        }
+    }
+
+    fn reference_endpoints(geometry: &Geometry, out: &mut Vec<Coord>) {
+        match geometry.body() {
+            GeometryBody::LineString(coords) => push_chain_endpoints(coords, out),
+            GeometryBody::MultiLineString(members) => {
+                for member in members {
+                    push_chain_endpoints(member, out);
+                }
+            }
+            GeometryBody::GeometryCollection(members) => {
+                for member in members {
+                    reference_endpoints(member, out);
+                }
+            }
+            GeometryBody::Point(_)
+            | GeometryBody::Polygon(_)
+            | GeometryBody::MultiPoint(_)
+            | GeometryBody::MultiPolygon(_) => {}
+        }
+    }
+
+    fn reference_has_area(geometry: &Geometry) -> bool {
+        match geometry.body() {
+            GeometryBody::Polygon(rings) => !rings.is_empty(),
+            GeometryBody::MultiPolygon(members) => members.iter().any(|rings| !rings.is_empty()),
+            GeometryBody::GeometryCollection(members) => members.iter().any(reference_has_area),
+            GeometryBody::Point(_)
+            | GeometryBody::LineString(_)
+            | GeometryBody::MultiPoint(_)
+            | GeometryBody::MultiLineString(_) => false,
+        }
+    }
+
+    fn reference_dimension(geometry: &Geometry) -> i32 {
+        match geometry.body() {
+            GeometryBody::GeometryCollection(members) => {
+                members.iter().map(reference_dimension).max().unwrap_or(-1)
+            }
+            _ => topological_dimension(geometry),
+        }
+    }
+
+    fn r(value: i64) -> Rat {
+        Rat::from_i64(value)
+    }
+
+    fn c(x: i64, y: i64) -> Coord {
+        Coord::xy(r(x), r(y))
+    }
+
+    fn seq(points: &[(i64, i64)]) -> CoordSeq {
+        points.iter().map(|&(x, y)| c(x, y)).collect()
+    }
+
+    fn point(x: i64, y: i64) -> Geometry {
+        Geometry::new(CoordDim::Xy, GeometryBody::Point(Some(c(x, y))))
+            .expect("a well-formed point")
+    }
+
+    fn line(points: &[(i64, i64)]) -> Geometry {
+        Geometry::new(CoordDim::Xy, GeometryBody::LineString(seq(points)))
+            .expect("a well-formed line")
+    }
+
+    fn square(size: i64) -> Geometry {
+        Geometry::new(
+            CoordDim::Xy,
+            GeometryBody::Polygon(vec![seq(&[
+                (0, 0),
+                (size, 0),
+                (size, size),
+                (0, size),
+                (0, 0),
+            ])]),
+        )
+        .expect("a closed ring")
+    }
+
+    /// Over generated planar trees and a grid of probes, the four work-list walks
+    /// answer as their recursive references do.
+    #[test]
+    fn the_four_walks_agree_with_the_recursive_references_on_generated_trees() {
+        let mut rng = Lcg::new(0x5eed_7001);
+        let probes: Vec<Coord> = (-4..=4)
+            .flat_map(|x| (-4..=4).map(move |y| c(x, y)))
+            .collect();
+        for round in 0..150 {
+            let tree = arbitrary::geometry(&mut rng, CoordDim::Xy, 4);
+            for probe in &probes {
+                assert_eq!(
+                    locate(probe, &tree),
+                    reference_locate(probe, &tree),
+                    "round {round}: {probe:?} in {tree:?}"
+                );
+            }
+            let (mut endpoints, mut reference) = (Vec::new(), Vec::new());
+            push_curve_endpoints(&tree, &mut endpoints);
+            reference_endpoints(&tree, &mut reference);
+            assert_eq!(endpoints, reference, "round {round}: {tree:?}");
+            assert_eq!(has_area(&tree), reference_has_area(&tree), "round {round}");
+            assert_eq!(
+                topological_dimension(&tree),
+                reference_dimension(&tree),
+                "round {round}: {tree:?}"
+            );
+        }
+    }
+
+    /// A single-member collection combines one location, which is that location,
+    /// adds no endpoint, no surface and no dimension: so a geometry nested a
+    /// hundred thousand collections deep answers as the flat geometry does — the
+    /// closed form, pinned at depths one and two and then run on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_deep_collection_is_located_bounded_and_measured_like_its_member() {
+        let inside = c(1, 1);
+        let on_edge = c(0, 1);
+        let outside = c(5, 5);
+        let two = square(2);
+        assert_eq!(locate(&inside, &two), Set::Interior);
+        assert_eq!(locate(&on_edge, &two), Set::Boundary);
+        assert_eq!(locate(&outside, &two), Set::Exterior);
+        let diagonal = line(&[(0, 0), (1, 1)]);
+        assert_eq!(curve_boundary_points(&diagonal), vec![c(0, 0), c(1, 1)]);
+        let empty = Geometry::empty(CoordDim::Xy, GeometryKind::GeometryCollection);
+        for levels in 1..=2 {
+            let nested = arbitrary::nest(two.clone(), levels);
+            assert_eq!(locate(&inside, &nested), Set::Interior, "{levels} levels");
+            assert_eq!(locate(&on_edge, &nested), Set::Boundary, "{levels} levels");
+            assert_eq!(locate(&outside, &nested), Set::Exterior, "{levels} levels");
+            assert!(has_area(&nested), "{levels} levels");
+            assert_eq!(topological_dimension(&nested), 2, "{levels} levels");
+            let nested_line = arbitrary::nest(diagonal.clone(), levels);
+            assert_eq!(curve_boundary_points(&nested_line), vec![c(0, 0), c(1, 1)]);
+            assert!(!has_area(&nested_line));
+            assert_eq!(topological_dimension(&nested_line), 1);
+            assert_eq!(
+                topological_dimension(&arbitrary::nest(point(3, 3), levels)),
+                0
+            );
+            assert_eq!(
+                topological_dimension(&arbitrary::nest(empty.clone(), levels)),
+                -1
+            );
+        }
+
+        arbitrary::on_small_stack(move || {
+            let deep = arbitrary::nest(two, arbitrary::DEEP);
+            assert_eq!(locate(&inside, &deep), Set::Interior);
+            assert_eq!(locate(&on_edge, &deep), Set::Boundary);
+            assert_eq!(locate(&outside, &deep), Set::Exterior);
+            assert!(has_area(&deep));
+            assert_eq!(topological_dimension(&deep), 2);
+            let deep_line = arbitrary::nest(diagonal, arbitrary::DEEP);
+            assert_eq!(curve_boundary_points(&deep_line), vec![c(0, 0), c(1, 1)]);
+            assert!(!has_area(&deep_line));
+            assert_eq!(topological_dimension(&deep_line), 1);
+            assert_eq!(
+                topological_dimension(&arbitrary::nest(point(3, 3), arbitrary::DEEP)),
+                0
+            );
+            assert_eq!(
+                topological_dimension(&arbitrary::nest(empty, arbitrary::DEEP)),
+                -1
+            );
+        });
     }
 }

@@ -1,8 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The geometry tree's `Drop`, `Clone`, `PartialEq` and `Debug`, and the walk over
-//! every position, each over an explicit heap work list rather than recursion.
+//! The geometry tree's `Drop`, `Clone`, `PartialEq` and `Debug`, the bottom-up fold
+//! every derived answer over a tree is built with, and the walk over every position,
+//! each over an explicit heap work list rather than recursion.
 //!
 //! A [`Geometry`] owns other geometries through
 //! [`GeometryBody::GeometryCollection`], and a `wktLiteral` or `geoJSONLiteral` is
@@ -15,14 +16,16 @@
 //! * **`Drop`** moves a collection's members onto a work list and dismantles the list
 //!   in a loop, taking every popped member's own members before it goes, so no drop
 //!   it runs recurses.
-//! * **`Clone`** builds the copy bottom-up: a two-phase walk enters each geometry
-//!   and, on the way back out, assembles a collection's copy from its members'
-//!   finished copies. A geometry that is not a collection is copied outright.
+//! * **[`try_fold`]** and **[`fold`]** build an answer bottom-up: a two-phase walk
+//!   enters each geometry and, on the way back out, assembles a collection's answer
+//!   from its members' finished answers in written order. `Clone` is the fold whose
+//!   leaf answer is a copy, and the GeoJSON writer, the boundary constructor and
+//!   point location are folds too.
 //! * **`PartialEq`** compares two trees pair by pair off one work list.
 //! * **`Debug`** prints the *script* `#[derive(Debug)]` prints — struct and variant
-//!   names, field names, leaf values — token by token, in both the plain (`{:?}`)
-//!   and the pretty (`{:#?}`) form, indenting the pretty form the way the standard
-//!   library's builders do, so the bytes are the derive's exactly.
+//!   names, field names, leaf values — through [`crate::debug_script`], which writes
+//!   it token by token in both the plain (`{:?}`) and the pretty (`{:#?}`) form, so
+//!   the bytes are the derive's exactly.
 //! * **[`Coords`]** yields every position in written order off a work list of
 //!   pending geometries.
 //!
@@ -30,10 +33,12 @@
 //! impls reach a nested geometry only through the `GeometryCollection` variant, where
 //! they call the impls here within one frame.
 
-use core::fmt::{self, Write as _};
+use core::convert::Infallible;
+use core::fmt;
 use core::mem;
 
-use super::{Coord, CoordDim, Geometry, GeometryBody};
+use super::{Coord, Geometry, GeometryBody};
+use crate::debug_script::{self, Tok};
 
 /// Whether `geometry` owns other geometries.
 fn has_members(geometry: &Geometry) -> bool {
@@ -61,57 +66,88 @@ impl Drop for Geometry {
     }
 }
 
-// ── Clone ────────────────────────────────────────────────────────────────────────
+// ── Bottom-up fold ───────────────────────────────────────────────────────────────
 
-/// One step of the bottom-up copy.
+/// One step of the bottom-up walk.
 enum Step<'a> {
-    /// Visit a geometry: copy one that owns no geometry outright, or schedule a
+    /// Visit a geometry: answer for one that owns no geometry outright, or schedule a
     /// collection's members before it.
     Enter(&'a Geometry),
-    /// Every member of the collection has been copied; assemble the collection's copy.
+    /// Every member of the collection has been answered; assemble the collection's
+    /// answer.
     Exit(&'a Geometry),
 }
 
-/// A copy of the tree under `root`, built bottom-up over a work list.
-fn clone_tree(root: &Geometry) -> Geometry {
-    let mut steps: Vec<Step<'_>> = vec![Step::Enter(root)];
-    let mut copies: Vec<Geometry> = Vec::new();
+/// An answer for the tree under `root`, built bottom-up over a work list.
+///
+/// `leaf` answers for a geometry that is not a collection; `collection` assembles a
+/// collection's answer from its members' answers, in written order, and receives an
+/// empty vector for a collection with no members. The walk stops at the first `Err`,
+/// which is the error the recursive spelling would have raised: leaves are visited in
+/// written order and a collection is assembled after its last member.
+pub(crate) fn try_fold<'a, T, E>(
+    root: &'a Geometry,
+    mut leaf: impl FnMut(&'a Geometry) -> Result<T, E>,
+    mut collection: impl FnMut(&'a Geometry, Vec<T>) -> Result<T, E>,
+) -> Result<T, E> {
+    let mut steps: Vec<Step<'a>> = vec![Step::Enter(root)];
+    let mut answers: Vec<T> = Vec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Enter(node) => match &node.body {
-                GeometryBody::GeometryCollection(members) if !members.is_empty() => {
-                    // Members are pushed last-first so they pop, and so their copies
-                    // land, in written order.
+                GeometryBody::GeometryCollection(members) => {
+                    // Members are pushed last-first so they pop, and so their
+                    // answers land, in written order.
                     steps.push(Step::Exit(node));
                     steps.extend(members.iter().rev().map(Step::Enter));
                 }
-                body => copies.push(Geometry {
-                    dim: node.dim,
-                    body: body.clone(),
-                }),
+                _ => answers.push(leaf(node)?),
             },
             Step::Exit(node) => {
                 let GeometryBody::GeometryCollection(members) = &node.body else {
                     unreachable!("only a collection is exited")
                 };
-                let first = copies.len() - members.len();
-                let copied: Vec<Geometry> = copies.drain(first..).collect();
-                copies.push(Geometry {
-                    dim: node.dim,
-                    body: GeometryBody::GeometryCollection(copied),
-                });
+                let first = answers.len() - members.len();
+                let of_members: Vec<T> = answers.drain(first..).collect();
+                answers.push(collection(node, of_members)?);
             }
         }
     }
-    copies
+    Ok(answers
         .pop()
-        .expect("the root's copy is the last one assembled")
+        .expect("the root's answer is the last one assembled"))
 }
+
+/// [`try_fold`] for answers that cannot fail.
+pub(crate) fn fold<'a, T>(
+    root: &'a Geometry,
+    mut leaf: impl FnMut(&'a Geometry) -> T,
+    mut collection: impl FnMut(&'a Geometry, Vec<T>) -> T,
+) -> T {
+    let Ok(answer) = try_fold::<T, Infallible>(
+        root,
+        |node| Ok(leaf(node)),
+        |node, of_members| Ok(collection(node, of_members)),
+    );
+    answer
+}
+
+// ── Clone ────────────────────────────────────────────────────────────────────────
 
 impl Clone for Geometry {
     fn clone(&self) -> Self {
         if has_members(self) {
-            clone_tree(self)
+            fold(
+                self,
+                |node| Self {
+                    dim: node.dim,
+                    body: node.body.clone(),
+                },
+                |node, copies| Self {
+                    dim: node.dim,
+                    body: GeometryBody::GeometryCollection(copies),
+                },
+            )
         } else {
             Self {
                 dim: self.dim,
@@ -205,38 +241,13 @@ impl<'a> Iterator for Coords<'a> {
 
 // ── Debug ────────────────────────────────────────────────────────────────────────
 
-/// One token of a geometry's script.
-#[derive(Clone, Copy)]
-enum Tok<'a> {
-    /// A struct opens: its name.
-    Struct(&'static str),
-    /// A field of the open struct: its name. Its value follows.
-    Field(&'static str),
-    /// The open struct closes.
-    EndStruct,
-    /// A tuple-like variant opens: its name.
-    Tuple(&'static str),
-    /// The open tuple closes.
-    EndTuple,
-    /// A list opens.
-    List,
-    /// The open list closes.
-    EndList,
-    /// The dimension, a leaf.
-    Dim(CoordDim),
-    /// A body that owns no geometry, a leaf.
-    Body(&'a GeometryBody),
-    /// A member geometry, read as its own script.
-    Node(&'a Geometry),
-}
-
 /// Append the script `#[derive(Debug)]` prints for `node` to `out`, each member as a
 /// [`Tok::Node`].
-fn script<'a>(node: &'a Geometry, out: &mut Vec<Tok<'a>>) {
+fn script<'a>(node: &'a Geometry, out: &mut Vec<Tok<'a, &'a Geometry>>) {
     out.extend([
         Tok::Struct("Geometry"),
         Tok::Field("dim"),
-        Tok::Dim(node.dim),
+        Tok::Leaf(&node.dim),
         Tok::Field("body"),
     ]);
     match &node.body {
@@ -245,216 +256,24 @@ fn script<'a>(node: &'a Geometry, out: &mut Vec<Tok<'a>>) {
             out.extend(members.iter().map(Tok::Node));
             out.extend([Tok::EndList, Tok::EndTuple]);
         }
-        body => out.push(Tok::Body(body)),
+        body => out.push(Tok::Leaf(body)),
     }
     out.push(Tok::EndStruct);
 }
 
-/// Replace the `Node` token just popped from `stack` by its script, so the script's
-/// first token is popped next.
-fn expand<'a>(node: &'a Geometry, stack: &mut Vec<Tok<'a>>) {
-    let before = stack.len();
-    script(node, stack);
-    stack[before..].reverse();
-}
-
-/// Writes into a formatter, indenting every line after the first by four spaces per
-/// open pretty-printed container — what nesting the standard library's `PadAdapter`
-/// once per level produces.
-struct Pad<'f, 'g> {
-    f: &'f mut fmt::Formatter<'g>,
-    pretty: bool,
-    depth: usize,
-    line_start: bool,
-}
-
-impl fmt::Write for Pad<'_, '_> {
-    fn write_str(&mut self, s: &str) -> fmt::Result {
-        for piece in s.split_inclusive('\n') {
-            if self.line_start {
-                for _ in 0..self.depth {
-                    self.f.write_str("    ")?;
-                }
-            }
-            self.line_start = piece.ends_with('\n');
-            self.f.write_str(piece)?;
-        }
-        Ok(())
-    }
-}
-
-/// A container open in [`geometry_debug`]: what it is and how many entries it holds
-/// so far.
-struct Open {
-    kind: OpenKind,
-    entries: usize,
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum OpenKind {
-    Struct,
-    Tuple,
-    List,
-}
-
-impl Pad<'_, '_> {
-    /// A value starts inside the innermost open container: write what separates it
-    /// from the entry before it.
-    fn begin(&mut self, open: &mut [Open]) -> fmt::Result {
-        let Some(container) = open.last_mut() else {
-            return Ok(());
-        };
-        match container.kind {
-            // The field token already wrote the separator and the name.
-            OpenKind::Struct => return Ok(()),
-            OpenKind::Tuple => {
-                if self.pretty {
-                    if container.entries == 0 {
-                        self.write_str("(\n")?;
-                        self.depth += 1;
-                    }
-                } else {
-                    self.write_str(if container.entries == 0 { "(" } else { ", " })?;
-                }
-            }
-            OpenKind::List => {
-                if self.pretty {
-                    if container.entries == 0 {
-                        self.write_str("\n")?;
-                        self.depth += 1;
-                    }
-                } else if container.entries > 0 {
-                    self.write_str(", ")?;
-                }
-            }
-        }
-        container.entries += 1;
-        Ok(())
-    }
-
-    /// A value inside an open container has ended.
-    fn end(&mut self, open: &[Open]) -> fmt::Result {
-        if self.pretty && !open.is_empty() {
-            self.write_str(",\n")?;
-        }
-        Ok(())
-    }
-
-    /// A leaf, written as the derive writes it in this form.
-    fn leaf<T: fmt::Debug>(&mut self, value: &T) -> fmt::Result {
-        if self.pretty {
-            write!(self, "{value:#?}")
-        } else {
-            write!(self, "{value:?}")
-        }
-    }
-}
-
-/// `{:?}` / `{:#?}` of `geometry` exactly as `#[derive(Debug)]` writes them, over a
-/// work list.
-fn geometry_debug(geometry: &Geometry, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-    let pretty = f.alternate();
-    let mut out = Pad {
-        f,
-        pretty,
-        depth: 0,
-        line_start: false,
-    };
-    let mut stack: Vec<Tok<'_>> = vec![Tok::Node(geometry)];
-    let mut open: Vec<Open> = Vec::new();
-    while let Some(tok) = stack.pop() {
-        match tok {
-            Tok::Node(node) => expand(node, &mut stack),
-            Tok::Struct(name) | Tok::Tuple(name) => {
-                out.begin(&mut open)?;
-                out.write_str(name)?;
-                open.push(Open {
-                    kind: if matches!(tok, Tok::Struct(_)) {
-                        OpenKind::Struct
-                    } else {
-                        OpenKind::Tuple
-                    },
-                    entries: 0,
-                });
-            }
-            Tok::List => {
-                out.begin(&mut open)?;
-                out.write_str("[")?;
-                open.push(Open {
-                    kind: OpenKind::List,
-                    entries: 0,
-                });
-            }
-            Tok::Field(name) => {
-                let container = open
-                    .last_mut()
-                    .expect("a field is written inside its struct");
-                if pretty {
-                    if container.entries == 0 {
-                        out.write_str(" {\n")?;
-                        out.depth += 1;
-                    }
-                } else {
-                    out.write_str(if container.entries == 0 { " { " } else { ", " })?;
-                }
-                container.entries += 1;
-                out.write_str(name)?;
-                out.write_str(": ")?;
-            }
-            Tok::EndStruct | Tok::EndTuple | Tok::EndList => {
-                let container = open.pop().expect("a container closes after it opens");
-                match container.kind {
-                    OpenKind::Struct if container.entries > 0 => {
-                        if pretty {
-                            out.depth -= 1;
-                            out.write_str("}")?;
-                        } else {
-                            out.write_str(" }")?;
-                        }
-                    }
-                    OpenKind::Struct => {}
-                    OpenKind::Tuple if container.entries > 0 => {
-                        if pretty {
-                            out.depth -= 1;
-                        }
-                        out.write_str(")")?;
-                    }
-                    OpenKind::Tuple => {}
-                    OpenKind::List => {
-                        if pretty && container.entries > 0 {
-                            out.depth -= 1;
-                        }
-                        out.write_str("]")?;
-                    }
-                }
-                out.end(&open)?;
-            }
-            Tok::Dim(dim) => {
-                out.begin(&mut open)?;
-                out.leaf(&dim)?;
-                out.end(&open)?;
-            }
-            Tok::Body(body) => {
-                out.begin(&mut open)?;
-                out.leaf(body)?;
-                out.end(&open)?;
-            }
-        }
-    }
-    Ok(())
-}
-
 impl fmt::Debug for Geometry {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        geometry_debug(self, f)
+        debug_script::write(f, self, script)
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::arbitrary::{self, Lcg};
     use super::super::{
         Coord, CoordDim, CoordSeq, Crs, Geometry, GeometryBody, GeometryKind, Rings,
     };
+    use super::{fold, try_fold};
 
     /// A type-for-type twin of the geometry tree with the compiler's own `Debug`, so
     /// the derive itself is the oracle for what the iterative `Debug` must write.
@@ -541,6 +360,117 @@ mod tests {
         }
     }
 
+    /// The derive stays the oracle over generated trees of every shape: the plain and
+    /// the pretty form agree byte for byte, and equality agrees with the derive's
+    /// printed form, which is injective over these types.
+    #[test]
+    fn the_iterative_debug_and_equality_agree_with_the_derive_on_generated_trees() {
+        let mut rng = Lcg::new(0x5eed_0001);
+        let dims = [CoordDim::Xy, CoordDim::Xyz, CoordDim::Xym, CoordDim::Xyzm];
+        let trees: Vec<Geometry> = (0..160)
+            .map(|index| arbitrary::geometry(&mut rng, dims[index % 4], 3))
+            .collect();
+        let printed: Vec<String> = trees
+            .iter()
+            .map(|tree| format!("{:?}", twin(tree)))
+            .collect();
+        for (index, tree) in trees.iter().enumerate() {
+            assert_eq!(format!("{tree:?}"), printed[index]);
+            assert_eq!(format!("{tree:#?}"), format!("{:#?}", twin(tree)));
+            let copy = tree.clone();
+            assert_eq!(
+                format!("{copy:?}"),
+                printed[index],
+                "a copy prints the same"
+            );
+            for (other_index, other) in trees.iter().enumerate() {
+                assert_eq!(
+                    tree == other,
+                    printed[index] == printed[other_index],
+                    "equality agrees with the derive's printed form"
+                );
+            }
+        }
+    }
+
+    /// The recursive spelling of a fold, the reference the work-list fold is
+    /// compared with on shallow generated trees.
+    fn reference_fold<T>(
+        node: &Geometry,
+        leaf: &mut impl FnMut(&Geometry) -> T,
+        collection: &mut impl FnMut(&Geometry, Vec<T>) -> T,
+    ) -> T {
+        match node.body() {
+            GeometryBody::GeometryCollection(members) => {
+                let answers = members
+                    .iter()
+                    .map(|member| reference_fold(member, leaf, collection))
+                    .collect();
+                collection(node, answers)
+            }
+            _ => leaf(node),
+        }
+    }
+
+    /// The fold visits leaves in written order, assembles each collection from
+    /// exactly its members' answers, and stops at the first error — the same script
+    /// the recursive spelling produces.
+    #[test]
+    fn the_fold_visits_the_same_script_as_the_recursive_reference() {
+        let mut rng = Lcg::new(0x5eed_0002);
+        for round in 0..200 {
+            let tree = arbitrary::geometry(&mut rng, CoordDim::Xy, 4);
+            // A leaf's answer is the WKT it writes; a collection's is its members'
+            // answers bracketed, so the answer is a rendering of the whole tree.
+            let mut leaf = |node: &Geometry| crate::wkt::write_bare(node, 0);
+            let mut collection =
+                |_: &Geometry, answers: Vec<String>| format!("<{}>", answers.join("|"));
+            let iterative = fold(&tree, &mut leaf, &mut collection);
+            let recursive = reference_fold(&tree, &mut leaf, &mut collection);
+            assert_eq!(iterative, recursive, "round {round}: {tree:?}");
+
+            // Failing at the n-th leaf, for every n, stops at the same leaf; `fail_at`
+            // zero never fails, since the first leaf is the first.
+            let leaves = fold(&tree, |_| 1_usize, |_, counts| counts.iter().sum());
+            let failing_leaf = |fail_at: usize| {
+                let mut seen = 0_usize;
+                move |node: &Geometry| {
+                    seen += 1;
+                    if seen == fail_at {
+                        Err(format!("stopped at leaf {fail_at}: {node:?}"))
+                    } else {
+                        Ok(seen)
+                    }
+                }
+            };
+            for fail_at in 0..=leaves {
+                let iterative = try_fold(&tree, failing_leaf(fail_at), |_, answers: Vec<usize>| {
+                    Ok(answers.into_iter().max().unwrap_or(0))
+                });
+                let recursive = reference_try_fold(&tree, &mut failing_leaf(fail_at));
+                assert_eq!(iterative, recursive, "round {round}, failing at {fail_at}");
+            }
+        }
+    }
+
+    /// The recursive reference for the failing fold: the maximum leaf ordinal, or the
+    /// first leaf's refusal.
+    fn reference_try_fold(
+        node: &Geometry,
+        leaf: &mut impl FnMut(&Geometry) -> Result<usize, String>,
+    ) -> Result<usize, String> {
+        match node.body() {
+            GeometryBody::GeometryCollection(members) => {
+                let mut best = 0;
+                for member in members {
+                    best = best.max(reference_try_fold(member, leaf)?);
+                }
+                Ok(best)
+            }
+            _ => leaf(node),
+        }
+    }
+
     /// A clone is equal to its original, prints identically and yields the same
     /// positions, for every shape; and equality tells the shapes apart.
     #[test]
@@ -562,8 +492,8 @@ mod tests {
     }
 
     /// A hundred thousand nested collections, built one level at a time through
-    /// `Geometry::new`, are cloned, compared, printed, counted and dropped on a
-    /// 128 KiB stack.
+    /// `Geometry::new`, are cloned, compared, printed, counted, folded and dropped on
+    /// a 128 KiB stack.
     ///
     /// The `Debug` length is a formula whose constant is pinned against the derive's
     /// own spelling at depths one and two: the empty collection prints as
@@ -572,7 +502,7 @@ mod tests {
     /// GeometryCollection([` and `]) }` (50 bytes).
     #[test]
     fn a_hundred_thousand_deep_collection_clones_compares_prints_and_drops() {
-        let depth = 100_000usize;
+        let depth = arbitrary::DEEP;
         const ONE: &str = "Geometry { dim: Xy, body: GeometryCollection([]) }";
         const TWO: &str = "Geometry { dim: Xy, body: GeometryCollection([Geometry { dim: Xy, body: \
                            GeometryCollection([]) }]) }";
@@ -587,36 +517,39 @@ mod tests {
         assert_eq!((ONE.len(), per_level), (50, 50));
         let expected_debug_len = ONE.len() + per_level * (depth - 1);
 
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(move || {
-                let mut geometry = empty();
-                for _ in 1..depth {
-                    geometry = nest(geometry);
-                }
-                let copy = geometry.clone();
-                assert_eq!(copy, geometry);
-                assert!(geometry.is_empty());
-                assert_eq!(geometry.coord_count(), 0);
-                assert_eq!(format!("{geometry:?}").len(), expected_debug_len);
-                // A point at the bottom makes the tree non-empty and its one
-                // position reachable through every level.
-                let crs = Crs::new("http://example.org/crs/planar").expect("a non-empty IRI");
-                let mut pointed = crate::wkt::parse("POINT(1 2)", &crs)
-                    .expect("a point")
-                    .into_geometry();
-                for _ in 1..depth {
-                    pointed = nest(pointed);
-                }
-                assert!(!pointed.is_empty());
-                assert_eq!(pointed.coord_count(), 1);
-                assert_ne!(pointed, geometry);
-                drop(pointed);
-                drop(copy);
-                drop(geometry);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the walks did not abort");
+        arbitrary::on_small_stack(move || {
+            let mut geometry = empty();
+            for _ in 1..depth {
+                geometry = nest(geometry);
+            }
+            let copy = geometry.clone();
+            assert_eq!(copy, geometry);
+            assert!(geometry.is_empty());
+            assert_eq!(geometry.coord_count(), 0);
+            assert_eq!(format!("{geometry:?}").len(), expected_debug_len);
+            // The fold counts the levels: every collection adds one to its single
+            // member's count, and the innermost empty collection is one level.
+            let levels = fold(
+                &geometry,
+                |_| 0_usize,
+                |_, counts| 1 + counts.into_iter().max().unwrap_or(0),
+            );
+            assert_eq!(levels, depth);
+            // A point at the bottom makes the tree non-empty and its one
+            // position reachable through every level.
+            let crs = Crs::new("http://example.org/crs/planar").expect("a non-empty IRI");
+            let mut pointed = crate::wkt::parse("POINT(1 2)", &crs)
+                .expect("a point")
+                .into_geometry();
+            for _ in 1..depth {
+                pointed = nest(pointed);
+            }
+            assert!(!pointed.is_empty());
+            assert_eq!(pointed.coord_count(), 1);
+            assert_ne!(pointed, geometry);
+            drop(pointed);
+            drop(copy);
+            drop(geometry);
+        });
     }
 }

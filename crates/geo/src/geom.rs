@@ -390,15 +390,20 @@ pub enum GeometryBody {
 ///
 /// A collection nests as deep as its literal writes it — there is no depth bound —
 /// so `Clone`, `PartialEq`, `Debug` and `Drop` are the iterative impls in
-/// the `geom::tree` module, not the compiler's recursive glue, and [`Geometry::is_empty`] and
-/// [`Geometry::coords`] walk the members off a heap work list.
+/// the `geom::tree` module, not the compiler's recursive glue, [`Geometry::is_empty`] and
+/// [`Geometry::coords`] walk the members off a heap work list, and every answer the
+/// crate derives from a whole tree is built by `tree::fold` bottom-up.
 #[derive(Eq)]
 pub struct Geometry {
     dim: CoordDim,
     body: GeometryBody,
 }
 
+#[cfg(test)]
+pub(crate) mod arbitrary;
 mod tree;
+
+pub(crate) use tree::{fold, try_fold};
 
 impl Geometry {
     /// A geometry of dimension `dim` with `body`, structurally checked.
@@ -517,8 +522,11 @@ impl Geometry {
     }
 }
 
-/// The structural checks [`Geometry::new`] applies, split out so the recursion
-/// through `GeometryCollection` is one function rather than a closure.
+/// The structural checks [`Geometry::new`] applies.
+///
+/// One level deep by construction: a collection's members are already geometries,
+/// each checked when it was built, so a collection is checked only for its members'
+/// dimensions and no walk descends into them.
 fn check_body(dim: CoordDim, body: &GeometryBody) -> Result<(), GeoError> {
     match body {
         GeometryBody::Point(point) => point.as_ref().map_or(Ok(()), |c| check_coord(dim, c)),
