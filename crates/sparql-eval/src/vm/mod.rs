@@ -143,18 +143,19 @@ impl RegexSlot {
 }
 
 /// What an instruction that may re-enter the evaluator produced.
-pub(crate) enum VmStep<'d, I> {
+pub(crate) enum VmStep<'e, 'd, I> {
     /// The instruction's value.
     Value(Option<SolutionTerm<I>>),
     /// The instruction needs pattern evaluation before it has a value.
-    Suspend(Suspend<'d>),
+    Suspend(Suspend<'e, 'd>),
 }
 
-/// A SPARQL-bodied function call an instruction is waiting on: the declaration, the
-/// prepared body, the call's entry in the program's call table, and the evaluated
-/// arguments.
-pub(crate) enum Suspend<'d> {
-    /// The call.
+/// A pattern evaluation an instruction is waiting on.
+pub(crate) enum Suspend<'e, 'd> {
+    /// `EXISTS` over `pattern`, for the current row.
+    Exists(&'e GraphPattern),
+    /// A SPARQL-bodied function call: the declaration, the prepared body, the call's
+    /// entry in the program's call table, and the evaluated arguments.
     SparqlUdf {
         func: &'d crate::user_fn::UserFunction,
         body: &'d Arc<crate::engine::PreparedQuery>,
@@ -163,25 +164,10 @@ pub(crate) enum Suspend<'d> {
     },
 }
 
-/// Where a run of a [`Program`] stopped.
-pub(crate) enum VmRun<I> {
-    /// The expression's value over the row: `Some` a term, `None` an error or unbound.
-    Done(Option<SolutionTerm<I>>),
-    /// The run reached `EXISTS` site `k` (the `k`-th `EXISTS` in the expression's
-    /// pre-order, [`exists_body`]) and waits for its answer, which
-    /// [`Program::resume`] supplies.
-    Exists(u32),
-}
-
 /// A program linked to one operator call: its variable slots resolved to the call's
-/// schema, its constant regexes compiled, and its constant pool, value stack and program
-/// counter.
-///
-/// A run is resumable: it stops at an `EXISTS` ([`VmRun::Exists`]) with its stack and
-/// program counter kept here, and [`Self::resume`] continues it with the answer. The
-/// program holds no reference to the expression it was compiled from, so an operator
-/// frame keeps it across the frames that answer the `EXISTS`.
-pub(crate) struct Program<I: Copy> {
+/// schema, its constant regexes compiled, its `EXISTS` bound to their patterns, and its
+/// constant pool and value stack.
+pub(crate) struct Linked<'e, I: Copy> {
     program: Arc<ExprProgram>,
     /// Each variable slot's schema column.
     slots: Vec<Option<usize>>,
@@ -189,15 +175,45 @@ pub(crate) struct Program<I: Copy> {
     consts: Vec<ConstCell<I>>,
     /// Each regex slot's pattern.
     regexes: Vec<RegexSlot>,
+    /// Each `EXISTS`'s pattern, in the expression's pre-order.
+    exists: Vec<&'e GraphPattern>,
     stack: Vec<Val<I>>,
-    /// Where a stopped run resumes.
-    pc: usize,
 }
 
-impl<I: Copy + PartialEq> Program<I> {
-    /// Link `program` to a call over `schema`.
+impl<'e, I: Copy + PartialEq> Linked<'e, I> {
+    /// Link `program`, compiled from `expr`, to a call over `schema`.
     pub(crate) fn link<D: DatasetView<Id = I> + Sync>(
         program: Arc<ExprProgram>,
+        expr: &'e Expression,
+        schema: &VarSchema,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Self {
+        let mut exists = Vec::new();
+        if program.has_exists() {
+            let mut pending = vec![expr];
+            while let Some(expr) = pending.pop() {
+                if let Expression::Exists(pattern) = expr {
+                    exists.push(&**pattern);
+                }
+                compile::push_operands(expr, &mut pending);
+            }
+        }
+        Self::link_parts(program, exists, schema, ctx)
+    }
+
+    /// Link a program whose expression is not at hand. An `EXISTS` in it has no
+    /// pattern to test and fails the run as an internal error.
+    pub(crate) fn link_without_exists<D: DatasetView<Id = I> + Sync>(
+        program: Arc<ExprProgram>,
+        schema: &VarSchema,
+        ctx: &mut EvalCtx<'_, D>,
+    ) -> Self {
+        Self::link_parts(program, Vec::new(), schema, ctx)
+    }
+
+    fn link_parts<D: DatasetView<Id = I> + Sync>(
+        program: Arc<ExprProgram>,
+        exists: Vec<&'e GraphPattern>,
         schema: &VarSchema,
         ctx: &mut EvalCtx<'_, D>,
     ) -> Self {
@@ -220,73 +236,58 @@ impl<I: Copy + PartialEq> Program<I> {
             consts: vec![ConstCell::Unread; program.consts.len()],
             slots,
             regexes,
+            exists,
             stack: Vec::new(),
-            pc: 0,
             program,
         }
     }
 
-    /// A copy for a forked worker: the same slots and regexes, with a constant pool of
-    /// its own, since the worker interns into its own scratch.
+    /// A copy for a forked worker: the same slots, regexes and patterns, with a constant
+    /// pool of its own, since the worker interns into its own scratch.
     pub(crate) fn fresh(&self) -> Self {
         Self {
             program: Arc::clone(&self.program),
             slots: self.slots.clone(),
             consts: vec![ConstCell::Unread; self.consts.len()],
             regexes: self.regexes.clone(),
+            exists: self.exists.clone(),
             stack: Vec::new(),
-            pc: 0,
         }
     }
 
-    /// Start a run over `row`.
-    ///
-    /// # Errors
-    ///
-    /// A hard failure of the expression.
-    pub(crate) fn run<D: DatasetView<Id = I> + Sync>(
+    /// The expression's effective boolean value over `row` (`Ok(None)` is an error or
+    /// unbound).
+    pub(crate) fn ebv<D: DatasetView<Id = I> + Sync>(
         &mut self,
         row: &[Option<SolutionTerm<I>>],
+        schema: &VarSchema,
         ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<VmRun<I>, EvalError> {
-        self.stack.clear();
-        self.pc = 0;
-        self.exec(row, ctx)
+    ) -> Result<Option<bool>, EvalError> {
+        match self.term(row, schema, ctx)? {
+            Some(term) => Ok(helpers::ebv_term(ctx, term)),
+            None => Ok(None),
+        }
     }
 
-    /// Continue the run that stopped at an `EXISTS`, whose answer is `found`, over the
-    /// same `row`.
-    ///
-    /// # Errors
-    ///
-    /// A hard failure of the expression.
-    pub(crate) fn resume<D: DatasetView<Id = I> + Sync>(
-        &mut self,
-        found: bool,
-        row: &[Option<SolutionTerm<I>>],
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<VmRun<I>, EvalError> {
-        let term = helpers::bool_term(ctx, found);
-        self.stack.push(Val::Term(Some(term)));
-        self.exec(row, ctx)
-    }
-
-    /// The interpreter, from the program counter to the end or to the next `EXISTS`.
-    fn exec<D: DatasetView<Id = I> + Sync>(
+    /// The expression's value over `row`: `Ok(Some)` a term, `Ok(None)` an error or
+    /// unbound, `Err` a hard failure. `schema` is the schema the program was linked to.
+    pub(crate) fn term<D: DatasetView<Id = I> + Sync>(
         &mut self,
         row: &[Option<SolutionTerm<I>>],
+        schema: &VarSchema,
         ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<VmRun<I>, EvalError> {
+    ) -> Result<Option<SolutionTerm<I>>, EvalError> {
         let Self {
             program,
             slots,
             consts,
             regexes,
+            exists,
             stack,
-            pc: pc_slot,
         } = self;
+        stack.clear();
         let ops = &program.ops;
-        let mut pc = *pc_slot;
+        let mut pc = 0_usize;
         while let Some(op) = ops.get(pc) {
             pc += 1;
             match *op {
@@ -448,10 +449,14 @@ impl<I: Copy + PartialEq> Program<I> {
                     )));
                 }
                 Op::Exists(site) => {
-                    // The row's value waits on a pattern evaluation: the run stops here,
-                    // with the instruction after this one as where it resumes.
-                    *pc_slot = pc;
-                    return Ok(VmRun::Exists(site));
+                    let pattern = exists.get(site as usize).copied().ok_or_else(|| {
+                        EvalError::internal(
+                            "an EXISTS instruction was run by a link that holds no pattern \
+                             for it",
+                        )
+                    })?;
+                    let value = resolve(Suspend::Exists(pattern), program, row, schema, ctx)?;
+                    stack.push(Val::Term(value));
                 }
                 Op::Call { call, argc, regex } => {
                     let vals = pop_values(stack, argc, ctx)?;
@@ -468,7 +473,7 @@ impl<I: Copy + PartialEq> Program<I> {
                     let vals = pop_values(stack, argc, ctx)?;
                     let value = match call_custom(program, call, vals, ctx)? {
                         VmStep::Value(value) => value,
-                        VmStep::Suspend(suspend) => resolve(suspend, program, ctx)?,
+                        VmStep::Suspend(suspend) => resolve(suspend, program, row, schema, ctx)?,
                     };
                     stack.push(Val::Term(value));
                 }
@@ -549,117 +554,7 @@ impl<I: Copy + PartialEq> Program<I> {
                 "an expression program left more than its value on the stack",
             ));
         }
-        Ok(VmRun::Done(value))
-    }
-}
-
-/// The body of `EXISTS` site `site` of `expr`: the `site`-th `EXISTS` in the
-/// expression's pre-order, the order the compiler numbers them in.
-pub(crate) fn exists_body(expr: &Expression, site: u32) -> Option<&GraphPattern> {
-    let mut seen = 0_u32;
-    let mut pending = vec![expr];
-    while let Some(expr) = pending.pop() {
-        if let Expression::Exists(pattern) = expr {
-            if seen == site {
-                return Some(pattern);
-            }
-            seen += 1;
-        }
-        compile::push_operands(expr, &mut pending);
-    }
-    None
-}
-
-/// The error of an `EXISTS` site no expression holds a body for.
-pub(crate) fn no_exists_body() -> EvalError {
-    EvalError::internal("an EXISTS instruction was run by a link that holds no pattern for it")
-}
-
-/// A [`Program`] that answers each `EXISTS` it reaches by evaluating it at once, on the
-/// calling thread: the form a forked worker and a test run an expression in.
-///
-/// The frame machine's operators run a [`Program`] themselves and answer an `EXISTS` with
-/// frames; this runs one on a machine of its own
-/// ([`crate::machine::block_on_exists`]), so an expression evaluated here costs one
-/// machine per `EXISTS` it reaches and no stack per level of the pattern below it.
-pub(crate) struct Linked<'e, I: Copy> {
-    program: Program<I>,
-    /// The expression the program was compiled from, whose `EXISTS` bodies it tests.
-    expr: Option<&'e Expression>,
-}
-
-impl<'e, I: Copy + PartialEq> Linked<'e, I> {
-    /// Link `program`, compiled from `expr`, to a call over `schema`.
-    pub(crate) fn link<D: DatasetView<Id = I> + Sync>(
-        program: Arc<ExprProgram>,
-        expr: &'e Expression,
-        schema: &VarSchema,
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Self {
-        Self {
-            program: Program::link(program, schema, ctx),
-            expr: Some(expr),
-        }
-    }
-
-    /// Link a program whose expression is not at hand. An `EXISTS` in it has no
-    /// pattern to test and fails the run as an internal error.
-    pub(crate) fn link_without_exists<D: DatasetView<Id = I> + Sync>(
-        program: Arc<ExprProgram>,
-        schema: &VarSchema,
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Self {
-        Self {
-            program: Program::link(program, schema, ctx),
-            expr: None,
-        }
-    }
-
-    /// A copy for a forked worker: the same slots, regexes and expression, with a
-    /// constant pool of its own, since the worker interns into its own scratch.
-    pub(crate) fn fresh(&self) -> Self {
-        Self {
-            program: self.program.fresh(),
-            expr: self.expr,
-        }
-    }
-
-    /// The expression's effective boolean value over `row` (`Ok(None)` is an error or
-    /// unbound).
-    pub(crate) fn ebv<D: DatasetView<Id = I> + Sync>(
-        &mut self,
-        row: &[Option<SolutionTerm<I>>],
-        schema: &VarSchema,
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<Option<bool>, EvalError> {
-        match self.term(row, schema, ctx)? {
-            Some(term) => Ok(helpers::ebv_term(ctx, term)),
-            None => Ok(None),
-        }
-    }
-
-    /// The expression's value over `row`: `Ok(Some)` a term, `Ok(None)` an error or
-    /// unbound, `Err` a hard failure. `schema` is the schema the program was linked to.
-    pub(crate) fn term<D: DatasetView<Id = I> + Sync>(
-        &mut self,
-        row: &[Option<SolutionTerm<I>>],
-        schema: &VarSchema,
-        ctx: &mut EvalCtx<'_, D>,
-    ) -> Result<Option<SolutionTerm<I>>, EvalError> {
-        let mut run = self.program.run(row, ctx)?;
-        loop {
-            match run {
-                VmRun::Done(value) => return Ok(value),
-                VmRun::Exists(site) => {
-                    let body = self
-                        .expr
-                        .and_then(|expr| exists_body(expr, site))
-                        .ok_or_else(no_exists_body)?;
-                    let found = crate::machine::block_on_exists(body, row, schema, ctx)?;
-                    run = self.program.resume(found, row, ctx)?;
-                }
-            }
-        }
+        Ok(value)
     }
 }
 
@@ -691,12 +586,12 @@ fn compare<D: DatasetView + Sync>(
 /// A caller-registered function call over its evaluated arguments, probed in the order
 /// the registry documents: SPARQL-bodied (which suspends), native, expression-bodied,
 /// then an XSD constructor cast; an IRI none of them names is unsupported.
-fn call_custom<'d, D: DatasetView + Sync>(
+fn call_custom<'e, 'd, D: DatasetView + Sync>(
     program: &ExprProgram,
     call: u32,
     vals: Vec<Option<TermValue>>,
     ctx: &mut EvalCtx<'d, D>,
-) -> Result<VmStep<'d, D::Id>, EvalError> {
+) -> Result<VmStep<'e, 'd, D::Id>, EvalError> {
     let Function::Custom(iri) = &program.calls[call as usize] else {
         return Err(EvalError::internal(
             "a custom-call instruction names a built-in function",
@@ -714,26 +609,34 @@ fn call_custom<'d, D: DatasetView + Sync>(
     helpers::apply_custom_host(iri.as_str(), &vals, ctx).map(VmStep::Value)
 }
 
-/// Resolve a SPARQL-bodied function call by evaluating its body, now, on the calling
-/// thread.
+/// Resolve a suspension by running the pattern evaluation it waits on, now.
 fn resolve<D: DatasetView + Sync>(
-    suspend: Suspend<'_>,
+    suspend: Suspend<'_, '_>,
     program: &ExprProgram,
+    row: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Suspend::SparqlUdf {
-        func,
-        body,
-        call,
-        vals,
-    } = suspend;
-    let Function::Custom(iri) = &program.calls[call as usize] else {
-        return Err(EvalError::internal(
-            "a suspended function call names a built-in function",
-        ));
-    };
-    let result = crate::user_fn::eval_user_function(func, body, iri.as_str(), &vals, ctx)?;
-    Ok(result.and_then(|value| helpers::intern(ctx, value)))
+    match suspend {
+        Suspend::Exists(pattern) => {
+            let found = helpers::exists(pattern, row, schema, ctx)?;
+            Ok(Some(helpers::bool_term(ctx, found)))
+        }
+        Suspend::SparqlUdf {
+            func,
+            body,
+            call,
+            vals,
+        } => {
+            let Function::Custom(iri) = &program.calls[call as usize] else {
+                return Err(EvalError::internal(
+                    "a suspended function call names a built-in function",
+                ));
+            };
+            let result = crate::user_fn::eval_user_function(func, body, iri.as_str(), &vals, ctx)?;
+            Ok(result.and_then(|value| helpers::intern(ctx, value)))
+        }
+    }
 }
 
 /// Pop `argc` terms and materialize their values, in argument order.
