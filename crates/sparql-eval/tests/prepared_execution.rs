@@ -491,15 +491,15 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 /// query carries three distinct IRIs rather than one: a per-occurrence cost would show
 /// here as a multiple of three.
 ///
-/// The **51**, read off the calling thread's ledger one allocation at a time:
+/// The **49**, read off the calling thread's ledger one allocation at a time:
 ///
 /// * **2** the per-call `Query::validate` walk's traversal stack;
 /// * **1** the evaluation context;
 /// * **11** the two basic graph patterns — their compiled patterns, working schemas
 ///   and row buffers;
-/// * **12** the `FILTER` over the eight joined rows — its output rows and receipts,
-///   the value stack its program runs on, the constant it interns and the terms the
-///   comparison types;
+/// * **10** the `FILTER` over the eight joined rows — its output rows, the value
+///   stack its program runs on, the constant it interns and the terms the comparison
+///   types (its worker's receipts are harvested inline);
 /// * **3** the XSD parse cache the comparison fills;
 /// * **2** the projection's column map and rows;
 /// * **20** the materialized egress — the eight answer rows and their IRI strings,
@@ -507,7 +507,7 @@ fn a_reused_handle_answers_and_charges_exactly_as_a_fresh_one_does() {
 ///
 /// None of it is the plan: the numbered tree and the `FILTER`'s compiled program are
 /// the admitted plan's, built on its first evaluation and shared by every later one.
-const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 51;
+const PREPARED_PLAN_CALL_ALLOCATIONS: u64 = 49;
 
 /// The query [`PREPARED_PLAN_CALL_ALLOCATIONS`] is measured over.
 ///

@@ -188,16 +188,16 @@ impl Constant {
 /// program is shared by every evaluation of its site.
 #[derive(Debug, Default)]
 pub(crate) struct ExprProgram {
-    /// The instructions.
-    pub(super) ops: Vec<Op>,
-    /// The variables the program reads, one slot each.
-    pub(super) vars: Vec<Variable>,
-    /// The term constants, one per occurrence.
-    pub(super) consts: Vec<Constant>,
+    /// The instructions, inline up to a small expression's length.
+    pub(super) ops: smallvec::SmallVec<[Op; 8]>,
+    /// The variables the program reads, one slot each, inline up to two.
+    pub(super) vars: smallvec::SmallVec<[Variable; 2]>,
+    /// The term constants, one per occurrence, inline up to two.
+    pub(super) consts: smallvec::SmallVec<[Constant; 2]>,
     /// The string-argument constants.
     pub(super) strs: Vec<(String, Option<String>)>,
-    /// The functions called.
-    pub(super) calls: Vec<Function>,
+    /// The functions called, inline up to two.
+    pub(super) calls: smallvec::SmallVec<[Function; 2]>,
     /// For each regex slot, the constant `(pattern, flags)` it links, when both are
     /// constants.
     pub(super) regexes: Vec<Option<(String, String)>>,

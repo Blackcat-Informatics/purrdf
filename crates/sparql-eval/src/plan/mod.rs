@@ -37,7 +37,6 @@ use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use purrdf_sparql_algebra::{Expression, GraphPattern};
 
-use crate::DetHashMap;
 use crate::eval::PreparedExists;
 use crate::governor::soundness::{
     ChildEdge, PATTERN_LABELS, PatternPart, pattern_label_index, visit_exists_patterns,
@@ -141,52 +140,77 @@ pub(crate) struct ExistsSite {
     prepared: OnceLock<Arc<PreparedExists>>,
 }
 
+/// One node's row of the shape: every per-node table the evaluator reads, and the ones
+/// only the tests read, in one record so a tree's nodes cost one allocation.
+#[derive(Clone)]
+struct NodeRow {
+    /// The node's algebra variant.
+    kind: NodeKind,
+    /// The node's depth below the root.
+    depth: u32,
+    /// The first id past the node's subtree.
+    subtree_end: NodeId,
+    /// The node's attached expressions, as a range of [`ExprId`]s.
+    exprs: Range<u32>,
+    /// The node's parent; `None` for the root.
+    parent: Option<NodeId>,
+    /// The address the node lived at when the shape was built.
+    address: usize,
+    /// The id of the node whose address ranks at this row's index among every node's
+    /// address, ascending: read across the rows, the address index [`AddressIndex`]
+    /// binary-searches.
+    by_address: NodeId,
+    /// The edge from the node's parent to it; [`ChildEdge::MONOTONE`] for the root.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the pre-order test asserts it; no evaluator path reads it"
+        )
+    )]
+    edge_in: ChildEdge,
+}
+
+/// One attached expression of the shape: the node it is attached to and its compiled
+/// program.
+struct ExprSlot {
+    /// The node the expression is attached to.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the pre-order test asserts it; no evaluator path reads it"
+        )
+    )]
+    owner: NodeId,
+    /// The expression's compiled program, compiled the first time the expression is
+    /// evaluated.
+    program: OnceLock<Arc<ExprProgram>>,
+}
+
+/// Node address to id, for code that still reaches a node by reference: a view of a
+/// shape's rows, whose [`NodeRow::by_address`] column lists every node in ascending
+/// address order, so a lookup is a binary search.
+#[derive(Clone, Copy)]
+pub(crate) struct AddressIndex<'s>(&'s [NodeRow]);
+
+impl AddressIndex<'_> {
+    /// The id of the node at `address`, when one of the indexed nodes lives there.
+    pub(crate) fn get(self, address: usize) -> Option<NodeId> {
+        let rows = self.0;
+        rows.binary_search_by_key(&address, |row| rows[row.by_address.index()].address)
+            .ok()
+            .map(|rank| rows[rank].by_address)
+    }
+}
+
 /// The dense per-node tables of one tree. Holds no reference into the tree it was built
 /// from, so it is shared by [`Arc`] with forked workers and with the charge ledger.
 pub(crate) struct PlanShape {
-    /// Each node's algebra variant.
-    kind: Vec<NodeKind>,
-    /// Each node's depth below the root.
-    depth: Vec<u32>,
-    /// Each node's parent; `None` for the root.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the pre-order test asserts it; no evaluator path reads it"
-        )
-    )]
-    parent: Vec<Option<NodeId>>,
-    /// The first id past each node's subtree.
-    subtree_end: Vec<NodeId>,
-    /// Where each node's children start in [`Self::children`]; one entry past the last
-    /// node closes the final range.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the pre-order test asserts it; no evaluator path reads it"
-        )
-    )]
-    child_start: Vec<u32>,
-    /// Every node's children with the edge reaching each, in
-    /// [`visit_classified_children`](crate::governor::soundness::visit_classified_children)
-    /// order: direct children, then `EXISTS` bodies.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the pre-order test asserts it; no evaluator path reads it"
-        )
-    )]
-    children: Vec<(NodeId, ChildEdge)>,
-    /// Each node's attached expressions, as a range of [`ExprId`]s.
-    node_exprs: Vec<Range<u32>>,
-    /// Each attached expression's compiled program, indexed by [`ExprId`] and compiled
-    /// the first time the expression is evaluated.
-    programs: Vec<OnceLock<Arc<ExprProgram>>>,
-    /// Each attached expression's node, indexed by [`ExprId`].
-    expr_owner: Vec<NodeId>,
+    /// Each node's row, indexed by [`NodeId`].
+    rows: Vec<NodeRow>,
+    /// Each attached expression's owner and compiled program, indexed by [`ExprId`].
+    exprs: Vec<ExprSlot>,
     /// Each property-path node, indexed by [`PathId`].
     #[cfg_attr(
         not(test),
@@ -200,11 +224,9 @@ pub(crate) struct PlanShape {
     sites: Vec<ExistsSite>,
     /// The tree's variable-endpoint `SERVICE` analysis, indexed by node.
     endpoints: EndpointScan,
-    /// Node address to id, for code that still reaches a node by reference. The root's
-    /// entry is the address it had when the shape was built; [`Self::root`] is where it
-    /// is now, and is the only way the root is resolved.
-    addr: DetHashMap<usize, NodeId>,
-    /// The address the root lives at for the evaluation running over this shape. Set by
+    /// The address the root lives at for the evaluation running over this shape. The
+    /// root's row keeps the address it had when the shape was built; this is where it is
+    /// now, and is the only way the root is resolved. Set by
     /// [`Tree::build`] and, for a kept shape, by [`PlanCache::handle`] before each
     /// evaluation; every evaluation sharing one kept shape runs over the one tree its
     /// owner holds, so every one of them sets the same address.
@@ -227,7 +249,7 @@ pub(crate) struct PlanShape {
 impl PlanShape {
     /// The number of nodes.
     pub(crate) fn len(&self) -> usize {
-        self.kind.len()
+        self.rows.len()
     }
 
     /// The id of the node at `pattern`'s address, when `pattern` is a node of this tree.
@@ -240,25 +262,24 @@ impl PlanShape {
         if address == self.root.load(Ordering::Relaxed) {
             return Some(NodeId::ROOT);
         }
-        self.addr
-            .get(&address)
-            .copied()
+        AddressIndex(&self.rows)
+            .get(address)
             .filter(|id| *id != NodeId::ROOT)
     }
 
     /// `node`'s algebra variant.
     pub(crate) fn kind(&self, node: NodeId) -> NodeKind {
-        self.kind[node.index()]
+        self.rows[node.index()].kind
     }
 
     /// `node`'s depth below the root.
     pub(crate) fn depth(&self, node: NodeId) -> u32 {
-        self.depth[node.index()]
+        self.rows[node.index()].depth
     }
 
     /// The first id past `node`'s subtree.
     pub(crate) fn subtree_end(&self, node: NodeId) -> NodeId {
-        self.subtree_end[node.index()]
+        self.rows[node.index()].subtree_end
     }
 
     /// The site whose body is `body`, when `body` is an `EXISTS` body of this tree.
@@ -296,7 +317,7 @@ impl PlanShape {
         position: usize,
         expr: &Expression,
     ) -> Arc<ExprProgram> {
-        let range = &self.node_exprs[node.index()];
+        let range = &self.rows[node.index()].exprs;
         if position >= range.len() {
             return Arc::new(ExprProgram::compile(expr));
         }
@@ -316,7 +337,11 @@ impl PlanShape {
             drop(kept);
             return program;
         }
-        Arc::clone(self.programs[id].get_or_init(|| Arc::new(ExprProgram::compile(expr))))
+        Arc::clone(
+            self.exprs[id]
+                .program
+                .get_or_init(|| Arc::new(ExprProgram::compile(expr))),
+        )
     }
 
     /// The tree's variable-endpoint `SERVICE` analysis.
@@ -326,22 +351,17 @@ impl PlanShape {
 
     /// The address map the tree was numbered with.
     #[cfg(test)]
-    pub(crate) const fn addresses(&self) -> &DetHashMap<usize, NodeId> {
-        &self.addr
+    pub(crate) fn addresses(&self) -> AddressIndex<'_> {
+        AddressIndex(&self.rows)
     }
 }
 
-/// The nodes a [`Tree`] numbers.
-pub(crate) enum Src<'q> {
-    /// Nodes of a pattern the caller owns, indexed by [`NodeId`].
-    Borrowed(Vec<&'q GraphPattern>),
-}
-
-/// A numbered algebra tree: a fresh [`TreeKey`], the shape, and the nodes it numbers.
+/// A numbered algebra tree: a fresh [`TreeKey`] and the shape, borrowing the pattern it
+/// numbers so the nodes stay alive and unmoved at the addresses the shape recorded.
 pub(crate) struct Tree<'q> {
     key: TreeKey,
     shape: Arc<PlanShape>,
-    src: Src<'q>,
+    numbered: std::marker::PhantomData<&'q GraphPattern>,
 }
 
 /// What an evaluation context carries of its tree: the key and the shape, without the
@@ -390,23 +410,27 @@ impl<'q> Tree<'q> {
     /// decomposition. The walk runs over a work list, so a tree of any height costs heap
     /// and never stack.
     pub(crate) fn build(root: &'q GraphPattern) -> Self {
-        let mut src: Vec<&'q GraphPattern> = Vec::new();
-        let mut kind = Vec::new();
-        let mut depth = Vec::new();
-        let mut parent: Vec<Option<NodeId>> = Vec::new();
-        // The build's scratch tables are inline up to a small tree's size.
-        let mut edge_in: smallvec::SmallVec<[ChildEdge; 16]> = smallvec::SmallVec::new();
-        let mut node_exprs = Vec::new();
-        let mut expr_owner = Vec::new();
+        // A first walk counts the nodes and their attached expressions, so each table is
+        // allocated once at its final size.
+        let (mut node_count, mut expr_count) = (0_usize, 0_usize);
+        walk_spine(root, &mut |node, _context, _level| {
+            node_count += 1;
+            visit_pattern_parts(node, &mut |part| {
+                expr_count += usize::from(matches!(part, PatternPart::Expression(_)));
+                false
+            });
+        });
+        let mut rows: Vec<NodeRow> = Vec::with_capacity(node_count);
+        let mut exprs: Vec<ExprSlot> = Vec::with_capacity(expr_count);
         let mut paths = Vec::new();
         let mut sites = Vec::new();
-        let mut addr = DetHashMap::default();
+        // The walk's open ancestors are inline up to a shallow tree's depth.
         let mut open: smallvec::SmallVec<[Open; 8]> = smallvec::SmallVec::new();
         walk_spine(root, &mut |node, _context, level| {
             while open.last().is_some_and(|ancestor| ancestor.depth >= level) {
                 open.pop();
             }
-            let id = NodeId::from_index(src.len());
+            let id = NodeId::from_index(rows.len());
             let (up, edge, via) = match open.last_mut() {
                 Some(ancestor) => {
                     let (edge, via) = ancestor.children[ancestor.visited];
@@ -415,12 +439,6 @@ impl<'q> Tree<'q> {
                 }
                 None => (None, ChildEdge::MONOTONE, None),
             };
-            src.push(node);
-            kind.push(NodeKind::of(node));
-            depth.push(level as u32);
-            parent.push(up);
-            edge_in.push(edge);
-            addr.insert(std::ptr::from_ref(node) as usize, id);
             if matches!(node, GraphPattern::Path { .. }) {
                 paths.push(id);
             }
@@ -431,14 +449,17 @@ impl<'q> Tree<'q> {
                     prepared: OnceLock::new(),
                 });
             }
-            let first_expr = expr_owner.len() as u32;
+            let first_expr = exprs.len() as u32;
             let mut children = smallvec::SmallVec::new();
             visit_pattern_parts(node, &mut |part| {
                 match part {
                     PatternPart::Child(_, edge) => children.push((edge, None)),
                     PatternPart::Expression(expr) => {
-                        let expr_id = ExprId(expr_owner.len() as u32);
-                        expr_owner.push(id);
+                        let expr_id = ExprId(exprs.len() as u32);
+                        exprs.push(ExprSlot {
+                            owner: id,
+                            program: OnceLock::new(),
+                        });
                         visit_exists_patterns(expr, &mut |_| {
                             children.push((ChildEdge::OPAQUE, Some(expr_id)));
                             false
@@ -447,7 +468,17 @@ impl<'q> Tree<'q> {
                 }
                 false
             });
-            node_exprs.push(first_expr..expr_owner.len() as u32);
+            rows.push(NodeRow {
+                kind: NodeKind::of(node),
+                depth: level as u32,
+                // Every subtree is sized by the reverse sweep below; a leaf keeps this.
+                subtree_end: NodeId::from_index(id.index() + 1),
+                exprs: first_expr..exprs.len() as u32,
+                parent: up,
+                address: std::ptr::from_ref(node) as usize,
+                by_address: id,
+                edge_in: edge,
+            });
             open.push(Open {
                 id,
                 depth: level,
@@ -456,72 +487,47 @@ impl<'q> Tree<'q> {
             });
         });
 
-        let count = src.len();
-        // Pre-order puts every child after its parent, so one reverse sweep sizes every
-        // subtree and one forward sweep lays each parent's children out in id order.
-        let mut size: smallvec::SmallVec<[u32; 16]> = smallvec::smallvec![1_u32; count];
-        for index in (1..count).rev() {
-            if let Some(p) = parent[index] {
-                size[p.index()] += size[index];
+        // Pre-order puts every node after its parent and its subtree contiguously after
+        // it, so one reverse sweep extends each parent's subtree end over its children's.
+        for index in (1..rows.len()).rev() {
+            if let Some(p) = rows[index].parent {
+                let end = rows[index].subtree_end;
+                let parent = &mut rows[p.index()].subtree_end;
+                *parent = (*parent).max(end);
             }
         }
-        let subtree_end = (0..count)
-            .map(|index| NodeId::from_index(index + size[index] as usize))
+        // The address order, ranked in a scratch list inline up to a small tree's size and
+        // written into the rows' `by_address` column.
+        let mut ranked: smallvec::SmallVec<[(usize, NodeId); 16]> = rows
+            .iter()
+            .map(|row| (row.address, row.by_address))
             .collect();
-        let mut child_start = vec![0_u32; count + 1];
-        for p in parent.iter().flatten() {
-            child_start[p.index() + 1] += 1;
-        }
-        for index in 0..count {
-            child_start[index + 1] += child_start[index];
-        }
-        let mut fill: smallvec::SmallVec<[u32; 16]> =
-            child_start[..count].iter().copied().collect();
-        let mut laid_out = vec![(NodeId::ROOT, ChildEdge::OPAQUE); count.saturating_sub(1)];
-        for index in 1..count {
-            if let Some(p) = parent[index] {
-                let slot = &mut fill[p.index()];
-                laid_out[*slot as usize] = (NodeId::from_index(index), edge_in[index]);
-                *slot += 1;
-            }
+        ranked.sort_unstable_by_key(|(address, _)| *address);
+        for (row, (_, id)) in rows.iter_mut().zip(ranked) {
+            row.by_address = id;
         }
 
-        let endpoints = crate::service_endpoints::scan(root, &addr, count);
+        let endpoints = crate::service_endpoints::scan(root, &AddressIndex(&rows), rows.len());
         Self {
             key: TreeKey::fresh(),
             shape: Arc::new(PlanShape {
-                kind,
-                depth,
-                parent,
-                subtree_end,
-                child_start,
-                children: laid_out,
-                programs: (0..expr_owner.len()).map(|_| OnceLock::new()).collect(),
-                node_exprs,
-                expr_owner,
+                rows,
+                exprs,
                 paths,
                 sites,
                 endpoints,
-                addr,
                 root: AtomicUsize::new(std::ptr::from_ref(root) as usize),
                 volatile_exprs: Vec::new(),
                 recycled: Vec::new(),
                 volatile_sites: Vec::new(),
             }),
-            src: Src::Borrowed(src),
+            numbered: std::marker::PhantomData,
         }
     }
 
     /// The tree's shape.
     pub(crate) const fn shape(&self) -> &Arc<PlanShape> {
         &self.shape
-    }
-
-    /// The node `node` numbers.
-    pub(crate) fn pattern(&self, node: NodeId) -> &'q GraphPattern {
-        match &self.src {
-            Src::Borrowed(nodes) => nodes[node.index()],
-        }
     }
 
     /// What an evaluation context keeps of this tree.
@@ -581,6 +587,9 @@ impl PlanCache {
     /// — two trees that differ in more than their values.
     pub(crate) fn varying(root: &GraphPattern, moved: &GraphPattern) -> Self {
         let tree = Tree::build(root);
+        // The tree's nodes, id for id: its numbering is this walk's pre-order.
+        let mut nodes: Vec<&GraphPattern> = Vec::with_capacity(tree.shape.len());
+        walk_spine(root, &mut |node, _context, _level| nodes.push(node));
         // `moved` has `root`'s structure, so its nodes in the same pre-order are the
         // tree's nodes, id for id.
         let mut others: Vec<&GraphPattern> = Vec::with_capacity(tree.shape.len());
@@ -589,16 +598,16 @@ impl PlanCache {
             others.len() == tree.shape.len(),
             "a retained tree and its value-moved copy number the same nodes"
         );
-        let expr_count = tree.shape.expr_owner.len();
+        let expr_count = tree.shape.exprs.len();
         let mut exprs: Vec<bool> = Vec::new();
         for (index, other) in others.iter().enumerate() {
-            let here = attached(tree.pattern(NodeId::from_index(index)));
+            let here = attached(nodes[index]);
             let there = attached(other);
             assert!(
                 here.len() == there.len(),
                 "a retained tree and its value-moved copy attach the same expressions"
             );
-            let first = tree.shape.node_exprs[index].start as usize;
+            let first = tree.shape.rows[index].exprs.start as usize;
             for (offset, (a, b)) in here.iter().zip(&there).enumerate() {
                 if a != b {
                     if exprs.is_empty() {
@@ -610,14 +619,14 @@ impl PlanCache {
         }
         let mut sites: Vec<bool> = Vec::new();
         for (index, site) in tree.shape.sites.iter().enumerate() {
-            if tree.pattern(site.body) != others[site.body.index()] {
+            if nodes[site.body.index()] != others[site.body.index()] {
                 if sites.is_empty() {
                     sites = vec![false; tree.shape.sites.len()];
                 }
                 sites[index] = true;
             }
         }
-        drop(others);
+        drop((nodes, others));
         let Tree { key, mut shape, .. } = tree;
         let table = Arc::get_mut(&mut shape).expect("a tree just built shares its shape with none");
         if !exprs.is_empty() {
@@ -658,11 +667,15 @@ mod tests {
     };
 
     impl PlanShape {
-        /// `node`'s children, in classified order.
-        fn children_of(&self, node: NodeId) -> &[(NodeId, super::ChildEdge)] {
-            let start = self.child_start[node.index()] as usize;
-            let end = self.child_start[node.index() + 1] as usize;
-            &self.children[start..end]
+        /// `node`'s children with the edge reaching each, in id order: every node whose
+        /// parent row names `node`.
+        fn children_of(&self, node: NodeId) -> Vec<(NodeId, super::ChildEdge)> {
+            self.rows
+                .iter()
+                .enumerate()
+                .filter(|(_, row)| row.parent == Some(node))
+                .map(|(index, row)| (NodeId::from_index(index), row.edge_in))
+                .collect()
         }
     }
 
@@ -680,8 +693,9 @@ mod tests {
         let mut bodies: Vec<(NodeId, NodeId)> = Vec::new();
         for (index, (node, depth)) in spine.iter().enumerate() {
             let id = NodeId::from_index(index);
-            assert!(
-                std::ptr::eq(tree.pattern(id), *node),
+            assert_eq!(
+                shape.rows[index].address,
+                std::ptr::from_ref(*node) as usize,
                 "{context}: node {index} is walk_spine's node {index}"
             );
             assert_eq!(shape.node_of(node), Some(id), "{context}: bridge {index}");
@@ -704,11 +718,11 @@ mod tests {
             let mut next = index + 1;
             for ((child, edge), (expected_child, expected_edge)) in children.iter().zip(&expected) {
                 assert!(
-                    std::ptr::eq(tree.pattern(*child), *expected_child),
+                    std::ptr::eq(spine[child.index()].0, *expected_child),
                     "{context}"
                 );
                 assert_eq!(edge, expected_edge, "{context}: edge under {index}");
-                assert_eq!(shape.parent[child.index()], Some(id), "{context}");
+                assert_eq!(shape.rows[child.index()].parent, Some(id), "{context}");
                 assert_eq!(child.index(), next, "{context}: children are contiguous");
                 next = shape.subtree_end(*child).index();
             }
@@ -726,10 +740,10 @@ mod tests {
                 }
                 false
             });
-            let range = shape.node_exprs[index].clone();
+            let range = shape.rows[index].exprs.clone();
             assert_eq!(range, expected_exprs..expected_exprs + exprs, "{context}");
             for expr in range {
-                assert_eq!(shape.expr_owner[expr as usize], id, "{context}");
+                assert_eq!(shape.exprs[expr as usize].owner, id, "{context}");
             }
             expected_exprs += exprs;
             let direct = {
@@ -767,18 +781,21 @@ mod tests {
                 "{context}: site order"
             );
             assert_eq!(shape.sites[site.0 as usize].body, *body, "{context}");
-            let expr_owner = shape.expr_owner[shape.sites[site.0 as usize].expr.0 as usize];
+            let expr_owner = shape.exprs[shape.sites[site.0 as usize].expr.0 as usize].owner;
             assert_eq!(
                 expr_owner, *owner,
                 "{context}: a site's expression is its parent's"
             );
         }
         let expected_sites = bodies.len();
-        assert_eq!(shape.expr_owner.len(), expected_exprs as usize, "{context}");
-        assert_eq!(ExprId(expected_exprs).0 as usize, shape.expr_owner.len());
+        assert_eq!(shape.exprs.len(), expected_exprs as usize, "{context}");
+        assert_eq!(ExprId(expected_exprs).0 as usize, shape.exprs.len());
         assert_eq!(shape.paths.len(), expected_paths as usize, "{context}");
         assert_eq!(shape.sites.len(), expected_sites, "{context}");
-        assert_eq!(shape.parent[0], None, "{context}: the root has no parent");
+        assert_eq!(
+            shape.rows[0].parent, None,
+            "{context}: the root has no parent"
+        );
     }
 
     #[test]

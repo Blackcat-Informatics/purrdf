@@ -159,8 +159,8 @@ impl ServedIndex {
 
 /// The id a scan records `node` under: every node the scan reaches is a node of the tree
 /// whose address map it was handed.
-fn scanned_id(ids: &crate::DetHashMap<usize, NodeId>, node: &GraphPattern) -> NodeId {
-    *ids.get(&(std::ptr::from_ref(node) as usize))
+fn scanned_id(ids: &crate::plan::AddressIndex<'_>, node: &GraphPattern) -> NodeId {
+    ids.get(std::ptr::from_ref(node) as usize)
         .expect("the endpoint scan walks only nodes of the tree it indexes")
 }
 
@@ -498,7 +498,7 @@ pub(crate) fn mentions_variable_endpoint(pattern: &GraphPattern) -> bool {
 /// maps to their ids — built with the tree by [`crate::plan::Tree::build`].
 pub(crate) fn scan(
     pattern: &GraphPattern,
-    ids: &crate::DetHashMap<usize, NodeId>,
+    ids: &crate::plan::AddressIndex<'_>,
     len: usize,
 ) -> EndpointScan {
     if !mentions_variable_endpoint(pattern) {
@@ -551,7 +551,7 @@ impl ServedIndex {
         &mut self,
         operand: &GraphPattern,
         summary: &[Occurrence],
-        ids: &crate::DetHashMap<usize, NodeId>,
+        ids: &crate::plan::AddressIndex<'_>,
     ) {
         let served: Arc<[Variable]> = summary
             .iter()
@@ -573,7 +573,7 @@ impl ServedIndex {
     fn summarize(
         &mut self,
         pattern: &GraphPattern,
-        ids: &crate::DetHashMap<usize, NodeId>,
+        ids: &crate::plan::AddressIndex<'_>,
     ) -> Vec<Occurrence> {
         let mut frames = vec![SummaryFrame::Enter(SummaryNode::Pattern(pattern))];
         let mut summaries: Vec<Vec<Occurrence>> = Vec::new();
@@ -607,7 +607,7 @@ impl ServedIndex {
         &mut self,
         node: SummaryNode<'_>,
         kids: &mut std::vec::IntoIter<Vec<Occurrence>>,
-        ids: &crate::DetHashMap<usize, NodeId>,
+        ids: &crate::plan::AddressIndex<'_>,
     ) -> Vec<Occurrence> {
         fn part(kids: &mut std::vec::IntoIter<Vec<Occurrence>>) -> Vec<Occurrence> {
             kids.next().expect("every part pushed its summary")
@@ -2354,7 +2354,6 @@ pub(crate) mod walk_tests {
 
     use super::{EndpointUse, Occurrence, Scope, ServedIndex, indirect, merge, record};
     use crate::governor::soundness::{ExpressionPart, PatternPart};
-    use crate::plan::NodeId;
     use crate::test_rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
@@ -2505,7 +2504,7 @@ pub(crate) mod walk_tests {
         fn summarize_reference(
             &mut self,
             pattern: &GraphPattern,
-            ids: &crate::DetHashMap<usize, NodeId>,
+            ids: &crate::plan::AddressIndex<'_>,
         ) -> Vec<Occurrence> {
             match pattern {
                 GraphPattern::Bgp { .. }
@@ -2645,7 +2644,7 @@ pub(crate) mod walk_tests {
         fn summarize_expression_reference(
             &mut self,
             expr: &Expression,
-            ids: &crate::DetHashMap<usize, NodeId>,
+            ids: &crate::plan::AddressIndex<'_>,
         ) -> Vec<Occurrence> {
             let mut summary = Vec::new();
             crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
@@ -2968,7 +2967,7 @@ pub(crate) mod walk_tests {
             classify_reference(&root, true, &mut Vec::new(), &mut reference_uses);
             assert_eq!(uses, reference_uses, "shape {shape}: {root:?}");
 
-            let ids = tree.shape().addresses();
+            let ids = &tree.shape().addresses();
             let mut index = ServedIndex::with_len(tree.shape().len());
             let summary = index.summarize(&root, ids);
             let mut reference_index = ServedIndex::with_len(tree.shape().len());

@@ -55,10 +55,10 @@
 //!
 //! | surface | allocations before | after | requested bytes before | after |
 //! |---|---|---|---|---|
-//! | `sh:sparql` constraint | 2,695 | 42 | 1,277,672 | 3,119 |
-//! | custom `sh:ask` component (2 value nodes) | 350 | 90 | 16,156 | 6,555 |
-//! | custom `sh:select` component | 2,738 | 50 | 1,278,972 | 3,694 |
-//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 105 | 13,393 | 6,744 |
+//! | `sh:sparql` constraint | 2,695 | 40 | 1,277,672 | 3,119 |
+//! | custom `sh:ask` component (2 value nodes) | 350 | 86 | 16,156 | 6,555 |
+//! | custom `sh:select` component | 2,738 | 48 | 1,278,972 | 3,694 |
+//! | SHACL-AF `sh:expression` call (2 tuples) | 236 | 101 | 13,393 | 6,744 |
 //!
 //! The "after" column is the figure pinned below, which is a live number rather
 //! than a historical one: it moves whenever the evaluator's per-query setup gets
@@ -562,8 +562,8 @@ const CASES: &[SparqlCase] = &[
             "          FILTER(!isLiteral(?n))\n",
             "        }\"\"\" ] .\n",
         ),
-        per_focus_node: 42,
-        governed_per_focus_node: 63,
+        per_focus_node: 40,
+        governed_per_focus_node: 61,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -582,12 +582,12 @@ const CASES: &[SparqlCase] = &[
             "ex:AskShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    sh:property [ sh:path ex:name ; ex:askParam true ] .\n",
         ),
-        per_focus_node: 90,
+        per_focus_node: 86,
         // The validator's `&&` is one node holding its two operands in one vector,
         // where the binary node boxed each: the governed lane's per-run copy of the
         // substituted query allocates once less for it, on each of the two value
         // nodes.
-        governed_per_focus_node: 118,
+        governed_per_focus_node: 114,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -610,8 +610,8 @@ const CASES: &[SparqlCase] = &[
             "ex:SelectShape a sh:NodeShape ; sh:targetClass ex:Focus ;\n",
             "    ex:selectParam true .\n",
         ),
-        per_focus_node: 50,
-        governed_per_focus_node: 71,
+        per_focus_node: 48,
+        governed_per_focus_node: 69,
         governed_entry: 29,
         footprint_is_boundable: false,
         results_per_violation: 1,
@@ -628,8 +628,8 @@ const CASES: &[SparqlCase] = &[
             "    sh:expression [ <http://www.w3.org/2005/xpath-functions#contains>\n",
             "        ( [ shnex:pathValues ex:name ] \"item\" ) ] .\n",
         ),
-        per_focus_node: 105,
-        governed_per_focus_node: 130,
+        per_focus_node: 101,
+        governed_per_focus_node: 126,
         governed_entry: 39,
         footprint_is_boundable: true,
         results_per_violation: 1,
@@ -1405,13 +1405,25 @@ const ASK_FALLBACK_SHAPES: &str = concat!(
 /// exactly as [`SparqlCase::per_focus_node`] is measured for the cases in
 /// [`CASES`] — same harness, same closed form, same two populations.
 ///
-/// It sits well above [`CASES`]'s `90` for the prepared `sh:ask component`
+/// It sits well above [`CASES`]'s `86` for the prepared `sh:ask component`
 /// case: the `&str` door re-probes the plan cache by hashing the whole query
 /// text on every run, re-interns every parameter name, and rebuilds the
 /// pre-binding list from scratch per value node, none of which the prepared
 /// door still pays for. That gap is exactly what this pin makes visible where
 /// nothing did before.
-const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 202;
+///
+/// What the count is made of: a focus node runs the `ASK` twice, once per value
+/// node, and each run clones the cached algebra, rewrites it under the SHACL
+/// pre-binding, numbers the rewritten tree and evaluates it. An allocation trace
+/// of one focus node on one thread, grouped by the innermost PurRDF frame,
+/// attributes about 84 to cloning and rewriting the query (the probe row's
+/// terms, their IRIs parsed, the substituted variables), about 54 to the hash
+/// join of the probe row with the filter's input, about 46 to evaluating the
+/// operators and the filter's expression program, 6 to numbering the two
+/// rewritten trees (per run: the node rows, the expression slots and the shared
+/// shape), 4 to the filter's forked worker context, 2 to compiling the filter's
+/// program, and the rest to the engine entry and the SHACL side's value terms.
+const ASK_FALLBACK_PER_FOCUS_NODE: u64 = 212;
 
 /// One dataset and one validator for [`ASK_FALLBACK_SHAPES`], built the same
 /// way [`Fixture::build`] builds each of [`CASES`]'s entries.
