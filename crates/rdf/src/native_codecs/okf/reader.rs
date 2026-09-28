@@ -106,6 +106,13 @@ impl StrictValue {
     }
 }
 
+/// Apply the reader's numeric normalization before accepting a writer projection.
+pub(super) fn json_from_yaml(value: serde_yaml::Value) -> Result<serde_json::Value, OkfError> {
+    serde_yaml::from_value::<StrictValue>(value)
+        .map_err(|error| OkfError::new(format!("invalid OKF YAML value: {error}")))?
+        .to_json()
+}
+
 impl<'de> Deserialize<'de> for StrictValue {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
