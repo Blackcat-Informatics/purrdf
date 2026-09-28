@@ -422,15 +422,13 @@ impl<'a> Cursor<'a> {
         self.position >= self.text.len()
     }
 
-    /// Advance past ASCII whitespace.
+    /// Advance past the grammar's four `WS` characters.
     ///
-    /// ASCII only, deliberately. The lexicals this scanner reads are the ones
-    /// [`candidate_lexical`] writes, whose separators are all ASCII, so treating
-    /// a Unicode space as a separator would accept a spelling this layer never
-    /// emits and cannot round-trip.
+    /// The lexicals this scanner reads are the ones [`candidate_lexical`]
+    /// writes, whose separators are SPARQL `WS` (space, tab, LF, CR).
     fn skip_whitespace(&mut self) {
         while let Some(ch) = self.rest().chars().next() {
-            if ch.is_ascii_whitespace() {
+            if purrdf_iri::terminals::is_ws_char(ch) {
                 self.position += ch.len_utf8();
             } else {
                 break;
@@ -555,7 +553,7 @@ impl<'a> Cursor<'a> {
     fn blank_label(&mut self) -> String {
         let start = self.position;
         while let Some(ch) = self.rest().chars().next() {
-            if ch.is_ascii_whitespace() || ch == ')' || ch == '>' {
+            if purrdf_iri::terminals::is_ws_char(ch) || ch == ')' || ch == '>' {
                 break;
             }
             self.position += ch.len_utf8();
@@ -744,7 +742,7 @@ pub fn observed_resolution(resolution: &BTreeMap<Iri, StratumResolution>) -> Str
 
 #[cfg(test)]
 mod tests {
-    use super::{RenderError, decode_term, sparql_term};
+    use super::{Cursor, RenderError, decode_term, sparql_term};
     use purrdf_core::TermBox;
     use purrdf_core::{RdfTextDirection, TermValue};
 
@@ -948,6 +946,21 @@ mod tests {
         ] {
             assert!(decode_term(text).is_ok(), "{text:?} is one canonical term");
         }
+    }
+
+    #[test]
+    fn cursor_uses_only_the_four_grammar_whitespace_characters() {
+        let mut spaces = Cursor::new("\t\n\r <http://example.org/s>");
+        spaces.skip_whitespace();
+        assert_eq!(spaces.rest(), "<http://example.org/s>");
+
+        let mut form_feed = Cursor::new("\u{c}<http://example.org/s>");
+        form_feed.skip_whitespace();
+        assert_eq!(form_feed.rest(), "\u{c}<http://example.org/s>");
+
+        let mut label = Cursor::new("a\u{c}b c");
+        assert_eq!(label.blank_label(), "a\u{c}b");
+        assert_eq!(label.rest(), " c");
     }
 
     /// The counter names every surface reports, written out as the whole set.
