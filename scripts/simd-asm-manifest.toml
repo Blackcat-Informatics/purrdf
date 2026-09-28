@@ -6408,7 +6408,7 @@ summary = "MD5 and the SHA3/Keccak-f[1600] permutation: each step of both consum
 
 [[site]]
 id = "hash.fixed-compress"
-summary = "the fixed-key hasher's compression, `Engine<Selected>::bytes`: `purrdf-core`'s `FastHasher` monomorphizes `Selected` to `Portable` (folded multiplies) on every build measured here except `Aes` (four lanes of AES rounds) on the one build whose target enables AES at compile time. Neither `Engine<P>` nor `fixed::portable`/`fixed::aes` is instantiated by any call inside `purrdf_hash`'s own library; `purrdf-core`'s `FastMap`/`FastSet` (`crates/rdf-core/src/hash.rs`) is the concrete caller that instantiates it, monomorphized into `purrdf-core`'s object code but still attributed to crate `purrdf_hash`, the type's origin, by this tool's demangler"
+summary = "the fixed-key streaming hasher's compression, `Engine<Selected>::bytes`: `purrdf-core`'s `FastHasher` monomorphizes `Selected` to `Portable` (folded multiplies) on every build measured here except `Aes` on the one build whose target enables AES at compile time. Slices of 17–32 bytes use two folded products plus rotated tail words, or two AES lanes with two rounds each; longer slices use four lanes. Neither `Engine<P>` nor `fixed::portable`/`fixed::aes` is instantiated by any call inside `purrdf_hash`'s own library; `purrdf-core`'s `FastHasher` (`crates/rdf-core/src/hash.rs`) supplies the policy, and a downstream `purrdf-rdf` caller retains an out-of-line instance even when core-only callers inline it. The demangler still attributes the instance to crate `purrdf_hash`, the type's origin"
 
   # `aarch64-neoverse-v1` is the only one of the seven configurations that compiles
   # `aes` at the target level (SSE2, `x86-64-v3` and `x86-64-v4` do not carry AES in
@@ -6434,6 +6434,35 @@ summary = "the fixed-key hasher's compression, `Engine<Selected>::bytes`: `purrd
   crate = "purrdf_hash"
   symbol = "purrdf_hash::fixed::Engine<purrdf_hash::fixed::Portable>>::bytes"
   min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+[[site]]
+id = "hash.fixed-terminal"
+summary = "the primary IRI index's tagged terminal-slice hash, `FixedHasher::hash_terminal`, called through `purrdf_core::hash::hash_iri_for_interner` by builder, global and frozen lookup. On portable builds it inlines into frozen `RdfDataset::term_id_by_iri`, whose measured vector count also includes the table probe. On Arm neoverse-v1 the AES terminal body survives out of line in purrdf-core, and the frozen lookup directly calls it; the terminal body carries the AES proof mnemonics. Borrowed/stored/frozen protocol agreement is checked by tests"
+
+  # On portable targets the terminal and helper inline into the frozen
+  # lookup, which remains out of line. The hash is folded-multiply
+  # arithmetic; counted vectors also include the table probe.
+  [[site.measure]]
+  label = "portable frozen lookup"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_core"
+  symbol = "purrdf_core::ir::dataset::RdfDataset>::term_id_by_iri"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  # On Arm neoverse-v1 the compiler outlines Engine<Aes>::terminal from
+  # purrdf-core; frozen term_id_by_iri calls it directly. This is the terminal
+  # hash body, not the caller's unrelated table-probe vectors. Measured v51.
+  [[site.measure]]
+  label = "aes terminal"
+  configs = ["aarch64-neoverse-v1"]
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::fixed::Engine<purrdf_hash::fixed::Aes>>::terminal"
+  min_vector_ops = 25
+  require_mnemonics = ["aese", "aesmc"]
   max_fma = 0
   forbid_relaxed = true
 
