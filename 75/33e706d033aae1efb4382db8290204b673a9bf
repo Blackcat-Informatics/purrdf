@@ -12,6 +12,6 @@ GhpRsq-Base-OID: a9565da71f977667a909952286e75090afd7a805
 GhpRsq-Head-Ref: paudley/356-shacl12-builtins-conformance
 GhpRsq-Head-OID: 7533e706d033aae1efb4382db8290204b673a9bf
 GhpRsq-Result-Tree: 70a85b67d8845082b89cbc3f3f6c9e9b022f49d4
-GhpRsq-Result-Commit: 183e749758cf533f533e81f7bf57ad9cdbce8bbb
+GhpRsq-Result-Commit: 1f22a08259c15111b2a5eb9696ef6cfe6f9801f0
 GhpRsq-Parent-Hashes: 7533e706d033aae1efb4382db8290204b673a9bf
 GhpRsq-Squash-Notes-SHA256: 6698b6e8b177d5d00df4a1e4341b5ec11b634e40816c3d4f67d02272005ca48f
