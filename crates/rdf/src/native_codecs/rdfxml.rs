@@ -2262,12 +2262,14 @@ mod term_walk_tests {
         );
     }
 
-    /// A triple-term object a hundred thousand levels deep is written on a thread whose
-    /// whole stack is 128 KiB, every level one `parseType="Triple"` element holding one
-    /// description.
+    /// A triple-term object three thousand levels deep is written on a thread whose whole
+    /// stack is 128 KiB, every level one `parseType="Triple"` element holding one
+    /// description. RDF/XML indents each level one step deeper, so the document grows with
+    /// the square of the depth; three thousand levels is far past what a recursive writer's
+    /// frames fit in that stack while keeping the document a few tens of megabytes.
     #[test]
-    fn a_hundred_thousand_level_object_is_written_on_a_128_kib_thread() {
-        const LEVELS: usize = 100_000;
+    fn a_three_thousand_level_object_is_written_on_a_128_kib_thread() {
+        const LEVELS: usize = 3_000;
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
