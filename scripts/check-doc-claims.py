@@ -4790,7 +4790,7 @@ def outstanding_bootstrap_claim(crates: list[str], ledger: list[str]) -> list[st
 
 
 def publishable_crate_count_claim(crates: list[str]) -> list[str]:
-    """"the N publishable crates" — the doc build's own headline, in two files.
+    """The doc build and book name the same publishable crate count.
 
     `make doc` and CI's `Doc (deny warnings)` step both run the same
     `cargo doc --workspace --no-deps --exclude …` over every member that is not
@@ -4810,6 +4810,10 @@ def publishable_crate_count_claim(crates: list[str]) -> list[str]:
         (
             _REPO / ".github" / "workflows" / "ci.yaml",
             _flow(r"Document exactly the (?P<n>\d+) publishable crates"),
+        ),
+        (
+            _REPO / "docs" / "book" / "src" / "project" / "releases.md",
+            _flow(r"(?P<n>\d+)-crate release set"),
         ),
     )
     for path, pattern in sites:
