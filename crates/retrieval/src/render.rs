@@ -506,9 +506,13 @@ impl<'a> Cursor<'a> {
         ))
     }
 
-    /// Decode `<…>`, resolving `UCHAR` escapes.
+    /// Decode `<…>`, resolving `UCHAR` escapes. The opening `<` is consumed here, so a
+    /// datatype position after `^^` that holds anything else — or nothing, at the end
+    /// of the text — is refused rather than stepped over.
     fn iri(&mut self) -> Result<String, String> {
-        self.position += 1;
+        if !self.eat("<") {
+            return Err(format!("expected an IRI `<…>` at byte {}", self.position));
+        }
         let mut out = String::new();
         loop {
             let Some(ch) = self.rest().chars().next() else {
@@ -905,6 +909,10 @@ mod tests {
             "<< <a> <b> <c> >>",
             "\"x\"@en--upside-down",
             "\"x\"\\q",
+            // A datatype position with no IRI: empty at the end of the text, and a
+            // character other than `<` where the IRI opens.
+            "\"1\"^^",
+            "\"1\"^^Xhttp://www.w3.org/2001/XMLSchema#integer>",
         ] {
             assert!(
                 decode_term(text).is_err(),
@@ -912,7 +920,13 @@ mod tests {
             );
         }
         // The neighbouring valid cases still decode.
-        for text in ["<http://example.org/s>", "_:b0", "\"x\"@en", "\"x\""] {
+        for text in [
+            "<http://example.org/s>",
+            "_:b0",
+            "\"x\"@en",
+            "\"x\"",
+            "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>",
+        ] {
             assert!(decode_term(text).is_ok(), "{text:?} is one canonical term");
         }
     }
