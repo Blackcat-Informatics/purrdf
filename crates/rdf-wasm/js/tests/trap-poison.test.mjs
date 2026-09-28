@@ -172,7 +172,14 @@ function linkedShapeModule({ omit } = {}) {
   ]);
 }
 
-const PROTOCOL = { AsyncJob: class AsyncJob {}, RunStatus: {}, SuspendStatus: {}, DeliveryStatus: {}, EffectKind: {} };
+const PROTOCOL = {
+  AsyncJob: class AsyncJob {},
+  RunStatus: {},
+  SuspendStatus: {},
+  DeliveryStatus: {},
+  EffectKind: {},
+  asyncStackRegionBytes: () => 1024 * 1024,
+};
 
 const instantiate = (options) => new WebAssembly.Instance(new WebAssembly.Module(linkedShapeModule(options))).exports;
 
@@ -230,4 +237,36 @@ test("installAsync requires every linker global by name, and the runtime reads t
   assert.doesNotThrow(() => marked.assertNotPoisoned());
   markedExports.purrdf_poisoned.value = 1;
   assert.throws(() => marked.assertNotPoisoned(), { message: POISON });
+});
+
+// A module whose shadow stack is not laid out as the asynchronous lane assumes reports so
+// from `asyncStackRegionBytes`: the runtime installs without the lane, and every
+// asynchronous call refuses with the module's own words and code, while nothing is
+// poisoned. The neighbour, a module reporting a size, installs with the lane.
+test("a module with no stack region to give installs without the asynchronous lane, refusing with the module's own error", async () => {
+  const LAYOUT =
+    "the module's shadow stack is not laid out as the asynchronous lane assumes " +
+    "(stack [0x100000, 0x200000), data end 0x100000, heap base 0x200000): " +
+    "the shadow stack is not below the static data (the layout is not stack-first)";
+  const refusing = await import(`../src/purrdf_jspi.mjs?region-refused-${process.pid}`);
+  const exports = instantiate();
+  refusing.installAsync(exports, {
+    ...PROTOCOL,
+    asyncStackRegionBytes: () => {
+      throw Object.assign(new Error(LAYOUT), { code: "native-sparql-host-fault" });
+    },
+  });
+  assert.equal(refusing.hasAsyncQueries(), false);
+  assert.throws(() => refusing.assertAsyncQueries(), (error) => {
+    assert.equal(error.message, LAYOUT);
+    assert.equal(error.code, "native-sparql-host-fault");
+    return true;
+  });
+  assert.doesNotThrow(() => refusing.assertNotPoisoned(), "a layout refusal poisons nothing");
+  assert.equal(exports.purrdf_poisoned.value, 0);
+
+  const sized = await import(`../src/purrdf_jspi.mjs?region-sized-${process.pid}`);
+  sized.installAsync(instantiate(), PROTOCOL);
+  assert.equal(sized.hasAsyncQueries(), true);
+  assert.doesNotThrow(() => sized.assertAsyncQueries());
 });

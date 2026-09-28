@@ -1053,21 +1053,21 @@ export class QueryEngine {
   // missing. Rejections: an option the twin would ignore is a `TypeError`; a parse or
   // evaluation failure (including a `SERVICE`/`LOAD` with no handler, and a result of the
   // wrong kind) is an `Error` with the synchronous twin's message — a request too deep
-  // for the job's stack region included: the parser's and the evaluator's refusals keep
-  // their code (`native-sparql-query-parse`/`native-sparql-update-parse`,
-  // `native-sparql-evaluation-stack-exhausted`) and gain the region's size and
-  // `stackBytes` as their remedy, while `native-sparql-host-stack-exhausted` (the fixed
-  // budget kept under the JavaScript engine's call stack, which V8 sizes the same for a
-  // job as for the synchronous lane) is the synchronous twin's refusal unchanged, since
-  // no region raises it; a cancellation through `signal` rejects with
+  // for the job's stack included: each job runs on a stack region exactly as large as the
+  // module's own shadow stack, so the parser's and the evaluator's refusals
+  // (`native-sparql-query-parse`/`native-sparql-update-parse`,
+  // `native-sparql-evaluation-stack-exhausted`) and `native-sparql-host-stack-exhausted`
+  // (the fixed budget kept under the JavaScript engine's call stack, which V8 sizes the
+  // same for a job as for the synchronous lane) are the synchronous twin's refusals word
+  // for word; a cancellation through `signal` rejects with
   // `signal.reason` (an `AbortError` without one); a handler that threw, rejected or
   // answered something unrecognizable fails its own invocation (`native-sparql-host-fault`
   // or `native-sparql-load-fault` without `SILENT`); a fault — a broken delivery protocol,
-  // or work no stack check guards
-  // reaching its region's guard band — is an `Error` with the fault's text. Errors built by the twin carry
+  // or frames no stack check guards running outside the job's region or past its base —
+  // is an `Error` with the fault's text. Errors built by the twin carry
   // the job's `evidence.async` (see `AsyncJobError`). The governed twins report a governor
   // trip — a deadline or an abort included — as an outcome, never a rejection. A job that
-  // traps (or runs past its stack region's guard zone) poisons the instance, and so does a
+  // traps poisons the instance, and so does a
   // trap, a Rust panic or a JavaScript exception thrown through wasm frames in any
   // synchronous call: every job in flight rejects with the poison error, and from then on
   // every asynchronous twin and `ready()` reject with it, while every synchronous call
@@ -1525,11 +1525,6 @@ export interface AsyncHostOptions {
   readonly signal?: AbortSignal | null;
   /** Governor polls between yields to the event loop: an integer ≥ 0 (0 yields at every poll). Default 65 536. */
   readonly yieldEveryPolls?: number | null;
-  /**
-   * The job's private shadow-stack region in bytes: an integer ≥ 524 288. Default 2 MiB.
-   * It does not raise the host-stack budget (`native-sparql-host-stack-exhausted`).
-   */
-  readonly stackBytes?: number | null;
   /** The policy host-resolved `SERVICE` requests and `LOAD` fetches are authorized against. Needs a handler to govern. */
   readonly catalog?: ServiceCatalog | null;
   /** Endpoints answered in process from a snapshot of a dataset, with no host call. */
@@ -1573,8 +1568,8 @@ export interface AsyncNegotiatedQueryOptions extends AsyncGovernedQueryOptions {
 
 /**
  * What one asynchronous job did: counts from the runtime, times in milliseconds.
- * `stackHighWaterBytes` is the deepest the job's stack region was used — size
- * `stackBytes` from it. Freezing the dataset before the job and serializing its result
+ * `stackHighWaterBytes` is the deepest below its top that the job's stack region was
+ * used; the region is exactly as large as the module's own shadow stack. Freezing the dataset before the job and serializing its result
  * after do not yield; `freezeMs` and `serializeMs` show what they cost.
  */
 export interface AsyncEvidence {
@@ -1655,8 +1650,10 @@ export interface AsyncJobError extends PurrdfError {
 /**
  * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI
  * (`WebAssembly.Suspending` and `WebAssembly.promising`) and `setTimeout`, which every job
- * yields to the event loop through. Where it is `false`, every asynchronous twin rejects
- * with the reason before touching wasm; the synchronous API is unaffected.
+ * yields to the event loop through, and the loaded module has a stack region to give each
+ * job (its shadow stack is laid out as the asynchronous lane assumes). Where it is
+ * `false`, every asynchronous twin rejects with the reason before touching wasm; the
+ * synchronous API is unaffected.
  */
 export function hasAsyncQueries(): boolean;
 

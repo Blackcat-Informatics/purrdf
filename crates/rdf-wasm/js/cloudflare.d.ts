@@ -120,7 +120,6 @@ export interface SparqlEndpointOptions {
   /** Without it, no CORS header is sent and `OPTIONS` is a `405`. */
   readonly cors?: EndpointCors | null;
   readonly yieldEveryPolls?: number | null;
-  readonly stackBytes?: number | null;
   /**
    * Bounds the request body, in bytes (a positive integer). A `Content-Length` above it is
    * refused with a `413` before anything is read; a missing or understated one is still

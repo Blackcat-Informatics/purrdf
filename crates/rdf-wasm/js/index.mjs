@@ -55,6 +55,7 @@
 // those `bigint` — a shape change, not a decision.
 
 import init, {
+  asyncStackRegionBytes,
   AsyncJob,
   AsyncJobOptions,
   AsyncOperationKind,
@@ -880,7 +881,7 @@ const utf8 = new TextDecoder();
 /**
  * Begin and drive a SHACL job for `operation`: `args` are the synchronous twin's
  * arguments by name, `options` the host options (`resolveService`, `resolveLoad`,
- * `signal`, `yieldEveryPolls`, `stackBytes`, `catalog`, `localServices`).
+ * `signal`, `yieldEveryPolls`, `catalog`, `localServices`).
  */
 async function driveShaclJob(operation, args, options, settle, fail) {
   assertAsyncQueries();
@@ -1076,7 +1077,14 @@ export async function ready(wasmBytesOrUrl) {
   } else {
     exports = await init();
   }
-  installAsync(exports, { AsyncJob, RunStatus, SuspendStatus, DeliveryStatus, EffectKind });
+  installAsync(exports, {
+    AsyncJob,
+    RunStatus,
+    SuspendStatus,
+    DeliveryStatus,
+    EffectKind,
+    asyncStackRegionBytes,
+  });
 
   // RDF/JS DatasetCore is iterable over its quads.
   if (!Dataset.prototype[Symbol.iterator]) {

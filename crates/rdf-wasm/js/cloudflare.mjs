@@ -49,7 +49,6 @@ const HANDLER_KEYS = [
   "localServices",
   "cors",
   "yieldEveryPolls",
-  "stackBytes",
   "maxRequestBytes",
   "onInternalError",
 ];
@@ -517,7 +516,7 @@ function handlerOptions(options) {
   // The host options the twins take are passed through untouched; the twins validate
   // them (and refuse a catalog with no resolveService).
   const host = {};
-  for (const key of ["resolveService", "resolveLoad", "catalog", "localServices", "yieldEveryPolls", "stackBytes"]) {
+  for (const key of ["resolveService", "resolveLoad", "catalog", "localServices", "yieldEveryPolls"]) {
     if (isPresent(source[key])) host[key] = source[key];
   }
   const onInternalError = internalErrorOption(source.onInternalError, caller);

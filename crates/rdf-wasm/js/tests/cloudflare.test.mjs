@@ -2169,31 +2169,32 @@ test("refusal pair: an operation this endpoint misconfigured is a 500 InternalEr
 
 // The query's own evaluation failure keeps its 500, now with the engine's code as `code`
 // (never "Error") and the engine's words as `detail`: nothing in them is the host's. A
-// request nested past a small stack region is one; the shallow neighbour answers.
+// request nested deeper than any stack the engine runs on holds is one — 126 nested
+// `LATERAL`, which the evaluator refuses on the synchronous lane and on a job's region
+// alike, word for word; the shallow neighbour answers.
 test("refusal pair: an evaluation failure is a 500 with the engine's code and words; the shallow neighbour answers 200", async () => {
-  const chain = (() => {
-    const lines = [];
-    for (let index = 0; index < 200; index += 1) lines.push(`<${EX}n${index}> <${EX}p> <${EX}n${index + 1}> .`);
-    return `${lines.join("\n")}\n`;
-  })();
-  const nested = (depth) => {
-    let pattern = `?v${depth} <${EX}p> ?v${depth + 1}`;
-    for (let level = depth - 1; level >= 0; level -= 1) {
-      pattern = `?v${level} <${EX}p> ?v${level + 1} OPTIONAL { ${pattern} }`;
-    }
-    return `SELECT * WHERE { ${pattern} }`;
-  };
+  const data = [1, 2, 3, 4]
+    .map((n) => `<${EX}s${n}> <${EX}p> <${EX}o${n}> .`)
+    .concat([`<${EX}s1> <${EX}q> <${EX}o1> .`])
+    .join("\n");
+  const nested = (depth) =>
+    `SELECT ?s WHERE { ${`?s <${EX}p> ?o LATERAL { `.repeat(depth)}?s <${EX}q> ?z${" }".repeat(depth)} }`;
   const options = {
     engine: new QueryEngine(),
-    dataset: Dataset.parse(chain, "nquads"),
+    dataset: Dataset.parse(data, "nquads"),
     governors: GOVERNORS,
-    stackBytes: 524288,
   };
-  const exhausted = await handleSparqlRequest(httpRequest({ query: q(nested(140)) }), options);
+  let syncRefusal;
+  assert.throws(() => new QueryEngine().select(options.dataset, nested(126)), (error) => {
+    syncRefusal = error.message;
+    return true;
+  });
+  const exhausted = await handleSparqlRequest(httpRequest({ query: q(nested(126)) }), options);
   assert.equal(exhausted.status, 500);
   const body = await problemOf(exhausted);
   assert.equal(body.code, "native-sparql-evaluation-stack-exhausted");
   assert.match(body.detail, /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: /);
+  assert.equal(body.detail, syncRefusal, "the endpoint's detail is the synchronous lane's refusal");
   assert.equal(body.correlationId, undefined);
 
   const shallow = await handleSparqlRequest(httpRequest({ query: q(nested(3)) }), options);

@@ -30,7 +30,13 @@ import {
   hasAsyncQueries,
   ready,
 } from "../index.mjs";
-import { AsyncJobOptions, AsyncOperationKind, DeliveryStatus, RunStatus } from "../pkg/purrdf_wasm.js";
+import init, {
+  AsyncJobOptions,
+  AsyncOperationKind,
+  DeliveryStatus,
+  RunStatus,
+  asyncStackRegionBytes,
+} from "../pkg/purrdf_wasm.js";
 import { NO_JSPI_MESSAGE, runJob } from "../pkg/purrdf_jspi.mjs";
 import { CROSS_COUNT, crossDataset, expectedCrossCount } from "./fixtures/yield-workload.mjs";
 
@@ -1721,15 +1727,22 @@ test("refusal pair: yieldEveryPolls -1 is refused, 0 yields at every poll", asyn
   assert.ok(every.evidence.async.yields > 0);
 });
 
-test("refusal pair: stackBytes 4096 is refused, 524288 answers", async () => {
+// Every job's stack region is exactly as large as the module's own shadow stack. The
+// shipped module is linked stack-first — the shadow stack occupies `[0, idle pointer)`
+// — so the size the module reports is the idle stack pointer's value; and a job's
+// deepest poll lies inside that region.
+test("a job's stack region is the size of the module's own shadow stack", async () => {
+  const exports = await init();
+  const idle = exports.purrdf_stack_pointer.value >>> 0;
+  const regionBytes = asyncStackRegionBytes();
+  assert.equal(regionBytes, idle, "the region is the shadow stack [0, idle pointer)");
+  assert.equal(regionBytes % 16, 0, "the region keeps the stack pointer's 16-byte alignment");
   const engine = new QueryEngine();
-  const query = `SELECT ?s ?o WHERE { ?s <${EX}p> ?o }`;
-  const refused = await rejection(engine.queryAsync(local(), query, { stackBytes: 4096 }));
-  assert.match(refused.message, /stackBytes must be an integer from 524288 to 4294967295 inclusive, got 4096/);
-  const answered = await engine.queryGovernedAsync(local(), query, { stackBytes: 524288 });
+  const answered = await engine.queryGovernedAsync(local(), `SELECT ?s ?o WHERE { ?s <${EX}p> ?o }`);
   assert.equal(answered.result.rowCount, 2);
   assert.ok(answered.evidence.async.stackHighWaterBytes > 0);
-  assert.ok(answered.evidence.async.stackHighWaterBytes < 524288);
+  assert.ok(answered.evidence.async.stackHighWaterBytes < regionBytes);
+  assert.equal(exports.purrdf_stack_pointer.value >>> 0, idle, "the job left the pointer idle");
 });
 
 test("refusal pair: a failure kind \"nope\" is a host fault the request reports, \"denied\" is a denial; SILENT answers both with the join identity", async () => {

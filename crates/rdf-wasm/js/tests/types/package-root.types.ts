@@ -296,7 +296,6 @@ const asyncResult: Promise<QueryResult> = engine.queryAsync(matched, "ASK { ?s ?
   signal: controller.signal,
   catalog,
   yieldEveryPolls: 1_024,
-  stackBytes: 4 * 1024 * 1024,
 });
 const asyncSelect: Promise<SelectResult> = engine.selectAsync(matched, "SELECT ?s WHERE { ?s ?p ?o }", {
   localServices: { "https://example.org/local": matched },

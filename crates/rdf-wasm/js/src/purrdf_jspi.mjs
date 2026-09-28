@@ -74,6 +74,14 @@
 //   the glue or a sink callback makes back into the instance from inside an import
 //   passes, because the import's trampoline counted it in `purrdf_outbound`.
 //
+// Every job runs on its own stack region, which the Rust side allocates exactly as large
+// as the module's own shadow stack, so a request the synchronous lane evaluates a job
+// evaluates too and a stack refusal reads the same on both lanes. `installAsync` reads the
+// size once (`asyncStackRegionBytes`); a module whose shadow stack is not laid out as the
+// lane assumes has no region to give, and every asynchronous call then refuses with the
+// module's own words. The Rust side reads the canary word at a region's base before every
+// suspension and when the run returns, and latches a changed word as the job's fault.
+//
 // This module's part: it passes the region top; it sets `purrdf_poisoned` when it learns
 // of a fault first (a Rust panic's hook, a run whose promise rejected); it treats a
 // `WebAssembly.RuntimeError` out of an export while the gate is closed as the gate's
@@ -124,6 +132,9 @@ const GATE_CLOSED_REASON =
 // { exports, promisingRun, AsyncJob, RunStatus, SuspendStatus, DeliveryStatus,
 //   EffectKind }: the instance and the protocol's classes and statuses
 let installed = null;
+// The error `asyncStackRegionBytes` threw when the module's shadow stack is not laid out
+// as the lane assumes: every asynchronous call refuses with its words.
+let laneRefusal = null;
 let poisonReason = null;
 let maxConcurrentJobs = DEFAULT_MAX_CONCURRENT_JOBS;
 const records = new Map(); // job id -> record
@@ -187,11 +198,15 @@ export function purrdf_jspi_panicked(reason, len) {
 
 /**
  * Install the scheduler over the instance's raw exports (the object the glue's `init`
- * returns) and the protocol's glue classes — `{ AsyncJob, RunStatus, SuspendStatus,
- * DeliveryStatus, EffectKind }`, the statuses the Rust side exports. Called once by
- * `ready()`. Throws when the exports lack the runtime's entry points or any of the
+ * returns) and the protocol's glue — `{ AsyncJob, RunStatus, SuspendStatus,
+ * DeliveryStatus, EffectKind }`, the statuses the Rust side exports, and
+ * `asyncStackRegionBytes`, which reports the size of every job's stack region. Called
+ * once by `ready()`. Throws when the exports lack the runtime's entry points or any of the
  * linker's globals — an artifact built without the asynchronous lane, or not linked by
- * `wasm-link`, is a build defect, not a mode — or when a protocol class is missing.
+ * `wasm-link`, is a build defect, not a mode — or when a protocol member is missing. A
+ * module whose shadow stack is not laid out as the lane assumes installs without the
+ * asynchronous lane: `hasAsyncQueries()` is `false`, and every asynchronous call refuses
+ * with the error `asyncStackRegionBytes` threw.
  */
 export function installAsync(exports, protocol) {
   if (installed !== null) {
@@ -214,10 +229,22 @@ export function installAsync(exports, protocol) {
       );
     }
   }
-  for (const name of ["AsyncJob", "RunStatus", "SuspendStatus", "DeliveryStatus", "EffectKind"]) {
+  for (const name of [
+    "AsyncJob",
+    "RunStatus",
+    "SuspendStatus",
+    "DeliveryStatus",
+    "EffectKind",
+    "asyncStackRegionBytes",
+  ]) {
     if (protocol?.[name] === undefined) {
       throw new Error(`installAsync needs the protocol's ${name}; the package root passes it`);
     }
+  }
+  try {
+    protocol.asyncStackRegionBytes();
+  } catch (error) {
+    laneRefusal = error;
   }
   installed = {
     exports,
@@ -232,20 +259,30 @@ export function installAsync(exports, protocol) {
   if (poisonReason !== null) exports.purrdf_poisoned.value = 1;
 }
 
-/** Whether this engine can run asynchronous jobs: JSPI and `setTimeout` exist. */
+/**
+ * Whether this engine can run asynchronous jobs: JSPI and `setTimeout` exist, and the
+ * installed module has a stack region to give each job.
+ */
 export function hasAsyncQueries() {
-  return HAS_JSPI && setTimeoutImpl !== null;
+  return HAS_JSPI && setTimeoutImpl !== null && laneRefusal === null;
 }
 
 /**
  * Throw the one clear error that explains why an asynchronous call cannot run here, or
- * return when it can: no JSPI, no `setTimeout`, not installed, or a poisoned instance.
+ * return when it can: no JSPI, no `setTimeout`, not installed, a poisoned instance, or a
+ * module whose shadow stack is not laid out as the lane assumes (the module's own error,
+ * with its code).
  */
 export function assertAsyncQueries() {
   if (!HAS_JSPI) throw new Error(NO_JSPI_MESSAGE);
   if (setTimeoutImpl === null) throw new Error(NO_YIELD_MESSAGE);
   if (installed === null) throw new Error(NOT_INSTALLED_MESSAGE);
   assertNotPoisoned();
+  if (laneRefusal !== null) {
+    const error = new Error(laneRefusal instanceof Error ? laneRefusal.message : String(laneRefusal));
+    if (laneRefusal instanceof Error && laneRefusal.code !== undefined) error.code = laneRefusal.code;
+    throw error;
+  }
 }
 
 /**
@@ -318,8 +355,7 @@ export function configureAsync(options) {
  * already started.
  * Rejects only when the call cannot run at all (see `assertAsyncQueries`), when
  * `maxConcurrentJobs` jobs are already in flight, for a malformed `host`, or when the
- * instance traps or the job's frames ran past its region's overrun zone — either of
- * which poisons it. The job stays the caller's to `finish()` and
+ * instance traps, which poisons it. The job stays the caller's to `finish()` and
  * `free()` in every case.
  */
 export async function runJob(job, host = {}) {
@@ -397,15 +433,6 @@ async function suspendImpl(rawJob, rawSeq, rawOut) {
 async function answer(record, seq) {
   const { job } = record;
   const { SuspendStatus, EffectKind } = installed;
-  // The canary at the region's base, read before any await or wasm call.
-  const memory = new DataView(installed.exports.memory.buffer);
-  const canaryIntact = memory.getUint32(record.base, true) === record.canary;
-  if (!canaryIntact) {
-    const reason = `asynchronous job ${record.id} overwrote the canary at the base of its stack region`;
-    latchFault(record, reason);
-    poison(reason);
-    return SuspendStatus.Fault;
-  }
   const effect = job.takeEffect();
   if (effect === undefined) {
     return latchFault(record, `effect ${seq} was suspended on without a posted ticket`);
@@ -861,8 +888,6 @@ function newRecord(job, handlers) {
     job,
     handlers,
     top: job.stackTop,
-    base: job.stackBase,
-    canary: job.stackCanary,
     controller: new AbortController(),
     stop: { fired: false, promise: undefined, resolve: undefined },
     reject: undefined,
@@ -915,14 +940,7 @@ function startRun(record) {
       pending = Promise.reject(error);
     }
     pending.then(
-      (status) => {
-        if (status >>> 0 === installed.RunStatus.Overran) {
-          poison(record.job.errorMessage ?? `asynchronous job ${record.id} overran its stack region`);
-          reject(poisonError());
-          return;
-        }
-        resolve(status >>> 0);
-      },
+      (status) => resolve(status >>> 0),
       (error) => {
         // A run that rejected was unwound — a trap, or a JavaScript exception thrown
         // through its frames — and left its gate entry without an exit, which the gate

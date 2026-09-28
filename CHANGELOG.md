@@ -2420,6 +2420,23 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Changed
 
+- **BREAKING** **wasm:** an asynchronous job's stack region is exactly as large as the
+  module's own shadow stack (1 MiB in the shipped module), and no option sizes it: the
+  `stackBytes` option of the asynchronous twins and of the Cloudflare adapter's
+  `handleSparqlRequest` is removed, and passing it is refused as an unknown option.
+  The region is a raw allocation the Rust side addresses only through its address; its
+  size is read off the module's own layout (`asyncStackRegionBytes()`), and a module
+  whose shadow stack is not laid out stack-first has no asynchronous lane —
+  `hasAsyncQueries()` is `false` and every asynchronous twin rejects with the module's
+  words. With equal stacks the two lanes run out of stack at the same depth, so a stack
+  refusal is the evaluator's own typed error, word for word the same on both lanes: the
+  synchronous lane no longer appends "run this request with the asynchronous twin … and
+  a larger stackBytes region", and a job's refusal no longer names its region's size or
+  a larger `stackBytes`. The guard band, the overrun zone below each region and
+  `RunStatus.Overran` are gone; one canary word at the region's base is read before
+  every suspension and when the run returns, and a job whose frames overwrote it fails
+  with a fault naming its region.
+
 - **BREAKING** **wasm:** `asyncYieldPrimitive()` is removed from the package root.
   Asynchronous jobs yield to the event loop through `setTimeout(…, 0)` on every host;
   nothing is chosen per host, sniffed from `navigator.userAgent`, or overridable.

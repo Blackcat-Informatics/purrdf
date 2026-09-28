@@ -269,20 +269,20 @@ before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
   a time, in call order, and an update is applied only if the dataset was not
   mutated while it ran. `configureAsync({ maxConcurrentJobs })` bounds the jobs
   in flight (16 by default).
-- Each job evaluates on its own stack region of `stackBytes` bytes (2 MiB by
-  default); `evidence.async.stackHighWaterBytes` reports how deep it went, and a
-  request too deep for the region fails with the typed stack refusal its
-  synchronous twin gives, naming `stackBytes` as the remedy.
-- A region sizes only the shadow stack. V8 gives a job's own call stack the same
-  size as the synchronous lane's (984 KiB by default, set for the whole process),
-  and PurRDF keeps a fixed budget of it for evaluating a request, so on both lanes
-  and every region a request's graph patterns nest at most 284 levels deep.
-  Past that is `native-sparql-host-stack-exhausted`, which no region and no lane
-  raises: nest the request less deeply. Parsing keeps a request's nesting in
+- Each job evaluates on its own stack region, exactly as large as the module's
+  own shadow stack — the stack the synchronous lane runs on; no option sizes it.
+  `evidence.async.stackHighWaterBytes` reports how deep the job went, and a
+  request too deep for the region is too deep for the synchronous lane too: both
+  fail with the same typed stack refusal, word for word.
+- A region is the size of the shadow stack only. V8 gives a job's own call stack
+  the same size as the synchronous lane's (984 KiB by default, set for the whole
+  process), and PurRDF keeps a fixed budget of it for evaluating a request, so on
+  both lanes a request's graph patterns nest at most 284 levels deep. Past that
+  is `native-sparql-host-stack-exhausted`, which no lane raises: nest the request
+  less deeply. Parsing keeps a request's nesting in
   linear memory and spends neither stack on it.
-- A job that traps,
-  or whose frames run past the region's guard zone, poisons the instance, and so
-  does a trap or a Rust panic in any synchronous call: from then on every
+- A job whose frames run past its region's base fails with a fault naming the
+  region. A job that traps poisons the instance, and so does a trap or a Rust panic in any synchronous call: from then on every
   call into the package — synchronous ones and objects created before the trap
   included — throws, and only a fresh JavaScript realm (a new page, Worker
   isolate or process) can load it again.

@@ -16,7 +16,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import { Dataset, QueryEngine, ready } from "../index.mjs";
-import init from "../pkg/purrdf_wasm.js";
+import init, { asyncStackRegionBytes } from "../pkg/purrdf_wasm.js";
 import { DATASETS, QUERIES } from "./fixtures/async-differential.mjs";
 
 await ready();
@@ -135,5 +135,49 @@ test("every sync-suite query answers identically through queryAsync, eight at a 
   for (const [index, entry] of QUERIES.entries()) {
     assert.deepEqual(observed[index], expected[index], entry.name);
   }
+  assert.equal(stackPointer(), idle, "the stack pointer is back at its idle value");
+});
+
+// A job's stack region is exactly as large as the module's own shadow stack, and across
+// the whole corpus no job comes near its base: every job's deepest poll
+// (`evidence.async.stackHighWaterBytes`, measured below the region's top) stays inside
+// the top quarter of the region the module reports. The neighbour that proves the
+// measurement is live: a query that evaluates algebra, and so polls, reports a positive
+// depth — as does every job, whose run records its first frame.
+test("every corpus query's asynchronous job stays inside the top quarter of its stack region", async () => {
+  const regionBytes = asyncStackRegionBytes();
+  assert.ok(Number.isSafeInteger(regionBytes) && regionBytes > 0, `${regionBytes}`);
+  const quarter = regionBytes / 4;
+  const engine = new QueryEngine();
+  const datasets = Object.fromEntries(
+    Object.entries(DATASETS).map(([name, { syntax, text }]) => [name, Dataset.parse(text, syntax)]),
+  );
+  const idle = stackPointer();
+  const depths = [];
+  for (const { name, data, query } of QUERIES) {
+    const governed = await engine.queryGovernedAsync(datasets[data], query);
+    assert.equal(governed.isComplete, true, name);
+    const { stackHighWaterBytes: depth, polls } = governed.evidence.async;
+    assert.ok(depth > 0, `${name}: a job's run records its first frame (${depth} bytes)`);
+    assert.ok(
+      depth < quarter,
+      `${name}: ${depth} bytes deep, not below a quarter of the ${regionBytes}-byte region`,
+    );
+    depths.push({ name, depth, polls });
+  }
+  assert.equal(depths.length, QUERIES.length, "every corpus query ran");
+  // The non-trivial neighbour: the queries that evaluate algebra poll, and the deepest of
+  // them stood below every frame a job that polls nothing records (the DESCRIBEs of a
+  // constant IRI), so the evidence measured an evaluation and not only a run's start.
+  const polling = depths.filter(({ polls }) => polls > 0);
+  const still = depths.filter(({ polls }) => polls === 0);
+  assert.ok(polling.length >= 40, `${polling.length} queries evaluated algebra`);
+  assert.ok(still.length > 0, "the corpus has a query that polls nothing");
+  const deepest = Math.max(...polling.map(({ depth }) => depth));
+  const startOnly = Math.max(...still.map(({ depth }) => depth));
+  assert.ok(
+    deepest > startOnly,
+    `the deepest evaluating job stood ${deepest} bytes down, a job that polls nothing ${startOnly}`,
+  );
   assert.equal(stackPointer(), idle, "the stack pointer is back at its idle value");
 });

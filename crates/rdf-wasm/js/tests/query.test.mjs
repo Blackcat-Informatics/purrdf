@@ -497,20 +497,20 @@ test("nesting answers on the synchronous lane as deep as its stacks hold it, and
   }
 });
 
-// What the synchronous lane appends to a stack refusal a larger stack answers: the remedy
-// only it has to name. It replaces the native "on a thread with a larger stack", which a
-// JavaScript caller cannot act on.
-const SYNC_STACK_HINT =
-  /(?:above its 65536-byte reserve\)|nests deeper than the stack parsing it can hold); the synchronous lane runs on the instance's own stack — run this request with the asynchronous twin of this call \(selectAsync, queryAsync, updateAsync, …\) and a larger stackBytes region$/;
+// The evaluator's stack refusal exactly as a wasm lane renders it: its own words, with no
+// remedy appended — an asynchronous job runs on a region exactly as large as this lane's
+// shadow stack, so neither lane has more stack to offer, and the native remedy (a thread
+// spawned with more stack) names nothing a JavaScript caller can act on.
+const EVALUATION_STACK_REFUSAL_EXACT =
+  /^error native-sparql-evaluation-stack-exhausted: evaluation stack exhausted: the request's nesting exceeds what this host's stack can evaluate \([a-zA-Z ]+ needs more stack than this thread has left above its 65536-byte reserve\)$/;
 // The real limit of every shape on the synchronous lane, found by bisection: the deepest
 // level that answers holds its computed value and one level more is the typed refusal —
 // a refusal pair at the lane's real end. Past the WHERE group's own 2 304 bytes, the
 // host-stack budget admits 637 brackets, 537 negations, 283 groups and 1 133 path groups,
-// and the next level is the host-stack refusal, which names no stackBytes remedy: the
-// JavaScript engine's call stack is the same size on the asynchronous lane (see
-// `async-concurrency.test.mjs`, where a 64 MiB region ends at the same levels). Nested
-// calls run out of shadow stack in their evaluation first, and that refusal keeps the
-// synchronous lane's remedy, the asynchronous twin with a larger region.
+// and the next level is the host-stack refusal: the JavaScript engine's call stack is the
+// same size on the asynchronous lane (see `async-concurrency.test.mjs`, where a job ends
+// at the same levels). Nested calls run out of shadow stack in their evaluation first,
+// and that refusal is the evaluator's own words, exactly as an asynchronous job gives it.
 test("on the synchronous lane the deepest answer and the first refusal are neighbours", async () => {
   const ds = Dataset.parse(NUMBERS, "nquads");
   const run = (query) => new QueryEngine().select(ds, query);
@@ -521,8 +521,7 @@ test("on the synchronous lane the deepest answer and the first refusal are neigh
   }
   const calls = limits["nested ABS("];
   assert.ok(calls >= 128 && calls <= 463, `nested ABS( answers ${calls} deep`);
-  assert.match(refusals["nested ABS("], /^error native-sparql-evaluation-stack-exhausted: /);
-  assert.match(refusals["nested ABS("], SYNC_STACK_HINT);
+  assert.match(refusals["nested ABS("], EVALUATION_STACK_REFUSAL_EXACT);
   delete limits["nested ABS("];
   delete refusals["nested ABS("];
   assert.deepEqual(limits, {
@@ -550,7 +549,6 @@ test("a FILTER nested 10 000 parentheses deep is the host-stack refusal, and the
     assert.throws(() => engine.select(ds, deep), (error) => {
       assert.match(error.message, HOST_STACK_REFUSAL);
       assert.match(error.message, /bracketted expression/);
-      assert.doesNotMatch(error.message, SYNC_STACK_HINT);
       return true;
     });
   }
@@ -598,10 +596,9 @@ for (const [what, deep, shallow, expected] of [
     for (let attempt = 0; attempt < 2; attempt += 1) {
       assert.throws(() => engine.select(ds, deep), STACK_REFUSAL);
     }
-    // The evaluator's refusal keeps its code and names the synchronous lane's remedy.
+    // The evaluator's refusal keeps its code and its own words, with nothing appended.
     assert.throws(() => engine.select(ds, deep), (error) => {
-      assert.match(error.message, /^error native-sparql-evaluation-stack-exhausted: /);
-      assert.match(error.message, SYNC_STACK_HINT);
+      assert.match(error.message, EVALUATION_STACK_REFUSAL_EXACT);
       return true;
     });
     // No memory was overwritten: the dataset's canonical form is byte-identical, and
@@ -614,7 +611,7 @@ for (const [what, deep, shallow, expected] of [
       .map((row) => row.name.value);
     assert.deepEqual(names, ["Ann", "Bob"]);
     // The valid neighbour: the same form, nested as deep as the stack evaluates, answers
-    // with the rows the deep one has on a larger stack (asynchronous tests).
+    // with the rows its semantics give.
     assert.deepEqual(subjectsOf(engine.select(ds, shallow)), expected);
   });
 }

@@ -8,11 +8,11 @@
 
 import assert from "node:assert/strict";
 
-export const STACK_REFUSAL =
-  /evaluation stack exhausted|stack region exhausted|host call stack budget exceeded/;
+export const STACK_REFUSAL = /evaluation stack exhausted|host call stack budget exceeded/;
 /**
  * The host-stack refusal: the budget kept under the JavaScript engine's own call stack,
- * the same on both lanes and on every region, so it names no stackBytes remedy.
+ * the same on both lanes, so it names no remedy but nesting less deeply. The text is the
+ * evaluator's (`crates/sparql-eval/src/error.rs`), matched exactly.
  */
 export const HOST_STACK_REFUSAL =
   /^error native-sparql-host-stack-exhausted: host call stack budget exceeded: the request's [a-z -]+ nests deeper than the JavaScript engine's own call stack holds \(655360 bytes of it are budgeted for a request, 284 nested graph patterns at most, the same on the synchronous and the asynchronous lane; a larger stackBytes does not raise it\); nest the request less deeply$/;
