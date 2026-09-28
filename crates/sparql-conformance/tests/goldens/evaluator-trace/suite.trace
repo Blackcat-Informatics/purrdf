@@ -450,7 +450,7 @@ fuel 21 tripped fuel-exhausted consumed=22 unknown barrier=Filter | fuel=22
 fuel 22 tripped fuel-exhausted consumed=23 unknown barrier=Filter | fuel=23
 fuel 23 tripped fuel-exhausted consumed=24 unknown barrier=Filter | fuel=24
 fuel 24 tripped fuel-exhausted consumed=25 unknown barrier=Filter | fuel=25
-fuel 25 tripped fuel-exhausted consumed=26 unknown barrier=Filter | fuel=26
+fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=1 digest=f7ba218075ffaddc | fuel=26
 fuel 26 tripped fuel-exhausted consumed=27 unknown barrier=Filter | fuel=27
 fuel 27 tripped fuel-exhausted consumed=28 unknown barrier=Filter | fuel=28
 fuel 28 tripped fuel-exhausted consumed=29 unknown barrier=Filter | fuel=29
@@ -494,7 +494,7 @@ fuel 17 tripped fuel-exhausted consumed=18 unknown barrier=Filter | fuel=18
 fuel 18 tripped fuel-exhausted consumed=19 unknown barrier=Filter | fuel=19
 fuel 19 tripped fuel-exhausted consumed=20 unknown barrier=Filter | fuel=20
 fuel 20 tripped fuel-exhausted consumed=21 unknown barrier=Filter | fuel=21
-fuel 21 tripped fuel-exhausted consumed=22 unknown barrier=Filter | fuel=22
+fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=22
 fuel 22 tripped fuel-exhausted consumed=23 unknown barrier=Filter | fuel=23
 fuel 23 tripped fuel-exhausted consumed=24 unknown barrier=Filter | fuel=24
 fuel 24 tripped fuel-exhausted consumed=25 unknown barrier=Filter | fuel=25
@@ -548,7 +548,7 @@ fuel 21 tripped fuel-exhausted consumed=22 unknown barrier=Filter | fuel=22
 fuel 22 tripped fuel-exhausted consumed=23 unknown barrier=Filter | fuel=23
 fuel 23 tripped fuel-exhausted consumed=24 unknown barrier=Filter | fuel=24
 fuel 24 tripped fuel-exhausted consumed=25 unknown barrier=Filter | fuel=25
-fuel 25 tripped fuel-exhausted consumed=26 unknown barrier=Filter | fuel=26
+fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=1 digest=f7ba218075ffaddc | fuel=26
 fuel 26 tripped fuel-exhausted consumed=27 unknown barrier=Filter | fuel=27
 fuel 27 tripped fuel-exhausted consumed=28 unknown barrier=Filter | fuel=28
 fuel 28 tripped fuel-exhausted consumed=29 unknown barrier=Filter | fuel=29
@@ -591,7 +591,7 @@ fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=0 digest=4e098
 fuel 8 tripped fuel-exhausted consumed=9 unknown barrier=Filter | fuel=9
 fuel 9 tripped fuel-exhausted consumed=10 unknown barrier=Filter | fuel=10
 fuel 10 tripped fuel-exhausted consumed=11 unknown barrier=Filter | fuel=11
-fuel 11 tripped fuel-exhausted consumed=12 unknown barrier=Filter | fuel=12
+fuel 11 tripped fuel-exhausted consumed=12 certain prefix=true rows=1 digest=f7ba218075ffaddc | fuel=12
 fuel 12 tripped fuel-exhausted consumed=13 certain prefix=true rows=2 digest=5912a21885e5f706 | fuel=13
 fuel 13 tripped fuel-exhausted consumed=14 certain prefix=true rows=2 digest=5912a21885e5f706 | fuel=14
 fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=2 digest=5912a21885e5f706 | fuel=15
@@ -618,13 +618,13 @@ fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=0 digest=4e098
 fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=8
 fuel 8 tripped fuel-exhausted consumed=9 unknown barrier=Filter | fuel=9
 fuel 9 tripped fuel-exhausted consumed=10 unknown barrier=Filter | fuel=10
-fuel 10 tripped fuel-exhausted consumed=11 unknown barrier=Filter | fuel=11
-fuel 11..=12 x2 tripped fuel-exhausted consumed=13 unknown barrier=Filter | fuel=13
+fuel 10..=11 x2 tripped fuel-exhausted consumed=12 unknown barrier=Filter | fuel=12
+fuel 12 tripped fuel-exhausted consumed=13 unknown barrier=Filter | fuel=13
 fuel 13 tripped fuel-exhausted consumed=14 unknown barrier=Filter | fuel=14
 fuel 14 tripped fuel-exhausted consumed=15 unknown barrier=Filter | fuel=15
 fuel 15 tripped fuel-exhausted consumed=16 unknown barrier=Filter | fuel=16
 fuel 16 tripped fuel-exhausted consumed=17 unknown barrier=Filter | fuel=17
-fuel 17 tripped fuel-exhausted consumed=18 unknown barrier=Filter | fuel=18
+fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=1 digest=f7ba218075ffaddc | fuel=18
 fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=2 digest=5912a21885e5f706 | fuel=19
 fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=2 digest=5912a21885e5f706 | fuel=20
 fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=2 digest=5912a21885e5f706 | fuel=21
@@ -1013,7 +1013,7 @@ fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=0 digest=4e098
 fuel 8 tripped fuel-exhausted consumed=9 unknown barrier=Filter | fuel=9
 fuel 9 tripped fuel-exhausted consumed=10 unknown barrier=Filter | fuel=10
 fuel 10 tripped fuel-exhausted consumed=11 unknown barrier=Filter | fuel=11
-fuel 11 tripped fuel-exhausted consumed=12 unknown barrier=Filter | fuel=12
+fuel 11 tripped fuel-exhausted consumed=12 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=12
 fuel 12..=64 x53 complete rows=0 digest=4e09856ef332be22 | fuel=12
 == purrdf-extend <http://purrdf.test/extend#reifierQuery> reifier querying binds the reifier and its inner s/p/o
 solutions vars=["r", "s", "p", "o"] rows=1 ordered=false
@@ -1752,14 +1752,14 @@ fuel 12 tripped fuel-exhausted consumed=13 certain prefix=true rows=0 digest=4e0
 fuel 13 tripped fuel-exhausted consumed=14 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=14
 fuel 14 tripped fuel-exhausted consumed=15 unknown barrier=Filter | fuel=15
 fuel 15 tripped fuel-exhausted consumed=16 unknown barrier=Filter | fuel=16
-fuel 16 tripped fuel-exhausted consumed=17 unknown barrier=Filter | fuel=17
-fuel 17..=18 x2 tripped fuel-exhausted consumed=19 unknown barrier=Filter | fuel=19
+fuel 16..=17 x2 tripped fuel-exhausted consumed=18 unknown barrier=Filter | fuel=18
+fuel 18 tripped fuel-exhausted consumed=19 unknown barrier=Filter | fuel=19
 fuel 19 tripped fuel-exhausted consumed=20 unknown barrier=Filter | fuel=20
 fuel 20 tripped fuel-exhausted consumed=21 unknown barrier=Filter | fuel=21
 fuel 21 tripped fuel-exhausted consumed=22 unknown barrier=Filter | fuel=22
 fuel 22 tripped fuel-exhausted consumed=23 unknown barrier=Filter | fuel=23
 fuel 23 tripped fuel-exhausted consumed=24 unknown barrier=Filter | fuel=24
-fuel 24 tripped fuel-exhausted consumed=25 unknown barrier=Filter | fuel=25
+fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=1 digest=47f48ff1041c4cce | fuel=25
 fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=1 digest=47f48ff1041c4cce | fuel=26
 fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=1 digest=47f48ff1041c4cce | fuel=27
 fuel 27..=64 x38 complete rows=1 digest=47f48ff1041c4cce | fuel=27
@@ -5860,13 +5860,13 @@ fuel 6 tripped fuel-exhausted consumed=7 certain prefix=true rows=0 digest=4e098
 fuel 7 tripped fuel-exhausted consumed=8 certain prefix=true rows=0 digest=4e09856ef332be22 | fuel=8
 fuel 8 tripped fuel-exhausted consumed=9 unknown barrier=Filter | fuel=9
 fuel 9 tripped fuel-exhausted consumed=10 unknown barrier=Filter | fuel=10
-fuel 10 tripped fuel-exhausted consumed=11 unknown barrier=Filter | fuel=11
-fuel 11..=12 x2 tripped fuel-exhausted consumed=13 unknown barrier=Filter | fuel=13
+fuel 10..=11 x2 tripped fuel-exhausted consumed=12 unknown barrier=Filter | fuel=12
+fuel 12 tripped fuel-exhausted consumed=13 unknown barrier=Filter | fuel=13
 fuel 13 tripped fuel-exhausted consumed=14 unknown barrier=Filter | fuel=14
 fuel 14 tripped fuel-exhausted consumed=15 unknown barrier=Filter | fuel=15
 fuel 15 tripped fuel-exhausted consumed=16 unknown barrier=Filter | fuel=16
 fuel 16 tripped fuel-exhausted consumed=17 unknown barrier=Filter | fuel=17
-fuel 17 tripped fuel-exhausted consumed=18 unknown barrier=Filter | fuel=18
+fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=1 digest=1c0c43954f423031 | fuel=18
 fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=1 digest=1c0c43954f423031 | fuel=19
 fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=1 digest=1c0c43954f423031 | fuel=20
 fuel 20..=64 x45 complete rows=1 digest=1c0c43954f423031 | fuel=20
@@ -5901,10 +5901,10 @@ fuel 14 tripped fuel-exhausted consumed=15 unknown barrier=Filter | fuel=15
 fuel 15 tripped fuel-exhausted consumed=16 unknown barrier=Filter | fuel=16
 fuel 16 tripped fuel-exhausted consumed=17 unknown barrier=Filter | fuel=17
 fuel 17 tripped fuel-exhausted consumed=18 unknown barrier=Filter | fuel=18
-fuel 18 tripped fuel-exhausted consumed=19 unknown barrier=Filter | fuel=19
-fuel 19 tripped fuel-exhausted consumed=20 unknown barrier=Filter | fuel=20
-fuel 20 tripped fuel-exhausted consumed=21 unknown barrier=Filter | fuel=21
-fuel 21 tripped fuel-exhausted consumed=22 unknown barrier=Filter | fuel=22
+fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=1 digest=e1db6162b9fab9c9 | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=2 digest=769313cbd0eb0e2b | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=3 digest=2d27e19d6acf3889 | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=3 digest=2d27e19d6acf3889 | fuel=22
 fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=3 digest=2d27e19d6acf3889 | fuel=23
 fuel 23 tripped fuel-exhausted consumed=24 certain prefix=true rows=3 digest=2d27e19d6acf3889 | fuel=24
 fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=3 digest=2d27e19d6acf3889 | fuel=25
@@ -5935,7 +5935,7 @@ fuel 8 tripped fuel-exhausted consumed=9 unknown barrier=Filter | fuel=9
 fuel 9 tripped fuel-exhausted consumed=10 unknown barrier=Filter | fuel=10
 fuel 10 tripped fuel-exhausted consumed=11 unknown barrier=Filter | fuel=11
 fuel 11 tripped fuel-exhausted consumed=12 unknown barrier=Filter | fuel=12
-fuel 12 tripped fuel-exhausted consumed=13 unknown barrier=Filter | fuel=13
+fuel 12 tripped fuel-exhausted consumed=13 certain prefix=true rows=1 digest=252a1f8492024745 | fuel=13
 fuel 13 tripped fuel-exhausted consumed=14 certain prefix=true rows=2 digest=95ee075dbec6b8a1 | fuel=14
 fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=2 digest=95ee075dbec6b8a1 | fuel=15
 fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=2 digest=95ee075dbec6b8a1 | fuel=16
@@ -5964,7 +5964,7 @@ fuel 9 tripped fuel-exhausted consumed=10 unknown barrier=Filter | fuel=10
 fuel 10 tripped fuel-exhausted consumed=11 unknown barrier=Filter | fuel=11
 fuel 11 tripped fuel-exhausted consumed=12 unknown barrier=Filter | fuel=12
 fuel 12 tripped fuel-exhausted consumed=13 unknown barrier=Filter | fuel=13
-fuel 13 tripped fuel-exhausted consumed=14 unknown barrier=Filter | fuel=14
+fuel 13 tripped fuel-exhausted consumed=14 certain prefix=true rows=0 digest=07a6c968e5f4ea4a | fuel=14
 fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=1 digest=8e4867247cff2b22 | fuel=15
 fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=1 digest=8e4867247cff2b22 | fuel=16
 fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=1 digest=8e4867247cff2b22 | fuel=17
@@ -9288,15 +9288,15 @@ fuel 13 tripped fuel-exhausted consumed=14 certain prefix=true rows=0 digest=e34
 fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=0 digest=e349e45efe62a2b7 | fuel=15
 fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=0 digest=e349e45efe62a2b7 | fuel=16
 fuel 16 tripped fuel-exhausted consumed=17 unknown barrier=Filter | fuel=17
-fuel 17 tripped fuel-exhausted consumed=18 unknown barrier=Filter | fuel=18
-fuel 18 tripped fuel-exhausted consumed=19 unknown barrier=Filter | fuel=19
+fuel 17..=18 x2 tripped fuel-exhausted consumed=19 unknown barrier=Filter | fuel=19
 fuel 19 tripped fuel-exhausted consumed=20 unknown barrier=Filter | fuel=20
 fuel 20 tripped fuel-exhausted consumed=21 unknown barrier=Filter | fuel=21
 fuel 21 tripped fuel-exhausted consumed=22 unknown barrier=Filter | fuel=22
-fuel 22..=23 x2 tripped fuel-exhausted consumed=24 unknown barrier=Filter | fuel=24
-fuel 24 tripped fuel-exhausted consumed=25 unknown barrier=Filter | fuel=25
-fuel 25 tripped fuel-exhausted consumed=26 unknown barrier=Filter | fuel=26
-fuel 26 tripped fuel-exhausted consumed=27 unknown barrier=Filter | fuel=27
+fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=0 digest=e349e45efe62a2b7 | fuel=23
+fuel 23 tripped fuel-exhausted consumed=24 certain prefix=true rows=1 digest=dd703310251a4186 | fuel=24
+fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=1 digest=dd703310251a4186 | fuel=25
+fuel 25 tripped fuel-exhausted consumed=26 certain prefix=true rows=2 digest=bd323b228046bd86 | fuel=26
+fuel 26 tripped fuel-exhausted consumed=27 certain prefix=true rows=2 digest=bd323b228046bd86 | fuel=27
 fuel 27 tripped fuel-exhausted consumed=28 certain prefix=true rows=2 digest=bd323b228046bd86 | fuel=28
 fuel 28 tripped fuel-exhausted consumed=29 certain prefix=true rows=2 digest=bd323b228046bd86 | fuel=29
 fuel 29 tripped fuel-exhausted consumed=30 certain prefix=true rows=2 digest=bd323b228046bd86 | fuel=30
@@ -9323,11 +9323,11 @@ fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=0 digest=e34
 fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=0 digest=e349e45efe62a2b7 | fuel=16
 fuel 16 tripped fuel-exhausted consumed=17 unknown barrier=Filter | fuel=17
 fuel 17 tripped fuel-exhausted consumed=18 unknown barrier=Filter | fuel=18
-fuel 18 tripped fuel-exhausted consumed=19 unknown barrier=Filter | fuel=19
-fuel 19 tripped fuel-exhausted consumed=20 unknown barrier=Filter | fuel=20
-fuel 20 tripped fuel-exhausted consumed=21 unknown barrier=Filter | fuel=21
-fuel 21 tripped fuel-exhausted consumed=22 unknown barrier=Filter | fuel=22
-fuel 22 tripped fuel-exhausted consumed=23 unknown barrier=Filter | fuel=23
+fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=0 digest=e349e45efe62a2b7 | fuel=19
+fuel 19 tripped fuel-exhausted consumed=20 certain prefix=true rows=0 digest=e349e45efe62a2b7 | fuel=20
+fuel 20 tripped fuel-exhausted consumed=21 certain prefix=true rows=0 digest=e349e45efe62a2b7 | fuel=21
+fuel 21 tripped fuel-exhausted consumed=22 certain prefix=true rows=0 digest=e349e45efe62a2b7 | fuel=22
+fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=0 digest=e349e45efe62a2b7 | fuel=23
 fuel 23..=64 x42 complete rows=0 digest=e349e45efe62a2b7 | fuel=23
 == w3c-sparql11/negation <http://www.w3.org/2009/sparql/docs/tests/data-sparql11/negation/manifest#full-minuend> Subtraction with MINUS from a fully bound minuend
 solutions vars=["a", "b", "c"] rows=2 ordered=true
@@ -9653,17 +9653,7 @@ fuel 233 tripped fuel-exhausted consumed=234 at-most prefix=false rows=0 digest=
 fuel 234 tripped fuel-exhausted consumed=235 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=235
 fuel 235 tripped fuel-exhausted consumed=236 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=236
 fuel 236 tripped fuel-exhausted consumed=237 unknown barrier=Filter | fuel=237
-fuel 237 tripped fuel-exhausted consumed=238 unknown barrier=Filter | fuel=238
-fuel 238 tripped fuel-exhausted consumed=239 unknown barrier=Filter | fuel=239
-fuel 239 tripped fuel-exhausted consumed=240 unknown barrier=Filter | fuel=240
-fuel 240 tripped fuel-exhausted consumed=241 unknown barrier=Filter | fuel=241
-fuel 241 tripped fuel-exhausted consumed=242 unknown barrier=Filter | fuel=242
-fuel 242 tripped fuel-exhausted consumed=243 unknown barrier=Filter | fuel=243
-fuel 243 tripped fuel-exhausted consumed=244 unknown barrier=Filter | fuel=244
-fuel 244 tripped fuel-exhausted consumed=245 unknown barrier=Filter | fuel=245
-fuel 245 tripped fuel-exhausted consumed=246 unknown barrier=Filter | fuel=246
-fuel 246 tripped fuel-exhausted consumed=247 unknown barrier=Filter | fuel=247
-fuel 247 tripped fuel-exhausted consumed=248 unknown barrier=Filter | fuel=248
+fuel 237..=247 x11 tripped fuel-exhausted consumed=248 unknown barrier=Filter | fuel=248
 fuel 248 tripped fuel-exhausted consumed=249 unknown barrier=Filter | fuel=249
 fuel 249 tripped fuel-exhausted consumed=250 unknown barrier=Filter | fuel=250
 fuel 250 tripped fuel-exhausted consumed=251 unknown barrier=Filter | fuel=251
@@ -9676,61 +9666,71 @@ fuel 256 tripped fuel-exhausted consumed=257 unknown barrier=Filter | fuel=257
 fuel 257 tripped fuel-exhausted consumed=258 unknown barrier=Filter | fuel=258
 fuel 258 tripped fuel-exhausted consumed=259 unknown barrier=Filter | fuel=259
 fuel 259 tripped fuel-exhausted consumed=260 unknown barrier=Filter | fuel=260
-fuel 260 tripped fuel-exhausted consumed=261 unknown barrier=Filter | fuel=261
-fuel 261 tripped fuel-exhausted consumed=262 unknown barrier=Filter | fuel=262
-fuel 262 tripped fuel-exhausted consumed=263 unknown barrier=Filter | fuel=263
-fuel 263 tripped fuel-exhausted consumed=264 unknown barrier=Filter | fuel=264
-fuel 264 tripped fuel-exhausted consumed=265 unknown barrier=Filter | fuel=265
-fuel 265 tripped fuel-exhausted consumed=266 unknown barrier=Filter | fuel=266
-fuel 266 tripped fuel-exhausted consumed=267 unknown barrier=Filter | fuel=267
-fuel 267 tripped fuel-exhausted consumed=268 unknown barrier=Filter | fuel=268
-fuel 268 tripped fuel-exhausted consumed=269 unknown barrier=Filter | fuel=269
-fuel 269 tripped fuel-exhausted consumed=270 unknown barrier=Filter | fuel=270
-fuel 270 tripped fuel-exhausted consumed=271 unknown barrier=Filter | fuel=271
-fuel 271 tripped fuel-exhausted consumed=272 unknown barrier=Filter | fuel=272
-fuel 272 tripped fuel-exhausted consumed=273 unknown barrier=Filter | fuel=273
-fuel 273 tripped fuel-exhausted consumed=274 unknown barrier=Filter | fuel=274
-fuel 274 tripped fuel-exhausted consumed=275 unknown barrier=Filter | fuel=275
-fuel 275 tripped fuel-exhausted consumed=276 unknown barrier=Filter | fuel=276
-fuel 276 tripped fuel-exhausted consumed=277 unknown barrier=Filter | fuel=277
-fuel 277 tripped fuel-exhausted consumed=278 unknown barrier=Filter | fuel=278
-fuel 278 tripped fuel-exhausted consumed=279 unknown barrier=Filter | fuel=279
-fuel 279 tripped fuel-exhausted consumed=280 unknown barrier=Filter | fuel=280
-fuel 280 tripped fuel-exhausted consumed=281 unknown barrier=Filter | fuel=281
-fuel 281 tripped fuel-exhausted consumed=282 unknown barrier=Filter | fuel=282
-fuel 282 tripped fuel-exhausted consumed=283 unknown barrier=Filter | fuel=283
-fuel 283 tripped fuel-exhausted consumed=284 unknown barrier=Filter | fuel=284
-fuel 284 tripped fuel-exhausted consumed=285 unknown barrier=Filter | fuel=285
-fuel 285 tripped fuel-exhausted consumed=286 unknown barrier=Filter | fuel=286
-fuel 286 tripped fuel-exhausted consumed=287 unknown barrier=Filter | fuel=287
-fuel 287 tripped fuel-exhausted consumed=288 unknown barrier=Filter | fuel=288
-fuel 288 tripped fuel-exhausted consumed=289 unknown barrier=Filter | fuel=289
-fuel 289 tripped fuel-exhausted consumed=290 unknown barrier=Filter | fuel=290
-fuel 290 tripped fuel-exhausted consumed=291 unknown barrier=Filter | fuel=291
-fuel 291 tripped fuel-exhausted consumed=292 unknown barrier=Filter | fuel=292
-fuel 292 tripped fuel-exhausted consumed=293 unknown barrier=Filter | fuel=293
-fuel 293 tripped fuel-exhausted consumed=294 unknown barrier=Filter | fuel=294
-fuel 294 tripped fuel-exhausted consumed=295 unknown barrier=Filter | fuel=295
-fuel 295 tripped fuel-exhausted consumed=296 unknown barrier=Filter | fuel=296
-fuel 296 tripped fuel-exhausted consumed=297 unknown barrier=Filter | fuel=297
-fuel 297 tripped fuel-exhausted consumed=298 unknown barrier=Filter | fuel=298
-fuel 298 tripped fuel-exhausted consumed=299 unknown barrier=Filter | fuel=299
-fuel 299 tripped fuel-exhausted consumed=300 unknown barrier=Filter | fuel=300
-fuel 300 tripped fuel-exhausted consumed=301 unknown barrier=Filter | fuel=301
-fuel 301 tripped fuel-exhausted consumed=302 unknown barrier=Filter | fuel=302
-fuel 302..=312 x11 tripped fuel-exhausted consumed=313 unknown barrier=Filter | fuel=313
-fuel 313 tripped fuel-exhausted consumed=314 unknown barrier=Filter | fuel=314
-fuel 314 tripped fuel-exhausted consumed=315 unknown barrier=Filter | fuel=315
-fuel 315 tripped fuel-exhausted consumed=316 unknown barrier=Filter | fuel=316
-fuel 316 tripped fuel-exhausted consumed=317 unknown barrier=Filter | fuel=317
-fuel 317 tripped fuel-exhausted consumed=318 unknown barrier=Filter | fuel=318
-fuel 318 tripped fuel-exhausted consumed=319 unknown barrier=Filter | fuel=319
-fuel 319 tripped fuel-exhausted consumed=320 unknown barrier=Filter | fuel=320
-fuel 320 tripped fuel-exhausted consumed=321 unknown barrier=Filter | fuel=321
-fuel 321 tripped fuel-exhausted consumed=322 unknown barrier=Filter | fuel=322
-fuel 322 tripped fuel-exhausted consumed=323 unknown barrier=Filter | fuel=323
-fuel 323 tripped fuel-exhausted consumed=324 unknown barrier=Filter | fuel=324
-fuel 324 tripped fuel-exhausted consumed=325 unknown barrier=Filter | fuel=325
+fuel 260 tripped fuel-exhausted consumed=261 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=261
+fuel 261 tripped fuel-exhausted consumed=262 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=262
+fuel 262 tripped fuel-exhausted consumed=263 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=263
+fuel 263 tripped fuel-exhausted consumed=264 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=264
+fuel 264 tripped fuel-exhausted consumed=265 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=265
+fuel 265 tripped fuel-exhausted consumed=266 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=266
+fuel 266 tripped fuel-exhausted consumed=267 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=267
+fuel 267 tripped fuel-exhausted consumed=268 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=268
+fuel 268 tripped fuel-exhausted consumed=269 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=269
+fuel 269 tripped fuel-exhausted consumed=270 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=270
+fuel 270 tripped fuel-exhausted consumed=271 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=271
+fuel 271 tripped fuel-exhausted consumed=272 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=272
+fuel 272 tripped fuel-exhausted consumed=273 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=273
+fuel 273 tripped fuel-exhausted consumed=274 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=274
+fuel 274 tripped fuel-exhausted consumed=275 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=275
+fuel 275 tripped fuel-exhausted consumed=276 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=276
+fuel 276 tripped fuel-exhausted consumed=277 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=277
+fuel 277 tripped fuel-exhausted consumed=278 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=278
+fuel 278 tripped fuel-exhausted consumed=279 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=279
+fuel 279 tripped fuel-exhausted consumed=280 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=280
+fuel 280 tripped fuel-exhausted consumed=281 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=281
+fuel 281 tripped fuel-exhausted consumed=282 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=282
+fuel 282 tripped fuel-exhausted consumed=283 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=283
+fuel 283 tripped fuel-exhausted consumed=284 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=284
+fuel 284 tripped fuel-exhausted consumed=285 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=285
+fuel 285 tripped fuel-exhausted consumed=286 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=286
+fuel 286 tripped fuel-exhausted consumed=287 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=287
+fuel 287 tripped fuel-exhausted consumed=288 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=288
+fuel 288 tripped fuel-exhausted consumed=289 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=289
+fuel 289 tripped fuel-exhausted consumed=290 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=290
+fuel 290 tripped fuel-exhausted consumed=291 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=291
+fuel 291 tripped fuel-exhausted consumed=292 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=292
+fuel 292 tripped fuel-exhausted consumed=293 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=293
+fuel 293 tripped fuel-exhausted consumed=294 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=294
+fuel 294 tripped fuel-exhausted consumed=295 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=295
+fuel 295 tripped fuel-exhausted consumed=296 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=296
+fuel 296 tripped fuel-exhausted consumed=297 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=297
+fuel 297 tripped fuel-exhausted consumed=298 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=298
+fuel 298 tripped fuel-exhausted consumed=299 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=299
+fuel 299 tripped fuel-exhausted consumed=300 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=300
+fuel 300 tripped fuel-exhausted consumed=301 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=301
+fuel 301 tripped fuel-exhausted consumed=302 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=302
+fuel 302 tripped fuel-exhausted consumed=303 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=303
+fuel 303 tripped fuel-exhausted consumed=304 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=304
+fuel 304 tripped fuel-exhausted consumed=305 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=305
+fuel 305 tripped fuel-exhausted consumed=306 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=306
+fuel 306 tripped fuel-exhausted consumed=307 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=307
+fuel 307 tripped fuel-exhausted consumed=308 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=308
+fuel 308 tripped fuel-exhausted consumed=309 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=309
+fuel 309 tripped fuel-exhausted consumed=310 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=310
+fuel 310 tripped fuel-exhausted consumed=311 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=311
+fuel 311 tripped fuel-exhausted consumed=312 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=312
+fuel 312 tripped fuel-exhausted consumed=313 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=313
+fuel 313 tripped fuel-exhausted consumed=314 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=314
+fuel 314 tripped fuel-exhausted consumed=315 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=315
+fuel 315 tripped fuel-exhausted consumed=316 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=316
+fuel 316 tripped fuel-exhausted consumed=317 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=317
+fuel 317 tripped fuel-exhausted consumed=318 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=318
+fuel 318 tripped fuel-exhausted consumed=319 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=319
+fuel 319 tripped fuel-exhausted consumed=320 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=320
+fuel 320 tripped fuel-exhausted consumed=321 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=321
+fuel 321 tripped fuel-exhausted consumed=322 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=322
+fuel 322 tripped fuel-exhausted consumed=323 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=323
+fuel 323 tripped fuel-exhausted consumed=324 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=324
+fuel 324 tripped fuel-exhausted consumed=325 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=325
 fuel 325 tripped fuel-exhausted consumed=326 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=326
 fuel 326 tripped fuel-exhausted consumed=327 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=327
 fuel 327 tripped fuel-exhausted consumed=328 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=328
@@ -9862,17 +9862,7 @@ fuel 518 tripped fuel-exhausted consumed=519 at-most prefix=false rows=0 digest=
 fuel 519 tripped fuel-exhausted consumed=520 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=520
 fuel 520 tripped fuel-exhausted consumed=521 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=521
 fuel 521 tripped fuel-exhausted consumed=522 unknown barrier=Filter | fuel=522
-fuel 522 tripped fuel-exhausted consumed=523 unknown barrier=Filter | fuel=523
-fuel 523 tripped fuel-exhausted consumed=524 unknown barrier=Filter | fuel=524
-fuel 524 tripped fuel-exhausted consumed=525 unknown barrier=Filter | fuel=525
-fuel 525 tripped fuel-exhausted consumed=526 unknown barrier=Filter | fuel=526
-fuel 526 tripped fuel-exhausted consumed=527 unknown barrier=Filter | fuel=527
-fuel 527 tripped fuel-exhausted consumed=528 unknown barrier=Filter | fuel=528
-fuel 528 tripped fuel-exhausted consumed=529 unknown barrier=Filter | fuel=529
-fuel 529 tripped fuel-exhausted consumed=530 unknown barrier=Filter | fuel=530
-fuel 530 tripped fuel-exhausted consumed=531 unknown barrier=Filter | fuel=531
-fuel 531 tripped fuel-exhausted consumed=532 unknown barrier=Filter | fuel=532
-fuel 532 tripped fuel-exhausted consumed=533 unknown barrier=Filter | fuel=533
+fuel 522..=532 x11 tripped fuel-exhausted consumed=533 unknown barrier=Filter | fuel=533
 fuel 533 tripped fuel-exhausted consumed=534 unknown barrier=Filter | fuel=534
 fuel 534 tripped fuel-exhausted consumed=535 unknown barrier=Filter | fuel=535
 fuel 535 tripped fuel-exhausted consumed=536 unknown barrier=Filter | fuel=536
@@ -9885,61 +9875,71 @@ fuel 541 tripped fuel-exhausted consumed=542 unknown barrier=Filter | fuel=542
 fuel 542 tripped fuel-exhausted consumed=543 unknown barrier=Filter | fuel=543
 fuel 543 tripped fuel-exhausted consumed=544 unknown barrier=Filter | fuel=544
 fuel 544 tripped fuel-exhausted consumed=545 unknown barrier=Filter | fuel=545
-fuel 545 tripped fuel-exhausted consumed=546 unknown barrier=Filter | fuel=546
-fuel 546 tripped fuel-exhausted consumed=547 unknown barrier=Filter | fuel=547
-fuel 547 tripped fuel-exhausted consumed=548 unknown barrier=Filter | fuel=548
-fuel 548 tripped fuel-exhausted consumed=549 unknown barrier=Filter | fuel=549
-fuel 549 tripped fuel-exhausted consumed=550 unknown barrier=Filter | fuel=550
-fuel 550 tripped fuel-exhausted consumed=551 unknown barrier=Filter | fuel=551
-fuel 551 tripped fuel-exhausted consumed=552 unknown barrier=Filter | fuel=552
-fuel 552 tripped fuel-exhausted consumed=553 unknown barrier=Filter | fuel=553
-fuel 553 tripped fuel-exhausted consumed=554 unknown barrier=Filter | fuel=554
-fuel 554 tripped fuel-exhausted consumed=555 unknown barrier=Filter | fuel=555
-fuel 555 tripped fuel-exhausted consumed=556 unknown barrier=Filter | fuel=556
-fuel 556 tripped fuel-exhausted consumed=557 unknown barrier=Filter | fuel=557
-fuel 557 tripped fuel-exhausted consumed=558 unknown barrier=Filter | fuel=558
-fuel 558 tripped fuel-exhausted consumed=559 unknown barrier=Filter | fuel=559
-fuel 559 tripped fuel-exhausted consumed=560 unknown barrier=Filter | fuel=560
-fuel 560 tripped fuel-exhausted consumed=561 unknown barrier=Filter | fuel=561
-fuel 561 tripped fuel-exhausted consumed=562 unknown barrier=Filter | fuel=562
-fuel 562 tripped fuel-exhausted consumed=563 unknown barrier=Filter | fuel=563
-fuel 563 tripped fuel-exhausted consumed=564 unknown barrier=Filter | fuel=564
-fuel 564 tripped fuel-exhausted consumed=565 unknown barrier=Filter | fuel=565
-fuel 565 tripped fuel-exhausted consumed=566 unknown barrier=Filter | fuel=566
-fuel 566 tripped fuel-exhausted consumed=567 unknown barrier=Filter | fuel=567
-fuel 567 tripped fuel-exhausted consumed=568 unknown barrier=Filter | fuel=568
-fuel 568 tripped fuel-exhausted consumed=569 unknown barrier=Filter | fuel=569
-fuel 569 tripped fuel-exhausted consumed=570 unknown barrier=Filter | fuel=570
-fuel 570 tripped fuel-exhausted consumed=571 unknown barrier=Filter | fuel=571
-fuel 571 tripped fuel-exhausted consumed=572 unknown barrier=Filter | fuel=572
-fuel 572 tripped fuel-exhausted consumed=573 unknown barrier=Filter | fuel=573
-fuel 573 tripped fuel-exhausted consumed=574 unknown barrier=Filter | fuel=574
-fuel 574 tripped fuel-exhausted consumed=575 unknown barrier=Filter | fuel=575
-fuel 575 tripped fuel-exhausted consumed=576 unknown barrier=Filter | fuel=576
-fuel 576 tripped fuel-exhausted consumed=577 unknown barrier=Filter | fuel=577
-fuel 577 tripped fuel-exhausted consumed=578 unknown barrier=Filter | fuel=578
-fuel 578 tripped fuel-exhausted consumed=579 unknown barrier=Filter | fuel=579
-fuel 579 tripped fuel-exhausted consumed=580 unknown barrier=Filter | fuel=580
-fuel 580 tripped fuel-exhausted consumed=581 unknown barrier=Filter | fuel=581
-fuel 581 tripped fuel-exhausted consumed=582 unknown barrier=Filter | fuel=582
-fuel 582 tripped fuel-exhausted consumed=583 unknown barrier=Filter | fuel=583
-fuel 583 tripped fuel-exhausted consumed=584 unknown barrier=Filter | fuel=584
-fuel 584 tripped fuel-exhausted consumed=585 unknown barrier=Filter | fuel=585
-fuel 585 tripped fuel-exhausted consumed=586 unknown barrier=Filter | fuel=586
-fuel 586 tripped fuel-exhausted consumed=587 unknown barrier=Filter | fuel=587
-fuel 587..=597 x11 tripped fuel-exhausted consumed=598 unknown barrier=Filter | fuel=598
-fuel 598 tripped fuel-exhausted consumed=599 unknown barrier=Filter | fuel=599
-fuel 599 tripped fuel-exhausted consumed=600 unknown barrier=Filter | fuel=600
-fuel 600 tripped fuel-exhausted consumed=601 unknown barrier=Filter | fuel=601
-fuel 601 tripped fuel-exhausted consumed=602 unknown barrier=Filter | fuel=602
-fuel 602 tripped fuel-exhausted consumed=603 unknown barrier=Filter | fuel=603
-fuel 603 tripped fuel-exhausted consumed=604 unknown barrier=Filter | fuel=604
-fuel 604 tripped fuel-exhausted consumed=605 unknown barrier=Filter | fuel=605
-fuel 605 tripped fuel-exhausted consumed=606 unknown barrier=Filter | fuel=606
-fuel 606 tripped fuel-exhausted consumed=607 unknown barrier=Filter | fuel=607
-fuel 607 tripped fuel-exhausted consumed=608 unknown barrier=Filter | fuel=608
-fuel 608 tripped fuel-exhausted consumed=609 unknown barrier=Filter | fuel=609
-fuel 609 tripped fuel-exhausted consumed=610 unknown barrier=Filter | fuel=610
+fuel 545 tripped fuel-exhausted consumed=546 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=546
+fuel 546 tripped fuel-exhausted consumed=547 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=547
+fuel 547 tripped fuel-exhausted consumed=548 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=548
+fuel 548 tripped fuel-exhausted consumed=549 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=549
+fuel 549 tripped fuel-exhausted consumed=550 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=550
+fuel 550 tripped fuel-exhausted consumed=551 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=551
+fuel 551 tripped fuel-exhausted consumed=552 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=552
+fuel 552 tripped fuel-exhausted consumed=553 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=553
+fuel 553 tripped fuel-exhausted consumed=554 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=554
+fuel 554 tripped fuel-exhausted consumed=555 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=555
+fuel 555 tripped fuel-exhausted consumed=556 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=556
+fuel 556 tripped fuel-exhausted consumed=557 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=557
+fuel 557 tripped fuel-exhausted consumed=558 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=558
+fuel 558 tripped fuel-exhausted consumed=559 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=559
+fuel 559 tripped fuel-exhausted consumed=560 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=560
+fuel 560 tripped fuel-exhausted consumed=561 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=561
+fuel 561 tripped fuel-exhausted consumed=562 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=562
+fuel 562 tripped fuel-exhausted consumed=563 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=563
+fuel 563 tripped fuel-exhausted consumed=564 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=564
+fuel 564 tripped fuel-exhausted consumed=565 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=565
+fuel 565 tripped fuel-exhausted consumed=566 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=566
+fuel 566 tripped fuel-exhausted consumed=567 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=567
+fuel 567 tripped fuel-exhausted consumed=568 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=568
+fuel 568 tripped fuel-exhausted consumed=569 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=569
+fuel 569 tripped fuel-exhausted consumed=570 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=570
+fuel 570 tripped fuel-exhausted consumed=571 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=571
+fuel 571 tripped fuel-exhausted consumed=572 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=572
+fuel 572 tripped fuel-exhausted consumed=573 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=573
+fuel 573 tripped fuel-exhausted consumed=574 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=574
+fuel 574 tripped fuel-exhausted consumed=575 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=575
+fuel 575 tripped fuel-exhausted consumed=576 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=576
+fuel 576 tripped fuel-exhausted consumed=577 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=577
+fuel 577 tripped fuel-exhausted consumed=578 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=578
+fuel 578 tripped fuel-exhausted consumed=579 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=579
+fuel 579 tripped fuel-exhausted consumed=580 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=580
+fuel 580 tripped fuel-exhausted consumed=581 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=581
+fuel 581 tripped fuel-exhausted consumed=582 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=582
+fuel 582 tripped fuel-exhausted consumed=583 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=583
+fuel 583 tripped fuel-exhausted consumed=584 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=584
+fuel 584 tripped fuel-exhausted consumed=585 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=585
+fuel 585 tripped fuel-exhausted consumed=586 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=586
+fuel 586 tripped fuel-exhausted consumed=587 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=587
+fuel 587 tripped fuel-exhausted consumed=588 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=588
+fuel 588 tripped fuel-exhausted consumed=589 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=589
+fuel 589 tripped fuel-exhausted consumed=590 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=590
+fuel 590 tripped fuel-exhausted consumed=591 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=591
+fuel 591 tripped fuel-exhausted consumed=592 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=592
+fuel 592 tripped fuel-exhausted consumed=593 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=593
+fuel 593 tripped fuel-exhausted consumed=594 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=594
+fuel 594 tripped fuel-exhausted consumed=595 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=595
+fuel 595 tripped fuel-exhausted consumed=596 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=596
+fuel 596 tripped fuel-exhausted consumed=597 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=597
+fuel 597 tripped fuel-exhausted consumed=598 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=598
+fuel 598 tripped fuel-exhausted consumed=599 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=599
+fuel 599 tripped fuel-exhausted consumed=600 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=600
+fuel 600 tripped fuel-exhausted consumed=601 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=601
+fuel 601 tripped fuel-exhausted consumed=602 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=602
+fuel 602 tripped fuel-exhausted consumed=603 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=603
+fuel 603 tripped fuel-exhausted consumed=604 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=604
+fuel 604 tripped fuel-exhausted consumed=605 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=605
+fuel 605 tripped fuel-exhausted consumed=606 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=606
+fuel 606 tripped fuel-exhausted consumed=607 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=607
+fuel 607 tripped fuel-exhausted consumed=608 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=608
+fuel 608 tripped fuel-exhausted consumed=609 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=609
+fuel 609 tripped fuel-exhausted consumed=610 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=610
 fuel 610 tripped fuel-exhausted consumed=611 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=611
 fuel 611 tripped fuel-exhausted consumed=612 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=612
 fuel 612 tripped fuel-exhausted consumed=613 at-most prefix=false rows=0 digest=d13c3ed1df6ae068 | fuel=613
@@ -10288,17 +10288,7 @@ fuel 355 tripped fuel-exhausted consumed=356 at-most prefix=false rows=0 digest=
 fuel 356 tripped fuel-exhausted consumed=357 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=357
 fuel 357 tripped fuel-exhausted consumed=358 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=358
 fuel 358 tripped fuel-exhausted consumed=359 unknown barrier=Filter | fuel=359
-fuel 359 tripped fuel-exhausted consumed=360 unknown barrier=Filter | fuel=360
-fuel 360 tripped fuel-exhausted consumed=361 unknown barrier=Filter | fuel=361
-fuel 361 tripped fuel-exhausted consumed=362 unknown barrier=Filter | fuel=362
-fuel 362 tripped fuel-exhausted consumed=363 unknown barrier=Filter | fuel=363
-fuel 363 tripped fuel-exhausted consumed=364 unknown barrier=Filter | fuel=364
-fuel 364 tripped fuel-exhausted consumed=365 unknown barrier=Filter | fuel=365
-fuel 365 tripped fuel-exhausted consumed=366 unknown barrier=Filter | fuel=366
-fuel 366 tripped fuel-exhausted consumed=367 unknown barrier=Filter | fuel=367
-fuel 367 tripped fuel-exhausted consumed=368 unknown barrier=Filter | fuel=368
-fuel 368 tripped fuel-exhausted consumed=369 unknown barrier=Filter | fuel=369
-fuel 369 tripped fuel-exhausted consumed=370 unknown barrier=Filter | fuel=370
+fuel 359..=369 x11 tripped fuel-exhausted consumed=370 unknown barrier=Filter | fuel=370
 fuel 370 tripped fuel-exhausted consumed=371 unknown barrier=Filter | fuel=371
 fuel 371 tripped fuel-exhausted consumed=372 unknown barrier=Filter | fuel=372
 fuel 372 tripped fuel-exhausted consumed=373 unknown barrier=Filter | fuel=373
@@ -10311,50 +10301,60 @@ fuel 378 tripped fuel-exhausted consumed=379 unknown barrier=Filter | fuel=379
 fuel 379 tripped fuel-exhausted consumed=380 unknown barrier=Filter | fuel=380
 fuel 380 tripped fuel-exhausted consumed=381 unknown barrier=Filter | fuel=381
 fuel 381 tripped fuel-exhausted consumed=382 unknown barrier=Filter | fuel=382
-fuel 382 tripped fuel-exhausted consumed=383 unknown barrier=Filter | fuel=383
-fuel 383 tripped fuel-exhausted consumed=384 unknown barrier=Filter | fuel=384
-fuel 384 tripped fuel-exhausted consumed=385 unknown barrier=Filter | fuel=385
-fuel 385 tripped fuel-exhausted consumed=386 unknown barrier=Filter | fuel=386
-fuel 386 tripped fuel-exhausted consumed=387 unknown barrier=Filter | fuel=387
-fuel 387 tripped fuel-exhausted consumed=388 unknown barrier=Filter | fuel=388
-fuel 388 tripped fuel-exhausted consumed=389 unknown barrier=Filter | fuel=389
-fuel 389 tripped fuel-exhausted consumed=390 unknown barrier=Filter | fuel=390
-fuel 390 tripped fuel-exhausted consumed=391 unknown barrier=Filter | fuel=391
-fuel 391 tripped fuel-exhausted consumed=392 unknown barrier=Filter | fuel=392
-fuel 392 tripped fuel-exhausted consumed=393 unknown barrier=Filter | fuel=393
-fuel 393 tripped fuel-exhausted consumed=394 unknown barrier=Filter | fuel=394
-fuel 394 tripped fuel-exhausted consumed=395 unknown barrier=Filter | fuel=395
-fuel 395 tripped fuel-exhausted consumed=396 unknown barrier=Filter | fuel=396
-fuel 396 tripped fuel-exhausted consumed=397 unknown barrier=Filter | fuel=397
-fuel 397 tripped fuel-exhausted consumed=398 unknown barrier=Filter | fuel=398
-fuel 398 tripped fuel-exhausted consumed=399 unknown barrier=Filter | fuel=399
-fuel 399 tripped fuel-exhausted consumed=400 unknown barrier=Filter | fuel=400
-fuel 400 tripped fuel-exhausted consumed=401 unknown barrier=Filter | fuel=401
-fuel 401 tripped fuel-exhausted consumed=402 unknown barrier=Filter | fuel=402
-fuel 402 tripped fuel-exhausted consumed=403 unknown barrier=Filter | fuel=403
-fuel 403 tripped fuel-exhausted consumed=404 unknown barrier=Filter | fuel=404
-fuel 404 tripped fuel-exhausted consumed=405 unknown barrier=Filter | fuel=405
-fuel 405 tripped fuel-exhausted consumed=406 unknown barrier=Filter | fuel=406
-fuel 406 tripped fuel-exhausted consumed=407 unknown barrier=Filter | fuel=407
-fuel 407 tripped fuel-exhausted consumed=408 unknown barrier=Filter | fuel=408
-fuel 408 tripped fuel-exhausted consumed=409 unknown barrier=Filter | fuel=409
-fuel 409 tripped fuel-exhausted consumed=410 unknown barrier=Filter | fuel=410
-fuel 410 tripped fuel-exhausted consumed=411 unknown barrier=Filter | fuel=411
-fuel 411 tripped fuel-exhausted consumed=412 unknown barrier=Filter | fuel=412
-fuel 412 tripped fuel-exhausted consumed=413 unknown barrier=Filter | fuel=413
-fuel 413..=423 x11 tripped fuel-exhausted consumed=424 unknown barrier=Filter | fuel=424
-fuel 424 tripped fuel-exhausted consumed=425 unknown barrier=Filter | fuel=425
-fuel 425 tripped fuel-exhausted consumed=426 unknown barrier=Filter | fuel=426
-fuel 426 tripped fuel-exhausted consumed=427 unknown barrier=Filter | fuel=427
-fuel 427 tripped fuel-exhausted consumed=428 unknown barrier=Filter | fuel=428
-fuel 428 tripped fuel-exhausted consumed=429 unknown barrier=Filter | fuel=429
-fuel 429 tripped fuel-exhausted consumed=430 unknown barrier=Filter | fuel=430
-fuel 430 tripped fuel-exhausted consumed=431 unknown barrier=Filter | fuel=431
-fuel 431 tripped fuel-exhausted consumed=432 unknown barrier=Filter | fuel=432
-fuel 432 tripped fuel-exhausted consumed=433 unknown barrier=Filter | fuel=433
-fuel 433 tripped fuel-exhausted consumed=434 unknown barrier=Filter | fuel=434
-fuel 434 tripped fuel-exhausted consumed=435 unknown barrier=Filter | fuel=435
-fuel 435 tripped fuel-exhausted consumed=436 unknown barrier=Filter | fuel=436
+fuel 382 tripped fuel-exhausted consumed=383 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=383
+fuel 383 tripped fuel-exhausted consumed=384 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=384
+fuel 384 tripped fuel-exhausted consumed=385 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=385
+fuel 385 tripped fuel-exhausted consumed=386 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=386
+fuel 386 tripped fuel-exhausted consumed=387 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=387
+fuel 387 tripped fuel-exhausted consumed=388 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=388
+fuel 388 tripped fuel-exhausted consumed=389 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=389
+fuel 389 tripped fuel-exhausted consumed=390 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=390
+fuel 390 tripped fuel-exhausted consumed=391 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=391
+fuel 391 tripped fuel-exhausted consumed=392 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=392
+fuel 392 tripped fuel-exhausted consumed=393 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=393
+fuel 393 tripped fuel-exhausted consumed=394 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=394
+fuel 394 tripped fuel-exhausted consumed=395 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=395
+fuel 395 tripped fuel-exhausted consumed=396 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=396
+fuel 396 tripped fuel-exhausted consumed=397 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=397
+fuel 397 tripped fuel-exhausted consumed=398 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=398
+fuel 398 tripped fuel-exhausted consumed=399 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=399
+fuel 399 tripped fuel-exhausted consumed=400 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=400
+fuel 400 tripped fuel-exhausted consumed=401 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=401
+fuel 401 tripped fuel-exhausted consumed=402 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=402
+fuel 402 tripped fuel-exhausted consumed=403 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=403
+fuel 403 tripped fuel-exhausted consumed=404 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=404
+fuel 404 tripped fuel-exhausted consumed=405 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=405
+fuel 405 tripped fuel-exhausted consumed=406 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=406
+fuel 406 tripped fuel-exhausted consumed=407 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=407
+fuel 407 tripped fuel-exhausted consumed=408 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=408
+fuel 408 tripped fuel-exhausted consumed=409 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=409
+fuel 409 tripped fuel-exhausted consumed=410 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=410
+fuel 410 tripped fuel-exhausted consumed=411 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=411
+fuel 411 tripped fuel-exhausted consumed=412 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=412
+fuel 412 tripped fuel-exhausted consumed=413 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=413
+fuel 413 tripped fuel-exhausted consumed=414 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=414
+fuel 414 tripped fuel-exhausted consumed=415 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=415
+fuel 415 tripped fuel-exhausted consumed=416 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=416
+fuel 416 tripped fuel-exhausted consumed=417 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=417
+fuel 417 tripped fuel-exhausted consumed=418 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=418
+fuel 418 tripped fuel-exhausted consumed=419 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=419
+fuel 419 tripped fuel-exhausted consumed=420 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=420
+fuel 420 tripped fuel-exhausted consumed=421 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=421
+fuel 421 tripped fuel-exhausted consumed=422 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=422
+fuel 422 tripped fuel-exhausted consumed=423 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=423
+fuel 423 tripped fuel-exhausted consumed=424 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=424
+fuel 424 tripped fuel-exhausted consumed=425 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=425
+fuel 425 tripped fuel-exhausted consumed=426 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=426
+fuel 426 tripped fuel-exhausted consumed=427 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=427
+fuel 427 tripped fuel-exhausted consumed=428 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=428
+fuel 428 tripped fuel-exhausted consumed=429 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=429
+fuel 429 tripped fuel-exhausted consumed=430 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=430
+fuel 430 tripped fuel-exhausted consumed=431 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=431
+fuel 431 tripped fuel-exhausted consumed=432 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=432
+fuel 432 tripped fuel-exhausted consumed=433 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=433
+fuel 433 tripped fuel-exhausted consumed=434 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=434
+fuel 434 tripped fuel-exhausted consumed=435 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=435
+fuel 435 tripped fuel-exhausted consumed=436 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=436
 fuel 436 tripped fuel-exhausted consumed=437 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=437
 fuel 437 tripped fuel-exhausted consumed=438 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=438
 fuel 438 tripped fuel-exhausted consumed=439 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=439
@@ -10659,17 +10659,7 @@ fuel 233 tripped fuel-exhausted consumed=234 at-most prefix=false rows=0 digest=
 fuel 234 tripped fuel-exhausted consumed=235 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=235
 fuel 235 tripped fuel-exhausted consumed=236 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=236
 fuel 236 tripped fuel-exhausted consumed=237 unknown barrier=Filter | fuel=237
-fuel 237 tripped fuel-exhausted consumed=238 unknown barrier=Filter | fuel=238
-fuel 238 tripped fuel-exhausted consumed=239 unknown barrier=Filter | fuel=239
-fuel 239 tripped fuel-exhausted consumed=240 unknown barrier=Filter | fuel=240
-fuel 240 tripped fuel-exhausted consumed=241 unknown barrier=Filter | fuel=241
-fuel 241 tripped fuel-exhausted consumed=242 unknown barrier=Filter | fuel=242
-fuel 242 tripped fuel-exhausted consumed=243 unknown barrier=Filter | fuel=243
-fuel 243 tripped fuel-exhausted consumed=244 unknown barrier=Filter | fuel=244
-fuel 244 tripped fuel-exhausted consumed=245 unknown barrier=Filter | fuel=245
-fuel 245 tripped fuel-exhausted consumed=246 unknown barrier=Filter | fuel=246
-fuel 246 tripped fuel-exhausted consumed=247 unknown barrier=Filter | fuel=247
-fuel 247 tripped fuel-exhausted consumed=248 unknown barrier=Filter | fuel=248
+fuel 237..=247 x11 tripped fuel-exhausted consumed=248 unknown barrier=Filter | fuel=248
 fuel 248 tripped fuel-exhausted consumed=249 unknown barrier=Filter | fuel=249
 fuel 249 tripped fuel-exhausted consumed=250 unknown barrier=Filter | fuel=250
 fuel 250 tripped fuel-exhausted consumed=251 unknown barrier=Filter | fuel=251
@@ -10682,61 +10672,71 @@ fuel 256 tripped fuel-exhausted consumed=257 unknown barrier=Filter | fuel=257
 fuel 257 tripped fuel-exhausted consumed=258 unknown barrier=Filter | fuel=258
 fuel 258 tripped fuel-exhausted consumed=259 unknown barrier=Filter | fuel=259
 fuel 259 tripped fuel-exhausted consumed=260 unknown barrier=Filter | fuel=260
-fuel 260 tripped fuel-exhausted consumed=261 unknown barrier=Filter | fuel=261
-fuel 261 tripped fuel-exhausted consumed=262 unknown barrier=Filter | fuel=262
-fuel 262 tripped fuel-exhausted consumed=263 unknown barrier=Filter | fuel=263
-fuel 263 tripped fuel-exhausted consumed=264 unknown barrier=Filter | fuel=264
-fuel 264 tripped fuel-exhausted consumed=265 unknown barrier=Filter | fuel=265
-fuel 265 tripped fuel-exhausted consumed=266 unknown barrier=Filter | fuel=266
-fuel 266 tripped fuel-exhausted consumed=267 unknown barrier=Filter | fuel=267
-fuel 267 tripped fuel-exhausted consumed=268 unknown barrier=Filter | fuel=268
-fuel 268 tripped fuel-exhausted consumed=269 unknown barrier=Filter | fuel=269
-fuel 269 tripped fuel-exhausted consumed=270 unknown barrier=Filter | fuel=270
-fuel 270 tripped fuel-exhausted consumed=271 unknown barrier=Filter | fuel=271
-fuel 271 tripped fuel-exhausted consumed=272 unknown barrier=Filter | fuel=272
-fuel 272 tripped fuel-exhausted consumed=273 unknown barrier=Filter | fuel=273
-fuel 273 tripped fuel-exhausted consumed=274 unknown barrier=Filter | fuel=274
-fuel 274 tripped fuel-exhausted consumed=275 unknown barrier=Filter | fuel=275
-fuel 275 tripped fuel-exhausted consumed=276 unknown barrier=Filter | fuel=276
-fuel 276 tripped fuel-exhausted consumed=277 unknown barrier=Filter | fuel=277
-fuel 277 tripped fuel-exhausted consumed=278 unknown barrier=Filter | fuel=278
-fuel 278 tripped fuel-exhausted consumed=279 unknown barrier=Filter | fuel=279
-fuel 279 tripped fuel-exhausted consumed=280 unknown barrier=Filter | fuel=280
-fuel 280 tripped fuel-exhausted consumed=281 unknown barrier=Filter | fuel=281
-fuel 281 tripped fuel-exhausted consumed=282 unknown barrier=Filter | fuel=282
-fuel 282 tripped fuel-exhausted consumed=283 unknown barrier=Filter | fuel=283
-fuel 283 tripped fuel-exhausted consumed=284 unknown barrier=Filter | fuel=284
-fuel 284 tripped fuel-exhausted consumed=285 unknown barrier=Filter | fuel=285
-fuel 285 tripped fuel-exhausted consumed=286 unknown barrier=Filter | fuel=286
-fuel 286 tripped fuel-exhausted consumed=287 unknown barrier=Filter | fuel=287
-fuel 287 tripped fuel-exhausted consumed=288 unknown barrier=Filter | fuel=288
-fuel 288 tripped fuel-exhausted consumed=289 unknown barrier=Filter | fuel=289
-fuel 289 tripped fuel-exhausted consumed=290 unknown barrier=Filter | fuel=290
-fuel 290 tripped fuel-exhausted consumed=291 unknown barrier=Filter | fuel=291
-fuel 291 tripped fuel-exhausted consumed=292 unknown barrier=Filter | fuel=292
-fuel 292 tripped fuel-exhausted consumed=293 unknown barrier=Filter | fuel=293
-fuel 293 tripped fuel-exhausted consumed=294 unknown barrier=Filter | fuel=294
-fuel 294 tripped fuel-exhausted consumed=295 unknown barrier=Filter | fuel=295
-fuel 295 tripped fuel-exhausted consumed=296 unknown barrier=Filter | fuel=296
-fuel 296 tripped fuel-exhausted consumed=297 unknown barrier=Filter | fuel=297
-fuel 297 tripped fuel-exhausted consumed=298 unknown barrier=Filter | fuel=298
-fuel 298 tripped fuel-exhausted consumed=299 unknown barrier=Filter | fuel=299
-fuel 299 tripped fuel-exhausted consumed=300 unknown barrier=Filter | fuel=300
-fuel 300 tripped fuel-exhausted consumed=301 unknown barrier=Filter | fuel=301
-fuel 301 tripped fuel-exhausted consumed=302 unknown barrier=Filter | fuel=302
-fuel 302..=312 x11 tripped fuel-exhausted consumed=313 unknown barrier=Filter | fuel=313
-fuel 313 tripped fuel-exhausted consumed=314 unknown barrier=Filter | fuel=314
-fuel 314 tripped fuel-exhausted consumed=315 unknown barrier=Filter | fuel=315
-fuel 315 tripped fuel-exhausted consumed=316 unknown barrier=Filter | fuel=316
-fuel 316 tripped fuel-exhausted consumed=317 unknown barrier=Filter | fuel=317
-fuel 317 tripped fuel-exhausted consumed=318 unknown barrier=Filter | fuel=318
-fuel 318 tripped fuel-exhausted consumed=319 unknown barrier=Filter | fuel=319
-fuel 319 tripped fuel-exhausted consumed=320 unknown barrier=Filter | fuel=320
-fuel 320 tripped fuel-exhausted consumed=321 unknown barrier=Filter | fuel=321
-fuel 321 tripped fuel-exhausted consumed=322 unknown barrier=Filter | fuel=322
-fuel 322 tripped fuel-exhausted consumed=323 unknown barrier=Filter | fuel=323
-fuel 323 tripped fuel-exhausted consumed=324 unknown barrier=Filter | fuel=324
-fuel 324 tripped fuel-exhausted consumed=325 unknown barrier=Filter | fuel=325
+fuel 260 tripped fuel-exhausted consumed=261 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=261
+fuel 261 tripped fuel-exhausted consumed=262 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=262
+fuel 262 tripped fuel-exhausted consumed=263 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=263
+fuel 263 tripped fuel-exhausted consumed=264 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=264
+fuel 264 tripped fuel-exhausted consumed=265 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=265
+fuel 265 tripped fuel-exhausted consumed=266 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=266
+fuel 266 tripped fuel-exhausted consumed=267 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=267
+fuel 267 tripped fuel-exhausted consumed=268 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=268
+fuel 268 tripped fuel-exhausted consumed=269 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=269
+fuel 269 tripped fuel-exhausted consumed=270 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=270
+fuel 270 tripped fuel-exhausted consumed=271 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=271
+fuel 271 tripped fuel-exhausted consumed=272 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=272
+fuel 272 tripped fuel-exhausted consumed=273 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=273
+fuel 273 tripped fuel-exhausted consumed=274 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=274
+fuel 274 tripped fuel-exhausted consumed=275 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=275
+fuel 275 tripped fuel-exhausted consumed=276 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=276
+fuel 276 tripped fuel-exhausted consumed=277 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=277
+fuel 277 tripped fuel-exhausted consumed=278 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=278
+fuel 278 tripped fuel-exhausted consumed=279 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=279
+fuel 279 tripped fuel-exhausted consumed=280 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=280
+fuel 280 tripped fuel-exhausted consumed=281 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=281
+fuel 281 tripped fuel-exhausted consumed=282 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=282
+fuel 282 tripped fuel-exhausted consumed=283 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=283
+fuel 283 tripped fuel-exhausted consumed=284 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=284
+fuel 284 tripped fuel-exhausted consumed=285 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=285
+fuel 285 tripped fuel-exhausted consumed=286 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=286
+fuel 286 tripped fuel-exhausted consumed=287 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=287
+fuel 287 tripped fuel-exhausted consumed=288 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=288
+fuel 288 tripped fuel-exhausted consumed=289 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=289
+fuel 289 tripped fuel-exhausted consumed=290 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=290
+fuel 290 tripped fuel-exhausted consumed=291 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=291
+fuel 291 tripped fuel-exhausted consumed=292 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=292
+fuel 292 tripped fuel-exhausted consumed=293 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=293
+fuel 293 tripped fuel-exhausted consumed=294 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=294
+fuel 294 tripped fuel-exhausted consumed=295 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=295
+fuel 295 tripped fuel-exhausted consumed=296 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=296
+fuel 296 tripped fuel-exhausted consumed=297 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=297
+fuel 297 tripped fuel-exhausted consumed=298 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=298
+fuel 298 tripped fuel-exhausted consumed=299 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=299
+fuel 299 tripped fuel-exhausted consumed=300 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=300
+fuel 300 tripped fuel-exhausted consumed=301 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=301
+fuel 301 tripped fuel-exhausted consumed=302 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=302
+fuel 302 tripped fuel-exhausted consumed=303 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=303
+fuel 303 tripped fuel-exhausted consumed=304 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=304
+fuel 304 tripped fuel-exhausted consumed=305 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=305
+fuel 305 tripped fuel-exhausted consumed=306 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=306
+fuel 306 tripped fuel-exhausted consumed=307 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=307
+fuel 307 tripped fuel-exhausted consumed=308 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=308
+fuel 308 tripped fuel-exhausted consumed=309 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=309
+fuel 309 tripped fuel-exhausted consumed=310 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=310
+fuel 310 tripped fuel-exhausted consumed=311 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=311
+fuel 311 tripped fuel-exhausted consumed=312 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=312
+fuel 312 tripped fuel-exhausted consumed=313 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=313
+fuel 313 tripped fuel-exhausted consumed=314 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=314
+fuel 314 tripped fuel-exhausted consumed=315 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=315
+fuel 315 tripped fuel-exhausted consumed=316 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=316
+fuel 316 tripped fuel-exhausted consumed=317 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=317
+fuel 317 tripped fuel-exhausted consumed=318 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=318
+fuel 318 tripped fuel-exhausted consumed=319 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=319
+fuel 319 tripped fuel-exhausted consumed=320 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=320
+fuel 320 tripped fuel-exhausted consumed=321 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=321
+fuel 321 tripped fuel-exhausted consumed=322 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=322
+fuel 322 tripped fuel-exhausted consumed=323 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=323
+fuel 323 tripped fuel-exhausted consumed=324 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=324
+fuel 324 tripped fuel-exhausted consumed=325 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=325
 fuel 325 tripped fuel-exhausted consumed=326 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=326
 fuel 326 tripped fuel-exhausted consumed=327 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=327
 fuel 327 tripped fuel-exhausted consumed=328 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=328
@@ -10835,17 +10835,7 @@ fuel 454 tripped fuel-exhausted consumed=455 at-most prefix=false rows=0 digest=
 fuel 455 tripped fuel-exhausted consumed=456 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=456
 fuel 456 tripped fuel-exhausted consumed=457 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=457
 fuel 457 tripped fuel-exhausted consumed=458 unknown barrier=Filter | fuel=458
-fuel 458 tripped fuel-exhausted consumed=459 unknown barrier=Filter | fuel=459
-fuel 459 tripped fuel-exhausted consumed=460 unknown barrier=Filter | fuel=460
-fuel 460 tripped fuel-exhausted consumed=461 unknown barrier=Filter | fuel=461
-fuel 461 tripped fuel-exhausted consumed=462 unknown barrier=Filter | fuel=462
-fuel 462 tripped fuel-exhausted consumed=463 unknown barrier=Filter | fuel=463
-fuel 463 tripped fuel-exhausted consumed=464 unknown barrier=Filter | fuel=464
-fuel 464 tripped fuel-exhausted consumed=465 unknown barrier=Filter | fuel=465
-fuel 465 tripped fuel-exhausted consumed=466 unknown barrier=Filter | fuel=466
-fuel 466 tripped fuel-exhausted consumed=467 unknown barrier=Filter | fuel=467
-fuel 467 tripped fuel-exhausted consumed=468 unknown barrier=Filter | fuel=468
-fuel 468 tripped fuel-exhausted consumed=469 unknown barrier=Filter | fuel=469
+fuel 458..=468 x11 tripped fuel-exhausted consumed=469 unknown barrier=Filter | fuel=469
 fuel 469 tripped fuel-exhausted consumed=470 unknown barrier=Filter | fuel=470
 fuel 470 tripped fuel-exhausted consumed=471 unknown barrier=Filter | fuel=471
 fuel 471 tripped fuel-exhausted consumed=472 unknown barrier=Filter | fuel=472
@@ -10858,31 +10848,41 @@ fuel 477 tripped fuel-exhausted consumed=478 unknown barrier=Filter | fuel=478
 fuel 478 tripped fuel-exhausted consumed=479 unknown barrier=Filter | fuel=479
 fuel 479 tripped fuel-exhausted consumed=480 unknown barrier=Filter | fuel=480
 fuel 480 tripped fuel-exhausted consumed=481 unknown barrier=Filter | fuel=481
-fuel 481 tripped fuel-exhausted consumed=482 unknown barrier=Filter | fuel=482
-fuel 482 tripped fuel-exhausted consumed=483 unknown barrier=Filter | fuel=483
-fuel 483 tripped fuel-exhausted consumed=484 unknown barrier=Filter | fuel=484
-fuel 484 tripped fuel-exhausted consumed=485 unknown barrier=Filter | fuel=485
-fuel 485 tripped fuel-exhausted consumed=486 unknown barrier=Filter | fuel=486
-fuel 486 tripped fuel-exhausted consumed=487 unknown barrier=Filter | fuel=487
-fuel 487 tripped fuel-exhausted consumed=488 unknown barrier=Filter | fuel=488
-fuel 488 tripped fuel-exhausted consumed=489 unknown barrier=Filter | fuel=489
-fuel 489 tripped fuel-exhausted consumed=490 unknown barrier=Filter | fuel=490
-fuel 490 tripped fuel-exhausted consumed=491 unknown barrier=Filter | fuel=491
-fuel 491 tripped fuel-exhausted consumed=492 unknown barrier=Filter | fuel=492
-fuel 492 tripped fuel-exhausted consumed=493 unknown barrier=Filter | fuel=493
-fuel 493..=503 x11 tripped fuel-exhausted consumed=504 unknown barrier=Filter | fuel=504
-fuel 504 tripped fuel-exhausted consumed=505 unknown barrier=Filter | fuel=505
-fuel 505 tripped fuel-exhausted consumed=506 unknown barrier=Filter | fuel=506
-fuel 506 tripped fuel-exhausted consumed=507 unknown barrier=Filter | fuel=507
-fuel 507 tripped fuel-exhausted consumed=508 unknown barrier=Filter | fuel=508
-fuel 508 tripped fuel-exhausted consumed=509 unknown barrier=Filter | fuel=509
-fuel 509 tripped fuel-exhausted consumed=510 unknown barrier=Filter | fuel=510
-fuel 510 tripped fuel-exhausted consumed=511 unknown barrier=Filter | fuel=511
-fuel 511 tripped fuel-exhausted consumed=512 unknown barrier=Filter | fuel=512
-fuel 512 tripped fuel-exhausted consumed=513 unknown barrier=Filter | fuel=513
-fuel 513 tripped fuel-exhausted consumed=514 unknown barrier=Filter | fuel=514
-fuel 514 tripped fuel-exhausted consumed=515 unknown barrier=Filter | fuel=515
-fuel 515 tripped fuel-exhausted consumed=516 unknown barrier=Filter | fuel=516
+fuel 481 tripped fuel-exhausted consumed=482 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=482
+fuel 482 tripped fuel-exhausted consumed=483 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=483
+fuel 483 tripped fuel-exhausted consumed=484 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=484
+fuel 484 tripped fuel-exhausted consumed=485 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=485
+fuel 485 tripped fuel-exhausted consumed=486 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=486
+fuel 486 tripped fuel-exhausted consumed=487 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=487
+fuel 487 tripped fuel-exhausted consumed=488 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=488
+fuel 488 tripped fuel-exhausted consumed=489 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=489
+fuel 489 tripped fuel-exhausted consumed=490 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=490
+fuel 490 tripped fuel-exhausted consumed=491 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=491
+fuel 491 tripped fuel-exhausted consumed=492 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=492
+fuel 492 tripped fuel-exhausted consumed=493 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=493
+fuel 493 tripped fuel-exhausted consumed=494 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=494
+fuel 494 tripped fuel-exhausted consumed=495 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=495
+fuel 495 tripped fuel-exhausted consumed=496 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=496
+fuel 496 tripped fuel-exhausted consumed=497 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=497
+fuel 497 tripped fuel-exhausted consumed=498 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=498
+fuel 498 tripped fuel-exhausted consumed=499 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=499
+fuel 499 tripped fuel-exhausted consumed=500 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=500
+fuel 500 tripped fuel-exhausted consumed=501 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=501
+fuel 501 tripped fuel-exhausted consumed=502 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=502
+fuel 502 tripped fuel-exhausted consumed=503 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=503
+fuel 503 tripped fuel-exhausted consumed=504 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=504
+fuel 504 tripped fuel-exhausted consumed=505 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=505
+fuel 505 tripped fuel-exhausted consumed=506 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=506
+fuel 506 tripped fuel-exhausted consumed=507 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=507
+fuel 507 tripped fuel-exhausted consumed=508 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=508
+fuel 508 tripped fuel-exhausted consumed=509 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=509
+fuel 509 tripped fuel-exhausted consumed=510 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=510
+fuel 510 tripped fuel-exhausted consumed=511 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=511
+fuel 511 tripped fuel-exhausted consumed=512 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=512
+fuel 512 tripped fuel-exhausted consumed=513 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=513
+fuel 513 tripped fuel-exhausted consumed=514 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=514
+fuel 514 tripped fuel-exhausted consumed=515 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=515
+fuel 515 tripped fuel-exhausted consumed=516 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=516
 fuel 516 tripped fuel-exhausted consumed=517 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=517
 fuel 517 tripped fuel-exhausted consumed=518 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=518
 fuel 518 tripped fuel-exhausted consumed=519 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=519
@@ -10891,12 +10891,12 @@ fuel 520 tripped fuel-exhausted consumed=521 at-most prefix=false rows=0 digest=
 fuel 521 tripped fuel-exhausted consumed=522 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=522
 fuel 522 tripped fuel-exhausted consumed=523 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=523
 fuel 523 tripped fuel-exhausted consumed=524 unknown barrier=Filter | fuel=524
-fuel 524 tripped fuel-exhausted consumed=525 unknown barrier=Filter | fuel=525
-fuel 525 tripped fuel-exhausted consumed=526 unknown barrier=Filter | fuel=526
-fuel 526 tripped fuel-exhausted consumed=527 unknown barrier=Filter | fuel=527
-fuel 527 tripped fuel-exhausted consumed=528 unknown barrier=Filter | fuel=528
-fuel 528 tripped fuel-exhausted consumed=529 unknown barrier=Filter | fuel=529
-fuel 529..=539 x11 tripped fuel-exhausted consumed=540 unknown barrier=Filter | fuel=540
+fuel 524..=534 x11 tripped fuel-exhausted consumed=535 unknown barrier=Filter | fuel=535
+fuel 535 tripped fuel-exhausted consumed=536 unknown barrier=Filter | fuel=536
+fuel 536 tripped fuel-exhausted consumed=537 unknown barrier=Filter | fuel=537
+fuel 537 tripped fuel-exhausted consumed=538 unknown barrier=Filter | fuel=538
+fuel 538 tripped fuel-exhausted consumed=539 unknown barrier=Filter | fuel=539
+fuel 539 tripped fuel-exhausted consumed=540 unknown barrier=Filter | fuel=540
 fuel 540 tripped fuel-exhausted consumed=541 unknown barrier=Filter | fuel=541
 fuel 541 tripped fuel-exhausted consumed=542 unknown barrier=Filter | fuel=542
 fuel 542 tripped fuel-exhausted consumed=543 unknown barrier=Filter | fuel=543
@@ -10904,11 +10904,11 @@ fuel 543 tripped fuel-exhausted consumed=544 unknown barrier=Filter | fuel=544
 fuel 544 tripped fuel-exhausted consumed=545 unknown barrier=Filter | fuel=545
 fuel 545 tripped fuel-exhausted consumed=546 unknown barrier=Filter | fuel=546
 fuel 546 tripped fuel-exhausted consumed=547 unknown barrier=Filter | fuel=547
-fuel 547 tripped fuel-exhausted consumed=548 unknown barrier=Filter | fuel=548
-fuel 548 tripped fuel-exhausted consumed=549 unknown barrier=Filter | fuel=549
-fuel 549 tripped fuel-exhausted consumed=550 unknown barrier=Filter | fuel=550
-fuel 550 tripped fuel-exhausted consumed=551 unknown barrier=Filter | fuel=551
-fuel 551 tripped fuel-exhausted consumed=552 unknown barrier=Filter | fuel=552
+fuel 547 tripped fuel-exhausted consumed=548 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=548
+fuel 548 tripped fuel-exhausted consumed=549 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=549
+fuel 549 tripped fuel-exhausted consumed=550 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=550
+fuel 550 tripped fuel-exhausted consumed=551 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=551
+fuel 551 tripped fuel-exhausted consumed=552 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=552
 fuel 552 tripped fuel-exhausted consumed=553 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=553
 fuel 553 tripped fuel-exhausted consumed=554 certain prefix=true rows=0 digest=8c63e45117586412 | fuel=554
 fuel 554 tripped fuel-exhausted consumed=555 certain prefix=true rows=0 digest=8c63e45117586412 | fuel=555
@@ -11149,17 +11149,7 @@ fuel 233 tripped fuel-exhausted consumed=234 at-most prefix=false rows=0 digest=
 fuel 234 tripped fuel-exhausted consumed=235 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=235
 fuel 235 tripped fuel-exhausted consumed=236 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=236
 fuel 236 tripped fuel-exhausted consumed=237 unknown barrier=Filter | fuel=237
-fuel 237 tripped fuel-exhausted consumed=238 unknown barrier=Filter | fuel=238
-fuel 238 tripped fuel-exhausted consumed=239 unknown barrier=Filter | fuel=239
-fuel 239 tripped fuel-exhausted consumed=240 unknown barrier=Filter | fuel=240
-fuel 240 tripped fuel-exhausted consumed=241 unknown barrier=Filter | fuel=241
-fuel 241 tripped fuel-exhausted consumed=242 unknown barrier=Filter | fuel=242
-fuel 242 tripped fuel-exhausted consumed=243 unknown barrier=Filter | fuel=243
-fuel 243 tripped fuel-exhausted consumed=244 unknown barrier=Filter | fuel=244
-fuel 244 tripped fuel-exhausted consumed=245 unknown barrier=Filter | fuel=245
-fuel 245 tripped fuel-exhausted consumed=246 unknown barrier=Filter | fuel=246
-fuel 246 tripped fuel-exhausted consumed=247 unknown barrier=Filter | fuel=247
-fuel 247 tripped fuel-exhausted consumed=248 unknown barrier=Filter | fuel=248
+fuel 237..=247 x11 tripped fuel-exhausted consumed=248 unknown barrier=Filter | fuel=248
 fuel 248 tripped fuel-exhausted consumed=249 unknown barrier=Filter | fuel=249
 fuel 249 tripped fuel-exhausted consumed=250 unknown barrier=Filter | fuel=250
 fuel 250 tripped fuel-exhausted consumed=251 unknown barrier=Filter | fuel=251
@@ -11172,61 +11162,71 @@ fuel 256 tripped fuel-exhausted consumed=257 unknown barrier=Filter | fuel=257
 fuel 257 tripped fuel-exhausted consumed=258 unknown barrier=Filter | fuel=258
 fuel 258 tripped fuel-exhausted consumed=259 unknown barrier=Filter | fuel=259
 fuel 259 tripped fuel-exhausted consumed=260 unknown barrier=Filter | fuel=260
-fuel 260 tripped fuel-exhausted consumed=261 unknown barrier=Filter | fuel=261
-fuel 261 tripped fuel-exhausted consumed=262 unknown barrier=Filter | fuel=262
-fuel 262 tripped fuel-exhausted consumed=263 unknown barrier=Filter | fuel=263
-fuel 263 tripped fuel-exhausted consumed=264 unknown barrier=Filter | fuel=264
-fuel 264 tripped fuel-exhausted consumed=265 unknown barrier=Filter | fuel=265
-fuel 265 tripped fuel-exhausted consumed=266 unknown barrier=Filter | fuel=266
-fuel 266 tripped fuel-exhausted consumed=267 unknown barrier=Filter | fuel=267
-fuel 267 tripped fuel-exhausted consumed=268 unknown barrier=Filter | fuel=268
-fuel 268 tripped fuel-exhausted consumed=269 unknown barrier=Filter | fuel=269
-fuel 269 tripped fuel-exhausted consumed=270 unknown barrier=Filter | fuel=270
-fuel 270 tripped fuel-exhausted consumed=271 unknown barrier=Filter | fuel=271
-fuel 271 tripped fuel-exhausted consumed=272 unknown barrier=Filter | fuel=272
-fuel 272 tripped fuel-exhausted consumed=273 unknown barrier=Filter | fuel=273
-fuel 273 tripped fuel-exhausted consumed=274 unknown barrier=Filter | fuel=274
-fuel 274 tripped fuel-exhausted consumed=275 unknown barrier=Filter | fuel=275
-fuel 275 tripped fuel-exhausted consumed=276 unknown barrier=Filter | fuel=276
-fuel 276 tripped fuel-exhausted consumed=277 unknown barrier=Filter | fuel=277
-fuel 277 tripped fuel-exhausted consumed=278 unknown barrier=Filter | fuel=278
-fuel 278 tripped fuel-exhausted consumed=279 unknown barrier=Filter | fuel=279
-fuel 279 tripped fuel-exhausted consumed=280 unknown barrier=Filter | fuel=280
-fuel 280 tripped fuel-exhausted consumed=281 unknown barrier=Filter | fuel=281
-fuel 281 tripped fuel-exhausted consumed=282 unknown barrier=Filter | fuel=282
-fuel 282 tripped fuel-exhausted consumed=283 unknown barrier=Filter | fuel=283
-fuel 283 tripped fuel-exhausted consumed=284 unknown barrier=Filter | fuel=284
-fuel 284 tripped fuel-exhausted consumed=285 unknown barrier=Filter | fuel=285
-fuel 285 tripped fuel-exhausted consumed=286 unknown barrier=Filter | fuel=286
-fuel 286 tripped fuel-exhausted consumed=287 unknown barrier=Filter | fuel=287
-fuel 287 tripped fuel-exhausted consumed=288 unknown barrier=Filter | fuel=288
-fuel 288 tripped fuel-exhausted consumed=289 unknown barrier=Filter | fuel=289
-fuel 289 tripped fuel-exhausted consumed=290 unknown barrier=Filter | fuel=290
-fuel 290 tripped fuel-exhausted consumed=291 unknown barrier=Filter | fuel=291
-fuel 291 tripped fuel-exhausted consumed=292 unknown barrier=Filter | fuel=292
-fuel 292 tripped fuel-exhausted consumed=293 unknown barrier=Filter | fuel=293
-fuel 293 tripped fuel-exhausted consumed=294 unknown barrier=Filter | fuel=294
-fuel 294 tripped fuel-exhausted consumed=295 unknown barrier=Filter | fuel=295
-fuel 295 tripped fuel-exhausted consumed=296 unknown barrier=Filter | fuel=296
-fuel 296 tripped fuel-exhausted consumed=297 unknown barrier=Filter | fuel=297
-fuel 297 tripped fuel-exhausted consumed=298 unknown barrier=Filter | fuel=298
-fuel 298 tripped fuel-exhausted consumed=299 unknown barrier=Filter | fuel=299
-fuel 299 tripped fuel-exhausted consumed=300 unknown barrier=Filter | fuel=300
-fuel 300 tripped fuel-exhausted consumed=301 unknown barrier=Filter | fuel=301
-fuel 301 tripped fuel-exhausted consumed=302 unknown barrier=Filter | fuel=302
-fuel 302..=312 x11 tripped fuel-exhausted consumed=313 unknown barrier=Filter | fuel=313
-fuel 313 tripped fuel-exhausted consumed=314 unknown barrier=Filter | fuel=314
-fuel 314 tripped fuel-exhausted consumed=315 unknown barrier=Filter | fuel=315
-fuel 315 tripped fuel-exhausted consumed=316 unknown barrier=Filter | fuel=316
-fuel 316 tripped fuel-exhausted consumed=317 unknown barrier=Filter | fuel=317
-fuel 317 tripped fuel-exhausted consumed=318 unknown barrier=Filter | fuel=318
-fuel 318 tripped fuel-exhausted consumed=319 unknown barrier=Filter | fuel=319
-fuel 319 tripped fuel-exhausted consumed=320 unknown barrier=Filter | fuel=320
-fuel 320 tripped fuel-exhausted consumed=321 unknown barrier=Filter | fuel=321
-fuel 321 tripped fuel-exhausted consumed=322 unknown barrier=Filter | fuel=322
-fuel 322 tripped fuel-exhausted consumed=323 unknown barrier=Filter | fuel=323
-fuel 323 tripped fuel-exhausted consumed=324 unknown barrier=Filter | fuel=324
-fuel 324 tripped fuel-exhausted consumed=325 unknown barrier=Filter | fuel=325
+fuel 260 tripped fuel-exhausted consumed=261 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=261
+fuel 261 tripped fuel-exhausted consumed=262 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=262
+fuel 262 tripped fuel-exhausted consumed=263 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=263
+fuel 263 tripped fuel-exhausted consumed=264 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=264
+fuel 264 tripped fuel-exhausted consumed=265 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=265
+fuel 265 tripped fuel-exhausted consumed=266 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=266
+fuel 266 tripped fuel-exhausted consumed=267 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=267
+fuel 267 tripped fuel-exhausted consumed=268 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=268
+fuel 268 tripped fuel-exhausted consumed=269 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=269
+fuel 269 tripped fuel-exhausted consumed=270 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=270
+fuel 270 tripped fuel-exhausted consumed=271 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=271
+fuel 271 tripped fuel-exhausted consumed=272 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=272
+fuel 272 tripped fuel-exhausted consumed=273 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=273
+fuel 273 tripped fuel-exhausted consumed=274 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=274
+fuel 274 tripped fuel-exhausted consumed=275 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=275
+fuel 275 tripped fuel-exhausted consumed=276 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=276
+fuel 276 tripped fuel-exhausted consumed=277 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=277
+fuel 277 tripped fuel-exhausted consumed=278 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=278
+fuel 278 tripped fuel-exhausted consumed=279 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=279
+fuel 279 tripped fuel-exhausted consumed=280 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=280
+fuel 280 tripped fuel-exhausted consumed=281 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=281
+fuel 281 tripped fuel-exhausted consumed=282 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=282
+fuel 282 tripped fuel-exhausted consumed=283 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=283
+fuel 283 tripped fuel-exhausted consumed=284 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=284
+fuel 284 tripped fuel-exhausted consumed=285 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=285
+fuel 285 tripped fuel-exhausted consumed=286 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=286
+fuel 286 tripped fuel-exhausted consumed=287 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=287
+fuel 287 tripped fuel-exhausted consumed=288 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=288
+fuel 288 tripped fuel-exhausted consumed=289 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=289
+fuel 289 tripped fuel-exhausted consumed=290 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=290
+fuel 290 tripped fuel-exhausted consumed=291 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=291
+fuel 291 tripped fuel-exhausted consumed=292 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=292
+fuel 292 tripped fuel-exhausted consumed=293 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=293
+fuel 293 tripped fuel-exhausted consumed=294 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=294
+fuel 294 tripped fuel-exhausted consumed=295 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=295
+fuel 295 tripped fuel-exhausted consumed=296 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=296
+fuel 296 tripped fuel-exhausted consumed=297 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=297
+fuel 297 tripped fuel-exhausted consumed=298 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=298
+fuel 298 tripped fuel-exhausted consumed=299 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=299
+fuel 299 tripped fuel-exhausted consumed=300 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=300
+fuel 300 tripped fuel-exhausted consumed=301 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=301
+fuel 301 tripped fuel-exhausted consumed=302 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=302
+fuel 302 tripped fuel-exhausted consumed=303 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=303
+fuel 303 tripped fuel-exhausted consumed=304 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=304
+fuel 304 tripped fuel-exhausted consumed=305 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=305
+fuel 305 tripped fuel-exhausted consumed=306 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=306
+fuel 306 tripped fuel-exhausted consumed=307 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=307
+fuel 307 tripped fuel-exhausted consumed=308 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=308
+fuel 308 tripped fuel-exhausted consumed=309 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=309
+fuel 309 tripped fuel-exhausted consumed=310 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=310
+fuel 310 tripped fuel-exhausted consumed=311 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=311
+fuel 311 tripped fuel-exhausted consumed=312 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=312
+fuel 312 tripped fuel-exhausted consumed=313 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=313
+fuel 313 tripped fuel-exhausted consumed=314 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=314
+fuel 314 tripped fuel-exhausted consumed=315 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=315
+fuel 315 tripped fuel-exhausted consumed=316 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=316
+fuel 316 tripped fuel-exhausted consumed=317 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=317
+fuel 317 tripped fuel-exhausted consumed=318 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=318
+fuel 318 tripped fuel-exhausted consumed=319 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=319
+fuel 319 tripped fuel-exhausted consumed=320 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=320
+fuel 320 tripped fuel-exhausted consumed=321 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=321
+fuel 321 tripped fuel-exhausted consumed=322 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=322
+fuel 322 tripped fuel-exhausted consumed=323 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=323
+fuel 323 tripped fuel-exhausted consumed=324 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=324
+fuel 324 tripped fuel-exhausted consumed=325 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=325
 fuel 325 tripped fuel-exhausted consumed=326 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=326
 fuel 326 tripped fuel-exhausted consumed=327 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=327
 fuel 327 tripped fuel-exhausted consumed=328 at-most prefix=false rows=0 digest=8c63e45117586412 | fuel=328
@@ -11404,17 +11404,7 @@ fuel 599 tripped fuel-exhausted consumed=600 certain prefix=false rows=0 digest=
 fuel 600 tripped fuel-exhausted consumed=601 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=601
 fuel 601 tripped fuel-exhausted consumed=602 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=602
 fuel 602 tripped fuel-exhausted consumed=603 unknown barrier=Filter | fuel=603
-fuel 603 tripped fuel-exhausted consumed=604 unknown barrier=Filter | fuel=604
-fuel 604 tripped fuel-exhausted consumed=605 unknown barrier=Filter | fuel=605
-fuel 605 tripped fuel-exhausted consumed=606 unknown barrier=Filter | fuel=606
-fuel 606 tripped fuel-exhausted consumed=607 unknown barrier=Filter | fuel=607
-fuel 607 tripped fuel-exhausted consumed=608 unknown barrier=Filter | fuel=608
-fuel 608 tripped fuel-exhausted consumed=609 unknown barrier=Filter | fuel=609
-fuel 609 tripped fuel-exhausted consumed=610 unknown barrier=Filter | fuel=610
-fuel 610 tripped fuel-exhausted consumed=611 unknown barrier=Filter | fuel=611
-fuel 611 tripped fuel-exhausted consumed=612 unknown barrier=Filter | fuel=612
-fuel 612 tripped fuel-exhausted consumed=613 unknown barrier=Filter | fuel=613
-fuel 613 tripped fuel-exhausted consumed=614 unknown barrier=Filter | fuel=614
+fuel 603..=613 x11 tripped fuel-exhausted consumed=614 unknown barrier=Filter | fuel=614
 fuel 614 tripped fuel-exhausted consumed=615 unknown barrier=Filter | fuel=615
 fuel 615 tripped fuel-exhausted consumed=616 unknown barrier=Filter | fuel=616
 fuel 616 tripped fuel-exhausted consumed=617 unknown barrier=Filter | fuel=617
@@ -11427,61 +11417,71 @@ fuel 622 tripped fuel-exhausted consumed=623 unknown barrier=Filter | fuel=623
 fuel 623 tripped fuel-exhausted consumed=624 unknown barrier=Filter | fuel=624
 fuel 624 tripped fuel-exhausted consumed=625 unknown barrier=Filter | fuel=625
 fuel 625 tripped fuel-exhausted consumed=626 unknown barrier=Filter | fuel=626
-fuel 626 tripped fuel-exhausted consumed=627 unknown barrier=Filter | fuel=627
-fuel 627 tripped fuel-exhausted consumed=628 unknown barrier=Filter | fuel=628
-fuel 628 tripped fuel-exhausted consumed=629 unknown barrier=Filter | fuel=629
-fuel 629 tripped fuel-exhausted consumed=630 unknown barrier=Filter | fuel=630
-fuel 630 tripped fuel-exhausted consumed=631 unknown barrier=Filter | fuel=631
-fuel 631 tripped fuel-exhausted consumed=632 unknown barrier=Filter | fuel=632
-fuel 632 tripped fuel-exhausted consumed=633 unknown barrier=Filter | fuel=633
-fuel 633 tripped fuel-exhausted consumed=634 unknown barrier=Filter | fuel=634
-fuel 634 tripped fuel-exhausted consumed=635 unknown barrier=Filter | fuel=635
-fuel 635 tripped fuel-exhausted consumed=636 unknown barrier=Filter | fuel=636
-fuel 636 tripped fuel-exhausted consumed=637 unknown barrier=Filter | fuel=637
-fuel 637 tripped fuel-exhausted consumed=638 unknown barrier=Filter | fuel=638
-fuel 638 tripped fuel-exhausted consumed=639 unknown barrier=Filter | fuel=639
-fuel 639 tripped fuel-exhausted consumed=640 unknown barrier=Filter | fuel=640
-fuel 640 tripped fuel-exhausted consumed=641 unknown barrier=Filter | fuel=641
-fuel 641 tripped fuel-exhausted consumed=642 unknown barrier=Filter | fuel=642
-fuel 642 tripped fuel-exhausted consumed=643 unknown barrier=Filter | fuel=643
-fuel 643 tripped fuel-exhausted consumed=644 unknown barrier=Filter | fuel=644
-fuel 644 tripped fuel-exhausted consumed=645 unknown barrier=Filter | fuel=645
-fuel 645 tripped fuel-exhausted consumed=646 unknown barrier=Filter | fuel=646
-fuel 646 tripped fuel-exhausted consumed=647 unknown barrier=Filter | fuel=647
-fuel 647 tripped fuel-exhausted consumed=648 unknown barrier=Filter | fuel=648
-fuel 648 tripped fuel-exhausted consumed=649 unknown barrier=Filter | fuel=649
-fuel 649 tripped fuel-exhausted consumed=650 unknown barrier=Filter | fuel=650
-fuel 650 tripped fuel-exhausted consumed=651 unknown barrier=Filter | fuel=651
-fuel 651 tripped fuel-exhausted consumed=652 unknown barrier=Filter | fuel=652
-fuel 652 tripped fuel-exhausted consumed=653 unknown barrier=Filter | fuel=653
-fuel 653 tripped fuel-exhausted consumed=654 unknown barrier=Filter | fuel=654
-fuel 654 tripped fuel-exhausted consumed=655 unknown barrier=Filter | fuel=655
-fuel 655 tripped fuel-exhausted consumed=656 unknown barrier=Filter | fuel=656
-fuel 656 tripped fuel-exhausted consumed=657 unknown barrier=Filter | fuel=657
-fuel 657 tripped fuel-exhausted consumed=658 unknown barrier=Filter | fuel=658
-fuel 658 tripped fuel-exhausted consumed=659 unknown barrier=Filter | fuel=659
-fuel 659 tripped fuel-exhausted consumed=660 unknown barrier=Filter | fuel=660
-fuel 660 tripped fuel-exhausted consumed=661 unknown barrier=Filter | fuel=661
-fuel 661 tripped fuel-exhausted consumed=662 unknown barrier=Filter | fuel=662
-fuel 662 tripped fuel-exhausted consumed=663 unknown barrier=Filter | fuel=663
-fuel 663 tripped fuel-exhausted consumed=664 unknown barrier=Filter | fuel=664
-fuel 664 tripped fuel-exhausted consumed=665 unknown barrier=Filter | fuel=665
-fuel 665 tripped fuel-exhausted consumed=666 unknown barrier=Filter | fuel=666
-fuel 666 tripped fuel-exhausted consumed=667 unknown barrier=Filter | fuel=667
-fuel 667 tripped fuel-exhausted consumed=668 unknown barrier=Filter | fuel=668
-fuel 668..=678 x11 tripped fuel-exhausted consumed=679 unknown barrier=Filter | fuel=679
-fuel 679 tripped fuel-exhausted consumed=680 unknown barrier=Filter | fuel=680
-fuel 680 tripped fuel-exhausted consumed=681 unknown barrier=Filter | fuel=681
-fuel 681 tripped fuel-exhausted consumed=682 unknown barrier=Filter | fuel=682
-fuel 682 tripped fuel-exhausted consumed=683 unknown barrier=Filter | fuel=683
-fuel 683 tripped fuel-exhausted consumed=684 unknown barrier=Filter | fuel=684
-fuel 684 tripped fuel-exhausted consumed=685 unknown barrier=Filter | fuel=685
-fuel 685 tripped fuel-exhausted consumed=686 unknown barrier=Filter | fuel=686
-fuel 686 tripped fuel-exhausted consumed=687 unknown barrier=Filter | fuel=687
-fuel 687 tripped fuel-exhausted consumed=688 unknown barrier=Filter | fuel=688
-fuel 688 tripped fuel-exhausted consumed=689 unknown barrier=Filter | fuel=689
-fuel 689 tripped fuel-exhausted consumed=690 unknown barrier=Filter | fuel=690
-fuel 690 tripped fuel-exhausted consumed=691 unknown barrier=Filter | fuel=691
+fuel 626 tripped fuel-exhausted consumed=627 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=627
+fuel 627 tripped fuel-exhausted consumed=628 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=628
+fuel 628 tripped fuel-exhausted consumed=629 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=629
+fuel 629 tripped fuel-exhausted consumed=630 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=630
+fuel 630 tripped fuel-exhausted consumed=631 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=631
+fuel 631 tripped fuel-exhausted consumed=632 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=632
+fuel 632 tripped fuel-exhausted consumed=633 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=633
+fuel 633 tripped fuel-exhausted consumed=634 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=634
+fuel 634 tripped fuel-exhausted consumed=635 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=635
+fuel 635 tripped fuel-exhausted consumed=636 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=636
+fuel 636 tripped fuel-exhausted consumed=637 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=637
+fuel 637 tripped fuel-exhausted consumed=638 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=638
+fuel 638 tripped fuel-exhausted consumed=639 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=639
+fuel 639 tripped fuel-exhausted consumed=640 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=640
+fuel 640 tripped fuel-exhausted consumed=641 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=641
+fuel 641 tripped fuel-exhausted consumed=642 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=642
+fuel 642 tripped fuel-exhausted consumed=643 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=643
+fuel 643 tripped fuel-exhausted consumed=644 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=644
+fuel 644 tripped fuel-exhausted consumed=645 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=645
+fuel 645 tripped fuel-exhausted consumed=646 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=646
+fuel 646 tripped fuel-exhausted consumed=647 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=647
+fuel 647 tripped fuel-exhausted consumed=648 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=648
+fuel 648 tripped fuel-exhausted consumed=649 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=649
+fuel 649 tripped fuel-exhausted consumed=650 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=650
+fuel 650 tripped fuel-exhausted consumed=651 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=651
+fuel 651 tripped fuel-exhausted consumed=652 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=652
+fuel 652 tripped fuel-exhausted consumed=653 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=653
+fuel 653 tripped fuel-exhausted consumed=654 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=654
+fuel 654 tripped fuel-exhausted consumed=655 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=655
+fuel 655 tripped fuel-exhausted consumed=656 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=656
+fuel 656 tripped fuel-exhausted consumed=657 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=657
+fuel 657 tripped fuel-exhausted consumed=658 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=658
+fuel 658 tripped fuel-exhausted consumed=659 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=659
+fuel 659 tripped fuel-exhausted consumed=660 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=660
+fuel 660 tripped fuel-exhausted consumed=661 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=661
+fuel 661 tripped fuel-exhausted consumed=662 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=662
+fuel 662 tripped fuel-exhausted consumed=663 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=663
+fuel 663 tripped fuel-exhausted consumed=664 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=664
+fuel 664 tripped fuel-exhausted consumed=665 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=665
+fuel 665 tripped fuel-exhausted consumed=666 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=666
+fuel 666 tripped fuel-exhausted consumed=667 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=667
+fuel 667 tripped fuel-exhausted consumed=668 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=668
+fuel 668 tripped fuel-exhausted consumed=669 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=669
+fuel 669 tripped fuel-exhausted consumed=670 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=670
+fuel 670 tripped fuel-exhausted consumed=671 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=671
+fuel 671 tripped fuel-exhausted consumed=672 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=672
+fuel 672 tripped fuel-exhausted consumed=673 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=673
+fuel 673 tripped fuel-exhausted consumed=674 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=674
+fuel 674 tripped fuel-exhausted consumed=675 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=675
+fuel 675 tripped fuel-exhausted consumed=676 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=676
+fuel 676 tripped fuel-exhausted consumed=677 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=677
+fuel 677 tripped fuel-exhausted consumed=678 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=678
+fuel 678 tripped fuel-exhausted consumed=679 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=679
+fuel 679 tripped fuel-exhausted consumed=680 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=680
+fuel 680 tripped fuel-exhausted consumed=681 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=681
+fuel 681 tripped fuel-exhausted consumed=682 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=682
+fuel 682 tripped fuel-exhausted consumed=683 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=683
+fuel 683 tripped fuel-exhausted consumed=684 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=684
+fuel 684 tripped fuel-exhausted consumed=685 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=685
+fuel 685 tripped fuel-exhausted consumed=686 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=686
+fuel 686 tripped fuel-exhausted consumed=687 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=687
+fuel 687 tripped fuel-exhausted consumed=688 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=688
+fuel 688 tripped fuel-exhausted consumed=689 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=689
+fuel 689 tripped fuel-exhausted consumed=690 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=690
+fuel 690 tripped fuel-exhausted consumed=691 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=691
 fuel 691 tripped fuel-exhausted consumed=692 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=692
 fuel 692 tripped fuel-exhausted consumed=693 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=693
 fuel 693 tripped fuel-exhausted consumed=694 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=694
@@ -11613,17 +11613,7 @@ fuel 884 tripped fuel-exhausted consumed=885 certain prefix=false rows=0 digest=
 fuel 885 tripped fuel-exhausted consumed=886 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=886
 fuel 886 tripped fuel-exhausted consumed=887 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=887
 fuel 887 tripped fuel-exhausted consumed=888 unknown barrier=Filter | fuel=888
-fuel 888 tripped fuel-exhausted consumed=889 unknown barrier=Filter | fuel=889
-fuel 889 tripped fuel-exhausted consumed=890 unknown barrier=Filter | fuel=890
-fuel 890 tripped fuel-exhausted consumed=891 unknown barrier=Filter | fuel=891
-fuel 891 tripped fuel-exhausted consumed=892 unknown barrier=Filter | fuel=892
-fuel 892 tripped fuel-exhausted consumed=893 unknown barrier=Filter | fuel=893
-fuel 893 tripped fuel-exhausted consumed=894 unknown barrier=Filter | fuel=894
-fuel 894 tripped fuel-exhausted consumed=895 unknown barrier=Filter | fuel=895
-fuel 895 tripped fuel-exhausted consumed=896 unknown barrier=Filter | fuel=896
-fuel 896 tripped fuel-exhausted consumed=897 unknown barrier=Filter | fuel=897
-fuel 897 tripped fuel-exhausted consumed=898 unknown barrier=Filter | fuel=898
-fuel 898 tripped fuel-exhausted consumed=899 unknown barrier=Filter | fuel=899
+fuel 888..=898 x11 tripped fuel-exhausted consumed=899 unknown barrier=Filter | fuel=899
 fuel 899 tripped fuel-exhausted consumed=900 unknown barrier=Filter | fuel=900
 fuel 900 tripped fuel-exhausted consumed=901 unknown barrier=Filter | fuel=901
 fuel 901 tripped fuel-exhausted consumed=902 unknown barrier=Filter | fuel=902
@@ -11636,61 +11626,71 @@ fuel 907 tripped fuel-exhausted consumed=908 unknown barrier=Filter | fuel=908
 fuel 908 tripped fuel-exhausted consumed=909 unknown barrier=Filter | fuel=909
 fuel 909 tripped fuel-exhausted consumed=910 unknown barrier=Filter | fuel=910
 fuel 910 tripped fuel-exhausted consumed=911 unknown barrier=Filter | fuel=911
-fuel 911 tripped fuel-exhausted consumed=912 unknown barrier=Filter | fuel=912
-fuel 912 tripped fuel-exhausted consumed=913 unknown barrier=Filter | fuel=913
-fuel 913 tripped fuel-exhausted consumed=914 unknown barrier=Filter | fuel=914
-fuel 914 tripped fuel-exhausted consumed=915 unknown barrier=Filter | fuel=915
-fuel 915 tripped fuel-exhausted consumed=916 unknown barrier=Filter | fuel=916
-fuel 916 tripped fuel-exhausted consumed=917 unknown barrier=Filter | fuel=917
-fuel 917 tripped fuel-exhausted consumed=918 unknown barrier=Filter | fuel=918
-fuel 918 tripped fuel-exhausted consumed=919 unknown barrier=Filter | fuel=919
-fuel 919 tripped fuel-exhausted consumed=920 unknown barrier=Filter | fuel=920
-fuel 920 tripped fuel-exhausted consumed=921 unknown barrier=Filter | fuel=921
-fuel 921 tripped fuel-exhausted consumed=922 unknown barrier=Filter | fuel=922
-fuel 922 tripped fuel-exhausted consumed=923 unknown barrier=Filter | fuel=923
-fuel 923 tripped fuel-exhausted consumed=924 unknown barrier=Filter | fuel=924
-fuel 924 tripped fuel-exhausted consumed=925 unknown barrier=Filter | fuel=925
-fuel 925 tripped fuel-exhausted consumed=926 unknown barrier=Filter | fuel=926
-fuel 926 tripped fuel-exhausted consumed=927 unknown barrier=Filter | fuel=927
-fuel 927 tripped fuel-exhausted consumed=928 unknown barrier=Filter | fuel=928
-fuel 928 tripped fuel-exhausted consumed=929 unknown barrier=Filter | fuel=929
-fuel 929 tripped fuel-exhausted consumed=930 unknown barrier=Filter | fuel=930
-fuel 930 tripped fuel-exhausted consumed=931 unknown barrier=Filter | fuel=931
-fuel 931 tripped fuel-exhausted consumed=932 unknown barrier=Filter | fuel=932
-fuel 932 tripped fuel-exhausted consumed=933 unknown barrier=Filter | fuel=933
-fuel 933 tripped fuel-exhausted consumed=934 unknown barrier=Filter | fuel=934
-fuel 934 tripped fuel-exhausted consumed=935 unknown barrier=Filter | fuel=935
-fuel 935 tripped fuel-exhausted consumed=936 unknown barrier=Filter | fuel=936
-fuel 936 tripped fuel-exhausted consumed=937 unknown barrier=Filter | fuel=937
-fuel 937 tripped fuel-exhausted consumed=938 unknown barrier=Filter | fuel=938
-fuel 938 tripped fuel-exhausted consumed=939 unknown barrier=Filter | fuel=939
-fuel 939 tripped fuel-exhausted consumed=940 unknown barrier=Filter | fuel=940
-fuel 940 tripped fuel-exhausted consumed=941 unknown barrier=Filter | fuel=941
-fuel 941 tripped fuel-exhausted consumed=942 unknown barrier=Filter | fuel=942
-fuel 942 tripped fuel-exhausted consumed=943 unknown barrier=Filter | fuel=943
-fuel 943 tripped fuel-exhausted consumed=944 unknown barrier=Filter | fuel=944
-fuel 944 tripped fuel-exhausted consumed=945 unknown barrier=Filter | fuel=945
-fuel 945 tripped fuel-exhausted consumed=946 unknown barrier=Filter | fuel=946
-fuel 946 tripped fuel-exhausted consumed=947 unknown barrier=Filter | fuel=947
-fuel 947 tripped fuel-exhausted consumed=948 unknown barrier=Filter | fuel=948
-fuel 948 tripped fuel-exhausted consumed=949 unknown barrier=Filter | fuel=949
-fuel 949 tripped fuel-exhausted consumed=950 unknown barrier=Filter | fuel=950
-fuel 950 tripped fuel-exhausted consumed=951 unknown barrier=Filter | fuel=951
-fuel 951 tripped fuel-exhausted consumed=952 unknown barrier=Filter | fuel=952
-fuel 952 tripped fuel-exhausted consumed=953 unknown barrier=Filter | fuel=953
-fuel 953..=963 x11 tripped fuel-exhausted consumed=964 unknown barrier=Filter | fuel=964
-fuel 964 tripped fuel-exhausted consumed=965 unknown barrier=Filter | fuel=965
-fuel 965 tripped fuel-exhausted consumed=966 unknown barrier=Filter | fuel=966
-fuel 966 tripped fuel-exhausted consumed=967 unknown barrier=Filter | fuel=967
-fuel 967 tripped fuel-exhausted consumed=968 unknown barrier=Filter | fuel=968
-fuel 968 tripped fuel-exhausted consumed=969 unknown barrier=Filter | fuel=969
-fuel 969 tripped fuel-exhausted consumed=970 unknown barrier=Filter | fuel=970
-fuel 970 tripped fuel-exhausted consumed=971 unknown barrier=Filter | fuel=971
-fuel 971 tripped fuel-exhausted consumed=972 unknown barrier=Filter | fuel=972
-fuel 972 tripped fuel-exhausted consumed=973 unknown barrier=Filter | fuel=973
-fuel 973 tripped fuel-exhausted consumed=974 unknown barrier=Filter | fuel=974
-fuel 974 tripped fuel-exhausted consumed=975 unknown barrier=Filter | fuel=975
-fuel 975 tripped fuel-exhausted consumed=976 unknown barrier=Filter | fuel=976
+fuel 911 tripped fuel-exhausted consumed=912 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=912
+fuel 912 tripped fuel-exhausted consumed=913 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=913
+fuel 913 tripped fuel-exhausted consumed=914 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=914
+fuel 914 tripped fuel-exhausted consumed=915 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=915
+fuel 915 tripped fuel-exhausted consumed=916 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=916
+fuel 916 tripped fuel-exhausted consumed=917 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=917
+fuel 917 tripped fuel-exhausted consumed=918 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=918
+fuel 918 tripped fuel-exhausted consumed=919 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=919
+fuel 919 tripped fuel-exhausted consumed=920 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=920
+fuel 920 tripped fuel-exhausted consumed=921 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=921
+fuel 921 tripped fuel-exhausted consumed=922 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=922
+fuel 922 tripped fuel-exhausted consumed=923 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=923
+fuel 923 tripped fuel-exhausted consumed=924 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=924
+fuel 924 tripped fuel-exhausted consumed=925 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=925
+fuel 925 tripped fuel-exhausted consumed=926 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=926
+fuel 926 tripped fuel-exhausted consumed=927 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=927
+fuel 927 tripped fuel-exhausted consumed=928 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=928
+fuel 928 tripped fuel-exhausted consumed=929 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=929
+fuel 929 tripped fuel-exhausted consumed=930 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=930
+fuel 930 tripped fuel-exhausted consumed=931 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=931
+fuel 931 tripped fuel-exhausted consumed=932 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=932
+fuel 932 tripped fuel-exhausted consumed=933 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=933
+fuel 933 tripped fuel-exhausted consumed=934 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=934
+fuel 934 tripped fuel-exhausted consumed=935 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=935
+fuel 935 tripped fuel-exhausted consumed=936 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=936
+fuel 936 tripped fuel-exhausted consumed=937 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=937
+fuel 937 tripped fuel-exhausted consumed=938 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=938
+fuel 938 tripped fuel-exhausted consumed=939 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=939
+fuel 939 tripped fuel-exhausted consumed=940 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=940
+fuel 940 tripped fuel-exhausted consumed=941 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=941
+fuel 941 tripped fuel-exhausted consumed=942 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=942
+fuel 942 tripped fuel-exhausted consumed=943 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=943
+fuel 943 tripped fuel-exhausted consumed=944 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=944
+fuel 944 tripped fuel-exhausted consumed=945 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=945
+fuel 945 tripped fuel-exhausted consumed=946 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=946
+fuel 946 tripped fuel-exhausted consumed=947 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=947
+fuel 947 tripped fuel-exhausted consumed=948 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=948
+fuel 948 tripped fuel-exhausted consumed=949 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=949
+fuel 949 tripped fuel-exhausted consumed=950 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=950
+fuel 950 tripped fuel-exhausted consumed=951 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=951
+fuel 951 tripped fuel-exhausted consumed=952 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=952
+fuel 952 tripped fuel-exhausted consumed=953 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=953
+fuel 953 tripped fuel-exhausted consumed=954 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=954
+fuel 954 tripped fuel-exhausted consumed=955 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=955
+fuel 955 tripped fuel-exhausted consumed=956 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=956
+fuel 956 tripped fuel-exhausted consumed=957 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=957
+fuel 957 tripped fuel-exhausted consumed=958 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=958
+fuel 958 tripped fuel-exhausted consumed=959 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=959
+fuel 959 tripped fuel-exhausted consumed=960 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=960
+fuel 960 tripped fuel-exhausted consumed=961 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=961
+fuel 961 tripped fuel-exhausted consumed=962 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=962
+fuel 962 tripped fuel-exhausted consumed=963 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=963
+fuel 963 tripped fuel-exhausted consumed=964 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=964
+fuel 964 tripped fuel-exhausted consumed=965 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=965
+fuel 965 tripped fuel-exhausted consumed=966 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=966
+fuel 966 tripped fuel-exhausted consumed=967 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=967
+fuel 967 tripped fuel-exhausted consumed=968 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=968
+fuel 968 tripped fuel-exhausted consumed=969 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=969
+fuel 969 tripped fuel-exhausted consumed=970 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=970
+fuel 970 tripped fuel-exhausted consumed=971 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=971
+fuel 971 tripped fuel-exhausted consumed=972 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=972
+fuel 972 tripped fuel-exhausted consumed=973 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=973
+fuel 973 tripped fuel-exhausted consumed=974 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=974
+fuel 974 tripped fuel-exhausted consumed=975 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=975
+fuel 975 tripped fuel-exhausted consumed=976 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=976
 fuel 976 tripped fuel-exhausted consumed=977 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=977
 fuel 977 tripped fuel-exhausted consumed=978 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=978
 fuel 978 tripped fuel-exhausted consumed=979 certain prefix=false rows=0 digest=8c63e45117586412 | fuel=979
@@ -11830,8 +11830,8 @@ fuel 10 tripped fuel-exhausted consumed=11 unknown barrier=Filter | fuel=11
 fuel 11 tripped fuel-exhausted consumed=12 unknown barrier=Filter | fuel=12
 fuel 12 tripped fuel-exhausted consumed=13 unknown barrier=Filter | fuel=13
 fuel 13 tripped fuel-exhausted consumed=14 unknown barrier=Filter | fuel=14
-fuel 14 tripped fuel-exhausted consumed=15 unknown barrier=Filter | fuel=15
-fuel 15 tripped fuel-exhausted consumed=16 unknown barrier=Filter | fuel=16
+fuel 14 tripped fuel-exhausted consumed=15 certain prefix=true rows=1 digest=ae44c540617c425d | fuel=15
+fuel 15 tripped fuel-exhausted consumed=16 certain prefix=true rows=2 digest=8c862cc3d2cfd0cf | fuel=16
 fuel 16 tripped fuel-exhausted consumed=17 certain prefix=true rows=2 digest=8c862cc3d2cfd0cf | fuel=17
 fuel 17 tripped fuel-exhausted consumed=18 certain prefix=true rows=2 digest=8c862cc3d2cfd0cf | fuel=18
 fuel 18 tripped fuel-exhausted consumed=19 certain prefix=true rows=2 digest=8c862cc3d2cfd0cf | fuel=19
@@ -11861,13 +11861,13 @@ fuel 11 tripped fuel-exhausted consumed=12 certain prefix=true rows=0 digest=790
 fuel 12 tripped fuel-exhausted consumed=13 certain prefix=true rows=0 digest=7906c2bd37ca8fae | fuel=13
 fuel 13 tripped fuel-exhausted consumed=14 certain prefix=true rows=0 digest=7906c2bd37ca8fae | fuel=14
 fuel 14 tripped fuel-exhausted consumed=15 unknown barrier=Filter | fuel=15
-fuel 15 tripped fuel-exhausted consumed=16 unknown barrier=Filter | fuel=16
-fuel 16..=17 x2 tripped fuel-exhausted consumed=18 unknown barrier=Filter | fuel=18
+fuel 15..=16 x2 tripped fuel-exhausted consumed=17 unknown barrier=Filter | fuel=17
+fuel 17 tripped fuel-exhausted consumed=18 unknown barrier=Filter | fuel=18
 fuel 18 tripped fuel-exhausted consumed=19 unknown barrier=Filter | fuel=19
 fuel 19 tripped fuel-exhausted consumed=20 unknown barrier=Filter | fuel=20
 fuel 20 tripped fuel-exhausted consumed=21 unknown barrier=Filter | fuel=21
 fuel 21 tripped fuel-exhausted consumed=22 unknown barrier=Filter | fuel=22
-fuel 22 tripped fuel-exhausted consumed=23 unknown barrier=Filter | fuel=23
+fuel 22 tripped fuel-exhausted consumed=23 certain prefix=true rows=1 digest=0690b494b2d6b353 | fuel=23
 fuel 23 tripped fuel-exhausted consumed=24 certain prefix=true rows=1 digest=0690b494b2d6b353 | fuel=24
 fuel 24 tripped fuel-exhausted consumed=25 certain prefix=true rows=1 digest=0690b494b2d6b353 | fuel=25
 fuel 25..=64 x40 complete rows=1 digest=0690b494b2d6b353 | fuel=25
