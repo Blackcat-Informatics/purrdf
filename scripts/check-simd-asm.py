@@ -146,6 +146,20 @@ Coverage: every workspace member has a row; every bench file has a row naming on
 known site ids; every roster site below is in the ``covers`` cell of a row that names a
 function with a manifest entry. ``--doc`` with no document is a failure, not a skip.
 
+Split runs (``--config NAME --emit-cells FILE``, ``--doc-from-cells DIR``)
+-------------------------------------------------------------------------
+
+Each configuration is a cold build of the graph, so CI measures them on separate
+runners. ``--config NAME --emit-cells FILE`` builds and measures that one configuration
+exactly as a full run does and writes its cell for every site, its problems and the
+SHA-256 of the manifest it read; it exits non-zero on a problem, after writing. Then
+``--doc-from-cells DIR`` builds nothing: it requires exactly ``DIR/<config>.json`` for
+every configuration, each naming its own configuration and this manifest's digest and
+holding a cell for every site, and runs the static scans, the parity and coverage
+checks and the verdict of ``--doc`` over them -- the same table, the same problems in
+the same order. A missing, stray, mislabelled or stale file is a failure, never a
+smaller table. The single-process modes above are unchanged.
+
 ``--self-test`` exercises every refusal against an embedded fixture, and the valid
 neighbour of each, without building anything.
 """
@@ -154,6 +168,7 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
+import hashlib
 import json
 import os
 import re
@@ -1140,6 +1155,98 @@ def render_cell(results: list[Result]) -> str:
     return "<br>".join(parts) if parts else "—"
 
 
+def config_cells(manifest: Manifest, config: Config, functions: list[Function]) -> tuple[dict[str, str], list[str]]:
+    """One configuration's generated cell for every site, and its problems in manifest order."""
+    results = evaluate_config(manifest, config, functions)
+    problems = [p for r in results for p in r.problems]
+    cells = {site.id: render_cell([r for r in results if r.site == site.id]) for site in manifest.sites}
+    return cells, problems
+
+
+# --------------------------------------------------------------------------- split runs
+#
+# CI measures each configuration on its own runner (`--config NAME --emit-cells FILE`)
+# and then checks the document once (`--doc-from-cells DIR`). A cells file is what one
+# configuration's measurement produced: its cell for every site and its problems, in the
+# order a single run reports them. The judging run refuses anything but exactly one file
+# per configuration, each measured against the manifest it reads itself, so the split
+# gate measures and reports what the single run does, in the same order.
+
+CELLS_FORMAT = "purrdf-simd-asm-cells/1"
+
+
+def manifest_digest(text: str) -> str:
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+
+
+def cells_payload(config: Config, digest: str, cells: dict[str, str], problems: list[str]) -> str:
+    return json.dumps(
+        {"format": CELLS_FORMAT, "config": config.name, "manifest_sha256": digest, "cells": cells, "problems": problems},
+        ensure_ascii=False, indent=1,
+    ) + "\n"
+
+
+def merge_cells(files: dict[str, str], manifest: Manifest, digest: str) -> tuple[dict, list[str]]:
+    """Every configuration's cells keyed ``(site id, config name)``, and the problems in run order.
+
+    ``files`` maps a file name to its text; exactly ``<config>.json`` per configuration
+    must be present. A missing configuration was not measured, and it is a failure, not
+    a smaller table.
+    """
+    expected = {f"{name}.json" for name in CONFIG_NAMES}
+    missing, extra = sorted(expected - set(files)), sorted(set(files) - expected)
+    if missing or extra:
+        raise GateError(
+            f"--doc-from-cells needs exactly one cells file per configuration; missing {missing}, "
+            f"unexpected {extra}. A configuration with no cells is a configuration nobody measured"
+        )
+    ids = [site.id for site in manifest.sites]
+    cells: dict = {}
+    problems: list[str] = []
+    for name in CONFIG_NAMES:
+        file = f"{name}.json"
+        try:
+            data = json.loads(files[file])
+        except json.JSONDecodeError as err:
+            raise GateError(f"{file} is not JSON: {err}") from None
+        if not isinstance(data, dict) or data.get("format") != CELLS_FORMAT:
+            raise GateError(f"{file} is not a `{CELLS_FORMAT}` cells file")
+        if data.get("config") != name:
+            raise GateError(f"{file} records configuration {data.get('config')!r}")
+        if data.get("manifest_sha256") != digest:
+            raise GateError(f"{file} was measured against a different manifest than {MANIFEST.relative_to(REPO_ROOT)}")
+        site_cells, site_problems = data.get("cells"), data.get("problems")
+        if not isinstance(site_cells, dict) or sorted(site_cells) != sorted(ids) or not all(isinstance(v, str) for v in site_cells.values()):
+            raise GateError(f"{file} does not hold one text cell for every manifest site")
+        if not isinstance(site_problems, list) or not all(isinstance(p, str) for p in site_problems):
+            raise GateError(f"{file} does not hold a list of problems")
+        cells.update({(sid, name): site_cells[sid] for sid in ids})
+        problems += site_problems
+    return cells, problems
+
+
+def read_cells_dir(directory: Path) -> dict[str, str]:
+    """Every entry of ``directory`` by name (a non-file entry reads as unexpected)."""
+    if not directory.is_dir():
+        raise GateError(f"--doc-from-cells: {directory} is not a directory")
+    return {entry.name: entry.read_text(encoding="utf-8") if entry.is_file() else "" for entry in sorted(directory.iterdir())}
+
+
+def mode_errors(args: argparse.Namespace) -> list[str]:
+    """Option combinations that would measure or check something other than they say."""
+    errors = []
+    if args.emit_cells:
+        if not args.config or len(args.config) != 1:
+            errors.append("--emit-cells measures exactly one configuration: give one --config")
+        if args.doc or args.write_doc or args.probe or args.doc_from_cells:
+            errors.append("--emit-cells only measures; the document is checked by --doc-from-cells over every configuration")
+    elif args.config and not args.probe:
+        errors.append("--config selects configurations only with --probe or --emit-cells; a full run measures all of them")
+    if args.doc_from_cells and (args.probe or args.config):
+        errors.append("--doc-from-cells measures nothing; it takes no --probe or --config")
+    return errors
+
+
 # --------------------------------------------------------------------------- building
 
 
@@ -1713,12 +1820,38 @@ def write_doc(doc: str, cells: dict) -> str:
 # --------------------------------------------------------------------------- driver
 
 
+def emit_cells(args: argparse.Namespace, manifest: Manifest, digest: str) -> int:
+    """Measure one configuration and write its cells file; the document is not read."""
+    config = CONFIG_BY_NAME[args.config[0]]
+    functions = measure_all(manifest, (config,), manifest_keep(manifest))[config.name]
+    cells, problems = config_cells(manifest, config, functions)
+    out = Path(args.emit_cells)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(cells_payload(config, digest, cells, problems), encoding="utf-8")
+    width = max(len(s.id) for s in manifest.sites)
+    print(f"\n{'site'.ljust(width)}  {config.name}")
+    for site in manifest.sites:
+        print(f"{site.id.ljust(width)}  " + cells[site.id].replace("<br>", " / "))
+    print(f"wrote {config.name}'s cells to {out}; `--doc-from-cells` checks the document against every configuration")
+    if problems:
+        print(f"\nFAIL: {len(problems)} problem(s) on {config.name}:", file=sys.stderr)
+        for p in problems:
+            print(f"  - {p}", file=sys.stderr)
+        return 1
+    print(f"\nOK: {len(manifest.sites)} site(s) measured on {config.name}")
+    return 0
+
+
 def run(args: argparse.Namespace) -> int:
-    manifest = load_manifest(tomllib.loads(MANIFEST.read_text(encoding="utf-8")))
+    manifest_text = MANIFEST.read_text(encoding="utf-8")
+    manifest = load_manifest(tomllib.loads(manifest_text))
+    if args.emit_cells:
+        return emit_cells(args, manifest, manifest_digest(manifest_text))
     problems: list[str] = []
     problems += identity_scan(rust_sources())
     problems += multiplier_scan("CHANGELOG.md [Unreleased]", unreleased_changelog(CHANGELOG.read_text(encoding="utf-8")))
-    if args.doc or args.write_doc:
+    checks_doc = bool(args.doc or args.write_doc or args.doc_from_cells)
+    if checks_doc:
         require_doc(DOC)
 
     if args.probe:
@@ -1751,16 +1884,16 @@ def run(args: argparse.Namespace) -> int:
                         print(f"{'':24}{inst.mnemonic} {', '.join(inst.operands)}")
         return 0
 
-    functions = measure_all(manifest, CONFIGS, manifest_keep(manifest))
-    results: list[Result] = []
-    for config in CONFIGS:
-        results += evaluate_config(manifest, config, functions[config.name])
-    for r in results:
-        problems.extend(r.problems)
-    cells = {}
-    for site in manifest.sites:
+    if args.doc_from_cells:
+        cells, measured_problems = merge_cells(read_cells_dir(Path(args.doc_from_cells)), manifest, manifest_digest(manifest_text))
+        problems += measured_problems
+    else:
+        functions = measure_all(manifest, CONFIGS, manifest_keep(manifest))
+        cells = {}
         for config in CONFIGS:
-            cells[(site.id, config.name)] = render_cell([r for r in results if r.site == site.id and r.config == config.name])
+            config_cell, config_problems = config_cells(manifest, config, functions[config.name])
+            problems += config_problems
+            cells.update({(sid, config.name): cell for sid, cell in config_cell.items()})
 
     width = max(len(s.id) for s in manifest.sites)
     print(f"\n{'site'.ljust(width)}  " + "  ".join(CONFIG_NAMES))
@@ -1773,7 +1906,7 @@ def run(args: argparse.Namespace) -> int:
         if updated != text:
             DOC.write_text(updated, encoding="utf-8")
             print(f"wrote the measured cells into {DOC.relative_to(REPO_ROOT)}")
-    if args.doc or args.write_doc:
+    if checks_doc:
         problems += doc_checks(DOC.read_text(encoding="utf-8"), manifest, cells, workspace_world())
     else:
         print("document parity and coverage: not requested (`--doc`)")
@@ -2247,6 +2380,79 @@ def self_test() -> int:
     except GateError as err:
         failures.append(f"an existing document must pass the --doc precondition: {err}")
 
+    # -- the split run: one configuration per cells file, reassembled into exactly what a
+    # single run measures and reports, in the same order; every malformed set is refused
+    split_manifest = load_manifest(_manifest_dict(measure=[{**base_measure, "min_vector_ops": 1}]))
+    asm_by_arch = {"x86": _X86_PACKED, "aarch64": _ARM_EXACT, "wasm": _WASM_EXACT}
+    # x86_64 compiles the scalar body, so one configuration carries a problem and the
+    # reassembled problem list is observed keeping its place in the run order.
+    functions_by_config = {
+        c.name: collect_functions([("f.s", _X86_SCALAR if c.name == "x86_64" else asm_by_arch[c.arch], 0)], c.arch)
+        for c in CONFIGS
+    }
+    single_cells: dict = {}
+    single_problems: list[str] = []
+    for c in CONFIGS:
+        results = evaluate_config(split_manifest, c, functions_by_config[c.name])
+        single_problems += [p for r in results for p in r.problems]
+        for site in split_manifest.sites:
+            single_cells[(site.id, c.name)] = render_cell([r for r in results if r.site == site.id and r.config == c.name])
+    digest = manifest_digest("fixture manifest")
+    split_files = {}
+    for c in CONFIGS:
+        c_cells, c_problems = config_cells(split_manifest, c, functions_by_config[c.name])
+        split_files[f"{c.name}.json"] = cells_payload(c, digest, c_cells, c_problems)
+    try:
+        merged_cells, merged_problems = merge_cells(split_files, split_manifest, digest)
+        expect(merged_cells == single_cells, f"the reassembled cells equal a single run's: {merged_cells} vs {single_cells}")
+        expect(merged_problems == single_problems, f"the reassembled problems equal a single run's, in order: {merged_problems} vs {single_problems}")
+        expect(len(single_problems) == 1 and "x86_64" in single_problems[0], f"the fixture's one problem is on x86_64: {single_problems}")
+    except GateError as err:
+        failures.append(f"a complete set of cells files must reassemble: {err}")
+
+    def split_refused(files: dict[str, str], needle: str, what: str, dig: str = digest) -> None:
+        try:
+            merge_cells(files, split_manifest, dig)
+            failures.append(f"{what} must be refused")
+        except GateError as err:
+            expect(needle in str(err), f"{what} must be refused for its own reason ({needle!r}): {err}")
+
+    first, second = CONFIG_NAMES[0], CONFIG_NAMES[1]
+    split_refused({k: v for k, v in split_files.items() if k != f"{first}.json"}, "missing", "a configuration with no cells file")
+    split_refused({**split_files, "riscv64.json": "{}"}, "unexpected", "a stray cells file")
+    split_refused({**split_files, f"{first}.json": split_files[f"{second}.json"]}, "records configuration", "one configuration's cells under another's name")
+    split_refused(split_files, "different manifest", "cells measured against another manifest", dig=manifest_digest("another manifest"))
+    split_refused({**split_files, f"{first}.json": "{"}, "is not JSON", "a truncated cells file")
+    split_refused({**split_files, f"{first}.json": json.dumps({"config": first})}, "cells file", "a file of another format")
+    short = json.loads(split_files[f"{first}.json"])
+    short["cells"] = {}
+    split_refused({**split_files, f"{first}.json": json.dumps(short)}, "every manifest site", "a cells file missing a site")
+    no_problems = json.loads(split_files[f"{first}.json"])
+    del no_problems["problems"]
+    split_refused({**split_files, f"{first}.json": json.dumps(no_problems)}, "list of problems", "a cells file that drops its problems")
+
+    # -- which option combinations are a measurement, and which would silently be another
+    def mode(**kw) -> argparse.Namespace:
+        base = {"doc": False, "write_doc": False, "probe": None, "config": None, "emit_cells": None, "doc_from_cells": None}
+        return argparse.Namespace(**{**base, **kw})
+    for ok_args, what in (
+        (mode(doc=True), "--doc"),
+        (mode(write_doc=True), "--write-doc"),
+        (mode(emit_cells="c.json", config=["aarch64"]), "--emit-cells with one --config"),
+        (mode(doc_from_cells="d"), "--doc-from-cells"),
+        (mode(doc_from_cells="d", write_doc=True), "--doc-from-cells --write-doc"),
+        (mode(probe="dot", config=["x86_64", "aarch64"]), "--probe with --config"),
+    ):
+        expect(not mode_errors(ok_args), f"{what} must be accepted: {mode_errors(ok_args)}")
+    for bad_args, what in (
+        (mode(emit_cells="c.json"), "--emit-cells without --config"),
+        (mode(emit_cells="c.json", config=["x86_64", "aarch64"]), "--emit-cells with two --config"),
+        (mode(emit_cells="c.json", config=["x86_64"], doc=True), "--emit-cells with --doc"),
+        (mode(config=["x86_64"], doc=True), "--config on a full run"),
+        (mode(doc_from_cells="d", config=["x86_64"]), "--doc-from-cells with --config"),
+    ):
+        expect(bool(mode_errors(bad_args)), f"{what} must be refused")
+
     if failures:
         print("FAIL: the simd-asm gate's self-test found refusals that do not fire or neighbours that do not pass:", file=sys.stderr)
         for f in failures:
@@ -2265,10 +2471,15 @@ def main() -> int:
     parser.add_argument("--probe-operands", action="store_true", help="with --probe: match PATH against instruction operands (call targets) instead of function paths")
     parser.add_argument("--dump", action="store_true", help="with --probe: print every instruction of each match")
     parser.add_argument("--crate", help="with --probe: only this crate")
-    parser.add_argument("--config", action="append", choices=CONFIG_NAMES, help="with --probe: only these configurations")
+    parser.add_argument("--config", action="append", choices=CONFIG_NAMES, help="with --probe: only these configurations; with --emit-cells: the one configuration to measure")
+    parser.add_argument("--emit-cells", metavar="FILE", help="with one --config: measure that configuration only and write its cells and problems to FILE (for --doc-from-cells)")
+    parser.add_argument("--doc-from-cells", metavar="DIR", help="build nothing: take every configuration's cells from DIR/<config>.json and check as --doc does")
     args = parser.parse_args()
     if args.self_test:
         return self_test()
+    errors = mode_errors(args)
+    if errors:
+        parser.error("; ".join(errors))
     try:
         return run(args)
     except GateError as err:

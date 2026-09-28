@@ -62,21 +62,43 @@ const GOLDEN_SERIAL_DIGEST: u64 = 0xf0b2_fd33_0bcc_fcc7;
 
 /// The digest is a property of the input alone, not of a schedule: one, two, four and
 /// eight rayon workers all fold the same bytes.
+///
+/// Each worker count is its own test below, so a slow target (riscv64 under user-mode
+/// emulation, where one digest takes minutes) can run them on separate CI runners. Every
+/// one asserts equality with the same golden, so together they assert what one loop over
+/// the four counts would.
+fn assert_golden_digest_under(workers: usize) {
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .expect("a worker pool is available");
+    let value = pool.install(digest);
+    assert_eq!(
+        value, GOLDEN_DIGEST,
+        "the digest under {workers} worker(s) is {value:016x}, golden \
+         {GOLDEN_DIGEST:016x}. A thread-count-dependent graph is exactly the defect \
+         the round-structured build exists to remove."
+    );
+}
+
 #[test]
-fn the_digest_is_identical_across_worker_counts() {
-    for workers in [1_usize, 2, 4, 8] {
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .expect("a worker pool is available");
-        let value = pool.install(digest);
-        assert_eq!(
-            value, GOLDEN_DIGEST,
-            "the digest under {workers} worker(s) is {value:016x}, golden \
-             {GOLDEN_DIGEST:016x}. A thread-count-dependent graph is exactly the defect \
-             the round-structured build exists to remove."
-        );
-    }
+fn the_digest_is_identical_under_one_worker() {
+    assert_golden_digest_under(1);
+}
+
+#[test]
+fn the_digest_is_identical_under_two_workers() {
+    assert_golden_digest_under(2);
+}
+
+#[test]
+fn the_digest_is_identical_under_four_workers() {
+    assert_golden_digest_under(4);
+}
+
+#[test]
+fn the_digest_is_identical_under_eight_workers() {
+    assert_golden_digest_under(8);
 }
 
 /// Within-round isolation is load-bearing: a serial insertion, where every node sees all
