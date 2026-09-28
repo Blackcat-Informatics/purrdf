@@ -63,6 +63,211 @@ const MODELS_MODULE: &str = "models";
 const BASE_MODULE: &str = "_base";
 const BASE_CLASS: &str = "PurrdfBaseModel";
 
+/// The Python source of the runtime `uniqueItems` check: JSON Schema's
+/// equality (numbers by value, `true` never `1`, objects by members) over the
+/// raw JSON input, run before any item is coerced — a coerced item (a parsed
+/// `datetime`, say) could make two distinct JSON strings equal.
+const UNIQUE_ITEMS_HELPER: &str = "def _purrdf_json_key(value: Any) -> Any:
+    if isinstance(value, bool):
+        return (\"boolean\", value)
+    if isinstance(value, (int, float)):
+        if isinstance(value, float) and not math.isfinite(value):
+            return (\"number\", repr(value))
+        return (\"number\", Fraction(value))
+    if isinstance(value, str):
+        return (\"string\", value)
+    if value is None:
+        return (\"null\",)
+    if isinstance(value, (list, tuple)):
+        return (\"array\", tuple(_purrdf_json_key(item) for item in value))
+    if isinstance(value, dict):
+        return (
+            \"object\",
+            tuple(sorted((str(key), _purrdf_json_key(item)) for key, item in value.items())),
+        )
+    return (\"other\", repr(value))
+
+
+def _purrdf_unique_items(value: Any) -> Any:
+    if isinstance(value, list):
+        seen: set[Any] = set()
+        for item in value:
+            key = _purrdf_json_key(item)
+            if key in seen:
+                raise ValueError(\"array items must be unique (JSON Schema uniqueItems)\")
+            seen.add(key)
+    return value
+
+
+";
+
+/// The Python source of the runtime JSON Schema `not`: the negated schema is
+/// evaluated over the raw JSON input by [`negation_supported`]'s closed keyword
+/// table, with JSON Schema's semantics — numbers by exact value (`true` is no
+/// number), string lengths in code points, `pattern` through Pydantic's own
+/// regex engine (the one `Field(pattern=...)` uses) with search semantics, and
+/// `$ref` into the package's `$defs` table.
+const NEGATION_HELPER: &str = "_PURRDF_PATTERNS: dict[str, Any] = {}
+
+
+def _purrdf_pattern_matches(pattern: str, value: str) -> bool:
+    adapter = _PURRDF_PATTERNS.get(pattern)
+    if adapter is None:
+        adapter = TypeAdapter(Annotated[str, Field(pattern=pattern)])
+        _PURRDF_PATTERNS[pattern] = adapter
+    try:
+        adapter.validate_python(value)
+    except ValidationError:
+        return False
+    return True
+
+
+def _purrdf_is_number(value: Any) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _purrdf_has_type(kind: str, value: Any) -> bool:
+    if kind == \"null\":
+        return value is None
+    if kind == \"boolean\":
+        return isinstance(value, bool)
+    if kind == \"number\":
+        return _purrdf_is_number(value)
+    if kind == \"integer\":
+        return _purrdf_is_number(value) and Fraction(value).denominator == 1
+    if kind == \"string\":
+        return isinstance(value, str)
+    if kind == \"array\":
+        return isinstance(value, list)
+    if kind == \"object\":
+        return isinstance(value, dict)
+    return False
+
+
+def _purrdf_matches(schema: Any, value: Any, defs: Any) -> bool:
+    if schema is True:
+        return True
+    if schema is False:
+        return False
+    for keyword, argument in schema.items():
+        if keyword == \"$ref\":
+            if not _purrdf_matches(defs[argument.rsplit(\"/\", 1)[1]], value, defs):
+                return False
+        elif keyword == \"type\":
+            kinds = argument if isinstance(argument, list) else [argument]
+            if not any(_purrdf_has_type(kind, value) for kind in kinds):
+                return False
+        elif keyword == \"const\":
+            if _purrdf_json_key(value) != _purrdf_json_key(argument):
+                return False
+        elif keyword == \"enum\":
+            if all(_purrdf_json_key(value) != _purrdf_json_key(item) for item in argument):
+                return False
+        elif keyword == \"not\":
+            if _purrdf_matches(argument, value, defs):
+                return False
+        elif keyword == \"allOf\":
+            if not all(_purrdf_matches(branch, value, defs) for branch in argument):
+                return False
+        elif keyword == \"anyOf\":
+            if not any(_purrdf_matches(branch, value, defs) for branch in argument):
+                return False
+        elif keyword == \"oneOf\":
+            if sum(1 for branch in argument if _purrdf_matches(branch, value, defs)) != 1:
+                return False
+        elif keyword == \"if\":
+            branch = schema.get(\"then\", True) if _purrdf_matches(argument, value, defs) else schema.get(\"else\", True)
+            if not _purrdf_matches(branch, value, defs):
+                return False
+        elif keyword in (\"then\", \"else\"):
+            continue
+        elif isinstance(value, dict):
+            if keyword == \"properties\":
+                for name, child in argument.items():
+                    if name in value and not _purrdf_matches(child, value[name], defs):
+                        return False
+            elif keyword == \"required\":
+                if any(name not in value for name in argument):
+                    return False
+            elif keyword == \"additionalProperties\":
+                named = schema.get(\"properties\", {})
+                for name, child in value.items():
+                    if name not in named and not _purrdf_matches(argument, child, defs):
+                        return False
+            elif keyword == \"minProperties\":
+                if len(value) < argument:
+                    return False
+            elif keyword == \"maxProperties\":
+                if len(value) > argument:
+                    return False
+        elif isinstance(value, list):
+            if keyword == \"items\":
+                start = len(schema.get(\"prefixItems\", []))
+                if not all(_purrdf_matches(argument, item, defs) for item in value[start:]):
+                    return False
+            elif keyword == \"prefixItems\":
+                if not all(_purrdf_matches(child, item, defs) for child, item in zip(argument, value)):
+                    return False
+            elif keyword == \"minItems\":
+                if len(value) < argument:
+                    return False
+            elif keyword == \"maxItems\":
+                if len(value) > argument:
+                    return False
+            elif keyword == \"uniqueItems\":
+                if argument and len({_purrdf_json_key(item) for item in value}) != len(value):
+                    return False
+            elif keyword == \"contains\":
+                count = sum(1 for item in value if _purrdf_matches(argument, item, defs))
+                if count < schema.get(\"minContains\", 1) or count > schema.get(\"maxContains\", count):
+                    return False
+        elif isinstance(value, str):
+            if keyword == \"pattern\":
+                if not _purrdf_pattern_matches(argument, value):
+                    return False
+            elif keyword == \"minLength\":
+                if len(value) < argument:
+                    return False
+            elif keyword == \"maxLength\":
+                if len(value) > argument:
+                    return False
+        elif _purrdf_is_number(value):
+            number = Fraction(value)
+            if keyword == \"minimum\" and number < Fraction(argument):
+                return False
+            if keyword == \"maximum\" and number > Fraction(argument):
+                return False
+            if keyword == \"exclusiveMinimum\" and number <= Fraction(argument):
+                return False
+            if keyword == \"exclusiveMaximum\" and number >= Fraction(argument):
+                return False
+            if keyword == \"multipleOf\" and (number / Fraction(argument)).denominator != 1:
+                return False
+    return True
+
+
+def _purrdf_rejects(schema: Any, defs: Any) -> Callable[[Any], Any]:
+    def reject(value: Any) -> Any:
+        if _purrdf_matches(schema, value, defs):
+            raise ValueError(\"the value matches a schema it must not (JSON Schema not)\")
+        return value
+
+    return reject
+
+
+def _purrdf_requires(schema: Any, defs: Any) -> Callable[[Any], Any]:
+    def require(value: Any) -> Any:
+        if not _purrdf_matches(schema, value, defs):
+            raise ValueError(
+                \"the value does not match a schema it must (JSON Schema allOf, oneOf or contains)\"
+            )
+        return value
+
+    return require
+
+
+";
+
 /// Fixed generated-package dialect and reverse-loss source identifier.
 pub const PYDANTIC_DIALECT: &str = "pydantic-v2";
 
@@ -356,7 +561,7 @@ pub fn emit_pydantic(
     let routed = config.topology().is_some();
     let names = definition_names(defs, routed)?;
 
-    let mut renderer = Renderer::new(&names, routed);
+    let mut renderer = Renderer::new(&names, defs, routed);
     for (key, definition) in defs {
         renderer.audit_schema(definition, &definition_path(key))?;
     }
@@ -508,6 +713,7 @@ pub fn emit_pydantic(
         model_paths
     };
 
+    renderer.finish_losses();
     Ok(PydanticPackage {
         dialect: PYDANTIC_DIALECT.to_owned(),
         artifacts: artifacts.finish(),
@@ -599,24 +805,48 @@ fn definition_names(
 
 struct Renderer<'a> {
     names: &'a BTreeMap<String, String>,
+    defs: &'a Map<String, Value>,
     routed: bool,
     ledger: LossLedger,
     helpers: Vec<(String, String)>,
     helper_by_path: BTreeMap<String, String>,
     used_names: BTreeSet<String>,
+    /// Losses the audit found in a composition (`allOf`, `oneOf`, `contains`) that the
+    /// runtime check may still enforce: `(code, path, note, enforcement key)`,
+    /// recorded by [`Self::finish_losses`] unless [`Self::resolve_type`] enforced it.
+    pending: Vec<(&'static str, String, &'static str, String)>,
+    /// The enforcement keys of the compositions [`Self::resolve_type`] attached a
+    /// runtime check for.
+    enforced: BTreeSet<String>,
 }
 
 impl<'a> Renderer<'a> {
-    fn new(names: &'a BTreeMap<String, String>, routed: bool) -> Self {
+    fn new(
+        names: &'a BTreeMap<String, String>,
+        defs: &'a Map<String, Value>,
+        routed: bool,
+    ) -> Self {
         let mut used_names: BTreeSet<String> = names.values().cloned().collect();
         used_names.extend(reserved_type_names().into_iter().map(str::to_owned));
         Self {
             names,
+            defs,
             routed,
             ledger: LossLedger::new(),
             helpers: Vec::new(),
             helper_by_path: BTreeMap::new(),
             used_names,
+            pending: Vec::new(),
+            enforced: BTreeSet::new(),
+        }
+    }
+
+    /// Record every pending composition loss whose composition no field enforces.
+    fn finish_losses(&mut self) {
+        for (code, path, note, key) in std::mem::take(&mut self.pending) {
+            if !self.enforced.contains(&key) {
+                self.record(code, &path, note);
+            }
         }
     }
 
@@ -829,11 +1059,59 @@ impl<'a> Renderer<'a> {
                 } else {
                     (self.resolve_declared_type(object, path)?, true)
                 };
-                if apply_outer_constraints {
-                    Ok(apply_constraints(base, object))
+                let resolved = if apply_outer_constraints {
+                    apply_constraints(base, object)
                 } else {
-                    Ok(base)
-                }
+                    base
+                };
+                let resolved = match object.get("not") {
+                    Some(negand) if negation_supported(negand, self.defs, &mut BTreeSet::new()) => {
+                        let negand = rewrite_references(negand, self.names)?;
+                        format!(
+                            "Annotated[{resolved}, BeforeValidator(_purrdf_rejects({}, \
+                             _PURRDF_DEFS))]",
+                            python_value(&negand)
+                        )
+                    }
+                    _ => resolved,
+                };
+                // The compositions a Pydantic annotation cannot state — every branch
+                // of `allOf`, exactly one of `oneOf`, a member meeting `contains` —
+                // are the runtime check's, over the raw JSON input, when its closed
+                // keyword table evaluates them.
+                let required: Map<String, Value> =
+                    ["allOf", "oneOf", "contains", "minContains", "maxContains"]
+                        .into_iter()
+                        .filter_map(|key| {
+                            object.get(key).map(|value| (key.to_owned(), value.clone()))
+                        })
+                        .collect();
+                let required = Value::Object(required);
+                Ok(
+                    if required
+                        .as_object()
+                        .is_some_and(|required| !required.is_empty())
+                        && negation_supported(&required, self.defs, &mut BTreeSet::new())
+                    {
+                        for (key, marker) in [
+                            ("allOf", format!("{path}/allOf")),
+                            ("oneOf", format!("{path}/oneOf")),
+                            ("contains", format!("contains:{path}")),
+                        ] {
+                            if object.contains_key(key) {
+                                self.enforced.insert(marker);
+                            }
+                        }
+                        let required = rewrite_references(&required, self.names)?;
+                        format!(
+                            "Annotated[{resolved}, BeforeValidator(_purrdf_requires({}, \
+                             _PURRDF_DEFS))]",
+                            python_value(&required)
+                        )
+                    } else {
+                        resolved
+                    },
+                )
             }
             _ => Err(PydanticError::new(format!(
                 "{path} must be a JSON Schema object or boolean"
@@ -1115,12 +1393,13 @@ impl<'a> Renderer<'a> {
         };
 
         if object.contains_key("oneOf") {
-            self.record(
+            self.pending.push((
                 "one-of-validation-widened",
-                &format!("{path}/oneOf"),
+                format!("{path}/oneOf"),
                 "Pydantic's runtime union accepts any matching branch and cannot enforce \
                  exactly-one branch semantics",
-            );
+                format!("{path}/oneOf"),
+            ));
         }
         if object.contains_key("anyOf")
             && [
@@ -1143,17 +1422,23 @@ impl<'a> Renderer<'a> {
             );
         }
         if object.contains_key("allOf") {
-            self.record(
+            self.pending.push((
                 "intersection-validation-widened",
-                &format!("{path}/allOf"),
+                format!("{path}/allOf"),
                 "Pydantic annotations cannot express a general JSON Schema intersection",
-            );
+                format!("{path}/allOf"),
+            ));
         }
-        if object.contains_key("not") {
+        if let Some(negand) = object.get("not")
+            && !negation_supported(negand, self.defs, &mut BTreeSet::new())
+        {
             self.record(
                 "negation-validation-dropped",
                 &format!("{path}/not"),
-                "Pydantic annotations cannot express general JSON Schema negation",
+                "The negated schema uses a keyword outside the runtime negation check's closed \
+                 table (a regex-selected key, key names, dependencies, evaluation state, a \
+                 format, content, a non-integer multipleOf, or a pattern outside the common \
+                 grammar); the exact assertion remains on model_json_schema()",
             );
         }
         if object.contains_key("if") || object.contains_key("then") || object.contains_key("else") {
@@ -1168,11 +1453,12 @@ impl<'a> Renderer<'a> {
             || object.contains_key("minContains")
             || object.contains_key("maxContains")
         {
-            self.record(
+            self.pending.push((
                 "array-contains-validation-dropped",
-                path,
+                path.to_owned(),
                 "Pydantic list annotations cannot enforce JSON Schema contains cardinality",
-            );
+                format!("contains:{path}"),
+            ));
         }
         if let Some(format) = object.get("format").and_then(Value::as_str) {
             let note = if matches!(format, "date-time" | "date" | "time") {
@@ -1305,13 +1591,17 @@ impl<'a> Renderer<'a> {
         let mut out = String::new();
         out.push_str(&python_string(docstring));
         out.push_str("\nfrom __future__ import annotations\n\n");
+        out.push_str("import math\n");
         out.push_str("from copy import deepcopy\n");
         out.push_str("from datetime import date, datetime, time\n");
         out.push_str("from enum import StrEnum\n");
+        out.push_str("from fractions import Fraction\n");
+        out.push_str("from collections.abc import Callable\n");
         out.push_str("from typing import Annotated, Any, ClassVar, ForwardRef, Literal, Never\n\n");
         out.push_str("from pydantic import (\n");
         out.push_str("    BeforeValidator,\n    ConfigDict,\n    Field,\n    RootModel,\n");
         out.push_str("    StrictBool,\n    StrictFloat,\n    StrictInt,\n    StrictStr,\n");
+        out.push_str("    TypeAdapter,\n    ValidationError,\n");
         out.push_str(")\n");
         out.push_str("from typing_extensions import NotRequired, Required, TypedDict\n\n");
         writeln!(out, "from .{BASE_MODULE} import {BASE_CLASS}\n\n")
@@ -1322,6 +1612,8 @@ impl<'a> Renderer<'a> {
             "        raise ValueError(\"temporal values require a JSON string carrier\")\n",
         );
         out.push_str("    return value\n\n\n");
+        out.push_str(UNIQUE_ITEMS_HELPER);
+        out.push_str(NEGATION_HELPER);
         writeln!(out, "_PURRDF_DEFS = {defs_literal}\n")
             .expect("writing generated Python to a String cannot fail");
 
@@ -1449,11 +1741,15 @@ fn apply_constraints(base: String, object: &Map<String, Value>) -> String {
             }
         }
     }
+    let mut validators = Vec::new();
     if declared_type == Some("array") {
         for (keyword, pydantic) in [("minItems", "min_length"), ("maxItems", "max_length")] {
             if let Some(value) = object.get(keyword).and_then(Value::as_u64) {
                 arguments.push(format!("{pydantic}={value}"));
             }
+        }
+        if object.get("uniqueItems") == Some(&Value::Bool(true)) {
+            validators.push("BeforeValidator(_purrdf_unique_items)");
         }
     } else if declared_type == Some("string") && !is_temporal_format(object) {
         for (keyword, pydantic) in [("minLength", "min_length"), ("maxLength", "max_length")] {
@@ -1467,10 +1763,15 @@ fn apply_constraints(base: String, object: &Map<String, Value>) -> String {
             arguments.push(format!("pattern={}", python_string(pattern)));
         }
     }
-    if arguments.is_empty() {
+    let mut metadata = Vec::new();
+    if !arguments.is_empty() {
+        metadata.push(format!("Field({})", arguments.join(", ")));
+    }
+    metadata.extend(validators.into_iter().map(str::to_owned));
+    if metadata.is_empty() {
         base
     } else {
-        format!("Annotated[{base}, Field({})]", arguments.join(", "))
+        format!("Annotated[{base}, {}]", metadata.join(", "))
     }
 }
 
@@ -1489,6 +1790,67 @@ fn is_temporal_format(object: &Map<String, Value>) -> bool {
 /// ECMA-262 and Rust regex semantics; compilation alone cannot establish that.
 fn runtime_pattern_supported(pattern: &str) -> bool {
     purrdf_core::xsd_regex::ecma_262_rust_compatible(pattern)
+}
+
+/// Whether the runtime negation check ([`NEGATION_HELPER`]) evaluates `schema`
+/// exactly: every keyword, through every subschema and `$defs` reference, is in
+/// its closed table.
+fn negation_supported(
+    schema: &Value,
+    defs: &Map<String, Value>,
+    visiting: &mut BTreeSet<String>,
+) -> bool {
+    let Value::Object(object) = schema else {
+        return schema.is_boolean();
+    };
+    let subschemas_supported = |value: &Value, visiting: &mut BTreeSet<String>| match value {
+        Value::Array(branches) => branches
+            .iter()
+            .all(|branch| negation_supported(branch, defs, visiting)),
+        other => negation_supported(other, defs, visiting),
+    };
+    for (keyword, argument) in object {
+        let supported = match keyword.as_str() {
+            "$ref" => {
+                let Some(key) = argument.as_str().and_then(reference_key) else {
+                    return false;
+                };
+                let Some(target) = defs.get(&key) else {
+                    return false;
+                };
+                if visiting.insert(key.clone()) {
+                    let supported = negation_supported(target, defs, visiting);
+                    visiting.remove(&key);
+                    supported
+                } else {
+                    // A cycle recurses through its own keywords, already checked.
+                    true
+                }
+            }
+            "type" | "const" | "enum" | "required" | "minProperties" | "maxProperties"
+            | "minItems" | "maxItems" | "uniqueItems" | "minContains" | "maxContains"
+            | "minLength" | "maxLength" | "minimum" | "maximum" | "exclusiveMinimum"
+            | "exclusiveMaximum" => true,
+            "multipleOf" => argument.is_i64() || argument.is_u64(),
+            "pattern" => argument.as_str().is_some_and(runtime_pattern_supported),
+            "not" | "if" | "then" | "else" | "items" | "contains" | "additionalProperties" => {
+                !argument.is_array() && subschemas_supported(argument, visiting)
+            }
+            "allOf" | "anyOf" | "oneOf" | "prefixItems" => {
+                argument.is_array() && subschemas_supported(argument, visiting)
+            }
+            "properties" => argument.as_object().is_some_and(|properties| {
+                properties
+                    .values()
+                    .all(|child| negation_supported(child, defs, visiting))
+            }),
+            other => is_annotation_keyword(other) && other != "$defs",
+        };
+        if !supported {
+            return false;
+        }
+    }
+    true
 }
 
 fn has_schema_type(object: &Map<String, Value>, expected: &str) -> bool {
@@ -1522,7 +1884,7 @@ fn branch_with_parent_constraints(branch: &Value, parent: &Map<String, Value>) -
                 "minLength" | "maxLength" | "pattern" | "format" => {
                     has_schema_type(branch_object, "string")
                 }
-                "minItems" | "maxItems" => has_schema_type(branch_object, "array"),
+                "minItems" | "maxItems" | "uniqueItems" => has_schema_type(branch_object, "array"),
                 "minimum" | "maximum" | "exclusiveMinimum" | "exclusiveMaximum" | "multipleOf" => {
                     has_numeric_schema_type(branch_object)
                 }
@@ -1558,6 +1920,7 @@ fn runtime_constraint_keys() -> &'static [&'static str] {
         "pattern",
         "minItems",
         "maxItems",
+        "uniqueItems",
         "format",
     ]
 }
@@ -1622,8 +1985,11 @@ fn render_routed_base(docstring: &str) -> String {
     let mut out = String::new();
     out.push_str(&python_string(docstring));
     out.push_str("\nfrom __future__ import annotations\n\n");
+    out.push_str("import math\n");
     out.push_str("from datetime import date, datetime, time\n");
     out.push_str("from enum import StrEnum\n");
+    out.push_str("from fractions import Fraction\n");
+    out.push_str("from collections.abc import Callable\n");
     out.push_str(
         "from typing import Annotated, Any, ClassVar, ForwardRef, Literal, Never, TypeAlias, cast\n\n",
     );
@@ -1632,6 +1998,7 @@ fn render_routed_base(docstring: &str) -> String {
         "    BaseModel,\n    BeforeValidator,\n    ConfigDict,\n    Field,\n    RootModel,\n",
     );
     out.push_str("    StrictBool,\n    StrictFloat,\n    StrictInt,\n    StrictStr,\n");
+    out.push_str("    TypeAdapter,\n    ValidationError,\n");
     out.push_str(")\n");
     out.push_str("from typing_extensions import NotRequired, Required, TypedDict\n\n\n");
     writeln!(out, "class {BASE_CLASS}(BaseModel):")
@@ -1643,6 +2010,8 @@ fn render_routed_base(docstring: &str) -> String {
     out.push_str("    if not isinstance(value, str):\n");
     out.push_str("        raise ValueError(\"temporal values require a JSON string carrier\")\n");
     out.push_str("    return value\n\n\n");
+    out.push_str(UNIQUE_ITEMS_HELPER);
+    out.push_str(NEGATION_HELPER);
     out.push_str("_PURRDF_RUNTIME_TYPES: dict[str, Any] = {\n");
     for name in routed_runtime_names() {
         writeln!(out, "    {}: {name},", python_string(name))
@@ -1681,7 +2050,10 @@ fn routed_runtime_names() -> &'static [&'static str] {
         "StrictStr",
         "TypeAlias",
         "TypedDict",
+        "_purrdf_rejects",
+        "_purrdf_requires",
         "_purrdf_temporal_input",
+        "_purrdf_unique_items",
         "cast",
         "date",
         "datetime",
@@ -2106,6 +2478,7 @@ fn known_schema_keyword(keyword: &str) -> bool {
             | "pattern"
             | "minItems"
             | "maxItems"
+            | "uniqueItems"
             | "format"
     )
 }
@@ -2189,6 +2562,7 @@ fn reserved_type_names() -> BTreeSet<&'static str> {
         "ConfigDict",
         "Field",
         "ForwardRef",
+        "Fraction",
         "Literal",
         "Never",
         "NotRequired",
@@ -3011,7 +3385,10 @@ mod tests {
             .expect("compiler-produced losses stay profile-sound");
         let models = std::str::from_utf8(&out.artifacts["example_models/models.py"]).unwrap();
         assert!(models.contains("class Person(PurrdfBaseModel):"));
-        assert!(models.contains("name: Annotated[StrictStr, Field(min_length=1)] |"));
+        assert!(
+            models.contains("name: Annotated[StrictStr, Field(min_length=1)] ="),
+            "{models}"
+        );
         assert!(models.contains(" = Field(alias=\"ex:name\")"));
     }
 
@@ -3041,6 +3418,102 @@ mod tests {
         assert!(out.losses.is_empty(), "{}", out.losses.render_json());
     }
 
+    /// A `not` whose schema the runtime check evaluates is enforced by a
+    /// before-validator over the raw JSON input, `$ref`s rewritten to the
+    /// package's `$defs` keys; one outside the table stays a recorded loss.
+    #[test]
+    fn evaluable_negation_is_enforced_at_runtime() {
+        let schema = json!({
+            "$defs": {
+                "Holder": {
+                    "type": "object",
+                    "properties": {
+                        "ex:typed": {
+                            "not": {
+                                "anyOf": [
+                                    { "$ref": "#/$defs/Reserved" },
+                                    {
+                                        "type": "object",
+                                        "properties": {
+                                            "@type": { "const": "xsd:date" },
+                                            "@value": {
+                                                "type": "string",
+                                                "not": { "pattern": "^2020-" }
+                                            }
+                                        },
+                                        "required": ["@value", "@type"]
+                                    }
+                                ]
+                            }
+                        },
+                        "ex:keys": { "not": { "propertyNames": { "maxLength": 1 } } }
+                    }
+                },
+                "Reserved": { "enum": ["reserved"] }
+            }
+        });
+        let out = emit_pydantic(&compiled(&schema), &config()).expect("emit");
+        let models = std::str::from_utf8(&out.artifacts["example_models/models.py"]).unwrap();
+        assert!(models.contains("def _purrdf_rejects(schema: Any, defs: Any)"));
+        assert!(
+            models.contains(
+                "BeforeValidator(_purrdf_rejects({\"anyOf\": [{\"$ref\": \"#/$defs/Reserved\"}"
+            ),
+            "{models}"
+        );
+        let located = out
+            .losses
+            .entries()
+            .iter()
+            .filter(|entry| entry.code.as_ref() == "negation-validation-dropped")
+            .filter_map(|entry| entry.location.as_ref()?.subject.clone())
+            .collect::<Vec<_>>();
+        assert_eq!(located, ["#/$defs/Holder/properties/ex:keys/not"]);
+    }
+
+    #[test]
+    fn enforces_every_composition_the_runtime_check_evaluates() {
+        let schema = json!({
+            "$defs": {
+                "Held": {
+                    "type": "object",
+                    "properties": {
+                        "ex:contains": {
+                            "type": "array",
+                            "items": { "type": "integer" },
+                            "contains": { "const": 1 }
+                        },
+                        "ex:intersection": {
+                            "allOf": [{ "type": "integer" }, { "type": "integer", "minimum": 1 }]
+                        },
+                        "ex:one": {
+                            "oneOf": [{ "type": "integer" }, { "enum": [1, "a"] }]
+                        }
+                    }
+                }
+            }
+        });
+        let out = emit_pydantic(&compiled(&schema), &config()).expect("emit");
+        assert!(
+            out.losses.entries().is_empty(),
+            "{}",
+            out.losses.render_json()
+        );
+        let models = String::from_utf8(out.artifacts["example_models/models.py"].clone())
+            .expect("UTF-8 models");
+        for required in [
+            r#"BeforeValidator(_purrdf_requires({"contains": {"const": 1}}, _PURRDF_DEFS))"#,
+            r#"BeforeValidator(_purrdf_requires({"allOf": [{"type": "integer"}, {"minimum": 1, "type": "integer"}]}, _PURRDF_DEFS))"#,
+            r#"BeforeValidator(_purrdf_requires({"oneOf": [{"type": "integer"}, {"enum": [1, "a"]}]}, _PURRDF_DEFS))"#,
+        ] {
+            assert!(
+                models.contains(required),
+                "{required} missing from:\n{models}"
+            );
+        }
+        assert!(models.contains("def _purrdf_requires(schema: Any, defs: Any)"));
+    }
+
     #[test]
     fn records_every_unprojectable_runtime_construct_soundly() {
         let schema = json!({
@@ -3055,7 +3528,7 @@ mod tests {
                         "ex:contains": {
                             "type": "array",
                             "items": { "type": "integer" },
-                            "contains": { "const": 1 },
+                            "contains": { "propertyNames": { "maxLength": 1 } },
                             "minContains": 2
                         },
                         "ex:conjoined": {
@@ -3064,12 +3537,12 @@ mod tests {
                         },
                         "ex:format": { "type": "string", "format": "email" },
                         "ex:intersection": {
-                            "allOf": [{ "type": "integer" }, { "minimum": 1 }]
+                            "allOf": [{ "type": "integer" }, { "propertyNames": { "maxLength": 1 } }]
                         },
-                        "ex:negated": { "not": { "type": "null" } },
+                        "ex:negated": { "not": { "propertyNames": { "maxLength": 1 } } },
                         "ex:odd": { "uniqueItems": true, "type": "array" },
                         "ex:one": {
-                            "oneOf": [{ "type": "integer" }, { "type": "number" }]
+                            "oneOf": [{ "type": "integer" }, { "propertyNames": { "maxLength": 1 } }]
                         },
                         "ex:temporal": {
                             "type": "string",

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Native RDF text codecs (S3).
+//! Native RDF text codecs.
 //!
 //! The codec-only backend that parses and serializes Turtle / TriG / N-Triples /
 //! N-Quads / RDF/XML, emitting through the `purrdf-events` seam into the frozen
@@ -73,7 +73,9 @@ mod codec;
 mod stream;
 
 pub use media_type::{NativeRdfFormat, classify};
-pub use parse::{ParseOutcome, parse_dataset, parse_dataset_with};
+pub use parse::{
+    ParseFailure, ParseOutcome, parse_dataset, parse_dataset_reporting_failure, parse_dataset_with,
+};
 pub use source_format::{GTS_EXTENSIONS, PACK_EXTENSIONS, SourceFormat, classify_source};
 pub use span::{ParseOptions, SpanTable};
 pub use stream::parse_dataset_from_reader;

@@ -829,7 +829,7 @@ impl NativeImporter {
         for (slot_name, (slot, slot_path)) in local_slots {
             if matches!(
                 slot_name.as_str(),
-                "@id" | "@type" | "@annotation" | "@value" | "@language"
+                "@id" | "@type" | "@annotation" | "@value" | "@language" | "@list" | "@direction"
             ) {
                 self.record("value-term-kind-widened", &slot_path);
                 continue;
@@ -855,6 +855,7 @@ impl NativeImporter {
                 ("minimum_cardinality", "minItems"),
                 ("maximum_cardinality", "maxItems"),
                 ("list_elements_unique", "uniqueItems"),
+                ("has_member", "contains"),
             ] {
                 if slot.contains_key(native) {
                     self.map_location(
@@ -1011,6 +1012,17 @@ impl NativeImporter {
             if let Some(unique) = optional_bool(slot, "list_elements_unique", path)? {
                 array.insert("uniqueItems".to_owned(), Value::Bool(unique));
             }
+            // `has_member` is JSON Schema's `contains`: some member satisfies it.
+            if let Some(member) = slot.get("has_member") {
+                let member_path = format!("{path}/has_member");
+                let member = member
+                    .as_object()
+                    .ok_or_else(|| LinkmlError::new(format!("{member_path} must be a mapping")))?;
+                let contained =
+                    self.expression_schema(member, &member_path, visiting, depth + 1)?;
+                self.audit_expression_fields(member, &member_path)?;
+                array.insert("contains".to_owned(), contained);
+            }
             if optional_bool(slot, "list_elements_ordered", path)?.unwrap_or(false) {
                 self.record(
                     "value-term-kind-widened",
@@ -1025,6 +1037,10 @@ impl NativeImporter {
                 return Err(LinkmlError::new(format!(
                     "{path} applies list semantics to a non-multivalued slot"
                 )));
+            }
+            // A single value is no JSON array, so no `contains` judges it.
+            if slot.contains_key("has_member") {
+                self.record("schema-applicator-dropped", &format!("{path}/has_member"));
             }
             scalar
         };
@@ -1104,7 +1120,9 @@ impl NativeImporter {
         }
         match self.kinds.get(range).copied() {
             Some(ElementKind::Class) if self.ignored_class_names.contains(range) => {
-                if let Some(carrier) = self.package_carrier_schema(range)? {
+                if let Some(carrier) = self.list_carrier_schema(range, visiting, depth, path)? {
+                    Ok(carrier)
+                } else if let Some(carrier) = self.package_carrier_schema(range)? {
                     Ok(carrier)
                 } else {
                     self.class_schema(range, visiting, depth)
@@ -1563,6 +1581,76 @@ impl NativeImporter {
                 == Some("RDF-1.2 statement metadata (reifier annotation)")
     }
 
+    /// The projection of a list, `{"@list": [...]}`, whose one attribute is
+    /// the ordered, multivalued `@list` slot: its cardinality bounds, element
+    /// uniqueness and range state the members' array schema exactly (the
+    /// members of a JSON-LD list are ordered, so `list_elements_ordered`
+    /// widens nothing here).
+    fn list_carrier_schema(
+        &mut self,
+        name: &str,
+        visiting: &mut BTreeSet<String>,
+        depth: usize,
+        path: &str,
+    ) -> Result<Option<Value>, LinkmlError> {
+        let Some(slot) = self
+            .classes
+            .get(name)
+            .and_then(Value::as_object)
+            .and_then(|class| class.get("attributes"))
+            .and_then(Value::as_object)
+            .filter(|attributes| attributes.len() == 1)
+            .and_then(|attributes| attributes.get("@list"))
+            .and_then(Value::as_object)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let slot_path = format!("{path}/attributes/@list");
+        if optional_bool(&slot, "required", &slot_path)? != Some(true)
+            || optional_bool(&slot, "multivalued", &slot_path)? != Some(true)
+        {
+            return Ok(None);
+        }
+        let mut members = Map::from_iter([("type".to_owned(), Value::String("array".to_owned()))]);
+        if let Some(value) = optional_u64(&slot, "minimum_cardinality", &slot_path)? {
+            members.insert("minItems".to_owned(), Value::from(value));
+        }
+        if let Some(value) = optional_u64(&slot, "maximum_cardinality", &slot_path)? {
+            members.insert("maxItems".to_owned(), Value::from(value));
+        }
+        if optional_bool(&slot, "list_elements_unique", &slot_path)? == Some(true) {
+            members.insert("uniqueItems".to_owned(), Value::Bool(true));
+        }
+        let mut item_fields = slot;
+        for field in [
+            "alias",
+            "required",
+            "multivalued",
+            "minimum_cardinality",
+            "maximum_cardinality",
+            "list_elements_ordered",
+            "list_elements_unique",
+            "inlined",
+            "inlined_as_list",
+        ] {
+            item_fields.remove(field);
+        }
+        // An empty list (`rdf:nil`'s) has no member for a range to judge; the
+        // range the emitter wrote is its fallback carrier, not a constraint.
+        if members.get("maxItems") != Some(&Value::from(0_u64)) {
+            let items = self.expression_schema(&item_fields, &slot_path, visiting, depth + 1)?;
+            if items.as_object().is_none_or(|object| !object.is_empty()) {
+                members.insert("items".to_owned(), items);
+            }
+        }
+        Ok(Some(serde_json::json!({
+            "type": "object",
+            "properties": { "@list": Value::Object(members) },
+            "required": ["@list"]
+        })))
+    }
+
     fn package_carrier_schema(&self, name: &str) -> Result<Option<Value>, LinkmlError> {
         let Some(class) = self.classes.get(name).and_then(Value::as_object) else {
             return Ok(None);
@@ -1575,12 +1663,62 @@ impl NativeImporter {
                 LinkmlError::new(format!("#/classes/{name}/attributes/@id must be a mapping"))
             })?;
             if optional_bool(id, "required", "#/classes/helper/attributes/@id")? == Some(true) {
+                // An IRI or blank-node reference states its `@id` label pattern.
+                let mut id_schema = serde_json::json!({ "type": "string" });
+                if let Some(pattern) = id.get("pattern") {
+                    let pattern = pattern.as_str().ok_or_else(|| {
+                        LinkmlError::new(format!(
+                            "#/classes/{name}/attributes/@id/pattern must be a string"
+                        ))
+                    })?;
+                    id_schema["pattern"] = Value::String(pattern.to_owned());
+                }
                 return Ok(Some(serde_json::json!({
                     "type": "object",
-                    "properties": { "@id": { "type": "string" } },
+                    "properties": { "@id": id_schema },
                     "required": ["@id"]
                 })));
             }
+        }
+        if attributes.len() == 2
+            && attributes.contains_key("@value")
+            && attributes.contains_key("@type")
+            && let Some(datatype) = attributes["@type"]
+                .get("equals_string")
+                .and_then(Value::as_str)
+        {
+            // One datatype's typed-literal object: `@type` is the datatype, and
+            // `@value` a string carrying the datatype's format or lexical pattern.
+            let value = attributes["@value"].as_object().ok_or_else(|| {
+                LinkmlError::new(format!(
+                    "#/classes/{name}/attributes/@value must be a mapping"
+                ))
+            })?;
+            let mut value_schema = serde_json::json!({ "type": "string" });
+            match value.get("range").and_then(Value::as_str) {
+                Some("string") | None => {}
+                Some("datetime") => value_schema["format"] = Value::from("date-time"),
+                Some("date") => value_schema["format"] = Value::from("date"),
+                Some("time") => value_schema["format"] = Value::from("time"),
+                Some("uri") => value_schema["format"] = Value::from("uri"),
+                Some(_) => return Ok(None),
+            }
+            if let Some(pattern) = value.get("pattern") {
+                let pattern = pattern.as_str().ok_or_else(|| {
+                    LinkmlError::new(format!(
+                        "#/classes/{name}/attributes/@value/pattern must be a string"
+                    ))
+                })?;
+                value_schema["pattern"] = Value::String(pattern.to_owned());
+            }
+            return Ok(Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "@value": value_schema,
+                    "@type": { "const": datatype }
+                },
+                "required": ["@value", "@type"]
+            })));
         }
         if attributes.len() == 2
             && attributes.contains_key("@value")
@@ -1609,6 +1747,22 @@ impl NativeImporter {
                 })));
             }
         }
+        if attributes.len() == 3
+            && attributes.contains_key("@value")
+            && attributes.contains_key("@language")
+            && attributes.contains_key("@direction")
+        {
+            // A directional language-tagged literal (`rdf:dirLangString`).
+            return Ok(Some(serde_json::json!({
+                "type": "object",
+                "properties": {
+                    "@value": { "type": "string" },
+                    "@language": { "type": "string" },
+                    "@direction": { "enum": ["ltr", "rtl"] }
+                },
+                "required": ["@value", "@language", "@direction"]
+            })));
+        }
         if attributes.len() == 2
             && attributes.contains_key("@value")
             && attributes.contains_key("@language")
@@ -1630,19 +1784,22 @@ impl NativeImporter {
                     "#/classes/helper/attributes/@language",
                 )? == Some(true)
             {
-                let pattern = language
-                    .get("pattern")
-                    .and_then(Value::as_str)
-                    .ok_or_else(|| {
+                // A `sh:languageIn` object states its tag pattern; the object of
+                // any language-tagged literal (`rdf:langString`) states none.
+                let mut language_schema = serde_json::json!({ "type": "string" });
+                if let Some(pattern) = language.get("pattern") {
+                    let pattern = pattern.as_str().ok_or_else(|| {
                         LinkmlError::new(format!(
                             "#/classes/{name}/attributes/@language/pattern must be a string"
                         ))
                     })?;
+                    language_schema["pattern"] = Value::String(pattern.to_owned());
+                }
                 return Ok(Some(serde_json::json!({
                     "type": "object",
                     "properties": {
                         "@value": { "type": "string" },
-                        "@language": { "type": "string", "pattern": pattern }
+                        "@language": language_schema
                     },
                     "required": ["@value", "@language"]
                 })));
@@ -1701,6 +1858,7 @@ impl NativeImporter {
             "maximum_cardinality",
             "list_elements_ordered",
             "list_elements_unique",
+            "has_member",
             "inlined",
             "inlined_as_list",
             "pattern",
@@ -2327,6 +2485,59 @@ mod tests {
         let mut bad_diagnostic = skipped;
         bad_diagnostic.slot_diagnostics[0].detail.push_str(" drift");
         assert!(import_package(&bad_diagnostic, &config()).is_err());
+    }
+
+    #[test]
+    fn has_member_on_a_list_is_contains_and_on_a_single_value_is_recorded() {
+        let tags_has_value = |document: &LinkmlDocument| {
+            let imported = import_document(document, &config(), None).expect("import");
+            let has_value = imported
+                .shapes
+                .node_shapes
+                .iter()
+                .flat_map(|shape| &shape.property_shapes)
+                .filter(|property| {
+                    matches!(&property.path, Path::Predicate(predicate) if predicate.as_str() == "https://example.org/tags")
+                })
+                .flat_map(|property| &property.constraints)
+                .filter_map(|constraint| match constraint {
+                    Constraint::HasValue(term) => Some(format!("{term:?}")),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            (has_value, imported.losses)
+        };
+        let (control, _) = tags_has_value(&native_document());
+        assert!(control.is_empty(), "{control:?}");
+
+        let mut value = native_document().into_value();
+        value["classes"]["Person"]["attributes"]["tags"]["has_member"] =
+            json!({ "equals_string": "urgent" });
+        value["classes"]["Person"]["attributes"]["color"]["has_member"] =
+            json!({ "equals_string": "red" });
+        let document = LinkmlDocument::from_value(value).expect("has_member document");
+        let (has_value, losses) = tags_has_value(&document);
+        assert_eq!(has_value.len(), 1, "{has_value:?}");
+        assert!(has_value[0].contains("urgent"), "{has_value:?}");
+        let observed = losses
+            .entries()
+            .iter()
+            .filter_map(|entry| {
+                Some((
+                    entry.code.to_string(),
+                    entry.location.as_ref()?.subject.as_deref()?.to_owned(),
+                ))
+            })
+            .filter(|(_, subject)| subject.contains("has_member"))
+            .collect::<BTreeSet<_>>();
+        assert_eq!(
+            observed,
+            BTreeSet::from([(
+                "schema-applicator-dropped".to_owned(),
+                "#/classes/Person/attributes/color/has_member".to_owned()
+            )])
+        );
+        check_ledger_sound(&losses, SOURCE, TARGET).expect("sound ledger");
     }
 
     #[test]

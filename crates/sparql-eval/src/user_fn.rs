@@ -65,12 +65,13 @@ use crate::eval::{
 use crate::registry_id::{RegistryId, append_framed_part};
 use crate::witness::RelationWitness;
 
-/// The result form of a function body: a `sh:select` returns the first projected
-/// value of the first solution; a `sh:ask` returns an `xsd:boolean`.
+/// The result form of a function body: a `sh:select` returns the projected value of
+/// its one solution (a second solution is an error); a `sh:ask` returns an
+/// `xsd:boolean`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum UserFnBody {
-    /// A `sh:select` body: the return value is the first projected variable of the
-    /// first solution row (empty result â no value).
+    /// A `sh:select` body: the return value is the projected variable of the one
+    /// solution row (an empty result is no value; a second row is an error).
     Select,
     /// A `sh:ask` body: the return value is the `xsd:boolean` of the ASK.
     Ask,
@@ -644,6 +645,19 @@ impl UserFunctionRegistry {
     #[must_use]
     pub fn resolve(&self, iri: &str) -> Option<&UserFunction> {
         self.fns.get(iri)
+    }
+
+    /// Remove the SPARQL-bodied function registered under `iri`, returning it.
+    ///
+    /// The seam SHACL 1.2 SPARQL Extensions §7.3's redefinition rule needs: "If a
+    /// function with the same IRI is already registered, SHACL engines MUST ignore
+    /// the attempt to redefine it unless the function was previously added as a
+    /// custom SPARQL function." A custom SPARQL function is therefore the one kind
+    /// an expression-bodied registration replaces, and the cross-kind guard on
+    /// [`Self::register_expr`] requires it gone first. Native and expression-bodied
+    /// entries have no removal: §7.3 keeps them.
+    pub fn remove_sparql_bodied(&mut self, iri: &str) -> Option<UserFunction> {
+        self.fns.remove(iri)
     }
 
     /// Resolve a call-position IRI to its declared native function, if any.
@@ -1266,8 +1280,23 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
                     variables.len()
                 )));
             }
-            // The single projected value of the first solution row; an empty
-            // result set is "no value".
+            // SHACL Advanced Features, "SPARQL-based Functions": "the function's return
+            // value is the binding of the (single) result variable of the first solution
+            // in the result set. Since all other bindings will be ignored, such SELECT
+            // queries should only return at most one solution." PurRDF reads the should
+            // as a must: a body that returns a second solution has no single value to
+            // return, and taking the first would make the call's value depend on an
+            // order the query never fixed, so the call is refused rather than answered.
+            if rows.len() > 1 {
+                return Err(EvalError::function(format!(
+                    "SHACL-AF function <{iri}> SELECT body returned {} solutions; SHACL \
+                     Advanced Features says \"such SELECT queries should only return at most \
+                     one solution\", read as a must, so the call has no single value",
+                    rows.len()
+                )));
+            }
+            // The single projected value of the one solution row; an empty result set
+            // is "no value".
             rows.into_iter()
                 .next()
                 .and_then(|row| row.into_iter().next().flatten())

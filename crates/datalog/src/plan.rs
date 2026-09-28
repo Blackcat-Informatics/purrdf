@@ -59,6 +59,7 @@ use std::sync::Arc;
 
 use crate::binding_pattern::BindingPattern;
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, NonDatalogClause};
+use crate::guard::Negation;
 use crate::id::TermId;
 use crate::store::Bound;
 
@@ -177,6 +178,16 @@ pub(crate) fn dependency_edges(
         }
     }
 
+    // A negated conjunction's atoms are read NEGATIVELY: the group is decided only
+    // once every relation it matches is complete, exactly as a negated atom is.
+    for rule in rules {
+        for atom in rule.negations().iter().flat_map(Negation::atoms) {
+            let symbol = predicate_symbol(atom);
+            wildcard_body |= symbol == ANY_PREDICATE;
+            preds.insert(symbol);
+        }
+    }
+
     // Edges: (head predicate, body predicate, negative?).
     let mut edges: Vec<(String, String, bool)> = Vec::new();
     for rule in rules {
@@ -188,6 +199,9 @@ pub(crate) fn dependency_edges(
                     predicate_symbol(atom),
                     atom.is_negated(),
                 ));
+            }
+            for atom in rule.negations().iter().flat_map(Negation::atoms) {
+                edges.push((head_symbol.clone(), predicate_symbol(atom), true));
             }
         }
     }
@@ -1027,14 +1041,33 @@ impl RulePlan {
 
         let mut variables = Vec::new();
         let mut slots = BTreeMap::new();
-        for atom in rule.body().iter().chain(rule.head_atoms()) {
+        let mut assign = |name: &String| {
+            if !slots.contains_key(name) {
+                let slot = variables.len();
+                variables.push(name.clone());
+                slots.insert(name.clone(), slot);
+            }
+        };
+        for atom in rule.body() {
             for term in atom.terms() {
-                if let ClauseTerm::Var(name) = term
-                    && !slots.contains_key(name)
-                {
-                    let slot = variables.len();
-                    variables.push(name.clone());
-                    slots.insert(name.clone(), slot);
+                if let ClauseTerm::Var(name) = term {
+                    assign(name);
+                }
+            }
+        }
+        // A guard output is a body binding like any other, so it takes a frame slot
+        // after the atoms and before the head: the head reads it exactly as it reads a
+        // join binding. A negated conjunction's own variables are existentially
+        // quantified inside the group and never reach the frame.
+        for guard in rule.guards() {
+            for output in guard.outputs() {
+                assign(output);
+            }
+        }
+        for atom in rule.head_atoms() {
+            for term in atom.terms() {
+                if let ClauseTerm::Var(name) = term {
+                    assign(name);
                 }
             }
         }

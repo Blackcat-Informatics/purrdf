@@ -24,6 +24,36 @@ const SHACL_NS: &str = "http://www.w3.org/ns/shacl#";
 /// The W3C SHACL Recommendation base URL (spec anchors hang off it).
 const SHACL_SPEC: &str = "https://www.w3.org/TR/shacl/";
 
+/// The W3C SHACL 1.2 Core specification, which defines the components SHACL
+/// 1.2 added under the same `#<LocalName>` anchors.
+const SHACL12_CORE_SPEC: &str = "https://www.w3.org/TR/shacl12-core/";
+
+/// The W3C SHACL 1.2 Node Expressions specification, which defines the
+/// node-expression constraint components.
+const SHACL12_NODE_EXPR_SPEC: &str = "https://www.w3.org/TR/shacl12-node-expr/";
+
+/// The specification that defines the constraint component `local`: the SHACL
+/// Recommendation for the components it defines, the SHACL 1.2 specification
+/// for each one SHACL 1.2 added — an anchor the Recommendation does not have.
+fn component_spec(local: &str) -> &'static str {
+    match local {
+        "MinListLengthConstraintComponent"
+        | "MaxListLengthConstraintComponent"
+        | "UniqueMembersConstraintComponent"
+        | "MemberShapeConstraintComponent"
+        | "SingleLineConstraintComponent"
+        | "RootClassConstraintComponent"
+        | "SomeValueConstraintComponent"
+        | "SubsetOfConstraintComponent"
+        | "UniqueValuesForConstraintComponent"
+        | "ReifierShapeConstraintComponent" => SHACL12_CORE_SPEC,
+        "ExpressionConstraintComponent" | "NodeByExpressionConstraintComponent" => {
+            SHACL12_NODE_EXPR_SPEC
+        }
+        _ => SHACL_SPEC,
+    }
+}
+
 /// Build the SARIF rule descriptor for `rule_id`.
 #[must_use]
 pub fn descriptor_for(rule_id: &str) -> ReportingDescriptor {
@@ -38,8 +68,8 @@ pub fn descriptor_for(rule_id: &str) -> ReportingDescriptor {
 
 /// A descriptor for a SHACL constraint component, deep-linking the spec anchor.
 fn shacl_component_descriptor(rule_id: &str, local: &str) -> ReportingDescriptor {
-    // The SHACL spec anchors a constraint component at `#<LocalName>`.
-    let help_uri = format!("{SHACL_SPEC}#{local}");
+    // The SHACL specifications anchor a constraint component at `#<LocalName>`.
+    let help_uri = format!("{}#{local}", component_spec(local));
     let short =
         curated_shacl_summary(local).map_or_else(|| format!("SHACL {local}."), ToOwned::to_owned);
     ReportingDescriptor {
@@ -57,9 +87,10 @@ fn shacl_component_descriptor(rule_id: &str, local: &str) -> ReportingDescriptor
     }
 }
 
-/// One-line summaries for the most common SHACL components, so a dashboard shows
-/// intent without opening the spec. Unlisted components fall back to a generic
-/// summary; the `helpUri` is always present.
+/// One-line summaries for every constraint component the SHACL specifications
+/// define, so a dashboard shows intent without opening the spec. A component
+/// they do not define falls back to a generic summary; the `helpUri` is always
+/// present.
 fn curated_shacl_summary(local: &str) -> Option<&'static str> {
     let summary = match local {
         "DatatypeConstraintComponent" => "A value has the wrong datatype (sh:datatype).",
@@ -100,6 +131,62 @@ fn curated_shacl_summary(local: &str) -> Option<&'static str> {
         "UniqueLangConstraintComponent" => "A language tag is used more than once (sh:uniqueLang).",
         "ClosedConstraintComponent" => "A node has properties outside a closed shape (sh:closed).",
         "SPARQLConstraintComponent" => "A SPARQL-based constraint was violated (sh:sparql).",
+        "NotConstraintComponent" => "A value conforms to a shape it must not (sh:not).",
+        "AndConstraintComponent" => "A value does not conform to every listed shape (sh:and).",
+        "OrConstraintComponent" => "A value conforms to none of the listed shapes (sh:or).",
+        "XoneConstraintComponent" => {
+            "A value does not conform to exactly one of the listed shapes (sh:xone)."
+        }
+        "EqualsConstraintComponent" => "The values differ from those of another path (sh:equals).",
+        "DisjointConstraintComponent" => {
+            "A value is shared with another path's values (sh:disjoint)."
+        }
+        "LessThanConstraintComponent" => {
+            "A value is not below every value of another path (sh:lessThan)."
+        }
+        "LessThanOrEqualsConstraintComponent" => {
+            "A value is not at or below every value of another path (sh:lessThanOrEquals)."
+        }
+        "QualifiedMinCountConstraintComponent" => {
+            "Too few values conform to the qualified shape (sh:qualifiedMinCount)."
+        }
+        "QualifiedMaxCountConstraintComponent" => {
+            "Too many values conform to the qualified shape (sh:qualifiedMaxCount)."
+        }
+        "MinListLengthConstraintComponent" => {
+            "A value is not a list of at least the minimum length (sh:minListLength)."
+        }
+        "MaxListLengthConstraintComponent" => {
+            "A value is not a list of at most the maximum length (sh:maxListLength)."
+        }
+        "UniqueMembersConstraintComponent" => {
+            "A value is not a list, or a list with a repeated member (sh:uniqueMembers)."
+        }
+        "MemberShapeConstraintComponent" => {
+            "A value is not a list whose every member conforms to the shape (sh:memberShape)."
+        }
+        "SingleLineConstraintComponent" => {
+            "A literal's lexical form contains a line break (sh:singleLine)."
+        }
+        "RootClassConstraintComponent" => {
+            "A value is not a root class or one of its subclasses (sh:rootClass)."
+        }
+        "SomeValueConstraintComponent" => "No value conforms to the shape (sh:someValue).",
+        "SubsetOfConstraintComponent" => {
+            "A value is not among the values of another path (sh:subsetOf)."
+        }
+        "UniqueValuesForConstraintComponent" => {
+            "Another target node has the same values for the listed properties (sh:uniqueValuesFor)."
+        }
+        "ReifierShapeConstraintComponent" => {
+            "A value's triple lacks a required reifier, or a reifier fails its shape (sh:reifierShape)."
+        }
+        "ExpressionConstraintComponent" => {
+            "A node expression produced a value other than true (sh:expression)."
+        }
+        "NodeByExpressionConstraintComponent" => {
+            "A value does not conform to a shape a node expression selects (sh:nodeByExpression)."
+        }
         _ => return None,
     };
     Some(summary)
@@ -178,6 +265,42 @@ mod tests {
                 Some(format!("SHACL {local}.").as_str())
             );
         }
+    }
+
+    /// Every constraint component the vendored SHACL 1.2 vocabulary declares has
+    /// a curated summary, and the ones SHACL 1.2 added link the SHACL 1.2
+    /// specification rather than an anchor the Recommendation lacks.
+    #[test]
+    fn every_declared_component_has_a_curated_summary() {
+        let vocabulary = include_str!("../../../vectors/shacl12/vocabularies/shacl.ttl");
+        let mut declared: Vec<&str> = vocabulary
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == ':'))
+            .filter_map(|token| token.strip_prefix("sh:"))
+            .filter(|local| {
+                local.ends_with("ConstraintComponent")
+                    && local.len() > "ConstraintComponent".len()
+                    && local.starts_with(|c: char| c.is_ascii_uppercase())
+            })
+            .collect();
+        declared.sort_unstable();
+        declared.dedup();
+        assert_eq!(declared.len(), 42, "{declared:?}");
+        for local in declared {
+            assert!(
+                curated_shacl_summary(local).is_some(),
+                "{local} has no curated summary"
+            );
+        }
+        assert_eq!(
+            descriptor_for("http://www.w3.org/ns/shacl#MemberShapeConstraintComponent").help_uri,
+            Some("https://www.w3.org/TR/shacl12-core/#MemberShapeConstraintComponent".to_owned())
+        );
+        assert_eq!(
+            descriptor_for("http://www.w3.org/ns/shacl#ExpressionConstraintComponent").help_uri,
+            Some(
+                "https://www.w3.org/TR/shacl12-node-expr/#ExpressionConstraintComponent".to_owned()
+            )
+        );
     }
 
     #[test]

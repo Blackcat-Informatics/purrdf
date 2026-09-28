@@ -1,0 +1,52 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+# Variant: before
+--- a/fixed.rs
++++ b/fixed.rs
+@@ -47 +47 @@
+-//! * slices of 0–16 bytes are two independently seeded folds plus a length term;
++//! * slices of 0–16 bytes are two independent folds plus a length term;
+@@ -75 +75 @@
+-use keys::{FIN_M, FIN_X, K_A, K_B, LEN_M, LEN_X, PAIR_X, SEED};
++use keys::{FIN_M, FIN_X, K_A, K_B, LEN_M, LEN_X, SEED};
+@@ -224,6 +224 @@
+-        // Seed both lanes: fold(0, K) = 0 and fold(u64::MAX, K) = u64::MAX
+-        // for every nonzero K. An unseeded second lane lets ordinary zero
+-        // and all-ones fields cancel across adjacent updates. Its own
+-        // derived offset removes that special case without serializing
+-        // the multiplies. This is still a public-key, non-cryptographic hash.
+-        self.acc = fold(self.acc ^ first, K_A) ^ fold(second ^ PAIR_X, K_B) ^ extra;
++        self.acc = fold(self.acc ^ first, K_A) ^ fold(second, K_B) ^ extra;
+--- a/fixed/keys.rs
++++ b/fixed/keys.rs
+@@ -87,2 +86,0 @@
+-/// The second word's domain offset in a portable two-word absorb.
+-pub(crate) const PAIR_X: u64 = KEYS[15];
+
+# Variant: after
+--- a/fixed.rs
++++ b/fixed.rs
+@@ -47 +47 @@
+-//! * slices of 0–16 bytes are two independently seeded folds plus a length term;
++//! * slices of 0–16 bytes are two successive folds plus a length term;
+@@ -75 +75 @@
+-use keys::{FIN_M, FIN_X, K_A, K_B, LEN_M, LEN_X, PAIR_X, SEED};
++use keys::{FIN_M, FIN_X, K_A, K_B, LEN_M, LEN_X, SEED};
+@@ -224,6 +224,5 @@
+-        // Seed both lanes: fold(0, K) = 0 and fold(u64::MAX, K) = u64::MAX
+-        // for every nonzero K. An unseeded second lane lets ordinary zero
+-        // and all-ones fields cancel across adjacent updates. Its own
+-        // derived offset removes that special case without serializing
+-        // the multiplies. This is still a public-key, non-cryptographic hash.
+-        self.acc = fold(self.acc ^ first, K_A) ^ fold(second ^ PAIR_X, K_B) ^ extra;
++        // Absorb both words before exposing the state to the next field.
++        // Independent folds XORed together leave fold(0, K) = 0 and
++        // fold(u64::MAX, K) = u64::MAX for every nonzero K: moving an
++        // all-ones word from `second` to the next field then cancels it.
++        self.acc = fold(fold(self.acc ^ first, K_A) ^ second, K_B) ^ extra;
+--- a/fixed/keys.rs
++++ b/fixed/keys.rs
+@@ -87,2 +86,0 @@
+-/// The second word's domain offset in a portable two-word absorb.
+-pub(crate) const PAIR_X: u64 = KEYS[15];

@@ -353,7 +353,7 @@ assert_eq!(FixedState::new().hash_one(7u32), FixedState::new().hash_one(7u32));
 | Input | Portable build | AES build |
 |---|---|---|
 | Integers | Folded multiply into a 64-bit state | One AES round into a 128-bit state |
-| 0–16 byte slices | Packed words, two folds and a length term | Packed words and length domain, one AES absorption |
+| 0–16 byte slices | Packed words, two independently seeded folds and a length term | Packed words and length domain, one AES absorption |
 | 17–32 byte slices | Two folds plus rotated tail words | Sequential first/last 16-byte absorption |
 | Longer slices | Four independent multiply lanes | Four independent AES lanes, then absorption |
 | Streaming finalization | One folded multiply | Two AES rounds, then low 64 bits |
@@ -369,6 +369,21 @@ lanes retain their extra diffusion before merging. The terminal IRI operation
 uses the sequential AES path at 17–32 bytes and its separately tested folded
 finalizer at other lengths.
 
+For a portable two-word update, let `F(x, k)` XOR the low and high halves
+of the 128-bit product `x * k`. The update is
+`S = F(S XOR first, K_A) XOR F(second XOR PAIR_X, K_B) XOR length_term`.
+The second lane has its own dense offset from the same fixed key schedule.
+Leaving that lane unseeded permits a structured cancellation:
+`F(0, k) = 0` and `F(2^64 - 1, k) = 2^64 - 1` for every nonzero `k`.
+An all-ones high word can then cancel an all-ones word in the next field.
+Seeding both lanes removes that zero/all-ones special case while retaining
+two independent multiplies; constant metadata can still be folded at compile
+time. Successive folds also passed the quality tests, but their dependency
+chain was slower for packed triple keys. The regression tests exercise wide
+integer fields and byte fields on the portable implementation even when the
+host selects AES. The public offsets do not provide resistance to deliberately
+constructed collisions.
+
 RDF blank nodes, short literals and embedded triples pack their typed fields
 into one or two integer blocks. The metadata includes lengths, scope or full
 64-bit datatype identity, language presence and text direction. Packed triple
@@ -379,7 +394,7 @@ Borrowed, stored, global and frozen lookups share the same protocol.
 AES selection is made at compile time. On 32-bit targets (i686, wasm32), the
 portable 128-bit product is built from 32-bit multiplies with identical output.
 Both functions are pinned by their own frozen self-vectors. The portable vectors
-are unchanged; the AES vectors record the accumulator law above. Avalanche,
+record the seeded-lane law; the AES vectors also pin its short-terminal fallback. Avalanche,
 collision and χ² distribution requirements are the same for both paths.
 Hardware width and instruction availability do not establish throughput: compare
 the concrete caller protocols and complete workloads using the maintained

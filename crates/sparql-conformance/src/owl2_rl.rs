@@ -1106,7 +1106,16 @@ pub fn certify(
     let base = format!("http://example.org/w3c-owl2-rl/{}", case.name);
     let premise = parse(&case.premise, &base)?;
     let target = parse(&case.target, &base)?;
-    purrdf_entail::entails(&premise, &target, purrdf_entail::Regime::OwlRl, imports)
+    // `imports` is the corpus's POOL of vendored support documents, keyed by ontology IRI;
+    // the upstream manifest names a case's support documents per case, so a case is handed
+    // exactly the ones its own `owl:imports` closure reaches. Handing every case the whole
+    // pool would be supplying documents its premise never names, which the service
+    // refuses (`EntailError::UnreachedImport`) rather than silently ignoring.
+    let mut own = purrdf_entail::ImportMap::new();
+    for (iri, document) in imports.closure(&premise).documents() {
+        own.insert(iri.clone(), std::sync::Arc::clone(document));
+    }
+    purrdf_entail::entails(&premise, &target, purrdf_entail::Regime::OwlRl, &own)
         .map_err(|e| format!("OWL-RL entailment: {e}"))
 }
 

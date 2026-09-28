@@ -84,6 +84,8 @@ pub(crate) const FIN_M: u64 = KEYS[6];
 pub(crate) const LANE_KEY: [u64; 4] = [KEYS[7], KEYS[8], KEYS[9], KEYS[10]];
 /// The initial values of the four portable lanes.
 pub(crate) const LANE_INIT: [u64; 4] = [KEYS[11], KEYS[12], KEYS[13], KEYS[14]];
+/// The second word's domain offset in a portable two-word absorb.
+pub(crate) const PAIR_X: u64 = KEYS[15];
 /// The AES path's four lane round keys, as `(low, high)` words.
 #[cfg_attr(
     not(all(

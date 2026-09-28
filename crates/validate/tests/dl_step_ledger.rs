@@ -478,9 +478,14 @@ fn every_ledgered_search_costs_exactly_what_it_is_pinned_to() {
             pin.name
         );
 
-        let answer =
-            purrdf_validate::regime::consistency_to_string(&document, pin.step_cap, pin.work_cap)
-                .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
+        let answer = purrdf_validate::regime::consistency_to_string(
+            &document,
+            &[],
+            &[],
+            pin.step_cap,
+            pin.work_cap,
+        )
+        .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
         let certificate = answer.certificate();
         assert_eq!(
             answer.answer(),
@@ -538,6 +543,8 @@ fn the_cardinality_only_control_is_a_distinct_ontology_from_the_both_moved_varia
     let document = as_nquads(cardinality_only);
     let answer = purrdf_validate::regime::consistency_to_string(
         &document,
+        &[],
+        &[],
         cardinality_only.step_cap,
         cardinality_only.work_cap,
     )
@@ -559,6 +566,8 @@ fn the_cardinality_only_control_is_a_distinct_ontology_from_the_both_moved_varia
     let both_moved_document = as_nquads(both_moved);
     let both_moved_answer = purrdf_validate::regime::consistency_to_string(
         &both_moved_document,
+        &[],
+        &[],
         both_moved.step_cap,
         both_moved.work_cap,
     )
@@ -581,9 +590,14 @@ fn every_decided_ledgered_search_stays_far_inside_its_budget() {
             continue;
         }
         let document = as_nquads(pin);
-        let answer =
-            purrdf_validate::regime::consistency_to_string(&document, pin.step_cap, pin.work_cap)
-                .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
+        let answer = purrdf_validate::regime::consistency_to_string(
+            &document,
+            &[],
+            &[],
+            pin.step_cap,
+            pin.work_cap,
+        )
+        .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
         let certificate = answer.certificate();
         let steps = measurement(certificate, "steps");
         let budget = measurement(certificate, "budget");
@@ -610,12 +624,22 @@ fn every_decided_ledgered_search_stays_far_inside_its_budget() {
 fn every_ledgered_search_renders_identically_twice() {
     for pin in LEDGER {
         let document = as_nquads(pin);
-        let first =
-            purrdf_validate::regime::consistency_to_string(&document, pin.step_cap, pin.work_cap)
-                .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
-        let again =
-            purrdf_validate::regime::consistency_to_string(&document, pin.step_cap, pin.work_cap)
-                .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
+        let first = purrdf_validate::regime::consistency_to_string(
+            &document,
+            &[],
+            &[],
+            pin.step_cap,
+            pin.work_cap,
+        )
+        .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
+        let again = purrdf_validate::regime::consistency_to_string(
+            &document,
+            &[],
+            &[],
+            pin.step_cap,
+            pin.work_cap,
+        )
+        .unwrap_or_else(|error| panic!("{}: the ontology reverse-maps: {error}", pin.name));
         assert_eq!(
             first, again,
             "{}: two runs, one rendering — answer AND certificate, every counter included",

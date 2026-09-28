@@ -57,6 +57,7 @@ include = [
     "PurrdfUpdateOutcomeKind",
     "PurrdfPartialKind",
     "PurrdfShaclChangeScopeKind",
+    "PurrdfSrlCheckLevel",
 ]
 
 [enum]

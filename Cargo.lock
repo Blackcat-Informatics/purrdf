@@ -681,6 +681,7 @@ dependencies = [
  "purrdf-sparql-results",
  "purrdf-testkit",
  "purrdf-validate",
+ "purrdf-xsd",
  "serde_json",
  "sha2",
  "structured-zstd",
@@ -941,6 +942,7 @@ dependencies = [
  "proc-macro2",
  "purrdf-alloc-probe",
  "purrdf-core",
+ "purrdf-datalog",
  "purrdf-gts",
  "purrdf-iri",
  "purrdf-jsonschema",
@@ -1081,6 +1083,7 @@ name = "purrdf-validate"
 version = "2.0.2"
 dependencies = [
  "purrdf-core",
+ "purrdf-datalog",
  "purrdf-entail",
  "purrdf-iri",
  "purrdf-rdf",

@@ -153,6 +153,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use crate::guard::{Guard, Negation};
+
 /// One argument position of a clause atom.
 ///
 /// A constant carries the term's **lexical surface**, the same identity the relation
@@ -385,7 +387,7 @@ impl ClauseAtom {
     }
 
     /// Record every variable of this atom into `into`.
-    fn collect_variables(&self, into: &mut BTreeSet<String>) {
+    pub(crate) fn collect_variables(&self, into: &mut BTreeSet<String>) {
         for term in self.terms() {
             if let ClauseTerm::Var(name) = term {
                 into.insert(name.clone());
@@ -551,12 +553,36 @@ pub struct NonDatalogClause {
     clause: usize,
     /// The head form that has no Datalog semantics.
     form: HeadForm,
+    /// Whether the refusal is of the clause's GUARDS rather than its head: a consumer
+    /// that re-derives clauses from their text alone (backward resolution) has no
+    /// meaning for a literal whose meaning is caller code.
+    guarded: bool,
 }
 
 impl NonDatalogClause {
     /// A refusal naming the offending clause and its head form.
     pub fn new(clause: usize, form: HeadForm) -> Self {
-        Self { clause, form }
+        Self {
+            clause,
+            form,
+            guarded: false,
+        }
+    }
+
+    /// A refusal of a clause that carries guard literals or negated conjunctions
+    /// ([`crate::guard`]) — literals whose truth is caller code, which a consumer that
+    /// reads only the clause text cannot decide.
+    pub fn guarded(clause: usize, form: HeadForm) -> Self {
+        Self {
+            clause,
+            form,
+            guarded: true,
+        }
+    }
+
+    /// Whether the refusal is of the clause's guards rather than its head form.
+    pub fn is_guarded(&self) -> bool {
+        self.guarded
     }
 
     /// The clause's index in authored program order.
@@ -572,6 +598,14 @@ impl NonDatalogClause {
 
 impl fmt::Display for NonDatalogClause {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        if self.guarded {
+            return write!(
+                f,
+                "clause {} carries guard literals, whose truth is caller code this consumer \
+                 cannot decide from the clause text",
+                self.clause
+            );
+        }
         write!(
             f,
             "clause {} has {} {} head, which the Datalog evaluator has no semantics for",
@@ -599,6 +633,12 @@ pub struct DlClause {
     /// The head disjunction `C₁ ∨ … ∨ Cₘ`, in authored order. Empty means the head is
     /// `false`; each disjunct is itself a non-empty conjunction.
     head: Vec<HeadDisjunct>,
+    /// The body's guard literals ([`crate::guard`]), in authored order: evaluated after
+    /// the positive atoms have joined, before any negation is decided.
+    guards: Vec<Guard>,
+    /// The body's negated conjunctions ([`crate::guard::Negation`]), in authored order:
+    /// decided after the guards, alongside the negated atoms.
+    negations: Vec<Negation>,
 }
 
 impl DlClause {
@@ -652,7 +692,126 @@ impl DlClause {
             body,
             existentials,
             head,
+            guards: Vec::new(),
+            negations: Vec::new(),
         }
+    }
+
+    /// This clause with `guards` as its guard literals, in authored order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the guards are not SCOPED, which is a construction bug rather than a
+    /// data state — see [`Self::with_negations`] for the full rule, which this checks
+    /// over the guards and every negated conjunction already attached.
+    #[must_use]
+    pub fn with_guards(mut self, guards: Vec<Guard>) -> Self {
+        self.guards = guards;
+        self.assert_scoped();
+        self
+    }
+
+    /// This clause with `negations` as its negated conjunctions, in authored order.
+    ///
+    /// # Panics
+    ///
+    /// Panics if the guards and negations are not SCOPED:
+    ///
+    /// * a body guard's input must be bound by a positive body atom or by an EARLIER
+    ///   body guard's output — a guard runs after the positive join, in authored
+    ///   order, so nothing later can have bound it;
+    /// * a body guard's output must be fresh: bound by no positive body atom and by no
+    ///   earlier guard, or the guard would silently overwrite a join binding;
+    /// * inside a negated conjunction, a guard's input must be bound by the enclosing
+    ///   rule (positive atoms and body guards), by an atom of the group, or by an
+    ///   earlier guard of the group — and a group guard's output must be fresh in the
+    ///   group.
+    #[must_use]
+    pub fn with_negations(mut self, negations: Vec<Negation>) -> Self {
+        self.negations = negations;
+        self.assert_scoped();
+        self
+    }
+
+    /// Check the scoping rule documented on [`Self::with_negations`].
+    fn assert_scoped(&self) {
+        let mut bound = BTreeSet::new();
+        for atom in self.body.iter().filter(|atom| !atom.negated) {
+            atom.collect_variables(&mut bound);
+        }
+        for guard in &self.guards {
+            for input in guard.inputs() {
+                assert!(
+                    bound.contains(input),
+                    "guard {:?} reads {input}, which no positive body atom or earlier guard binds",
+                    guard.name()
+                );
+            }
+            for output in guard.outputs() {
+                assert!(
+                    bound.insert(output.clone()),
+                    "guard {:?} binds {output}, which the rule already binds",
+                    guard.name()
+                );
+            }
+        }
+        for negation in &self.negations {
+            let mut scope = bound.clone();
+            for atom in negation.atoms() {
+                atom.collect_variables(&mut scope);
+            }
+            for guard in negation.guards() {
+                for input in guard.inputs() {
+                    assert!(
+                        scope.contains(input),
+                        "negated-conjunction guard {:?} reads {input}, which neither the rule \
+                         nor the group binds before it",
+                        guard.name()
+                    );
+                }
+                for output in guard.outputs() {
+                    assert!(
+                        scope.insert(output.clone()),
+                        "negated-conjunction guard {:?} binds {output}, which is already bound",
+                        guard.name()
+                    );
+                }
+            }
+        }
+    }
+
+    /// The body's guard literals, in authored order.
+    pub fn guards(&self) -> &[Guard] {
+        &self.guards
+    }
+
+    /// The body's negated conjunctions, in authored order.
+    pub fn negations(&self) -> &[Negation] {
+        &self.negations
+    }
+
+    /// Whether the clause carries any guard literal or negated conjunction — any body
+    /// literal whose truth is caller code rather than the relation store.
+    pub fn is_guarded(&self) -> bool {
+        !self.guards.is_empty() || !self.negations.is_empty()
+    }
+
+    /// Whether some body guard reads the evaluation model ([`crate::guard::GuardReads`]).
+    pub fn reads_model(&self) -> bool {
+        self.guards.iter().any(Guard::reads_model)
+    }
+
+    /// Every variable the positive body atoms and the body guards' outputs bind — the
+    /// variables a head may carry.
+    pub fn bound_variables(&self) -> BTreeSet<String> {
+        let mut bound = BTreeSet::new();
+        for atom in self.body.iter().filter(|atom| !atom.negated) {
+            atom.collect_variables(&mut bound);
+        }
+        for guard in &self.guards {
+            bound.extend(guard.outputs().iter().cloned());
+        }
+        bound
     }
 
     /// A Datalog clause: one head atom, no existential.

@@ -40,7 +40,15 @@ const MAX_LINKML_YAML_NODES: usize = 1_000_000;
 const MAX_LINKML_STRING_BYTES: usize = 16 * 1024 * 1024;
 pub(super) const MAX_LINKML_SOURCE_KEY_BYTES: usize = 1024 * 1024;
 
-const RESERVED_JSONLD_SLOTS: &[&str] = &["@annotation", "@id", "@language", "@type", "@value"];
+const RESERVED_JSONLD_SLOTS: &[&str] = &[
+    "@annotation",
+    "@direction",
+    "@id",
+    "@language",
+    "@list",
+    "@type",
+    "@value",
+];
 
 /// Policy for a JSON property that cannot be used directly as a LinkML slot name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]

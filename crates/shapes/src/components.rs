@@ -22,15 +22,26 @@ use ::purrdf::{FastMap, FastSet};
 use purrdf_sparql_eval::Prebinding;
 
 use crate::data::{GraphFilter, native_quads};
+use crate::error::{IllFormedDeclaration, PrebindingViolation, RuleViolation as Violation};
 use crate::model::{rdf, rdfs, sh, xsd};
 use crate::path;
 use crate::report::{Severity, ValidationResult};
-use crate::shapes::{ComponentValidator, Path, build_prefix_header};
+use crate::shapes::prefixes::PrefixResolver;
+use crate::shapes::{ComponentValidator, Path};
 use crate::sparql::{run_ask_with_shacl_prebinding_view, run_select_with_shacl_prebinding_view};
-use crate::term::{NamedNode, Term, term_value_to_native};
+use crate::term::{Literal, NamedNode, Term, term_value_to_native};
+use crate::validator_alternatives::{AlternativeValidator, ValidatorLanguage};
+
+/// `sh:JSValidator`, the SHACL JavaScript Extensions validator class. Not a SHACL 1.2
+/// term, so it has no `model::sh` constant; it is named here so the refusal of a
+/// validator of that class says what it is. It is not a validator of any attachment:
+/// "The values of sh:validator must be ASK-based validators" and the values of
+/// `sh:nodeValidator` / `sh:propertyValidator` "must be SELECT-based validators"
+/// (SHACL 1.2 SPARQL Extensions, "Summary of Syntax Rules").
+const JS_VALIDATOR: &str = "http://www.w3.org/ns/shacl#JSValidator";
 
 /// Discriminator for a SPARQL validator's query form.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub(crate) enum ValidatorKind {
     /// An `ASK` query: a result of `true` means the focus node/value is valid.
     Ask,
@@ -45,10 +56,42 @@ pub(crate) struct Validator {
     pub kind: ValidatorKind,
     /// Full query text with any `PREFIX` header already prepended.
     pub query_text: String,
-    /// Optional human-readable message declared on the validator node.
-    pub message: Option<String>,
+    /// The `sh:message` values declared on the validator node.
+    pub messages: Vec<Literal>,
     /// Optional severity declared on the validator node.
     pub severity: Option<Severity>,
+    /// The result annotations declared on the validator node.
+    pub annotations: Vec<crate::shapes::ResultAnnotation>,
+    /// The validator node itself.
+    pub node: Term,
+    /// The attachment it is declared under (`sh:nodeValidator`, `sh:propertyValidator`
+    /// or `sh:validator`).
+    pub attachment: &'static str,
+    /// The pre-binding restriction its query violates, when it violates one. A
+    /// violation is not a syntax error of the declaration: SHACL 1.2 SPARQL Extensions,
+    /// Appendix A requires a failure only for a query "executed with pre-bound
+    /// variables", so it is refused where a shape selects the validator (see
+    /// `Parser::parse_constraints`) and listed by `lint` otherwise.
+    pub prebinding: Option<String>,
+}
+
+impl Validator {
+    /// The declaration this validator is, as refusals and `lint` render it.
+    pub(crate) fn declaration(&self, component: &str) -> String {
+        custom_validator_declaration(&self.node, component, self.attachment)
+    }
+}
+
+/// How a validator of the custom component `component` declared under `attachment` is
+/// named in a refusal or a `lint` entry.
+fn custom_validator_declaration(node: &Term, component: &str, attachment: &str) -> String {
+    format!("validator {node} of the constraint component <{component}>, via <{attachment}>")
+}
+
+/// How a validator of the built-in component `component` declared under `attachment` is
+/// named in a refusal or a `lint` entry.
+fn builtin_validator_declaration(node: &Term, component: &str, attachment: &str) -> String {
+    format!("validator {node} of the built-in component <{component}>, via <{attachment}>")
 }
 
 /// Declaration of a single `sh:Parameter` for a constraint component.
@@ -75,8 +118,8 @@ pub(crate) struct Component {
     pub property_validators: Vec<Validator>,
     /// Generic validators (`sh:validator`).
     pub validators: Vec<Validator>,
-    /// Optional human-readable message declared on the component node.
-    pub message: Option<String>,
+    /// The `sh:message` values declared on the component node.
+    pub messages: Vec<Literal>,
     /// Optional severity declared on the component node.
     pub severity: Option<Severity>,
 }
@@ -92,6 +135,18 @@ pub(crate) struct ComponentRegistry {
     pub by_parameter_path: FastMap<String, NamedNode>,
     /// Component IRI string → component definition.
     pub components: FastMap<String, Component>,
+    /// Every validator declared for a built-in component — an alternative its native
+    /// implementation supersedes — sorted. See [`crate::validator_alternatives`].
+    pub alternatives: Vec<AlternativeValidator>,
+    /// Every syntax-rule violation of a component declaration, of its parameters or of
+    /// its validators, built-in and custom alike. Collected rather than raised one at a
+    /// time, so the refusal names every violation in the graph (see
+    /// [`crate::error::IllFormedShapesGraph`]).
+    pub ill_formed: Vec<IllFormedDeclaration>,
+    /// The pre-binding violations of the validators declared for built-in components.
+    /// The native implementation supersedes every such validator, so none of them ever
+    /// executes and none refuses anything: `lint` lists them as unexecuted.
+    pub alternative_prebinding: Vec<PrebindingViolation>,
 }
 
 impl ComponentRegistry {
@@ -102,21 +157,37 @@ impl ComponentRegistry {
     /// class is `sh:ConstraintComponent` or a subclass thereof. Each discovered
     /// component's `sh:parameter` declarations and `sh:nodeValidator` /
     /// `sh:propertyValidator` / `sh:validator` SPARQL validators are parsed and
-    /// validated (query must parse to the declared form and satisfy SHACL-SPARQL
-    /// pre-binding restrictions). Any malformed component is a hard error.
+    /// checked against the syntax rules of SHACL 1.2 SPARQL Extensions. Every violation,
+    /// on a built-in or a custom component, used by a shape or not, is collected into
+    /// [`Self::ill_formed`]; the caller refuses the shapes graph with all of them (see
+    /// [`Self::parse`]). A validator query that violates a pre-binding restriction is
+    /// NOT ill-formed: the violation is recorded on the validator
+    /// ([`Validator::prebinding`]) or, for a built-in's, in
+    /// [`Self::alternative_prebinding`], and judged where the query would execute.
     ///
     /// # Errors
     ///
-    /// Returns `Err(String)` when a component, parameter, or validator is
-    /// malformed or when a validator query violates the pre-binding restrictions.
-    pub(crate) fn parse(
+    /// Returns `Err(String)` for a refusal that is not a syntax-rule violation of a
+    /// declaration: a component declaration naming a built-in function, a declaration
+    /// of a built-in component that contradicts its signature, a malformed
+    /// `sh:message`.
+    ///
+    /// A value of an attachment that is not a SPARQL validator of the attachment's query
+    /// form — a SHACL-JS `sh:JSValidator` included — is a syntax-rule violation like any
+    /// other, collected into [`Self::ill_formed`]. So is one declared by a subject the
+    /// registry does not read as a component: the class rules name the attachment, not
+    /// its subject.
+    pub(crate) fn parse_collecting(
         data: &RdfDataset,
-        doc_prefixes: &[(String, String)],
+        prefixes: &PrefixResolver,
     ) -> Result<Self, String> {
         let rdf_type = Term::NamedNode(NamedNode::from(rdf::TYPE));
         let mut component_iris: Vec<String> = Vec::new();
         let mut seen: FastSet<String> = FastSet::default();
         let mut subclass_memo: FastMap<(String, String), bool> = FastMap::default();
+        let mut builtin_alternatives: Vec<AlternativeValidator> = Vec::new();
+        let mut ill_formed: Vec<IllFormedDeclaration> = Vec::new();
+        let mut alternative_prebinding: Vec<PrebindingViolation> = Vec::new();
 
         for (subject, _pred, object) in
             native_quads(data, None, Some(&rdf_type), None, GraphFilter::AnyGraph)
@@ -135,26 +206,106 @@ impl ComponentRegistry {
             let Term::NamedNode(component) = subject else {
                 continue;
             };
-            // Built-in components already have native parsing and evaluation.
-            // Importing their RDF declarations must not add a second dispatch.
-            if is_native_component(component.as_str()) {
+            if !seen.insert(component.as_str().to_owned()) {
                 continue;
             }
-            if seen.insert(component.as_str().to_owned()) {
-                component_iris.push(component.as_str().to_owned());
+            // The linker (`crate::spec`): a declaration of a component the spec
+            // symbol table knows is a SIGNATURE, bound against the table rather than
+            // registered as a custom component. A native component's declaration
+            // binds and registers nothing; the validators it declares are
+            // alternative implementations the native one supersedes, checked for
+            // well-formedness, recorded, and never run; a body, a query or a
+            // semantic `sh:` statement on it is refused; a declaration of a
+            // built-in FUNCTION IRI is a kind mismatch. Every spec component is
+            // evaluated natively, so none is registered as a custom component.
+            crate::spec::refuse_component_declared_function(component.as_str())?;
+            if let Some(row) = crate::spec::component(component.as_str()) {
+                crate::spec::bind_spec_component(data, row)?;
+                let component_term = Term::NamedNode(component.clone());
+                // An alternative is never run, but it must still be a well-formed
+                // validator: "The value of sh:ask must be a valid SPARQL ASK query"
+                // (likewise sh:select), under the parameter names the built-in's
+                // signature pre-binds. The syntax rules hold whether or not anything
+                // runs the validator, so a violation is collected like a custom
+                // component's. A pre-binding violation is not a syntax violation, and
+                // an alternative never executes, so it is recorded for `lint` and
+                // refuses nothing. The parse resolves no function, so a query calling
+                // a function this engine does not have is well-formed and loads.
+                let param_names: Vec<String> = row
+                    .params
+                    .iter()
+                    .map(|param| sparql_local_name(param.path))
+                    .collect();
+                for (attachment, validator, kind) in
+                    declared_validators(data, &component_term, &mut subclass_memo)
+                {
+                    let declaration =
+                        builtin_validator_declaration(&validator, component.as_str(), attachment);
+                    let language = match kind {
+                        Ok(kind) => {
+                            match parse_validator(
+                                data,
+                                prefixes,
+                                &component_term,
+                                &validator,
+                                attachment,
+                                &param_names,
+                                kind,
+                            ) {
+                                Ok(parsed) => {
+                                    if let Some(message) = parsed.prebinding {
+                                        alternative_prebinding.push(PrebindingViolation::new(
+                                            format!(
+                                                "{declaration}, which never executes: the \
+                                                 native implementation supersedes it"
+                                            ),
+                                            message,
+                                        ));
+                                    }
+                                }
+                                Err((rule, message)) => ill_formed.push(IllFormedDeclaration::new(
+                                    declaration,
+                                    rule,
+                                    message,
+                                )),
+                            }
+                            match kind {
+                                ValidatorKind::Ask => ValidatorLanguage::SparqlAsk,
+                                ValidatorKind::Select => ValidatorLanguage::SparqlSelect,
+                            }
+                        }
+                        Err((rule, message)) => {
+                            ill_formed.push(IllFormedDeclaration::new(declaration, rule, message));
+                            continue;
+                        }
+                    };
+                    builtin_alternatives.push(AlternativeValidator {
+                        component: component.as_str().to_owned(),
+                        attachment: attachment.to_owned(),
+                        validator,
+                        language,
+                    });
+                }
+                continue;
             }
+            component_iris.push(component.as_str().to_owned());
         }
         component_iris.sort();
 
-        let mut registry = Self::default();
+        let mut registry = Self {
+            alternatives: builtin_alternatives,
+            alternative_prebinding,
+            ..Self::default()
+        };
         for component_iri in component_iris {
             let component_term = Term::NamedNode(NamedNode::from(component_iri.as_str()));
             let component = parse_component(
                 data,
-                doc_prefixes,
+                prefixes,
                 &component_term,
                 &component_iri,
                 &mut subclass_memo,
+                &mut ill_formed,
             )?;
             for param in &component.parameters {
                 registry
@@ -164,60 +315,75 @@ impl ComponentRegistry {
             let id = component.id.as_str().to_owned();
             registry.components.insert(id, component);
         }
+        // The class rules constrain every value of an attachment, whatever declares it:
+        // a subject read above as a component was judged there, and every other subject
+        // of `sh:validator`, `sh:nodeValidator` or `sh:propertyValidator` is judged here,
+        // so no ill-formed validator loads because its owner is not a component.
+        let mut owners: Vec<Term> = Vec::new();
+        for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
+            let predicate = Term::NamedNode(NamedNode::from(attachment));
+            for (subject, _, _) in
+                native_quads(data, None, Some(&predicate), None, GraphFilter::AnyGraph)
+            {
+                if !matches!(&subject, Term::NamedNode(iri) if seen.contains(iri.as_str())) {
+                    owners.push(subject);
+                }
+            }
+        }
+        crate::term::sort_terms_canonical(&mut owners);
+        owners.dedup();
+        for owner in owners {
+            for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
+                let mut nodes = objects_of(data, &owner, attachment);
+                crate::term::sort_terms_canonical(&mut nodes);
+                for node in nodes {
+                    if let Err((rule, message)) = attachment_class(
+                        data,
+                        &owner.to_string(),
+                        attachment,
+                        &node,
+                        &mut subclass_memo,
+                    ) {
+                        ill_formed.push(IllFormedDeclaration::new(
+                            format!("validator {node} of {owner}, via <{attachment}>"),
+                            rule,
+                            message,
+                        ));
+                    }
+                }
+            }
+        }
+        registry.alternatives.sort();
+        registry.alternative_prebinding.sort();
+        registry.alternative_prebinding.dedup();
+        registry.ill_formed = ill_formed;
         Ok(registry)
+    }
+
+    /// [`Self::parse_collecting`], refusing the registry when any declaration in it
+    /// violates a syntax rule — for a caller that reads the registry alone. A parse of
+    /// the whole shapes graph instead joins [`Self::ill_formed`] with the violations of
+    /// the rest of its declarations before refusing (see `Parser::parse_with_expressions`).
+    ///
+    /// # Errors
+    ///
+    /// [`Self::parse_collecting`]'s own, and every syntax-rule violation, as the
+    /// rendered [`crate::error::IllFormedShapesGraph`].
+    pub(crate) fn parse(data: &RdfDataset, prefixes: &PrefixResolver) -> Result<Self, String> {
+        let registry = Self::parse_collecting(data, prefixes)?;
+        match crate::error::IllFormedShapesGraph::from_violations(registry.ill_formed.clone()) {
+            Some(refusal) => Err(refusal.to_string()),
+            None => Ok(registry),
+        }
     }
 }
 
-/// Components executed by the native SHACL engines, even when their vocabulary
-/// declarations occur in the input dataset. Custom IRIs in the SHACL namespace
-/// remain discoverable; this list identifies implementations, not namespaces.
-fn is_native_component(iri: &str) -> bool {
-    matches!(
-        iri,
-        "http://www.w3.org/ns/shacl#PropertyConstraintComponent"
-            | sh::SPARQL_CONSTRAINT_COMPONENT
-            | sh::EXPRESSION_CONSTRAINT_COMPONENT
-            | sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT
-            | sh::MIN_COUNT_CONSTRAINT_COMPONENT
-            | sh::MAX_COUNT_CONSTRAINT_COMPONENT
-            | sh::CLASS_CONSTRAINT_COMPONENT
-            | sh::DATATYPE_CONSTRAINT_COMPONENT
-            | sh::NODE_KIND_CONSTRAINT_COMPONENT
-            | sh::IN_CONSTRAINT_COMPONENT
-            | sh::HAS_VALUE_CONSTRAINT_COMPONENT
-            | sh::PATTERN_CONSTRAINT_COMPONENT
-            | sh::MIN_LENGTH_CONSTRAINT_COMPONENT
-            | sh::UNIQUE_LANG_CONSTRAINT_COMPONENT
-            | sh::MIN_INCLUSIVE_CONSTRAINT_COMPONENT
-            | sh::MAX_INCLUSIVE_CONSTRAINT_COMPONENT
-            | sh::MIN_EXCLUSIVE_CONSTRAINT_COMPONENT
-            | sh::MAX_EXCLUSIVE_CONSTRAINT_COMPONENT
-            | sh::AND_CONSTRAINT_COMPONENT
-            | sh::OR_CONSTRAINT_COMPONENT
-            | sh::XONE_CONSTRAINT_COMPONENT
-            | sh::NODE_CONSTRAINT_COMPONENT
-            | sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT
-            | sh::MAX_LENGTH_CONSTRAINT_COMPONENT
-            | sh::NOT_CONSTRAINT_COMPONENT
-            | sh::LANGUAGE_IN_CONSTRAINT_COMPONENT
-            | sh::CLOSED_CONSTRAINT_COMPONENT
-            | sh::EQUALS_CONSTRAINT_COMPONENT
-            | sh::DISJOINT_CONSTRAINT_COMPONENT
-            | sh::LESS_THAN_CONSTRAINT_COMPONENT
-            | sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT
-            | sh::QUALIFIED_MIN_COUNT_CONSTRAINT_COMPONENT
-            | sh::QUALIFIED_MAX_COUNT_CONSTRAINT_COMPONENT
-    )
-}
-
-/// Map an `sh:severity` object term to a [`Severity`]: the three built-in
+/// Map an `sh:severity` object term to a [`Severity`]: the five built-in
 /// `sh:` severities map to their variants, any OTHER IRI is preserved verbatim
 /// (SHACL allows custom severity IRIs), and a non-IRI object yields `None`.
 pub(crate) fn severity_from_term(t: &Term) -> Option<Severity> {
     match t {
-        Term::NamedNode(n) => {
-            Some(Severity::from_iri(n.as_str()).unwrap_or_else(|| Severity::Other(n.clone())))
-        }
+        Term::NamedNode(n) => Some(Severity::from_iri_open(n.as_str())),
         _ => None,
     }
 }
@@ -251,6 +417,22 @@ pub(crate) fn substitute_message_templates(msg: &str, bindings: &[(String, Term)
     .into_owned()
 }
 
+/// Render every message of a result against `bindings` (SHACL-SPARQL §5.3.3),
+/// each keeping its datatype, language tag and base direction, in canonical order.
+pub(crate) fn render_message_templates(
+    messages: &[Literal],
+    bindings: &[(String, Term)],
+) -> Vec<Literal> {
+    crate::report::canonical_messages(
+        messages
+            .iter()
+            .map(|message| {
+                message.with_value(substitute_message_templates(message.value(), bindings))
+            })
+            .collect(),
+    )
+}
+
 /// Evaluate an ASK validator for a custom constraint component.
 ///
 /// Each value node is substituted as `$value` / `?value` alongside `$this` and the
@@ -268,7 +450,8 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
     source_shape: &Term,
     path: Option<&Path>,
     severity: &Severity,
-    message: Option<&String>,
+    messages: &[Literal],
+    annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -338,7 +521,7 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
     // The violating branch's template buffer, hoisted for the same reason: its
     // parameter half does not vary, so it is filled once and only the trailing
     // `value` entry is replaced.
-    let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
+    let mut template_bindings: Vec<(String, Term)> = if !messages.is_empty() {
         let mut buffer = Vec::with_capacity(bindings.len() + 1);
         buffer.extend_from_slice(bindings);
         buffer.push(("value".to_owned(), focus.clone()));
@@ -349,12 +532,27 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
     // One reporting step, called from whichever door computed the verdict, so the two
     // doors cannot grow two different notions of what a violation looks like.
     let mut report = |v: &Term, results: &mut Vec<ValidationResult>| {
-        let message = message.map(|m| {
+        let messages = if messages.is_empty() {
+            Vec::new()
+        } else {
             let slot = template_bindings
                 .last_mut()
                 .expect("the template buffer is non-empty whenever a message is present");
             slot.1 = v.clone();
-            substitute_message_templates(m, &template_bindings)
+            render_message_templates(messages, &template_bindings)
+        };
+        // SHACL 1.2 SPARQL Extensions, "Validation with SPARQL-based Constraint
+        // Components": an ASK validator's solution for a failing value node "consists
+        // of the bindings ($this, focus node) and ($value, v)", and the result is
+        // produced from it as from a SELECT solution — so its annotations read
+        // `this`, `value` and, pre-bound beside them, the component's parameters.
+        let annotations = crate::result_annotations::annotate(annotations, |name| match name {
+            "this" => Some(focus.clone()),
+            "value" => Some(v.clone()),
+            _ => bindings
+                .iter()
+                .find(|(parameter, _)| parameter == name)
+                .map(|(_, value)| value.clone()),
         });
         results.push(ValidationResult {
             focus_node: focus.clone(),
@@ -364,11 +562,13 @@ pub(crate) fn eval_ask_validator<D: DatasetView + Sync + crate::sparql::FocusGra
             source_constraint_component: component.clone(),
             source_shape: source_shape.clone(),
             severity: severity.clone(),
-            message,
+            messages,
             source_box_roles: vec![],
             path_box_roles: vec![],
             result_box_roles: vec![],
             attributions: vec![],
+            details: vec![],
+            annotations,
         });
     };
 
@@ -440,7 +640,8 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
     source_shape: &Term,
     path: Option<&Path>,
     severity: &Severity,
-    message: Option<&String>,
+    messages: &[Literal],
+    annotations: &[crate::shapes::ResultAnnotation],
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
@@ -465,13 +666,15 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
         let this_index = solutions.column("this");
         let path_index = solutions.column("path");
         let value_index = solutions.column("value");
+        let annotation_columns =
+            crate::sparql::annotation_columns(annotations, |name| solutions.column(name));
 
         let mut results = Vec::with_capacity(solutions.len());
         // §5.3.3 message templating is the ONLY reader of the row's other columns,
         // so the buffer is allocated — and the columns are converted — only when
         // there is a message to render. A validator with none reads exactly the
         // three columns it maps onto the result.
-        let mut template_bindings: Vec<(String, Term)> = if message.is_some() {
+        let mut template_bindings: Vec<(String, Term)> = if !messages.is_empty() {
             Vec::with_capacity(solutions.variables().len() + bindings.len())
         } else {
             Vec::new()
@@ -488,12 +691,20 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
                     None => (path_term.clone(), path_structure.clone()),
                 };
 
+            // SHACL 1.2 SPARQL Extensions, "Validation with SPARQL-based Constraint
+            // Components": "The production rules for the validation results are
+            // identical to those for SPARQL-based constraints", whose `sh:value` is
+            // "The binding for the variable value", else "The value node". A node
+            // shape's one value node is its focus node.
             let value = value_index
                 .and_then(|i| solutions.cell(row, i))
                 .as_ref()
-                .map(term_value_to_native);
+                .map(term_value_to_native)
+                .or_else(|| path.is_none().then(|| focus.clone()));
 
-            let message = message.map(|m| {
+            let messages = if messages.is_empty() {
+                Vec::new()
+            } else {
                 // The row's own bindings first, so a projected variable outranks a
                 // parameter of the same name — the precedence this has always had.
                 template_bindings.clear();
@@ -508,7 +719,25 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
                         template_bindings.push((name.clone(), value.clone()));
                     }
                 }
-                substitute_message_templates(m, &template_bindings)
+                render_message_templates(messages, &template_bindings)
+            };
+            // SHACL 1.2 SPARQL Extensions, "Annotation Properties": the solution's
+            // binding of each annotation's variable — the pre-bound `$this` and
+            // parameters included, as for message templates — or else its defaults.
+            let annotations = crate::result_annotations::annotate(annotations, |name| {
+                annotation_columns
+                    .iter()
+                    .find(|(variable, _)| *variable == name)
+                    .and_then(|(_, column)| column.and_then(|i| solutions.cell(row, i)))
+                    .as_ref()
+                    .map(term_value_to_native)
+                    .or_else(|| (name == "this").then(|| focus.clone()))
+                    .or_else(|| {
+                        bindings
+                            .iter()
+                            .find(|(parameter, _)| parameter == name)
+                            .map(|(_, value)| value.clone())
+                    })
             });
 
             results.push(ValidationResult {
@@ -519,11 +748,13 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
                 source_constraint_component: component.clone(),
                 source_shape: source_shape.clone(),
                 severity: severity.clone(),
-                message,
+                messages,
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
                 attributions: vec![],
+                details: vec![],
+                annotations,
             });
         }
         Ok(results)
@@ -665,8 +896,15 @@ fn is_subclass_of(
     result
 }
 
-/// Determine the validator kind from its `rdf:type` declarations, respecting
-/// subclasses of `sh:SPARQLAskValidator` and `sh:SPARQLSelectValidator`.
+/// The query form `validator`'s `rdf:type` declarations make it, respecting subclasses
+/// of `sh:SPARQLAskValidator` and `sh:SPARQLSelectValidator`.
+///
+/// # Errors
+///
+/// A validator typed as both ASK and SELECT, and one typed as neither — a SHACL-JS
+/// `sh:JSValidator` among them, which is named as such: SHACL 1.2 SPARQL Extensions
+/// admits only ASK-based validators as values of `sh:validator` and SELECT-based ones as
+/// values of `sh:nodeValidator` and `sh:propertyValidator`.
 fn validator_kind(
     data: &RdfDataset,
     validator: &Term,
@@ -674,94 +912,206 @@ fn validator_kind(
 ) -> Result<ValidatorKind, String> {
     let mut is_ask = false;
     let mut is_select = false;
+    let mut is_js = false;
     for q in objects_of(data, validator, rdf::TYPE) {
         let Term::NamedNode(class) = q else {
             continue;
         };
-        if is_subclass_of(data, class.as_str(), sh::SPARQL_ASK_VALIDATOR, memo) {
-            is_ask = true;
-        }
-        if is_subclass_of(data, class.as_str(), sh::SPARQL_SELECT_VALIDATOR, memo) {
-            is_select = true;
-        }
+        is_ask |= is_subclass_of(data, class.as_str(), sh::SPARQL_ASK_VALIDATOR, memo);
+        is_select |= is_subclass_of(data, class.as_str(), sh::SPARQL_SELECT_VALIDATOR, memo);
+        is_js |= is_subclass_of(data, class.as_str(), JS_VALIDATOR, memo);
     }
-    if is_ask && is_select {
-        return Err(format!(
+    match (is_ask, is_select) {
+        (true, true) => Err(format!(
             "validator {validator} is typed as both ASK and SELECT"
-        ));
+        )),
+        (true, false) => Ok(ValidatorKind::Ask),
+        (false, true) => Ok(ValidatorKind::Select),
+        (false, false) if is_js => Err(format!(
+            "validator {validator} is a sh:JSValidator of the SHACL JavaScript Extensions, \
+             which is not a SPARQL validator: it must be typed as sh:SPARQLAskValidator or \
+             sh:SPARQLSelectValidator (or a subclass)"
+        )),
+        (false, false) => Err(format!(
+            "validator {validator} must be typed as sh:SPARQLAskValidator or \
+             sh:SPARQLSelectValidator (or a subclass)"
+        )),
     }
-    if is_ask {
-        return Ok(ValidatorKind::Ask);
+}
+
+/// The syntax rule that makes the values of `attachment` validators of one form:
+/// `nodeValidator-class`, `propertyValidator-class` or `validator-class` (SHACL 1.2
+/// SPARQL Extensions, "Summary of Syntax Rules").
+fn class_rule(attachment: &str) -> &'static str {
+    match attachment {
+        sh::NODE_VALIDATOR => "nodeValidator-class",
+        sh::PROPERTY_VALIDATOR => "propertyValidator-class",
+        _ => "validator-class",
     }
-    if is_select {
-        return Ok(ValidatorKind::Select);
+}
+
+/// Every validator `component` declares, as `(attachment, validator, kind)` in
+/// attachment order and canonical term order within one.
+///
+/// A kind is a [`Violation`] of the attachment's class rule for a validator
+/// [`validator_kind`] refuses, and for a SPARQL validator whose query form is not the
+/// one its attachment takes: "The values of sh:nodeValidator must be SELECT-based
+/// validators", "The values of sh:propertyValidator must be SELECT-based validators",
+/// "The values of sh:validator must be ASK-based validators" (SHACL 1.2 SPARQL
+/// Extensions). A SHACL-JS `sh:JSValidator` is judged by the same rules: it is neither
+/// ASK- nor SELECT-based, so it is a violation under every attachment.
+fn declared_validators(
+    data: &RdfDataset,
+    component: &Term,
+    memo: &mut FastMap<(String, String), bool>,
+) -> Vec<(&'static str, Term, Result<ValidatorKind, Violation>)> {
+    let mut out = Vec::new();
+    for attachment in [sh::NODE_VALIDATOR, sh::PROPERTY_VALIDATOR, sh::VALIDATOR] {
+        let mut nodes = objects_of(data, component, attachment);
+        crate::term::sort_terms_canonical(&mut nodes);
+        for node in nodes {
+            let kind = attachment_class(
+                data,
+                &format!("component {component}"),
+                attachment,
+                &node,
+                memo,
+            );
+            out.push((attachment, node, kind));
+        }
     }
-    Err(format!(
-        "validator {validator} must be typed as sh:SPARQLAskValidator or \
-         sh:SPARQLSelectValidator (or a subclass)"
+    out
+}
+
+/// `node`'s query form, judged as a value of `attachment` declared by `owner` (rendered
+/// for the message): the [`Violation`] of the attachment's class rule when
+/// [`validator_kind`] refuses it or its form is not the one the attachment takes.
+fn attachment_class(
+    data: &RdfDataset,
+    owner: &str,
+    attachment: &'static str,
+    node: &Term,
+    memo: &mut FastMap<(String, String), bool>,
+) -> Result<ValidatorKind, Violation> {
+    let expects_ask = attachment == sh::VALIDATOR;
+    let form = validator_kind(data, node, memo).map_err(|e| {
+        (
+            Some(class_rule(attachment)),
+            format!("{owner} validator {node}: {e}"),
+        )
+    })?;
+    if matches!(form, ValidatorKind::Ask) == expects_ask {
+        return Ok(form);
+    }
+    Err((
+        Some(class_rule(attachment)),
+        format!(
+            "{owner} {attachment} requires {} validators, and {node} is {form:?}",
+            if expects_ask { "ASK" } else { "SELECT" },
+        ),
     ))
 }
 
-/// Whether `name` is a legal SPARQL VARNAME and not one of the reserved names
-/// banned for SHACL-SPARQL parameter bindings.
+/// Whether `name` is a SPARQL `VARNAME` and not one of the reserved names banned
+/// for SHACL-SPARQL parameter bindings.
+///
+/// `VARNAME` is the grammar's production, Unicode included — `ex:größe` binds
+/// `?größe` and `ex:2d` binds `?2d` — so the answer is the SPARQL lexer's own.
 fn is_valid_varname(name: &str) -> bool {
-    const BANNED: &[&str] = &["this", "path", "PATH", "value"];
-    if BANNED.contains(&name) {
-        return false;
-    }
-    let mut chars = name.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_alphabetic() && first != '_' {
-        return false;
-    }
-    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+    !is_reserved_parameter_name(name) && purrdf_sparql_algebra::lexer::is_varname(name)
 }
 
-/// Parse a single SPARQL validator node attached to a component.
+/// Whether `name` is one SHACL 1.2 SPARQL Extensions reserves: "Parameter names must not
+/// be one of the following: this, path, PATH, value." (`parameter-name-not-in`).
+fn is_reserved_parameter_name(name: &str) -> bool {
+    const RESERVED: &[&str] = &["this", "path", "PATH", "value"];
+    RESERVED.contains(&name)
+}
+
+/// Parse a single SPARQL validator node, of query form `kind`, declared under
+/// `attachment` of a component.
+///
+/// # Errors
+///
+/// The syntax-rule [`Violation`] of the declaration. A pre-binding violation is not
+/// one: it is returned on the parsed validator ([`Validator::prebinding`]).
 fn parse_validator(
     data: &RdfDataset,
-    doc_prefixes: &[(String, String)],
+    prefixes: &PrefixResolver,
     component: &Term,
     validator: &Term,
+    attachment: &'static str,
     param_names: &[String],
-    subclass_memo: &mut FastMap<(String, String), bool>,
-) -> Result<Validator, String> {
+    kind: ValidatorKind,
+) -> Result<Validator, Violation> {
     let component_iri = match component {
         Term::NamedNode(n) => n.as_str(),
-        _ => return Err(format!("component {component} is not a named node")),
+        _ => return Err((None, format!("component {component} is not a named node"))),
     };
-    let kind = validator_kind(data, validator, subclass_memo)
-        .map_err(|e| format!("component {component_iri} validator {validator}: {e}"))?;
+    let (query_rule, count_rule, datatype_rule) = match kind {
+        ValidatorKind::Ask => ("ask-sparql", "ask-count", "ask-datatype"),
+        ValidatorKind::Select => (
+            "select-query-valid",
+            "SPARQLSelectValidator-select-count",
+            "select-query-valid",
+        ),
+    };
 
     let query_pred = match kind {
         ValidatorKind::Ask => sh::ASK,
         ValidatorKind::Select => sh::SELECT,
     };
+    // A validator typed for one query form and carrying the other's query would
+    // have that query silently ignored.
+    let other_pred = match kind {
+        ValidatorKind::Ask => sh::SELECT,
+        ValidatorKind::Select => sh::ASK,
+    };
+    if !objects_of(data, validator, other_pred).is_empty() {
+        // No numbered rule forbids the second query; it is refused because a
+        // validator of this form would silently never run it.
+        return Err((
+            None,
+            format!(
+                "component {component_iri} validator {validator} is declared as {kind:?} but \
+                 also carries <{other_pred}>, which a {kind:?} validator never runs"
+            ),
+        ));
+    }
     let raw_queries = objects_of(data, validator, query_pred);
     let raw_query = match raw_queries.as_slice() {
         [Term::Literal(literal)] if literal.datatype_str() == xsd::STRING => literal.value(),
-        _ => {
-            return Err(format!(
-                "component {component_iri} validator {validator} must have exactly one {} xsd:string literal",
-                match kind {
-                    ValidatorKind::Ask => "sh:ask",
-                    ValidatorKind::Select => "sh:select",
-                }
+        values => {
+            return Err((
+                Some(if values.len() == 1 {
+                    datatype_rule
+                } else {
+                    count_rule
+                }),
+                format!(
+                    "component {component_iri} validator {validator} must have exactly one {} \
+                     xsd:string literal",
+                    match kind {
+                        ValidatorKind::Ask => "sh:ask",
+                        ValidatorKind::Select => "sh:select",
+                    }
+                ),
             ));
         }
     };
-    let query_text = format!(
-        "{}{raw_query}",
-        build_prefix_header(data, doc_prefixes, &[component, validator])
-    );
+    let header = prefixes
+        .header(data, &[component, validator])
+        .map_err(crate::shapes::prefixes::split_syntax_rule)?;
+    let query_text = format!("{header}{raw_query}");
 
     let query = match purrdf_sparql_algebra::SparqlParser::new().parse_query(&query_text) {
         Ok(q) => q,
         Err(e) => {
-            return Err(format!(
-                "component {component_iri} validator {validator} has an unparsable query: {e}"
+            return Err((
+                Some(query_rule),
+                format!(
+                    "component {component_iri} validator {validator} has an unparsable query: {e}"
+                ),
             ));
         }
     };
@@ -776,9 +1126,12 @@ fn parse_validator(
         ValidatorKind::Select => "SELECT",
     };
     if got_form != expected_form {
-        return Err(format!(
-            "component {component_iri} validator {validator} is declared as {kind:?} but the \
-             query text parses to a {got_form} query"
+        return Err((
+            Some(query_rule),
+            format!(
+                "component {component_iri} validator {validator} is declared as {kind:?} but \
+                 the query text parses to a {got_form} query"
+            ),
         ));
     }
 
@@ -791,135 +1144,116 @@ fn parse_validator(
         ValidatorKind::Ask => crate::prebinding::check_ask(&query, &prebound),
         ValidatorKind::Select => crate::prebinding::check_select(&query, &prebound),
     };
-    prebinding_result.map_err(|e| {
+    let prebinding = prebinding_result.err().map(|e| {
         format!(
             "component {component_iri} validator {validator} violates pre-binding restrictions: \
              {e}"
         )
-    })?;
+    });
 
-    let mut messages: Vec<String> = objects_of(data, validator, sh::MESSAGE)
-        .into_iter()
-        .filter_map(|t| match t {
-            Term::Literal(lit) => Some(lit.value().to_owned()),
-            _ => None,
-        })
-        .collect();
-    messages.sort();
-    let message = messages.into_iter().next();
+    let messages = declared_messages(data, validator).map_err(|message| (None, message))?;
     let severity =
         first_object_of(data, validator, sh::SEVERITY).and_then(|t| severity_from_term(&t));
+    // SHACL 1.2 SPARQL Extensions: result annotations are declared "at the subject
+    // of the sh:select or sh:ask triple", which is this validator node.
+    let annotations = crate::result_annotations::parse_with_rule(data, validator)?;
 
     Ok(Validator {
         kind,
         query_text,
-        message,
+        messages,
         severity,
+        annotations,
+        node: validator.clone(),
+        attachment,
+        prebinding,
     })
 }
 
 /// Parse a single constraint component node and its parameters / validators.
 fn parse_component(
     data: &RdfDataset,
-    doc_prefixes: &[(String, String)],
+    prefixes: &PrefixResolver,
     component: &Term,
     component_iri: &str,
     subclass_memo: &mut FastMap<(String, String), bool>,
+    ill_formed: &mut Vec<IllFormedDeclaration>,
 ) -> Result<Component, String> {
+    let component_declaration = format!("the constraint component <{component_iri}>");
     let param_nodes: Vec<Term> = objects_of(data, component, sh::PARAMETER_PROPERTY);
     let mut parameters = Vec::with_capacity(param_nodes.len());
+    let mut parameters_ill_formed = false;
     for param_node in param_nodes {
-        parameters.push(parse_parameter(data, &param_node, component_iri)?);
+        match parse_parameter(data, &param_node, component_iri) {
+            Ok(parameter) => parameters.push(parameter),
+            Err((rule, message)) => {
+                parameters_ill_formed = true;
+                ill_formed.push(IllFormedDeclaration::new(
+                    format!("parameter {param_node} of the constraint component <{component_iri}>"),
+                    Some(rule),
+                    message,
+                ));
+            }
+        }
     }
     parameters.sort_by(|a, b| a.path.as_str().cmp(b.path.as_str()));
-    if parameters.iter().all(|parameter| parameter.optional) {
-        return Err(format!(
-            "component {component_iri} must declare at least one non-optional parameter"
+    // A parameter that did not parse may be the non-optional one, so the rule is judged
+    // only over a complete parameter list.
+    if !parameters_ill_formed && parameters.iter().all(|parameter| parameter.optional) {
+        ill_formed.push(IllFormedDeclaration::new(
+            component_declaration.clone(),
+            Some("ConstraintComponent-parameter"),
+            format!("component {component_iri} must declare at least one non-optional parameter"),
         ));
     }
     let mut names = FastSet::default();
     for parameter in &parameters {
         if !names.insert(parameter.name.as_str()) {
-            return Err(format!(
-                "component {component_iri} declares duplicate parameter name ?{}",
-                parameter.name,
+            ill_formed.push(IllFormedDeclaration::new(
+                component_declaration.clone(),
+                Some("parameter-name-unique"),
+                format!(
+                    "component {component_iri} declares duplicate parameter name ?{}",
+                    parameter.name,
+                ),
             ));
         }
     }
     let param_names: Vec<String> = parameters.iter().map(|p| p.name.clone()).collect();
 
-    let mut node_validator_nodes: Vec<Term> = objects_of(data, component, sh::NODE_VALIDATOR);
-    crate::term::sort_terms_canonical(&mut node_validator_nodes);
-    let node_validators = node_validator_nodes
-        .into_iter()
-        .map(|v| {
-            parse_validator(
-                data,
-                doc_prefixes,
-                component,
-                &v,
-                &param_names,
-                subclass_memo,
-            )
-        })
-        .collect::<Result<Vec<Validator>, _>>()?;
-    let mut property_validator_nodes: Vec<Term> =
-        objects_of(data, component, sh::PROPERTY_VALIDATOR);
-    crate::term::sort_terms_canonical(&mut property_validator_nodes);
-    let property_validators = property_validator_nodes
-        .into_iter()
-        .map(|v| {
-            parse_validator(
-                data,
-                doc_prefixes,
-                component,
-                &v,
-                &param_names,
-                subclass_memo,
-            )
-        })
-        .collect::<Result<Vec<Validator>, _>>()?;
-    let mut validator_nodes: Vec<Term> = objects_of(data, component, sh::VALIDATOR);
-    crate::term::sort_terms_canonical(&mut validator_nodes);
-    let validators = validator_nodes
-        .into_iter()
-        .map(|v| {
-            parse_validator(
-                data,
-                doc_prefixes,
-                component,
-                &v,
-                &param_names,
-                subclass_memo,
-            )
-        })
-        .collect::<Result<Vec<Validator>, _>>()?;
-
-    for (attachment, parsed, expect_ask) in [
-        (sh::NODE_VALIDATOR, &node_validators, false),
-        (sh::PROPERTY_VALIDATOR, &property_validators, false),
-        (sh::VALIDATOR, &validators, true),
-    ] {
-        if parsed
-            .iter()
-            .any(|validator| matches!(validator.kind, ValidatorKind::Ask) != expect_ask)
-        {
-            return Err(format!(
-                "component {component_iri} {attachment} requires {} validators",
-                if expect_ask { "ASK" } else { "SELECT" },
-            ));
+    let mut node_validators = Vec::new();
+    let mut property_validators = Vec::new();
+    let mut validators = Vec::new();
+    for (attachment, node, kind) in declared_validators(data, component, subclass_memo) {
+        let declaration = custom_validator_declaration(&node, component_iri, attachment);
+        let kind = match kind {
+            Ok(kind) => kind,
+            Err((rule, message)) => {
+                ill_formed.push(IllFormedDeclaration::new(declaration, rule, message));
+                continue;
+            }
+        };
+        match parse_validator(
+            data,
+            prefixes,
+            component,
+            &node,
+            attachment,
+            &param_names,
+            kind,
+        ) {
+            Ok(parsed) => match attachment {
+                sh::NODE_VALIDATOR => node_validators.push(parsed),
+                sh::PROPERTY_VALIDATOR => property_validators.push(parsed),
+                _ => validators.push(parsed),
+            },
+            Err((rule, message)) => {
+                ill_formed.push(IllFormedDeclaration::new(declaration, rule, message));
+            }
         }
     }
 
-    let mut component_messages: Vec<String> = objects_of(data, component, sh::MESSAGE)
-        .into_iter()
-        .filter_map(|t| match t {
-            Term::Literal(lit) => Some(lit.value().to_owned()),
-            _ => None,
-        })
-        .collect();
-    component_messages.sort();
-    let message = component_messages.into_iter().next();
+    let messages = declared_messages(data, component)?;
     let severity =
         first_object_of(data, component, sh::SEVERITY).and_then(|t| severity_from_term(&t));
 
@@ -929,25 +1263,42 @@ fn parse_component(
         node_validators,
         property_validators,
         validators,
-        message,
+        messages,
         severity,
     })
 }
 
+/// Every `sh:message` of a validator or component node, as literals in canonical
+/// order. A value that is not an `xsd:string`, `rdf:langString`,
+/// `rdf:dirLangString` or `rdf:HTML` literal is refused rather than skipped.
+fn declared_messages(data: &RdfDataset, node: &Term) -> Result<Vec<Literal>, String> {
+    let mut messages = Vec::new();
+    for value in objects_of(data, node, sh::MESSAGE) {
+        match &value {
+            Term::Literal(lit) if crate::shapes::parser_is_text_literal(&value) => {
+                messages.push(lit.clone());
+            }
+            other => {
+                return Err(format!(
+                    "sh:message on {node} must be an xsd:string, rdf:langString, \
+                     rdf:dirLangString or rdf:HTML literal, got {other}"
+                ));
+            }
+        }
+    }
+    Ok(crate::report::canonical_messages(messages))
+}
+
 #[cfg(test)]
 mod tests {
-    use std::sync::Arc;
-
     use super::*;
     use crate::term::Literal;
-    use crate::text_ingest::extract_prefixes;
+    use crate::text_ingest::parse_turtle_document;
 
     fn load_registry(ttl: &str, base_iri: &str) -> ComponentRegistry {
-        let prefixes = extract_prefixes(ttl);
-        let dataset: Arc<::purrdf::RdfDataset> =
-            ::purrdf::parse_dataset(ttl.as_bytes(), "text/turtle", Some(base_iri))
-                .expect("fixture parses");
-        ComponentRegistry::parse(dataset.as_ref(), &prefixes).expect("registry parses")
+        let document = parse_turtle_document(ttl, Some(base_iri)).expect("fixture parses");
+        let prefixes = PrefixResolver::new(&document.prefixes);
+        ComponentRegistry::parse(document.dataset.as_ref(), &prefixes).expect("registry parses")
     }
 
     #[test]
@@ -977,12 +1328,16 @@ mod tests {
             node_validators: vec![Validator {
                 kind: ValidatorKind::Ask,
                 query_text: "ASK { ?this a ex:Thing }".to_owned(),
-                message: None,
+                messages: vec![],
                 severity: None,
+                annotations: vec![],
+                node: Term::NamedNode(NamedNode::from("http://example.org/ns#validator")),
+                attachment: sh::NODE_VALIDATOR,
+                prebinding: None,
             }],
             property_validators: vec![],
             validators: vec![],
-            message: None,
+            messages: vec![],
             severity: None,
         };
         let id = component.id.as_str().to_owned();
@@ -1078,13 +1433,26 @@ mod tests {
     }
 
     fn validate_fixture(ttl: &str, base_iri: &str) -> crate::report::ValidationReport {
-        let prefixes = extract_prefixes(ttl);
-        let dataset: Arc<::purrdf::RdfDataset> =
-            ::purrdf::parse_dataset(ttl.as_bytes(), "text/turtle", Some(base_iri))
-                .expect("fixture parses");
-        let shapes =
-            crate::shapes::from_dataset_with_prefixes(&dataset, &prefixes).expect("shapes parse");
-        crate::engine::validate_dataset(&dataset, &shapes).expect("validation evaluates")
+        validate_fixture_with_imports(ttl, base_iri, &crate::imports::ShapesImports::new())
+            .expect("shapes parse")
+    }
+
+    fn validate_fixture_with_imports(
+        ttl: &str,
+        base_iri: &str,
+        imports: &crate::imports::ShapesImports,
+    ) -> Result<crate::report::ValidationReport, crate::error::ShapesError> {
+        let document = parse_turtle_document(ttl, Some(base_iri)).expect("fixture parses");
+        let dataset = document.dataset;
+        let shapes = crate::shapes::from_dataset_with_base(
+            &dataset,
+            Some(base_iri),
+            &document.prefixes,
+            None,
+            None,
+            imports,
+        )?;
+        Ok(crate::engine::validate_dataset(&dataset, &shapes).expect("validation evaluates"))
     }
 
     #[test]
@@ -1140,28 +1508,82 @@ mod tests {
             ex:Shape a sh:NodeShape ; sh:targetNode ex:focus ;
                 ex:required ex:a, ex:b ; ex:other ex:c .
         "#;
-        let error = crate::engine::parse_shapes(ttl, None).unwrap_err();
+        let error = crate::engine::parse_shapes(ttl, None)
+            .unwrap_err()
+            .to_string();
         assert!(error.contains("only one is allowed"), "{error}");
     }
 
+    /// The W3C `validator-001` mechanism — a custom component with two parameters
+    /// whose ASK validator flags every value that is not their concatenation, typed
+    /// through SUBCLASSES of `sh:ConstraintComponent` and `sh:SPARQLAskValidator` —
+    /// on an `example.org` fixture whose subclass axioms live in an IMPORTED
+    /// document, written for this test. With the document supplied, exactly the
+    /// non-conforming target `"Hallo Welt"` is reported; without it, the load
+    /// refuses the unresolved import by name.
     #[test]
     fn eval_ask_validator_001() {
-        let ttl = std::fs::read_to_string(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../vectors/shacl/sparql/component/validator-001.ttl"
-        ))
-        .expect("fixture exists");
-        let report = validate_fixture(
-            &ttl,
-            "http://datashapes.org/sh/tests/sparql/component/validator-001.test",
+        const VOCABULARY: &str = "http://example.org/validator-vocabulary";
+        let shapes = format!(
+            r#"
+            @prefix ex: <http://example.org/ns#> .
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+            <http://example.org/shapes> owl:imports <{VOCABULARY}> .
+            ex:TestConstraintComponent a ex:ConstraintComponent ;
+                sh:parameter ex:TestParameter1, ex:TestParameter2 ;
+                sh:validator [
+                    a ex:SPARQLAskValidator ;
+                    sh:ask "ASK {{ FILTER (?value = CONCAT($test1, $test2)) }}" ;
+                ] .
+            ex:TestParameter1 a sh:Parameter ; sh:path ex:test1 ; sh:datatype xsd:string .
+            ex:TestParameter2 a sh:Parameter ; sh:path ex:test2 ; sh:datatype xsd:string .
+            ex:TestShape a sh:NodeShape ;
+                ex:test1 "Hello " ;
+                ex:test2 "World" ;
+                sh:targetNode "Hallo Welt", "Hello World" .
+            "#
         );
+        let vocabulary = format!(
+            r"
+            @prefix ex: <http://example.org/ns#> .
+            @prefix owl: <http://www.w3.org/2002/07/owl#> .
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+            @prefix sh: <http://www.w3.org/ns/shacl#> .
+            <{VOCABULARY}> a owl:Ontology .
+            ex:ConstraintComponent rdfs:subClassOf sh:ConstraintComponent .
+            ex:SPARQLAskValidator rdfs:subClassOf sh:SPARQLAskValidator .
+            "
+        );
+        let mut imports = crate::imports::ShapesImports::new();
+        imports
+            .insert_turtle(VOCABULARY, &vocabulary)
+            .expect("the imported document parses");
+        let report = validate_fixture_with_imports(&shapes, "http://example.org/shapes", &imports)
+            .expect("the imported document resolves the import");
         assert!(!report.conforms);
         assert_eq!(report.results.len(), 1, "exactly one non-conforming target");
         assert_eq!(report.results[0].focus_node, lit("Hallo Welt"));
         assert_eq!(report.results[0].value, Some(lit("Hallo Welt")));
         assert_eq!(
             report.results[0].source_constraint_component.as_str(),
-            "http://datashapes.org/sh/tests/sparql/component/validator-001.test#TestConstraintComponent"
+            "http://example.org/ns#TestConstraintComponent"
+        );
+
+        let refused = validate_fixture_with_imports(
+            &shapes,
+            "http://example.org/shapes",
+            &crate::imports::ShapesImports::new(),
+        )
+        .expect_err("an import no document resolves is refused");
+        assert!(
+            matches!(
+                refused.as_imports(),
+                Some(crate::imports::ShapesImportError::Unresolved { iris })
+                    if iris == &[VOCABULARY.to_owned()]
+            ),
+            "refused for exactly the unresolved import: {refused}"
         );
     }
 
@@ -1215,8 +1637,9 @@ mod tests {
             &"http://datashapes.org/sh/tests/sparql/component/propertyValidator-select-001.test#germanLabel"));
         for r in &report.results {
             assert!(
-                r.message
-                    .as_ref()
+                r.messages
+                    .first()
+                    .map(Literal::value)
                     .expect("message present")
                     .contains("Values are literals with language"),
                 "message template should be substituted"

@@ -44,7 +44,7 @@
 //! The paths are:
 //!
 //! * integers are one fold;
-//! * slices of 0–16 bytes are two independent folds plus a length term;
+//! * slices of 0–16 bytes are two independently seeded folds plus a length term;
 //! * slices of 17–32 bytes use two folded products plus rotated tail words;
 //! * slices over 32 bytes use four independent folded-multiply lanes;
 //! * [`finish`](core::hash::Hasher::finish) is one final fold.
@@ -72,7 +72,7 @@ mod keys;
 mod portable;
 
 use fold::fold;
-use keys::{FIN_M, FIN_X, K_A, K_B, LEN_M, LEN_X, SEED};
+use keys::{FIN_M, FIN_X, K_A, K_B, LEN_M, LEN_X, PAIR_X, SEED};
 
 /// Zero-extend at most sixteen bytes to a little-endian integer.
 ///
@@ -221,7 +221,12 @@ impl<P: Compress> Engine<P> {
 
     #[inline]
     const fn pair(&mut self, first: u64, second: u64, extra: u64) {
-        self.acc = fold(self.acc ^ first, K_A) ^ fold(second, K_B) ^ extra;
+        // Seed both lanes: fold(0, K) = 0 and fold(u64::MAX, K) = u64::MAX
+        // for every nonzero K. An unseeded second lane lets ordinary zero
+        // and all-ones fields cancel across adjacent updates. Its own
+        // derived offset removes that special case without serializing
+        // the multiplies. This is still a public-key, non-cryptographic hash.
+        self.acc = fold(self.acc ^ first, K_A) ^ fold(second ^ PAIR_X, K_B) ^ extra;
     }
 
     #[inline]

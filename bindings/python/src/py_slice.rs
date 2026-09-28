@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! PyO3 Python bindings for `purrdf-slice` (S8).
+//! PyO3 Python bindings for `purrdf-slice`.
 //!
 //! # Engine core separation
 //!
@@ -13,7 +13,7 @@
 //! # What is exposed
 //!
 //! This binding makes the native slice machinery the authoritative slice
-//! catalog/analyzer for the Python tooling (S8), retiring the redundant
+//! catalog/analyzer for the Python tooling, retiring the redundant
 //! Python `slice_ownership_lint` / `module_specs` plumbing:
 //!
 //! * [`PySliceCatalog`] — manifest-based discovery (`SliceCatalog::discover`),
@@ -128,7 +128,7 @@ impl PyArtifactRecord {
 
     /// The raw artifact bytes (content cache). Exposed so the GTS producer can
     /// fold each ontology artifact into the self-describing S3 bundle as a
-    /// content-addressed blob without a second disk read (S3).
+    /// content-addressed blob without a second disk read.
     #[getter]
     fn content<'py>(&self, py: Python<'py>) -> Bound<'py, pyo3::types::PyBytes> {
         pyo3::types::PyBytes::new(py, &self.inner.content)
@@ -250,7 +250,7 @@ impl PySliceRecord {
 // ── SliceCatalog ───────────────────────────────────────────────────────────────
 
 /// The native slice catalog: manifest-based discovery of every slice under a
-/// root directory, the authoritative slice machinery (S8).
+/// root directory, the authoritative slice machinery.
 #[pyclass(name = "SliceCatalog", module = "purrdf_slice")]
 #[derive(Debug)]
 pub struct PySliceCatalog {
@@ -563,7 +563,7 @@ impl PyOwnershipAnalyzer {
     }
 
     /// Emit the computed `purrdf:graph/slice-analysis` named graph as a Turtle
-    /// body string (S7).
+    /// body string.
     ///
     /// This is the production consumer of `purrdf_slice::analysis::emit_analysis_graph`:
     /// it builds the `tier_of` / `term_count_of` closures from the analyzer's own

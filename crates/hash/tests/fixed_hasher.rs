@@ -78,6 +78,45 @@ fn one<H: Hasher + Default>(feed: impl FnOnce(&mut H)) -> u64 {
     hasher.finish()
 }
 
+/// An all-ones high word must not cancel an all-ones word in the next field.
+/// Exercise the portable implementation explicitly even on an AES build.
+fn portable_structured_fields_do_not_cancel() {
+    let edges = [
+        0,
+        1,
+        u64::from(u32::MAX),
+        1 << 32,
+        1 << 63,
+        u64::MAX - 1,
+        u64::MAX,
+        0x5555_5555_5555_5555,
+        0xaaaa_aaaa_aaaa_aaaa,
+    ];
+    for byte_field in [false, true] {
+        let mut seen = std::collections::HashSet::new();
+        for first in edges {
+            for second in edges {
+                for third in edges {
+                    let digest = one::<PortableFixedHasher>(|h| {
+                        let pair = u128::from(first) | (u128::from(second) << 64);
+                        if byte_field {
+                            h.write(&pair.to_le_bytes());
+                        } else {
+                            h.write_u128(pair);
+                        }
+                        h.write_u128(u128::from(third) | (3 << 64));
+                    });
+                    assert!(
+                        seen.insert(digest),
+                        "structured fields collided: {first}/{second}/{third}, bytes={byte_field}"
+                    );
+                }
+            }
+        }
+        assert_eq!(seen.len(), edges.len().pow(3));
+    }
+}
+
 // --- the vector file ---------------------------------------------------------
 
 /// One record's streaming or terminal operation.
@@ -983,6 +1022,7 @@ purrdf_testkit::harness_main!(
     #[cfg(not(target_arch = "wasm32"))]
     record_vectors_when_asked,
     portable_vectors_are_reproduced,
+    portable_structured_fields_do_not_cancel,
     short_packing_preserves_every_byte,
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),

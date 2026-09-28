@@ -12,7 +12,9 @@ import assert from "node:assert/strict";
 
 import {
   ready,
+  shaclApplyRules,
   shaclEntail,
+  shaclLintShapes,
   shaclValidateChangesToSarif,
   shaclValidateToSarif,
 } from "../index.mjs";
@@ -35,7 +37,10 @@ const DATA = `<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-synta
 test("shaclValidateToSarif emits SARIF 2.1.0 with a violation", () => {
   const sarif = JSON.parse(shaclValidateToSarif(SHAPES, DATA));
   assert.equal(sarif.version, "2.1.0");
-  const results = sarif.runs.flatMap((r) => r.results ?? []);
+  const results = sarif.runs.flatMap((r) => {
+    assert.ok(Array.isArray(r.results), "a completed SARIF run always carries results");
+    return r.results;
+  });
   assert.ok(results.length >= 1, "the ill-typed age must produce at least one result");
   assert.ok(
     results.some((r) => r.level === "error"),
@@ -45,6 +50,161 @@ test("shaclValidateToSarif emits SARIF 2.1.0 with a violation", () => {
 
 test("shaclValidateToSarif rejects malformed shapes (never a silent pass)", () => {
   assert.throws(() => shaclValidateToSarif("@@@ not turtle", DATA));
+});
+
+// The conformance-disallow set: a Warning-graded violation does not conform under the
+// default set and conforms under sh:Violation alone; a non-IRI level throws.
+test("wasm_shacl_conformance_disallows: shaclValidateToSarif honours conformanceDisallows", () => {
+  const warning = SHAPES.replace(
+    "sh:path ex:age ;",
+    "sh:path ex:age ; sh:severity sh:Warning ;",
+  );
+  const run = (disallows) =>
+    JSON.parse(shaclValidateToSarif(warning, DATA, undefined, disallows)).runs[0].properties;
+  assert.equal(run(undefined).shaclConforms, false);
+  const relaxed = run(["http://www.w3.org/ns/shacl#Violation"]);
+  assert.equal(relaxed.shaclConforms, true);
+  assert.deepEqual(relaxed.shaclConformanceDisallows, [
+    "http://www.w3.org/ns/shacl#Violation",
+  ]);
+  assert.throws(() => shaclValidateToSarif(warning, DATA, undefined, ["Violation"]));
+});
+
+// SHACL 1.2 Core section 6.7.1.4: every report states sh:shapesGraphWellFormed, and states
+// true for an empty sh:in list too — in-minListLength is a mandatory lint diagnostic, not
+// an ill-formedness. The empty row is observed to be validated (one result) and its
+// non-empty neighbour to conform; only the empty row carries the lint diagnostic.
+test("wasm_shacl_shapes_graph_well_formed: the SARIF run states sh:shapesGraphWellFormed", () => {
+  const withIn = (members) =>
+    `@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/> .
+ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:in ${members} .
+`;
+  const data = "<http://example.org/a> <http://example.org/p> <http://example.org/b> .\n";
+  const run = (shapes) => JSON.parse(shaclValidateToSarif(shapes, data)).runs[0];
+  const filled = run(withIn("( <http://example.org/a> )"));
+  const empty = run(withIn("( )"));
+  assert.equal(filled.properties.shaclShapesGraphWellFormed, true);
+  assert.equal(empty.properties.shaclShapesGraphWellFormed, true);
+  assert.equal(filled.results.length, 0);
+  assert.equal(empty.results.length, 1);
+
+  const emptyLint = shaclLintShapes(withIn("( )"));
+  assert.ok(
+    emptyLint.report.includes("diagnostics 1\ndiagnostic in-minListLength <http://example.org/S>\n"),
+    emptyLint.report,
+  );
+  assert.equal(emptyLint.clean, false);
+  const filledLint = shaclLintShapes(withIn("( <http://example.org/a> )"));
+  assert.ok(!filledLint.report.includes("in-minListLength"), filledLint.report);
+  assert.equal(filledLint.findings + 1, emptyLint.findings);
+  emptyLint.free();
+  filledLint.free();
+});
+
+// SHACL 1.2 Core section 6.3's subClassOfInShapesGraph: a class target reached only through
+// the shapes graph's rdfs:subClassOf fires with the parameter and not without it; the
+// control, a direct instance of the target class, fires both ways.
+test("wasm_shacl_subclass_of_in_shapes_graph: shaclValidateToSarif honours subClassOfInShapesGraph", () => {
+  const shapes = `@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix ex: <http://example.org/> .
+ex:Student rdfs:subClassOf ex:Person .
+ex:PersonShape a sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:property [ sh:path ex:name ; sh:minCount 1 ] .
+`;
+  const data = `<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Student> .
+<http://example.org/bob> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .
+`;
+  const run = (on) =>
+    shaclValidateToSarif(shapes, data, undefined, undefined, undefined, undefined, undefined, on);
+  const flagged = (sarif) =>
+    new Set([...sarif.matchAll(/example\.org\/(alice|bob)\b/g)].map((m) => m[1]));
+  for (const off of [run(undefined), run(false)]) {
+    assert.deepEqual(flagged(off), new Set(["bob"]), off);
+  }
+  const on = run(true);
+  assert.deepEqual(flagged(on), new Set(["alice", "bob"]), on);
+});
+
+// The W3C SHACL 1.2 vocabulary's declaration of the built-in sh:SPARQLExprExpression,
+// verbatim: a sh:NamedParameterExpressionFunction with the two sh:Parameters -prefixes
+// and -sparqlExpr and no sh:bodyExpression.
+const SPARQL_EXPR_DECLARATION = `@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+
+sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+  rdfs:label "SPARQL expr expression"@en ;
+  rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
+  rdfs:isDefinedBy sh: ;
+  rdfs:subClassOf sh:NamedParameterExpression,
+  sh:SPARQLExecutable ;
+  sh:parameter sh:SPARQLExprExpression-prefixes,
+  sh:SPARQLExprExpression-sparqlExpr .
+
+sh:SPARQLExprExpression-prefixes a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:description "The prefixes that shall be applied before parsing the SPARQL query that gets derived from the sh:sparqlExpr expression. The object should define those prefixes using sh:declare."@en ;
+  sh:name "prefixes"@en ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:prefixes .
+
+sh:SPARQLExprExpression-sparqlExpr a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:datatype xsd:string ;
+  sh:description "The SPARQL expression that is executed during evaluation of this node expression."@en ;
+  sh:keyParameter true ;
+  sh:name "SPARQL expr"@en ;
+  sh:path sh:sparqlExpr .
+`;
+
+// A Warning-graded property shape whose one value node is computed by
+// sh:sparqlExpr "ex:active" through sh:prefixes; sh:in ( ex:retired ) refuses it.
+const SPARQL_EXPR_SHAPES = `
+@prefix ex: <http://example.org/> .
+ex:Prefixes sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/"^^xsd:anyURI ] .
+ex:PersonShape a sh:NodeShape ;
+  sh:targetClass ex:Person ;
+  sh:property [
+    sh:path ex:status ;
+    sh:values [ sh:sparqlExpr "ex:active" ; sh:prefixes ex:Prefixes ] ;
+    sh:in ( ex:retired ) ;
+    sh:severity sh:Warning
+  ] .
+`;
+
+// On wasm, a shapes graph merged with the SHACL 1.2 vocabulary's own
+// sh:SPARQLExprExpression declaration loads, and the sh:sparqlExpr +
+// sh:prefixes expression is evaluated natively — the result's value is the computed
+// <http://example.org/active>, which only the prefix-expanded expression yields. The
+// Warning result does not conform by default and conforms under sh:Violation alone.
+test("wasm_shacl_sparql_expr_declaration: shaclValidateToSarif evaluates sh:sparqlExpr beside its vocabulary declaration", () => {
+  const shapes = SPARQL_EXPR_DECLARATION + SPARQL_EXPR_SHAPES;
+  const run = (disallows) => JSON.parse(shaclValidateToSarif(shapes, DATA, undefined, disallows)).runs[0];
+  const byDefault = run(undefined);
+  assert.equal(byDefault.properties.shaclConforms, false);
+  assert.equal(byDefault.results.length, 1);
+  assert.ok(
+    byDefault.results[0].message.text.startsWith("Value <http://example.org/active> "),
+    byDefault.results[0].message.text,
+  );
+  assert.equal(run(["http://www.w3.org/ns/shacl#Violation"]).properties.shaclConforms, true);
+});
+
+// Every sh:message reaches the SARIF result, each with its language tag.
+test("wasm_shacl_message_languages: shaclValidateToSarif carries every message with its language", () => {
+  const tagged = SHAPES.replace(
+    "sh:datatype xsd:integer ]",
+    'sh:datatype xsd:integer ; sh:message "Too many"@en , "Zu viele"@de ]',
+  );
+  const result = JSON.parse(shaclValidateToSarif(tagged, DATA)).runs[0].results[0];
+  assert.equal(result.message.text, "Too many");
+  assert.deepEqual(result.properties.shaclMessages, [
+    { text: "Too many", language: "en" },
+    { text: "Zu viele", language: "de" },
+  ]);
 });
 
 // A `sh:rule` shapes graph that types every ex:Person as ex:adult ex:yes.
@@ -60,7 +220,10 @@ const RULE_DATA = `<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-
 `;
 
 test("shaclEntail materializes the inferred triple and keeps the base fact", () => {
-  const nt = shaclEntail(RULE_SHAPES, RULE_DATA);
+  const out = shaclEntail(RULE_SHAPES, RULE_DATA);
+  const nt = out.ntriples;
+  assert.deepEqual(out.diagnostics, []);
+  out.free();
   assert.match(
     nt,
     /<http:\/\/example\.org\/alice> <http:\/\/example\.org\/adult> <http:\/\/example\.org\/yes> \./,
@@ -69,6 +232,57 @@ test("shaclEntail materializes the inferred triple and keeps the base fact", () 
     nt,
     /<http:\/\/example\.org\/alice> <http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#type> <http:\/\/example\.org\/Person> \./,
   );
+});
+
+// The approved W3C test core/node/in-002: a shape whose sh:in list is empty. Every run
+// reports the in-minListLength mandatory diagnostic — SARIF validation as a note-level
+// tool-execution notification, rules and entailment in their `diagnostics` — while the
+// verdict and the results are those of the specification; the neighbour whose list has a
+// member carries no diagnostic, so the notification is about the empty list.
+const IN_002 = (members) => `@prefix ex: <http://example.com/ns#> .
+@prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+ex:Instance rdf:type ex:TestShape .
+ex:TestShape rdf:type rdfs:Class , sh:NodeShape ; sh:in ${members} ;
+  sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:seen ; sh:object ex:yes ] .
+`;
+const IN_002_DATA =
+  "<http://example.com/ns#Instance> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.com/ns#TestShape> .\n";
+
+test("wasm_shacl_mandatory_diagnostics: every run reports an empty sh:in list, beside the verdict", () => {
+  const run = (members) => JSON.parse(shaclValidateToSarif(IN_002(members), IN_002_DATA)).runs[0];
+  const empty = run("()");
+  assert.equal(empty.properties.shaclConforms, false);
+  assert.equal(empty.results.length, 1);
+  assert.equal(empty.results[0].ruleId, "http://www.w3.org/ns/shacl#InConstraintComponent");
+  const [notification] = empty.invocations[0].toolExecutionNotifications;
+  assert.equal(empty.invocations[0].executionSuccessful, true);
+  assert.equal(notification.level, "note");
+  assert.equal(notification.descriptor.id, "in-minListLength");
+  assert.equal(empty.tool.driver.notifications[notification.descriptor.index].id, "in-minListLength");
+  assert.equal(notification.locations[0].logicalLocations[0].name, "<http://example.com/ns#TestShape>");
+  assert.equal(empty.invocations[0].toolExecutionNotifications.length, 1);
+
+  const filled = run("( <http://example.com/ns#Instance> )");
+  assert.equal(filled.properties.shaclConforms, true);
+  assert.deepEqual(filled.results, []);
+  assert.equal(filled.invocations, undefined, JSON.stringify(filled));
+  assert.equal(filled.tool.driver.notifications, undefined);
+
+  // One structured encoding on every host: the rule, then the shape, as separate fields.
+  const expected = [{ rule: "in-minListLength", shape: "<http://example.com/ns#TestShape>" }];
+  const plain = (diagnostics) => diagnostics.map((d) => ({ rule: d.rule, shape: d.shape }));
+  const rules = shaclApplyRules(IN_002_DATA, IN_002("()"));
+  assert.deepEqual(plain(rules.diagnostics), expected);
+  rules.free();
+  const entailed = shaclEntail(IN_002("()"), IN_002_DATA);
+  assert.deepEqual(plain(entailed.diagnostics), expected);
+  assert.ok(entailed.ntriples.includes("<http://example.com/ns#seen>"), entailed.ntriples);
+  entailed.free();
+  const quiet = shaclEntail(IN_002("( <http://example.com/ns#Instance> )"), IN_002_DATA);
+  assert.deepEqual(quiet.diagnostics, []);
+  quiet.free();
 });
 
 // A conforming base, so every violation below is the CHANGE's doing.
@@ -103,7 +317,10 @@ test("shaclValidateChangesToSarif honours the retract half", () => {
   try {
     assert.equal(outcome.bounded, true);
     const sarif = JSON.parse(outcome.sarif);
-    const results = sarif.runs.flatMap((r) => r.results ?? []);
+    const results = sarif.runs.flatMap((r) => {
+    assert.ok(Array.isArray(r.results), "a completed SARIF run always carries results");
+    return r.results;
+  });
     assert.equal(results.length, 0, "removing the ill-typed row restores conformance");
   } finally {
     outcome.free();

@@ -24,3 +24,8 @@ crates/jsonschema/metaschemas/** -text -diff
 # The vendored Unicode Character Database is frozen by digest and kept verbatim;
 # several upstream files carry trailing whitespace, which is part of the bytes.
 crates/iri/unicode/*.*.*/*.txt -text -diff
+
+# Preserve the pinned W3C SHACL 1.2 vocabularies and shacl12-test-suite
+# byte-for-byte, including the crate-local runtime copy of the vocabularies.
+vectors/shacl12/** -text -diff
+crates/shapes/spec/** -text -diff

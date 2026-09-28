@@ -8,16 +8,16 @@
 //!
 //! 1. **Compile** each triple pattern's three positions to either a [`Pos::Slot`]
 //!    (a variable column) or a [`Pos::Bound`] (a ground constant resolved once via
-//!    `term_id_by_value`, the P4 reverse index). If a ground constant is absent from
+//!    `term_id_by_value`, the reverse index). If a ground constant is absent from
 //!    the dataset the whole BGP is empty — that constant cannot match.
 //! 2. **Order** the patterns cheapest-first with a cost-based join planner
-//!    ([`cost_based_order`]): probe each pattern's real cardinality through the P4
+//!    ([`cost_based_order`]): probe each pattern's real cardinality through the
 //!    lazy permutation index and search join orders (exhaustive left-deep DP for a
 //!    small BGP, greedy beyond) to minimise the estimated total intermediate
 //!    cardinality, keeping the join connected.
 //! 3. **Index-nested-loop join** in that order; for each partial solution, substitute
 //!    its already-bound variables into the next pattern's positions and call the
-//!    indexed P4 `quads_for_pattern`, then extend. Repeated variables (`?x p ?x`) and
+//!    indexed `quads_for_pattern`, then extend. Repeated variables (`?x p ?x`) and
 //!    previously-bound variables are enforced at bind time.
 //!
 //! ## Blank nodes are non-distinguished variables
@@ -385,7 +385,7 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
 /// differential planner-correctness corpus test. Schedule greedily by the count
 /// of bound positions, keep the join connected, break ties on lowest index.
 ///
-/// This is the S7 behaviour `cost_based_order` replaced; it is intentionally
+/// This is the structural order `cost_based_order` replaced; it is intentionally
 /// deterministic and never materialises a plan as triples.
 fn structural_order<I: ViewTermId>(compiled: &[CompiledPattern<I>]) -> Vec<usize> {
     fn constrained<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
@@ -579,7 +579,7 @@ fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
 
 /// Order compiled BGP patterns cheapest-first with a cost-based join planner — the
 /// native `sparopt` role. Unlike a structural heuristic, this probes the dataset's
-/// real per-pattern cardinalities (the P4 lazy permutation index, via
+/// real per-pattern cardinalities (the lazy permutation index, via
 /// [`RdfDataset::cardinality_estimate`]) and searches join orders to minimise the
 /// estimated total intermediate cardinality.
 ///

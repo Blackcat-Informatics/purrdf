@@ -54,7 +54,7 @@ use purrdf_shapes::product::{
     HostBindings, ProductDimension, ShapesProduct, ShapesProductError, ShapesProfile,
 };
 use purrdf_shapes::shapes::{Shapes, from_dataset_with_config_and_graph};
-use purrdf_shapes::text_ingest::{extract_prefixes, parse_turtle_to_dataset};
+use purrdf_shapes::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};
 use purrdf_sparql_eval::user_fn::{self, FnPopulation};
 use purrdf_sparql_eval::{
     AggregateAccumulator, AggregateRegistry, AlgebraicClass, Arity, BindingPattern,
@@ -685,6 +685,37 @@ fn refuses_stage_id() {
     );
 }
 
+/// The stage id a build stamped before its preimage folded in the spec symbol
+/// table: a real stage id of a real build, whose products describe a preparation
+/// made WITHOUT the table's native bindings.
+const PRE_SPEC_TABLE_STAGE_ID: [u8; 32] = [
+    0x10, 0xfb, 0x65, 0x93, 0x69, 0x14, 0x91, 0x0c, 0x8e, 0xf2, 0x6a, 0x51, 0x76, 0xf5, 0x80, 0x1f,
+    0x4f, 0x6d, 0x2a, 0x36, 0x45, 0xe3, 0xb0, 0xb3, 0xf3, 0x42, 0x48, 0x60, 0x21, 0x30, 0x12, 0xce,
+];
+
+/// A product prepared under ANOTHER spec symbol table is stale: `admit` refuses it
+/// on the stage-id dimension instead of trusting a memo whose native bindings this
+/// build does not share, and `rebuild` — the valid neighbour — re-derives it and
+/// answers exactly what a fresh preparation does.
+#[test]
+fn refuses_a_product_prepared_under_another_spec_table() {
+    assert_ne!(
+        purrdf_shapes::product::STAGE_ID,
+        PRE_SPEC_TABLE_STAGE_ID,
+        "this build's table is folded into its stage id"
+    );
+    let stale = repack(&product_of(PLAIN_SHAPES), |sections| {
+        sections[0][..32].copy_from_slice(&PRE_SPEC_TABLE_STAGE_ID);
+    });
+    let refusal = admit(&stale).expect_err("a stale-table product must not be admitted");
+    assert_eq!(refusal.dimension(), ProductDimension::StageId);
+    let rebuilt = rebuild(&stale).expect("rebuild re-derives a stale-table product");
+    assert_eq!(
+        report_nt(&rebuilt, &data_of(PLAIN_DATA)),
+        plain_expected_report()
+    );
+}
+
 #[test]
 fn accepts_stage_id_neighbour() {
     // The exact stage id this build writes admits...
@@ -1004,7 +1035,9 @@ fn shapes_with_graph(iri: Option<&str>) -> Shapes {
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("the fixture parses");
     from_dataset_with_config_and_graph(
         &dataset,
-        &extract_prefixes(&ttl),
+        &parse_turtle_document(&ttl, None)
+            .expect("fixture parses")
+            .prefixes,
         None,
         iri.map(ToOwned::to_owned),
     )
@@ -1253,8 +1286,15 @@ fn accepts_base_neighbour() {
 fn vocab_shapes(vocab: Option<BoxRoleVocab>) -> Shapes {
     let ttl = format!("{PREFIXES}{ROLE_SHAPES}");
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("the role fixture parses");
-    from_dataset_with_config_and_graph(&dataset, &extract_prefixes(&ttl), vocab, None)
-        .expect("the role fixture shapes parse")
+    from_dataset_with_config_and_graph(
+        &dataset,
+        &parse_turtle_document(&ttl, None)
+            .expect("fixture parses")
+            .prefixes,
+        vocab,
+        None,
+    )
+    .expect("the role fixture shapes parse")
 }
 
 /// The six box-role terms of [`ROLE_NS`], written in a different field order from
@@ -1778,6 +1818,69 @@ ex:S a sh:NodeShape ; sh:targetNode ex:alice ;
 }
 
 // ═══════════════════════════════════════════════════════════════════════════════
+// included-graphs
+// ═══════════════════════════════════════════════════════════════════════════════
+
+/// A product for `body` whose shapes graph was assembled from the named graphs
+/// `absorbed` — declared loaded in its import table, so they are recorded without
+/// changing the merged dataset.
+fn product_absorbing(body: &str, absorbed: &[&str]) -> Vec<u8> {
+    let mut imports = purrdf_shapes::ShapesImports::new();
+    for iri in absorbed {
+        imports.declare_loaded(*iri);
+    }
+    product_for(
+        purrdf_shapes::engine::parse_shapes_with_config(
+            &format!("{PREFIXES}{body}"),
+            None,
+            None,
+            &imports,
+        )
+        .expect("the fixture shapes parse"),
+    )
+}
+
+/// Provoke: the product's binding pins a set of absorbed graphs its own preamble — and
+/// so the preparation it restores — does not record.
+fn refusal_included_graphs() -> ShapesProductError {
+    let donor = identity_component(
+        &product_absorbing(PLAIN_SHAPES, &["http://example.org/lib"]),
+        "included-graphs",
+    );
+    let bytes = product_of(PLAIN_SHAPES);
+    assert_ne!(
+        identity_component(&bytes, "included-graphs"),
+        donor,
+        "another absorbed set must move the pinned component",
+    );
+    admit(&splice_identity(&bytes, "included-graphs", &donor)).expect_err(
+        "a product whose binding pins graphs its preparation does not record must not restore",
+    )
+}
+
+#[test]
+fn refuses_included_graphs() {
+    assert_eq!(
+        refusal_included_graphs().dimension(),
+        ProductDimension::IncludedGraphs,
+    );
+}
+
+#[test]
+fn accepts_included_graphs_neighbour() {
+    // Both genuine products restore: the empty set and a non-empty one, each checked
+    // against the preparation its own preamble restores.
+    admit(&product_of(PLAIN_SHAPES)).expect("a product that absorbed nothing restores");
+    let absorbing = product_absorbing(PLAIN_SHAPES, &["http://example.org/lib"]);
+    let restored = admit(&absorbing).expect("a product that absorbed a graph restores");
+    assert_eq!(
+        restored.shapes().provenance().included_graphs(),
+        ["http://example.org/lib"],
+        "the restore answers the recorded set",
+    );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════════
 // unsupported-capability
 // ═══════════════════════════════════════════════════════════════════════════════
 
@@ -2272,6 +2375,7 @@ fn provoked_dimensions() -> BTreeSet<ProductDimension> {
         refusal_implementation_identity(),
         refusal_class_catalog(),
         refusal_parse_configuration(),
+        refusal_included_graphs(),
         refusal_unsupported_capability(),
         depth_boundary().1,
         refusal_malformed(),

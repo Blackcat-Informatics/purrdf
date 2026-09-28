@@ -155,7 +155,7 @@ const COMPOSITE_CONCLUSION: &str = concat!(
 const IMPORTING_PREMISE: &str = concat!(
     "@prefix ex: <http://example.org/> .\n",
     "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
-    "ex:o owl:imports ex:schema .\n",
+    "ex:o a owl:Ontology ; owl:imports ex:schema .\n",
     "ex:tom a ex:Cat .\n",
 );
 
@@ -618,6 +618,93 @@ fn an_open_predicate_renders_the_limit_that_makes_the_answer_honest() {
 
 // ── `--import`: the documents the premise says it is not all of ─────────────────
 
+/// A premise whose ontology header `owl:imports` its OWN document IRI — by its `file://`
+/// retrieval IRI, or by `--base` — needs no pair: the import names the document being read.
+/// The neighbour, a header importing a document that is NOT the premise, is still refused by
+/// name; and the same `owl:imports` on a node that is no ontology header is a premise triple,
+/// not an import, so that premise is answered with no pair.
+#[test]
+fn a_premise_importing_its_own_iri_needs_no_pair() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let conclusion = write_file(dir, "derived.ttl", DERIVED_CONCLUSION);
+    let own = write_file(
+        dir,
+        "own.ttl",
+        &format!(
+            "<#o> a <http://www.w3.org/2002/07/owl#Ontology> ;\n\
+             <http://www.w3.org/2002/07/owl#imports> <> .\n{SUBCLASS_PREMISE}"
+        ),
+    );
+    for extra in [&[][..], &["--base", "http://example.org/premise"][..]] {
+        let mut args = vec![
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--premise",
+            &own,
+            "--conclusion",
+            &conclusion,
+        ];
+        args.extend_from_slice(extra);
+        let o = run(&args);
+        assert_eq!(o.status.code(), Some(0), "{extra:?}: {}", stderr(&o));
+        assert!(
+            stdout(&o).contains("\nentailment entailed\n"),
+            "{extra:?}: {}",
+            stdout(&o)
+        );
+    }
+
+    let other = write_file(
+        dir,
+        "other.ttl",
+        &format!(
+            "<#o> a <http://www.w3.org/2002/07/owl#Ontology> ;\n\
+             <http://www.w3.org/2002/07/owl#imports> <http://example.org/elsewhere> .\n\
+             {SUBCLASS_PREMISE}"
+        ),
+    );
+    let data = write_file(
+        dir,
+        "data.ttl",
+        &format!(
+            "<#o> <http://www.w3.org/2002/07/owl#imports> <http://example.org/elsewhere> .\n\
+             {SUBCLASS_PREMISE}"
+        ),
+    );
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &data,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(o.status.code(), Some(0), "{}", stderr(&o));
+    assert!(
+        stdout(&o).contains("\nentailment entailed\n"),
+        "{}",
+        stdout(&o)
+    );
+    let o = run(&[
+        "entails",
+        "--regime",
+        "owl-rl",
+        "--premise",
+        &other,
+        "--conclusion",
+        &conclusion,
+    ]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("owl:imports <http://example.org/elsewhere>"),
+        "{}",
+        stderr(&o)
+    );
+}
+
 /// `--import` ANSWERS A PREMISE WHOSE `owl:imports` IS INTACT.
 ///
 /// OWL 2 defines an ontology's imports closure to BE the ontology, so the conclusion is
@@ -725,36 +812,49 @@ fn the_report_distinguishes_a_resolved_import_from_an_unresolved_one() {
         "the reason must say what is true of THIS token: {resolved}"
     );
 
-    // UNRESOLVED: the same premise, materialized, where no import map exists at all.
+    // `reason` over the SAME premise and the SAME pair closes the merge and renders the
+    // same RESOLVED token: the closure it writes holds the conclusion only the imported
+    // schema licenses.
     let closure = path(dir, "closure.nt");
-    let unresolved_report = path(dir, "unresolved.report");
+    let reason_report = path(dir, "reason.report");
     let o = run(&[
         "reason",
         "--regime",
         "owl-rl",
+        "--import",
+        &pair,
         &premise,
         &closure,
-        &format!("--report={unresolved_report}"),
+        &format!("--report={reason_report}"),
     ]);
-    assert!(o.status.success(), "reason: {}", stderr(&o));
-    let unresolved = std::fs::read_to_string(&unresolved_report).expect("read the report");
+    assert!(o.status.success(), "reason --import: {}", stderr(&o));
+    let reasoned = std::fs::read_to_string(&reason_report).expect("read the report");
     assert!(
-        unresolved.contains("\nboundary ontology-import-unresolved "),
-        "a materialization resolved nothing and must say so: {unresolved}"
+        reasoned.contains("\nboundary ontology-import-resolved ")
+            && !reasoned.contains("boundary ontology-import-unresolved"),
+        "a merged import closure renders the RESOLVED token on `reason` too: {reasoned}"
     );
+    let written = std::fs::read_to_string(&closure).expect("read the closure");
     assert!(
-        !unresolved.contains("boundary ontology-import-resolved"),
-        "…and must not claim a merge it never made: {unresolved}"
-    );
-    assert!(
-        unresolved.contains("NOTHING RESOLVED THOSE DOCUMENTS FOR THIS RUN"),
-        "the reason must say what is true of THIS token: {unresolved}"
+        written.contains(
+            "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Animal> ."
+        ),
+        "the imported axiom took part in the closure: {written}"
     );
 
-    // RESOLVING THE IMPORTS DOES NOT NARROW THE ANSWER. An `owl-rl` chase always meets the
-    // datatype value space, so `exact-within-boundaries` is what both runs say — and the
-    // assertion is that the two AGREE rather than that either spells a particular word, so a
-    // later change that let the import boundary decide completeness would fail here.
+    // Without the pair `reason` no longer closes a smaller premise: it refuses by name.
+    let o = run(&["reason", "--regime", "owl-rl", &premise, &closure]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("unresolved-import")
+            && stderr(&o).contains("--import http://example.org/schema=FILE"),
+        "{}",
+        stderr(&o)
+    );
+
+    // RESOLVING THE IMPORTS IDENTICALLY DOES NOT CHANGE THE ANSWER'S COMPLETENESS between
+    // the two lanes: the conclusion-directed service and the materialization agree.
     let line = |report: &str| {
         report
             .lines()
@@ -762,7 +862,300 @@ fn the_report_distinguishes_a_resolved_import_from_an_unresolved_one() {
             .expect("every report carries a completeness line")
             .to_owned()
     };
-    assert_eq!(line(&resolved), line(&unresolved));
+    assert_eq!(line(&resolved), line(&reasoned));
+}
+
+/// An `--import` pair the premise's closure never reaches is a USAGE error (exit 2) on every
+/// entailment subcommand — `entails`, `reason`, `convert --entailment`, `query --entailment`
+/// and `consistency` — exactly as
+/// `validate` refuses an unused shapes-graph pair. When the premise does state the
+/// `owl:imports`, but on a node that anchors nothing, the refusal says so. The neighbour on
+/// each command is the importing premise, which uses the very same pair and succeeds.
+#[test]
+fn every_entailment_subcommand_refuses_an_unreached_import_pair() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let importing = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let plain = write_file(
+        dir,
+        "plain.ttl",
+        "@prefix ex: <http://example.org/> .\nex:tom a ex:Cat .\n",
+    );
+    let unanchored = write_file(
+        dir,
+        "unanchored.ttl",
+        "@prefix ex: <http://example.org/> .\n\
+         @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+         ex:node owl:imports ex:schema .\nex:tom a ex:Cat .\n",
+    );
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let out = path(dir, "out.nt");
+    let pair = format!("http://example.org/schema={schema}");
+
+    let commands = |premise: &str| -> Vec<Vec<String>> {
+        let owned = |args: &[&str]| args.iter().map(ToString::to_string).collect();
+        vec![
+            owned(&[
+                "entails",
+                "--regime",
+                "owl-rl",
+                "--premise",
+                premise,
+                "--conclusion",
+                &conclusion,
+                "--import",
+                &pair,
+            ]),
+            owned(&[
+                "reason", "--regime", "owl-rl", "--import", &pair, premise, &out,
+            ]),
+            owned(&[
+                "convert",
+                "--entailment",
+                "owl-rl",
+                "--import",
+                &pair,
+                premise,
+                &out,
+            ]),
+            owned(&[
+                "query",
+                "--data",
+                premise,
+                "--entailment",
+                "owl-rl",
+                "--import",
+                &pair,
+                "ASK { ?s ?p ?o }",
+            ]),
+            owned(&["consistency", "--import", &pair, premise]),
+        ]
+    };
+    for args in commands(&plain) {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = run(&args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("unreached-import: --import <http://example.org/schema>")
+                && stderr(&o).contains("would be read and never used")
+                && !stderr(&o).contains("not anchored"),
+            "{args:?}: {}",
+            stderr(&o)
+        );
+    }
+    for args in commands(&unanchored) {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = run(&args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("does state owl:imports <http://example.org/schema>")
+                && stderr(&o).contains("not anchored"),
+            "{args:?}: {}",
+            stderr(&o)
+        );
+    }
+    for args in commands(&importing) {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = run(&args);
+        assert!(o.status.success(), "{args:?}: {}", stderr(&o));
+    }
+    let closed = std::fs::read_to_string(&out).expect("the convert closure");
+    assert!(
+        closed.contains(
+            "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Animal> ."
+        ),
+        "convert --entailment closed over the imported schema: {closed}"
+    );
+}
+
+/// `query --entailment` ANSWERS OVER THE IMPORTS CLOSURE, and refuses without the pair.
+///
+/// The observing oracle is the answer itself: `ex:tom a ex:Animal` is licensed ONLY by the
+/// imported schema, so a query that silently closed the data alone would answer `false`
+/// where this one must answer `true` — and without the pair it must not answer at all.
+#[test]
+fn query_entailment_closes_over_the_import_table() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let pair = format!("http://example.org/schema={schema}");
+    let ask = "ASK { <http://example.org/tom> a <http://example.org/Animal> }";
+
+    let o = run(&["query", "--data", &premise, "--entailment", "owl-rl", ask]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("unresolved-import")
+            && stderr(&o).contains("--import http://example.org/schema=FILE"),
+        "the refusal names the document to supply: {}",
+        stderr(&o)
+    );
+    assert!(
+        stdout(&o).is_empty(),
+        "a refusal answers nothing: {}",
+        stdout(&o)
+    );
+
+    let report = path(dir, "query.report");
+    let o = run(&[
+        "query",
+        "--data",
+        &premise,
+        "--entailment",
+        "owl-rl",
+        "--import",
+        &pair,
+        &format!("--report={report}"),
+        ask,
+    ]);
+    assert!(o.status.success(), "query --import: {}", stderr(&o));
+    assert!(
+        stdout(&o).contains("\"boolean\":true") || stdout(&o).contains("\"boolean\": true"),
+        "the imported axiom licenses the answer: {}",
+        stdout(&o)
+    );
+    let rendered = std::fs::read_to_string(&report).expect("read the report");
+    assert!(
+        rendered.contains("\nboundary ontology-import-resolved ")
+            && !rendered.contains("boundary ontology-import-unresolved"),
+        "{rendered}"
+    );
+
+    // The valid neighbour: data that imports nothing needs no pair and answers as before —
+    // `false`, because nothing licenses the conclusion there.
+    let plain = write_file(
+        dir,
+        "plain.ttl",
+        "@prefix ex: <http://example.org/> .\nex:tom a ex:Cat .\n",
+    );
+    let o = run(&["query", "--data", &plain, "--entailment", "owl-rl", ask]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(
+        stdout(&o).contains("\"boolean\":false") || stdout(&o).contains("\"boolean\": false"),
+        "{}",
+        stdout(&o)
+    );
+}
+
+/// `consistency` DECIDES THE IMPORTS CLOSURE, and refuses without the pair.
+///
+/// The imported document states the disjointness that makes the ontology inconsistent, so
+/// the oracle is the verdict: `false` only if the import was read. Without the pair the
+/// question is refused rather than answered `true` over the smaller ontology. A proof
+/// recorded over the merge checks against the same command line.
+#[test]
+fn consistency_decides_the_imports_closure() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(
+        dir,
+        "importing.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:o a owl:Ontology ; owl:imports ex:schema .\n",
+            "ex:tom a ex:Cat , ex:Dog .\n",
+        ),
+    );
+    let schema = write_file(
+        dir,
+        "schema.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:Cat owl:disjointWith ex:Dog .\n",
+        ),
+    );
+    let pair = format!("http://example.org/schema={schema}");
+
+    let o = run(&["consistency", &premise]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("owl:imports <http://example.org/schema>"),
+        "{}",
+        stderr(&o)
+    );
+    assert!(stdout(&o).is_empty(), "{}", stdout(&o));
+
+    let o = run(&["consistency", "--import", &pair, &premise]);
+    assert!(o.status.success(), "consistency --import: {}", stderr(&o));
+    let decided = stdout(&o);
+    assert!(decided.starts_with("consistency false\n"), "{decided}");
+    assert!(
+        decided.contains("\nboundary ontology-import-resolved ")
+            && !decided.contains("boundary ontology-import-unresolved"),
+        "{decided}"
+    );
+
+    // The proof surface reasons over the same merge: recording a proof decides the same
+    // verdict.
+    let o = run(&["consistency", "--proof", "--import", &pair, &premise]);
+    assert!(
+        o.status.success(),
+        "consistency --proof --import: {}",
+        stderr(&o)
+    );
+    let proved = stdout(&o);
+    assert!(proved.starts_with("consistency false\n"), "{proved}");
+
+    // …and a proof produced over a merge checks against that merge. A consistent merge, so
+    // the answer states the claim the proof establishes.
+    let consistent = write_file(
+        dir,
+        "consistent.ttl",
+        concat!(
+            "@prefix ex: <http://example.org/> .\n",
+            "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n",
+            "ex:o a owl:Ontology ; owl:imports ex:schema .\n",
+            "ex:tom a ex:Cat .\n",
+        ),
+    );
+    let o = run(&["consistency", "--proof", "--import", &pair, &consistent]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    let proved = stdout(&o);
+    assert!(proved.starts_with("consistency true\n"), "{proved}");
+    let at = proved
+        .find("purrdf-dl-proof 1\n")
+        .expect("the proof document");
+    let proof = write_file(dir, "proof.txt", &proved[at..]);
+    // Without the pair the premise is a different ontology: the import is refused.
+    let o = run(&["consistency", "--check-proof", &proof, &consistent]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    let o = run(&[
+        "consistency",
+        "--import",
+        &pair,
+        "--check-proof",
+        &proof,
+        &consistent,
+    ]);
+    assert!(
+        o.status.success(),
+        "--check-proof over the merge: {}",
+        stderr(&o)
+    );
+    assert!(
+        stdout(&o).contains("purrdf-dl-proof-check 1\n"),
+        "{}",
+        stdout(&o)
+    );
+
+    // The valid neighbour: the same individual in an ontology that imports nothing is
+    // consistent and needs no pair.
+    let plain = write_file(
+        dir,
+        "plain.ttl",
+        "@prefix ex: <http://example.org/> .\nex:tom a ex:Cat , ex:Dog .\n",
+    );
+    let o = run(&["consistency", &plain]);
+    assert!(o.status.success(), "{}", stderr(&o));
+    assert!(
+        stdout(&o).starts_with("consistency true\n"),
+        "{}",
+        stdout(&o)
+    );
 }
 
 // ── The refusals ────────────────────────────────────────────────────────────────
@@ -1454,4 +1847,95 @@ fn every_served_regime_answers() {
             "the certificate must name the regime that ran: {written}"
         );
     }
+}
+
+/// `entails` and `query --entailment` take the evaluation limits `reason` takes, and a
+/// refusal names the command line's own flag. The neighbour, the same question with the
+/// limit raised, answers.
+#[test]
+fn entails_and_query_take_the_evaluation_limits() {
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
+    let dir = dir.path();
+    let premise = write_file(dir, "premise.ttl", SUBCLASS_PREMISE);
+    let conclusion = write_file(dir, "conclusion.ttl", DERIVED_CONCLUSION);
+    let entails = |extra: &[&str]| {
+        let mut args = vec![
+            "entails",
+            "--regime",
+            "owl-rl",
+            "--premise",
+            premise.as_str(),
+            "--conclusion",
+            conclusion.as_str(),
+        ];
+        args.extend_from_slice(extra);
+        run(&args)
+    };
+    let refused = entails(&["--max-join-steps", "1"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("evaluation exceeded the join-step limit: ")
+            && stderr(&refused).contains("raise it with --max-join-steps"),
+        "{}",
+        stderr(&refused)
+    );
+    let refused = entails(&["--max-stored-facts", "1"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("raise it with --max-stored-facts"),
+        "{}",
+        stderr(&refused)
+    );
+    let answered = entails(&[
+        "--max-stored-facts",
+        "4194304",
+        "--max-join-steps",
+        "1048576",
+    ]);
+    assert!(answered.status.success(), "{}", stderr(&answered));
+    assert!(
+        stdout(&answered).contains("\nentailment entailed\n"),
+        "{}",
+        stdout(&answered)
+    );
+
+    let query = |extra: &[&str]| {
+        let mut args = vec![
+            "query",
+            "--data",
+            premise.as_str(),
+            "--entailment",
+            "owl-rl",
+        ];
+        args.extend_from_slice(extra);
+        args.push("ASK { ?s ?p ?o }");
+        run(&args)
+    };
+    let refused = query(&["--max-join-steps", "1"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("evaluation exceeded the join-step limit: ")
+            && stderr(&refused).contains("raise it with --max-join-steps"),
+        "{}",
+        stderr(&refused)
+    );
+    let refused = query(&["--max-stored-facts", "1"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused).contains("raise it with --max-stored-facts"),
+        "{}",
+        stderr(&refused)
+    );
+    let answered = query(&["--max-stored-facts", "4194304"]);
+    assert!(answered.status.success(), "{}", stderr(&answered));
+    // Without `--entailment` the flags have nothing to bound, and clap refuses them.
+    let bare = run(&[
+        "query",
+        "--data",
+        premise.as_str(),
+        "--max-join-steps",
+        "1",
+        "ASK { ?s ?p ?o }",
+    ]);
+    assert_eq!(bare.status.code(), Some(2), "{}", stderr(&bare));
 }

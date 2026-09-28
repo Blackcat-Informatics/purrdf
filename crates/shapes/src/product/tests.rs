@@ -31,7 +31,7 @@ use crate::engine::{PreparedShapes, parse_shapes};
 use crate::model::BoxRoleVocab;
 use crate::report::ValidationReport;
 use crate::shapes::{Shapes, from_dataset_with_config_and_graph};
-use crate::text_ingest::{extract_prefixes, parse_turtle_to_dataset};
+use crate::text_ingest::{parse_turtle_document, parse_turtle_to_dataset};
 
 // ── Fixtures (example.org, per the repository's fixture rule) ───────────────────
 
@@ -135,8 +135,9 @@ ex:high a ex:Thing ; ex:n "2"^^xsd:integer .
 ///
 /// The declarative model is what a product carries, and a declaration nothing in
 /// that model reaches is not in it — while the `sh:select` body above still names
-/// the function by IRI, so a restore would resolve that call to nothing. This is the
-/// construct a product genuinely cannot carry.
+/// the function by IRI. A restore therefore re-derives the declaration from the
+/// carried shapes dataset rather than from the model; see
+/// `a_declaration_the_model_does_not_reach_is_carried`.
 const UNREACHABLE_FN_SHAPES: &str = r#"
 ex:incomeTotal a sh:ListParameterExpressionFunction ;
   rdfs:subClassOf sh:ListParameterExpression ;
@@ -684,7 +685,9 @@ fn role_shapes() -> Shapes {
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("role fixture parses");
     from_dataset_with_config_and_graph(
         &dataset,
-        &extract_prefixes(&ttl),
+        &parse_turtle_document(&ttl, None)
+            .expect("fixture parses")
+            .prefixes,
         Some(BoxRoleVocab::for_namespace(ROLE_NS)),
         None,
     )
@@ -750,8 +753,15 @@ fn admit_restores_box_role_vocab() {
 fn admit_under_none_vocab_restores_none() {
     let ttl = format!("{PREFIXES}{ROLE_SHAPES}");
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("parses");
-    let parsed = from_dataset_with_config_and_graph(&dataset, &extract_prefixes(&ttl), None, None)
-        .expect("shapes parse");
+    let parsed = from_dataset_with_config_and_graph(
+        &dataset,
+        &parse_turtle_document(&ttl, None)
+            .expect("fixture parses")
+            .prefixes,
+        None,
+        None,
+    )
+    .expect("shapes parse");
     assert!(parsed.box_role_vocab.is_none());
     assert_eq!(
         box_roles(&parsed),
@@ -863,6 +873,7 @@ fn declared_identity_readable_without_admission() {
             "property-function-registry",
             "class-catalog",
             "parse-configuration",
+            "included-graphs",
         ],
         "the binding is DECODABLE, which is what lets a caller see which input moved",
     );
@@ -945,51 +956,71 @@ fn a_declared_sparql_function_survives_the_round_trip() {
     assert_eq!(report_nt(&rebuilt, &flipped), flipped_expected);
 }
 
+// ── Declarations the model does not reach ──────────────────────────────────────
+
+/// A §7.3 list-parameter declaration that no node expression calls is CARRIED:
+/// nothing in the declarative model reaches it, but a `sh:sparql` body names it,
+/// and the restore re-derives it from the shapes dataset the product carries —
+/// the same way it re-derives `sh:SPARQLFunction` declarations. Both restore
+/// seams must answer what the document answers, and the negative control must
+/// flip identically through all three.
+#[test]
+fn a_declaration_the_model_does_not_reach_is_carried() {
+    let document = prepare(UNREACHABLE_FN_SHAPES);
+    let bytes = document
+        .to_product(&ShapesProfile::CORE)
+        .expect("a declaration called only from SPARQL text is representable");
+    let admitted = ShapesProduct::open(&bytes)
+        .expect("opens")
+        .admit(&ShapesProfile::CORE, &HostBindings::empty())
+        .expect("admits");
+    let rebuilt = ShapesProduct::open(&bytes)
+        .expect("opens")
+        .rebuild(&ShapesProfile::CORE, &HostBindings::empty())
+        .expect("rebuilds");
+
+    // 10 + 25 = 35 > 30: the SPARQL body condemns ex:alice through the function.
+    let over = data_of("ex:alice ex:income 10, 25 .");
+    let expected = report_nt(&document, &over);
+    assert!(
+        expected.contains("http://example.org/ns#alice"),
+        "the function must be reached from the SPARQL body: {expected}"
+    );
+    assert_eq!(report_nt(&admitted, &over), expected);
+    assert_eq!(report_nt(&rebuilt, &over), expected);
+
+    // THE NEGATIVE CONTROL: 10 is not over 30, so nobody is condemned — through
+    // every route alike.
+    let under = data_of("ex:alice ex:income 10 .");
+    let under_expected = report_nt(&document, &under);
+    assert_ne!(under_expected, expected);
+    assert_eq!(report_nt(&admitted, &under), under_expected);
+    assert_eq!(report_nt(&rebuilt, &under), under_expected);
+}
+
 // ── The writer refuses before it emits ─────────────────────────────────────────
 
-/// A declared function the product's model cannot reach is refused at WRITE time,
-/// with nothing emitted.
-///
-/// The construct is a `sh:ListParameterExpressionFunction` that no node expression
-/// calls: nothing in the declarative model reaches the declaration, so the model
-/// cannot carry it — while a `sh:sparql` body still names it, so a restore would
-/// resolve that call site to nothing and validate green. The refusal is reached
-/// through the registry fingerprint comparison rather than through a probe for this
-/// case, which is what makes it hold for a kind nobody has thought of yet.
+/// A restore that would LOSE a declared function is refused at write time, with
+/// nothing emitted: the check compares the parse's declared population with what a
+/// restore assembles, so it holds for a declared kind nobody has thought of yet.
+/// Driven directly on the comparison, because every declared kind this build knows
+/// is now reproduced by its restore.
 #[test]
-fn to_product_refuses_before_emitting_bytes() {
-    let prepared = prepare(UNREACHABLE_FN_SHAPES);
-    let error = prepared
-        .to_product(&ShapesProfile::CORE)
-        .expect_err("a declaration the model cannot reach is not representable");
+fn a_restore_that_loses_a_declaration_is_refused() {
+    let parsed = shapes_of(EXPRESSION_FN_SHAPES);
+    let lost = UserFunctionRegistry::new();
+    let error = super::certified::verify_declared_functions(&parsed.functions, &lost)
+        .expect_err("a restore that lost the declaration must be refused");
     assert_eq!(error.dimension(), ProductDimension::UnsupportedCapability);
     assert!(
         error.message().contains("validate green"),
         "the refusal must name the harm it prevents: {error}",
     );
-
-    // The NEIGHBOURING valid cases. Without these the check above would pass just as
-    // well for a writer that refused every function-bearing shapes graph — which is
-    // exactly the over-refusal this pairing exists to catch.
-    //
-    // A §7.3 list-parameter declaration a node expression DOES call:
-    let bytes = prepare(EXPRESSION_FN_SHAPES)
-        .to_product(&ShapesProfile::CORE)
-        .expect("an expression-bodied declaration the model reaches is representable");
-    ShapesProduct::open(&bytes)
-        .expect("opens")
-        .admit(&ShapesProfile::CORE, &HostBindings::empty())
-        .expect("admits");
-
-    // …and a SHACL-AF §5 `sh:SPARQLFunction`, which the shapes dataset states and a
-    // restore re-derives:
-    let bytes = prepare(SPARQL_FN_SHAPES)
-        .to_product(&ShapesProfile::CORE)
-        .expect("a SPARQL-bodied declaration is representable");
-    ShapesProduct::open(&bytes)
-        .expect("opens")
-        .admit(&ShapesProfile::CORE, &HostBindings::empty())
-        .expect("admits");
+    // The NEIGHBOUR: the restore this build actually assembles is accepted.
+    let assembled =
+        super::certified::assemble_functions(&parsed, &HostBindings::empty()).expect("assembles");
+    super::certified::verify_declared_functions(&parsed.functions, &assembled)
+        .expect("a restore that reproduces every declaration is accepted");
 }
 
 // ── Certification is the cold path ─────────────────────────────────────────────
@@ -1224,7 +1255,9 @@ fn disagreeing_carriers_refuse() {
     let dataset = parse_turtle_to_dataset(&ttl, None).expect("parses");
     let shapes = from_dataset_with_config_and_graph(
         &dataset,
-        &extract_prefixes(&ttl),
+        &parse_turtle_document(&ttl, None)
+            .expect("fixture parses")
+            .prefixes,
         None,
         Some("http://example.org/shapes".to_owned()),
     )
@@ -1264,4 +1297,63 @@ fn disagreeing_carriers_refuse() {
 #[test]
 fn writing_is_deterministic() {
     assert_eq!(product_of(PLAIN_SHAPES), product_of(PLAIN_SHAPES));
+}
+
+/// The graphs a shapes graph was assembled from by name are an identity component of
+/// their own: they decide which data-graph `sh:shapesGraph` links (SHACL 1.2 Core
+/// section 6.4) a restored preparation holds, so two products over ONE merged dataset
+/// that recorded different sets validate the same data graph differently and must not
+/// share an identity. Equal sets give equal identities.
+#[test]
+fn included_graphs_are_bound_by_the_identity() {
+    const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+        @prefix ex: <http://example.org/> .\n\
+        ex:Node a sh:NodeShape ; sh:targetNode ex:Focus ; sh:property ex:Prop .\n\
+        ex:Prop sh:path ex:p ; sh:minCount 1 .\n";
+    const LIB: &str = "http://example.org/lib";
+    let pack = |absorbed: &[&str]| -> (Vec<u8>, Identity) {
+        let mut imports = crate::imports::ShapesImports::new();
+        for iri in absorbed {
+            imports.declare_loaded(*iri);
+        }
+        let shapes = crate::engine::parse_shapes_with_config(SHAPES, None, None, &imports)
+            .expect("the fixture parses");
+        assert_eq!(shapes.provenance().included_graphs(), absorbed);
+        let bytes = PreparedShapes::new(Arc::new(shapes))
+            .to_product(&ShapesProfile::CORE)
+            .expect("the fixture is representable");
+        let identity = ShapesProduct::open(&bytes)
+            .expect("the product opens")
+            .declared_identity()
+            .clone();
+        (bytes, identity)
+    };
+    let (_, none) = pack(&[]);
+    let (lib_bytes, lib) = pack(&[LIB]);
+    let (_, lib_again) = pack(&[LIB]);
+
+    // One merged dataset, one of everything else: only row 12 differs.
+    assert_eq!(
+        none.component("source-dataset"),
+        lib.component("source-dataset")
+    );
+    let differing: Vec<&str> = none
+        .components()
+        .iter()
+        .zip(lib.components())
+        .filter(|(a, b)| a.value() != b.value())
+        .map(|(a, _)| a.label())
+        .collect();
+    assert_eq!(differing, ["included-graphs"]);
+    assert_ne!(
+        none, lib,
+        "different absorbed sets must not share an identity"
+    );
+    assert_eq!(lib, lib_again, "equal absorbed sets give equal identities");
+
+    // Restoring checks the row against the restored preparation, so the product admits.
+    ShapesProduct::open(&lib_bytes)
+        .expect("opens")
+        .admit(&ShapesProfile::CORE, &HostBindings::empty())
+        .expect("a product whose recorded graphs agree with its preamble admits");
 }

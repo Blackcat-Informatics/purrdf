@@ -48,8 +48,9 @@
 //! under `m`, both anchors include the position after a final newline; under
 //! `i`, Unicode simple case folding omits some full case variants, such as
 //! dotless `ı` matching `i`. Tests pin these engine behaviors explicitly.
-//! Unicode ECMA-262 emission implements the exact `m` rules and refuses `i`
-//! with a typed error rather than inheriting those validator differences.
+//! Unicode ECMA-262 emission implements the exact `m` rules, and writes `i`
+//! into the source as XPath case variants (F&O 3.1 §5.6.2) rather than
+//! inheriting either validator difference.
 //!
 //! # A recognizer, not a pass-through
 //!
@@ -118,6 +119,7 @@
 //! pattern matches a zero-length string) is not.
 
 mod blocks;
+mod case_variants;
 mod classes;
 mod ecma;
 mod ecma_emit;
@@ -393,6 +395,17 @@ enum PatternMode {
 }
 
 fn prepare(pattern: &str, flags: &str) -> Result<PreparedPattern, XsdRegexError> {
+    prepare_with(pattern, flags, false)
+}
+
+/// [`prepare`], with the `i` flag written into the source as XPath case
+/// variants when `xpath_case` is set (see [`case_variants`]); the returned
+/// `case_insensitive` is then `false`, since no engine mode is to be applied.
+fn prepare_with(
+    pattern: &str,
+    flags: &str,
+    xpath_case: bool,
+) -> Result<PreparedPattern, XsdRegexError> {
     if pattern.len() > MAX_SOURCE_BYTES {
         return Err(XsdRegexError::TooLarge {
             bytes: pattern.len(),
@@ -427,7 +440,26 @@ fn prepare(pattern: &str, flags: &str) -> Result<PreparedPattern, XsdRegexError>
         // (confirmed: `regex::escape("a b#c")` == `"a b\\#c"`), so applying
         // `x` afterward would delete literal spaces from the pattern, which
         // is exactly the bug this module does not repeat.
-        let escaped = regex::escape(pattern);
+        let escaped = if xpath_case && case_insensitive {
+            // Every character of a `q` pattern is a normal character used as
+            // an atom, so each one stands for the set of its case variants.
+            let mut source = String::with_capacity(pattern.len());
+            for c in pattern.chars() {
+                if let Some(variants) = case_variants::of(c) {
+                    source.push('[');
+                    for &variant in variants {
+                        let code = u32::from(variant);
+                        classes::push_hex_range(&mut source, code, code);
+                    }
+                    source.push(']');
+                } else {
+                    source.push_str(&regex::escape(c.encode_utf8(&mut [0; 4])));
+                }
+            }
+            source
+        } else {
+            regex::escape(pattern)
+        };
         if escaped.len() > MAX_TRANSLATED_BYTES {
             return Err(XsdRegexError::TooLarge {
                 bytes: escaped.len(),
@@ -436,7 +468,7 @@ fn prepare(pattern: &str, flags: &str) -> Result<PreparedPattern, XsdRegexError>
         }
         return Ok(PreparedPattern {
             source: escaped,
-            case_insensitive,
+            case_insensitive: case_insensitive && !xpath_case,
             dot_all: false,
             multi_line: false,
             mode: PatternMode::Literal,
@@ -452,7 +484,12 @@ fn prepare(pattern: &str, flags: &str) -> Result<PreparedPattern, XsdRegexError>
     } else {
         pattern.to_owned()
     };
-    let translated = emit::translate(&source, dot_all, case_insensitive)?;
+    let case = match (case_insensitive, xpath_case) {
+        (false, _) => emit::CaseMode::Sensitive,
+        (true, false) => emit::CaseMode::EngineFold,
+        (true, true) => emit::CaseMode::XPathVariants,
+    };
+    let translated = emit::translate_with(&source, dot_all, case)?;
     if translated.len() > MAX_TRANSLATED_BYTES {
         return Err(XsdRegexError::TooLarge {
             bytes: translated.len(),
@@ -461,7 +498,7 @@ fn prepare(pattern: &str, flags: &str) -> Result<PreparedPattern, XsdRegexError>
     }
     Ok(PreparedPattern {
         source: translated,
-        case_insensitive,
+        case_insensitive: case_insensitive && !xpath_case,
         dot_all,
         multi_line,
         mode: PatternMode::Regex,

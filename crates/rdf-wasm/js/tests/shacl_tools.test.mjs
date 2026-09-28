@@ -1,0 +1,519 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+// Node real-execution coverage of the shapes-graph tools reached through the PUBLIC
+// package root (`../index.mjs`): `shaclApplyRules`, `shaclCheckRules`, `shaclEvalNodeExpr`
+// and `shaclLintShapes`. Every shapes graph carries the W3C SHACL 1.2 declaration of
+// `sh:SPARQLExprExpression` verbatim — a built-in declared as a
+// `sh:NamedParameterExpressionFunction` with no `sh:bodyExpression`, which is not a
+// bodiless custom function — beside shapes that call `sh:sparqlExpr` with `sh:prefixes`.
+
+import { test } from "node:test";
+import assert from "node:assert/strict";
+
+import {
+  ready,
+  shaclApplyRules,
+  shaclCheckRules,
+  shaclEntail,
+  shaclEvalNodeExpr,
+  shaclLintShapes,
+} from "../index.mjs";
+
+await ready();
+
+const PREFIXES = `@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://example.org/ns#> .
+`;
+
+const SNIPPET = `
+sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+  rdfs:label "SPARQL expr expression"@en ;
+  rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
+  rdfs:isDefinedBy sh: ;
+  rdfs:subClassOf sh:NamedParameterExpression,
+  sh:SPARQLExecutable ;
+  sh:parameter sh:SPARQLExprExpression-prefixes,
+  sh:SPARQLExprExpression-sparqlExpr .
+
+sh:SPARQLExprExpression-prefixes a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:description "The prefixes that shall be applied before parsing the SPARQL query that gets derived from the sh:sparqlExpr expression. The object should define those prefixes using sh:declare."@en ;
+  sh:name "prefixes"@en ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:prefixes .
+
+sh:SPARQLExprExpression-sparqlExpr a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:datatype xsd:string ;
+  sh:description "The SPARQL expression that is executed during evaluation of this node expression."@en ;
+  sh:keyParameter true ;
+  sh:name "SPARQL expr"@en ;
+  sh:path sh:sparqlExpr .
+`;
+
+// A sh:sparqlExpr node naming ex:yes through sh:prefixes, a labelled shnex:var node, a
+// rule tagging every ex:Item through the same expression, and a counter rule stepping
+// ex:n to 5 — exactly four term-generating rounds.
+const TOOLS = `
+ex:Prefixes sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ] .
+ex:Tag sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes .
+_:suffix shnex:var "suffix" .
+
+ex:Tagger a sh:NodeShape ;
+  sh:targetClass ex:Item ;
+  sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:tagged ;
+            sh:object [ sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ] ] .
+
+ex:Counter a sh:NodeShape ;
+  sh:targetSubjectsOf ex:n ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 AS ?m) }""" ] .
+`;
+
+const SHAPES = PREFIXES + SNIPPET + TOOLS;
+
+const INTEGER = "<http://www.w3.org/2001/XMLSchema#integer>";
+
+const DATA = `<http://example.org/ns#a> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Item> .
+<http://example.org/ns#a> <http://example.org/ns#n> "1"^^${INTEGER} .
+`;
+
+const INFERRED =
+  [2, 3, 4, 5]
+    .map((n) => `<http://example.org/ns#a> <http://example.org/ns#n> "${n}"^^${INTEGER} .\n`)
+    .join("") +
+  "<http://example.org/ns#a> <http://example.org/ns#tagged> <http://example.org/ns#yes> .\n";
+
+test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its proof, and honours the round limit", () => {
+  const plain = shaclApplyRules(DATA, SHAPES);
+  assert.equal(plain.inferred, INFERRED);
+  assert.equal(plain.proof, undefined);
+  plain.free();
+
+  const explained = shaclApplyRules(DATA, SHAPES, undefined, undefined, undefined, true);
+  assert.equal(explained.inferred, INFERRED);
+  assert.equal(explained.proof.split("derived ").length - 1, 5);
+  explained.free();
+
+  // A passed limit names the limit, the numbers and this host's own argument.
+  assert.throws(
+    () => shaclApplyRules(
+      DATA,
+      SHAPES,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      3n,
+    ),
+    (error) =>
+      error.message.startsWith(
+        "SHACL rules did not complete: the rules exceeded the term-generating round " +
+          "limit: 4 rounds inferred a term the evaluation graph did not hold, past the " +
+          "limit of 3 (the caller's limit); rule ",
+      ) &&
+      error.message.endsWith(
+        "if the rule set terminates, raise the limit with shaclApplyRules's " +
+          "maxTermGeneratingRounds",
+      ),
+  );
+  assert.throws(
+    () =>
+      shaclApplyRules(
+        DATA,
+        SHAPES,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        5n,
+      ),
+    (error) =>
+      error.message.includes("exceeded the generated-term budget") &&
+      error.message.includes("past the budget of 5 (the caller's budget)") &&
+      error.message.endsWith("raise the budget with shaclApplyRules's maxGeneratedTerms"),
+  );
+  const roomy = shaclApplyRules(
+    DATA,
+    SHAPES,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    6n,
+  );
+  assert.equal(roomy.inferred, INFERRED);
+  roomy.free();
+  const enough = shaclApplyRules(
+    DATA,
+    SHAPES,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    4n,
+  );
+  assert.equal(enough.inferred, INFERRED);
+  enough.free();
+
+  const srl = shaclApplyRules(
+    DATA,
+    undefined,
+    "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\nDATA { ex:d ex:q 2 }\n",
+    undefined,
+    undefined,
+    true,
+  );
+  assert.equal(
+    srl.inferred,
+    `<http://example.org/ns#a> <http://example.org/ns#q> "1"^^${INTEGER} .\n` +
+      `<http://example.org/ns#d> <http://example.org/ns#q> "2"^^${INTEGER} .\n`,
+  );
+  assert.ok(srl.proof.includes("  data-block\n"), srl.proof);
+  srl.free();
+
+  assert.throws(
+    () => shaclApplyRules(DATA),
+    (error) =>
+      error.message === "no rule source: name a SHACL shapes graph or a SPARQL 1.2 RL rule set",
+  );
+
+  // The join-step limit names this host's own argument.
+  assert.throws(
+    () =>
+      shaclApplyRules(
+        DATA,
+        SHAPES,
+        undefined,
+        undefined,
+        undefined,
+        false,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        undefined,
+        1n,
+      ),
+    (error) =>
+      error.message.includes("the rules exceeded the join-step limit: ") &&
+      error.message.endsWith("raise it with shaclApplyRules's maxJoinSteps"),
+  );
+
+  // A SPARQL 1.2 RL rule set's IMPORTS resolve from the same import table.
+  const importing =
+    "PREFIX ex: <http://example.org/ns#>\nIMPORTS <http://example.org/more>\n" +
+    "RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+  const imported =
+    "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n";
+  const lone = "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+  const counted =
+    "<http://example.org/ns#a> <http://example.org/ns#counted> " +
+    '"true"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n';
+  const resolved = shaclApplyRules(
+    DATA,
+    undefined,
+    importing,
+    undefined,
+    undefined,
+    false,
+    ["http://example.org/more"],
+    [imported],
+  );
+  assert.ok(resolved.inferred.includes(counted), resolved.inferred);
+  resolved.free();
+  assert.throws(
+    () => shaclApplyRules(DATA, undefined, importing),
+    (error) =>
+      error.message ===
+      "SPARQL 1.2 RL import <http://example.org/more> failed: no import-table entry " +
+        "supplies the rule set it names, and PurRDF fetches nothing it was not handed; " +
+        "supply that rule set's text under this IRI",
+  );
+  assert.throws(
+    () =>
+      shaclApplyRules(
+        DATA,
+        undefined,
+        lone,
+        undefined,
+        undefined,
+        false,
+        [
+        "http://example.org/more",
+      ],
+        [imported],
+      ),
+    (error) =>
+      error.message ===
+      "the SPARQL 1.2 RL rule set's import closure never reaches <http://example.org/more>, " +
+        "so the import table's rule set would be read and never used; remove it",
+  );
+});
+
+test("wasm_shacl_eval_node_expr: shaclEvalNodeExpr evaluates one expression node, natively and with a scope", () => {
+  assert.deepEqual(
+    shaclEvalNodeExpr(SHAPES, DATA, "http://example.org/ns#Tag", "http://example.org/ns#a").outputs,
+    ["<http://example.org/ns#yes>"],
+  );
+  assert.deepEqual(
+    shaclEvalNodeExpr(SHAPES, DATA, "_:suffix", "http://example.org/ns#a", ['suffix="!"@en']).outputs,
+    ['"!"@en'],
+  );
+  assert.throws(
+    () => shaclEvalNodeExpr(SHAPES, DATA, "_:nosuch", "http://example.org/ns#a"),
+    (error) =>
+      error.message ===
+      "the shapes graph mentions no blank node _:nosuch, so there is no expression to " +
+        "evaluate; name the expression node by the label the shapes document gives it, " +
+        "or by its IRI",
+  );
+  assert.throws(
+    () => shaclEvalNodeExpr(SHAPES, DATA, "_:suffix", "http://example.org/ns#a", ['focusNode="!"']),
+    (error) =>
+      error.message ===
+      'scope variable "focusNode" can never be read: SHACL 1.2 Node Expressions §4.1.2 ' +
+        'resolves shnex:var "focusNode" to the focus node before the scope is searched. ' +
+        "Pass the node as the focus node instead",
+  );
+});
+
+test("shaclEvalNodeExpr reports the mandatory diagnostic as { rule, shape }, and none for the neighbour", () => {
+  const shapes = (members) =>
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n" +
+    "@prefix ex: <http://example.org/ns#> .\n" +
+    `ex:Listed a sh:NodeShape ; sh:in ( ${members} ) .\n`;
+  const constant = "http://example.org/ns#Constant";
+  const empty = shaclEvalNodeExpr(shapes(""), DATA, constant, "http://example.org/ns#a");
+  assert.deepEqual(empty.outputs, [`<${constant}>`]);
+  assert.deepEqual(
+    empty.diagnostics.map((d) => ({ rule: d.rule, shape: d.shape })),
+    [{ rule: "in-minListLength", shape: "<http://example.org/ns#Listed>" }],
+  );
+  const member = shaclEvalNodeExpr(shapes("ex:one"), DATA, constant, "http://example.org/ns#a");
+  assert.deepEqual(member.outputs, [`<${constant}>`]);
+  assert.equal(member.diagnostics.length, 0);
+});
+
+test("wasm_shacl_eval_node_expr_selectors: shaclEvalNodeExpr names an anonymous expression by a walk and inline as Turtle", () => {
+  const SH = "http://www.w3.org/ns/shacl#";
+  const A = "http://example.org/ns#a";
+  const YES = ["<http://example.org/ns#yes>"];
+  const at = (node, via) =>
+    shaclEvalNodeExpr(SHAPES, DATA, undefined, A, undefined, undefined, undefined, undefined, node, via)
+      .outputs;
+  const inline = (turtle) =>
+    shaclEvalNodeExpr(SHAPES, DATA, undefined, A, undefined, undefined, undefined, undefined, undefined, undefined, turtle)
+      .outputs;
+  assert.deepEqual(at("http://example.org/ns#Tagger", [`${SH}rule`, `${SH}object`]), YES);
+  // One value beside two.
+  assert.deepEqual(
+    at(`${SH}SPARQLExprExpression`, ["http://www.w3.org/2000/01/rdf-schema#isDefinedBy"]),
+    [`<${SH}>`],
+  );
+  assert.throws(
+    () => at(`${SH}SPARQLExprExpression`, [`${SH}parameter`]),
+    (error) => error.message.includes("reaches 2 values"),
+  );
+  // One root beside two.
+  assert.deepEqual(inline('[ sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ] .'), YES);
+  assert.throws(
+    () => inline('[ shnex:var "a" ] . [ shnex:var "b" ] .'),
+    (error) => error.message.includes("has 2 root blank nodes"),
+  );
+  // One selector beside two.
+  assert.throws(
+    () =>
+      shaclEvalNodeExpr(
+        SHAPES, DATA, "http://example.org/ns#Tag", A, undefined, undefined, undefined, undefined,
+        undefined, undefined, '[ shnex:var "a" ] .',
+      ),
+    (error) => error.message.includes("2 of the expression node"),
+  );
+});
+
+test("wasm_shacl_lint_shapes: shaclLintShapes certifies the declaration-bearing graph clean and reports a malformed one", () => {
+  const clean = shaclLintShapes(SHAPES);
+  assert.equal(clean.clean, true);
+  assert.equal(clean.findings, 0);
+  assert.equal(clean.loadError, undefined);
+  assert.ok(
+    clean.report.includes(
+      "call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on <http://example.org/ns#Tagger>\n",
+    ),
+    clean.report,
+  );
+  assert.ok(clean.report.endsWith("unanchored-imports 0\nfindings 0\nclean true\n"), clean.report);
+  clean.free();
+
+  // An owl:imports on a node that is no anchor is data: listed, never a finding.
+  const unanchored = shaclLintShapes(
+    SHAPES + "ex:Other <http://www.w3.org/2002/07/owl#imports> ex:Target .\n",
+  );
+  assert.equal(unanchored.clean, true, unanchored.report);
+  assert.ok(
+    unanchored.report.includes(
+      "unanchored-imports 1\nunanchored <http://example.org/ns#Other> <http://example.org/ns#Target> document -\n",
+    ),
+    unanchored.report,
+  );
+  unanchored.free();
+
+  const malformed = shaclLintShapes(
+    PREFIXES + SNIPPET + 'ex:S a sh:NodeShape ; sh:property [ sh:path ex:p ; sh:minCount "one" ] .\n',
+  );
+  assert.equal(malformed.clean, false);
+  assert.ok(malformed.findings >= 2, malformed.report);
+  assert.equal(typeof malformed.loadError, "string");
+  assert.ok(malformed.report.endsWith("clean false\n"));
+  malformed.free();
+
+  assert.throws(() => shaclLintShapes("@@@ not turtle"));
+});
+
+test("wasm_shacl_apply_rules: the wasm32 default stored-fact limit refuses a 70,000-triple copy, naming maxStoredFacts, and admits it when raised", () => {
+  const COPIED = 70000;
+  let data = "";
+  for (let i = 0; i < COPIED; i += 1) {
+    data += `<http://example.org/ns#s${i}> <http://example.org/ns#p> <http://example.org/ns#o${i}> .\n`;
+  }
+  const copy = `${PREFIXES}
+ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ;
+  sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:q ;
+            sh:object [ sh:path ex:p ] ] .
+`;
+  // 70,000 data triples and 70,000 copies: 140,000 facts, past this target's default.
+  assert.throws(
+    () => shaclApplyRules(data, copy),
+    (error) =>
+      error.message ===
+      "SHACL rules did not complete: the rules exceeded the stored-fact limit: 140000 facts " +
+        "observed, 131072 permitted (the default for this target); raise it with " +
+        "shaclApplyRules's maxStoredFacts",
+  );
+  const raised = shaclApplyRules(
+    data,
+    copy,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    undefined,
+    140000n,
+  );
+  assert.equal(raised.inferred.split("\n").length - 1, COPIED);
+  raised.free();
+});
+
+test("wasm_shacl_entail_limits: shaclEntail takes the four rule-evaluation limits, names its own arguments, and materializes the closure when they are raised", () => {
+  const counter = `${PREFIXES}
+ex:Counter a sh:NodeShape ;
+  sh:targetSubjectsOf ex:n ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 AS ?m) }""" ] .
+`;
+  const data =
+    '<http://example.org/ns#a> <http://example.org/ns#n> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .\n';
+  const entail = (rounds, terms, facts, steps) =>
+    shaclEntail(counter, data, undefined, undefined, undefined, undefined, rounds, terms, facts, steps);
+  const cases = [
+    [[1n, undefined, undefined, undefined], "shaclEntail's maxTermGeneratingRounds"],
+    [[undefined, 1n, undefined, undefined], "shaclEntail's maxGeneratedTerms"],
+    [[undefined, undefined, 1n, undefined], "shaclEntail's maxStoredFacts"],
+    [[undefined, undefined, undefined, 1n], "shaclEntail's maxJoinSteps"],
+  ];
+  for (const [limits, knob] of cases) {
+    assert.throws(
+      () => entail(...limits),
+      (error) => error.message.endsWith(knob),
+      knob,
+    );
+  }
+  const out = entail(64n, 64n, 64n, 4096n);
+  const closed = out.ntriples;
+  out.free();
+  assert.ok(
+    closed.includes(
+      '<http://example.org/ns#a> <http://example.org/ns#n> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .',
+    ),
+    closed,
+  );
+});
+
+test("wasm_shacl_check_rules: shaclCheckRules checks a SPARQL 1.2 RL rule set to a level and evaluates nothing", () => {
+  const importing =
+    'PREFIX ex: <http://example.org/ns#>\nVERSION "1.2"\nIMPORTS <http://example.org/more>\n' +
+    "RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\nDATA { ex:d ex:q 2 }\n";
+  const imported =
+    "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n";
+  const checked = shaclCheckRules(importing, undefined, ["http://example.org/more"], [imported]);
+  assert.equal(checked.level, "stratified");
+  assert.equal(checked.rules.length, 2);
+  assert.equal(checked.dataTriples, 1);
+  assert.deepEqual(checked.imported, ["http://example.org/more"]);
+  assert.deepEqual(checked.versions, ["1.2"]);
+  assert.equal(checked.strata, 1);
+  assert.equal(
+    checked.summary,
+    "SPARQL 1.2 RL rule set is well formed and stratified (level stratified): 2 rules, " +
+      '1 data triple, 1 imported rule set, 1 stratum, VERSION "1.2"',
+  );
+  checked.free();
+  // Without the table entry the import is unresolved: refused by name.
+  assert.throws(
+    () => shaclCheckRules(importing),
+    (error) => error.message.startsWith("SPARQL 1.2 RL import <http://example.org/more> failed"),
+  );
+
+  // A self-negating rule is syntactically valid and well formed but not stratifiable; its
+  // neighbour, differing only in the negated predicate, passes every level.
+  const cyclic =
+    "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:p ex:z } }\n";
+  const acyclic =
+    "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:r ex:z } }\n";
+  for (const level of ["syntax", "well-formed"]) {
+    const below = shaclCheckRules(cyclic, undefined, undefined, undefined, level);
+    assert.equal(below.level, level);
+    assert.equal(below.strata, undefined);
+    below.free();
+  }
+  assert.throws(
+    () => shaclCheckRules(cyclic),
+    (error) => error.message.includes("is not stratifiable"),
+  );
+  const fine = shaclCheckRules(acyclic);
+  assert.equal(fine.strata, 1);
+  fine.free();
+  // Not SPARQL 1.2 RL at all, and an unknown level.
+  assert.throws(
+    () => shaclCheckRules("RULE {", undefined, undefined, undefined, "syntax"),
+    (error) => error.message.startsWith("SPARQL 1.2 RL syntax error"),
+  );
+  assert.throws(
+    () => shaclCheckRules(acyclic, undefined, undefined, undefined, "stratify"),
+    (error) => error.message.includes("is not a SPARQL 1.2 RL check level"),
+  );
+});

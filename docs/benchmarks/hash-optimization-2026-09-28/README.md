@@ -47,9 +47,14 @@ do the 4- and 16-byte blank-label protocols. The table includes these losses:
 the string and map results do not establish a universal win. The largest loss
 is the 64-byte slice (2.461 times the reference time).
 
+The table and integrated workload snapshots below predate the portable pair
+mixing correction and subsequent integration. Their exact source identities
+remain in the receipts. [Portable pair mixing](portable-mixing/README.md) records
+the correction's separate baseline-x86-64 comparison.
+
 ## Integrated workloads
 
-`workloads/` records the final implementation, including the public string
+`workloads/` records the measured implementation, including the public string
 wrapper inlining repair: nine output-identity comparisons, 324 paired timing
 samples, allocation measurements and 81 hardware-counter receipts. Every
 output identity matches across the three builds. Build receipts retain compiler

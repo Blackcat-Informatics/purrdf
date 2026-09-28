@@ -41,10 +41,10 @@ Usage:
     python3 scripts/conformance-matrix.py --no-python  # native Rust suites only
     python3 scripts/conformance-matrix.py --self-test  # scrape fail-closed proof
 
-    # The same matrix in two halves on two machines, then one verdict:
-    python3 scripts/conformance-matrix.py --part native --report R/native.json
-    python3 scripts/conformance-matrix.py --part python --report R/python.json
-    python3 scripts/conformance-matrix.py --merge-reports R
+    # The same matrix on several machines, then one verdict (what CI runs):
+    python3 scripts/conformance-matrix.py --shard core --emit-results R/core.json
+    ...                                   (one run per name in SHARDS)
+    python3 scripts/conformance-matrix.py --from-results R
 """
 
 from __future__ import annotations
@@ -59,7 +59,7 @@ import shlex
 import subprocess
 import sys
 from collections.abc import Callable, Iterator
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict, dataclass, field, fields
 from pathlib import Path
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -236,6 +236,8 @@ def _suite_codec() -> SuiteResult:
 
 
 def _suite_shacl_w3c() -> SuiteResult:
+    """The vendored W3C SHACL 1.0 suite plus the `af/` seam: scrape the harness's
+    own `TOTAL` line. Ledgered xfails are counted in the XFail/Skip column."""
     cmd = [
         "cargo", "test", "-p", "purrdf-shapes", "--locked",
         "--test", "w3c_conformance", "--", "--nocapture",
@@ -245,7 +247,7 @@ def _suite_shacl_w3c() -> SuiteResult:
     m = re.search(r"TOTAL: passed (\d+), xfailed (\d+), ledger (\d+)", out)
     if m:
         passed, xfailed = int(m.group(1)), int(m.group(2))
-        detail = f"{passed} pass · {xfailed} ledgered"
+        detail = f"{passed} pass as approved · {xfailed} ledgered"
         return SuiteResult(
             "SHACL Core + SHACL-SPARQL", "W3C data-shapes",
             passed=passed, xskip=xfailed, failed=0,
@@ -254,6 +256,86 @@ def _suite_shacl_w3c() -> SuiteResult:
     return _no_scoreboard(
         "SHACL Core + SHACL-SPARQL", "W3C data-shapes",
         "`TOTAL: passed N, xfailed N, ledger N`", cmd, out,
+    )
+
+
+_SHACL12_NAME = "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)"
+_SHACL12_SOURCE = "W3C shacl12-test-suite"
+_SHACL12_UNLISTED_NAME = "SHACL 1.2 unlisted vendored files"
+_SHACL12_UNLISTED_SOURCE = "W3C shacl12-test-suite files no manifest includes"
+
+
+def _suite_shacl12_w3c() -> SuiteResult:
+    """The vendored W3C SHACL 1.2 suite, every test type: scrape the harness's
+    own `W3C12 TOTAL` line so the row counts suite ENTRIES (sht:Validate,
+    sht:EvalNodeExpr, sht:Infer and the seven srlt: types), not the handful of
+    Rust test functions the cargo tally would report.
+
+    Only the APPROVED suite — the entries an upstream manifest lists — is this
+    row. Pass is the entries that agree with their approved expectation exactly.
+    The entries whose approved result spells a computed decimal non-canonically
+    (graded by substituting the XSD 1.1 canonical spelling) are counted in the
+    XFail/Skip column and named in the detail, never folded into Pass. The entries of vendored files no manifest includes are
+    their own row, `_suite_shacl12_unlisted`."""
+    cmd = [
+        "cargo", "test", "-p", "purrdf-shapes", "--locked",
+        "--test", "w3c12_conformance", "--", "--nocapture",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(
+        r"W3C12 TOTAL: passed (\d+), non-canonical-expected-decimal (\d+), "
+        r"xfailed (\d+), ledger (\d+)",
+        out,
+    )
+    if m:
+        passed, noncanonical, xfailed = (int(m.group(i)) for i in range(1, 4))
+        detail = (
+            f"{passed} pass as approved · {noncanonical} non-canonical expected decimals "
+            f"(graded by the XSD 1.1 canonical spelling) · {xfailed} ledgered"
+        )
+        return SuiteResult(
+            _SHACL12_NAME, _SHACL12_SOURCE,
+            passed=passed, xskip=noncanonical + xfailed, failed=0,
+            detail=detail, ok=(rc == 0 and failed == 0), log=out,
+        )
+    return _no_scoreboard(
+        _SHACL12_NAME, _SHACL12_SOURCE,
+        "`W3C12 TOTAL: passed N, non-canonical-expected-decimal N, xfailed N, ledger N`",
+        cmd, out,
+    )
+
+
+def _suite_shacl12_unlisted() -> SuiteResult:
+    """The entries of vendored SHACL 1.2 files that NO upstream manifest
+    includes: graded exactly against their own file (one with a proven delta)
+    by their own test, and reported as their own row so they are never counted
+    among the approved suite's passes."""
+    cmd = [
+        "cargo", "test", "-p", "purrdf-shapes", "--locked",
+        "--test", "w3c12_conformance", "--", "--nocapture", "--exact",
+        "w3c_shacl12_unlisted_vendored_files",
+    ]
+    rc, out = _run(cmd, _REPO_ROOT)
+    _, _, failed = _cargo_tally(out)
+    m = re.search(
+        r"W3C12 UNLISTED: passed (\d+), exact (\d+), with-delta (\d+), total (\d+)", out
+    )
+    if m:
+        passed, exact, with_delta, total = (int(m.group(i)) for i in range(1, 5))
+        detail = (
+            f"{total} entries of vendored files no upstream manifest includes, graded "
+            f"apart from the approved suite: {exact} exactly as written · {with_delta} "
+            "with a proven delta"
+        )
+        return SuiteResult(
+            _SHACL12_UNLISTED_NAME, _SHACL12_UNLISTED_SOURCE,
+            passed=passed, xskip=0, failed=total - passed,
+            detail=detail, ok=(rc == 0 and failed == 0 and passed == total), log=out,
+        )
+    return _no_scoreboard(
+        _SHACL12_UNLISTED_NAME, _SHACL12_UNLISTED_SOURCE,
+        "`W3C12 UNLISTED: passed N, exact N, with-delta N, total N`", cmd, out,
     )
 
 
@@ -314,19 +396,20 @@ def _suite_product_equivalence() -> SuiteResult:
         )
         detail = (
             f"{passed}/{total} shapes graphs agree across parse/admit/rebuild; "
-            f"{ledgered} refused by the product writer; {unparsable} whose own RDF the "
-            "suite requires the validator to reject"
+            f"{ledgered} refused by the product writer; {unparsable} whose shapes graph "
+            "the conformance harnesses require the loader to refuse (a declared "
+            "sht:Failure)"
         )
         return SuiteResult(
             "SHACL prepared-product equivalence",
-            "W3C data-shapes + first-party corpus",
+            "W3C data-shapes + shacl12-test-suite + first-party corpus",
             passed=passed, xskip=ledgered,
             failed=(disagreed + total - passed - ledgered - unparsable),
             detail=detail, ok=(rc == 0 and failed == 0 and disagreed == 0), log=out,
         )
     return _no_scoreboard(
         "SHACL prepared-product equivalence",
-        "W3C data-shapes + first-party corpus",
+        "W3C data-shapes + shacl12-test-suite + first-party corpus",
         "`PRODUCT-EQUIVALENCE: passed N ledgered N unparsable N disagreed N total N`",
         cmd, out,
     )
@@ -986,8 +1069,7 @@ def _augment(detail: str, msg: str) -> str:
 
 
 def enforce_ratchet(
-    results: list[SuiteResult],
-    budget: dict[str, int],
+    results: list[SuiteResult], budget: dict[str, int], check_orphans: bool = True,
     not_run: frozenset[str] = frozenset(),
 ) -> None:
     """Gate each suite's ledgered count against its committed budget.
@@ -1043,10 +1125,10 @@ def enforce_ratchet(
                 "scripts/conformance-baseline.json to lock the gain",
             )
 
-    # `not_run` names suites this invocation deliberately skipped (the Python
-    # gates under `--no-python`): their budgets are not orphans, they are simply
-    # not measured by this run. A name that is neither run nor skipped is.
-    orphans = sorted(set(budget) - {r.name for r in results} - not_run)
+    # One shard of the matrix (`--shard`) produces only some of the budgeted
+    # suites, so it cannot tell an orphan key from a suite another shard runs.
+    # `--from-results` judges the combined rows with this check on.
+    orphans = sorted(set(budget) - {r.name for r in results} - not_run) if check_orphans else []
     if orphans:
         raise SystemExit(
             "conformance-matrix: scripts/conformance-baseline.json budgets a suite "
@@ -1062,31 +1144,36 @@ def enforce_ratchet(
 # ---------------------------------------------------------------------------
 
 
-def native_suites() -> list[SuiteResult]:
+def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
+    """Every native suite, in matrix order, with the shard that runs it.
+
+    Nothing runs here: each entry is a thunk. The order is the order the matrix
+    prints, and the shard is only where CI runs a suite (see `SHARDS`).
+    """
     return [
-        _suite_cargo(
+        ("core", lambda: _suite_cargo(
             "IRI (RFC 3987 / RFC 3986 resolution)", "W3C IRI + RFC vectors",
             ["cargo", "test", "-p", "purrdf-iri", "--locked",
              "--test", "w3c_iri", "--test", "iri_suite", "--test", "resolution"],
             detail="parse/validate/normalize/resolve vectors",
-        ),
-        _suite_cargo(
+        )),
+        ("core", lambda: _suite_cargo(
             "RDFC-1.0 canonicalization", "W3C rdf-canon",
             ["cargo", "test", "-p", "purrdf-rdf", "--locked", "--test", "rdfc_w3c"],
             detail="65 vectors (64 eval + 1 negative), sharded",
-        ),
-        _suite_cargo(
+        )),
+        ("core", lambda: _suite_cargo(
             "RDF 1.2 canonicalization profile", "purrdf-rdfc12 v2 (first-party)",
             ["cargo", "test", "-p", "purrdf-rdf", "--locked",
              "--test", "rdf12_canon_profile"],
             detail="19 goldens + 7 refusals, frozen and content-addressed",
-        ),
-        _suite_codec(),
-        _suite_sparql(),
-        _suite_construct_corpus(),
-        _suite_describe_corpus(),
-        _suite_cdt_corpus(),
-        _suite_governor_corpus(),
+        )),
+        ("core", _suite_codec),
+        ("sparql", _suite_sparql),
+        ("sparql", _suite_construct_corpus),
+        ("sparql", _suite_describe_corpus),
+        ("sparql", _suite_cdt_corpus),
+        ("sparql", _suite_governor_corpus),
         # The two lanes below are `_suite_cargo` rows for the same reason the
         # four above/below them are: neither grades a CORPUS. Each is a
         # first-party test lane over inline fixtures and pinned literals, so the
@@ -1094,7 +1181,7 @@ def native_suites() -> list[SuiteResult]:
         # so rather than inventing a fixture count. Both shipped without a matrix
         # row at all, which is strictly worse: a lane nothing reports is a lane
         # whose regression the umbrella gate cannot see.
-        _suite_cargo(
+        ("core", lambda: _suite_cargo(
             "SPARQL embedding kNN (first-party)",
             "purrdf-embedding-knn (first-party)",
             ["cargo", "test", "-p", "purrdf-sparql-eval", "--locked",
@@ -1110,8 +1197,8 @@ def native_suites() -> list[SuiteResult]:
                 "its wasm32 half is a separate gate (`make wasm-test`), so this row "
                 "measures the native target only"
             ),
-        ),
-        _suite_cargo(
+        )),
+        ("core", lambda: _suite_cargo(
             "HNSW approximate kNN (first-party)",
             "purrdf-hnsw (first-party)",
             ["cargo", "test", "-p", "purrdf-hnsw", "--locked",
@@ -1142,29 +1229,31 @@ def native_suites() -> list[SuiteResult]:
                 "grows. The cross-target digest is a separate gate "
                 "(`make hnsw-determinism`), so this row measures the native target only"
             ),
-        ),
-        _suite_geo_determinism(),
-        _suite_entailment(),
-        _suite_entailment_rl(),
-        _suite_shacl_w3c(),
-        _suite_shapes_corpus(),
-        _suite_product_equivalence(),
-        _suite_xsd_regex_corpus(),
-        _suite_shacl_rules(),
-        _suite_shex_validation(),
-        _suite_cargo(
+        )),
+        ("core", _suite_geo_determinism),
+        ("sparql", _suite_entailment),
+        ("sparql", _suite_entailment_rl),
+        ("shapes", _suite_shacl_w3c),
+        ("shapes", _suite_shacl12_w3c),
+        ("shapes", _suite_shacl12_unlisted),
+        ("shapes", _suite_shapes_corpus),
+        ("shapes", _suite_product_equivalence),
+        ("core", _suite_xsd_regex_corpus),
+        ("shapes", _suite_shacl_rules),
+        ("shapes", _suite_shex_validation),
+        ("shapes", lambda: _suite_cargo(
             "ShEx syntax + ShExC/ShExJ round-trip", "shexTest v2.1.0",
             ["cargo", "test", "-p", "purrdf-shex", "--locked",
              "--test", "syntax_conformance", "--test", "shexc_roundtrip",
              "--test", "shexj_roundtrip"],
             detail="schemas parse + negative syntax/structure",
-        ),
+        )),
         # A `_suite_cargo` row that IS a per-case measurement: the suite
         # harness is `harness = false` with one libtest case per suite test, so
         # the tally counts suite cases, and its `suite-inventory` case pins the
         # file, group, case and remote counts, so the corpus cannot shrink
         # under this number without the row going RED.
-        _suite_cargo(
+        ("core", lambda: _suite_cargo(
             "JSON Schema draft 2020-12 (official suite)",
             "JSON-Schema-Test-Suite 5b0ee16",
             ["cargo", "test", "-p", "purrdf-jsonschema", "--locked", "--test", "suite"],
@@ -1176,8 +1265,8 @@ def native_suites() -> list[SuiteResult]:
                 "suite-inventory case. optional/cross-draft.json evaluates a $ref into a "
                 "draft 2019-09 document under 2019-09 rules"
             ),
-        ),
-        _suite_cargo(
+        )),
+        ("core", lambda: _suite_cargo(
             "JSON Schema draft 2019-09 (official suite)",
             "JSON-Schema-Test-Suite 5b0ee16",
             ["cargo", "test", "-p", "purrdf-jsonschema", "--locked", "--test",
@@ -1191,8 +1280,8 @@ def native_suites() -> list[SuiteResult]:
                 "optional/cross-draft.json's $refs into 2020-12 and draft-07 documents, "
                 "each evaluated under its own draft"
             ),
-        ),
-        _suite_cargo(
+        )),
+        ("core", lambda: _suite_cargo(
             "JSON Schema draft-07 (official suite)",
             "JSON-Schema-Test-Suite 5b0ee16",
             ["cargo", "test", "-p", "purrdf-jsonschema", "--locked", "--test",
@@ -1204,9 +1293,183 @@ def native_suites() -> list[SuiteResult]:
                 "draft-07 has no "
                 "output-format tests"
             ),
-        ),
-        _suite_gts_vectors(),
+        )),
+        ("core", _suite_gts_vectors),
     ]
+
+
+def native_suites() -> list[SuiteResult]:
+    return [run() for _shard, run in _native_registry()]
+
+
+# ---------------------------------------------------------------------------
+# Shards: the same matrix on several runners, judged once
+# ---------------------------------------------------------------------------
+
+# Where CI runs each suite. A shard is a runner, not a different gate: every
+# suite belongs to exactly one shard, `--shard` runs that shard's suites and
+# writes their rows UNJUDGED, and `--from-results` reassembles the rows in
+# matrix order and judges them exactly as a single full run does (the ratchet
+# with its orphan check, the scoreboard, the job summary, the document drift
+# check). Suites that compile the same crates share a shard, so no runner builds
+# a graph another one already paid for.
+SHARDS = ("core", "sparql", "shapes", "python")
+_RESULTS_FORMAT = "purrdf-conformance-shard/1"
+
+
+def full_registry(build: bool) -> list[tuple[str, Callable[[], SuiteResult]]]:
+    """The whole matrix -- the native suites, then the two Python gates -- in print order.
+
+    The Python pair shares one shard: the compat suite reuses the module the
+    rdflib gate builds, exactly as in a single run.
+    """
+    return [
+        *_native_registry(),
+        ("python", lambda: _suite_py_rdflib_gate(build)),
+        ("python", lambda: _suite_py_compat(build=False)),
+    ]
+
+
+def registry_shards() -> list[str]:
+    """The shard of every matrix row, by row index. Builds nothing, runs nothing."""
+    return [shard for shard, _run in full_registry(build=False)]
+
+
+def shard_payload(shard: str, indexed: list[tuple[int, SuiteResult]]) -> str:
+    """One shard's rows as measured -- before the ratchet -- for `--from-results`.
+
+    The ratchet runs once, over the whole matrix, in the judging run: its orphan
+    half can only be decided with every shard in hand, and applying the rest
+    twice would annotate a red row twice.
+    """
+    rows = [{"index": index, **asdict(result)} for index, result in indexed]
+    return json.dumps(
+        {"format": _RESULTS_FORMAT, "shard": shard, "rows": rows},
+        indent=1, ensure_ascii=False,
+    ) + "\n"
+
+
+def merge_shards(files: dict[str, str], shards_by_index: list[str]) -> list[SuiteResult]:
+    """Every shard's rows in matrix order; anything but the whole matrix once is refused.
+
+    `files` maps a file name to its text. Exactly one `<shard>.json` per name in
+    `SHARDS` must be present, each recording its own shard, and each must hold
+    exactly the row indices that shard owns in `shards_by_index`. Because the
+    shards partition the indices, that makes the combined rows complete and
+    disjoint by construction: a missing shard, a stray file, a shard that ran
+    another's suite or skipped one of its own, and a row missing a field are all
+    refused by name rather than judged as a smaller matrix.
+    """
+    def refuse(message: str) -> SystemExit:
+        return SystemExit(f"conformance-matrix: --from-results: {message}")
+
+    expected = {f"{shard}.json" for shard in SHARDS}
+    missing = sorted(expected - set(files))
+    extra = sorted(set(files) - expected)
+    if missing or extra:
+        raise refuse(
+            f"needs exactly {sorted(expected)}; missing {missing}, unexpected {extra}. "
+            "A shard with no results is a slice of the matrix nobody measured."
+        )
+    field_names = {f.name for f in fields(SuiteResult)}
+    by_index: dict[int, SuiteResult] = {}
+    for shard in SHARDS:
+        name = f"{shard}.json"
+        try:
+            data = json.loads(files[name])
+        except json.JSONDecodeError as err:
+            raise refuse(f"{name} is not JSON: {err}") from None
+        if not isinstance(data, dict) or data.get("format") != _RESULTS_FORMAT:
+            raise refuse(f"{name} is not a `{_RESULTS_FORMAT}` results file")
+        if data.get("shard") != shard:
+            raise refuse(f"{name} records shard {data.get('shard')!r}")
+        rows = data.get("rows")
+        if not isinstance(rows, list) or not all(isinstance(row, dict) for row in rows):
+            raise refuse(f"{name} has no list of rows")
+        owned = [index for index, owner in enumerate(shards_by_index) if owner == shard]
+        reported = [row.get("index") for row in rows]
+        if reported != owned:
+            raise refuse(
+                f"{name} reports rows {reported}, but shard `{shard}` runs rows {owned}"
+            )
+        for row in rows:
+            values = {key: value for key, value in row.items() if key != "index"}
+            if set(values) != field_names:
+                raise refuse(
+                    f"{name} row {row['index']} has fields {sorted(values)}, "
+                    f"a matrix row has {sorted(field_names)}"
+                )
+            by_index[row["index"]] = SuiteResult(**values)
+    return [by_index[index] for index in range(len(shards_by_index))]
+
+
+def read_results_dir(directory: Path) -> dict[str, str]:
+    """Every entry of `directory` by name (a non-file entry reads as unexpected)."""
+    if not directory.is_dir():
+        raise SystemExit(f"conformance-matrix: --from-results: {directory} is not a directory")
+    return {
+        entry.name: entry.read_text(encoding="utf-8") if entry.is_file() else ""
+        for entry in sorted(directory.iterdir())
+    }
+
+
+def _shard_self_test() -> list[str]:
+    """The shard split and its reassembly, each refusal beside its valid neighbour."""
+    problems: list[str] = []
+    shards_by_index = registry_shards()
+    if sorted(set(shards_by_index)) != sorted(SHARDS):
+        problems.append(
+            f"  • shards: the registry uses {sorted(set(shards_by_index))}, SHARDS names "
+            f"{sorted(SHARDS)}; a shard no suite uses, or a suite no shard runs, is a gap"
+        )
+    if shards_by_index[-2:] != ["python", "python"] or shards_by_index.count("python") != 2:
+        problems.append("  • shards: the two Python gates must be the only `python` rows, last")
+
+    def row(index: int) -> SuiteResult:
+        return SuiteResult(
+            name=f"suite {index}", source="specimen", passed=index, xskip=index % 3,
+            failed=index % 2, detail=f"d{index}", ok=index % 2 == 0, log=f"log {index}",
+        )
+
+    def payloads() -> dict[str, str]:
+        return {
+            f"{shard}.json": shard_payload(
+                shard, [(i, row(i)) for i, owner in enumerate(shards_by_index) if owner == shard]
+            )
+            for shard in SHARDS
+        }
+
+    try:
+        merged = merge_shards(payloads(), shards_by_index)
+        if merged != [row(i) for i in range(len(shards_by_index))]:
+            problems.append("  • shards: the reassembled rows differ from the rows each shard wrote")
+    except SystemExit as err:
+        problems.append(f"  • shards: a complete set of shard results is refused: {err}")
+
+    def refused(files: dict[str, str], needle: str, what: str) -> None:
+        try:
+            merge_shards(files, shards_by_index)
+        except SystemExit as err:
+            if needle not in str(err):
+                problems.append(f"  • shards: {what} is refused for the wrong reason: {err}")
+            return
+        problems.append(f"  • shards: {what} is accepted")
+
+    first, second = SHARDS[0], SHARDS[1]
+    complete = payloads()
+    refused({k: v for k, v in complete.items() if k != f"{first}.json"}, "missing", "a missing shard")
+    refused({**complete, "stray.json": "{}"}, "unexpected", "a stray results file")
+    refused({**complete, f"{first}.json": complete[f"{second}.json"]}, "records shard", "a shard's file under another name")
+    refused({**complete, f"{first}.json": "not json"}, "is not JSON", "a malformed file")
+    refused({**complete, f"{first}.json": json.dumps({"shard": first, "rows": []})}, "results file", "a file of another format")
+    owned = [i for i, owner in enumerate(shards_by_index) if owner == first]
+    other = next(i for i, owner in enumerate(shards_by_index) if owner != first)
+    refused({**complete, f"{first}.json": shard_payload(first, [(i, row(i)) for i in owned[:-1]])}, "reports rows", "a shard that skipped one of its suites")
+    refused({**complete, f"{first}.json": shard_payload(first, [(i, row(i)) for i in [*owned, other]])}, "reports rows", "a shard that ran another shard's suite")
+    stripped = json.loads(complete[f"{first}.json"])
+    del stripped["rows"][0]["failed"]
+    refused({**complete, f"{first}.json": json.dumps(stripped)}, "has fields", "a row without its fail count")
+    return problems
 
 
 def render(results: list[SuiteResult]) -> str:
@@ -1467,7 +1730,36 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
         (
             _noise("W3C SHACL conformance scoreboard (9 tests):"),
             _noise("  core/node                     passed   4  xfailed   1"),
-            _board("  TOTAL: passed 7, xfailed 2, ledger 2"),
+            _board("  TOTAL: passed 6, xfailed 2, ledger 2"),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        _SHACL12_NAME,
+        _suite_shacl12_w3c,
+        (
+            _noise(
+                "W3C SHACL 1.2 conformance scoreboard (9 approved tests; 1 entries of "
+                "unlisted vendored files reported apart):"
+            ),
+            _noise(
+                "  core/node                            passed   4  "
+                "non-canonical-expected-decimal  1  xfailed   1"
+            ),
+            _board(
+                "  W3C12 TOTAL: passed 5, non-canonical-expected-decimal 1, xfailed 2, "
+                "ledger 2"
+            ),
+            _noise(_CARGO_OK),
+        ),
+    ),
+    (
+        _SHACL12_UNLISTED_NAME,
+        _suite_shacl12_unlisted,
+        (
+            _noise("W3C SHACL 1.2 entries of unlisted vendored files:"),
+            _noise("  core/node/example-001                        sht:Validate"),
+            _board("  W3C12 UNLISTED: passed 2, exact 1, with-delta 1, total 2"),
             _noise(_CARGO_OK),
         ),
     ),
@@ -1632,50 +1924,14 @@ def self_test(report: bool) -> list[str]:
                     "per-case scoreboard stopped being measured and this matrix still "
                     "reports a number for it"
                 )
-    return problems
-
-
-# The two halves `--part` runs, and the report file each writes into a
-# `--merge-reports` directory. The merge requires exactly these files.
-PARTS = ("native", "python")
-
-
-def write_report(path: Path, part: str, results: list[SuiteResult]) -> None:
-    """Write *results* as measured (before the ratchet) for `--merge-reports`.
-
-    The ratchet is applied once, by the merge, over the whole matrix: applying
-    it here as well would annotate a red row twice, and the orphan-key half of
-    it can only be judged with both halves in hand.
-    """
-    rows = [{k: v for k, v in asdict(r).items() if k not in ("log", "budget")} for r in results]
-    path.parent.mkdir(parents=True, exist_ok=True)
-    scratch = path.with_suffix(path.suffix + ".partial")
-    scratch.write_text(json.dumps({"part": part, "results": rows}, indent=1) + "\n", encoding="utf-8")
-    scratch.replace(path)
-
-
-def load_reports(directory: Path) -> list[SuiteResult]:
-    """Both halves' rows, native first, refusing a missing, extra or mislabelled report."""
-    found = sorted(p.name for p in directory.glob("*.json")) if directory.is_dir() else []
-    expected = sorted(f"{part}.json" for part in PARTS)
-    if found != expected:
-        raise SystemExit(
-            f"conformance-matrix: --merge-reports needs exactly {expected} in "
-            f"{directory}, found {found}. A missing half is an unmeasured half."
+    shard_problems = _shard_self_test()
+    if report:
+        print(
+            f"  {'ok' if not shard_problems else 'BROKEN':9}  shards: every suite in one of "
+            f"{len(SHARDS)} shards; a missing, stray, mislabelled, short, overreaching or "
+            "field-less shard result is refused and the complete set reassembles"
         )
-    results: list[SuiteResult] = []
-    for part in PARTS:
-        data = json.loads((directory / f"{part}.json").read_text(encoding="utf-8"))
-        if data.get("part") != part:
-            raise SystemExit(
-                f"conformance-matrix: {part}.json records part {data.get('part')!r}"
-            )
-        results.extend(SuiteResult(**row) for row in data["results"])
-    names = [r.name for r in results]
-    duplicated = sorted({n for n in names if names.count(n) > 1})
-    if duplicated:
-        raise SystemExit(f"conformance-matrix: a suite is reported twice: {duplicated}")
-    return results
+    return problems + shard_problems
 
 
 def main() -> int:
@@ -1703,32 +1959,35 @@ def main() -> int:
         "row must go RED when its scoreboard line is withheld",
     )
     parser.add_argument(
-        "--part",
-        choices=PARTS,
-        help="run only one half of the matrix (native Rust suites, or the two Python "
-        "gates); with --report, for a later --merge-reports",
+        "--shard",
+        choices=SHARDS,
+        help="run only this shard's suites and write their rows to --emit-results "
+        "(a slice of the matrix for a later --from-results; judges nothing)",
     )
     parser.add_argument(
-        "--report",
+        "--emit-results",
         type=Path,
-        help="with --part: write the half's measured rows to this JSON file",
+        metavar="FILE",
+        help="with --shard: the file the shard's measured rows are written to",
     )
     parser.add_argument(
-        "--merge-reports",
+        "--from-results",
         type=Path,
         metavar="DIR",
-        help="run nothing: judge the whole matrix from DIR/native.json and "
-        "DIR/python.json (the ratchet, the scoreboard and the document drift check)",
+        help="run no suite: judge the whole matrix from DIR/<shard>.json for every "
+        "shard, exactly as a full run judges it (ratchet, scoreboard, document check)",
     )
     args = parser.parse_args()
 
-    if args.part and args.no_python:
-        parser.error("--part already names the half to run; drop --no-python")
-    if (args.part is None) != (args.report is None):
-        parser.error("--part and --report go together")
-    if args.merge_reports and (args.part or args.no_python or args.no_build):
-        parser.error("--merge-reports runs nothing; it takes no run options")
-    if args.write_doc and (args.no_python or args.part):
+    if (args.shard is None) != (args.emit_results is None):
+        parser.error("--shard and --emit-results go together")
+    if args.shard and (args.no_python or args.write_doc):
+        # A shard is a slice: `--no-python` would redefine which slice, and the
+        # document block needs the whole matrix, which only --from-results has.
+        parser.error("--shard runs one slice; it takes neither --no-python nor --write-doc")
+    if args.from_results and (args.shard or args.no_python or args.no_build):
+        parser.error("--from-results runs no suite; it takes no run options")
+    if args.write_doc and args.no_python:
         # The committed doc block reflects the full matrix (every native Rust
         # suite PLUS the two Python gates); a native-only run cannot reproduce it,
         # and writing it from one would silently delete the Python rows.
@@ -1764,26 +2023,38 @@ def main() -> int:
         )
         return 0
 
-    budget = load_budget()
-    if args.merge_reports:
-        results = load_reports(args.merge_reports)
-        not_run: frozenset[str] = frozenset()
+    # Build the native module once (in the rdflib gate); the compat suite then
+    # reuses that editable install.
+    registry = full_registry(build=not args.no_build)
+    if args.shard:
+        indexed = [
+            (index, run()) for index, (shard, run) in enumerate(registry) if shard == args.shard
+        ]
+        args.emit_results.parent.mkdir(parents=True, exist_ok=True)
+        args.emit_results.write_text(shard_payload(args.shard, indexed), encoding="utf-8")
+        results = [result for _index, result in indexed]
+        # Judged here only to name a red row in this runner's log; the verdict
+        # that gates is the --from-results run over every shard.
+        enforce_ratchet(results, load_budget(), check_orphans=False)
+        print(f"conformance-matrix: shard `{args.shard}` ({len(results)} of {len(registry)} suites)")
+        print(render(results))
+        for r in results:
+            if not r.ok:
+                print(f"\n----- captured log: {r.name} -----", file=sys.stderr)
+                print(r.log, file=sys.stderr)
+        print(
+            f"wrote the shard's rows to {args.emit_results}; `--from-results` judges "
+            "the whole matrix"
+        )
+        return 0 if all(r.ok for r in results) else 1
+    if args.from_results:
+        results = merge_shards(read_results_dir(args.from_results), registry_shards())
     else:
-        results = [] if args.part == "python" else native_suites()
-        if not args.no_python and args.part != "native":
-            # Build the native module once (in the rdflib gate); the compat suite
-            # then reuses that editable install.
-            build = not args.no_build
-            results.append(_suite_py_rdflib_gate(build))
-            results.append(_suite_py_compat(build=False))
-        if args.report:
-            write_report(args.report, args.part, results)
-        if args.part == "python":
-            not_run = frozenset(budget) - PYTHON_SUITES
-        elif args.no_python or args.part == "native":
-            not_run = PYTHON_SUITES
-        else:
-            not_run = frozenset()
+        results = [
+            run() for shard, run in registry if not (args.no_python and shard == "python")
+        ]
+    budget = load_budget()
+    not_run = PYTHON_SUITES if args.no_python else frozenset()
 
     # Monotone-shrink ratchet: every run suite's ledgered-gap count must equal
     # its committed budget (growth and silent shrink both fail RED).

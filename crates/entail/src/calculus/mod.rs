@@ -98,8 +98,9 @@
 //! is fabricated into the closure, because the head is an internal relation that no
 //! materialization step can emit and the run that produced it is refused outright.
 
-use purrdf_datalog::cache::{ContractHash, contract_hash};
+use purrdf_datalog::cache::{ContractHash, contract_hash, contract_hash_with};
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
+use purrdf_datalog::seminaive::EvalOptions;
 
 use crate::Regime;
 use crate::lists::{CLASH_RELATION, INTERNAL_GRAPH, INTERNAL_SIGIL};
@@ -581,6 +582,14 @@ pub(crate) fn calculus_contract_hash(regime: Regime) -> ContractHash {
     contract_hash(&calculus_program(regime))
 }
 
+/// [`calculus_contract_hash`] under the caller's evaluation limits: exactly
+/// `purrdf_datalog::cache::contract_hash_with(&calculus_program(regime), options)`, so a
+/// closure computed under raised limits never claims the identity of one computed under
+/// the defaults.
+pub(crate) fn calculus_contract_hash_with(regime: Regime, options: &EvalOptions) -> ContractHash {
+    contract_hash_with(&calculus_program(regime), options)
+}
+
 /// The rule ids `regime`'s lane fires, in [`ChaseRule::ALL`] order, deduplicated.
 ///
 /// Used by the tests to bind the chase's tags to [`crate::implemented`].
@@ -630,14 +639,17 @@ pub(crate) const ALL_REGIMES: [Regime; 7] = [
 mod tests {
     use super::{
         ALL_REGIMES, ChaseRule, OWL_RL_RDFS_SHAPED_EXTRAS, calculus_contract_hash,
-        calculus_program, clash_marker, clash_rule, clauses_for, constraint_clause,
-        declared_constraints, fired_rule_ids, program_with_attribution,
+        calculus_contract_hash_with, calculus_program, clash_marker, clash_rule, clauses_for,
+        constraint_clause, declared_constraints, fired_rule_ids, program_with_attribution,
     };
     use crate::{Regime, RuleId, extensions, implemented, rules};
     use purrdf_datalog::cache::contract_hash;
     use purrdf_datalog::chase::certify;
     use purrdf_datalog::clause::HeadForm;
-    use purrdf_datalog::seminaive::compile;
+    use purrdf_datalog::seminaive::{
+        EvalOptions, NATIVE_DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_STORED_FACTS,
+        WASM_DEFAULT_MAX_JOIN_STEPS, WASM_DEFAULT_MAX_STORED_FACTS, compile,
+    };
     use std::collections::BTreeSet;
 
     /// EVERY rule that DECLARES a `false` head really states one, in every clause.
@@ -931,35 +943,98 @@ mod tests {
         }
     }
 
-    /// Each lane's calculus identity, pinned byte for byte.
+    /// Each lane's calculus identity, pinned byte for byte — under the `wasm32` default
+    /// evaluation limits and under the native ones, each STATED, so both tables hold on
+    /// every target.
     ///
     /// The contract hash is a PUBLISHED identity: a consumer stores it beside a cached
     /// closure and refuses the closure when it moves. So it may only move when the rules
-    /// move. Splitting the declaration across family modules, reordering a family's
-    /// internals, or rewording a clause without changing what it concludes are all edits
-    /// that must leave these digests exactly where they are — only adding, removing or
-    /// restating a RULE may move one, deliberately, with this table updated in the same
-    /// commit.
+    /// or the limits in force move. Splitting the declaration across family modules,
+    /// reordering a family's internals, or rewording a clause without changing what it
+    /// concludes are all edits that must leave these digests exactly where they are — only
+    /// adding, removing or restating a RULE, or changing a default limit, may move one,
+    /// deliberately, with these tables updated in the same commit. The `wasm32` table is
+    /// the identity every target published while the limits were fixed at the `wasm32`
+    /// values; the native table moved when the native defaults were raised.
     #[test]
     fn the_contract_hashes_are_pinned() {
-        let empty = "4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5";
-        let pinned = [
-            (Regime::Simple, empty),
-            (Regime::Rdf, PINNED_RDF_HASH),
-            (Regime::Rdfs, PINNED_RDFS_HASH),
-            (Regime::OwlRl, PINNED_OWL_RL_HASH),
-            (Regime::OwlDirect, empty),
-            (Regime::Rif, empty),
-            (Regime::D, PINNED_D_HASH),
-        ];
-        for (regime, digest) in pinned {
+        let wasm = EvalOptions::default()
+            .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS)
+            .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS);
+        let native = EvalOptions::default()
+            .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS)
+            .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS);
+        for (options, table) in [(wasm, PINNED_WASM), (native, PINNED_NATIVE)] {
+            for (regime, digest) in table {
+                assert_eq!(
+                    calculus_contract_hash_with(*regime, &options).to_hex(),
+                    *digest,
+                    "{regime:?} under {options:?}"
+                );
+            }
+        }
+        // The published default is the current target's table.
+        let current = if cfg!(target_arch = "wasm32") {
+            PINNED_WASM
+        } else {
+            PINNED_NATIVE
+        };
+        for (regime, digest) in current {
             assert_eq!(
-                calculus_contract_hash(regime).to_hex(),
-                digest,
+                calculus_contract_hash(*regime).to_hex(),
+                *digest,
                 "{regime:?}"
             );
         }
     }
+
+    /// The lanes' calculus identities under the `wasm32` default limits.
+    const PINNED_WASM: &[(Regime, &str)] = &[
+        (Regime::Simple, PINNED_EMPTY_HASH),
+        (Regime::Rdf, PINNED_RDF_HASH),
+        (Regime::Rdfs, PINNED_RDFS_HASH),
+        (Regime::OwlRl, PINNED_OWL_RL_HASH),
+        (Regime::OwlDirect, PINNED_EMPTY_HASH),
+        (Regime::Rif, PINNED_EMPTY_HASH),
+        (Regime::D, PINNED_D_HASH),
+    ];
+
+    /// The lanes' calculus identities under the native default limits.
+    const PINNED_NATIVE: &[(Regime, &str)] = &[
+        (
+            Regime::Simple,
+            "2947634d38a6668b09634bb6233e82565233e5be7ef03c084c986f8aa16c1ade",
+        ),
+        (
+            Regime::Rdf,
+            "293e637ed65ae6f23259f17b46b59e1a591ccebd291c33eff97db1adc3c6a9a3",
+        ),
+        (
+            Regime::Rdfs,
+            "edac936406f51671f34dc305b0e90d1f0c4be08915522a445fcffc692174d0ca",
+        ),
+        (
+            Regime::OwlRl,
+            "abb12b9af5fa9c022ed2dbf846e0b3e8c4184f5c2bb8c49a3c0dbac20e1f5243",
+        ),
+        (
+            Regime::OwlDirect,
+            "2947634d38a6668b09634bb6233e82565233e5be7ef03c084c986f8aa16c1ade",
+        ),
+        (
+            Regime::Rif,
+            "2947634d38a6668b09634bb6233e82565233e5be7ef03c084c986f8aa16c1ade",
+        ),
+        (
+            Regime::D,
+            "8110c4437c3d0158450816bbf6e291f33426d18cbabc641aa7b6fe60b511746c",
+        ),
+    ];
+
+    /// The empty program's identity — the lanes with no rule table of their own — under
+    /// the `wasm32` default limits.
+    const PINNED_EMPTY_HASH: &str =
+        "4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5";
 
     /// The `RDF` lane's calculus identity, moved deliberately by stating `rdfD1` and
     /// `rdfD1a` — the two RDF patterns whose conclusions are existentially quantified.

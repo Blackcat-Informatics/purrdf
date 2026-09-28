@@ -75,7 +75,10 @@ test("shaclPackProduct -> shaclProductValidateToSarif round trips to the SAME ve
 
   const parsed = JSON.parse(viaProduct);
   assert.equal(parsed.version, "2.1.0");
-  const results = parsed.runs.flatMap((r) => r.results ?? []);
+  const results = parsed.runs.flatMap((r) => {
+    assert.ok(Array.isArray(r.results), "a completed SARIF run always carries results");
+    return r.results;
+  });
   assert.ok(results.length >= 1, "the ill-typed age must produce at least one result");
   assert.ok(results.some((r) => r.level === "error"));
 });

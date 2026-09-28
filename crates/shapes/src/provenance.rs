@@ -45,9 +45,10 @@
 //!
 //! [`ParseProvenance::doc_prefixes`] hands back the pairs in exactly the order the
 //! parser received them, whatever that order is. It is NOT necessarily the order
-//! the document wrote them in: the text entry point folds the document scan through
-//! [`crate::text_ingest::extract_prefixes`], which resolves last-writer-wins
-//! duplicates and therefore emits prefix-sorted pairs, while a caller entering at
+//! the document wrote them in: the text entry point hands on the Turtle codec's own
+//! record ([`crate::text_ingest::TurtleDocument::prefixes`]), which resolves
+//! last-writer-wins duplicates and therefore emits prefix-sorted pairs, while a caller
+//! entering at
 //! [`crate::shapes::from_dataset_with_prefixes`] supplies whatever order it built.
 //!
 //! Re-sorting here would be the wrong layer either way. The list the parser
@@ -90,6 +91,16 @@ pub struct ParseProvenance {
     /// The named-graph IRI under which the shapes dataset is exposed to
     /// SHACL-SPARQL queries, when the caller named one.
     shapes_graph: Option<String>,
+    /// The IRIs of every graph the parse assembled the shapes graph from by name, sorted:
+    /// the IRIs its import table declares it loaded under (its base is recorded as the
+    /// base), each `owl:imports` document its closure reached, and each data-graph
+    /// `sh:shapesGraph` link it resolved
+    /// ([`crate::imports::ResolvedShapesGraph::included`]).
+    ///
+    /// A prepared product carries them in its identity section, so a restored
+    /// preparation holds a link to a table-supplied document exactly as the parse that
+    /// packed it did (see [`crate::imports::check_data_graph_links`]).
+    included_graphs: Vec<String>,
 }
 
 impl ParseProvenance {
@@ -110,7 +121,26 @@ impl ParseProvenance {
             doc_prefixes,
             box_role_vocab,
             shapes_graph,
+            included_graphs: Vec::new(),
         }
+    }
+
+    /// Record the graphs the parse's import resolution assembled the shapes graph from.
+    /// `included` is sorted and deduplicated by
+    /// [`resolve_shapes_imports`](crate::imports::resolve_shapes_imports).
+    pub(crate) fn set_included_graphs(&mut self, included: Vec<String>) {
+        self.included_graphs = included;
+    }
+
+    /// The IRIs of every graph the parse assembled the shapes graph from by name, sorted:
+    /// each IRI its import table declares it loaded under (the parse base is recorded as
+    /// [`Self::base`]), each `owl:imports` document its closure reached, and each
+    /// data-graph `sh:shapesGraph` link it resolved. A prepared product records them, and
+    /// binds them as its `included-graphs` identity component, so a restored preparation
+    /// answers the same list.
+    #[must_use]
+    pub fn included_graphs(&self) -> &[String] {
+        &self.included_graphs
     }
 
     /// The base the source document's relative IRI references were resolved
@@ -361,7 +391,10 @@ mod tests {
         // re-sorted copy is a different list that nothing could invert.
         assert_eq!(
             provenance.doc_prefixes(),
-            crate::text_ingest::extract_prefixes(SHAPES_TTL).as_slice(),
+            crate::text_ingest::parse_turtle_document(SHAPES_TTL, None)
+                .expect("fixture parses")
+                .prefixes
+                .as_slice(),
             "the retained map is the parser's own list, unreordered"
         );
     }
@@ -405,7 +438,9 @@ mod tests {
         let vocab = BoxRoleVocab::for_namespace("http://example.org/roles#");
         let shapes = from_dataset_with_config_and_graph(
             &dataset,
-            &crate::text_ingest::extract_prefixes(SHAPES_TTL),
+            &crate::text_ingest::parse_turtle_document(SHAPES_TTL, None)
+                .expect("fixture parses")
+                .prefixes,
             Some(vocab.clone()),
             Some("http://example.org/shapes-graph".to_owned()),
         )

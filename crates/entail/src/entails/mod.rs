@@ -3,7 +3,7 @@
 
 //! **Conclusion-directed** entailment: does this premise entail this conclusion?
 //!
-//! [`materialize`] answers a different question. It computes a CLOSURE
+//! [`materialize`](crate::materialize) answers a different question. It computes a CLOSURE
 //! — everything the premise entails, as a dataset — and hands it over. That is the right
 //! shape for a caller that will go on asking many questions of one premise, and the wrong
 //! shape for a caller with one question, because turning a closure into a verdict is not
@@ -40,7 +40,7 @@
 //! 2 RL's seventy-eight rules conclude `false` — `eq-diff1..3`, `prp-irp`, `prp-asyp`,
 //! `prp-pdw`, `prp-adp`, `prp-npa1`, `prp-npa2`, `cls-nothing2`, `cls-com`, `cls-maxc1`,
 //! `cls-maxqc1`, `cls-maxqc2`, `cax-dw`, `cax-adc` and `dt-not-type`, the last of which is
-//! also the `D` lane's — and a body match on any of them makes [`materialize`] return
+//! also the `D` lane's — and a body match on any of them makes [`materialize`](crate::materialize) return
 //! [`EntailError::Inconsistent`] instead of a closure. So there is no closure for this
 //! module to match against, and the refusal propagates to the caller carrying the
 //! [`InconsistentRun`] witness that says which rule fired on which
@@ -189,7 +189,8 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use crate::interner::intern_into;
 use crate::owl_dl::query::QTriple;
 use crate::report::{InconsistentRun, ReasoningReport};
-use crate::{EntailError, Materialization, Regime, materialize};
+use crate::{EntailError, Materialization, Regime, materialize_with};
+use purrdf_datalog::seminaive::EvalOptions;
 
 pub mod answers;
 pub mod certificate;
@@ -219,7 +220,7 @@ pub use comprehension::ComprehensionWarrant;
 pub use datarange::{DataRangeWarrant, RangeContainment};
 pub use freeze::{FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization};
 pub use homomorphism::{Binding, MATCH_BUDGET, MissReason};
-pub use imports::ImportMap;
+pub use imports::{ImportMap, rif_resolver};
 pub use negation::NegativeFact;
 pub use pattern::VarKey;
 pub use precondition::UndecidedReason;
@@ -334,6 +335,8 @@ pub(crate) struct Question<'a> {
     pub(crate) triples: &'a [Triple],
     /// The indices no earlier lane has discharged yet.
     pub(crate) pending: &'a BTreeSet<usize>,
+    /// The caller's evaluation limits, which every re-chase a lane runs is held to.
+    pub(crate) options: &'a EvalOptions,
 }
 
 /// What one mechanism READS of a question, with nothing decided either way.
@@ -471,8 +474,9 @@ impl Prepared {
 /// MERGED premise — which still carries the `owl:imports` triples the merge resolved. So the
 /// chase raises [`Construct::UnresolvedOntologyImport`], which is the honest reading from
 /// where it stands and the wrong one from here: `imports::resolve` above refuses the whole
-/// call with [`EntailError::UnresolvedImport`] on any document its map does not resolve, so
-/// reaching this line at all proves every declared import was resolved and merged.
+/// call with [`EntailError::UnresolvedImport`] on any import its map does not resolve and
+/// the premise does not already contain, so reaching this line at all proves every declared
+/// import was resolved — merged, or found in place.
 ///
 /// This is therefore the one place both facts are in scope, and it is where the boundary is
 /// restated as [`Construct::ResolvedOntologyImport`] — on the closure's report and on the
@@ -482,21 +486,36 @@ fn prepare(
     premise: &RdfDataset,
     regime: Regime,
     imports: &ImportMap,
+    options: &EvalOptions,
 ) -> Result<Prepared, EntailError> {
     let plan = plan_for(regime)?;
     let merged = imports::resolve(premise, imports)?;
-    // `resolve` answers `None` for a premise that names no document, and that premise's run
-    // has no import boundary to restate — so the correction is applied exactly when a merge
-    // actually happened.
+    // `resolve` answers `None` when there is no document to merge: either the premise names
+    // no document, and its run has no import boundary to restate, or every ontology it
+    // imports is already IN it — resolved without a merge, so the chase's unresolved-import
+    // boundary is restated exactly as it is after a merge.
     let Some(merged) = merged else {
-        let (closure, report) = materialize(premise, plan)?;
+        let resolved_in_place = !imports.imported_iris(premise).is_empty();
+        let (closure, report) =
+            materialize_with(premise, plan, options, None).map_err(|error| {
+                if resolved_in_place {
+                    resolved_imports_error(error)
+                } else {
+                    error
+                }
+            })?;
         return Ok(Prepared {
             merged: None,
             closure: Closure::of(default_graph_triples(&closure)),
-            report,
+            report: if resolved_in_place {
+                report.with_resolved_imports()
+            } else {
+                report
+            },
         });
     };
-    let (closure, report) = materialize(&merged, plan).map_err(resolved_imports_error)?;
+    let (closure, report) =
+        materialize_with(&merged, plan, options, None).map_err(resolved_imports_error)?;
     Ok(Prepared {
         merged: Some(merged),
         closure: Closure::of(default_graph_triples(&closure)),
@@ -510,7 +529,7 @@ fn prepare(
 /// the absence of a run and has no boundary list to correct. Written as a total match so a
 /// later error that starts carrying a report has to decide here rather than silently ship the
 /// pre-merge boundary.
-fn resolved_imports_error(error: EntailError) -> EntailError {
+pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
     match error {
         EntailError::Inconsistent(run) => {
             let (witness, report) = run.into_parts();
@@ -526,6 +545,8 @@ fn resolved_imports_error(error: EntailError) -> EntailError {
         | EntailError::MalformedList(_)
         | EntailError::UnsupportedRegime(_)
         | EntailError::UnresolvedImport(_)
+        | EntailError::UnreachedImport { .. }
+        | EntailError::IncompatibleImports(_)
         | EntailError::MatchBudget
         | EntailError::ProofsNotRecorded
         | EntailError::Stopped
@@ -585,7 +606,7 @@ fn resolved_imports_error(error: EntailError) -> EntailError {
 /// not carry; [`EntailError::UnresolvedImport`] for an `owl:imports` the map does not
 /// resolve; [`EntailError::Inconsistent`] for a premise with no model, carrying the witness
 /// and the run's report; [`EntailError::MatchBudget`] if the match exhausts
-/// [`MATCH_BUDGET`]; and whatever [`materialize`] refuses with.
+/// [`MATCH_BUDGET`]; and whatever [`materialize`](crate::materialize) refuses with.
 ///
 /// ```
 /// use purrdf_core::{RdfDatasetBuilder, TermValue};
@@ -618,7 +639,29 @@ pub fn certain_answers(
     regime: Regime,
     imports: &ImportMap,
 ) -> Result<CertainAnswers, EntailError> {
-    let prepared = prepare(premise, regime, imports)?;
+    certain_answers_with(premise, bgp, regime, imports, &EvalOptions::default())
+}
+
+/// [`certain_answers`] under the caller's evaluation limits.
+///
+/// Every evaluation the service runs — the closure it answers over, and each re-chase a
+/// mechanism beyond the rule table runs — is held to `options`' stored-fact and join-step
+/// limits, exactly as [`materialize_with`] holds a closure. A run
+/// past one is refused ([`EntailError::Evaluate`], [`EntailError::Chase`]) naming the limit
+/// and the numbers; a run inside them answers exactly as larger limits would, and the
+/// report's contract hash names the calculus under `options`.
+///
+/// # Errors
+///
+/// As [`certain_answers`].
+pub fn certain_answers_with(
+    premise: &RdfDataset,
+    bgp: &[QTriple],
+    regime: Regime,
+    imports: &ImportMap,
+    options: &EvalOptions,
+) -> Result<CertainAnswers, EntailError> {
+    let prepared = prepare(premise, regime, imports, options)?;
     let pats = bgp_patterns(bgp);
     let names = projected_vars(&pats);
     // NOTHING TO PROJECT: this is `entails`'s question, so it is `entails`'s fold that answers
@@ -642,6 +685,7 @@ pub fn certain_answers(
             regime,
             closure,
             &report,
+            options,
         )?;
         return Ok(verdict_answers(regime, &outcome, report));
     }
@@ -686,6 +730,7 @@ pub fn certain_answers(
             question,
             regime,
             &prepared.closure,
+            options,
         ));
     }
     let vars: Vec<VarKey> = names.iter().cloned().map(VarKey::Projected).collect();
@@ -752,6 +797,7 @@ fn unreachable_lanes(
     question: &AsGraph,
     regime: Regime,
     closure: &Closure,
+    options: &EvalOptions,
 ) -> Vec<UndecidedReason> {
     // Every triple is outstanding: nothing on this path discharged anything, so every lane is
     // asked about the whole question.
@@ -763,6 +809,7 @@ fn unreachable_lanes(
         closure,
         triples: &question.triples,
         pending: &pending,
+        options,
     };
     let mut limits = Vec::new();
     for lane in MECHANISMS {
@@ -931,6 +978,7 @@ fn decide(
     regime: Regime,
     closure: Closure,
     report: &ReasoningReport,
+    options: &EvalOptions,
 ) -> Result<EntailmentOutcome, EntailError> {
     let pats: Vec<PatTriple> = conclusion_patterns(conclusion);
     Ok(match homomorphism::find_one(pats, &closure)? {
@@ -943,7 +991,7 @@ fn decide(
         // They run HERE and not earlier because each is strictly more expensive — a full
         // re-chase per negative fact or per frozen implication — and because the premise's
         // consistency, which every soundness argument requires, is what `prepare` established.
-        Err(_) => fold(premise, conclusion, regime, closure, report)?,
+        Err(_) => fold(premise, conclusion, regime, closure, report, options)?,
     })
 }
 
@@ -1023,6 +1071,28 @@ pub fn entails(
     regime: Regime,
     imports: &ImportMap,
 ) -> Result<EntailmentCertificate, EntailError> {
+    entails_with(
+        premise,
+        conclusion,
+        regime,
+        imports,
+        &EvalOptions::default(),
+    )
+}
+
+/// [`entails()`] under the caller's evaluation limits — see [`certain_answers_with`], whose
+/// limits these are.
+///
+/// # Errors
+///
+/// As [`entails()`].
+pub fn entails_with(
+    premise: &RdfDataset,
+    conclusion: &RdfDataset,
+    regime: Regime,
+    imports: &ImportMap,
+    options: &EvalOptions,
+) -> Result<EntailmentCertificate, EntailError> {
     // Destructured rather than held whole: the closure MOVES into a homomorphism warrant
     // inside `decide` while the report moves into the certificate at the end, and two fields
     // of one binding cannot be handed to two owners through a method call.
@@ -1030,13 +1100,14 @@ pub fn entails(
         merged,
         closure,
         report,
-    } = prepare(premise, regime, imports)?;
+    } = prepare(premise, regime, imports, options)?;
     let outcome = decide(
         merged.as_deref().unwrap_or(premise),
         conclusion,
         regime,
         closure,
         &report,
+        options,
     )?;
     Ok(EntailmentCertificate::new(outcome, report))
 }
@@ -1057,6 +1128,7 @@ fn fold(
     regime: Regime,
     closure: Closure,
     report: &ReasoningReport,
+    options: &EvalOptions,
 ) -> Result<EntailmentOutcome, EntailError> {
     let triples = default_graph_triples(conclusion);
     let mut pending: BTreeSet<usize> = (0..triples.len()).collect();
@@ -1071,6 +1143,7 @@ fn fold(
             closure: &closure,
             triples: &triples,
             pending: &pending,
+            options,
         };
         match (lane.attempt)(&question)? {
             Attempt::Entailed(established) => {

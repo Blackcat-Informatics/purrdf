@@ -43,7 +43,9 @@ from pathlib import Path
 # SPARQL 1.1 and 1.2 suites the conformance matrix grades against, and the
 # official JSON-Schema-Test-Suite and the draft 2020-12, 2019-09 and draft-07
 # meta-schemas `purrdf-jsonschema`'s tests register (test data only: the crate
-# compiles no meta-schema in) — all declared
+# compiles no meta-schema in) — together with the vendored W3C SHACL 1.2 vocabularies,
+# shacl12-test-suite and crate-local vocabulary copies under crates/shapes/spec,
+# all declared
 # byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
 # in gmeow-gts and is intentionally not policed here; adding a new root is a
 # deliberate edit to this map followed by `--update` — a corpus is NEVER guarded
@@ -64,9 +66,11 @@ GUARDED_ROOTS: dict[str, str] = {
         "scripts/conformance-frozen/vectors-sparql-governors.sha256"
     ),
     "vectors/shacl": "scripts/conformance-frozen/vectors-shacl.sha256",
+    "vectors/shacl12": "scripts/conformance-frozen/vectors-shacl12.sha256",
     "vectors/shexTest": "scripts/conformance-frozen/vectors-shexTest.sha256",
     "vectors/sparql-cdt": "scripts/conformance-frozen/vectors-sparql-cdt.sha256",
     "crates/shapes/corpus": "scripts/conformance-frozen/shapes-corpus.sha256",
+    "crates/shapes/spec": "scripts/conformance-frozen/shapes-spec.sha256",
     "crates/sparql-conformance/corpus/construct": (
         "scripts/conformance-frozen/sparql-conformance-corpus-construct.sha256"
     ),

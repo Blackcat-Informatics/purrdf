@@ -58,9 +58,10 @@
 //! relation, which is quadratic in the number of literals the dataset holds whose datatype
 //! `purrdf-xsd` models. That is inherent to the rule — an inequality over `n` values IS
 //! `n²` pairs, and it cannot be a negation here (see [`crate::lists`]) — and it is bounded
-//! by [`MAX_STORED_FACTS`](purrdf_datalog::seminaive::MAX_STORED_FACTS) like every other
-//! fact: a dataset with more than a few hundred distinct valued literals passes that
-//! ceiling and the run is REFUSED with an accurate report, never truncated. That is the
+//! by the stored-fact limit
+//! ([`EvalOptions::with_max_stored_facts`](purrdf_datalog::seminaive::EvalOptions::with_max_stored_facts))
+//! like every other fact: a dataset whose distinct valued literals square past that limit
+//! is REFUSED with an accurate report, never truncated. That is the
 //! one place in this calculus where an ordinary input can meet a ceiling, and it is
 //! measured rather than assumed.
 

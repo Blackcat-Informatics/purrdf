@@ -21,7 +21,7 @@ all-features = true
 workspace = true
 
 [dependencies]
-# The zero-dependency, wasm-clean RDF 1.2 ingestion protocol (purrdf P6): the
+# The zero-dependency, wasm-clean RDF 1.2 ingestion protocol: the
 # neutral `RdfEventSink` seam the GTS event bridge (`event_stream`) folds into.
 # This edge is acyclic — `purrdf-events` depends on nothing — so it never risks
 # a cycle and keeps `make wasm` green.

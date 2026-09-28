@@ -146,8 +146,11 @@ static int run_vector_case(const char *regime, Slice input, Slice program,
         report_s == NULL) {
         goto done;
     }
-    if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, &nquads,
-                                            &rendered,
+    /* NULL limits: this native library's defaults, which are the limits the
+     * artifact is written under. */
+    if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, NULL, NULL,
+                                            0, NULL, 0, NULL, NULL,
+                                            &nquads, &rendered,
                                             &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "golden case (%s) did not materialize: %s\n", regime,
                 error == NULL ? "(no error)" : purrdf_error_message(error));
@@ -355,7 +358,8 @@ static int check_vendored_imports(const char *premise_path,
     size_t len = 0;
 
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, import_iris,
-                                    import_documents, 1, &answer, &certificate,
+                                    import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                    &certificate,
                                     &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "graph_entails refused the vendored case: %s\n",
                 error == NULL ? "(no error)" : purrdf_error_message(error));
@@ -379,7 +383,8 @@ static int check_vendored_imports(const char *premise_path,
     /* The pattern-shaped entry point answers the same question the same way: a
      * conclusion graph is the relation with no columns, so a `yes` is one bare row. */
     if (purrdf_entail_certain_answers("owl-rl", premise, conclusion, import_iris,
-                                      import_documents, 1, &answer, &certificate,
+                                      import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                      &certificate,
                                       &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "certain_answers refused the vendored case\n");
         goto done;
@@ -396,7 +401,8 @@ static int check_vendored_imports(const char *premise_path,
     certificate = NULL;
 
     if (purrdf_entail_verify_entailment("owl-rl", premise, conclusion, import_iris,
-                                        import_documents, 1, &answer, &certificate,
+                                        import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                        &certificate,
                                         &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "verify_entailment refused the vendored case\n");
         goto done;
@@ -414,8 +420,8 @@ static int check_vendored_imports(const char *premise_path,
     /* An empty table with two NULL arrays is accepted as "imports nothing" — and
      * for THIS premise that is a refusal NAMING the document, never an answer
      * computed from a premise missing the axioms it told the caller about. */
-    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 0,
-                                    &answer, &certificate,
+    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 0, NULL, 0,
+                                    NULL, NULL, &answer, &certificate,
                                     &error) != PURRDF_STATUS_PARSE_ERROR) {
         fprintf(stderr, "an unsupplied import was not refused\n");
         goto done;
@@ -436,8 +442,8 @@ static int check_vendored_imports(const char *premise_path,
 
     /* A NULL array with a NON-ZERO count is a caller error, refused before any
      * dereference rather than segfaulting. */
-    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 1,
-                                    &answer, &certificate,
+    if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 1, NULL, 0,
+                                    NULL, NULL, &answer, &certificate,
                                     &error) != PURRDF_STATUS_NULL_POINTER) {
         fprintf(stderr, "a null import array with a non-zero count was not refused\n");
         goto done;
@@ -463,6 +469,97 @@ done:
     free(conclusion);
     free(support);
     return failed;
+}
+
+/* The shapes-graph IRI through the real header and linkage, on the constraint of the W3C
+ * SHACL 1.0 test sparql/pre-binding/shapesGraph-001: it selects its focus node only when
+ * $shapesGraph is bound and GRAPH $shapesGraph reads the shapes graph. Named, the approved
+ * ONE result; NULL, SHACL 1.2's ordinary unbound variable, so the data conforms. */
+static int check_shapes_graph_iri(void) {
+    const char *shapes =
+        "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+        "@prefix ex: <http://example.org/ns#> .\n"
+        "ex:TestShape a sh:NodeShape ; sh:targetNode ex:InvalidResource ; ex:property 42 ;\n"
+        "  sh:sparql [ sh:message \"Test message\" ; sh:select \"\"\"\n"
+        "    SELECT $this WHERE { FILTER bound($shapesGraph) .\n"
+        "      GRAPH $shapesGraph { FILTER bound($currentShape) .\n"
+        "        $currentShape <http://example.org/ns#property> 42 . } }\"\"\" ] .\n";
+    const char *data = "<http://example.org/ns#InvalidResource> "
+                       "<http://example.org/ns#p> <http://example.org/ns#o> .\n";
+    const char *graphs[2] = {"http://example.org/shapes", NULL};
+    for (int i = 0; i < 2; i++) {
+        PurrdfBuffer *sarif = NULL;
+        PurrdfError *error = NULL;
+        const uint8_t *bytes = NULL;
+        size_t len = 0;
+        int32_t rc = purrdf_shacl_validate_to_sarif(shapes, NULL, graphs[i], data, NULL, 0, NULL,
+                                                    NULL, 0, false, &sarif, &error);
+        CHECK(rc == PURRDF_STATUS_OK && sarif != NULL, "validate_to_sarif(shapes_graph_iri)");
+        purrdf_buffer_data(sarif, &bytes, &len);
+        if (graphs[i] != NULL) {
+            CHECK(contains_bytes(bytes, len, "\"shaclConforms\": false") &&
+                      contains_bytes(bytes, len, "Test message"),
+                  "a named shapes graph pre-binds $shapesGraph: the one approved result");
+        } else {
+            CHECK(contains_bytes(bytes, len, "\"shaclConforms\": true"),
+                  "no shapes graph: $shapesGraph is unbound and the data conforms");
+        }
+        purrdf_buffer_free(sarif);
+    }
+    PurrdfBuffer *refused = NULL;
+    PurrdfError *error = NULL;
+    int32_t rc = purrdf_shacl_validate_to_sarif(shapes, NULL, "shapes", data, NULL, 0, NULL, NULL,
+                                                0, false, &refused, &error);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR && refused == NULL,
+          "a relative shapes graph with no base names no graph");
+    CHECK(strstr(purrdf_error_message(error), "iri-relative-no-base") != NULL,
+          "the refusal names its code");
+    purrdf_error_free(error);
+    printf("shapes_graph_iri: named pre-binds $shapesGraph, NULL leaves it unbound\n");
+    return 0;
+}
+
+/* The check-only SPARQL 1.2 RL entry point through the real header and linkage: a
+ * self-negating rule is syntactically valid (level SYNTAX answers with its summary) but
+ * not stratifiable (level STRATIFIED refuses it, naming the stage, and writes no
+ * summary), while its neighbour differing only in the negated predicate passes. */
+static int check_srl_rules(void) {
+    const char *cyclic = "PREFIX ex: <http://example.org/ns#>\n"
+                         "RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:p ex:z } }\n";
+    const char *acyclic = "PREFIX ex: <http://example.org/ns#>\n"
+                          "RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:r ex:z } }\n";
+    PurrdfBuffer *summary = NULL;
+    PurrdfError *error = NULL;
+    const uint8_t *bytes = NULL;
+    size_t len = 0;
+
+    int32_t rc = purrdf_shacl_check_rules(cyclic, NULL, PURRDF_SRL_CHECK_LEVEL_SYNTAX, NULL,
+                                          NULL, 0, &summary, &error);
+    CHECK(rc == PURRDF_STATUS_OK && summary != NULL, "check_rules(cyclic, SYNTAX)");
+    purrdf_buffer_data(summary, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "is syntactically valid (level syntax)"),
+          "the syntax level answers its own question");
+    purrdf_buffer_free(summary);
+
+    summary = NULL;
+    rc = purrdf_shacl_check_rules(cyclic, NULL, PURRDF_SRL_CHECK_LEVEL_STRATIFIED, NULL, NULL,
+                                  0, &summary, &error);
+    CHECK(rc == PURRDF_STATUS_PARSE_ERROR && summary == NULL,
+          "check_rules(cyclic, STRATIFIED) refuses and writes no summary");
+    CHECK(strstr(purrdf_error_message(error), "is not stratifiable") != NULL,
+          "the refusal names the stratification stage");
+    purrdf_error_free(error);
+    error = NULL;
+
+    rc = purrdf_shacl_check_rules(acyclic, NULL, PURRDF_SRL_CHECK_LEVEL_STRATIFIED, NULL,
+                                  NULL, 0, &summary, &error);
+    CHECK(rc == PURRDF_STATUS_OK && summary != NULL, "check_rules(acyclic, STRATIFIED)");
+    purrdf_buffer_data(summary, &bytes, &len);
+    CHECK(contains_bytes(bytes, len, "is well formed and stratified (level stratified)"),
+          "the stratifiable neighbour passes every level");
+    purrdf_buffer_free(summary);
+    printf("check_rules: the level decides, and a refusal names its stage\n");
+    return 0;
 }
 
 int main(int argc, char **argv) {
@@ -908,7 +1005,8 @@ int main(int argc, char **argv) {
     PurrdfPartialCertificate entailment_partial;
     PurrdfBuffer *entailment_report = NULL;
     rc = purrdf_query_entailment_governed(
-        dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", NULL, &governors,
+        dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", NULL, NULL, 0, NULL,
+        0, NULL, NULL, NULL, &governors,
         &entailment_outcome, &entailment_kind, NULL, NULL,
         &entailment_boolean, &entailment_evidence, &entailment_partial,
         &entailment_report, &error);
@@ -963,7 +1061,8 @@ int main(int argc, char **argv) {
         "PREFIX ex: <http://example.org/> "
         "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?w) AS ?m) "
         "WHERE { ?s a ex:Animal . ?s ex:weight ?w }",
-        NULL, "rdfs", "", "https://example.org/agg#", &governors,
+        NULL, "rdfs", "", NULL, NULL, 0, NULL, 0, NULL, NULL, "https://example.org/agg#",
+        &governors,
         &entailed_median_outcome, &entailed_median_kind,
         &entailed_median_rows, NULL, NULL, &entailed_median_evidence,
         &entailed_median_partial, &entailed_median_report, &error);
@@ -1105,7 +1204,8 @@ int main(int argc, char **argv) {
     const uint8_t *cbytes = NULL;
     size_t clen = 0;
 
-    rc = purrdf_entail_consistency(taxonomy, 0, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_consistency(taxonomy, NULL, NULL, 0, NULL, 0, 0, 0, &answer,
+                                   &certificate, &error);
     CHECK(rc == PURRDF_STATUS_OK && answer != NULL && certificate != NULL,
           "entail_consistency");
     purrdf_buffer_data(answer, &abytes, &alen);
@@ -1317,6 +1417,9 @@ int main(int argc, char **argv) {
 
     purrdf_reasoner_free(session);
     purrdf_reasoner_free(NULL); /* documented no-op */
+
+    CHECK(check_shapes_graph_iri() == 0, "the shapes-graph IRI");
+    CHECK(check_srl_rules() == 0, "the check-only SPARQL 1.2 RL entry point");
 
     purrdf_dataset_free(dataset);
     printf("C smoke OK\n");

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The permissive-ingestion bridge (purrdf P6): wire the immutable IR to the
+//! The permissive-ingestion bridge: wire the immutable IR to the
 //! dependency-free `purrdf-events` protocol.
 //!
 //! Two pieces live here:

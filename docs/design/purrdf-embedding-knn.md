@@ -170,7 +170,7 @@ Euclidean. `cargo test` executes them on the host; `make wasm-test` compiles the
 wasm32 twice — on the baseline target and with `+simd128`, where the lanes become
 `f64x2` operations — and runs both in Node through `scripts/wasm-test-runner.sh`, the
 cargo runner that generates each test binary's bindings with the wasm-bindgen CLI the
-wasm lane already installs, at the one pinned version. CI's wasm job runs that lane. A target that computes a different last bit renders a different lexical
+wasm lane already installs, at the one pinned version. CI's `wasm-exec` job runs that lane. A target that computes a different last bit renders a different lexical
 and fails there, rather than surfacing later as an unexplained reordering.
 
 ### The limit of the claim, stated

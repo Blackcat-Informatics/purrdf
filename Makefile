@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check test-shard geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -103,6 +103,8 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-python-binding-tests.py
 	python3 scripts/check-terminal-predicates.py --self-test
 	python3 scripts/check-terminal-predicates.py
+	python3 scripts/check-shapes-parser-drops.py --self-test
+	python3 scripts/check-shapes-parser-drops.py
 	python3 scripts/check-licenses.py --self-test
 	python3 scripts/check-licenses.py
 	python3 scripts/fetch-locked-deps.py
@@ -232,6 +234,47 @@ node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance
 
 test: node-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
+
+# `make test` as six parallel CI jobs. As one job it compiled for 25 minutes before
+# running anything, against a 30-minute job budget. The compile is almost all
+# first-party test targets, so caching dependencies cannot fix it; splitting the
+# targets across runners does.
+#
+# EVERY SHARD SELECTS `--workspace`, and that is the load-bearing choice. Cargo
+# unifies dependency features across the packages SELECTED on the command line, so
+# sharding by package (`-p purrdf-shapes`, ...) would compile several dependencies
+# (clap, regex-automata, ahash, smallvec, insta) with different features from the
+# ones `cargo test --workspace` uses — a different build, not a split of the same one.
+# Target-kind flags change which targets are built, never how features resolve.
+#
+# THE SHARDS PARTITION `cargo test --workspace`'s default target selection exactly:
+#   lib            every library's unit tests, and every binary's. purrdf-python is
+#                  excluded because its library is `test = false` (a PyO3 extension
+#                  cannot link a test harness), and the default selection skips it for
+#                  the same reason; the explicit `--lib` flag would not. Excluding it
+#                  changes no other package's features (only pyo3 leaves the graph).
+#   doc            every library's doc tests (purrdf-python's included, as before),
+#                  and the examples, which the default selection builds but does not
+#                  run; `cargo build --profile test` is that same build.
+#   integration-N  the integration-test targets, split by the first character of the
+#                  target name: [a-d] [e-o] [p-r], and [!a-r] for everything else, so
+#                  the four globs are disjoint and cover every name by construction.
+# No bench target sets `test = true`, so the default selection has none to run.
+#
+# c_abi_smoke is skipped in integration-1 because `make capi-check` runs that same
+# `cargo test -p purrdf-capi --test c_smoke`, and the capi CI job runs capi-check.
+# `make test` locally still runs everything in one invocation.
+test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..4).
+	@case "$(SHARD)" in \
+		lib) set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
+		doc) set -x; cargo test --workspace --locked --doc \
+			&& cargo build --workspace --locked --examples --profile test ;; \
+		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
+		integration-2) set -x; cargo test --workspace --locked --test '[e-o]*' ;; \
+		integration-3) set -x; cargo test --workspace --locked --test '[p-r]*' ;; \
+		integration-4) set -x; cargo test --workspace --locked --test '[!a-r]*' ;; \
+		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..4" >&2; exit 1 ;; \
+	esac
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.
 	cargo clippy -p purrdf-gts --lib --test bounded_keyed_blobs --locked -- -D warnings
@@ -405,6 +448,10 @@ miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT p
 	@# The scalar rotation uses Rust under Miri; native lowering is checked separately.
 	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash --test blake3 streaming_boundary_answers
 
+# CI runs the matrix split across runners through CONFORMANCE_ARGS: one
+# `--shard NAME --emit-results FILE` per shard, then one `--from-results DIR` that
+# judges the whole matrix exactly as a single run does. Empty is the full run.
+CONFORMANCE_ARGS ?=
 conformance: ## Umbrella conformance matrix: native Rust W3C suites + the Python rdflib drop-in gate, one scoreboard (see docs/CONFORMANCE.md).
 	python3 scripts/conformance-matrix.py $(CONFORMANCE_ARGS)
 
@@ -611,6 +658,12 @@ hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are i
 # generated count cells equal this measurement, and every workspace member and bench
 # file is covered. `--doc` hard-fails when the document is missing; it never skips.
 # `python3 scripts/check-simd-asm.py --write-doc` regenerates the count cells.
+#
+# CI runs the same gate split across runners through SIMD_ASM_ARGS: one
+# `--config NAME --report FILE` per configuration, then one
+# `--merge-reports DIR` that requires seven matching successful reports and
+# checks the document against them. Empty measures the complete matrix.
+SIMD_ASM_ARGS ?=
 simd-asm: ## Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).
 	python3 scripts/check-simd-asm.py --doc $(SIMD_ASM_ARGS)
 

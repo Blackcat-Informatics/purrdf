@@ -1,0 +1,25 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+#![allow(dead_code, unused_imports)]
+mod fixed;
+use std::{hash::Hasher, hint::black_box, time::Instant};
+fn measure(iterations: usize, f: impl Fn(usize) -> u64) {
+    let start = Instant::now();
+    let mut answer = 0;
+    for i in 0..iterations { answer ^= black_box(f(black_box(i))); }
+    println!("{} {}", start.elapsed().as_nanos(), black_box(answer));
+}
+fn main() {
+    let args: Vec<String> = std::env::args().collect();
+    let iterations: usize = args[2].parse().unwrap();
+    let data: Vec<u8> = (0..256).map(|i| (i * 157 + 43) as u8).collect();
+    match args[1].as_str() {
+        "u64" => measure(iterations, |i| { let mut h = fixed::FixedHasher::default(); h.write_u64(i as u64); h.finish() }),
+        "triple-local" => measure(iterations, |i| { let mut h = fixed::FixedHasher::default(); h.write_u128((i as u128) | (23 << 32) | (77 << 64) | (3 << 96)); h.finish() }),
+        "triple-global" => measure(iterations, |i| { let mut h = fixed::FixedHasher::default(); h.write_u128((i as u128) | (u128::from(u64::MAX) << 64)); h.write_u128(23 | (3 << 64)); h.finish() }),
+        "bytes16" => measure(iterations, |i| { let mut h = fixed::FixedHasher::default(); h.write_u64(i as u64); h.write(black_box(&data[..16])); h.finish() }),
+        "str26" => measure(iterations, |i| { let mut h = fixed::FixedHasher::default(); h.write_u64(i as u64); h.write(black_box(&data[..26])); h.write_u8(255); h.finish() }),
+        "bytes64" => measure(iterations, |i| { let mut h = fixed::FixedHasher::default(); h.write_u64(i as u64); h.write(black_box(&data[..64])); h.finish() }),
+        _ => panic!("unknown case"),
+    }
+}

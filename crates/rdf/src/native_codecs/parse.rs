@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use super::media_type::{NativeRdfFormat, classify};
 use super::ser_model::{SerGraph, SerTermKind};
-use super::span::{ParseOptions, SpanCollector, SpanTable};
+use super::span::{NoSpans, ParseOptions, SpanCollector, SpanTable};
 use super::text_parse::LineParseMode;
 use crate::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId,
@@ -175,6 +175,25 @@ pub struct ParseOutcome {
     /// [`BaseOrigin::Directive`]: purrdf_iri::BaseOrigin::Directive
     /// [`BaseOrigin::Enclosing`]: purrdf_iri::BaseOrigin::Enclosing
     pub document_base: Option<ScopedBase>,
+    /// The prefix bindings a Turtle or TriG document's `@prefix` / `PREFIX` directives
+    /// left in force at the END of the document: one `(label, namespace)` pair per
+    /// declared label, sorted by label, each namespace resolved against the base that
+    /// was in force when it was declared. A label declared twice reports the namespace
+    /// of its LAST declaration.
+    ///
+    /// This is the grammar's own record, read back from the parse that decided what
+    /// every prefixed name in the document meant — not a second reading of the text, so
+    /// characters that merely look like a directive inside a string literal are never
+    /// reported. The parser's built-in `rdf:` convenience binding is not a declaration
+    /// and is not reported.
+    ///
+    /// For RDF/XML it is the document's `xmlns` declarations in the same shape — last
+    /// declaration of each prefix wins, sorted, the default namespace under the empty
+    /// prefix `""` — as the XML parser scoped them, never those inside the content of
+    /// an `rdf:parseType="Literal"` value (see the RDF/XML codec's `declared_namespaces`).
+    /// EMPTY for every other format: N-Triples and N-Quads have no prefix directive, and
+    /// TriX, HexTuples, JSON-LD and YAML-LD declare none this reports.
+    pub document_prefixes: Vec<(String, String)>,
 }
 
 impl ParseOutcome {
@@ -186,12 +205,56 @@ impl ParseOutcome {
     }
 }
 
+/// A parse that failed, with the directive state in force where it stopped.
+///
+/// The failure mirror of [`ParseOutcome`]'s `document_base` and `document_prefixes`:
+/// for Turtle and TriG, every `@prefix` / `PREFIX` and `@base` / `BASE` directive the
+/// parser read BEFORE the failing token, and nothing after it. A caller that recovers
+/// statement by statement — re-parsing each remaining statement to report every
+/// independent defect — continues under exactly the directives the document made up to
+/// that point, taken from the grammar rather than from a second reading of the text.
+///
+/// For every other format, and for a failure before parsing began (an unknown media
+/// type, invalid UTF-8, an invalid caller base), the state is what the caller supplied:
+/// no prefixes, and the caller's base when it was valid.
+#[derive(Debug, Clone)]
+pub struct ParseFailure {
+    /// The diagnostic [`parse_dataset_with`] returns for the same input.
+    pub diagnostic: RdfDiagnostic,
+    /// The base in force where the parse stopped (see [`ParseOutcome::document_base`]).
+    pub document_base: Option<ScopedBase>,
+    /// The prefix bindings in force where the parse stopped, in the form
+    /// [`ParseOutcome::document_prefixes`] reports them.
+    pub document_prefixes: Vec<(String, String)>,
+}
+
+impl ParseFailure {
+    /// The base in force where the parse stopped, as the `Option<&str>` a parse takes.
+    #[must_use]
+    pub fn document_base_iri(&self) -> Option<&str> {
+        self.document_base.as_ref().map(|base| base.iri().as_str())
+    }
+
+    /// A failure before any directive was read, under the caller's `base_iri`.
+    fn before_parsing(diagnostic: RdfDiagnostic, base_iri: Option<&str>) -> Box<Self> {
+        Box::new(Self {
+            diagnostic,
+            document_base: base_scope_for(base_iri)
+                .ok()
+                .and_then(|scope| scope.current().cloned()),
+            document_prefixes: Vec::new(),
+        })
+    }
+}
+
 /// [`parse_dataset`] reporting everything the parse learned: the dataset, the opt-in
 /// source-position side table, and the base the document ended up under.
 ///
 /// This is the ONE extended parse seam — deliberately not a `parse_dataset_with_base`
 /// twin beside a `parse_dataset_with_spans` one. What a parse can tell you grows; the
-/// number of ways to ask must not.
+/// number of ways to ask must not. [`parse_dataset_reporting_failure`] is this same
+/// seam with the directive state kept on the error path too; this function is it with
+/// that state dropped.
 ///
 /// Span tracking is OPT-IN: it costs memory and pins the sequential line pipeline
 /// (the chunk-parallel N-Triples/N-Quads path never records spans), so
@@ -206,49 +269,114 @@ pub fn parse_dataset_with(
     base_iri: Option<&str>,
     options: &ParseOptions,
 ) -> Result<ParseOutcome, RdfDiagnostic> {
-    if !options.track_source_spans {
-        let (dataset, base) = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)?;
-        return Ok(ParseOutcome {
-            dataset,
-            spans: None,
-            document_base: base.current().cloned(),
-        });
-    }
+    parse_dataset_reporting_failure(bytes, media_type, base_iri, options)
+        .map_err(|failure| failure.diagnostic)
+}
 
-    let format = classify(media_type)?;
+/// [`parse_dataset_with`], keeping the directive state on the error path: a failure is
+/// a (boxed, since it is the rare path) [`ParseFailure`] carrying the prefixes and base
+/// in force where the parse stopped.
+///
+/// # Errors
+///
+/// Exactly [`parse_dataset_with`]'s diagnostic, as [`ParseFailure::diagnostic`].
+pub fn parse_dataset_reporting_failure(
+    bytes: &[u8],
+    media_type: &str,
+    base_iri: Option<&str>,
+    options: &ParseOptions,
+) -> Result<ParseOutcome, Box<ParseFailure>> {
+    let format = classify(media_type).map_err(|e| ParseFailure::before_parsing(e, base_iri))?;
 
     if format.tokenizer_carries_spans() {
-        // Line/Turtle family: UTF-8 is only required by the text tokenizer, so validate
-        // it here where the span-carrying pipeline consumes it.
-        let text = std::str::from_utf8(bytes)
-            .map_err(|e| RdfDiagnostic::error("native-codec-utf8", e.to_string()))?;
-        // Force sequential so subject spans are captured (the parallel path is
-        // `NoSpans`-only), then fold into the SAME frozen IR `parse_dataset` builds. This
-        // is a distinct `SpanTable` monomorphization of `text_parse_without_panicking`,
-        // so the hot `NoSpans` path the codec's `parse` drives stays zero-cost.
-        let mut table = SpanTable::default();
-        let mut base = base_scope_for(base_iri)?;
-        let graph = text_parse_without_panicking(
-            format,
-            text,
-            &mut base,
-            LineParseMode::ForceSequential,
-            &mut table,
-        )?;
-        let dataset = dataset_from_text_ser_graph(&graph)?;
+        // Line/Turtle family: parsed here, through the SAME `text_parse` front-end and
+        // fold `LineCodec::parse` drives, rather than through the codec seam — because
+        // this is the one leg that also reads back the document's prefix map, which the
+        // codec seam (shared with formats that have no `@prefix`) does not carry. UTF-8
+        // is only required by the text tokenizer, so it is validated here.
+        let text = std::str::from_utf8(bytes).map_err(|e| {
+            ParseFailure::before_parsing(
+                RdfDiagnostic::error("native-codec-utf8", e.to_string()),
+                base_iri,
+            )
+        })?;
+        let mut base =
+            base_scope_for(base_iri).map_err(|e| ParseFailure::before_parsing(e, None))?;
+        let mut document_prefixes = Vec::new();
+        let parsed = if options.track_source_spans {
+            // Force sequential so subject spans are captured (the parallel path is
+            // `NoSpans`-only). This is a distinct `SpanTable` monomorphization of
+            // `text_parse_without_panicking`, so the hot `NoSpans` path stays zero-cost.
+            let mut table = SpanTable::default();
+            text_parse_without_panicking(
+                format,
+                text,
+                &mut base,
+                LineParseMode::ForceSequential,
+                &mut table,
+                &mut document_prefixes,
+            )
+            .map(|graph| (graph, Some(table)))
+        } else {
+            text_parse_without_panicking(
+                format,
+                text,
+                &mut base,
+                LineParseMode::Auto,
+                &mut NoSpans,
+                &mut document_prefixes,
+            )
+            .map(|graph| (graph, None))
+        };
+        let folded = parsed.and_then(|(graph, spans)| {
+            dataset_from_text_ser_graph(&graph).map(|dataset| (dataset, spans))
+        });
+        match folded {
+            Ok((dataset, spans)) => Ok(ParseOutcome {
+                dataset,
+                spans,
+                document_base: base.current().cloned(),
+                document_prefixes,
+            }),
+            Err(diagnostic) => Err(Box::new(ParseFailure {
+                diagnostic,
+                document_base: base.current().cloned(),
+                document_prefixes,
+            })),
+        }
+    } else if format == NativeRdfFormat::RdfXml {
+        // RDF/XML: no span-carrying tokenizer (an empty table under tracking), and its
+        // prefix map is the document's `xmlns` declarations, read back from the XML
+        // parser by the same parse — so it is parsed here rather than through the codec
+        // seam, which carries no namespaces.
+        let text = std::str::from_utf8(bytes).map_err(|e| {
+            ParseFailure::before_parsing(
+                RdfDiagnostic::error("native-codec-utf8", e.to_string()),
+                base_iri,
+            )
+        })?;
+        let mut base =
+            base_scope_for(base_iri).map_err(|e| ParseFailure::before_parsing(e, None))?;
+        let mut document_prefixes = Vec::new();
+        let dataset = parse_rdfxml_without_panicking(text, &mut base, Some(&mut document_prefixes))
+            .map_err(|e| ParseFailure::before_parsing(e, base_iri))?;
         Ok(ParseOutcome {
             dataset,
-            spans: Some(table),
+            spans: options.track_source_spans.then(SpanTable::default),
             document_base: base.current().cloned(),
+            document_prefixes,
         })
     } else {
-        // RDF/XML, TriX, HexTuples: no span-carrying text tokenizer, so return an empty
-        // table alongside the identical dataset (physical-location fallback by design).
-        let (dataset, base) = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)?;
+        // TriX, HexTuples, JSON-LD, YAML-LD: no span-carrying text tokenizer, so under
+        // tracking return an empty table alongside the identical dataset
+        // (physical-location fallback by design). None has a prefix directive.
+        let (dataset, base) = parse_dataset_mode(bytes, media_type, base_iri, LineParseMode::Auto)
+            .map_err(|e| ParseFailure::before_parsing(e, base_iri))?;
         Ok(ParseOutcome {
             dataset,
-            spans: Some(SpanTable::default()),
+            spans: options.track_source_spans.then(SpanTable::default),
             document_base: base.current().cloned(),
+            document_prefixes: Vec::new(),
         })
     }
 }
@@ -348,9 +476,10 @@ pub(super) fn text_parse_without_panicking<S: SpanCollector>(
     base: &mut BaseScope,
     mode: LineParseMode,
     collector: &mut S,
+    prefixes: &mut Vec<(String, String)>,
 ) -> Result<SerGraph, RdfDiagnostic> {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        super::text_parse::parse_to_gts_graph_mode(format, text, base, mode, collector)
+        super::text_parse::parse_to_gts_graph_mode(format, text, base, mode, collector, prefixes)
     }));
     match outcome {
         Ok(result) => result,
@@ -368,9 +497,10 @@ pub(super) fn text_parse_without_panicking<S: SpanCollector>(
 pub(super) fn parse_rdfxml_without_panicking(
     text: &str,
     base: &mut BaseScope,
+    namespaces: Option<&mut Vec<(String, String)>>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     let outcome = catch_unwind(AssertUnwindSafe(|| {
-        super::rdfxml::parse_rdfxml_to_dataset(text, base)
+        super::rdfxml::parse_rdfxml_document(text, base, namespaces)
     }));
     match outcome {
         Ok(result) => result,
@@ -1100,6 +1230,164 @@ mod tests {
         assert!(
             tracked.quads().collect::<Vec<_>>() == plain.quads().collect::<Vec<_>>(),
             "tracked dataset has identical quads"
+        );
+    }
+
+    /// The document prefix map is the GRAMMAR's record: a `PREFIX` line quoted inside a
+    /// long string literal is text, never a declaration, and a label declared twice
+    /// reports its LAST namespace — on the hot path and the span-tracking path alike.
+    #[test]
+    fn document_prefixes_are_the_grammars_declarations() {
+        let ttl = concat!(
+            "@prefix ex: <https://example.org/a#> .\n",
+            "PREFIX rel: <rel/>\n",
+            "ex:s ex:p \"\"\"\n",
+            "PREFIX evil: <urn:evil:>\n",
+            "@prefix ex: <urn:evil:ex#> .\n",
+            "\"\"\" .\n",
+            "@prefix ex: <https://example.org/b#> .\n",
+            "ex:s ex:q ex:o .\n",
+        );
+        let expected = vec![
+            ("ex".to_owned(), "https://example.org/b#".to_owned()),
+            ("rel".to_owned(), "https://example.org/base/rel/".to_owned()),
+        ];
+        for track_source_spans in [false, true] {
+            let outcome = parse_dataset_with(
+                ttl.as_bytes(),
+                "text/turtle",
+                Some("https://example.org/base/"),
+                &ParseOptions { track_source_spans },
+            )
+            .expect("parse");
+            assert_eq!(
+                outcome.document_prefixes, expected,
+                "tracking: {track_source_spans}"
+            );
+        }
+    }
+
+    /// No declaration, no report: the parser's `rdf:` convenience binding resolves
+    /// `rdf:type` without ever being a document declaration, and formats with no
+    /// `@prefix` directive report nothing.
+    #[test]
+    fn document_prefixes_report_nothing_undeclared() {
+        let ttl = "<https://example.org/s> rdf:type <https://example.org/C> .\n";
+        let outcome = parse_dataset_with(
+            ttl.as_bytes(),
+            "text/turtle",
+            None,
+            &ParseOptions::default(),
+        )
+        .expect("parse");
+        assert_eq!(outcome.dataset.quad_count(), 1);
+        assert_eq!(outcome.document_prefixes, Vec::<(String, String)>::new());
+        let nt = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .\n";
+        let outcome = parse_dataset_with(
+            nt.as_bytes(),
+            "application/n-triples",
+            None,
+            &ParseOptions::default(),
+        )
+        .expect("parse");
+        assert_eq!(outcome.document_prefixes, Vec::<(String, String)>::new());
+    }
+
+    /// A failed parse reports the directives read BEFORE the failing statement, and
+    /// none after it — including none quoted inside a literal.
+    #[test]
+    fn a_failure_reports_the_directives_in_force_where_it_stopped() {
+        let ttl = concat!(
+            "@prefix a: <https://example.org/a#> .\n",
+            "@base <https://example.org/doc/> .\n",
+            "a:s a:p \"\"\"\nPREFIX q: <urn:q:>\n\"\"\" .\n",
+            "PREFIX b: <rel#>\n",
+            "a:s a:p .\n",
+            "@prefix c: <https://example.org/c#> .\n",
+        );
+        let failure = parse_dataset_reporting_failure(
+            ttl.as_bytes(),
+            "text/turtle",
+            None,
+            &ParseOptions::default(),
+        )
+        .expect_err("the fifth line has no object");
+        assert_eq!(
+            failure.document_prefixes,
+            vec![
+                ("a".to_owned(), "https://example.org/a#".to_owned()),
+                ("b".to_owned(), "https://example.org/doc/rel#".to_owned()),
+            ]
+        );
+        assert_eq!(
+            failure.document_base_iri(),
+            Some("https://example.org/doc/")
+        );
+        let plain = parse_dataset_with(
+            ttl.as_bytes(),
+            "text/turtle",
+            None,
+            &ParseOptions::default(),
+        )
+        .expect_err("the same failure");
+        assert_eq!(plain.to_string(), failure.diagnostic.to_string());
+    }
+
+    /// RDF/XML reports its `xmlns` declarations as the XML parser scoped them. The
+    /// control is the same document with `evil` really declared: only that row
+    /// differs. Text that merely spells a declaration — in element content, or in the
+    /// content of a `parseType="Literal"` value — declares nothing.
+    #[test]
+    fn rdfxml_document_prefixes_are_the_xml_parsers_declarations() {
+        let document = |root_extra: &str| {
+            format!(
+                "<?xml version=\"1.0\"?>\n\
+                 <rdf:RDF xmlns:rdf=\"http://www.w3.org/1999/02/22-rdf-syntax-ns#\" \
+                 xmlns:ex=\"http://example.org/first#\" xmlns=\"http://example.org/default#\"{root_extra}>\n\
+                 <rdf:Description rdf:about=\"http://example.org/s\" xmlns:ex=\"http://example.org/ex#\">\n\
+                 <ex:comment> xmlns:evil=\"http://example.org/evil#\" </ex:comment>\n\
+                 <ex:lit rdf:parseType=\"Literal\"><b xmlns:inlit=\"http://example.org/inlit#\">x</b></ex:lit>\n\
+                 </rdf:Description>\n\
+                 </rdf:RDF>\n"
+            )
+        };
+        let prefixes = |text: &str| {
+            parse_dataset_with(
+                text.as_bytes(),
+                "application/rdf+xml",
+                None,
+                &ParseOptions::default(),
+            )
+            .expect("parse")
+            .document_prefixes
+        };
+        let base = vec![
+            (String::new(), "http://example.org/default#".to_owned()),
+            ("ex".to_owned(), "http://example.org/ex#".to_owned()),
+            (
+                "rdf".to_owned(),
+                "http://www.w3.org/1999/02/22-rdf-syntax-ns#".to_owned(),
+            ),
+        ];
+        assert_eq!(prefixes(&document("")), base);
+        let mut control = base;
+        control.insert(
+            1,
+            ("evil".to_owned(), "http://example.org/evil#".to_owned()),
+        );
+        assert_eq!(
+            prefixes(&document(" xmlns:evil=\"http://example.org/evil#\"")),
+            control
+        );
+        // `xmlns=""` as the last word on the default namespace undeclares it.
+        let undeclared = document("").replace(
+            "rdf:about=\"http://example.org/s\"",
+            "rdf:about=\"http://example.org/s\" xmlns=\"\"",
+        );
+        assert!(
+            !prefixes(&undeclared)
+                .iter()
+                .any(|(prefix, _)| prefix.is_empty())
         );
     }
 }

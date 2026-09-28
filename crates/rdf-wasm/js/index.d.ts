@@ -142,6 +142,34 @@ export interface GovernedQueryOptions
 export interface EntailmentQueryOptions extends GovernedQueryOptions {
   /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
   readonly program?: string | null;
+  /**
+   * The dataset's `owl:imports` table, as two PARALLEL arrays of the same length: entry `i`
+   * declares that the ontology IRI `importIris[i]` denotes the N-Quads document
+   * `importDocuments[i]`. OWL 2 defines an ontology's imports closure to BE the ontology,
+   * so the closure the query runs over is materialized over the dataset merged with every
+   * document the table supplies. An `owl:imports` the table does not resolve, and the
+   * dataset does not already hold, throws by name — never a closure of a smaller premise —
+   * and so does an entry the closure never reaches. Omitted, the table is empty.
+   */
+  readonly importIris?: readonly string[] | null;
+  /** The documents of the import table, parallel to `importIris`. */
+  readonly importDocuments?: readonly string[] | null;
+  /**
+   * The IRIs the dataset was read from; an `owl:imports` of one names the dataset itself
+   * and resolves in place. Omitted, none.
+   */
+  readonly premiseIris?: readonly string[] | null;
+  /**
+   * The closure's stored-fact limit for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, as
+   * `entailMaterialize` takes it; omitted, this target's default (131072). A closure past
+   * it throws naming `queryEntailmentGoverned's maxStoredFacts`.
+   */
+  readonly maxStoredFacts?: bigint | number | null;
+  /**
+   * The closure's join-step limit (default 1048576); a closure past it throws naming
+   * `queryEntailmentGoverned's maxJoinSteps`.
+   */
+  readonly maxJoinSteps?: bigint | number | null;
 }
 
 export interface QueryRawOptions extends QueryOptions {
@@ -927,6 +955,10 @@ export class QueryEngine {
    * purrdf's first-party statistical aggregate set for the closure query's PARSE and its
    * evaluation, so `AGG(<{NAMESPACE}NAME>, args…)` reaches the entailment-aware lane
    * exactly as it reaches the ordinary one.
+   *
+   * `options.importIris`/`importDocuments`/`premiseIris` are the dataset's `owl:imports`
+   * table: the closure is materialized over the dataset's imports closure, and an import
+   * the table does not resolve throws by name.
    */
   queryEntailmentGoverned(
     dataset: Dataset,
@@ -1070,11 +1102,30 @@ export type EntailmentRegime =
  * `"owl-direct"` takes no program either: its extra input is a *query's* class
  * expressions, and this is a document boundary with no query, so it runs the
  * query-independent tableau augmentation.
+ *
+ * `maxStoredFacts` bounds the facts each evaluation store may hold and `maxJoinSteps` the
+ * candidate solutions the rules may enumerate, for the `"rdf"`, `"rdfs"`, `"owl-rl"` and
+ * `"d"` regimes. Omitted, each is this target's default: 131072 facts and 1048576 join
+ * steps (a native build's defaults are 4194304 and 1048576). A run past either throws
+ * naming the limit, the numbers and the argument that raises it; the report's
+ * `contract-hash` names the calculus under the limits in force.
+ *
+ * `importIris`, `importDocuments` and `premiseIris` are `entailCertainAnswers`'s: OWL 2
+ * defines an ontology's imports closure to BE the ontology, so a document carrying an
+ * `owl:imports` is closed over the merge of itself and every N-Quads document the table
+ * supplies. An import the table does not resolve, and the document does not already hold,
+ * throws by name, and so does an entry the closure never reaches. `[]`, `[]`, `[]` is the
+ * ordinary "imports nothing" case; all three are required.
  */
 export function entailMaterialize(
   document: string,
   regime: EntailmentRegime | string,
   program: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
+  premiseIris: readonly string[],
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
 ): RegimeClosure;
 export function entailRules(regime: EntailmentRegime | string): string[];
 export function entailImplementedRules(regime: EntailmentRegime | string): string[];
@@ -1168,7 +1219,14 @@ export function entailCheckProof(
 export type ModuleExtractionMethod = "bot" | "top" | "star";
 
 /**
- * `entailConsistency(document, stepCap, workCap)` → is the knowledge base consistent?
+ * `entailConsistency(document, importIris, importDocuments, premiseIris, stepCap, workCap)`
+ * → is the knowledge base consistent?
+ *
+ * `importIris`, `importDocuments` and `premiseIris` are `entailCertainAnswers`'s: OWL 2
+ * defines an ontology's imports closure to BE the ontology, so consistency is decided for
+ * the ontology merged with every document the table supplies, and the certificate then
+ * names `ontology-import-resolved`. An import the table does not resolve throws by name —
+ * never a verdict over a smaller ontology — and so does an entry the closure never reaches.
  *
  * `stepCap` narrows the per-decision tableau step cap and `workCap` the per-decision
  * WORK cap; `0` means the knowledge base's own cap for either, not a cap of zero, and
@@ -1181,6 +1239,9 @@ export type ModuleExtractionMethod = "bot" | "top" | "star";
  */
 export function entailConsistency(
   document: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
+  premiseIris: readonly string[],
   stepCap: number,
   workCap: number,
 ): ReasoningAnswer;
@@ -1319,8 +1380,10 @@ export function entailExplainConclusion(
  * `importIris[i]` denotes the N-Quads document `importDocuments[i]`. A premise carrying
  * an `owl:imports` states that its axioms are its own PLUS those of the documents it
  * names, so this is where those documents go — and the `owl:imports` triple stays exactly
- * where you wrote it. PurRDF FETCHES NOTHING: an ontology IRI the table does not resolve
- * throws by name, never a network access and never a silently empty import. Two empty
+ * where you wrote it. PurRDF FETCHES NOTHING: an ontology IRI the table does not resolve,
+ * and the premise does not already hold (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or
+ * an `owl:versionIRI` naming it), throws by name, never a network access and never a silently empty import; an entry
+ * the premise's import closure never names throws too, since it would be read and never used. Two empty
  * arrays are the ordinary *imports nothing* case; both are required, not defaulted, and
  * resolution is transitive to a fixpoint.
  *
@@ -1331,7 +1394,20 @@ export function entailExplainConclusion(
  * Throws on an unknown regime, on `owl-direct` or `rif`, on a malformed document,
  * pattern or import document, on import arrays of different lengths, on a duplicate or
  * empty import IRI, on a pattern that names a graph, on an `owl:imports` the table does
- * not resolve, and on an inconsistent premise.
+ * not resolve and the premise does not hold, and on an inconsistent premise.
+ *
+ * `premiseIris` are the IRIs the premise document was read from — its retrieval IRI or
+ * parse base, when the host knows one. Each is the premise's own IRI: an `owl:imports` on
+ * one of them, like one on the premise's `owl:Ontology` header or on a `sh:ShapesGraph` it
+ * declares (`sh:RulesGraph` and subclasses included), is an import, while one on any other
+ * node — one that is only a `sh:DataGraph` among them — is a premise triple. An `owl:imports` of one of them names the premise
+ * itself and is resolved in place. The empty array is the ordinary case for bare text;
+ * like the import arrays it is required, in the same position on every host.
+ *
+ * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
+ * answered with — the premise's closure and each re-chase a mechanism beyond the rule
+ * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
+ * A run past one throws naming `entailCertainAnswers's maxStoredFacts` or `entailCertainAnswers's maxJoinSteps`.
  */
 export function entailCertainAnswers(
   regime: EntailmentRegime | string,
@@ -1339,6 +1415,9 @@ export function entailCertainAnswers(
   pattern: string,
   importIris: readonly string[],
   importDocuments: readonly string[],
+  premiseIris: readonly string[],
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -1359,6 +1438,11 @@ export function entailCertainAnswers(
  * the conclusion is a graph to match rather than an ontology to close.
  *
  * Throws as `entailCertainAnswers`.
+ *
+ * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
+ * answered with — the premise's closure and each re-chase a mechanism beyond the rule
+ * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
+ * A run past one throws naming `entailGraphEntails's maxStoredFacts` or `entailGraphEntails's maxJoinSteps`.
  */
 export function entailGraphEntails(
   regime: EntailmentRegime | string,
@@ -1366,6 +1450,9 @@ export function entailGraphEntails(
   conclusion: string,
   importIris: readonly string[],
   importDocuments: readonly string[],
+  premiseIris: readonly string[],
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -1381,6 +1468,11 @@ export function entailGraphEntails(
  * graph the library assembled.
  *
  * Throws as `entailCertainAnswers`.
+ *
+ * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
+ * answered with — the premise's closure and each re-chase a mechanism beyond the rule
+ * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
+ * A run past one throws naming `entailVerifyEntailment's maxStoredFacts` or `entailVerifyEntailment's maxJoinSteps`.
  */
 export function entailVerifyEntailment(
   regime: EntailmentRegime | string,
@@ -1388,23 +1480,431 @@ export function entailVerifyEntailment(
   conclusion: string,
   importIris: readonly string[],
   importDocuments: readonly string[],
+  premiseIris: readonly string[],
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
 ): ReasoningAnswer;
 
 /**
+ * A shapes graph's `owl:imports` closure is not in hand, or the import table cannot be
+ * used — the one refusal every shapes-graph function throws, on every PurRDF host alike.
+ *
+ * Every function that takes a Turtle shapes graph takes the caller's `owl:imports` table
+ * as two trailing parallel arrays, `importIris` and `importDocuments`: entry `i` declares
+ * that `importIris[i]` names the Turtle document `importDocuments[i]`, parsed with that
+ * IRI as its base. An `owl:imports` is an import only on the shapes graph's own IRI
+ * (`shapesBase`, or the document's own `@base`), on an `owl:Ontology` header, on a
+ * `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a node naming one of
+ * those as its `owl:versionIRI`; on any other node — one that is only a `sh:DataGraph`
+ * among them — it is data. An import is resolved by a table entry, by `shapesBase` (or the
+ * document's own `@base`) naming the imported document, or by the closure declaring it
+ * (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose `owl:versionIRI` is
+ * `<X>`). Anything else throws this class rather than validating a smaller shapes graph than the
+ * one named. PurRDF fetches nothing; omitted arrays are an empty table, which still
+ * enforces the rule.
+ *
+ * `kind` is the matchable half: `"unresolved-import"` (pass the named documents),
+ * `"unreached-import"` (a table entry neither an import nor a data-graph link names),
+ * `"incompatible-import-versions"` (the closure holds two versions of one series, or a
+ * graph another declares `owl:incompatibleWith`, SHACL 1.2 Core sections 1.3 and 6.1 —
+ * `iris` are the conflicting documents), `"invalid-import"` (a key that is not an absolute IRI, a key named twice, or a document
+ * that is not Turtle), `"unresolved-shapes-graph-link"` (the data graph links a graph with
+ * `sh:shapesGraph`, SHACL 1.2 Core section 6.4, that nothing in hand resolves — pass it in
+ * `importIris` / `importDocuments`), `"unheld-shapes-graph-link"` (a prepared product does
+ * not hold a graph the data graph links) or `"invalid-shapes-graph-link"` (a data-graph
+ * `sh:shapesGraph` value that is not an IRI). `iris` are the IRIs (or values) it names. `message` is prose; do not match on it. Like every other class
+ * in this package the instance owns wasm memory — call `free()` when done.
+ */
+export class ShaclImportError {
+  readonly kind:
+    | "unresolved-import"
+    | "unreached-import"
+    | "incompatible-import-versions"
+    | "invalid-import"
+    | "unresolved-shapes-graph-link"
+    | "unheld-shapes-graph-link"
+    | "invalid-shapes-graph-link";
+  readonly iris: string[];
+  readonly message: string;
+  toString(): string;
+  free(): void;
+}
+
+/**
+ * Entail `dataNt` under `shapesTtl`, returning a `ShaclEntailment`: `ntriples`, the
+ * materialized dataset (the base graph plus every SHACL-AF `sh:rule` inference), and
+ * `diagnostics`, the shapes graph's mandatory diagnostics.
+ *
  * `shapesBase` is the base IRI the SHAPES document's relative IRI references resolve
  * against. A browser or Node host has no retrieval IRI of its own, so PurRDF will not
  * invent one: omit it and a relative reference throws rather than being mis-parsed.
  * `dataNt` needs no counterpart — N-Triples admits no relative IRI by grammar.
+ *
+ * `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
+ * `ShaclImportError`): an imported document's rules run.
+ *
+ * `shapesGraph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+ * `shaclApplyRules` takes it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it. A
+ * relative one resolves against `shapesBase`; omitted, `$shapesGraph` is an ordinary
+ * variable.
+ *
+ * `maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts` and `maxJoinSteps` are
+ * the four rule-evaluation limits, exactly as `shaclApplyRules` takes them and with the
+ * same defaults: 16384 term-generating rounds, max(65536, 4 × N) generated terms for N
+ * distinct input terms, 131072 stored facts and 1048576 join steps on this target. A run
+ * past one throws naming the limit, the numbers and the argument that raises it
+ * (`shaclEntail's maxStoredFacts`, …).
  */
 export function shaclEntail(
   shapesTtl: string,
   dataNt: string,
   shapesBase?: string,
-): string;
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  shapesGraph?: string,
+  maxTermGeneratingRounds?: bigint,
+  maxGeneratedTerms?: bigint,
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
+): ShaclEntailment;
+
+/**
+ * The outcome of `shaclEntail`. Like every other class in this package it owns wasm
+ * memory: call `free()`.
+ */
+export class ShaclEntailment {
+  free(): void;
+  /**
+   * The MATERIALIZED dataset — the base graph plus every inferred triple — as canonical
+   * N-Triples.
+   */
+  readonly ntriples: string;
+  /**
+   * The shapes graph's mandatory diagnostics: one `ShaclDiagnostic` (`rule`, `shape`) per
+   * shape with an empty `sh:in` or `sh:xone` list, which every run reports.
+   */
+  readonly diagnostics: ShaclDiagnostic[];
+}
+
+/**
+ * The outcome of `shaclApplyRules`. Like every other class in this package it owns
+ * wasm memory: call `free()`.
+ */
+export class ShaclRulesInference {
+  free(): void;
+  /**
+   * The INFERENCE GRAPH — the inferred triples only, never the data graph — as
+   * N-Triples 1.2, one triple per line, in canonical order.
+   */
+  readonly inferred: string;
+  /**
+   * The proof of every inferred triple, or `undefined` when `explain` was not set:
+   * `derived S P O .`, then `  rule R` and one `  premise S P O .` per fact the rule's
+   * body matched, or `  data-block` for a SPARQL 1.2 RL data-block triple.
+   */
+  readonly proof?: string;
+  /**
+   * The shapes graph's mandatory diagnostics: one `ShaclDiagnostic` (`rule` —
+   * `in-minListLength` or `xone-minListLength` — and `shape`) per shape with an empty
+   * `sh:in` or `sh:xone` list, which every run reports. Empty for an `srl` rule set, which
+   * has no shapes graph.
+   */
+  readonly diagnostics: ShaclDiagnostic[];
+}
+
+/**
+ * Run exactly one rule source over the N-Triples data graph: the SHACL 1.2 rules of the
+ * Turtle shapes graph `shapesTtl` (its default rule set), or the SPARQL 1.2 RL rule set
+ * `srl`. Naming neither or both throws. `shapesBase` / `srlBase` are the documents' base
+ * IRIs.
+ *
+ * `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?, importIris?,
+ * importDocuments?, shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?,
+ * maxStoredFacts?, maxJoinSteps?)`: the import table, then `shapesGraph`, then the four
+ * rule-evaluation limits, in the order `shaclEntail` takes them.
+ *
+ * `maxTermGeneratingRounds` bounds the evaluation rounds that infer a term the graph did
+ * not hold (default 16384), and `maxGeneratedTerms` the terms inferred beyond the input's
+ * (default max(65536, 4 × N) for N distinct input terms). A run past either throws naming
+ * the limit, the numbers, the rules that inferred a new term last, and the argument that
+ * raises it.
+ *
+ * `maxStoredFacts` bounds the facts the evaluation store may hold — the data graph, a rule
+ * set's data and every inferred triple — and `maxJoinSteps` the candidate solutions the
+ * rule bodies may enumerate. Omitted, each is this target's default: 131072 facts and
+ * 1048576 join steps, sized for one WebAssembly linear memory (a native build's defaults
+ * are 4194304 and 1048576). A run past either throws naming the limit, the numbers and
+ * the argument that raises it.
+ *
+ * `importIris` / `importDocuments` are the rule source's import table: the shapes graph's
+ * `owl:imports` table (Turtle documents, see `ShaclImportError`) beside `shapesTtl`, the
+ * rule set's `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
+ * imported document's rules run. An import no entry supplies, and an entry the import
+ * closure never names, throw.
+ *
+ * `shapesGraph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+ * `purrdf rules --shapes-graph` names it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound
+ * to it and `GRAPH $shapesGraph { … }` reads the shapes graph. A relative one resolves
+ * against `shapesBase`; omitted, `$shapesGraph` is an ordinary variable. Naming one beside
+ * `srl` throws: a SPARQL 1.2 RL rule set has no shapes graph.
+ */
+export function shaclApplyRules(
+  dataNt: string,
+  shapesTtl?: string,
+  srl?: string,
+  shapesBase?: string,
+  srlBase?: string,
+  explain?: boolean,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  shapesGraph?: string,
+  maxTermGeneratingRounds?: bigint,
+  maxGeneratedTerms?: bigint,
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
+): ShaclRulesInference;
+
+/**
+ * The outcome of `shaclCheckRules`: a SPARQL 1.2 RL rule set that passed every check its
+ * level asks for. Like every other class in this package it owns wasm memory: call
+ * `free()`.
+ */
+export class ShaclRulesCheck {
+  free(): void;
+  /** The level the rule set passed. */
+  readonly level: SrlCheckLevel;
+  /**
+   * Every rule of the combined rule set — the rule set's own, then every imported rule —
+   * described by its IRI or by where it is written.
+   */
+  readonly rules: string[];
+  /** The number of data-block triples of the combined rule set. */
+  readonly dataTriples: number;
+  /** The IRIs of the imported rule sets, each once, in the order they were read. */
+  readonly imported: string[];
+  /** The `VERSION` labels, in document order. */
+  readonly versions: string[];
+  /** The number of stratification layers, or `undefined` below `"stratified"`. */
+  readonly strata?: number;
+  /** The one-line summary every PurRDF host reports. */
+  readonly summary: string;
+}
+
+/**
+ * How far `shaclCheckRules` checks a SPARQL 1.2 RL rule set, each level including the
+ * ones before it.
+ */
+export type SrlCheckLevel = "syntax" | "well-formed" | "stratified";
+
+/**
+ * Check the SPARQL 1.2 RL rule set `srl` WITHOUT evaluating it: the grammar, the `IMPORTS`
+ * closure resolved from `importIris` / `importDocuments` (rule-set texts, as
+ * `shaclApplyRules` takes them), well-formedness and stratification — every static check
+ * `shaclApplyRules` applies before it runs — with no data graph read and no rule run.
+ * `srlBase` is the rule set's base IRI.
+ *
+ * `level` is how far the check goes: `"syntax"` (the grammar, for the rule set and every
+ * document its imports read), `"well-formed"` (every rule, imported ones included, is
+ * well formed) or `"stratified"` (the combined rule set can be stratified); omitted,
+ * `"stratified"`. Any other name throws.
+ *
+ * Throws, naming the stage, for a rule set a check refuses: a syntax error, an import the
+ * table does not supply or an entry its closure never names, an ill-formed rule, a rule
+ * set that cannot be stratified.
+ */
+export function shaclCheckRules(
+  srl: string,
+  srlBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  level?: SrlCheckLevel,
+): ShaclRulesCheck;
+
+/**
+ * One mandatory diagnostic of a shapes graph — a shape whose `sh:in` or `sh:xone` list is
+ * empty — as the structured value every host carries: the rule, then the shape. Like every
+ * other class in this package it owns wasm memory: call `free()`.
+ */
+export class ShaclDiagnostic {
+  free(): void;
+  /** The syntax rule's id: `in-minListLength` or `xone-minListLength`. */
+  readonly rule: string;
+  /** The shape whose list is empty, as an N-Triples term (`<iri>` or `_:label`). */
+  readonly shape: string;
+}
+
+/**
+ * The outcome of `shaclEvalNodeExpr`. Like every other class in this package it owns wasm
+ * memory: call `free()`.
+ */
+export class ShaclNodeExprOutcome {
+  free(): void;
+  /** The output nodes, as N-Triples 1.2 terms in sequence order. */
+  readonly outputs: string[];
+  /**
+   * The shapes graph's mandatory diagnostics — one per shape of its `owl:imports` closure
+   * with an empty `sh:in` or `sh:xone` list — which every run reports. They change no
+   * output.
+   */
+  readonly diagnostics: ShaclDiagnostic[];
+}
+
+/**
+ * Evaluate ONE node expression of the Turtle shapes graph against a focus node of the
+ * N-Triples data graph — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph,
+ * focusNode, scope)` — returning a `ShaclNodeExprOutcome`: `outputs`, its output nodes as
+ * N-Triples 1.2 terms in the order the expression's sequence semantics define, and
+ * `diagnostics`, the shapes graph's mandatory diagnostics.
+ *
+ * The expression is named exactly one way. `expr` is an absolute IRI or `"_:label"` for a
+ * blank node the shapes document labels so. Otherwise `expr` is `undefined` and either
+ * `exprAt` names a node and `exprVia` the predicate IRIs a walk from it follows, each
+ * step reaching exactly one value (how an anonymous `[ … ]` expression is named), or
+ * `exprTurtle` is the expression as a Turtle document, read under the shapes document's
+ * prefixes and base and merged into the shapes graph, whose one root blank node is the
+ * expression. `focus` is an absolute IRI or any N-Triples term; `scope` is an array of
+ * `"NAME=TERM"` bindings read by `shnex:var "NAME"`. Throws on none or several
+ * selectors, a walk step reaching no value or several, an inline document without
+ * exactly one root, a label the shapes document never wrote, a binding named
+ * `focusNode` or bound twice, and any parse or evaluation failure.
+ */
+export function shaclEvalNodeExpr(
+  shapesTtl: string,
+  dataNt: string,
+  expr: string | undefined,
+  focus: string,
+  scope?: readonly string[],
+  shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  exprAt?: string,
+  exprVia?: readonly string[],
+  exprTurtle?: string,
+): ShaclNodeExprOutcome;
+
+/**
+ * The cold-certify report of a shapes graph, returned by `shaclLintShapes`. Like every
+ * other class in this package it owns wasm memory: call `free()`.
+ */
+export class ShaclLintReport {
+  free(): void;
+  /**
+   * No finding: the loader accepted the graph, every `shacl-shacl.ttl` result is
+   * superseded (flagged there, well-formed SHACL 1.2 Core), no unexecuted query
+   * violates a pre-binding restriction and no mandatory diagnostic applies.
+   */
+  readonly clean: boolean;
+  /**
+   * One for a load refusal, plus every `shacl-shacl.ttl` result no supersession covers,
+   * plus every unexecuted query that violates a pre-binding restriction, plus every
+   * mandatory diagnostic (an empty `sh:in` or `sh:xone` list).
+   */
+  readonly findings: number;
+  /** The loader's refusal, or `undefined` when it accepted the graph. */
+  readonly loadError?: string;
+  /**
+   * The deterministic text every PurRDF host prints: the `load`, `shacl-shacl`,
+   * `functions` (`call BINDING <IRI> in OWNER`), `validators` (`alternative
+   * <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`, one per validator
+   * declared for a built-in component), `unexecuted` (`violation DECLARATION`, one per
+   * query that violates a pre-binding restriction and that nothing executes),
+   * `diagnostics` (`diagnostic RULE SHAPE`, one per shape whose `sh:in` or `sh:xone`
+   * list is empty, `RULE` being `in-minListLength` or `xone-minListLength`; each a
+   * finding, and the `shacl-shacl` warning on the same list is marked `diagnosed RULE`
+   * and not counted) and `unanchored-imports` (`unanchored SUBJECT OBJECT document -|<IRI>`, one per
+   * `owl:imports` triple of the closure whose subject is no anchor of its document — not
+   * the IRI it was read or imported under, not an ontology header, not a shapes graph —
+   * so it is data and imported nothing; never a finding) sections, then `findings N` and
+   * `clean true|false`.
+   */
+  readonly report: string;
+}
+
+/**
+ * Certify a Turtle shapes graph COLD — its whole `owl:imports` closure: the loader's
+ * verdict, every result of validating it against the W3C `shacl-shacl.ttl`, and which
+ * implementation every node-expression function call binds to. Throws a
+ * `ShaclImportError` when the closure is not in hand — never a report about the
+ * importing document alone — and otherwise only when the document is not Turtle.
+ * `shapesGraph` configures the loader as `purrdf shapes lint --shapes-graph` does (see
+ * `shaclValidateToSarif`).
+ */
+export function shaclLintShapes(
+  shapesTtl: string,
+  shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  shapesGraph?: string,
+): ShaclLintReport;
+/**
+ * A SHACL severity IRI. The five built-in levels SHACL 1.2 Core names, most severe
+ * first; any other IRI is a custom severity and is carried verbatim.
+ */
+export type ShaclSeverity =
+  | "http://www.w3.org/ns/shacl#Violation"
+  | "http://www.w3.org/ns/shacl#Warning"
+  | "http://www.w3.org/ns/shacl#Info"
+  | "http://www.w3.org/ns/shacl#Debug"
+  | "http://www.w3.org/ns/shacl#Trace"
+  | (string & {});
+
+/** One `sh:resultMessage` in a SARIF result's `properties.shaclMessages`. */
+export interface ShaclSarifMessage {
+  text: string;
+  language?: string;
+  direction?: "ltr" | "rtl";
+  /** Present only for a datatype other than `xsd:string` / the language strings. */
+  datatype?: string;
+}
+
+/**
+ * Validate `dataNt` (N-Triples) against `shapesTtl` (Turtle), returning a SARIF 2.1.0
+ * JSON log. `shapesBase` carries the meaning it does on `shaclEntail`.
+ *
+ * `conformanceDisallows` is the conformance-disallow set: the severities whose results
+ * make the data non-conforming. Omitted, it is SHACL's default set (`sh:Violation`,
+ * `sh:Warning`, `sh:Info`); an empty array or a value that is not an absolute IRI
+ * throws. The log's run carries `properties.shaclConforms` (boolean),
+ * `properties.shaclConformanceDisallows` (the set the report was judged against) and
+ * `properties.shaclShapesGraphWellFormed` (the report's `sh:shapesGraphWellFormed`:
+ * `true` for every report a validation produced),
+ * because the results alone cannot say whether the data conforms: an `sh:Debug` or
+ * `sh:Trace` result is SARIF `kind: "informational"` with `level: "none"` and appears in
+ * the log of a conforming report, its IRI kept in `properties.shaclSeverity`.
+ * A result's `message.text` is its untagged `sh:resultMessage` when it has one (else
+ * the first in canonical order); whenever that text alone would lose something —
+ * several messages, a language tag, a direction, an `rdf:HTML` message — the result's
+ * `properties.shaclMessages` lists EVERY message as `ShaclSarifMessage`.
+ *
+ * The shapes graph's mandatory diagnostics — one per shape with an empty `sh:in` or
+ * `sh:xone` list — ride in `invocations[0].toolExecutionNotifications`, never among the
+ * results: each a SARIF notification at `level: "note"` whose `descriptor` names the rule
+ * (`in-minListLength`, `xone-minListLength`) in `tool.driver.notifications` and whose one
+ * logical location (`kind: "shape"`) is the shape. They change neither the verdict nor
+ * the results.
+ *
+ * `shapesGraph` is the IRI SHACL-SPARQL sees the shapes graph under, as `purrdf validate
+ * --shapes-graph` names it: `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph {
+ * … }` reads the shapes graph — SHACL 1.0's pre-binding, which SHACL 1.2 removed.
+ * Omitted, no graph is named and `$shapesGraph` is an ordinary variable. A relative IRI
+ * resolves against `shapesBase`; one with no base throws (`iri-relative-no-base`).
+ *
+ * `subClassOfInShapesGraph` is SHACL 1.2 Core section 6.3's parameter of that name:
+ * `true` reads the shapes graph's `rdfs:subClassOf` triples, in addition to the data
+ * graph's, wherever SHACL type decides class membership (`sh:targetClass`, implicit
+ * class targets, `sh:class`, `sh:rootClass`, `shnex:instancesOf`). Omitted or `false`,
+ * the specification's default: the data graph alone. Only class membership changes;
+ * `rdf:type` triples are always read from the data graph.
+ */
 export function shaclValidateToSarif(
   shapesTtl: string,
   dataNt: string,
   shapesBase?: string,
+  conformanceDisallows?: readonly ShaclSeverity[],
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  shapesGraph?: string,
+  subClassOfInShapesGraph?: boolean,
 ): string;
 
 /**
@@ -1462,6 +1962,10 @@ export function shaclValidateChangesToSarif(
   addedNt?: string,
   removedNt?: string,
   shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  /** The shapes-graph IRI, exactly as `shaclValidateToSarif` takes it. */
+  shapesGraph?: string,
 ): ShaclChangeValidation;
 
 /**
@@ -1495,11 +1999,23 @@ export class ShaclProductRefusal {
  * identical inputs produce identical bytes, so a content-addressed cache key over
  * the result is stable.
  *
- * Throws a `ShaclProductRefusal`.
+ * `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
+ * `ShaclImportError`); the product carries the merged closure, so a restore needs no
+ * documents.
+ *
+ * `shapesGraph` (see `shaclValidateToSarif`) is recorded in the product and bound by
+ * its identity, as `purrdf shacl pack --shapes-graph` records it; a restore exposes the
+ * shapes graph under it.
+ *
+ * Throws a `ShaclImportError` when the shapes graph's `owl:imports` closure is not in
+ * hand, and a `ShaclProductRefusal` otherwise.
  */
 export function shaclPackProduct(
   shapesTtl: string,
   shapesBase?: string,
+  importIris?: readonly string[],
+  importDocuments?: readonly string[],
+  shapesGraph?: string,
 ): Uint8Array;
 
 /**

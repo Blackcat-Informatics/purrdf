@@ -7,11 +7,11 @@
 //! [`eval_expr`] maps an [`Expression`] over one solution to
 //! `Ok(Some(term))` (a value), `Ok(None)` (a SPARQL **error / unbound** — the
 //! third truth value), or `Err` (a hard [`EvalError::Unsupported`] for a construct
-//! outside the current S6 scope). The `Ok(None)` vs `Err` split is load-bearing: a
+//! the evaluator does not support). The `Ok(None)` vs `Err` split is load-bearing: a
 //! type error is normal three-valued logic (it makes a FILTER drop the row), while
 //! an unimplemented builtin is a hard failure (never a wrong answer).
 //!
-//! ## Scope (S6)
+//! ## Supported expressions
 //!
 //! Implemented: logical `&&`/`||`/`!` (Kleene three-valued), comparisons and
 //! `sameTerm`, `BOUND`, `IN`, `IF`, `COALESCE`, `EXISTS`, the string/type/RDF

@@ -63,16 +63,17 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
 use purrdf_validate::regime::{
-    PROOF_SERVICE_NAMES, REGIME_NAMES, ReasonerSession, certain_answers_to_string, check_dl_proof,
-    classify_to_string, consistency_to_string, entails_to_string, explain_conclusion_to_string,
-    extension_rules_string, extract_module_to_string, graph_entails_to_string,
-    implemented_rules_string, instances_to_string, justify_to_string, materialize_to_nquads_string,
-    parse_regime, profile_to_string, prove_to_string, realize_to_string, regime_name, regime_plan,
-    regime_rule_set, render_entail_error, render_reasoning_report, rules_string,
+    MaterializeLimits, PROOF_SERVICE_NAMES, REGIME_NAMES, ReasonerSession, RegimeHost,
+    certain_answers_to_string, check_dl_proof, classify_to_string, consistency_to_string,
+    entails_to_string, explain_conclusion_to_string, extension_rules_string,
+    extract_module_to_string, graph_entails_to_string, implemented_rules_string,
+    instances_to_string, justify_to_string, materialize_to_nquads_string_with, parse_regime,
+    premise_import_map, profile_to_string, prove_to_string, realize_to_string, regime_name,
+    regime_plan, regime_rule_set, render_entail_error_for, render_reasoning_report, rules_string,
     verify_entailment_to_string,
 };
 
-use crate::entail::{Regime, materialize as materialize_closure};
+use crate::entail::{Regime, materialize_with_imports};
 use crate::py_gts_dataset::PyRdfDataset;
 
 // ── The regime enum ─────────────────────────────────────────────────────────────
@@ -195,17 +196,54 @@ fn native_regime(regime: &Bound<'_, PyAny>) -> PyResult<Regime> {
 /// the premise COUNT, so the caller whose data was bad was the only caller who got no
 /// report at all.
 ///
+/// # The evaluation limits
+///
+/// `max_stored_facts` bounds the facts each evaluation store may hold — one store per
+/// graph of the dataset, holding its triples, the regime's axioms and every conclusion —
+/// and `max_join_steps` the candidate solutions the rules may enumerate, for the `RDF`,
+/// `RDFS`, `OWL_RL` and `D` regimes. `None` keeps the default: 4194304 facts and
+/// 1048576 join steps. A run past either raises `ValueError` naming the limit, the
+/// numbers and the keyword argument that raises it; a run inside them returns exactly the
+/// closure larger limits would, and the report's `contract-hash` names the calculus under
+/// the limits in force.
+///
+/// # `imports` and `premise_iris` — the dataset's `owl:imports` closure
+///
+/// [`certain_answers`]'s: OWL 2 defines an ontology's imports closure to BE the ontology,
+/// so a dataset carrying an `owl:imports` is closed over the merge of itself and every
+/// N-Quads document `imports` supplies, and the report then states
+/// `ontology-import-resolved`. An import the table does not resolve, and the dataset does
+/// not already hold, raises `ValueError` naming it — never a closure of a smaller ontology —
+/// and so does an entry the closure never reaches. `[]`, `[]` is the ordinary "imports
+/// nothing" case; both are required rather than defaulted, in the same position on every
+/// host.
+///
 /// Raises `ValueError` for an unknown regime spelling (naming the accepted set), for a
-/// `program` that is wrong for the regime, for an inconsistent knowledge base, and for an
-/// exhausted evaluation ceiling.
+/// `program` that is wrong for the regime, for an import-table refusal, for an inconsistent
+/// knowledge base, and for a passed evaluation limit.
 #[pyfunction]
-#[pyo3(signature = (dataset, regime, program))]
+#[pyo3(signature = (dataset, regime, program, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the dataset, the regime's program, the import table and each limit are named \
+              explicitly at the boundary, in the order every other host takes them"
+)]
 fn materialize(
     py: Python<'_>,
     dataset: &PyRdfDataset,
     regime: &Bound<'_, PyAny>,
     program: &str,
+    imports: Vec<(String, String)>,
+    premise_iris: Vec<String>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> PyResult<(PyRdfDataset, String)> {
+    let limits = MaterializeLimits {
+        max_stored_facts,
+        max_join_steps,
+        host: RegimeHost::Python,
+    };
     // Arguments become plain Rust data (a native regime, an owned `Arc` handle)
     // BEFORE the GIL is released.
     let native = native_regime(regime)?;
@@ -218,9 +256,18 @@ fn materialize(
             // The SAME two helpers `materialize_nt` reaches through the string boundary,
             // so the dataset path and the text path cannot come to mean different things
             // by the same regime spelling.
+            let table = import_list(&imports);
+            let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+            let map = premise_import_map(&table, &premise_iris)?;
             let rules = regime_rule_set(native, name, program)?;
-            let (closure, report) = materialize_closure(data.as_ref(), regime_plan(native, &rules))
-                .map_err(|error| render_entail_error(name, &error))?;
+            let (closure, report) = materialize_with_imports(
+                data.as_ref(),
+                regime_plan(native, &rules),
+                &map,
+                &limits.eval_options(),
+                None,
+            )
+            .map_err(|error| render_entail_error_for(name, &error, limits.host))?;
             Ok::<_, String>((closure, render_reasoning_report(&report)))
         })
         .map_err(PyValueError::new_err)?;
@@ -242,23 +289,49 @@ fn materialize(
 ///
 /// `program` is the regime's own rule document, exactly as on [`materialize`].
 ///
+/// `imports` and `premise_iris` are [`materialize`]'s: the document is closed over its
+/// `owl:imports` closure, and an import the table does not resolve raises by name.
+///
+/// `max_stored_facts` and `max_join_steps` are [`materialize`]'s evaluation limits.
+///
 /// Raises `ValueError` on a malformed document, an unknown regime spelling
-/// (naming the accepted set), or a `program` that is wrong for the regime — and on an
+/// (naming the accepted set), a `program` that is wrong for the regime, or an import-table
+/// refusal — and on an
 /// INCONSISTENT knowledge base, whose raise carries the run's full rendered report,
-/// witness triples included, exactly as [`materialize`] documents.
+/// witness triples included, exactly as [`materialize`] documents — and on a passed
+/// evaluation limit, naming the keyword argument that raises it.
 #[pyfunction]
-#[pyo3(signature = (data, regime, program))]
+#[pyo3(signature = (data, regime, program, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the document, the regime's program, the import table and each limit are named \
+              explicitly at the boundary, in the order every other host takes them"
+)]
 fn materialize_nt(
     py: Python<'_>,
     data: &str,
     regime: &Bound<'_, PyAny>,
     program: &str,
+    imports: Vec<(String, String)>,
+    premise_iris: Vec<String>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
+    let limits = MaterializeLimits {
+        max_stored_facts,
+        max_join_steps,
+        host: RegimeHost::PythonText,
+    };
     // Parse + chase + canonical serialization + report rendering run detached
     // (GIL released).
+    let table = import_list(&imports);
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     let closure = py
-        .detach(|| materialize_to_nquads_string(name, data, program))
+        .detach(|| {
+            materialize_to_nquads_string_with(name, data, program, &table, &premise_iris, &limits)
+        })
         .map_err(PyValueError::new_err)?;
     Ok(closure.into_parts())
 }
@@ -355,17 +428,31 @@ fn extensions(regime: &Bound<'_, PyAny>) -> PyResult<Vec<String>> {
 /// This is the only DL service that answers for an unsatisfiable ontology, because
 /// it is the one that detects one.
 ///
-/// Raises `ValueError` on a malformed document or a failed reverse mapping.
+/// `imports` and `premise_iris` are [`certain_answers`]'s: OWL 2 defines an ontology's
+/// imports closure to BE the ontology, so consistency is decided for the ontology merged
+/// with every document `imports` supplies, and the certificate then names
+/// `ontology-import-resolved`. An import the table does not resolve, and the ontology does
+/// not already hold, raises `ValueError` naming it — never a verdict over a smaller
+/// ontology — and so does an entry the closure never reaches. Both are required, in the
+/// same position on every host.
+///
+/// Raises `ValueError` on a malformed document, an import-table refusal, or a failed
+/// reverse mapping.
 #[pyfunction]
-#[pyo3(signature = (data, step_cap = 0, work_cap = 0))]
+#[pyo3(signature = (data, imports, premise_iris, step_cap = 0, work_cap = 0))]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn consistency(
     py: Python<'_>,
     data: &str,
+    imports: Vec<(String, String)>,
+    premise_iris: Vec<String>,
     step_cap: u32,
     work_cap: u32,
 ) -> PyResult<(String, String)> {
+    let table = import_list(&imports);
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     let answer = py
-        .detach(|| consistency_to_string(data, step_cap, work_cap))
+        .detach(|| consistency_to_string(data, &table, &premise_iris, step_cap, work_cap))
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -583,18 +670,46 @@ fn explain_conclusion(
 
 // ── The conclusion-directed entailment services ─────────────────────────────────
 
-/// Borrow a Python-supplied import table as the boundary's [`ImportList`].
+/// The two optional evaluation-limit keywords every conclusion-directed service takes, as the
+/// boundary's limits, spelled for this host: a refusal names the keyword of the function the
+/// caller called.
+const fn python_limits(
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
+) -> MaterializeLimits {
+    MaterializeLimits {
+        max_stored_facts,
+        max_join_steps,
+        host: RegimeHost::Python,
+    }
+}
+
+/// Borrow a Python-supplied import table as the boundary's [`ImportList`] — or, for the
+/// SHACL module's shapes-graph functions, its `ShapesImportList`, which has the same shape.
 ///
-/// The three services below all take `imports` as a `Sequence[tuple[str, str]]`, which PyO3
+/// Every service that takes `imports` takes it as a `Sequence[tuple[str, str]]`, which PyO3
 /// materializes as owned `String`s; the boundary takes borrowed pairs. This is that one
-/// re-borrow, written once so the three call sites cannot drift, and it preserves the
-/// caller's ORDER — the boundary's table is a list rather than a map precisely so the same
-/// input always produces the same run.
-fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
+/// re-borrow, written once so the call sites cannot drift, and it preserves the caller's
+/// ORDER — the boundary's table is a list rather than a map precisely so the same input
+/// always produces the same run.
+pub(crate) fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
     imports
         .iter()
         .map(|(iri, document)| (iri.as_str(), document.as_str()))
         .collect()
+}
+
+/// A store's optional `imports` / `premise_iris` keyword arguments as the map the
+/// entailment-aware query resolves `owl:imports` against — parsed by the same shared
+/// boundary ([`premise_import_map`]) every string service uses. `None` is the empty table.
+pub(crate) fn entailment_import_map(
+    imports: Option<Vec<(String, String)>>,
+    premise_iris: Option<Vec<String>>,
+) -> PyResult<crate::entail::ImportMap> {
+    let imports = imports.unwrap_or_default();
+    let premise_iris = premise_iris.unwrap_or_default();
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    premise_import_map(&import_list(&imports), &premise_iris).map_err(PyValueError::new_err)
 }
 
 /// The CERTAIN ANSWERS of a basic graph pattern over `data` under `regime`.
@@ -639,8 +754,31 @@ fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
 ///
 /// **PurRDF fetches nothing.** An ontology IRI this sequence does not resolve is a
 /// `ValueError` naming the document, never a network access and never a silently empty
-/// import. `[]` is the ordinary "imports nothing" case and is required rather than defaulted,
+/// import; an entry the premise's import closure never names is a `ValueError` too, since
+/// it would be read and never used. `[]` is the ordinary "imports nothing" case and is required rather than defaulted,
 /// in the same position on all four hosts, so one call shape works everywhere.
+///
+/// # `premise_iris` — the IRIs the premise document was read from
+///
+/// A `Sequence[str]`: the premise's retrieval IRI, or the base it was parsed under, when
+/// the caller knows one. Each is the premise's own IRI: an `owl:imports` on one of these,
+/// like one on the premise's `owl:Ontology` header or on a `sh:ShapesGraph` it declares
+/// (`sh:RulesGraph` and subclasses included), is an import, while an `owl:imports` on any
+/// other node — one that is only a `sh:DataGraph` among them — is a premise triple and
+/// names no document. An `owl:imports` of one of these names the premise ITSELF, so it is
+/// resolved in place rather than refused as missing (so is an import of an ontology or
+/// shapes graph the premise already declares, with no argument needed). A caller handed bare text has no
+/// such IRI, and `[]` is that ordinary case; like `imports` the argument is required rather
+/// than defaulted, in the same position on all four hosts.
+///
+/// # `max_stored_facts`, `max_join_steps` — the evaluation limits
+///
+/// Keyword-only, and [`materialize`]'s: they bound every evaluation the question is answered
+/// with — the premise's closure and each re-chase a mechanism beyond the rule table runs —
+/// for the `RDF`, `RDFS`, `OWL_RL` and `D` regimes. `None` keeps the default (4194304 facts,
+/// 1048576 join steps). A run past one raises `ValueError` naming the limit, the numbers and
+/// this function's keyword; a run inside them answers exactly as larger limits would.
+/// [`graph_entails`] and [`verify_entailment`] take the same two.
 ///
 /// Raises `ValueError` on `OWL_DIRECT` or `RIF` — each is defined by an input this
 /// signature does not carry, so both are refused by name rather than served by a weaker
@@ -650,7 +788,12 @@ fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
 /// binding to project), on an `owl:imports` `imports` does not resolve, and on an
 /// inconsistent premise, whose refusal carries the full report.
 #[pyfunction]
-#[pyo3(signature = (regime, data, pattern, imports))]
+#[pyo3(signature = (regime, data, pattern, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the question, the import table and each evaluation limit are named explicitly \
+              at the boundary, in the order every other host takes them"
+)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn certain_answers(
     py: Python<'_>,
@@ -658,11 +801,24 @@ fn certain_answers(
     data: &str,
     pattern: &str,
     imports: Vec<(String, String)>,
+    premise_iris: Vec<String>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     let answer = py
-        .detach(|| certain_answers_to_string(name, data, pattern, &table))
+        .detach(|| {
+            certain_answers_to_string(
+                name,
+                data,
+                pattern,
+                &table,
+                &premise_iris,
+                &python_limits(max_stored_facts, max_join_steps),
+            )
+        })
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -688,13 +844,18 @@ fn certain_answers(
 /// say instead. Reading the third as the second would turn a limitation of this library
 /// into a false statement about the caller's data.
 ///
-/// `imports` is [`certain_answers`]'s, and applies to the PREMISE: the conclusion is a graph
+/// `imports` and `premise_iris` are [`certain_answers`]'s, and apply to the PREMISE: the conclusion is a graph
 /// to match rather than an ontology to close, so an `owl:imports` in it names nothing this
 /// service resolves.
 ///
 /// Raises `ValueError` as [`certain_answers`].
 #[pyfunction]
-#[pyo3(signature = (regime, premise, conclusion, imports))]
+#[pyo3(signature = (regime, premise, conclusion, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the question, the import table and each evaluation limit are named explicitly \
+              at the boundary, in the order every other host takes them"
+)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn graph_entails(
     py: Python<'_>,
@@ -702,11 +863,24 @@ fn graph_entails(
     premise: &str,
     conclusion: &str,
     imports: Vec<(String, String)>,
+    premise_iris: Vec<String>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     let answer = py
-        .detach(|| graph_entails_to_string(name, premise, conclusion, &table))
+        .detach(|| {
+            graph_entails_to_string(
+                name,
+                premise,
+                conclusion,
+                &table,
+                &premise_iris,
+                &python_limits(max_stored_facts, max_join_steps),
+            )
+        })
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }
@@ -723,14 +897,19 @@ fn graph_entails(
 /// to re-decide, and a `false` there would read as a failed check rather than an absent
 /// one.
 ///
-/// `imports` is [`certain_answers`]'s. The re-check runs against the premise AS WRITTEN
+/// `imports` and `premise_iris` are [`certain_answers`]'s. The re-check runs against the premise AS WRITTEN
 /// rather than against its imports closure: a warrant re-decidable from the caller's own
 /// document is a stronger check than one only re-decidable against a graph the library
 /// assembled.
 ///
 /// Raises `ValueError` as [`certain_answers`].
 #[pyfunction]
-#[pyo3(signature = (regime, premise, conclusion, imports))]
+#[pyo3(signature = (regime, premise, conclusion, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the question, the import table and each evaluation limit are named explicitly \
+              at the boundary, in the order every other host takes them"
+)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 fn verify_entailment(
     py: Python<'_>,
@@ -738,11 +917,24 @@ fn verify_entailment(
     premise: &str,
     conclusion: &str,
     imports: Vec<(String, String)>,
+    premise_iris: Vec<String>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> PyResult<(String, String)> {
     let name = regime_name(native_regime(regime)?);
     let table = import_list(&imports);
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     let answer = py
-        .detach(|| verify_entailment_to_string(name, premise, conclusion, &table))
+        .detach(|| {
+            verify_entailment_to_string(
+                name,
+                premise,
+                conclusion,
+                &table,
+                &premise_iris,
+                &python_limits(max_stored_facts, max_join_steps),
+            )
+        })
         .map_err(PyValueError::new_err)?;
     Ok(answer.into_parts())
 }

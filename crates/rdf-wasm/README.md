@@ -81,16 +81,36 @@ const reparsed = Dataset.parse(nq, "nquads");
   lower bound, an upper bound, or neither. A tripped UPDATE applies nothing at all.
   `explainQuery` renders the metered charge ledger those budgets are sized from.
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples data
-  graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
+  graph against a Turtle shapes graph and returns a SARIF 2.1.0 report (a trailing
+  `shapesGraph` names the IRI SHACL-SPARQL's `$shapesGraph` is pre-bound to, as
+  `purrdf validate --shapes-graph` does);
   `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?)` validates a
   CHANGE to that graph instead — both halves of the delta, expanded into the focus
   nodes it can move — and returns the report beside the scope it describes, because
   a shapes graph whose constraints read through SPARQL query text has no bounded
   footprint and falls back to validating everything;
-  `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
-  N-Triples.
-- **Entailment regimes** — `entailMaterialize(document, regime, program)` closes an N-Quads
-  (or N-Triples) document under any of the SEVEN SPARQL entailment regimes
+  `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences,
+  bounded by the same four rule-evaluation limits `shaclApplyRules` takes
+  (`maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts`, `maxJoinSteps`),
+  and returns a `ShaclEntailment` (`ntriples`, and `diagnostics`: the shapes graph's
+  mandatory diagnostics, one `ShaclDiagnostic` — `rule`, `shape` — per empty `sh:in` /
+  `sh:xone` list, which every run reports — `ShaclRulesInference` and
+  `shaclEvalNodeExpr`'s `ShaclNodeExprOutcome` carry the same array, and
+  a validation's SARIF log carries them as note-level
+  `invocations[0].toolExecutionNotifications`). Beside validation, `shaclApplyRules(dataNt, shapesTtl?, srl?, …)` runs
+  SHACL 1.2 rules or a SPARQL 1.2 RL rule set and returns the inference graph (and,
+  on request, its proof), `shaclCheckRules(srl, srlBase?, importIris?,
+  importDocuments?, level?)` checks a SPARQL 1.2 RL rule set to a level (`syntax`,
+  `well-formed`, or `stratified` by default) without running it,
+  `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, …)`
+  evaluates one node expression, named by IRI or label, by a walk from a named node
+  (`exprAt` / `exprVia`), or inline as Turtle (`exprTurtle`), and
+  `shaclLintShapes(shapesTtl)` certifies a shapes graph against the W3C
+  `shacl-shacl.ttl` and reports every function call's binding.
+- **Entailment regimes** — `entailMaterialize(document, regime, program, importIris,
+  importDocuments, premiseIris)` closes an N-Quads (or N-Triples) document — together with
+  its `owl:imports` closure, supplied by the caller — under any of the SEVEN SPARQL
+  entailment regimes
   (`simple` / `rdf` / `rdfs` / `owl-rl` / `d` / `owl-direct` / `rif`; none is
   refused for being the regime it is) and returns both the canonical N-Quads closure and a
   byte-stable reasoning report; `entailRules(regime)` /

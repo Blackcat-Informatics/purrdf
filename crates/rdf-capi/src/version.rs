@@ -61,29 +61,31 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// recompiled once for all of them; splitting would have broken the same consumer four
 /// times for one reason.
 ///
-/// # `0.7.0` → `0.8.0`: nine added symbols and an appended status
+/// # `0.7.0` → `0.8.0`: seventeen added symbols, eight changed ones and appended statuses
 ///
 /// The prepared-shapes-product surface exports eight new entry points —
 /// `purrdf_shapes_product_encode`, `_open`, `_admit`, `_admit_expecting`, `_rebuild`,
 /// `_rebuild_expecting`, `_certify` and `_error_dimension` — and APPENDS
 /// `PurrdfStatus::ShapesProductError = 11`. The SHACL change path exports a ninth,
 /// `purrdf_shacl_validate_changes_to_sarif`, with its own `PurrdfShaclChangeScopeKind`
-/// discriminant.
+/// discriminant. The shapes-graph tools export three more —
+/// `purrdf_shacl_apply_rules`, `purrdf_shacl_eval_node_expr` and
+/// `purrdf_shacl_lint_shapes`.
 ///
-/// The ninth rides this SAME unreleased bump rather than a tenth one, exactly as the
+/// The ninth to twelfth ride this SAME unreleased bump rather than a later one, exactly as the
 /// `0.6.0` → `0.7.0` breaks were bundled: `0.8.0` has shipped in nothing, so there is
 /// no library answering it that exports a different surface, and splitting would make a
 /// consumer recompile twice for one reason. A symbol added AFTER `0.8.0` ships is a
 /// different question, and the paragraph below is the answer to it.
 ///
-/// Every one of those is additive: no existing prototype was retyped, reordered,
-/// removed or given a parameter, and no discriminant was renumbered. A host built
-/// against `0.7.0` calls everything it called before, with the same arguments, and gets
-/// the same values back.
+/// Every one of those twelve is additive: no discriminant was renumbered, and a host
+/// built against `0.7.0` calls each symbol it called before with the same arguments —
+/// except `purrdf_shacl_validate_to_sarif` and the three conclusion-directed
+/// `purrdf_entail_*` services, whose incompatible changes are described below.
 ///
 /// It bumps anyway, and the reason is the sentence at the top of this comment rather
 /// than a judgement about additivity. `0.7.0` SHIPPED — it is the ABI of the released
-/// `2.0.0`, `2.0.1` and `2.0.2` libraries, which export nine fewer symbols than this
+/// `2.0.0`, `2.0.1` and `2.0.2` libraries, which export seventeen fewer symbols than this
 /// one does. Leaving the triple still would mean two different shippable libraries
 /// answering `purrdf_abi_version` identically while exporting different surfaces, so a
 /// host that compiled against this header and loaded the older library would be told
@@ -91,6 +93,90 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// make that question answerable, and a number that cannot distinguish two shipped
 /// libraries is not answering it. Additive changes are cheap for the CONSUMER, not free
 /// for the VERSION.
+///
+/// The same unshipped bump also changes the signatures of eight symbols `0.7.0` shipped
+/// (`purrdf_shacl_validate_to_sarif`, `purrdf_shacl_entail_to_ntriples`, the four
+/// `purrdf_entail_*` services and `purrdf_query_entailment_governed`); every one is an
+/// INCOMPATIBLE change, described in the paragraphs below. The first four:
+/// `purrdf_shacl_validate_to_sarif` gained `conformance_disallows` /
+/// `conformance_disallows_count` — the SHACL 1.2 conformance-disallow set — between
+/// `data_nt` and `out_buffer`; and `purrdf_entail_certain_answers`,
+/// `purrdf_entail_graph_entails` and `purrdf_entail_verify_entailment` each gained
+/// `premise_iris` / `premise_iri_count` — the IRIs the premise document was read from, so
+/// an `owl:imports` of the premise's own IRI resolves in place — between `import_count`
+/// and `out_answer`. A host built against `0.7.0` must recompile; the bump they ride is
+/// the one that already says so, rather than a second export for the same job.
+///
+/// The same unshipped bump carries the shapes graph's `owl:imports` table, too. Seven
+/// shapes-graph entry points — `purrdf_shacl_validate_to_sarif`,
+/// `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_entail_to_ntriples`,
+/// `purrdf_shacl_apply_rules`, `purrdf_shacl_eval_node_expr`, `purrdf_shacl_lint_shapes`
+/// and `purrdf_shapes_product_encode` — each gained `import_iris` / `import_documents` /
+/// `import_count` before their out-parameters (incompatible: a `0.7.0` host passes its
+/// out-pointer into `import_iris`); `PurrdfStatus::ShapesImportError = 12` is APPENDED;
+/// and three accessors are added, `purrdf_shapes_import_error_kind`,
+/// `purrdf_shapes_import_error_iri_count` and `purrdf_shapes_import_error_iri`. Every host
+/// now refuses a shapes graph whose `owl:imports` closure is not in hand with the same
+/// typed refusal, where the C surface used to validate the importing document alone.
+///
+/// `purrdf_shacl_eval_node_expr`, one of the symbols this bump adds, names its node
+/// expression by one of three selectors — `expr`, `expr_at` with `expr_via` /
+/// `expr_via_count`, or `expr_turtle` — each nullable, exactly one given.
+///
+/// The same unshipped bump carries the caller's evaluation limits. `purrdf_shacl_apply_rules`
+/// gained `max_stored_facts` / `max_join_steps` between `max_generated_terms` and
+/// `import_iris`, and `purrdf_entail_materialize_to_nquads` gained the same two between
+/// `program` and `out_nquads` — each a nullable `const uint64_t *`, NULL for the target's
+/// default. Both are incompatible (a `0.7.0` host passes its import table or its
+/// out-pointer into the new slots), and both ride this bump for the reason the others do.
+/// `purrdf_shacl_entail_to_ntriples` gained all four of `purrdf_shacl_apply_rules`' limits —
+/// `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+/// `max_join_steps`, each a nullable `const uint64_t *` — between `import_count` and
+/// `out_buffer`, so an entailment run is bounded exactly as a rules run is. Incompatible
+/// for the same reason, riding the same bump. Both rules entry points also gained a nullable
+/// `PurrdfBuffer **out_diagnostics` immediately before `out_error` — the shapes graph's
+/// mandatory diagnostics (one `diagnostic RULE SHAPE` line per empty `sh:in` / `sh:xone`
+/// list), which every run reports — incompatible for the same reason (a `0.7.0` host passes
+/// its `PurrdfError **` into the new slot), riding the same bump.
+///
+/// The same unshipped bump adds `purrdf_shacl_check_rules` — the check-only SPARQL 1.2 RL
+/// entry point every host exposes, with its own `PurrdfSrlCheckLevel` discriminant — for
+/// the reason the other added symbols ride it.
+///
+/// The same unshipped bump carries the shapes-graph IRI. `purrdf_shacl_validate_to_sarif`,
+/// `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_lint_shapes` and
+/// `purrdf_shapes_product_encode` each gained a nullable `shapes_graph_iri` immediately
+/// after `shapes_base_iri` — the IRI SHACL-SPARQL's `$shapesGraph` is pre-bound to, which
+/// `purrdf validate --shapes-graph` names and no C host could until now. Incompatible (a
+/// `0.7.0` host passes its data or import table into the new slot); it rides this bump
+/// for the reason the others do, and sits beside the base it resolves against for the
+/// reason `shapes_base_iri` sits beside the document it qualifies. The two rules entry
+/// points gained the same nullable `shapes_graph_iri` in the same place —
+/// `purrdf_shacl_apply_rules` after `shapes_base_iri` and before `srl`, and
+/// `purrdf_shacl_entail_to_ntriples` after `shapes_base_iri` and before `data_nt` — so a
+/// `sh:SPARQLRule`'s `$shapesGraph` is pre-bound as `purrdf rules --shapes-graph` binds it.
+///
+/// The same unshipped bump carries SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`:
+/// `purrdf_shacl_validate_to_sarif` gained `bool subclass_of_in_shapes_graph` between
+/// `import_count` and `out_buffer` — `false` is the specification's default. Incompatible
+/// (a `0.7.0` host passes its out-pointer into the new slot); it rides this bump for the
+/// reason the others do.
+///
+/// The same unshipped bump closes an entailment premise's `owl:imports` on every entailment
+/// service. `purrdf_entail_materialize_to_nquads`, `purrdf_entail_consistency` and
+/// `purrdf_query_entailment_governed` gained `import_iris` / `import_documents` /
+/// `import_count` and `premise_iris` / `premise_iri_count`, and refuse an unresolved import
+/// or an unused table entry as the other entailment services do. The three
+/// conclusion-directed services and `purrdf_query_entailment_governed` gained
+/// `max_stored_facts` / `max_join_steps`, each a nullable `const uint64_t *`, after the
+/// premise IRIs; `purrdf_entail_consistency` keeps its `step_cap` / `work_cap`, which bound
+/// its tableau. All incompatible (a `0.7.0` host passes an out-pointer into a new slot),
+/// riding this bump. Two symbols this bump adds changed before shipping:
+/// `purrdf_shacl_validate_changes_to_sarif` gained `conformance_disallows` /
+/// `conformance_disallows_count` after `removed_nt` and `bool subclass_of_in_shapes_graph`
+/// after `import_count`, matching `purrdf_shacl_validate_to_sarif`; and
+/// `purrdf_shacl_eval_node_expr` gained a nullable `PurrdfBuffer **out_diagnostics`
+/// before `out_error`, as the rules entry points did.
 ///
 /// One of them is worth a second look regardless: appending a status is sound, but
 /// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes

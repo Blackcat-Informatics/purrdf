@@ -1,14 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The static, allocation-free **read view** over an RDF dataset (purrdf P2,
-//! ). See [`docs/design/purrdf-backend-contract.md`](../../../docs/design/purrdf-backend-contract.md).
+//! The static, allocation-free **read view** over an RDF dataset. See [`docs/design/purrdf-backend-contract.md`](../../../docs/design/purrdf-backend-contract.md).
 //!
 //! [`DatasetView`] is the id-based, borrowed read interface: it yields `Copy`
 //! [`QuadIds`] and borrowed [`QuadRef`]s (no per-quad allocation, no term-string clones), and offers
 //! [`DatasetView::quads_for_pattern`] keyed on dataset-local [`TermId`]s plus a
 //! [`GraphMatch`]. The default `quads_for_pattern` is a linear scan; backends with
-//! access-pattern indexes (P4) override it.
+//! access-pattern indexes override it.
 //!
 //! This is the **static** trait layer (generic `impl DatasetView`, RPITIT — not
 //! object-safe). Per the backend contract (C1), backend selection is compile-time
@@ -231,8 +230,8 @@ pub trait DatasetView {
     /// Quads matching an optional `(s, p, o)` id pattern and a [`GraphMatch`].
     ///
     /// The default is an id-equality linear scan (no string resolution); backends
-    /// with access-pattern indexes (P4) override this with an indexed lookup.
-    /// Callers resolve term *values* to ids first (`term_id_by_value`, P4).
+    /// with access-pattern indexes override this with an indexed lookup.
+    /// Callers resolve term *values* to ids first (`term_id_by_value`).
     fn quads_for_pattern(
         &self,
         s: Option<Self::Id>,
@@ -254,7 +253,7 @@ pub trait DatasetView {
     ///
     /// A value interned nowhere in this view yields `None` (it names no term), so a
     /// structural walk keyed on a not-present IRI simply finds nothing — absence is
-    /// an empty match, never an error. Backends with a reverse value index (P4) use
+    /// an empty match, never an error. Backends with a reverse value index use
     /// it; others may scan.
     fn term_id_by_value(&self, value: &TermValue) -> Option<Self::Id>;
 
@@ -295,7 +294,7 @@ pub trait DatasetView {
 
     /// An upper-bound cardinality estimate for `(s, p, o, g)`, FOR COST RANKING ONLY
     /// (never an exact `COUNT`). The default materializes the pattern and counts it;
-    /// a backend with index bounds (P4) overrides this with an `O(log n)` estimate.
+    /// a backend with index bounds overrides this with an `O(log n)` estimate.
     fn cardinality_estimate(
         &self,
         s: Option<Self::Id>,
@@ -767,7 +766,7 @@ where
 }
 
 /// The **write companion** to [`DatasetView`] — the mutation surface a copy-on-write
-/// or backed-by-store dataset exposes (purrdf P5; backend contract C4).
+/// or backed-by-store dataset exposes (backend contract C4).
 ///
 /// Where [`DatasetView`] reads in dataset-local [`TermId`]s, `DatasetMut` mutates by
 /// **value**: its [`Quad`](DatasetMut::Quad) associated type is an owned, dataset-

@@ -176,6 +176,22 @@ _HOST_NAMES: dict[str, dict[str, str]] = {
         "capi": "purrdf_entail_graph_entails",
         "cli": "--conclusion",
     },
+    # The limit-taking forms: every host reaches them through the same entry point, whose
+    # stored-fact and join-step limit arguments are what select them.
+    "certain_answers_with": {
+        "boundary": "certain_answers_to_string",
+        "python": "certain_answers",
+        "wasm": "entailCertainAnswers",
+        "capi": "purrdf_entail_certain_answers",
+        "cli": "--pattern",
+    },
+    "entails_with": {
+        "boundary": "graph_entails_to_string",
+        "python": "graph_entails",
+        "wasm": "entailGraphEntails",
+        "capi": "purrdf_entail_graph_entails",
+        "cli": "--conclusion",
+    },
     "verify": {
         "boundary": "verify_entailment_to_string",
         "python": "verify_entailment",
@@ -240,12 +256,31 @@ _PARAM_SPELLINGS: dict[str, dict[str, tuple[str, ...]]] = {
         "capi": ("conclusion",),
         "cli": ("--conclusion",),
     },
+    # The evaluation limits, one `MaterializeLimits` on the boundary: every host spells
+    # the stored-fact and join-step limits as its own two arguments.
+    "limits": {
+        "python": ("max_stored_facts", "max_join_steps"),
+        "wasm": ("max_stored_facts", "max_join_steps"),
+        "dts": ("maxStoredFacts", "maxJoinSteps"),
+        "capi": ("max_stored_facts", "max_join_steps"),
+        "cli": ("--max-stored-facts", "--max-join-steps"),
+    },
     "imports": {
         "python": ("imports",),
         "wasm": ("import_iris", "import_documents"),
         "dts": ("importIris", "importDocuments"),
         "capi": ("import_iris", "import_documents", "import_count"),
         "cli": ("--import",),
+    },
+    # The IRIs the premise document was read from. The CLI has no flag of its own for
+    # them: it derives the premise's `file://` retrieval IRI, or takes `--base`, which is
+    # therefore this parameter's spelling there.
+    "premise_iris": {
+        "python": ("premise_iris",),
+        "wasm": ("premise_iris",),
+        "dts": ("premiseIris",),
+        "capi": ("premise_iris", "premise_iri_count"),
+        "cli": ("--base",),
     },
 }
 
@@ -258,11 +293,12 @@ _HOST_PLUMBING: dict[str, tuple[str, ...]] = {
 
 # The `purrdf entails` flags that answer to no boundary parameter and to no service, and
 # are therefore the subcommand's own plumbing. `--report` is the certificate target every
-# reasoning subcommand carries; `--from` and `--base` are the CLI's own format resolution,
-# which runs in FRONT of a boundary that parses one media type; `OUT` is positional and so
-# is not a flag at all. A flag outside this list and outside the two tables above is a
-# capability with no boundary behind it, and fails the gate.
-_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from", "--base"})
+# reasoning subcommand carries; `--from` is the CLI's own format resolution, which runs in
+# FRONT of a boundary that parses one media type; `OUT` is positional and so is not a flag
+# at all. (`--base` is not plumbing: it is how the CLI spells `premise_iris`.) A flag
+# outside this list and outside the two tables above is a capability with no boundary
+# behind it, and fails the gate.
+_CLI_PLUMBING: frozenset[str] = frozenset({"--report", "--from"})
 
 # Where the CLI's three needles live.
 _CLI_COMMAND_TREE = Path("crates/cli/src/cli.rs")
@@ -325,6 +361,9 @@ def _named_params(text: str, opener: str, what: str, trailing: bool) -> list[str
     chunks = _params_between_parens(text, start + len(opener) - 1, what)
     names: list[str] = []
     for chunk in chunks:
+        # A Python stub's bare `*` marks the keyword-only arguments; it names no parameter.
+        if chunk.strip() == "*":
+            continue
         pattern = r"(\w+)\s*(?:\[\s*\])?\s*$" if trailing else r"^(?:mut\s+)?(\w+)"
         found = re.search(pattern, chunk) if trailing else re.match(pattern, chunk)
         if not found:
@@ -402,7 +441,7 @@ def _pyo3_signature(text: str, function: str) -> list[str]:
     # skipped rather than assumed absent. What is NOT allowed between is another `fn`.
     found = re.search(
         rf"#\[pyo3\(signature = \((?P<params>[^()]*)\)\)\]\s*"
-        rf"(?:#\[[^\n]*\][^\n]*\s*)*fn {function}\(",
+        rf"(?:#\[(?:[^\[\]]|\[[^\[\]]*\])*\][^\n]*\s*)*fn {function}\(",
         text,
     )
     if not found:
@@ -411,7 +450,12 @@ def _pyo3_signature(text: str, function: str) -> list[str]:
             "above it; without one the Python call shape is whatever PyO3 infers, which "
             "this gate cannot check"
         )
-    return [chunk.strip().split("=")[0].strip() for chunk in found.group("params").split(",") if chunk.strip()]
+    # A bare `*` marks the keyword-only arguments that follow; it names no parameter.
+    return [
+        chunk.strip().split("=")[0].strip()
+        for chunk in found.group("params").split(",")
+        if chunk.strip() and chunk.strip() != "*"
+    ]
 
 
 def _wasm_params(text: str, js_name: str) -> list[str]:
@@ -956,6 +1000,14 @@ def _swap(text: str, old: str, new: str) -> str:
     return text.replace(old, new, 1)
 
 
+def _swap_after(text: str, anchor: str, old: str, new: str) -> str:
+    """`text` with the first `old` AFTER the first `anchor` replaced by `new`."""
+    if anchor not in text:
+        raise SystemExit(f"{anchor!r} is no longer there")
+    head, tail = text.split(anchor, 1)
+    return head + anchor + _swap(tail, old, new)
+
+
 def _undecorate(text: str, attribute: str, declaration: str) -> str:
     """`text` with the ONE `attribute` line that decorates `declaration` removed.
 
@@ -1061,8 +1113,8 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
         "bindings/python/src/py_entail.rs",
         lambda text: _swap(
             text,
-            "#[pyo3(signature = (regime, data, pattern, imports))]",
-            "#[pyo3(signature = (regime, data, pattern))]",
+            "#[pyo3(signature = (regime, data, pattern, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]",
+            "#[pyo3(signature = (regime, data, pattern, imports, *, max_stored_facts=None, max_join_steps=None))]",
         ),
     ),
     (
@@ -1099,7 +1151,12 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
     (
         "the wasm binding loses a parameter",
         "crates/rdf-wasm/src/entail.rs",
-        lambda text: _swap(text, "    import_documents: Vec<String>,\n", ""),
+        lambda text: _swap_after(
+            text,
+            f"#[wasm_bindgen(js_name = {_names('wasm')})]\n",
+            "    import_documents: Vec<String>,\n",
+            "",
+        ),
     ),
     (
         "the name is dropped from the `import init, { … }` list",
@@ -1123,7 +1180,12 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
     (
         "the `.d.ts` declaration loses a parameter",
         "crates/rdf-wasm/js/index.d.ts",
-        lambda text: _swap(text, "  importDocuments: readonly string[],\n", ""),
+        lambda text: _swap_after(
+            text,
+            f"export function {_names('wasm')}(",
+            "  importDocuments: readonly string[],\n",
+            "",
+        ),
     ),
     # ── the C ABI, and the header cbindgen writes ──
     (
@@ -1168,7 +1230,12 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
     (
         "the header declaration loses a parameter",
         "crates/rdf-capi/include/purrdf.h",
-        lambda text: _swap(text, "                                      size_t import_count,\n", ""),
+        lambda text: _swap_after(
+            text,
+            "int32_t purrdf_entail_certain_answers(",
+            "                                      size_t import_count,\n",
+            "",
+        ),
     ),
     # ── the command line ──
     (
@@ -1183,8 +1250,12 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
     (
         "a boundary parameter loses its CLI flag",
         "crates/cli/src/cli.rs",
-        lambda text: _swap(
+        # `reason` takes an identically spelled `--import`, and it is declared first, so the
+        # mutation is aimed at the `entails` variant's own flag: stripping another
+        # subcommand's would leave this surface whole and prove nothing.
+        lambda text: _swap_after(
             text,
+            "    Entails {\n",
             '#[arg(long = "import", value_name = "IRI=FILE")]',
             '#[arg(value_name = "IRI=FILE")]',
         ),

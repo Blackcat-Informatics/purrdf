@@ -26,8 +26,9 @@
 
 use std::sync::Arc;
 
-use purrdf_shapes::engine::{parse_shapes, validate_dataset};
-use purrdf_shapes::term::Term;
+use purrdf_shapes::engine::{PreparedShapes, parse_shapes, validate_dataset};
+use purrdf_shapes::report::ValidationReport;
+use purrdf_shapes::term::{NamedNode, Term};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
 
 const PREFIXES: &str = r"
@@ -116,6 +117,75 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Thing ;
         &["hasFlag"],
         "the node-shape spelling of sh:not must keep its (already correct) answer",
     );
+}
+
+/// The bounded change-path entry points — `PreparedValidator::validate_focus_node_ids`
+/// and `PreparedValidator::validate_focus_nodes`, over a validator bound with
+/// `PreparedShapes::bind_shared_dataset` exactly as the allocation fixture binds
+/// it — give the answer the whole-dataset entry gives: with and without an
+/// explicit `a sh:PropertyShape`, only the flagged node is reported, whether the
+/// two nodes are validated together or each alone.
+#[test]
+fn not_over_anonymous_property_shape_on_the_prepared_change_path() {
+    let data: Arc<_> =
+        parse_turtle_to_dataset(&format!("{PREFIXES}{DATA}"), None).expect("data parse");
+    let has_flag = NamedNode::new_unchecked("http://example.org/ns#hasFlag").into_term();
+    let no_flag = NamedNode::new_unchecked("http://example.org/ns#noFlag").into_term();
+    let reported = |report: &ValidationReport| -> Vec<Term> {
+        let mut focus: Vec<Term> = report
+            .results
+            .iter()
+            .map(|r| r.focus_node.clone())
+            .collect();
+        focus.sort_by_key(ToString::to_string);
+        focus.dedup();
+        focus
+    };
+    for negated in [
+        "[ sh:path ex:flag ; sh:minCount 1 ]",
+        "[ a sh:PropertyShape ; sh:path ex:flag ; sh:minCount 1 ]",
+    ] {
+        let shapes = parse_shapes(
+            &format!(
+                "{PREFIXES}ex:S a sh:NodeShape ; sh:targetClass ex:Thing ; sh:not {negated} ."
+            ),
+            None,
+        )
+        .expect("shapes parse");
+        let validator = PreparedShapes::new(Arc::new(shapes))
+            .bind_shared_dataset(Arc::clone(&data))
+            .expect("the dataset binds");
+        let has_flag_id = validator
+            .term_id(&has_flag)
+            .expect("ex:hasFlag is interned");
+        let no_flag_id = validator.term_id(&no_flag).expect("ex:noFlag is interned");
+
+        let both_ids = validator
+            .validate_focus_node_ids(&[no_flag_id, has_flag_id])
+            .expect("validation runs");
+        assert_eq!(reported(&both_ids), vec![has_flag.clone()], "{negated}");
+        let both_terms = validator
+            .validate_focus_nodes(&[no_flag.clone(), has_flag.clone()])
+            .expect("validation runs");
+        assert_eq!(
+            both_terms.to_ntriples(),
+            both_ids.to_ntriples(),
+            "{negated}"
+        );
+
+        let only_unflagged = validator
+            .validate_focus_node_ids(&[no_flag_id])
+            .expect("validation runs");
+        assert!(
+            only_unflagged.conforms,
+            "{negated}: {:?}",
+            only_unflagged.results
+        );
+        let only_flagged = validator
+            .validate_focus_nodes(std::slice::from_ref(&has_flag))
+            .expect("validation runs");
+        assert_eq!(reported(&only_flagged), vec![has_flag.clone()], "{negated}");
+    }
 }
 
 // ── sh:node (SHACL §4.6.6) ────────────────────────────────────────────────────

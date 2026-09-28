@@ -242,6 +242,90 @@ def test_parse_sparql_style_prefix(compat: ModuleType) -> None:
     assert ("ex", "http://example.org/") in {(p, str(n)) for p, n in g.namespaces()}
 
 
+_QUOTED_PREFIX_TTL = (
+    "@prefix ex: <http://example.org/> .\n"
+    'ex:q ex:select """\n'
+    "PREFIX quoted: <http://example.org/quoted#>\n"
+    "@prefix alsoquoted: <http://example.org/alsoquoted#> .\n"
+    'SELECT * WHERE { ?s ?p ?o }\n"""  .\n'
+)
+
+
+@pytest.mark.parametrize("route", ["data", "path"])
+def test_parse_does_not_bind_a_prefix_quoted_in_a_literal(
+    compat: ModuleType, oracle: ModuleType, tmp_path: object, route: str
+) -> None:
+    """A ``PREFIX`` line inside a string literal is text, never a declaration.
+
+    The document's one real ``@prefix`` (``ex``) is bound; the two directives quoted
+    inside the long literal are not — through a ``data=`` payload and through a
+    path source alike, and in agreement with rdflib itself.
+    """
+    source = None
+    if route == "path":
+        from pathlib import Path
+
+        source = Path(str(tmp_path)) / "quoted.ttl"
+        source.write_text(_QUOTED_PREFIX_TTL, encoding="utf-8")
+    maps = []
+    for lib in (compat, oracle):
+        g = lib.Graph()
+        if source is None:
+            g.parse(data=_QUOTED_PREFIX_TTL, format="turtle")
+        else:
+            g.parse(source=str(source), format="turtle")
+        maps.append({(p, str(n)) for p, n in g.namespaces()})
+    cmap, omap = maps
+    assert ("ex", "http://example.org/") in cmap
+    for quoted in ("quoted", "alsoquoted"):
+        assert quoted not in {p for p, _ in cmap}
+        assert quoted not in {p for p, _ in omap}
+
+
+def test_parse_binds_a_prefix_declared_outside_the_literal(compat: ModuleType) -> None:
+    """The control row: the same namespace, really declared, IS bound."""
+    ttl = "@prefix quoted: <http://example.org/quoted#> .\n" + _QUOTED_PREFIX_TTL
+    g = compat.Graph()
+    g.parse(data=ttl, format="turtle")
+    cmap = {(p, str(n)) for p, n in g.namespaces()}
+    assert ("quoted", "http://example.org/quoted#") in cmap
+    assert "alsoquoted" not in {p for p, _ in cmap}
+
+
+def _rdfxml(root_extra: str) -> str:
+    """An RDF/XML document whose element content SPELLS an ``xmlns:evil`` declaration."""
+    return (
+        '<?xml version="1.0"?>\n'
+        '<rdf:RDF xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" '
+        f'xmlns:ex="http://example.org/"{root_extra}>\n'
+        '  <rdf:Description rdf:about="http://example.org/s">\n'
+        '    <ex:comment> xmlns:evil="http://example.org/evil#" </ex:comment>\n'
+        "  </rdf:Description>\n"
+        "</rdf:RDF>\n"
+    )
+
+
+@pytest.mark.parametrize(
+    ("root_extra", "evil_bound"),
+    [("", False), (' xmlns:evil="http://example.org/evil#"', True)],
+)
+def test_rdfxml_binds_only_real_xmlns_declarations(
+    compat: ModuleType, oracle: ModuleType, root_extra: str, evil_bound: bool
+) -> None:
+    """``xmlns:evil`` spelled in element content is text; declared on an element it binds.
+
+    The control row declares the same ``evil`` namespace for real, so the two rows
+    differ only in whether the declaration is XML or character data — and rdflib
+    agrees on both.
+    """
+    for lib in (compat, oracle):
+        g = lib.Graph()
+        g.parse(data=_rdfxml(root_extra), format="xml")
+        bound = {(p, str(n)) for p, n in g.namespaces()}
+        assert ("ex", "http://example.org/") in bound, lib.__name__
+        assert (("evil", "http://example.org/evil#") in bound) is evil_bound, lib.__name__
+
+
 def test_parse_binds_jsonld_context_prefixes(compat: ModuleType) -> None:
     """JSON-LD ``@context`` prefixes are extracted after parse by walking the JSON context."""
     jsonld = (

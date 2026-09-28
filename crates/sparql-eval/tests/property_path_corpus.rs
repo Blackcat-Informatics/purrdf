@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Integration test: a real corpus-shaped property-path query evaluates end-to-end
-//! through the public API (S8).
+//! through the public API.
 //!
 //! This proves the gap is closed on the public path — a `rdfs:subClassOf*`
 //! query (the most common corpus shape, e.g. `queries/competency/agents.rq`) is

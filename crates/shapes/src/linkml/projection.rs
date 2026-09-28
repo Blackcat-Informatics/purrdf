@@ -74,6 +74,7 @@ pub(super) fn emit(
             .clone();
         renderer.render_definition(key, &info, definition)?;
     }
+    renderer.record_unstated_contains();
     renderer.verify_rehome_hints()?;
     renderer.slot_renames.sort_by(|left, right| {
         left.source_class
@@ -666,6 +667,10 @@ struct Renderer<'a> {
     slot_diagnostics: Vec<LinkmlSlotDiagnostic>,
     used_rehome_hints: BTreeSet<String>,
     total_slots: usize,
+    /// Every `contains` the audit met, by its JSON Pointer.
+    audited_contains: BTreeSet<String>,
+    /// The `contains` a rendered `has_member` states, by its JSON Pointer.
+    stated_contains: BTreeSet<String>,
 }
 
 impl<'a> Renderer<'a> {
@@ -692,6 +697,8 @@ impl<'a> Renderer<'a> {
             slot_diagnostics: Vec::new(),
             used_rehome_hints: BTreeSet::new(),
             total_slots: 0,
+            audited_contains: BTreeSet::new(),
+            stated_contains: BTreeSet::new(),
         }
     }
 
@@ -1703,6 +1710,13 @@ impl Renderer<'_> {
                             self.render_slot_expression(&Value::Object(branch), &branch_path)?,
                         ));
                     }
+                    // The array branch states this schema's `contains`.
+                    if (0..kinds.len()).any(|index| {
+                        self.stated_contains
+                            .contains(&format!("{path}/type/{index}/contains"))
+                    }) {
+                        self.stated_contains.insert(format!("{path}/contains"));
+                    }
                     if !expressions.is_empty() {
                         conjoin_expression(&mut slot, "any_of", expressions);
                         has_carrier = true;
@@ -1814,8 +1828,25 @@ impl Renderer<'_> {
         } else {
             format!("{path}/items")
         };
-        let item = self.render_slot_expression(&item_schema, &item_path)?;
+        // An array admitting no item (`maxItems: 0`, the empty list's members)
+        // has no item for a range to judge: the string carrier is exact there,
+        // not a fallback.
+        let empty = object.get("maxItems").and_then(Value::as_u64) == Some(0)
+            && !object.contains_key("items")
+            && !object.contains_key("prefixItems");
+        let item = if empty {
+            Map::from_iter([("range".to_owned(), Value::String("string".to_owned()))])
+        } else {
+            self.render_slot_expression(&item_schema, &item_path)?
+        };
         for (key, value) in item {
+            if key == "has_member" {
+                // A nested array's member condition judges the inner array,
+                // which the flattened slot does not keep.
+                self.stated_contains
+                    .remove(&format!("{item_path}/contains"));
+                continue;
+            }
             if !matches!(
                 key.as_str(),
                 "title"
@@ -1856,7 +1887,38 @@ impl Renderer<'_> {
                 .ok_or_else(|| LinkmlError::new(format!("{path}/uniqueItems must be a boolean")))?;
             slot.insert("list_elements_unique".to_owned(), Value::Bool(unique));
         }
+        // `contains` is LinkML's `has_member`: some member satisfies the
+        // expression. A `minContains` of 0 makes it vacuous.
+        if let Some(contained) = object.get("contains")
+            && object.get("minContains").and_then(Value::as_u64) != Some(0)
+        {
+            let member_path = format!("{path}/contains");
+            let member = self.render_slot_expression(contained, &member_path)?;
+            let member = self.anonymous_expression(member, &member_path);
+            slot.insert("has_member".to_owned(), Value::Object(member));
+            self.stated_contains.insert(member_path);
+        } else if object.contains_key("contains") {
+            self.stated_contains.insert(format!("{path}/contains"));
+        }
         Ok(())
+    }
+
+    /// Records every audited `contains` that no rendered `has_member` states:
+    /// one on a schema this projection renders as no slot expression (a
+    /// dropped `if` branch, say), whose enclosing loss is recorded as well.
+    fn record_unstated_contains(&mut self) {
+        let unstated = self
+            .audited_contains
+            .difference(&self.stated_contains)
+            .cloned()
+            .collect::<Vec<_>>();
+        for path in unstated {
+            self.record(
+                "array-contains-validation-dropped",
+                &path,
+                "This contains sits on a schema the projection renders as no LinkML slot expression, so no has_member states it",
+            );
+        }
     }
 
     fn apply_slot_compositions(
@@ -1878,17 +1940,45 @@ impl Renderer<'_> {
                 .ok_or_else(|| LinkmlError::new(format!("{path}/{source} must be an array")))?;
             let mut expressions = Vec::with_capacity(branches.len());
             for (index, branch) in branches.iter().enumerate() {
+                let branch_path = format!("{path}/{source}/{index}");
+                let expression = self.render_slot_expression(branch, &branch_path)?;
                 expressions.push(Value::Object(
-                    self.render_slot_expression(branch, &format!("{path}/{source}/{index}"))?,
+                    self.anonymous_expression(expression, &branch_path),
                 ));
             }
             conjoin_expression(slot, target, expressions);
         }
         if let Some(negated) = object.get("not") {
             let expression = self.render_slot_expression(negated, &format!("{path}/not"))?;
+            let expression = self.anonymous_expression(expression, &format!("{path}/not"));
             conjoin_expression(slot, "none_of", vec![Value::Object(expression)]);
         }
         Ok(())
+    }
+
+    /// A branch rendered as a slot expression, restricted to the fields a
+    /// LinkML 1.11 anonymous slot expression has.
+    ///
+    /// `list_elements_ordered` and `list_elements_unique` are slot-definition
+    /// fields only. Order is no JSON Schema assertion (a JSON array is ordered),
+    /// so dropping it widens nothing; an array branch's `uniqueItems` has no
+    /// statement in the anonymous expression, and its loss is recorded.
+    fn anonymous_expression(
+        &mut self,
+        mut expression: Map<String, Value>,
+        path: &str,
+    ) -> Map<String, Value> {
+        expression.remove("list_elements_ordered");
+        if expression.remove("list_elements_unique") == Some(Value::Bool(true)) {
+            self.record(
+                "keyword-validation-dropped",
+                &format!("{path}/uniqueItems"),
+                "A LinkML 1.11 anonymous slot expression (a branch of any_of, exactly_one_of, \
+                 all_of or none_of) has no list_elements_unique field, so a branch array's \
+                 uniqueItems is not stated",
+            );
+        }
+        expression
     }
 
     fn ensure_inline_enum(&mut self, schema: &Value, path: &str) -> Result<String, LinkmlError> {
@@ -1929,18 +2019,29 @@ impl Renderer<'_> {
                 "JSON Schema if/then/else dependent validation has no LinkML 1.11 expression",
             );
         }
-        if ["contains", "minContains", "maxContains"]
-            .iter()
-            .any(|keyword| object.contains_key(*keyword))
+        // A `contains` is stated as a LinkML `has_member` wherever the array it
+        // sits on is rendered as a slot expression; one that no rendered slot
+        // states is recorded once rendering is done.
+        if object.contains_key("contains") {
+            self.audited_contains.insert(format!("{path}/contains"));
+        }
+        // `has_member` asks for one matching member: a `minContains` of 1 is
+        // its own reading and one of 0 makes the `contains` vacuous, but LinkML
+        // 1.11 has no expression counting the matching members.
+        if let Some(minimum) = object.get("minContains").and_then(Value::as_u64)
+            && minimum > 1
         {
-            let keyword = ["contains", "minContains", "maxContains"]
-                .into_iter()
-                .find(|keyword| object.contains_key(*keyword))
-                .expect("presence checked");
             self.record(
                 "array-contains-validation-dropped",
-                &format!("{path}/{keyword}"),
-                "LinkML list expressions retain item and list cardinality constraints but cannot enforce a contains predicate or its match count",
+                &format!("{path}/minContains"),
+                "A LinkML has_member requires one matching member; LinkML 1.11 has no expression requiring more than one",
+            );
+        }
+        if object.contains_key("maxContains") {
+            self.record(
+                "array-contains-validation-dropped",
+                &format!("{path}/maxContains"),
+                "A LinkML has_member requires one matching member; LinkML 1.11 has no expression bounding how many members match",
             );
         }
         for keyword in ["dependentRequired", "dependentSchemas"] {
@@ -2762,7 +2863,7 @@ mod tests {
                                 { "type": "integer" }
                             ],
                             "contains": { "const": 7 },
-                            "minContains": 1,
+                            "minContains": 2,
                             "unevaluatedItems": false
                         },
                         "ex:choice": {
@@ -2816,6 +2917,12 @@ mod tests {
         let rendered = output.losses.render_json();
         assert!(rendered.contains("#/$defs/Lossy/properties/ex:label/minLength"));
         assert!(rendered.contains("#/$defs/Lossy/properties/ex:number/multipleOf"));
+        assert!(rendered.contains("#/$defs/Lossy/properties/ex:array/minContains"));
+        assert!(!rendered.contains("#/$defs/Lossy/properties/ex:array/contains"));
+        assert_eq!(
+            output.document.as_value()["classes"]["Lossy"]["attributes"]["ex:array"]["has_member"],
+            json!({ "equals_number": 7 })
+        );
         assert!(rendered.contains("#/$defs/Lossy/propertyNames"));
         assert_eq!(
             output.document.as_value()["classes"]["Lossy"]["extra_slots"]["range_expression"]["range"],
@@ -3151,7 +3258,15 @@ mod tests {
 
     #[test]
     fn reserved_carriers_and_semantic_identity_collisions_are_explicit() {
-        for reserved in ["@annotation", "@id", "@language", "@type", "@value"] {
+        for reserved in [
+            "@annotation",
+            "@direction",
+            "@id",
+            "@language",
+            "@list",
+            "@type",
+            "@value",
+        ] {
             let seed = slot_name_seed(&config(), reserved).expect("reserved seed");
             assert_eq!(seed.source_kind, SlotSourceKind::Reserved);
             assert!(!seed.requires_rename());

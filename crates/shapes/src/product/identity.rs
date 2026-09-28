@@ -60,6 +60,15 @@
 //! | 9 | the property-function registry, + the implementation identity | `property-function-registry` | [`PropertyFunctionRegistry`] |
 //! | 10 | the class catalog's digest | `class-catalog` | [`ClassCatalog`] |
 //! | 11 | the declared parser options: relation lists **sorted**, extension namespaces in **declaration order** | `parse-configuration` | [`ParseConfiguration`] |
+//! | 12 | the IRIs of every graph the shapes graph was assembled from by name, **sorted** | `included-graphs` | [`IncludedGraphs`] |
+//!
+//! Row 12 binds what the merged dataset in row 0 cannot say: WHICH documents it was
+//! merged from. A table-supplied document with no ontology header declares no IRI of
+//! its own, so two products over one merged dataset can differ only in whether they
+//! recorded that document — and the restored preparation holds a data graph's
+//! `sh:shapesGraph` link to it (SHACL 1.2 Core section 6.4) only if it did. Two
+//! products that answer a data graph differently must not share an identity, so the
+//! recorded set is a component of its own ([`encode_included_graphs`]).
 //!
 //! Row 11 is the OTHER half of the seam row 9 covers. A registry's keys decide
 //! which EXACT predicate IRIs are calls; a declared namespace decides it for a whole
@@ -216,6 +225,7 @@
 //! [`PropertyFunctionRegistry`]: ProductDimension::PropertyFunctionRegistry
 //! [`ClassCatalog`]: ProductDimension::ClassCatalog
 //! [`ParseConfiguration`]: ProductDimension::ParseConfiguration
+//! [`IncludedGraphs`]: ProductDimension::IncludedGraphs
 
 use ::purrdf::PackDigest;
 use purrdf_core::ContentDigest;
@@ -251,7 +261,7 @@ use super::error::{ProductDimension, ShapesProductError};
 /// The census mixes the SAME string into its stage id under its own `PROFILE_ID`.
 /// It is an integration test and cannot see a `pub(crate)` item, so the two
 /// declarations are necessarily separate; they name one profile and must be changed
-/// together. `stage_id_matches_golden` fails the moment the census's copy moves, so
+/// together. `stage_id_matches_shipped_constant` fails the moment the census's copy moves, so
 /// a divergence is loud rather than silent.
 pub(crate) const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 
@@ -262,7 +272,7 @@ pub(crate) const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 /// One table drives both [`build_identity`] (which pushes in this order) and
 /// [`check_identity`] (which indexes by position), so the labels and the dimensions
 /// cannot drift apart into two hand-maintained lists.
-const COMPONENTS: [(&str, ProductDimension); 12] = [
+const COMPONENTS: [(&str, ProductDimension); 13] = [
     ("source-dataset", ProductDimension::DatasetIdentity),
     ("shapes-graph", ProductDimension::ShapesGraph),
     ("doc-prefixes", ProductDimension::Prefixes),
@@ -284,6 +294,7 @@ const COMPONENTS: [(&str, ProductDimension); 12] = [
     ),
     ("class-catalog", ProductDimension::ClassCatalog),
     ("parse-configuration", ProductDimension::ParseConfiguration),
+    ("included-graphs", ProductDimension::IncludedGraphs),
 ];
 
 /// The positions of the three HOST-supplied rows in [`COMPONENTS`]: the injected
@@ -506,6 +517,19 @@ fn encode_parser_options(options: &ParserOptions) -> Vec<u8> {
     out
 }
 
+/// The included-graph IRIs, encoded for row 12: a big-endian count, then each IRI as a
+/// framed part, in the sorted order the resolver recorded them. Framed so no two sets
+/// alias (`{"ab", "c"}` against `{"a", "bc"}`), and counted so the empty set — a shapes
+/// graph read under no IRI that imported nothing — has an encoding of its own.
+fn encode_included_graphs(iris: &[String]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + iris.iter().map(|iri| iri.len() + 2).sum::<usize>());
+    push_part(&mut out, &(iris.len() as u64).to_be_bytes());
+    for iri in iris {
+        push_part(&mut out, iri.as_bytes());
+    }
+    out
+}
+
 // The class-catalog digest
 // ---------------------------------------------------------------------------
 
@@ -680,7 +704,7 @@ pub(crate) fn check_restored_identity(
 /// carries the host's declarations AND the identity it gave the implementations
 /// behind them, so a host that wired a same-named, same-arity native out of a
 /// DIFFERENT build is refused here too, not merely one that wired a different IRI.
-/// [`check_restored_identity`] covers all eleven and is what actually binds the
+/// [`check_restored_identity`] covers every row and is what actually binds the
 /// restore; this runs first so a host that supplied the wrong registries is told so
 /// without paying for a dataset restore and an AST decode it is going to discard.
 ///
@@ -799,7 +823,7 @@ pub(crate) fn certify_dataset_component(
     ))
 }
 
-/// Assemble the eleven component values in the fixed order of [`COMPONENTS`].
+/// Assemble the component values in the fixed order of [`COMPONENTS`].
 ///
 /// One body shared by the writer ([`build_identity`], which supplies a CERTIFIED
 /// dataset digest) and the restore check ([`check_restored_identity`], which
@@ -840,6 +864,7 @@ fn assemble(
         relations,
         class_catalog_digest(classes).as_bytes().to_vec(),
         encode_parser_options(parser_options),
+        encode_included_graphs(provenance.included_graphs()),
     ];
 
     let mut identity = Identity::new();
@@ -1007,6 +1032,12 @@ fn fix_for(dimension: ProductDimension) -> &'static str {
              its shapes graph, because the section and the binding over it no longer describe one \
              analysis"
         }
+        ProductDimension::IncludedGraphs => {
+            "this product was prepared from a shapes graph assembled from a different set of \
+             named graphs than the one supplied for its execution; re-prepare it with the SAME \
+             import table, because the recorded graphs decide which data-graph sh:shapesGraph \
+             links the restored preparation holds"
+        }
         // The residual. Reached only through the `#[non_exhaustive]` fallback in
         // `mismatch_position` or a position past the last known component, both of
         // which mean this build cannot say WHICH input moved.
@@ -1147,7 +1178,9 @@ mod tests {
     fn shapes_of(ttl: &str) -> Shapes {
         shapes_with(
             ttl,
-            &crate::text_ingest::extract_prefixes(ttl),
+            &crate::text_ingest::parse_turtle_document(ttl, None)
+                .expect("fixture parses")
+                .prefixes,
             None,
             Some(SHAPES_GRAPH_IRI),
         )
@@ -1405,6 +1438,7 @@ mod tests {
                 "property-function-registry",
                 "class-catalog",
                 "parse-configuration",
+                "included-graphs",
             ],
             "the component order is part of the format; reordering breaks every product \
              already written",
@@ -1432,7 +1466,9 @@ mod tests {
 
     #[test]
     fn identity_differs_on_shapes_graph() {
-        let prefixes = crate::text_ingest::extract_prefixes(PLAIN_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(PLAIN_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let before = identity_of(&shapes_with(
             PLAIN_SHAPES,
             &prefixes,
@@ -1514,7 +1550,9 @@ mod tests {
 
     #[test]
     fn identity_differs_on_box_role_vocab() {
-        let prefixes = crate::text_ingest::extract_prefixes(PLAIN_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(PLAIN_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let before = identity_of(&shapes_with(
             PLAIN_SHAPES,
             &prefixes,
@@ -1759,7 +1797,9 @@ mod tests {
         // The exact collision length-prefixing exists to prevent: without a prefix
         // on BOTH halves of every pair, each of these prefix maps flattens to `abc`
         // and two genuinely different configurations share one digest.
-        let prefixes = crate::text_ingest::extract_prefixes(PLAIN_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(PLAIN_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let left = identity_of(&shapes_with(
             PLAIN_SHAPES,
             &[("a".to_owned(), "bc".to_owned())],
@@ -1833,7 +1873,9 @@ mod tests {
 
     #[test]
     fn absent_vocabulary_differs_from_empty_vocabulary() {
-        let prefixes = crate::text_ingest::extract_prefixes(PLAIN_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(PLAIN_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let empty = BoxRoleVocab {
             graph_box_role: String::new(),
             box_abox: String::new(),
@@ -2061,7 +2103,7 @@ mod tests {
 
         // The same map handed over in reverse order through the DATASET entry point,
         // which does no sorting of its own — so this exercises the encoder's sort
-        // rather than `extract_prefixes`'.
+        // rather than the codec's.
         let forward = vec![
             ("a".to_owned(), "https://example.org/a#".to_owned()),
             ("b".to_owned(), "https://example.org/b#".to_owned()),
@@ -2089,7 +2131,9 @@ mod tests {
     fn absent_vocabulary_matches_absent_vocabulary() {
         // The valid neighbour of `absent_vocabulary_differs_from_empty_vocabulary`:
         // an inactive box-role feature on BOTH sides is a match, not a refusal.
-        let prefixes = crate::text_ingest::extract_prefixes(PLAIN_SHAPES);
+        let prefixes = crate::text_ingest::parse_turtle_document(PLAIN_SHAPES, None)
+            .expect("fixture parses")
+            .prefixes;
         let left = shapes_with(PLAIN_SHAPES, &prefixes, None, Some(SHAPES_GRAPH_IRI));
         let right = shapes_with(PLAIN_SHAPES, &prefixes, None, Some(SHAPES_GRAPH_IRI));
         assert!(left.box_role_vocab.is_none() && right.box_role_vocab.is_none());

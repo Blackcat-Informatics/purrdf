@@ -1,0 +1,5 @@
+# Derived triples ONLY (the delta over input.ttl's graph): the control rule's
+# triple. The literal-subject rule's one combination is ill-formed and skipped.
+@prefix ex: <http://example.org/ns#> .
+
+ex:alice ex:q ex:o .

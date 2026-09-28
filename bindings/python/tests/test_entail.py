@@ -44,7 +44,7 @@ def test_entail_is_callable() -> None:
 
 
 def test_entail_materializes_inferred_triple() -> None:
-    out = purrdf.shapes.entail(_SHAPES, _DATA)
+    out = purrdf.shapes.entail(_SHAPES, _DATA)["ntriples"]
     assert _INFERRED in out, f"inferred triple missing from:\n{out}"
     # The base fact survives into the materialized dataset.
     assert _BASE in out, f"base triple missing from:\n{out}"

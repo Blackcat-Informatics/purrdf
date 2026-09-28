@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The **global** `u64`-scaled term-identity layer: [`GlobalTermId`] and the
-//! [`GlobalDictionary`] value-interner (backend seam, purrdf P4/paged backends).
+//! [`GlobalDictionary`] value-interner (backend seam, paged backends).
 //!
 //! This is a SEPARATE id space from the frozen [`RdfDataset`](super::RdfDataset)'s
 //! [`TermId`]. A paged / cross-segment backend needs a term identity that can span

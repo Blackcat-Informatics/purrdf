@@ -8,6 +8,15 @@
 //! `rdf:type` set plus unique virtual `(subject, rdf:type, superclass)` rows
 //! reachable through one or more asserted default-graph `rdfs:subClassOf`
 //! edges. No subclass row or other RDFS/OWL consequence is virtualized.
+//!
+//! A view may also carry a SUPPLEMENT of `rdfs:subClassOf` edges that are not
+//! triples of the data graph: the shapes graph's, when the caller sets
+//! `subClassOfInShapesGraph` (SHACL 1.2 Core §6.3: the parameter "should alter the
+//! definition of SHACL Type so that the rdfs:subClassOf triples are queried from the
+//! shapes graph in addition to the data graph"). The supplement joins the edge set
+//! memberships are derived from and nothing else: it adds no row a pattern over
+//! `rdfs:subClassOf` can match, so every constraint that reads the data graph sees
+//! exactly the data graph.
 
 use crate::data_view::{ShaclDatasetView, ShaclRead};
 use std::sync::{Arc, OnceLock};
@@ -116,6 +125,10 @@ pub(crate) struct ClassMembershipView {
     base: Arc<ShaclDatasetView>,
     rdf_type: Option<TermId>,
     subclass_of: Option<TermId>,
+    /// The supplementary `(subclass, superclass)` edges, sorted and deduplicated;
+    /// `None` unless the caller asked for the shapes graph's and it has some (see the
+    /// module docs). An `Option` so the common view allocates nothing for it.
+    supplement: Option<Arc<[(TermId, TermId)]>>,
     shared: Arc<SharedIndex>,
 }
 
@@ -125,14 +138,50 @@ impl ClassMembershipView {
     }
 
     pub(crate) fn from_view(base: Arc<ShaclDatasetView>) -> Self {
+        Self::from_view_with_supplement(base, &[])
+    }
+
+    /// A view whose SHACL type also follows `supplement`, `(subclass, superclass)`
+    /// IRI pairs that are not triples of `base` (see the module docs). A pair naming
+    /// an IRI `base` does not intern is skipped: no data node can be typed with, or
+    /// derive a membership through, a class the data graph cannot name — the caller
+    /// interns every IRI of the pairs into the data view before building this one.
+    pub(crate) fn from_view_with_supplement(
+        base: Arc<ShaclDatasetView>,
+        supplement: &[(String, String)],
+    ) -> Self {
         let rdf_type = base.term_id_by_iri(rdf::TYPE);
         let subclass_of = base.term_id_by_iri(rdfs::SUB_CLASS_OF);
+        let mut edges: Vec<(TermId, TermId)> = supplement
+            .iter()
+            .filter_map(|(child, parent)| {
+                Some((base.term_id_by_iri(child)?, base.term_id_by_iri(parent)?))
+            })
+            .collect();
+        edges.sort_unstable();
+        edges.dedup();
         Self {
             base,
             rdf_type,
             subclass_of,
+            supplement: (!edges.is_empty()).then(|| edges.into()),
             shared: Arc::new(SharedIndex::default()),
         }
+    }
+
+    /// The supplementary edges, empty when there are none.
+    fn supplement(&self) -> &[(TermId, TermId)] {
+        self.supplement.as_deref().unwrap_or_default()
+    }
+
+    /// The supplementary superclasses of `class` (see the module docs).
+    fn supplementary_parents(&self, class: TermId) -> impl Iterator<Item = TermId> + '_ {
+        let supplement = self.supplement();
+        let start = supplement.partition_point(|&(child, _)| child < class);
+        supplement[start..]
+            .iter()
+            .take_while(move |&&(child, _)| child == class)
+            .map(|&(_, parent)| parent)
     }
 
     /// Build the immutable index at the preparation boundary.
@@ -167,6 +216,62 @@ impl ClassMembershipView {
             return true;
         }
         self.has_derived_membership(subject, class)
+    }
+
+    /// Whether one or more asserted default-graph `rdfs:subClassOf` edges lead
+    /// from `class` to any member of `ancestors` — the `rdfs:subClassOf+` half of
+    /// `sh:rootClass`, over the same edge set this view derives memberships from.
+    ///
+    /// A fresh walk from `class` rather than a lookup in the frozen index: the
+    /// index keeps ancestry only for classes something is TYPED with, and a
+    /// `sh:rootClass` value node is a class that need have no instance at all.
+    /// The frontier and the visited set live inline for the shallow hierarchies
+    /// class trees usually are, so a conforming value node allocates nothing; a
+    /// walk that outgrows the inline visited set moves it to a hash set, so a
+    /// deep or wide hierarchy costs linear rather than quadratic time.
+    pub(crate) fn reaches_by_subclass(&self, class: TermId, ancestors: &FastSet<TermId>) -> bool {
+        const INLINE_VISITED: usize = 32;
+        if self.subclass_of.is_none() && self.supplement.is_none() {
+            return false;
+        }
+        if ancestors.is_empty() {
+            return false;
+        }
+        let mut frontier: SmallVec<[TermId; 8]> = SmallVec::new();
+        frontier.push(class);
+        let mut visited_inline: SmallVec<[TermId; INLINE_VISITED]> = SmallVec::new();
+        visited_inline.push(class);
+        let mut visited_spilled: Option<FastSet<TermId>> = None;
+        while let Some(current) = frontier.pop() {
+            let asserted = self.subclass_of.into_iter().flat_map(|subclass_of| {
+                self.base
+                    .quads_for_pattern(Some(current), Some(subclass_of), None, GraphMatch::Default)
+                    .map(|quad| quad.o)
+            });
+            for parent in asserted.chain(self.supplementary_parents(current)) {
+                if ancestors.contains(&parent) {
+                    return true;
+                }
+                let fresh = match &mut visited_spilled {
+                    Some(visited) => visited.insert(parent),
+                    None if visited_inline.contains(&parent) => false,
+                    None if visited_inline.len() < INLINE_VISITED => {
+                        visited_inline.push(parent);
+                        true
+                    }
+                    None => {
+                        let mut visited: FastSet<TermId> = visited_inline.iter().copied().collect();
+                        visited.insert(parent);
+                        visited_spilled = Some(visited);
+                        true
+                    }
+                };
+                if fresh {
+                    frontier.push(parent);
+                }
+            }
+        }
+        false
     }
 
     /// Every class `subject` is a direct or transitive asserted SHACL instance
@@ -208,9 +313,10 @@ impl ClassMembershipView {
     }
 
     fn index(&self) -> Option<&ClassMembershipIndex> {
-        let (Some(rdf_type), Some(subclass_of)) = (self.rdf_type, self.subclass_of) else {
+        let rdf_type = self.rdf_type?;
+        if self.subclass_of.is_none() && self.supplement.is_none() {
             return None;
-        };
+        }
         self.shared
             .index
             .get_or_init(|| {
@@ -221,7 +327,7 @@ impl ClassMembershipView {
                         .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                     THREAD_INDEX_BUILDS.with(|builds| builds.set(builds.get() + 1));
                 }
-                build_index(&self.base, rdf_type, subclass_of)
+                build_index(&self.base, rdf_type, self.subclass_of, self.supplement())
             })
             .as_ref()
     }
@@ -650,7 +756,7 @@ impl DatasetView for ClassMembershipView {
     }
 
     fn len_hint(&self) -> Option<usize> {
-        if self.rdf_type.is_none() || self.subclass_of.is_none() || self.index().is_none() {
+        if self.rdf_type.is_none() || self.index().is_none() {
             self.base.len_hint()
         } else {
             None
@@ -745,7 +851,8 @@ impl DatasetView for ClassMembershipView {
 fn build_index(
     dataset: &impl ShaclRead,
     rdf_type: TermId,
-    subclass_of: TermId,
+    subclass_of: Option<TermId>,
+    supplement: &[(TermId, TermId)],
 ) -> Option<ClassMembershipIndex> {
     let mut parents: FastMap<TermId, Vec<TermId>> = FastMap::default();
     let mut asserted_type_classes = FastSet::default();
@@ -766,9 +873,12 @@ fn build_index(
                 asserted_type_classes.insert(quad.o);
                 previous_type = Some(quad.o);
             }
-        } else if quad.p == subclass_of {
+        } else if Some(quad.p) == subclass_of {
             parents.entry(quad.s).or_default().push(quad.o);
         }
+    }
+    for &(child, parent) in supplement {
+        parents.entry(child).or_default().push(parent);
     }
     if parents.is_empty() {
         return None;

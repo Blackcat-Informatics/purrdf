@@ -446,8 +446,22 @@ NEIGHBOURS: dict[str, str] = {
     "铸造": "青铜器由铸造而成。",  # bronze casting
     "抵达": "列车准时抵达车站。",  # a train arriving
     "大声": "请勿大声喧哗。",  # loudly
+    "/显式报错(?!失败)/": "表单填写有误时，页面会显式报错。",  # a web form flagging an error
+    "/(?<!丢弃并)显式告知/": "合同条款的变更须向客户显式告知。",  # telling a customer about a contract change
     "全文搜索": "本站提供全文搜索功能。",  # a website's search box
     "校验报告": "文件校验报告显示哈希一致。",  # a checksum verification report
+    "/基础\\s*IRI/": "入门课程先讲基础 IRI 语法，再讲进阶内容。",  # basic IRI syntax
+    "以失败关闭": "这个项目最终以失败关闭，团队随后解散。",  # closed down as a failure
+    "封闭失败": "阀门封闭失败，导致管道泄漏。",  # a valve failing to seal
+    "预言机": "区块链预言机把链下数据写入智能合约。",  # a blockchain oracle
+    "一致性": "SHACL 1.2 一致性测试全部通过。",  # conformance
+    "制品": "这件青铜制品出土于商代遗址。",  # a crafted article
+    "/内置(?!函数)/": "Python 内置了许多常用模块。",  # built-in
+    "准备阶段": "考试准备阶段要注意休息。",  # a preparation period
+    "准备时": "出门准备时别忘了带伞。",  # while getting ready
+    "格式良好": "这份简历格式良好，便于阅读。",  # a neatly formatted CV
+    "偏移": "该字段记录文件内的字节偏移。",  # a byte offset
+    "写入器": "这台光盘写入器已经停产。",  # a disc writer
 }
 
 # A msgid no row anchors — asserted, not assumed, in ``self_test``.

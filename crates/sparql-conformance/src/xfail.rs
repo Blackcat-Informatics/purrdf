@@ -179,7 +179,7 @@ pub const XFAIL: &[Xfail] = &[
     //     canonical serializer, so it is unaffected and still passes.)
     //
     //     PurRDF targets SPARQL 1.1, which normatively references XSD 1.1, so the
-    //     engine emits the XSD 1.1 canonical decimal (§3.3.3.2: no decimal point
+    //     engine emits the XSD 1.1 canonical decimal (§E.1: no decimal point
     //     for an integer-valued decimal) uniformly. The ceil/floor/round/seconds
     //     fixtures therefore PASS natively; the fixtures below carry the legacy
     //     "X.0" expectation and are the ledgered erratum. Their value and datatype

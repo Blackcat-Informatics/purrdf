@@ -16,8 +16,9 @@
 //! The entailment twin of [`crate::shacl::validate_to_sarif_string`]: where the
 //! validation boundary runs the SHACL engine and renders a
 //! [`ValidationReport`](purrdf_shapes::report::ValidationReport) to SARIF, this
-//! boundary applies every active `sh:rule` to a fixpoint (via
-//! [`engine::entail_graphs`]) and serializes the MATERIALIZED dataset — the base
+//! boundary runs the shapes graph's rules as SHACL 1.2 Inference Rules executes
+//! them — layer by layer, run-once rules once and iterating rules until an
+//! iteration infers nothing new (via [`engine::entail_graphs`]) — and serializes the MATERIALIZED dataset — the base
 //! graph plus every inferred triple — to a canonical, byte-deterministic
 //! N-Triples string. Hoisting the sequence here keeps each binding to its
 //! platform-specific wrapping (buffer, `JsValue`, `str`).
@@ -27,14 +28,107 @@
 //!
 //! [`engine::entail_graphs`]: purrdf_shapes::engine::entail_graphs
 
+use std::sync::Arc;
+
+use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine;
+use purrdf_shapes::text_ingest::parse_ntriples_to_dataset;
+use purrdf_shapes::{ShapesError, ShapesImports};
+
+use crate::ShapesImportList;
+use crate::shapes_tools::{RuleLimits, RulesHost};
+
+/// One SHACL entailment run across the host boundary: the shapes graph whose rules run,
+/// the data graph they run over, and the rule-evaluation limits bounding the run.
+#[derive(Debug, Clone, Copy)]
+pub struct EntailRequest<'a> {
+    /// The shapes graph, as Turtle.
+    pub shapes_ttl: &'a str,
+    /// The base IRI the shapes document's relative references resolve against.
+    pub shapes_base: Option<&'a str>,
+    /// The shapes-graph IRI a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to — see
+    /// [`entail_to_ntriples_string_with_shapes_graph`]. `None` leaves it an ordinary
+    /// variable.
+    pub shapes_graph: Option<&'a str>,
+    /// The data (base) graph, as N-Triples.
+    pub data_nt: &'a str,
+    /// The shapes graph's `owl:imports` table: an imported document's rules run.
+    pub imports: &'a ShapesImportList<'a>,
+    /// The term-generating round limit, or `None` for the engine default (16,384).
+    pub max_term_generating_rounds: Option<u64>,
+    /// The generated-term budget, or `None` for the engine default (`max(65,536, 4 × N)`
+    /// for `N` distinct input terms).
+    pub max_generated_terms: Option<u64>,
+    /// The stored-fact limit, or `None` for the target's default (4,194,304 natively,
+    /// 131,072 on `wasm32`).
+    pub max_stored_facts: Option<u64>,
+    /// The join-step limit, or `None` for the target's default (1,048,576).
+    pub max_join_steps: Option<u64>,
+    /// The host calling, whose names for the limits' knobs a refusal gives
+    /// ([`RulesHost::entail_limit_knobs`]).
+    pub host: RulesHost,
+}
+
+/// What a SHACL entailment run produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntailOutcome {
+    /// The materialized dataset — the base graph plus every inferred triple — as canonical
+    /// N-Triples.
+    pub ntriples: String,
+    /// The shapes graph's mandatory diagnostics
+    /// ([`purrdf_shapes::shapes::Shapes::mandatory_diagnostics`]): every shape with an empty
+    /// `sh:in` or `sh:xone` list, which every run reports.
+    pub diagnostics: Vec<purrdf_shapes::lint::MandatoryDiagnostic>,
+}
+
+/// Entail `request.data_nt` under `request.shapes_ttl` and serialize the materialized
+/// dataset (base graph ⊎ every SHACL-AF rule inference) to canonical N-Triples, the run
+/// bounded by the request's four rule-evaluation limits.
+///
+/// The limits are the ones [`crate::apply_rules_to_ntriples`] takes, turned into the same
+/// [`purrdf_shapes::RuleOptions`] by [`RuleLimits::rule_options`]: an entailment run and a
+/// rules run of one shapes graph are bounded identically. A run past a limit fails naming
+/// the limit, the numbers and the knob that raises it in the calling host's terms
+/// ([`RulesHost::entail_limit_knobs`]); a run inside them materializes exactly what it
+/// would under any larger limits.
+///
+/// # Errors
+///
+/// Everything [`entail_to_ntriples_string_with_shapes_graph`] refuses, and
+/// [`ShapesError::Invalid`] naming the host's knob for a passed rule-evaluation limit.
+pub fn entail_to_ntriples(request: &EntailRequest<'_>) -> Result<EntailOutcome, ShapesError> {
+    let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+    let shapes = engine::parse_shapes_with_graph(
+        request.shapes_ttl,
+        request.shapes_base,
+        None,
+        request.shapes_graph,
+        &ShapesImports::from_turtle(request.imports)?,
+    )?;
+    let projected = engine::project_dataset(data.as_ref())?;
+    let holder = ShaclData::new(Arc::clone(&projected), projected, None);
+    let options = RuleLimits {
+        max_term_generating_rounds: request.max_term_generating_rounds,
+        max_generated_terms: request.max_generated_terms,
+        max_stored_facts: request.max_stored_facts,
+        max_join_steps: request.max_join_steps,
+    }
+    .rule_options(request.host.entail_limit_knobs());
+    let inference = purrdf_shapes::infer(&holder, &shapes, &options)?;
+    Ok(EntailOutcome {
+        ntriples: canonical_ntriples(inference.dataset())?,
+        diagnostics: shapes.mandatory_diagnostics().to_vec(),
+    })
+}
 
 /// Entail `data_nt` (N-Triples) under `shapes_ttl` (Turtle) and serialize the
 /// materialized dataset (base graph ⊎ every SHACL-AF rule inference) to a
 /// canonical N-Triples string.
 ///
 /// This is the single entry point every language binding shares: it parses the
-/// two graphs, applies every active `sh:rule` to a fixpoint, and renders the
+/// two graphs, runs the shapes graph's rules layer by layer as SHACL 1.2 Inference
+/// Rules executes them (run-once rules once, iterating rules until an iteration
+/// infers nothing new, in `sh:order` groups), and renders the
 /// resulting dataset via the native RDFC-1.0 flat serializer (deterministic,
 /// blank-node-canonical), returning a `String` error (the engine's own
 /// parse/rule error) so callers can map it to whatever their platform expects.
@@ -56,11 +150,16 @@ use purrdf_shapes::engine;
 /// or search-budget refusal comes back as an `Err` value across the
 /// wasm/Python/C-ABI boundary instead of aborting the process.
 ///
+/// `imports` is the shapes graph's `owl:imports` table ([`ShapesImportList`]): an
+/// imported document's rules run as rules of the shapes graph.
+///
 /// # Errors
 ///
-/// Returns the SHACL engine's error string if either graph fails to parse or if
-/// rule application fails (an illegal head term, an unresolvable `sh:condition`,
-/// or a rule set that does not reach a fixpoint); or a diagnostic naming the
+/// [`ShapesError::Imports`] when the shapes graph's `owl:imports` closure is not in
+/// hand or `imports` cannot be used. Otherwise [`ShapesError::Invalid`]: either graph
+/// fails to parse, or rule application fails (an illegal head term, an unresolvable `sh:condition`,
+/// an unregistered `sh:ruleProcessor`, or a rule set that passes the engine's
+/// term-generating round limit or another evaluation limit); or a diagnostic naming the
 /// refusal if the materialized dataset carries a reserved-vocabulary IRI or
 /// exhausts the RDFC-1.0 n-degree search budget.
 ///
@@ -78,27 +177,66 @@ use purrdf_shapes::engine;
 /// let data = "<http://example.org/alice> \
 ///     <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
 ///
-/// let nt = entail_to_ntriples_string(shapes, None, data).expect("entailment produced");
+/// let nt = entail_to_ntriples_string(shapes, None, data, &[]).expect("entailment produced");
 /// assert!(nt.contains("<http://example.org/adult>"));
 /// ```
 pub fn entail_to_ntriples_string(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     data_nt: &str,
-) -> Result<String, String> {
-    let dataset = engine::entail_graphs(data_nt, shapes_ttl, shapes_base)?;
+    imports: &ShapesImportList<'_>,
+) -> Result<String, ShapesError> {
+    entail_to_ntriples_string_with_shapes_graph(shapes_ttl, shapes_base, None, data_nt, imports)
+}
+
+/// [`entail_to_ntriples_string`] with the shapes-graph IRI the SHACL-SPARQL rules see the
+/// shapes graph under: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it and
+/// `GRAPH $shapesGraph { … }` reads the shapes graph, exactly as
+/// [`crate::validate_to_sarif_string_with_shapes_graph`] exposes it to validation. A
+/// relative `shapes_graph` resolves against `shapes_base`
+/// ([`engine::resolve_shapes_graph_iri`]); `None` is [`entail_to_ntriples_string`], where
+/// `$shapesGraph` is an ordinary variable. Python's `shapes_graph=`, WebAssembly's
+/// `shapesGraph` and C's `shapes_graph_iri` all reach here.
+///
+/// # Errors
+///
+/// Everything [`entail_to_ntriples_string`] refuses, and [`ShapesError::Invalid`] for a
+/// `shapes_graph` that names no graph.
+pub fn entail_to_ntriples_string_with_shapes_graph(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    shapes_graph: Option<&str>,
+    data_nt: &str,
+    imports: &ShapesImportList<'_>,
+) -> Result<String, ShapesError> {
+    entail_to_ntriples(&EntailRequest {
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        data_nt,
+        imports,
+        max_term_generating_rounds: None,
+        max_generated_terms: None,
+        max_stored_facts: None,
+        max_join_steps: None,
+        host: RulesHost::Rust,
+    })
+    .map(|outcome| outcome.ntriples)
+}
+
+/// The materialized dataset as canonical N-Triples.
+fn canonical_ntriples(dataset: &purrdf_core::RdfDataset) -> Result<String, ShapesError> {
     // The materialized dataset is wholly caller-supplied (both `data_nt` and
     // `shapes_ttl` cross the wasm/Python/C-ABI boundary), so it goes through the
     // typed, non-panicking canonicalization entry point rather than
     // `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
     // reserved-vocabulary or budget-exhausting document must come back as an `Err`
     // value, not abort the process.
-    match purrdf_core::try_canonicalize_flat_view(dataset.as_ref(), purrdf_core::CanonHash::Sha256)
-    {
+    match purrdf_core::try_canonicalize_flat_view(dataset, purrdf_core::CanonHash::Sha256) {
         Ok(canonicalized) => Ok(canonicalized.nquads),
-        Err(purrdf_core::ViewCanonError::Refused(err)) => Err(format!(
+        Err(purrdf_core::ViewCanonError::Refused(err)) => Err(ShapesError::Invalid(format!(
             "SHACL-AF entailment: the materialized dataset was refused canonicalization: {err}"
-        )),
+        ))),
         Err(purrdf_core::ViewCanonError::NotReady { error, .. }) => match error {
             // LAW: `&RdfDataset`'s `FallibleDatasetView::Error` is `Infallible` — the
             // frozen dataset never faults, so this arm is unreachable by construction
@@ -146,6 +284,7 @@ pub const PYTHON_BINDING_GOLDEN: &str = "\
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shapes_tools::RuleLimits;
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
         @prefix ex: <http://example.org/> .\n\
@@ -159,7 +298,7 @@ mod tests {
 
     #[test]
     fn entail_materializes_the_inferred_triple() {
-        let nt = entail_to_ntriples_string(SHAPES, None, DATA).expect("entailment produced");
+        let nt = entail_to_ntriples_string(SHAPES, None, DATA, &[]).expect("entailment produced");
         // The inferred head triple appears.
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> \
@@ -172,16 +311,105 @@ mod tests {
         ));
     }
 
+    /// A counter that infers `ex:n 2` … `ex:n 5` from `ex:n 1`: four term-generating
+    /// rounds, four generated terms, five stored facts, a handful of join steps.
+    const COUNTER_SHAPES: &str = r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+ex:Counter a sh:NodeShape ;
+  sh:targetSubjectsOf ex:n ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 AS ?m) }""" ] .
+"#;
+
+    const COUNTER_DATA: &str = "<http://example.org/ns#a> <http://example.org/ns#n> \
+        \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n";
+
+    fn counter(limits: RuleLimits, host: RulesHost) -> Result<EntailOutcome, ShapesError> {
+        entail_to_ntriples(&EntailRequest {
+            shapes_ttl: COUNTER_SHAPES,
+            shapes_base: None,
+            shapes_graph: None,
+            data_nt: COUNTER_DATA,
+            imports: &[],
+            max_term_generating_rounds: limits.max_term_generating_rounds,
+            max_generated_terms: limits.max_generated_terms,
+            max_stored_facts: limits.max_stored_facts,
+            max_join_steps: limits.max_join_steps,
+            host,
+        })
+    }
+
+    /// Every one of the four limits bounds an entailment run exactly as it bounds a rules
+    /// run, and each refusal names the knob in the CALLING host's own spelling — never
+    /// `RuleOptions::with_max_*`. The same run with the limit raised materializes the whole
+    /// closure, so the refusal is the limit's, not the rule set's.
+    #[test]
+    fn entail_is_bounded_by_the_four_limits_named_in_each_hosts_terms() {
+        let one = |pick: usize| {
+            let mut limits = RuleLimits::default();
+            match pick {
+                0 => limits.max_term_generating_rounds = Some(1),
+                1 => limits.max_generated_terms = Some(1),
+                2 => limits.max_stored_facts = Some(1),
+                _ => limits.max_join_steps = Some(1),
+            }
+            limits
+        };
+        let raised = RuleLimits {
+            max_term_generating_rounds: Some(64),
+            max_generated_terms: Some(64),
+            max_stored_facts: Some(64),
+            max_join_steps: Some(4_096),
+        };
+        for host in [
+            RulesHost::Rust,
+            RulesHost::Python,
+            RulesHost::Wasm,
+            RulesHost::CAbi,
+        ] {
+            let knobs = host.entail_limit_knobs();
+            let names = [
+                knobs.rounds(),
+                knobs.generated_terms(),
+                knobs.stored_facts(),
+                knobs.join_steps(),
+            ];
+            for (pick, knob) in names.iter().enumerate() {
+                let refused = counter(one(pick), host)
+                    .expect_err("a limit of one refuses the counter")
+                    .to_string();
+                assert!(refused.ends_with(knob), "{host:?} {pick}: {refused}");
+                assert!(!refused.contains("RuleOptions::"), "{refused}");
+            }
+            let closed = counter(raised, host).expect("raised limits admit the counter");
+            assert!(
+                closed.ntriples.contains(
+                    "<http://example.org/ns#a> <http://example.org/ns#n> \
+                     \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
+                ),
+                "{}",
+                closed.ntriples
+            );
+        }
+        assert_eq!(
+            counter(RuleLimits::default(), RulesHost::Rust)
+                .expect("the defaults admit it")
+                .ntriples,
+            entail_to_ntriples_string(COUNTER_SHAPES, None, COUNTER_DATA, &[])
+                .expect("the unbounded-by-default form"),
+        );
+    }
+
     #[test]
     fn entail_is_deterministic() {
-        let a = entail_to_ntriples_string(SHAPES, None, DATA).expect("entailment produced");
-        let b = entail_to_ntriples_string(SHAPES, None, DATA).expect("entailment produced");
+        let a = entail_to_ntriples_string(SHAPES, None, DATA, &[]).expect("entailment produced");
+        let b = entail_to_ntriples_string(SHAPES, None, DATA, &[]).expect("entailment produced");
         assert_eq!(a, b, "entailment serialization must be byte-stable");
     }
 
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(entail_to_ntriples_string("@@@ not turtle", None, DATA).is_err());
+        assert!(entail_to_ntriples_string("@@@ not turtle", None, DATA, &[]).is_err());
     }
 
     /// Both `shapes_ttl` and `data_nt` are wholly caller-supplied (they cross the
@@ -194,10 +422,12 @@ mod tests {
     fn entail_refuses_a_reserved_vocabulary_dataset_as_a_value_not_a_panic() {
         let data = "<http://example.org/alice> <http://example.org/knows> \
             <urn:purrdf:rdfc:bad> .\n";
-        let error = entail_to_ntriples_string(SHAPES, None, data).expect_err(
-            "a dataset carrying a reserved-vocabulary IRI must refuse canonicalization \
+        let error = entail_to_ntriples_string(SHAPES, None, data, &[])
+            .expect_err(
+                "a dataset carrying a reserved-vocabulary IRI must refuse canonicalization \
              as a value, not panic",
-        );
+            )
+            .to_string();
         assert!(error.contains("refused canonicalization"), "{error}");
     }
 
@@ -208,7 +438,7 @@ mod tests {
     fn an_ordinary_object_iri_neighbouring_the_reserved_one_still_entails() {
         let data = "<http://example.org/alice> <http://example.org/knows> \
             <http://example.org/bad> .\n";
-        let nt = entail_to_ntriples_string(SHAPES, None, data)
+        let nt = entail_to_ntriples_string(SHAPES, None, data, &[])
             .expect("an ordinary dataset must still entail");
         assert!(nt.contains("http://example.org/bad"));
     }
@@ -228,6 +458,7 @@ mod tests {
             PYTHON_BINDING_GOLDEN_SHAPES,
             None,
             PYTHON_BINDING_GOLDEN_DATA,
+            &[],
         )
         .expect("entailment produced");
         assert_eq!(produced, PYTHON_BINDING_GOLDEN);

@@ -49,6 +49,32 @@ pub enum Level {
     None,
 }
 
+/// A SARIF result `kind` (SARIF 2.1.0 §3.27.9): what the result says about the
+/// artifact, as distinct from how severe it is.
+///
+/// Absent means `fail` ("If kind is absent, it SHALL default to 'fail'"). A
+/// SHACL `sh:Debug` or `sh:Trace` result — "a debug message that is not a
+/// constraint violation", "a trace message that is not a constraint violation" —
+/// is [`ResultKind::Informational`] ("The tool is reporting an item of
+/// information that does not imply a problem"), and SARIF then requires its
+/// `level` to be `none`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ResultKind {
+    /// The rule was evaluated and the result is not applicable.
+    NotApplicable,
+    /// The rule was evaluated and no problem was found.
+    Pass,
+    /// The rule was evaluated and a problem was found.
+    Fail,
+    /// The result requires human review.
+    Review,
+    /// The tool could not determine the result.
+    Open,
+    /// An item of information that does not imply a problem.
+    Informational,
+}
+
 /// The top-level SARIF log.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SarifLog {
@@ -79,8 +105,16 @@ impl SarifLog {
 pub struct Run {
     /// The analysis tool that produced this run.
     pub tool: Tool,
-    /// The results (violations/warnings/notes) for this run.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    /// The results (violations/warnings/notes) for this run — ALWAYS serialized, an
+    /// empty array included.
+    ///
+    /// SARIF 2.1.0 §3.14.23: "In all other circumstances, results SHALL be present and
+    /// SHALL contain all results detected by the tool. If the tool did not detect any
+    /// results, results SHALL be an empty array. If results is absent, it SHALL default
+    /// to null." Only a tool that failed to start, or started but failed to begin its
+    /// analysis, may leave it absent or `null`; every run this model is built for
+    /// completed, so a run that found nothing says so with `[]` rather than claiming, by
+    /// omission, that it could not compute results.
     pub results: Vec<SarifResult>,
     /// Optional invocation records (only when the caller supplied timing).
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -91,6 +125,10 @@ pub struct Run {
     /// entirely when empty (the default, no-base-URI behavior).
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub original_uri_base_ids: BTreeMap<String, ArtifactLocation>,
+    /// A sorted-key property bag for run-level facts outside the core schema — for
+    /// a SHACL report log, `shaclConforms` and `shaclConformanceDisallows`.
+    #[serde(skip_serializing_if = "PropertyBag::is_empty")]
+    pub properties: PropertyBag,
 }
 
 /// The analysis tool wrapper.
@@ -116,6 +154,11 @@ pub struct Driver {
     /// The rule metadata referenced by `result.ruleId` / `result.ruleIndex`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<ReportingDescriptor>,
+    /// The notification metadata a [`Notification::descriptor`] refers to (SARIF 2.1.0
+    /// §3.19.24): for a SHACL report log, one descriptor per mandatory-diagnostic rule a
+    /// notification states.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notifications: Vec<ReportingDescriptor>,
 }
 
 /// Metadata for one rule (`reportingDescriptor`).
@@ -165,6 +208,38 @@ pub struct Invocation {
     /// Caller-supplied end time (ISO-8601 UTC).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub end_time_utc: Option<String>,
+    /// Conditions the run detected that are not results (SARIF 2.1.0 §3.20.21): for a
+    /// SHACL report log, the shapes graph's mandatory diagnostics, each at level `note`
+    /// ("The notification is purely informational"), so the run did not fail.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub tool_execution_notifications: Vec<Notification>,
+}
+
+/// A SARIF notification (§3.58): a condition met during the run that is not a result.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Notification {
+    /// The descriptor in `driver.notifications` that identifies this notification
+    /// (§3.58.2: "SHOULD contain a property named descriptor").
+    pub descriptor: ReportingDescriptorReference,
+    /// The notification's severity level.
+    pub level: Level,
+    /// What was encountered (§3.58.5: "SHALL contain a property named message").
+    pub message: Message,
+    /// The locations the condition is relevant to.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub locations: Vec<Location>,
+}
+
+/// A reference to a `reportingDescriptor` (§3.52), by id and by index into the array
+/// that holds it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReportingDescriptorReference {
+    /// The descriptor's id.
+    pub id: String,
+    /// The descriptor's index in its array.
+    pub index: usize,
 }
 
 /// A single SARIF result.
@@ -176,6 +251,9 @@ pub struct SarifResult {
     /// The index of `rule_id` in `driver.rules`, if the rule is registered.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rule_index: Option<usize>,
+    /// What the result says about the artifact; absent means `fail`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub kind: Option<ResultKind>,
     /// The severity level.
     pub level: Level,
     /// The result message.
@@ -357,11 +435,13 @@ mod tests {
                             level: Level::Error,
                         }),
                     }],
+                    notifications: vec![],
                 },
             },
             results: vec![SarifResult {
                 rule_id: "sh:DatatypeConstraintComponent".to_owned(),
                 rule_index: Some(0),
+                kind: None,
                 level: Level::Error,
                 message: Message::text("Value \"foo\" fails sh:datatype xsd:integer"),
                 locations: vec![Location {
@@ -388,6 +468,7 @@ mod tests {
             }],
             invocations: vec![],
             original_uri_base_ids: BTreeMap::new(),
+            properties: PropertyBag::new(),
         })
     }
 

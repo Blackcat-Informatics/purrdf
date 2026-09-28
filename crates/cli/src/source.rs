@@ -122,9 +122,10 @@ use purrdf_core::{
     dataset_from_view, verify_pack,
 };
 use purrdf_rdf::{
-    NativeRdfFormat, SerializeOutcome, SourceFormat, TransportEncoding, decode_transport,
-    detect_transport, import_gts_events, parse_dataset, parse_dataset_from_reader,
-    serialize_dataset_to_format, sniff_transport, transport_reader,
+    NativeRdfFormat, ParseOptions, ParseOutcome, SerializeOutcome, SourceFormat, TransportEncoding,
+    decode_transport, detect_transport, import_gts_events, parse_dataset,
+    parse_dataset_from_reader, parse_dataset_with, serialize_dataset_to_format, sniff_transport,
+    transport_reader,
 };
 
 use crate::error::CliError;
@@ -344,6 +345,28 @@ fn load_native(
     let decoded = transport_reader(stream, encoding)
         .map_err(|error| CliError::Runtime(format!("{}: {error}", display_path(path))))?;
     parse_dataset_from_reader(decoded, format.media_type(), base)
+        .map_err(|error| with_cli_base_hint(&error, base))
+}
+
+/// Read an RDF text source at `path` WHOLE and report everything its one parse learned:
+/// the dataset, the base the document ended under, and the prefix map its syntax declared
+/// (`purrdf_rdf::parse_dataset_with`).
+///
+/// [`load_native`] is the lane for data, which streams a line-oriented syntax and needs
+/// neither; this is the lane for a document whose DECLARATIONS are part of what it means —
+/// a shapes graph, whose SHACL-SPARQL queries fall back on its prefix map and whose
+/// `owl:imports` of its own IRI name the base it declares. It resolves the base and decodes
+/// the transport exactly as [`load_native`] does, so the same file reads to the same graph
+/// on both lanes.
+pub(crate) fn load_native_document(
+    path: &str,
+    format: NativeRdfFormat,
+    base: Option<&str>,
+) -> Result<ParseOutcome, CliError> {
+    let base = effective_base(path, format, base)?;
+    let base = base.as_deref();
+    let bytes = read_bytes_with_transport(path, TransportPolicy::Detect)?;
+    parse_dataset_with(&bytes, format.media_type(), base, &ParseOptions::default())
         .map_err(|error| with_cli_base_hint(&error, base))
 }
 

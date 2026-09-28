@@ -291,8 +291,9 @@ fn build_dataset(conforming: usize, violating: usize) -> Arc<RdfDataset> {
 /// Bind [`SHAPES`] over `dataset`, with the box-role feature active or inactive.
 fn bind(dataset: &Arc<RdfDataset>, vocab: Option<BoxRoleVocab>) -> PreparedValidator {
     let configured = vocab.is_some();
-    let shapes = parse_shapes_with_config(SHAPES, None, vocab)
-        .unwrap_or_else(|error| panic!("the box-role shapes must parse: {error}"));
+    let shapes =
+        parse_shapes_with_config(SHAPES, None, vocab, &purrdf_shapes::ShapesImports::new())
+            .unwrap_or_else(|error| panic!("the box-role shapes must parse: {error}"));
     PreparedShapes::new(Arc::new(shapes))
         .bind_shared_dataset(Arc::clone(dataset))
         .unwrap_or_else(|error| {
@@ -699,6 +700,7 @@ fn box_roles_are_pinned_for_path_nested_and_reifier_shapes() {
             &shapes,
             None,
             Some(vocabulary()),
+            &purrdf_shapes::ShapesImports::new(),
         )
         .unwrap_or_else(|error| panic!("case {} must validate: {error}", case.name));
         assert_eq!(

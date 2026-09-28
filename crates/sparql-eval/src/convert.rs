@@ -108,8 +108,7 @@ pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
 ///
 /// Returns [`EvalError::Unsupported`] if any component is a variable: matching a
 /// quoted triple term whose components *bind* variables (structural triple-term
-/// matching) is out of the current S6 scope for every caller of this helper, not
-/// only BGPs; only fully-ground quoted triples resolve to a single interned id.
+/// matching) is not supported for any caller of this helper, not only BGPs; only fully-ground quoted triples resolve to a single interned id.
 pub(crate) fn ground_triple_pattern_to_value(
     pattern: &TriplePattern,
     site: &str,

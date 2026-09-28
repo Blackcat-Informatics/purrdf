@@ -44,8 +44,8 @@ quads = purrdf.parse(
 )
 ```
 
-`purrdf.parse` 接受 Turtle、TriG、N-Triples、N-Quads、TriX 与 HexTuples
-（`purrdf.RdfFormat`）；JSON-LD 与 RDF/XML 经由专门的
+`purrdf.parse` 接受 Turtle、TriG、N-Triples、N-Quads、TriX、HexTuples 与 RDF/XML
+（`purrdf.RdfFormat`）；JSON-LD 与 RDF/XML 另有专门的
 `purrdf.from_json_ld` / `purrdf.to_json_ld` 与 `purrdf.from_rdf_xml` /
 `purrdf.to_rdf_xml` 转换器。所有编解码器均为第一方实现，输出字节级确定。
 
@@ -150,7 +150,7 @@ Path("void.tar").write_bytes(description.archive)
 
 对于大型 LPG 载体，`purrdf.project_artifacts(...)` 会调用一个事务式的工件回调，带有
 包/工件开始、有界分块、工件结束、提交与中止事件。可选的进度回调会收到不可变的
-`ProjectionProgress` 快照；回调中的异常会中止该包并原样返回。这条路径保留所选的规范
+`ProjectionProgress` 快照；回调中的异常会中止该包，并被原样重新抛出。这条路径保留所选的规范
 LPG 模型，但不保留完整的工件体或 USTAR 字节。参见可运行的原子目录式
 [`projection_stream.py`](https://github.com/Blackcat-Informatics/purrdf/blob/main/bindings/python/examples/projection_stream.py)
 示例。
@@ -166,8 +166,71 @@ report = shapes.validate(shapes_ttl=my_shapes, data_nt=my_data)
 print(report["conforms"])
 ```
 
-完整的 SHACL Core、SHACL-SPARQL 约束/目标，以及经由 `shapes.entail(...)` 的 SHACL-AF
-`sh:rule` 蕴涵。可复用的已解析形状为 `shapes.Shapes(shapes_ttl).validate_nt(data_nt)`。
+SHACL 1.2 Core、SPARQL 扩展与节点表达式，以及经由 `shapes.entail(...)` 的 SHACL 规则
+蕴涵，后者返回 `{"ntriples", "diagnostics"}`。`sh:in` 或 `sh:xone` 列表为空的形状是一条每次运行都会报告的强制诊断，与判定并列，却绝不混入结果之中：`shapes.validate` 的字典、`ValidationReport.diagnostics`，以及 `apply_rules` 与 `entail` 的字典都携带一个由 `{"rule", "shape"}` 字典组成的 `diagnostics` 列表，`to_sarif()` 则把每条诊断作为一个 note 级别的 `toolExecutionNotifications` 条目携带。
+可复用的已解析形状可通过 `shapes.Shapes(shapes_ttl).validate_nt(data_nt)` 使用。每个结果
+字典都携带 `messages`：每条 `sh:resultMessage` 各为一个字典，含 `text`，存在时还含
+`language`、`direction` 与 `datatype`。`shapes.validate(...,
+conformance_disallows=[...])` 设定哪些严重级别 IRI 会使报告判定为不符合（默认为
+`sh:Violation`、`sh:Warning` 与 `sh:Info`），结果字典中的 `conformance_disallows`
+给出报告判定时所依据的集合。`shapes.validate`、`shapes.Shapes`、`shapes.pack_product`
+与 `shapes.lint_shapes` 上的 `shapes_graph=IRI` 指名 SHACL-SPARQL 看到形状图时所用的
+IRI，与 `purrdf validate --shapes-graph` 相同：`$shapesGraph` 预绑定到该 IRI，
+`GRAPH $shapesGraph { ... }` 读取的就是形状图（这是 SHACL 1.0 的预绑定，SHACL 1.2
+已将其移除）。省略时，`$shapesGraph` 是一个普通变量。`Shapes` 会把它带入 `prepare()`
+及其产物。`shapes.apply_rules` 与 `shapes.entail` 接受同一个关键字参数，用它预绑定
+`sh:SPARQLRule` 的 `$shapesGraph`；若与 `srl` 一同指名它，`apply_rules` 会抛出
+`ValueError`，因为 `srl` 没有形状图。`shapes.entail` 还接受 `apply_rules` 所接受的四个规则求值上限——`max_term_generating_rounds`、`max_generated_terms`、`max_stored_facts` 与 `max_join_steps`，默认值相同——越过其中任一上限的运行会抛出 `ValueError`，点名该上限、相关数值以及用于提高它的关键字参数（`entail(max_stored_facts=...)`）。
+`shapes.validate` 与 `shapes.Shapes` 上的
+`subclass_of_in_shapes_graph=True`
+就是 SHACL 1.2 Core §6.3 的 `subClassOfInShapesGraph`：在 SHACL 类型判定类成员资格的
+每一处（`sh:targetClass`、隐式类目标、`sh:class`、`sh:rootClass`、`shnex:instancesOf`），
+除数据图的 `rdfs:subClassOf` 三元组之外，还会读取形状图的这些三元组。它默认关闭，这也是
+规范的默认值。若形状图的 `owl:imports` 导入闭包中含有同一系列的两个版本，或含有一个被另一
+个图声明为 `owl:incompatibleWith` 的图，则会抛出 kind 为 `incompatible-import-versions`
+的 `ShapesImportError`。
+
+验证之外还有四个工具，每一个都是 CLI、WebAssembly 与 C 接口所发出的同一个库调用：
+
+```python
+# Run the SHACL 1.2 rules of a shapes graph, or a SPARQL 1.2 RL rule set (srl=...),
+# and get the INFERENCE GRAPH: the inferred triples only, as N-Triples. With
+# explain=True, "proof" carries the proof of every inferred triple.
+out = shapes.apply_rules(my_data, my_shapes, explain=True)
+out["inferred"], out["proof"]
+
+# Two limits stop a rule set that keeps inferring new terms: 16384 term-generating
+# rounds, and max(65536, 4 x the input's distinct terms) generated terms. A rule set
+# that needs more states it; a run past either raises ValueError naming the limit.
+shapes.apply_rules(my_data, srl=counting_rules, max_term_generating_rounds=50_000)
+
+# Two more bound what a run holds and enumerates: 4194304 stored facts (the data
+# graph, a rule set's data and every inferred triple) and 1048576 join steps. A
+# run past either raises ValueError naming the limit and the keyword argument.
+shapes.apply_rules(my_data, my_shapes, max_stored_facts=8_000_000)
+
+# Check a SPARQL 1.2 RL rule set WITHOUT running it: the grammar, the IMPORTS
+# closure (from `imports`), well-formedness and stratification -- every static
+# check apply_rules(srl=...) applies first. level="syntax" or "well-formed" stops
+# earlier. A refused rule set raises ValueError naming the stage.
+shapes.check_rules(counting_rules)["summary"]
+
+# Evaluate one node expression of a shapes graph against a focus node. The
+# expression is an IRI or "_:label"; the scope binds shnex:var names. The result is
+# {"outputs": [...], "diagnostics": [{"rule", "shape"}, ...]}: the output nodes, and
+# the shapes graph's mandatory diagnostics (an empty sh:in / sh:xone list).
+shapes.eval_node_expr(my_shapes, my_data, "http://example.org/Tag",
+                      "http://example.org/a", scope={"suffix": '"!"'})["outputs"]
+
+# Certify a shapes graph: the loader's verdict, the W3C shacl-shacl.ttl results,
+# which implementation every function call binds to, and the validators a
+# vocabulary declares for built-in components (superseded, never run).
+lint = shapes.lint_shapes(my_shapes)
+lint["clean"], lint["findings"], lint["calls"], lint["alternatives"], lint["report"]
+```
+
+格式错误的形状图得到的是一份带有问题项的 `lint_shapes` 报告，而不是异常；只有不是
+Turtle 的文档才会抛出 `ValueError`。
 
 ## 用 ShEx 验证
 
@@ -197,13 +260,21 @@ import purrdf
 from purrdf import entail
 
 dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
-closure, report = entail.materialize(dataset, "rdfs", "")
+closure, report = entail.materialize(dataset, "rdfs", "", [], [])
 print(closure.to_nquads())
 print(report)
 ```
 
-对于持有文档而非已解析数据集的调用方，`entail.materialize_nt(text, regime, program)`
-接受 N-Triples/N-Quads 并返回 `(canonical_nquads, report)`。二者都接受以普通字符串
+第四和第五个参数是该数据集的 `owl:imports` 表——一个由 `(ontology_iri, nquads_document)`
+对组成的列表——以及读取该数据集所用的 IRI，其写法与 `entail.certain_answers` 完全一致。
+OWL 2 将一个本体的导入闭包定义为**就是**该本体本身，因此导入了某份文档的数据集会在合并
+结果上求闭包；该表无法解析的导入会抛出指明它的 `ValueError`，闭包从未触及的表条目同样
+如此。`[]`、`[]` 表示什么也不导入。`entail.consistency(data, imports, premise_iris)` 与
+`Store.query_entailment_governed(..., imports=…, premise_iris=…)` 接受同一张表。
+
+对于持有文档而非已解析数据集的调用方，
+`entail.materialize_nt(text, regime, program, imports, premise_iris)` 接受
+N-Triples/N-Quads 并返回 `(canonical_nquads, report)`。二者都接受以普通字符串
 （`"simple"`、`"rdf"`、`"rdfs"`、`"owl-rl"`、`"owl-direct"`、`"rif"`、`"d"`）或
 `entail.Regime.RDFS` 给出的蕴涵机制。
 
@@ -213,7 +284,7 @@ print(report)
 `program` 是一份规范性的 RIF-in-XML 文档：
 
 ```python
-closure, report = entail.materialize(dataset, "rif", my_rif_xml)
+closure, report = entail.materialize(dataset, "rif", my_rif_xml, [], [])
 ```
 
 `"owl-direct"` 同样不接受 program，而这是一项声明而非疏漏：它的额外输入是*查询*的
@@ -222,9 +293,9 @@ tableau 增强（分类、实现（realization）、蕴涵的角色断言，以�
 `owl:sameAs` 同一性）。
 
 **推理报告是第二个返回值，且永远不可省略。**它是一份字节稳定的渲染，说明哪些规则触发
-了、触发了多少次，哪些规范规则*没有*触发，本次运行把哪些构造留在了边界处，消耗了求值
-器固定上限中的多少，以及所运行演算的契约哈希——这样，一个在不同规则集下生成的缓存
-闭包就可以被拒绝，而不是被信任。
+了、触发了多少次，哪些规范规则*没有*触发，本次运行把哪些构造留在了边界处，在其所处的
+求值上限下消耗了多少，以及在这些上限下所运行演算的契约哈希——这样，一个在不同规则集下
+生成的缓存闭包就可以被拒绝，而不是被信任。
 
 规则表可以直接读取，因此覆盖率是可以测量的，而不是凭信念接受的：
 
@@ -261,8 +332,14 @@ W3C 一致——其中 3 个被*反驳*（判定为非蕴涵），20 个被*承�
 
 以下情况抛出 `ValueError`：未知的蕴涵机制拼写（消息会列出可接受的集合）；`program`
 与蕴涵机制不匹配——除 `"rif"` 之外的任何机制收到非空值，或 `"rif"` 无法把它解析为
-规范性的 RIF-in-XML 文档；以及求值上限耗尽。上限耗尽是一次拒绝，绝不会把截断的闭包
+规范性的 RIF-in-XML 文档；以及越过求值上限。越过上限是一次拒绝，绝不会把截断的闭包
 当作完整闭包交回。是 `"owl-direct"` 或 `"rif"` 本身并不构成拒绝：二者都会物化。
+
+对 `"rdf"`、`"rdfs"`、`"owl-rl"` 与 `"d"` 蕴涵机制，`materialize` 与 `materialize_nt`
+接受两个仅限关键字的求值上限：`max_stored_facts`（每个图的存储可持有的事实，默认
+4194304）与 `max_join_steps`（规则可枚举的候选解，默认 1048576）。越过其中任一上限的
+运行会抛出 `ValueError`，点名该上限、相关数值与该关键字参数；在上限之内的运行返回的
+闭包与任何更大上限下的相同，报告的 `contract-hash` 指名的是所生效上限下的演算。
 
 ## 描述逻辑推理服务
 
@@ -273,7 +350,7 @@ hypertableau——它的每一项服务都在 `purrdf.entail` 上。每项服务
 
 | 服务 | 调用 | 答案 |
 | --- | --- | --- |
-| 一致性 | `entail.consistency(data)` | `consistency true` / `false` / `unknown`——`unknown` 表示 tableau 达到了步数上限，且绝不会被折叠为 `false` |
+| 相容性 | `entail.consistency(data, imports, premise_iris)` | `consistency true` / `false` / `unknown`——`unknown` 表示 tableau 达到了步数上限，且绝不会被折叠为 `false` |
 | 分类 | `entail.classify(data)` | `equivalent`、`subclass`（传递闭包）、`direct`（其约简）与 `unsatisfiable` 各行 |
 | 实现（realization） | `entail.realize(data)` | 命名个体的 `type` 行，随后是最具体的 `direct-type` 行 |
 | 实例检索 | `entail.instances(data, class_)` | `instance <term>` 行；`class_` 是**一个** N-Triples 词项，含尖括号 |
@@ -316,9 +393,9 @@ OWL 2 RDF 映射中的一条*公理*，而 `entail.graph_entails` 向蕴涵机�
 
 | 服务 | 调用 | 答案 |
 | --- | --- | --- |
-| 确定答案 | `entail.certain_answers(regime, data, pattern, imports)` | `mechanism`，每个投影变量一行 `var`，每个确定答案一行 `row`，以及行集可能不完备的每个原因一行 `limit` |
-| 图蕴涵 | `entail.graph_entails(regime, premise, conclusion, imports)` | `mechanism <name>`，随后是 `entailment entailed` / `not-entailed` / `undecided`——三种裁决，绝不是两种 |
-| 已验证蕴涵 | `entail.verify_entailment(regime, premise, conclusion, imports)` | 上述内容加上 `warrant present`/`absent` 与 `verified true`/`false`/`not-applicable` |
+| 确定答案 | `entail.certain_answers(regime, data, pattern, imports, premise_iris)` | `mechanism`，每个投影变量一行 `var`，每个确定答案一行 `row`，以及行集可能不完备的每个原因一行 `limit` |
+| 图蕴涵 | `entail.graph_entails(regime, premise, conclusion, imports, premise_iris)` | `mechanism <name>`，随后是 `entailment entailed` / `not-entailed` / `undecided`——三种裁决，绝不是两种 |
+| 已验证蕴涵 | `entail.verify_entailment(regime, premise, conclusion, imports, premise_iris)` | 上述内容加上 `warrant present`/`absent` 与 `verified true`/`false`/`not-applicable` |
 
 `pattern` 是在任意位置（**谓词**位置也包括在内）带 `?name` 的 N-Triples；其中的空节点
 是非区分变量，受匹配约束但不投影，这正是 SPARQL 对查询空节点的定义。RDF 1.2 三元组项
@@ -349,7 +426,7 @@ OWL 2 RDF 映射中的一条*公理*，而 `entail.graph_entails` 向蕴涵机�
 蕴涵的缺失——而 `undecided` 是不完备的过程有权改说的话。把后者当作前者，会把本库的
 一个局限变成关于所用本体的一个错误陈述。
 
-### `imports`——前提自称并非全部的那些文档
+### `imports`——前提自称缺了它们便不完整的那些文档
 
 `imports` 是一个有序的 `(ontology_iri, document)` 对序列，其中 `document` 是与前提
 完全一样的 N-Quads（或 N-Triples）文本。带有 `owl:imports` 的本体声明其公理是自身的
@@ -361,6 +438,11 @@ OWL 2 RDF 映射中的一条*公理*，而 `entail.graph_entails` 向蕴涵机�
 是必填而非默认的，并在全部四个宿主上处于同一位置，因此同一种调用形态在 Python、
 JavaScript、C 与 Rust 中都可用。解析是传递到不动点的，因此所提供文档自身的
 `owl:imports` 同样会被跟进。
+
+`premise_iris` 是读取前提文档所用的 IRI 列表——在已知的情况下，即它的 URL，或解析它时
+所用的基准 IRI。指向其中之一的 `owl:imports` 指的就是前提本身，会原地解析，无需
+`imports` 条目；对前提已声明的本体的导入同样如此。没有来源位置、直接交到你手上的文本
+没有这样的 IRI，`[]` 就是这种普通情形。与 `imports` 一样，该参数是必填的。
 
 ```python
 from purrdf import entail
@@ -381,14 +463,14 @@ conclusion = (
 )
 
 answer, _ = entail.graph_entails(
-    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)]
+    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)], []
 )
 assert "entailment entailed" in answer
 
 # The same call with nothing supplied refuses BY NAME rather than reasoning over a
 # premise that is missing the axioms it told you about.
 try:
-    entail.graph_entails("owl-rl", premise, conclusion, [])
+    entail.graph_entails("owl-rl", premise, conclusion, [], [])
 except ValueError as refusal:
     assert "https://example.org/schema" in str(refusal)
 ```
@@ -405,7 +487,7 @@ ontology = (
     " <https://example.org/Cat> .\n"
 )
 
-answer, certificate = entail.consistency(ontology)
+answer, certificate = entail.consistency(ontology, [], [])
 assert answer.strip() == "consistency true"
 assert certificate.startswith("purrdf-dl-certificate 1")
 assert "completeness decided" in certificate
@@ -497,7 +579,7 @@ store.query(query, relations_from_graph={f"{EX}rel/memberOf": (purrdf.NamedNode(
 模式。重复的 IRI、参差不齐的表、断裂的列表或指向不存在节点的头节点，会在其提供之处抛出
 `ValueError`。
 
-第三种写法根本不是表。`path_relations` 在存储自身的边上注册一次**路径见证**（path
+第三种写法根本不是表。`path_relations` 在存储自身的边上注册一个**路径见证**（path
 witness）遍历：一次调用写作 `?start <iri> ( ?end ?pathId ?len ?step ?node ?edge )`，
 每一跳发出一行，`?edge` 绑定到作为 RDF 1.2 三元组项的被遍历陈述，因此 `GROUP BY ?pathId`
 配合 `ORDER BY ?step` 就能在查询内部重组一整条游走。规格中的每个字段都是必填的——
@@ -518,6 +600,41 @@ store.query(
     },
 )
 ```
+
+三种声明中的任何一种都可以再多带一个末尾位置：`(generation, incompleteness)`，即宿主
+对这些行所来自的索引所知道的情况。这是关系中唯一无法由行本身表达的部分——从正在重建的
+搜索索引中读出的表，与从完整索引中读出的表是同一组行，两次运行之间的查询文本与数据集
+快照也毫无差别。两个成员都会被逐字记录，任一成员为 `None` 都表示没有陈述，绝不表示索引
+是最新的或完整的：
+
+```python
+outcome = store.query_governed(
+    query,
+    relations={
+        f"{EX}rel/memberOf": (
+            1, 1, rows,
+            ("members-index-7", "shard 3 of 4 is still rebuilding"),
+        )
+    },
+)
+outcome.relation_witness[f"{EX}rel/memberOf"]["incompleteness"]
+# ['shard 3 of 4 is still rebuilding']
+```
+
+被声明的不完整性**要么被见证，要么致命**，由入口点自身的返回类型决定，而不是由任何
+关键字决定。受调控的结果有容纳该声明的位置，因此 `query_governed` /
+`query_entailment_governed` 会作答，并在 `relation_witness` 上报告它——
+`{relation_iri: {"invocations": int, "generations": [...], "incompleteness": [...]}}`，
+按 IRI 顺序作键，始终存在，可能为空。`query` 与 `update` 没有地方放它，因此会抛出携带
+`native-sparql-relation-incomplete` 的 `ValueError`，而不是交回一个与完整答案无法区分的
+残缺答案。空的见证、空的 `incompleteness` 列表以及为 `None` 的 generation 都只是缺失——
+它们都不能证明某个索引是完整的。
+
+两份声明列表可以在不同运行之间比较；`invocations` 则不能。它统计的是进入宿主代码的
+次数，这是关于调度而非关于索引的事实——在 `FILTER EXISTS` 之下，关系会对驱动行的每个
+分块各进入一次，而分块数取决于运行时的线程数，因此同一份数据上的同一个查询可能报告不同的
+数字，而旁边的每一项声明都完全相同。把它读作「这个关系到底有没有运行」，绝不要把它当作
+可在两份回执之间比较的值。
 
 注册是按调用进行的且不携带任何可调用对象，因此整个求值仍在释放 GIL 的状态下运行。
 在 Rust 侧是任意宿主闭包的那些属性函数——全文索引、GeoSPARQL 关系、嵌入 k 近邻
@@ -575,10 +692,21 @@ rows = purrdf.gts_relational_rows_from_bytes(gts_bytes)
 rows["terms"], rows["quads"], rows["reifiers"], rows["annotations"], rows["blobs"]
 ```
 
-`gts_relational_rows_from_bytes` 返回一个 `GtsRelationalRows` 字典，含五个行列表；把它们
-写入某个存储是调用方自己的步骤。`gts_to_sqlite`、`gts_to_duckdb` 与 `gts_to_parquet` 这
-三个名字已声明但**未实现**：每一个都抛出 `ValueError` 且不写出任何东西。同样的入口点也
-归组在 `purrdf.gts` 之下以便发现。
+`gts_relational_rows_from_bytes` 返回一个 `GtsRelationalRows` 字典，含五个行列表。
+`gts_to_sqlite(data, path)`、`gts_to_duckdb(data, path)` 与
+`gts_to_parquet(data, out_dir)` 把这五张表——`terms`、`quads`、`reifiers`、
+`annotations`、`blobs`——按投影自身的行顺序写出，因此把同一个容器导出两次会得到相同的
+内容。`gts_to_parquet` 每张表写一个文件，并按表的顺序返回它们的路径。
+
+SQLite 只需要标准库。另外两个在对应的 extra 缺失时会抛出点名该 extra 的
+`ModuleNotFoundError`：
+
+```bash
+pip install 'purrdf[duckdb]'    # gts_to_duckdb
+pip install 'purrdf[parquet]'   # gts_to_parquet
+```
+
+同样的入口点也归组在 `purrdf.gts` 之下以便发现。
 
 ## 进一步了解
 

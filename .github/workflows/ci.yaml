@@ -85,6 +85,12 @@ jobs:
       - name: Check no terminal predicate is re-derived outside its owning surface
         run: python3 scripts/check-terminal-predicates.py
 
+      - name: Check the shapes-parser silent-drop gate can still fail
+        run: python3 scripts/check-shapes-parser-drops.py --self-test
+
+      - name: Check the shapes parser drops no shapes-graph value silently
+        run: python3 scripts/check-shapes-parser-drops.py
+
       - name: Check the tracked-path gate can still fail
         run: python3 scripts/check-tracked-paths.py --self-test
 
@@ -190,34 +196,35 @@ jobs:
       - name: Check the kernel ring-fence (no oxigraph/PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
 
-  # The workspace tests, sharded by package across runners: one runner building
-  # and linking every test target in the workspace took longer than a job may.
-  # Each named shard tests its packages; the `rest` shard tests the whole
-  # workspace EXCEPT every package a named shard owns, so a member crate added
-  # later is tested there without being listed anywhere. The lists live once, in
-  # this job's env, and the `rest` shard's exclusions are derived from them.
+  # `cargo test --workspace --locked` (`make test`), as six parallel shards. As one
+  # job it compiled for 25 minutes before running a test and was cancelled at its
+  # timeout; nearly all of that is first-party test targets, so a dependency cache
+  # alone could not bring it back under budget. `make test-shard` defines the
+  # shards and carries the proof that together they are exactly the old command:
+  # every shard selects `--workspace`, so dependency features resolve as they did,
+  # and the lib / doc / four integration-test shards partition its default target
+  # selection. The one test removed from this lane is c_abi_smoke, which the `capi`
+  # job below already runs through `make capi-check`.
   test-shard:
+    name: test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
+      # One red shard must not cancel the others: each reports a disjoint slice of
+      # the suite, and a cancelled slice is a slice nobody saw.
       fail-fast: false
       matrix:
-        shard: [rdf, core, sparql, shapes, rest]
-    env:
-      SHARD_RDF: purrdf-rdf purrdf-iri purrdf-xsd purrdf-hash purrdf-gts
-      SHARD_CORE: purrdf-core purrdf-hnsw purrdf-geo purrdf-text purrdf-cdt purrdf-testkit
-      SHARD_SPARQL: purrdf-sparql-eval purrdf-sparql-conformance purrdf-sparql-algebra purrdf-sparql-results purrdf-retrieval
-      SHARD_SHAPES: purrdf-shapes purrdf-shex purrdf-jsonschema purrdf-validate purrdf-entail purrdf-datalog
+        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4]
     # Debug-info policy is not set here any more. `[profile.dev]` in Cargo.toml
     # owns it (line tables for our crates, none for dependencies), so this job
     # gets the artifact saving it used to buy with CARGO_PROFILE_TEST_DEBUG on
     # every other lane too -- and a second place to set one thing was exactly the
     # kind of manifest shadow `scripts/check-build-profiles.py` now reports.
     steps:
-      # This lane links every test target in the workspace, which is the largest
-      # thing CI builds -- one binary per integration-test file, each carrying the
-      # line tables `[profile.dev]` asks for, plus the umbrella crate's doctests,
-      # whose link line pulls in every member crate at once.
+      # This lane links the workspace's test targets, which is the largest thing CI
+      # builds -- one binary per integration-test file, each carrying the line
+      # tables `[profile.dev]` asks for, plus the umbrella crate's doctests, whose
+      # link line pulls in every member crate at once.
       #
       # A hosted runner ships ~30 GB of preinstalled toolchains this repository
       # never uses, and running out of disk here does NOT surface as a disk error:
@@ -246,40 +253,30 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
+      # One cache for all six shards. Every shard resolves features over the whole
+      # workspace, so each compiles its dependencies identically and one saved set
+      # serves them all; the lib shard, which builds every package's dev-dependencies,
+      # is the one that saves it. First-party crates are never cached (the action
+      # cleans them), so every shard still compiles the code under test.
+      - name: Cache the dependency build (shared by every shard)
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: workspace-test
+          save-if: ${{ matrix.shard == 'lib' }}
+
       - name: Install Node for the Unicode ECMAScript oracle
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
 
-      - name: Run workspace tests (includes doc tests)
+      - name: Run workspace tests (this shard; the six include the doc tests)
         # A hosted x86_64 runner guarantees only the SSE2 baseline, so that is the one
         # reassociated path this job requires; the distance, kNN and HNSW tests still
         # assert they executed every path the runner reports. `avx512-sde` below
         # requires the rest.
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable,sse2
-          SHARD: ${{ matrix.shard }}
-        run: |
-          case "$SHARD" in
-          rdf) packages="$SHARD_RDF" ;;
-          core) packages="$SHARD_CORE" ;;
-          sparql) packages="$SHARD_SPARQL" ;;
-          shapes) packages="$SHARD_SHAPES" ;;
-          rest) packages="" ;;
-          *) echo "unknown shard $SHARD"; exit 1 ;;
-          esac
-          args=()
-          if [ "$SHARD" = rest ]; then
-            args+=(--workspace)
-            for package in $SHARD_RDF $SHARD_CORE $SHARD_SPARQL $SHARD_SHAPES; do
-              args+=(--exclude "$package")
-            done
-          else
-            for package in $packages; do
-              args+=(-p "$package")
-            done
-          fi
-          cargo test --locked "${args[@]}"
+        run: make test-shard SHARD=${{ matrix.shard }}
 
   # The stable name for the sharded workspace tests: it succeeds only when every
   # shard did.
@@ -407,6 +404,13 @@ jobs:
         env:
           RUSTUP_TOOLCHAIN: "1.98"
 
+  # The wasm lane, as three jobs along its natural seams, each with its own build
+  # cache (the composite action keys the cache by job): `wasm` proves the release
+  # crates build for wasm32 and that geo and HNSW answer byte-identically on both
+  # targets; `wasm-package` builds the optimized npm package and runs everything
+  # that consumes it; `wasm-test` executes the cross-target determinism tests in
+  # Node. As one job the chain ran 23 minutes on a 30-minute budget, and on main
+  # it was cancelled at the timeout.
   wasm:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -461,6 +465,24 @@ jobs:
             -p purrdf \
             -p purrdf-wasm \
             -p purrdf-bench
+
+  wasm-package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          targets: wasm32-unknown-unknown
+
+      - name: Set up the pinned wasm toolchain (wasm-bindgen + binaryen) and cache
+        uses: ./.github/actions/wasm-toolchain
 
       - name: Build the optimized wasm package
         # Builds the +simd128 release artifact, runs wasm-bindgen + wasm-opt -Oz,
@@ -805,14 +827,26 @@ jobs:
         run: cargo test --locked -p purrdf-gts --test unpack_mtime
 
   # riscv64 runs apart from i686 because the distribution's multilib and riscv64
-  # cross compilers cannot be installed together. Its HNSW worker-count digest under
-  # emulation is the long pole.
+  # cross compilers cannot be installed together. Under emulation one HNSW digest
+  # takes minutes, so the suites run on four runners. The `determinism-*` parts each
+  # run the determinism tests they name, and fail unless every named test ran; the
+  # `suites` part runs everything else, the rest of the determinism file included
+  # (it skips exactly the names the other parts own), so a test added to the file
+  # later runs there without being listed anywhere.
   cross-arch-riscv64:
+    name: cross-arch-riscv64 (${{ matrix.part }})
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [suites, determinism-serial, determinism-one-worker, determinism-more-workers]
     env:
       CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
       CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64 -L /usr/riscv64-linux-gnu
+      DETERMINISM_SERIAL: a_serial_insert_builds_a_different_graph
+      DETERMINISM_ONE_WORKER: the_digest_is_identical_under_one_worker
+      DETERMINISM_MORE_WORKERS: the_digest_is_identical_under_two_workers the_digest_is_identical_under_four_workers the_digest_is_identical_under_eight_workers
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -831,17 +865,48 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
 
-      - name: Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation
+      - name: Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable
+          PART: ${{ matrix.part }}
+        shell: bash
         run: |
-          PURRDF_REQUIRE_BLAKE3_PATHS=portable cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-hash --test blake3
-          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-core --lib distance
-          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
-          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-sparql-eval \
-            --test knn_wasm_determinism --test knn_wasm_reassociated
-          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-hnsw \
-            --test determinism --test conformance --test wasm_reassociated
+          set -euo pipefail
+          target=riscv64gc-unknown-linux-gnu
+          # Run the named determinism tests, then require each to have run and passed:
+          # an `--exact` filter that matches nothing runs zero tests and exits 0.
+          determinism() {
+            log="$RUNNER_TEMP/determinism-$PART.log"
+            cargo test --locked --target "$target" -p purrdf-hnsw --test determinism \
+              -- --color never --exact "$@" 2>&1 | tee "$log"
+            for name in "$@"; do
+              grep -qx "test $name ... ok" "$log" || { echo "::error::$name did not run on this part"; exit 1; }
+            done
+          }
+          # Word splitting of the DETERMINISM_* lists is intended: each is a list of
+          # test names.
+          # shellcheck disable=SC2086
+          case "$PART" in
+          suites)
+            PURRDF_REQUIRE_BLAKE3_PATHS=portable cargo test --locked --target "$target" -p purrdf-hash --test blake3
+            cargo test --locked --target "$target" -p purrdf-core --lib distance
+            cargo test --locked --target "$target" -p purrdf-sparql-eval --lib knn
+            cargo test --locked --target "$target" -p purrdf-sparql-eval \
+              --test knn_wasm_determinism --test knn_wasm_reassociated
+            cargo test --locked --target "$target" -p purrdf-hnsw \
+              --test conformance --test wasm_reassociated
+            skips=()
+            for name in $DETERMINISM_SERIAL $DETERMINISM_ONE_WORKER $DETERMINISM_MORE_WORKERS; do
+              skips+=(--skip "$name")
+            done
+            cargo test --locked --target "$target" -p purrdf-hnsw --test determinism \
+              -- --exact "${skips[@]}"
+            ;;
+          determinism-serial) determinism $DETERMINISM_SERIAL ;;
+          determinism-one-worker) determinism $DETERMINISM_ONE_WORKER ;;
+          determinism-more-workers) determinism $DETERMINISM_MORE_WORKERS ;;
+          *) echo "::error::unknown part $PART"; exit 1 ;;
+          esac
 
   # The x86_64 dispatch paths a hosted runner does not guarantee, EXECUTED. GitHub's
   # x86_64 runners promise neither AVX2+FMA nor AVX-512F, so without this job the
@@ -903,7 +968,7 @@ jobs:
   # opt-in top-level `rdflib` shadow package is never installed in this env.
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -914,6 +979,15 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      # The test lane's saved dependency build, restored and never re-saved: the
+      # module build and the emitter oracle's cargo run share most dependency units
+      # with it, and no new cache entry competes for the repository's quota.
+      - name: Restore the workspace test lane's dependency build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: workspace-test
+          save-if: false
 
       - name: Install uv
         run: |
@@ -961,18 +1035,20 @@ jobs:
   # published to the job summary via $GITHUB_STEP_SUMMARY. The REAL rdflib is the
   # differential oracle (installed by uv), never the top-level rdflib shadow.
   #
-  # The two halves run on two runners (the native Rust suites, and the Python
-  # gates with the module build they need), because together they do not fit one
-  # 30-minute job. Each writes its measured rows; the `conformance` job judges the
-  # whole matrix from both -- the ratchet, the scoreboard and the document drift
-  # check -- exactly as a single `make conformance` run does.
-  conformance-part:
+  # The suites run on four runners, one per shard of scripts/conformance-matrix.py's
+  # SHARDS (suites that compile the same crates share one), and each writes its rows
+  # unjudged. The `conformance` job reassembles every shard's rows in matrix order
+  # and judges the whole matrix -- the ratchet and its orphan check, the scoreboard,
+  # the job summary and the docs/CONFORMANCE.md drift check -- exactly as a single
+  # `make conformance` run does; a missing or incomplete shard is a failure there.
+  conformance-shard:
+    name: conformance (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        part: [native, python]
+        shard: [core, sparql, shapes, python]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -984,44 +1060,58 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
+      # The dependency build the test lane saves, restored and never re-saved: the
+      # conformance suites are that lane's test targets, so most dependency units are
+      # already compiled, and no new cache entry competes for the repository's quota.
+      - name: Restore the workspace test lane's dependency build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: workspace-test
+          save-if: false
+
       - name: Install uv
-        if: matrix.part == 'python'
+        if: matrix.shard == 'python'
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
-      - name: Conformance matrix half
-        run: make conformance CONFORMANCE_ARGS="--part ${{ matrix.part }} --report target/conformance-reports/${{ matrix.part }}.json"
+      - name: Conformance matrix (this shard's suites)
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: make conformance CONFORMANCE_ARGS="--shard $SHARD --emit-results target/conformance-results/$SHARD.json"
 
-      - name: Upload this half's report
+      - name: Upload this shard's rows
+        if: ${{ !cancelled() }}
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: conformance-${{ matrix.part }}
-          path: target/conformance-reports/${{ matrix.part }}.json
+          name: conformance-results-${{ matrix.shard }}
+          path: target/conformance-results/${{ matrix.shard }}.json
           if-no-files-found: error
 
   conformance:
-    needs: conformance-part
-    if: always()
+    needs: conformance-shard
+    # Runs whatever the shards concluded, so a red suite is still reported in the one
+    # scoreboard; a shard that wrote no rows fails here by name.
+    if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
-      - name: Require both halves to succeed
-        env:
-          MATRIX_RESULT: ${{ needs.conformance-part.result }}
-        run: test "$MATRIX_RESULT" = success
-
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
 
-      - name: Download both halves' reports
+      - name: Download every shard's rows
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
-          pattern: conformance-*
+          pattern: conformance-results-*
           merge-multiple: true
-          path: target/conformance-reports
+          path: target/conformance-results
 
       - name: Conformance matrix (native Rust suites + rdflib gate)
-        run: make conformance CONFORMANCE_ARGS="--merge-reports target/conformance-reports"
+        run: make conformance CONFORMANCE_ARGS="--from-results target/conformance-results"
+
+      - name: Require every shard job to have succeeded
+        env:
+          SHARDS_RESULT: ${{ needs.conformance-shard.result }}
+        run: test "$SHARDS_RESULT" = success

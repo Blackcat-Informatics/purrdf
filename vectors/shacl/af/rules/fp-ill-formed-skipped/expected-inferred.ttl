@@ -1,0 +1,5 @@
+# Derived triples ONLY (the delta over input.ttl's graph): the well-formed
+# combination. The literal-subject combination is skipped.
+@prefix ex: <http://example.org/ns#> .
+
+ex:alice ex:p ex:o .

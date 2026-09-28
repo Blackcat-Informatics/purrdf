@@ -37,7 +37,7 @@
 //! 2. each lookaside resource's `content_digest` (collected and SORTED),
 //! 3. each blob's [`ContentDigest`] in the store (SORTED),
 //! 4. the provenance's runtime-id-free PUBLIC projection
-//!    ([`DatasetProvenance::public_projection`], S0.5).
+//!    ([`DatasetProvenance::public_projection`]).
 //!
 //! [`PipelineViewBundle::digest`] folds exactly the same four sections, reading
 //! section 1 through [`try_canonicalize_view`] instead of [`canonicalize`]. A

@@ -228,8 +228,8 @@ pub enum TrustBaseEntry {
     ///
     /// The checker runs it over the CALLER's own dataset, so a proof cannot smuggle a knowledge
     /// base in; but it is the same code the producer ran, and every concept id in a proof term
-    /// is meaningless without it. Stage 1 rested on this silently. It is named here rather than
-    /// left implicit.
+    /// is meaningless without it. An earlier checker rested on this silently. It is named here
+    /// rather than left implicit.
     ReverseMapping,
     /// CLAUSIFICATION: `owl_dl::clause` and `owl_dl::absorb`, which compile a
     /// knowledge base into the DL-clause set.
@@ -6693,7 +6693,7 @@ mod tests {
     /// A clash replay reports its structural checks as `trusted`, NAMES what they rest on, and
     /// never presents them as `attested`.
     ///
-    /// This is the honesty of the stage made observable. Stage 1's module docs said the checker
+    /// This is the honesty of the checker made observable. Its earlier module docs said the checker
     /// "clausifies that ontology itself"; that is true and it is still not independence, because
     /// the clausifier is the producer's. The report says so.
     #[test]
@@ -6821,7 +6821,7 @@ mod tests {
     ///
     /// This is how an unsound `inconsistent` is fabricated: refute the alternatives you like,
     /// omit the one you cannot close, and present a proof in which every recorded step checks.
-    /// Stage 1's checker passes such a proof — every clash it carries is genuine. This one does
+    /// A checker that trusts the recorded case split passes such a proof — every clash it carries is genuine. This one does
     /// not, because it regenerates the alternative set from the CALLER's own clause set and
     /// finds the case split narrower than the clause licenses.
     #[test]

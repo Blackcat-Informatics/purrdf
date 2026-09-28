@@ -6,7 +6,7 @@
 //! libpurrdf statically reuses the permissive `purrdf-gts` Rust crate (via the
 //! oxigraph-free `gts_write` / `import_gts_events` core), so a language shim
 //! links `libpurrdf` ALONE and still reads/writes `.gts` containers — the spec's
-//! "one shared library, not two" clause (PurRDF-PLAN P8).
+//! "one shared library, not two" clause.
 //!
 //! GTS is a lossless container: both the plain-graph data AND the full RDF-1.2
 //! statement layer (quoted triples + reifier bindings) survive the round-trip.

@@ -91,23 +91,45 @@ fn the_digest_is_the_pinned_golden() {
 }
 
 /// The digest is a property of the input alone, not of a schedule: one, two, four and
-/// eight rayon workers all fold the same bytes. Native only: wasm32-unknown-unknown has
-/// no threads to build a worker pool from.
+/// eight rayon workers all fold the same bytes.
+///
+/// Each worker count is its own test below, so a slow target (riscv64 under user-mode
+/// emulation, where one digest takes minutes) can run them on separate CI runners. Every
+/// one asserts equality with the same golden, so together they assert what one loop over
+/// the four counts would.
 #[cfg(not(target_arch = "wasm32"))]
-fn the_digest_is_identical_across_worker_counts() {
-    for workers in [1_usize, 2, 4, 8] {
-        let pool = ThreadPoolBuilder::new()
-            .num_threads(workers)
-            .build()
-            .expect("a worker pool is available");
-        let value = pool.install(digest);
-        assert_eq!(
-            value, GOLDEN_DIGEST,
-            "the digest under {workers} worker(s) is {value:016x}, golden \
-             {GOLDEN_DIGEST:016x}. A thread-count-dependent graph is exactly the defect \
-             the round-structured build exists to remove."
-        );
-    }
+fn assert_golden_digest_under(workers: usize) {
+    let pool = ThreadPoolBuilder::new()
+        .num_threads(workers)
+        .build()
+        .expect("a worker pool is available");
+    let value = pool.install(digest);
+    assert_eq!(
+        value, GOLDEN_DIGEST,
+        "the digest under {workers} worker(s) is {value:016x}, golden \
+         {GOLDEN_DIGEST:016x}. A thread-count-dependent graph is exactly the defect \
+         the round-structured build exists to remove."
+    );
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn the_digest_is_identical_under_one_worker() {
+    assert_golden_digest_under(1);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn the_digest_is_identical_under_two_workers() {
+    assert_golden_digest_under(2);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn the_digest_is_identical_under_four_workers() {
+    assert_golden_digest_under(4);
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn the_digest_is_identical_under_eight_workers() {
+    assert_golden_digest_under(8);
 }
 
 /// Within-round isolation is load-bearing: a serial insertion, where every node sees all
@@ -194,7 +216,13 @@ purrdf_testkit::harness_main!(
     a_serial_insert_builds_a_different_graph,
     exact_image_golden_unchanged_by_reassociated_surface,
     #[cfg(not(target_arch = "wasm32"))]
-    the_digest_is_identical_across_worker_counts,
+    the_digest_is_identical_under_one_worker,
+    #[cfg(not(target_arch = "wasm32"))]
+    the_digest_is_identical_under_two_workers,
+    #[cfg(not(target_arch = "wasm32"))]
+    the_digest_is_identical_under_four_workers,
+    #[cfg(not(target_arch = "wasm32"))]
+    the_digest_is_identical_under_eight_workers,
     the_digest_is_not_vacuous,
     the_digest_is_the_pinned_golden,
 );

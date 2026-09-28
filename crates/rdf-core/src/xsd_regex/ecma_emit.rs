@@ -12,7 +12,7 @@ use std::fmt::{self, Write};
 
 use regex_syntax::hir::{Class, Hir, HirKind, Look};
 
-use super::{MAX_TRANSLATED_BYTES, XsdRegexError, prepare};
+use super::{MAX_TRANSLATED_BYTES, XsdRegexError, prepare_with};
 
 /// A pattern cannot be faithfully emitted within the declared resource limits.
 #[derive(Debug, Clone, PartialEq)]
@@ -49,18 +49,20 @@ impl std::error::Error for Ecma262Error {}
 /// recommends. `s`, `m`, `x`, and `q` are incorporated into the source;
 /// callers must not add flags. All classes use explicit Unicode scalar ranges.
 /// XPath multiline anchors exclude the position after a final newline. The
-/// `i` flag refuses because XPath case variants differ from simple case folding.
+/// `i` flag is written into the source too: XPath F&O 3.1 §5.6.2 defines it by
+/// case variants (`fn:lower-case(C1) eq fn:lower-case(C2) or fn:upper-case(C1)
+/// eq fn:upper-case(C2)`), not by simple case folding, so ECMA-262's own `i`
+/// would judge a different language. Each normal character used as an atom
+/// becomes the class of its variants, each character class gains the variants
+/// of what its characters and ranges match, and every escape (`\p{Lu}`, `\d`,
+/// `\i`, …) is unaffected, as the specification requires.
 ///
 /// # Errors
 /// Invalid or unsupported source and bounded-size failures are typed errors;
 /// an expression with a different accepted language is never returned.
 pub fn to_ecma_262(pattern: &str, flags: &str) -> Result<String, Ecma262Error> {
-    let prepared = prepare(pattern, flags).map_err(Ecma262Error::Source)?;
-    if prepared.case_insensitive {
-        return Err(Ecma262Error::Unsupported(
-            "the i flag requires XPath case-variant semantics",
-        ));
-    }
+    let prepared = prepare_with(pattern, flags, true).map_err(Ecma262Error::Source)?;
+    debug_assert!(!prepared.case_insensitive, "i is in the source");
     let hir = regex_syntax::ParserBuilder::new()
         .dot_matches_new_line(prepared.dot_all)
         .multi_line(prepared.multi_line)
@@ -373,6 +375,60 @@ mod tests {
             "🦀+",
         ] {
             assert!(ecma_262_rust_compatible(pattern), "must accept {pattern:?}");
+        }
+    }
+
+    /// Run emitted Unicode ECMA-262 source through the Rust engine. The i-flag
+    /// output uses only literals, groups, anchors, explicit `\u{…}` ranges and
+    /// general categories, whose meaning the two engines share.
+    fn matches(source: &str, flags: &str, input: &str) -> bool {
+        let emitted = to_ecma_262(source, flags).expect("i translates");
+        regex::Regex::new(&emitted)
+            .expect("emitted source compiles")
+            .is_match(input)
+    }
+
+    /// F&O 3.1 §5.6.2's own examples of the `i` flag, and the two places its
+    /// case-variant relation differs from simple case folding.
+    #[test]
+    fn i_flag_is_written_as_xpath_case_variants() {
+        for (source, flags, input, expected) in [
+            ("^z$", "i", "Z", true),
+            ("^[A-Z]$", "i", "q", true),
+            ("^[A-Z]$", "i", "\u{212a}", true),
+            ("^[A-Z-[IO]]$", "i", "b", true),
+            ("^[A-Z-[IO]]$", "i", "i", false),
+            ("^[A-Z-[IO]]$", "i", "O", false),
+            ("^[^Q]$", "i", "q", false),
+            ("^[^Q]$", "i", "r", true),
+            // "All other constructs are unaffected": `\p{Lu}` stays upper-case.
+            (r"^\p{Lu}$", "i", "a", false),
+            (r"^[\p{Lu}]$", "i", "a", false),
+            (r"^[\p{Lu}x]$", "i", "X", true),
+            (r"^\i$", "i", "a", true),
+            // Dotless ı and i upper-case alike; İ lower-cases to two characters.
+            ("^i$", "i", "ı", true),
+            ("^i$", "i", "İ", false),
+            ("^ı$", "i", "I", true),
+            // Leading and trailing `-` stay members; a range ending a class
+            // keeps its extent.
+            ("^[-a]$", "i", "A", true),
+            ("^[-a]$", "i", "-", true),
+            ("^[a-]$", "i", "-", true),
+            ("^[--a]$", "i", "-", true),
+            ("^[\\t-z]$", "i", "K", true),
+            // `q` makes every character a normal atom.
+            ("a.C", "qi", "xA.cx", true),
+            ("a.C", "qi", "xAbcx", false),
+            // `x`, `s` and `m` compose.
+            ("^ a b $", "ix", "AB", true),
+            ("^A.B$", "is", "a\nb", true),
+        ] {
+            assert_eq!(
+                matches(source, flags, input),
+                expected,
+                "{source:?}/{flags:?} on {input:?}"
+            );
         }
     }
 

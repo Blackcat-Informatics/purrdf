@@ -95,8 +95,16 @@ impl RdfCodec for LineCodec {
         // The hot path never records spans; the span-tracking path in
         // `parse_dataset_with` calls `text_parse_without_panicking` with a `SpanTable`
         // directly (a distinct monomorphization), so `NoSpans` stays zero-cost here.
-        let graph =
-            super::parse::text_parse_without_panicking(self.0, text, base, mode, &mut NoSpans)?;
+        // The hot path does not report the document's prefix map; `parse_dataset_with`
+        // reads it back through its own call of the same front-end.
+        let graph = super::parse::text_parse_without_panicking(
+            self.0,
+            text,
+            base,
+            mode,
+            &mut NoSpans,
+            &mut Vec::new(),
+        )?;
         super::parse::dataset_from_text_ser_graph(&graph)
     }
 

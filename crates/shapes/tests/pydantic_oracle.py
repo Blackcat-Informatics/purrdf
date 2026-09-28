@@ -31,7 +31,7 @@ def _scratch_root() -> Path:
     root = (Path(target) if target else REPO / "target") / "gate-scratch"
     root.mkdir(parents=True, exist_ok=True)
     return root
-FLAT_BASELINE_SHA256 = "9277681d425755b085048a302ddd2fa530630a98154352eba8e6672e6a7dff70"
+FLAT_BASELINE_SHA256 = "6d30855141344a4bc9308182af7a7b969a92b381e6d2fca4c953e947876ce692"
 SCHEMA_MAP_KEYWORDS = (
     "$defs",
     "properties",
@@ -355,6 +355,25 @@ def _assert_package_runtime(
     )
 
 
+def _assert_lists(lists: dict[str, Any]) -> None:
+    """Every SHACL probe of a fixture package agrees with its SHACL verdict."""
+    losses = lists["losses"]["losses"]
+    if not all(entry["intentional"] for entry in losses):
+        raise AssertionError("fixture package has an unregistered loss")
+    holder = _load_models(lists["model_paths"])["Holder"]
+    for probe in lists["probes"]:
+        try:
+            holder.model_validate(probe["value"])
+            valid = True
+        except ValidationError:
+            valid = False
+        if valid != probe["conforms"]:
+            raise AssertionError(
+                f"list-component probe {probe['label']!r}: SHACL={probe['conforms']}, "
+                f"Pydantic={valid}"
+            )
+
+
 def _assert_strict_routed_types(root: Path) -> None:
     consumer = root / "routed_consumer.py"
     consumer.write_text(
@@ -432,7 +451,13 @@ def main() -> None:
     )
     with tempfile.TemporaryDirectory(prefix="purrdf-pydantic-oracle-", dir=_scratch_root()) as directory:
         root = Path(directory)
-        for artifacts in [payload["artifacts"], payload["routed"]["artifacts"]]:
+        for artifacts in [
+            payload["artifacts"],
+            payload["routed"]["artifacts"],
+            payload["lists"]["artifacts"],
+            payload["temporal"]["artifacts"],
+            payload["value_shapes"]["artifacts"],
+        ]:
             for relative, text in artifacts.items():
                 destination = root / relative
                 destination.parent.mkdir(parents=True, exist_ok=True)
@@ -448,6 +473,32 @@ def main() -> None:
                 payload["routed"]["model_paths"],
                 payload["routed"]["metadata"],
             )
+            _assert_lists(payload["lists"])
+            # The temporal range bounds: each is a negation the generated
+            # runtime check evaluates, so no probe diverges and no negation
+            # loss remains.
+            _assert_lists(payload["temporal"])
+            if any(
+                entry["code"] == "negation-validation-dropped"
+                for entry in payload["temporal"]["losses"]["losses"]
+            ):
+                raise AssertionError("temporal package kept a negation loss")
+            # The value-position shape constraints: allOf, oneOf, not and contains
+            # are each enforced by the generated runtime check, so no probe
+            # diverges and none of their losses remains.
+            _assert_lists(payload["value_shapes"])
+            if any(
+                entry["code"]
+                in {
+                    "array-contains-validation-dropped",
+                    "intersection-validation-widened",
+                    "negation-validation-dropped",
+                    "one-of-validation-widened",
+                }
+                and "#/$defs/Holder" in entry["location"]
+                for entry in payload["value_shapes"]["losses"]["losses"]
+            ):
+                raise AssertionError("value-shape package kept a composition loss")
             routed_root = importlib.import_module("routed_oracle_models")
             if routed_root.__version__ != payload["routed"]["version"]:
                 raise AssertionError("routed package version export drifted")
@@ -457,7 +508,10 @@ def main() -> None:
     print(
         f"Pydantic oracle: {len(payload['version_oracle'])} PEP 440 differential cases "
         "agree; flat 6-model and routed 8-model packages pass strict typing, live schemas, "
-        "validation/alias probes, metadata/version linkage, and verified reverse SHACL import"
+        "validation/alias probes, metadata/version linkage, and verified reverse SHACL import; "
+        f"{len(payload['lists']['probes'])} SHACL list-component probes agree; "
+        f"{len(payload['temporal']['probes'])} temporal range-bound probes agree; "
+        f"{len(payload['value_shapes']['probes'])} SHACL value-shape probes agree"
     )
 
 

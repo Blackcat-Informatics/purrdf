@@ -20,8 +20,8 @@ use crate::json_schema::{
     SchemaSurfaceMode,
 };
 use crate::model::{rdf, rdfs};
-use crate::shapes::{Constraint, Path, Shape, Target};
-use crate::term::Term;
+use crate::shapes::{ClosedMode, Constraint, Path, Shape, Target};
+use crate::term::{NamedNode, Term};
 
 const RDF_PROPERTY: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
@@ -693,20 +693,33 @@ fn shape_class_info(shapes: &crate::shapes::Shapes) -> BTreeMap<String, ShapeCla
                 _ => None,
             };
             if let Some(class) = class {
-                merge_shape_info(classes.entry(class.to_owned()).or_default(), shape);
+                merge_shape_info(classes.entry(class.to_owned()).or_default(), shape, class);
             }
         }
     }
     classes
 }
 
-fn merge_shape_info(info: &mut ShapeClassInfo, shape: &Shape) {
+fn merge_shape_info(info: &mut ShapeClassInfo, shape: &Shape, class: &str) {
     let direct = direct_shape_properties(shape);
     info.direct_properties.extend(direct.iter().cloned());
     for constraint in &shape.constraints {
-        if let Constraint::Closed { ignored } = constraint {
+        if let Constraint::Closed { ignored, mode } = constraint {
+            // What the closed shape permits an instance of `class`: under
+            // `sh:closed true` the shape's own property paths; under
+            // `sh:closed sh:ByTypes` (SHACL 1.2 Core §7.9.1) what the instance's
+            // type `class` collects, plus `rdf:type`.
+            let permitted = match mode {
+                ClosedMode::Declared => direct.clone(),
+                ClosedMode::ByTypes(index) => index
+                    .properties(&Term::NamedNode(NamedNode::new_unchecked(class)))
+                    .iter()
+                    .map(|property| property.as_str().to_owned())
+                    .chain(std::iter::once(rdf::TYPE.to_owned()))
+                    .collect(),
+            };
             info.closed_surfaces.push(ClosedSurface {
-                direct_properties: direct.clone(),
+                direct_properties: permitted,
                 ignored_properties: ignored
                     .iter()
                     .map(|node| node.as_str().to_owned())

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The self-describing bundle resource layer (S3).
+//! The self-describing bundle resource layer.
 //!
 //! [`RdfBundle`] is the kernel-generic, repo-free package that carries
 //! *everything* needed to recover a compilation product without a filesystem:

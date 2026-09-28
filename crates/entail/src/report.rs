@@ -60,10 +60,10 @@ use core::fmt;
 use purrdf_core::{DatasetView, TermRef, TermValue};
 use purrdf_datalog::cache::ContractHash;
 use purrdf_datalog::chase::ChaseTermination;
-use purrdf_datalog::seminaive::BudgetReport;
+use purrdf_datalog::seminaive::{BudgetReport, EvalOptions};
 
 use crate::Regime;
-use crate::calculus::{ChaseRule, calculus_contract_hash};
+use crate::calculus::{ChaseRule, calculus_contract_hash, calculus_contract_hash_with};
 use crate::entails::EntailmentMechanism;
 use crate::rules::{RuleId, extensions, implemented, rules};
 
@@ -305,8 +305,8 @@ impl Completeness {
 /// * the six reverse-mapping constructs — `Kb::boundaries`, driven per construct by
 ///   `every_owl2_construct_is_handled_or_bounded`;
 /// * [`Construct::ResolvedOntologyImport`] — [`entails`](crate::entails()), through
-///   `ReasoningReport::with_resolved_imports`, once `imports::resolve` has merged the whole
-///   `owl:imports` closure into the premise. It is the one construct that is a fact about
+///   `ReasoningReport::with_resolved_imports`, once `imports::resolve` has resolved the whole
+///   `owl:imports` closure — merged from the caller's map, or already in the premise. It is the one construct that is a fact about
 ///   what the CALLER supplied rather than about what a lane read, which is exactly why the
 ///   chase cannot raise it: `boundaries` surveys the MERGED dataset, which still carries the
 ///   `owl:imports` triples, so the survey alone cannot tell a resolved import from an
@@ -632,14 +632,15 @@ impl Construct {
             Self::UnresolvedOntologyImport => {
                 "owl:imports names another ontology DOCUMENT, and OWL 2's imports closure \
                  is the union of the importing ontology with every document it transitively \
-                 names. NOTHING RESOLVED THOSE DOCUMENTS FOR THIS RUN: a materialization \
-                 takes no import map and the OWL-Direct reverse mapping reads the dataset it \
-                 was handed, and PurRDF fetches neither — it performs no I/O, has no network \
-                 and must stay wasm32-clean. So the imported axioms are premises this run \
-                 did NOT have, and what was closed is a smaller ontology than the one the \
-                 author wrote. A caller who wants them supplies them: \
-                 purrdf_entail::entails takes an ImportMap, merges the named documents into \
-                 the premise before the chase starts, and such a run raises \
+                 names. NOTHING RESOLVED THOSE DOCUMENTS FOR THIS RUN: it was a materialization \
+                 given no import map (materialize, materialize_with) or the OWL-Direct \
+                 reverse mapping, which reads the dataset it was handed, and PurRDF fetches \
+                 neither — it performs no I/O, has no network and must stay wasm32-clean. So \
+                 the imported axioms are premises this run did NOT have, and what was closed \
+                 is a smaller ontology than the one the author wrote. A caller who wants them \
+                 supplies them: purrdf_entail::materialize_with_imports, entails and \
+                 certain_answers take an ImportMap, merge the named documents into the \
+                 premise before the chase starts, and such a run raises \
                  ontology-import-resolved instead of this — which is the token that says the \
                  axioms WERE here. This one is what stops a run pretending a merge it never \
                  made already happened"
@@ -647,11 +648,15 @@ impl Construct {
             Self::ResolvedOntologyImport => {
                 "owl:imports names another ontology DOCUMENT, and OWL 2's imports closure is \
                  the union of the importing ontology with every document it transitively \
-                 names. THIS RUN HAD THAT CLOSURE: purrdf_entail::entails resolved the \
-                 caller's ImportMap into the premise before the chase started — transitively, \
-                 to a fixpoint, each document standardized apart — and an import the map did \
-                 not resolve would have refused the whole call with \
-                 EntailError::UnresolvedImport rather than quietly shrinking the premise. So \
+                 names. THIS RUN HAD THAT CLOSURE: the run (purrdf_entail::entails, \
+                 certain_answers or materialize_with_imports) resolved every \
+                 imported ontology before the chase started — either already IN the premise \
+                 (its owl:Ontology header, a sh:ShapesGraph it declares, an owl:versionIRI \
+                 naming it, or the premise document's own IRI) or supplied by the \
+                 caller's ImportMap and merged in transitively, to a fixpoint, each document \
+                 standardized apart — and an import neither resolved would have refused the \
+                 whole call with EntailError::UnresolvedImport rather than quietly shrinking \
+                 the premise. So \
                  every imported axiom was a premise here and every conclusion it licenses was \
                  drawn; this boundary names the documents the merge was ABOUT, and names no \
                  missing one. \
@@ -659,8 +664,9 @@ impl Construct {
                  What it does disclose is the one thing the run could not establish for \
                  itself. PurRDF fetches nothing, so WHICH document an ontology IRI denotes is \
                  the caller's declaration and not a fact this library checked: the answer is \
-                 complete for the imports closure that map describes and says nothing about \
-                 the one those IRIs dereference to elsewhere. A caller comparing this answer \
+                 complete for the imports closure the map and premise describe and says \
+                 nothing about the one those IRIs dereference to elsewhere. A caller \
+                 comparing this answer \
                  against the document it passed in is comparing against a SMALLER premise \
                  than the run used"
             }
@@ -961,8 +967,10 @@ pub(crate) struct RunStats {
     /// Conclusions committed AND materialized, per [`ChaseRule`], indexed by
     /// [`ChaseRule::index`].
     pub(crate) fired: [u64; ChaseRule::COUNT],
-    /// What the evaluation consumed of `purrdf-datalog`'s three fixed ceilings.
+    /// What the evaluation consumed, against the limits it ran under.
     pub(crate) budget: BudgetReport,
+    /// The caller's evaluation limits the run was governed by.
+    pub(crate) options: EvalOptions,
     /// Conclusions dropped because the RDF 1.2 IR cannot hold them — a literal or triple
     /// term in subject position, or a non-IRI in predicate position. The
     /// [`Construct::GeneralizedRdf`] boundary's observation.
@@ -983,16 +991,13 @@ pub(crate) struct RunStats {
 }
 
 impl RunStats {
-    /// The measurements of a run that evaluated nothing — the `Simple` identity closure.
-    pub(crate) fn none() -> Self {
-        Self::of_budget(BudgetReport::new(0, 0, 0))
-    }
-
-    /// A fresh tally over an evaluation that consumed `budget`.
-    pub(crate) fn of_budget(budget: BudgetReport) -> Self {
+    /// The measurements of a run that has evaluated nothing yet, governed by `options` —
+    /// the `Simple` identity closure's whole tally, and the start of every other lane's.
+    pub(crate) fn none(options: EvalOptions) -> Self {
         Self {
             fired: [0; ChaseRule::COUNT],
-            budget,
+            budget: BudgetReport::new(0, 0, 0).governed_by(&options),
+            options,
             generalized_rdf_drops: 0,
             surrogate_drops: 0,
             termination: None,
@@ -1029,7 +1034,8 @@ impl RunStats {
             self.budget
                 .term_arena_bytes()
                 .max(budget.term_arena_bytes()),
-        );
+        )
+        .governed_by(&self.options);
     }
 
     /// Record `count` conclusions the RDF 1.2 IR could not hold.
@@ -1056,7 +1062,7 @@ impl RunStats {
 
 /// What the dataset itself contains that bears on a boundary.
 ///
-/// One pass over the quads, so a boundary is emitted because the input actually holds the
+/// Read off the quads, so a boundary is emitted because the input actually holds the
 /// construct rather than because the lane might in principle meet it.
 #[derive(Debug, Clone, Copy, Default)]
 struct DatasetSurvey {
@@ -1064,13 +1070,15 @@ struct DatasetSurvey {
     named_graph: bool,
     /// Whether any quad of ANY graph mentions a triple term.
     triple_term: bool,
-    /// Whether the dataset names another ontology DOCUMENT with `owl:imports`.
+    /// Whether the dataset IMPORTS another ontology document.
     ///
-    /// An IRI OBJECT and nothing else, which is the same test
-    /// [`imports::resolve`](crate::entails::imports) applies: `owl:imports` is defined to
-    /// relate an ontology to an ontology IRI, so a blank-node or literal object names no
-    /// document and cannot make one missing. Flagging on the PREDICATE alone would have the
-    /// boundary say a document's axioms are absent when the triple named no document at all.
+    /// Exactly [`purrdf_core::imports::imported_iris`], the rule
+    /// [`imports::resolve`](crate::entails::imports) applies: an `owl:imports` whose subject
+    /// is an ontology header or a SHACL shapes graph of the dataset (or names one as its
+    /// `owl:versionIRI`), with an IRI object. A survey is handed no IRI the dataset was
+    /// loaded under, so its anchors are the dataset's own declared graphs. An `owl:imports` on any other subject is data and names no
+    /// document, and a blank-node or literal object names none either; flagging either would
+    /// have the boundary say a document's axioms are absent when no document was imported.
     ontology_import: bool,
 }
 
@@ -1082,19 +1090,16 @@ impl DatasetSurvey {
     /// of itself and the default graph, so a triple term sitting in one is a term this
     /// crate's chase cannot look inside exactly as a default-graph one is.
     ///
-    /// All three questions are answered in one pass, so the three-way break below can
-    /// actually fire: the `owl:imports` id is resolved once before the loop (a dataset that
-    /// never mentions the predicate interns no id for it, so that lookup costs one map
-    /// probe), and each quad's predicate id — read alongside its resolved [`TermRef`] view
-    /// via `ds.quads()`, zipped lock-step with `ds.quad_refs()` — is compared to it directly
-    /// rather than by a second full scan. When no id was interned, the import question is
-    /// already settled as `false`, so the exit guard treats "no id to match" the same as
-    /// "already found"; either way the loop still stops the moment the other two flags are
-    /// set, rather than draining the rest of the dataset.
+    /// The named-graph and triple-term questions are answered in one pass that stops the
+    /// moment both are settled, rather than draining the rest of the dataset. The import
+    /// question is the kernel's rule, which costs one term lookup and no pass at all for a
+    /// dataset that never mentions `owl:imports`.
     fn of<D: DatasetView>(ds: &D) -> Self {
-        let mut survey = Self::default();
-        let imports = ds.term_id_by_value(&TermValue::iri(crate::vocab::OWL_IMPORTS));
-        for (ids, quad) in ds.quads().zip(ds.quad_refs()) {
+        let mut survey = Self {
+            ontology_import: !purrdf_core::imports::imported_iris(ds, &[]).is_empty(),
+            ..Self::default()
+        };
+        for quad in ds.quad_refs() {
             if quad.g.is_some() {
                 survey.named_graph = true;
             }
@@ -1104,13 +1109,7 @@ impl DatasetSurvey {
             {
                 survey.triple_term = true;
             }
-            if imports == Some(ids.p) && matches!(quad.o, TermRef::Iri(_)) {
-                survey.ontology_import = true;
-            }
-            if survey.named_graph
-                && survey.triple_term
-                && (survey.ontology_import || imports.is_none())
-            {
+            if survey.named_graph && survey.triple_term {
                 break;
             }
         }
@@ -1136,7 +1135,7 @@ pub struct ReasoningReport {
     rules_fired: Vec<(RuleId, u64)>,
     /// The constructs the run could not fully handle.
     boundaries: Vec<Boundary>,
-    /// What the run consumed of the three fixed evaluation ceilings.
+    /// What the run consumed, against the evaluation limits it ran under.
     budget: BudgetReport,
     /// The identity of the calculus the run used.
     contract_hash: ContractHash,
@@ -1168,10 +1167,12 @@ impl ReasoningReport {
     /// non-empty `boundaries` is not a value a caller can pass in — not from this crate,
     /// and not from a consumer assembling a report of its own.
     ///
-    /// The contract hash is not a parameter either: it is
-    /// `calculus_contract_hash(regime)` by definition, and a report naming a calculus other
-    /// than the one its regime declares would be a second contradiction with no honest
-    /// reading. Neither is [`Self::mechanism`]: a materialization answers no
+    /// The contract hash is not a parameter either: it is the calculus `regime` declares,
+    /// hashed under the default evaluation limits of the current target
+    /// (`purrdf_datalog::cache::contract_hash(&calculus_program(regime))`), and a report
+    /// naming a calculus other than the one its regime declares would be a second
+    /// contradiction with no honest reading. A report [`crate::materialize_with`] builds
+    /// for a run under the caller's limits names the calculus under those limits instead. Neither is [`Self::mechanism`]: a materialization answers no
     /// conclusion-directed question, so every report built here starts with `None`, and the
     /// only thing that attaches one is the certificate that derives it from its own outcome.
     ///
@@ -1231,6 +1232,15 @@ impl ReasoningReport {
         }
     }
 
+    /// This report, naming its regime's calculus under `options`
+    /// ([`crate::materialize_with`]).
+    pub(crate) fn under(self, options: &EvalOptions) -> Self {
+        Self {
+            contract_hash: calculus_contract_hash_with(self.regime, options),
+            ..self
+        }
+    }
+
     /// Assemble the report for a run of `regime` over `ds` that measured `stats`.
     pub(crate) fn of_run<D: DatasetView>(ds: &D, regime: Regime, stats: &RunStats) -> Self {
         Self::of_chase_run(ds, regime, stats, None)
@@ -1260,21 +1270,28 @@ impl ReasoningReport {
     }
 
     /// The shared body of [`Self::of_run`] and [`Self::of_inconsistent_run`].
+    ///
+    /// The contract hash is the calculus's under the limits the run was governed by
+    /// ([`RunStats::options`]), so a closure computed under raised limits names a
+    /// different calculus from one computed under the defaults.
     fn of_chase_run<D: DatasetView>(
         ds: &D,
         regime: Regime,
         stats: &RunStats,
         inconsistency: Option<InconsistencyWitness>,
     ) -> Self {
-        Self::new(
-            regime,
-            fired_rules(regime, stats),
-            boundaries(ds, regime, stats),
-            stats.budget,
-            inconsistency,
-            stats.surrogate_drops,
-            stats.termination,
-        )
+        Self {
+            contract_hash: calculus_contract_hash_with(regime, &stats.options),
+            ..Self::new(
+                regime,
+                fired_rules(regime, stats),
+                boundaries(ds, regime, stats),
+                stats.budget,
+                inconsistency,
+                stats.surrogate_drops,
+                stats.termination,
+            )
+        }
     }
 
     /// Assemble the report for an `OWL-Direct` run that met `boundaries`.
@@ -1441,13 +1458,15 @@ impl ReasoningReport {
     /// This report, restated for a run whose whole `owl:imports` closure WAS resolved.
     ///
     /// Every [`Construct::UnresolvedOntologyImport`] boundary becomes a
-    /// [`Construct::ResolvedOntologyImport`] one; a report that names neither is returned
-    /// unchanged, which is the common case and costs one scan of a list that is at most
-    /// sixteen long.
+    /// [`Construct::ResolvedOntologyImport`] one, and a report that names neither gains the
+    /// resolved one. The only caller calls this exactly when the premise HAS imports, and the
+    /// survey can miss them: it is handed no IRI the premise was loaded under, so an import
+    /// anchored only on the premise document's own IRI (see [`purrdf_core::imports`]) is
+    /// one the chase never saw and the caller did resolve.
     ///
     /// # Why the swap happens here and not in `boundaries`
     ///
-    /// `boundaries` surveys the dataset the run was over, and on the [`entails`](crate::entails)
+    /// `boundaries` surveys the dataset the run was over, and on the [`entails`](fn@crate::entails)
     /// path that dataset is the MERGED premise — which still carries the `owl:imports`
     /// triples the merge resolved. So no survey of it can tell "resolved" from "not
     /// resolved", and the chase raises the honest-from-where-it-stands
@@ -1455,20 +1474,27 @@ impl ReasoningReport {
     ///
     /// The fact lives one level up, in a REFUSAL: `imports::resolve` returns
     /// [`EntailError::UnresolvedImport`](crate::EntailError) naming the first document its
-    /// map does not resolve, so a call that reached a chase at all is a call whose every
-    /// declared import was resolved and merged. That is the whole warrant for this method,
-    /// and it is why its only caller is the one that made the merge.
+    /// map does not resolve and the premise does not already contain, so a call that reached
+    /// a chase at all is a call whose every declared import was resolved. That is the whole
+    /// warrant for this method, and it is why its only caller is the one that resolved them.
     ///
     /// Order is preserved: the two constructs are adjacent in [`Construct`] declaration
     /// order and the boundary list is sorted by it, so swapping one for the other cannot
-    /// move a neighbour and two identical runs still render byte-identically.
-    pub(crate) fn with_resolved_imports(mut self) -> Self {
+    /// move a neighbour, an added one is sorted into place, and two identical runs still
+    /// render byte-identically.
+    ///
+    /// Public so a caller that resolved a premise's imports with
+    /// [`resolve_imports`](crate::resolve_imports) and then closed the result through a lane
+    /// of its own can say so. It must be called ONLY on a run whose imports that function
+    /// resolved — merged, or found already in the premise.
+    #[must_use]
+    pub fn with_resolved_imports(mut self) -> Self {
         for boundary in &mut self.boundaries {
             if boundary.construct() == Construct::UnresolvedOntologyImport {
                 *boundary = Boundary::of(Construct::ResolvedOntologyImport);
             }
         }
-        self
+        self.with_boundary(Construct::ResolvedOntologyImport)
     }
 
     /// The rules the run's calculus states that NO specification table does — exactly what
@@ -1503,7 +1529,7 @@ impl ReasoningReport {
         extensions(self.regime)
     }
 
-    /// What the run consumed of the three fixed evaluation ceilings.
+    /// What the run consumed, against the evaluation limits it ran under.
     ///
     /// The coordinates carry `purrdf-datalog`'s meanings: candidate conclusions
     /// enumerated, facts held when the run stopped, and interned term surface bytes. A
@@ -1515,10 +1541,14 @@ impl ReasoningReport {
 
     /// The identity of the calculus this closure was minted under.
     ///
-    /// Exactly `purrdf_datalog::cache::contract_hash(&calculus_program(regime))`. A
-    /// consumer holding a cached closure compares this against the hash of the calculus it
-    /// is willing to trust and refuses the closure if they differ — the point being that
-    /// the comparison is a digest, not two prose claims about rule coverage.
+    /// Exactly `purrdf_datalog::cache::contract_hash_with(&calculus_program(regime),
+    /// options)` for the evaluation limits the run was governed by — the current target's
+    /// defaults unless the caller stated others ([`crate::materialize_with`]). A consumer
+    /// holding a cached closure compares this against the hash of the calculus it is
+    /// willing to trust and refuses the closure if they differ — the point being that the
+    /// comparison is a digest, not two prose claims about rule coverage. Because the
+    /// effective limits are hashed, a closure minted natively under the native defaults
+    /// and one minted on `wasm32` under its defaults name different calculi.
     #[must_use]
     pub const fn contract_hash(&self) -> ContractHash {
         self.contract_hash
@@ -1810,13 +1840,16 @@ mod tests {
         use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral};
 
         use super::DatasetSurvey;
-        use crate::vocab::OWL_IMPORTS;
+        use crate::vocab::{OWL_IMPORTS, OWL_ONTOLOGY, RDF_TYPE};
 
         const NS: &str = "http://example.org/import-object#";
 
         for (what, object) in [("blank node", None), ("literal", Some("not-an-iri"))] {
             let mut b = RdfDatasetBuilder::new();
             let s = b.intern_iri(&format!("{NS}o"));
+            let rdf_type = b.intern_iri(RDF_TYPE);
+            let ontology = b.intern_iri(OWL_ONTOLOGY);
+            b.push_quad(s, rdf_type, ontology, None);
             let imports = b.intern_iri(OWL_IMPORTS);
             let o = match object {
                 None => b.intern_blank("target", BlankScope::DEFAULT),
@@ -1839,6 +1872,9 @@ mod tests {
         // question rather than answering it `false`.
         let mut b = RdfDatasetBuilder::new();
         let s = b.intern_iri(&format!("{NS}o"));
+        let rdf_type = b.intern_iri(RDF_TYPE);
+        let ontology = b.intern_iri(OWL_ONTOLOGY);
+        b.push_quad(s, rdf_type, ontology, None);
         let imports = b.intern_iri(OWL_IMPORTS);
         let o = b.intern_iri(&format!("{NS}other"));
         b.push_quad(s, imports, o, None);
@@ -1849,11 +1885,11 @@ mod tests {
     /// `DatasetSurvey::of` reports each of its three flags independently of the other two,
     /// across every one of the eight combinations.
     ///
-    /// This pins the survey's single loop: `named_graph`, `triple_term` and
-    /// `ontology_import` are each set from a distinct condition inside one pass over
-    /// `ds.quads().zip(ds.quad_refs())`, and the loop exits the moment all three are
-    /// settled rather than draining the rest of the dataset. Because the three fields are
-    /// monotonic OR accumulators, an early exit that fired on the wrong guard (or fired too
+    /// This pins the survey's loop: `named_graph` and `triple_term` are each set from a
+    /// distinct condition inside one pass over `ds.quad_refs()`, and the loop exits the
+    /// moment both are settled rather than draining the rest of the dataset, while
+    /// `ontology_import` is the kernel's import rule (an ontology header's `owl:imports`
+    /// here). Because the loop's fields are monotonic OR accumulators, an early exit that fired on the wrong guard (or fired too
     /// early) could only be caught by checking the FINAL flags against every combination of
     /// which conditions the dataset actually holds — a single "does it work at all" case
     /// would pass even with a guard that always breaks after the first quad. Every
@@ -1866,7 +1902,7 @@ mod tests {
         use purrdf_core::RdfDatasetBuilder;
 
         use super::DatasetSurvey;
-        use crate::vocab::OWL_IMPORTS;
+        use crate::vocab::{OWL_IMPORTS, OWL_ONTOLOGY, RDF_TYPE};
 
         const NS: &str = "http://example.org/dataset-survey#";
 
@@ -1898,6 +1934,9 @@ mod tests {
                     }
 
                     if ontology_import {
+                        let rdf_type = b.intern_iri(RDF_TYPE);
+                        let ontology = b.intern_iri(OWL_ONTOLOGY);
+                        b.push_quad(s, rdf_type, ontology, graph);
                         let imports = b.intern_iri(OWL_IMPORTS);
                         let other_doc = b.intern_iri(&format!("{NS}other-ontology"));
                         b.push_quad(s, imports, other_doc, graph);

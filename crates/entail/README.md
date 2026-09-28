@@ -115,9 +115,13 @@ rule with no conclusion can do.
   with every closure. It carries the regime's `Completeness` — *derived* from
   `rules(regime)` minus `implemented(regime)`, so it improves by itself as rules
   are added — which rules fired and how many conclusions each contributed, the
-  `Boundary`s the run met and why, what it consumed of the evaluation ceilings,
-  and the contract hash of the calculus it ran, so a cached closure minted under
-  a different rule set can be refused rather than trusted. A report that claims
+  `Boundary`s the run met and why, what it consumed against the evaluation
+  limits it ran under, and the contract hash of the calculus it ran under those
+  limits, so a cached closure minted under a different rule set, or under other
+  limits, can be refused rather than trusted. `materialize_with` states the
+  stored-fact and join-step limits (`EvalOptions`); `materialize` runs the target's
+  defaults — 4,194,304 facts and 1,048,576 join steps natively, 131,072 and
+  1,048,576 on `wasm32`. A report that claims
   `Exact` while naming a boundary is a test failure.
 * **wasm-clean and dependency-lean.** Dependencies are `purrdf-core`,
   `purrdf-datalog`, `purrdf-xsd`, `roxmltree`, `purrdf-hash`, and `hashbrown`'s raw
