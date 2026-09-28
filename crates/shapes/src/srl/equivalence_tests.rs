@@ -372,8 +372,8 @@ fn document(
                 SPARQL_RULES[rule.template]
             )
         };
-        let condition = CONDITIONS[rule.condition]
-            .map_or_default(|shape| format!(" ; sh:condition {shape}"));
+        let condition =
+            CONDITIONS[rule.condition].map_or_default(|shape| format!(" ; sh:condition {shape}"));
         writeln!(
             ttl,
             "ex:S{index} a sh:NodeShape ; {} ;\n  sh:rule [ {body}{condition} ; \
