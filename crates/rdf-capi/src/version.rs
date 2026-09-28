@@ -61,7 +61,7 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// recompiled once for all of them; splitting would have broken the same consumer four
 /// times for one reason.
 ///
-/// # `0.7.0` → `0.8.0`: twelve added symbols and an appended status
+/// # `0.7.0` → `0.8.0`: seventeen added symbols, eight changed ones and appended statuses
 ///
 /// The prepared-shapes-product surface exports eight new entry points —
 /// `purrdf_shapes_product_encode`, `_open`, `_admit`, `_admit_expecting`, `_rebuild`,
@@ -85,7 +85,7 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 ///
 /// It bumps anyway, and the reason is the sentence at the top of this comment rather
 /// than a judgement about additivity. `0.7.0` SHIPPED — it is the ABI of the released
-/// `2.0.0`, `2.0.1` and `2.0.2` libraries, which export twelve fewer symbols than this
+/// `2.0.0`, `2.0.1` and `2.0.2` libraries, which export seventeen fewer symbols than this
 /// one does. Leaving the triple still would mean two different shippable libraries
 /// answering `purrdf_abi_version` identically while exporting different surfaces, so a
 /// host that compiled against this header and loaded the older library would be told
@@ -94,7 +94,10 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// libraries is not answering it. Additive changes are cheap for the CONSUMER, not free
 /// for the VERSION.
 ///
-/// The same unshipped bump also carries four INCOMPATIBLE changes:
+/// The same unshipped bump also changes the signatures of eight symbols `0.7.0` shipped
+/// (`purrdf_shacl_validate_to_sarif`, `purrdf_shacl_entail_to_ntriples`, the four
+/// `purrdf_entail_*` services and `purrdf_query_entailment_governed`); every one is an
+/// INCOMPATIBLE change, described in the paragraphs below. The first four:
 /// `purrdf_shacl_validate_to_sarif` gained `conformance_disallows` /
 /// `conformance_disallows_count` — the SHACL 1.2 conformance-disallow set — between
 /// `data_nt` and `out_buffer`; and `purrdf_entail_certain_answers`,
@@ -158,6 +161,22 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `import_count` and `out_buffer` — `false` is the specification's default. Incompatible
 /// (a `0.7.0` host passes its out-pointer into the new slot); it rides this bump for the
 /// reason the others do.
+///
+/// The same unshipped bump closes an entailment premise's `owl:imports` on every entailment
+/// service. `purrdf_entail_materialize_to_nquads`, `purrdf_entail_consistency` and
+/// `purrdf_query_entailment_governed` gained `import_iris` / `import_documents` /
+/// `import_count` and `premise_iris` / `premise_iri_count`, and refuse an unresolved import
+/// or an unused table entry as the other entailment services do. The three
+/// conclusion-directed services and `purrdf_query_entailment_governed` gained
+/// `max_stored_facts` / `max_join_steps`, each a nullable `const uint64_t *`, after the
+/// premise IRIs; `purrdf_entail_consistency` keeps its `step_cap` / `work_cap`, which bound
+/// its tableau. All incompatible (a `0.7.0` host passes an out-pointer into a new slot),
+/// riding this bump. Two symbols this bump adds changed before shipping:
+/// `purrdf_shacl_validate_changes_to_sarif` gained `conformance_disallows` /
+/// `conformance_disallows_count` after `removed_nt` and `bool subclass_of_in_shapes_graph`
+/// after `import_count`, matching `purrdf_shacl_validate_to_sarif`; and
+/// `purrdf_shacl_eval_node_expr` gained a nullable `PurrdfBuffer **out_diagnostics`
+/// before `out_error`, as the rules entry points did.
 ///
 /// One of them is worth a second look regardless: appending a status is sound, but
 /// RENUMBERING one is invisible to `tests/abi_signatures.rs`, which compares prototypes
