@@ -45,11 +45,15 @@
 //! left the one operator who most needed the certificate with only an exit code.
 
 use purrdf_core::{DatasetView, RdfDataset};
-use purrdf_entail::{EntailError, Materialization, ReasoningReport, materialize_with};
+use purrdf_entail::{
+    EntailError, ImportMap, Materialization, ReasoningReport, materialize_with,
+    materialize_with_imports,
+};
 use purrdf_rdf::SourceFormat;
 use purrdf_validate::regime::{
     MaterializeLimits, regime_name, render_entail_error_for, render_reasoning_report,
 };
+use std::fmt::Write as _;
 use std::sync::Arc;
 
 use crate::cli::ReportTarget;
@@ -74,7 +78,82 @@ pub(crate) fn materialize_reported<D: DatasetView>(
     target: &ReportTarget,
 ) -> Result<Arc<RdfDataset>, CliError> {
     let regime = regime_name(plan.regime());
-    match materialize_with(dataset, plan, &limits.eval_options(), None) {
+    reported(
+        regime,
+        materialize_with(dataset, plan, &limits.eval_options(), None),
+        limits,
+        target,
+    )
+}
+
+/// [`materialize_reported`] over `premise` together with its `owl:imports` closure, the
+/// documents `--import IRI=FILE` supplied ([`purrdf_entail::materialize_with_imports`]).
+///
+/// An import no pair resolves is a runtime refusal (exit 1) naming the IRI and the pair
+/// that resolves it; a pair the closure never reaches is a USAGE error (exit 2) — the fault
+/// is in the command line — naming the pair and, when the premise does state the
+/// `owl:imports` on a node that anchors nothing, saying so. Both are the refusals
+/// `validate` gives a shapes graph's imports.
+pub(crate) fn materialize_reported_with_imports(
+    premise: &RdfDataset,
+    plan: Materialization<'_>,
+    imports: &ImportMap,
+    limits: &MaterializeLimits,
+    target: &ReportTarget,
+) -> Result<Arc<RdfDataset>, CliError> {
+    let regime = regime_name(plan.regime());
+    reported(
+        regime,
+        materialize_with_imports(premise, plan, imports, &limits.eval_options(), None),
+        limits,
+        target,
+    )
+}
+
+/// The usage error for `--import` pairs the premise's `owl:imports` closure never reaches:
+/// `iris`, of which `unanchored` are named by an `owl:imports` on a node that anchors
+/// nothing. Every entailment subcommand refuses an unused pair with this one message.
+pub(crate) fn unreached_import_refusal(iris: &[String], unanchored: &[String]) -> CliError {
+    let named = |iris: &[String]| {
+        iris.iter()
+            .map(|iri| format!("<{iri}>"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let mut message = format!(
+        "unreached-import: --import {}: the premise's import closure never reaches {it}, so \
+         {these} would be read and never used. Remove the pair, or import the IRI from the \
+         premise's ontology header",
+        named(iris),
+        it = if iris.len() == 1 { "it" } else { "them" },
+        these = if iris.len() == 1 {
+            "this document"
+        } else {
+            "these documents"
+        },
+    );
+    if !unanchored.is_empty() {
+        let _ = write!(
+            message,
+            ". The premise does state owl:imports {}, but on a subject that is not anchored — \
+             not the IRI the premise was read under, not an owl:Ontology header, not a \
+             sh:ShapesGraph, and not a node naming one of those as its owl:versionIRI — so \
+             that triple is a premise triple, not an import",
+            named(unanchored)
+        );
+    }
+    CliError::Usage(message)
+}
+
+/// Surface the report of a materialization run and hand back its closure, or render its
+/// refusal. See [`materialize_reported`].
+fn reported(
+    regime: &str,
+    outcome: Result<(Arc<RdfDataset>, ReasoningReport), EntailError>,
+    limits: &MaterializeLimits,
+    target: &ReportTarget,
+) -> Result<Arc<RdfDataset>, CliError> {
+    match outcome {
         Ok((closure, report)) => {
             surface(target, &report)?;
             Ok(closure)
@@ -97,6 +176,17 @@ pub(crate) fn materialize_reported<D: DatasetView>(
             &error,
             limits.host,
         ))),
+        Err(EntailError::UnresolvedImport(iri)) => Err(CliError::Runtime(format!(
+            "unresolved-import: the premise owl:imports <{iri}>, which no --import pair \
+             resolves and the premise does not contain. PurRDF fetches nothing the operator \
+             did not name, and closing over the premise without an imported ontology would \
+             close a different, smaller ontology than the one named. Pass `--import \
+             {iri}=FILE` to fold it in, or merge the imported ontology into the premise. If \
+             the premise IS <{iri}>, read it under that IRI with `--base {iri}`"
+        ))),
+        Err(EntailError::UnreachedImport { iris, unanchored }) => {
+            Err(unreached_import_refusal(&iris, &unanchored))
+        }
         Err(other) => Err(other.into()),
     }
 }
@@ -106,17 +196,23 @@ pub(crate) fn materialize_reported<D: DatasetView>(
 /// reasoner**: a pack source is seeded into the reasoner directly from its zero-copy
 /// `PackView`, and a text source parses to an `RdfDataset`. The shared entry point for
 /// `reason` and `convert --entailment`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is a distinct input the two callers already hold separately"
+)]
 pub(crate) fn materialize_reported_over_input(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
     policy: TransportPolicy,
     plan: Materialization<'_>,
+    imports: &crate::premise_imports::PremiseImports,
     limits: &MaterializeLimits,
     target: &ReportTarget,
 ) -> Result<Arc<RdfDataset>, CliError> {
     struct Op<'a> {
         plan: Materialization<'a>,
+        imports: &'a crate::premise_imports::PremiseImports,
         limits: &'a MaterializeLimits,
         target: &'a ReportTarget,
     }
@@ -125,7 +221,8 @@ pub(crate) fn materialize_reported_over_input(
         type Output = Arc<RdfDataset>;
 
         fn run<D: DatasetView + Sync>(self, view: &D) -> Result<Self::Output, CliError> {
-            materialize_reported(view, self.plan, self.limits, self.target)
+            self.imports
+                .materialize(view, self.plan, self.limits, self.target)
         }
     }
 
@@ -136,6 +233,7 @@ pub(crate) fn materialize_reported_over_input(
         policy,
         Op {
             plan,
+            imports,
             limits,
             target,
         },

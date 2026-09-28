@@ -428,6 +428,23 @@ pub enum EntailError {
     /// configuration, and its absence is a refusal that carries the IRI so the caller learns
     /// exactly which document to supply.
     UnresolvedImport(String),
+    /// The caller's [`ImportMap`] supplies documents no `owl:imports` in the premise's
+    /// closure names, so each would be read and never used.
+    ///
+    /// A supplied document is configuration the caller believes matters: an entry the
+    /// closure never reaches is a typo in an IRI, a document meant for another premise, or an
+    /// `owl:imports` the author stated on a node that anchors nothing — and answering without
+    /// it would answer a question the caller did not ask while reporting that it had used
+    /// what it was given. The SHACL engine refuses the same unused entry for a shapes graph.
+    UnreachedImport {
+        /// The unreached map keys, in IRI order.
+        iris: Vec<String>,
+        /// The unreached keys an `owl:imports` triple of the closure DOES name, on a
+        /// subject that is no anchor of the document it occurs in — so the triple is a
+        /// premise triple, not an import ([`ImportMap::unanchored_imports`]). A subset of
+        /// `iris`, in its order.
+        unanchored: Vec<String>,
+    },
     /// The premise's `owl:imports` closure holds two ontologies that are different versions
     /// of one ontology series, or of which one declares `owl:incompatibleWith` the other.
     ///
@@ -518,6 +535,36 @@ impl std::fmt::Display for EntailError {
                 "the premise owl:imports <{iri}>, which the supplied import map does not \
                  resolve and the premise does not contain"
             ),
+            Self::UnreachedImport { iris, unanchored } => {
+                let named = |iris: &[String]| {
+                    iris.iter()
+                        .map(|iri| format!("<{iri}>"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                write!(
+                    f,
+                    "the supplied import map resolves {}, which no owl:imports in the premise's \
+                     closure names, so {} would be read and never used; remove the {}, or \
+                     import the IRI from the premise's ontology header",
+                    named(iris),
+                    if iris.len() == 1 { "it" } else { "they" },
+                    if iris.len() == 1 { "entry" } else { "entries" },
+                )?;
+                if !unanchored.is_empty() {
+                    write!(
+                        f,
+                        ". The premise does state owl:imports {}, but on a subject that is not \
+                         anchored — not the IRI the premise was read under, not an \
+                         owl:Ontology header, not a sh:ShapesGraph, and not a node naming one \
+                         of those as its owl:versionIRI — so that triple is a premise triple, \
+                         not an import. State the owl:imports on the premise's ontology header \
+                         to import it",
+                        named(unanchored),
+                    )?;
+                }
+                Ok(())
+            }
             Self::IncompatibleImports(conflicts) => {
                 write!(
                     f,
@@ -564,7 +611,8 @@ impl std::error::Error for EntailError {
     ///
     /// The rest return `None` because they genuinely have no cause to name.
     /// `Build`, `Parse`, `MalformedList` and `UnresolvedImport` carry a `String` — a
-    /// rendered message, not an error value — `IncompatibleImports` carries the conflicting
+    /// rendered message, not an error value — `UnreachedImport` carries the unused table keys,
+    /// `IncompatibleImports` carries the conflicting
     /// pairs, which are the refusal itself rather than a cause of it, and `Unsatisfiable`, `MatchBudget` and
     /// `UnsupportedRegime` and `ProofsNotRecorded` are complete statements in themselves. `Inconsistent` carries
     /// an `InconsistentRun`, which is a WITNESS rather than a failure: it is evidence
@@ -583,6 +631,7 @@ impl std::error::Error for EntailError {
             | Self::Unsatisfiable
             | Self::UnsupportedRegime(_)
             | Self::UnresolvedImport(_)
+            | Self::UnreachedImport { .. }
             | Self::IncompatibleImports(_)
             | Self::MatchBudget
             | Self::ProofsNotRecorded
@@ -804,6 +853,48 @@ pub fn materialize_with<D: DatasetView>(
         }
     };
     Ok((closure, ReasoningReport::of_run(ds, regime, &stats)))
+}
+
+/// [`materialize_with`] over `premise` TOGETHER WITH its whole `owl:imports` closure, the
+/// documents supplied by `imports`.
+///
+/// OWL 2 defines an ontology's imports closure to BE the ontology, so a premise that
+/// imports a document is closed over the merge — exactly as [`entails()`] and
+/// [`certain_answers`] decide over it. Before anything is materialized the closure is
+/// resolved against `imports`, and three things refuse the whole call: an `owl:imports`
+/// nothing in hand resolves ([`EntailError::UnresolvedImport`]), a map entry the closure
+/// never reaches ([`EntailError::UnreachedImport`]) and two incompatible ontologies in the
+/// closure ([`EntailError::IncompatibleImports`]). An import is read off the premise's
+/// anchors — its ontology headers, its shapes graphs, the IRIs `imports` declares loaded
+/// ([`ImportMap::declare_loaded`], the IRI the premise was read under) and nodes versioning
+/// one of those; an `owl:imports` on any other node is a premise triple.
+///
+/// A premise that imports nothing and an empty map is [`materialize_with`] exactly. When the
+/// closure WAS resolved — merged, or found already in the premise — the report states the
+/// `ontology-import-resolved` boundary instead of the chase's `ontology-import-unresolved`,
+/// on the closure's report and on an inconsistent run's alike.
+///
+/// # Errors
+///
+/// The three import refusals above, then everything [`materialize_with`] refuses.
+pub fn materialize_with_imports(
+    premise: &RdfDataset,
+    plan: Materialization<'_>,
+    imports: &ImportMap,
+    options: &EvalOptions,
+    stop: Option<&Arc<dyn StopSignal>>,
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    let merged = entails::imports::resolve(premise, imports)?;
+    let resolved = merged.is_some() || !imports.imported_iris(premise).is_empty();
+    let run = match &merged {
+        Some(merged) => materialize_with(merged.as_ref(), plan, options, stop),
+        None => materialize_with(premise, plan, options, stop),
+    };
+    if !resolved {
+        return run;
+    }
+    run.map(|(closure, report)| (closure, report.with_resolved_imports()))
+        .map_err(entails::resolved_imports_error)
 }
 
 #[cfg(test)]

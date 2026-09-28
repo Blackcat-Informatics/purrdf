@@ -523,7 +523,7 @@ fn prepare(
 /// the absence of a run and has no boundary list to correct. Written as a total match so a
 /// later error that starts carrying a report has to decide here rather than silently ship the
 /// pre-merge boundary.
-fn resolved_imports_error(error: EntailError) -> EntailError {
+pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
     match error {
         EntailError::Inconsistent(run) => {
             let (witness, report) = run.into_parts();
@@ -539,6 +539,7 @@ fn resolved_imports_error(error: EntailError) -> EntailError {
         | EntailError::MalformedList(_)
         | EntailError::UnsupportedRegime(_)
         | EntailError::UnresolvedImport(_)
+        | EntailError::UnreachedImport { .. }
         | EntailError::IncompatibleImports(_)
         | EntailError::MatchBudget
         | EntailError::ProofsNotRecorded

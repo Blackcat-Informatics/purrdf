@@ -23,6 +23,14 @@
 //! where the CLI supplies it: `rif` reads its rule set from `--rules`, and `owl-direct`
 //! runs the query-independent tableau augmentation, because `reason` transforms a document
 //! and has no query for a query-directed one to be directed by.
+//!
+//! # The premise is its `owl:imports` closure
+//!
+//! OWL 2 defines an ontology's imports closure to BE the ontology, so `reason` closes the
+//! premise merged with every document its `owl:imports` name, each supplied by an
+//! `--import IRI=FILE` pair ([`crate::premise_imports`]): an import no pair resolves is
+//! refused by name, a pair the closure never reaches is refused as unused, and a premise
+//! that imports nothing runs over its zero-copy view exactly as before.
 
 use std::path::Path;
 
@@ -35,6 +43,7 @@ use crate::cli::{CliRdfFormat, CliRegime, LedgerTarget, ReportTarget};
 use crate::error::CliError;
 use crate::format;
 use crate::ledger;
+use crate::premise_imports::PremiseImports;
 use crate::report;
 use crate::sink;
 
@@ -165,6 +174,7 @@ pub(crate) fn run(
     regime: CliRegime,
     rules: Option<&Path>,
     limits: &MaterializeLimits,
+    imports: &[String],
     from: Option<CliRdfFormat>,
     to: Option<CliRdfFormat>,
     base: Option<&str>,
@@ -183,14 +193,22 @@ pub(crate) fn run(
     let target_format = format::resolve_target(to, output, "the --to target")?;
     // `--base` has two legs here — the source parse and the closure's serialization — and
     // is refused only when NEITHER can spend it.
-    format::refuse_unconsumable_base(
-        base,
-        &[
-            format::BaseUse::parse(source_format, "the --from source"),
-            format::BaseUse::serialize(target_format, "the --to target"),
-        ],
-    )?;
+    // `--import` documents parse under `--base` too, so each is a parse leg.
+    let import_legs = PremiseImports::base_legs(imports, from)?;
+    let mut legs = vec![
+        format::BaseUse::parse(source_format, "the --from source"),
+        format::BaseUse::serialize(target_format, "the --to target"),
+    ];
+    legs.extend(
+        import_legs
+            .iter()
+            .map(|(format, role)| format::BaseUse::parse(*format, role)),
+    );
+    format::refuse_unconsumable_base(base, &legs)?;
     sink::validate_jsonld_options(target_format, jsonld_options)?;
+    // The premise's `owl:imports` closure: every pair decided and read before the reasoner
+    // runs, so an unreadable or malformed pair fails against the command line.
+    let premise_imports = PremiseImports::read(imports, from, base, &[(input, source_format)])?;
 
     // The closure goes to the sink and the report goes to `--report`: `reason` writes RDF,
     // and the evidence of what produced it is a second output rather than a discarded one.
@@ -203,6 +221,7 @@ pub(crate) fn run(
         base,
         crate::source::TransportPolicy::Detect,
         plan.materialization(),
+        &premise_imports,
         limits,
         report_target,
     )?;

@@ -337,6 +337,19 @@ pub(crate) enum Command {
         /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
         max_join_steps: Option<u64>,
+        /// An `owl:imports` the premise declares, resolved to a local document:
+        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+        /// imports closure to BE the ontology, so the `--entailment` closure is
+        /// materialized over the premise — the merged sources — with every imported document. PurRDF fetches nothing: an
+        /// `owl:imports` no pair resolves, that does not name the premise document itself
+        /// (a source's `file://` retrieval IRI or `--base`), and whose ontology the premise does
+        /// not already hold, is refused by name (exit 1), and a pair the closure never
+        /// reaches is refused as unused (exit 2). The premise's imports are the
+        /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+        /// other is a premise triple. The IRI half must be ABSOLUTE.
+        #[arg(long = "import", value_name = "IRI=FILE", requires = "entailment")]
+        imports: Vec<String>,
         /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. Canonical output is
         /// always N-Quads, so `--to` may be omitted — and is REFUSED (not silently
         /// ignored) when named beside `--canonical`, since it would otherwise be
@@ -580,7 +593,21 @@ pub(crate) enum Command {
         /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
         #[arg(long = "max-join-steps", value_name = "N")]
         max_join_steps: Option<u64>,
-        /// Input format override; inferred from the input extension when omitted.
+        /// An `owl:imports` the premise declares, resolved to a local document:
+        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+        /// imports closure to BE the ontology, so the closure is materialized over the
+        /// premise merged with every imported document. PurRDF fetches nothing: an
+        /// `owl:imports` no pair resolves, that does not name the premise document itself
+        /// (its `file://` retrieval IRI or `--base`), and whose ontology the premise does
+        /// not already hold, is refused by name (exit 1), and a pair the closure never
+        /// reaches is refused as unused (exit 2). The premise's imports are the
+        /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+        /// other is a premise triple. The IRI half must be ABSOLUTE.
+        #[arg(long = "import", value_name = "IRI=FILE")]
+        imports: Vec<String>,
+        /// Input format override (the input and every `--import` document); inferred from
+        /// each path's extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
         /// Output format override; inferred from the output extension when omitted.

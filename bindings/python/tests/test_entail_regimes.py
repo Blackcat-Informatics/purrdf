@@ -1222,3 +1222,39 @@ def test_the_python_enum_has_exactly_the_seven_members_these_tests_range_over() 
         "seven; a member on one side and not the other is untested surface"
     )
     assert len(exported) == len(ALL_REGIMES) == len(REGIME_CALLS) == 7
+
+
+def test_every_conclusion_directed_service_refuses_an_unreached_import_pair() -> None:
+    """A pair the premise's ``owl:imports`` closure never names raises ``ValueError``
+    naming it, on all three services; the importing neighbour answers from it."""
+    lib = "http://example.org/lib"
+    schema = (
+        "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> "
+        "<http://example.org/B> .\n"
+    )
+    fact = (
+        "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://example.org/A> .\n"
+    )
+    importing = (
+        "<http://example.org/o> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://www.w3.org/2002/07/owl#Ontology> .\n"
+        f"<http://example.org/o> <http://www.w3.org/2002/07/owl#imports> <{lib}> .\n" + fact
+    )
+    conclusion = (
+        "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://example.org/B> .\n"
+    )
+    pattern = "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n"
+    table = [(lib, schema)]
+    for service, question in (
+        (entail.graph_entails, conclusion),
+        (entail.verify_entailment, conclusion),
+        (entail.certain_answers, pattern),
+    ):
+        with pytest.raises(ValueError) as refused:
+            service("rdfs", fact, question, table, [])
+        assert f"<{lib}>" in str(refused.value), str(refused.value)
+        assert "would be read and never used" in str(refused.value), str(refused.value)
+        answer, _ = service("rdfs", importing, question, table, [])
+        assert answer.startswith("mechanism "), answer

@@ -967,6 +967,14 @@ def _swap(text: str, old: str, new: str) -> str:
     return text.replace(old, new, 1)
 
 
+def _swap_after(text: str, anchor: str, old: str, new: str) -> str:
+    """`text` with the first `old` AFTER the first `anchor` replaced by `new`."""
+    if anchor not in text:
+        raise SystemExit(f"{anchor!r} is no longer there")
+    head, tail = text.split(anchor, 1)
+    return head + anchor + _swap(tail, old, new)
+
+
 def _undecorate(text: str, attribute: str, declaration: str) -> str:
     """`text` with the ONE `attribute` line that decorates `declaration` removed.
 
@@ -1194,8 +1202,12 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
     (
         "a boundary parameter loses its CLI flag",
         "crates/cli/src/cli.rs",
-        lambda text: _swap(
+        # `reason` takes an identically spelled `--import`, and it is declared first, so the
+        # mutation is aimed at the `entails` variant's own flag: stripping another
+        # subcommand's would leave this surface whole and prove nothing.
+        lambda text: _swap_after(
             text,
+            "    Entails {\n",
             '#[arg(long = "import", value_name = "IRI=FILE")]',
             '#[arg(value_name = "IRI=FILE")]',
         ),

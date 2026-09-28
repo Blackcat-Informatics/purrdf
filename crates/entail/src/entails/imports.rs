@@ -153,15 +153,17 @@ pub fn rif_resolver(
 /// (`an_imported_document_is_itself_checked_for_imports` is the falsifiable form), and a
 /// cycle terminates without refusing, because OWL 2 §3.4 permits one.
 ///
-/// A supplied document the closure never reaches is NOT refused here: an entailment
-/// [`ImportMap`] is a table of what the caller's ontology IRIs denote, shared with the RIF
-/// lane ([`rif_resolver`]), and a document one lane never reaches may be the one the other
-/// does.
+/// A supplied document the closure never reaches IS refused, exactly as the SHACL engine
+/// refuses an unused entry for a shapes graph: the caller named it, and answering without it
+/// would report a question over configuration that was silently ignored. The RIF lane's
+/// imports ([`rif_resolver`]) are resolved by that lane from the rule document's own
+/// `Import` locations, never through this function, so no entry here is kept for it.
 ///
 /// # Errors
 ///
 /// [`EntailError::UnresolvedImport`] naming the first ontology IRI, in import order, that
-/// neither `map` nor the closure resolves; [`EntailError::IncompatibleImports`] naming every
+/// neither `map` nor the closure resolves; [`EntailError::UnreachedImport`] naming every map
+/// entry the closure never reaches; [`EntailError::IncompatibleImports`] naming every
 /// pair of ontologies of the closure that are two versions of one series or of which one
 /// declares `owl:incompatibleWith` the other (OWL 2 §3.4); [`EntailError::Build`] if the
 /// merged dataset cannot be frozen.
@@ -172,6 +174,21 @@ pub(crate) fn resolve(
     let closure = map.closure(premise);
     if let Some(iri) = closure.unresolved().first() {
         return Err(EntailError::UnresolvedImport(iri.clone()));
+    }
+    if !closure.unreached().is_empty() {
+        let iris = closure.unreached().to_vec();
+        // COLD: only the refusal pays for the survey, to say why the entry is unused.
+        let surveyed = map.unanchored_imports(premise);
+        let unanchored = iris
+            .iter()
+            .filter(|iri| {
+                surveyed.iter().any(|entry| {
+                    matches!(&entry.object, purrdf_core::TermValue::Iri(object) if object == *iri)
+                })
+            })
+            .cloned()
+            .collect();
+        return Err(EntailError::UnreachedImport { iris, unanchored });
     }
     if !closure.conflicts().is_empty() {
         return Err(EntailError::IncompatibleImports(
@@ -250,9 +267,156 @@ mod tests {
         assert_eq!(conflicts.len(), 1);
         assert_eq!(conflicts[0].first.as_deref(), Some(V1));
         assert_eq!(conflicts[0].second.as_deref(), Some(V2));
+        let mut one = ImportMap::new();
+        one.insert(V2, version(V2));
         assert!(
-            resolve(&document("b", "http://example.org/o", &[V2]), &map)
+            resolve(&document("b", "http://example.org/o", &[V2]), &one)
                 .expect("one version")
+                .is_some()
+        );
+        // The same two-entry map beside a premise importing only one version refuses the
+        // entry nothing reaches rather than silently leaving it unused.
+        let Err(EntailError::UnreachedImport { iris, .. }) =
+            resolve(&document("b", "http://example.org/o", &[V2]), &map)
+        else {
+            panic!("an entry nothing imports must refuse");
+        };
+        assert_eq!(iris, [V1]);
+    }
+
+    /// [`crate::materialize_with_imports`] closes the premise OVER its imports: an axiom in
+    /// the imported document fires on a premise fact, and the report states the import
+    /// resolved. The same premise with no document is refused by name, never closed as a
+    /// smaller premise; with a document nothing imports, the entry is refused as unused.
+    #[test]
+    fn materialize_with_imports_closes_over_the_merge_and_refuses_what_it_cannot_use() {
+        const LIB: &str = "http://example.org/lib";
+        const SUB: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+        let triple = |b: &mut RdfDatasetBuilder, s: &str, p: &str, o: &str| {
+            let (s, p, o) = (b.intern_iri(s), b.intern_iri(p), b.intern_iri(o));
+            b.push_quad(s, p, o, None);
+        };
+        let premise = |imports: bool| {
+            let mut b = RdfDatasetBuilder::new();
+            triple(&mut b, "http://example.org/o", RDF_TYPE, OWL_ONTOLOGY);
+            if imports {
+                triple(&mut b, "http://example.org/o", OWL_IMPORTS, LIB);
+            }
+            triple(
+                &mut b,
+                "http://example.org/x",
+                RDF_TYPE,
+                "http://example.org/A",
+            );
+            b.freeze().expect("freeze")
+        };
+        let schema = {
+            let mut b = RdfDatasetBuilder::new();
+            triple(&mut b, "http://example.org/A", SUB, "http://example.org/B");
+            b.freeze().expect("freeze")
+        };
+        let mut map = ImportMap::new();
+        map.insert(LIB, schema);
+        let options = purrdf_datalog::seminaive::EvalOptions::default();
+        let run = |premise: &RdfDataset, map: &ImportMap| {
+            crate::materialize_with_imports(
+                premise,
+                crate::Materialization::Rdfs,
+                map,
+                &options,
+                None,
+            )
+        };
+
+        let (closure, report) = run(&premise(true), &map).expect("the import resolves");
+        let b_class = closure
+            .term_id_by_value(&TermValue::iri("http://example.org/B"))
+            .expect("the imported axiom's class reached the closure");
+        let x = closure
+            .term_id_by_value(&TermValue::iri("http://example.org/x"))
+            .expect("x");
+        assert!(
+            closure.quads().any(|quad| quad.s == x && quad.o == b_class),
+            "x a B is entailed only through the imported axiom"
+        );
+        let rendered = format!("{report:?}");
+        assert!(
+            rendered.contains("ResolvedOntologyImport")
+                && !rendered.contains("UnresolvedOntologyImport"),
+            "{rendered}"
+        );
+
+        assert!(matches!(
+            run(&premise(true), &ImportMap::new()),
+            Err(EntailError::UnresolvedImport(iri)) if iri == LIB
+        ));
+        assert!(matches!(
+            run(&premise(false), &map),
+            Err(EntailError::UnreachedImport { iris, .. }) if iris == [LIB]
+        ));
+        // The import-free neighbour with no table is `materialize_with` exactly.
+        let plain = run(&premise(false), &ImportMap::new()).expect("nothing to resolve");
+        let direct = crate::materialize_with(
+            premise(false).as_ref(),
+            crate::Materialization::Rdfs,
+            &options,
+            None,
+        )
+        .expect("the plain run");
+        assert_eq!(plain.0.quads().count(), direct.0.quads().count());
+    }
+
+    /// A map entry no `owl:imports` of the closure names is refused by name — never read and
+    /// silently unused. When the premise DOES state the `owl:imports`, but on a node that
+    /// anchors nothing, the refusal says so; the observing neighbour anchors the very same
+    /// triple (the node is typed `owl:Ontology`) and the same entry is merged.
+    #[test]
+    fn an_unreached_entry_is_refused_and_an_anchored_import_of_it_merges() {
+        const LIB: &str = "http://example.org/lib";
+        let premise = |anchored: bool| {
+            let mut b = RdfDatasetBuilder::new();
+            let node = b.intern_iri("http://example.org/node");
+            let imports = b.intern_iri(OWL_IMPORTS);
+            let lib = b.intern_iri(LIB);
+            b.push_quad(node, imports, lib, None);
+            if anchored {
+                let rdf_type = b.intern_iri(RDF_TYPE);
+                let owl_ontology = b.intern_iri(OWL_ONTOLOGY);
+                b.push_quad(node, rdf_type, owl_ontology, None);
+            }
+            b.freeze().expect("freeze")
+        };
+        let mut map = ImportMap::new();
+        map.insert(LIB, document("b", "http://example.org/lib-said", &[]));
+
+        let Err(refusal) = resolve(&premise(false), &map) else {
+            panic!("an entry only an unanchored triple names is never reached");
+        };
+        let EntailError::UnreachedImport { iris, unanchored } = &refusal else {
+            panic!("{refusal}");
+        };
+        assert_eq!(iris, &[LIB]);
+        assert_eq!(unanchored, &[LIB]);
+        let message = refusal.to_string();
+        assert!(
+            message.contains("would be read and never used") && message.contains("not anchored"),
+            "{message}"
+        );
+
+        let bare = resolve(&document("b", "http://example.org/o", &[]), &map)
+            .expect_err("an entry nothing names at all");
+        assert!(
+            matches!(&bare, EntailError::UnreachedImport { unanchored, .. } if unanchored.is_empty()),
+            "{bare}"
+        );
+        assert!(!bare.to_string().contains("not anchored"), "{bare}");
+
+        let merged = resolve(&premise(true), &map)
+            .expect("the anchored import resolves")
+            .expect("and is merged");
+        assert!(
+            merged
+                .term_id_by_value(&TermValue::iri("http://example.org/lib-said"))
                 .is_some()
         );
     }
@@ -854,8 +1018,8 @@ mod tests {
     /// An `owl:imports` on the IRI the premise was loaded under is an import: unsupplied it
     /// is refused; supplied, the conclusion only the imported schema licenses is entailed and
     /// the report says the closure was resolved. The neighbour declares no loaded IRI, so the
-    /// very same triple is data: nothing is refused, the supplied schema is never merged, and
-    /// the same conclusion is NOT entailed.
+    /// very same triple is data: a supplied schema is refused as an entry nothing imports, and
+    /// with no table nothing is refused and the same conclusion is NOT entailed.
     #[test]
     fn an_import_on_the_loaded_iri_counts_and_without_it_the_triple_is_data() {
         use crate::report::Construct;
@@ -881,14 +1045,25 @@ mod tests {
             "{constructs:?}"
         );
 
-        let (entailed, constructs) = run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &schema_map())
-            .expect("with no loaded IRI the triple is data");
+        // With no loaded IRI the triple is data, so a supplied schema is an entry nothing
+        // imports: refused as unused, naming the unanchored triple, never silently dropped.
+        let Err(EntailError::UnreachedImport { iris, unanchored }) =
+            run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &schema_map())
+        else {
+            panic!("a schema only a data triple names is refused as unused");
+        };
+        assert_eq!(
+            (iris, unanchored),
+            (vec![LIB.to_owned()], vec![LIB.to_owned()])
+        );
+        let (entailed, constructs) = run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &ImportMap::new())
+            .expect("with no loaded IRI and no table the triple is data");
         assert!(
             !entailed,
             "the schema was not imported, so its axiom took no part"
         );
         assert!(!constructs.contains(&Construct::ResolvedOntologyImport));
-        let (entailed, _) = run(&premise, &[(DOC, OWL_IMPORTS, LIB)], &schema_map())
+        let (entailed, _) = run(&premise, &[(DOC, OWL_IMPORTS, LIB)], &ImportMap::new())
             .expect("with no loaded IRI the triple is data");
         assert!(entailed, "the triple is still in the premise");
     }
@@ -985,9 +1160,9 @@ mod tests {
     }
 
     /// The neighbour: a node whose only graph role is `sh:DataGraph` imports nothing (SHACL
-    /// 1.2 Core §6.2). Nothing is refused, the supplied schema is never merged — so the
-    /// conclusion only it licenses is NOT entailed — and the `owl:imports` triple is itself
-    /// entailed, because it is premise data.
+    /// 1.2 Core §6.2). A supplied schema is refused as an entry nothing imports; with no table
+    /// nothing is refused — the conclusion only the schema licenses is NOT entailed — and the
+    /// `owl:imports` triple is itself entailed, because it is premise data.
     #[test]
     fn a_data_graph_only_node_imports_nothing_in_entailment() {
         use crate::report::Construct;
@@ -996,7 +1171,16 @@ mod tests {
             (OTHER_NODE, RDF_TYPE, SH_DATA_GRAPH),
             (OTHER_NODE, OWL_IMPORTS, LIB),
         ]);
-        let (entailed, constructs) = run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &schema_map())
+        let Err(EntailError::UnreachedImport { iris, unanchored }) =
+            run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &schema_map())
+        else {
+            panic!("a schema only a data-graph triple names is refused as unused");
+        };
+        assert_eq!(
+            (iris, unanchored),
+            (vec![LIB.to_owned()], vec![LIB.to_owned()])
+        );
+        let (entailed, constructs) = run(&premise, &[(TOM, RDF_TYPE, ANIMAL)], &ImportMap::new())
             .expect("a data-graph import is not refused");
         assert!(!entailed, "the schema was not imported");
         assert!(!constructs.contains(&Construct::ResolvedOntologyImport));

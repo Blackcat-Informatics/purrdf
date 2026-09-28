@@ -632,14 +632,15 @@ impl Construct {
             Self::UnresolvedOntologyImport => {
                 "owl:imports names another ontology DOCUMENT, and OWL 2's imports closure \
                  is the union of the importing ontology with every document it transitively \
-                 names. NOTHING RESOLVED THOSE DOCUMENTS FOR THIS RUN: a materialization \
-                 takes no import map and the OWL-Direct reverse mapping reads the dataset it \
-                 was handed, and PurRDF fetches neither — it performs no I/O, has no network \
-                 and must stay wasm32-clean. So the imported axioms are premises this run \
-                 did NOT have, and what was closed is a smaller ontology than the one the \
-                 author wrote. A caller who wants them supplies them: \
-                 purrdf_entail::entails takes an ImportMap, merges the named documents into \
-                 the premise before the chase starts, and such a run raises \
+                 names. NOTHING RESOLVED THOSE DOCUMENTS FOR THIS RUN: it was a materialization \
+                 given no import map (materialize, materialize_with) or the OWL-Direct \
+                 reverse mapping, which reads the dataset it was handed, and PurRDF fetches \
+                 neither — it performs no I/O, has no network and must stay wasm32-clean. So \
+                 the imported axioms are premises this run did NOT have, and what was closed \
+                 is a smaller ontology than the one the author wrote. A caller who wants them \
+                 supplies them: purrdf_entail::materialize_with_imports, entails and \
+                 certain_answers take an ImportMap, merge the named documents into the \
+                 premise before the chase starts, and such a run raises \
                  ontology-import-resolved instead of this — which is the token that says the \
                  axioms WERE here. This one is what stops a run pretending a merge it never \
                  made already happened"
@@ -647,7 +648,8 @@ impl Construct {
             Self::ResolvedOntologyImport => {
                 "owl:imports names another ontology DOCUMENT, and OWL 2's imports closure is \
                  the union of the importing ontology with every document it transitively \
-                 names. THIS RUN HAD THAT CLOSURE: purrdf_entail::entails resolved every \
+                 names. THIS RUN HAD THAT CLOSURE: the run (purrdf_entail::entails, \
+                 certain_answers or materialize_with_imports) resolved every \
                  imported ontology before the chase started — either already IN the premise \
                  (its owl:Ontology header, a sh:ShapesGraph it declares, an owl:versionIRI \
                  naming it, or the premise document's own IRI) or supplied by the \

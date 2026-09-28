@@ -811,6 +811,7 @@ pub fn render_entail_error_for(regime: &str, error: &EntailError, host: RegimeHo
         | EntailError::MalformedList(_)
         | EntailError::UnsupportedRegime(_)
         | EntailError::UnresolvedImport(_)
+        | EntailError::UnreachedImport { .. }
         | EntailError::IncompatibleImports(_)
         | EntailError::MatchBudget
         | EntailError::Unsatisfiable => head,
@@ -6985,6 +6986,42 @@ _:l2 <http://www.w3.org/1999/02/22-rdf-syntax-ns#rest> \
     /// The conclusion only the imports closure reaches.
     const IMPORTED_CONCLUSION: &str = "<http://example.org/socrates> \
 <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Mortal> .\n";
+
+    /// ALL THREE conclusion-directed services refuse an import-table entry the premise's
+    /// closure never names — the entry would be read and never used — and the neighbour
+    /// whose premise imports it answers from it.
+    #[test]
+    fn every_conclusion_directed_service_refuses_an_unreached_import_entry() {
+        let imports = [("http://example.org/schema", IMPORTED_SCHEMA)];
+        let plain = "<http://example.org/socrates> \
+<http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Man> .\n";
+        let services: [(&str, ServiceFn); 3] = [
+            ("certain answers", certain_answers_to_string),
+            ("graph entails", graph_entails_to_string),
+            ("verify", verify_entailment_to_string),
+        ];
+        for (name, service) in services {
+            let refused = service("owl-rl", plain, IMPORTED_CONCLUSION, &imports, &[])
+                .expect_err("an entry nothing imports is refused");
+            assert!(
+                refused.contains("<http://example.org/schema>")
+                    && refused.contains("would be read and never used"),
+                "{name}: {refused}"
+            );
+            service(
+                "owl-rl",
+                IMPORTING_PREMISE,
+                IMPORTED_CONCLUSION,
+                &imports,
+                &[],
+            )
+            .unwrap_or_else(|error| panic!("{name}: the importing premise uses it: {error}"));
+        }
+    }
+
+    /// One of the three conclusion-directed services' string signatures.
+    type ServiceFn =
+        fn(&str, &str, &str, &ImportList<'_>, &[&str]) -> Result<ReasoningAnswer, String>;
 
     /// ALL THREE conclusion-directed services take the caller's import table, and answer
     /// from the imports closure over the premise AS WRITTEN.

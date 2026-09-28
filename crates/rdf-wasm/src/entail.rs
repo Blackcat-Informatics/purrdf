@@ -713,7 +713,9 @@ pub(crate) fn certain_answers_impl(
 /// those documents arrive and the `owl:imports` triple stays exactly where the caller wrote
 /// it. **PurRDF fetches nothing**: an ontology IRI the table does not resolve, and the premise
 /// does not already hold (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an
-/// `owl:versionIRI` naming it), throws by name, never a network access and never a silently empty import. Two empty arrays are the
+/// `owl:versionIRI` naming it), throws by name, never a network access and never a silently empty import; an entry the
+/// premise's import closure never names throws too, since it would be read and never used.
+/// Two empty arrays are the
 /// ordinary "imports nothing" case, and both are required rather than defaulted.
 ///
 /// `premiseIris` are the IRIs the premise DOCUMENT was read from — its retrieval IRI, or the
@@ -1369,6 +1371,53 @@ mod tests {
             let answered = service("simple", &premise, question, &[], &[], &named)
                 .expect("a declared premise IRI resolves the self-import");
             assert!(answered.answer().starts_with("mechanism strict-table\n"));
+        }
+    }
+
+    /// Every conclusion-directed service on this host refuses an import-table entry the
+    /// premise's closure never names, naming it; the neighbour premise that imports it
+    /// answers from it.
+    #[test]
+    fn wasm_entail_unreached_import() {
+        const LIB: &str = "http://example.org/lib";
+        let schema = "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> \
+            <http://example.org/B> .\n";
+        let fact = "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+            <http://example.org/A> .\n";
+        let importing = format!(
+            "<http://example.org/o> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://www.w3.org/2002/07/owl#Ontology> .\n\
+             <http://example.org/o> <http://www.w3.org/2002/07/owl#imports> <{LIB}> .\n{fact}"
+        );
+        let conclusion = "<http://example.org/x> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .\n";
+        let pattern = "<http://example.org/x> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
+        let iris = [LIB.to_owned()];
+        let documents = [schema.to_owned()];
+        type Service = fn(
+            &str,
+            &str,
+            &str,
+            &[String],
+            &[String],
+            &[String],
+        ) -> Result<ReasoningAnswer, String>;
+        let services: [(Service, &str); 3] = [
+            (graph_entails_impl, conclusion),
+            (verify_entailment_impl, conclusion),
+            (certain_answers_impl, pattern),
+        ];
+        for (service, question) in services {
+            let refused = service("rdfs", fact, question, &iris, &documents, &[])
+                .expect_err("an entry nothing imports is refused");
+            assert!(
+                refused.contains(&format!("<{LIB}>"))
+                    && refused.contains("would be read and never used"),
+                "{refused}"
+            );
+            service("rdfs", &importing, question, &iris, &documents, &[])
+                .expect("the importing premise uses the entry");
         }
     }
 

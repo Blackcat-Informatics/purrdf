@@ -98,6 +98,7 @@ mod ingest;
 mod ledger;
 mod pack;
 mod path_relation;
+mod premise_imports;
 mod projection;
 mod query;
 mod reason;
@@ -201,6 +202,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             report,
             max_stored_facts,
             max_join_steps,
+            imports,
             canonical,
             input,
             output,
@@ -214,6 +216,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
                 entailment: *entailment,
                 rules: rules.as_deref(),
                 limits: cli_materialize_limits(*max_stored_facts, *max_join_steps),
+                imports,
                 canonical: *canonical,
                 jsonld_options: jsonld_options.as_ref(),
             },
@@ -310,6 +313,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             report,
             max_stored_facts,
             max_join_steps,
+            imports,
             from,
             to,
             base,
@@ -319,6 +323,7 @@ fn dispatch(cli: &Cli) -> Result<CliOutcome, CliError> {
             *regime,
             rules.as_deref(),
             &cli_materialize_limits(*max_stored_facts, *max_join_steps),
+            imports,
             *from,
             *to,
             base.as_deref(),

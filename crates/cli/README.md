@@ -96,7 +96,8 @@ arriving on stdin is read into a buffer and verified the same way. A `pack → p
 ## `convert`
 
 ```text
-purrdf convert [--from <F>] [--to <F>] [--base <IRI>] [--entailment <R>] [--canonical] [IN] [OUT]
+purrdf convert [--from <F>] [--to <F>] [--base <IRI>] [--entailment <R>] [--import <IRI>=<FILE>]...
+               [--canonical] [IN] [OUT]
 ```
 
 Transcode a source into a target syntax or the pack container.
@@ -112,6 +113,9 @@ Transcode a source into a target syntax or the pack container.
 - `--max-stored-facts <N>` / `--max-join-steps <N>` — the evaluation limits
   `--entailment` runs under, exactly as on [`reason`](#reason); each requires
   `--entailment`.
+- `--import <IRI>=<FILE>` — repeatable; resolves one `owl:imports` of the premise
+  (the merged sources) to a local document, exactly as on [`reason`](#reason), so
+  `--entailment` closes the whole imports closure. Requires `--entailment`.
 - `--canonical` — emit the RDFC-1.0 canonical N-Quads document instead of `--to`.
   Canonical output is **always** N-Quads, so `--canonical` overrides (and lets you
   omit) `--to`.
@@ -321,7 +325,7 @@ purrdf query --data people.ttl --entailment rdfs \
 
 ```text
 purrdf reason --regime <R> [--rules <FILE>] [--max-stored-facts <N>] [--max-join-steps <N>]
-              [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
+              [--import <IRI>=<FILE>]... [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
 ```
 
 Materialize an entailment regime's closure over the source graph and write it out.
@@ -339,9 +343,25 @@ Materialize an entailment regime's closure over the source graph and write it ou
   `IN`/`OUT` extension when omitted. `IN`/`OUT` default to `-` (stdin/stdout); a
   path of `-` has no extension, so it **requires** the matching explicit
   `--from`/`--to`.
+- `--import <IRI>=<FILE>` — repeatable; resolves one `owl:imports` of the premise
+  to a local document, followed transitively (see below). `--from` and `--base`
+  apply to each `--import` document too.
 - `--base <IRI>` — base IRI for the input parse, also threaded into the serializer.
 
-**Regimes the CLI materializes — all seven. None is refused.**
+**The premise is its `owl:imports` closure.** OWL 2 defines an ontology's imports
+closure to *be* the ontology, so `reason` (and `convert --entailment`) close the
+premise merged with every document its `owl:imports` name. **PurRDF fetches
+nothing**: each `--import` pair resolves one ontology IRI to one local document. An
+`owl:imports` no pair resolves, that does not name the premise document itself
+(its `file://` retrieval IRI or `--base`), and whose ontology the premise does not
+already hold, is refused by name (exit 1), with the pair that resolves it — never
+closed as a smaller premise. A pair the closure never reaches is a usage error
+(exit 2): it would be read and never used; when the premise does state that
+`owl:imports` on a node that anchors nothing, the refusal says so. The imports read
+are the ones `entails` and `validate` read (see [`entails`](#entails)). The report
+of a run whose imports were resolved states `boundary ontology-import-resolved`. A
+premise that imports nothing, with no pair, runs exactly as before — a pack over its
+zero-copy view.
 
 | `--regime` | Meaning | `--rules` |
 |---|---|---|
@@ -483,8 +503,9 @@ resolves one ontology IRI to one local document; an `owl:imports` no pair resolv
 that does not name the premise document itself (its `file://` retrieval IRI or
 `--base`), and whose ontology the premise does not already hold (`<X> a
 owl:Ontology`, `<X> a sh:ShapesGraph`, or an `owl:versionIRI` naming it), is
-refused by name (exit 1) rather than treated as an empty document. The
-`owl:imports` read are the ones `shapes lint` and `validate` read: on the premise
+refused by name (exit 1) rather than treated as an empty document, and a pair the
+premise's closure never reaches is refused as unused (exit 2), as `validate` refuses
+one. The `owl:imports` read are the ones `shapes lint` and `validate` read: on the premise
 document's own IRI, on an `owl:Ontology` header, on a `sh:ShapesGraph`
 (`sh:RulesGraph` and subclasses included), or on a node naming one of those as
 its `owl:versionIRI`; an `owl:imports` on any other node — one that is only a

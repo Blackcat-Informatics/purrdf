@@ -115,7 +115,12 @@ the question rather than of any host:
   (`premiseIris` in JavaScript), the IRIs the caller read the premise from, `[]` for
   bare text — or a graph the premise already holds (`<X> a owl:Ontology`,
   `<X> a sh:ShapesGraph`, or an `owl:versionIRI` naming it). Any other unresolved
-  import is a refusal naming the document, never a silently truncated premise.
+  import is a refusal naming the document, never a silently truncated premise, and
+  a table entry the premise's closure never reaches is refused too — it would be
+  read and never used — on every host, as SHACL validation refuses an unused
+  shapes-graph entry. The command line's `reason` and `convert --entailment` take
+  the same `--import IRI=FILE` pairs and close the merged premise under the same
+  rule (Rust: `materialize_with_imports`).
   The `owl:imports` read are the same ones SHACL validation reads: on the premise's
   own IRI, on an `owl:Ontology` header, on a `sh:ShapesGraph` (`sh:RulesGraph` and
   subclasses included), or on a node naming one of those as its `owl:versionIRI`.

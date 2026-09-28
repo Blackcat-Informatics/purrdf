@@ -1619,7 +1619,9 @@ int32_t purrdf_entail_explain_conclusion(const char *document,
  * resolve, and the premise does not already hold (`<X> a owl:Ontology`, `<X> a
  * sh:ShapesGraph`, or an `owl:versionIRI` naming it), is an error naming the document, never
  * a network access
- * and never a silently empty import. `import_count == 0` with two NULL arrays is the
+ * and never a silently empty import; an entry the premise's import closure never names is an
+ * error too, since it would be read and never used. `import_count == 0` with two NULL arrays
+ * is the
  * ordinary "imports nothing" case and is accepted; a NULL array with a non-zero count is a
  * caller error and is refused, never dereferenced. Resolution is transitive to a fixpoint.
  *

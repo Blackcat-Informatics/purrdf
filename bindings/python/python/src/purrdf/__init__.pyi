@@ -2248,9 +2248,10 @@ class entail:
     # are its own PLUS those of the documents it names, so this is where those
     # documents arrive. PurRDF FETCHES NOTHING: an ontology IRI the sequence
     # does not resolve raises ValueError naming the document, never a network
-    # access and never a silently empty import. `[]` is the ordinary "imports
-    # nothing" case; the argument is required, not defaulted, and sits in the
-    # same position on all four hosts.
+    # access and never a silently empty import. A pair the premise's import
+    # closure never names raises ValueError too: it would be read and never
+    # used. `[]` is the ordinary "imports nothing" case; the argument is
+    # required, not defaulted, and sits in the same position on all four hosts.
     #
     # `premise_iris` are the IRIs the premise document was read from (its
     # retrieval IRI or parse base, when the caller knows one): an `owl:imports`

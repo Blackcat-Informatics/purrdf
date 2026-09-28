@@ -909,7 +909,9 @@ unsafe fn premise_iri_list<'a>(
 /// resolve, and the premise does not already hold (`<X> a owl:Ontology`, `<X> a
 /// sh:ShapesGraph`, or an `owl:versionIRI` naming it), is an error naming the document, never
 /// a network access
-/// and never a silently empty import. `import_count == 0` with two NULL arrays is the
+/// and never a silently empty import; an entry the premise's import closure never names is an
+/// error too, since it would be read and never used. `import_count == 0` with two NULL arrays
+/// is the
 /// ordinary "imports nothing" case and is accepted; a NULL array with a non-zero count is a
 /// caller error and is refused, never dereferenced. Resolution is transitive to a fixpoint.
 ///
@@ -2925,6 +2927,46 @@ mod tests {
                 "{message}"
             );
             crate::error::purrdf_error_free(error);
+        }
+
+        // …and the SAME table beside a premise that imports nothing is refused as an entry
+        // that would be read and never used, rather than silently ignored.
+        let plain = CString::new(
+            "<http://example.org/x> <http://example.org/p> <http://example.org/y> .\n",
+        )
+        .expect("no interior NUL");
+        let mut answer_ptr: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut certificate_ptr: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        // SAFETY: as above; the error handle is read and freed below.
+        unsafe {
+            assert_eq!(
+                purrdf_entail_graph_entails(
+                    regime.as_ptr(),
+                    plain.as_ptr(),
+                    conclusion.as_ptr(),
+                    iris.as_ptr(),
+                    documents.as_ptr(),
+                    1,
+                    std::ptr::null(),
+                    0,
+                    &raw mut answer_ptr,
+                    &raw mut certificate_ptr,
+                    &raw mut error,
+                ),
+                PurrdfStatus::ParseError as i32
+            );
+            assert!(answer_ptr.is_null() && certificate_ptr.is_null());
+            let message = std::ffi::CStr::from_ptr(crate::error::purrdf_error_message(error))
+                .to_str()
+                .expect("the boundary emits UTF-8")
+                .to_owned();
+            crate::error::purrdf_error_free(error);
+            assert!(
+                message.contains("<http://www.w3.org/2002/03owlt/imports/support011-A>")
+                    && message.contains("would be read and never used"),
+                "{message}"
+            );
         }
     }
 

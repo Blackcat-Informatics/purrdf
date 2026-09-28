@@ -10,6 +10,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **entail, validate, cli, python, wasm, capi (BREAKING):** every entailment entry point
+  closes the premise's `owl:imports` closure and refuses what it cannot use. `purrdf
+  reason` and `purrdf convert --entailment` take `--import IRI=FILE` (they used to ignore
+  `owl:imports` and close the premise alone, reporting the import unresolved): the
+  closure is materialized over the premise merged with every imported document, an
+  import no pair resolves is refused by name (exit 1), and the report states
+  `ontology-import-resolved`. An import-table entry the premise's closure never reaches
+  is now refused on every entailment service — `purrdf entails` (exit 2, as `validate`
+  refuses an unused shapes-graph pair), Python `entail.graph_entails` /
+  `verify_entailment` / `certain_answers`, WebAssembly `entailGraphEntails` /
+  `entailVerifyEntailment` / `entailCertainAnswers`, C `purrdf_entail_graph_entails` /
+  `purrdf_entail_verify_entailment` / `purrdf_entail_certain_answers`, Rust `entails` /
+  `certain_answers` (`EntailError::UnreachedImport`, naming the entries and, when the
+  premise states the `owl:imports` on a node that anchors nothing, saying so); it used to
+  be read and silently unused. Rust gains `materialize_with_imports`.
+
 - **validate, python, wasm, capi (BREAKING for C):** SHACL-AF entailment takes the four
   rule-evaluation limits the rules run takes — the term-generating round limit, the
   generated-term budget, the stored-fact limit and the join-step limit — routed through

@@ -1330,7 +1330,8 @@ export function entailExplainConclusion(
  * names, so this is where those documents go — and the `owl:imports` triple stays exactly
  * where you wrote it. PurRDF FETCHES NOTHING: an ontology IRI the table does not resolve,
  * and the premise does not already hold (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or
- * an `owl:versionIRI` naming it), throws by name, never a network access and never a silently empty import. Two empty
+ * an `owl:versionIRI` naming it), throws by name, never a network access and never a silently empty import; an entry
+ * the premise's import closure never names throws too, since it would be read and never used. Two empty
  * arrays are the ordinary *imports nothing* case; both are required, not defaulted, and
  * resolution is transitive to a fixpoint.
  *

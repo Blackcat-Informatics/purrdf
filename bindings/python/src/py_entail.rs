@@ -674,7 +674,8 @@ pub(crate) fn import_list(imports: &[(String, String)]) -> Vec<(&str, &str)> {
 ///
 /// **PurRDF fetches nothing.** An ontology IRI this sequence does not resolve is a
 /// `ValueError` naming the document, never a network access and never a silently empty
-/// import. `[]` is the ordinary "imports nothing" case and is required rather than defaulted,
+/// import; an entry the premise's import closure never names is a `ValueError` too, since
+/// it would be read and never used. `[]` is the ordinary "imports nothing" case and is required rather than defaulted,
 /// in the same position on all four hosts, so one call shape works everywhere.
 ///
 /// # `premise_iris` — the IRIs the premise document was read from

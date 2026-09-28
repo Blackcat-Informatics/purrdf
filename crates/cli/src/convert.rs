@@ -119,6 +119,8 @@ pub(crate) struct ConvertOptions<'a> {
     pub(crate) rules: Option<&'a std::path::Path>,
     /// `--max-stored-facts` and `--max-join-steps`: the limits `--entailment` runs under.
     pub(crate) limits: purrdf_validate::regime::MaterializeLimits,
+    /// `--import IRI=FILE`: the premise's `owl:imports` closure `--entailment` closes over.
+    pub(crate) imports: &'a [String],
     /// Whether `--canonical` was set (emit RDFC-1.0 canonical N-Quads).
     pub(crate) canonical: bool,
     /// Explicit JSON-LD/YAML-LD serialization configuration.
@@ -277,6 +279,14 @@ fn refuse_unconsumable_base(
         .map(|(format, role)| format::BaseUse::parse(*format, role))
         .collect();
     legs.push(format::BaseUse::serialize(target, target_role));
+    // `--import` documents parse under `--base` too, so each is a parse leg.
+    let import_legs =
+        crate::premise_imports::PremiseImports::base_legs(options.imports, options.from)?;
+    legs.extend(
+        import_legs
+            .iter()
+            .map(|(format, role)| format::BaseUse::parse(*format, role)),
+    );
     format::refuse_unconsumable_base(options.base, &legs)
 }
 
@@ -361,6 +371,20 @@ fn run_with_transforms(
     let dataset: Arc<RdfDataset> = match options.entailment {
         Some(regime) => {
             let plan = reason::EntailmentPlan::resolve(regime, options.rules)?;
+            // The premise is the merged source list; each source's own IRI names part of
+            // it, so an `owl:imports` of any of them resolves in place.
+            let premises: Vec<(&str, SourceFormat)> = sources
+                .paths
+                .iter()
+                .copied()
+                .zip(formats.iter().copied())
+                .collect();
+            let premise_imports = crate::premise_imports::PremiseImports::read(
+                options.imports,
+                options.from,
+                options.base,
+                &premises,
+            )?;
             // The closure is what gets serialized; the report is what `--report` carries,
             // so a converted document can be traced back to the run that derived it.
             match (sources.single(), formats) {
@@ -371,6 +395,7 @@ fn run_with_transforms(
                         options.base,
                         options.transport,
                         plan.materialization(),
+                        &premise_imports,
                         &options.limits,
                         report_target,
                     )?
@@ -381,7 +406,7 @@ fn run_with_transforms(
                     // then reason over the merged dataset.
                     let (merged, ledger) = ingest::ingest(sources, formats)?;
                     read_ledger = ledger;
-                    report::materialize_reported(
+                    premise_imports.materialize(
                         &*merged,
                         plan.materialization(),
                         &options.limits,

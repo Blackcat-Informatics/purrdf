@@ -812,36 +812,49 @@ fn the_report_distinguishes_a_resolved_import_from_an_unresolved_one() {
         "the reason must say what is true of THIS token: {resolved}"
     );
 
-    // UNRESOLVED: the same premise, materialized, where no import map exists at all.
+    // `reason` over the SAME premise and the SAME pair closes the merge and renders the
+    // same RESOLVED token: the closure it writes holds the conclusion only the imported
+    // schema licenses.
     let closure = path(dir, "closure.nt");
-    let unresolved_report = path(dir, "unresolved.report");
+    let reason_report = path(dir, "reason.report");
     let o = run(&[
         "reason",
         "--regime",
         "owl-rl",
+        "--import",
+        &pair,
         &premise,
         &closure,
-        &format!("--report={unresolved_report}"),
+        &format!("--report={reason_report}"),
     ]);
-    assert!(o.status.success(), "reason: {}", stderr(&o));
-    let unresolved = std::fs::read_to_string(&unresolved_report).expect("read the report");
+    assert!(o.status.success(), "reason --import: {}", stderr(&o));
+    let reasoned = std::fs::read_to_string(&reason_report).expect("read the report");
     assert!(
-        unresolved.contains("\nboundary ontology-import-unresolved "),
-        "a materialization resolved nothing and must say so: {unresolved}"
+        reasoned.contains("\nboundary ontology-import-resolved ")
+            && !reasoned.contains("boundary ontology-import-unresolved"),
+        "a merged import closure renders the RESOLVED token on `reason` too: {reasoned}"
     );
+    let written = std::fs::read_to_string(&closure).expect("read the closure");
     assert!(
-        !unresolved.contains("boundary ontology-import-resolved"),
-        "…and must not claim a merge it never made: {unresolved}"
-    );
-    assert!(
-        unresolved.contains("NOTHING RESOLVED THOSE DOCUMENTS FOR THIS RUN"),
-        "the reason must say what is true of THIS token: {unresolved}"
+        written.contains(
+            "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Animal> ."
+        ),
+        "the imported axiom took part in the closure: {written}"
     );
 
-    // RESOLVING THE IMPORTS DOES NOT NARROW THE ANSWER. An `owl-rl` chase always meets the
-    // datatype value space, so `exact-within-boundaries` is what both runs say — and the
-    // assertion is that the two AGREE rather than that either spells a particular word, so a
-    // later change that let the import boundary decide completeness would fail here.
+    // Without the pair `reason` no longer closes a smaller premise: it refuses by name.
+    let o = run(&["reason", "--regime", "owl-rl", &premise, &closure]);
+    assert_eq!(o.status.code(), Some(1), "{}", stderr(&o));
+    assert!(
+        stderr(&o).contains("unresolved-import")
+            && stderr(&o).contains("--import http://example.org/schema=FILE"),
+        "{}",
+        stderr(&o)
+    );
+
+    // RESOLVING THE IMPORTS IDENTICALLY DOES NOT CHANGE THE ANSWER'S COMPLETENESS between
+    // the two lanes: the conclusion-directed service and the materialization agree.
     let line = |report: &str| {
         report
             .lines()
@@ -849,7 +862,100 @@ fn the_report_distinguishes_a_resolved_import_from_an_unresolved_one() {
             .expect("every report carries a completeness line")
             .to_owned()
     };
-    assert_eq!(line(&resolved), line(&unresolved));
+    assert_eq!(line(&resolved), line(&reasoned));
+}
+
+/// An `--import` pair the premise's closure never reaches is a USAGE error (exit 2) on every
+/// entailment subcommand — `entails`, `reason` and `convert --entailment` — exactly as
+/// `validate` refuses an unused shapes-graph pair. When the premise does state the
+/// `owl:imports`, but on a node that anchors nothing, the refusal says so. The neighbour on
+/// each command is the importing premise, which uses the very same pair and succeeds.
+#[test]
+fn every_entailment_subcommand_refuses_an_unreached_import_pair() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = dir.path();
+    let importing = write_file(dir, "importing.ttl", IMPORTING_PREMISE);
+    let plain = write_file(
+        dir,
+        "plain.ttl",
+        "@prefix ex: <http://example.org/> .\nex:tom a ex:Cat .\n",
+    );
+    let unanchored = write_file(
+        dir,
+        "unanchored.ttl",
+        "@prefix ex: <http://example.org/> .\n\
+         @prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+         ex:node owl:imports ex:schema .\nex:tom a ex:Cat .\n",
+    );
+    let schema = write_file(dir, "schema.ttl", IMPORTED_SCHEMA);
+    let conclusion = write_file(dir, "animal.ttl", IMPORTED_CONCLUSION);
+    let out = path(dir, "out.nt");
+    let pair = format!("http://example.org/schema={schema}");
+
+    let commands = |premise: &str| -> Vec<Vec<String>> {
+        let owned = |args: &[&str]| args.iter().map(ToString::to_string).collect();
+        vec![
+            owned(&[
+                "entails",
+                "--regime",
+                "owl-rl",
+                "--premise",
+                premise,
+                "--conclusion",
+                &conclusion,
+                "--import",
+                &pair,
+            ]),
+            owned(&[
+                "reason", "--regime", "owl-rl", "--import", &pair, premise, &out,
+            ]),
+            owned(&[
+                "convert",
+                "--entailment",
+                "owl-rl",
+                "--import",
+                &pair,
+                premise,
+                &out,
+            ]),
+        ]
+    };
+    for args in commands(&plain) {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = run(&args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("unreached-import: --import <http://example.org/schema>")
+                && stderr(&o).contains("would be read and never used")
+                && !stderr(&o).contains("not anchored"),
+            "{args:?}: {}",
+            stderr(&o)
+        );
+    }
+    for args in commands(&unanchored) {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = run(&args);
+        assert_eq!(o.status.code(), Some(2), "{args:?}: {}", stderr(&o));
+        assert!(
+            stderr(&o).contains("does state owl:imports <http://example.org/schema>")
+                && stderr(&o).contains("not anchored"),
+            "{args:?}: {}",
+            stderr(&o)
+        );
+    }
+    for args in commands(&importing) {
+        let args: Vec<&str> = args.iter().map(String::as_str).collect();
+        let o = run(&args);
+        assert!(o.status.success(), "{args:?}: {}", stderr(&o));
+    }
+    let closed = std::fs::read_to_string(&out).expect("the convert closure");
+    assert!(
+        closed.contains(
+            "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Animal> ."
+        ),
+        "convert --entailment closed over the imported schema: {closed}"
+    );
 }
 
 // ── The refusals ────────────────────────────────────────────────────────────────
