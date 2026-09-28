@@ -8,6 +8,41 @@ use purrdf_testkit::vectors::VectorFile;
 
 const VECTORS: &str = include_str!("vectors/blake3_differential_vectors.txt");
 
+fn required_backends_are_available() {
+    assert!(Backend::Portable.is_available());
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    assert_eq!(Backend::selected(), Backend::Wasm128);
+    #[cfg(all(target_arch = "wasm32", not(target_feature = "simd128")))]
+    assert_eq!(Backend::selected(), Backend::Portable);
+    #[cfg(all(
+        target_arch = "aarch64",
+        target_feature = "neon",
+        target_endian = "little"
+    ))]
+    assert_eq!(Backend::selected(), Backend::Neon);
+    #[cfg(target_arch = "x86_64")]
+    assert!(Backend::Sse2.is_available());
+
+    #[cfg(not(target_arch = "wasm32"))]
+    if let Ok(required) = std::env::var("PURRDF_REQUIRE_BLAKE3_PATHS") {
+        for name in required.split(',') {
+            let backend = match name {
+                "portable" => Backend::Portable,
+                "sse2" => Backend::Sse2,
+                "ssse3" => Backend::Ssse3,
+                "avx2" => Backend::Avx2,
+                "avx512" => Backend::Avx512,
+                "neon" => Backend::Neon,
+                other => panic!("unknown required BLAKE3 path: {other}"),
+            };
+            assert!(
+                backend.is_available(),
+                "required BLAKE3 path is absent: {name}"
+            );
+        }
+    }
+}
+
 fn corpus() -> Vec<u8> {
     (0..=1_048_576).map(|i| (i % 251) as u8).collect()
 }
@@ -251,6 +286,7 @@ fn caller_scheduled_trees_match_frozen_answers() {
 }
 
 purrdf_testkit::harness_main!(
+    required_backends_are_available,
     caller_scheduled_trees_match_frozen_answers,
     random_inputs_cover_irregular_trees_and_alignment,
     streaming_boundary_answers,

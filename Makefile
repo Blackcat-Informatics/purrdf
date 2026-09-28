@@ -389,7 +389,7 @@ pytest: ## Build the native module + run the Python binding test suite (own gate
 	python3 scripts/check-python-binding-tests.py
 	cd bindings/python && uv run maturin develop && uv run pytest tests
 
-miri: ## Run the SmallVec unsafe-storage tests under Miri: Stacked and Tree Borrows, strict provenance, and 32-bit i686 (own lane, NOT part of `check`).
+miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT part of `check`).
 	@# `purrdf_core::SmallVec` keeps its inline elements in uninitialised
 	@# storage and moves them with raw pointer copies; its tests pin ownership
 	@# (no double drop, no leak, no uninitialised read) but only an interpreter
@@ -401,6 +401,9 @@ miri: ## Run the SmallVec unsafe-storage tests under Miri: Stacked and Tree Borr
 	MIRIFLAGS=-Zmiri-tree-borrows cargo miri test -p purrdf-core small
 	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test -p purrdf-core small
 	cargo miri test -p purrdf-core small --target i686-unknown-linux-gnu
+	@# Bounded streaming vectors cover buffer/tree boundaries and snapshots.
+	@# The scalar rotation uses Rust under Miri; native lowering is checked separately.
+	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash --test blake3 streaming_boundary_answers
 
 conformance: ## Umbrella conformance matrix: native Rust W3C suites + the Python rdflib drop-in gate, one scoreboard (see docs/CONFORMANCE.md).
 	python3 scripts/conformance-matrix.py $(CONFORMANCE_ARGS)
@@ -627,8 +630,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# pinned expectations the native `cargo test` run asserts. Ordered JSON also
 	@# crosses the same production RDF codecs against a pinned byte corpus.
 	@# purrdf-hash replays its frozen digest vectors there, so the portable MD5,
-	@# SHA-1, SHA-3 and CRC-32 paths wasm32 runs answer as every native path does,
-	@# and runs its base16 tests on the baseline and +simd128 builds, so the
+	@# SHA-1, SHA-3 and CRC-32 paths wasm32 runs answer as every native path does.
+	@# BLAKE3 replays its full streaming corpus on baseline and SIMD128 builds.
+	@# Base16 tests also run on the baseline and +simd128 builds, so the
 	@# i8x16.swizzle encoder is executed against the portable one. purrdf-core's
 	@# CSV field scanner runs its own kernel differential there too, on the
 	@# baseline and +simd128 builds, through the doc-hidden `csv::backend`
@@ -722,7 +726,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			-p purrdf-shapes --test product_wasm \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash --test digest_differential --test hex \
+			-p purrdf-hash --test digest_differential --test hex --test blake3 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-hash --test fixed_hasher \
@@ -730,7 +734,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash --test hex \
+			-p purrdf-hash --test hex --test blake3 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-core --test csv_scan_wasm \

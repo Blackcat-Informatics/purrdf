@@ -4,11 +4,10 @@
 //! The processor-specific kernels: the only code in the crate allowed
 //! `unsafe`.
 //!
-//! Each kernel is a `#[target_feature]` function. It is reachable from the
-//! rest of the crate only through a function pointer that the matching
-//! `*_x86_*` / `*_aarch64*` accessor below returns after run-time detection
-//! has confirmed every feature the kernel was compiled for; on any other
-//! processor or target the accessor returns `None`. The wasm32 `simd128`
+//! Hardware kernels are `#[target_feature]` functions behind safe wrappers
+//! that check the required CPU capabilities. SHA-1 and CRC-32 select function
+//! pointers; BLAKE3 selects an enum backend and calls checked wrappers. On an
+//! unsupported processor or target the wrappers return `None`. The wasm32 `simd128`
 //! kernel is the exception to run-time detection: wasm has none, so it is
 //! compiled only when `simd128` is enabled for the whole build.
 //!
