@@ -83,14 +83,15 @@ enum Step {
 }
 
 /// Where decoded bytes go.
-trait Sink {
+pub(crate) trait Sink {
     /// Take as many of `bytes` as fit; return how many were taken.
     fn put(&mut self, bytes: &[u8]) -> usize;
+    fn written(&self) -> usize;
 }
 
-struct SliceSink<'a> {
-    out: &'a mut [u8],
-    written: usize,
+pub(crate) struct SliceSink<'a> {
+    pub(crate) out: &'a mut [u8],
+    pub(crate) written: usize,
 }
 
 impl Sink for SliceSink<'_> {
@@ -100,11 +101,14 @@ impl Sink for SliceSink<'_> {
         self.written += n;
         n
     }
+    fn written(&self) -> usize {
+        self.written
+    }
 }
 
-struct VecSink<'a> {
-    out: &'a mut Vec<u8>,
-    written: usize,
+pub(crate) struct VecSink<'a> {
+    pub(crate) out: &'a mut Vec<u8>,
+    pub(crate) written: usize,
 }
 
 impl Sink for VecSink<'_> {
@@ -112,6 +116,9 @@ impl Sink for VecSink<'_> {
         self.out.extend_from_slice(bytes);
         self.written += bytes.len();
         bytes.len()
+    }
+    fn written(&self) -> usize {
+        self.written
     }
 }
 
@@ -141,7 +148,10 @@ pub struct Inflater {
     limit: u64,
     kernels: Kernels,
     error: Option<Error>,
-    trailing: Vec<u8>,
+    // A 64-bit lookahead buffer retains at most seven whole bytes after
+    // consuming the nonempty end-of-block code and byte alignment.
+    trailing: [u8; 7],
+    trailing_len: usize,
 }
 
 impl std::fmt::Debug for Inflater {
@@ -195,7 +205,8 @@ impl Inflater {
             limit: u64::MAX,
             kernels,
             error: None,
-            trailing: Vec::new(),
+            trailing: [0; 7],
+            trailing_len: 0,
         }
     }
 
@@ -218,7 +229,7 @@ impl Inflater {
         self.delivered = 0;
         self.base = 0;
         self.error = None;
-        self.trailing.clear();
+        self.trailing_len = 0;
     }
 
     /// Total bytes decoded so far (delivered or not).
@@ -239,7 +250,7 @@ impl Inflater {
     /// Input bytes that were consumed into the bit buffer but lie after the
     /// end of the stream. Empty until [`Self::is_done`].
     pub fn trailing_bytes(&self) -> &[u8] {
-        &self.trailing
+        &self.trailing[..self.trailing_len]
     }
 
     /// Decode from `input` into `output`.
@@ -248,12 +259,7 @@ impl Inflater {
             out: output,
             written: 0,
         };
-        let (consumed, status) = self.run(input, &mut sink)?;
-        Ok(Progress {
-            consumed,
-            written: sink.written,
-            status,
-        })
+        self.feed_sink(input, &mut sink)
     }
 
     /// Decode from `input`, appending every decoded byte to `output`. Never
@@ -263,10 +269,19 @@ impl Inflater {
             out: output,
             written: 0,
         };
-        let (consumed, status) = self.run(input, &mut sink)?;
+        self.feed_sink(input, &mut sink)
+    }
+
+    pub(crate) fn feed_sink<S: Sink>(
+        &mut self,
+        input: &[u8],
+        sink: &mut S,
+    ) -> Result<Progress, Error> {
+        let before = sink.written();
+        let (consumed, status) = self.run(input, sink)?;
         Ok(Progress {
             consumed,
-            written: sink.written,
+            written: sink.written() - before,
             status,
         })
     }
@@ -679,9 +694,10 @@ impl Inflater {
         // Whole bytes left in the bit buffer belong to whatever follows.
         let partial = self.nbits % 8;
         self.consume(partial);
-        self.trailing.clear();
+        self.trailing_len = 0;
         while self.nbits >= 8 {
-            self.trailing.push(self.bits(8) as u8);
+            self.trailing[self.trailing_len] = self.bits(8) as u8;
+            self.trailing_len += 1;
             self.consume(8);
         }
         self.bitbuf = 0;

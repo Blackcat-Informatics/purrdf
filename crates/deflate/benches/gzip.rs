@@ -134,6 +134,30 @@ fn decode(c: &mut Criterion) {
     group.finish();
 }
 
+/// Append successive gzip members into reusable output without staging copies.
+fn decode_vec(c: &mut Criterion) {
+    let mut group = c.benchmark_group("gzip-decode-vector");
+    for (kind, label, data) in corpus() {
+        let framed = gzip::compress(&data, Level::DEFAULT);
+        group.throughput(Throughput::Bytes(data.len() as u64));
+        group.sample_size(if data.len() > 1 << 22 { 10 } else { 30 });
+        group.bench_with_input(BenchmarkId::new(kind, label), &framed, |b, framed| {
+            let mut decoder = GzipDecoder::new();
+            let mut out = Vec::with_capacity(data.len());
+            b.iter(|| {
+                out.clear();
+                let progress = decoder
+                    .feed_to_vec(black_box(framed), &mut out)
+                    .expect("valid");
+                assert_eq!(progress.consumed, framed.len());
+                decoder.finish().expect("complete member");
+                black_box(out.as_slice());
+            });
+        });
+    }
+    group.finish();
+}
+
 /// Encode and decode of the 1 MiB text case per kernel path.
 fn paths(c: &mut Criterion) {
     let data = text(1 << 20);
@@ -167,5 +191,5 @@ fn paths(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, encode, decode, paths);
+criterion_group!(benches, encode, decode, decode_vec, paths);
 criterion_main!(benches);

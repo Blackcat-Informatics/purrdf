@@ -46,6 +46,21 @@ and whether they need more input or more output room. That is what a
 JavaScript stream callback needs on wasm32, and the `Read` adapter is a thin
 loop over it.
 
+`Inflater::feed_to_vec` and `GzipDecoder::feed_to_vec` append directly to a
+caller-owned `Vec`. They preserve any existing prefix and report only the
+bytes appended by that call. The gzip path updates CRC-32 from accepted
+bytes in the inflater's window and verifies every trailer; it needs no
+intermediate output buffer. Reserve capacity when the caller knows the
+output bound. The bounded slice API remains useful when output storage is
+fixed or the consumer applies backpressure.
+
+Decoder windows and Huffman table scratch are reused between members.
+Trailer lookahead occupies a fixed seven-byte array. Once those tables are
+warm, decoding the same member into reserved output performs zero heap
+allocations, enforced by an allocation-counter test. Convenience functions
+still allocate their returned `Vec` and decoder storage; encoder output
+starts with at most 64 KiB plus framing slack and grows as needed.
+
 ## Guarantees
 
 - **Every gzip member is decoded** and its trailer verified: CRC-32 and

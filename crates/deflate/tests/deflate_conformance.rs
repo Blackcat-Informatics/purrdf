@@ -1322,7 +1322,41 @@ fn required_paths_are_available() {
     }
 }
 
+fn gzip_vector_sink_preserves_prefix_and_member_checks() {
+    let first = text(65537, 91);
+    let second = random_bytes(131_073, 92);
+    let mut encoded = gzip::compress(&first, Level::DEFAULT);
+    encoded.extend_from_slice(&gzip::compress(&[], Level::DEFAULT));
+    encoded.extend_from_slice(&gzip::compress(&second, Level::DEFAULT));
+    let mut expected = b"existing prefix".to_vec();
+    expected.extend_from_slice(&first);
+    expected.extend_from_slice(&second);
+    for width in [1, 7, 64, 8192, encoded.len()] {
+        let mut decoder = GzipDecoder::new();
+        decoder.set_limit((first.len() + second.len()) as u64);
+        let mut output = b"existing prefix".to_vec();
+        for part in encoded.chunks(width) {
+            let before = output.len();
+            let progress = decoder
+                .feed_to_vec(part, &mut output)
+                .expect("valid members");
+            assert_eq!(progress.consumed, part.len());
+            assert_eq!(progress.written, output.len() - before);
+            assert_eq!(progress.status, Status::NeedsInput);
+        }
+        decoder.finish().expect("all members verified");
+        assert_eq!(decoder.members(), 3);
+        assert_eq!(output, expected);
+        let error = decoder
+            .feed_to_vec(b"garbage after members", &mut output)
+            .expect_err("trailing garbage");
+        assert_eq!(decoder.feed_to_vec(&[], &mut output), Err(error));
+        assert_eq!(output, expected);
+    }
+}
+
 purrdf_testkit::harness_main!(
+    gzip_vector_sink_preserves_prefix_and_member_checks,
     required_paths_are_available,
     round_trips_across_levels_and_window_limits,
     encoder_output_is_independent_of_write_chunking,

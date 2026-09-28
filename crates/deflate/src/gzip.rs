@@ -22,7 +22,26 @@ use purrdf_hash::crc32::Crc32;
 use crate::backend::Backend;
 use crate::deflate::{Deflater, Level};
 use crate::error::Error;
-use crate::inflate::{Inflater, Progress, Status};
+use crate::inflate::{Inflater, Progress, Sink, SliceSink, Status, VecSink};
+
+/// Checksum the bytes accepted by the destination while they are still hot
+/// in the inflater's window. A full slice leaves undelivered bytes untouched.
+struct CheckedSink<'a, S> {
+    output: &'a mut S,
+    crc: &'a mut Crc32,
+}
+
+impl<S: Sink> Sink for CheckedSink<'_, S> {
+    fn put(&mut self, bytes: &[u8]) -> usize {
+        let n = self.output.put(bytes);
+        self.crc.update(&bytes[..n]);
+        n
+    }
+
+    fn written(&self) -> usize {
+        self.output.written()
+    }
+}
 
 const ID1: u8 = 0x1f;
 const ID2: u8 = 0x8b;
@@ -151,6 +170,29 @@ impl GzipDecoder {
     /// all input is consumed and all output delivered (call [`Self::finish`]
     /// if the input has ended), or [`Status::OutputFull`].
     pub fn feed(&mut self, input: &[u8], output: &mut [u8]) -> Result<Progress, Error> {
+        self.feed_sink(
+            input,
+            &mut SliceSink {
+                out: output,
+                written: 0,
+            },
+        )
+    }
+
+    /// Append decoded bytes directly to `output`, checking every member's
+    /// trailer. Never returns [`Status::OutputFull`]. Output already appended
+    /// is retained on error, as with [`Self::feed`].
+    pub fn feed_to_vec(&mut self, input: &[u8], output: &mut Vec<u8>) -> Result<Progress, Error> {
+        self.feed_sink(
+            input,
+            &mut VecSink {
+                out: output,
+                written: 0,
+            },
+        )
+    }
+
+    fn feed_sink<S: Sink>(&mut self, input: &[u8], output: &mut S) -> Result<Progress, Error> {
         if let Some(error) = &self.error {
             return Err(error.clone());
         }
@@ -174,7 +216,7 @@ impl GzipDecoder {
         }
     }
 
-    fn run(&mut self, input: &[u8], output: &mut [u8]) -> Result<Progress, Error> {
+    fn run<S: Sink>(&mut self, input: &[u8], output: &mut S) -> Result<Progress, Error> {
         let mut ip = 0;
         let mut written = 0;
         loop {
@@ -182,15 +224,19 @@ impl GzipDecoder {
                 Stage::Body => {
                     let progress = self
                         .inflater
-                        .feed(&input[ip..], &mut output[written..])
+                        .feed_sink(
+                            &input[ip..],
+                            &mut CheckedSink {
+                                output,
+                                crc: &mut self.crc,
+                            },
+                        )
                         .map_err(|error| match error {
                             Error::LimitExceeded { .. } => {
                                 Error::LimitExceeded { limit: self.limit }
                             }
                             other => other,
                         })?;
-                    self.crc
-                        .update(&output[written..written + progress.written]);
                     self.member_out += progress.written as u64;
                     written += progress.written;
                     ip += progress.consumed;
@@ -399,18 +445,17 @@ pub fn decompress(data: &[u8]) -> Result<Vec<u8>, Error> {
 pub fn decompress_with_limit(data: &[u8], limit: u64) -> Result<Vec<u8>, Error> {
     let mut decoder = GzipDecoder::new();
     decoder.set_limit(limit);
-    let mut out = Vec::with_capacity(data.len().saturating_mul(3).min(1 << 26));
-    let mut chunk = vec![0u8; 256 * 1024];
-    let mut input = data;
-    loop {
-        let progress = decoder.feed(input, &mut chunk)?;
-        out.extend_from_slice(&chunk[..progress.written]);
-        input = &input[progress.consumed..];
-        if progress.status == Status::NeedsInput {
-            decoder.finish()?;
-            return Ok(out);
-        }
-    }
+    // Incompressible members need about their input size. Multiplying that
+    // estimate retains unused memory without avoiding growth for highly
+    // compressed members. Respect a caller's smaller output limit as well.
+    let capacity = data
+        .len()
+        .min(1 << 26)
+        .min(usize::try_from(limit).unwrap_or(usize::MAX));
+    let mut out = Vec::with_capacity(capacity);
+    decoder.feed_to_vec(data, &mut out)?;
+    decoder.finish()?;
+    Ok(out)
 }
 
 /// Compress `data` as one gzip member at `level`.

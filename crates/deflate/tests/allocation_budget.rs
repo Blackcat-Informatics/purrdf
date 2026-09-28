@@ -4,7 +4,7 @@
 //! Allocation budgets for a long stream whose output is much smaller than input.
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
-use purrdf_deflate::{Level, gzip};
+use purrdf_deflate::{GzipDecoder, Level, Status, gzip};
 use std::fmt::Write as _;
 
 #[global_allocator]
@@ -42,4 +42,31 @@ fn repeated_blocks_reuse_bounded_working_storage() {
     assert_eq!(decoded, input);
     // Output capacity can grow; dynamic decode-table scratch is reused.
     assert!(decode.allocations <= 64, "{decode:?}");
+}
+
+#[test]
+fn warmed_member_decoding_into_reserved_output_allocates_nothing() {
+    let input = b"reused gzip member with a repeated literal and matching history\n".repeat(2048);
+    let encoded = gzip::compress(&input, Level::DEFAULT);
+    let mut decoder = GzipDecoder::new();
+    let mut output = Vec::with_capacity(input.len());
+    decoder
+        .feed_to_vec(&encoded, &mut output)
+        .expect("warm member");
+    decoder.finish().expect("complete member");
+    assert_eq!(output, input);
+    output.clear();
+
+    let window = CurrentThreadWindow::open();
+    for part in encoded.chunks(17) {
+        let progress = decoder.feed_to_vec(part, &mut output).expect("next member");
+        assert_eq!(progress.consumed, part.len());
+        assert_eq!(progress.status, Status::NeedsInput);
+    }
+    decoder.finish().expect("complete second member");
+    let measured = window.close();
+    assert_eq!(output, input);
+    assert_eq!(decoder.members(), 2);
+    assert_eq!(measured.allocations, 0, "{measured:?}");
+    assert_eq!(measured.requested_bytes, 0, "{measured:?}");
 }

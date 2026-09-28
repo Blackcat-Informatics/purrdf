@@ -891,7 +891,7 @@ impl Deflater {
 /// Compress `data` into one raw DEFLATE stream at `level`.
 pub fn compress(data: &[u8], level: Level) -> Vec<u8> {
     let mut deflater = Deflater::new(level);
-    let mut out = Vec::with_capacity(data.len() / 2 + 64);
+    let mut out = Vec::with_capacity((data.len() / 2 + 64).min(64 * 1024 + 64));
     deflater.write(data, &mut out);
     deflater.finish(&mut out);
     out
