@@ -1035,7 +1035,10 @@ test("LOAD redirect: a redirect to an unlisted origin is denied, and the unliste
   const denied = await rejection(new QueryEngine().updateAsync(new Dataset(), `LOAD <${DOC}>`, { resolveLoad, catalog }));
   assert.equal(denied.code, "native-sparql-load-denied");
   // The refusal names the redirect's own target (never the authorized DOC).
-  assert.match(denied.message, new RegExp(`<${evilOrigin}/steal\\.ttl> withholds the network capability`));
+  assert.ok(
+    denied.message.includes(`<${evilOrigin}/steal.ttl> withholds the network capability`),
+    denied.message,
+  );
   assert.equal(calls.length, 1);
   assert.equal(calls[0].url, DOC);
 });

@@ -2106,11 +2106,11 @@ mod tests {
             let rows = run(&source, &q(shape)).expect(shape);
             assert!(
                 rows.contains(&"e=e1&g=g1&x=answer-from-e1".to_owned()),
-                "{shape}: {rows:?}"
+                "{shape}: the row from ex:e1 is answered"
             );
             assert!(
                 rows.iter().all(|row| !row.contains("answer-from-e2")),
-                "{shape}: only ex:e1 is bound on the left: {rows:?}"
+                "{shape}: only ex:e1 is bound on the left"
             );
         }
     }
