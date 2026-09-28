@@ -2070,7 +2070,7 @@ def main() -> int:
             print(r.log, file=sys.stderr)
 
     summary_path = os.environ.get("GITHUB_STEP_SUMMARY")
-    if summary_path and not args.part:
+    if summary_path:
         with open(summary_path, "a", encoding="utf-8") as fh:
             fh.write(render_markdown(results))
             fh.write("\n")
@@ -2079,7 +2079,7 @@ def main() -> int:
     # block in docs/CONFORMANCE.md against the freshly measured results. Only in
     # a full run (a native-only run cannot reproduce the whole table).
     doc_ok = True
-    if not args.no_python and not args.part:
+    if not args.no_python:
         block = render_matrix_table(results)
         if args.write_doc:
             write_doc_block(block)
