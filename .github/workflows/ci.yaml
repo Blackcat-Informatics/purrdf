@@ -106,6 +106,9 @@ jobs:
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
 
+      - name: Fetch all locked platform dependencies for the offline audit
+        run: python3 scripts/fetch-locked-deps.py
+
       - name: Check the banned-dependency gate can still fail
         run: python3 scripts/check-banned-deps.py --self-test
 
