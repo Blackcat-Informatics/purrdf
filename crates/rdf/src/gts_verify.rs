@@ -30,7 +30,7 @@ use std::fmt::Write as _;
 use purrdf_gts::mmr::{prove_file, verify_proof};
 use purrdf_gts::reader;
 use purrdf_gts::verify::verify_file;
-use purrdf_gts::wire::hex;
+use purrdf_hash::hex::lower as hex;
 
 use crate::gts_core::diagnostics_to_error;
 use crate::{RdfDataset, RdfDiagnostic};
@@ -289,7 +289,7 @@ mod tests {
             blob_frame_id, head,
             "the blob frame id must not equal the segment head"
         );
-        let content_iri = format!("blake3:{}", purrdf_gts::wire::hex(&blob_frame_id));
+        let content_iri = format!("blake3:{}", purrdf_hash::hex::lower(&blob_frame_id));
         assert_ne!(
             content_iri,
             digest_str(BLOB_PAYLOAD),

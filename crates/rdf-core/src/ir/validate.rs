@@ -31,10 +31,11 @@ use crate::RdfDiagnostic;
 use super::builder::RdfDatasetBuilder;
 use super::term::{InternedTerm, TermId};
 
-/// Maximum triple-term nesting depth: how many triple terms one chain may hold, the
-/// outermost included (`<<( s p <<( s p o )>> )>>` holds two). Reuses the GTS importer's
-/// nesting bound so the IR and the transport agree on the acyclicity cliff.
-pub(crate) const MAX_TERM_NESTING_DEPTH: usize = 16;
+// Maximum triple-term nesting depth: how many triple terms one chain may hold, the
+// outermost included (`<<( s p <<( s p o )>> )>>` holds two). The one definition lives
+// in the events crate, so the IR, the GTS transport and every projection agree on the
+// acyclicity cliff by construction rather than by matching literals.
+pub(crate) use purrdf_events::MAX_TERM_NESTING_DEPTH;
 
 /// Validate the builder's accumulated structure. Returns `Ok(())` when the dataset
 /// is structurally sound, or a precise [`RdfDiagnostic`] on the first violation.

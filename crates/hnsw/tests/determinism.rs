@@ -43,8 +43,9 @@
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
 use purrdf_hnsw::determinism::{CORPUS_ROWS, corpus_len, digest, digest_serial};
-use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, level::splitmix64};
+use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf_testkit::harness::{print_line, without_host_clock_or_entropy};
+use purrdf_testkit::rng::signed_unit_step;
 #[cfg(not(target_arch = "wasm32"))]
 use rayon::ThreadPoolBuilder;
 
@@ -188,12 +189,7 @@ fn exact_image_golden_unchanged_by_reassociated_surface() {
     );
 
     let mut state = 0x5eed_f00d_7e57_0001_u64;
-    let data: Vec<f64> = (0..64 * 96)
-        .map(|_| {
-            state = splitmix64(state);
-            ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
-        })
-        .collect();
+    let data: Vec<f64> = (0..64 * 96).map(|_| signed_unit_step(&mut state)).collect();
     let matrix = VectorMatrix::new(64, 96, data).expect("a valid matrix");
     let params = Params::new(8, 16, 32, 8).expect("valid parameters");
     let exact = HnswIndex::build(matrix.clone(), &DistanceMetric::SquaredEuclidean, params)

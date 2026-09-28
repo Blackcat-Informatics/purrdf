@@ -26,7 +26,8 @@ use purrdf_core::{
     TargetSet, TargetSetId, TermValue, VectorDtype, VectorSpaceId, derive_artifact_root,
     verify_embedding,
 };
-use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, guard, level::splitmix64};
+use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, guard};
+use purrdf_testkit::rng::splitmix64_step;
 
 /// Directory entry length in the PURREMB v1 framing.
 const DIRECTORY_ENTRY_LENGTH: usize = 64;
@@ -356,7 +357,7 @@ fn context(rows: usize, dims: usize, prefix: usize) -> Context {
         .map(|target| {
             let values = (0..dims)
                 .map(|_| {
-                    state = splitmix64(state);
+                    state = splitmix64_step(state);
                     let unit = (state >> 11) as f32 / (1_u64 << 53) as f32;
                     let value = unit.mul_add(2.0, -1.0);
                     if value == 0.0 { 0.25 } else { value }

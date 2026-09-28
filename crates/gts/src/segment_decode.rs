@@ -62,11 +62,11 @@ use crate::model::{
 };
 use crate::reader::{BlobPayload, BlobRefusal, FrameContext, StreamingSink};
 
-/// A [`std::collections::HashMap`] keyed by the workspace's fixed-key
-/// `purrdf_hash::fixed::FixedHasher` (`purrdf-core`'s `FastHasher` policy) — no runtime RNG
-/// seeding, so it stays wasm-clean. Iteration order is unspecified; every
-/// order-sensitive read here goes through an explicit sort, never hash order.
-type FastMap<K, V> = std::collections::HashMap<K, V, purrdf_hash::fixed::FixedState>;
+// The tables below are the workspace's fixed-key `purrdf_hash::fixed::FixedMap`
+// (`purrdf-core`'s `FastMap` policy) — no runtime RNG seeding, so they stay
+// wasm-clean. Iteration order is unspecified; every order-sensitive read here
+// goes through an explicit sort, never hash order.
+use purrdf_hash::fixed::FixedMap;
 
 /// Depth bound for resolving nested quoted-triple terms. A cyclic or absurdly
 /// nested triple term hard-fails rather than recursing without bound. Mirrors
@@ -275,18 +275,18 @@ pub struct SegmentResolver<S: ResolvedSink> {
     sink: S,
     /// RAW per-segment terms buffered during the streaming phase, keyed by
     /// `(segment_index, gts_id)`, resolved and drained at segment close.
-    raw_terms: FastMap<(usize, usize), Term>,
+    raw_terms: FixedMap<(usize, usize), Term>,
     /// Per-segment memo from `(segment_index, gts_id)` to the target id,
     /// populated as the currently buffered segment's terms resolve (so a term
     /// referenced twice — e.g. as both a quad subject and a reifier subject —
     /// interns once) and cleared at the end of [`Self::resolve_buffered`]:
     /// segment-local ids never cross a segment boundary, so retaining this
     /// past segment close would grow it O(total terms across ALL segments).
-    remaps: FastMap<(usize, usize), S::Id>,
+    remaps: FixedMap<(usize, usize), S::Id>,
     /// Per-segment reifier bindings `(segment_index, reifier) → (s, p, o)` gts
     /// ids, recorded from `reifier` events so a Triple term (any order) can
     /// recover its components.
-    reifier_bindings: FastMap<(usize, usize), Triple3>,
+    reifier_bindings: FixedMap<(usize, usize), Triple3>,
     /// RAW quad rows `(segment_index, (s, p, o, g) gts ids)`.
     raw_quads: Vec<(usize, Quad)>,
     /// RAW reifier rows `(segment_index, reifier, (s, p, o), graph?)`.
@@ -320,9 +320,9 @@ impl<S: ResolvedSink> SegmentResolver<S> {
     pub fn new(sink: S) -> Self {
         Self {
             sink,
-            raw_terms: FastMap::default(),
-            remaps: FastMap::default(),
-            reifier_bindings: FastMap::default(),
+            raw_terms: FixedMap::default(),
+            remaps: FixedMap::default(),
+            reifier_bindings: FixedMap::default(),
             raw_quads: Vec::new(),
             raw_reifiers: Vec::new(),
             raw_annotations: Vec::new(),

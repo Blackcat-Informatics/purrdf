@@ -76,6 +76,76 @@ pub const XSD_HEX_BINARY: &str = "http://www.w3.org/2001/XMLSchema#hexBinary";
 /// `xsd:base64Binary` — a Base64-encoded byte sequence.
 pub const XSD_BASE64_BINARY: &str = "http://www.w3.org/2001/XMLSchema#base64Binary";
 
+// ── Datatypes this crate names but does not model as a value space ─────────────────
+//
+// Each of these is a real XSD 1.1 datatype whose value space is a string (or, for
+// `dateTimeStamp`, a `dateTime` with a required timezone) and which other crates in
+// the workspace recognise by IRI — SHACL datatype constraints, JSON Schema
+// mappings, OWL 2 datatype maps, the `IRI()`/`STR()` cast family. They are spelled
+// here ONCE so those crates share one byte-exact constant instead of retyping it.
+// None of them is an [`XsdDatatype`] variant: `parse_by_iri` still answers
+// `Ok(None)` for them, and that three-valued honesty is deliberate.
+
+/// `xsd:anyURI` — a URI reference; its value space is its lexical space.
+pub const XSD_ANY_URI: &str = "http://www.w3.org/2001/XMLSchema#anyURI";
+/// `xsd:normalizedString` — `xsd:string` under the `whiteSpace = replace` facet.
+pub const XSD_NORMALIZED_STRING: &str = "http://www.w3.org/2001/XMLSchema#normalizedString";
+/// `xsd:token` — `xsd:normalizedString` under the `whiteSpace = collapse` facet.
+pub const XSD_TOKEN: &str = "http://www.w3.org/2001/XMLSchema#token";
+/// `xsd:language` — a BCP 47 language tag, derived from `xsd:token`.
+pub const XSD_LANGUAGE: &str = "http://www.w3.org/2001/XMLSchema#language";
+/// `xsd:Name` — an XML `Name`, derived from `xsd:token`.
+pub const XSD_NAME: &str = "http://www.w3.org/2001/XMLSchema#Name";
+/// `xsd:NCName` — an XML non-colonized name, derived from `xsd:Name`.
+pub const XSD_NCNAME: &str = "http://www.w3.org/2001/XMLSchema#NCName";
+/// `xsd:NMTOKEN` — an XML `Nmtoken`, derived from `xsd:token`.
+pub const XSD_NMTOKEN: &str = "http://www.w3.org/2001/XMLSchema#NMTOKEN";
+/// `xsd:dateTimeStamp` — an `xsd:dateTime` whose timezone is required (XSD 1.1).
+pub const XSD_DATE_TIME_STAMP: &str = "http://www.w3.org/2001/XMLSchema#dateTimeStamp";
+/// `xsd:anySimpleType` — the root of the simple-type hierarchy.
+pub const XSD_ANY_SIMPLE_TYPE: &str = "http://www.w3.org/2001/XMLSchema#anySimpleType";
+/// `xsd:anyAtomicType` — the base of every atomic datatype (XSD 1.1).
+pub const XSD_ANY_ATOMIC_TYPE: &str = "http://www.w3.org/2001/XMLSchema#anyAtomicType";
+/// `xsd:NOTATION` — an XML notation reference.
+pub const XSD_NOTATION: &str = "http://www.w3.org/2001/XMLSchema#NOTATION";
+/// `xsd:QName` — an XML qualified name.
+pub const XSD_QNAME: &str = "http://www.w3.org/2001/XMLSchema#QName";
+/// `xsd:ID` — an XML identifier, derived from `xsd:NCName`.
+pub const XSD_ID: &str = "http://www.w3.org/2001/XMLSchema#ID";
+/// `xsd:IDREF` — an XML identifier reference, derived from `xsd:NCName`.
+pub const XSD_IDREF: &str = "http://www.w3.org/2001/XMLSchema#IDREF";
+/// `xsd:ENTITY` — an XML unparsed-entity reference, derived from `xsd:NCName`.
+pub const XSD_ENTITY: &str = "http://www.w3.org/2001/XMLSchema#ENTITY";
+
+// ── Constraining facets (XSD 1.1 Part 2 §4.3) ──────────────────────────────────────
+//
+// The facet IRIs SHACL (`sh:datatype` restrictions), OWL 2 datatype restrictions
+// and JSON Schema mappings name. They are predicates, not datatypes, and have no
+// [`XsdDatatype`] variant.
+
+/// `xsd:minInclusive` — the inclusive lower bound facet (§4.3.10).
+pub const XSD_MIN_INCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#minInclusive";
+/// `xsd:maxInclusive` — the inclusive upper bound facet (§4.3.7).
+pub const XSD_MAX_INCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#maxInclusive";
+/// `xsd:minExclusive` — the exclusive lower bound facet (§4.3.9).
+pub const XSD_MIN_EXCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#minExclusive";
+/// `xsd:maxExclusive` — the exclusive upper bound facet (§4.3.8).
+pub const XSD_MAX_EXCLUSIVE: &str = "http://www.w3.org/2001/XMLSchema#maxExclusive";
+/// `xsd:length` — the exact length facet (§4.3.1).
+pub const XSD_LENGTH: &str = "http://www.w3.org/2001/XMLSchema#length";
+/// `xsd:minLength` — the minimum length facet (§4.3.2).
+pub const XSD_MIN_LENGTH: &str = "http://www.w3.org/2001/XMLSchema#minLength";
+/// `xsd:maxLength` — the maximum length facet (§4.3.3).
+pub const XSD_MAX_LENGTH: &str = "http://www.w3.org/2001/XMLSchema#maxLength";
+/// `xsd:pattern` — the regular-expression facet (§4.3.4).
+pub const XSD_PATTERN: &str = "http://www.w3.org/2001/XMLSchema#pattern";
+/// `xsd:totalDigits` — the total-digits facet on decimals (§4.3.11).
+pub const XSD_TOTAL_DIGITS: &str = "http://www.w3.org/2001/XMLSchema#totalDigits";
+/// `xsd:fractionDigits` — the fraction-digits facet on decimals (§4.3.12).
+pub const XSD_FRACTION_DIGITS: &str = "http://www.w3.org/2001/XMLSchema#fractionDigits";
+/// `xsd:whiteSpace` — the whitespace-normalization facet (§4.3.6).
+pub const XSD_WHITE_SPACE: &str = "http://www.w3.org/2001/XMLSchema#whiteSpace";
+
 /// The XSD datatypes whose **value space** `purrdf-xsd` models.
 ///
 /// This is a closed set by design: XSD does not grow at runtime, so dispatch over
@@ -276,50 +346,304 @@ impl XsdDatatype {
             _ => return None,
         })
     }
+
+    /// Whether this datatype is `xsd:integer` or one of the twelve integer datatypes
+    /// derived from it (`long` … `unsignedByte`, `nonNegativeInteger` …
+    /// `negativeInteger`).
+    ///
+    /// Derived from [`Self::integer_range`] — the one table that says which datatypes
+    /// are integer-shaped — so the two can never disagree.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::XsdDatatype;
+    ///
+    /// assert!(XsdDatatype::UnsignedByte.is_integer_family());
+    /// assert!(!XsdDatatype::Decimal.is_integer_family());
+    /// ```
+    #[must_use]
+    pub const fn is_integer_family(self) -> bool {
+        self.integer_range().is_some()
+    }
+
+    /// Whether this datatype sits in the SPARQL numeric tower: the integer family
+    /// ([`Self::is_integer_family`]) plus `xsd:decimal`, `xsd:float` and
+    /// `xsd:double`.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::XsdDatatype;
+    ///
+    /// assert!(XsdDatatype::Float.is_numeric());
+    /// assert!(XsdDatatype::NegativeInteger.is_numeric());
+    /// assert!(!XsdDatatype::Boolean.is_numeric());
+    /// ```
+    #[must_use]
+    pub const fn is_numeric(self) -> bool {
+        self.is_integer_family() || matches!(self, Self::Decimal | Self::Float | Self::Double)
+    }
+
+    /// Whether `iri` names an integer-family datatype ([`Self::is_integer_family`]).
+    /// `false` for any IRI outside this crate's value space, including an XSD IRI it
+    /// does not model.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::XsdDatatype;
+    ///
+    /// assert!(XsdDatatype::is_integer_family_iri("http://www.w3.org/2001/XMLSchema#long"));
+    /// assert!(!XsdDatatype::is_integer_family_iri("http://www.w3.org/2001/XMLSchema#decimal"));
+    /// assert!(!XsdDatatype::is_integer_family_iri("http://example.org/integer"));
+    /// ```
+    #[must_use]
+    pub fn is_integer_family_iri(iri: &str) -> bool {
+        Self::from_iri(iri).is_some_and(Self::is_integer_family)
+    }
+
+    /// Whether `iri` names a datatype in the numeric tower ([`Self::is_numeric`]).
+    /// `false` for any IRI outside this crate's value space.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::XsdDatatype;
+    ///
+    /// assert!(XsdDatatype::is_numeric_iri("http://www.w3.org/2001/XMLSchema#double"));
+    /// assert!(!XsdDatatype::is_numeric_iri("http://www.w3.org/2001/XMLSchema#string"));
+    /// ```
+    #[must_use]
+    pub fn is_numeric_iri(iri: &str) -> bool {
+        Self::from_iri(iri).is_some_and(Self::is_numeric)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Every variant, once. A new variant that is not added here fails
+    /// `every_variant_is_in_the_roster`, whose exhaustive `match` the compiler
+    /// refuses to build without an arm for it.
+    const ALL: [XsdDatatype; 31] = [
+        XsdDatatype::Integer,
+        XsdDatatype::Long,
+        XsdDatatype::Int,
+        XsdDatatype::Short,
+        XsdDatatype::Byte,
+        XsdDatatype::UnsignedLong,
+        XsdDatatype::UnsignedInt,
+        XsdDatatype::UnsignedShort,
+        XsdDatatype::UnsignedByte,
+        XsdDatatype::NonNegativeInteger,
+        XsdDatatype::PositiveInteger,
+        XsdDatatype::NonPositiveInteger,
+        XsdDatatype::NegativeInteger,
+        XsdDatatype::Decimal,
+        XsdDatatype::Float,
+        XsdDatatype::Double,
+        XsdDatatype::Boolean,
+        XsdDatatype::String,
+        XsdDatatype::Date,
+        XsdDatatype::Time,
+        XsdDatatype::DateTime,
+        XsdDatatype::Duration,
+        XsdDatatype::DayTimeDuration,
+        XsdDatatype::YearMonthDuration,
+        XsdDatatype::GYear,
+        XsdDatatype::GMonth,
+        XsdDatatype::GDay,
+        XsdDatatype::GYearMonth,
+        XsdDatatype::GMonthDay,
+        XsdDatatype::HexBinary,
+        XsdDatatype::Base64Binary,
+    ];
+
+    /// The expected answers, one arm per variant: `(is_integer_family, is_numeric)`.
+    /// Spelled as a `match` rather than a list so a new variant cannot be forgotten.
+    const fn expected_predicates(dt: XsdDatatype) -> (bool, bool) {
+        match dt {
+            XsdDatatype::Integer
+            | XsdDatatype::Long
+            | XsdDatatype::Int
+            | XsdDatatype::Short
+            | XsdDatatype::Byte
+            | XsdDatatype::UnsignedLong
+            | XsdDatatype::UnsignedInt
+            | XsdDatatype::UnsignedShort
+            | XsdDatatype::UnsignedByte
+            | XsdDatatype::NonNegativeInteger
+            | XsdDatatype::PositiveInteger
+            | XsdDatatype::NonPositiveInteger
+            | XsdDatatype::NegativeInteger => (true, true),
+            XsdDatatype::Decimal | XsdDatatype::Float | XsdDatatype::Double => (false, true),
+            XsdDatatype::Boolean
+            | XsdDatatype::String
+            | XsdDatatype::Date
+            | XsdDatatype::Time
+            | XsdDatatype::DateTime
+            | XsdDatatype::Duration
+            | XsdDatatype::DayTimeDuration
+            | XsdDatatype::YearMonthDuration
+            | XsdDatatype::GYear
+            | XsdDatatype::GMonth
+            | XsdDatatype::GDay
+            | XsdDatatype::GYearMonth
+            | XsdDatatype::GMonthDay
+            | XsdDatatype::HexBinary
+            | XsdDatatype::Base64Binary => (false, false),
+        }
+    }
+
+    #[test]
+    fn every_variant_is_in_the_roster() {
+        for dt in ALL {
+            // The match is exhaustive over the enum; reaching it for every roster
+            // entry and finding no duplicates pins the roster to the enum.
+            let _ = expected_predicates(dt);
+            assert_eq!(ALL.iter().filter(|&&other| other == dt).count(), 1);
+        }
+    }
+
     #[test]
     fn iri_round_trips_for_every_datatype() {
-        for dt in [
-            XsdDatatype::Integer,
-            XsdDatatype::Long,
-            XsdDatatype::Int,
-            XsdDatatype::Short,
-            XsdDatatype::Byte,
-            XsdDatatype::UnsignedLong,
-            XsdDatatype::UnsignedInt,
-            XsdDatatype::UnsignedShort,
-            XsdDatatype::UnsignedByte,
-            XsdDatatype::NonNegativeInteger,
-            XsdDatatype::PositiveInteger,
-            XsdDatatype::NonPositiveInteger,
-            XsdDatatype::NegativeInteger,
-            XsdDatatype::Decimal,
-            XsdDatatype::Float,
-            XsdDatatype::Double,
-            XsdDatatype::Boolean,
-            XsdDatatype::String,
-            XsdDatatype::Date,
-            XsdDatatype::Time,
-            XsdDatatype::DateTime,
-            XsdDatatype::Duration,
-            XsdDatatype::DayTimeDuration,
-            XsdDatatype::YearMonthDuration,
-            XsdDatatype::GYear,
-            XsdDatatype::GMonth,
-            XsdDatatype::GDay,
-            XsdDatatype::GYearMonth,
-            XsdDatatype::GMonthDay,
-            XsdDatatype::HexBinary,
-            XsdDatatype::Base64Binary,
-        ] {
+        for dt in ALL {
             assert_eq!(XsdDatatype::from_iri(dt.iri()), Some(dt));
             assert!(dt.iri().starts_with(XSD_NS));
         }
+    }
+
+    #[test]
+    fn integer_family_and_numeric_predicates_agree_with_the_table() {
+        let mut integer_count = 0;
+        let mut numeric_count = 0;
+        for dt in ALL {
+            let (integer, numeric) = expected_predicates(dt);
+            assert_eq!(dt.is_integer_family(), integer, "{dt:?}");
+            assert_eq!(dt.is_numeric(), numeric, "{dt:?}");
+            assert_eq!(
+                dt.is_integer_family(),
+                dt.integer_range().is_some(),
+                "{dt:?}: derived from the range table"
+            );
+            assert_eq!(XsdDatatype::is_integer_family_iri(dt.iri()), integer);
+            assert_eq!(XsdDatatype::is_numeric_iri(dt.iri()), numeric);
+            integer_count += usize::from(integer);
+            numeric_count += usize::from(numeric);
+        }
+        assert_eq!(integer_count, 13, "integer plus its twelve derived types");
+        assert_eq!(
+            numeric_count, 16,
+            "the integer family plus decimal, float, double"
+        );
+    }
+
+    #[test]
+    fn iri_predicates_refuse_every_iri_outside_the_value_space() {
+        for iri in [
+            "http://example.org/integer",
+            "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString",
+            "http://www.w3.org/2002/07/owl#rational",
+            // XSD IRIs this crate names but does not model.
+            XSD_ANY_URI,
+            XSD_TOKEN,
+            XSD_DATE_TIME_STAMP,
+            XSD_MIN_INCLUSIVE,
+            "",
+            // A near miss on the local name.
+            "http://www.w3.org/2001/XMLSchema#Integer",
+            "http://www.w3.org/2001/XMLSchema#integer ",
+        ] {
+            assert!(!XsdDatatype::is_integer_family_iri(iri), "{iri:?}");
+            assert!(!XsdDatatype::is_numeric_iri(iri), "{iri:?}");
+        }
+        // The neighbouring valid spellings still answer `true`.
+        assert!(XsdDatatype::is_integer_family_iri(XSD_INTEGER));
+        assert!(XsdDatatype::is_numeric_iri(XSD_DECIMAL));
+    }
+
+    /// The datatypes this crate names without modelling, and the constraining
+    /// facets, pinned byte-for-byte: other crates share these constants in place of
+    /// their own copies, so the strings must be exactly the W3C spellings (note the
+    /// case of `Name`, `NCName`, `NMTOKEN`, `NOTATION`, `QName`, `ID`, `IDREF`,
+    /// `ENTITY`).
+    #[test]
+    fn unmodelled_datatype_and_facet_constants_are_byte_exact() {
+        for (constant, local) in [
+            (XSD_ANY_URI, "anyURI"),
+            (XSD_NORMALIZED_STRING, "normalizedString"),
+            (XSD_TOKEN, "token"),
+            (XSD_LANGUAGE, "language"),
+            (XSD_NAME, "Name"),
+            (XSD_NCNAME, "NCName"),
+            (XSD_NMTOKEN, "NMTOKEN"),
+            (XSD_DATE_TIME_STAMP, "dateTimeStamp"),
+            (XSD_ANY_SIMPLE_TYPE, "anySimpleType"),
+            (XSD_ANY_ATOMIC_TYPE, "anyAtomicType"),
+            (XSD_NOTATION, "NOTATION"),
+            (XSD_QNAME, "QName"),
+            (XSD_ID, "ID"),
+            (XSD_IDREF, "IDREF"),
+            (XSD_ENTITY, "ENTITY"),
+            (XSD_YEAR_MONTH_DURATION, "yearMonthDuration"),
+            (XSD_DAY_TIME_DURATION, "dayTimeDuration"),
+            (XSD_MIN_INCLUSIVE, "minInclusive"),
+            (XSD_MAX_INCLUSIVE, "maxInclusive"),
+            (XSD_MIN_EXCLUSIVE, "minExclusive"),
+            (XSD_MAX_EXCLUSIVE, "maxExclusive"),
+            (XSD_LENGTH, "length"),
+            (XSD_MIN_LENGTH, "minLength"),
+            (XSD_MAX_LENGTH, "maxLength"),
+            (XSD_PATTERN, "pattern"),
+            (XSD_TOTAL_DIGITS, "totalDigits"),
+            (XSD_FRACTION_DIGITS, "fractionDigits"),
+            (XSD_WHITE_SPACE, "whiteSpace"),
+        ] {
+            assert_eq!(constant, format!("{XSD_NS}{local}"));
+        }
+        // None of the unmodelled datatypes or facets is a value-space datatype: the
+        // shared entry point keeps answering "recognised as unsupported" for them.
+        for iri in [
+            XSD_ANY_URI,
+            XSD_NORMALIZED_STRING,
+            XSD_TOKEN,
+            XSD_LANGUAGE,
+            XSD_NAME,
+            XSD_NCNAME,
+            XSD_NMTOKEN,
+            XSD_DATE_TIME_STAMP,
+            XSD_ANY_SIMPLE_TYPE,
+            XSD_ANY_ATOMIC_TYPE,
+            XSD_NOTATION,
+            XSD_QNAME,
+            XSD_ID,
+            XSD_IDREF,
+            XSD_ENTITY,
+            XSD_MIN_INCLUSIVE,
+            XSD_MAX_INCLUSIVE,
+            XSD_MIN_EXCLUSIVE,
+            XSD_MAX_EXCLUSIVE,
+            XSD_LENGTH,
+            XSD_MIN_LENGTH,
+            XSD_MAX_LENGTH,
+            XSD_PATTERN,
+            XSD_TOTAL_DIGITS,
+            XSD_FRACTION_DIGITS,
+            XSD_WHITE_SPACE,
+        ] {
+            assert_eq!(XsdDatatype::from_iri(iri), None, "{iri}");
+        }
+        // The two duration subtypes, by contrast, ARE modelled.
+        assert_eq!(
+            XsdDatatype::from_iri(XSD_YEAR_MONTH_DURATION),
+            Some(XsdDatatype::YearMonthDuration)
+        );
+        assert_eq!(
+            XsdDatatype::from_iri(XSD_DAY_TIME_DURATION),
+            Some(XsdDatatype::DayTimeDuration)
+        );
     }
 
     #[test]

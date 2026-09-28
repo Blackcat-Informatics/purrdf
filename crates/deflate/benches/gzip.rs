@@ -15,19 +15,15 @@ use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_deflate::backend::Backend;
 use purrdf_deflate::{Deflater, GzipDecoder, Level, gzip};
+use purrdf_testkit::rng::Xorshift64;
 
 const SIZES: [(usize, &str); 3] = [(4 << 10, "4KiB"), (1 << 20, "1MiB"), (16 << 20, "16MiB")];
 
 /// A deterministic xorshift byte stream.
-fn random(len: usize, mut state: u64) -> Vec<u8> {
-    (0..len)
-        .map(|_| {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state as u8
-        })
-        .collect()
+fn random(len: usize, seed: u64) -> Vec<u8> {
+    let mut bytes = vec![0; len];
+    Xorshift64::new(seed).fill_bytes(&mut bytes);
+    bytes
 }
 
 /// Words from a small vocabulary, pseudo-randomly ordered.

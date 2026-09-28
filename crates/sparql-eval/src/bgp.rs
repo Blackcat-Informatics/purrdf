@@ -564,8 +564,8 @@ fn plan_or_cached_order<D: DatasetView>(
 /// structurally distinct BGPs cannot collide to one cached order, and folds in the scope
 /// because a pattern's cardinality (hence its best order) is scope-dependent.
 fn bgp_shape_key<I: ViewTermId>(compiled: &[CompiledPattern<I>], scope: &GraphScope<I>) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    use std::hash::{BuildHasher as _, Hash, Hasher};
+    let mut h = purrdf_core::FastHasher::default().build_hasher();
     compiled.len().hash(&mut h);
     for cp in compiled {
         hash_pos(&cp.s, &mut h);

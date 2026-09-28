@@ -9,8 +9,10 @@
 use ciborium::value::Value;
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
 
+use purrdf_hash::hex::Lower;
+
 use crate::wire::{
-    MAGIC, VERSION, blake3_256, canonical, content_id, header_id, hex, iter_items, map_get,
+    MAGIC, VERSION, blake3_256, canonical, content_id, header_id, iter_items, map_get,
     unwrap_header,
 };
 
@@ -416,8 +418,8 @@ impl Proof {
         );
         let _ = writeln!(out, "  \"count\": {},", self.count);
         let _ = writeln!(out, "  \"leaf_index\": {},", self.leaf_index);
-        let _ = writeln!(out, "  \"frame_id\": \"{}\",", hex(&self.frame_id));
-        let _ = writeln!(out, "  \"root\": \"{}\",", hex(&self.root));
+        let _ = writeln!(out, "  \"frame_id\": \"{}\",", Lower(&self.frame_id));
+        let _ = writeln!(out, "  \"root\": \"{}\",", Lower(&self.root));
         let _ = writeln!(out, "  \"peak_index\": {},", self.peak_index);
         out.push_str("  \"peaks\": [\n");
         for (index, peak) in self.peaks.iter().enumerate() {
@@ -425,7 +427,7 @@ impl Proof {
                 out,
                 "    {{\"height\": {}, \"hash\": \"{}\"}}{}",
                 peak.height,
-                hex(&peak.hash),
+                Lower(&peak.hash),
                 if index + 1 == self.peaks.len() {
                     ""
                 } else {
@@ -445,7 +447,7 @@ impl Proof {
                 "    {{\"side\": \"{}\", \"parent_height\": {}, \"hash\": \"{}\"}}{}",
                 side,
                 step.parent_height,
-                hex(&step.hash),
+                Lower(&step.hash),
                 if index + 1 == self.path.len() {
                     ""
                 } else {
@@ -766,23 +768,20 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
 }
 
 /// Parse a raw 32-byte hex id, accepting an optional `blake3:` prefix.
+///
+/// Surrounding whitespace is trimmed and either digit case is accepted, as
+/// [`purrdf_hash::hex::decode_32`] (the strict shared decoder this reads
+/// through) accepts it; anything that is not exactly 64 hex digits after the
+/// prefix is refused.
 pub fn parse_hex_32(input: &str) -> Result<Vec<u8>, String> {
     let trimmed = input.trim();
     let raw = trimmed.strip_prefix("blake3:").unwrap_or(trimmed);
     if raw.len() != 64 {
         return Err("expected a 32-byte hex value".to_string());
     }
-    let mut out = Vec::with_capacity(32);
-    for chunk in raw.as_bytes().as_chunks::<2>().0 {
-        let hi = (chunk[0] as char)
-            .to_digit(16)
-            .ok_or_else(|| "hex value contains a non-hex character".to_string())?;
-        let lo = (chunk[1] as char)
-            .to_digit(16)
-            .ok_or_else(|| "hex value contains a non-hex character".to_string())?;
-        out.push(((hi << 4) | lo) as u8);
-    }
-    Ok(out)
+    purrdf_hash::hex::decode_32(raw)
+        .map(|digest| digest.to_vec())
+        .map_err(|_| "hex value contains a non-hex character".to_string())
 }
 
 fn as_i128(v: &Value) -> Option<i128> {
@@ -909,7 +908,7 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
             item_index += 1;
         }
     }
-    candidate.ok_or_else(|| format!("no valid index mmr covers frame {}", hex(target_frame_id)))
+    candidate.ok_or_else(|| format!("no valid index mmr covers frame {}", Lower(target_frame_id)))
 }
 
 #[cfg(test)]
@@ -918,6 +917,40 @@ mod tests {
 
     fn id(n: u8) -> Vec<u8> {
         vec![n; 32]
+    }
+
+    /// The grammar `parse_hex_32` accepted before it read through the shared
+    /// decoder, pinned: an optional `blake3:` prefix, surrounding whitespace,
+    /// either digit case; refusals name the length or the digit.
+    #[test]
+    fn parse_hex_32_keeps_its_prefix_trim_and_case_grammar() {
+        let digest: Vec<u8> = (0..32u8).map(|i| i.wrapping_mul(9) ^ 0x5a).collect();
+        let text = purrdf_hash::hex::lower(&digest);
+        assert_eq!(parse_hex_32(&text).unwrap(), digest);
+        assert_eq!(parse_hex_32(&format!("blake3:{text}")).unwrap(), digest);
+        assert_eq!(parse_hex_32(&format!("  blake3:{text}\n")).unwrap(), digest);
+        assert_eq!(
+            parse_hex_32(&text.to_ascii_uppercase()).unwrap(),
+            digest,
+            "uppercase digits were accepted before and still are"
+        );
+        assert_eq!(
+            parse_hex_32(&text[..63]).unwrap_err(),
+            "expected a 32-byte hex value"
+        );
+        assert_eq!(
+            parse_hex_32(&format!("{text}0")).unwrap_err(),
+            "expected a 32-byte hex value"
+        );
+        assert_eq!(
+            parse_hex_32(&format!("blake3:{}", "g".repeat(64))).unwrap_err(),
+            "hex value contains a non-hex character"
+        );
+        assert_eq!(
+            parse_hex_32(&format!("{}\u{e9}", &text[..62])).unwrap_err(),
+            "hex value contains a non-hex character",
+            "a two-byte character keeps the 64-byte length but is not a digit"
+        );
     }
 
     #[test]

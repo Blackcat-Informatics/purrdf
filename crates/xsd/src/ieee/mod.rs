@@ -119,6 +119,7 @@
 use core::fmt;
 use core::marker::PhantomData;
 
+pub mod exact;
 #[doc(hidden)]
 pub mod reference;
 #[cfg(all(target_arch = "x86", not(target_feature = "sse2")))]

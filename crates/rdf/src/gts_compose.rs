@@ -24,8 +24,9 @@ use std::hash::BuildHasher;
 use ciborium::value::Value;
 use hashbrown::HashTable;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
-use purrdf_gts::wire::{blake3_256, canonical, hex};
+use purrdf_gts::wire::{blake3_256, canonical};
 use purrdf_gts::writer::Writer;
+use purrdf_hash::hex::lower as hex;
 
 use crate::{
     BlankScope, DatasetView, DrainCheckpoint, FallibleDatasetView, FastHasher, RdfTextDirection,

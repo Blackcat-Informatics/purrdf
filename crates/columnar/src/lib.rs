@@ -39,5 +39,4 @@ pub use schema::{ColumnSchema, PhysicalType, Repetition, Table, TableSchema};
 pub use writer::{ColumnarWrite, write};
 
 #[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;
+use purrdf_core::term_fixture as test_terms;

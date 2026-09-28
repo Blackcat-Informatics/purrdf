@@ -21,7 +21,6 @@ use purrdf_core::TermValue;
 use super::certificate::{Session, Verdict};
 use super::classify::Subsumptions;
 use super::proof::{Claim, ClaimSubject, refutation_claim};
-use super::term_key;
 use crate::owl_dl::graph::Assumptions;
 
 /// Whether `KB ⊨ individual : concept`, by refuting `individual : ¬concept`.
@@ -147,9 +146,8 @@ impl Realization {
             }
         }
 
-        let pair = |(a, b): &(TermValue, TermValue)| (term_key(a), term_key(b));
-        types.sort_by_key(pair);
-        direct.sort_by_key(pair);
+        types.sort();
+        direct.sort();
         (Self { types, direct }, claims)
     }
 }

@@ -626,6 +626,7 @@ dependencies = [
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-testkit",
  "purrdf-text",
  "purrdf-validate",
  "purrdf-xsd",
@@ -859,6 +860,7 @@ name = "purrdf-jsonschema"
 version = "2.0.2"
 dependencies = [
  "criterion",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-testkit",
  "regex",
@@ -950,6 +952,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-datalog",
  "purrdf-gts",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-jsonschema",
  "purrdf-rdf",

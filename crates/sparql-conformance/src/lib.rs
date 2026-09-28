@@ -188,5 +188,4 @@ fn log_xfail(iri: &str, reason: XfailReason, msg: &str) {
 }
 
 #[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;
+use purrdf_core::term_fixture as test_terms;

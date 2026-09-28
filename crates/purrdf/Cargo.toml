@@ -85,6 +85,10 @@ purrdf-json.workspace = true
 # HNSW producers, which only the umbrella can wire together in one fixture
 # because `purrdf-retrieval` does not depend on `purrdf-hnsw`.
 criterion = { workspace = true }
+# The one deterministic SplitMix64 stream the facade tests' and bench's vector
+# fixtures draw from. Path-only and unpublished, so it is stripped from the
+# packaged manifest; wasm32-clean, so it needs no target gate.
+purrdf-testkit = { workspace = true }
 
 # The fused read taken on demand against the same read materialised, over real
 # text and HNSW producers rather than the mock ones `purrdf-retrieval`'s own

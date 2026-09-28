@@ -116,5 +116,4 @@ pub use topology::{
 pub use vocab::{CrsUnit, DEFAULT_COORDINATE_SCALE, GeoTerm, GeoVocab, GeoVocabBuilder};
 
 #[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;
+use purrdf_core::term_fixture as test_terms;

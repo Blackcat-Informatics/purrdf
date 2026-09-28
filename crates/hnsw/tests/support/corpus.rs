@@ -90,8 +90,8 @@
 // subset. Matches the sibling `support/purremb.rs`.
 #![allow(dead_code, unreachable_pub)]
 
-use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{Result, VectorMatrix};
+use purrdf_testkit::rng::{signed_unit_next_nonzero, signed_unit_step_nonzero, splitmix64_step};
 
 /// The shape and geometry of a generated corpus.
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -193,19 +193,15 @@ impl Stream {
     }
 
     pub(crate) fn next_bits(&mut self) -> u64 {
-        self.0 = splitmix64(self.0);
+        self.0 = splitmix64_step(self.0);
         self.0
     }
 
-    /// A value in `[-1, 1)`, never exactly zero so a norm cannot collapse.
+    /// A value in `[-1, 1)`, never exactly zero so a norm cannot collapse: the
+    /// workspace's self-composed SplitMix64 unit draw, an exact zero displaced
+    /// to `0.125`.
     pub(crate) fn unit(&mut self) -> f64 {
-        let bits = self.next_bits();
-        #[expect(
-            clippy::cast_precision_loss,
-            reason = "a 53-bit mantissa is ample for a coordinate draw"
-        )]
-        let value = ((bits >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-        if value == 0.0 { 0.125 } else { value }
+        signed_unit_step_nonzero(&mut self.0, 0.125)
     }
 
     /// A unit-norm vector of `len` components.
@@ -216,30 +212,18 @@ impl Stream {
     }
 }
 
-/// One step of the "linear counter" SplitMix64 variant behind
-/// [`linear_unit_values`]. Unlike [`Stream`], whose internal state IS the
-/// previous mixed output (a self-composed stream), this generator's `state`
-/// is a plain incrementing counter and every draw re-mixes it from scratch —
-/// a different stream from the same seed. It exists because a caller's
-/// deterministic expectations were built against exactly this construction.
-fn linear_step(state: &mut u64) -> f64 {
-    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    let mut z = *state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^= z >> 31;
-    #[expect(
-        clippy::cast_precision_loss,
-        reason = "a 53-bit mantissa is ample for a coordinate draw"
-    )]
-    let value = ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-    if value == 0.0 { 0.125 } else { value }
-}
-
-/// `count` values from the linear-counter SplitMix64 stream seeded by `seed`.
+/// `count` values from the "linear counter" SplitMix64 stream seeded by
+/// `seed`, an exact zero displaced to `0.125`. Unlike [`Stream`], whose
+/// internal state IS the previous mixed output (a self-composed stream), this
+/// generator's state is a plain incrementing counter and every draw re-mixes
+/// it from scratch — a different stream from the same seed. It exists because
+/// a caller's deterministic expectations were built against exactly this
+/// construction.
 pub(crate) fn linear_unit_values(seed: u64, count: usize) -> Vec<f64> {
     let mut state = seed;
-    (0..count).map(|_| linear_step(&mut state)).collect()
+    (0..count)
+        .map(|_| signed_unit_next_nonzero(&mut state, 0.125))
+        .collect()
 }
 
 /// Scale `values` to unit L2 norm. A zero vector is left alone; `Stream::unit` cannot

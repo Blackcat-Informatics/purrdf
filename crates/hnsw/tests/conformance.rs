@@ -45,12 +45,12 @@ use std::path::{Path, PathBuf};
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
-use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{
     HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE, Params,
     VectorMatrix, profile,
 };
 use purrdf_sparql_eval::knn::{Kernel, Ranked, best};
+use purrdf_testkit::rng::{signed_unit_step, signed_unit_step_nonzero, splitmix64_step};
 use std::fmt::Write as _;
 
 use serde_json::{Value, json};
@@ -87,13 +87,9 @@ fn uniform(rows: usize, dims: usize, seed: u64) -> VectorMatrix {
         .checked_mul(dims)
         .expect("the fixture shape fits usize");
     let mut state = seed;
-    let mut data = Vec::with_capacity(elements);
-    for _ in 0..elements {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        let value = unit.mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.25 } else { value });
-    }
+    let data: Vec<f64> = (0..elements)
+        .map(|_| signed_unit_step_nonzero(&mut state, 0.25))
+        .collect();
     VectorMatrix::new(rows, dims, data).expect("the generated matrix is finite and rectangular")
 }
 
@@ -141,7 +137,7 @@ fn clusters(rows: usize, dims: usize) -> VectorMatrix {
             let centroid = row % 4;
             (0..dims)
                 .map(|axis| {
-                    state = splitmix64(state);
+                    state = splitmix64_step(state);
                     let noise = ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(0.02, -0.01);
                     if axis == centroid { 3.0 + noise } else { noise }
                 })
@@ -158,10 +154,7 @@ fn hub(rows: usize, dims: usize) -> VectorMatrix {
         .map(|row| {
             let scale = if row + 1 == rows { 10.0 } else { 0.01 };
             (0..dims)
-                .map(|_| {
-                    state = splitmix64(state);
-                    ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0) * scale
-                })
+                .map(|_| signed_unit_step(&mut state) * scale)
                 .collect()
         })
         .collect();

@@ -33,6 +33,20 @@ pub type FastSet<T> = std::collections::HashSet<T, FastHasher>;
 /// A [`FastSet`] of interned [`TermId`](crate::TermId)s — the common id-membership set.
 pub type IdSet = FastSet<crate::TermId>;
 
+/// The coarse (quad count, distinct term count) fingerprint every
+/// [`DatasetView`](crate::DatasetView) implementation reports from
+/// `stats_fingerprint`: a cache discriminator for planner decisions, never a
+/// content digest and never persisted, so it hashes through the workspace's
+/// fixed-key [`FastHasher`] rather than the standard library's unspecified
+/// `DefaultHasher`. One function, so every view answers the same value for the
+/// same two counts and a cache keyed by it never sees a view-specific spelling.
+#[inline]
+#[must_use]
+pub fn stats_fingerprint(quads: usize, terms: usize) -> u64 {
+    use std::hash::BuildHasher as _;
+    FastHasher::default().hash_one((quads, terms))
+}
+
 /// Hash an IRI for the primary term index, including its variant tag.
 ///
 /// The builder, global dictionary and frozen dataset must use this exact

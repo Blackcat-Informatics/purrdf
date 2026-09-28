@@ -367,14 +367,25 @@ pub fn days_from_civil(y: i64, m: u8, d: u8) -> i128 {
     era * 146_097 + doe - 719_468
 }
 
-/// Howard Hinnant's `civil_from_days`: the inverse of [`days_from_civil`]. `days` is
-/// the day count relative to 1970-01-01 (may be negative), given — and computed —
-/// in `i128` for the identical overflow-safety reason [`days_from_civil`]'s doc
-/// spells out (the two functions are inverses of each other and share the same
+/// The proleptic-Gregorian `(year, month, day)` that is `days` days after
+/// 1970-01-01 — Howard Hinnant's `civil_from_days`, the exact inverse of
+/// [`days_from_civil`]: `civil_from_days(days_from_civil(y, m, d)) == (y, m, d)`
+/// for every valid date, and `days_from_civil` of the result is `days` for every
+/// day count. `days` may be negative; day 0 is 1970-01-01, day −1 is 1969-12-31.
+/// Month is `1..=12`, day `1..=31`, and the calendar is proleptic Gregorian
+/// throughout (the Gregorian leap rule applied before 1582 too, with year 0 and
+/// negative years as XSD 1.1 numbers them: year 0 is 1 BCE).
+///
+/// Given — and computed — in `i128` for the identical overflow-safety reason
+/// [`days_from_civil`]'s doc spells out (the two functions share the same
 /// `era * 146_097`-shaped arithmetic, so they share the same hazard and the same
-/// fix). Shared by [`datetime_from_unix_seconds`] and the duration/timezone
-/// arithmetic below, which all need to turn an exact day count back into a
-/// proleptic-Gregorian date.
+/// fix). Exact for every `days` up to `i128::MAX − 719_468` (the shift onto the
+/// 0000-03-01 epoch is the one operation that can overflow, and only at the very
+/// top of `i128`); every day count reachable from an `i64` year — the crate's
+/// year field type — lies over sixteen orders of magnitude inside that. Shared by
+/// [`datetime_from_unix_seconds`], the RFC 3339 formatter and the
+/// duration/timezone arithmetic below, which all need to turn an exact day count
+/// back into a proleptic-Gregorian date.
 ///
 /// The returned year is `i128` too, deliberately not narrowed here: narrowing is
 /// the caller's job, at the point where an `i64` field is actually populated, so
@@ -383,7 +394,19 @@ pub fn days_from_civil(y: i64, m: u8, d: u8) -> i128 {
 /// to fail and which cannot.
 ///
 /// Algorithm reference: <https://howardhinnant.github.io/date_algorithms.html>
-fn civil_from_days(days: i128) -> (i128, u8, u8) {
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_xsd::{civil_from_days, days_from_civil};
+///
+/// assert_eq!(civil_from_days(0), (1970, 1, 1));
+/// assert_eq!(civil_from_days(-1), (1969, 12, 31));
+/// assert_eq!(civil_from_days(11_017), (2000, 3, 1));
+/// assert_eq!(civil_from_days(days_from_civil(1600, 2, 29)), (1600, 2, 29));
+/// ```
+#[must_use]
+pub const fn civil_from_days(days: i128) -> (i128, u8, u8) {
     let z = days + 719_468;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
     let doe = z - era * 146_097;
@@ -5311,5 +5334,84 @@ mod tests {
         assert_eq!(d.months(), 14); // 1*12 + 2
         // 3 days + 4h + 5m + 6s = 259200 + 14400 + 300 + 6 = 273906
         assert_eq!(d.seconds().canonical_lexical(), "273906");
+    }
+
+    // ── The civil calendar ─────────────────────────────────────────────────────────
+
+    /// `civil_from_days` inverts `days_from_civil` on every day of four thousand
+    /// years around the epoch, and consecutive days give consecutive day counts.
+    #[test]
+    fn civil_from_days_inverts_days_from_civil_for_every_day_of_four_millennia() {
+        let mut previous: Option<i128> = None;
+        let mut count = 0_u32;
+        for year in -1000_i64..3000 {
+            for month in 1_u8..=12 {
+                for day in 1..=days_in_month(year, month) {
+                    let days = days_from_civil(year, month, day);
+                    assert_eq!(
+                        civil_from_days(days),
+                        (i128::from(year), month, day),
+                        "{year}-{month:02}-{day:02}"
+                    );
+                    if let Some(previous) = previous {
+                        assert_eq!(days, previous + 1, "{year}-{month:02}-{day:02}");
+                    }
+                    previous = Some(days);
+                    count += 1;
+                }
+            }
+        }
+        // 4000 years: 1000 leap-year cycles of 146_097 days each.
+        assert_eq!(count, 10 * 146_097);
+    }
+
+    #[test]
+    fn civil_from_days_known_dates() {
+        assert_eq!(civil_from_days(0), (1970, 1, 1));
+        assert_eq!(civil_from_days(-1), (1969, 12, 31));
+        assert_eq!(civil_from_days(1), (1970, 1, 2));
+        // 30 years with seven leap days to 2000-01-01, then January and a leap
+        // February: 10_957 + 31 + 29.
+        assert_eq!(civil_from_days(11_017), (2000, 3, 1));
+        assert_eq!(civil_from_days(11_016), (2000, 2, 29));
+        // Exactly one 400-year cycle earlier.
+        assert_eq!(civil_from_days(11_017 - 146_097), (1600, 3, 1));
+        assert_eq!(civil_from_days(-135_081), (1600, 2, 29));
+        assert_eq!(days_from_civil(1600, 2, 29), -135_081);
+        // The algorithm's own epoch, 0000-03-01, and the day before it.
+        assert_eq!(civil_from_days(-719_468), (0, 3, 1));
+        assert_eq!(civil_from_days(-719_469), (0, 2, 29));
+        // Century rule: 1900 is not a leap year, 2000 is.
+        assert_eq!(
+            civil_from_days(days_from_civil(1900, 2, 28) + 1),
+            (1900, 3, 1)
+        );
+        assert_eq!(
+            civil_from_days(days_from_civil(2000, 2, 28) + 1),
+            (2000, 2, 29)
+        );
+        // A negative year and the largest day count an i64 unix-seconds value reaches.
+        assert_eq!(
+            civil_from_days(days_from_civil(-4713, 11, 24)),
+            (-4713, 11, 24)
+        );
+        let far = i128::from(i64::MAX / 86_400);
+        assert_eq!(days_from_civil_i128(civil_from_days(far)), far);
+        let far_back = i128::from(i64::MIN / 86_400);
+        assert_eq!(days_from_civil_i128(civil_from_days(far_back)), far_back);
+    }
+
+    /// `days_from_civil` over the `i128` year `civil_from_days` answers.
+    fn days_from_civil_i128((year, month, day): (i128, u8, u8)) -> i128 {
+        days_from_civil(i64::try_from(year).expect("fits i64"), month, day)
+    }
+
+    /// The function is `const`: evaluated at compile time.
+    #[test]
+    fn civil_from_days_is_const() {
+        const EPOCH: (i128, u8, u8) = civil_from_days(0);
+        const LEAP: (i128, u8, u8) = civil_from_days(11_016);
+        assert_eq!(EPOCH, (1970, 1, 1));
+        assert_eq!(LEAP, (2000, 2, 29));
     }
 }

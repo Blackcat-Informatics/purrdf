@@ -23,11 +23,8 @@
 //!   [`QuadPatternCursor`] that pins an [`Arc`] and lazily follows the selected
 //!   quad index without collecting matching rows.
 //!
-use crate::TermBox;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::convert::Infallible;
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
 use hashbrown::HashTable;
@@ -43,7 +40,6 @@ use crate::{
 };
 
 use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
-use super::term_walk::fold_term;
 
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
 /// layer (`reifier rdf:reifies <<( s p o )>>`). Used to expose the reifier side-table
@@ -854,56 +850,12 @@ impl RdfDataset {
     /// world-store, the SPARQL egress) resolve through this rather than the
     /// `RdfTerm` owned model.
     ///
-    /// A triple term is assembled bottom-up over [`fold_term`]'s work list: its
-    /// subject, predicate and object are resolved in that order, each fully before
-    /// the next.
+    /// This is [`DatasetView::term_value`](crate::DatasetView::term_value), the one
+    /// materialization every view shares: a triple term is assembled bottom-up over a
+    /// work list, its subject, predicate and object resolved in that order, each
+    /// fully before the next.
     pub fn term_value(&self, id: TermId) -> TermValue {
-        match fold_term(
-            self,
-            id,
-            |_, term| {
-                Ok::<_, Infallible>(match term {
-                    TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-                    TermRef::Blank { label, scope } => TermValue::Blank {
-                        label: label.to_owned(),
-                        scope,
-                    },
-                    TermRef::Literal {
-                        lexical,
-                        datatype,
-                        language,
-                        direction,
-                    } => {
-                        let datatype = match self.resolve(datatype) {
-                            TermRef::Iri(dt) => dt.to_owned(),
-                            other => {
-                                unreachable!(
-                                    "literal datatype must resolve to an IRI, got {other:?}"
-                                )
-                            }
-                        };
-                        TermValue::Literal {
-                            lexical_form: lexical.to_owned(),
-                            datatype,
-                            language: language.map(str::to_owned),
-                            direction,
-                        }
-                    }
-                    TermRef::Triple { .. } => {
-                        unreachable!("a triple term is assembled from its components")
-                    }
-                })
-            },
-            |_, s, p, o| {
-                Ok(TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                })
-            },
-        ) {
-            Ok(value) => value,
-        }
+        crate::DatasetView::term_value(self, id)
     }
 
     /// Resolve a term id that must be an IRI (a predicate / triple-predicate
@@ -1997,10 +1949,7 @@ impl RdfDataset {
     /// never incorrect. For a content-exact identity use the RDFC-1.0 canonical digest.
     #[inline]
     pub fn stats_fingerprint(&self) -> u64 {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.quads.len().hash(&mut h);
-        self.terms.len().hash(&mut h);
-        h.finish()
+        crate::hash::stats_fingerprint(self.quads.len(), self.terms.len())
     }
 
     /// The caller-configured content-id recognition scheme (see

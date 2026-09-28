@@ -156,7 +156,15 @@ pub(crate) mod binary64;
 mod build_identity;
 mod dispatch;
 mod env;
+// The MXCSR probes the float-environment tests share (native x86 only): a
+// `#[doc(hidden)]` test fixture, re-exported at the crate root.
 mod exact;
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
+#[doc(hidden)]
+pub mod float_env_probe;
 mod reassociated;
 mod shape;
 

@@ -8,9 +8,9 @@
 //! is the SHA-256 blob-store address computed by this crate (`of`/`from_raw`),
 //! `Blake3ContentId` addresses the separate BLAKE3 domain used by the GTS
 //! `blake3:<hex>` term encoding produced *outside* this crate. This type is
-//! **decode-only**: it never hashes bytes and `purrdf-core` gains no `blake3`
-//! dependency from it. Callers that need to mint a `Blake3ContentId` from raw
-//! bytes must hash elsewhere and hand the crate the resulting hex or raw bytes.
+//! **decode-only**: it never hashes bytes. The kernel reaches BLAKE3 through
+//! `purrdf-hash`, but a content id is minted where the bytes are hashed, and it
+//! arrives here as hex or as its raw 32 bytes.
 //!
 //! The hex-decode loop is shared with `ContentDigest::from_hex` via
 //! `decode_hex_32` / `decode_hex_32_lower` so the two domains

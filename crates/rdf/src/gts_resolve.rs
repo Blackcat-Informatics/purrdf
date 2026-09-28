@@ -31,10 +31,11 @@ use crate::{RdfDiagnostic, RdfTextDirection};
 #[cfg(test)]
 use crate::{RdfLiteral, RdfLocation, RdfTerm, RdfTriple};
 
-/// Depth bound for resolving nested quoted-triple terms. A cyclic or absurdly
-/// nested triple term hard-fails rather than recursing without bound. Shared by the
-/// eager resolver here and the move-based importer in [`super::import_graph`].
-pub(crate) const MAX_GTS_TERM_NESTING_DEPTH: usize = 16;
+// Depth bound for resolving nested quoted-triple terms. A cyclic or absurdly
+// nested triple term hard-fails rather than recursing without bound. Shared by the
+// eager resolver here and the move-based importer in `super::import_graph`, and
+// defined once, in the events crate, for every layer that walks a triple term.
+pub(crate) use purrdf_events::MAX_TERM_NESTING_DEPTH as MAX_GTS_TERM_NESTING_DEPTH;
 
 /// The outgoing structural edges of one term: the ids it makes another walker
 /// resolve. Three is the maximum (a quoted triple's `(s, p, o)`); a literal

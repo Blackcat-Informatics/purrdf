@@ -166,18 +166,21 @@ pub fn blake3_256(data: &[u8]) -> [u8; 32] {
     *purrdf_hash::blake3::hash_with_join(data, grain, &RayonJoin).as_bytes()
 }
 
-/// Lowercase hex of a byte string.
-pub fn hex(data: &[u8]) -> String {
-    use std::fmt::Write as _;
-    data.iter().fold(String::new(), |mut out, b| {
-        let _ = write!(out, "{b:02x}");
-        out
-    })
+/// The `blake3:<hex>` text of an already-computed digest (§12): the prefix,
+/// then the digest bytes as lowercase hex through the workspace's one renderer,
+/// [`purrdf_hash::hex::Lower`].
+///
+/// This renders; it does not hash. [`digest_str`] is this over the BLAKE3 of
+/// `data`. Anything that already holds the 32 bytes — a segment head, a frame
+/// id, an MMR root, a `"digest"` value carried as bytes — spells its text here
+/// rather than hashing again.
+pub fn digest_text(digest: &[u8]) -> String {
+    format!("blake3:{}", purrdf_hash::hex::Lower(digest))
 }
 
 /// A `blake3:<hex>` content digest for inline blob addressing (§12).
 pub fn digest_str(data: &[u8]) -> String {
-    format!("blake3:{}", purrdf_hash::hex::Lower(&blake3_256(data)))
+    digest_text(&blake3_256(data))
 }
 
 /// Get a map entry by text key (first match, like Python `dict.get`).
@@ -268,6 +271,22 @@ pub fn unwrap_header(item: &Value) -> Result<&Vec<(Value, Value)>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `digest_text` renders bytes it is handed; `digest_str` hashes first.
+    /// Pinned against the byte-by-byte `{:02x}` form the container used to spell.
+    #[test]
+    fn digest_text_renders_and_digest_str_hashes() {
+        use std::fmt::Write as _;
+        let digest: [u8; 32] = core::array::from_fn(|i| (i * 37 + 3) as u8);
+        let mut expected = String::from("blake3:");
+        for byte in digest {
+            write!(expected, "{byte:02x}").unwrap();
+        }
+        assert_eq!(digest_text(&digest), expected);
+        assert_eq!(digest_text(&[]), "blake3:");
+        assert_eq!(digest_str(b"abc"), digest_text(&blake3_256(b"abc")));
+        assert_ne!(digest_str(&digest), digest_text(&digest));
+    }
 
     #[test]
     fn parallel_hash_matches_frozen_answers() {

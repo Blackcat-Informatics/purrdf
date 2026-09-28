@@ -511,5 +511,4 @@ pub use purrdf_sparql_eval::{Completeness, OrderFidelity, RankFidelity};
 pub use purrdf_sparql_eval::ExclusionBasis;
 
 #[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;
+use purrdf_core::term_fixture as test_terms;

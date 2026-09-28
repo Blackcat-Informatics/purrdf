@@ -910,6 +910,9 @@ pub fn materialize_with_imports(
 }
 
 #[cfg(test)]
+use purrdf_core::term_fixture as test_terms;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::vocab::{
@@ -2766,7 +2769,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

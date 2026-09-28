@@ -9,23 +9,42 @@ use sha2::{Digest, Sha256};
 
 use super::{ProjectionError, ProjectionLimits};
 
-struct LimitedJsonBytes {
-    bytes: Vec<u8>,
+/// An in-memory [`io::Write`] sink that refuses to grow past `limit` bytes.
+///
+/// The one capped sink every projection artifact is written through — the canonical JSON
+/// of a row identity and the exact-profile CSV alike — so an artifact ceiling means the
+/// same thing on every path: a write that would carry the buffer past the limit is
+/// refused whole, the buffer keeps only what was admitted, and [`Self::exceeded`] records
+/// that the refusal happened, because the writer above (serde, the CSV writer) reports
+/// the refusal as an opaque I/O error and the caller has to tell "the artifact was too
+/// large" apart from "the writer failed" to name the right limit.
+///
+/// `what` names the artifact in the refusal's I/O error text, which is what the writer
+/// above surfaces; the caller's own typed limit error is the one it reports.
+pub(crate) struct LimitedBytes {
+    /// The bytes admitted so far.
+    pub(crate) bytes: Vec<u8>,
+    /// The inclusive ceiling on `bytes.len()`.
     limit: usize,
-    exceeded: bool,
+    /// Set by the first refused write and never cleared.
+    pub(crate) exceeded: bool,
+    /// What the sink holds, for the refusal's message.
+    what: &'static str,
 }
 
-impl LimitedJsonBytes {
-    fn new(limit: usize) -> Self {
+impl LimitedBytes {
+    /// An empty sink admitting at most `limit` bytes of `what`.
+    pub(crate) const fn new(limit: usize, what: &'static str) -> Self {
         Self {
             bytes: Vec::new(),
             limit,
             exceeded: false,
+            what,
         }
     }
 }
 
-impl io::Write for LimitedJsonBytes {
+impl io::Write for LimitedBytes {
     fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
         if self
             .bytes
@@ -34,7 +53,10 @@ impl io::Write for LimitedJsonBytes {
             .is_none_or(|length| length > self.limit)
         {
             self.exceeded = true;
-            return Err(io::Error::other("projection JSON byte limit exceeded"));
+            return Err(io::Error::other(format!(
+                "{} byte limit exceeded",
+                self.what
+            )));
         }
         self.bytes.extend_from_slice(buffer);
         Ok(buffer.len())
@@ -50,7 +72,7 @@ pub(crate) fn canonical_json_bounded<T: Serialize>(
     limits: ProjectionLimits,
     description: &str,
 ) -> Result<Vec<u8>, ProjectionError> {
-    let mut output = LimitedJsonBytes::new(limits.max_artifact_bytes());
+    let mut output = LimitedBytes::new(limits.max_artifact_bytes(), "projection JSON");
     if let Err(error) = serde_json::to_writer(&mut output, value) {
         if output.exceeded {
             return Err(ProjectionError::limit(format!(

@@ -34,11 +34,12 @@ use purrdf_core::binding_pattern::BindingPattern;
 use purrdf_core::distance::{Arithmetic, Exact, Path, Reassociated};
 use purrdf_core::{DistanceMetric, TermValue};
 use purrdf_hnsw::relation::{HnswObservations, HnswRelation, HnswSpace};
-use purrdf_hnsw::{HnswIndex, Params, VectorMatrix, level::splitmix64};
+use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
 use purrdf_sparql_eval::{
     CandidateDomains, Completeness, ExclusionBasis, KnnGuard, OrderFidelity, PfArgs, PfRow,
     PropertyFunction, PropertyFunctionRegistry, RankedDeclaration, TermKind,
 };
+use purrdf_testkit::rng::signed_unit_step_nonzero;
 
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const PREDICATE: &str = "https://example.org/pf/nearest";
@@ -61,13 +62,9 @@ fn params() -> Params {
 /// A deterministic fixture matrix. Nothing here reads a clock or an RNG.
 fn matrix(rows: usize, dims: usize) -> VectorMatrix {
     let mut state = 0x51DE_0000_1234_ABCD_u64;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        let value = unit.mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.25 } else { value });
-    }
+    let data: Vec<f64> = (0..rows * dims)
+        .map(|_| signed_unit_step_nonzero(&mut state, 0.25))
+        .collect();
     VectorMatrix::new(rows, dims, data).expect("the fixture matrix is valid")
 }
 

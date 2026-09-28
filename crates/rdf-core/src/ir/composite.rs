@@ -3,9 +3,7 @@
 
 //! Immutable composition over shared native dictionaries and indexes.
 
-use super::term_walk::fold_term;
 use super::view_accounting::WorkCounter;
-use crate::TermBox;
 use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
 use crate::cdt_blank::{cdt_embedded_blanks, rewrite_cdt_blank_terms};
 use crate::hash::FastMap;
@@ -2140,49 +2138,10 @@ fn lookup_source_term(
         .pop()
         .expect("the term's own answer is the last one found")
 }
-/// The dataset-independent value of the term `id` names in `view`, assembled
-/// bottom-up over [`fold_term`]'s work list: a triple term's subject, predicate and
-/// object are resolved in that order, each fully before the next.
+/// The dataset-independent value of the term `id` names in `view`:
+/// [`DatasetView::term_value`], reached through a free function because every
+/// composite and pack seam in this crate already spells it this way.
+#[inline]
 pub(crate) fn owned_value<D: DatasetView>(view: &D, id: D::Id) -> TermValue {
-    match fold_term(
-        view,
-        id,
-        |_, term| {
-            Ok::<_, Infallible>(match term {
-                TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-                TermRef::Blank { label, scope } => TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                },
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let TermRef::Iri(datatype) = view.resolve(datatype) else {
-                        unreachable!("native literal datatype is IRI")
-                    };
-                    TermValue::Literal {
-                        lexical_form: lexical.to_owned(),
-                        datatype: datatype.to_owned(),
-                        language: language.map(str::to_owned),
-                        direction,
-                    }
-                }
-                TermRef::Triple { .. } => {
-                    unreachable!("a triple term is assembled from its components")
-                }
-            })
-        },
-        |_, s, p, o| {
-            Ok(TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
-            })
-        },
-    ) {
-        Ok(value) => value,
-    }
+    DatasetView::term_value(view, id)
 }

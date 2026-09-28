@@ -32,7 +32,8 @@
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{FloatEnvironmentError, FloatEnvironmentEvidence};
-use purrdf_hnsw::{HnswError, HnswIndex, Params, Ranked, VectorMatrix, level::splitmix64};
+use purrdf_hnsw::{HnswError, HnswIndex, Params, Ranked, VectorMatrix};
+use purrdf_testkit::rng::signed_unit_step;
 
 /// MXCSR flush-to-zero.
 const FTZ: u32 = 1 << 15;
@@ -72,12 +73,9 @@ fn params() -> Params {
 /// A deterministic fixture matrix. Nothing here reads a clock or an RNG.
 fn matrix(rows: usize, dims: usize) -> VectorMatrix {
     let mut state = 0xF7A3_0000_5EED_0001_u64;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        data.push(unit.mul_add(2.0, -1.0));
-    }
+    let data: Vec<f64> = (0..rows * dims)
+        .map(|_| signed_unit_step(&mut state))
+        .collect();
     VectorMatrix::new(rows, dims, data).expect("the fixture matrix is valid")
 }
 

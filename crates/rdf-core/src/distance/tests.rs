@@ -1027,43 +1027,14 @@ fn every_probe_row_is_distinct_and_names_its_departure() {
 
 // ---- x86: MXCSR on both widths --------------------------------------------------
 
-/// The current thread's MXCSR.
+// The register probes are the shared `float_env_probe` fixture's; `Mxcsr` below
+// loads arbitrary departures (DAZ, the rounding controls), which is why it is not
+// the fixture's FTZ-only guard.
 #[cfg(any(
     target_arch = "x86_64",
     all(target_arch = "x86", target_feature = "sse2")
 ))]
-fn read_mxcsr() -> u32 {
-    let mut value: u32 = 0;
-    // SAFETY: `stmxcsr` stores the 32-bit MXCSR, and nothing else, to a live, aligned,
-    // writable `u32` on this stack frame.
-    unsafe {
-        core::arch::asm!(
-            "stmxcsr [{ptr}]",
-            ptr = in(reg) &raw mut value,
-            options(nostack, preserves_flags),
-        );
-    }
-    value
-}
-
-/// Load `value` into the current thread's MXCSR.
-#[cfg(any(
-    target_arch = "x86_64",
-    all(target_arch = "x86", target_feature = "sse2")
-))]
-fn write_mxcsr(value: u32) {
-    // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`. Every value loaded here
-    // differs from the saved register only in the FTZ, DAZ and rounding-control fields,
-    // `Mxcsr` restores the saved value on every exit including a panic, and the register
-    // is per-thread, so no other test observes it.
-    unsafe {
-        core::arch::asm!(
-            "ldmxcsr [{ptr}]",
-            ptr = in(reg) &raw const value,
-            options(nostack, preserves_flags, readonly),
-        );
-    }
-}
+use super::float_env_probe::{read_mxcsr, write_mxcsr};
 
 /// MXCSR loaded with a value for as long as the guard lives; the saved value is restored
 /// when it drops, including by unwinding.

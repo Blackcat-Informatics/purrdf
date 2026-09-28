@@ -4,7 +4,6 @@
 //! Canonical CSVW table group carrying an exact RDF 1.2 dataset.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::io;
 use std::sync::Arc;
 
 use purrdf_core::csv::{Dialect, Reader, StringRecord, Writer};
@@ -13,7 +12,7 @@ use purrdf_core::{
 };
 use serde::Serialize;
 
-use super::super::util::canonical_json_bounded;
+use super::super::util::{LimitedBytes, canonical_json_bounded};
 use super::super::{
     ProjectionDirection, ProjectionError, ProjectionLimits, ProjectionPackage, ProjectionTerm,
     stable_identifier,
@@ -1333,42 +1332,6 @@ fn row_identifier<T: Serialize>(
     stable_identifier(prefix, &canonical_json_bounded(row, limits, description)?)
 }
 
-struct LimitedCsvBytes {
-    bytes: Vec<u8>,
-    limit: usize,
-    exceeded: bool,
-}
-
-impl LimitedCsvBytes {
-    fn new(limit: usize) -> Self {
-        Self {
-            bytes: Vec::new(),
-            limit,
-            exceeded: false,
-        }
-    }
-}
-
-impl io::Write for LimitedCsvBytes {
-    fn write(&mut self, buffer: &[u8]) -> io::Result<usize> {
-        if self
-            .bytes
-            .len()
-            .checked_add(buffer.len())
-            .is_none_or(|length| length > self.limit)
-        {
-            self.exceeded = true;
-            return Err(io::Error::other("exact CSVW artifact limit exceeded"));
-        }
-        self.bytes.extend_from_slice(buffer);
-        Ok(buffer.len())
-    }
-
-    fn flush(&mut self) -> io::Result<()> {
-        Ok(())
-    }
-}
-
 fn write_csv<I>(
     path: &str,
     header: &[&str],
@@ -1378,7 +1341,7 @@ fn write_csv<I>(
 where
     I: IntoIterator<Item = Vec<String>>,
 {
-    let sink = LimitedCsvBytes::new(limits.max_artifact_bytes());
+    let sink = LimitedBytes::new(limits.max_artifact_bytes(), "exact CSVW artifact");
     let mut writer = Writer::new(Dialect::RFC4180, sink);
     write_csv_record(&mut writer, header, path)?;
     for row in rows {
@@ -1400,7 +1363,7 @@ where
 }
 
 fn write_csv_record<I, T>(
-    writer: &mut Writer<LimitedCsvBytes>,
+    writer: &mut Writer<LimitedBytes>,
     record: I,
     path: &str,
 ) -> Result<(), ProjectionError>

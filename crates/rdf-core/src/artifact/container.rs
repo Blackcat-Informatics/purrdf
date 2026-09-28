@@ -192,32 +192,23 @@ fn hex32(digest: &[u8; 32]) -> String {
 }
 
 // ---------------------------------------------------------------------------
-// Small byte-header write/read helpers (explicit LE, no pointer casts).
+// Small byte-header write/read helpers: the `crate::bytes` primitives under this
+// container's own names (explicit LE, no pointer casts; the layout is frozen by
+// goldens and the shared primitives write the same bytes).
 // ---------------------------------------------------------------------------
-//
-// `ir::pack::bits` keeps its equivalents module-private and that file's byte
-// layouts are frozen by goldens, so these are transcribed rather than shared.
-// They follow the same alignment-agnostic law that module documents: every
-// multi-byte field is decoded through `from_le_bytes` over an explicit
-// byte-slice copy, never a pointer cast, so the caller's buffer may sit at any
-// address.
 
 fn write_u32_le(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
+    crate::bytes::put_u32_le(out, value);
 }
 
 fn write_u64_le(out: &mut Vec<u8>, value: u64) {
-    out.extend_from_slice(&value.to_le_bytes());
+    crate::bytes::put_u64_le(out, value);
 }
 
 /// Read a `u32` at `*pos`, advancing `*pos` past it. Every call site has already
 /// proven the buffer holds `*pos + 4` bytes.
 fn read_u32_le(bytes: &[u8], pos: &mut usize) -> u32 {
-    let value = u32::from_le_bytes(
-        bytes[*pos..*pos + 4]
-            .try_into()
-            .expect("slice is exactly 4 bytes"),
-    );
+    let value = crate::bytes::read_u32_le(bytes, *pos).expect("the buffer holds pos + 4 bytes");
     *pos += 4;
     value
 }
@@ -225,11 +216,7 @@ fn read_u32_le(bytes: &[u8], pos: &mut usize) -> u32 {
 /// Read a `u64` at `*pos`, advancing `*pos` past it. See [`read_u32_le`]'s
 /// bounds note.
 fn read_u64_le(bytes: &[u8], pos: &mut usize) -> u64 {
-    let value = u64::from_le_bytes(
-        bytes[*pos..*pos + 8]
-            .try_into()
-            .expect("slice is exactly 8 bytes"),
-    );
+    let value = crate::bytes::read_u64_le(bytes, *pos).expect("the buffer holds pos + 8 bytes");
     *pos += 8;
     value
 }

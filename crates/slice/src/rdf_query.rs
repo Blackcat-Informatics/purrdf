@@ -24,15 +24,11 @@
 use std::path::Path;
 
 use purrdf::{
-    DatasetView, GraphMatch, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm,
+    DatasetView, GraphMatch, NativeRdfFormat, RdfDataset, RdfDatasetBuilder, RdfQuad,
     RdfTextDirection, TermId, TermRef, TermValue, parse_dataset,
 };
 
 use crate::error::SliceError;
-
-/// The `rdf:reifies` predicate IRI — re-materialized when flattening the RDF 1.2
-/// statement overlay back to plain quads for canonicalization.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 // ── Native NamedNode ───────────────────────────────────────────────────────────
 
@@ -538,11 +534,11 @@ impl Dataset {
 
     /// The canonical N-Quads document (full W3C RDFC-1.0) of this dataset's quads,
     /// **flattened** — the RDF 1.2 statement overlay (reifier bindings + annotations)
-    /// is re-materialized back into plain `rdf:reifies` / annotation triples BEFORE
-    /// canonicalizing, with no overlay re-fold. This is byte-identical to the prior
-    /// `purrdf::canonical_nquads` over a flat oxigraph quad set: both canonicalize
-    /// the same flat triple set, so the semantic digest is preserved (the native
-    /// folded `canonicalize` would instead emit reserved overlay sentinels).
+    /// is re-materialized back into plain `rdf:reifies` / annotation rows, each in the
+    /// graph it was asserted in, BEFORE canonicalizing, with no overlay re-fold. Both
+    /// halves canonicalize the same flat quad set, so the semantic digest of a document
+    /// is the digest of its statements (the native folded `canonicalize` would instead
+    /// emit reserved overlay sentinels).
     pub fn canonical_nquads_flat(&self) -> Result<String, SliceError> {
         let mut builder = RdfDatasetBuilder::new();
         for quad in self.flat_quads() {
@@ -555,22 +551,13 @@ impl Dataset {
     }
 
     /// Flatten the dataset to the source-faithful plain-quad stream: base quads, then
-    /// the re-materialized `rdf:reifies` reifier rows, then the annotation rows. The
-    /// oxigraph-free twin of `purrdf::oxigraph::flat_rdf_quads_from_dataset`.
+    /// the re-materialized `rdf:reifies` reifier rows, then the annotation rows, each
+    /// row in the graph its statement was asserted in. This is `purrdf_rdf`'s one
+    /// flattening law; a reifier declared inside `GRAPH g { … }` keeps `g` here, as it
+    /// does there, so canonicalizing the flat stream never relocates a graph-scoped
+    /// reification into the default graph.
     fn flat_quads(&self) -> Vec<RdfQuad> {
-        let mut quads: Vec<RdfQuad> = self.ds.owned_quads().collect();
-        for reifier in self.ds.owned_reifiers() {
-            let statement = RdfTerm::triple(reifier.statement);
-            quads.push(RdfQuad::new(reifier.reifier, RDF_REIFIES, statement));
-        }
-        for annotation in self.ds.owned_annotations() {
-            quads.push(RdfQuad::new(
-                annotation.reifier,
-                annotation.predicate,
-                annotation.object,
-            ));
-        }
-        quads
+        purrdf::flat_rdf_quads_from_dataset(&self.ds)
     }
 
     /// Build a frozen [`RdfDataset`] from a flat owned-quad set (`push_owned_quad`,
@@ -964,6 +951,53 @@ pub(crate) fn media_type_for_path(path: &Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    /// A reifier declared inside `GRAPH g { … }` keeps `g` on the flat canonical
+    /// surface: the flattening law is `purrdf_rdf`'s, which carries the graph slot, so a
+    /// graph-scoped reification is never relocated into the default graph before
+    /// canonicalization. Its default-graph neighbour stays a default-graph row.
+    #[test]
+    fn canonical_flat_form_keeps_a_reifier_in_its_named_graph() {
+        use purrdf_core::{RdfDatasetBuilder, RdfReifier, RdfTerm, RdfTriple};
+        let statement = || {
+            RdfTriple::new(
+                RdfTerm::iri("http://example.org/s"),
+                "http://example.org/p",
+                RdfTerm::iri("http://example.org/o"),
+            )
+        };
+        let mut builder = RdfDatasetBuilder::new();
+        builder.push_owned_reifier(&RdfReifier {
+            reifier: RdfTerm::iri("http://example.org/scoped"),
+            statement: statement(),
+            graph: Some(RdfTerm::iri("http://example.org/g")),
+            location: None,
+        });
+        builder.push_owned_reifier(&RdfReifier {
+            reifier: RdfTerm::iri("http://example.org/plain"),
+            statement: statement(),
+            graph: None,
+            location: None,
+        });
+        let dataset = Dataset::from_frozen(builder.freeze().expect("freeze"));
+        let flat = dataset.canonical_nquads_flat().expect("canonical");
+        let scoped = flat
+            .lines()
+            .find(|line| line.starts_with("<http://example.org/scoped>"))
+            .expect("the graph-scoped reifier row");
+        assert!(scoped.contains("rdf-syntax-ns#reifies"), "{scoped}");
+        assert!(
+            scoped
+                .trim_end_matches(" .")
+                .ends_with("<http://example.org/g>"),
+            "the reifier row must keep its graph: {scoped}"
+        );
+        let plain = flat
+            .lines()
+            .find(|line| line.starts_with("<http://example.org/plain>"))
+            .expect("the default-graph reifier row");
+        assert!(!plain.contains("<http://example.org/g>"), "{plain}");
+    }
+
     use super::*;
 
     #[test]

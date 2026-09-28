@@ -13,8 +13,10 @@ use purrdf_iri::json_escape::{JsonEscapes, push_string};
 pub use crate::model::ByteRange;
 use crate::model::{Diagnostic, StreamableInfo};
 use crate::reader::read_file_segments;
+use purrdf_hash::hex::{Lower, lower};
+
 use crate::wire::{
-    blake3_256, canonical, content_id, header_id, hex, iter_items, map_get, unwrap_header,
+    blake3_256, canonical, content_id, header_id, iter_items, map_get, unwrap_header,
 };
 
 /// Byte range, identity, and chain-validation state for one frame.
@@ -354,7 +356,7 @@ fn json_string(text: &str) -> String {
 }
 
 fn json_hex(bytes: &[u8]) -> String {
-    json_string(&hex(bytes))
+    json_string(&lower(bytes))
 }
 
 fn json_optional_hex(value: Option<&[u8]>) -> String {
@@ -612,7 +614,7 @@ pub fn resume_after<'a>(data: &'a [u8], frame_id: &[u8]) -> Result<&'a [u8], Str
             }
         }
     }
-    Err(format!("frame {} not found", hex(frame_id)))
+    Err(format!("frame {} not found", Lower(frame_id)))
 }
 
 /// Outcome category for a two-file replication [`diff`].

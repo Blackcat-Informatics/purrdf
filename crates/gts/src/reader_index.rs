@@ -3,7 +3,9 @@
 
 //! Private lookup state for insertion-ordered digest tables during a fold.
 
-use std::collections::{HashMap, hash_map::Entry};
+use std::collections::hash_map::Entry;
+
+use purrdf_hash::fixed::FixedMap;
 
 // Tiny folds already fit in the ordered table's cache footprint. Bound the
 // scan, then build the index once when a seventeenth distinct digest arrives.
@@ -13,7 +15,7 @@ const INLINE_DIGESTS: usize = 16;
 /// Public graphs retain their ordinary vectors; index iteration never emits data.
 #[derive(Default)]
 pub(crate) struct DigestIndex {
-    positions: HashMap<String, usize, purrdf_hash::fixed::FixedState>,
+    positions: FixedMap<String, usize>,
 }
 
 impl DigestIndex {

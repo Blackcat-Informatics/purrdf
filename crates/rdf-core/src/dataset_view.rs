@@ -18,9 +18,13 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::RdfStoreCapabilities;
+use crate::collections::{ListFault, RdfListError, RdfListPolicy, container_member_index};
 use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
-use crate::collections::{RdfListError, container_member_index};
-use crate::ir::{QuadIds, QuadProbePlan, QuadRef, RdfDataset, TermId, TermRef, TermValue};
+use crate::hash::FastSet;
+use crate::ir::{
+    Nested, QuadIds, QuadProbePlan, QuadRef, RdfDataset, TermBox, TermId, TermRef, TermValue,
+    try_fold_nested,
+};
 
 mod sealed {
     pub trait Sealed {}
@@ -431,15 +435,18 @@ pub trait DatasetView {
     }
 
     /// Materialize an `rdf:first`/`rdf:rest`/`rdf:nil` Collection whose head is
-    /// `head`, scoped to `graph`. Returns members in list order.
+    /// `head`, scoped to `graph`, under [`RdfListPolicy::CORE_DEFAULT`]. Returns
+    /// members in list order.
     ///
     /// Cycle-guarded: a revisited cell terminates the walk gracefully (`Ok`,
-    /// truncated at the cycle), matching the reference GTS walker. A MALFORMED cell
-    /// — a cons cell with no `rdf:first`, more than one `rdf:first`, or an
+    /// truncated at the cycle), matching the reference GTS walker, and a cons cell
+    /// with no `rdf:rest` ends the list. A MALFORMED cell — a cons cell with no
+    /// `rdf:first`, more than one `rdf:first`, more than one `rdf:rest`, or an
     /// `rdf:rest` to a term that is neither `rdf:nil` nor a cons cell — is a hard
     /// error ([`RdfListError`]): this walker is also a validator. A head that is
     /// `rdf:nil` or is not a list (carries neither `rdf:first` nor `rdf:rest`)
-    /// yields an empty `Vec`.
+    /// yields an empty `Vec`. [`rdf_list_with`](Self::rdf_list_with) takes the
+    /// policy explicitly.
     ///
     /// If the `rdf:first` IRI is not interned in this view at all, no Collection can
     /// exist, so the result is an empty `Vec` (`Ok`), not an error.
@@ -448,19 +455,41 @@ pub trait DatasetView {
         head: Self::Id,
         graph: GraphMatch<Self::Id>,
     ) -> Result<Vec<Self::Id>, RdfListError> {
+        self.rdf_list_with(head, graph, RdfListPolicy::CORE_DEFAULT)
+    }
+
+    /// [`rdf_list`](Self::rdf_list) under an explicit [`RdfListPolicy`]: what each
+    /// structural fault of the chain does to the walk is the caller's choice, and
+    /// [`RdfListPolicy::STRICT`] makes every one an error.
+    ///
+    /// The walk is the same under every policy: from `head`, each cell's `rdf:first`
+    /// edges are gathered and judged, then its `rdf:rest` edges, and the chosen
+    /// tail is followed after it is validated to be `rdf:nil` or a cons cell (a
+    /// tail that is neither is [`RdfListError::DanglingRest`] under every policy).
+    /// A head that is `rdf:nil` or is not a list yields an empty `Vec`, and a view
+    /// with no `rdf:first` term at all has no Collection to walk.
+    fn rdf_list_with(
+        &self,
+        head: Self::Id,
+        graph: GraphMatch<Self::Id>,
+        policy: RdfListPolicy,
+    ) -> Result<Vec<Self::Id>, RdfListError> {
+        debug_assert!(
+            policy.is_well_formed(),
+            "an RdfListPolicy field holds a ListFault variant it does not admit: {policy:?}"
+        );
         // No `rdf:first` in the term table ⇒ no cons cell can exist here.
         let Some(first_p) = self.term_id_by_value(&TermValue::iri(RDF_FIRST)) else {
             return Ok(Vec::new());
         };
         // `rdf:rest`/`rdf:nil` may be absent; the walk handles that inline (a
-        // missing `rdf:rest` edge simply ends the list, absent `rdf:nil` matches no
-        // terminator).
+        // missing `rdf:rest` edge is the `missing_rest` fault, absent `rdf:nil`
+        // matches no terminator).
         let rest_p = self.term_id_by_value(&TermValue::iri(RDF_REST));
         let nil = self.term_id_by_value(&TermValue::iri(RDF_NIL));
 
         let mut out = Vec::new();
-        // Cycle guard: revisited cell terminates the walk (mirrors the reference
-        // GTS `rdf_list` seen-set).
+        // Cycle guard: the seen-set of the reference GTS `rdf_list` walker.
         let mut seen: BTreeSet<Self::Id> = BTreeSet::new();
         let mut current = head;
         loop {
@@ -468,52 +497,181 @@ pub trait DatasetView {
                 break;
             }
             if !seen.insert(current) {
-                break;
-            }
-
-            // Gather this cell's `rdf:first` objects: zero or many is malformed
-            // (the defensive multi-edge detection of the reference list walker).
-            let mut first_obj = None;
-            let mut first_count = 0usize;
-            for q in self.quads_for_pattern(Some(current), Some(first_p), None, graph) {
-                first_obj = Some(q.o);
-                first_count += 1;
-            }
-            // The single `rdf:rest` object, if any.
-            let mut rest_obj = None;
-            if let Some(rest_p) = rest_p {
-                for q in self.quads_for_pattern(Some(current), Some(rest_p), None, graph) {
-                    rest_obj = Some(q.o);
+                match policy.cycle {
+                    ListFault::StopBefore => break,
+                    _ => return Err(RdfListError::Cycle),
                 }
             }
+
+            // Gather this cell's `rdf:first` and `rdf:rest` edges, keeping the one the
+            // policy would take should there be several (the defensive multi-edge
+            // detection of the reference list walker).
+            let (first_obj, first_count) = select_edge(
+                self.quads_for_pattern(Some(current), Some(first_p), None, graph)
+                    .map(|q| q.o),
+                policy.multiple_first,
+            );
+            let (rest_obj, rest_count) = match rest_p {
+                Some(rest_p) => select_edge(
+                    self.quads_for_pattern(Some(current), Some(rest_p), None, graph)
+                        .map(|q| q.o),
+                    policy.multiple_rest,
+                ),
+                None => (None, 0),
+            };
 
             // Neither edge ⇒ not a cons cell. Only `head` can reach this branch
             // (interior cells are only entered through a rest edge validated to
             // point at `rdf:nil` or a cons cell); it means `head` is simply not a
             // list ⇒ an empty Vec.
-            if first_count == 0 && rest_obj.is_none() {
+            if first_count == 0 && rest_count == 0 {
                 break;
             }
-            if first_count == 0 {
-                return Err(RdfListError::MissingFirst);
-            }
-            if first_count > 1 {
-                return Err(RdfListError::MultipleFirst);
-            }
-            out.push(first_obj.expect("first_count == 1 implies a first object"));
 
-            // A cons cell with no `rdf:rest` edge ends the list (a truncated, but
-            // not malformed, tail). Otherwise validate the rest target before
-            // following it.
-            let Some(next) = rest_obj else {
-                break;
+            // The cell's member, judged by its `rdf:first` fault first.
+            let member = match first_count {
+                0 => match policy.missing_first {
+                    ListFault::Skip => None,
+                    ListFault::StopBefore => break,
+                    _ => return Err(RdfListError::MissingFirst),
+                },
+                1 => first_obj,
+                _ => match policy.multiple_first {
+                    ListFault::FirstWins | ListFault::LastWins => first_obj,
+                    ListFault::StopBefore => break,
+                    _ => return Err(RdfListError::MultipleFirst),
+                },
             };
+            if let Some(member) = member {
+                out.push(member);
+            }
+
+            // The tail, judged by the cell's `rdf:rest` fault; the member above is
+            // already kept, so `StopBefore` here ends the list after it.
+            let next = match rest_count {
+                0 => match policy.missing_rest {
+                    ListFault::StopBefore => break,
+                    _ => return Err(RdfListError::MissingRest),
+                },
+                1 => rest_obj,
+                _ => match policy.multiple_rest {
+                    ListFault::FirstWins | ListFault::LastWins => rest_obj,
+                    ListFault::StopBefore => break,
+                    _ => return Err(RdfListError::MultipleRest),
+                },
+            };
+            let next = next.expect("a counted rest edge yields its object");
             if Some(next) != nil && !self.is_cons_cell(next, first_p, rest_p, graph) {
                 return Err(RdfListError::DanglingRest);
             }
             current = next;
         }
         Ok(out)
+    }
+
+    /// The distinct objects of `(subject, predicate, ?o)` in `graph`, in the order the
+    /// view first yields them, each once — the `(s, p)` fan-out a structural walk
+    /// (a SHACL shape's `sh:property` objects, a manifest's entries) reads with.
+    ///
+    /// Callers resolve the predicate IRI to its id first (`term_id_by_value`); an IRI
+    /// interned nowhere in the view has no objects, so the walk finds nothing rather
+    /// than erring. Deduplication is by id, so the same object asserted in two graphs
+    /// under [`GraphMatch::Any`] is yielded once.
+    fn objects(
+        &self,
+        subject: Self::Id,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Vec<Self::Id> {
+        let mut seen: FastSet<Self::Id> = FastSet::default();
+        self.quads_for_pattern(Some(subject), Some(predicate), None, graph)
+            .map(|q| q.o)
+            .filter(|o| seen.insert(*o))
+            .collect()
+    }
+
+    /// The first object of `(subject, predicate, ?o)` in `graph` the view yields, if
+    /// any — [`objects`](Self::objects)' first element without materializing the
+    /// rest, for the single-valued properties a walk reads.
+    fn first_object(
+        &self,
+        subject: Self::Id,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Option<Self::Id> {
+        self.quads_for_pattern(Some(subject), Some(predicate), None, graph)
+            .next()
+            .map(|q| q.o)
+    }
+
+    /// The dataset-independent [`TermValue`] the id names: the inverse of interning a
+    /// value. The literal datatype is expanded to its IRI string, the blank label
+    /// keeps its scope, and a triple term is taken by value, assembled bottom-up
+    /// over a work list — its subject, predicate and object resolved in that order,
+    /// each fully before the next — so a term of any depth is materialized without
+    /// recursion (C0.1/C0.2/C0.3).
+    ///
+    /// This is the one materialization every consumer that keys on value identity
+    /// (the SPARQL egress, the pack dictionary, a world store) resolves through.
+    /// [`term_value_bounded`](Self::term_value_bounded) is the same walk under a
+    /// nesting bound, for a view whose terms this crate has not already validated.
+    ///
+    /// # Panics
+    ///
+    /// When a literal's datatype id does not resolve to an IRI. Every dataset this
+    /// crate freezes interns the datatype as an IRI term, so this is a broken
+    /// implementor, not data.
+    fn term_value(&self, id: Self::Id) -> TermValue {
+        match self.term_value_bounded(id, usize::MAX) {
+            Ok(value) => value,
+            Err(error) => unreachable!("literal datatype must resolve to an IRI: {error}"),
+        }
+    }
+
+    /// [`term_value`](Self::term_value), refusing rather than trusting: a triple term
+    /// nested past `max_depth` levels — `<<( s p <<( s p o )>> )>>` holds two, a term
+    /// that is not a triple term holds none — is
+    /// [`TermValueError::DepthExceeded`], and a literal whose datatype id does not
+    /// resolve to an IRI is [`TermValueError::NonIriDatatype`], where `term_value`
+    /// would panic.
+    ///
+    /// For a view this crate did not freeze — an archive being read, a foreign
+    /// backend — the bound is also the cycle guard: a view whose triple-term
+    /// components resolve back to the term itself (which the trait's termination
+    /// contract forbids, but which this walk can meet before anything has checked
+    /// it) exceeds any finite bound rather than looping. The walk is
+    /// [`try_fold_nested`] over `(id, depth)` nodes, so the bound costs one
+    /// comparison per triple term and no extra allocation.
+    ///
+    /// # Errors
+    ///
+    /// [`TermValueError`], as above. The first refusal ends the walk.
+    fn term_value_bounded(
+        &self,
+        id: Self::Id,
+        max_depth: usize,
+    ) -> Result<TermValue, TermValueError> {
+        try_fold_nested(
+            (id, 0usize),
+            &mut (),
+            |(), (id, depth)| match self.resolve(id) {
+                TermRef::Triple { s, p, o } => {
+                    if depth >= max_depth {
+                        return Err(TermValueError::DepthExceeded { max_depth });
+                    }
+                    let below = depth + 1;
+                    Ok(Nested::Triple((s, below), (p, below), (o, below)))
+                }
+                leaf => leaf_value(self, leaf).map(Nested::Leaf),
+            },
+            |(), _, s, p, o| {
+                Ok(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+            },
+        )
     }
 
     /// RDF Container members `rdf:_1`..`rdf:_n` of `head` in numeric order, scoped
@@ -604,6 +762,84 @@ pub trait DatasetView {
                 matches!(self.resolve(q.o), TermRef::Iri(iri) if iri == RDF_SEQ || iri == RDF_BAG || iri == RDF_ALT)
             })
     }
+}
+
+/// Of the edges a cell carries, the one the walk takes, and how many there were.
+///
+/// [`ListFault::FirstWins`] keeps the first edge the view yields; every other
+/// judgement keeps the last (which is what [`ListFault::LastWins`] takes, and what
+/// the other variants never read, since they stop or refuse on a second edge).
+fn select_edge<Id>(edges: impl Iterator<Item = Id>, on_multiple: ListFault) -> (Option<Id>, usize) {
+    let mut chosen = None;
+    let mut count = 0usize;
+    for edge in edges {
+        if count == 0 || on_multiple != ListFault::FirstWins {
+            chosen = Some(edge);
+        }
+        count += 1;
+    }
+    (chosen, count)
+}
+
+/// Why [`DatasetView::term_value_bounded`] has no value for a term.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TermValueError {
+    /// A triple term is nested more than `max_depth` levels deep.
+    DepthExceeded {
+        /// The bound the walk was given.
+        max_depth: usize,
+    },
+    /// A literal's datatype id resolves to a term that is not an IRI.
+    NonIriDatatype,
+}
+
+impl std::fmt::Display for TermValueError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::DepthExceeded { max_depth } => {
+                write!(
+                    f,
+                    "a triple term is nested more than {max_depth} levels deep"
+                )
+            }
+            Self::NonIriDatatype => f.write_str("a literal's datatype does not resolve to an IRI"),
+        }
+    }
+}
+
+impl std::error::Error for TermValueError {}
+
+/// The value of a term that is not a triple term, its literal datatype resolved
+/// through `view`.
+fn leaf_value<D: DatasetView + ?Sized>(
+    view: &D,
+    term: TermRef<'_, D::Id>,
+) -> Result<TermValue, TermValueError> {
+    Ok(match term {
+        TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+        TermRef::Blank { label, scope } => TermValue::Blank {
+            label: label.to_owned(),
+            scope,
+        },
+        TermRef::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => {
+            let TermRef::Iri(datatype) = view.resolve(datatype) else {
+                return Err(TermValueError::NonIriDatatype);
+            };
+            TermValue::Literal {
+                lexical_form: lexical.to_owned(),
+                datatype: datatype.to_owned(),
+                language: language.map(str::to_owned),
+                direction,
+            }
+        }
+        TermRef::Triple { .. } => unreachable!("a triple term is assembled from its components"),
+    })
 }
 
 /// An atomic checkpoint of an operationally fallible dataset view.
@@ -1211,6 +1447,216 @@ mod tests {
         // The trait read view agrees with the inherent iterators.
         assert_eq!(DatasetView::quads(&*ds).count(), 2);
         assert_eq!(DatasetView::quad_refs(&*ds).count(), 2);
+    }
+
+    /// `objects` yields each distinct object once, in the order the view first
+    /// yields it, and honours the graph scope; `first_object` is its head.
+    #[test]
+    fn objects_are_distinct_in_first_seen_order_and_graph_scoped() {
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let q = iri(&mut b, "q");
+        let o1 = iri(&mut b, "o1");
+        let o2 = iri(&mut b, "o2");
+        let g = iri(&mut b, "g");
+        b.push_quad(s, p, o2, None);
+        b.push_quad(s, p, o1, None);
+        b.push_quad(s, p, o2, Some(g)); // o2 again, in another graph
+        b.push_quad(s, q, o1, None); // another predicate: never an object of p
+        let ds = b.freeze().expect("freeze");
+
+        // The oracle: the view's own yield order, deduplicated by hand.
+        let mut expected = Vec::new();
+        for quad in ds.quads_for_pattern(Some(s), Some(p), None, GraphMatch::Any) {
+            if !expected.contains(&quad.o) {
+                expected.push(quad.o);
+            }
+        }
+        assert_eq!(expected.len(), 2, "o2 is asserted twice but distinct once");
+        assert_eq!(ds.objects(s, p, GraphMatch::Any), expected);
+        assert_eq!(ds.first_object(s, p, GraphMatch::Any), Some(expected[0]));
+
+        assert_eq!(ds.objects(s, p, GraphMatch::Named(g)), vec![o2]);
+        assert_eq!(ds.first_object(s, p, GraphMatch::Named(g)), Some(o2));
+        let default: Vec<TermId> = ds.objects(s, p, GraphMatch::Default);
+        assert_eq!(default.len(), 2);
+        assert!(default.contains(&o1) && default.contains(&o2));
+
+        // The valid neighbours of an empty answer: an absent subject, an absent
+        // predicate, and a predicate that is interned but never used with `s`.
+        assert_eq!(ds.objects(o1, p, GraphMatch::Any), Vec::<TermId>::new());
+        assert_eq!(ds.first_object(o1, p, GraphMatch::Any), None);
+        assert_eq!(ds.objects(s, q, GraphMatch::Any), vec![o1]);
+        assert_eq!(ds.objects(s, o1, GraphMatch::Any), Vec::<TermId>::new());
+    }
+
+    /// The shared `term_value` agrees with the frozen dataset's own inherent
+    /// resolution, and the bounded twin refuses exactly the terms nested past its
+    /// bound while admitting the ones at it.
+    #[test]
+    fn term_value_agrees_with_the_inherent_resolution_and_the_bound_holds() {
+        use crate::model::RdfLiteral;
+        use crate::{BlankScope, RdfTextDirection};
+
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let lit = b.intern_literal(RdfLiteral {
+            lexical_form: "hi".to_owned(),
+            datatype: None,
+            language: Some("EN".to_owned()),
+            direction: Some(RdfTextDirection::Ltr),
+        });
+        let blank = b.intern_blank("b", BlankScope(3));
+        let inner = b.intern_triple(s, p, lit);
+        let outer = b.intern_triple(blank, p, inner);
+        b.push_quad(s, p, outer, None);
+        let ds = b.freeze().expect("freeze");
+
+        let expected_lit = TermValue::Literal {
+            lexical_form: "hi".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(RdfTextDirection::Ltr),
+        };
+        let expected_inner = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://example.org/s")),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(expected_lit.clone()),
+        };
+        let expected_outer = TermValue::Triple {
+            s: TermBox::new(TermValue::Blank {
+                label: "b".to_owned(),
+                scope: BlankScope(3),
+            }),
+            p: TermBox::new(TermValue::iri("http://example.org/p")),
+            o: TermBox::new(expected_inner.clone()),
+        };
+        assert_eq!(DatasetView::term_value(&*ds, outer), expected_outer);
+        assert_eq!(RdfDataset::term_value(&ds, outer), expected_outer);
+        assert_eq!(DatasetView::term_value(&*ds, lit), expected_lit);
+        assert_eq!(
+            ds.term_id_by_value(&expected_outer),
+            Some(outer),
+            "the value round-trips to the id that produced it"
+        );
+
+        // `<<( b p <<( s p lit )>> )>>` holds two levels.
+        assert_eq!(ds.term_value_bounded(outer, 2), Ok(expected_outer));
+        assert_eq!(
+            ds.term_value_bounded(outer, 1),
+            Err(TermValueError::DepthExceeded { max_depth: 1 })
+        );
+        assert_eq!(ds.term_value_bounded(inner, 1), Ok(expected_inner));
+        assert_eq!(
+            ds.term_value_bounded(inner, 0),
+            Err(TermValueError::DepthExceeded { max_depth: 0 })
+        );
+        assert_eq!(ds.term_value_bounded(lit, 0), Ok(expected_lit));
+        assert_eq!(
+            ds.term_value_bounded(blank, 0),
+            Ok(TermValue::Blank {
+                label: "b".to_owned(),
+                scope: BlankScope(3),
+            })
+        );
+    }
+
+    /// A view that resolves one literal's datatype id to a blank node — which the
+    /// frozen dataset can never do, so it is simulated by overriding `resolve`.
+    struct BrokenDatatypeView {
+        inner: Arc<RdfDataset>,
+        broken: TermId,
+    }
+
+    impl DatasetView for BrokenDatatypeView {
+        type Id = TermId;
+        type ProbePlan = ();
+
+        fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+            self.inner.quads()
+        }
+
+        fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
+            DatasetView::quad_refs(&*self.inner)
+        }
+
+        fn resolve(&self, id: TermId) -> TermRef<'_> {
+            if id == self.broken {
+                return TermRef::Blank {
+                    label: "not-a-datatype",
+                    scope: crate::BlankScope::DEFAULT,
+                };
+            }
+            self.inner.resolve(id)
+        }
+
+        fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
+            self.inner.term_id_by_value(value)
+        }
+
+        fn capabilities(&self) -> RdfStoreCapabilities {
+            self.inner.capabilities()
+        }
+
+        fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
+
+        fn quads_for_pattern_with_plan(
+            &self,
+            _plan: &(),
+            s: Option<TermId>,
+            p: Option<TermId>,
+            o: Option<TermId>,
+            g: GraphMatch,
+        ) -> impl Iterator<Item = QuadIds> + '_ {
+            self.quads_for_pattern(s, p, o, g)
+        }
+
+        fn term_count(&self) -> usize {
+            self.inner.term_count()
+        }
+    }
+
+    /// A literal whose datatype id resolves to a non-IRI is refused by the bounded
+    /// walk, while its neighbour with an intact datatype still resolves.
+    #[test]
+    fn term_value_bounded_refuses_a_non_iri_datatype() {
+        use crate::model::RdfLiteral;
+
+        let mut b = RdfDatasetBuilder::new();
+        let s = iri(&mut b, "s");
+        let p = iri(&mut b, "p");
+        let integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let typed = b.intern_literal(RdfLiteral::typed("1", integer));
+        let plain = b.intern_literal(RdfLiteral::simple("x"));
+        b.push_quad(s, p, typed, None);
+        b.push_quad(s, p, plain, None);
+        let inner = b.freeze().expect("freeze");
+        let broken = inner
+            .term_id_by_value(&TermValue::iri(integer))
+            .expect("the datatype IRI is interned");
+        let view = BrokenDatatypeView { inner, broken };
+
+        assert_eq!(
+            view.term_value_bounded(typed, 4),
+            Err(TermValueError::NonIriDatatype)
+        );
+        assert_eq!(
+            view.term_value_bounded(plain, 4),
+            Ok(TermValue::simple_literal("x")),
+            "the literal whose datatype is intact still resolves"
+        );
+        assert!(
+            TermValueError::NonIriDatatype
+                .to_string()
+                .contains("datatype")
+        );
+        assert!(
+            TermValueError::DepthExceeded { max_depth: 3 }
+                .to_string()
+                .contains('3')
+        );
     }
 
     // -----------------------------------------------------------------------

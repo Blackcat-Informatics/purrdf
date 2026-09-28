@@ -8,9 +8,8 @@
 //! them by [`MatrixId`], and verifies strictly increasing target rows while
 //! writing each `MATRIX_DATA` body directly to a caller-owned `Write + Seek`.
 
-use std::io::{Seek, SeekFrom, Write};
-
 use sha2::{Digest as _, Sha256};
+use std::io::{Seek, SeekFrom, Write};
 
 use crate::ContentDigest;
 use crate::distance::binary64::Precision;
@@ -19,9 +18,10 @@ use crate::distance::{Arithmetic as _, Exact, Resolved, Scalar};
 use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError, EmbeddingWriteError};
 use super::identity::{
-    ArtifactRoot, FamilyId, MatrixContentDigest, MatrixId, ProjectionContentDigest, ProjectionId,
-    TargetId, TargetSetId, VectorSpaceId, derive_matrix_content_digest, derive_matrix_id,
-    derive_projection_id, derive_target_set_id, derive_vector_space_id,
+    ArtifactRoot, D_MATRIX_CONTENT, D_PROJECTION_CONTENT, D_TARGET_SET, FamilyId, FramedHasher,
+    MatrixContentDigest, MatrixId, ProjectionContentDigest, ProjectionId, TargetId, TargetSetId,
+    VectorSpaceId, derive_matrix_content_digest, derive_matrix_id, derive_projection_id,
+    derive_target_set_id, derive_vector_space_id,
 };
 use super::metadata::CanonicalMetadataInput;
 use super::wire::{
@@ -39,10 +39,6 @@ const PROJECTION_RECORD_LENGTH: u64 = 152;
 const PROJECTION_ID_INDEX_RECORD_LENGTH: u64 = 40;
 const MATRIX_KEY_INDEX_RECORD_LENGTH: u64 = 72;
 const EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH: u64 = 72;
-
-const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
-const D_MATRIX_CONTENT: &[u8] = b"purrdf.purremb.v1.matrix-content\0";
-const D_PROJECTION_CONTENT: &[u8] = b"purrdf.purremb.v1.projection-content\0";
 
 /// One caller extension section retained byte-for-byte by the writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1317,36 +1313,6 @@ fn matrix_instance(index: usize) -> Result<u32, EmbeddingError> {
     })
 }
 
-struct FramedHasher {
-    hasher: Sha256,
-}
-
-impl FramedHasher {
-    fn new(domain: &[u8]) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(domain);
-        Self { hasher }
-    }
-
-    fn field(&mut self, bytes: &[u8]) {
-        let length = u64::try_from(bytes.len()).expect("an in-memory slice length fits u64");
-        self.begin_field(length);
-        self.update(bytes);
-    }
-
-    fn begin_field(&mut self, length: u64) {
-        self.hasher.update(length.to_le_bytes());
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        self.hasher.update(bytes);
-    }
-
-    fn finish(self) -> [u8; 32] {
-        self.hasher.finalize().into()
-    }
-}
-
 fn target_set_hasher(row_count: u64) -> FramedHasher {
     let mut hasher = FramedHasher::new(D_TARGET_SET);
     hasher.field(&row_count.to_le_bytes());
@@ -1635,18 +1601,129 @@ fn check_digest(
 }
 
 fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    crate::bytes::write_u32_le_at(bytes, offset, value);
 }
 
 fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    crate::bytes::write_u64_le_at(bytes, offset, value);
 }
 
 #[cfg(test)]
 mod tests {
     use std::io::Cursor;
 
+    use sha2::Sha256;
+
     use super::*;
+
+    /// The framed hasher this writer carried before it moved to `identity`, kept
+    /// verbatim as the reference the shared one is held to, record for record.
+    struct ReferenceFramedHasher {
+        hasher: Sha256,
+    }
+
+    impl ReferenceFramedHasher {
+        fn new(domain: &[u8]) -> Self {
+            let mut hasher = Sha256::new();
+            hasher.update(domain);
+            Self { hasher }
+        }
+
+        fn field(&mut self, bytes: &[u8]) {
+            let length = u64::try_from(bytes.len()).expect("an in-memory slice length fits u64");
+            self.begin_field(length);
+            self.update(bytes);
+        }
+
+        fn begin_field(&mut self, length: u64) {
+            self.hasher.update(length.to_le_bytes());
+        }
+
+        fn update(&mut self, bytes: &[u8]) {
+            self.hasher.update(bytes);
+        }
+
+        fn finish(self) -> [u8; 32] {
+            self.hasher.finalize().into()
+        }
+    }
+
+    /// One record: a domain, its whole fields, and a streamed field fed in chunks.
+    struct Record {
+        domain: &'static [u8],
+        fields: Vec<Vec<u8>>,
+        streamed: Vec<Vec<u8>>,
+    }
+
+    fn records() -> Vec<Record> {
+        vec![
+            Record {
+                domain: D_TARGET_SET,
+                fields: vec![3u64.to_le_bytes().to_vec(), vec![1; 32], vec![2; 32]],
+                streamed: Vec::new(),
+            },
+            Record {
+                domain: D_MATRIX_CONTENT,
+                fields: vec![
+                    1u32.to_le_bytes().to_vec(),
+                    2u64.to_le_bytes().to_vec(),
+                    3u32.to_le_bytes().to_vec(),
+                ],
+                streamed: vec![vec![0xaa; 5], vec![0xbb; 7], Vec::new(), vec![0xcc]],
+            },
+            Record {
+                domain: D_PROJECTION_CONTENT,
+                fields: vec![Vec::new(), b"ab".to_vec(), b"c".to_vec()],
+                streamed: vec![vec![1, 2, 3, 4]],
+            },
+            Record {
+                domain: b"purrdf.purremb.v1.test\0",
+                fields: Vec::new(),
+                streamed: Vec::new(),
+            },
+        ]
+    }
+
+    /// Every record digests to the same bytes through the shared hasher and the
+    /// writer's former copy, whole fields and streamed fields alike; and the two
+    /// framings of adjacent fields the writer relies on stay distinct.
+    #[test]
+    fn the_shared_framed_hasher_matches_the_writers_former_copy_record_for_record() {
+        for record in records() {
+            let mut shared = FramedHasher::new(record.domain);
+            let mut reference = ReferenceFramedHasher::new(record.domain);
+            for field in &record.fields {
+                shared.field(field);
+                reference.field(field);
+            }
+            let streamed_length =
+                u64::try_from(record.streamed.iter().map(Vec::len).sum::<usize>()).unwrap();
+            shared.begin_field(streamed_length);
+            reference.begin_field(streamed_length);
+            for chunk in &record.streamed {
+                shared.update(chunk);
+                reference.update(chunk);
+            }
+            assert_eq!(shared.finish(), reference.finish());
+        }
+        // The streamed form of a field is the whole-field form: chunking never
+        // reaches the digest.
+        let mut whole = FramedHasher::new(D_MATRIX_CONTENT);
+        whole.field(b"abcdef");
+        let mut chunked = ReferenceFramedHasher::new(D_MATRIX_CONTENT);
+        chunked.begin_field(6);
+        chunked.update(b"ab");
+        chunked.update(b"cdef");
+        assert_eq!(whole.finish(), chunked.finish());
+        // And the framing keeps adjacent fields apart.
+        let mut left = FramedHasher::new(D_TARGET_SET);
+        left.field(b"ab");
+        left.field(b"c");
+        let mut right = ReferenceFramedHasher::new(D_TARGET_SET);
+        right.field(b"a");
+        right.field(b"bc");
+        assert_ne!(left.finish(), right.finish());
+    }
 
     fn metadata() -> CanonicalMetadataSections {
         let source_exact_digest = ContentDigest::of(b"source-pack");

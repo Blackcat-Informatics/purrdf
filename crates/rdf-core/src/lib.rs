@@ -50,6 +50,10 @@ pub mod binding_pattern;
 // transcribed per codec.
 pub mod artifact;
 pub mod bundle;
+// The ONE transcription of the little-endian, alignment-agnostic byte framing every
+// fixed-layout codec in this crate reads and writes: a bounds-checked cursor, the
+// offset-addressed readers and writers, and the length-framed field.
+pub mod bytes;
 // Narrow purrdf backend traits (P2d): term interning, parser ingress,
 // SPARQL execution, and serializer egress. PyO3-free, oxigraph-free — pure
 // contract only; concrete adapters live in `purrdf`.
@@ -131,6 +135,20 @@ pub mod named_graph;
 // CSV and TSV on the W3C CSVW dialect model.
 pub mod csv;
 pub mod sink;
+#[doc(hidden)]
+pub mod term_fixture;
+// The ONE definition of the PURREMB test fixtures (artifacts, stages, contracts) the
+// `.purremb` tests and benches share; a `tests/` target and a `benches/` target can
+// only share code through the library.
+#[doc(hidden)]
+pub mod purremb_fixture;
+// The MXCSR probes the float-environment tests share, native x86 only.
+#[cfg(any(
+    target_arch = "x86_64",
+    all(target_arch = "x86", target_feature = "sse2")
+))]
+#[doc(hidden)]
+pub use distance::float_env_probe;
 // Shared small-vector primitives (SmallVec / IdVec) for hot, short-lived id rows.
 pub mod small;
 // Native SSSOM (Simple Standard for Sharing Ontology Mappings) TSV codec +
@@ -160,12 +178,12 @@ pub use bundle::{
     ArtifactIndex, ArtifactRecord, BundleError, RdfBundle, SegmentUnitMap, UnitCatalog,
     UnitMetadata,
 };
-pub use collections::RdfListError;
+pub use collections::{ListFault, RdfListError, RdfListPolicy};
 pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{
     DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch,
-    GraphMatchValue, ViewOperationStatus, ViewTermId, checkpointed_drain,
+    GraphMatchValue, TermValueError, ViewOperationStatus, ViewTermId, checkpointed_drain,
 };
 pub use describe::{Describer, describe};
 pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
@@ -182,27 +200,28 @@ pub use hash::{FastHasher, FastMap, FastSet, IdSet};
 pub use ir::embedding;
 pub use ir::embedding::*;
 pub use ir::{
-    BlankScope, BudgetExceeded, BundleDigestWork, CANON_CORPUS_DIGEST,
+    BlankLabelPolicy, BlankScope, BudgetExceeded, BundleDigestWork, CANON_CORPUS_DIGEST,
     CANON_PRESENTATION_FLAT_ASSERTION_ID, CANON_PRESENTATION_FLAT_ASSERTION_VERSION,
     CANON_PRESENTATION_OVERLAY_ID, CANON_PRESENTATION_OVERLAY_VERSION, CANON_PROFILE_ID,
     CANON_PROFILE_VERSION, CanonError, CanonHash, CanonPresentation, CanonScopeName,
     CanonicalRelabeling, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
-    DeltaDatasetView, DeltaViewId, FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary,
-    GlobalTermId, GraphLayer, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider,
-    MutableDataset, Nested, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind, PageGeneration, PageId,
-    PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
-    PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
-    PagedQueryView, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds,
-    QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE,
-    RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SkolemError,
-    SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
-    ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_relabel,
-    canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
-    canonicalize_with, check_admissible, check_admissible_flat_view, check_admissible_view,
-    dataset_diff, datasets_isomorphic, deskolemize, fold_term, graph_digest_view, skolemize,
-    try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
-    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
-    try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
+    DatatypePolicy, DeltaDatasetView, DeltaViewId, FrozenDatasetSource, GENID_WELL_KNOWN_PATH,
+    GlobalDictionary, GlobalTermId, GraphLayer, GtsBundle, HandleEntry, HandleKey,
+    InMemoryPageProvider, MutableDataset, Nested, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind,
+    PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
+    PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
+    PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle, PipelineBundleError,
+    PipelineViewBundle, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues,
+    RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+    RdfEnvelope, ReservedVocabulary, SkolemError, SubsetPageProvider, TermBox, TermConversionError,
+    TermId, TermPosition, TermRef, TermValue, TermVisit, ValidatedRdfDatasetBuilder,
+    ViewCanonError, blank_count_view, canonical_relabel, canonical_relabel_with_mapping,
+    canonicalize, canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
+    check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
+    deskolemize, fold_term, graph_digest_view, skolemize, try_canonicalize,
+    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
+    try_graph_digest_view, visit_nested,
 };
 pub use ir::{
     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
@@ -305,8 +324,4 @@ pub use ir::{
 };
 
 #[cfg(test)]
-extern crate self as purrdf_core;
-
-#[cfg(test)]
-#[path = "../tests/support/term_fixture.rs"]
-mod test_terms;
+use crate::term_fixture as test_terms;

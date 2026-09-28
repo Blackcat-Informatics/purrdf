@@ -552,19 +552,19 @@ fn validate_descriptors(descriptors: &[SectionDescriptor]) -> Result<(), Embeddi
 }
 
 fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+    crate::bytes::write_u32_le_at(bytes, offset, value);
 }
 
 fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
+    crate::bytes::write_u64_le_at(bytes, offset, value);
 }
 
 fn push_u32(bytes: &mut Vec<u8>, value: u32) {
-    bytes.extend_from_slice(&value.to_le_bytes());
+    crate::bytes::put_u32_le(bytes, value);
 }
 
 fn push_u64(bytes: &mut Vec<u8>, value: u64) {
-    bytes.extend_from_slice(&value.to_le_bytes());
+    crate::bytes::put_u64_le(bytes, value);
 }
 
 #[cfg(test)]

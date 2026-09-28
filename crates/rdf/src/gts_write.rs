@@ -26,7 +26,7 @@ use crate::{
     RdfTerm,
 };
 
-const MAX_TERM_NESTING_DEPTH: usize = 16;
+use purrdf_events::MAX_TERM_NESTING_DEPTH;
 
 /// Convert a frozen [`RdfDataset`] into a canonical GTS [`Writer`].
 ///

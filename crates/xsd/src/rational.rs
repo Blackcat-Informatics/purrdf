@@ -37,6 +37,7 @@
 
 use crate::numeric::Decimal;
 use crate::value::XsdValue;
+use crate::wide::wide_mul;
 
 /// The `owl:rational` datatype IRI.
 pub const OWL_RATIONAL: &str = "http://www.w3.org/2002/07/owl#rational";
@@ -230,11 +231,10 @@ impl Ord for Rational {
             Ordering::Equal => {}
             unequal => return unequal,
         }
-        // Same sign. Compare |a/b| vs |c/d| as a·d vs c·b in u128 — exact for
-        // every representable pair because each product of two i128 magnitudes
-        // that both survived reduction fits u128's doubled width only if the
-        // inputs are small enough; where it would not, split multiplication
-        // keeps it exact.
+        // Same sign. Compare |a/b| vs |c/d| as a·d vs c·b — exact for every
+        // representable pair because the products are formed at 256 bits
+        // ([`crate::wide::wide_mul`]) rather than in a `u128` that a pair of
+        // large reduced magnitudes would overflow.
         let lhs = wide_mul(
             self.numerator.unsigned_abs(),
             other.denominator.unsigned_abs(),
@@ -250,21 +250,6 @@ impl Ord for Rational {
             magnitude.reverse()
         }
     }
-}
-
-/// `a × b` as `(high, low)` 128-bit halves — exact 256-bit magnitude compare.
-fn wide_mul(a: u128, b: u128) -> (u128, u128) {
-    const MASK: u128 = (1u128 << 64) - 1;
-    let (a_hi, a_lo) = (a >> 64, a & MASK);
-    let (b_hi, b_lo) = (b >> 64, b & MASK);
-    let ll = a_lo * b_lo;
-    let lh = a_lo * b_hi;
-    let hl = a_hi * b_lo;
-    let hh = a_hi * b_hi;
-    let mid = (ll >> 64) + (lh & MASK) + (hl & MASK);
-    let low = (ll & MASK) | (mid << 64);
-    let high = hh + (lh >> 64) + (hl >> 64) + (mid >> 64);
-    (high, low)
 }
 
 #[cfg(test)]

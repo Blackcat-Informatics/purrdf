@@ -1342,7 +1342,7 @@ pub fn stage_id(
     analysis: &[(String, String)],
 ) -> String {
     let preimage = stage_id_preimage(types, builtins, components, analysis);
-    purrdf_gts::wire::hex(&purrdf_gts::wire::blake3_256(preimage.as_bytes()))
+    purrdf_hash::hex::lower(&purrdf_gts::wire::blake3_256(preimage.as_bytes()))
 }
 
 /// The stage id of the live repository sources.
@@ -1592,7 +1592,7 @@ fn stage_id_depends_on_the_profile_id() {
     );
     assert_ne!(real, other, "the profile line must appear in the preimage");
     assert_ne!(
-        purrdf_gts::wire::hex(&purrdf_gts::wire::blake3_256(other.as_bytes())),
+        purrdf_hash::hex::lower(&purrdf_gts::wire::blake3_256(other.as_bytes())),
         live_stage_id()
     );
 }

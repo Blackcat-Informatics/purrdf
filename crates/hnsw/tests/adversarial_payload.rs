@@ -26,19 +26,15 @@
 //! covered by the PURREMB round-trip suite that ships with the guard adapter.
 
 use purrdf_core::DistanceMetric;
-use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswError, HnswIndex, Params, VectorMatrix};
+use purrdf_testkit::rng::signed_unit_step_nonzero;
 
 /// A deterministic fixture, generated from a splitmix64 integer stream.
 fn fixture(rows: usize, dims: usize) -> VectorMatrix {
     let mut state = 0x0bad_c0de_0bad_c0de_u64;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = splitmix64(state);
-        let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-        let value = unit.mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.25 } else { value });
-    }
+    let data: Vec<f64> = (0..rows * dims)
+        .map(|_| signed_unit_step_nonzero(&mut state, 0.25))
+        .collect();
     VectorMatrix::new(rows, dims, data).expect("the fixture shape is valid")
 }
 

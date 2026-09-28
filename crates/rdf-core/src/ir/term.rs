@@ -419,21 +419,9 @@ impl TermValue {
     }
 }
 
-/// Append `bytes` to `out` behind its length, so the field can be read back
-/// without a terminator and without knowing anything about its contents.
-///
-/// The length is a `u64` little-endian prefix rather than a separator byte or an
-/// escape scheme: RDF strings are arbitrary UTF-8 (a lexical form may contain NUL,
-/// a blank label may contain the marker, an IRI may contain anything the producer
-/// wrote), so NO byte value is available as a delimiter. A fixed-width count is the
-/// only framing that is oblivious to the payload. Little-endian and a fixed 8 bytes
-/// make the encoding byte-identical on every target, including the 32-bit
-/// `wasm32-unknown-unknown` build where `usize` is narrower.
-#[inline]
-fn push_framed(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    out.extend_from_slice(bytes);
-}
+// The length-framed field writer: a `u64` little-endian length, then the bytes. The
+// framing and its rationale are stated once, in `crate::bytes`.
+use crate::bytes::push_framed;
 
 impl TermValue {
     /// Append this term's canonical byte encoding to `out`.
@@ -580,6 +568,141 @@ impl TermValue {
         let mut out = Vec::new();
         self.canonical_bytes(&mut out);
         out
+    }
+}
+
+// ── The owned-model bridge ─────────────────────────────────────────────────────────
+
+/// How [`TermValue::to_rdf_term`] fills an owned literal's `datatype` slot.
+///
+/// A [`TermValue::Literal`] always carries its datatype expanded (C0.1); the owned
+/// [`RdfLiteral`](crate::RdfLiteral) may leave the slot `None` for the datatypes its
+/// language and direction imply. Which datatypes are collapsed is a property of the
+/// consumer — a SPARQL result document writes `"a"` and `"a"@en` without a datatype,
+/// a JS `Literal` always reports one — so the choice is named here rather than made
+/// once and transcribed per consumer.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DatatypePolicy {
+    /// `Some(datatype)` always: the expanded IRI travels with the literal.
+    Keep,
+    /// `xsd:string` becomes `None`; every other datatype, the language-string
+    /// datatypes included, is kept.
+    CollapseString,
+    /// `xsd:string`, `rdf:langString` and `rdf:dirLangString` become `None` — the
+    /// three datatypes the owned model expands back from a bare, a language-tagged
+    /// and a directional literal. A literal carrying a language tag is collapsed
+    /// whatever its datatype spells, since the tag alone implies it.
+    CollapseStringAndLanguage,
+}
+
+impl DatatypePolicy {
+    /// The owned `datatype` slot for a value literal with `datatype` and, if
+    /// language-tagged, `language`.
+    fn apply(self, datatype: &str, language_tagged: bool) -> Option<String> {
+        let collapse = match self {
+            Self::Keep => false,
+            Self::CollapseString => datatype == XSD_STRING,
+            Self::CollapseStringAndLanguage => {
+                language_tagged
+                    || matches!(datatype, XSD_STRING | RDF_LANG_STRING | RDF_DIR_LANG_STRING)
+            }
+        };
+        (!collapse).then(|| datatype.to_owned())
+    }
+}
+
+/// How [`TermValue::to_rdf_term`] spells a blank node's `(label, scope)` pair into
+/// the owned model's single label string.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlankLabelPolicy {
+    /// The [`qualify_label`](BlankScope::qualify_label) envelope the kernel writes:
+    /// injective over `(label, scope)`, and the exact inverse of what
+    /// [`RdfTerm::to_term_value`](crate::RdfTerm::to_term_value) and the builder's
+    /// `intern_owned_term` decode at the default scope. A default-scope label outside
+    /// the reserved marker namespace passes through verbatim.
+    Qualified,
+    /// The bare label, the scope dropped. Lossy across scopes — two same-label blanks
+    /// from different scopes collapse into one owned blank — and right only where the
+    /// consumer's own model has no scope and every label is already default-scope,
+    /// which is what a host-facing boundary such as a JS `BlankNode` holds.
+    Bare,
+}
+
+/// Why a [`TermValue`] has no owned [`RdfTerm`](crate::RdfTerm) twin.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TermConversionError {
+    /// A triple term, at some nesting depth, has a predicate that is not an IRI.
+    /// RDF 1.2 requires an IRI there and the owned [`RdfTriple`](crate::RdfTriple)
+    /// holds one by construction, so there is no owned value to return — and none
+    /// is fabricated.
+    NonIriPredicate {
+        /// The kind of term found in the predicate position.
+        kind: crate::RdfTermKind,
+    },
+}
+
+impl std::fmt::Display for TermConversionError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NonIriPredicate { kind } => {
+                write!(f, "a triple-term predicate must be an IRI, found {kind:?}")
+            }
+        }
+    }
+}
+
+impl std::error::Error for TermConversionError {}
+
+impl TermValue {
+    /// This term in the owned [`RdfTerm`](crate::RdfTerm) model, the literal datatype
+    /// slot filled per `datatype` and each blank label spelled per `blank_label`.
+    ///
+    /// Everything else crosses verbatim: the lexical form, the (lowercased) language
+    /// tag, the base direction, and a triple term's components. A triple term is
+    /// assembled bottom-up over [`try_fold`](Self::try_fold)'s work list — subject,
+    /// predicate, object, each fully before the next — so a term of any depth is
+    /// converted without recursion, and the first non-IRI predicate ends the walk.
+    ///
+    /// # Errors
+    ///
+    /// [`TermConversionError::NonIriPredicate`] when a triple term at any depth has a
+    /// predicate that is not an IRI.
+    pub fn to_rdf_term(
+        &self,
+        datatype: DatatypePolicy,
+        blank_label: BlankLabelPolicy,
+    ) -> Result<crate::RdfTerm, TermConversionError> {
+        use crate::{RdfLiteral, RdfTerm, RdfTriple};
+        self.try_fold(
+            |leaf| {
+                Ok(match leaf {
+                    Self::Iri(iri) => RdfTerm::Iri(iri.clone()),
+                    Self::Blank { label, scope } => RdfTerm::BlankNode(match blank_label {
+                        BlankLabelPolicy::Qualified => scope.qualify_label(label).into_owned(),
+                        BlankLabelPolicy::Bare => label.clone(),
+                    }),
+                    Self::Literal {
+                        lexical_form,
+                        datatype: datatype_iri,
+                        language,
+                        direction,
+                    } => RdfTerm::Literal(RdfLiteral {
+                        lexical_form: lexical_form.clone(),
+                        datatype: datatype.apply(datatype_iri, language.is_some()),
+                        language: language.clone(),
+                        direction: *direction,
+                    }),
+                    Self::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+                })
+            },
+            |subject, predicate, object| match predicate {
+                RdfTerm::Iri(predicate) => {
+                    Ok(RdfTerm::triple(RdfTriple::new(subject, predicate, object)))
+                }
+                other => Err(TermConversionError::NonIriPredicate { kind: other.kind() }),
+            },
+        )
     }
 }
 
@@ -825,6 +948,205 @@ mod tests {
             assert_eq!(scope, BlankScope::DEFAULT, "{label:?}");
             assert_eq!(decoded.as_ref(), label, "{label:?}");
         }
+    }
+
+    // -- the owned-model bridge --------------------------------------------------
+
+    /// A directional literal spelled out field by field: `"a"@ar--rtl`.
+    fn rtl_literal() -> TermValue {
+        TermValue::Literal {
+            lexical_form: "a".to_owned(),
+            datatype: RDF_DIR_LANG_STRING.to_owned(),
+            language: Some("ar".to_owned()),
+            direction: Some(RdfTextDirection::Rtl),
+        }
+    }
+
+    /// The owned literal `term` bridges to under `policy`, as its slots.
+    fn bridged_literal(term: &TermValue, policy: DatatypePolicy) -> crate::RdfLiteral {
+        match term
+            .to_rdf_term(policy, BlankLabelPolicy::Qualified)
+            .expect("a literal always bridges")
+        {
+            crate::RdfTerm::Literal(literal) => literal,
+            other => panic!("a literal bridges to a literal, got {other:?}"),
+        }
+    }
+
+    /// Each datatype policy fills the owned datatype slot exactly as documented, and
+    /// every other literal slot crosses verbatim; the owned literal's own expansion
+    /// rule then recovers the value's datatype, whichever policy collapsed it.
+    #[test]
+    fn to_rdf_term_fills_the_datatype_slot_per_policy() {
+        let integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let simple = TermValue::simple_literal("a");
+        let lang = TermValue::lang_literal("a", "en");
+        let rtl = rtl_literal();
+        let typed = TermValue::typed_literal("1", integer);
+        let expectations: [(DatatypePolicy, [Option<&str>; 3]); 3] = [
+            (
+                DatatypePolicy::Keep,
+                [
+                    Some(XSD_STRING),
+                    Some(RDF_LANG_STRING),
+                    Some(RDF_DIR_LANG_STRING),
+                ],
+            ),
+            (
+                DatatypePolicy::CollapseString,
+                [None, Some(RDF_LANG_STRING), Some(RDF_DIR_LANG_STRING)],
+            ),
+            (
+                DatatypePolicy::CollapseStringAndLanguage,
+                [None, None, None],
+            ),
+        ];
+        for (policy, [simple_slot, lang_slot, rtl_slot]) in expectations {
+            let bridged_simple = bridged_literal(&simple, policy);
+            assert_eq!(
+                bridged_simple.datatype.as_deref(),
+                simple_slot,
+                "{policy:?}"
+            );
+            assert_eq!(bridged_simple.language, None);
+            assert_eq!(bridged_simple.direction, None);
+            assert_eq!(bridged_simple.datatype_iri(), XSD_STRING);
+
+            let bridged_lang = bridged_literal(&lang, policy);
+            assert_eq!(bridged_lang.datatype.as_deref(), lang_slot, "{policy:?}");
+            assert_eq!(bridged_lang.language.as_deref(), Some("en"));
+            assert_eq!(bridged_lang.direction, None);
+            assert_eq!(bridged_lang.datatype_iri(), RDF_LANG_STRING);
+
+            let bridged_rtl = bridged_literal(&rtl, policy);
+            assert_eq!(bridged_rtl.datatype.as_deref(), rtl_slot, "{policy:?}");
+            assert_eq!(bridged_rtl.language.as_deref(), Some("ar"));
+            assert_eq!(bridged_rtl.direction, Some(RdfTextDirection::Rtl));
+            assert_eq!(bridged_rtl.datatype_iri(), RDF_DIR_LANG_STRING);
+
+            // The valid neighbour: a typed literal is never collapsed.
+            let bridged_typed = bridged_literal(&typed, policy);
+            assert_eq!(
+                bridged_typed.datatype.as_deref(),
+                Some(integer),
+                "{policy:?}"
+            );
+            assert_eq!(bridged_typed.lexical_form, "1");
+        }
+    }
+
+    /// The blank-label policy spells the scope into the label or drops it; an IRI
+    /// crosses verbatim under either.
+    #[test]
+    fn to_rdf_term_spells_blank_labels_per_policy() {
+        let default_scope = TermValue::blank("b");
+        let scoped = TermValue::Blank {
+            label: "b".to_owned(),
+            scope: BlankScope(2),
+        };
+        let iri = TermValue::iri("http://example.org/i");
+        for (policy, expected_scoped) in [
+            (BlankLabelPolicy::Qualified, "purrdfesc2_b"),
+            (BlankLabelPolicy::Bare, "b"),
+        ] {
+            assert_eq!(
+                default_scope.to_rdf_term(DatatypePolicy::Keep, policy),
+                Ok(crate::RdfTerm::blank_node("b")),
+                "{policy:?}"
+            );
+            assert_eq!(
+                scoped.to_rdf_term(DatatypePolicy::Keep, policy),
+                Ok(crate::RdfTerm::blank_node(expected_scoped)),
+                "{policy:?}"
+            );
+            assert_eq!(
+                iri.to_rdf_term(DatatypePolicy::Keep, policy),
+                Ok(crate::RdfTerm::iri("http://example.org/i"))
+            );
+        }
+    }
+
+    /// A nested triple term is assembled bottom-up, and a non-IRI predicate at any
+    /// depth is refused with the kind that was found there.
+    #[test]
+    fn to_rdf_term_assembles_nested_triple_terms_and_refuses_a_non_iri_predicate() {
+        use crate::{RdfTerm, RdfTermKind, RdfTriple};
+        let s = TermValue::iri("http://example.org/s");
+        let p = TermValue::iri("http://example.org/p");
+        let inner = TermValue::Triple {
+            s: TermBox::new(s.clone()),
+            p: TermBox::new(p.clone()),
+            o: TermBox::new(TermValue::lang_literal("o", "en")),
+        };
+        let outer = TermValue::Triple {
+            s: TermBox::new(inner.clone()),
+            p: TermBox::new(TermValue::iri("http://example.org/q")),
+            o: TermBox::new(TermValue::Blank {
+                label: "b".to_owned(),
+                scope: BlankScope(1),
+            }),
+        };
+        let expected_inner = RdfTerm::triple(RdfTriple::new(
+            RdfTerm::iri("http://example.org/s"),
+            "http://example.org/p",
+            RdfTerm::literal(crate::RdfLiteral {
+                lexical_form: "o".to_owned(),
+                datatype: None,
+                language: Some("en".to_owned()),
+                direction: None,
+            }),
+        ));
+        let expected_outer = RdfTerm::triple(RdfTriple::new(
+            expected_inner.clone(),
+            "http://example.org/q",
+            RdfTerm::blank_node("purrdfesc1_b"),
+        ));
+        assert_eq!(
+            outer.to_rdf_term(
+                DatatypePolicy::CollapseStringAndLanguage,
+                BlankLabelPolicy::Qualified
+            ),
+            Ok(expected_outer)
+        );
+        assert_eq!(
+            inner.to_rdf_term(
+                DatatypePolicy::CollapseStringAndLanguage,
+                BlankLabelPolicy::Qualified
+            ),
+            Ok(expected_inner)
+        );
+
+        // A blank predicate at the top, and a literal predicate nested inside.
+        let blank_predicate = TermValue::Triple {
+            s: TermBox::new(s.clone()),
+            p: TermBox::new(TermValue::blank("p")),
+            o: TermBox::new(s.clone()),
+        };
+        assert_eq!(
+            blank_predicate.to_rdf_term(DatatypePolicy::Keep, BlankLabelPolicy::Bare),
+            Err(TermConversionError::NonIriPredicate {
+                kind: RdfTermKind::BlankNode
+            })
+        );
+        let nested_literal_predicate = TermValue::Triple {
+            s: TermBox::new(TermValue::Triple {
+                s: TermBox::new(s.clone()),
+                p: TermBox::new(TermValue::simple_literal("p")),
+                o: TermBox::new(s.clone()),
+            }),
+            p: TermBox::new(p),
+            o: TermBox::new(s),
+        };
+        let refused = nested_literal_predicate
+            .to_rdf_term(DatatypePolicy::Keep, BlankLabelPolicy::Bare)
+            .expect_err("a nested non-IRI predicate is refused");
+        assert_eq!(
+            refused,
+            TermConversionError::NonIriPredicate {
+                kind: RdfTermKind::Literal
+            }
+        );
+        assert!(refused.to_string().contains("predicate"));
     }
 
     #[test]

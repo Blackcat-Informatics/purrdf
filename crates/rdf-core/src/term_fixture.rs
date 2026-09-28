@@ -1,19 +1,23 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Shared generated RDF terms for traversal regression tests. Included only by test builds.
+//! The ONE definition of the generated-term fixture the traversal tests of a dozen
+//! crates draw from.
+//!
+//! A `tests/` target and a `src/` unit test of another crate are separate compilation
+//! units that can only share code through a library, and a source file included by
+//! path from another package is outside that package's published tarball, so the
+//! fixture lives here, shipped `#[doc(hidden)]` at the crate root exactly as
+//! `purrdf_rdf::gts_fixtures` is: built from the same crate, not public API, called by
+//! no shipping code path. It draws from `purrdf_hash::mix`, the workspace's one
+//! SplitMix64, so every crate's tests see the same stream for the same seed.
 
-#![allow(
-    dead_code,
-    reason = "shared traversal fixtures expose shapes used by different crate tests"
-)]
-
-use purrdf_testkit::rng::splitmix64_next;
+use purrdf_hash::mix::splitmix64_next;
 
 /// Which positions of a generated triple term [`term_value`] may fill with which terms.
 #[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TermShape {
+pub enum TermShape {
     /// Any term in any position, a non-IRI predicate included — a walk that refuses one
     /// meets it.
     Any,
@@ -35,16 +39,10 @@ pub(crate) enum TermShape {
 /// This draws recursively: a generated term nests at most `budget` levels, and the
 /// generator is for tests of the walks, not one of them.
 #[doc(hidden)]
-pub(crate) fn term_value(
-    state: &mut u64,
-    budget: &mut usize,
-    shape: TermShape,
-) -> purrdf_core::TermValue {
-    use purrdf_core::{BlankScope, RdfTextDirection, TermBox, TermValue};
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-    const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+pub fn term_value(state: &mut u64, budget: &mut usize, shape: TermShape) -> crate::TermValue {
+    use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING};
+    use crate::{BlankScope, RdfTextDirection, TermBox, TermValue};
+    use purrdf_xsd::datatype::{XSD_INTEGER, XSD_STRING};
     let draw = |state: &mut u64, n: u64| splitmix64_next(state) % n;
     if *budget > 0 && draw(state, 3) == 0 {
         *budget -= 1;
@@ -103,8 +101,8 @@ pub(crate) fn term_value(
 /// by a loop, so any depth is cheap to make.
 #[doc(hidden)]
 #[must_use]
-pub(crate) fn triple_chain(levels: usize) -> purrdf_core::TermValue {
-    use purrdf_core::{TermBox, TermValue};
+pub fn triple_chain(levels: usize) -> crate::TermValue {
+    use crate::{TermBox, TermValue};
     let mut term = TermValue::iri("http://example.org/o");
     for _ in 0..levels {
         term = TermValue::Triple {

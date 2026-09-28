@@ -194,6 +194,9 @@ pub fn version() -> String {
 }
 
 #[cfg(test)]
+use purrdf_core::term_fixture as test_terms;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -202,10 +205,6 @@ mod tests {
         assert_eq!(version(), env!("CARGO_PKG_VERSION"));
     }
 }
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;
 
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]

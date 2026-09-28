@@ -277,6 +277,67 @@ impl RdfTerm {
             |(), _, s, p, o| triple(s, p, o),
         )
     }
+
+    /// This term as a dataset-independent [`TermValue`](crate::TermValue), bound
+    /// under the kernel's own owned-model ingestion law (the one
+    /// `RdfDatasetBuilder::intern_owned_term_scoped` interns by), so a value obtained
+    /// here names exactly the term the builder would mint for `self`:
+    ///
+    /// * the literal datatype is expanded through [`RdfLiteral::datatype_iri`] — a
+    ///   language tag implies `rdf:langString`, a tag with a direction
+    ///   `rdf:dirLangString`, an absent datatype `xsd:string` — and the language tag
+    ///   is lowercased, both per the C0.1 identity key;
+    /// * at [`BlankScope::DEFAULT`](crate::BlankScope::DEFAULT) a blank label is
+    ///   decoded through [`BlankScope::unqualify_label`](crate::BlankScope::unqualify_label),
+    ///   the exact inverse of [`BlankLabelPolicy::Qualified`](crate::BlankLabelPolicy::Qualified),
+    ///   so a qualified label round-trips to the `(label, scope)` pair it encodes and
+    ///   an ordinary label passes through verbatim; at any other `scope` the label is
+    ///   kept verbatim under that scope — the standardize-apart relabelling, which
+    ///   must stay injective over the source's own scopes rather than decode them;
+    /// * a triple term's predicate IRI becomes an IRI value.
+    ///
+    /// A triple term is assembled bottom-up over [`try_fold`](Self::try_fold)'s work
+    /// list, so a term of any depth is converted without recursion.
+    #[must_use]
+    pub fn to_term_value(&self, scope: crate::BlankScope) -> crate::TermValue {
+        use crate::{BlankScope, TermBox, TermValue};
+        let lowered = self.try_fold::<_, core::convert::Infallible>(
+            |leaf| {
+                Ok(match leaf {
+                    Self::Iri(iri) => TermValue::Iri(iri.clone()),
+                    Self::BlankNode(label) if scope == BlankScope::DEFAULT => {
+                        let (label, scope) = BlankScope::unqualify_label(label);
+                        TermValue::Blank {
+                            label: label.into_owned(),
+                            scope,
+                        }
+                    }
+                    Self::BlankNode(label) => TermValue::Blank {
+                        label: label.clone(),
+                        scope,
+                    },
+                    Self::Literal(literal) => TermValue::Literal {
+                        lexical_form: literal.lexical_form.clone(),
+                        datatype: literal.datatype_iri().to_owned(),
+                        language: literal.language.as_deref().map(str::to_lowercase),
+                        direction: literal.direction,
+                    },
+                    Self::Triple(_) => unreachable!("a triple term is folded from its parts"),
+                })
+            },
+            |predicate| Ok(TermValue::Iri(predicate.to_owned())),
+            |s, p, o| {
+                Ok(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+            },
+        );
+        match lowered {
+            Ok(value) => value,
+        }
+    }
 }
 
 /// Renders the term in its canonical form (`<iri>`, `_:label`, a typed/lang literal,
@@ -532,6 +593,147 @@ mod tests {
                 .expect_err("mismatched components must not construct");
             assert_eq!(code, LITERAL_SHAPE_CODE);
         }
+    }
+
+    /// The datatype expands exactly as the builder would expand it at intern time,
+    /// and the language tag is lowercased to the identity key.
+    #[test]
+    fn to_term_value_expands_datatypes_and_lowercases_the_language() {
+        use crate::{BlankScope, TermValue};
+        let integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let cases = [
+            (RdfLiteral::simple("a"), XSD_STRING, None, None),
+            (
+                RdfLiteral::language_tagged("a", "EN-us"),
+                RDF_LANG_STRING,
+                Some("en-us"),
+                None,
+            ),
+            (
+                RdfLiteral {
+                    lexical_form: "a".to_owned(),
+                    datatype: None,
+                    language: Some("AR".to_owned()),
+                    direction: Some(RdfTextDirection::Rtl),
+                },
+                RDF_DIR_LANG_STRING,
+                Some("ar"),
+                Some(RdfTextDirection::Rtl),
+            ),
+            (RdfLiteral::typed("1", integer), integer, None, None),
+            // An explicit datatype alongside a language tag: the tag wins, as at
+            // intern time.
+            (
+                RdfLiteral {
+                    lexical_form: "a".to_owned(),
+                    datatype: Some(integer.to_owned()),
+                    language: Some("en".to_owned()),
+                    direction: None,
+                },
+                RDF_LANG_STRING,
+                Some("en"),
+                None,
+            ),
+        ];
+        for (literal, datatype, language, direction) in cases {
+            let value = RdfTerm::literal(literal.clone()).to_term_value(BlankScope::DEFAULT);
+            assert_eq!(
+                value,
+                TermValue::Literal {
+                    lexical_form: literal.lexical_form.clone(),
+                    datatype: datatype.to_owned(),
+                    language: language.map(str::to_owned),
+                    direction,
+                },
+                "{literal:?}"
+            );
+        }
+    }
+
+    /// At the default scope a qualified label is decoded — the exact inverse of the
+    /// qualified bridge — and an ordinary label passes through; at any other scope
+    /// the label is kept verbatim under that scope.
+    #[test]
+    fn to_term_value_decodes_qualified_labels_at_the_default_scope_only() {
+        use crate::{BlankLabelPolicy, BlankScope, DatatypePolicy, TermBox, TermValue};
+        assert_eq!(
+            RdfTerm::blank_node("purrdfesc2_b").to_term_value(BlankScope::DEFAULT),
+            TermValue::Blank {
+                label: "b".to_owned(),
+                scope: BlankScope(2),
+            }
+        );
+        assert_eq!(
+            RdfTerm::blank_node("b").to_term_value(BlankScope::DEFAULT),
+            TermValue::blank("b")
+        );
+        assert_eq!(
+            RdfTerm::blank_node("purrdfesc2_b").to_term_value(BlankScope(5)),
+            TermValue::Blank {
+                label: "purrdfesc2_b".to_owned(),
+                scope: BlankScope(5),
+            }
+        );
+        assert_eq!(
+            RdfTerm::iri("http://example.org/i").to_term_value(BlankScope(5)),
+            TermValue::iri("http://example.org/i")
+        );
+
+        // The round trip through the qualified bridge is the identity, nested triple
+        // terms and scoped blanks included.
+        let value = TermValue::Triple {
+            s: TermBox::new(TermValue::Triple {
+                s: TermBox::new(TermValue::Blank {
+                    label: "a.b".to_owned(),
+                    scope: BlankScope(7),
+                }),
+                p: TermBox::new(TermValue::iri("http://example.org/p")),
+                o: TermBox::new(TermValue::lang_literal("o", "en")),
+            }),
+            p: TermBox::new(TermValue::iri("http://example.org/q")),
+            o: TermBox::new(TermValue::simple_literal("x")),
+        };
+        for policy in [
+            DatatypePolicy::Keep,
+            DatatypePolicy::CollapseString,
+            DatatypePolicy::CollapseStringAndLanguage,
+        ] {
+            let owned = value
+                .to_rdf_term(policy, BlankLabelPolicy::Qualified)
+                .expect("IRI predicates");
+            assert_eq!(
+                owned.to_term_value(BlankScope::DEFAULT),
+                value,
+                "{policy:?}"
+            );
+        }
+    }
+
+    /// A nested owned triple term lowers bottom-up, its predicate IRIs as IRI values.
+    #[test]
+    fn to_term_value_lowers_a_nested_triple_term() {
+        use crate::{BlankScope, TermBox, TermValue};
+        let owned = RdfTerm::triple(RdfTriple::new(
+            RdfTerm::triple(RdfTriple::new(
+                RdfTerm::iri("http://example.org/s"),
+                "http://example.org/p",
+                RdfTerm::literal(RdfLiteral::simple("o")),
+            )),
+            "http://example.org/q",
+            RdfTerm::blank_node("b"),
+        ));
+        assert_eq!(
+            owned.to_term_value(BlankScope::DEFAULT),
+            TermValue::Triple {
+                s: TermBox::new(TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("http://example.org/s")),
+                    p: TermBox::new(TermValue::iri("http://example.org/p")),
+                    o: TermBox::new(TermValue::simple_literal("o")),
+                }),
+                p: TermBox::new(TermValue::iri("http://example.org/q")),
+                o: TermBox::new(TermValue::blank("b")),
+            }
+        );
     }
 
     #[test]

@@ -38,6 +38,7 @@
 //!    and remove→insert→… both return to "present").
 
 use crate::TermBox;
+use crate::hash::FastHasher;
 use std::convert::Infallible;
 use std::ops::ControlFlow;
 use std::sync::Arc;
@@ -109,21 +110,19 @@ pub(crate) struct QuadKey {
 struct DeltaBuilder {
     /// The sole owner of each delta term value, in mint order.
     values: Vec<TermValue>,
-    /// Reverse hash→id index, mirroring the base's `value_index` in `dataset.rs`:
-    /// keyed by a canonical hash of the term VALUE with `Vec<DeltaTermId>` collision
-    /// buckets, so interning and lookup are O(1) expected instead of a linear scan.
-    /// The hash is in-memory only (never persisted), so a fixed-seed `DefaultHasher`
-    /// is fine and matches the `dataset.rs` precedent.
-    index: std::collections::HashMap<u64, Vec<DeltaTermId>>,
+    /// Reverse hash→id index: keyed by a hash of the term VALUE with
+    /// `Vec<DeltaTermId>` collision buckets, so interning and lookup are O(1)
+    /// expected instead of a linear scan. The hash is in-memory only and never
+    /// persisted, and it is the workspace's fixed-key [`FastHasher`], the one
+    /// hashing policy every in-memory table in the kernel follows.
+    index: FastMap<u64, Vec<DeltaTermId>>,
 }
 
 impl DeltaBuilder {
-    /// Canonical hash of a [`TermValue`], matching the base's `value_index` keying.
+    /// The bucket key of a [`TermValue`]: its fixed-key [`FastHasher`] hash.
     fn hash_of(value: &TermValue) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        value.hash(&mut hasher);
-        hasher.finish()
+        use std::hash::BuildHasher as _;
+        FastHasher::default().hash_one(value)
     }
 
     /// Intern a delta term BY VALUE, returning its [`DeltaTermId`]. Idempotent: equal

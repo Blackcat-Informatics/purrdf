@@ -397,15 +397,17 @@ impl From<PackSideError> for PackError {
 }
 
 // ---------------------------------------------------------------------------
-// Small byte-header write/read helpers (explicit LE, no pointer casts).
+// Small byte-header write/read helpers: the `crate::bytes` primitives under this
+// container's own names (explicit LE, no pointer casts; the layout is frozen by
+// goldens and the shared primitives write the same bytes).
 // ---------------------------------------------------------------------------
 
 fn write_u32_le(out: &mut Vec<u8>, v: u32) {
-    out.extend_from_slice(&v.to_le_bytes());
+    crate::bytes::put_u32_le(out, v);
 }
 
 fn write_u64_le(out: &mut Vec<u8>, v: u64) {
-    out.extend_from_slice(&v.to_le_bytes());
+    crate::bytes::put_u64_le(out, v);
 }
 
 /// Read a `u32` at `*pos`, advancing `*pos` past it. The caller must already
@@ -413,11 +415,7 @@ fn write_u64_le(out: &mut Vec<u8>, v: u64) {
 /// within the fixed-length header/directory, whose total length is checked
 /// up front by [`PackView::from_bytes`]).
 fn read_u32_le(bytes: &[u8], pos: &mut usize) -> u32 {
-    let v = u32::from_le_bytes(
-        bytes[*pos..*pos + 4]
-            .try_into()
-            .expect("slice is exactly 4 bytes"),
-    );
+    let v = crate::bytes::read_u32_le(bytes, *pos).expect("the buffer holds pos + 4 bytes");
     *pos += 4;
     v
 }
@@ -425,11 +423,7 @@ fn read_u32_le(bytes: &[u8], pos: &mut usize) -> u32 {
 /// Read a `u64` at `*pos`, advancing `*pos` past it. See [`read_u32_le`]'s
 /// bounds-checking note.
 fn read_u64_le(bytes: &[u8], pos: &mut usize) -> u64 {
-    let v = u64::from_le_bytes(
-        bytes[*pos..*pos + 8]
-            .try_into()
-            .expect("slice is exactly 8 bytes"),
-    );
+    let v = crate::bytes::read_u64_le(bytes, *pos).expect("the buffer holds pos + 8 bytes");
     *pos += 8;
     v
 }

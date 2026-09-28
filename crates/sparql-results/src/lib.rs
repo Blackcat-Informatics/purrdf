@@ -88,6 +88,19 @@ pub use xml_read::{from_xml, from_xml_boolean, provenance_from_xml};
 pub use purrdf_core::SparqlResult;
 
 /// The four W3C SPARQL Results serialization formats this crate targets.
+///
+/// The variant order is the SPARQL Protocol's server-preference order — JSON first, the
+/// default a host answers with when a client states no preference — and [`Self::ALL`]
+/// carries it, so a negotiating host iterates this crate's order rather than its own.
+///
+/// # One name table
+///
+/// Every host boundary (the CLI, the C ABI, the WebAssembly package, the Python extension)
+/// takes a results format by NAME, and each once carried its own spelling table. They now
+/// share this one: [`Self::from_name`] resolves the canonical token ([`Self::token`]), the
+/// accepted aliases, and the media type ([`Self::media_type`]), ASCII-case-insensitively
+/// and ignoring surrounding whitespace. A spelling this method does not resolve is one no
+/// host accepts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SparqlResultsFormat {
     /// SPARQL Results JSON (a.k.a. SRJ).
@@ -98,6 +111,78 @@ pub enum SparqlResultsFormat {
     Csv,
     /// SPARQL Results TSV.
     Tsv,
+}
+
+/// Every spelling [`SparqlResultsFormat::from_name`] resolves, beside the format it names.
+///
+/// The canonical token first, then the aliases, then the media type — the order is
+/// documentation only, since the lookup is a full scan over a table this small.
+const FORMAT_NAMES: [(&str, SparqlResultsFormat); 11] = [
+    ("json", SparqlResultsFormat::Json),
+    ("srj", SparqlResultsFormat::Json),
+    ("sparql-json", SparqlResultsFormat::Json),
+    ("application/sparql-results+json", SparqlResultsFormat::Json),
+    ("xml", SparqlResultsFormat::Xml),
+    ("sparql-xml", SparqlResultsFormat::Xml),
+    ("application/sparql-results+xml", SparqlResultsFormat::Xml),
+    ("csv", SparqlResultsFormat::Csv),
+    ("text/csv", SparqlResultsFormat::Csv),
+    ("tsv", SparqlResultsFormat::Tsv),
+    ("text/tab-separated-values", SparqlResultsFormat::Tsv),
+];
+
+impl SparqlResultsFormat {
+    /// Every format, in server-preference order (JSON first).
+    pub const ALL: [Self; 4] = [Self::Json, Self::Xml, Self::Csv, Self::Tsv];
+
+    /// The canonical short token naming this format: `json`, `xml`, `csv` or `tsv`.
+    ///
+    /// This is the spelling the SPARQL Protocol negotiation returns and the one every
+    /// host's diagnostics use; [`Self::from_name`] resolves it back.
+    #[must_use]
+    pub const fn token(self) -> &'static str {
+        match self {
+            Self::Json => "json",
+            Self::Xml => "xml",
+            Self::Csv => "csv",
+            Self::Tsv => "tsv",
+        }
+    }
+
+    /// The registered media type of this format's documents, for a `Content-Type`.
+    #[must_use]
+    pub const fn media_type(self) -> &'static str {
+        match self {
+            Self::Json => "application/sparql-results+json",
+            Self::Xml => "application/sparql-results+xml",
+            Self::Csv => "text/csv",
+            Self::Tsv => "text/tab-separated-values",
+        }
+    }
+
+    /// Resolve a caller-supplied format name, or `None` when no format is spelled that way.
+    ///
+    /// Accepted, ASCII-case-insensitively and with surrounding whitespace ignored:
+    ///
+    /// | Format | Token | Aliases | Media type |
+    /// |---|---|---|---|
+    /// | JSON | `json` | `srj`, `sparql-json` | `application/sparql-results+json` |
+    /// | XML | `xml` | `sparql-xml` | `application/sparql-results+xml` |
+    /// | CSV | `csv` | — | `text/csv` |
+    /// | TSV | `tsv` | — | `text/tab-separated-values` |
+    ///
+    /// A media type with parameters (`text/csv; charset=utf-8`) is not a name and is not
+    /// resolved: a caller holding an `Accept` or `Content-Type` header negotiates it
+    /// through the protocol module, which understands parameters and weights, rather than
+    /// through a name lookup that would have to guess which parameters are harmless.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        let name = name.trim();
+        FORMAT_NAMES
+            .iter()
+            .find(|(spelling, _)| spelling.eq_ignore_ascii_case(name))
+            .map(|&(_, format)| format)
+    }
 }
 
 /// The result of a serialization: the encoded bytes plus an exit-gate flag.
@@ -239,6 +324,9 @@ fn provenance_dropped(
 }
 
 #[cfg(test)]
+use purrdf_core::term_fixture as test_terms;
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use purrdf_core::{RdfDatasetBuilder, TermValue};
@@ -284,8 +372,110 @@ mod tests {
             "?s\n<http://example.org/s>\n"
         );
     }
-}
 
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;
+    /// Every token and media type round-trips through `from_name`, in either case and
+    /// with surrounding whitespace, and every alias lands on the format it abbreviates.
+    #[test]
+    fn from_name_resolves_tokens_aliases_and_media_types() {
+        for format in SparqlResultsFormat::ALL {
+            assert_eq!(SparqlResultsFormat::from_name(format.token()), Some(format));
+            assert_eq!(
+                SparqlResultsFormat::from_name(format.media_type()),
+                Some(format)
+            );
+            assert_eq!(
+                SparqlResultsFormat::from_name(&format.token().to_ascii_uppercase()),
+                Some(format)
+            );
+            assert_eq!(
+                SparqlResultsFormat::from_name(&format!("  {}\t", format.media_type())),
+                Some(format)
+            );
+        }
+        assert_eq!(
+            SparqlResultsFormat::from_name("srj"),
+            Some(SparqlResultsFormat::Json)
+        );
+        assert_eq!(
+            SparqlResultsFormat::from_name("sparql-json"),
+            Some(SparqlResultsFormat::Json)
+        );
+        assert_eq!(
+            SparqlResultsFormat::from_name("SPARQL-XML"),
+            Some(SparqlResultsFormat::Xml)
+        );
+        assert_eq!(
+            SparqlResultsFormat::from_name("Application/Sparql-Results+JSON"),
+            Some(SparqlResultsFormat::Json)
+        );
+    }
+
+    /// A spelling no host accepts stays refused: the empty name, rdflib's `txt` table
+    /// format, a media type carrying parameters, and a token with interior whitespace.
+    /// Each has a resolved neighbour, so the refusal is of the spelling and not of the
+    /// format.
+    #[test]
+    fn from_name_refuses_spellings_no_host_accepts() {
+        for unknown in [
+            "",
+            " ",
+            "txt",
+            "text/csv; charset=utf-8",
+            "text/csv;charset=utf-8",
+            "sparql json",
+            "json/",
+            "application/json",
+            "ntriples",
+        ] {
+            assert_eq!(
+                SparqlResultsFormat::from_name(unknown),
+                None,
+                "{unknown:?} must not resolve"
+            );
+        }
+        // The neighbouring valid spellings of the refused ones.
+        assert_eq!(
+            SparqlResultsFormat::from_name("text/csv"),
+            Some(SparqlResultsFormat::Csv)
+        );
+        assert_eq!(
+            SparqlResultsFormat::from_name("sparql-json"),
+            Some(SparqlResultsFormat::Json)
+        );
+        assert_eq!(
+            SparqlResultsFormat::from_name("json"),
+            Some(SparqlResultsFormat::Json)
+        );
+    }
+
+    /// `ALL` is the server-preference order the protocol negotiates in, and the token and
+    /// media type of each entry are distinct from every other entry's.
+    #[test]
+    fn all_is_ordered_and_names_are_distinct() {
+        assert_eq!(
+            SparqlResultsFormat::ALL.map(SparqlResultsFormat::token),
+            ["json", "xml", "csv", "tsv"]
+        );
+        let mut names: Vec<&str> = FORMAT_NAMES.iter().map(|&(name, _)| name).collect();
+        let before = names.len();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(
+            names.len(),
+            before,
+            "every spelling names exactly one format"
+        );
+        for format in SparqlResultsFormat::ALL {
+            assert!(
+                FORMAT_NAMES
+                    .iter()
+                    .any(|&(name, f)| f == format && name == format.token())
+            );
+            assert!(
+                FORMAT_NAMES
+                    .iter()
+                    .any(|&(name, f)| f == format && name == format.media_type())
+            );
+        }
+    }
+}

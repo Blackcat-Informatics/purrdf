@@ -28,10 +28,20 @@
 //! by the folded row count) needs two more narrow operations once the sum has
 //! escaped `i128`: scaling by a power of ten and dividing by a single machine
 //! integer (the count) — [`BigInt::mul_pow10`] and [`BigInt::div_rem_u64`],
-//! both still exact and both still far short of a general-purpose bignum: no
-//! `BigInt × BigInt` multiplication, no `BigInt ÷ BigInt` division, no parsing
-//! from a lexical form, because a row count is always a single machine word and
-//! nothing in this crate ever needs to multiply two running sums together.
+//! both still exact.
+//!
+//! # The shared arbitrary-precision seam
+//!
+//! The accumulator is also the workspace's one exact integer beyond `i128`, and
+//! two other surfaces need exactly that: a SHACL or JSON Schema validator deciding
+//! `multipleOf`/`minimum` over a literal whose digits exceed `i128`, and the exact
+//! decimal expansions of binary floating-point values ([`crate::ieee::exact`]),
+//! whose numerators reach `2^1074`. So the type carries the small general core
+//! those need — [`BigInt::from_decimal_digits`], [`BigInt::mul`],
+//! [`BigInt::div_rem`], [`BigInt::mul_pow5`] — each exact, each schoolbook over
+//! the base-`1e9` limbs, and none tuned for speed: nothing here runs per triple
+//! or per row. What it deliberately still is NOT is a bignum library: no bitwise
+//! operators, no `gcd`, no `pow`, no arithmetic traits beyond `Ord`.
 //!
 //! # Representation
 //!
@@ -358,6 +368,210 @@ impl BigInt {
         };
         Some((quotient, remainder))
     }
+
+    /// Construct from an unsigned run of ASCII decimal digits, exactly, with no
+    /// bound on the length: `"007"` is `7`, `"0"` and `"000"` are zero. `None` when
+    /// `digits` is empty or holds any byte that is not `0`–`9` — a sign, a space,
+    /// a decimal point or a non-ASCII digit all refuse, so a caller splitting a
+    /// lexical form supplies the sign itself.
+    ///
+    /// The one way to reach a `BigInt` from text: a literal whose magnitude exceeds
+    /// `i128` fails [`crate::parse`] on range, and a validator that must still
+    /// compare it against a facet parses its digits here.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::BigInt;
+    ///
+    /// let big = BigInt::from_decimal_digits("340282366920938463463374607431768211456")
+    ///     .expect("digits");
+    /// assert_eq!(big.to_i128(), None, "2^128 exceeds i128");
+    /// assert_eq!(big, BigInt::from_i128(1).mul_pow2(128));
+    /// assert_eq!(BigInt::from_decimal_digits("-1"), None, "no sign");
+    /// assert_eq!(BigInt::from_decimal_digits(""), None);
+    /// ```
+    #[must_use]
+    pub fn from_decimal_digits(digits: &str) -> Option<Self> {
+        let bytes = digits.as_bytes();
+        if bytes.is_empty() || !bytes.iter().all(u8::is_ascii_digit) {
+            return None;
+        }
+        // Nine digits per limb, least significant group first; the leading
+        // (possibly short) group comes last.
+        let mut limbs = Vec::with_capacity(bytes.len().div_ceil(9));
+        for group in bytes.rchunks(9) {
+            let limb = group
+                .iter()
+                .fold(0u32, |acc, &digit| acc * 10 + u32::from(digit - b'0'));
+            limbs.push(limb);
+        }
+        while limbs.last() == Some(&0) {
+            limbs.pop();
+        }
+        Some(Self {
+            negative: false,
+            limbs,
+        })
+    }
+
+    /// `self × factor` in place, exactly, for a single machine-word factor; the
+    /// sign is unchanged (and a zero result is canonical zero).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::BigInt;
+    ///
+    /// let mut n = BigInt::from_i128(-3);
+    /// n.mul_small(7);
+    /// assert_eq!(n.to_i128(), Some(-21));
+    /// n.mul_small(0);
+    /// assert!(n.is_zero());
+    /// ```
+    pub fn mul_small(&mut self, factor: u32) {
+        if self.is_zero() {
+            return;
+        }
+        if factor == 0 {
+            *self = Self::zero();
+            return;
+        }
+        if factor == 1 {
+            return;
+        }
+        self.limbs = mul_by_small(&self.limbs, u64::from(factor));
+    }
+
+    /// `self × 5^n` in place, exactly — the decimal counterpart of
+    /// [`Self::mul_pow2`]: `2^-k = 5^k / 10^k`, so a dyadic rational's exact
+    /// decimal expansion is its odd numerator times `5^k`, read at `k` fractional
+    /// digits. That is how [`crate::ieee::exact`] writes a binary64 value's
+    /// digits.
+    ///
+    /// `5^13 < 2^32`, so the scaling runs thirteen powers at a time through
+    /// [`Self::mul_small`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::BigInt;
+    ///
+    /// let mut n = BigInt::from_i128(1);
+    /// n.mul_pow5(3);
+    /// assert_eq!(n.to_i128(), Some(125));
+    /// n.mul_pow5(0);
+    /// assert_eq!(n.to_i128(), Some(125));
+    /// ```
+    pub fn mul_pow5(&mut self, n: u32) {
+        /// `5^13 = 1_220_703_125`, the largest power of five below `2^32`.
+        const CHUNK: u32 = 13;
+        const FIVE_TO_CHUNK: u32 = 1_220_703_125;
+        if self.is_zero() {
+            return;
+        }
+        let mut remaining = n;
+        while remaining >= CHUNK {
+            self.mul_small(FIVE_TO_CHUNK);
+            remaining -= CHUNK;
+        }
+        if remaining > 0 {
+            self.mul_small(5u32.pow(remaining));
+        }
+    }
+
+    /// `self × other`, exactly: schoolbook multiplication over the base-`1e9`
+    /// limbs (quadratic in the limb count, which nothing here makes large).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::BigInt;
+    ///
+    /// let a = BigInt::from_i128(i128::MAX);
+    /// let square = a.mul(&a);
+    /// assert_eq!(square.to_i128(), None);
+    /// assert_eq!(
+    ///     square.to_decimal_string(),
+    ///     "28948022309329048855892746252171976962977213799489202546401021394546514198529"
+    /// );
+    /// assert_eq!(a.mul(&BigInt::from_i128(-1)), BigInt::from_i128(-i128::MAX));
+    /// assert!(a.mul(&BigInt::zero()).is_zero());
+    /// ```
+    #[must_use]
+    pub fn mul(&self, other: &Self) -> Self {
+        if self.is_zero() || other.is_zero() {
+            return Self::zero();
+        }
+        Self {
+            negative: self.negative != other.negative,
+            limbs: magnitude_mul(&self.limbs, &other.limbs),
+        }
+    }
+
+    /// `(self ÷ other, self mod other)`, exactly, truncating toward zero as
+    /// integer division does: the quotient takes the product of the signs, the
+    /// remainder the dividend's sign, and `quotient × other + remainder == self`.
+    /// Schoolbook long division over the base-`1e9` limbs, each quotient limb found
+    /// by bisection — slow for what a bignum library would do, and exact.
+    ///
+    /// # Panics
+    ///
+    /// When `other` is zero: as with `/` on a machine integer, dividing by zero is a
+    /// programming error, not a value. [`Self::is_zero`] is the guard.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::BigInt;
+    ///
+    /// let n = BigInt::from_decimal_digits("1000000000000000000000000000000000000000007")
+    ///     .expect("digits");
+    /// let (quotient, remainder) = n.div_rem(&BigInt::from_i128(1_000_000_000_000_000_000_000));
+    /// assert_eq!(quotient.to_decimal_string(), "1000000000000000000000");
+    /// assert_eq!(remainder.to_i128(), Some(7));
+    /// let (quotient, remainder) = BigInt::from_i128(-7).div_rem(&BigInt::from_i128(2));
+    /// assert_eq!((quotient.to_i128(), remainder.to_i128()), (Some(-3), Some(-1)));
+    /// ```
+    #[must_use]
+    pub fn div_rem(&self, other: &Self) -> (Self, Self) {
+        assert!(!other.is_zero(), "BigInt division by zero");
+        if self.is_zero() {
+            return (Self::zero(), Self::zero());
+        }
+        let (quotient_limbs, remainder_limbs) = magnitude_div_rem(&self.limbs, &other.limbs);
+        let quotient = Self {
+            negative: (self.negative != other.negative) && !quotient_limbs.is_empty(),
+            limbs: quotient_limbs,
+        };
+        let remainder = Self {
+            negative: self.negative && !remainder_limbs.is_empty(),
+            limbs: remainder_limbs,
+        };
+        (quotient, remainder)
+    }
+
+    /// `self mod other`, exactly, with the dividend's sign — the remainder half of
+    /// [`Self::div_rem`]; `is_zero()` of the result is the `multipleOf` test.
+    ///
+    /// # Panics
+    ///
+    /// When `other` is zero (see [`Self::div_rem`]).
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::BigInt;
+    ///
+    /// let n = BigInt::from_i128(1).mul_pow2(200);
+    /// assert!(n.rem(&BigInt::from_i128(1).mul_pow2(100)).is_zero());
+    /// // 2^3 ≡ 1 (mod 7), so 2^200 = 2^(3·66 + 2) ≡ 4.
+    /// assert_eq!(n.rem(&BigInt::from_i128(7)).to_i128(), Some(4));
+    /// ```
+    #[must_use]
+    pub fn rem(&self, other: &Self) -> Self {
+        self.div_rem(other).1
+    }
 }
 
 /// The full arithmetic order on the value — sign first, then magnitude.
@@ -545,11 +759,16 @@ fn magnitude_sub(a: &[u32], b: &[u32]) -> Vec<u32> {
     out
 }
 
-/// `a × factor` over a base-`1e9` magnitude, where `factor < LIMB_BASE` (the only
-/// case [`BigInt::mul_pow10`] needs — a single leftover decimal digit's worth of
-/// scaling after the whole-limb shift). Each limb's product is
-/// `< LIMB_BASE × LIMB_BASE < 2^60`, comfortably inside `u64` alongside the carry.
+/// `a × factor` over a base-`1e9` magnitude, where `factor ≤ u32::MAX` — the
+/// leftover-digit scaling of [`BigInt::mul_pow10`], the 29-bit chunks of
+/// [`BigInt::mul_pow2`], and any machine-word factor [`BigInt::mul_small`] is
+/// handed. Each limb's product plus carry is below `factor × (LIMB_BASE + 1) <
+/// 2^32 × (10^9 + 1) < 2^62`, comfortably inside `u64`.
 fn mul_by_small(a: &[u32], factor: u64) -> Vec<u32> {
+    debug_assert!(
+        u32::try_from(factor).is_ok(),
+        "factor exceeds the u64 carry lane"
+    );
     let mut out = Vec::with_capacity(a.len() + 1);
     let mut carry: u64 = 0;
     for &limb in a {
@@ -590,6 +809,72 @@ fn magnitude_div_rem_u64(a: &[u32], divisor: u64) -> (Vec<u32>, u64) {
         quotient,
         u64::try_from(remainder).expect("remainder < divisor <= u64::MAX"),
     )
+}
+
+/// `a × b` over two non-zero base-`1e9` magnitudes: schoolbook, one row per limb
+/// of `a`. Each cell is `out[i + j] + a[i] × b[j] + carry`, where the product is
+/// `< 10^18`, the existing cell `< 10^9` and the carry `< 10^9 + 1`, so the sum is
+/// below `2^60` and the `u64` lane never overflows. Returns the canonical
+/// (trailing-zero-limb-trimmed) product.
+fn magnitude_mul(a: &[u32], b: &[u32]) -> Vec<u32> {
+    let mut out = vec![0u32; a.len() + b.len()];
+    for (i, &a_limb) in a.iter().enumerate() {
+        let mut carry: u64 = 0;
+        for (j, &b_limb) in b.iter().enumerate() {
+            let cell = u64::from(out[i + j]) + u64::from(a_limb) * u64::from(b_limb) + carry;
+            out[i + j] = (cell % LIMB_BASE) as u32;
+            carry = cell / LIMB_BASE;
+        }
+        // The row's final carry lands in a cell no earlier row has reached past
+        // (row `i` writes `i .. i + b.len()`; this is `i + b.len()`), which is
+        // therefore still zero — so the store is exact and needs no add.
+        out[i + b.len()] = carry as u32;
+    }
+    while out.last() == Some(&0) {
+        out.pop();
+    }
+    out
+}
+
+/// `(a ÷ b, a mod b)` over base-`1e9` magnitudes, `b` non-zero (the caller
+/// checks). Schoolbook long division, most significant limb first: the running
+/// remainder is kept below `b` (the loop invariant), so after shifting one more
+/// limb in it is below `b × LIMB_BASE` and the next quotient limb is a single
+/// base-`1e9` digit, found by bisection over `0..LIMB_BASE` against `b × q` (30
+/// single-limb multiplies and compares per limb — quadratic overall, and exact).
+/// Returns both results canonical (trailing zero limbs trimmed).
+fn magnitude_div_rem(a: &[u32], b: &[u32]) -> (Vec<u32>, Vec<u32>) {
+    if magnitude_cmp(a, b) == Ordering::Less {
+        return (Vec::new(), a.to_vec());
+    }
+    let mut quotient = vec![0u32; a.len()];
+    let mut remainder: Vec<u32> = Vec::with_capacity(b.len() + 1);
+    for (i, &limb) in a.iter().enumerate().rev() {
+        // remainder = remainder × LIMB_BASE + limb, kept canonical.
+        remainder.insert(0, limb);
+        while remainder.last() == Some(&0) {
+            remainder.pop();
+        }
+        // Largest q with b × q ≤ remainder; q < LIMB_BASE by the invariant.
+        let mut low: u64 = 0;
+        let mut high: u64 = LIMB_BASE - 1;
+        while low < high {
+            let mid = low + (high - low).div_ceil(2);
+            if magnitude_cmp(&mul_by_small(b, mid), &remainder) == Ordering::Greater {
+                high = mid - 1;
+            } else {
+                low = mid;
+            }
+        }
+        if low > 0 {
+            remainder = magnitude_sub(&remainder, &mul_by_small(b, low));
+        }
+        quotient[i] = low as u32;
+    }
+    while quotient.last() == Some(&0) {
+        quotient.pop();
+    }
+    (quotient, remainder)
 }
 
 #[cfg(test)]
@@ -1044,5 +1329,287 @@ mod tests {
             quotient.to_decimal_string(),
             format!("{}{}", i128::MAX, "0".repeat(18))
         );
+    }
+
+    // ---- the shared arbitrary-precision seam ------------------------------------
+
+    /// A random `u128` whose bit length is itself uniform over `0..=128`, so the
+    /// draws cover single-limb values and full-width ones alike.
+    fn random_u128(state: &mut u64) -> u128 {
+        let bits = splitmix64(state) % 129;
+        if bits == 0 {
+            return 0;
+        }
+        let raw = (u128::from(splitmix64(state)) << 64) | u128::from(splitmix64(state));
+        let mask = if bits == 128 {
+            u128::MAX
+        } else {
+            (1u128 << bits) - 1
+        };
+        (raw & mask) | (1u128 << (bits - 1))
+    }
+
+    /// A random `i128` of either sign; its magnitude is below `2^127`, so negation
+    /// never overflows.
+    fn random_i128(state: &mut u64) -> i128 {
+        let magnitude = i128::try_from(random_u128(state) >> 1).expect("below 2^127");
+        if splitmix64(state).is_multiple_of(2) {
+            magnitude
+        } else {
+            -magnitude
+        }
+    }
+
+    /// A random NON-NEGATIVE magnitude of exactly `bits` significant bits.
+    fn random_magnitude(state: &mut u64, bits: u32) -> BigInt {
+        let mut value = random_of_bit_length(state, bits);
+        value.negative = false;
+        value
+    }
+
+    #[test]
+    fn from_decimal_digits_round_trips_and_refuses_non_digits() {
+        assert_eq!(BigInt::from_decimal_digits("0"), Some(BigInt::zero()));
+        assert_eq!(BigInt::from_decimal_digits("000"), Some(BigInt::zero()));
+        assert_eq!(
+            BigInt::from_decimal_digits("007"),
+            Some(BigInt::from_i128(7))
+        );
+        // Either side of the nine-digit limb boundary.
+        assert_eq!(
+            BigInt::from_decimal_digits("999999999"),
+            Some(BigInt::from_i128(999_999_999))
+        );
+        assert_eq!(
+            BigInt::from_decimal_digits("1000000000"),
+            Some(BigInt::from_i128(1_000_000_000))
+        );
+        assert_eq!(
+            BigInt::from_decimal_digits("000000000000000001000000000"),
+            Some(BigInt::from_i128(1_000_000_000))
+        );
+        for bad in [
+            "", "-1", "+1", "1.0", "1 ", " 1", "1e3", "1_000", "0x10", "١", "1\n",
+        ] {
+            assert_eq!(BigInt::from_decimal_digits(bad), None, "{bad:?}");
+        }
+        let mut state = 0xD161_7500_0000_0001_u64;
+        for _ in 0..2000 {
+            let value = random_u128(&mut state);
+            let text = value.to_string();
+            let parsed = BigInt::from_decimal_digits(&text).expect("digits");
+            assert_eq!(parsed, BigInt::from_u128(value), "{text}");
+            assert_eq!(parsed.to_decimal_string(), text);
+        }
+        // Beyond u128 entirely: the rendering and the parse are inverses.
+        let big = random_magnitude(&mut state, 700);
+        assert_eq!(
+            BigInt::from_decimal_digits(&big.to_decimal_string()),
+            Some(big)
+        );
+    }
+
+    #[test]
+    fn mul_small_matches_u128_arithmetic_and_keeps_the_sign() {
+        let mut state = 0x5CA1_AB1E_0000_0002_u64;
+        for _ in 0..2000 {
+            // `value < 2^95` and `factor < 2^32`, so the product fits `i128`.
+            let value = random_u128(&mut state) >> 33;
+            let factor = splitmix64(&mut state) as u32;
+            let mut big = BigInt::from_u128(value);
+            big.mul_small(factor);
+            assert_eq!(big, BigInt::from_u128(value * u128::from(factor)));
+            let signed = -i128::try_from(value).expect("below 2^95");
+            let mut negative = BigInt::from_i128(signed);
+            negative.mul_small(factor);
+            assert_eq!(negative.to_i128(), Some(signed * i128::from(factor)));
+        }
+        // The factor at the top of the lane, across a limb carry.
+        let mut top = BigInt::from_u128(u128::from(u64::MAX));
+        top.mul_small(u32::MAX);
+        assert_eq!(
+            top,
+            BigInt::from_u128(u128::from(u64::MAX) * u128::from(u32::MAX))
+        );
+        let mut zeroed = BigInt::from_i128(-5);
+        zeroed.mul_small(0);
+        assert_eq!(zeroed, BigInt::zero(), "zero is canonical, not negative");
+        let mut zero = BigInt::zero();
+        zero.mul_small(7);
+        assert!(zero.is_zero());
+    }
+
+    #[test]
+    fn mul_pow5_matches_u128_powers_and_the_decimal_scaler() {
+        // 5^55 < 2^128, so every exponent up to 55 has a u128 oracle — including the
+        // 13-power chunk boundaries at 13, 26, 39 and 52.
+        for exp in 0..=55_u32 {
+            let mut big = BigInt::from_i128(1);
+            big.mul_pow5(exp);
+            assert_eq!(big, BigInt::from_u128(5_u128.pow(exp)), "5^{exp}");
+            // 3 × 5^54 < 2^127 is the last signed oracle that fits i128.
+            if exp <= 54 {
+                let mut negative = BigInt::from_i128(-3);
+                negative.mul_pow5(exp);
+                assert_eq!(negative.to_i128(), Some(-3 * 5_i128.pow(exp)));
+            }
+        }
+        // Beyond u128: 5^k × 2^k = 10^k, the scaler this module already trusts.
+        for exp in [56_u32, 100, 333, 1074] {
+            let mut five = BigInt::from_i128(1);
+            five.mul_pow5(exp);
+            assert_eq!(five.mul(&pow2(exp)), BigInt::from_i128(1).mul_pow10(exp));
+        }
+        let mut zero = BigInt::zero();
+        zero.mul_pow5(9);
+        assert!(zero.is_zero());
+    }
+
+    #[test]
+    fn mul_matches_u128_and_i128_arithmetic() {
+        let mut state = 0x0BAD_F00D_0000_0003_u64;
+        for _ in 0..2000 {
+            // Both below 2^64, so the product fits u128.
+            let a = random_u128(&mut state) >> 64;
+            let b = random_u128(&mut state) >> 64;
+            assert_eq!(
+                BigInt::from_u128(a).mul(&BigInt::from_u128(b)),
+                BigInt::from_u128(a * b),
+                "{a} × {b}"
+            );
+            // Signed, both magnitudes below 2^63.
+            let a = random_i128(&mut state) >> 64;
+            let b = random_i128(&mut state) >> 64;
+            assert_eq!(
+                BigInt::from_i128(a).mul(&BigInt::from_i128(b)).to_i128(),
+                Some(a * b),
+                "{a} × {b}"
+            );
+        }
+        // Full-width operands: (2^128 − 1)² = 2^256 − 2^129 + 1.
+        let max = BigInt::from_u128(u128::MAX);
+        let mut expected = pow2(256);
+        let mut minus = pow2(129);
+        minus.negative = true;
+        expected.add_assign(&minus);
+        expected.add_i128(1);
+        assert_eq!(max.mul(&max), expected);
+    }
+
+    #[test]
+    fn mul_agrees_with_the_power_scalers_beyond_u128() {
+        let mut state = 0x5CA1_E000_0000_0004_u64;
+        for bits in [1_u32, 64, 129, 300, 1000] {
+            let x = random_of_bit_length(&mut state, bits);
+            for exp in [0_u32, 1, 8, 9, 10, 27, 100] {
+                assert_eq!(
+                    x.mul(&BigInt::from_i128(1).mul_pow10(exp)),
+                    x.mul_pow10(exp)
+                );
+                assert_eq!(x.mul(&pow2(exp)), x.mul_pow2(exp));
+                assert_eq!(pow2(exp).mul(&x), x.mul_pow2(exp), "commutes");
+            }
+            assert!(x.mul(&BigInt::zero()).is_zero());
+            assert_eq!(x.mul(&BigInt::from_i128(1)), x);
+            let mut negated = x.mul(&BigInt::from_i128(-1));
+            assert_eq!(negated.is_negative(), !x.is_negative() && !x.is_zero());
+            negated.add_assign(&x);
+            assert!(negated.is_zero());
+        }
+    }
+
+    #[test]
+    fn div_rem_matches_u128_and_i128_division() {
+        let mut state = 0xD1B1_DE00_0000_0005_u64;
+        for _ in 0..2000 {
+            let a = random_u128(&mut state);
+            let b = random_u128(&mut state).max(1);
+            let (quotient, remainder) = BigInt::from_u128(a).div_rem(&BigInt::from_u128(b));
+            assert_eq!(quotient, BigInt::from_u128(a / b), "{a} / {b}");
+            assert_eq!(remainder, BigInt::from_u128(a % b), "{a} % {b}");
+            assert_eq!(BigInt::from_u128(a).rem(&BigInt::from_u128(b)), remainder);
+            // A small divisor too, so a quotient limb reaches every digit.
+            let small = u128::from(splitmix64(&mut state) % 1_000_000).max(1);
+            let (quotient, remainder) = BigInt::from_u128(a).div_rem(&BigInt::from_u128(small));
+            assert_eq!(quotient, BigInt::from_u128(a / small));
+            assert_eq!(remainder, BigInt::from_u128(a % small));
+            // Signed: truncation toward zero, remainder with the dividend's sign.
+            let a = random_i128(&mut state);
+            let b = random_i128(&mut state);
+            if b == 0 {
+                continue;
+            }
+            let (quotient, remainder) = BigInt::from_i128(a).div_rem(&BigInt::from_i128(b));
+            assert_eq!(quotient.to_i128(), Some(a / b), "{a} / {b}");
+            assert_eq!(remainder.to_i128(), Some(a % b), "{a} % {b}");
+        }
+    }
+
+    #[test]
+    fn div_rem_is_exact_beyond_u128() {
+        let mut state = 0xB16D_1FF0_0000_0006_u64;
+        for round in 0..300_u32 {
+            let a = random_magnitude(&mut state, 100 + round * 3);
+            let divisor_bits = 65 + round;
+            let b = random_magnitude(&mut state, divisor_bits);
+            // Fewer bits than `b`, so `r < b` by construction.
+            let remainder_bits = splitmix64(&mut state) as u32 % divisor_bits;
+            let r = random_magnitude(&mut state, remainder_bits);
+            let mut n = a.mul(&b);
+            n.add_assign(&r);
+            assert_eq!(n.div_rem(&b), (a.clone(), r.clone()));
+            // Every sign combination, truncating toward zero.
+            let negate = |value: &BigInt| value.mul(&BigInt::from_i128(-1));
+            assert_eq!(negate(&n).div_rem(&b), (negate(&a), negate(&r)));
+            assert_eq!(n.div_rem(&negate(&b)), (negate(&a), r.clone()));
+            assert_eq!(negate(&n).div_rem(&negate(&b)), (a, negate(&r)));
+        }
+    }
+
+    #[test]
+    fn div_rem_edge_shapes() {
+        let seven = BigInt::from_i128(7);
+        let three = BigInt::from_i128(3);
+        assert_eq!(
+            three.div_rem(&seven),
+            (BigInt::zero(), three),
+            "dividend below divisor"
+        );
+        assert_eq!(
+            seven.div_rem(&seven),
+            (BigInt::from_i128(1), BigInt::zero())
+        );
+        assert_eq!(
+            seven.div_rem(&BigInt::from_i128(1)),
+            (seven.clone(), BigInt::zero())
+        );
+        assert_eq!(
+            BigInt::zero().div_rem(&seven),
+            (BigInt::zero(), BigInt::zero())
+        );
+        // A quotient limb of exactly 999_999_999, and a divisor spanning limbs.
+        let base = BigInt::from_i128(1_000_000_000);
+        let (quotient, remainder) = BigInt::from_i128(999_999_999_999_999_999).div_rem(&base);
+        assert_eq!(quotient.to_i128(), Some(999_999_999));
+        assert_eq!(remainder.to_i128(), Some(999_999_999));
+        let (quotient, remainder) = pow2(200).div_rem(&pow2(100));
+        assert_eq!(quotient, pow2(100));
+        assert!(remainder.is_zero());
+        // A negative zero never escapes: the quotient of a small negative dividend
+        // and the remainder of an exact negative division are canonical zero.
+        let (quotient, remainder) = BigInt::from_i128(-3).div_rem(&seven);
+        assert_eq!(quotient, BigInt::zero());
+        assert!(!quotient.is_negative());
+        assert_eq!(remainder.to_i128(), Some(-3));
+        let (quotient, remainder) = BigInt::from_i128(-14).div_rem(&seven);
+        assert_eq!(quotient.to_i128(), Some(-2));
+        assert_eq!(remainder, BigInt::zero());
+        assert!(!remainder.is_negative());
+    }
+
+    #[test]
+    #[should_panic(expected = "BigInt division by zero")]
+    fn div_rem_by_zero_panics() {
+        let _ = BigInt::from_i128(1).div_rem(&BigInt::zero());
     }
 }

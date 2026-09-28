@@ -27,7 +27,7 @@ use crate::mmr;
 use crate::model::{Graph, Quad, ReifierRow, Suppression, Term, TermKind};
 use crate::reader::{read, read_file_segments};
 use crate::stream;
-use crate::wire::{blake3_256, digest_str, hex, map_get};
+use crate::wire::{blake3_256, digest_str, digest_text, map_get};
 use crate::writer::{self, FrameOptions, Writer, WriterOptions};
 
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -752,7 +752,7 @@ fn streaming_index(
     let o = b.literal(timestamp, Some(t_dt));
     b.quad(c, t_timestamp, o);
     for head in &g.segment_heads {
-        let o = b.literal(&format!("blake3:{}", hex(head)), None);
+        let o = b.literal(&digest_text(head), None);
         b.quad(c, t_source_head, o);
     }
     if let Some(sealed) = sealed_digest {
@@ -775,7 +775,7 @@ fn streaming_index(
         let node = b.add(TermKind::Bnode, &format!("s{j}"));
         let cose_b64 = base64url_unpadded(cose);
         b.quad(node, t_type, t_detached_sig);
-        let o = b.literal(&format!("blake3:{}", hex(frame_id)), None);
+        let o = b.literal(&digest_text(frame_id), None);
         b.quad(node, t_source_frame, o);
         let o = b.literal(&cose_b64, None);
         b.quad(node, t_cose, o);
@@ -790,7 +790,7 @@ fn streaming_index(
             .map(|(frame_id, cose)| detached_signature_leaf(frame_id, cose))
             .collect();
         let root = mmr::root(&leaves);
-        let o = b.literal(&format!("blake3:{}", hex(&root)), None);
+        let o = b.literal(&digest_text(&root), None);
         b.quad(c, t_root, o);
     }
     Ok(b)

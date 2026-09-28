@@ -49,8 +49,10 @@ pub(crate) fn container_member_index(iri: &str) -> Option<u64> {
 /// A malformed RDF Collection encountered while walking `rdf:first`/`rdf:rest`.
 ///
 /// The list walker ([`DatasetView::rdf_list`](crate::DatasetView::rdf_list)) is
-/// also a validator: cycles terminate gracefully, but a structurally broken cons
-/// cell is a hard error carrying which invariant it violated.
+/// also a validator: under its default policy cycles terminate gracefully, but a
+/// structurally broken cons cell is a hard error carrying which invariant it
+/// violated. Which faults are errors is the caller's [`RdfListPolicy`]; the
+/// variants here name every fault a policy can turn into an error.
 #[derive(Debug, Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum RdfListError {
@@ -61,6 +63,14 @@ pub enum RdfListError {
     /// An `rdf:rest` edge points at a term that is neither `rdf:nil` nor a cons
     /// cell (a term with no `rdf:first`/`rdf:rest`) — a dangling tail.
     DanglingRest,
+    /// A cons cell carries no `rdf:rest` edge — a truncated tail (an error only
+    /// under a policy whose [`missing_rest`](RdfListPolicy::missing_rest) says so).
+    MissingRest,
+    /// A cons cell carries more than one `rdf:rest` edge (ambiguous tail).
+    MultipleRest,
+    /// The `rdf:rest` chain revisits a cell (an error only under a policy whose
+    /// [`cycle`](RdfListPolicy::cycle) says so).
+    Cycle,
 }
 
 impl std::fmt::Display for RdfListError {
@@ -71,12 +81,128 @@ impl std::fmt::Display for RdfListError {
             Self::DanglingRest => {
                 "rdf:List rdf:rest points at a term that is neither rdf:nil nor a cons cell"
             }
+            Self::MissingRest => "rdf:List cons cell missing an rdf:rest edge",
+            Self::MultipleRest => "rdf:List cons cell with multiple rdf:rest edges",
+            Self::Cycle => "rdf:List rdf:rest chain revisits a cons cell",
         };
         f.write_str(msg)
     }
 }
 
 impl std::error::Error for RdfListError {}
+
+/// What the list walker does when it meets one structural fault.
+///
+/// Not every variant applies to every fault: a cycle has nothing to take "first",
+/// and a cell with two `rdf:first` edges has nothing to skip. Each
+/// [`RdfListPolicy`] field documents the variants it admits; a variant a field does
+/// not admit is treated as [`Error`](Self::Error) for that fault — the strictest
+/// outcome, never a silent one — and [`RdfListPolicy::is_well_formed`] says so up
+/// front.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ListFault {
+    /// The walk stops and returns the matching [`RdfListError`].
+    Error,
+    /// The walk ends at the fault and returns what it has: every member read before
+    /// the faulty cell. When the fault is in the cell's `rdf:rest` (missing or
+    /// multiple), the cell's own unambiguous `rdf:first` member is kept, since the
+    /// fault lies past it; when it is in the cell's `rdf:first` (missing or
+    /// multiple) or the cell is a revisit, nothing of the cell is kept.
+    StopBefore,
+    /// Of several edges, the first one the view yields is taken. For the `multiple_*`
+    /// faults only.
+    FirstWins,
+    /// Of several edges, the last one the view yields is taken. For the `multiple_*`
+    /// faults only. This is the tail the walker silently followed for a multiple
+    /// `rdf:rest` before the policy existed.
+    LastWins,
+    /// The cell contributes no member and the walk follows its `rdf:rest`. For
+    /// `missing_first` only.
+    Skip,
+}
+
+/// What the list walker does at each structural fault of an `rdf:first`/`rdf:rest`
+/// chain — the argument of [`DatasetView::rdf_list_with`](crate::DatasetView::rdf_list_with).
+///
+/// Faults are judged per cell in `rdf:first` then `rdf:rest` order, so a cell that is
+/// faulty in both reports (or stops at) its `rdf:first` fault. A head that is
+/// `rdf:nil` or is not a list at all (carries neither edge) yields an empty list
+/// under every policy, and an `rdf:rest` pointing at a term that is neither
+/// `rdf:nil` nor a cons cell is [`RdfListError::DanglingRest`] under every policy:
+/// that is not a fault a walker can read past, since there is no cell to continue
+/// from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RdfListPolicy {
+    /// The `rdf:rest` chain revisits a cell. Admits [`ListFault::Error`] and
+    /// [`ListFault::StopBefore`].
+    pub cycle: ListFault,
+    /// A cons cell has no `rdf:first`. Admits [`ListFault::Error`],
+    /// [`ListFault::StopBefore`] and [`ListFault::Skip`].
+    pub missing_first: ListFault,
+    /// A cons cell has more than one `rdf:first`. Admits [`ListFault::Error`],
+    /// [`ListFault::StopBefore`], [`ListFault::FirstWins`] and [`ListFault::LastWins`].
+    pub multiple_first: ListFault,
+    /// A cons cell has no `rdf:rest`. Admits [`ListFault::Error`] and
+    /// [`ListFault::StopBefore`].
+    pub missing_rest: ListFault,
+    /// A cons cell has more than one `rdf:rest`. Admits [`ListFault::Error`],
+    /// [`ListFault::StopBefore`], [`ListFault::FirstWins`] and [`ListFault::LastWins`].
+    pub multiple_rest: ListFault,
+}
+
+impl RdfListPolicy {
+    /// Every fault is an error: the walker is a validator and nothing malformed is
+    /// read past.
+    pub const STRICT: Self = Self {
+        cycle: ListFault::Error,
+        missing_first: ListFault::Error,
+        multiple_first: ListFault::Error,
+        missing_rest: ListFault::Error,
+        multiple_rest: ListFault::Error,
+    };
+
+    /// What [`DatasetView::rdf_list`](crate::DatasetView::rdf_list) walks by: a
+    /// cycle and a missing `rdf:rest` end the list gracefully (the reference GTS
+    /// walker's behaviour), a missing or multiple `rdf:first` is an error, and a
+    /// multiple `rdf:rest` is an error too — before the policy existed the walker
+    /// silently followed the last such edge the view yielded, which is
+    /// [`ListFault::LastWins`] for a caller that wants it back.
+    pub const CORE_DEFAULT: Self = Self {
+        cycle: ListFault::StopBefore,
+        missing_first: ListFault::Error,
+        multiple_first: ListFault::Error,
+        missing_rest: ListFault::StopBefore,
+        multiple_rest: ListFault::Error,
+    };
+
+    /// Whether every field holds a variant it admits (see the field docs). A policy
+    /// that does not is still walked — each inadmissible variant acts as
+    /// [`ListFault::Error`] — but it is a programming error, and the walker asserts
+    /// this in debug builds.
+    #[must_use]
+    pub const fn is_well_formed(&self) -> bool {
+        matches!(self.cycle, ListFault::Error | ListFault::StopBefore)
+            && matches!(
+                self.missing_first,
+                ListFault::Error | ListFault::StopBefore | ListFault::Skip
+            )
+            && matches!(
+                self.multiple_first,
+                ListFault::Error
+                    | ListFault::StopBefore
+                    | ListFault::FirstWins
+                    | ListFault::LastWins
+            )
+            && matches!(self.missing_rest, ListFault::Error | ListFault::StopBefore)
+            && matches!(
+                self.multiple_rest,
+                ListFault::Error
+                    | ListFault::StopBefore
+                    | ListFault::FirstWins
+                    | ListFault::LastWins
+            )
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -359,6 +485,321 @@ mod tests {
             ds.members(plain, GraphMatch::Any).expect("neither"),
             [] as [_; 0]
         );
+    }
+
+    /// The member a cons cell holds, for reading a walk's answer back as members
+    /// when the choice between two tails is the thing under test.
+    fn member_of(ds: &crate::RdfDataset, cell: TermId) -> TermId {
+        let first = ds
+            .term_id_by_value(&crate::TermValue::iri(RDF_FIRST))
+            .expect("rdf:first is interned");
+        ds.first_object(cell, first, GraphMatch::Any)
+            .expect("a cons cell has a member")
+    }
+
+    /// A cell with two `rdf:rest` edges: an error under `rdf_list`, `CORE_DEFAULT`
+    /// and `STRICT`; the first edge the view yields under `FirstWins`, the last under
+    /// `LastWins` (two DIFFERENT tails, so an honoured choice is distinguishable
+    /// from a dropped one); and the list ends after the cell's own member under
+    /// `StopBefore`.
+    #[test]
+    fn multiple_rest_is_judged_by_the_policy() {
+        let mut b = RdfDatasetBuilder::new();
+        let first = rdf(&mut b, "first");
+        let rest = rdf(&mut b, "rest");
+        let nil = rdf(&mut b, "nil");
+        let a = iri(&mut b, "a");
+        let bb = iri(&mut b, "b");
+        let c = iri(&mut b, "c");
+        let head = b.intern_blank("head", BlankScope::DEFAULT);
+        let tail_b = b.intern_blank("tail_b", BlankScope::DEFAULT);
+        let tail_c = b.intern_blank("tail_c", BlankScope::DEFAULT);
+        b.push_quad(head, first, a, None);
+        b.push_quad(head, rest, tail_b, None);
+        b.push_quad(head, rest, tail_c, None);
+        b.push_quad(tail_b, first, bb, None);
+        b.push_quad(tail_b, rest, nil, None);
+        b.push_quad(tail_c, first, c, None);
+        b.push_quad(tail_c, rest, nil, None);
+        let ds = b.freeze().expect("freeze");
+
+        assert_eq!(
+            ds.rdf_list(head, GraphMatch::Any),
+            Err(RdfListError::MultipleRest)
+        );
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, RdfListPolicy::CORE_DEFAULT),
+            Err(RdfListError::MultipleRest)
+        );
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, RdfListPolicy::STRICT),
+            Err(RdfListError::MultipleRest)
+        );
+
+        // "First" and "last" are by the view's own yield order, which is what the
+        // policy promises; the two tails differ, so the two answers must too.
+        let tails: Vec<TermId> = ds
+            .quads_for_pattern(Some(head), Some(rest), None, GraphMatch::Any)
+            .map(|q| q.o)
+            .collect();
+        assert_eq!(tails.len(), 2);
+        let first_wins = RdfListPolicy {
+            multiple_rest: ListFault::FirstWins,
+            ..RdfListPolicy::CORE_DEFAULT
+        };
+        let last_wins = RdfListPolicy {
+            multiple_rest: ListFault::LastWins,
+            ..RdfListPolicy::CORE_DEFAULT
+        };
+        let stop = RdfListPolicy {
+            multiple_rest: ListFault::StopBefore,
+            ..RdfListPolicy::CORE_DEFAULT
+        };
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, first_wins),
+            Ok(vec![a, member_of(&ds, tails[0])])
+        );
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, last_wins),
+            Ok(vec![a, member_of(&ds, tails[1])])
+        );
+        assert_ne!(
+            ds.rdf_list_with(head, GraphMatch::Any, first_wins),
+            ds.rdf_list_with(head, GraphMatch::Any, last_wins),
+            "the two choices name different tails"
+        );
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, stop),
+            Ok(vec![a]),
+            "the cell's own member is kept; the ambiguous tail is not followed"
+        );
+    }
+
+    /// A cell with two `rdf:first` edges: `FirstWins` and `LastWins` take different
+    /// members, `StopBefore` ends the list before the ambiguous cell.
+    #[test]
+    fn multiple_first_is_judged_by_the_policy() {
+        let mut b = RdfDatasetBuilder::new();
+        let first = rdf(&mut b, "first");
+        let rest = rdf(&mut b, "rest");
+        let nil = rdf(&mut b, "nil");
+        let a = iri(&mut b, "a");
+        let bb = iri(&mut b, "b");
+        let z = iri(&mut b, "z");
+        let head = b.intern_blank("head", BlankScope::DEFAULT);
+        let tail = b.intern_blank("tail", BlankScope::DEFAULT);
+        b.push_quad(head, first, z, None);
+        b.push_quad(head, rest, tail, None);
+        b.push_quad(tail, first, a, None);
+        b.push_quad(tail, first, bb, None); // two rdf:first — ambiguous
+        b.push_quad(tail, rest, nil, None);
+        let ds = b.freeze().expect("freeze");
+        let members: Vec<TermId> = ds
+            .quads_for_pattern(Some(tail), Some(first), None, GraphMatch::Any)
+            .map(|q| q.o)
+            .collect();
+        assert_eq!(members.len(), 2);
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, RdfListPolicy::STRICT),
+            Err(RdfListError::MultipleFirst)
+        );
+        let first_wins = RdfListPolicy {
+            multiple_first: ListFault::FirstWins,
+            ..RdfListPolicy::CORE_DEFAULT
+        };
+        let last_wins = RdfListPolicy {
+            multiple_first: ListFault::LastWins,
+            ..RdfListPolicy::CORE_DEFAULT
+        };
+        let stop = RdfListPolicy {
+            multiple_first: ListFault::StopBefore,
+            ..RdfListPolicy::CORE_DEFAULT
+        };
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, first_wins),
+            Ok(vec![z, members[0]])
+        );
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, last_wins),
+            Ok(vec![z, members[1]])
+        );
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, stop),
+            Ok(vec![z]),
+            "the ambiguous cell contributes nothing"
+        );
+    }
+
+    /// A cell with no `rdf:first`: an error under `STRICT` (and `CORE_DEFAULT`), a
+    /// cell that contributes nothing under `Skip` — the tail after it is still
+    /// walked, which is what tells a skip from a stop — and the end of the list under
+    /// `StopBefore`.
+    #[test]
+    fn missing_first_is_an_error_under_strict_and_skipped_under_skip() {
+        let mut b = RdfDatasetBuilder::new();
+        let first = rdf(&mut b, "first");
+        let rest = rdf(&mut b, "rest");
+        let nil = rdf(&mut b, "nil");
+        let a = iri(&mut b, "a");
+        let bb = iri(&mut b, "b");
+        let head = b.intern_blank("head", BlankScope::DEFAULT);
+        let gap = b.intern_blank("gap", BlankScope::DEFAULT);
+        let tail = b.intern_blank("tail", BlankScope::DEFAULT);
+        b.push_quad(head, first, a, None);
+        b.push_quad(head, rest, gap, None);
+        b.push_quad(gap, rest, tail, None); // no rdf:first
+        b.push_quad(tail, first, bb, None);
+        b.push_quad(tail, rest, nil, None);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, RdfListPolicy::STRICT),
+            Err(RdfListError::MissingFirst)
+        );
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, RdfListPolicy::CORE_DEFAULT),
+            Err(RdfListError::MissingFirst)
+        );
+        let skip = RdfListPolicy {
+            missing_first: ListFault::Skip,
+            ..RdfListPolicy::CORE_DEFAULT
+        };
+        let stop = RdfListPolicy {
+            missing_first: ListFault::StopBefore,
+            ..RdfListPolicy::CORE_DEFAULT
+        };
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, skip),
+            Ok(vec![a, bb])
+        );
+        assert_eq!(ds.rdf_list_with(head, GraphMatch::Any, stop), Ok(vec![a]));
+    }
+
+    /// A cycle: truncated at the revisited cell under `StopBefore` (the default),
+    /// refused under `Error` (`STRICT`).
+    #[test]
+    fn a_cycle_stops_under_stop_before_and_errs_under_error() {
+        let mut b = RdfDatasetBuilder::new();
+        let first = rdf(&mut b, "first");
+        let rest = rdf(&mut b, "rest");
+        let a = iri(&mut b, "a");
+        let bb = iri(&mut b, "b");
+        let c0 = b.intern_blank("c0", BlankScope::DEFAULT);
+        let c1 = b.intern_blank("c1", BlankScope::DEFAULT);
+        b.push_quad(c0, first, a, None);
+        b.push_quad(c0, rest, c1, None);
+        b.push_quad(c1, first, bb, None);
+        b.push_quad(c1, rest, c0, None);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(
+            ds.rdf_list_with(c0, GraphMatch::Any, RdfListPolicy::CORE_DEFAULT),
+            Ok(vec![a, bb])
+        );
+        assert_eq!(
+            ds.rdf_list_with(c0, GraphMatch::Any, RdfListPolicy::STRICT),
+            Err(RdfListError::Cycle)
+        );
+        let error_only_on_cycle = RdfListPolicy {
+            cycle: ListFault::Error,
+            ..RdfListPolicy::CORE_DEFAULT
+        };
+        assert_eq!(
+            ds.rdf_list_with(c0, GraphMatch::Any, error_only_on_cycle),
+            Err(RdfListError::Cycle)
+        );
+    }
+
+    /// A cons cell with no `rdf:rest`: the list ends after its member by default,
+    /// and `STRICT` refuses it. The dataset also holds a proper list so the
+    /// `rdf:rest` vocabulary is present and the fault is the cell's, not the view's.
+    #[test]
+    fn missing_rest_ends_the_list_by_default_and_errs_under_strict() {
+        let mut b = RdfDatasetBuilder::new();
+        let first = rdf(&mut b, "first");
+        let a = iri(&mut b, "a");
+        let bb = iri(&mut b, "b");
+        let proper = build_list(&mut b, &[bb], None);
+        let head = b.intern_blank("head", BlankScope::DEFAULT);
+        b.push_quad(head, first, a, None); // no rdf:rest
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, RdfListPolicy::CORE_DEFAULT),
+            Ok(vec![a])
+        );
+        assert_eq!(
+            ds.rdf_list_with(head, GraphMatch::Any, RdfListPolicy::STRICT),
+            Err(RdfListError::MissingRest)
+        );
+        // The valid neighbour under the strict policy: the proper list is unaffected.
+        assert_eq!(
+            ds.rdf_list_with(proper, GraphMatch::Any, RdfListPolicy::STRICT),
+            Ok(vec![bb])
+        );
+    }
+
+    /// The valid neighbour of every refusal above: a well-formed three-item list
+    /// answers the same under every preset and under the most lenient policy.
+    #[test]
+    fn a_well_formed_list_answers_the_same_under_every_policy() {
+        let mut b = RdfDatasetBuilder::new();
+        let a = iri(&mut b, "a");
+        let bb = iri(&mut b, "b");
+        let c = iri(&mut b, "c");
+        let head = build_list(&mut b, &[a, bb, c], None);
+        let ds = b.freeze().expect("freeze");
+        let lenient = RdfListPolicy {
+            cycle: ListFault::StopBefore,
+            missing_first: ListFault::Skip,
+            multiple_first: ListFault::LastWins,
+            missing_rest: ListFault::StopBefore,
+            multiple_rest: ListFault::FirstWins,
+        };
+        for policy in [RdfListPolicy::STRICT, RdfListPolicy::CORE_DEFAULT, lenient] {
+            assert_eq!(
+                ds.rdf_list_with(head, GraphMatch::Any, policy),
+                Ok(vec![a, bb, c]),
+                "{policy:?}"
+            );
+        }
+        assert_eq!(ds.rdf_list(head, GraphMatch::Any), Ok(vec![a, bb, c]));
+    }
+
+    /// The presets admit only the variants their fields document; a misplaced
+    /// variant is reported rather than silently reinterpreted.
+    #[test]
+    fn presets_are_well_formed_and_a_misplaced_variant_is_not() {
+        assert!(RdfListPolicy::STRICT.is_well_formed());
+        assert!(RdfListPolicy::CORE_DEFAULT.is_well_formed());
+        for bad in [
+            RdfListPolicy {
+                cycle: ListFault::FirstWins,
+                ..RdfListPolicy::STRICT
+            },
+            RdfListPolicy {
+                missing_first: ListFault::LastWins,
+                ..RdfListPolicy::STRICT
+            },
+            RdfListPolicy {
+                multiple_first: ListFault::Skip,
+                ..RdfListPolicy::STRICT
+            },
+            RdfListPolicy {
+                missing_rest: ListFault::Skip,
+                ..RdfListPolicy::STRICT
+            },
+            RdfListPolicy {
+                multiple_rest: ListFault::Skip,
+                ..RdfListPolicy::STRICT
+            },
+        ] {
+            assert!(!bad.is_well_formed(), "{bad:?}");
+        }
+        for variant in [
+            RdfListError::MissingRest,
+            RdfListError::MultipleRest,
+            RdfListError::Cycle,
+        ] {
+            assert!(variant.to_string().contains("rdf:"), "{variant:?}");
+        }
     }
 
     #[test]

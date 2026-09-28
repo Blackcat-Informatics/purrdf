@@ -4726,46 +4726,29 @@ fn fixed_record(
         .ok_or(EmbeddingError::Truncated)
 }
 
+/// An overflowing `offset` is reported as arithmetic overflow, a short buffer as
+/// truncation; the read itself is `crate::bytes`'s.
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, EmbeddingError> {
-    let end = offset
+    offset
         .checked_add(4)
         .ok_or(EmbeddingError::ArithmeticOverflow("u32 read"))?;
-    Ok(u32::from_le_bytes(
-        bytes
-            .get(offset..end)
-            .ok_or(EmbeddingError::Truncated)?
-            .try_into()
-            .map_err(|_| EmbeddingError::Truncated)?,
-    ))
+    crate::bytes::read_u32_le(bytes, offset).ok_or(EmbeddingError::Truncated)
 }
 
+/// See [`read_u32`].
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, EmbeddingError> {
-    let end = offset
+    offset
         .checked_add(8)
         .ok_or(EmbeddingError::ArithmeticOverflow("u64 read"))?;
-    Ok(u64::from_le_bytes(
-        bytes
-            .get(offset..end)
-            .ok_or(EmbeddingError::Truncated)?
-            .try_into()
-            .map_err(|_| EmbeddingError::Truncated)?,
-    ))
+    crate::bytes::read_u64_le(bytes, offset).ok_or(EmbeddingError::Truncated)
 }
 
 fn infallible_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("structurally validated fixed u32 field"),
-    )
+    crate::bytes::read_u32_le(bytes, offset).expect("structurally validated fixed u32 field")
 }
 
 fn infallible_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(
-        bytes[offset..offset + 8]
-            .try_into()
-            .expect("structurally validated fixed u64 field"),
-    )
+    crate::bytes::read_u64_le(bytes, offset).expect("structurally validated fixed u64 field")
 }
 
 fn array32(bytes: &[u8], offset: usize) -> [u8; 32] {

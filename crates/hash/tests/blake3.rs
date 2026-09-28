@@ -4,6 +4,7 @@
 //! Frozen public-API oracle answers, replayed with unrelated update boundaries.
 use purrdf_hash::blake3::{Backend, Hasher, hash};
 use purrdf_hash::hex::Lower;
+use purrdf_testkit::rng::Xorshift64;
 use purrdf_testkit::vectors::VectorFile;
 
 const VECTORS: &str = include_str!("vectors/blake3_differential_vectors.txt");
@@ -150,13 +151,7 @@ fn random_inputs_cover_irregular_trees_and_alignment() {
             let seed = u64::from_str_radix(fields[1], 16).expect("seed");
             let offset = (seed % 32) as usize;
             let mut buffer = vec![0; offset + len];
-            let mut state = seed;
-            for byte in &mut buffer[offset..] {
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-                *byte = state as u8;
-            }
+            Xorshift64::new(seed).fill_bytes(&mut buffer[offset..]);
             let data = &buffer[offset..];
             let expected = Backend::Portable
                 .hash(data)

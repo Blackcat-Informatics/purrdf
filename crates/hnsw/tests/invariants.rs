@@ -16,16 +16,14 @@ mod corpus;
 use corpus::CorpusShape;
 use purrdf_hnsw::level::{level_cap, level_from_index};
 use purrdf_hnsw::{HnswIndex, Params, Ranked, VectorMatrix, build};
+use purrdf_testkit::rng::signed_unit_step_nonzero;
 
 /// A deterministic matrix of `rows x dims` values in `[-1, 1)`, never exactly zero.
 fn fixture(rows: usize, dims: usize, seed: u64) -> VectorMatrix {
     let mut state = seed;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = purrdf_hnsw::level::splitmix64(state);
-        let value = ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.125 } else { value });
-    }
+    let data: Vec<f64> = (0..rows * dims)
+        .map(|_| signed_unit_step_nonzero(&mut state, 0.125))
+        .collect();
     VectorMatrix::new(rows, dims, data).expect("fixture is valid")
 }
 
@@ -392,11 +390,7 @@ fn a_narrow_matrix_builds_the_identical_graph_to_its_widened_copy() {
     let (rows, dims) = (192_usize, 12_usize);
     let mut state = 0x1F32_D00D_u64;
     let narrow: Vec<f32> = (0..rows * dims)
-        .map(|_| {
-            state = purrdf_hnsw::level::splitmix64(state);
-            let value = ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-            (if value == 0.0 { 0.125 } else { value }) as f32
-        })
+        .map(|_| signed_unit_step_nonzero(&mut state, 0.125) as f32)
         .collect();
     let widened: Vec<f64> = narrow.iter().copied().map(f64::from).collect();
 

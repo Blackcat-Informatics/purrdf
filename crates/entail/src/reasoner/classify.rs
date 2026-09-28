@@ -56,7 +56,6 @@ use purrdf_core::TermValue;
 
 use super::certificate::{Session, Verdict};
 use super::proof::{Claim, ClaimBasis, ClaimSubject};
-use super::term_key;
 use crate::owl_dl::Kb;
 use crate::owl_dl::graph::Assumptions;
 use crate::owl_dl::saturate::saturate;
@@ -389,11 +388,10 @@ impl ClassHierarchy {
 
     /// Put every sequence into the crate's canonical term order.
     fn sort(&mut self) {
-        let pair = |(a, b): &(TermValue, TermValue)| (term_key(a), term_key(b));
-        self.subsumptions.sort_by_key(pair);
-        self.equivalences.sort_by_key(pair);
-        self.unsatisfiable.sort_by_key(term_key);
-        self.direct.sort_by_key(pair);
+        self.subsumptions.sort();
+        self.equivalences.sort();
+        self.unsatisfiable.sort();
+        self.direct.sort();
     }
 }
 
@@ -933,27 +931,21 @@ mod tests {
         for (name, dataset, _) in corpus() {
             let reasoner = Reasoner::new(&dataset).expect("reverse-map");
             let hierarchy: ClassHierarchy = reasoner.classify().expect("consistent").into_answer();
-            let key = |term: &TermValue| super::term_key(term);
-            let closure: BTreeSet<((u8, String), (u8, String))> = hierarchy
-                .subsumptions()
-                .iter()
-                .map(|(sub, sup)| (key(sub), key(sup)))
-                .collect();
-            let below = |sub: &(u8, String), sup: &(u8, String)| {
-                closure.contains(&(sub.clone(), sup.clone()))
-            };
+            let closure: BTreeSet<(TermValue, TermValue)> =
+                hierarchy.subsumptions().iter().cloned().collect();
+            let below =
+                |sub: &TermValue, sup: &TermValue| closure.contains(&(sub.clone(), sup.clone()));
             let strictly_below =
-                |sub: &(u8, String), sup: &(u8, String)| below(sub, sup) && !below(sup, sub);
-            let signature: Vec<(u8, String)> = reasoner.signature().iter().map(key).collect();
+                |sub: &TermValue, sup: &TermValue| below(sub, sup) && !below(sup, sub);
+            let signature = reasoner.signature();
             for (sub, sup) in hierarchy.direct_subsumptions() {
-                let (sub, sup) = (key(sub), key(sup));
                 assert!(
-                    strictly_below(&sub, &sup),
+                    strictly_below(sub, sup),
                     "{name}: a direct edge must be a strict subsumption"
                 );
                 let interposed = signature
                     .iter()
-                    .find(|middle| strictly_below(&sub, middle) && strictly_below(middle, &sup));
+                    .find(|middle| strictly_below(sub, middle) && strictly_below(middle, sup));
                 assert!(
                     interposed.is_none(),
                     "{name}: {sub:?} ⊑ {sup:?} is implied through {:?}",

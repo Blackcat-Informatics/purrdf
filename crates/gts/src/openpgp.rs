@@ -330,7 +330,7 @@ fn parse_ed25519_public_material(body: &[u8]) -> Result<([u8; 32], usize)> {
     if oid != ED25519_OID {
         return Err(OpenPgpError(format!(
             "unsupported curve OID {}",
-            crate::wire::hex(oid)
+            purrdf_hash::hex::Lower(oid)
         )));
     }
 
@@ -417,7 +417,7 @@ fn fingerprint(pub_key_body: &[u8]) -> String {
     hasher.update(&(pub_key_body.len() as u16).to_be_bytes());
     hasher.update(pub_key_body);
     let digest = hasher.finalize();
-    crate::wire::hex(&digest).to_uppercase()
+    purrdf_hash::hex::lower(&digest).to_uppercase()
 }
 
 /// Parse an armored OpenPGP certificate into its raw Ed25519 key + v4 fingerprint.
@@ -597,7 +597,7 @@ mod tests {
         let armored = json_string_field(&raw, "armored");
         let key = parse_transport_key(&armored).unwrap();
         assert_eq!(
-            crate::wire::hex(&key.raw_public),
+            purrdf_hash::hex::lower(&key.raw_public),
             json_string_field(&raw, "raw_pub")
         );
         assert_eq!(key.fingerprint, json_string_field(&raw, "fingerprint"));

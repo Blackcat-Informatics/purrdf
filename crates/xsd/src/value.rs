@@ -99,6 +99,26 @@ impl XsdValue {
         }
     }
 
+    /// Whether this value sits in the SPARQL numeric tower — an integer-family
+    /// value, a decimal, a float or a double — i.e. whether the numeric operators
+    /// ([`crate::numeric_add`] and its siblings, [`crate::numeric_cmp`]) accept it.
+    /// Exactly [`XsdDatatype::is_numeric`] of [`Self::datatype`].
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_xsd::{XsdDatatype, parse};
+    ///
+    /// assert!(parse("1.5", XsdDatatype::Decimal)?.is_numeric());
+    /// assert!(parse("NaN", XsdDatatype::Double)?.is_numeric());
+    /// assert!(!parse("1", XsdDatatype::Boolean)?.is_numeric());
+    /// # Ok::<(), purrdf_xsd::XsdError>(())
+    /// ```
+    #[must_use]
+    pub fn is_numeric(&self) -> bool {
+        self.datatype().is_numeric()
+    }
+
     /// The canonical lexical form of this value (XSD canonical mapping).
     ///
     /// # Examples
@@ -343,3 +363,67 @@ impl std::fmt::Display for XsdError {
 }
 
 impl std::error::Error for XsdError {}
+
+#[cfg(test)]
+mod tests {
+    use super::{XsdValue, parse};
+    use crate::datatype::XsdDatatype;
+
+    /// One parsed value per variant, with the expected `is_numeric` answer. The
+    /// `match` below is exhaustive over the enum, so a new variant must be added
+    /// here before the crate compiles its tests.
+    fn every_variant() -> Vec<(XsdValue, bool)> {
+        let values = [
+            (parse("7", XsdDatatype::Integer), true),
+            (parse("7", XsdDatatype::UnsignedByte), true),
+            (parse("-7", XsdDatatype::NegativeInteger), true),
+            (parse("7.5", XsdDatatype::Decimal), true),
+            (parse("NaN", XsdDatatype::Float), true),
+            (parse("INF", XsdDatatype::Double), true),
+            (parse("true", XsdDatatype::Boolean), false),
+            (parse("7", XsdDatatype::String), false),
+            (parse("2024-02-29T00:00:00Z", XsdDatatype::DateTime), false),
+            (parse("2024-02-29", XsdDatatype::Date), false),
+            (parse("12:00:00", XsdDatatype::Time), false),
+            (parse("P1Y", XsdDatatype::Duration), false),
+            (parse("P1D", XsdDatatype::DayTimeDuration), false),
+            (parse("P1M", XsdDatatype::YearMonthDuration), false),
+            (parse("2024", XsdDatatype::GYear), false),
+            (parse("--02", XsdDatatype::GMonth), false),
+            (parse("---29", XsdDatatype::GDay), false),
+            (parse("2024-02", XsdDatatype::GYearMonth), false),
+            (parse("--02-29", XsdDatatype::GMonthDay), false),
+            (parse("0A", XsdDatatype::HexBinary), false),
+            (parse("Cg==", XsdDatatype::Base64Binary), false),
+        ];
+        values
+            .into_iter()
+            .map(|(value, numeric)| (value.expect("fixture parses"), numeric))
+            .collect()
+    }
+
+    #[test]
+    fn is_numeric_answers_for_every_variant() {
+        let mut seen = [false; 12];
+        for (value, expected) in every_variant() {
+            let slot = match value {
+                XsdValue::Integer { .. } => 0,
+                XsdValue::Decimal(_) => 1,
+                XsdValue::Float(_) => 2,
+                XsdValue::Double(_) => 3,
+                XsdValue::Boolean(_) => 4,
+                XsdValue::String(_) => 5,
+                XsdValue::DateTime(_) => 6,
+                XsdValue::Date(_) => 7,
+                XsdValue::Time(_) => 8,
+                XsdValue::Duration(_) => 9,
+                XsdValue::Gregorian(_) => 10,
+                XsdValue::Binary { .. } => 11,
+            };
+            seen[slot] = true;
+            assert_eq!(value.is_numeric(), expected, "{value:?}");
+            assert_eq!(value.is_numeric(), value.datatype().is_numeric());
+        }
+        assert!(seen.iter().all(|&hit| hit), "every variant is exercised");
+    }
+}

@@ -164,10 +164,12 @@
 
 use core::ops::ControlFlow;
 
-/// Depth bound for resolving nested reified-triple terms, mirroring
-/// `MAX_GTS_TERM_NESTING_DEPTH` in the IR engine. A cyclic or absurdly nested triple
-/// term hard-fails ([`EventError::NestingDepthExceeded`]) rather than recursing
-/// without bound.
+/// Depth bound for nested triple terms: how many triple terms one chain may hold, the
+/// outermost included. This is the ONE definition; the IR kernel's validator, the GTS
+/// segment decoder and resolver, the GTS writer and the package projection all use it
+/// by name, so every layer that walks a triple term agrees on the acyclicity cliff by
+/// construction. A cyclic or absurdly nested triple term hard-fails
+/// ([`EventError::NestingDepthExceeded`]) rather than recursing without bound.
 pub const MAX_TERM_NESTING_DEPTH: usize = 16;
 
 /// A **blank-node label namespace**, local to one ingestion drive. A [`ScopeId`]

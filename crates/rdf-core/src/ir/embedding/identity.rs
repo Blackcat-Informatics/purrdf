@@ -21,11 +21,11 @@ const D_CHUNKING: &[u8] = b"purrdf.purremb.v1.chunking\0";
 const D_SPACE: &[u8] = b"purrdf.purremb.v1.vector-space\0";
 const D_TARGET_IDENTITY: &[u8] = b"purrdf.purremb.v1.target-identity\0";
 const D_TARGET: &[u8] = b"purrdf.purremb.v1.target\0";
-const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
+pub(super) const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
 const D_RELATION_ROLE: &[u8] = b"purrdf.purremb.v1.relation-role\0";
-const D_MATRIX_CONTENT: &[u8] = b"purrdf.purremb.v1.matrix-content\0";
+pub(super) const D_MATRIX_CONTENT: &[u8] = b"purrdf.purremb.v1.matrix-content\0";
 const D_MATRIX: &[u8] = b"purrdf.purremb.v1.matrix\0";
-const D_PROJECTION_CONTENT: &[u8] = b"purrdf.purremb.v1.projection-content\0";
+pub(super) const D_PROJECTION_CONTENT: &[u8] = b"purrdf.purremb.v1.projection-content\0";
 const D_PROJECTION: &[u8] = b"purrdf.purremb.v1.projection\0";
 const D_EXTERNAL_CONTRACT: &[u8] = b"purrdf.purremb.v1.external-contract\0";
 const D_EXTERNAL: &[u8] = b"purrdf.purremb.v1.external-binding\0";
@@ -394,15 +394,55 @@ pub fn derive_artifact_root(header_zero_root: &[u8], directory: &[u8]) -> Artifa
     ArtifactRoot(hash_fold(D_ARTIFACT, &[header_zero_root, directory]))
 }
 
-fn hash_fold(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
-    let mut hasher = Sha256::new();
-    hasher.update(domain);
-    for field in fields {
-        let length = u64::try_from(field.len()).expect("an in-memory slice length fits u64");
-        hasher.update(length.to_le_bytes());
-        hasher.update(field);
+/// The normative length-framed SHA-256 fold of `docs/PURREMB.md`, stated once: the
+/// domain constant, then each field as its `u64` little-endian length followed by
+/// its bytes. [`hash_fold`] runs it over a slice of in-memory fields; the writer and
+/// the verifier reach for it directly when a field is a matrix body they stream —
+/// [`begin_field`](Self::begin_field) with the body's length, then
+/// [`update`](Self::update) chunk by chunk — so a streamed digest and an in-memory
+/// one are the same bytes by construction rather than by two transcriptions.
+pub(super) struct FramedHasher {
+    hasher: Sha256,
+}
+
+impl FramedHasher {
+    /// A fold under `domain`, with no field yet.
+    pub(super) fn new(domain: &[u8]) -> Self {
+        let mut hasher = Sha256::new();
+        hasher.update(domain);
+        Self { hasher }
     }
-    hasher.finalize().into()
+
+    /// One whole field: its length, then its bytes.
+    pub(super) fn field(&mut self, bytes: &[u8]) {
+        let length = u64::try_from(bytes.len()).expect("an in-memory slice length fits u64");
+        self.begin_field(length);
+        self.update(bytes);
+    }
+
+    /// Open a field of `length` bytes whose contents follow through
+    /// [`update`](Self::update).
+    pub(super) fn begin_field(&mut self, length: u64) {
+        self.hasher.update(length.to_le_bytes());
+    }
+
+    /// Some of the bytes of the field opened by [`begin_field`](Self::begin_field).
+    pub(super) fn update(&mut self, bytes: &[u8]) {
+        self.hasher.update(bytes);
+    }
+
+    /// The 32-byte digest.
+    pub(super) fn finish(self) -> [u8; 32] {
+        self.hasher.finalize().into()
+    }
+}
+
+fn hash_fold(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = FramedHasher::new(domain);
+    for field in fields {
+        hasher.field(field);
+    }
+    hasher.finish()
 }
 
 #[cfg(test)]

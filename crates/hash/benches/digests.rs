@@ -14,20 +14,15 @@ use purrdf_hash::backend::{Crc32Backend, HexBackend, Sha1Backend};
 use purrdf_hash::hex::Lower;
 use purrdf_hash::md5::Md5;
 use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
+use purrdf_testkit::rng::Xorshift64;
 
 const SIZES: [(usize, &str); 3] = [(64, "64B"), (1024, "1KiB"), (1 << 20, "1MiB")];
 
 /// Deterministic, non-trivial input bytes.
 fn input(len: usize) -> Vec<u8> {
-    let mut state = 0x9E37_79B9_7F4A_7C15u64;
-    (0..len)
-        .map(|_| {
-            state ^= state << 13;
-            state ^= state >> 7;
-            state ^= state << 17;
-            state as u8
-        })
-        .collect()
+    let mut bytes = vec![0; len];
+    Xorshift64::new(0x9E37_79B9_7F4A_7C15).fill_bytes(&mut bytes);
+    bytes
 }
 
 fn bench_one(c: &mut Criterion, group: &str, path: &str, digest: &dyn Fn(&[u8]) -> u8) {

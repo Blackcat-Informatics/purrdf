@@ -11,12 +11,11 @@ use std::path::{Path, PathBuf};
 use ciborium::value::Value;
 
 use crate::model::{Graph, Quad, Term, TermKind};
-// This crate's one lowercase-hex renderer, shared with `compact`, `openpgp`,
-// `reader` and the rest of the container. It is deliberately NOT
-// `purrdf_core::hex::lower` (the renderer the IR-side crates share): the GTS
-// container engine does not depend on the IR kernel, and inverting that layering
-// to save four lines would make every GTS consumer pull `purrdf-core` in.
-use crate::wire::hex;
+// Digest text is spelled once, in `wire::digest_text`, over the workspace's
+// one lowercase-hex renderer (`purrdf_hash::hex::Lower`). The container engine
+// reaches `purrdf-hash` directly — the zero-dependency leaf every digest in this
+// workspace already comes from — so there is no renderer of its own to keep.
+use crate::wire::digest_text;
 use crate::writer::{Writer, WriterOptions, digest_string};
 
 const FILES_NS: &str = "https://w3id.org/gts/files#";
@@ -426,37 +425,77 @@ fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, String> 
     Ok(entries)
 }
 
+/// The media type a file extension conventionally names, or `None` for an extension this
+/// table does not know.
+///
+/// This is the ONE extension table in the workspace: the files-profile packer here, the
+/// slice catalog's artifact rows, the Python GTS producer and the slice RDF loader all
+/// resolve through it, so an extension cannot mean one media type in an archive and
+/// another in a catalog built from the same tree. Each caller applies its own default
+/// (an archive entry falls to `application/octet-stream`; the RDF loader keeps only the RDF
+/// types and falls to Turtle) at the call site, where the default's reason is documented.
+///
+/// `ext` is the bare extension without its dot, matched exactly — `ttl`, never `.ttl` or
+/// `TTL`. The lookup is deliberately case-sensitive: every caller passed lowercase
+/// extensions before the table was shared, and a case fold here would silently re-type an
+/// archive entry that a frozen vector already pins.
+///
+/// | Extension | Media type |
+/// |---|---|
+/// | `ttl` | `text/turtle` |
+/// | `nt` | `application/n-triples` |
+/// | `nq` | `application/n-quads` |
+/// | `trig` | `application/trig` |
+/// | `sparql`, `rq` | `application/sparql-query` |
+/// | `md` | `text/markdown` |
+/// | `yaml`, `yml`, `cff` | `application/yaml` |
+/// | `json` | `application/json` |
+/// | `txt` | `text/plain` |
+/// | `html`, `htm` | `text/html` |
+/// | `xml` | `application/xml` |
+/// | `png` | `image/png` |
+/// | `jpg`, `jpeg` | `image/jpeg` |
+/// | `gif` | `image/gif` |
+/// | `webp` | `image/webp` |
+/// | `pdf` | `application/pdf` |
+/// | `zip` | `application/zip` |
+/// | `gz` | `application/gzip` |
+/// | `tar` | `application/x-tar` |
+#[must_use]
+pub fn media_type_for_extension(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "ttl" => "text/turtle",
+        "nt" => "application/n-triples",
+        "nq" => "application/n-quads",
+        "trig" => "application/trig",
+        "sparql" | "rq" => "application/sparql-query",
+        "md" => "text/markdown",
+        "yaml" | "yml" | "cff" => "application/yaml",
+        "json" => "application/json",
+        "txt" => "text/plain",
+        "html" | "htm" => "text/html",
+        "xml" => "application/xml",
+        "png" => "image/png",
+        "jpg" | "jpeg" => "image/jpeg",
+        "gif" => "image/gif",
+        "webp" => "image/webp",
+        "pdf" => "application/pdf",
+        "zip" => "application/zip",
+        "gz" => "application/gzip",
+        "tar" => "application/x-tar",
+        _ => return None,
+    })
+}
+
+/// The media type an archive entry is recorded under: the extension's conventional type
+/// through [`media_type_for_extension`], or `application/octet-stream` for a path with no
+/// extension or one the table does not know.
 fn guess_media_type(path: &Path) -> String {
-    match path.extension().and_then(|e| e.to_str()) {
-        Some("txt") => "text/plain".to_string(),
-        Some("html" | "htm") => "text/html".to_string(),
-        Some("json") => "application/json".to_string(),
-        Some("xml") => "application/xml".to_string(),
-        Some("png") => "image/png".to_string(),
-        Some("jpg" | "jpeg") => "image/jpeg".to_string(),
-        Some("gif") => "image/gif".to_string(),
-        Some("webp") => "image/webp".to_string(),
-        Some("pdf") => "application/pdf".to_string(),
-        Some("zip") => "application/zip".to_string(),
-        Some("gz") => "application/gzip".to_string(),
-        Some("tar") => "application/x-tar".to_string(),
-        _ => "application/octet-stream".to_string(),
-    }
-}
-
-struct HashingWriter<'a> {
-    hasher: &'a mut purrdf_hash::blake3::Hasher,
-}
-
-impl Write for HashingWriter<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.hasher.update(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
+    path.extension()
+        .and_then(|e| e.to_str())
+        .and_then(media_type_for_extension)
+        .unwrap_or("application/octet-stream")
+        .to_string()
 }
 
 fn write_cbor_type_len<W: Write>(writer: &mut W, major: u8, len: u64) -> std::io::Result<()> {
@@ -538,10 +577,7 @@ fn copy_counted_and_hash<R: Read, W: Write>(
             format!("blob source changed size: expected {expected_size}, read {written}"),
         ));
     }
-    Ok((
-        format!("blake3:{}", hex(digest.finalize().as_bytes())),
-        written,
-    ))
+    Ok((digest_text(digest.finalize().as_bytes()), written))
 }
 
 fn write_blob_preimage<R: Read, W: Write>(
@@ -612,13 +648,12 @@ fn append_blob_path<W: Write>(
     let representation = source.representation.as_deref();
     let mut file =
         fs::File::open(&source.path).map_err(|e| format!("read {:?}: {e}", source.path))?;
+    // `purrdf_hash::blake3::Hasher` is an `io::Write`, so the preimage is
+    // written straight into the digest state.
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
-        let mut sink = HashingWriter {
-            hasher: &mut hasher,
-        };
         write_blob_preimage(
-            &mut sink,
+            &mut hasher,
             &mut file,
             source.size,
             media_type,
@@ -658,11 +693,8 @@ fn append_blob_bytes<W: Write>(
 ) -> Result<(), String> {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
-        let mut sink = HashingWriter {
-            hasher: &mut hasher,
-        };
         write_blob_preimage(
-            &mut sink,
+            &mut hasher,
             source.data,
             source.data.len() as u64,
             source.media_type,
@@ -702,11 +734,8 @@ fn append_blob_range<R: Read + Seek, W: Write>(
         reader
             .seek(SeekFrom::Start(source.offset))
             .map_err(|e| format!("seek inline blob: {e}"))?;
-        let mut sink = HashingWriter {
-            hasher: &mut hasher,
-        };
         write_blob_preimage(
-            &mut sink,
+            &mut hasher,
             reader.take(source.size),
             source.size,
             source.media_type,
@@ -1471,7 +1500,7 @@ fn suppressed_blob_digests(graph: &Graph) -> HashSet<String> {
                     } else if key == "digest" {
                         digest = Some(match v {
                             Value::Text(t) => t.clone(),
-                            Value::Bytes(b) => format!("blake3:{}", hex(b)),
+                            Value::Bytes(b) => digest_text(b),
                             _ => continue,
                         });
                     }
@@ -1898,4 +1927,84 @@ pub fn diff(graph: &Graph, directory: &Path) -> Result<Vec<String>, String> {
     }
     lines.sort();
     Ok(lines)
+}
+
+#[cfg(test)]
+mod media_type_tests {
+    use super::{guess_media_type, media_type_for_extension};
+
+    /// The shared table is the UNION of the four tables it replaced: every entry each of
+    /// them carried resolves to the same media type here.
+    #[test]
+    fn the_shared_table_carries_every_former_entry() {
+        // The archive packer's former table.
+        for (ext, media) in [
+            ("txt", "text/plain"),
+            ("html", "text/html"),
+            ("htm", "text/html"),
+            ("json", "application/json"),
+            ("xml", "application/xml"),
+            ("png", "image/png"),
+            ("jpg", "image/jpeg"),
+            ("jpeg", "image/jpeg"),
+            ("gif", "image/gif"),
+            ("webp", "image/webp"),
+            ("pdf", "application/pdf"),
+            ("zip", "application/zip"),
+            ("gz", "application/gzip"),
+            ("tar", "application/x-tar"),
+        ] {
+            assert_eq!(media_type_for_extension(ext), Some(media), "{ext}");
+        }
+        // The slice catalog's and the Python producer's former table.
+        for (ext, media) in [
+            ("ttl", "text/turtle"),
+            ("nt", "application/n-triples"),
+            ("nq", "application/n-quads"),
+            ("sparql", "application/sparql-query"),
+            ("rq", "application/sparql-query"),
+            ("md", "text/markdown"),
+            ("yaml", "application/yaml"),
+            ("yml", "application/yaml"),
+            ("cff", "application/yaml"),
+            ("json", "application/json"),
+        ] {
+            assert_eq!(media_type_for_extension(ext), Some(media), "{ext}");
+        }
+        // The slice RDF loader's former table.
+        assert_eq!(media_type_for_extension("trig"), Some("application/trig"));
+    }
+
+    /// An unknown extension, a dotted or upper-cased spelling of a known one, and the
+    /// empty extension all resolve to nothing; the caller's default is the caller's.
+    #[test]
+    fn unknown_and_misspelled_extensions_resolve_to_nothing() {
+        for unknown in ["", ".", ".ttl", "TTL", "Json", "bin", "gts", "tar.gz"] {
+            assert_eq!(media_type_for_extension(unknown), None, "{unknown:?}");
+        }
+        // The neighbouring spellings that do resolve.
+        assert_eq!(media_type_for_extension("ttl"), Some("text/turtle"));
+        assert_eq!(media_type_for_extension("gz"), Some("application/gzip"));
+    }
+
+    /// An archive entry falls to `application/octet-stream` when the table has no answer,
+    /// and takes the table's answer otherwise; `foo.tar.gz` is a `gz` by its last segment.
+    #[test]
+    fn archive_entries_default_to_octet_stream() {
+        use std::path::Path;
+        assert_eq!(guess_media_type(Path::new("a/b/notes.txt")), "text/plain");
+        assert_eq!(guess_media_type(Path::new("a/b/data.ttl")), "text/turtle");
+        assert_eq!(
+            guess_media_type(Path::new("a/b/tree.tar.gz")),
+            "application/gzip"
+        );
+        assert_eq!(
+            guess_media_type(Path::new("a/b/README")),
+            "application/octet-stream"
+        );
+        assert_eq!(
+            guess_media_type(Path::new("a/b/blob.bin")),
+            "application/octet-stream"
+        );
+    }
 }

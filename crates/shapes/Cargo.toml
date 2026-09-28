@@ -83,6 +83,7 @@ purrdf-slice = { workspace = true }
 
 [dev-dependencies]
 purrdf-gts = { workspace = true }
+purrdf-hash = { workspace = true }
 # The workspace's shared counting allocator, for `benches/validate.rs`, which is
 # the one target here needing BOTH measurement modes in one process: per-thread
 # figures for the single-threaded import/emission probes, whole-process figures

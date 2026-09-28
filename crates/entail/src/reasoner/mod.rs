@@ -125,51 +125,6 @@ use classify::{Subsumptions, subsumes};
 use proof::{ClaimBasis as Basis, refutation_claim};
 use realize::is_instance;
 
-/// A total, dataset-independent sort key for a term.
-///
-/// Every sequence a reasoner service emits is sorted by this, which is what makes the
-/// answers reproducible *and* readable — interned-id order is deterministic too, but it is
-/// parse order, so a caller diffing two answers would be reading the input's quad order
-/// rather than the reasoner's. The leading discriminant keeps the four term kinds from
-/// interleaving; within a kind the order is lexicographic over the term's own identity
-/// coordinates, including the RDF 1.2 base direction, so two literals that differ only in
-/// direction do not compare equal.
-///
-/// A triple term's key is assembled bottom-up over [`TermValue::fold`]'s work list from its
-/// subject's, predicate's and object's keys.
-pub(crate) fn term_key(term: &TermValue) -> (u8, String) {
-    term.fold(
-        |term| match term {
-            TermValue::Iri(iri) => (0, iri.clone()),
-            TermValue::Blank { label, scope } => (1, format!("{}\u{1f}{label}", scope.0)),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => (
-                2,
-                format!(
-                    "{datatype}\u{1f}{}\u{1f}{}\u{1f}{lexical_form}",
-                    language.as_deref().unwrap_or(""),
-                    match direction {
-                        Some(purrdf_core::RdfTextDirection::Ltr) => "ltr",
-                        Some(purrdf_core::RdfTextDirection::Rtl) => "rtl",
-                        None => "",
-                    }
-                ),
-            ),
-            TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-        },
-        |(sk, sv), (pk, pv), (ok, ov)| {
-            (
-                3,
-                format!("{sk}\u{1f}{sv}\u{1e}{pk}\u{1f}{pv}\u{1e}{ok}\u{1f}{ov}"),
-            )
-        },
-    )
-}
-
 /// The OWL 2 Direct-Semantics reasoning services over one dataset.
 ///
 /// See the [module docs](self) for the service list, the certificate discipline, and why
@@ -756,7 +711,7 @@ impl Reasoner {
                 }
             }
         }
-        answer.sort_by_key(term_key);
+        answer.sort();
         Ok(self.seal(session, answer, || {
             (
                 Question::InstanceRetrieval {
@@ -1180,58 +1135,76 @@ mod tests {
 
 #[cfg(test)]
 mod term_walk_tests {
-    //! The sort key against its recursive reference, and over a chain far deeper than a
-    //! 128 KiB thread could recurse.
+    //! The order the reasoner sorts its answers by is [`TermValue`]'s own total order:
+    //! total, dataset-independent, injective, and compared over a work list.
 
-    use purrdf_core::TermValue;
+    use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
-    use super::term_key;
-
-    fn reference(term: &TermValue) -> (u8, String) {
-        match term {
-            TermValue::Triple { s, p, o } => {
-                let (sk, sv) = reference(s);
-                let (pk, pv) = reference(p);
-                let (ok, ov) = reference(o);
-                (
-                    3,
-                    format!("{sk}\u{1f}{sv}\u{1e}{pk}\u{1f}{pv}\u{1e}{ok}\u{1f}{ov}"),
-                )
-            }
-            leaf => term_key(leaf),
+    /// Two literals that differ only in base direction, and two blank nodes that differ
+    /// only in scope, are distinct values and order deterministically: no tie between
+    /// distinct terms, in either direction.
+    #[test]
+    fn direction_and_scope_are_part_of_the_order() {
+        let ltr = TermValue::Literal {
+            lexical_form: "a".to_owned(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+            language: Some("en".to_owned()),
+            direction: Some(RdfTextDirection::Ltr),
+        };
+        let mut rtl = ltr.clone();
+        if let TermValue::Literal { direction, .. } = &mut rtl {
+            *direction = Some(RdfTextDirection::Rtl);
         }
+        assert_ne!(ltr.cmp(&rtl), std::cmp::Ordering::Equal);
+        assert_eq!(ltr.cmp(&rtl), rtl.cmp(&ltr).reverse());
+        let one = TermValue::Blank {
+            label: "b".to_owned(),
+            scope: BlankScope(1),
+        };
+        let two = TermValue::Blank {
+            label: "b".to_owned(),
+            scope: BlankScope(2),
+        };
+        assert_ne!(one.cmp(&two), std::cmp::Ordering::Equal);
+        assert_eq!(one.cmp(&two), two.cmp(&one).reverse());
     }
 
-    /// Every generated term keys exactly as the recursive reference keys it.
+    /// Over generated terms the order is total and injective: sorting leaves adjacent
+    /// distinct terms strictly increasing, and equal terms compare equal.
     #[test]
-    fn the_key_agrees_with_its_recursive_reference_on_generated_terms() {
+    fn the_order_is_total_and_injective_on_generated_terms() {
+        let mut terms = Vec::new();
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            terms.push(crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
                 crate::test_terms::TermShape::Any,
-            );
-            assert_eq!(term_key(&value), reference(&value), "seed {seed}");
+            ));
+        }
+        terms.sort();
+        for pair in terms.windows(2) {
+            let ordering = pair[0].cmp(&pair[1]);
+            assert_ne!(ordering, std::cmp::Ordering::Greater);
+            assert_eq!(ordering == std::cmp::Ordering::Equal, pair[0] == pair[1]);
         }
     }
 
-    /// A chain several thousand triple terms deep is keyed on a thread whose whole
-    /// stack is 128 KiB. A triple's key copies its components' keys, so a key's length
-    /// grows with its depth and the chain is kept to a few thousand levels.
+    /// A chain several thousand triple terms deep is compared on a thread whose whole
+    /// stack is 128 KiB: the comparison walks a work list, never the call stack.
     #[test]
-    fn a_deep_chain_is_keyed_on_a_128_kib_thread() {
+    fn a_deep_chain_is_compared_on_a_128_kib_thread() {
         const LEVELS: usize = 3_000;
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let (kind, key) = term_key(&crate::test_terms::triple_chain(LEVELS));
-                assert_eq!(kind, 3);
-                assert_eq!(key.matches("http://example.org/p").count(), LEVELS);
+                let chain = crate::test_terms::triple_chain(LEVELS);
+                let same = crate::test_terms::triple_chain(LEVELS);
+                assert_eq!(chain.cmp(&same), std::cmp::Ordering::Equal);
             })
             .expect("the thread starts")
             .join()
-            .expect("the key did not overflow the thread's stack");
+            .expect("the comparison did not overflow the thread's stack");
     }
 }

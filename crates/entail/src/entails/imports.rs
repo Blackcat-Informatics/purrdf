@@ -60,7 +60,7 @@
 //! # The closure is transitive, because the specification's is
 //!
 //! An imported document may import further documents, and OWL 2's imports closure is the
-//! transitive one. The resolution below is therefore a work-list to a fixpoint over the
+//! transitive one. The resolution, which lives in [`purrdf_core::imports`], is therefore a work-list to a fixpoint over the
 //! import graph, visiting each document once — which also makes a cyclic import (`A`
 //! imports `B` imports `A`, which OWL 2 explicitly permits) terminate rather than loop.
 //!

@@ -9,8 +9,9 @@ use super::ProjectionError;
 
 /// Maximum artifact path length accepted by the portable package profile.
 const MAX_ARTIFACT_PATH_BYTES: usize = 4_096;
-/// Hard recursion ceiling shared with the RDF kernel's validated triple-term forest.
-const MAX_TERM_DEPTH: usize = 16;
+// Hard recursion ceiling shared with the RDF kernel's validated triple-term forest:
+// the events crate's one definition.
+use purrdf_events::MAX_TERM_NESTING_DEPTH as MAX_TERM_DEPTH;
 /// Largest value representable by the canonical 11-octal-digit USTAR size field.
 const USTAR_MAX_MEMBER_BYTES: u64 = 0o77_777_777_777;
 

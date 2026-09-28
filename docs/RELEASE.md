@@ -81,8 +81,8 @@ workflow, the bootstrap script and the crates.io preflight all source, and which
 - `purrdf-iri`
 - `purrdf-xsd`
 - `purrdf-cdt`
-- `purrdf-jsonschema`
 - `purrdf-hash`
+- `purrdf-jsonschema`
 - `purrdf-deflate`
 - `purrdf-stack`
 - `purrdf-gts`
@@ -175,10 +175,10 @@ first tagged run can publish the complete workspace in dependency order.
    records; deleting a crate would undo the setup. Yank can be reversed with
    `cargo yank --undo --version 0.0.0 "$new_crate"`.
 
-### Outstanding bootstrap: `purrdf-jsonschema`, `purrdf-hash`, `purrdf-deflate`, `purrdf-stack`, `purrdf-hnsw` and `purrdf-retrieval`
+### Outstanding bootstrap: `purrdf-hash`, `purrdf-jsonschema`, `purrdf-deflate`, `purrdf-stack`, `purrdf-hnsw` and `purrdf-retrieval`
 
 Six crates are in the release set above without a crates.io record yet.
-`purrdf-jsonschema` is the **fifth** in publish order, `purrdf-hash` the
+`purrdf-hash` is the **fifth** in publish order, `purrdf-jsonschema` the
 **sixth**, `purrdf-deflate` the **seventh**, `purrdf-stack` the **eighth**, `purrdf-hnsw` the **seventeenth** and
 `purrdf-retrieval` the **nineteenth**. Each record must be
 created by a token publish (a create-new-crate publish is the only thing an API
@@ -194,10 +194,10 @@ release set, so the lane publishes the crates ahead of each, skips it visibly,
 and continues through every later crate; only the two themselves wait for the
 token step described in
 [New crates: set up publishing before tagging](#new-crates-set-up-publishing-before-tagging).
-`purrdf-jsonschema` is different: `purrdf-rdf` and `purrdf-shapes` take it as a
-dev-dependency, and `cargo publish` resolves dev-dependencies when it verifies a
-package, so neither can be verified until `purrdf-jsonschema` has a record. Its
-token bootstrap therefore comes first, before the tag.
+`purrdf-jsonschema` depends on `purrdf-hash`, and `purrdf-rdf` and
+`purrdf-shapes` take it as a dev-dependency. `cargo publish` resolves
+dev-dependencies when it verifies a package, so the hash record must be
+created before the JSON Schema record, and both must exist before the tag.
 
 `purrdf-hash` is a normal dependency of `purrdf-deflate`, `purrdf-gts`,
 `purrdf-datalog` and `purrdf-sparql-eval`, and through them of most of the
@@ -311,7 +311,7 @@ git push origin rust-v0.1.5
 The workflow first refuses outright if any crate in the release set has no
 crates.io record and is not in the bootstrap ledger, or has a record that is
 not locked to Trusted Publishing (see
-[bootstrap status](#outstanding-bootstrap-purrdf-jsonschema-purrdf-hash-purrdf-deflate-purrdf-stack-purrdf-hnsw-and-purrdf-retrieval)).
+[bootstrap status](#outstanding-bootstrap-purrdf-hash-purrdf-jsonschema-purrdf-deflate-purrdf-stack-purrdf-hnsw-and-purrdf-retrieval)).
 The ledger names `purrdf-jsonschema`, `purrdf-hash`, `purrdf-deflate`, `purrdf-stack`, `purrdf-hnsw` and `purrdf-retrieval`, so
 every other release crate must have its record and lock before packaging. The lane publishes crates
 in dependency order and skips any

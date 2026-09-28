@@ -69,11 +69,11 @@ use crate::model::{ByteRange, Diagnostic, OpaqueNode, Signature, StreamableInfo,
 use crate::reader::{FrameContext, ReadOptions, StreamingReadResult, read_to_sink_with_options};
 use crate::segment_decode::{ResolvedSink, SegmentResolver};
 
-/// A [`std::collections::HashMap`] keyed by the workspace's fixed-key
-/// `purrdf_hash::fixed::FixedHasher` (`purrdf-core`'s `FastHasher` policy) — no runtime RNG
-/// seeding, so it stays wasm-clean. Iteration order is unspecified; this map is
-/// only ever point-looked-up, never iterated for egress.
-type FastMap<K, V> = std::collections::HashMap<K, V, purrdf_hash::fixed::FixedState>;
+// `iri_map` is the workspace's fixed-key `purrdf_hash::fixed::FixedMap`
+// (`purrdf-core`'s `FastMap` policy) — no runtime RNG seeding, so it stays
+// wasm-clean. Iteration order is unspecified; the map is only ever
+// point-looked-up, never iterated for egress.
+use purrdf_hash::fixed::FixedMap;
 
 /// Well-known `xsd:string` datatype IRI implied by a plain literal (RDF §7.1).
 ///
@@ -191,7 +191,7 @@ pub struct EventEmitter<'s> {
     next_id: u32,
     /// Resolved IRI text by minted id, retained so a literal's datatype id can be
     /// resolved back to its IRI string for [`EventTerm::Literal`].
-    iri_map: FastMap<EventTermId, String>,
+    iri_map: FixedMap<EventTermId, String>,
     /// The segment whose scope is currently open, if any.
     current_segment: Option<usize>,
     /// The scope opened for [`Self::current_segment`].
@@ -221,7 +221,7 @@ impl<'s> EventEmitter<'s> {
         Self {
             sink,
             next_id: 0,
-            iri_map: FastMap::default(),
+            iri_map: FixedMap::default(),
             current_segment: None,
             current_scope: ScopeId::DEFAULT,
             cached: None,

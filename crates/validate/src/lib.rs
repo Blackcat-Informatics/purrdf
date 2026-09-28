@@ -155,5 +155,4 @@ pub use shapes_tools::{
 };
 
 #[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;
+use purrdf_core::term_fixture as test_terms;

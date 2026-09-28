@@ -344,27 +344,8 @@ fn select_terms(
     ids.sort_unstable();
     ids.dedup();
     let mut values: Vec<TermValue> = ids.into_iter().map(|id| data.term_value(id)).collect();
-    values.sort_by_cached_key(term_key);
+    values.sort();
     values
-}
-
-/// A stable, dataset-independent sort key for a term, each triple term keyed from its
-/// components' keys over [`TermValue::fold`]'s work list.
-fn term_key(value: &TermValue) -> String {
-    value.fold(
-        |leaf| match leaf {
-            TermValue::Iri(iri) => format!("0<{iri}>"),
-            TermValue::Blank { label, .. } => format!("1_:{label}"),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                ..
-            } => format!("2{lexical_form}\u{1}{datatype}\u{1}{language:?}"),
-            TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-        },
-        |s, p, o| format!("3{s}\u{1}{p}\u{1}{o}"),
-    )
 }
 
 // ── the parser ────────────────────────────────────────────────────────────────
@@ -1165,7 +1146,7 @@ mod term_walk_tests {
     use purrdf_core::{TermBox, TermValue};
     use purrdf_iri::BaseScope;
 
-    use super::{MapParser, Result, term_key};
+    use super::{MapParser, Result};
 
     fn parser(text: &str) -> MapParser {
         MapParser {
@@ -1201,18 +1182,6 @@ mod term_walk_tests {
         })
     }
 
-    fn reference_key(value: &TermValue) -> String {
-        match value {
-            TermValue::Triple { s, p, o } => format!(
-                "3{}\u{1}{}\u{1}{}",
-                reference_key(s),
-                reference_key(p),
-                reference_key(o)
-            ),
-            leaf => term_key(leaf),
-        }
-    }
-
     /// The shape-map spelling of a generated term, `<< s p o >>` for a triple term: the
     /// recursive reference of `validate::node_term_string`.
     fn spelled(value: &TermValue) -> String {
@@ -1226,10 +1195,9 @@ mod term_walk_tests {
 
     /// Every generated term's spelling — whole, cut short, and with its last `>>`
     /// broken — parses to exactly the term, the refusal and the cursor the recursive
-    /// reference reaches; and every term keys and is spelled as the references key and
-    /// spell it.
+    /// reference reaches; and every term is spelled as the reference spells it.
     #[test]
-    fn the_parser_and_the_key_agree_with_their_recursive_references() {
+    fn the_parser_and_the_spelling_agree_with_their_recursive_references() {
         let mut nested = 0;
         for seed in 0..400_u64 {
             let mut state = seed;
@@ -1240,7 +1208,6 @@ mod term_walk_tests {
                 crate::test_terms::TermShape::IriPredicates,
             );
             nested += usize::from(budget < 7);
-            assert_eq!(term_key(&value), reference_key(&value), "seed {seed}");
             let text = spelled(&value);
             assert_eq!(
                 crate::validate::node_term_string(&value),

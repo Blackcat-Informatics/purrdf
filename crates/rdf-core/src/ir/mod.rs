@@ -98,7 +98,9 @@ pub use pipeline_bundle::{
     PipelineBundle, PipelineBundleError, PipelineViewBundle,
 };
 pub use skolem::{GENID_WELL_KNOWN_PATH, SkolemError, deskolemize, skolemize};
-pub use term::{BlankScope, TermId, TermValue};
+pub use term::{
+    BlankLabelPolicy, BlankScope, DatatypePolicy, TermConversionError, TermId, TermValue,
+};
 pub use term_walk::{Nested, TermBox, TermVisit, fold_term, try_fold_nested, visit_nested};
 
 pub use composite::{

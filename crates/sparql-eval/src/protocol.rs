@@ -52,6 +52,7 @@ use std::fmt;
 
 use purrdf_sparql_algebra::lexer::{Token, tokenize};
 use purrdf_sparql_algebra::{ParserOptions, SparqlParser, UpdateDatasetSlot};
+use purrdf_sparql_results::SparqlResultsFormat;
 
 use crate::error::{EvalError, UnsupportedKind};
 use crate::remote::RemoteError;
@@ -931,15 +932,28 @@ const fn hex_value(byte: u8) -> Option<u8> {
     }
 }
 
+/// Project results formats onto the `(token, media type)` pairs the negotiation walks.
+///
+/// The results-format name table lives in `purrdf-sparql-results` ([`SparqlResultsFormat`]),
+/// where every host boundary resolves names against it; this module carries no second
+/// copy, so a token or media type can never be spelled one way here and another there.
+const fn results_formats<const N: usize>(
+    formats: [SparqlResultsFormat; N],
+) -> [(&'static str, &'static str); N] {
+    let mut out = [("", ""); N];
+    let mut index = 0;
+    while index < N {
+        out[index] = (formats[index].token(), formats[index].media_type());
+        index += 1;
+    }
+    out
+}
+
 /// The formats a solutions result is offered in, in server preference order: the token
-/// the engine's result serializer takes, and its media type. The first is the default
-/// (SPARQL 1.1 Query Results JSON).
-const SOLUTION_FORMATS: [(&str, &str); 4] = [
-    ("json", "application/sparql-results+json"),
-    ("xml", "application/sparql-results+xml"),
-    ("csv", "text/csv"),
-    ("tsv", "text/tab-separated-values"),
-];
+/// the engine's result serializer takes, and its media type — every
+/// [`SparqlResultsFormat`], in that crate's order. The first is the default (SPARQL 1.1
+/// Query Results JSON).
+const SOLUTION_FORMATS: [(&str, &str); 4] = results_formats(SparqlResultsFormat::ALL);
 
 /// The formats a graph result is offered in, in server preference order. The first is the
 /// default (Turtle).
@@ -962,10 +976,8 @@ const DATASET_FORMATS: [(&str, &str); 3] = [
 
 /// The formats an `ASK` boolean is offered in: the SPARQL results formats that define a
 /// boolean result, in the same relative order. The first is the default (JSON).
-const BOOLEAN_FORMATS: [(&str, &str); 2] = [
-    ("json", "application/sparql-results+json"),
-    ("xml", "application/sparql-results+xml"),
-];
+const BOOLEAN_FORMATS: [(&str, &str); 2] =
+    results_formats([SparqlResultsFormat::Json, SparqlResultsFormat::Xml]);
 
 const fn formats(kind: ResultKind) -> &'static [(&'static str, &'static str)] {
     match kind {

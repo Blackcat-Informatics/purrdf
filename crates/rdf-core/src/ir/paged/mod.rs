@@ -89,7 +89,6 @@ pub(crate) mod summary;
 pub mod translation;
 
 use std::collections::{BTreeSet, HashMap};
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
 use crate::RdfStoreCapabilities;
@@ -1300,11 +1299,7 @@ impl DatasetView for PagedDataset {
     }
 
     fn stats_fingerprint(&self) -> u64 {
-        // Mirror RdfDataset's coarse fingerprint: hash (total quads, distinct terms).
-        let mut h = std::collections::hash_map::DefaultHasher::new();
-        self.total_quads.hash(&mut h);
-        self.dictionary.len().hash(&mut h);
-        h.finish()
+        crate::hash::stats_fingerprint(self.total_quads, self.dictionary.len())
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {

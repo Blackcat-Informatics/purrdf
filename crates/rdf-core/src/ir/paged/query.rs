@@ -8,7 +8,6 @@
 //! a query engine then samples [`FallibleDatasetView::operation_status`] before it can
 //! publish any internally-computed rows as a complete result.
 
-use std::hash::{Hash, Hasher};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock, TryLockError};
 
 use crate::RdfStoreCapabilities;
@@ -747,10 +746,7 @@ impl DatasetView for PagedQueryView<'_> {
     }
 
     fn stats_fingerprint(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.dataset.total_quads.hash(&mut hasher);
-        self.dataset.dictionary.len().hash(&mut hasher);
-        hasher.finish()
+        crate::hash::stats_fingerprint(self.dataset.total_quads, self.dataset.dictionary.len())
     }
 
     fn reifier_quads(&self) -> impl Iterator<Item = QuadIds<GlobalTermId>> + '_ {

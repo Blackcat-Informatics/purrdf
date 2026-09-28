@@ -28,59 +28,13 @@
 ))]
 
 use purrdf_core::distance::{Arithmetic as _, Exact, FloatEnvironmentError};
+use purrdf_core::float_env_probe::FlushToZero;
+use purrdf_core::purremb_fixture::{ContractSpec, contract};
 use purrdf_core::{
-    AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
-    CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
-    EmbeddingError, EmbeddingFamilyContract, EmbeddingView, MatrixInput, MatrixRow,
-    PrefixPostprocessing, ProjectionSpec, RdfDatasetBuilder, StageImplementation, TargetSet,
-    VectorDtype, verify_embedding,
+    CanonicalMetadataInput, CertifiedPurrpckSource, DimensionalityPolicy, DistanceMetric,
+    EmbeddingBuilder, EmbeddingError, EmbeddingView, MatrixInput, MatrixRow, PrefixPostprocessing,
+    ProjectionSpec, RdfDatasetBuilder, TargetSet, VectorDtype, verify_embedding,
 };
-
-/// MXCSR flush-to-zero.
-const FTZ: u32 = 1 << 15;
-
-fn read_mxcsr() -> u32 {
-    let mut value: u32 = 0;
-    // SAFETY: `stmxcsr` stores the 32-bit MXCSR to a live, aligned, writable `u32`.
-    unsafe {
-        core::arch::asm!(
-            "stmxcsr [{ptr}]",
-            ptr = in(reg) &raw mut value,
-            options(nostack, preserves_flags),
-        );
-    }
-    value
-}
-
-fn write_mxcsr(value: u32) {
-    // SAFETY: `ldmxcsr` loads MXCSR from a live, aligned `u32`. Every value written here is
-    // the saved register or the saved register with FTZ added, and `Flushed` restores the
-    // saved one on every exit, including a panic.
-    unsafe {
-        core::arch::asm!(
-            "ldmxcsr [{ptr}]",
-            ptr = in(reg) &raw const value,
-            options(nostack, preserves_flags, readonly),
-        );
-    }
-}
-
-/// FTZ set on this thread for as long as the guard lives.
-struct Flushed(u32);
-
-impl Flushed {
-    fn new() -> Self {
-        let saved = read_mxcsr();
-        write_mxcsr(saved | FTZ);
-        Self(saved)
-    }
-}
-
-impl Drop for Flushed {
-    fn drop(&mut self) {
-        write_mxcsr(self.0);
-    }
-}
 
 /// Whether `error` is the flush-to-zero refusal: named by the MXCSR where it is read
 /// (`x86_64`), and by the behavioural probe where it is not (32-bit x86).
@@ -123,29 +77,6 @@ fn reference_norm(values: &[f64]) -> f64 {
     core::hint::black_box(scale) * root
 }
 
-fn artifact(name: &str) -> ArtifactIdentity {
-    ArtifactIdentity::new(
-        format!("https://example.org/{name}"),
-        "application/octet-stream",
-        ContentDigest::of(name.as_bytes()),
-        None,
-        ArtifactIdentityKind::Single,
-    )
-    .expect("artifact")
-}
-
-fn stage(name: &str) -> AppliedStage {
-    AppliedStage::Applied(
-        StageImplementation::new(
-            format!("https://example.org/{name}"),
-            ContentDigest::of(name.as_bytes()),
-            "application/octet-stream",
-            vec![1],
-        )
-        .expect("stage"),
-    )
-}
-
 /// Build the one-row binary64 artifact whose only projection has `postprocessing`.
 fn build(postprocessing: PrefixPostprocessing) -> Result<Vec<u8>, EmbeddingError> {
     let dataset = RdfDatasetBuilder::new().freeze().expect("empty dataset");
@@ -153,22 +84,20 @@ fn build(postprocessing: PrefixPostprocessing) -> Result<Vec<u8>, EmbeddingError
     let target = source.dataset_target(true).expect("dataset target");
     let target_id = target.id;
     let set = TargetSet::new(vec![target_id]).expect("target set");
-    let contract = EmbeddingFamilyContract {
-        model: artifact("model-ftz"),
-        engine: artifact("engine-ftz"),
-        tokenizer: artifact("tokenizer-ftz"),
-        execution: stage("execution-ftz"),
-        subject_projection: stage("projection-ftz"),
-        preprocessing: AppliedStage::NotApplied,
-        chunking: AppliedStage::NotApplied,
-        pooling: stage("pooling-ftz"),
-        normalization: AppliedStage::NotApplied,
-        truncation: AppliedStage::NotApplied,
-        dtype: VectorDtype::F64,
-        metric: DistanceMetric::Cosine,
-        dimensionality: DimensionalityPolicy::fixed(2, postprocessing).expect("fixed dimensions"),
-        extensions: Vec::new(),
-    };
+    let contract = contract(&ContractSpec {
+        model: "model-ftz",
+        engine: "engine-ftz",
+        tokenizer: "tokenizer-ftz",
+        execution: "execution-ftz",
+        subject_projection: "projection-ftz",
+        pooling: "pooling-ftz",
+        ..ContractSpec::new(
+            "https://example.org/",
+            VectorDtype::F64,
+            DistanceMetric::Cosine,
+            DimensionalityPolicy::fixed(2, postprocessing).expect("fixed dimensions"),
+        )
+    });
     let family = contract.derive().expect("family");
     let metadata = CanonicalMetadataInput {
         source,
@@ -205,7 +134,7 @@ fn a_normalized_projection_needs_the_ieee_environment_and_a_raw_one_does_not() {
     let raw = build(PrefixPostprocessing::None).expect("builds by default");
 
     let (flushed_norm, sealed, verified, resolved, raw_sealed, raw_verified) = {
-        let flushed = Flushed::new();
+        let flushed = FlushToZero::engage();
         let norm = reference_norm(&ROW);
         let sealed = build(PrefixPostprocessing::DeterministicL2);
         let verified = verify(&normalized);

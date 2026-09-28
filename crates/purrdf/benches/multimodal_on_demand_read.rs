@@ -98,6 +98,7 @@ use purrdf::retrieval::{
 use purrdf::sparql::{KnnGuard, PropertyFunctionRegistry, RankedDeclaration, TermKind};
 use purrdf::text::{GraphSelector, TextIndex, TextIndexConfig, TextSearchRelation};
 use purrdf::{DistanceMetric, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use purrdf_testkit::rng::signed_unit_next_nonzero;
 
 /// The fixture namespace. A bench mints no vocabulary of its own, and a
 /// reserved-for-documentation authority is the only one it may put in a term.
@@ -222,21 +223,13 @@ fn text_index(dataset: &RdfDataset, predicate: &str) -> Arc<TextIndex> {
     Arc::new(TextIndex::from_dataset(dataset, &config).expect("the fixture index builds"))
 }
 
-/// Deterministic vectors, splitmix64, spelled here so the fixture depends on no
-/// private helper.
+/// Deterministic vectors from the workspace's linear-counter SplitMix64
+/// stream, an exact zero displaced to `0.125`.
 fn splitmix_vectors(seed: u64, rows: usize, dims: usize) -> Vec<f64> {
     let mut state = seed;
-    let mut data = Vec::with_capacity(rows * dims);
-    for _ in 0..rows * dims {
-        state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^= z >> 31;
-        let value = ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-        data.push(if value == 0.0 { 0.125 } else { value });
-    }
-    data
+    (0..rows * dims)
+        .map(|_| signed_unit_next_nonzero(&mut state, 0.125))
+        .collect()
 }
 
 /// An HNSW space of `terms.len()` rows, named by `terms`.
