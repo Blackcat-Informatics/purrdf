@@ -155,6 +155,7 @@ mod template;
 pub mod test_rng;
 pub mod update;
 pub mod user_fn;
+mod vm;
 // The per-query record of what the relations a query invoked attested about the
 // indexes behind them — which generation answered, and whether it was whole.
 pub mod witness;

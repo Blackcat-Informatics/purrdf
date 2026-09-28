@@ -1696,8 +1696,8 @@ mod tests {
         // still a genuinely free variable (never substituted): `IF`'s condition
         // `?s = :trigger` is therefore INDETERMINATE (an unbound-variable comparison —
         // SPARQL's type-error, `Ok(None)`), and `Expression::If`'s `None` arm evaluates
-        // NEITHER branch at all (`crate::expr::eval_expr`'s `If` arm: `Some(true) =>
-        // eval T, Some(false) => eval E, None => Ok(None)`) — so the custom call the
+        // NEITHER branch at all (the expression VM's `IF` branch instruction: `true`
+        // runs T, `false` runs E, an error jumps past both to an unbound value) — so the custom call the
         // correct path hard-errors on is never even reached, and the probe would answer
         // `false` for the `:trigger` row too, cleanly, no error. This is exactly why
         // `Function::Custom` makes the containing construct UNCONDITIONALLY

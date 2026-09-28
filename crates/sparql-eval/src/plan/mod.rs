@@ -35,6 +35,7 @@ use crate::governor::soundness::{
     visit_pattern_parts, walk_spine,
 };
 use crate::service_endpoints::EndpointScan;
+use crate::vm::ExprProgram;
 
 /// A node of one tree: its ordinal in the tree's pre-order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -171,14 +172,10 @@ pub(crate) struct PlanShape {
     )]
     children: Vec<(NodeId, ChildEdge)>,
     /// Each node's attached expressions, as a range of [`ExprId`]s.
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "the pre-order test asserts it; no evaluator path reads it"
-        )
-    )]
     node_exprs: Vec<Range<u32>>,
+    /// Each attached expression's compiled program, indexed by [`ExprId`] and compiled
+    /// the first time the expression is evaluated.
+    programs: Vec<OnceLock<Arc<ExprProgram>>>,
     /// Each attached expression's node, indexed by [`ExprId`].
     #[cfg_attr(
         not(test),
@@ -255,6 +252,24 @@ impl PlanShape {
                 .prepared
                 .get_or_init(|| Arc::new(build())),
         )
+    }
+
+    /// The program of `node`'s attached expression at `position` (in the order the
+    /// shape numbers them), compiled by `compile` the first time it is asked for. A
+    /// position past the node's attached expressions has no slot, and `compile`'s program
+    /// is returned unkept.
+    pub(crate) fn program(
+        &self,
+        node: NodeId,
+        position: usize,
+        compile: impl FnOnce() -> ExprProgram,
+    ) -> Arc<ExprProgram> {
+        let range = &self.node_exprs[node.index()];
+        let id = ExprId(range.start.saturating_add(position as u32));
+        if position >= range.len() {
+            return Arc::new(compile());
+        }
+        Arc::clone(self.programs[id.0 as usize].get_or_init(|| Arc::new(compile())))
     }
 
     /// The tree's variable-endpoint `SERVICE` analysis.
@@ -432,6 +447,7 @@ impl<'q> Tree<'q> {
                 subtree_end,
                 child_start,
                 children: laid_out,
+                programs: (0..expr_owner.len()).map(|_| OnceLock::new()).collect(),
                 node_exprs,
                 expr_owner,
                 paths,

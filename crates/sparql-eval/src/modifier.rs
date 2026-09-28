@@ -60,7 +60,7 @@
 //! "solutions containing error values are removed at the end of evaluating the
 //! group and any aggregation functions").
 //!
-//! This crate's `eval_expr` cannot express that: its signature is
+//! This crate's expression evaluation (`crate::vm`) cannot express that: its result is
 //! `Result<Option<SolutionTerm>, EvalError>`, which has only three states — a
 //! bound value, an honestly UNBOUND variable (`Ok(None)`), or a HARD evaluation
 //! failure (`Err`, e.g. an XPath-function type error) — not the spec's single
@@ -119,7 +119,7 @@ use crate::agg_fn::AggregateAccumulator as _;
 use crate::convert::{ground_term_to_value, literal_to_value, named_node_to_value};
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
-use crate::expr::{eval_expr, xsd_of};
+use crate::expr::xsd_of;
 use crate::governor::ChargePoint;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
@@ -319,11 +319,16 @@ pub(crate) fn eval_order_by<D: DatasetView + Sync>(
     // O(n log n) comparator. Row `i`'s keys are `keys[i * width..][..width]`, and
     // sorting the PERMUTATION leaves them where their borrows point.
     let width = exprs.len();
+    let mut linked = Vec::with_capacity(width);
+    for oe in exprs {
+        let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = oe;
+        let program = crate::vm::program_at(ctx, node, e);
+        linked.push(crate::vm::Linked::link(program, e, &schema, ctx));
+    }
     let mut values: Vec<Option<TermValue>> = Vec::with_capacity(seq.rows.len() * width);
     for row in &seq.rows {
-        for oe in exprs {
-            let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = oe;
-            let term = eval_expr(e, row, &schema, ctx)?;
+        for key in &mut linked {
+            let term = key.term(row, &schema, ctx)?;
             values.push(term.map(|t| ctx.scratch.value_of(ctx.dataset, t)));
         }
     }
@@ -1435,6 +1440,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     let safe = aggregates
         .iter()
         .all(|(_, agg)| ctx.may_fork_aggregate(agg));
+    let mut links = link_aggregates(node, aggregates, &in_schema, ctx);
 
     let rows = if safe {
         let base = ctx.scratch.computed_count();
@@ -1444,19 +1450,26 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         let (minted, witnesses) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             &groups,
-            || ctx.fork_for_worker(),
-            |child, acc, (_, key, idxs)| {
+            || {
+                let fresh: Vec<Vec<_>> = links
+                    .iter()
+                    .map(|agg| agg.iter().map(crate::vm::Linked::fresh).collect())
+                    .collect();
+                (ctx.fork_for_worker(), fresh)
+            },
+            |(child, links), acc, (_, key, idxs)| {
                 let mut row = smallvec::smallvec![None; out_width];
                 // `key` was built from `key_cols` (one cell per GROUP BY variable), so
                 // `key.len() == var_count`: one memcpy replaces the indexed loop.
                 row[..var_count].copy_from_slice(key);
-                for (j, (_, agg)) in aggregates.iter().enumerate() {
-                    row[var_count + j] = eval_aggregate(agg, idxs, &seq.rows, &in_schema, child)?;
+                for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
+                    row[var_count + j] =
+                        eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, child)?;
                 }
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 Ok(())
             },
-            |child| core::mem::take(&mut child.witness),
+            |(child, _)| core::mem::take(&mut child.witness),
         )?;
         ctx.absorb_worker_witnesses(witnesses);
         minted
@@ -1469,8 +1482,8 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
             let mut row = smallvec::smallvec![None; out_width];
             // `key.len() == var_count` (built from `key_cols`): one memcpy, no index loop.
             row[..var_count].copy_from_slice(key);
-            for (j, (_, agg)) in aggregates.iter().enumerate() {
-                row[var_count + j] = eval_aggregate(agg, idxs, &seq.rows, &in_schema, ctx)?;
+            for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
+                row[var_count + j] = eval_aggregate(agg, links, idxs, &seq.rows, &in_schema, ctx)?;
             }
             rows.push(row);
         }
@@ -1489,7 +1502,31 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     }))
 }
 
-/// Compute one aggregate over a group's rows in two phases: phase 1 evaluates
+/// Link every aggregate's expressions to the group input's schema, once per `GROUP`
+/// call: for each aggregate, its arguments in order, then its own `ORDER BY` keys.
+fn link_aggregates<'e, D: DatasetView + Sync>(
+    node: &GraphPattern,
+    aggregates: &'e [(Variable, AggregateExpression)],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Vec<Vec<crate::vm::Linked<'e, D::Id>>> {
+    aggregates
+        .iter()
+        .map(|(_, agg)| {
+            agg.args()
+                .iter()
+                .chain(agg.order_by().iter().map(order_sort_key))
+                .map(|expr| {
+                    let program = crate::vm::program_at(ctx, node, expr);
+                    crate::vm::Linked::link(program, expr, schema, ctx)
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// Compute one aggregate over a group's rows, its expressions evaluated through `links`
+/// ([`link_aggregates`]'s entry for it), in two phases: phase 1 evaluates
 /// every surviving row's argument(s) and materializes them into a per-group
 /// buffer (`survivors`, already `DISTINCT`-resolved and in row order); phase 2
 /// folds that buffer through an accumulator, sequentially or in parallel
@@ -1513,7 +1550,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 ///
 /// # Error-row skipping
 ///
-/// A row whose argument expression evaluates to unbound (`eval_expr` returns
+/// A row whose argument expression evaluates to unbound (its evaluation returns
 /// `Ok(None)`) never reaches a fold's `step` at all — for the single argument a
 /// built-in aggregate other than `COUNT(*)` takes, exactly as for every
 /// positional argument a [`AggregateFunction::Custom`] call takes (a `Custom`
@@ -1534,6 +1571,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
 /// withhold the whole grouped output.
 fn eval_aggregate<D: DatasetView + Sync>(
     agg: &AggregateExpression,
+    links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
     rows: &[Solution<D::Id>],
     schema: &VarSchema,
@@ -1545,7 +1583,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
     }
 
     if let AggregateFunction::Custom(iri) = agg.function() {
-        return eval_custom_aggregate(iri.as_str(), agg, idxs, rows, schema, ctx);
+        return eval_custom_aggregate(iri.as_str(), agg, links, idxs, rows, schema, ctx);
     }
 
     // `FOLD` is dispatched away here for the same reason `Custom` is: its PHASE 1
@@ -1557,7 +1595,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
     // [`crate::agg_fn::AggregateAccumulator`] — one fold algebra, as the rest of
     // this module's dispatch promises. See [`crate::cdt_agg`].
     if matches!(agg.function(), AggregateFunction::Fold) {
-        return crate::cdt_agg::eval_fold(agg, idxs, rows, schema, ctx);
+        return crate::cdt_agg::eval_fold(agg, links, idxs, rows, schema, ctx);
     }
 
     // `COUNT(*)`/`COUNT(DISTINCT *)` is the spec's empty exprlist, and
@@ -1644,7 +1682,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
     // its survivor count is unknowable up front.
     let mut survivors: Vec<TermValue> =
         Vec::with_capacity(if agg.distinct { 0 } else { idxs.len() });
-    if let Some(first_arg) = agg.args().first() {
+    if let Some(first_arg) = links[..agg.args().len()].first_mut() {
         // Phase 1: evaluate every row's argument expression against `ctx`, charge
         // `AggregateAccumulation` for each one, apply `DISTINCT`, and charge
         // `ScratchBytes` for each value actually retained into `survivors` (see
@@ -1680,7 +1718,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             ChargePoint::AggregateAccumulation,
         );
         for &i in idxs {
-            let Some(term) = eval_expr(first_arg, &rows[i], schema, ctx)? else {
+            let Some(term) = first_arg.term(&rows[i], schema, ctx)? else {
                 continue;
             };
             if let Err(tripped) = checkpoint.pass(ctx) {
@@ -1837,7 +1875,8 @@ pub(crate) fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
     Box::new(fold).finish()
 }
 
-/// Fold a group through a registered [`crate::agg_fn::CustomAggregate`]:
+/// Fold a group through a registered [`crate::agg_fn::CustomAggregate`], its arguments
+/// evaluated through `links` ([`link_aggregates`]'s entry for it):
 /// resolve the IRI, meter its declared per-accumulator state bound, then stream
 /// every row's positional argument tuple through
 /// [`crate::agg_fn::step_contained`], deduping on the FULL tuple under
@@ -1854,6 +1893,7 @@ pub(crate) fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
 pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     iri: &str,
     agg: &AggregateExpression,
+    links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
     rows: &[Solution<D::Id>],
     schema: &VarSchema,
@@ -1900,8 +1940,8 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     for &i in idxs {
         tuple.clear();
         let mut every_position_bound = true;
-        for expression in agg.args() {
-            let Some(term) = eval_expr(expression, &rows[i], schema, ctx)? else {
+        for argument in &mut links[..agg.args().len()] {
+            let Some(term) = argument.term(&rows[i], schema, ctx)? else {
                 every_position_bound = false;
                 break;
             };

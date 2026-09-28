@@ -20,8 +20,8 @@
 //! instance) goes on to answer the next request. Exactly these entries open a scope:
 //!
 //! * **Evaluation proper** checks and returns the error: every algebra node
-//!   (`eval::eval_evaluated`, through [`is_low`]), every expression node
-//!   (`expr::eval_expr`), every `EXISTS` (`expr::exists`), every correlated evaluation
+//!   (`eval::eval_evaluated`, through [`is_low`]), every `EXISTS` (`expr::exists`),
+//!   every correlated evaluation
 //!   (a `LATERAL` right side or a correlated `EXISTS`, per outer row, in `binop`) and
 //!   every user-defined function call (`user_fn`) — each through [`check`].
 //! * **The correlated substitution** — the per-row copy of a correlated body with the

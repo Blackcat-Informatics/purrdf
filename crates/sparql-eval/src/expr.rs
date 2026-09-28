@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! SPARQL expression evaluation (FILTER / BIND / EXISTS), plus the `Filter` and
+//! SPARQL expression semantics (FILTER / BIND / EXISTS), plus the `Filter` and
 //! `Extend` graph-pattern nodes that drive it.
 //!
-//! [`eval_expr`] maps an [`Expression`] over one solution to
+//! [`crate::vm`] evaluates an [`Expression`]; the operator semantics it applies to
+//! already-evaluated operands live here. An expression over one solution evaluates to
 //! `Ok(Some(term))` (a value), `Ok(None)` (a SPARQL **error / unbound** — the
 //! third truth value), or `Err` (a hard [`EvalError::Unsupported`] for a construct
 //! outside the current S6 scope). The `Ok(None)` vs `Err` split is load-bearing: a
@@ -42,8 +43,8 @@ use purrdf_sparql_algebra::{
 };
 use purrdf_xsd::{
     XsdDatatype, XsdValue, effective_boolean_value, numeric_abs, numeric_ceil, numeric_floor,
-    numeric_round, numeric_unary_plus, parse_by_iri, parse_xsd10, value_add, value_cmp, value_div,
-    value_equal, value_mul, value_sub, value_unary_minus,
+    numeric_round, parse_by_iri, parse_xsd10, value_add, value_cmp, value_div, value_equal,
+    value_mul, value_sub,
 };
 use sha2::Digest; // brings the Digest trait in scope for all RustCrypto hash calls
 
@@ -60,152 +61,32 @@ const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 
-/// Evaluate an expression over a solution. See the [module docs](self) for the
-/// `Ok(Some)` / `Ok(None)` / `Err` contract.
+/// Evaluate an expression over a solution, compiling and linking it for this one call.
+/// See the [module docs](self) for the `Ok(Some)` / `Ok(None)` / `Err` contract. The
+/// evaluator itself compiles once per site and links once per operator call (see
+/// [`crate::vm`]); this entry is for tests that evaluate one expression directly.
+#[cfg(test)]
 pub(crate) fn eval_expr<D: DatasetView + Sync>(
     expr: &Expression,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    // Every node is one level of this recursion — an operator chain is one node, its
-    // operands folded by a loop — and the tree is as tall as the stack that parsed it
-    // held, which is not the stack evaluating it takes: see `crate::stack`.
-    crate::stack::check("expression")?;
-    match expr {
-        // ---- atoms ---------------------------------------------------------
-        Expression::NamedNode(n) => Ok(const_atom(ctx, expr, || {
-            TermValue::Iri(n.as_str().to_owned())
-        })),
-        Expression::Literal(l) => Ok(const_atom(ctx, expr, || {
-            crate::convert::literal_to_value(l)
-        })),
-        Expression::Variable(v) => Ok(lookup(v, row, schema)),
-        Expression::Bound(v) => Ok(Some(bool_term(ctx, lookup(v, row, schema).is_some()))),
-
-        // ---- logical (Kleene three-valued) --------------------------------
-        // A chain is the left fold of the binary operator, which evaluates both of
-        // its operands, left then right, before combining them: so every operand is
-        // evaluated, in order, a hard error stops the chain at the first operand that
-        // raises one, and the value is the fold of `kleene_or`/`kleene_and` from the
-        // operator's identity — the value the left-nested binary tree has.
-        Expression::Or(operands) => {
-            let mut value = Some(false);
-            for operand in operands {
-                value = kleene_or(value, ebv_of(operand, row, schema, ctx)?);
-            }
-            Ok(value.map(|b| bool_term(ctx, b)))
-        }
-        Expression::And(operands) => {
-            let mut value = Some(true);
-            for operand in operands {
-                value = kleene_and(value, ebv_of(operand, row, schema, ctx)?);
-            }
-            Ok(value.map(|b| bool_term(ctx, b)))
-        }
-        Expression::Not(a) => {
-            let v = ebv_of(a, row, schema, ctx)?;
-            Ok(v.map(|b| bool_term(ctx, !b)))
-        }
-
-        // ---- comparisons ---------------------------------------------------
-        // `=` is RDFterm-equality, NOT an ordering test: distinct IRIs/blank nodes
-        // are *unequal* (`false`), not a type error. Routing `=` through the
-        // ordering `compare` (which returns a type error for un-orderable IRI pairs)
-        // would make `?a = ?b` — and therefore the desugared `?a != ?b` — evaluate
-        // to an error (and so filter the row out) whenever the two IRIs differ. The
-        // dedicated `equal` path applies the value-equality semantics of `rdf_equal`.
-        Expression::Equal(a, b) => equal(a, b, row, schema, ctx),
-        Expression::Greater(a, b) => compare(
-            a,
-            b,
-            row,
-            schema,
-            ctx,
-            crate::cdt_fn::CdtRelation::Greater,
-            |c| c == Ordering::Greater,
-        ),
-        Expression::GreaterOrEqual(a, b) => compare(
-            a,
-            b,
-            row,
-            schema,
-            ctx,
-            crate::cdt_fn::CdtRelation::GreaterOrEqual,
-            |c| c != Ordering::Less,
-        ),
-        Expression::Less(a, b) => compare(
-            a,
-            b,
-            row,
-            schema,
-            ctx,
-            crate::cdt_fn::CdtRelation::Less,
-            |c| c == Ordering::Less,
-        ),
-        Expression::LessOrEqual(a, b) => compare(
-            a,
-            b,
-            row,
-            schema,
-            ctx,
-            crate::cdt_fn::CdtRelation::LessOrEqual,
-            |c| c != Ordering::Greater,
-        ),
-        Expression::SameTerm(a, b) => {
-            let ta = eval_expr(a, row, schema, ctx)?;
-            let tb = eval_expr(b, row, schema, ctx)?;
-            Ok(match (ta, tb) {
-                (Some(x), Some(y)) => Some(bool_term(ctx, x == y)),
-                _ => None,
-            })
-        }
-
-        // ---- conditionals --------------------------------------------------
-        Expression::If(c, t, e) => match ebv_of(c, row, schema, ctx)? {
-            Some(true) => eval_expr(t, row, schema, ctx),
-            Some(false) => eval_expr(e, row, schema, ctx),
-            None => Ok(None),
-        },
-        Expression::Coalesce(items) => {
-            for item in items {
-                if let Some(term) = eval_expr(item, row, schema, ctx)? {
-                    return Ok(Some(term));
-                }
-            }
-            Ok(None)
-        }
-        Expression::In(needle, haystack) => eval_in(needle, haystack, row, schema, ctx),
-
-        // ---- EXISTS --------------------------------------------------------
-        Expression::Exists(pattern) => {
-            let found = exists(pattern, row, schema, ctx)?;
-            Ok(Some(bool_term(ctx, found)))
-        }
-
-        // ---- arithmetic ---------------------------------------------------
-        // SPARQL three-valued contract: type errors (non-numeric/non-temporal
-        // operands, overflow, divide-by-zero, and the indeterminate-timezone
-        // instant-difference case) → Ok(None), NOT Err. A hard EvalError would
-        // propagate out of FILTER and break the query; Ok(None) just drops the row.
-        Expression::Arithmetic(first, steps) => arithmetic_chain(first, steps, row, schema, ctx),
-        Expression::UnaryPlus(a) => unary_numeric(a, row, schema, ctx, numeric_unary_plus),
-        Expression::UnaryMinus(a) => unary_numeric(a, row, schema, ctx, value_unary_minus),
-
-        // ---- functions -----------------------------------------------------
-        Expression::FunctionCall(function, args) => eval_function(function, args, row, schema, ctx),
-    }
+    let program = Arc::new(crate::vm::ExprProgram::compile(expr));
+    crate::vm::Linked::link(program, expr, schema, ctx).term(row, schema, ctx)
 }
 
 /// Evaluate `expr` and reduce it to an effective boolean value (`Ok(None)` =
-/// error/unbound).
+/// error/unbound), compiling and linking it for this one call, as [`eval_expr`] does.
+#[cfg(test)]
 pub(crate) fn eval_ebv<D: DatasetView + Sync>(
     expr: &Expression,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<bool>, EvalError> {
-    ebv_of(expr, row, schema, ctx)
+    let program = Arc::new(crate::vm::ExprProgram::compile(expr));
+    crate::vm::Linked::link(program, expr, schema, ctx).ebv(row, schema, ctx)
 }
 
 /// `Filter(expr, inner)`: keep solutions whose `expr` has effective boolean value
@@ -257,6 +138,8 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
     let forked = ctx.may_fork_row_loop(expr);
     let mut checkpoint =
         crate::row_checkpoint::RowCheckpoint::for_rows(ctx, point, forked, seq.rows.len());
+    let program = crate::vm::program_at(ctx, node, expr);
+    let mut linked = crate::vm::Linked::link(program, expr, &schema, ctx);
     let rows = if forked {
         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
         // Harvesting, not plain: a predicate can reach a property function through an
@@ -266,13 +149,13 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         let (mut rows, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             admissible,
-            || (ctx.fork_for_worker(), checkpoint.clone()),
+            || (ctx.fork_for_worker(), checkpoint.clone(), linked.fresh()),
             |worker, acc, row| {
-                let (child, checkpoint) = worker;
+                let (child, checkpoint, linked) = worker;
                 if checkpoint.pass(child).is_err() {
                     return Ok(());
                 }
-                if eval_ebv(expr, row, &schema, child)? == Some(true) {
+                if linked.ebv(row, &schema, child)? == Some(true) {
                     acc.push(row.clone());
                     checkpoint.keep();
                 }
@@ -295,7 +178,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
             if checkpoint.pass(ctx).is_err() {
                 break;
             }
-            if eval_ebv(expr, &row, &schema, ctx)? == Some(true) {
+            if linked.ebv(&row, &schema, ctx)? == Some(true) {
                 rows.push(row);
             }
         }
@@ -349,6 +232,8 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
     let col = schema.push(var.clone());
     let width = schema.len();
     let schema = Arc::new(schema);
+    let program = crate::vm::program_at(ctx, node, expr);
+    let mut linked = crate::vm::Linked::link(program, expr, &schema, ctx);
 
     let rows = if forked {
         let admissible = &seq.rows[..checkpoint.forked_len(seq.rows.len())];
@@ -362,15 +247,15 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         let (mut minted, harvests) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             admissible,
-            || (ctx.fork_for_worker(), checkpoint.clone()),
+            || (ctx.fork_for_worker(), checkpoint.clone(), linked.fresh()),
             |worker, acc, in_row| {
-                let (child, checkpoint) = worker;
+                let (child, checkpoint, linked) = worker;
                 if checkpoint.pass(child).is_err() {
                     return Ok(());
                 }
                 let mut row = in_row.clone();
                 row.resize(width, None);
-                let value = eval_expr(expr, &row, &schema, child)?;
+                let value = linked.term(&row, &schema, child)?;
                 row[col] = value;
                 acc.push(crate::parallel::minted_row(&child.scratch, base, row));
                 checkpoint.keep();
@@ -402,7 +287,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
             // here matches its position in every other Extend of the same chain. A
             // BNODE-bearing `expr` is exactly what forces this sequential branch.
             ctx.current_row = idx as u64;
-            let value = eval_expr(expr, &row, &schema, ctx)?;
+            let value = linked.term(&row, &schema, ctx)?;
             row[col] = value;
             rows.push(row);
         }
@@ -423,22 +308,13 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
 // internals
 // ---------------------------------------------------------------------------
 
-/// Look up a variable's binding in a solution.
-fn lookup<I: ViewTermId>(
-    var: &Variable,
-    row: &[Option<SolutionTerm<I>>],
-    schema: &VarSchema,
-) -> Option<SolutionTerm<I>> {
-    schema.index_of(var).and_then(|c| row[c])
-}
-
 /// Intern a value to a solution term (promoting to an existing dataset id).
 ///
 /// [`None`] when the value carries a language tag the grammar refuses — see
 /// [`ScratchInterner::intern_checked`](crate::scratch::ScratchInterner::intern_checked). Every
 /// caller here is inside an expression, so the mapping is the one §17.2 already
 /// states and `eval_str_lang` already performs: the expression is unbound.
-fn intern<D: DatasetView + Sync>(
+pub(crate) fn intern<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
 ) -> Option<SolutionTerm<D::Id>> {
@@ -447,7 +323,7 @@ fn intern<D: DatasetView + Sync>(
 
 /// Intern a value that is no triple term — a constant atom the query wrote, a literal a
 /// string function built — so there is no depth to admit (see [`intern`]).
-fn intern_leaf<D: DatasetView + Sync>(
+pub(crate) fn intern_leaf<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     value: TermValue,
 ) -> Option<SolutionTerm<D::Id>> {
@@ -471,39 +347,11 @@ fn typed_term<D: DatasetView + Sync>(
         .intern_datatyped(ctx.dataset, lexical.to_owned(), datatype.to_owned())
 }
 
-/// Intern a constant atom (`NamedNode`/`Literal`), memoized per query by the
-/// node's AST address (see [`EvalCtx::const_atom_cache`]). `build` — which owns
-/// the `TermValue` allocation — runs only on a cache miss, so a FILTER/BIND over
-/// N rows pays the `to_owned()` + intern probe once, not N times.
-///
-/// The memoized answer is the WHOLE answer, refusal included: the SPARQL parser
-/// holds a `LANGTAG` written in query text to the same profile the interner does
-/// (`crate::scratch`'s `LANGTAG_PROFILE`), so an atom's verdict is fixed for the
-/// life of the query and caching it cannot go stale.
-fn const_atom<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    expr: &Expression,
-    build: impl FnOnce() -> TermValue,
-) -> Option<SolutionTerm<D::Id>> {
-    // Address-keyed memoization is unsound over a per-row substituted-EXISTS
-    // temporary (see `EvalCtx::in_substituted_exists`): the node's address can
-    // be a dropped-and-reused allocation from an earlier outer row, so a hit
-    // here would silently return a stale, wrong-row constant. Bypass the cache
-    // entirely for the duration of that window.
-    if ctx.in_substituted_exists {
-        return intern_leaf(ctx, build());
-    }
-    let key = std::ptr::from_ref::<Expression>(expr) as usize;
-    if let Some(term) = ctx.const_atom_cache.get(&key) {
-        return *term;
-    }
-    let term = intern_leaf(ctx, build());
-    ctx.const_atom_cache.insert(key, term);
-    term
-}
-
 /// Materialize a solution term to an owned value.
-fn value_of<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::Id>) -> TermValue {
+pub(crate) fn value_of<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> TermValue {
     ctx.scratch.value_of(ctx.dataset, term)
 }
 
@@ -514,7 +362,10 @@ fn value_of<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>, term: SolutionTerm<D::I
 /// intern probe once, not N times. The cache is exact — interning is
 /// deterministic for the context's pinned dataset and dedup-by-value scratch, so
 /// the cached term is the same `SolutionTerm` a fresh intern would produce.
-fn bool_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, b: bool) -> SolutionTerm<D::Id> {
+pub(crate) fn bool_term<D: DatasetView + Sync>(
+    ctx: &mut EvalCtx<'_, D>,
+    b: bool,
+) -> SolutionTerm<D::Id> {
     let slot = usize::from(b);
     if let Some(term) = ctx.cached_bool_terms[slot] {
         return term;
@@ -565,19 +416,6 @@ pub(crate) fn xsd_of(value: &TermValue) -> Option<XsdValue> {
     }
 }
 
-/// The effective boolean value of an evaluated expression (`Ok(None)` = error).
-fn ebv_of<D: DatasetView + Sync>(
-    expr: &Expression,
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<bool>, EvalError> {
-    match eval_expr(expr, row, schema, ctx)? {
-        Some(term) => Ok(ebv_term(ctx, term)),
-        None => Ok(None),
-    }
-}
-
 /// The effective boolean value a constant `literal` evaluates to (`None` = type error)
 /// — [`ebv_term`]'s answer for it, reached without a dataset, for the prepare-time
 /// planner (`crate::property_fn_plan`'s `requires`). A language-tagged string has
@@ -592,7 +430,7 @@ pub(crate) fn constant_ebv(literal: &purrdf_sparql_algebra::Literal) -> Option<b
 }
 
 /// The effective boolean value of a concrete term (`None` = type error).
-fn ebv_term<D: DatasetView + Sync>(
+pub(crate) fn ebv_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
 ) -> Option<bool> {
@@ -738,22 +576,18 @@ fn cdt_compare<D: DatasetView + Sync>(
     crate::cdt_fn::compare(relation, &av, &bv).map(|answer| bool_term(ctx, answer))
 }
 
-/// Evaluate a comparison: both operands to values, compare in the XSD value space,
-/// and test the resulting [`Ordering`] with `keep`. `None` (error/unbound operand
-/// or incomparable values) propagates.
-fn compare<D: DatasetView + Sync>(
-    a: &Expression,
-    b: &Expression,
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
+/// A comparison over two evaluated operands: compare in the XSD value space, and test
+/// the resulting [`Ordering`] with `keep`. `None` (error/unbound operand or
+/// incomparable values) propagates.
+pub(crate) fn compare_terms<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
+    ta: Option<SolutionTerm<D::Id>>,
+    tb: Option<SolutionTerm<D::Id>>,
     relation: crate::cdt_fn::CdtRelation,
     keep: impl Fn(Ordering) -> bool,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let ta = eval_expr(a, row, schema, ctx)?;
-    let tb = eval_expr(b, row, schema, ctx)?;
+) -> Option<SolutionTerm<D::Id>> {
     let (Some(ta), Some(tb)) = (ta, tb) else {
-        return Ok(None);
+        return None;
     };
     // A composite-typed operand is diverted BEFORE the sameTerm short-circuit
     // below, which would otherwise answer the wrong thing for the very case the
@@ -762,11 +596,11 @@ fn compare<D: DatasetView + Sync>(
     // sides — to be UNBOUND, because SPARQL `<` has no answer where a blank node
     // stands. `keep(Ordering::Equal)` would call it `true`.
     if is_cdt_pair(ctx, ta, tb) {
-        return Ok(cdt_compare(ctx, relation, ta, tb));
+        return cdt_compare(ctx, relation, ta, tb);
     }
     // sameTerm short-circuit: identical terms are equal regardless of value space.
     if ta == tb {
-        return Ok(Some(bool_term(ctx, keep(Ordering::Equal))));
+        return Some(bool_term(ctx, keep(Ordering::Equal)));
     }
     // Value-space comparison over borrowed term views (no owned TermValue
     // clones). Distinct non-value terms (IRIs/blanks) or incomparable value
@@ -779,10 +613,10 @@ fn compare<D: DatasetView + Sync>(
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
         _ => None,
     };
-    Ok(ord.map(|ord| bool_term(ctx, keep(ord))))
+    ord.map(|ord| bool_term(ctx, keep(ord)))
 }
 
-/// Evaluate `a = b` under SPARQL RDF-term equality (SPARQL 1.2 §17.4.2.2
+/// `a = b` over two evaluated operands, under SPARQL RDF-term equality (SPARQL 1.2 §17.4.2.2
 /// `sameValue`, which "replaces `RDFterm-equal` from SPARQL 1.1" — same
 /// question, current name): both operands resolve to a term, identical terms
 /// are equal, value-comparable literals compare in the XSD value space
@@ -790,23 +624,19 @@ fn compare<D: DatasetView + Sync>(
 /// carve-out its docs explain), distinct terms where at least one is a
 /// non-literal (IRI/blank) are **unequal** (`false`, NOT a type error), and two
 /// incomparable literals are a type error (`None`). This is the equality companion to
-/// the ordering [`compare`]; using `compare` for `=` would wrongly turn a distinct
+/// the ordering [`compare_terms`]; using it for `=` would wrongly turn a distinct
 /// IRI pair into an error. Note that `sameValue` "cannot be used directly in
 /// expressions" (its own spec text) — it names the semantics `=` embeds, not a
 /// callable SPARQL function, so there is no `Function::SameValue` parser/algebra
 /// arm to add; see `crate::basic_profile`'s module docs for where that
 /// distinction is recorded against the Basic-profile survey.
-fn equal<D: DatasetView + Sync>(
-    a: &Expression,
-    b: &Expression,
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
+pub(crate) fn equal_terms<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let ta = eval_expr(a, row, schema, ctx)?;
-    let tb = eval_expr(b, row, schema, ctx)?;
+    ta: Option<SolutionTerm<D::Id>>,
+    tb: Option<SolutionTerm<D::Id>>,
+) -> Option<SolutionTerm<D::Id>> {
     let (Some(ta), Some(tb)) = (ta, tb) else {
-        return Ok(None);
+        return None;
     };
     // A composite-typed operand takes SEP-0009's own `=`, which is not the XSD
     // value space and not RDF-term equality: a `cdt:List` compares element-wise by
@@ -816,11 +646,11 @@ fn equal<D: DatasetView + Sync>(
     // sameTerm short-circuit so the diversion is unconditional and `=`/`<` agree
     // about which relation they are in.
     if is_cdt_pair(ctx, ta, tb) {
-        return Ok(cdt_compare(ctx, crate::cdt_fn::CdtRelation::Equal, ta, tb));
+        return cdt_compare(ctx, crate::cdt_fn::CdtRelation::Equal, ta, tb);
     }
     // sameTerm short-circuit: identical terms are equal regardless of value space.
     if ta == tb {
-        return Ok(Some(bool_term(ctx, true)));
+        return Some(bool_term(ctx, true));
     }
     // Distinct `SolutionTerm`s are distinct RDF terms BY CONSTRUCTION: the dataset
     // builder interns terms by value (one id per value, table kept as-is at
@@ -835,7 +665,7 @@ fn equal<D: DatasetView + Sync>(
     if term_is_triple(ctx, ta) && term_is_triple(ctx, tb) {
         let av = value_of(ctx, ta);
         let bv = value_of(ctx, tb);
-        return Ok(rdf_equal(&av, &bv).map(|eq| bool_term(ctx, eq)));
+        return rdf_equal(&av, &bv).map(|eq| bool_term(ctx, eq));
     }
     let ax = xsd_of_term(ctx, ta);
     let bx = xsd_of_term(ctx, tb);
@@ -851,44 +681,25 @@ fn equal<D: DatasetView + Sync>(
             }
         }
     };
-    Ok(eq.map(|eq| bool_term(ctx, eq)))
+    eq.map(|eq| bool_term(ctx, eq))
 }
 
-/// `expr IN (list)`: true if equal (value semantics) to any list entry; an error in
-/// the list propagates only if no `true` is found (SPARQL §17.4.1.9).
-fn eval_in<D: DatasetView + Sync>(
-    needle: &Expression,
-    haystack: &[Expression],
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some(target) = eval_expr(needle, row, schema, ctx)? else {
-        return Ok(None);
-    };
-    let tv = value_of(ctx, target);
-    let mut saw_error = false;
-    for item in haystack {
-        match eval_expr(item, row, schema, ctx)? {
-            Some(candidate) => {
-                if target == candidate {
-                    return Ok(Some(bool_term(ctx, true)));
-                }
-                let cv = value_of(ctx, candidate);
-                match rdf_equal(&tv, &cv) {
-                    Some(true) => return Ok(Some(bool_term(ctx, true))),
-                    Some(false) => {}
-                    None => saw_error = true,
-                }
-            }
-            None => saw_error = true,
-        }
+/// One `expr IN (list)` candidate against the evaluated needle `target` (whose value is
+/// `target_value`): `Some(true)` when they are equal (value semantics), `Some(false)`
+/// when they are not, `None` when the comparison is an error. The list is true at its
+/// first equal candidate, and an error propagates only if no candidate is equal
+/// (SPARQL §17.4.1.9).
+pub(crate) fn in_candidate<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    target: SolutionTerm<D::Id>,
+    target_value: &TermValue,
+    candidate: SolutionTerm<D::Id>,
+) -> Option<bool> {
+    if target == candidate {
+        return Some(true);
     }
-    if saw_error {
-        Ok(None)
-    } else {
-        Ok(Some(bool_term(ctx, false)))
-    }
+    let cv = value_of(ctx, candidate);
+    rdf_equal(target_value, &cv)
 }
 
 /// RDF term value-equality (`=`). `None` = type error (two literals not comparable).
@@ -939,7 +750,7 @@ fn rdf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
 /// [`rdf_equal`] for a pair of which at most one is a triple term.
 fn leaf_equal(a: &TermValue, b: &TermValue) -> Option<bool> {
     // SEP-0009 composite equality, for the value-space paths that reach this
-    // function rather than [`equal`]: `IN` (§17.4.1.9) and the componentwise
+    // function rather than [`equal_terms`]: `IN` (§17.4.1.9) and the componentwise
     // triple-term comparison. The same diversion, on the same rule, so a
     // `cdt:List` inside a triple term compares the way it does outside one.
     if crate::cdt_fn::is_composite_typed(a) || crate::cdt_fn::is_composite_typed(b) {
@@ -979,7 +790,7 @@ fn is_xsd_nan(x: &XsdValue) -> bool {
 /// keep doing for `<`/`>`/`ORDER BY`: the carve-out is `sameValue`'s alone, so
 /// it lives here rather than in `value_cmp` itself. `same-type` NaN pairs
 /// (`double`/`double` or `float`/`float`) already answer `true` one level up,
-/// via [`equal`]'s/[`rdf_equal`]'s identical-RDF-term short-circuit — NaN's
+/// via [`equal_terms`]'s/[`rdf_equal`]'s identical-RDF-term short-circuit — NaN's
 /// canonical lexical form is always `"NaN"`, so two same-typed NaN literals ARE
 /// the same RDF term before this function is ever reached (`sameValue` step 1)
 /// — this function is what the CROSS-type pair needs, since two literals with
@@ -1571,7 +1382,7 @@ fn exists_use_probe(
 /// A nested `EXISTS` the substitution walk left as a placeholder is answered by
 /// [`exists_deferred`], which substitutes the body it stands for — once, for this row —
 /// rather than by preparing the placeholder: see `crate::deferred_exists`.
-fn exists<D: DatasetView + Sync>(
+pub(crate) fn exists<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     row: &[Option<SolutionTerm<D::Id>>],
     schema: &VarSchema,
@@ -3812,36 +3623,18 @@ fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebr
     built.pop()
 }
 
-/// Dispatch a built-in (or custom) function call.
-fn eval_function<D: DatasetView + Sync>(
+/// Apply a built-in function to its evaluated arguments' values (`None` for an unbound
+/// or error argument; a missing/unbound argument is a per-function concern, and most
+/// functions are strict and error on it).
+///
+/// `replace_pattern` is `REPLACE`'s pattern compiled at link time, when its pattern and
+/// flags are constants; any other call ignores it.
+pub(crate) fn apply_function<D: DatasetView + Sync>(
     function: &Function,
-    args: &[Expression],
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
+    vals: &[Option<TermValue>],
     ctx: &mut EvalCtx<'_, D>,
+    replace_pattern: Option<&Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    match function {
-        Function::Contains => {
-            return eval_string_pred_expr(args, row, schema, ctx, |h, n| h.contains(n));
-        }
-        Function::StrStarts => {
-            return eval_string_pred_expr(args, row, schema, ctx, |h, n| h.starts_with(n));
-        }
-        Function::StrEnds => {
-            return eval_string_pred_expr(args, row, schema, ctx, |h, n| h.ends_with(n));
-        }
-        Function::Regex => return eval_regex_expr(args, row, schema, ctx),
-        Function::LangMatches => return eval_lang_matches_expr(args, row, schema, ctx),
-        _ => {}
-    }
-
-    // Evaluate all arguments first (a missing/unbound argument is a per-function
-    // concern handled below; most functions are strict and error on it).
-    let mut vals: Vec<Option<TermValue>> = Vec::with_capacity(args.len());
-    for a in args {
-        vals.push(eval_expr(a, row, schema, ctx)?.map(|t| value_of(ctx, t)));
-    }
-
     match function {
         // ---- type tests (total: never a type error) -----------------------
         Function::IsIri | Function::IsUri => Ok(Some(bool_term(
@@ -3858,7 +3651,7 @@ fn eval_function<D: DatasetView + Sync>(
         ))),
         Function::IsNumeric => {
             let numeric =
-                matches!(arg(&vals, 0), Some(v) if xsd_of(v).is_some_and(|xv| is_numeric(&xv)));
+                matches!(arg(vals, 0), Some(v) if xsd_of(v).is_some_and(|xv| is_numeric(&xv)));
             Ok(Some(bool_term(ctx, numeric)))
         }
         Function::IsTriple => Ok(Some(bool_term(
@@ -3867,14 +3660,14 @@ fn eval_function<D: DatasetView + Sync>(
         ))),
 
         // ---- term accessors ------------------------------------------------
-        Function::Str => match arg(&vals, 0) {
+        Function::Str => match arg(vals, 0) {
             Some(TermValue::Literal { lexical_form, .. }) => {
                 Ok(Some(string_term(ctx, lexical_form)))
             }
             Some(TermValue::Iri(iri)) => Ok(Some(string_term(ctx, iri))),
             _ => Ok(None),
         },
-        Function::Lang => match arg(&vals, 0) {
+        Function::Lang => match arg(vals, 0) {
             Some(TermValue::Literal { language, .. }) => Ok(Some(string_term(
                 ctx,
                 language.as_deref().unwrap_or_default(),
@@ -3882,7 +3675,7 @@ fn eval_function<D: DatasetView + Sync>(
             _ => Ok(None),
         },
         // RDF 1.2 base-direction accessors/tests.
-        Function::LangDir => match arg(&vals, 0) {
+        Function::LangDir => match arg(vals, 0) {
             Some(TermValue::Literal { direction, .. }) => {
                 Ok(Some(string_term(ctx, direction.map_or("", |d| d.as_str()))))
             }
@@ -3891,50 +3684,50 @@ fn eval_function<D: DatasetView + Sync>(
         // `hasLANG`/`hasLANGDIR` are total over a bound term: false for any term
         // that is not a language-tagged / directional literal (only an unbound
         // argument yields unbound).
-        Function::HasLang => match arg(&vals, 0) {
+        Function::HasLang => match arg(vals, 0) {
             None => Ok(None),
             Some(TermValue::Literal { language, .. }) => {
                 Ok(Some(bool_term(ctx, language.is_some())))
             }
             Some(_) => Ok(Some(bool_term(ctx, false))),
         },
-        Function::HasLangDir => match arg(&vals, 0) {
+        Function::HasLangDir => match arg(vals, 0) {
             None => Ok(None),
             Some(TermValue::Literal { direction, .. }) => {
                 Ok(Some(bool_term(ctx, direction.is_some())))
             }
             Some(_) => Ok(Some(bool_term(ctx, false))),
         },
-        Function::Datatype => match arg(&vals, 0) {
+        Function::Datatype => match arg(vals, 0) {
             Some(TermValue::Literal { datatype, .. }) => Ok(Some(iri_term(ctx, datatype.clone()))),
             _ => Ok(None),
         },
 
         // ---- string functions ---------------------------------------------
-        Function::StrLen => match string_arg(&vals, 0) {
+        Function::StrLen => match string_arg(vals, 0) {
             Some((s, _)) => Ok(Some(integer_term(ctx, s.chars().count() as i64))),
             None => Ok(None),
         },
-        Function::UCase => map_string(ctx, &vals, str::to_uppercase),
-        Function::LCase => map_string(ctx, &vals, str::to_lowercase),
-        // Dispatched by the early `return` at the top of this function, BEFORE the
-        // eager argument evaluation above (their `_expr` forms avoid minting nested
-        // `STR`/`LANG` terms), so no value-space arm exists for them here.
+        Function::UCase => map_string(ctx, vals, str::to_uppercase),
+        Function::LCase => map_string(ctx, vals, str::to_lowercase),
+        // The string predicates read their arguments as string arguments, never as
+        // evaluated terms (so they mint no nested `STR`/`LANG` term), and the compiler
+        // gives each its own instruction; no call over evaluated values reaches here.
         Function::Contains
         | Function::StrStarts
         | Function::StrEnds
         | Function::Regex
-        | Function::LangMatches => {
-            unreachable!("string predicates dispatch before eager argument evaluation")
-        }
-        Function::Concat => eval_concat(ctx, &vals),
-        Function::SubStr => eval_substr(ctx, &vals),
-        Function::StrBefore => eval_str_before_after(ctx, &vals, true),
-        Function::StrAfter => eval_str_before_after(ctx, &vals, false),
-        Function::Replace => eval_replace(ctx, &vals),
+        | Function::LangMatches => Err(EvalError::internal(
+            "a string predicate was applied to evaluated argument values",
+        )),
+        Function::Concat => eval_concat(ctx, vals),
+        Function::SubStr => eval_substr(ctx, vals),
+        Function::StrBefore => eval_str_before_after(ctx, vals, true),
+        Function::StrAfter => eval_str_before_after(ctx, vals, false),
+        Function::Replace => eval_replace(ctx, vals, replace_pattern),
 
         // ---- term constructors --------------------------------------------
-        Function::Iri | Function::Uri => match arg(&vals, 0) {
+        Function::Iri | Function::Uri => match arg(vals, 0) {
             Some(TermValue::Iri(iri)) => Ok(Some(iri_term(ctx, iri.clone()))),
             Some(TermValue::Literal { lexical_form, .. }) => {
                 match resolve_against_base(ctx.base_iri.as_deref(), lexical_form) {
@@ -3946,9 +3739,9 @@ fn eval_function<D: DatasetView + Sync>(
             }
             _ => Ok(None),
         },
-        Function::StrLang => eval_str_lang(ctx, &vals),
-        Function::StrLangDir => eval_str_lang_dir(ctx, &vals),
-        Function::StrDt => eval_str_dt(ctx, &vals),
+        Function::StrLang => eval_str_lang(ctx, vals),
+        Function::StrLangDir => eval_str_lang_dir(ctx, vals),
+        Function::StrDt => eval_str_dt(ctx, vals),
         // BNODE(): always mints a fresh blank node, even called twice in the same
         // solution (contrast BNODE(strExpr) below — SPARQL 1.1 §17.4.2.2).
         Function::BNode if vals.is_empty() => Ok(Some(mint_bnode(ctx))),
@@ -3956,7 +3749,7 @@ fn eval_function<D: DatasetView + Sync>(
         // (§17.4.2.2) reuses the previously-minted blank; see `ctx.bnode_memo`'s
         // doc for the row-identity mechanism and its scope.
         Function::BNode => {
-            let Some((s, _)) = string_arg(&vals, 0) else {
+            let Some((s, _)) = string_arg(vals, 0) else {
                 return Ok(None);
             };
             let key = (ctx.current_row, s);
@@ -3969,20 +3762,20 @@ fn eval_function<D: DatasetView + Sync>(
         }
 
         // ---- RDF 1.2 triple-term functions --------------------------------
-        Function::Triple => eval_triple_ctor(ctx, &vals),
-        Function::Subject => triple_part(ctx, &vals, |s, _, _| s),
-        Function::Predicate => triple_part(ctx, &vals, |_, p, _| p),
-        Function::Object => triple_part(ctx, &vals, |_, _, o| o),
+        Function::Triple => eval_triple_ctor(ctx, vals),
+        Function::Subject => triple_part(ctx, vals, |s, _, _| s),
+        Function::Predicate => triple_part(ctx, vals, |_, p, _| p),
+        Function::Object => triple_part(ctx, vals, |_, _, o| o),
 
         // ---- numeric math functions (ABS/CEIL/FLOOR/ROUND) ----------------
         // All four are strict in one numeric argument; type errors → Ok(None).
-        Function::Abs => unary_numeric_fn(ctx, &vals, numeric_abs),
-        Function::Ceil => unary_numeric_fn(ctx, &vals, numeric_ceil),
-        Function::Floor => unary_numeric_fn(ctx, &vals, numeric_floor),
-        Function::Round => unary_numeric_fn(ctx, &vals, numeric_round),
+        Function::Abs => unary_numeric_fn(ctx, vals, numeric_abs),
+        Function::Ceil => unary_numeric_fn(ctx, vals, numeric_ceil),
+        Function::Floor => unary_numeric_fn(ctx, vals, numeric_floor),
+        Function::Round => unary_numeric_fn(ctx, vals, numeric_round),
 
         // ---- ENCODE_FOR_URI -----------------------------------------------
-        Function::EncodeForUri => match string_arg(&vals, 0) {
+        Function::EncodeForUri => match string_arg(vals, 0) {
             Some((s, _)) => Ok(Some(string_term(ctx, &encode_for_uri(&s)))),
             None => Ok(None),
         },
@@ -3991,39 +3784,39 @@ fn eval_function<D: DatasetView + Sync>(
         Function::Now => Ok(Some(xsd_to_term(ctx, &ctx.now.clone()))),
 
         // ---- Date/time component extraction --------------------------------
-        Function::Year => match arg(&vals, 0).and_then(xsd_of) {
+        Function::Year => match arg(vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, dt.year()))),
             Some(XsdValue::Date(d)) => Ok(Some(integer_term(ctx, d.year()))),
             _ => Ok(None),
         },
-        Function::Month => match arg(&vals, 0).and_then(xsd_of) {
+        Function::Month => match arg(vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.month())))),
             Some(XsdValue::Date(d)) => Ok(Some(integer_term(ctx, i64::from(d.month())))),
             _ => Ok(None),
         },
-        Function::Day => match arg(&vals, 0).and_then(xsd_of) {
+        Function::Day => match arg(vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.day())))),
             Some(XsdValue::Date(d)) => Ok(Some(integer_term(ctx, i64::from(d.day())))),
             _ => Ok(None),
         },
-        Function::Hours => match arg(&vals, 0).and_then(xsd_of) {
+        Function::Hours => match arg(vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.hour())))),
             Some(XsdValue::Time(t)) => Ok(Some(integer_term(ctx, i64::from(t.hour())))),
             _ => Ok(None),
         },
-        Function::Minutes => match arg(&vals, 0).and_then(xsd_of) {
+        Function::Minutes => match arg(vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.minute())))),
             Some(XsdValue::Time(t)) => Ok(Some(integer_term(ctx, i64::from(t.minute())))),
             _ => Ok(None),
         },
-        Function::Seconds => match arg(&vals, 0).and_then(xsd_of) {
+        Function::Seconds => match arg(vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => {
                 Ok(Some(xsd_to_term(ctx, &XsdValue::Decimal(dt.second()))))
             }
             Some(XsdValue::Time(t)) => Ok(Some(xsd_to_term(ctx, &XsdValue::Decimal(t.second())))),
             _ => Ok(None),
         },
-        Function::Timezone => match arg(&vals, 0).and_then(xsd_of) {
+        Function::Timezone => match arg(vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => match dt.timezone_minutes() {
                 Some(off_min) => Ok(Some(typed_term(
                     ctx,
@@ -4050,7 +3843,7 @@ fn eval_function<D: DatasetView + Sync>(
             },
             _ => Ok(None),
         },
-        Function::Tz => match arg(&vals, 0).and_then(xsd_of) {
+        Function::Tz => match arg(vals, 0).and_then(xsd_of) {
             Some(XsdValue::DateTime(dt)) => Ok(Some(string_term(
                 ctx,
                 &format_tz_string(dt.timezone_minutes()),
@@ -4077,8 +3870,8 @@ fn eval_function<D: DatasetView + Sync>(
         // ±14:00 timezone) fold into `Ok(None)`, same as every other SPARQL
         // expression error.
         Function::Adjust => {
-            let value = arg(&vals, 0).and_then(xsd_of);
-            let timezone = arg(&vals, 1)
+            let value = arg(vals, 0).and_then(xsd_of);
+            let timezone = arg(vals, 1)
                 .and_then(xsd_of)
                 .and_then(|v| adjust_timezone_arg(&v))
                 .map(AdjustTimezone::into_seconds);
@@ -4114,35 +3907,35 @@ fn eval_function<D: DatasetView + Sync>(
         // per solution row, on every one of these nine built-ins. The only
         // allocation a hash call still makes per row is the hex digest it
         // returns, which is genuinely new text.
-        Function::Md5 => match string_arg_ref(&vals, 0) {
+        Function::Md5 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = md5::Md5::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha1 => match string_arg_ref(&vals, 0) {
+        Function::Sha1 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha1::Sha1::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha256 => match string_arg_ref(&vals, 0) {
+        Function::Sha256 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha384 => match string_arg_ref(&vals, 0) {
+        Function::Sha384 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha512 => match string_arg_ref(&vals, 0) {
+        Function::Sha512 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
@@ -4153,28 +3946,28 @@ fn eval_function<D: DatasetView + Sync>(
         // SEP-0008 SHA-3 (FIPS 202). Same call convention as SHA1/SHA256: one
         // simple-literal/xsd:string argument in, the lowercase hex digest out,
         // an unbound/ill-typed argument yielding an error (`None`).
-        Function::Sha3_224 => match string_arg_ref(&vals, 0) {
+        Function::Sha3_224 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_224::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha3_256 => match string_arg_ref(&vals, 0) {
+        Function::Sha3_256 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_256::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha3_384 => match string_arg_ref(&vals, 0) {
+        Function::Sha3_384 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_384::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
             }
             None => Ok(None),
         },
-        Function::Sha3_512 => match string_arg_ref(&vals, 0) {
+        Function::Sha3_512 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha3::Sha3_512::digest(s.as_bytes());
                 Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
@@ -4206,18 +3999,18 @@ fn eval_function<D: DatasetView + Sync>(
         // Dispatch on the parse-time-resolved kind; the original call IRI in the
         // node is serialization-only.
         Function::Purrdf(call) => match call.fn_kind {
-            PurrdfFn::HeldIn => eval_held_in(&vals, ctx),
+            PurrdfFn::HeldIn => eval_held_in(vals, ctx),
             // The six `rdf:List` functions (`listLength`, …) — every other
             // extension function is a list function, so this arm is total over
             // the registry.
-            list_func => crate::list_fn::dispatch(list_func, &vals, ctx),
+            list_func => crate::list_fn::dispatch(list_func, vals, ctx),
         },
 
         // ---- SEP-0009 composite datatypes (CLOSED, spec-fixed) --------------
         // Resolved at parse time by exact IRI match, with the argument count
         // already checked against the function's spec signature, so this is a
         // total dispatch over the fifteen-member registry.
-        Function::Cdt(call) => crate::cdt_fn::dispatch(call.fn_kind, &vals, ctx),
+        Function::Cdt(call) => crate::cdt_fn::dispatch(call.fn_kind, vals, ctx),
 
         // ---- XSD constructor casts (SPARQL 1.1 §17.1) ---------------------
         // An IRI in call position whose IRI is an XSD value-space datatype is the
@@ -4225,55 +4018,77 @@ fn eval_function<D: DatasetView + Sync>(
         // unknown custom function. It builds a target-typed literal from the argument's
         // lexical form (an IRI argument casts to `xsd:string`). A lexical form that is
         // not valid for the target type is a SPARQL expression error (`Ok(None)`).
-        Function::Custom(iri) => {
-            // A caller-injected SHACL-AF function (`sh:SPARQLFunction`) resolved at
-            // eval time — the open counterpart of the closed, parse-time `PurrdfFn`
-            // set. `ctx.user_functions` is a `Copy` borrow tied to the dataset
-            // lifetime, so reading it out does not borrow `ctx`, leaving `&mut ctx`
-            // free for the executor. Checked before the XSD-cast path so a function
-            // IRI never collides with a datatype IRI. An EMPTY registry resolves
-            // nothing, so this falls through exactly as an absent registry used to.
-            // The declaration and its bound body come back together: the
-            // declaration supplies the parameters the arguments bind to, the bound
-            // body is what the call evaluates. A registry that reaches here is
-            // bound by construction — `BoundFunctionRegistry` is the only type the
-            // evaluator accepts — so there is no unbound case to handle.
-            if let Some((func, body)) = ctx.user_functions.resolve(iri.as_str()) {
-                let result =
-                    crate::user_fn::eval_user_function(func, body, iri.as_str(), &vals, ctx)?;
-                return Ok(result.and_then(|value| intern(ctx, value)));
-            }
-            // A caller-injected native (host-Rust closure) function, resolved from
-            // the same registry's second table. Checked after the SPARQL-bodied
-            // path (so a same-registry cross-kind collision can never arise — the
-            // registry's collision guard already makes that unrepresentable) and
-            // before the XSD-cast fallback, so a function IRI never collides with a
-            // datatype IRI.
-            if let Some(native) = ctx.user_functions.resolve_native(iri.as_str()) {
-                let result = crate::user_fn::eval_native_function(native, iri.as_str(), &vals)?;
-                return Ok(result.and_then(|value| intern(ctx, value)));
-            }
-            // A caller-injected DATASET-AWARE (expression-bodied) function — SHACL 1.2
-            // SPARQL Extensions §7.3's "SPARQL engines SHOULD register a function for
-            // any SHACL instance of sh:ListParameterExpressionFunction". Unlike the
-            // native kind it is handed the query's focus graph and the current call
-            // depth (see `crate::user_fn::ExprFnCall`), because its body is a node
-            // expression rather than a value-level closure. The registry's collision
-            // guard makes a cross-kind IRI unrepresentable, so the three probes are an
-            // ordering, not a precedence rule.
-            if let Some(expr_fn) = ctx.user_functions.resolve_expr(iri.as_str()) {
-                let result = crate::user_fn::eval_expr_function(expr_fn, iri.as_str(), &vals, ctx)?;
-                return Ok(result.and_then(|value| intern(ctx, value)));
-            }
-            if let Some(target) = XsdDatatype::from_iri(iri.as_str()) {
-                return Ok(eval_xsd_cast(ctx, target, arg(&vals, 0)));
-            }
-            Err(EvalError::unsupported_deferred(
-                crate::error::UnsupportedKind::CustomFunction,
-                format!("custom SPARQL function <{}>", iri.as_str()),
-            ))
-        }
+        Function::Custom(iri) => apply_custom(iri.as_str(), vals, ctx),
     }
+}
+
+/// A caller-registered function call over its evaluated arguments.
+///
+/// A caller-injected SHACL-AF function (`sh:SPARQLFunction`) resolved at eval time —
+/// the open counterpart of the closed, parse-time `PurrdfFn` set. `ctx.user_functions`
+/// is a `Copy` borrow tied to the dataset lifetime, so reading it out does not borrow
+/// `ctx`, leaving `&mut ctx` free for the executor. Checked before the XSD-cast path so
+/// a function IRI never collides with a datatype IRI. An EMPTY registry resolves
+/// nothing, so this falls through exactly as an absent registry used to. The
+/// declaration and its bound body come back together: the declaration supplies the
+/// parameters the arguments bind to, the bound body is what the call evaluates. A
+/// registry that reaches here is bound by construction — `BoundFunctionRegistry` is the
+/// only type the evaluator accepts — so there is no unbound case to handle. Every other
+/// kind is [`apply_custom_host`]'s.
+pub(crate) fn apply_custom<D: DatasetView + Sync>(
+    iri: &str,
+    vals: &[Option<TermValue>],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    if let Some((func, body)) = ctx.user_functions.resolve(iri) {
+        let result = crate::user_fn::eval_user_function(func, body, iri, vals, ctx)?;
+        return Ok(result.and_then(|value| intern(ctx, value)));
+    }
+    apply_custom_host(iri, vals, ctx)
+}
+
+/// A caller-registered function call that is not SPARQL-bodied, over its evaluated
+/// arguments: a native closure, an expression-bodied function, or an XSD constructor
+/// cast, probed in that order; an IRI none of them names is unsupported.
+///
+/// XSD constructor casts (SPARQL 1.1 §17.1): an IRI in call position whose IRI is an
+/// XSD value-space datatype is the standard cast constructor (`xsd:decimal(?x)`,
+/// `xsd:integer(?x)`, …), NOT an unknown custom function. It builds a target-typed
+/// literal from the argument's lexical form (an IRI argument casts to `xsd:string`). A
+/// lexical form that is not valid for the target type is a SPARQL expression error
+/// (`Ok(None)`).
+pub(crate) fn apply_custom_host<D: DatasetView + Sync>(
+    iri: &str,
+    vals: &[Option<TermValue>],
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
+    // A caller-injected native (host-Rust closure) function, resolved from the same
+    // registry's second table. Checked after the SPARQL-bodied path (so a same-registry
+    // cross-kind collision can never arise — the registry's collision guard already
+    // makes that unrepresentable) and before the XSD-cast fallback, so a function IRI
+    // never collides with a datatype IRI.
+    if let Some(native) = ctx.user_functions.resolve_native(iri) {
+        let result = crate::user_fn::eval_native_function(native, iri, vals)?;
+        return Ok(result.and_then(|value| intern(ctx, value)));
+    }
+    // A caller-injected DATASET-AWARE (expression-bodied) function — SHACL 1.2 SPARQL
+    // Extensions §7.3's "SPARQL engines SHOULD register a function for any SHACL
+    // instance of sh:ListParameterExpressionFunction". Unlike the native kind it is
+    // handed the query's focus graph and the current call depth (see
+    // `crate::user_fn::ExprFnCall`), because its body is a node expression rather than
+    // a value-level closure. The registry's collision guard makes a cross-kind IRI
+    // unrepresentable, so the three probes are an ordering, not a precedence rule.
+    if let Some(expr_fn) = ctx.user_functions.resolve_expr(iri) {
+        let result = crate::user_fn::eval_expr_function(expr_fn, iri, vals, ctx)?;
+        return Ok(result.and_then(|value| intern(ctx, value)));
+    }
+    if let Some(target) = XsdDatatype::from_iri(iri) {
+        return Ok(eval_xsd_cast(ctx, target, arg(vals, 0)));
+    }
+    Err(EvalError::unsupported_deferred(
+        crate::error::UnsupportedKind::CustomFunction,
+        format!("custom SPARQL function <{iri}>"),
+    ))
 }
 
 /// Evaluate an XSD constructor cast: parse the source literal's lexical form against
@@ -4578,62 +4393,6 @@ fn arg(vals: &[Option<TermValue>], i: usize) -> Option<&TermValue> {
     vals.get(i).and_then(|v| v.as_ref())
 }
 
-fn eval_string_pred_expr<D: DatasetView + Sync>(
-    args: &[Expression],
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-    f: impl Fn(&str, &str) -> bool,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let result = {
-        let (Some((h, _)), Some((n, _))) = (
-            eval_string_arg_expr(args.first(), row, schema, ctx)?,
-            eval_string_arg_expr(args.get(1), row, schema, ctx)?,
-        ) else {
-            return Ok(None);
-        };
-        f(&h, &n)
-    };
-    Ok(Some(bool_term(ctx, result)))
-}
-
-fn eval_regex_expr<D: DatasetView + Sync>(
-    args: &[Expression],
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let text = eval_string_arg_expr(args.first(), row, schema, ctx)?;
-    let pattern = eval_string_arg_expr(args.get(1), row, schema, ctx)?;
-    let flags = eval_string_arg_expr(args.get(2), row, schema, ctx)?;
-    let (Some((text, _)), Some((pattern, _))) = (text, pattern) else {
-        return Ok(None);
-    };
-    let flags = flags.map_or_default(|(f, _)| f);
-    match cached_regex(ctx, &pattern, &flags) {
-        Some(re) => Ok(Some(bool_term(ctx, re.as_regex().is_match(&text)))),
-        None => Ok(None),
-    }
-}
-
-fn eval_lang_matches_expr<D: DatasetView + Sync>(
-    args: &[Expression],
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let result = {
-        let (Some((tag, _)), Some((range, _))) = (
-            eval_string_arg_expr(args.first(), row, schema, ctx)?,
-            eval_string_arg_expr(args.get(1), row, schema, ctx)?,
-        ) else {
-            return Ok(None);
-        };
-        lang_matches(&tag, &range)
-    };
-    Ok(Some(bool_term(ctx, result)))
-}
-
 /// RFC 4647 basic filtering as `LANGMATCHES` applies it: `range` is `*`, or equals
 /// `tag` ASCII-case-insensitively, or is a `-`-terminated prefix of it.
 ///
@@ -4641,86 +4400,25 @@ fn eval_lang_matches_expr<D: DatasetView + Sync>(
 /// `String`s per row: `to_ascii_lowercase` only folds `A-Z`, which is exactly the
 /// folding `eq_ignore_ascii_case` performs, and non-ASCII bytes pass through both
 /// untouched, so the answer is identical with zero allocations.
-fn lang_matches(tag: &str, range: &str) -> bool {
+pub(crate) fn lang_matches(tag: &str, range: &str) -> bool {
     let (t, r) = (tag.as_bytes(), range.as_bytes());
     range == "*"
         || t.eq_ignore_ascii_case(r)
         || (t.len() > r.len() && t[r.len()] == b'-' && t[..r.len()].eq_ignore_ascii_case(r))
 }
 
-fn eval_string_arg_expr<D: DatasetView + Sync>(
-    expr: Option<&Expression>,
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<(String, Option<String>)>, EvalError> {
-    let Some(expr) = expr else {
-        return Ok(None);
-    };
-    match expr {
-        Expression::Literal(lit)
-            if lit.datatype().as_str() == XSD_STRING
-                || lit.datatype().as_str() == RDF_LANG_STRING =>
-        {
-            Ok(Some((
-                lit.value().to_owned(),
-                lit.language().map(str::to_ascii_lowercase),
-            )))
-        }
-        Expression::FunctionCall(Function::Str, inner) if inner.len() == 1 => {
-            eval_str_lexical_expr(&inner[0], row, schema, ctx).map(|v| v.map(|s| (s, None)))
-        }
-        Expression::FunctionCall(Function::Lang, inner) if inner.len() == 1 => {
-            eval_lang_lexical_expr(&inner[0], row, schema, ctx).map(|v| v.map(|s| (s, None)))
-        }
-        _ => {
-            let Some(term) = eval_expr(expr, row, schema, ctx)? else {
-                return Ok(None);
-            };
-            // `value` is an owned temporary: move its strings out rather than clone them.
-            Ok(string_arg_value_owned(value_of(ctx, term)).map(|(s, l, _)| (s, l)))
-        }
-    }
+/// A term read as a string argument: its lexical form and language tag, when it is a
+/// simple, `xsd:string`, `rdf:langString` or `rdf:dirLangString` literal.
+pub(crate) fn string_arg_of_term<D: DatasetView + Sync>(
+    ctx: &EvalCtx<'_, D>,
+    term: SolutionTerm<D::Id>,
+) -> Option<(String, Option<String>)> {
+    // `value` is an owned temporary: move its strings out rather than clone them.
+    string_arg_value_owned(value_of(ctx, term)).map(|(s, l, _)| (s, l))
 }
 
-fn eval_str_lexical_expr<D: DatasetView + Sync>(
-    expr: &Expression,
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<String>, EvalError> {
-    match expr {
-        Expression::NamedNode(node) => Ok(Some(node.as_str().to_owned())),
-        Expression::Literal(lit) => Ok(Some(lit.value().to_owned())),
-        _ => {
-            let Some(term) = eval_expr(expr, row, schema, ctx)? else {
-                return Ok(None);
-            };
-            Ok(str_lexical_term(ctx, term))
-        }
-    }
-}
-
-fn eval_lang_lexical_expr<D: DatasetView + Sync>(
-    expr: &Expression,
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<String>, EvalError> {
-    match expr {
-        Expression::Literal(lit) => {
-            Ok(Some(lit.language().map_or_default(str::to_ascii_lowercase)))
-        }
-        _ => {
-            let Some(term) = eval_expr(expr, row, schema, ctx)? else {
-                return Ok(None);
-            };
-            Ok(lang_lexical_term(ctx, term))
-        }
-    }
-}
-
-fn str_lexical_term<D: DatasetView + Sync>(
+/// The lexical form `STR(term)` has, read straight off the term without minting it.
+pub(crate) fn str_lexical_term<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
 ) -> Option<String> {
@@ -4738,7 +4436,8 @@ fn str_lexical_term<D: DatasetView + Sync>(
     }
 }
 
-fn lang_lexical_term<D: DatasetView + Sync>(
+/// The tag `LANG(term)` has, read straight off the term without minting it.
+pub(crate) fn lang_lexical_term<D: DatasetView + Sync>(
     ctx: &EvalCtx<'_, D>,
     term: SolutionTerm<D::Id>,
 ) -> Option<String> {
@@ -5028,9 +4727,13 @@ fn eval_str_before_after<D: DatasetView + Sync>(
 }
 
 /// `REPLACE(str, pattern, replacement[, flags])` via the regex engine.
+///
+/// `linked` is the pattern the call's constant pattern and flags compiled to at link
+/// time; without one the pattern is compiled (or found) in the per-query cache.
 fn eval_replace<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
+    linked: Option<&Option<Arc<purrdf_core::xsd_regex::CompiledPattern>>>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     let Some((s, lang)) = string_arg(vals, 0) else {
         return Ok(None);
@@ -5039,8 +4742,14 @@ fn eval_replace<D: DatasetView + Sync>(
     else {
         return Ok(None);
     };
-    let flags = string_arg(vals, 3).map_or_default(|(f, _)| f);
-    let Some(compiled) = cached_regex(ctx, &pattern, &flags) else {
+    let compiled = match linked {
+        Some(compiled) => compiled.clone(),
+        None => {
+            let flags = string_arg(vals, 3).map_or_default(|(f, _)| f);
+            cached_regex(ctx, &pattern, &flags)
+        }
+    };
+    let Some(compiled) = compiled else {
         return Ok(None);
     };
     // The `q` bit and XPath F&O 3.1 §5.6.2's replacement syntax both live
@@ -5061,7 +4770,7 @@ fn eval_replace<D: DatasetView + Sync>(
 /// rows of one filter share a single compiled regex and therefore its lazy-DFA
 /// cache pool, instead of each row cloning a fresh one. Compile failures are
 /// cached as `None` (same errors, compiled once).
-fn cached_regex<D: DatasetView + Sync>(
+pub(crate) fn cached_regex<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     pattern: &str,
     flags: &str,
@@ -5342,14 +5051,10 @@ pub(crate) fn xsd_literal_value(v: &XsdValue) -> TermValue {
     typed(&v.canonical_lexical(), v.datatype().iri())
 }
 
-/// Evaluate a binary value-space expression: resolve both operands to [`XsdValue`],
-/// call `op`, and return `Ok(Some(term))` on success or `Ok(None)` on any error (type
-/// error, overflow, divide-by-zero, indeterminate timezone mix — all SPARQL
-/// expression errors).
 /// SPARQL's three-valued `||` over two effective boolean values (`None` is an
 /// error): `true` if either is `true`, `false` if both are `false`, an error
 /// otherwise (§17.2).
-const fn kleene_or(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+pub(crate) const fn kleene_or(a: Option<bool>, b: Option<bool>) -> Option<bool> {
     match (a, b) {
         (Some(true), _) | (_, Some(true)) => Some(true),
         (Some(false), Some(false)) => Some(false),
@@ -5360,7 +5065,7 @@ const fn kleene_or(a: Option<bool>, b: Option<bool>) -> Option<bool> {
 /// SPARQL's three-valued `&&` over two effective boolean values (`None` is an
 /// error): `false` if either is `false`, `true` if both are `true`, an error
 /// otherwise (§17.2).
-const fn kleene_and(a: Option<bool>, b: Option<bool>) -> Option<bool> {
+pub(crate) const fn kleene_and(a: Option<bool>, b: Option<bool>) -> Option<bool> {
     match (a, b) {
         (Some(false), _) | (_, Some(false)) => Some(false),
         (Some(true), Some(true)) => Some(true),
@@ -5368,41 +5073,15 @@ const fn kleene_and(a: Option<bool>, b: Option<bool>) -> Option<bool> {
     }
 }
 
-/// Evaluate an [`Expression::Arithmetic`] chain: the left fold of its binary
-/// operators, exactly as the left-nested tree of binary nodes evaluates.
-///
-/// The binary node evaluates its left operand, then its right, then applies the
-/// operator; in the tree, the left operand of every step is the value of the steps
-/// before it. So the fold evaluates the first operand, then each step's operand in
-/// turn — every operand, whether or not an earlier step raised an expression error,
-/// so a hard error (and anything an operand's evaluation does) happens in the same
-/// order — and applies each step with [`arithmetic_step`] to the value so far, which
-/// is the term the binary node would have produced for it. An expression error
-/// (`Ok(None)`) in any operand or step makes every later step, and the chain, an
-/// error.
-fn arithmetic_chain<D: DatasetView + Sync>(
-    first: &Expression,
-    steps: &[(ArithmeticOperator, Expression)],
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
-    ctx: &mut EvalCtx<'_, D>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let mut value = eval_expr(first, row, schema, ctx)?;
-    for (op, operand) in steps {
-        let right = eval_expr(operand, row, schema, ctx)?;
-        value = match (value, right) {
-            (Some(ta), Some(tb)) => arithmetic_step(ctx, *op, ta, tb),
-            _ => None,
-        };
-    }
-    Ok(value)
-}
-
-/// Apply one binary arithmetic operator to two evaluated operand terms, as the
-/// binary node does: resolve both to XSD values and call the operator, returning
+/// Apply one binary arithmetic operator to two evaluated operand terms — one step of
+/// an [`Expression::Arithmetic`] chain, which is the left fold of its binary operators
+/// over its operands, evaluated left to right, every operand whether or not an earlier
+/// step raised an expression error. An expression error (`None`) in any operand or
+/// step makes every later step, and the chain, an error. Each step is what the binary
+/// node does: resolve both to XSD values and call the operator, returning
 /// `None` — SPARQL's expression error, NOT a hard error — for an operand with no
 /// XSD value and for overflow, division by zero or a type mismatch.
-fn arithmetic_step<D: DatasetView + Sync>(
+pub(crate) fn arithmetic_step<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     op: ArithmeticOperator,
     ta: SolutionTerm<D::Id>,
@@ -5421,25 +5100,15 @@ fn arithmetic_step<D: DatasetView + Sync>(
     result.ok().map(|result| xsd_to_term(ctx, &result))
 }
 
-/// Evaluate a unary numeric expression (`+` / `-`): resolve the operand, call `op`,
-/// return `Ok(None)` on any error.
-fn unary_numeric<D: DatasetView + Sync>(
-    a: &Expression,
-    row: &[Option<SolutionTerm<D::Id>>],
-    schema: &VarSchema,
+/// A unary numeric operator (`+` / `-`) over its evaluated operand: resolve it to an XSD
+/// value, call `op`, and return `None` on any error.
+pub(crate) fn unary_numeric_term<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
+    operand: Option<SolutionTerm<D::Id>>,
     op: impl Fn(&XsdValue) -> Result<XsdValue, purrdf_xsd::XsdError>,
-) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some(ta) = eval_expr(a, row, schema, ctx)? else {
-        return Ok(None);
-    };
-    let Some(xa) = xsd_of_term(ctx, ta) else {
-        return Ok(None);
-    };
-    match op(&xa) {
-        Ok(result) => Ok(Some(xsd_to_term(ctx, &result))),
-        Err(_) => Ok(None),
-    }
+) -> Option<SolutionTerm<D::Id>> {
+    let xa = xsd_of_term(ctx, operand?)?;
+    op(&xa).ok().map(|result| xsd_to_term(ctx, &result))
 }
 
 /// Apply a unary numeric function from the `vals` pre-evaluated argument list.
@@ -6047,8 +5716,8 @@ mod tests {
 
     /// The **two-argument** `REGEX(text, pattern)` arity — no flags argument
     /// at all. Every other dialect test supplies a PRESENT final `lit("")`, so
-    /// only this shape exercises `eval_regex_expr`'s `args.get(2)`-absent
-    /// `unwrap_or_default()` path. The subject/pattern pair returns the XSD
+    /// only this shape exercises the `REGEX` instruction's absent-flags path (the
+    /// compiler's absent string argument, read as no flags). The subject/pattern pair returns the XSD
     /// answer `false` because XSD's `.` excludes #x0D where Rust's excludes
     /// only #x0A — a Rust `regex` would answer `true` — so this pins that the
     /// dialect is in force on the arity-2 dispatch specifically, not merely
@@ -8782,11 +8451,10 @@ mod tests {
     // correlated branch of `exists()` is a fresh heap allocation that is
     // dropped at the end of each outer row's evaluation. Across many rows the
     // allocator can (and in practice does) hand back the *same address* for
-    // the next row's temporary. Before the fix, `const_atom_cache`,
-    // `exists_prepared_cache`, `exists_inner_cache`, and `exists_definition_memo`
-    // were (or, for the latter two, are) keyed on that address, so a later row
-    // could get a stale cache hit computed against an
-    // earlier row's substituted constant — corrupting the solution set. This
+    // the next row's temporary. `exists_prepared_cache`, `exists_inner_cache`, and
+    // `exists_definition_memo` are keyed on that address outside the window, so a
+    // hit inside it would be computed against an earlier row's substituted
+    // constant — corrupting the solution set. This
     // test drives five outer rows (more than enough for address reuse to
     // occur) with an alternating true/false correlated-FILTER-EXISTS result,
     // so any stale hit flips at least one row to the wrong answer.

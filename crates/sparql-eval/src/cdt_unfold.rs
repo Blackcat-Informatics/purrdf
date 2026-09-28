@@ -102,7 +102,6 @@ use purrdf_sparql_algebra::{Expression, GraphPattern, Variable};
 
 use crate::error::EvalError;
 use crate::eval::{EvalCtx, eval_evaluated};
-use crate::expr::eval_expr;
 use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::row_ingest::{GovernedRowIngest, IngestVerdict};
 use crate::solution::{Solution, SolutionSeq, VarSchema};
@@ -171,6 +170,8 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     // actually bounds the expansion, since one literal can hold up to
     // `purrdf_cdt::MAX_ELEMENTS` elements.
     let ingest = GovernedRowIngest::new(ctx, width, None);
+    let program = crate::vm::program_at(ctx, node, expression);
+    let mut linked = crate::vm::Linked::link(program, expression, &seq.schema, ctx);
     let mut rows: Vec<Solution<D::Id>> = Vec::new();
     let mut tripped: Option<TrippedGovernor> = None;
 
@@ -185,7 +186,7 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
         // expression is evaluated against, and it advances once per input row
         // however many output rows that row expands to.
         ctx.current_row = idx as u64;
-        let Some(value) = composite_of(expression, mu, &seq.schema, ctx)? else {
+        let Some(value) = composite_of(&mut linked, mu, &seq.schema, ctx)? else {
             // SEP-0009 §12.3, both definitions, verbatim: "If var ∉ dom(μ) and
             // expr(μ) is an error or an RDF term that is neither a well-formed
             // cdt:List literal nor a well-formed cdt:Map literal, then
@@ -275,19 +276,19 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
     })
 }
 
-/// The composite value `expression` denotes for `mu`, or `None` when it denotes
-/// none (unbound, raised, not `cdt:`-typed, or an ill-formed composite literal).
+/// The composite value the linked `expression` denotes for `mu`, or `None` when it
+/// denotes none (unbound, raised, not `cdt:`-typed, or an ill-formed composite literal).
 ///
 /// # Errors
 ///
 /// Any hard failure `expression` itself raises.
 fn composite_of<D: DatasetView + Sync>(
-    expression: &Expression,
+    expression: &mut crate::vm::Linked<'_, D::Id>,
     mu: &Solution<D::Id>,
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<CdtValue>, EvalError> {
-    let Some(term) = eval_expr(expression, mu, schema, ctx)? else {
+    let Some(term) = expression.term(mu, schema, ctx)? else {
         return Ok(None);
     };
     let value = ctx.scratch.value_of(ctx.dataset, term);

@@ -504,8 +504,8 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// body of the tree keeps its preparation on its [`crate::plan::ExistsSite`] instead.
     /// Populated lazily, once per distinct site — see [`Self::prepared_exists`], the sole
     /// accessor, for the substituted-temporary ABA guard this cache observes: like
-    /// [`Self::exists_inner_cache`] and [`Self::const_atom_cache`], it is neither read nor
-    /// written inside a substituted window. A nested `EXISTS` inside a per-row copy does not need it: the copy holds a
+    /// [`Self::exists_inner_cache`], it is neither read nor written inside a substituted
+    /// window. A nested `EXISTS` inside a per-row copy does not need it: the copy holds a
     /// placeholder whose body was prepared once, from the written body, and kept by the
     /// preparation (or plan node) the body was read from (see [`crate::deferred_exists`]).
     pub(crate) exists_prepared_cache: DetHashMap<usize, Arc<PreparedExists>>,
@@ -543,29 +543,6 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// the scratch interner dedups by value — so the cached term is bit-identical
     /// to what a fresh intern would return.
     pub(crate) cached_bool_terms: [Option<SolutionTerm<D::Id>>; 2],
-    /// Per-query memo of interned constant expression atoms (`NamedNode` /
-    /// `Literal`), keyed by the atom node's immutable AST address. A constant atom
-    /// inside a `FILTER`/`BIND` is otherwise re-`to_owned()`'d into an owned
-    /// `TermValue` and re-interned (a dataset reverse-index probe) once per row;
-    /// this collapses that to a single intern per distinct atom node. Like
-    /// [`Self::cached_bool_terms`], interning is deterministic for the pinned
-    /// `(dataset, scratch)` pair, so a cached hit is the same `SolutionTerm` a
-    /// fresh intern would produce. Naturally per-query — **but only for the
-    /// static query algebra**: the address is a sound cache key precisely because
-    /// those nodes are allocated once and outlive the whole `query()` call.
-    /// Per-outer-row correlated-`EXISTS` substitution (`expr::exists`) is the
-    /// exception: it heap-allocates a fresh substituted pattern tree per row and
-    /// drops it at the end of that row, so a later row's differently-substituted
-    /// node can be allocated at the SAME address (an ABA hazard) and would
-    /// otherwise return a stale, wrong-row value from this cache.
-    /// [`Self::in_substituted_exists`] flags exactly that window so `const_atom`
-    /// bypasses this cache while it is set.
-    /// The memoized value is `Option<SolutionTerm>` because the intern itself is:
-    /// a constant atom whose language tag the grammar refuses is unbound, and
-    /// that verdict is as constant as the term would have been (the SPARQL
-    /// parser and `crate::scratch` name the same profile), so it is memoized on
-    /// equal footing rather than recomputed per row.
-    pub(crate) const_atom_cache: DetHashMap<usize, Option<SolutionTerm<D::Id>>>,
     /// Per-query memo of the parsed XSD value of a dataset literal, keyed by its
     /// `TermId`. `FILTER`/comparison hot paths (`compare`/`equal`/`ebv_term`) parse
     /// the same `Existing(TermId)` literal's lexical form via `parse_by_iri` on
@@ -605,13 +582,13 @@ pub struct EvalCtx<'d, D: DatasetView + Sync = RdfDataset> {
     /// cache key: a later row's allocation can reuse a dropped node's address (the ABA
     /// hazard), and a hit keyed by it would return an earlier row's answer.
     ///
-    /// This crate keeps exactly FOUR address-keyed, per-query caches subject to that
-    /// hazard — [`Self::const_atom_cache`], [`Self::exists_prepared_cache`],
-    /// [`Self::exists_inner_cache`], [`Self::exists_definition_memo`] — none of them
-    /// deleted, disabled, or replaced by this flag; each one stays exactly as lazy,
-    /// address-keyed, and per-evaluation as its own doc describes. What this flag
-    /// changes is narrower than "bypass the cache class": none of the four can tell a
-    /// per-row temporary's address from a real one, so all four skip both the read and
+    /// This crate keeps exactly THREE address-keyed, per-query caches subject to that
+    /// hazard — [`Self::exists_prepared_cache`], [`Self::exists_inner_cache`],
+    /// [`Self::exists_definition_memo`] — none of them deleted, disabled, or replaced by
+    /// this flag; each one stays exactly as lazy, address-keyed, and per-evaluation as its
+    /// own doc describes. What this flag changes is narrower than "bypass the cache
+    /// class": none of the three can tell a per-row temporary's address from a real one,
+    /// so all three skip both the read and
     /// the write, unconditionally, whenever this flag is set — a fresh, unshared answer
     /// every reach, same as before this field existed. The nested `EXISTS` sites a copy
     /// defers are kept elsewhere: on the preparation whose tree holds them, or on
@@ -946,7 +923,6 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_definition_memo: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
-            const_atom_cache: DetHashMap::default(),
             xsd_parse_cache: DetHashMap::default(),
             remote: None,
             bgp_order_cache: None,
@@ -1681,6 +1657,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         &self,
         point: crate::governor::ChargePoint,
     ) -> Result<(), TrippedGovernor> {
+        #[cfg(test)]
+        crate::vm::charge_trace::record(|| format!("charge {point:?}"));
         match self.governors.as_ref() {
             None => Ok(()),
             Some(state) => {
@@ -1729,6 +1707,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         point: crate::governor::ChargePoint,
         occurrences: u64,
     ) -> Result<(), TrippedGovernor> {
+        #[cfg(test)]
+        crate::vm::charge_trace::record(|| format!("charge {point:?} x{occurrences}"));
         if occurrences == 0 {
             return Ok(());
         }
@@ -1766,6 +1746,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         dimension: purrdf_core::ResourceDimension,
         amount: u64,
     ) -> Result<(), TrippedGovernor> {
+        #[cfg(test)]
+        crate::vm::charge_trace::record(|| format!("charge {dimension:?} {amount}"));
         match self.governors.as_ref() {
             None => Ok(()),
             Some(state) => state.charge_if_engaged(dimension, amount),
@@ -2006,8 +1988,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///   id is valid in the parent's space (a raw child `ScratchId` is never
     ///   reused in the parent — only the id space, not individual ids, is
     ///   shared by the clone).
-    /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `const_atom_cache`,
-    ///   `xsd_parse_cache`, `constructed`): per-worker mutable state that must
+    /// - **Fresh** (`regex_cache`, `cached_bool_terms`, `xsd_parse_cache`,
+    ///   `constructed`): per-worker mutable state that must
     ///   NOT be shared, so each worker mints its own constructed-quad buffer
     ///   without contending on a lock. The caller
     ///   classifies each worker row with [`crate::parallel::minted_row`] into a
@@ -2057,7 +2039,6 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_definition_memo: self.exists_definition_memo.clone(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
-            const_atom_cache: DetHashMap::default(),
             xsd_parse_cache: DetHashMap::default(),
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
@@ -2287,7 +2268,6 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
             exists_definition_memo: DetHashMap::default(),
             regex_cache: DetHashMap::default(),
             cached_bool_terms: [None, None],
-            const_atom_cache: DetHashMap::default(),
             xsd_parse_cache: DetHashMap::default(),
             remote: self.remote,
             bgp_order_cache: self.bgp_order_cache,
@@ -2373,9 +2353,8 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
     ///
     /// While [`Self::in_substituted_exists`] is set, `pattern`'s address may be a per-row
     /// heap temporary that can alias a dropped-and-reused allocation from an earlier outer
-    /// row — the same ABA hazard [`Self::exists_inner_cache`]/[`Self::const_atom_cache`]
-    /// guard against — so it is never a cache key there, and the preparation is built fresh
-    /// and returned uncached. A nested `EXISTS` inside a substituted copy does not come
+    /// row — the same ABA hazard [`Self::exists_inner_cache`] guards against — so it is
+    /// never a cache key there, and the preparation is built fresh and returned uncached. A nested `EXISTS` inside a substituted copy does not come
     /// here at all: the substitution left it as a placeholder whose site was prepared once,
     /// from the written body (see [`crate::deferred_exists`]). What does come here inside a
     /// window is a body the window evaluates as it is written, or one substituted in full

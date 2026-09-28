@@ -97,9 +97,8 @@ use crate::agg_fn::AggregateAccumulator;
 use crate::cdt_fn::{argument_element, composite_literal};
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
-use crate::expr::eval_expr;
 use crate::governor::ChargePoint;
-use crate::modifier::{SortKey, compare_keys, fold_builtin, order_sort_key, project};
+use crate::modifier::{SortKey, compare_keys, fold_builtin, project};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, VarSchema};
 
@@ -317,7 +316,9 @@ impl AggregateAccumulator for FoldAccumulator {
 
 /// Evaluate one `FOLD` aggregate over a group's rows.
 ///
-/// `idxs` indexes `rows` in the group's own row order, exactly as
+/// `links` holds the aggregate's arguments, then its `ORDER BY` keys, each linked to
+/// `schema` once for the whole `GROUP` call. `idxs` indexes `rows` in the group's own
+/// row order, exactly as
 /// `crate::modifier`'s `eval_aggregate` supplies it. The two phases are the ones
 /// this module's docs describe: evaluate + de-duplicate + order (here), then fold
 /// (through [`FoldAccumulator`], driven by [`fold_builtin`]).
@@ -330,18 +331,23 @@ impl AggregateAccumulator for FoldAccumulator {
 /// answered as unbound, the doctrine every aggregate in `crate::modifier` follows.
 pub(crate) fn eval_fold<D: DatasetView + Sync>(
     agg: &AggregateExpression,
+    links: &mut [crate::vm::Linked<'_, D::Id>],
     idxs: &[usize],
     rows: &[Solution<D::Id>],
     schema: &VarSchema,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let Some(first_arg) = agg.args().first() else {
-        return Err(EvalError::internal(
-            "FOLD reached evaluation with an empty exprlist; AggregateExpression::new admits \
-             only one argument (the cdt:List form) or two (the cdt:Map form)",
-        ));
+    let (arguments, keys) = links.split_at_mut(agg.args().len().min(links.len()));
+    let (first_arg, mut second_arg) = match arguments {
+        [first] => (first, None),
+        [first, second, ..] => (first, Some(second)),
+        [] => {
+            return Err(EvalError::internal(
+                "FOLD reached evaluation with an empty exprlist; AggregateExpression::new \
+                 admits only one argument (the cdt:List form) or two (the cdt:Map form)",
+            ));
+        }
     };
-    let second_arg = agg.args().get(1);
     let target = if second_arg.is_some() {
         FoldTarget::Map
     } else {
@@ -364,9 +370,9 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
         crate::row_checkpoint::RowCheckpoint::sequential(ctx, ChargePoint::AggregateAccumulation);
     for &i in idxs {
         let row = &rows[i];
-        let first = eval_expr(first_arg, row, schema, ctx)?;
-        let second = match second_arg {
-            Some(expression) => eval_expr(expression, row, schema, ctx)?,
+        let first = first_arg.term(row, schema, ctx)?;
+        let second = match second_arg.as_mut() {
+            Some(expression) => expression.term(row, schema, ctx)?,
             None => None,
         };
         // Charged for every row `FOLD` inspects, whether or not `DISTINCT` keeps
@@ -401,8 +407,8 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
 
         // Only a SURVIVOR's sort key is ever needed: `DISTINCT` keeps each value's
         // first occurrence, so that row's own key is the one the element sorts by.
-        for order in order_by {
-            let key = eval_expr(order_sort_key(order), row, schema, ctx)?;
+        for key_link in keys.iter_mut() {
+            let key = key_link.term(row, schema, ctx)?;
             let key = key.map(|term| ctx.scratch.value_of(ctx.dataset, term));
             if let Err(tripped) = ctx.charge_amount(
                 purrdf_core::ResourceDimension::ScratchBytes,

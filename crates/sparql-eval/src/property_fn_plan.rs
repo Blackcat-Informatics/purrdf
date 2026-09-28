@@ -2637,7 +2637,7 @@ const fn is_type_test(function: &Function) -> bool {
 /// unbound, whatever its other arguments hold — the argument positions the function is
 /// STRICT in.
 ///
-/// Read off the evaluator (`crate::expr`'s `eval_function` and the dispatch tables it
+/// Read off the evaluator (`crate::expr`'s `apply_function` and the dispatch tables it
 /// hands on to), and held to it by a drift test there that evaluates every built-in
 /// with each argument unbound in turn: a position classified strict must yield no value
 /// on every sample, and one classified otherwise must yield a value on at least one —

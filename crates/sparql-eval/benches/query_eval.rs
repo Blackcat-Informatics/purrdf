@@ -317,8 +317,8 @@ SELECT (GROUP_CONCAT(?a; separator=\",\") AS ?ages) (MAX(?a) AS ?max) WHERE {
 }";
 
 /// (m) Arithmetic-dense `FILTER` over a **dataset-bound** variable (`?age`), never
-/// a literal constant: `const_atom` memoization (`expr.rs`) caches a literal
-/// operand's parsed `XsdValue` per AST node on its first evaluation, so a FILTER
+/// a literal constant: the expression VM's constant pool (`vm`) interns a literal
+/// operand once per operator call, on its first evaluation, so a FILTER
 /// built from literal constants would measure the (memoized) constant-folding
 /// path rather than the per-row extraction + dispatch path production traffic
 /// actually takes.

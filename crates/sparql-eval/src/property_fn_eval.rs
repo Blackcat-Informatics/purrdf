@@ -965,7 +965,7 @@ fn unify_term(arg: &Arg, value: &TermValue, values: &mut [Option<TermValue>]) ->
 /// it is read on demand too: each row the call yields is carried up through the
 /// operators above it, innermost first, and a row a `FILTER` rejects is dropped there
 /// and the next one pulled. The predicate is evaluated by the engine's own expression
-/// evaluator (`eval_ebv`, the one `FILTER` evaluation calls), over the names visible
+/// evaluator (`crate::vm`, the one `FILTER` evaluation runs), over the names visible
 /// at that `FILTER`, in a context configured as the materialised lane's is and reading
 /// the instant the read opened as its `NOW()`. A `LIMIT` counts the rows that reach
 /// it, so one below a `FILTER` counts rows the `FILTER` may still drop and one above it
@@ -1054,8 +1054,9 @@ enum ReadStage {
     },
     /// A `FILTER`: its predicate, over the names visible where it stands.
     Filter {
-        /// The predicate, as the query wrote it.
-        expression: Expression,
+        /// The predicate, compiled from what the query wrote. It reaches no `EXISTS`:
+        /// [`CallReadShape`] admits no predicate that does.
+        program: Arc<crate::vm::ExprProgram>,
         /// The names visible to the predicate, in the order `slots` reads them.
         schema: VarSchema,
         /// For each name in `schema`, the call slot it reads, or `None` for a name
@@ -3024,7 +3025,7 @@ pub(crate) fn open_call_cursor(
             }
             GraphPattern::Filter { expr, .. } => {
                 stages.push(ReadStage::Filter {
-                    expression: expr.clone(),
+                    program: Arc::new(crate::vm::ExprProgram::compile(expr)),
                     schema: VarSchema::from_vars(visible.iter().map(|(name, _)| (*name).clone())),
                     slots: visible.iter().map(|(_, slot)| *slot).collect(),
                 });
@@ -3120,6 +3121,10 @@ impl CallCursor {
         // Built at most once per call, at the first `FILTER` a row reaches, and reused
         // for every row this call pulls past.
         let mut context: Option<EvalCtx<'_, D>> = None;
+        // Each `FILTER` stage's program, linked to its schema at the first row that
+        // reaches it and reused for every row this call pulls past.
+        let mut links: Vec<Option<crate::vm::Linked<'static, D::Id>>> = Vec::new();
+        links.resize_with(self.stages.len(), || None);
         'pull: loop {
             if self.ended {
                 return Ok(None);
@@ -3153,11 +3158,11 @@ impl CallCursor {
             if !unify_row(&self.plan.args, &emitted, &mut self.values) {
                 continue;
             }
-            for stage in &mut self.stages {
+            for (stage, link) in self.stages.iter_mut().zip(links.iter_mut()) {
                 match stage {
                     ReadStage::Limit { passed, .. } => *passed += 1,
                     ReadStage::Filter {
-                        expression,
+                        program,
                         schema,
                         slots,
                     } => {
@@ -3179,7 +3184,10 @@ impl CallCursor {
                                     })
                             })
                             .collect::<Vec<Option<crate::scratch::SolutionTerm<D::Id>>>>();
-                        if crate::expr::eval_ebv(expression, &row, schema, ctx)? != Some(true) {
+                        let linked = link.get_or_insert_with(|| {
+                            crate::vm::Linked::link_without_exists(Arc::clone(program), schema, ctx)
+                        });
+                        if linked.ebv(&row, schema, ctx)? != Some(true) {
                             continue 'pull;
                         }
                     }

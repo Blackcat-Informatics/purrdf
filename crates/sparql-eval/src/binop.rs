@@ -1078,7 +1078,7 @@ fn left_join_lift<D: DatasetView + Sync>(
     let pad_unmatched = !lift.is_truncated();
     let joined = match expression {
         None => left_outer_join(&l, &r, ctx, pad_unmatched),
-        Some(expr) => left_outer_join_filtered(&l, &r, expr, ctx, pad_unmatched)?,
+        Some(expr) => left_outer_join_filtered(node, &l, &r, expr, ctx, pad_unmatched)?,
     };
     // An `EXISTS` inside the inline condition is an opaque edge: a trip inside it makes
     // every emitted row's condition a boolean computed over a truncated bag, so the whole
@@ -1139,6 +1139,7 @@ fn filtered_candidates<'a, I: ViewTermId>(
 /// the whole of it, in which case "no pairing passes" is not a fact this operator holds
 /// and the left-alone row must not be emitted; see [`eval_left_join`].
 fn left_outer_join_filtered<D: DatasetView + Sync>(
+    node: &GraphPattern,
     l: &SolutionSeq<D::Id>,
     r: &SolutionSeq<D::Id>,
     expr: &Expression,
@@ -1160,7 +1161,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
     // `Multi` key is termwise equality); `build_index` pushes indices into each
     // bucket in ascending row order, so the bucket is precisely the ascending-index
     // subsequence of `r.rows` the scan would have visited, in the same order.
-    // `merge`/`eval_ebv` therefore run over the identical candidate sequence, and the
+    // `merge` and the condition therefore run over the identical candidate sequence, and the
     // emitted rows, padding decisions, cell-ceiling trip points and charges are
     // unchanged. A left row with an unbound shared column (`bound_key` → `None`)
     // keeps the full scan, and so does an index with any wild row.
@@ -1168,6 +1169,8 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
 
     // A left outer join emits at least one row per left row.
     let cell_ceiling = ctx.cell_row_ceiling(out_len);
+    let program = crate::vm::program_at(ctx, node, expr);
+    let mut linked = crate::vm::Linked::link(program, expr, &out, ctx);
     let rows = if cell_ceiling.is_none() && ctx.may_fork_row_loop(expr) {
         // Harvesting, for `crate::expr::eval_filter`'s reason: the join predicate can
         // reach a property function through an embedded `EXISTS`, and a worker's
@@ -1175,15 +1178,15 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
         let (rows, witnesses) = crate::parallel::par_chunk_try_map_init(
             ctx.sequential_operation_required(),
             &l.rows,
-            || ctx.fork_for_worker(),
-            |child, acc, lrow| {
+            || (ctx.fork_for_worker(), linked.fresh()),
+            |(child, linked), acc, lrow| {
                 let before = acc.len();
                 match filtered_candidates(lrow, &shared, &keyed, &wild) {
                     Candidates::Bucket(idxs) => {
                         for &idx in idxs {
                             let merged =
                                 merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len);
-                            if crate::expr::eval_ebv(expr, &merged, &out, child)? == Some(true) {
+                            if linked.ebv(&merged, &out, child)? == Some(true) {
                                 acc.push(merged);
                             }
                         }
@@ -1194,7 +1197,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                                 continue;
                             }
                             let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
-                            if crate::expr::eval_ebv(expr, &merged, &out, child)? == Some(true) {
+                            if linked.ebv(&merged, &out, child)? == Some(true) {
                                 acc.push(merged);
                             }
                         }
@@ -1207,7 +1210,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                 }
                 Ok(())
             },
-            |child| core::mem::take(&mut child.witness),
+            |(child, _)| core::mem::take(&mut child.witness),
         )?;
         ctx.absorb_worker_witnesses(witnesses);
         rows
@@ -1220,7 +1223,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                 Candidates::Bucket(idxs) => {
                     for &idx in idxs {
                         let merged = merge(lrow, &r.rows[idx], left_len, &right_to_out, out_len);
-                        if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
+                        if linked.ebv(&merged, &out, ctx)? == Some(true) {
                             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
@@ -1236,7 +1239,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                             continue;
                         }
                         let merged = merge(lrow, rrow, left_len, &right_to_out, out_len);
-                        if crate::expr::eval_ebv(expr, &merged, &out, ctx)? == Some(true) {
+                        if linked.ebv(&merged, &out, ctx)? == Some(true) {
                             if cell_ceiling.is_some_and(|cap| rows.len() >= cap) {
                                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                                 break 'left;
