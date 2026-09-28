@@ -26,7 +26,7 @@
 //!   suspends through JSPI on host-resolved `SERVICE` and `LOAD` effects and yields to
 //!   the event loop, so the host owns the I/O and its policy while PurRDF keeps the
 //!   parsing, evaluation, joins, `SILENT` semantics and result encoding.
-//! - **Separate from the C-ABI (P8).** WASM has its own ownership model,
+//! - **Separate from the C-ABI.** WASM has its own ownership model,
 //!   packaging, and async I/O; it is not a C-ABI consumer and does not depend on the
 //!   `no_std` track.
 //!
@@ -109,8 +109,7 @@ mod term;
 pub use async_query::purrdf_jspi_run;
 pub use async_query::{
     AsyncEffect, AsyncEvidence, AsyncJob, AsyncJobOptions, AsyncOperationKind, DeliveryStatus,
-    EffectKind, RunStatus, ServiceCatalog, ShaclAsyncOperation, SuspendStatus,
-    async_stack_region_bytes,
+    EffectKind, RunStatus, ServiceCatalog, SuspendStatus, async_stack_region_bytes,
 };
 pub use dataset::Dataset;
 pub use entail::RegimeClosure;

@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The execution scope: the one door through which a validation's SPARQL reaches a
-//! `SERVICE` source, and through which a stop signal reaches the validation itself.
+//! The execution scope: the one door through which a stop signal and the query
+//! sources reach a validation.
 //!
 //! Three claims, each driven through the public surface and each beside the neighbour
 //! that must NOT change:
 //!
-//! 1. A SHACL-SPARQL constraint whose query uses `SERVICE` answers through the sources
-//!    the scope installs — and its violations are the REMOTE answer's, so two remote
-//!    answers give two different, correct reports. Without the scope the same shapes
-//!    graph fails by name, exactly as it always has.
+//! 1. SHACL-SPARQL admits no `SERVICE` in any query — a constraint's or a
+//!    `sh:SPARQLTarget`'s, `SILENT` or not — so a shapes graph with one is refused while
+//!    it loads, and a scope that installs a source for the endpoint changes nothing about
+//!    that. The same target reading the data graph answers, inside the scope and out.
 //! 2. The scope's stop signal ends a validation that runs no SPARQL at all: it is
 //!    polled between focus nodes, not only inside queries. The neighbour — the same
 //!    validation under a signal that never fires — reaches the ungoverned report.
@@ -23,7 +23,9 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use purrdf::RdfDataset;
+use purrdf_shapes::ShapesError;
 use purrdf_shapes::engine::validate_graphs;
+use purrdf_shapes::imports::ShapesImports;
 use purrdf_shapes::report::ValidationReport;
 use purrdf_shapes::sparql::{
     AmbientContext, QuerySources, current_governors, enter_execution_scope, replace_ambient_context,
@@ -38,14 +40,15 @@ const EX: &str = "http://example.org/";
 const ENDPOINT: &str = "http://example.org/sparql";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
 
+/// The refusal of a `SERVICE` in a SHACL-SPARQL query.
+const SERVICE_REFUSAL: &str = "a federated query (SERVICE) is not allowed";
+
 /// A shapes graph whose TARGET asks a remote service which people are banned, and
-/// whose one constraint every person here violates (none has a clearance): every
-/// violation it can find is a focus node the service's answer selected.
+/// whose one constraint every person here violates (none has a clearance).
 ///
-/// The `SERVICE` is in the target, not in a constraint, because that is where SHACL
-/// admits it: a constraint's query runs with `$this` pre-bound, and SHACL 1.2 SPARQL
-/// Extensions Appendix A forbids `SERVICE` in such a query — this crate refuses one at
-/// shape load. A `sh:SPARQLTarget` query pre-binds nothing, so it may federate.
+/// SHACL 1.2 SPARQL Extensions, Appendix A: "SPARQL queries SHOULD not contain a
+/// federated query (SERVICE)"; this crate reads it as a must for every SHACL-SPARQL
+/// query, a target's included, and refuses the shapes graph at load.
 fn service_shapes(silent: bool) -> String {
     let silent = if silent { "SILENT " } else { "" };
     format!(
@@ -81,6 +84,32 @@ ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;
     sh:sparql [ sh:select """SELECT $this WHERE {{ SERVICE <{ENDPOINT}> {{ $this <{EX}status> "banned" }} }}""" ] .
 "#
     )
+}
+
+/// The neighbour of [`service_shapes`]: the same target reading the data graph itself.
+fn local_target_shapes() -> String {
+    format!(
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{EX}> .
+
+ex:BannedShape
+    a sh:NodeShape ;
+    sh:target [
+        a sh:SPARQLTarget ;
+        sh:select """
+            SELECT ?this
+            WHERE {{ ?this a <{EX}Person> ; <{EX}status> "banned" }}
+        """ ;
+    ] ;
+    sh:property [ sh:path ex:clearance ; sh:minCount 1 ] .
+"#
+    )
+}
+
+/// Alice and Bob, both people, with `who` banned.
+fn people_banning(who: &str) -> String {
+    format!("{}<{EX}{who}> <{EX}status> \"banned\" .\n", people_nt())
 }
 
 /// Alice and Bob, both people.
@@ -124,7 +153,10 @@ fn validate_in_scope(
     data: &str,
     governors: &QueryGovernors,
     sources: QuerySources,
-) -> (Result<ValidationReport, String>, Option<TrippedGovernor>) {
+) -> (
+    Result<ValidationReport, ShapesError>,
+    Option<TrippedGovernor>,
+) {
     let state = Arc::new(GovernorState::new(governors));
     let result = {
         let _scope = enter_execution_scope(Arc::clone(&state), sources);
@@ -145,110 +177,62 @@ fn a_service_in_a_constraint_query_is_refused_at_load_with_or_without_a_scope() 
     ] {
         let (refused, _) =
             validate_in_scope(&shapes, &people_nt(), &QueryGovernors::METERED, sources);
-        let refused = refused.expect_err("SERVICE under pre-binding is refused");
-        assert!(
-            refused.contains("federated queries (SERVICE) are not allowed"),
-            "{label}: {refused}"
-        );
+        let refused = refused
+            .expect_err("SERVICE under pre-binding is refused")
+            .to_string();
+        assert!(refused.contains(SERVICE_REFUSAL), "{label}: {refused}");
     }
 }
 
 #[test]
-fn a_service_target_answers_through_the_scope_and_its_violations_are_the_remote_answer() {
-    let shapes = service_shapes(false);
+fn a_service_target_is_refused_at_load_with_or_without_a_source_and_a_local_target_answers() {
     let data = people_nt();
+    for silent in [false, true] {
+        let shapes = service_shapes(silent);
+        let refused = validate_graphs(&data, &shapes, None)
+            .expect_err("SERVICE is refused at load")
+            .to_string();
+        assert!(refused.contains(SERVICE_REFUSAL), "{refused}");
+        for (label, sources) in [
+            ("no source", QuerySources::default()),
+            ("a source", sources_over(registry("alice"))),
+        ] {
+            let (inside, tripped) =
+                validate_in_scope(&shapes, &data, &QueryGovernors::METERED, sources);
+            assert_eq!(tripped, None, "{label}");
+            let inside = inside
+                .expect_err("a source does not admit a SERVICE")
+                .to_string();
+            assert_eq!(inside, refused, "silent {silent}, {label}");
+        }
+    }
 
-    // The neighbour of the refusal: with no scope, the SERVICE has no source and the
-    // validation fails by name — the synchronous lane's behaviour, unchanged.
-    let refused = validate_graphs(&data, &shapes, None).expect_err("no SERVICE source");
+    // The neighbour: the same target over the data graph answers, and each report names
+    // exactly the person the data bans, inside a scope that has a source and out of one.
+    let shapes = local_target_shapes();
+    for banned in ["alice", "bob"] {
+        let data = people_banning(banned);
+        let outside = validate_graphs(&data, &shapes, None).expect("a local target answers");
+        assert!(!outside.conforms);
+        assert_eq!(focus_nodes(&outside), vec![format!("<{EX}{banned}>")]);
+        let (inside, tripped) = validate_in_scope(
+            &shapes,
+            &data,
+            &QueryGovernors::METERED,
+            sources_over(registry("carol")),
+        );
+        assert_eq!(tripped, None);
+        assert_eq!(
+            format!("{:?}", inside.expect("a local target answers")),
+            format!("{outside:?}")
+        );
+    }
     assert!(
-        refused.contains("no remote query source configured"),
-        "the refusal names the missing source: {refused}"
+        validate_graphs(&people_nt(), &shapes, None)
+            .expect("nobody banned")
+            .conforms
     );
-
-    // A scope that installs governors but no source refuses identically: installing a
-    // scope is not what makes a SERVICE answerable, a source is.
-    let (sourceless, tripped) = validate_in_scope(
-        &shapes,
-        &data,
-        &QueryGovernors::METERED,
-        QuerySources::default(),
-    );
-    assert_eq!(tripped, None);
-    let sourceless = sourceless.expect_err("a scope with no source has no SERVICE source");
-    assert!(
-        sourceless.contains("no remote query source configured"),
-        "{sourceless}"
-    );
-
-    // Two registries, two answers: the report names exactly the person each bans.
-    let (alice, tripped) = validate_in_scope(
-        &shapes,
-        &data,
-        &QueryGovernors::METERED,
-        sources_over(registry("alice")),
-    );
-    assert_eq!(tripped, None);
-    let alice = alice.expect("the registry answers");
-    assert!(!alice.conforms);
-    assert_eq!(focus_nodes(&alice), vec![format!("<{EX}alice>")]);
-
-    let (bob, _) = validate_in_scope(
-        &shapes,
-        &data,
-        &QueryGovernors::METERED,
-        sources_over(registry("bob")),
-    );
-    assert_eq!(
-        focus_nodes(&bob.expect("the registry answers")),
-        vec![format!("<{EX}bob>")]
-    );
-
-    // A registry that bans nobody here: the data conforms.
-    let (nobody, _) = validate_in_scope(
-        &shapes,
-        &data,
-        &QueryGovernors::METERED,
-        sources_over(registry("dave")),
-    );
-    assert!(nobody.expect("the registry answers").conforms);
-
-    // The scope is gone once dropped: the next validation on this thread has no source.
-    assert!(validate_graphs(&data, &shapes, None).is_err());
-    assert!(current_governors().is_none());
-}
-
-#[test]
-fn service_silent_without_a_source_is_the_join_identity_inside_and_outside_the_scope() {
-    // SILENT swallows the missing source to the join identity — one empty solution, which
-    // joined with the pre-bound `$this` selects every focus node. The scope changes
-    // nothing about that: SILENT's contract is the evaluator's, not the scope's.
-    let shapes = service_shapes(true);
-    let data = people_nt();
-    let outside = validate_graphs(&data, &shapes, None).expect("SILENT swallows the failure");
-    let (inside, _) = validate_in_scope(
-        &shapes,
-        &data,
-        &QueryGovernors::METERED,
-        QuerySources::default(),
-    );
-    let inside = inside.expect("SILENT swallows the failure");
-    assert_eq!(focus_nodes(&inside), focus_nodes(&outside));
-    assert_eq!(
-        focus_nodes(&outside),
-        vec![format!("<{EX}alice>"), format!("<{EX}bob>")]
-    );
-    // The answered neighbour differs: a registry that bans Bob selects Bob alone.
-    let (answered, _) = validate_in_scope(
-        &shapes,
-        &data,
-        &QueryGovernors::METERED,
-        sources_over(registry("bob")),
-    );
-    assert_eq!(
-        focus_nodes(&answered.expect("answered")),
-        vec![format!("<{EX}bob>")]
-    );
+    assert!(current_governors().is_none(), "every scope was dropped");
 }
 
 /// Core shapes only: a datatype constraint, evaluated from the IR with no SPARQL.
@@ -381,7 +365,8 @@ ex:PersonRule a sh:NodeShape ;
     sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:adult ; sh:object ex:yes ] .
 ";
     let data = aged_people(30);
-    let baseline = purrdf_shapes::engine::entail_graphs(&data, shapes, None).expect("entails");
+    let baseline = purrdf_shapes::engine::entail_graphs(&data, shapes, None, &ShapesImports::new())
+        .expect("entails");
     let state = |signal: Arc<dyn StopSignal>| {
         Arc::new(GovernorState::new(
             &QueryGovernors::METERED.with_stop_signal(signal),
@@ -391,7 +376,8 @@ ex:PersonRule a sh:NodeShape ;
     let quiet = state(Arc::new(CancellationFlag::new()));
     let entailed = {
         let _scope = enter_execution_scope(Arc::clone(&quiet), QuerySources::default());
-        purrdf_shapes::engine::entail_graphs(&data, shapes, None).expect("entails")
+        purrdf_shapes::engine::entail_graphs(&data, shapes, None, &ShapesImports::new())
+            .expect("entails")
     };
     assert_eq!(quiet.tripped(), None);
     assert_eq!(
@@ -405,7 +391,7 @@ ex:PersonRule a sh:NodeShape ;
     let stopped = state(Arc::new(cancelled));
     let result = {
         let _scope = enter_execution_scope(Arc::clone(&stopped), QuerySources::default());
-        purrdf_shapes::engine::entail_graphs(&data, shapes, None)
+        purrdf_shapes::engine::entail_graphs(&data, shapes, None, &ShapesImports::new())
     };
     assert!(result.is_err(), "a stopped rule application has no result");
     assert_eq!(
@@ -419,32 +405,44 @@ ex:PersonRule a sh:NodeShape ;
 #[test]
 fn replacing_the_ambient_context_takes_every_scope_off_the_thread_and_puts_it_back() {
     assert!(current_governors().is_none());
-    let state = Arc::new(GovernorState::new(&QueryGovernors::METERED));
-    let shapes = service_shapes(false);
-    let data = people_nt();
+    let signal = Arc::new(CountingSignal {
+        polls: AtomicU64::new(0),
+        fire_at: u64::MAX,
+    });
+    let state = Arc::new(GovernorState::new(
+        &QueryGovernors::METERED.with_stop_signal(Arc::clone(&signal) as Arc<dyn StopSignal>),
+    ));
+    let data = aged_people(30);
+    let baseline = validate_graphs(&data, CORE_SHAPES, None).expect("the ungoverned run");
     let _scope = enter_execution_scope(Arc::clone(&state), sources_over(registry("alice")));
 
-    // Parked: the thread is idle, and a validation run now is the ungoverned one with no
-    // source — it cannot see the parked scope's governors or its registry.
+    // Parked: the thread is idle, and a validation run now is the ungoverned one — it
+    // polls none of the parked scope's signal.
     let parked = replace_ambient_context(AmbientContext::default());
     assert!(
         !parked.is_idle(),
         "the parked context carries the installed scope"
     );
     assert!(current_governors().is_none());
-    let meanwhile = validate_graphs(&data, &shapes, None).expect_err("no source while parked");
-    assert!(
-        meanwhile.contains("no remote query source configured"),
-        "{meanwhile}"
+    let meanwhile = validate_graphs(&data, CORE_SHAPES, None).expect("the ungoverned run");
+    assert_eq!(format!("{meanwhile:?}"), format!("{baseline:?}"));
+    assert_eq!(
+        signal.polls.load(Ordering::Relaxed),
+        0,
+        "no validation polled the parked scope's signal"
     );
 
-    // Restored: the scope's governors and registry are back, and answer.
+    // Restored: the scope's governors are back, and the next validation polls them.
     let idle = replace_ambient_context(parked);
     assert!(idle.is_idle(), "what ran while parked left nothing behind");
     assert!(
         current_governors().is_some_and(|installed| Arc::ptr_eq(&installed, &state)),
         "the restored governors are the scope's own"
     );
-    let report = validate_graphs(&data, &shapes, None).expect("the registry answers again");
-    assert_eq!(focus_nodes(&report), vec![format!("<{EX}alice>")]);
+    let report = validate_graphs(&data, CORE_SHAPES, None).expect("the quiet signal completes");
+    assert_eq!(format!("{report:?}"), format!("{baseline:?}"));
+    assert!(
+        signal.polls.load(Ordering::Relaxed) >= 30,
+        "the restored scope's signal is polled between focus nodes"
+    );
 }

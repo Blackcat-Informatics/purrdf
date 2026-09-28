@@ -110,7 +110,7 @@ fn document(blocks: usize) -> String {
 #[test]
 fn two_co_typed_copies_decide_inside_both_budgets() {
     let document = document(2);
-    let answer = purrdf_validate::regime::consistency_to_string(&document, 0, 0)
+    let answer = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
         .expect("the ontology reverse-maps");
     let certificate = answer.certificate();
     assert_eq!(
@@ -142,7 +142,7 @@ fn two_co_typed_copies_decide_inside_both_budgets() {
 #[test]
 fn ten_co_typed_copies_answer_unknown_at_the_work_cap() {
     let document = document(10);
-    let answer = purrdf_validate::regime::consistency_to_string(&document, 0, 0)
+    let answer = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
         .expect("the ontology reverse-maps");
     let certificate = answer.certificate();
     assert_eq!(
@@ -182,9 +182,9 @@ fn ten_co_typed_copies_answer_unknown_at_the_work_cap() {
 #[test]
 fn the_exhausted_answer_is_identical_twice() {
     let document = document(10);
-    let first = purrdf_validate::regime::consistency_to_string(&document, 0, 0)
+    let first = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
         .expect("the ontology reverse-maps");
-    let again = purrdf_validate::regime::consistency_to_string(&document, 0, 0)
+    let again = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
         .expect("the ontology reverse-maps");
     assert_eq!(
         first, again,

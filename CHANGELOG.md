@@ -38,6 +38,606 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   runtime's statuses are exported enums: `RunStatus`, `SuspendStatus`,
   `DeliveryStatus` and `EffectKind`.
 
+- **shapes, validate, cli, python, wasm, capi (BREAKING):** the empty `sh:in` / `sh:xone`
+  mandatory diagnostic is reported by EVERY run, not only by the lint (maintainer
+  decision, "Every run reports it"). Appendix A's `in-minListLength` and
+  `xone-minListLength` ("Each such list SHOULD have at least one member") leave the
+  shapes graph well-formed, so a diagnostic is never a `sh:ValidationResult`: it changes
+  neither `sh:conforms` nor any result, the W3C grading is unchanged, and the RDF report
+  graph does not carry it (SHACL defines no report term for it and PurRDF mints none).
+  Rust: `Shapes::mandatory_diagnostics`, `ValidationReport::diagnostics` (a new public
+  field), `RulesOutcome::diagnostics`, `EntailOutcome::diagnostics`; `MandatoryDiagnostic`
+  displays as `RULE SHAPE`. SARIF: each is a `level: "note"` notification in
+  `invocations[0].toolExecutionNotifications` whose `descriptor` names the rule in
+  `tool.driver.notifications` (SARIF 2.1.0 §3.20.21, §3.58). Command line: a `shacl
+  diagnostic RULE SHAPE` stderr line after `validate`'s verdict and after `rules
+  inferred N`. Python: a `diagnostics` list of `{"rule", "shape"}` on the `validate`
+  dict, `ValidationReport`, and the `apply_rules` dict; `shapes.entail` now returns
+  `{"ntriples", "diagnostics"}` instead of a string. WebAssembly: `shaclEntail` now
+  returns a `ShaclEntailment` (`ntriples`, `diagnostics`) instead of a string, and
+  `ShaclRulesInference` gains `diagnostics`. C: `purrdf_shacl_apply_rules` and
+  `purrdf_shacl_entail_to_ntriples` gain a nullable `out_diagnostics` buffer before
+  `out_error` (riding the unshipped 0.8.0 ABI bump). The diagnostics are computed once
+  per shapes graph, from its retained dataset, so a parse and a prepared-product
+  restore agree (the product stage id moves; existing products must be rebuilt), and a
+  graph with no empty list allocates nothing more per validation.
+
+- **entail, validate, cli, python, wasm, capi (BREAKING):** every entailment entry point
+  closes the premise's `owl:imports` closure and refuses what it cannot use. `purrdf
+  reason` and `purrdf convert --entailment` take `--import IRI=FILE` (they used to ignore
+  `owl:imports` and close the premise alone, reporting the import unresolved): the
+  closure is materialized over the premise merged with every imported document, an
+  import no pair resolves is refused by name (exit 1), and the report states
+  `ontology-import-resolved`. An import-table entry the premise's closure never reaches
+  is now refused on every entailment service — `purrdf entails` (exit 2, as `validate`
+  refuses an unused shapes-graph pair), Python `entail.graph_entails` /
+  `verify_entailment` / `certain_answers`, WebAssembly `entailGraphEntails` /
+  `entailVerifyEntailment` / `entailCertainAnswers`, C `purrdf_entail_graph_entails` /
+  `purrdf_entail_verify_entailment` / `purrdf_entail_certain_answers`, Rust `entails` /
+  `certain_answers` (`EntailError::UnreachedImport`, naming the entries and, when the
+  premise states the `owl:imports` on a node that anchors nothing, saying so); it used to
+  be read and silently unused. Rust gains `materialize_with_imports`.
+
+- **entail, validate, `purrdf`, cli, python, wasm, capi (BREAKING):** the entailment-regime
+  query, the OWL-Direct consistency question and the host materialization entry points
+  close over the premise's `owl:imports` closure too, through the same kernel resolver
+  and with the same refusals as `reason`. They used to answer over the premise alone —
+  `purrdf query --entailment` and `purrdf consistency` silently omitted every imported
+  axiom. Command line: `query --entailment … --import IRI=FILE` and `consistency --import
+  IRI=FILE` (`--proof`/`--check-proof` record and check over the merge). Python:
+  `entail.materialize(dataset, regime, program, imports, premise_iris, …)`,
+  `entail.materialize_nt(text, regime, program, imports, premise_iris, …)`,
+  `entail.consistency(data, imports, premise_iris, step_cap=0, work_cap=0)` (the two new
+  arguments are required and positional, as on `certain_answers`), and
+  `Store`/`MutableDataset.query_entailment_governed(..., imports=None,
+  premise_iris=None)`. WebAssembly: `entailMaterialize(document, regime, program,
+  importIris, importDocuments, premiseIris, maxStoredFacts?, maxJoinSteps?)`,
+  `entailConsistency(document, importIris, importDocuments, premiseIris, stepCap,
+  workCap)`, and `importIris`/`importDocuments`/`premiseIris` options on
+  `queryEntailmentGoverned` (the raw binding takes them after `program`). C:
+  `purrdf_entail_materialize_to_nquads`, `purrdf_entail_consistency` and
+  `purrdf_query_entailment_governed` gain `import_iris`, `import_documents`,
+  `import_count`, `premise_iris`, `premise_iri_count` (riding the unshipped 0.8.0 ABI
+  bump). Rust: `validate::regime::materialize_to_nquads_string_with` and
+  `consistency_to_string` take `imports` and `premise_iris`;
+  `ReasonerSession::open_premise` and `premise_nquads`; `premise_import_map`;
+  `purrdf::query_with_entailment_closure_governed` over an `EntailmentClosure`;
+  `purrdf_entail::resolve_imports`, `ReasoningReport::with_resolved_imports`,
+  `EntailError::with_resolved_imports`, `Reasoner::with_resolved_imports`. The Rust
+  entry points that take no table (`query_with_entailment`,
+  `query_with_entailment_governed`, `materialize_to_nquads_string`) resolve against the
+  empty one, so an importing premise is refused there rather than closed without its
+  imports. A resolved closure states `ontology-import-resolved` in the reasoning report
+  and, now, in the DL certificate.
+
+- **entail, validate, `purrdf`, cli, python, wasm, capi (BREAKING):** every entailment service
+  that evaluates a regime's rule table takes the stored-fact and join-step limits the
+  materialization path takes, and a refusal names the CALLING host's knob — never
+  `MaterializeLimits::…` or `EvalOptions::…` to a non-Rust caller. The conclusion-directed
+  services hold the premise's closure AND every re-chase of the refutation and freeze
+  mechanisms to them; the entailment-regime query holds its closure to them (the query
+  governors still price only the evaluation over the closure). Defaults are unchanged.
+  Command line: `entails --max-stored-facts N --max-join-steps N` and `query --entailment …
+  --max-stored-facts N --max-join-steps N`. Python: keyword-only `max_stored_facts=`,
+  `max_join_steps=` on `entail.certain_answers`, `graph_entails`, `verify_entailment` and
+  `Store`/`MutableDataset.query_entailment_governed`, each refusal naming that function's
+  keyword. WebAssembly: trailing `maxStoredFacts?`, `maxJoinSteps?` (`bigint`) on
+  `entailCertainAnswers`, `entailGraphEntails`, `entailVerifyEntailment`, and
+  `maxStoredFacts`/`maxJoinSteps` options on `queryEntailmentGoverned` (the raw binding
+  takes them after `premiseIris`). C: nullable `const uint64_t *max_stored_facts, const
+  uint64_t *max_join_steps` after `premise_iri_count` on `purrdf_entail_certain_answers`,
+  `purrdf_entail_graph_entails`, `purrdf_entail_verify_entailment` and
+  `purrdf_query_entailment_governed` (riding the unshipped 0.8.0 ABI bump). Rust:
+  `purrdf_entail::entails_with` / `certain_answers_with`; `certain_answers_to_string`,
+  `graph_entails_to_string` and `verify_entailment_to_string` take a `MaterializeLimits`;
+  `RegimeService`, `RegimeHost::service_knobs`, `render_entail_error_in`;
+  `EntailmentClosure::with_limits`. The OWL-Direct consistency question runs no rule-table
+  evaluation — its evaluator is the hypertableau, bounded by `step_cap`/`work_cap` on every
+  host already — so it takes no stored-fact or join-step knob that would govern nothing;
+  the term-generating round and generated-term limits govern no entailment lane either.
+
+- **capi (BREAKING for C):** `purrdf_shacl_validate_changes_to_sarif` takes the two
+  validation parameters the whole-graph `purrdf_shacl_validate_to_sarif` takes, in the same
+  places: `conformance_disallows` / `conformance_disallows_count` after `removed_nt`, and
+  `bool subclass_of_in_shapes_graph` after `import_count` (riding the unshipped 0.8.0 ABI
+  bump). A change is judged exactly as the whole graph would be; before, the change path
+  always used SHACL's default disallow set and read class membership from the data graph
+  alone.
+
+- **shapes, validate, cli, python, wasm, capi (BREAKING):** a node-expression evaluation
+  reports the shapes graph's mandatory diagnostic (an empty `sh:in` / `sh:xone` list) like
+  every other run. Command line: `purrdf node-expr` writes one `shacl diagnostic RULE
+  SHAPE` stderr line per diagnostic after `node-expr outputs N`. Python:
+  `shapes.eval_node_expr` returns `{"outputs": [...], "diagnostics": [{"rule", "shape"},
+  ...]}` instead of a list. WebAssembly: `shaclEvalNodeExpr` returns a
+  `ShaclNodeExprOutcome` (`outputs`, `diagnostics` of `ShaclDiagnostic` values with `rule`
+  and `shape`) instead of an array. C: `purrdf_shacl_eval_node_expr` gains a nullable
+  `out_diagnostics` buffer before `out_error` (riding the unshipped 0.8.0 ABI bump). Rust:
+  `free_expression::evaluate` returns a `NodeExprEvaluation` (`outputs`, `diagnostics`),
+  and `purrdf_validate::eval_node_expr` (a `NodeExprOutcome`) replaces
+  `eval_node_expr_to_terms`. The diagnostics change no output.
+
+- **wasm (BREAKING), capi:** the two SHACL rules entry points spell their shared parameters
+  in one order, and a mandatory diagnostic has one encoding on every host. WebAssembly
+  `shaclApplyRules` is now `(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
+  importIris?, importDocuments?, shapesGraph?, maxTermGeneratingRounds?,
+  maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)` — the import table, then
+  `shapesGraph`, then the four limits contiguously, exactly as `shaclEntail(shapesTtl,
+  dataNt, shapesBase?, importIris?, importDocuments?, shapesGraph?,
+  maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)` takes
+  them (it used to interleave the limits with the import table and end on
+  `shapesGraph`). `ShaclEntailment.diagnostics` and `ShaclRulesInference.diagnostics` are
+  arrays of `ShaclDiagnostic` values (`rule`, `shape`) instead of `RULE SHAPE` strings —
+  the structured form Python's `{"rule", "shape"}` dicts already carry. C keeps its
+  `diagnostic RULE SHAPE` lines, now documented as the same two fields in the same order.
+
+- **validate, python, wasm, capi (BREAKING for C):** SHACL-AF entailment takes the four
+  rule-evaluation limits the rules run takes — the term-generating round limit, the
+  generated-term budget, the stored-fact limit and the join-step limit — routed through
+  the same `RuleOptions`, with the same defaults. Python `shapes.entail(...,
+  max_term_generating_rounds=, max_generated_terms=, max_stored_facts=,
+  max_join_steps=)`; WebAssembly four trailing `bigint` arguments on `shaclEntail`; C
+  four nullable `const uint64_t *` parameters on `purrdf_shacl_entail_to_ntriples`
+  between `import_count` and `out_buffer` (riding the unshipped 0.8.0 ABI bump); Rust
+  `EntailRequest` / `entail_to_ntriples` and `RuleLimits`. A refusal names the knob in
+  the calling host's own spelling (`entail(max_stored_facts=...)`, `shaclEntail's
+  maxStoredFacts`, `purrdf_shacl_entail_to_ntriples's max_stored_facts`); it used to
+  name `RuleOptions::with_max_*`, which no host caller can reach, and no host could
+  raise a limit an entailment run passed.
+
+- **sparql-eval, shapes (BREAKING):** a call to a SHACL-AF `sh:SPARQLFunction` whose
+  `sh:select` body returns more than one solution fails, naming the count, instead of
+  answering with the first row. SHACL Advanced Features: "Since all other bindings will
+  be ignored, such SELECT queries should only return at most one solution", read as a
+  must; the first row of an unordered result is no single value. A body that returns one
+  solution, or none (no value, a SPARQL error as before), is unchanged.
+
+- **shapes (BREAKING):** a SPARQL 1.2 RL rule set whose first `VERSION` directive follows
+  a `RULE` or `DATA` block is refused at the syntax stage. §7.1: "The version
+  announcement SHOULD be made early in the document", read as a must. A rule set that
+  announces no version still parses, and a later `VERSION` after an early one is still a
+  directive for what follows it. No W3C SPARQL 1.2 RL entry places a `VERSION` late; the
+  counts are unchanged.
+
+- **shapes, validate, cli, python, wasm, capi (BREAKING):** `SERVICE` is refused in every
+  SHACL-SPARQL query that runs. SHACL 1.2 SPARQL Extensions, Appendix A: "SPARQL queries
+  SHOULD not contain a federated query (SERVICE). Implementations that do not permit
+  SERVICE MUST report a failure", read as a must. It was already refused in constraints,
+  validators and rules; a `sh:SPARQLFunction` body (with or without parameters), a
+  `sh:SPARQLTarget`, a `sh:SPARQLTargetType` and a `sh:select` / `sh:sparqlExpr` node
+  expression used to run it. The refusal is `ShapesError::Prebinding`, raised where the
+  query runs; a declaration nothing runs is listed by `lint` under `unexecuted`. Appendix
+  A's MUSTs now apply where they were not checked: to a `sh:SPARQLTargetType` a shape
+  instantiates (its parameters are pre-bound) and to a `sh:select` node expression a shape
+  reaches (`$this` is pre-bound, §6.1). A `sh:sparql` constraint's pre-binding violation is
+  now typed `ShapesError::Prebinding` too; it was `ShapesError::Invalid`.
+
+- **shapes, validate, cli, python, wasm, capi (BREAKING):** a shape whose `sh:target` is a
+  custom target PurRDF cannot compute — neither a `sh:SPARQLTarget` nor an instance of a
+  declared `sh:SPARQLTargetType` — is refused typed, `ShapesError::UnsupportedTarget`
+  (`UnsupportedTargetRefusal`: the shape, the target, the message). SHACL Advanced
+  Features says such an engine "SHOULD at least report a warning"; the refusal is stronger,
+  since a warning would sit beside a report about focus nodes nobody computed. The refusal
+  used to be the untyped `ShapesError::Invalid`. Hosts report it as they report the other
+  shapes-graph refusals (Python `ValueError`, WebAssembly `Error`, C
+  `PURRDF_STATUS_PARSE_ERROR`, CLI exit `1`).
+
+- **shapes, validate, cli, python, wasm, capi (BREAKING for C):** the shapes-graph IRI
+  reaches the RULES entry points on every host, as it already reached validation.
+  SHACL-AF SPARQL rules run in the shapes-graph context: a `sh:SPARQLRule`'s
+  `$shapesGraph` is pre-bound to the named IRI and `GRAPH $shapesGraph { … }` reads the
+  shapes graph; with none named it is an ordinary variable. `purrdf rules
+  --shapes-graph IRI`; Python `shapes_graph=` on `shapes.apply_rules` and
+  `shapes.entail`; WebAssembly a trailing `shapesGraph` on `shaclApplyRules` and
+  `shaclEntail`; C a nullable `shapes_graph_iri` after `shapes_base_iri` on
+  `purrdf_shacl_apply_rules` and `purrdf_shacl_entail_to_ntriples` (riding the
+  unshipped 0.8.0 ABI bump); Rust `RulesRequest::shapes_graph`,
+  `entail_to_ntriples_string_with_shapes_graph` and
+  `engine::entail_graphs_with_shapes_graph`. A relative IRI resolves against the shapes
+  document's base. A SPARQL 1.2 RL rule set has no shapes graph, so an IRI named beside
+  one is refused (CLI exit `2`, `ValueError`, a thrown `Error`, `ParseError`).
+
+- **shapes (BREAKING):** a `sh:SPARQLTarget` may carry one `sh:ask`, which used to be
+  refused. SHACL Advanced Features §3.1: "SPARQL-based targets have at most one value for
+  the property sh:ask"; "A SHACL engine can then determine whether a given shape applies
+  to a given node by executing the ASK query with the variable this pre-bound to the
+  node." The SELECT still defines the target a whole validation enumerates; every path
+  that checks given candidates — `PreparedValidator::validate_focus_nodes` and
+  `validate_focus_node_ids` (the change path over a SPARQL target validates the whole
+  graph) — runs the ASK with `$this` pre-bound to the candidate, a node the data graph
+  does not hold included, and CONFIRMS its answer against the target's own SELECT
+  results: a node the two answer differently for is refused typed,
+  `ShapesError::SparqlTargetDisagreement` (the shape, both queries, the node, both
+  answers), rather than decided by the ASK alone. Both candidate methods now return
+  `ShapesError` instead of `String`. The ASK is checked at
+  load: an ASK query, meeting the pre-binding restrictions for `$this` (`SERVICE`
+  included); a second `sh:ask` is refused by the built-in cardinality check.
+  `Target::Sparql` gains `ask: Option<String>`; the prepared-product codec carries it,
+  so the product stage id changes and existing products must be rebuilt.
+
+- **shapes, validate, cli, python, wasm, capi:** an empty `sh:in` or `sh:xone` list is
+  a MANDATORY DIAGNOSTIC (maintainer decision). Appendix A's `in-minListLength` and
+  `xone-minListLength` ("Each such list SHOULD have at least one member") constrain the
+  document author: the shapes graph is well-formed, validation proceeds as the approved
+  W3C tests `core/node/in-002`, `in-003`, `xone-002` and `xone-003` require, and its
+  report states `sh:shapesGraphWellFormed true`. `shapes lint` gains a `diagnostics`
+  section, between `unexecuted` and `unanchored-imports`, that always lists each empty
+  list as `diagnostic in-minListLength|xone-minListLength SHAPE`, whether or not the load
+  succeeded; each line is a finding, so such a graph no longer lints clean.
+  `shacl-shacl.ttl`'s own `sh:minListLength` warning on the same list is listed marked
+  `diagnosed RULE` (`ShaclShaclResult::diagnosed`, Python key `diagnosed`) and is not
+  counted a second time.
+  `LintReport::diagnostics`, `lint::MandatoryDiagnostic`,
+  `lint::MANDATORY_DIAGNOSTIC_RULES`; Python `lint_shapes` gains the `diagnostics` key
+  (`rule`, `shape`); the CLI, WebAssembly and C carry the section in the rendered report.
+  Every lint report's text gains the `diagnostics N` line.
+
+- **shapes, validate, python, wasm, capi:** every validation report states
+  `sh:shapesGraphWellFormed` (SHACL 1.2 Core §6.7.1.4: a processor that checks the
+  shapes graph "SHOULD use the property sh:shapesGraphWellFormed to inform the consumer
+  of the validation report"). It is `true`, since an ill-formed shapes graph is refused
+  before validation; a shapes graph with an empty `sh:in` or `sh:xone` list is
+  well-formed (see the mandatory-diagnostic entry below).
+  `ValidationReport::shapes_graph_well_formed` (`None` for a report assembled by
+  `from_results`, which states nothing) and `with_shapes_graph_well_formed`; the SARIF
+  run property
+  `shaclShapesGraphWellFormed`; Python `ValidationReport.shapes_graph_well_formed` and
+  the `shapes.validate` dict key `shapes_graph_well_formed`. Report bytes change by the
+  one added triple: the first-party corpus expectations and the change-path golden
+  each gain exactly that line, and no other byte moves.
+
+- **shapes (BREAKING):** a node whose `sh:message` values repeat a language tag, or
+  hold more than one `xsd:string`, is ill-formed and refused as
+  `ShapesError::IllFormed`, rule `message-datatype` (`SPARQLConstraint-message-datatype`
+  on a SPARQL-based constraint): "A subject should neither have more than one value for
+  sh:message with the same language tag, nor multiple values with datatype xsd:string",
+  read as a must. Tags compare case-insensitively and a direction does not make two
+  values of one tag distinct; `rdf:HTML` values are not limited. Such a node used to
+  load, and its results carried every message.
+
+- **shapes, validate, cli, python, wasm, capi (BREAKING for C):** SHACL 1.2 Core
+  §6.3's `subClassOfInShapesGraph` ("SHACL processors SHOULD offer a parameter
+  subClassOfInShapesGraph"), on every host. When set, the shapes graph's
+  `rdfs:subClassOf` triples (its whole import closure's) are read, in addition to the
+  data graph's, wherever SHACL type decides class membership: `sh:targetClass`,
+  implicit class targets, `sh:class`, `sh:rootClass` and `shnex:instancesOf`. Only
+  class membership changes: the shapes graph's triples do not become data-graph
+  triples, and `rdf:type` is still read from the data graph alone. Off by default,
+  the specification's default. Rust:
+  `ValidationOptions::subclass_of_in_shapes_graph` /
+  `with_subclass_of_in_shapes_graph`; CLI: `purrdf validate
+  --subclass-of-in-shapes-graph` (document and `--shapes-product` routes); Python:
+  `subclass_of_in_shapes_graph=` on `shapes.validate` and `shapes.Shapes`;
+  WebAssembly: a trailing `subClassOfInShapesGraph` on `shaclValidateToSarif`; C:
+  `bool subclass_of_in_shapes_graph` between `import_count` and `out_buffer` on
+  `purrdf_shacl_validate_to_sarif` (incompatible; rides the unshipped `0.8.0` ABI
+  bump). A binding over a mutation snapshot keeps its change path.
+
+- **core, shapes, entail, validate, cli, python, wasm, capi (BREAKING):** an
+  `owl:imports` closure that holds two versions of one series — two graphs declaring
+  one IRI with different `owl:versionIRI` values — or a graph another declares
+  `owl:incompatibleWith` is refused, naming both graphs. SHACL 1.2 Core §1.3 makes
+  such a shapes graph ill-formed and §6.1 says the closure "SHOULD NOT" hold them; OWL
+  2 §3.4 states the same two conditions for an ontology. The kernel's closure walk
+  reports each pair (`ImportClosure::conflicts`, `VersionConflict`), SHACL refuses
+  with the typed import error kind `incompatible-import-versions`
+  (`ShapesImportError::IncompatibleVersions`) on every host, and entailment with
+  `EntailError::IncompatibleImports`. Such a closure used to be merged and used.
+
+- **shapes, validate, python, wasm, capi (BREAKING for C):** the shapes-graph IRI
+  that `purrdf validate --shapes-graph` names — the IRI SHACL-SPARQL's `$shapesGraph`
+  is pre-bound to, with the shapes graph exposed under it (SHACL 1.0 pre-binding,
+  which SHACL 1.2 removed and PurRDF keeps as a caller's choice) — reaches every host.
+  Python: `shapes_graph=` on `shapes.validate`, `shapes.Shapes` (carried into
+  `prepare()`, `PreparedShapes` and `to_product()`), `shapes.pack_product` and
+  `shapes.lint_shapes`. WebAssembly: a trailing `shapesGraph` on
+  `shaclValidateToSarif`, `shaclValidateChangesToSarif`, `shaclPackProduct` and
+  `shaclLintShapes`. C: a nullable `shapes_graph_iri` immediately after
+  `shapes_base_iri` on `purrdf_shacl_validate_to_sarif`,
+  `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_lint_shapes` and
+  `purrdf_shapes_product_encode` (incompatible; rides the unshipped `0.8.0` ABI
+  bump). Rust: `engine::parse_shapes_with_graph`,
+  `engine::validate_graphs_with_shapes_graph`, `engine::resolve_shapes_graph_iri`,
+  and `purrdf_validate::{validate_to_sarif_string_with_shapes_graph,
+  validate_changes_to_sarif_string_with_shapes_graph,
+  lint_shapes_ttl_with_shapes_graph, pack_shapes_product_with_shapes_graph}`. A
+  relative IRI resolves against the shapes document's base, as the command line
+  resolves it; one with no base is refused (`iri-relative-no-base`). Without it, W3C
+  SHACL 1.0 `sparql/pre-binding/shapesGraph-001` silently conformed on Python,
+  WebAssembly and C; named, every host reports its approved result, and unnamed,
+  every host reports the SHACL 1.2 ordinary-variable answer (conforms). A `Shapes`
+  parsed under a shapes-graph IRI is now exposed under it by `validate_dataset`,
+  `validate_projected_dataset`, `validate_projected_dataset_with_focus_filter`,
+  `PreparedShapes::bind_projected_dataset` and `bind_shared_dataset` too; they used
+  to validate it as if the IRI were absent, leaving `$shapesGraph` unbound. A `Shapes`
+  without one takes the same path it always did.
+
+- **shapes, validate, cli, python, wasm, capi:** a SPARQL 1.2 RL rule set can be
+  checked without being evaluated, on every host. `purrdf_shapes::srl::check(text,
+  base, imports, level)` applies the static checks up to a `CheckLevel` — `Syntax`
+  (the §7 grammar, for the rule set and every document its `IMPORTS` closure reads),
+  `WellFormed` (§4.2, imported rules included) or `Stratified` (§4.4, the default) —
+  resolving the closure from the same import table a rules run takes, reading no
+  base graph and running no rule, and returns a `CheckedRuleSet` (the combined rule
+  set, the imported IRIs, the strata, and the one-line `summary()` every host
+  reports) or the `SrlError` of the stage that refused. The hosts: `purrdf rules
+  --srl FILE --check[=syntax|well-formed|stratified]` (bare `--check` is
+  `stratified`; one summary line on stdout, exit 1 naming the stage for a refused
+  rule set, exit 2 for an unused `--import` pair and for the data, output, proof and
+  limit flags a check never consumes), Python `purrdf.shapes.check_rules(srl, *,
+  srl_base, imports, level)`, WebAssembly `shaclCheckRules(srl, srlBase?, importIris?,
+  importDocuments?, level?)` returning `ShaclRulesCheck`, and C
+  `purrdf_shacl_check_rules(srl, srl_base_iri, level, import_iris, import_documents,
+  import_count, out_summary, out_error)` with the `PurrdfSrlCheckLevel` discriminant
+  (riding the unshipped `0.8.0` ABI bump). `purrdf_validate::check_rules` and
+  `parse_check_level` are the shared boundary. Every host's SPARQL 1.2 RL rules run
+  now passes through the same check at `Stratified` before it evaluates, so a run
+  refuses exactly what a check refuses. The W3C SPARQL 1.2 RL harness grades every
+  syntax, well-formedness and stratification entry through `srl::check` — a positive
+  entry at the level its type asks about, a negative one at the full check by the
+  stage its type names — and a new CLI test drives every one of those entries, and
+  every evaluation entry's rule set, through the built `purrdf rules --check`; the
+  counts are unchanged (538 passed plus 6 non-canonical decimals). Fourteen positive
+  syntax entries are not stratifiable and one is not well formed, so bare `--check`
+  refuses exactly those fifteen, by a later stage, while `--check=syntax` accepts
+  them.
+
+- **core, shapes, validate, cli, python, wasm, capi (BREAKING):** a data graph's
+  `sh:shapesGraph` links are part of the shapes graph that validates it (SHACL 1.2
+  Core §6.4, whose SHOULD PurRDF reads as a MUST). A `sh:shapesGraph` whose subject is
+  the data graph's loaded IRI (the command line's `--base` or the data file's `file://`
+  retrieval IRI) or a `sh:DataGraph` node names a graph that is resolved through the
+  SAME import table as the shapes graph's `owl:imports` — a table entry, a graph the
+  shapes graph already declares, the `^owl:versionIRI` step, and the linked graph's
+  own `owl:imports` closure — and unioned into the shapes graph; a table entry only a
+  link names is reached, not refused as unreached. It was silently ignored. A
+  `sh:shapesGraph` on any other node is data, and the data graph's own `owl:imports`
+  stay unenacted (§6.2). `ShapesImportError` gains `UnresolvedLink`
+  (`unresolved-shapes-graph-link`, a link nothing resolves), `UnheldLink`
+  (`unheld-shapes-graph-link`) and `InvalidLink` (`invalid-shapes-graph-link`, a link
+  value that is not an IRI); every host carries the new kinds in its existing typed
+  import refusal, and the command line names the `--import IRI=FILE` pair that
+  resolves a link. New API: `purrdf_shapes::imports::{data_graph_links,
+  check_data_graph_links, SH_SHAPES_GRAPH_LINK}`, `ShapesImports::link_data_graph`
+  and `links`, `ResolvedShapesGraph::included`, `ParseProvenance::included_graphs`,
+  and `purrdf_core::imports::{ImportMap::closure_with_links, ImportMap::loaded,
+  declared_import_targets}`. The text entry points (`validate_graphs_with_options`,
+  `validate_graphs_with_config`, `validate_dataset_graphs`, the `purrdf-validate`
+  SARIF and change-path boundaries every binding calls, and `purrdf validate
+  --shapes`) fold the links in before parsing the shapes graph, so an empty shapes
+  document validates against the linked graphs alone. A shapes graph built before
+  the data graph was known — a `Shapes`, a `PreparedShapes`, a prepared product —
+  cannot take a graph in: every validation and every binding checks that each link
+  is one it already holds (its loaded IRI, a graph its closure or links folded in, or
+  an anchor or version IRI it declares) and refuses any other as
+  `ShapesError::Imports(UnheldLink)`, typed on every host. A prepared product records
+  the IRIs of every graph its shapes graph absorbed by name in its identity section,
+  so a product packed with a table-supplied document that declares no ontology header
+  of its own holds a link to that document after `admit` and after `rebuild` alike;
+  the preparation stage id now digests that preamble carrier (`ParseProvenance`) as
+  well as the model, and moved to
+  `b4c4a547c28b743e110bb68a8b766a9abfdeb4cbe37718443e69637c7620c8f5`, so every earlier
+  product is refused at `admit` and re-derived by `rebuild` (holding only what its
+  merged dataset declares); the fixture product was regenerated with its generator.
+  The recorded set is bound by the product identity as a thirteenth component,
+  `included-graphs` (row 12, after `parse-configuration`), refused under a new
+  `ProductDimension::IncludedGraphs` (`included-graphs`, between
+  `parse-configuration` and `unsupported-capability`; `ProductDimension::ALL` grows to
+  22 and the later dimensions' ordinals move by one), so two products over one merged
+  dataset that recorded different sets no longer share an identity. The parse base is
+  recorded as the base, not repeated in the set. Every host's dimension list names it
+  (and `parse-configuration`, which the C, Python and WebAssembly lists had omitted);
+  the fixture product is 4,728 bytes and a restore's admit allocations are re-pinned
+  from 291 to 304, attributed in `change_path_alloc`.
+  **Breaking API:** the engine's validation entry points return the typed
+  `ShapesError` instead of `String` — `validate_with`, `validate_with_focus_filter`,
+  `validate_with_governors`, `validate_dataset`, `validate_dataset_with_governors`,
+  `validate_dataset_with_shapes_graph`, `validate_projected_dataset`,
+  `validate_projected_dataset_with_focus_filter`,
+  `validate_projected_dataset_with_shapes_graph`, every `PreparedShapes::bind*`, and
+  `PreparedValidator::new`, `from_dataset`, `from_projected_dataset` and
+  `from_projected_dataset_with_shapes_graph`. A hard validation failure is
+  `ShapesError::Invalid` carrying the old message, and `String: From<ShapesError>`
+  keeps `?` working in string-error callers. A change that adds or retracts a link
+  changes the shapes graph, so the incremental change path reports
+  `ChangeScope::Everything` and validates in full. Python's
+  `Shapes.validate_against_dataset` now returns a `Result`. `purrdf validate
+  --changes` reads its change documents before the shapes graph, because the mutated
+  graph's links decide what the shapes graph is. The change expansion's fixed
+  allocation cost rises by one (the `sh:shapesGraph` lookup), re-pinned in
+  `change_path_alloc` and `sparql_path_alloc`; binding a native dataset costs nothing
+  more.
+
+- **datalog, shapes, entail, validate, cli, python, wasm, capi:** the
+  stored-fact and join-step limits are the caller's. `EvalOptions` gains
+  `with_max_stored_facts` and `with_max_join_steps`; `RuleOptions` and
+  `InferOptions` gain the same two; `chase::chase_with` and
+  `purrdf_entail::materialize_with` run under the caller's options. Each host
+  takes both limits for rules and for regime materialization: `--max-stored-facts`
+  and `--max-join-steps` on `purrdf rules`, `purrdf reason` and `purrdf convert
+  --entailment`; `max_stored_facts=` and `max_join_steps=` on Python's
+  `shapes.apply_rules`, `entail.materialize` and `entail.materialize_nt`;
+  `maxStoredFacts` and `maxJoinSteps` on WebAssembly's `shaclApplyRules` and
+  `entailMaterialize`; and `max_stored_facts` / `max_join_steps` on C's
+  `purrdf_shacl_apply_rules` and `purrdf_entail_materialize_to_nquads`. Each
+  stored-fact default is sized for the target: 131,072 facts on `wasm32` (the
+  value every target used while the limit was fixed) and 4,194,304 natively
+  (`DEFAULT_MAX_STORED_FACTS`, chosen from the target architecture at compile
+  time). The join-step default stays 1,048,576 on every target
+  (`DEFAULT_MAX_JOIN_STEPS`): a body's candidates are materialised before the
+  check, and a Cartesian body over 20,000 nodes allocated about 20 GB, still
+  unrefused, under 268,435,456 where the default refuses it in about 2 s at under
+  half a gigabyte. A program that needs
+  more work states it — the non-linear closure of a 1,000-node chain completes
+  with `--max-join-steps` raised. A single rule copying a predicate over 70,000
+  triples, and the transitive closure of a thousand-node chain through SHACL
+  rules or SPARQL 1.2 RL, now complete natively; both were refused. A run past
+  either limit is refused naming the limit, the observed and permitted numbers,
+  and the knob that raises it in the calling host's spelling (`LimitKnobs`,
+  `RulesHost`, `RegimeHost`, `MaterializeLimits`); a run inside the limits
+  returns exactly what larger limits would. The term-arena ceiling
+  (`MAX_TERM_ARENA_BYTES`) is unchanged.
+- **datalog:** a semi-naive round skips a decomposition whose anchoring atom
+  gained no row since the last round, instead of enumerating every atom planned
+  before it and then matching nothing. A linear recursion — `connected(x, z) :-
+  connected(x, y), link(y, z)` — no longer rescans its whole closure every round:
+  the closure of a 1,000-edge chain enumerates under 1,048,576 join steps where it
+  passed 268,435,456. Solutions, derivations and every other budget coordinate are
+  unchanged; join-step counts fall (OWL-RL join steps across the entailment golden
+  corpus: 285,412 to 244,208). The `srl_closure` bench gains `infer_linear`, and
+  `rules_divergence` gains `complete/copy` and `complete/closure`.
+
+- **datalog, shapes, validate, cli, python, wasm, capi:** a guarded rule set
+  that keeps generating new terms is stopped by two limits, each the caller's.
+  The term-generating round limit defaults to 16,384 rounds
+  (`DEFAULT_MAX_TERM_GENERATING_ROUNDS`), so a 10,000-step countdown completes
+  and a counter with no bound is refused in well under a second. The new
+  generated-term budget bounds the terms inferred beyond the input's and
+  defaults to `max(65,536, 4 × N)` for `N` distinct input terms, so a rule set
+  whose terms double every iteration is refused within a few iterations. A run
+  past either limit is refused as `EvalError::TermLimitExceeded`,
+  `RulesError::LimitExceeded` or `SrlError::LimitExceeded`, carrying a
+  `RuleLimitExceeded`. The error names the limit, the observed numbers and the
+  rules that generated a term last, and never calls the rule set divergent.
+  It names the knob that raises the limit in the calling host's terms
+  (`RuleOptions::with_limit_knobs`, `LimitKnobs`, `RulesRequest::host`):
+  `--max-term-generating-rounds` and the new `--max-generated-terms` flag;
+  Python `apply_rules(max_generated_terms=...)`; WebAssembly
+  `shaclApplyRules(..., maxGeneratedTerms)`; and C
+  `purrdf_shacl_apply_rules(..., max_term_generating_rounds,
+  max_generated_terms, ...)`. The C parameter is new, so it is an ABI change.
+  `EvalOptions`, `RuleOptions` and `InferOptions` gain
+  `with_max_generated_terms`, and `srl::evaluate` returns `RulesError`.
+- **shapes:** a global SPARQL rule whose CONSTRUCT is a conjunctive pattern
+  (triple patterns, `FILTER` and `BIND`) runs as rule elements, evaluated
+  semi-naively. It infers the same triples as the producer did, but an
+  iteration now costs what is new instead of a pass over the whole graph. A
+  10,000-step countdown takes well under a second instead of hitting the
+  fixed join-step ceiling. `--explain` lists the premises of such a rule's
+  inferences.
+- **shapes:** a shapes graph in which a shape reaches the SHACL JavaScript
+  Extensions is refused with the typed `ShapesError::ShaclJs(ShaclJsRefusal)`,
+  which names the node and the SHACL-JS term, instead of `ShapesError::Invalid`.
+  A shape reaches SHACL-JS through `sh:js` or a SHACL-JS type on the shape, a
+  `sh:JSTarget` or an instance of a `sh:JSTargetType` as its `sh:target`, a
+  `sh:JSRule` among its rules, and a call to a `sh:JSFunction` from a node
+  expression or from SPARQL the shape runs, directly or through a
+  `sh:SPARQLFunction`. SHACL-JS is a 2017 Working Group Note, not SHACL 1.2. A
+  shapes graph that only declares `sh:JSLibrary`s and `sh:JSFunction`s nothing
+  calls now loads with those declarations inert. `ShapesError` gains the
+  variant, so an exhaustive match on it must name it; `purrdf-validate`
+  re-exports `ShaclJsRefusal`. The Python, WebAssembly, C and command-line
+  hosts report it with the same message as before.
+- **BREAKING** **shapes, validate, cli, python, wasm, capi:** a SHACL-JS
+  `sh:JSValidator` attached to a constraint component fails the load as
+  `ShapesError::IllFormed`, naming the syntax rule, on built-in and custom
+  components alike and whether or not a shape uses the component. SHACL 1.2
+  SPARQL Extensions: "The values of sh:validator must be ASK-based validators"
+  (`validator-class`), and the values of `sh:nodeValidator` and
+  `sh:propertyValidator` "must be SELECT-based validators"
+  (`nodeValidator-class`, `propertyValidator-class`). A `sh:JSValidator` is
+  neither, and Core's ill-formed SHOULD is read as a MUST. Such a graph used to
+  load, and `shapes lint` reported it clean. The class rules also judge a value
+  of those properties whose subject is not a component the registry reads (an
+  untyped owner, a blank-node component). `ValidatorLanguage` has no
+  `JavaScript` variant, and no host's lint `validators` section prints a
+  `javascript` label.
+- **sparql-algebra:** `Query::custom_function_calls` lists the IRI of every
+  extension function a query calls, anywhere in its algebra.
+- **shapes:** the JSON Schema compiler projects the SHACL 1.2 list components
+  onto a list value's `@list` array: `sh:minListLength` as `minItems`,
+  `sh:maxListLength` as `maxItems`, `sh:uniqueMembers true` as `uniqueItems`,
+  and `sh:memberShape` as `items`, compiled as one value's schema. Each
+  component requires a list, and on a node shape they judge the focus node's
+  `rdf:first` and `rdf:rest`. Lexical constraints judge an IRI's `@id`, the
+  constants `rdf:nil`, `true` and `false`, and a bare integer's numeral length.
+  Numeric datatypes are told apart over their lexical and value spaces. A range
+  bound compares a typed integer-family or decimal literal by an order pattern
+  on its lexical form, with SPARQL's numeric promotion against a double or
+  float bound. `rdf:langString` and `rdf:dirLangString` are told apart. A node
+  shape's node kind, `sh:in`, `sh:hasValue` and lexical constraints judge the
+  focus node's `@id`. What remains recorded is what no JSON Schema keyword
+  states, each case with its reason: a list kept as linked nodes, a pattern
+  over a bare integer, a bound over double or float lexical forms, and a node
+  shape's class membership. The Pydantic emitter enforces
+  `uniqueItems`. LinkML carries `@list` and `@direction`, and its `any_of`
+  branches keep to the anonymous-slot-expression fields.
+- **shapes:** the GraphQL emitter carries a JSON Schema `anyOf` whose
+  alternatives every value selects exactly one of (by JSON kind, or among
+  object alternatives by a required key no other declares) as a `@oneOf` input
+  object and an output union, instead of the fallback scalar. An alternative
+  that is not an object type is a union member through a wrapper type with a
+  `value` field. A SHACL list value (a node reference or a `@list` object) and
+  its `sh:memberShape` members are therefore typed. `GraphqlNameMap` gains
+  `unions` (so a struct literal of it must name the field), and
+  `GraphqlPackage` gains `decode_input` and `encode_output` beside
+  `encode_input` and `decode_output`. The GraphQL oracle serializes every valid
+  value through its output type with GraphQL.js.
+- **shapes:** the TypeScript emitter states array length bounds exactly at any
+  size, with no tuple-expansion cap. Prefix positions are tuple elements.
+  Lengths beyond them are element properties (`minItems: m` is a required
+  `"m-1"`, `maxItems: n` an optional `never` `"n"`), which tuple-like
+  contextual typing makes exact. `uniqueItems` over finitely many scalar items
+  is enumerated by a generated `JsonDistinct` helper up to the compiler's
+  instantiation-depth and union limits. Numeric keywords over a finite
+  `const`/`enum` leave out the failing numbers. The
+  `array-cardinality-validation-widened` and `tuple-array-validation-widened`
+  codes leave the `json-schema` → `typescript-7.0` profile. The TypeScript
+  oracle compiles the facts the remaining numeric and uniqueness losses rest
+  on, and its scratch directory moves beside the build output.
+- **shapes:** the JSON Schema compiler projects a temporal range bound
+  (`sh:minInclusive` and the rest over `xsd:dateTime`, `xsd:date` or
+  `xsd:time`) exactly, as order and lexical patterns on the literal's lexical
+  form over the XSD timeline. A timezone makes the value an instant, and
+  `24:00:00` is the next day's midnight. A zoned value and a local bound, or
+  the reverse, compare only beyond ±14:00, and are an incomparable violation
+  within it. The leap-year rule, the signed 64-bit year range and 18 fractional
+  second digits are held as the validator parses them, and values of any other
+  datatype are rejected. The validator trims a temporal lexical form by
+  `whiteSpace` `collapse`, as it trims a numeric one. The generated Pydantic
+  package evaluates a JSON Schema `not` at run time over the raw input for a
+  closed keyword table, `$ref` included. So temporal bounds, typed numeric
+  bounds and the other negations the compiler writes are enforced, not only
+  recorded. A pattern conjunct restates `"type": "string"`, so LinkML reads it
+  with its string carrier. Every emitter oracle runs a temporal fixture over
+  projected instances.
+- **shapes:** a range bound survives the SHACL → JSON Schema → SHACL round
+  trip exactly. This covers integer-family, decimal, double and float bounds,
+  and bounds over `xsd:dateTime`, `xsd:date` and `xsd:time`, with or without
+  `sh:datatype`. Each rejection the compiler writes from a bound names the
+  bound in its `$comment`: the facet's SHACL term and the bound as an N-Triples
+  term. The importer believes the comment only when the rejections the bound
+  projects to, narrowed by the value's datatype, are exactly the ones carrying
+  it, and when the `minimum` / `maximum` beside a numeric bound are the
+  integers it admits. `sh:maxExclusive 150` therefore reads back as itself, not
+  as `sh:maxInclusive 149`. A decimal or temporal bound is no longer recorded as
+  `schema-applicator-dropped`. A datatype's value schema with bounds folded into
+  it keeps its `sh:datatype` too.
+- **validate:** every host names an ANONYMOUS node expression. A
+  `purrdf_validate::ExprSelector` names the expression in one of three ways:
+  the node itself (an IRI or `_:label`, as before); a walk from a named node
+  along one or more predicates, each step reaching exactly one value; or an
+  inline Turtle document. The Turtle document is read under the shapes
+  document's prefixes and base and merged into the shapes graph with its blank
+  nodes kept apart, and its one root blank node is the expression. A step
+  reaching no value or several, and a document with no root or several, are
+  typed `ExprSelectorError`s naming the count. `NodeExprRequest::expr` is now an
+  `ExprSelector`. The CLI's `node-expr` gains `--expr-at` / `--expr-via`,
+  `--expr-turtle` and `--expr-turtle-file` beside `--expr`, exactly one of them
+  required. Python's `eval_node_expr` takes `expr=None` with `expr_at`,
+  `expr_via` or `expr_turtle`. WASM's `shaclEvalNodeExpr` takes an optional
+  `expr` and trailing `exprAt`, `exprVia` and `exprTurtle`. The C ABI's
+  `purrdf_shacl_eval_node_expr` gains `expr_at`, `expr_via`, `expr_via_count`
+  and `expr_turtle` between `expr` and `focus`, with `expr` nullable. All 143
+  W3C SHACL 1.2 `sht:EvalNodeExpr` tests run through the `purrdf node-expr`
+  binary, each entry's expression named by the walk `mf:action` then
+  `sht:nodeExpr`. The six entries whose approved result spells a computed
+  decimal non-canonically are graded by the same table the library harness
+  applies.
+- **core:** `purrdf_core::xsd_regex::to_ecma_262` writes the `i` flag into the
+  pattern as XPath case variants (F&O 3.1 section 5.6.2), instead of refusing
+  it: each normal character and character range gains its variants, and every
+  escape is left unaffected.
 - **core:** `purrdf_core::distance`, the binary64 distance arithmetic that every
   ranked-retrieval surface computes with. The module holds:
   - `Scalar`, `Bound` and `Bounded`, which moved here from
@@ -447,25 +1047,32 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   answer where `explainQuery` refuses it for want of a source, and it yields and stops
   on its signal while it measures. SHACL evaluates SPARQL too, so the SHACL
   functions have twins: `shaclValidateToSarifAsync`, `shaclValidateChangesToSarifAsync`,
-  `shaclEntailAsync`, `shaclProductValidateToSarifAsync`,
-  `shaclProductValidateToSarifRebuildAsync`, `shaclProductValidateToSarifExpectingAsync`
-  and `shaclProductValidateToSarifRebuildExpectingAsync`. Each takes its synchronous
+  `shaclEntailAsync`, `shaclApplyRulesAsync`, `shaclEvalNodeExprAsync`,
+  `shaclProductValidateToSarifAsync`, `shaclProductValidateToSarifRebuildAsync`,
+  `shaclProductValidateToSarifExpectingAsync` and
+  `shaclProductValidateToSarifRebuildExpectingAsync`. Each takes its synchronous
   twin's arguments and then the host options, and returns exactly what the synchronous
-  twin returns; a refused product rejects with the same `ShaclProductRefusal`. A
-  `sh:SPARQLTarget` that uses `SERVICE` is answered by the host where the synchronous
-  entry refuses it for want of a source, and the signal is polled between focus nodes
-  as well as inside queries, so a validation with no SPARQL in it still yields and
-  stops. `queryGovernedNegotiatedAsync` answers a governed
+  twin returns; a refused product rejects with the same `ShaclProductRefusal`, and an
+  `owl:imports` closure not in hand with the same `ShaclImportError`. SHACL-SPARQL
+  admits no `SERVICE` in any query, on either lane, so a validation never calls the
+  host's handlers. The
+  signal is polled between focus nodes as well as inside queries, so a validation with
+  no SPARQL in it still yields and stops. `queryGovernedNegotiatedAsync` answers a governed
   query as a document in the format an HTTP `Accept` header negotiates. Each twin
   runs the same evaluator over a snapshot of the dataset, as a job on its own stack
-  region that suspends through WebAssembly JavaScript Promise Integration (JSPI)
+  region, exactly as large as the module's own shadow stack (1 MiB in the shipped
+  module), that suspends through WebAssembly JavaScript Promise Integration (JSPI)
   while the host answers a `SERVICE` or `LOAD`, and resolves to its synchronous
   twin's result shape. The options are:
   - `resolveService` and `resolveLoad`, the host's handlers. A handler answers with
-    data or with a typed `{ kind: "transport" }` or `{ kind: "denied" }` failure.
-    Either fails the request; under `SILENT` either is the join identity, and
-    `evidence.async.silenced` records it. A handler that throws has faulted, and the
-    fault fails the job even under `SILENT`;
+    data or with a typed `{ kind: "transport" }` or `{ kind: "denied" }` failure. A
+    handler that throws, rejects, answers with a value the protocol does not define, or
+    names a failure kind it does not define fails the one invocation it was answering
+    as `{ kind: "fault", message }`. Any failure fails the request — a fault with
+    `native-sparql-host-fault` or `native-sparql-load-fault`, its message carrying the
+    handler's words; under `SILENT` it is the join identity (`SERVICE`) or loads nothing
+    (`LOAD`), and `evidence.async.silenced` records it. A job's own fault is only a
+    broken delivery protocol or a stack region its frames overran;
   - `catalog`, a `ServiceCatalog` (deny by default, one profile per endpoint, an
     optional fallback) that authorizes each `SERVICE` request, each `LOAD` source and
     each location a `LOAD` is redirected to before the handler is called, and bounds
@@ -477,30 +1084,43 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     event loop one turn per that many governor polls, counted rather than timed.
     Every turn is one `setTimeout(…, 0)` task, on every host: a timer task queues
     behind the requests, timers and network responses already waiting, so each of
-    them runs between a job's turns;
-  - `stackBytes` (default 2 MiB, at least 524 288), the job's stack region. It
-    sizes the shadow stack only: V8 gives a job's suspendable call stack the same
-    size as the synchronous lane's, so the host-stack budget (see Fixed) binds at
-    the same depth on both lanes and on every region.
+    them runs between a job's turns. `globalThis.setTimeout` is bound once when the
+    runtime module loads; nothing is chosen per host.
+
+  No option sizes a job's stack region: with equal stacks the two lanes run out of
+  stack at the same depth, and a stack refusal is the evaluator's own typed error,
+  word for word the same on both. `asyncStackRegionBytes()` reads the region's size
+  off the module's layout. One canary word at the region's base is read before every
+  suspension and when the run returns, and a job whose frames overwrote it fails with
+  a fault naming its region. The options each operation accepts are validated in Rust
+  (`AsyncJobOptions.fromJs`), and an unknown option is refused.
 
   One asynchronous update of a dataset may be in flight at a time — another begun
   meanwhile is refused with `native-sparql-update-in-flight` — and an update commits
   only if the dataset was not mutated while it ran; `Dataset.id` and
   `Dataset.generation` expose the identity and mutation count that check reads. A
   `LOAD` redirect is followed by the job itself (`{ kind: "redirect", location }`),
-  re-authorized against the catalog at every hop, up to five hops. A job answers a
+  re-authorized against the catalog at every hop, up to five hops; `resolveLoad`
+  receives each hop's `accept`, `userAgent`, `headers` and `timeoutMs`. Every effect
+  names when it is abandoned (`abandonAfterMs`: its request's timeout or the deadline,
+  whichever is sooner), and a profile `timeoutMs` past 2 147 483 647 is refused. A
+  `SERVICE` effect says whether it is `cacheable`. A job answers a
   `SERVICE` request it repeats from its own memo when the first answer was rows, and
   concurrent jobs share one host call for the same request when the joining job's
   deadline falls no later than the call's. Every error a twin rejects with carries
   its stable code as `error.code`. Governed outcomes and twin errors carry
   `evidence.async` (polls, yields, effects, time waited per effect kind,
   freeze/evaluate/serialize time, stack high-water mark).
-  `hasAsyncQueries()` reports JSPI support; without it every twin rejects before
-  touching wasm and the synchronous API is unchanged. JSPI is on by default in
+  `hasAsyncQueries()` reports whether the lane can run: JSPI and `setTimeout` exist
+  and the module's shadow stack is laid out stack-first. Without them every twin
+  rejects before touching wasm, naming what is missing, and the synchronous API is
+  unchanged. JSPI is on by default in
   Chrome and Edge 137+, Firefox 139+, Safari 27, Node 24.20+ and Cloudflare
   Workers. `configureAsync({ maxConcurrentJobs })` bounds the jobs in flight
-  (default 16). A job that overruns its region's guard zone poisons the instance,
-  and every later asynchronous call refuses. `SparqlProtocolRequest` reads a SPARQL
+  (default 16). `Dataset.queryAsync` takes `queryRawAsync`'s options. The synchronous
+  methods run the same operation implementation as their twins with no source: an
+  ungoverned one on the engine's ungoverned entry, and a governed one under exactly
+  the governors its caller named. `SparqlProtocolRequest` reads a SPARQL
   1.1 Protocol request through the Rust `protocol` module. `ready()` accepts a
   compiled `WebAssembly.Module`, and the package exports its `.wasm` file for hosts
   that import it.
@@ -539,7 +1159,10 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
     resolver reaches (`native-sparql-service-unconfigured`,
     `native-sparql-load-no-resolver`), and a host fault or an exception no code
     classifies (`InternalError`) are a 500 with a fixed `detail` and a
-    `correlationId`, and the real error goes to `onInternalError`. Every other
+    `correlationId`, and the real error goes to `onInternalError`. A `SILENT` clause
+    over a throwing handler is answered with the clause's own answer (`200`, or `204`
+    for an update), and the handler's error still goes to `onInternalError` under a
+    correlation id. Every other
     evaluation failure is a 500 whose `code` is the engine's code, never a JavaScript
     error class name.
   `maxRemoteRequests` bounds the subrequests a request makes, because every
@@ -576,7 +1199,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   and `RemoteError::StackExhausted` report a request too deep for the stack that
   evaluates it; on `wasm32`, `EvalError::HostStackExhausted`
   (`native-sparql-host-stack-exhausted`) and `RemoteError::HostStackExhausted` report
-  one past the budget kept under the JavaScript engine's call stack; see Fixed. `NativeSparqlEngine::explain_query_with_stop_signal`
+  one past the budget kept under the JavaScript engine's call stack; see Fixed. A host
+  source's handler that faulted is `RemoteError::HostFault { endpoint, message }` for a
+  `SERVICE` source and `LoadError::Fault` for a `LOAD` source; a `SERVICE` without
+  `SILENT` then raises `EvalError::ServiceHostFault`, whose code is
+  `EvalError::HOST_FAULT_CODE` (`native-sparql-host-fault`), and `FailureCode::from`
+  maps both to `FailureCode::HostFault`, so a protocol boundary answers it as the
+  host's fault. `NativeSparqlEngine::explain_query_with_stop_signal`
   explains a query with a host stop signal polled by the measuring run, which is
   still metered and never bounded; a signal that fires is reported on the
   explanation's evidence as the stop it was.
@@ -622,23 +1251,256 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   guarantees properties of the wasm module itself. It exports the shadow-stack pointer
   as `purrdf_stack_pointer`; routes every call of the suspending import through an
   injected `$suspend` that parks the job on the idle pointer and restores the job's own
-  pointer when the import returns; wraps `purrdf_jspi_run`, which now takes the region
-  top as its last argument and returns with the idle pointer restored; and puts every
+  pointer when the import returns; wraps `purrdf_jspi_run`, which takes the region top
+  as its last argument and returns with the idle pointer restored; and puts every
   exported function behind a poison gate whose `WebAssembly.Global`s are exported
   (`purrdf_idle`, `purrdf_poisoned`, `purrdf_active`, `purrdf_parked`,
   `purrdf_outbound`). The JavaScript runtime passes the region top, reads those globals
-  and never moves the stack pointer; `scripts/bind-wasm-glue.py` and
-  `scripts/check-wasm-jspi-frame.py`, which rewrote the wasm-bindgen glue and text-checked
-  the frame function, are deleted. A JavaScript exception thrown through wasm frames now
-  poisons the instance as a trap does; the trapping call throws the trap itself, every
-  later synchronous entry traps at the gate, and the asynchronous twins and `ready()`
-  reject with the poison error. The release exports behind `free()`,
+  and never moves the stack pointer. A trap, a Rust panic, or a JavaScript exception
+  thrown through wasm frames poisons the instance: the failing call throws its own
+  error, every later synchronous entry traps at the gate, and the asynchronous twins
+  and `ready()` reject with the poison error. The release exports behind `free()`,
   `[Symbol.dispose]()` and the glue's finalization registries have an inert gate: on a
   poisoned instance they return without entering it, releasing nothing (the instance's
   memory is abandoned whole), so a finalizer never throws where nothing can catch it. A
   job started from inside a synchronous sink callback is counted by the import's
-  trampoline and runs as before.
-  The pack checks now fail when the tarball lacks a path `package.json` promises.
+  trampoline and runs.
+  The pack checks fail when the tarball lacks a path `package.json` promises.
+
+- **shapes:** SHACL 1.2 Core is complete: every constraint component the SHACL 1.2
+  vocabulary declares is evaluated natively. New are the list components
+  `sh:minListLength`, `sh:maxListLength`, `sh:uniqueMembers` and `sh:memberShape`,
+  whose failing or duplicate members are reported as `sh:detail` results; a SHACL
+  list as the value of `sh:class`, `sh:datatype` and `sh:nodeKind` (a disjunction),
+  and `sh:TripleTerm` as a node kind; `sh:singleLine`; `sh:rootClass`;
+  `sh:someValue`; `sh:subsetOf` and property-pair components over any SHACL property
+  path; `sh:uniqueValuesFor`, resolved once per dataset binding and grouped by exact
+  term tuple; and `sh:closed sh:ByTypes`, evaluated by the Core 7.9.1 algorithm over
+  a shapes-graph-wide index built once at load. `Constraint` gains `MinListLength`,
+  `MaxListLength`, `UniqueMembers`, `MemberShape`, `SingleLine`, `RootClass`,
+  `SomeValue`, `SubsetOf` and `UniqueValuesFor`; `ClosedMode` and `ClosedTypeIndex`
+  are new, and `NodeKindValue` gains `TripleTerm`.
+
+- **shapes:** the SHACL 1.2 targets. An implicit class target applies to a shape that
+  is also a SHACL instance of `rdfs:Class`, directly or through `rdfs:subClassOf`,
+  and to every `sh:ShapeClass`; a data-graph node with `sh:shape s` is a focus node
+  of `s`; `sh:targetWhere` targets every node of the data graph that conforms to the
+  where-shape, triple terms included; and a node-expression `sh:targetNode` is
+  evaluated with the shape as its focus node. `Target` gains `NodeExpression` and
+  `Where`.
+
+- **shapes:** computed values. A property shape's value nodes are those of its path,
+  then the outputs of its `sh:values` node expression, then, only while the set is
+  still empty, those of `sh:defaultValue`, each evaluated at the focus node
+  (`PropertyShape::values`, `PropertyShape::default_value`). The rules engine derives
+  the same values through `sh:expectedPredicate` (SHACL 1.2 Inference Rules 3.8).
+
+- **shapes:** per-constraint reifier annotations. A reifier of an asserted constraint
+  triple in the shapes graph may carry `sh:deactivated`, `sh:severity` or
+  `sh:message` for that one constraint; severity and message resolve reifier first,
+  then the constraint node, then the shape, and reifiers or statements that disagree
+  are refused at load (`ConstraintAnnotation`, `AnnotatedConstraint`,
+  `Shape::constraint_annotations`, `PropertyShape::constraint_annotations`).
+
+- **shapes:** the `sh:Debug` and `sh:Trace` severities and the conformance-disallow
+  set. `engine::ValidationOptions` (`#[non_exhaustive]`) carries
+  `conformance_disallows`, a `report::ConformanceDisallows` that defaults to exactly
+  `sh:Violation`, `sh:Warning` and `sh:Info`. A report conforms unless a result has a
+  disallowed severity, every nested conformance check (`sh:node`, `sh:not`, the
+  logical and qualified components, `sh:someValue`, `sh:memberShape`,
+  `sh:reifierShape`, `filterShape`) uses the same set, and a non-default set is
+  echoed as `sh:conformanceDisallows` triples. `ValidationReport::from_results`
+  builds a report judged under a set, and `ValidationResult::details` carries
+  `sh:detail` results.
+
+- **shapes:** SHACL 1.2 Inference Rules, run on `purrdf-datalog`. `sh:layer` defines
+  the strata and the rules of one `sh:order` run concurrently; `sh:runOnce`, global
+  rules, `sh:RulesGraph`, rule sets with `sh:hasRule` and `sh:includesRuleSet`,
+  SPARQL rule templates (a missing required parameter fails), temporary triples,
+  `sh:expectedPredicate` derived triples, `sh:ruleProcessor` (a value the host has
+  not registered fails) and `sh:entailment sh:RulesEntailment`, which runs the rules
+  before validation. `infer` returns an `Inference` whose `Explanation`s name the
+  rule and premises behind each derived triple; `RuleOptions` carries the registered
+  rule processors, the rule-set selection and the term-generating round limit
+  (default 65,536). `Shapes::rules` holds a `RuleGraph` of global rules and
+  `RuleSetDeclaration`s.
+
+- **shapes:** the SPARQL 1.2 RL rule language. `purrdf_shapes::srl` parses every
+  production of the grammar over the `purrdf-sparql-algebra` lexer (data blocks,
+  `WHERE DATA`, `NOT` and `NOT DATA`, `SET`, triple terms, reifiers and annotations),
+  rejects the SPARQL built-ins the language leaves out, checks well-formedness (4.2),
+  computes rule dependency with unification through nested triple terms (4.3),
+  stratifies and names the rules of a cycle (4.4), resolves imports through a
+  caller-supplied resolver (4.5 and Appendix A), and evaluates (6.4, 6.5) on the same
+  rules engine as SHACL rules, with `parse`, `parse_and_check` and `infer` and one
+  typed error per stage. Grammar rule [2] is implemented as written.
+
+- **shapes:** SHACL-SPARQL result annotations. A `sh:resultAnnotation` on a
+  SPARQL-based constraint or on a validator of a SPARQL-based constraint component
+  copies the solution's binding of its `sh:annotationVarName` into every result as
+  a value of its `sh:annotationProperty`. With no `sh:annotationVarName`, the local
+  name of the property is the variable. When the variable is unbound, the
+  `sh:annotationValue` defaults are used. An ASK validator's annotations read `this`,
+  `value` and the component's parameters. `shapes::ResultAnnotation` is new,
+  `ValidationResult::annotations` carries the pairs, and the report graph, prepared
+  products, the SARIF result property `shaclResultAnnotations`
+  (`build::PROP_SHACL_RESULT_ANNOTATIONS`) and the Python result dicts'
+  `"annotations"` key all carry them. The shared W3C grader grades any annotation an
+  expected report states.
+
+- **shapes:** the SHACL Advanced Features 1.1 `sh:minus` node expression,
+  `[ sh:nodes N ; sh:minus M ]`, evaluates as SHACL 1.2's `shnex:remove`: the nodes
+  of N that are not in M, in N's order. `sh:nodes` is required.
+
+- **sparql-algebra:** `lexer::is_varname`, the grammar's `VARNAME` test, is public.
+
+- **shapes:** the spec symbol table. `purrdf_shapes::spec` reads what the vendored
+  SHACL 1.2 vocabularies declare (`declared`, `declared_terms`, `Vocabulary`) and
+  lists what the engine implements (`implemented`, with `ComponentRow`,
+  `FunctionRow`, `TargetRow` and their parameter rows); a test pins the difference at
+  zero. `spec::census` classifies every `sh:` and `shnex:` term the parser reads.
+  `function_resolution::FunctionResolution` says, per node-expression call site,
+  whether the function bound natively, to a custom body, to a SPARQL registration or
+  to a host extension.
+
+- **shapes:** `lint::lint` certifies a shapes graph: the loader's verdict, every
+  result of validating it against the vendored `shacl-shacl.ttl` (a result SHACL 1.2
+  Core makes well-formed is marked superseded), and the function resolution.
+  `free_expression::evaluate` evaluates one node expression of a shapes graph at a
+  focus node with scope bindings, as `evalExpr` defines.
+  `text_ingest::parse_turtle_document` returns a `TurtleDocument` carrying the
+  dataset, the document base and the prefixes the document declares.
+  `NodeExpr::sequence_contract` and `SequenceContract` state the order and
+  multiplicity each node-expression kind's evaluation clause defines.
+
+- **validate:** `shapes_tools`, the string-in, string-out layer every host calls:
+  `apply_rules_to_ntriples` (`RulesRequest`, `RulesOutcome`),
+  `eval_node_expr_to_terms` (`NodeExprRequest`), `lint_shapes_ttl` and
+  `parse_scope_binding`. SARIF gains `SarifOptions::validation`, the
+  `ValidationOptions` a log is judged under; `ResultKind` with `SarifResult::kind`
+  and `SarifResult::properties`; `shacl_kind`, which makes `sh:Debug` and `sh:Trace`
+  results informational with level `none`; run properties `shaclConforms` and
+  `shaclConformanceDisallows`; a result property `shaclMessages` listing every
+  message whenever the primary text alone would lose one; `sh:detail` results as
+  related locations; a curated rule summary for every component the SHACL 1.2
+  vocabulary declares; and specification links for the SHACL 1.2 components.
+
+- **cli:** `purrdf rules` applies a shapes graph's SHACL rules or a SPARQL 1.2 RL
+  rule set (`--srl`) and writes only the inferred triples, with `--explain[=PATH]`
+  for each derived triple's rule and premises and `--max-term-generating-rounds`;
+  `purrdf node-expr` evaluates one node expression (`--expr`, `--focus`, `--scope
+  NAME=TERM`); `purrdf shapes lint` reports the lint and exits 1 on any finding.
+  `purrdf validate` gains `--shapes-base IRI`, the shapes document's parse base, and
+  `--conformance-disallows IRI` (repeatable).
+
+- **python:** `purrdf.shapes.apply_rules`, `eval_node_expr` and `lint_shapes`;
+  `shapes.validate(..., conformance_disallows=[...])`, whose result dict carries the
+  `conformance_disallows` set it was judged against; `RdfFormat.RDF_XML`; and
+  `Store.load`, `Store.bulk_load` and `MutableDataset.load` return the document's
+  prefix list, which the rdflib-compatible `Graph` binds.
+
+- **wasm:** `shaclApplyRules` (returning `ShaclRulesInference`), `shaclEvalNodeExpr`,
+  `shaclLintShapes` (returning `ShaclLintReport`), and an optional
+  `conformanceDisallows` argument to `shaclValidateToSarif`, typed as
+  `ShaclSeverity[]`.
+
+- **capi:** `purrdf_shacl_apply_rules`, `purrdf_shacl_eval_node_expr` and
+  `purrdf_shacl_lint_shapes`, within the unreleased 0.8 ABI.
+
+- **datalog:** what the SHACL and SPARQL 1.2 RL frontends need. Guard literals
+  (`guard::Guard`, `GuardEvaluator`) evaluated through `purrdf-sparql-eval` by
+  `evaluate_guarded`; negated conjunctions (`Negation`); conjunctive heads; the
+  `schedule` module, which runs layered run-once and iterating rule groups with
+  per-layer hooks (`Schedule`, `Layer`, `compile_scheduled`, `evaluate_scheduled`,
+  `LayerHooks`); SPARQL 1.2 RL rule-level stratification that names the cycle of a
+  non-stratifiable set (`stratify_rules`, `stratify_dependency_graph`,
+  `DependencyGraph`); and `EvalOptions`, whose term-generating round limit
+  (`DEFAULT_MAX_TERM_GENERATING_ROUNDS`, 65,536) stops a guard that keeps computing
+  new terms and is folded into `contract_hash_with` and `scheduled_contract_hash`.
+  The limit cannot bind a guard-free program.
+
+- **core:** `purrdf_core::imports`, the one rule for which `owl:imports` triple is an
+  import, for when an import is resolved, and the one merge that folds a resolved
+  closure into a dataset: `ImportMap` (`insert`, `declare_loaded`, `imported_iris`,
+  `closure`, `unresolved_imports`), `ImportClosure`
+  (`documents`, `unresolved`, `unreached`, `merge`), `unresolved_imports` and
+  `imported_iris(graph, loaded)`. An `owl:imports` triple is an import only when its
+  subject is an anchor of its document — an IRI it was loaded under (for an imported
+  document, the IRI it was imported by), a subject it types `owl:Ontology`, or a subject
+  naming one of those as its `owl:versionIRI` — per OWL 2's ontology header (Mapping to
+  RDF Graphs §3.1.2) and SHACL 1.2's `^owl:versionIRI?/owl:imports`; any other
+  `owl:imports` triple is data. Entailment and SHACL both take their verdict from it;
+  `purrdf-entail` re-exports it from `entails::imports`.
+
+- **core:** `purrdf_core::graph_roles`, the one graph-role classifier: `GraphRoles`
+  (`ONTOLOGY_HEADER`, `SHAPES_GRAPH`, `DATA_GRAPH`; `is_import_anchor`,
+  `declares_implicit_prefixes`, `labels`) and `GraphRoleIndex::classify`, which gives
+  every node of a document its roles as a SHACL instance (`rdf:type/rdfs:subClassOf*`
+  over the document) of `owl:Ontology`, `sh:ShapesGraph` (with `sh:RulesGraph` counted
+  as one whether or not the document states its subclass axiom) and `sh:DataGraph`. The
+  `owl:imports` rule and SHACL-SPARQL's implicit prefix collection both select from it,
+  so the two node sets cannot drift apart. `purrdf_core::imports` gains
+  `unanchored_import_triples`, `ImportMap::unanchored_imports` and `UnanchoredImport`:
+  every `owl:imports` triple of a closure that is data rather than an import.
+
+- **shapes, validate, cli, python, wasm, capi:** `shapes lint` reports a sixth,
+  informational section, `unanchored-imports N`, with one `unanchored SUBJECT OBJECT
+  document -|<IRI>` line per `owl:imports` triple of the shapes graph's closure whose
+  subject is no anchor of its document, so it is data and imported nothing. The lines are
+  never findings and do not affect `clean`. `LintReport::unanchored_imports` and
+  `lint::UnanchoredImport` carry it, and Python's `lint_shapes` dict gains
+  `"unanchored_imports"` (`document`, `subject`, `object`). The `shacl-shacl` section
+  already reports W3C `shsh:DataGraphImportsShape`, at severity `sh:Info`, for a
+  `sh:DataGraph` that uses `owl:imports` without the type `owl:Ontology`; that result is
+  a finding, and a test now pins it.
+
+- **shapes:** `purrdf_shapes::imports`: the `ShapesImports` table (`from_turtle`,
+  `insert`, `insert_turtle`, `declare_loaded`), the typed `ShapesImportError`
+  (`Unresolved`, `Unreached`, `InvalidEntry`, with a stable `kind()` label:
+  `unresolved-import`, `unreached-import`, `invalid-import`), and
+  `resolve_shapes_imports`, the one helper every shapes-graph entry point resolves a
+  shapes graph's `owl:imports` closure through. `ShapesError` (`Imports` or
+  `Invalid`) is the error those entry points return.
+
+- **python/wasm/capi:** the shapes graph's `owl:imports` table on every host.
+  Python's shapes functions and `Shapes(...)` take `imports=[(iri, turtle), ...]`
+  and raise `purrdf.shapes.ShapesImportError` (a `ValueError`) with `.kind` and
+  `.iris`. Every JavaScript `shacl*` function that takes a shapes graph takes
+  trailing `importIris` / `importDocuments` arrays and rejects with the
+  `ShaclImportError` class (`kind`, `iris`, `message`). The C ABI appends
+  `PURRDF_STATUS_SHAPES_IMPORT_ERROR` (12) and adds
+  `purrdf_shapes_import_error_kind`, `purrdf_shapes_import_error_iri_count` and
+  `purrdf_shapes_import_error_iri`.
+
+- **rdf:** `ParseOutcome::document_prefixes`, the prefixes a Turtle, TriG or RDF/XML
+  document declares, and `parse_dataset_reporting_failure`, whose `ParseFailure`
+  carries the directives in force at the failure point.
+
+- **sparql-eval:** `UserFunctionRegistry::remove_sparql_bodied`, the seam the SHACL
+  1.2 SPARQL Extensions redefinition rule needs.
+
+- **conformance:** the W3C SHACL 1.2 vocabularies and the whole `shacl12-test-suite`
+  are vendored byte-exact under `vectors/shacl12/` by `scripts/vendor-shacl12.py` and
+  frozen by SHA-256 manifests. The new harness
+  (`crates/shapes/tests/w3c12_conformance.rs`) runs every test type through the
+  library API. Of the 544 entries an upstream manifest lists, 538 pass as approved
+  and 6 are counted apart as non-canonical expected decimals: the approved result
+  spells a computed `xsd:decimal` non-canonically (`"4.0"`, `"3.0"`, `"42.0"`,
+  `"00"`) where the expected value is correct, and they are graded by substituting
+  the XSD 1.1 canonical spelling, which for these six equals value comparison.
+  `validator-001` passes by name in both suites (129 / 129 in the SHACL 1.0 suite)
+  with no import supplied: its `owl:imports <http://datashapes.org/dash>` sits on a
+  node that is neither the document's IRI nor an `owl:Ontology`, so it is data, and
+  the harnesses load it with an empty import table. The expected-failure ledger is empty. The 3 entries of vendored files no manifest includes are graded
+  and reported apart. The matrix gains a SHACL 1.2 row and a row for the unlisted
+  files, and the prepared-product equivalence row now covers the SHACL 1.2
+  `sht:Validate` entries (364 shapes graphs). Beside it,
+  `vocabulary_import_invariance.rs` proves that merging the vocabularies changes no
+  report, `shacl_shacl_differential.rs` holds the parser's refusals to the verdicts
+  of `shacl-shacl.ttl` over 376 shapes graphs and 724 generated mutants,
+  `node_expr_reference.rs` compares the evaluator with a clause-by-clause reference
+  interpreter over 2048 generated cases, and `scripts/check-shapes-parser-drops.py`
+  (in `make check` and CI) forbids the parser patterns that dropped terms silently.
 
 ### Measured
 
@@ -669,6 +1531,14 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the drain holds the answer.
 
 ### Fixed
+
+- **retrieval:** the term decoder that reads an entity seed and a fused candidate's
+  canonical lexical stepped over the character before a datatype IRI without checking
+  that it was `<`. Text cut off after `^^` panicked past the end of the input, and
+  `"1"^^X…>` was accepted with the `X` dropped. Both are now refused as text that is not
+  one term — an entity seed with `PlacementError::Unrenderable`, a fused candidate as a
+  failed lookup — and a well-formed `"1"^^<…>` still decodes. A caller that sent either
+  malformed form writes the datatype IRI in angle brackets.
 
 - **sparql-eval:** `ServiceCatalog::authorize` named the `query` capability as the one
   withheld when no profile covered the endpoint, whatever the request needed; it now
@@ -711,17 +1581,19 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   measures the stack it has left at every recursive step that can deepen without
   bound, and refuses with `native-sparql-evaluation-stack-exhausted` before the
   margin is spent. Walks that have no error channel run inside a scope that discards
-  the half-built result, and the serializer that renders a forwarded `SERVICE` body
-  asks at every level too. A stack refusal inside an in-process `SERVICE` body cannot
+  the half-built result. A stack refusal inside an in-process `SERVICE` body cannot
   be silenced by `SERVICE SILENT`. The evaluator's 128-level graph-pattern count and
   the 512-level expression height are gone: a plan is measured, whole and
   iteratively, against the stack its evaluation starts on, and refused with
   `native-sparql-evaluation-stack-exhausted` only where that stack cannot hold the
   walks over it, so a plan prepared on one thread and run on another is judged by
-  the stack it runs on. On `wasm32`, graph patterns nest at most 284 deep, for V8's
-  call stack.
+  the stack it runs on. On `wasm32`, where the JavaScript engine's own call stack
+  bounds the recursion too, a plan past the host-stack bounds (graph patterns nested
+  past 284 levels, a tree taller than 2 048 levels plus eight per nested group, or
+  expressions and paths nested past 2 304 levels) is refused with `native-sparql-host-stack-exhausted` before it runs,
+  on both lanes.
 
-- **sparql-eval, core, stack:** a triple term nested past anything a dataset holds is
+- **sparql-eval, core:** a triple term nested past anything a dataset holds is
   valid SPARQL 1.2 and is answered, not refused. A pattern whose triple term nests
   deeper than any the dataset holds matches nothing: `SELECT` answers no rows, `ASK`
   false, `COUNT` zero, and the neighbour of the same shape at the stored depth
@@ -729,12 +1601,9 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   can nest (16 for every frozen dataset, delta and composite view, 128 for a PACK,
   none by default), and the evaluator answers such a pattern before converting or
   looking up any of it. A deep triple term written as a value (`VALUES`, `BIND`) is
-  returned whole. The derived copies, comparisons and matching of terms recurse once
-  per level wherever an evaluation stands, so a request whose own triple terms nest
-  past 128 levels is evaluated under a stack reserve (`purrdf_stack::reserve`, 512
-  bytes a level natively, 256 on `wasm32`) that every check it passes leaves room
-  for; past the stack the answer is the typed `native-sparql-evaluation-stack-exhausted`
-  refusal. Writing a triple term into a dataset is
+  returned whole. Every walk the evaluator makes over a triple term — interning,
+  matching, instantiation, comparison and conversion — runs over a work list, so a
+  term's nesting costs no stack on any host and is bounded by memory alone. Writing a triple term into a dataset is
   held to the dataset's own limit: `INSERT DATA`, an `INSERT` template and a
   `CONSTRUCT` graph nesting one past 16 levels are refused with
   `rdf-ir-triple-nesting-limit` (a `CONSTRUCT`'s through the new
@@ -822,6 +1691,116 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   does a right operand that leaves `?e` unbound in some solution; a clause an
   enclosing operator already lists endpoints for keeps that list.
 
+- **shapes, datalog, core:** a SHACL shape rule (linked to a shape, executed once per
+  focus node) re-executed EVERY focus node every iteration, so a rule minting one new
+  focus node per iteration cost one execution per focus node so far each time: the
+  corpus's `err-diverging-fresh-term` rule was stopped only by the join-step limit
+  (about 7 s at the default), and with that limit raised to 2^28 it ran for minutes
+  instead of reaching the term limits it is documented to meet. A shape rule is now
+  re-executed only for the focus nodes that are new or that a triple the previous
+  iteration added is about, as the rule's read set says (`srl::reads`: the triple
+  patterns, property paths and node-expression paths it reads, each with the positions
+  its constants and `$this` fix). A triple it reads a join step away from `$this`
+  re-executes every focus node; a rule whose answer is not repeatable (a template or
+  `BNODE()` blank node, `RAND()`, `NOW()`, `UUID()`, `STRUUID()`, `LIMIT`/`OFFSET`,
+  `SAMPLE`, `GROUP_CONCAT`, `FOLD`, a function the analysis does not read) is executed
+  for every focus node every iteration. For a rule with no condition whose shape's
+  targets only grow (`sh:targetClass`, `sh:targetSubjectsOf`, `sh:targetObjectsOf`,
+  `sh:targetNode`, an implicit class), the new focus nodes are found from the added
+  triples without resolving the targets again. The graph the rules read is extended by
+  each iteration's triples (a delta over the last compacted view, compacted by a
+  rent-or-buy rule in term bytes) rather than rebuilt from the whole store. The
+  inference is unchanged: the inferred triples, their blank-node labels and the proof
+  are byte-identical to executing every focus node every iteration over a rebuilt
+  graph, which unit tests compare on the rules corpus, on a 60-link discovery chain and
+  on 256 randomised rule sets each run. A per-focus rule minting a counter IRI per
+  iteration is now refused by the term-generating round limit (16,385 rounds) in about
+  2.5 s, and `err-diverging-fresh-term`, whose IRI grows a character per iteration, by
+  the fixed 16 MiB term-arena ceiling in about 2.5 s, both with the join-step limit at
+  its default and at 2^28 (before: join-step refusal after about 7 s, and no refusal
+  within 150 s at 2^28). `RelationStore::rows_from` reads the rows a store gained since
+  a row count in time proportional to them; `DeltaDatasetView::added_term_ids` lists a
+  snapshot's own terms without walking its base, and a SHACL view over a snapshot
+  numbers its base terms arithmetically. The `rules_divergence` bench gains
+  `refuse/per_focus_counter` and `complete/per_focus_chain`, and `srl_closure` gains a
+  per-focus closure. The native join-step default stays 2^20 (see above): with the
+  divergent rules no longer needing it, the reason left is memory.
+
+- **shapes, cli, python, wasm, capi (BREAKING for Rust):** an `unreached-import` refusal for a table entry that
+  an `owl:imports` triple DOES name — on a subject that is no anchor, so the triple is
+  data — now says so: it names the triple's object, says the subject is not anchored, and
+  points at the shapes lint's `unanchored-imports` section (`purrdf shapes lint` on the
+  command line). The command line used to say "the shapes graph has no owl:imports at all"
+  of such a graph; it now says the shapes graph imports nothing (no `owl:imports` of it is
+  anchored). `ShapesImportError::Unreached` gained `unanchored`, the entries such a triple
+  names; every host renders the same sentence (`UnanchoredNote`).
+
+- **validate, cli, python, wasm, capi:** a SARIF log whose run found nothing now carries
+  `"results": []`; it used to omit `results`. SARIF 2.1.0 §3.14.23: "In all other
+  circumstances, results SHALL be present and SHALL contain all results detected by the
+  tool. If the tool did not detect any results, results SHALL be an empty array. If
+  results is absent, it SHALL default to null" — and `null` is reserved for a tool that
+  failed to start or to begin its analysis. A conforming validation and a clean parse
+  therefore serialize one more member, on every host.
+
+- **core, shapes, entail:** `<G> a sh:ShapesGraph ; owl:imports <lib>` was silently not
+  an import: validation ran without `<lib>`'s shapes, and entailment without its axioms,
+  with no refusal. It is now an import on every host (see Changed). The implicit
+  SHACL-SPARQL prefix collection and the import rule now read one classifier, so a node
+  whose `sh:declare` supplies a query's prefixes is classified exactly as the import rule
+  classifies it.
+
+- **shapes:** the `README.md` example of a shapes graph with an import used an
+  `owl:imports` on a node that is no anchor, so the table entry it supplied would have
+  been refused as unreached. It declares the node a `sh:ShapesGraph` now.
+
+- **shapes:** the JSON Schema compiler projects `sh:someValue`, `sh:node`,
+  `sh:and`, `sh:or`, `sh:xone` and `sh:not` on a property shape, instead of
+  dropping them. Each shape becomes one value's schema, combined with
+  `contains`, `allOf`, `anyOf`, `oneOf` or `not`. `sh:xone` and `sh:not` are
+  emitted only over shapes whose value schema is exact, and are recorded
+  otherwise. A shape's property shapes, which judge the value's own node, are
+  recorded. A multi-valued property's single-value alternative now rejects an
+  array, so an array of values can no longer bypass a per-value constraint
+  (`sh:pattern`, a length, `sh:not`) or `sh:maxCount`. The Pydantic emitter
+  enforces `allOf`, `oneOf` and `contains` with its runtime check (the new
+  `_purrdf_requires` helper) where that check evaluates them. The LinkML
+  emitter states `contains` as a `has_member` carrying the whole value
+  expression, and the LinkML importer reads a `has_member` back as `contains`.
+  Each emitter oracle runs a value-shape fixture.
+- **validate, shapes, python, wasm, capi, cli:** a SPARQL 1.2 RL rule set's
+  `IMPORTS` now resolve from the rules tool's import table on every host. The
+  Python `apply_rules(srl=..., imports=...)`, WebAssembly `shaclApplyRules` and
+  C `purrdf_shacl_apply_rules` entry points used to refuse any import. One
+  route, `RuleSetDocument::resolve_import_table`, is shared by the command line
+  and the `purrdf-validate` boundary. An import that no entry supplies, and an
+  entry that nothing imports, are refused with the same message on every host
+  (the new `SrlError::UnreachedImports` covers the second case).
+  `RulesRequest::shapes_imports` is renamed `RulesRequest::imports`, because
+  the table now serves either rule source.
+- **shapes, validate:** a validation report no longer fuses a shapes-graph
+  blank node with a data-graph blank node that has the same label in its own
+  document. The report graph (every RDF syntax) and the SARIF projection write
+  data-graph blank nodes as `_:dg{n}` and shapes-graph blank nodes as
+  `_:sg{n}`, so distinct nodes keep distinct labels and one node keeps one
+  label. The labels no longer depend on the parser that read the documents.
+  `ValidationReport::with_report_blank_labels` returns the relabelled report
+  and a `ReportBlankLabels` map back to each node's graph and original label.
+  Report bytes that carried blank nodes change.
+- **cli:** a shapes document in TriG or RDF/XML now keeps the prefixes and base
+  its codec reports, just as a Turtle document does. Its SHACL-SPARQL queries
+  can use the document's prefixes, and an `owl:imports` of its own `@base` or
+  `xml:base` resolves. `shacl pack` gains `--shapes-from`, so it can read the
+  shapes document in any RDF syntax.
+- **shapes:** a SELECT-based validator of a SPARQL-based constraint component
+  on a node shape reports the focus node as `sh:value` when its solution does
+  not bind `?value`, as for a SPARQL-based constraint ("The value node"); the
+  result had no value. The W3C SHACL suite's `sht:proposed`
+  `sparql/component/nodeValidator-001`, which no manifest includes, is graded
+  under its own category and passes.
+- **xsd:** the `xsd:dateTime`, `xsd:date` and `xsd:time` parsers reject a
+  signed field (`+2020-01-01`, `+1:00:00`, a `+-1:00` timezone) and a seconds
+  field that is not two digits (`00:00:5`). `from_str` had read the sign.
 - **rdf, shapes, shex:** a JSON number read through `serde_json` could become the
   neighbour of the binary64 its decimal spells. Without its `float_roundtrip` feature
   `serde_json` scales a `u64` significand by a binary64 power of ten, rounding at each
@@ -1585,7 +2564,152 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 - **shapes, sparql-eval:** a `sh:sparql` constraint whose `FILTER EXISTS` or `FILTER NOT EXISTS` body calls a registered relation failed validation outright for every blank-node or quoted-triple focus node while it validated an IRI one: the value was driven into the call by a one-row `VALUES` that bound `$this` again on a row that already had it, which the evaluator refuses as a rebinding. Inside an `EXISTS` body the call is now driven in a scope of its own: it is invoked bound to the focus node exactly as before and its output does not carry `$this`, which is also what an IRI focus node gets.
 - **sparql-eval:** a query request's substitutions are now admitted as bound, the same way a prepared execution's declared parameters are. `SELECT ?q ?out WHERE { ?q <rel> ?out }` with `?q` substituted was refused against a relation serving only the bound mode ("reachable only as `ff`") for every term kind, an IRI included, on every request entry point — ungoverned, interned, governed, operation-scoped and fallible. The rewrite lane is part of the admission, so a substitution the ordinary rewrite does not carry to the call, such as one inside an `OPTIONAL` arm, is still refused, while the SHACL pre-binding rewrite, which does reach that arm, admits it.
 
+- **shapes:** a shapes graph that merged the W3C SHACL 1.2 vocabularies failed to
+  load with `custom node-expression function <sh:SPARQLExprExpression> declares 0
+  sh:bodyExpression values`. Every bodiless `sh:NamedParameterExpressionFunction` and
+  `sh:ListParameterExpressionFunction` declaration, including the specification's own
+  declarations of `sh:SPARQLExprExpression`, the `shnex:` library and the `sparql:`
+  functions, was indexed as a user-defined function. A declaration of a built-in now
+  binds to the native implementation on both the fresh-parse and the prepared-product
+  restore path and adds nothing to the custom-function index, and merging the
+  vocabularies leaves every report byte-identical. A bodiless function the engine
+  does not implement is still refused, in `sh:` as in any other namespace.
+
+- **shapes:** a native constraint component IRI declared with user validators was
+  skipped without a word; it is now a duplicate-definition load error. A custom
+  function keyed by a built-in's key parameter is refused, since the key parameters
+  of all node expression functions must be disjoint. `sparql:plus` and
+  `sparql:encode`, the spellings `shnex-sparql.ttl` declares, are accepted beside
+  `sparql:add` and `sparql:encodeForUri`. The prepared-product writer refused a
+  custom list function reached only from SPARQL text; restore now rebuilds it.
+
+- **shapes:** the shapes parser dropped what it did not understand: a misspelled
+  parameter, a literal where an IRI is required, a non-boolean flag compared as the
+  string "true", a second `sh:flags`, a non-literal `sh:pattern`, a list where one
+  value is expected. Each such shape validated as if the constraint were absent. An
+  unknown term or an ill-typed value on a shape or node-expression node is now
+  refused at load, each refusal tested beside a valid neighbour. `sh:deactivated` on
+  a SPARQL or expression constraint node was ignored and is now honoured.
+
+- **shapes:** the nodes of SHACL-SPARQL were not checked at all. A SPARQL-based
+  constraint, a validator and a `sh:SPARQLTarget` loaded whatever else they carried:
+  a `sh:resultAnnotation` was dropped, and so were an `sh:ask` beside a constraint's
+  `sh:select`, an `sh:update` and a misspelled `sh:mesage`. The annotations are now
+  evaluated. Any other term such a node carries, beyond what its specification
+  gives it, is refused at load, and an ASK validator that also carries an
+  `sh:select` (or a SELECT validator an `sh:ask`) is refused. `sh:describe` and
+  `sh:update`, which no SHACL specification executes, are refused wherever the
+  loader reads, with that reason, and a resource that is only such an executable
+  loads.
+
+- **python:** the `.pyi` type declarations gave `MutableDataset.__init__` as
+  returning the prefix list that only `load` and `bulk_load` return; it returns
+  `None`. The `shapes.entail` documentation, in the `.pyi` file and the binding,
+  said rules run "to a fixpoint"; it now describes the layered SHACL 1.2
+  Inference Rules execution the engine performs.
+
+- **shapes:** a custom component parameter whose local name is a SPARQL variable
+  name outside ASCII (`ex:größe`) or starting with a digit (`ex:2d`) was refused as
+  an invalid variable name. The test is now the SPARQL grammar's `VARNAME`
+  production.
+
+- **shapes:** all but one `sh:message` was dropped and the language tag of the one
+  kept was lost. Every message is reported, each keeping its language tag, direction
+  and datatype, and `rdf:HTML` messages are accepted.
+
+- **shapes:** `sh:reifierShape` reported the triple term as `sh:value`, once per
+  result of the inner shape, and `sh:reificationRequired` reported the triple term
+  too. SHACL 1.2 Core 7.8.5's textual definition names both the triple term and the
+  reifier `t`; the approved W3C tests `core/property/reifierShape-001` and `-002`
+  expect the value node, and both results now carry the value node as `sh:value`.
+  There is one result per non-conforming reifier, carrying the reifier's own
+  validation results (the reifier as focus node) as `sh:detail`. `sh:uniqueLang` (7.4.6) groups values by language tag and
+  base direction, so `"1"@ar`, `"1"@ar--ltr` and `"1"@ar--rtl` no longer collide.
+
+- **entail, validate, cli:** an `owl:imports` of an ontology already in the graph was
+  treated as unresolved. A shapes graph that merged the W3C vocabularies imports
+  `<http://www.w3.org/ns/shacl#>` while containing it, and the CLI warned (or refused
+  once any `--import` was given), while the prepared-product path behind the
+  WebAssembly and C hosts refused any `owl:imports` at all. An import is now resolved
+  when it names a document already loaded, an `owl:Ontology` in the graph or a
+  version IRI in the graph, transitively over the closure, and the CLI, the product
+  packer and entailment all take their verdict from that one rule.
+
+- **core, shapes, entail:** every `owl:imports` triple was read as an import, whatever
+  its subject. OWL 2 reads a document's imports off its ontology header (Mapping to RDF
+  Graphs §3.1.2, Table 4) and SHACL 1.2 follows them from the shapes graph's own IRI
+  along `^owl:versionIRI?/owl:imports`, so an `owl:imports` on any other node imports
+  nothing. The approved W3C `sparql/node/prefixes-001` tests (SHACL 1.0 and 1.2) write
+  `ex:TestPrefixes owl:imports <…>` as a `sh:prefixes/owl:imports*/sh:declare` prefix
+  edge, and `sparql/component/validator-001` writes `owl:imports
+  <http://datashapes.org/dash>` on a node that is neither the document's IRI nor an
+  `owl:Ontology`; every host refused both as unresolved imports. An `owl:imports` is now
+  an import only on an IRI its document was loaded under, a subject typed
+  `owl:Ontology`, or a subject naming either as its `owl:versionIRI`; any other is data,
+  kept in the graph as written. Both tests validate as written with no import table, and
+  entailment reads a premise's imports by the same rule.
+
+- **shapes, rdf, python:** prefixes were recovered by scanning text. The SHACL-AF
+  document-prefix fallback scanned the shapes document, so a `PREFIX` line inside one
+  constraint's query literal leaked into every other constraint's header; statement
+  error recovery and the Python rdflib-compatible `Graph` scanned Turtle, SPARQL or
+  RDF/XML text the same way. Every caller now takes the prefixes the parser records;
+  the RDF/XML codec reports its `xmlns` declarations, excluding those inside
+  `rdf:parseType="Literal"` values; and error recovery no longer ends a statement at
+  a decimal point.
+
+- **shapes:** SHACL-SPARQL prefixes follow SHACL 1.2 SPARQL Extensions. `sh:prefixes`
+  now follows `owl:imports` and `owl:versionIRI` to its `sh:declare` values; a query
+  with no `sh:prefixes` uses the `sh:declare` values of SHACL instances of
+  `owl:Ontology`, `sh:DataGraph`, `sh:ShapesGraph` and `sh:RulesGraph`; the document
+  `@prefix` fallback only fills labels those leave unbound; and two namespaces for
+  one prefix, or a malformed declaration, reached by a query fail the load.
+
+- **shapes:** node expressions were almost all set-shaped: outputs were sorted
+  canonically and deduplicated. Each kind now keeps the order and multiplicity its
+  SHACL 1.2 Node Expressions clause defines, held to a clause-by-clause reference
+  interpreter. `filterShape` keeps input order and duplicates, `distinct` keeps first
+  occurrences, and `orderBy` sorts an unbound key first instead of failing; `sh:if`
+  and `shnex:if` take the then branch only when the condition is the list `( true )`
+  (4.1.6), with no effective-boolean coercion; a `sparql:` argument that produces no
+  node reaches SPARQL unbound, so `BOUND` and `COALESCE` behave; `findFirst`,
+  `matchAll` and `filterShape` accept the empty shape `[]`; and `shnex:instancesOf`
+  takes a node expression.
+
+- **shapes:** rule output kept only plain quads: a reifier or annotation a CONSTRUCT
+  or triple rule produced was lost or stored as a plain triple. Rule-derived
+  reifications and annotations now land in the RDF 1.2 statement layer.
+
+- **shapes, validate:** the schema projections were unsound. `sh:pattern`,
+  `sh:minLength` and `sh:maxLength` checked only bare strings, not a typed or
+  language-tagged literal's lexical form, and `sh:flags "i"` failed the whole
+  compile; several value-type constraints on one property were unioned instead of
+  conjoined, and several `sh:in` lists unioned instead of intersected; `sh:datatype`,
+  `sh:nodeKind`, `sh:hasValue`, `sh:languageIn` and numeric range bounds accepted
+  values SHACL rejects or rejected values it accepts; triple terms were projected as
+  strings; property pairs, node-level value constraints, property-level shape
+  constraints, nested and non-predicate-path property shapes, reifier shapes and the
+  SHACL 1.2 components were dropped without a trace; and deactivated property shapes
+  and non-disallowed severities were enforced. Every construct now reaches the
+  TypeScript, Pydantic, GraphQL and LinkML emitters as a projection whose verdict
+  matches SHACL on the same data, checked with a JSON Schema validator, or as a
+  declared loss, and the JSON Schema importer reads every new form back.
+
+- **shapes:** extension-usage reporting missed the queries of custom-component
+  validators and SPARQL inside inline nested shapes.
+
 ### Fixed
+
+- **shapes:** a SHACL Advanced Features 1.1 path expression with an input,
+  `[ sh:path P ; sh:nodes N ]`, was refused for carrying `sh:nodes`. It now evaluates
+  as the specification defines it, the values of P from every node N produces, which
+  is SHACL 1.2's `shnex:flatMap` of the path over N. One that also carries
+  `shnex:focusNode` is refused.
+
+- **shapes:** a custom constraint component that is also a shape (it carries a
+  target, for example) was refused for carrying `sh:parameter` and its validators,
+  which the component registry reads. Both roles now load and run; a shape that is
+  not a component still may not carry them.
 
 - **sparql-eval:** The forked row loop's per-chunk harvest no longer allocates below
   the parallel threshold. Harvesting a worker's relation witness came back as a `Vec`
@@ -2420,50 +3544,6 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Changed
 
-- **BREAKING** **wasm:** an asynchronous job's stack region is exactly as large as the
-  module's own shadow stack (1 MiB in the shipped module), and no option sizes it: the
-  `stackBytes` option of the asynchronous twins and of the Cloudflare adapter's
-  `handleSparqlRequest` is removed, and passing it is refused as an unknown option.
-  The region is a raw allocation the Rust side addresses only through its address; its
-  size is read off the module's own layout (`asyncStackRegionBytes()`), and a module
-  whose shadow stack is not laid out stack-first has no asynchronous lane —
-  `hasAsyncQueries()` is `false` and every asynchronous twin rejects with the module's
-  words. With equal stacks the two lanes run out of stack at the same depth, so a stack
-  refusal is the evaluator's own typed error, word for word the same on both lanes: the
-  synchronous lane no longer appends "run this request with the asynchronous twin … and
-  a larger stackBytes region", and a job's refusal no longer names its region's size or
-  a larger `stackBytes`. The guard band, the overrun zone below each region and
-  `RunStatus.Overran` are gone; one canary word at the region's base is read before
-  every suspension and when the run returns, and a job whose frames overwrote it fails
-  with a fault naming its region.
-
-- **BREAKING** **wasm:** `asyncYieldPrimitive()` is removed from the package root.
-  Asynchronous jobs yield to the event loop through `setTimeout(…, 0)` on every host;
-  nothing is chosen per host, sniffed from `navigator.userAgent`, or overridable.
-  `globalThis.setTimeout` is bound once when the runtime module loads; a host without
-  it has no asynchronous lane (`hasAsyncQueries()` is `false`, and every asynchronous
-  twin rejects naming `setTimeout`), the synchronous API unaffected.
-
-- **BREAKING** **wasm, cloudflare:** a `resolveService` or `resolveLoad` that throws,
-  rejects, answers with a value the protocol does not define, or names a failure kind
-  it does not define fails the one invocation it was answering, delivered as the typed
-  failure `{ kind: "fault", message }` beside `"transport"` and `"denied"`. The clause
-  decides what that means: `SERVICE SILENT` is the join identity and `LOAD SILENT`
-  loads nothing, each recorded on `evidence.silenced` with kind `"fault"`; without
-  `SILENT` the request fails with `native-sparql-host-fault` or
-  `native-sparql-load-fault`, its message carrying the handler's words for the host
-  that wrote the handler. Such a failure was a fault latched on the whole job, which
-  no `SILENT` absorbed; a job's fault is now only a broken delivery protocol.
-  `handleSparqlRequest` answers a `SILENT` clause over a throwing handler with the
-  clause's own answer (`200`, or `204` for an update) while still reporting the bug
-  through `onInternalError` under a correlation id; without `SILENT` it stays the
-  `500` carrying that id and none of the handler's words. In Rust the failure is
-  `RemoteError::HostFault { endpoint, message }` for a `SERVICE` source and
-  `LoadError::Fault` for a `LOAD` source; a loud `SERVICE` raises
-  `EvalError::ServiceHostFault`, whose code is `EvalError::HOST_FAULT_CODE`
-  (`native-sparql-host-fault`), and `FailureCode::from` maps both to
-  `FailureCode::HostFault`, so a protocol boundary answers it as the host's fault.
-
 - **BREAKING** **cdt, geo:** composite and geometry nesting is bounded by memory alone.
   `purrdf_cdt::MAX_NESTING_DEPTH` and `CdtError::DepthExceeded` are removed; a
   composite is bounded by `MAX_ELEMENTS` and `MAX_LEXICAL_BYTES`, and every level is
@@ -2489,62 +3569,6 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   accepts any `max_hops` a `u32` holds. The path-relation traversal keeps every piece
   of per-depth state on the heap, so the cap that stood in for a stack budget names
   nothing; the two resource guards bound the work a walk does.
-
-- **BREAKING** **sparql-eval, wasm:** a `LOAD` the host's own policy refused
-  (`LoadError::HostDenied`) is `native-sparql-load-host-denied`, apart from the
-  catalog's `native-sparql-load-denied`.
-
-- **BREAKING** **wasm:** asynchronous policy lives in Rust. The asynchronous twins'
-  options are validated against each operation's table by
-  `AsyncJobOptions.fromJs(kind, options, serviceHandler, loadHandler, argument)`; the
-  per-field `AsyncJobOptions` setters are gone. `ServiceCatalog.carriesCredential`,
-  `ServiceCatalog.authorizeLoad` and `LoadAuthorization` are removed: a job authorizes
-  every `LOAD` source and redirect against its catalog before the handler is called,
-  and a `SERVICE` effect says whether it is `cacheable`. `resolveLoad` receives the
-  hop's `accept`, `userAgent`, `headers` and `timeoutMs`, and may answer
-  `{ kind: "redirect", location }`. A `LOAD` document that does not parse is
-  `native-sparql-load-decode`, no longer `native-sparql-load-failed`. An
-  asynchronous update begun while another update of the same dataset is in flight is
-  refused (`native-sparql-update-in-flight`) instead of queued. A job reuses a
-  repeated `SERVICE` request's answer only when it was rows; a failure is asked
-  again. The deadline instant is the job's: every effect names when it is abandoned
-  (`abandonAfterMs`, its request's timeout or the deadline, whichever is sooner) and
-  a profile `timeoutMs` past 2 147 483 647 is refused. `AsyncEffectKind` is renamed
-  `EffectKind`; `AsyncJob.takeError`, `AsyncJob.tripDeadline` and
-  `AsyncJob.deliverBindings` are removed in favour of `errorCode`/`errorMessage`,
-  `expireEffect`, and the shared-exchange deliveries. `Dataset.queryAsync` takes
-  `queryRawAsync`'s options. The synchronous methods run the same operation
-  implementation as their twins with no source: an ungoverned one on the engine's
-  ungoverned entry, installing no governor state, and a governed one under exactly the
-  governors its caller named; their results are unchanged.
-
-- **BREAKING** **cloudflare:** `createFetchServiceResolver` no longer takes `catalog`,
-  `timeoutMs`, `waitUntil` or `onCacheError`: the catalog and each request's timeout
-  (the profile's `timeoutMs`) are the job's, a failed `cache.match` or `cache.put` is
-  the request's transport failure rather than a miss, and a request the job marks not
-  `cacheable` bypasses the cache rather than failing. `createFetchLoadResolver` no
-  longer takes `catalog`, `timeoutMs` or `maxRedirects`: it fetches one hop and hands a
-  redirect back to the job, which follows up to five. `handleSparqlRequest` answers
-  an operation that does not parse with its parse code
-  (`native-sparql-query-parse`, …) instead of re-parsing it for `MalformedOperation`,
-  a conflicting update with a 409, and a `LOAD` the host's policy refused with
-  `native-sparql-load-host-denied`.
-
-- **BREAKING** **wasm:** both lanes bound a request's evaluation by a 640 KiB budget
-  kept under V8's call stack: a plan whose height is past the evaluator's host-stack
-  bounds — graph patterns nested past 284 levels, 2 304 levels of expressions and
-  paths, triple terms 2 048 deep — is refused with `native-sparql-host-stack-exhausted`
-  before it runs, on either lane: an asynchronous job runs on a V8 stack of the same
-  size, whatever its `stackBytes`, so the refusal names the budget and the remedy is a
-  request nested less deeply. Parsing spends none of that stack, so nesting that
-  builds no node — brackets, a group around a single element, a bracketed path — is
-  not limited. The shadow-stack refusal is the one a larger stack answers: on the
-  synchronous lane the evaluator's (`native-sparql-evaluation-stack-exhausted`) keeps
-  its code and message and ends with the remedy, the asynchronous twin of the call
-  (`selectAsync`, `queryAsync`, `updateAsync`, …) and a larger `stackBytes` region; on
-  the asynchronous lane it names the region's size and a larger `stackBytes`. On
-  `wasm32` the message does not say to use a thread with a larger stack, which a
-  JavaScript caller cannot do.
 
 - **BREAKING** **sparql-eval, sparql-algebra, wasm:** an unsupported request no longer
   reads as a development stage or as a server fault. `EvalError::Unsupported` renders
@@ -2582,8 +3606,9 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `LoadError` — `Transport`, `Decode`, `Denied` (a `ServiceDenial`), `HostDenied`,
   `Fault` or `Governed` (the request's own stop signal) — where it returned an
   `RdfDiagnostic`; `LoadError::code` is the diagnostic code a `LOAD` without
-  `SILENT` fails with (`native-sparql-load-failed`, the new
-  `native-sparql-load-decode`, `native-sparql-load-denied`,
+  `SILENT` fails with (`native-sparql-load-failed`, `native-sparql-load-decode`,
+  `native-sparql-load-denied` for the catalog's refusal,
+  `native-sparql-load-host-denied` for the host's own policy,
   `native-sparql-load-fault`, `native-sparql-load-stopped`), and the message is
   `LOAD <iri>: ` followed by the error. An implementation maps its failure onto a
   variant instead of choosing a code. `LOAD SILENT` follows SPARQL 1.1 Update
@@ -2611,9 +3636,18 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 - **BREAKING** **sparql-eval:** `UnsupportedKind::GraphPatternDepthExceeded` and its
   code `native-sparql-graph-pattern-depth-exceeded` are removed (`UnsupportedKind::ALL`
   has three entries). The `wasm32` graph-pattern depth limit it reported is the
-  host-stack budget, not a construct deferred in scope, and a graph pattern nested
-  past 284 levels is now `EvalError::HostStackExhausted`
-  (`native-sparql-host-stack-exhausted`).
+  host-stack budget, not a construct deferred in scope: both wasm lanes keep a
+  request's evaluation within a 640 KiB budget under V8's call stack, and a plan past
+  it — graph patterns nested past 284 levels, a tree taller than 2 048 levels plus
+  eight per nested group, expressions and paths nested past 2 304 levels — is
+  `EvalError::HostStackExhausted` (`native-sparql-host-stack-exhausted`) before it
+  runs, on either lane. Parsing spends none of that stack, so nesting that builds no
+  node — brackets, a group around a single element, a bracketed path — is not
+  limited. A host that matched the removed code matches
+  `native-sparql-host-stack-exhausted`; the remedy is a request nested less deeply. On
+  `wasm32` the `native-sparql-evaluation-stack-exhausted` message names no remedy,
+  since a JavaScript caller cannot choose a thread's stack; natively it says to run
+  the request on a thread with a larger stack.
 
 - **release:** under this suite's full-semver rule, the breaking changes below
   make the next release a MAJOR version. Several of them change surfaces that no
@@ -2693,7 +3727,7 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `walk_pre_post`, `fold_post_order`) is the one enumeration of a node's children
   these walks, validation and the retained-size count share. The serializer and
   `PropertyPathExpression`'s `Display` are one loop over a work list with unchanged
-  output, and no longer consult `purrdf_stack::walk_is_low` or truncate.
+  output.
   `Query::retained_size_bytes` charges a tree of any height in full, where it
   answered `usize::MAX` past 256 nested containers. In `purrdf-core`,
   `TermValue::Triple`'s components are the new `TermBox` in place of `Box<TermValue>`
@@ -2713,21 +3747,143 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   quoted triples and `VALUES` triple terms by loops over stacks of their own. The
   algebra, the error kinds, the byte offsets and the messages the parser produces are
   unchanged: the snapshot of every in-repository request parses to a byte-identical
-  golden. Removed, because nothing is refused for its nesting any more:
-  `ParseError::StackExhausted`, `ParseError::HostStackExhausted`,
-  `WASM_HOST_STACK_BUDGET`, `WASM_GRAPH_PATTERN_DEPTH`, the deprecated
-  `MAX_GRAPH_PATTERN_DEPTH` and `MAX_GRAPH_PATTERN_NODES`, and
-  `GraphPattern::validate_height`; `Query::validate` no longer refuses a tree for its
-  height, and `purrdf-sparql-algebra` no longer depends on `purrdf-stack`. The
+  golden. Nothing is refused for its nesting any more: `MAX_GRAPH_PATTERN_DEPTH` and
+  `MAX_GRAPH_PATTERN_NODES` are removed, and `Query::validate` no longer refuses a
+  tree for its height. The
   evaluator admits a plan's height itself, iteratively and at the same per-level
   charge, before its recursive passes — at preparation and on every evaluation — so
   a plan too tall for the evaluating thread is `EvalError::StackExhausted` naming
-  `"query algebra"` (on `wasm32`, past the host-stack bounds,
-  `EvalError::HostStackExhausted`), with the codes it had. `EvalError::from` a
+  `"query algebra"` (`native-sparql-evaluation-stack-exhausted`; on `wasm32`, past the
+  host-stack bounds, `EvalError::HostStackExhausted`,
+  `native-sparql-host-stack-exhausted`). `EvalError::from` a
   `ParseError` is always `EvalError::Parse`, a parse diagnostic always carries the
   query or update parse code, and an in-process `SERVICE` body that fails to re-parse
-  is a decode failure. The wasm lanes' stack-refusal hints no longer recognize a
-  parser stack refusal, which cannot occur.
+  is a decode failure. A caller that matched the removed constants or a parse-time
+  nesting refusal drops that handling; a caller that needs a ceiling on nesting
+  applies its own.
+
+- **BREAKING** **datalog, shapes, entail, validate, cli, python, wasm, capi:** the
+  stored-fact and join-step ceilings are no longer constants. `MAX_STORED_FACTS`
+  and `MAX_JOIN_STEPS` are removed; the limits are `EvalOptions` parameters with
+  per-target defaults (`DEFAULT_MAX_STORED_FACTS`, `DEFAULT_MAX_JOIN_STEPS`,
+  `WASM_DEFAULT_*`, `NATIVE_DEFAULT_*`). `BudgetReport` carries the limits a run
+  was governed by (`join_step_limit`, `stored_fact_limit` and their `_stated`
+  twins, `governed_by`). `EvalError::BudgetExhausted` and
+  `ChaseError::BudgetExhausted` render as "evaluation exceeded the stored-fact
+  limit: N facts observed, M permitted (…); raise it with …" rather than "the
+  fixed … ceiling". `LimitKnobs::new` takes four knob names, `RuleLimit` gains
+  `StoredFacts` and `JoinSteps`, and `RulesRequest` gains `max_stored_facts` and
+  `max_join_steps`. The contract hash folds the EFFECTIVE limits into every
+  program's digest, so every native contract hash moves (the `wasm32` digests
+  are the previous values) and every entailment report's `contract-hash` line
+  moves with it; the entailment golden corpus, the tri-host regime vectors and
+  the pinned calculus hashes are regenerated. The regime vectors are checked
+  under the native defaults stated (`REGIME_GOLDEN_VECTOR_LIMITS`), so a
+  `wasm32` host reproduces them byte for byte. The C functions
+  `purrdf_shacl_apply_rules` and `purrdf_entail_materialize_to_nquads` gain two
+  nullable parameters, riding the unshipped ABI 0.8.0 bump; the WebAssembly
+  functions gain two trailing optional arguments.
+
+- **BREAKING** **shapes:** the JSON-LD instance projection
+  (`instance::project_graph`, `project_subject`) changes shape so that it drops
+  nothing a constraint judges. A well-formed RDF list is now the JSON-LD list
+  object `{"@list": [...]}`, and its cells are no longer `@graph` nodes;
+  `rdf:nil` is `{"@list": []}`. The list conversion of JSON-LD 1.1 Processing
+  Algorithms and API section 8.4.2 decides which lists convert, read strictly so
+  that no triple is dropped. A member list carries its head cell's label as
+  `@index`. An `@id` is now the full IRI, never a compact IRI; keys and `@type`
+  stay compacted. A bare JSON scalar now appears only for a canonical
+  `xsd:integer` within 64 bits and for `xsd:boolean` `true` or `false`. Every
+  other numeric literal, `xsd:decimal` and `xsd:double` included, keeps its
+  `{"@value", "@type"}` object. An `rdf:dirLangString` literal carries
+  `@direction`. Value-vocabulary enum members are `{"@id": <full IRI>}` to
+  match. The JSON Schema compiler changes in lock-step, and a consumer that
+  reads projected documents must read the new forms.
+
+- **BREAKING** **shapes:** a built-in constraint component's declaration that
+  carries validators binds natively. SHACL 1.2 SPARQL Extensions selects "one of the
+  values" of `sh:nodeValidator`, `sh:propertyValidator` or `sh:validator` as a
+  constraint's validator, so each declared validator is an alternative implementation
+  of the same component; the native implementation is the one that runs, and the
+  declared ones are checked against the syntax rules (type, query form and grammar)
+  and never executed, so their queries may call functions the engine does not have.
+  A pre-binding violation in one refuses nothing, because it never executes; the lint
+  report lists it under `unexecuted` (see below). Such
+  a declaration used to be refused as a duplicate definition. A body, an `sh:ask` or
+  an `sh:select` stated on the component itself is still a duplicate definition, a
+  contradicting signature is still a mismatch, and a validator that is not a
+  well-formed SPARQL validator of its attachment — an untyped node, an ASK validator
+  under `sh:nodeValidator` or `sh:propertyValidator`, a SELECT validator under
+  `sh:validator`, an unparsable query, a SHACL-JS `sh:JSValidator` under any
+  attachment — is refused. Newly refused: an `sh:`
+  statement on a built-in's declaration other than its signature, its validators,
+  `sh:message`, `sh:labelTemplate` or a non-validating characteristic (`sh:severity`
+  on `sh:MinCountConstraintComponent`, for one), which the native implementation
+  would not honour.
+
+- **BREAKING** **shapes, validate, cli, python, wasm, capi:** a SHACL-SPARQL or SHACL-AF
+  declaration that violates a syntax rule refuses the load whether or not any shape
+  reaches it. SHACL 1.2 Core, "Handling of Ill-formed Shapes Graphs", says "A SHACL
+  processor SHOULD produce a failure in this case" with no reachability qualifier.
+  Refused: a non-SELECT value of `sh:nodeValidator` or `sh:propertyValidator` and a
+  non-ASK value of `sh:validator`, on a built-in or a custom component
+  (`nodeValidator-class`, `propertyValidator-class`, `validator-class`); a validator
+  without exactly one `xsd:string` query, or with a query that does not parse to its
+  form (`ask-count`, `ask-datatype`, `ask-sparql`, `SPARQLSelectValidator-select-count`,
+  `select-query-valid`); an ill-formed result annotation or prefix declaration on a
+  validator; a component parameter named `this`, `path`, `PATH` or `value`
+  (`parameter-name-not-in`) and the other parameter rules; a `sh:SPARQLFunction`
+  parameter named one of those or `shapesGraph` or `currentShape`, which SHACL
+  Advanced Features takes from the SHACL-SPARQL parameter rules; a `sh:SPARQLFunction`
+  without exactly one `sh:ask` or `sh:select`, with an unparsable body, or with a
+  SELECT body that does not project exactly one variable (`SPARQLFunction-query`).
+  The refusal is the new `ShapesError::IllFormed(IllFormedShapesGraph)`, which lists
+  every violation in the graph as an `IllFormedDeclaration` naming the declaration and
+  the rule id (`[syntax rule nodeValidator-class]` in the message).
+  A pre-binding violation (a `MINUS`, a `VALUES`, an `AS ?var` for a pre-bound
+  variable) is not a syntax violation: SHACL 1.2 SPARQL Extensions, Appendix A,
+  requires a failure for a query "executed with pre-bound variables". It refuses the
+  load, as the new `ShapesError::Prebinding(PrebindingViolation)`, only where a query
+  executes: the validator a use of a custom component selects, or a
+  `sh:SPARQLFunction` that a node expression or reachable SPARQL calls, directly or
+  through another function's body. A function body is now checked against Appendix
+  A's three rules over its parameter variables. A function with no parameters binds
+  nothing, so none of them applies to it. A validator of a built-in component never
+  executes, and neither does a validator no use selects or a function nothing calls.
+  Those load, and the lint report gains a fifth section, `unexecuted N`
+  (`unexecuted unavailable` over a refused graph), with one `violation DECLARATION`
+  line and its `error` lines for each. Each is a finding.
+  `LintReport::unexecuted` carries them, and Python's `lint_shapes` dict gains
+  `"unexecuted"`. SHACL-JS reachability is unchanged. A shapes graph that imports a
+  library whose unused declarations violate syntax rules, as DASH's do, is refused
+  until those declarations are repaired.
+
+- **BREAKING** **shapes, validate, cli, python, wasm, capi:** the lint report gains a
+  fourth section, `validators N` (`validators unavailable` over a refused graph), with
+  one `alternative <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE superseded-by-native`
+  line per validator declared for a built-in component; never a finding.
+  `LintReport::alternative_validators` and the new
+  `purrdf_shapes::validator_alternatives` module (`AlternativeValidator`,
+  `ValidatorLanguage`) carry it, `LinkedDeclarations` gains `alternative_validators`,
+  and Python's `lint_shapes` dict gains `"alternatives"`.
+
+- **BREAKING** **core, shapes, entail, validate, cli, python, wasm, capi:** one import
+  rule reads OWL headers and SHACL shapes-graph roles in every engine. An `owl:imports`
+  on EVERY SHACL instance of `sh:ShapesGraph` — typed `sh:ShapesGraph` or
+  `sh:RulesGraph`, or typed a class the document declares `rdfs:subClassOf*`
+  `sh:ShapesGraph` — is now an import (SHACL 1.2 Core §6.1), in validation, rules,
+  node expressions, lint, shapes products and entailment alike: unsupplied it is refused
+  by name, supplied it is merged. Such a triple was data before. OWL 2's `owl:Ontology`
+  header is read through `rdfs:subClassOf*` too. A node whose only graph role is
+  `sh:DataGraph` still imports nothing (SHACL 1.2 Core §6.2, "owl:imports in the data
+  graph is not enacted"), and the data graph's own `owl:imports` are never enacted
+  whatever they sit on. An import of `<X>` is now also resolved in place when the closure
+  declares `<X> a sh:ShapesGraph`. The kernel's module documentation no longer claims to
+  name no vocabulary beyond OWL's (`docs/SUPERSEDED-CLAIMS.md`).
+
+- **BREAKING** **shapes, validate, cli, python, wasm, capi:** the lint report text gains
+  the `unanchored-imports N` section between `unexecuted` and `findings` on every host,
+  so a consumer that matched the report's tail sees one more section.
 
 - **BREAKING** **toolchain:** the MSRV is now 1.98, raised from 1.96.
   `Reassociated` uses `f64::algebraic_*`, which was stabilized as
@@ -3322,6 +4478,157 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   this suite's rule, not a MAJOR one, because no existing call can compile to a
   different answer.
 
+- **BREAKING** **shapes:** `Constraint` (not `#[non_exhaustive]`): `Class`,
+  `Datatype` and `NodeKind` hold a `Vec` (a SHACL list is a disjunction); `Equals`,
+  `Disjoint`, `LessThan` and `LessThanOrEquals` hold a `Path` instead of a
+  `NamedNode`; `Closed` gains `mode: ClosedMode`; `Sparql`, `Expression`,
+  `NodeByExpression` and `Component` replace `message: Option<String>` with
+  `messages: Vec<Literal>`; `Sparql` and `Component` gain `annotations:
+  Vec<ResultAnnotation>`; and the variants listed under Added are new, so an
+  exhaustive match must handle them.
+
+- **BREAKING** **shapes:** `Target` (not `#[non_exhaustive]`) gains `NodeExpression`
+  and `Where`; `NodeKindValue` (not `#[non_exhaustive]`) gains `TripleTerm`;
+  `Severity` (not `#[non_exhaustive]`) gains `Debug` and `Trace`, ordered after
+  `Info` and before `Other`.
+
+- **BREAKING** **shapes:** the report types, none `#[non_exhaustive]`, all with
+  public fields. `ValidationResult` replaces `message: Option<String>` with
+  `messages: Vec<Literal>` and gains `details` and `annotations`;
+  `ValidationReport` gains `conformance_disallows`, so build one with
+  `ValidationReport::from_results`. `sparql::eval_sparql_constraint` takes the
+  constraint's result annotations (`&[ResultAnnotation]`) after its messages.
+
+- **BREAKING** **shapes:** the shapes model, none `#[non_exhaustive]`. `Shape` and
+  `PropertyShape` replace `message` with `messages: Vec<Literal>` and gain
+  `constraint_annotations`; `PropertyShape` gains `values` and `default_value`;
+  `Shapes` gains `rules`, and `Shapes::node_shapes` also holds every shape a
+  data-graph `sh:shape` could name. `NodeExpr::InstancesOf` holds a node expression
+  instead of a `NamedNode`.
+
+- **BREAKING** **shapes:** the rules model, none `#[non_exhaustive]`. `Rule` replaces
+  `schedule: RuleSchedule` with `layer`, `run_once` and `processors` and gains
+  `expected_predicates`; `RuleBody::Triple`'s fields are `Option<NodeExpr>`;
+  `RuleBody::Sparql` gains `parameters`. `RuleSchedule`,
+  `construct_template_mints_blank` and `node_expr_mints_blank` are removed. SHACL
+  rules now run as SHACL 1.2 Inference Rules specifies: `sh:layer` defines the strata
+  and `sh:order` no longer does; only `sh:runOnce` makes a rule run-once, so a rule
+  minting blank nodes on every pass without it is stopped by the term-generating
+  round limit; a triple rule's missing `sh:subject`, `sh:predicate` or `sh:object`
+  defaults to the focus node and an ill-formed derived triple is skipped rather than
+  an error; and an untyped rule node, an unknown rule term or an unregistered
+  `sh:ruleProcessor` fails.
+
+- **BREAKING** **shapes:** validation answers change. A shapes graph that relied on a
+  silently dropped term is refused at load, on a SHACL-SPARQL constraint, validator
+  or target node as on a shape; results of a SPARQL-based constraint or validator
+  that declares `sh:resultAnnotation` carry its annotations; `sh:reifierShape` and
+  `sh:reificationRequired` results carry the value node as `sh:value`, one
+  `sh:reifierShape` result per non-conforming reifier with the reifier's own results
+  as `sh:detail`; `sh:uniqueLang` no longer
+  reports values that differ only in base direction; `sh:defaultValue` on a property
+  shape now changes results; a node typed `rdfs:Class` only through its parameters no
+  longer gets an implicit class target; and a SHACL-SPARQL query without
+  `sh:prefixes` uses the implicit declarations, while conflicting or malformed
+  declarations it reaches fail the load.
+
+- **BREAKING** **shapes:** node-expression answers change: `filterShape`, `distinct`
+  and `orderBy` output order; `sh:if` no longer coerces its condition; and a
+  `sparql:` call with an argument producing several nodes is an evaluation failure.
+
+- **BREAKING** **shapes:** `text_ingest::extract_prefixes` is removed; take the
+  prefixes from `parse_turtle_document`. The prepared-product stage id covers the
+  spec table and the new model, so a product written by an earlier build is refused
+  and must be rebuilt.
+
+- **BREAKING** **shapes, rdf-core:** JSON Schema output changes for every construct
+  listed under Fixed; the instance projector emits triple terms as JSON-LD-star
+  embedded nodes; `sh:pattern` with the `i` flag compiles with a recorded loss
+  instead of failing with `SchemaCompileError::Pattern`; and the SHACL to JSON Schema
+  loss profile gains and rewords codes, with the transcode loss matrix regenerated.
+
+- **BREAKING** **rdf:** `ParseOutcome` (not `#[non_exhaustive]`, public fields) gains
+  `document_prefixes`, so a struct literal must name it.
+
+- **BREAKING** **validate:** `SarifOptions` (not `#[non_exhaustive]`) gains
+  `validation`, and `SarifResult` (not `#[non_exhaustive]`) gains `properties` and
+  `kind`, so a struct literal must name them (`..Default::default()` suffices for
+  `SarifOptions`). `regime::certain_answers_to_string`, `graph_entails_to_string` and
+  `verify_entailment_to_string` take `premise_iris: &[&str]`, the IRIs the premise
+  document was read from.
+
+- **BREAKING** **cli:** `purrdf validate --shapes` and `purrdf shacl pack` refuse an
+  unresolved `owl:imports` (exit 1), naming each IRI and the `--import` or
+  `--shapes-base` remedy, instead of warning and validating against the shapes graph
+  alone.
+
+- **BREAKING** **python:** SHACL result dicts carry `messages`, a list of dicts with
+  `text` and optional `language`, `direction` and `datatype`, instead of `message`.
+  `entail.certain_answers`, `entail.graph_entails` and `entail.verify_entailment`
+  take a required `premise_iris` argument after `imports`.
+
+- **BREAKING** **wasm:** `entailCertainAnswers`, `entailGraphEntails` and
+  `entailVerifyEntailment` take a required `premiseIris` argument after
+  `importDocuments`.
+
+- **BREAKING** **capi:** `purrdf_shacl_validate_to_sarif` gains
+  `conformance_disallows` and `conformance_disallows_count` between `data_nt` and
+  `out_buffer`, and `purrdf_entail_certain_answers`, `purrdf_entail_graph_entails`
+  and `purrdf_entail_verify_entailment` gain `premise_iris` and `premise_iri_count`
+  between `import_count` and `out_answer`. All four change within the unreleased 0.8
+  ABI, and a host built against 0.7 must recompile.
+
+- **BREAKING** **shapes:** a shapes graph's `owl:imports` closure is resolved or
+  refused by every shapes-graph entry point, not by the command line and the
+  product packer alone. Before, the same shapes graph was refused by
+  `purrdf validate`, validated by the engine API, Python, WebAssembly and C against
+  the importing document alone, given an empty inference graph by `apply_rules`,
+  and certified clean by `lint_shapes`. Every `Shapes` constructor now resolves the
+  closure through `resolve_shapes_imports` before reading a shape, merges the
+  supplied documents (their prefix maps join the fallback environment), and refuses
+  an import nothing resolves — and a table entry nothing imports — with
+  `ShapesError::Imports`. A caller whose shapes graph imports a document it does not
+  contain must now supply it, or declare the ontology in place. The constructors
+  and the engine's text entry points (`parse_shapes`, `parse_shapes_with_config`,
+  `validate_graphs`, `validate_graphs_with_options`, `validate_graphs_with_config`,
+  `validate_dataset_graphs`, `entail_graphs`, `free_expression::evaluate`,
+  `lint::lint`) return `ShapesError` instead of `String`;
+  `from_dataset_with_base`, `from_dataset_with_node_expressions`,
+  `parse_shapes_with_config`, `validate_graphs_with_options`,
+  `validate_graphs_with_config`, `validate_dataset_graphs`, `entail_graphs` and
+  `lint::lint` take a `&ShapesImports`, and `FreeExpression` gains `imports`. `lint`
+  certifies the merged closure and refuses an incomplete one rather than reporting
+  it in the `load` section.
+
+- **BREAKING** **validate:** `validate_to_sarif_string`,
+  `validate_changes_to_sarif_string`, `entail_to_ntriples_string`,
+  `lint_shapes_ttl` and `pack_shapes_product` take a `ShapesImportList` of
+  `(IRI, Turtle)` pairs and return `ShapesError` where they returned `String`;
+  `pack_shapes_product_from_dataset` takes a `&ShapesImports`; `RulesRequest` gains
+  `shapes_imports` and `NodeExprRequest` gains `imports`.
+  `ShapesProductRefusal::Shapes` carries a `ShapesError`, an unresolved import is
+  that variant (with `import_error()`) rather than an `unsupported-capability`
+  admission refusal, and `ShapesProductRefusal::message` returns a `Cow<str>`.
+
+- **BREAKING** **entail:** `ImportMap::rif_resolver(&self)` is the free function
+  `rif_resolver(&ImportMap)`: `ImportMap` is now a `purrdf-core` type.
+
+- **BREAKING** **capi:** `purrdf_shacl_validate_to_sarif`,
+  `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_entail_to_ntriples`,
+  `purrdf_shacl_apply_rules`, `purrdf_shacl_eval_node_expr`,
+  `purrdf_shacl_lint_shapes` and `purrdf_shapes_product_encode` gain `import_iris`,
+  `import_documents` and `import_count` before their out-parameters, within the
+  unreleased 0.8 ABI; a host built against 0.7 must recompile. An unresolved import
+  is `PURRDF_STATUS_SHAPES_IMPORT_ERROR`, where `purrdf_shapes_product_encode`
+  returned `PURRDF_STATUS_SHAPES_PRODUCT_ERROR` and the other six validated the
+  importing document alone.
+
+- **datalog:** `BudgetResource` gains `TermGeneratingRounds`, `EvalError` gains
+  `Guard`, `ModelReadingGuard`, `NonStratifiableRules`, `MalformedSchedule` and
+  `LayerHook`, `ChaseError` gains `GuardedClause`, and `ProofError` gains
+  `GuardedRule`. All four enums are `#[non_exhaustive]`, so no existing match breaks;
+  the variants are the refusals the guarded and scheduled evaluation adds.
+
 ### Features
 
 - **shapes:** Prepared SHACL products. `PreparedShapes::to_product` writes a
@@ -3688,9 +4995,9 @@ component, and an `sh:expression` function call.
   binding writes into is memoized and rewritten in place rather than rebuilt from scratch on
   every run. Combined with retaining the evaluator's scratch interner across runs and deciding
   once, rather than separately at each call site, what a pre-bound value may be used for, the
-  per-focus-node allocation cost fell from 96 / 214 / 116 / 194 to 51 / 114 / 64 / 127 across the
-  four surfaces respectively, and to 49 / 112 / 62 / 123 once the evaluation's height check
-  stopped allocating a traversal vector per expression.
+  per-focus-node allocation cost fell from 96 / 214 / 116 / 194 to 49 / 112 / 62 / 123 across the
+  four surfaces respectively; the evaluation's height check allocates no traversal vector per
+  expression.
 
 - CONSTRUCT template instantiation and SPARQL Update's insert/delete/graph-slot templates
   resolved every variable position by lookup again on every output row; the resolution now

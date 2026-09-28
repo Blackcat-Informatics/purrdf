@@ -49,7 +49,8 @@ print(results[0]["conformant"])
 ```
 
 SHACL 结果字典保留稳定的键 `focus`、`path`、`value`、`severity`、`component`、
-`source_shape` 与 `message`。两个引擎各自覆盖的范围见 [SHACL](../validation/shacl.md)
+`source_shape` 与 `messages`（每条 `sh:resultMessage`，连同其语言标签与方向）。两个引擎
+各自覆盖的范围见 [SHACL](../validation/shacl.md)
 与 [ShEx](../validation/shex.md)。
 
 ## 蕴涵

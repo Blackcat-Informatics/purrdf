@@ -28,7 +28,7 @@ pub mod composite;
 pub mod dataset;
 /// Deterministic, mmap-native embedding companions bound to exact pack bytes.
 pub mod embedding;
-// The copy-on-write, suppression-delta mutable dataset + `DatasetMut` impl (P5).
+// The copy-on-write, suppression-delta mutable dataset + `DatasetMut` impl.
 pub mod mutable;
 pub mod view_accounting;
 // Evented, ID-addressed OUTPUT of a frozen dataset (C6): the dual of the
@@ -38,7 +38,7 @@ pub mod event_sink;
 // (`GlobalTermId`) and its value-interner (`GlobalDictionary`), for paged /
 // cross-segment backends. NEVER widens the frozen dataset's u32 `TermId` niche.
 pub mod global;
-// The permissive-ingestion adapter (purrdf P6): an `RdfEventSink` (the
+// The permissive-ingestion adapter: an `RdfEventSink` (the
 // `purrdf-events` protocol) that buffers forward references and freezes a dataset
 // at `finish()`, plus the frozen-IR-replay `RdfEventSource` that drives it.
 pub mod import;

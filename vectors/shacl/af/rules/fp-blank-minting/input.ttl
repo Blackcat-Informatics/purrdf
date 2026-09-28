@@ -1,5 +1,9 @@
 # First-party SHACL Rules case: blank-minting SPARQLRule.
 # The CONSTRUCT mints a FRESH blank node per focus node for the address resource.
+# The rule is a run-once rule (sh:runOnce true): SHACL 1.2 Inference Rules, "some
+# rules may produce fresh blank nodes with each execution and therefore cause
+# infinite iterations. Rules may use the property sh:runOnce to instruct a rules
+# engine that the rule is only executed once".
 # The derived graph is compared by RDF isomorphism (RDFC-1.0), so the minted
 # blank's label is irrelevant — only its structure matters.
 
@@ -14,5 +18,6 @@ ex:AddrRule
   sh:targetClass ex:Person ;
   sh:rule [
       rdf:type sh:SPARQLRule ;
+      sh:runOnce true ;
       sh:construct """CONSTRUCT { $this ex:addr _:a . _:a ex:city ex:Metropolis . }
                       WHERE { $this a ex:Person }""" ] .

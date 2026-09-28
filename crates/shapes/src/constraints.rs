@@ -12,17 +12,22 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 use std::sync::OnceLock;
 
-use ::purrdf::{FastMap, FastSet, IdSet, TermId, TermRef};
+use ::purrdf::{FastMap, FastSet, IdSet, RdfTextDirection, TermId, TermRef};
 use smallvec::SmallVec;
 
 use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
 use crate::engine::FocusNode;
 use crate::model::{BoxRoleVocab, rdf, sh};
 use crate::path;
-use crate::plan::{PlannedConstraint, PropertyPlan, RangeBound, ShapePlan};
-use crate::report::ValidationResult;
-use crate::shapes::{ComponentValidator, NodeKindValue, Path, PropertyShape, Shape};
-use crate::term::{NamedNode, Term, Triple, canonical_cmp_ids, term_id_to_native};
+use crate::plan::{
+    DatasetBinding, PairPath, PlannedConstraint, PropertyPlan, RangeBound, ShapePlan,
+};
+use crate::report::{ConformanceDisallows, Severity, ValidationResult};
+use crate::shapes::{
+    AnnotatedConstraint, ComponentValidator, ConstraintAnnotation, NodeKindValue, Path,
+    PropertyShape, Shape, annotation_for,
+};
+use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids, term_id_to_native};
 
 /// Internal value-node currency for the constraint layer.
 ///
@@ -146,6 +151,33 @@ impl ValueNode {
         }
     }
 
+    /// Borrow the `(language tag, base direction)` pair of a language-tagged
+    /// literal value node without materializing an interned id; `None` for any
+    /// other node. The direction is `None` for an `rdf:langString`, and
+    /// `Some` for an RDF 1.2 `rdf:dirLangString`.
+    fn language_and_direction<'a>(
+        &'a self,
+        ds: &'a impl ShaclRead,
+    ) -> Option<(&'a str, Option<RdfTextDirection>)> {
+        match self {
+            Self::Interned(id) => match ds.resolve(*id) {
+                TermRef::Literal {
+                    language: Some(language),
+                    direction,
+                    ..
+                } => Some((language, direction)),
+                TermRef::Literal { language: None, .. }
+                | TermRef::Iri(_)
+                | TermRef::Blank { .. }
+                | TermRef::Triple { .. } => None,
+            },
+            Self::Foreign(Term::Literal(literal)) => literal
+                .language()
+                .map(|language| (language, literal.direction())),
+            Self::Foreign(Term::NamedNode(_) | Term::BlankNode(_) | Term::Triple(_)) => None,
+        }
+    }
+
     /// Borrow `(lexical, datatype IRI)` for a literal value node.
     fn literal_parts<'a>(&'a self, ds: &'a impl ShaclRead) -> Option<(&'a str, &'a str)> {
         let view = self.literal_view(ds)?;
@@ -242,19 +274,99 @@ impl ValueKind {
 /// Keeping this separate from [`Shape`] lets property-shape evaluation borrow
 /// the three fields it needs instead of cloning an entire synthetic shape for
 /// every focus node.
+///
+/// `severity` and `message` are the ones the constraint's results carry by
+/// default: its reifier annotation's when it has one, else its shape's.
 #[derive(Clone, Copy)]
 struct ConstraintSource<'a> {
     id: &'a Term,
-    severity: &'a crate::report::Severity,
-    message: &'a Option<String>,
+    severity: &'a Severity,
+    messages: &'a [Literal],
+    /// Whether `severity` is a reifier annotation on the constraint's own
+    /// statements, which beats the severity a SHACL-SPARQL constraint node or a
+    /// custom component declares for itself.
+    pinned_severity: bool,
+    /// As `pinned_severity`, for `messages`.
+    pinned_messages: bool,
 }
 
-impl<'a> From<&'a Shape> for ConstraintSource<'a> {
-    fn from(shape: &'a Shape) -> Self {
+impl<'a> ConstraintSource<'a> {
+    /// The source of a constraint of the shape `id`, whose own severity and
+    /// message are `severity` and `message`, under the constraint's reifier
+    /// `annotation` if it has one.
+    ///
+    /// SHACL 1.2 Core, "Severity (sh:resultSeverity)": the value is "the value of
+    /// sh:severity at a reifier of any of the triples containing the parameters of
+    /// the constraint that caused the result", then "the value of sh:severity of
+    /// the shape in the shapes graph that caused the result", then `sh:Violation`;
+    /// and "Messages declared using reification have precedence over those
+    /// declared at the surrounding shape".
+    #[inline]
+    fn annotated(
+        id: &'a Term,
+        severity: &'a Severity,
+        messages: &'a [Literal],
+        annotation: Option<&'a ConstraintAnnotation>,
+    ) -> Self {
+        let pinned_severity = annotation.and_then(|a| a.severity.as_ref());
+        let pinned_messages = annotation
+            .map(|a| a.messages.as_slice())
+            .filter(|pinned| !pinned.is_empty());
         Self {
-            id: &shape.id,
-            severity: &shape.severity,
-            message: &shape.message,
+            id,
+            severity: pinned_severity.unwrap_or(severity),
+            messages: pinned_messages.unwrap_or(messages),
+            pinned_severity: pinned_severity.is_some(),
+            pinned_messages: pinned_messages.is_some(),
+        }
+    }
+
+    /// The `index`-th node-level constraint of `shape`.
+    #[inline]
+    fn of_shape(shape: &'a Shape, index: usize) -> Self {
+        Self::annotated(
+            &shape.id,
+            &shape.severity,
+            &shape.messages,
+            annotation_for(
+                &shape.constraint_annotations,
+                AnnotatedConstraint::Constraint(index),
+            ),
+        )
+    }
+
+    /// The `which` constraint of the property shape `ps`.
+    #[inline]
+    fn of_property(ps: &'a PropertyShape, which: AnnotatedConstraint) -> Self {
+        Self::annotated(
+            &ps.id,
+            &ps.severity,
+            &ps.messages,
+            annotation_for(&ps.constraint_annotations, which),
+        )
+    }
+
+    /// The severity of a result whose constraint node declares `own`: a pinned
+    /// reifier severity, else `own`, else the shape's.
+    fn severity_over(&self, own: Option<&Severity>) -> Severity {
+        if self.pinned_severity {
+            self.severity.clone()
+        } else {
+            own.unwrap_or(self.severity).clone()
+        }
+    }
+
+    /// The messages of a result whose constraint node declares `own`, ordered as
+    /// [`Self::severity_over`] orders severities: a pinned reifier set, else the
+    /// node's own set when it declares one, else the shape's.
+    fn messages_over<'b>(&self, own: &'b [Literal]) -> &'b [Literal]
+    where
+        'a: 'b,
+    {
+        if self.pinned_messages || own.is_empty() {
+            self.messages
+        } else {
+            own
         }
     }
 }
@@ -345,12 +457,15 @@ trait ResultSink {
     /// compiled into that traversal.
     const RECORDS_RESULTS: bool;
 
-    /// Record one violation.
+    /// Record one violation of `severity`.
     ///
-    /// `build` produces the result this violation would be REPORTED as. It is
-    /// invoked if and only if [`Self::RECORDS_RESULTS`], so a caller may put
-    /// arbitrary reporting work inside it.
-    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow;
+    /// `build` produces the result this violation would be REPORTED as, and the
+    /// result it builds carries exactly `severity`. It is invoked if and only if
+    /// [`Self::RECORDS_RESULTS`], so a caller may put arbitrary reporting work
+    /// inside it. The severity travels beside the builder rather than inside it
+    /// because a conformance probe judges it without building anything: whether a
+    /// result blocks conformance is decided by the run's conformance-disallow set.
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow;
 }
 
 /// The reporting sink: every result is kept, and the traversal always runs to
@@ -364,22 +479,42 @@ impl ResultSink for Collect {
     const RECORDS_RESULTS: bool = true;
 
     #[inline]
-    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow {
+    fn violation(
+        &mut self,
+        _severity: &Severity,
+        build: impl FnOnce() -> ValidationResult,
+    ) -> Flow {
         self.results.push(build());
         Flow::Continue
     }
 }
 
-/// The conformance sink: records THAT a violation exists and stops the traversal.
+/// The conformance sink: records THAT a disallowed violation exists and stops the
+/// traversal.
 ///
-/// SHACL conformance is "produces no results", so the first violation settles it
-/// and everything after it is work whose answer is already known.
-#[derive(Default)]
-struct AnyViolation {
+/// SHACL 1.2 Core, "Conformance Checking": "A focus node conforms to a shape if
+/// and only if the set of result of the validation of the focus node against the
+/// shape does not contain any validation results with a severity level of the set
+/// of disallowed levels and no failure has been reported by it." So the first
+/// result whose severity is in the run's disallow set settles it, and everything
+/// after it is work whose answer is already known; a result whose severity is not
+/// in the set (an `sh:Debug` one, under the default set) leaves the verdict open
+/// and the traversal continues.
+struct AnyViolation<'d> {
     seen: bool,
+    disallows: &'d ConformanceDisallows,
 }
 
-impl AnyViolation {
+impl<'d> AnyViolation<'d> {
+    /// A probe that judges results against `disallows`.
+    #[inline]
+    const fn new(disallows: &'d ConformanceDisallows) -> Self {
+        Self {
+            seen: false,
+            disallows,
+        }
+    }
+
     /// The conformance verdict this probe reached.
     #[inline]
     const fn conforms(&self) -> bool {
@@ -387,13 +522,21 @@ impl AnyViolation {
     }
 }
 
-impl ResultSink for AnyViolation {
+impl ResultSink for AnyViolation<'_> {
     const RECORDS_RESULTS: bool = false;
 
     #[inline]
-    fn violation(&mut self, _build: impl FnOnce() -> ValidationResult) -> Flow {
-        self.seen = true;
-        Flow::Stop
+    fn violation(
+        &mut self,
+        severity: &Severity,
+        _build: impl FnOnce() -> ValidationResult,
+    ) -> Flow {
+        if self.disallows.contains(severity) {
+            self.seen = true;
+            Flow::Stop
+        } else {
+            Flow::Continue
+        }
     }
 }
 
@@ -413,9 +556,9 @@ impl<S: ResultSink> ResultSink for NodeRoles<'_, S> {
     const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
 
     #[inline]
-    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow {
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow {
         let roles = self.roles;
-        self.inner.violation(move || {
+        self.inner.violation(severity, move || {
             let mut result = build();
             if !roles.is_empty() {
                 result.apply_box_roles(roles, &[]);
@@ -508,9 +651,9 @@ impl<S: ResultSink> ResultSink for Stamped<'_, S> {
     const RECORDS_RESULTS: bool = S::RECORDS_RESULTS;
 
     #[inline]
-    fn violation(&mut self, build: impl FnOnce() -> ValidationResult) -> Flow {
+    fn violation(&mut self, severity: &Severity, build: impl FnOnce() -> ValidationResult) -> Flow {
         let stamp = self.stamp;
-        self.inner.violation(move || {
+        self.inner.violation(severity, move || {
             let mut result = build();
             stamp.apply(&mut result);
             result
@@ -669,7 +812,7 @@ fn conforms_memoized<'a>(
     {
         return Ok(recorded);
     }
-    let mut probe = AnyViolation::default();
+    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
     walk_shape(context.inner(plan), focus, &mut probe)?;
     let verdict = probe.conforms();
     if let Some(key) = key {
@@ -682,7 +825,9 @@ fn conforms_memoized<'a>(
 
 /// Validate a single focus node against a shape, returning all `ValidationResult`s.
 ///
-/// Any result ⇒ non-conformance (regardless of severity).  Recurses for
+/// Whether the results make the focus node non-conforming is decided by their
+/// severities against the conformance-disallow set (see
+/// [`crate::report::ConformanceDisallows`]); this returns every result.  Recurses for
 /// `sh:and`, `sh:or`, `sh:xone`, and `sh:node` constraints.
 ///
 /// A `deactivated` shape produces no results.
@@ -746,7 +891,7 @@ pub(crate) fn validate_shape_with_plan_at(
 /// rather than once per call.
 struct OneShotLowering<'a> {
     lowered: crate::plan::LoweredShapes,
-    binding: crate::plan::DatasetBinding,
+    binding: DatasetBinding,
     shape: &'a Shape,
 }
 
@@ -864,14 +1009,14 @@ fn walk_shape<S: ResultSink>(
             inner: &mut *sink,
             roles: &shape.box_roles,
         };
-        for (constraint, lowered) in plan.constraints()? {
+        for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
             if eval_constraint(
                 context,
                 focus,
                 &node_value_nodes,
                 plan.planned(constraint, lowered)?,
                 None,
-                ConstraintSource::from(shape),
+                ConstraintSource::of_shape(shape, index),
                 &mut node_sink,
             )?
             .stopped()
@@ -894,9 +1039,21 @@ fn walk_shape<S: ResultSink>(
     // the OFFENDING PREDICATE's path roles — so closed-world violations carry the
     // same predicate attribution that property-shape results do — violations
     // must not drop their predicate role.
-    for (constraint, lowered) in plan.constraints()? {
-        if let PlannedConstraint::Closed { permitted } = plan.planned(constraint, lowered)?
-            && eval_closed(context, focus, shape, permitted, sink).stopped()
+    for (index, (constraint, lowered)) in plan.constraints()?.enumerate() {
+        if let PlannedConstraint::Closed {
+            permitted,
+            by_types,
+        } = plan.planned(constraint, lowered)?
+            && eval_closed(
+                context,
+                focus,
+                shape,
+                ConstraintSource::of_shape(shape, index),
+                permitted,
+                by_types,
+                sink,
+            )
+            .stopped()
         {
             return Ok(Flow::Stop);
         }
@@ -905,19 +1062,27 @@ fn walk_shape<S: ResultSink>(
     Ok(Flow::Continue)
 }
 
-/// Evaluate `sh:closed` against a focus node (SHACL §4.8.1).
+/// Evaluate `sh:closed` against a focus node (SHACL 1.2 Core §7.9.1).
 ///
-/// The permitted predicate set is the union of:
+/// Under `sh:closed true` the permitted predicate set is the union of:
 /// - every simple-predicate `sh:path` of the shape's property shapes (an inverse
 ///   path constrains incoming, not outgoing, triples and so does not permit an
 ///   outgoing predicate); and
 /// - the `sh:ignoredProperties` list.
 ///
-/// `rdf:type` is NOT implicitly permitted: per the spec (and W3C
+/// `rdf:type` is NOT implicitly permitted there: per the spec (and W3C
 /// `core/node/closed-001`), a closed shape reports EVERY predicate not
 /// declared by `sh:property` or listed in `sh:ignoredProperties` — shapes that
 /// want to allow `rdf:type` must list it in `sh:ignoredProperties`
 /// (`core/node/closed-002` does exactly that).
+///
+/// Under `sh:closed sh:ByTypes` (`by_types` is `Some`), `permitted` holds
+/// `rdf:type` and `sh:ignoredProperties`, and a predicate outside it is still
+/// permitted when `collectProperties(T)` reaches it for some `rdf:type` value `T`
+/// of the focus node in the data graph. Those types are read from the focus
+/// node's own `rdf:type` quads only for a predicate the type-independent set does
+/// not already permit, and looked up by identity in the bound index, so a
+/// conforming focus node allocates nothing.
 ///
 /// One result per focus-node outgoing triple whose predicate is not permitted.
 ///
@@ -941,7 +1106,9 @@ fn eval_closed<S: ResultSink>(
     context: ValidationContext<'_, '_>,
     focus: &FocusNode,
     shape: &Shape,
+    source: ConstraintSource<'_>,
     permitted: &FastSet<TermId>,
+    by_types: Option<crate::plan::ClosedByTypes<'_>>,
     sink: &mut S,
 ) -> Flow {
     // A focus node this data graph does not intern has no outgoing quads at all,
@@ -954,7 +1121,9 @@ fn eval_closed<S: ResultSink>(
         return Flow::Continue;
     };
     for quad in quads_for_pattern_ids(ds, Some(focus_id), None, None, GraphFilter::AnyGraph) {
-        if permitted.contains(&quad.p) {
+        if permitted.contains(&quad.p)
+            || by_types.is_some_and(|by_types| permitted_by_types(ds, focus_id, quad.p, by_types))
+        {
             continue;
         }
         // Past the permitted probe this quad IS a violation, so materializing its
@@ -966,7 +1135,7 @@ fn eval_closed<S: ResultSink>(
         let Term::NamedNode(predicate) = term_id_to_native(ds, quad.p) else {
             continue;
         };
-        let flow = sink.violation(|| {
+        let flow = sink.violation(source.severity, || {
             // Resolve the offending predicate's graph-box roles (the same
             // resolution property shapes use for their path) so closed-world
             // results are not left with empty path attribution.
@@ -979,12 +1148,14 @@ fn eval_closed<S: ResultSink>(
                 value: Some(term_id_to_native(ds, quad.o)),
                 source_constraint_component: NamedNode::from(sh::CLOSED_CONSTRAINT_COMPONENT),
                 source_shape: shape.id.clone(),
-                severity: shape.severity.clone(),
-                message: shape.message.clone(),
+                severity: source.severity.clone(),
+                messages: source.messages.to_vec(),
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
                 attributions: vec![],
+                details: vec![],
+                annotations: vec![],
             };
             result.apply_box_roles(&shape.box_roles, &path_roles);
             result
@@ -996,8 +1167,31 @@ fn eval_closed<S: ResultSink>(
     Flow::Continue
 }
 
-/// Returns `true` iff the focus node produces zero validation results against
-/// the shape (i.e., it fully conforms).
+/// Whether some `rdf:type` value `T` of the focus node permits `predicate` under
+/// `sh:closed sh:ByTypes` — whether `collectProperties(T)` reaches it.
+fn permitted_by_types(
+    ds: &impl ShaclRead,
+    focus: TermId,
+    predicate: TermId,
+    by_types: crate::plan::ClosedByTypes<'_>,
+) -> bool {
+    let Some(rdf_type) = by_types.rdf_type else {
+        return false;
+    };
+    quads_for_pattern_ids(ds, Some(focus), Some(rdf_type), None, GraphFilter::AnyGraph).any(
+        |quad| {
+            by_types
+                .types
+                .get(&quad.o)
+                .is_some_and(|properties| properties.contains(&predicate))
+        },
+    )
+}
+
+/// Returns `true` iff the focus node conforms to the shape: it produces no
+/// validation result whose severity is in the DEFAULT conformance-disallow set
+/// (`sh:Violation`, `sh:Warning`, `sh:Info`) — a bare shape carries no validation
+/// request, so SHACL's default set is the one it is judged against.
 ///
 /// This convenience entry point lowers `shape` on every call — the whole
 /// cycle-aware walk, plus one interning probe per constant it names. A caller that
@@ -1063,7 +1257,7 @@ pub(crate) fn conforms_with_id_depth(
         depth,
         memo: &memo,
     };
-    let mut probe = AnyViolation::default();
+    let mut probe = AnyViolation::new(context.plan.binding().conformance_disallows());
     walk_shape(context, focus, &mut probe)?;
     Ok(probe.conforms())
 }
@@ -1105,30 +1299,9 @@ fn eval_property_shape<'a, S: ResultSink>(
     if ps.deactivated {
         return Ok(Flow::Continue);
     }
-    // Carry the value nodes id-native for the common interned-focus case
-    // ([`path::eval_ids`]); a non-interned SHACL-AF focus falls back to the
-    // owned-`Term` producer. Identity/set constraint arms then compare `TermId`s
-    // without materializing, and only the value nodes a violation records — or a
-    // content constraint inspects — are resolved to owned terms.
-    // The path is the LOWERED one: every predicate step carries the dataset
-    // identity resolved at bind, so a property shape evaluated across a million
-    // focus nodes hashes its predicate IRI zero times.
-    let lowered_path = property_plan.path();
-    let binding = context.plan.binding();
-    let value_nodes: SmallVec<[ValueNode; 4]> = match focus {
-        FocusNode::Interned(id) => {
-            path::eval_planned_ids_from_id(store.core_view(), *id, lowered_path, binding)?
-                .into_iter()
-                .map(ValueNode::Interned)
-                .collect()
-        }
-        FocusNode::Foreign(term) => {
-            path::eval_planned(store.core_view(), term, lowered_path, binding)?
-                .into_iter()
-                .map(ValueNode::Foreign)
-                .collect()
-        }
-    };
+    // The value nodes: the path's, plus `sh:values` / `sh:defaultValue` output
+    // (see `property_value_nodes`), id-native wherever the data graph interns them.
+    let value_nodes = property_value_nodes(store, focus, ps, property_plan, context.depth)?;
     // Report-only materialization is lazy: a conforming focus node never
     // allocates a native path term, clones a complex path structure, merges the
     // source graph-box roles, or scans the graph for the path's roles. All four
@@ -1143,13 +1316,7 @@ fn eval_property_shape<'a, S: ResultSink>(
         parent_box_roles,
         lazy: &lazy,
     };
-    let constraint_source = ConstraintSource {
-        id: &ps.id,
-        severity: &ps.severity,
-        message: &ps.message,
-    };
-
-    for (constraint, lowered) in property_plan.constraints(ps)? {
+    for (index, (constraint, lowered)) in property_plan.constraints(ps)?.enumerate() {
         // The stamp travels with the sink rather than being applied to a returned
         // vector, so the property shape's path, focus and roles are resolved
         // inside the result builder — which a conformance-only traversal never
@@ -1164,7 +1331,7 @@ fn eval_property_shape<'a, S: ResultSink>(
             &value_nodes,
             context.plan.planned(constraint, lowered)?,
             Some(&ps.path),
-            constraint_source,
+            ConstraintSource::of_property(ps, AnnotatedConstraint::Constraint(index)),
             &mut stamped,
         )?
         .stopped()
@@ -1222,6 +1389,137 @@ fn eval_property_shape<'a, S: ResultSink>(
         );
     }
     Ok(Flow::Continue)
+}
+
+/// The value nodes of property shape `ps` at `focus`.
+///
+/// SHACL 1.2 Core, "Value Nodes of Property Shapes": "For property shapes with a
+/// value for sh:path p the set of value nodes is produced by the following steps:
+/// Add all nodes in the data graph that can be reached from the focus node with
+/// the path mapping of p. If e is the value of sh:values at the property shape,
+/// then add the output nodes of evalExpr(e, data graph, focus node, {}). If the
+/// set is still empty and d is the value of sh:defaultValue at the property
+/// shape, then add the output nodes of evalExpr(d, data graph, focus node, {})."
+///
+/// So the computed nodes are UNIONED with the path's — a SET, so a computed node
+/// the path already reached is not added twice — and the default applies only
+/// when both produced nothing. Each expression is evaluated with the focus node as
+/// its focus and an empty scope, over the data graph; an evaluation failure is a
+/// validation error, exactly as an `sh:expression` constraint's is.
+///
+/// A property shape with neither expression — every shape SHACL Core writes —
+/// pays for the path walk alone: the two `Option` checks are the whole cost.
+///
+/// Carries the value nodes id-native for the common interned-focus case
+/// ([`path::eval_ids`]); a non-interned SHACL-AF focus falls back to the
+/// owned-`Term` producer. Identity/set constraint arms then compare `TermId`s
+/// without materializing, and only the value nodes a violation records — or a
+/// content constraint inspects — are resolved to owned terms. The path is the
+/// LOWERED one: every predicate step carries the dataset identity resolved at
+/// bind, so a property shape evaluated across a million focus nodes hashes its
+/// predicate IRI zero times. A computed node the data graph interns is carried as
+/// its identity too; one it does not intern (a computed literal, say) is carried
+/// as the term the expression produced.
+///
+/// # Errors
+///
+/// Returns an error when the path walk or an expression evaluation fails, or when
+/// the property shape and its lowering disagree.
+fn property_value_nodes(
+    store: &ShaclData,
+    focus: &FocusNode,
+    ps: &PropertyShape,
+    property_plan: PropertyPlan<'_>,
+    depth: u32,
+) -> Result<SmallVec<[ValueNode; 4]>, String> {
+    let lowered_path = property_plan.path();
+    let binding = property_plan.parent().binding();
+    let mut value_nodes: SmallVec<[ValueNode; 4]> = match focus {
+        FocusNode::Interned(id) => {
+            path::eval_planned_ids_from_id(store.core_view(), *id, lowered_path, binding)?
+                .into_iter()
+                .map(ValueNode::Interned)
+                .collect()
+        }
+        FocusNode::Foreign(term) => {
+            path::eval_planned(store.core_view(), term, lowered_path, binding)?
+                .into_iter()
+                .map(ValueNode::Foreign)
+                .collect()
+        }
+    };
+    let values = property_plan.values(ps)?;
+    let default_value = property_plan.default_value(ps)?;
+    if values.is_none() && default_value.is_none() {
+        return Ok(value_nodes);
+    }
+    let ds = store.core_view();
+    let focus_term = focus.to_term(ds);
+    let mut guard = crate::expression::RecursionGuard::with_depth(depth);
+    let mut computed = |expr: &crate::expression::NodeExpr,
+                        lowered: &crate::plan::LoweredExpr,
+                        value_nodes: &mut SmallVec<[ValueNode; 4]>,
+                        which: &str|
+     -> Result<(), String> {
+        let produced = crate::expression::eval_planned_node_expr(
+            store,
+            &focus_term,
+            expr,
+            lowered,
+            property_plan.parent(),
+            &mut guard,
+        )
+        .map_err(|e| format!("{which} of property shape {} at {focus_term}: {e}", ps.id))?;
+        for term in produced {
+            let node = match FocusNode::resolve(ds, &term) {
+                FocusNode::Interned(id) => ValueNode::Interned(id),
+                FocusNode::Foreign(term) => ValueNode::Foreign(term),
+            };
+            let present = value_nodes.iter().any(|existing| match (existing, &node) {
+                (ValueNode::Interned(a), ValueNode::Interned(b)) => a == b,
+                (ValueNode::Foreign(a), ValueNode::Foreign(b)) => a == b,
+                // `FocusNode::resolve` interns whatever the data graph interns, so an
+                // interned node and a foreign one are never the same term.
+                (ValueNode::Interned(_), ValueNode::Foreign(_))
+                | (ValueNode::Foreign(_), ValueNode::Interned(_)) => false,
+            });
+            if !present {
+                value_nodes.push(node);
+            }
+        }
+        Ok(())
+    };
+    if let Some((expr, lowered)) = values {
+        computed(expr, lowered, &mut value_nodes, "sh:values")?;
+    }
+    if value_nodes.is_empty()
+        && let Some((expr, lowered)) = default_value
+    {
+        computed(expr, lowered, &mut value_nodes, "sh:defaultValue")?;
+    }
+    Ok(value_nodes)
+}
+
+/// The value nodes of property shape `ps` at `focus`, as owned terms: the SHACL
+/// 1.2 Core "Value Nodes of Property Shapes" set [`property_value_nodes`]
+/// computes, for a caller outside validation — the rules engine's derived triples
+/// (SHACL 1.2 Inference Rules §3.8) — that speaks owned terms.
+///
+/// # Errors
+///
+/// As [`property_value_nodes`].
+pub(crate) fn property_value_terms(
+    store: &ShaclData,
+    focus: &Term,
+    ps: &PropertyShape,
+    property_plan: PropertyPlan<'_>,
+) -> Result<Vec<Term>, String> {
+    let ds = store.core_view();
+    let focus = FocusNode::resolve(ds, focus);
+    Ok(property_value_nodes(store, &focus, ps, property_plan, 0)?
+        .iter()
+        .map(|node| node.to_term(ds))
+        .collect())
 }
 
 /// Everything the reifier-shape evaluation needs from the `eval_property_shape`
@@ -1321,6 +1619,10 @@ fn eval_reifier_shapes<S: ResultSink>(
     let reifies_id = ds.term_id_by_iri(rdf::REIFIES);
 
     let source_roles = with_cbox_role(source_roles, context.box_role_vocab);
+    // The reifier-shape constraint's severity and message: its reifier
+    // annotation's when it has one, else the property shape's.
+    let source = ConstraintSource::of_property(ps, AnnotatedConstraint::Reifier);
+    let disallows = context.plan.binding().conformance_disallows();
     // The reifier identities of ONE value node's statement, in canonical term
     // order. Inline for the sizes a statement layer actually carries — a handful
     // of reifiers per statement — so the common case keeps the whole arm free of
@@ -1364,22 +1666,30 @@ fn eval_reifier_shapes<S: ResultSink>(
             _ => false,
         };
         if !reified && ps.reification_required {
-            let flow = sink.violation(|| {
+            // "If $reificationRequired is set to true and there is no reified
+            // statement for the triple term t in the data graph, there is a
+            // validation result with t as sh:value." The result's `sh:value` is
+            // the VALUE NODE, as the approved W3C tests state (see
+            // [`reifier_result`] for the reading): with the focus node and
+            // `sh:resultPath` beside it, it names the unreified statement exactly.
+            let flow = sink.violation(source.severity, || {
                 let mut result = ValidationResult {
                     focus_node: focus.to_term(ds),
                     result_path: Some(ctx.path_term().clone()),
                     path_structure: None,
-                    value: Some(reified_triple_term(ds, focus, predicate, value)),
+                    value: Some(value.to_term(ds)),
                     source_constraint_component: NamedNode::from(
                         sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT,
                     ),
                     source_shape: ps.id.clone(),
-                    severity: ps.severity.clone(),
-                    message: ps.message.clone(),
+                    severity: source.severity.clone(),
+                    messages: source.messages.to_vec(),
                     source_box_roles: vec![],
                     path_box_roles: vec![],
                     result_box_roles: vec![],
                     attributions: vec![],
+                    details: vec![],
+                    annotations: vec![],
                 };
                 result.apply_box_roles(&source_roles, path_roles);
                 result
@@ -1405,38 +1715,63 @@ fn eval_reifier_shapes<S: ResultSink>(
                     // this result's message, and this sink keeps no message. Probe
                     // for the first inner violation and stop there rather than
                     // collecting the rest.
-                    let mut probe = AnyViolation::default();
+                    let mut probe = AnyViolation::new(disallows);
                     walk_shape(reifier_context, &reifier_focus, &mut probe)?;
                     if probe.conforms() {
                         continue;
                     }
-                    let flow = sink.violation(|| {
-                        let message = reifier_shape.message.clone().or_else(|| ps.message.clone());
-                        reifier_result(&ctx, predicate, value, &source_roles, message, &[])
+                    let flow = sink.violation(source.severity, || {
+                        let messages = if source.pinned_messages {
+                            source.messages.to_vec()
+                        } else {
+                            first_messages(&[&reifier_shape.messages, &ps.messages])
+                        };
+                        reifier_result(&ctx, value, &source_roles, &source, messages, &[], vec![])
                     });
                     if flow.stopped() {
                         return Ok(Flow::Stop);
                     }
                     continue;
                 }
-                for inner in collect_shape(reifier_context, &reifier_focus)? {
-                    let flow = sink.violation(|| {
-                        let message = inner
-                            .message
-                            .or_else(|| reifier_shape.message.clone())
-                            .or_else(|| ps.message.clone());
-                        reifier_result(
-                            &ctx,
-                            predicate,
-                            value,
-                            &source_roles,
-                            message,
-                            &inner.source_box_roles,
-                        )
+                // Only an inner result the run's conformance-disallow set holds
+                // makes the reifier non-conforming — the same judgement the probe
+                // above makes, and so a report and a conformance check over this
+                // arm cannot disagree. A non-conforming reifier is ONE result
+                // however many inner results made it so: "For each reifier t that
+                // does not conform to $reifierShape, there is a validation result".
+                let mut inner = collect_shape(reifier_context, &reifier_focus)?;
+                inner.retain(|inner| disallows.contains(&inner.severity));
+                if inner.is_empty() {
+                    continue;
+                }
+                let flow = sink.violation(source.severity, || {
+                    let messages = if source.pinned_messages {
+                        source.messages.to_vec()
+                    } else {
+                        let mut candidates: Vec<&Vec<Literal>> =
+                            inner.iter().map(|inner| &inner.messages).collect();
+                        candidates.push(&reifier_shape.messages);
+                        candidates.push(&ps.messages);
+                        first_messages(&candidates)
+                    };
+                    let inner_roles = inner.iter().fold(Vec::new(), |roles, inner| {
+                        merge_box_roles(&roles, &inner.source_box_roles)
                     });
-                    if flow.stopped() {
-                        return Ok(Flow::Stop);
-                    }
+                    // The reifier's own results — each with the reifier as its
+                    // focus node — are the result's `sh:detail`, so the reifier
+                    // and why it fails are carried beside the value node.
+                    reifier_result(
+                        &ctx,
+                        value,
+                        &source_roles,
+                        &source,
+                        messages,
+                        &inner_roles,
+                        inner,
+                    )
+                });
+                if flow.stopped() {
+                    return Ok(Flow::Stop);
                 }
             }
         }
@@ -1444,60 +1779,66 @@ fn eval_reifier_shapes<S: ResultSink>(
     Ok(Flow::Continue)
 }
 
-/// One `sh:reifierShape` result: the enclosing property shape's focus node, path
-/// and quoted triple term, carrying `message` and the roles the inner result
-/// contributed.
+/// The first non-empty message set of `candidates`, whole — the messages of a
+/// result come from one declaration, never a mixture of several.
+fn first_messages(candidates: &[&Vec<Literal>]) -> Vec<Literal> {
+    candidates
+        .iter()
+        .find(|messages| !messages.is_empty())
+        .map_or_default(|messages| (*messages).clone())
+}
+
+/// One `sh:reifierShape` result: the enclosing property shape's focus node and
+/// path, the VALUE NODE as `sh:value`, the non-conforming reifier's own results
+/// (each with the reifier as focus node) as `sh:detail`, carrying `messages` and
+/// the roles the inner results contributed.
+///
+/// SHACL 1.2 Core §7.8.5's textual definition uses one name, `t`, for two
+/// things. It opens "Let t be the triple term (focus node, $path, value node)",
+/// and the reporting sentences read "For each reifier t that does not conform to
+/// $reifierShape, there is a validation result with t as sh:value" and "there is
+/// no reified statement for the triple term t in the data graph, there is a
+/// validation result with t as sh:value". The approved W3C SHACL 1.2 tests
+/// resolve the name: `core/property/reifierShape-001` (a non-conforming reifier)
+/// and `core/property/reifierShape-002` (`sh:reificationRequired` with no
+/// reifier) both expect `sh:value "invalid"` — the value node. PurRDF follows
+/// the approved suite's reading for both results.
+///
+/// No information is lost by it. One result is produced per non-conforming
+/// reifier per reifier shape, and the reifier is named by every one of its
+/// `sh:detail` results, whose focus node it is. SHACL 1.2 Core §6.7.2.6 is the
+/// licence: "The property sh:detail may link a (parent) result with one or more
+/// SHACL instances of sh:AbstractResult that can provide further details about
+/// the cause of the (parent) result."
 fn reifier_result(
     ctx: &ReifierEvalContext<'_, '_, '_>,
-    predicate: &NamedNode,
     value: &ValueNode,
     source_roles: &[NamedNode],
-    message: Option<String>,
+    source: &ConstraintSource<'_>,
+    messages: Vec<Literal>,
     inner_source_roles: &[NamedNode],
+    details: Vec<ValidationResult>,
 ) -> ValidationResult {
     let ds = ctx.context.store.core_view();
     let mut result = ValidationResult {
         focus_node: ctx.focus.to_term(ds),
         result_path: Some(ctx.path_term().clone()),
         path_structure: None,
-        value: Some(reified_triple_term(ds, ctx.focus, predicate, value)),
+        value: Some(value.to_term(ds)),
         source_constraint_component: NamedNode::from(sh::REIFIER_SHAPE_CONSTRAINT_COMPONENT),
         source_shape: ctx.ps.id.clone(),
-        severity: ctx.ps.severity.clone(),
-        message,
+        severity: source.severity.clone(),
+        messages,
         source_box_roles: vec![],
         path_box_roles: vec![],
         result_box_roles: vec![],
         attributions: vec![],
+        details,
+        annotations: vec![],
     };
     let merged = merge_box_roles(source_roles, inner_source_roles);
     result.apply_box_roles(&merged, ctx.path_roles);
     result
-}
-
-/// The quoted triple term `<< focus predicate value >>` as a report value.
-///
-/// **A materialization boundary, and the only one this arm has.** It is called
-/// from inside a result builder and nowhere else, so a statement that is reified
-/// as its shape requires never builds one — which is the whole difference between
-/// this and the owned triple the arm used to construct for every value node before
-/// anything was known about it.
-///
-/// It is built rather than looked up because it must exist even when the data
-/// graph interns no such term: a `sh:reificationRequired` violation REPORTS the
-/// statement that is missing its reifier, and a statement the graph never quoted
-/// is precisely the one most likely to be missing one.
-fn reified_triple_term(
-    ds: &impl ShaclRead,
-    focus: &FocusNode,
-    predicate: &NamedNode,
-    value: &ValueNode,
-) -> Term {
-    Term::Triple(Box::new(Triple::new(
-        focus.to_term(ds),
-        predicate.clone(),
-        value.to_term(ds),
-    )))
 }
 
 /// The reifier resources declared for one quoted triple term, id-native.
@@ -1645,7 +1986,7 @@ fn eval_constraint<'a, S: ResultSink>(
     // serialization can emit the spec-mandated structure.
     let path_structure = || path.filter(|p| !matches!(p, Path::Predicate(_))).cloned();
     let severity = source.severity;
-    let message = source.message;
+    let messages = source.messages;
     let source_shape = source.id;
     let shapes_graph_iri = store.shapes_graph_iri();
 
@@ -1659,11 +2000,13 @@ fn eval_constraint<'a, S: ResultSink>(
                 source_constraint_component: NamedNode::from($component),
                 source_shape: source_shape.clone(),
                 severity: severity.clone(),
-                message: message.clone(),
+                messages: messages.to_vec(),
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
                 attributions: vec![],
+                details: vec![],
+                annotations: vec![],
             }
         };
         ($component:expr, $focus:expr, $value:expr) => {
@@ -1675,11 +2018,13 @@ fn eval_constraint<'a, S: ResultSink>(
                 source_constraint_component: NamedNode::from($component),
                 source_shape: source_shape.clone(),
                 severity: severity.clone(),
-                message: message.clone(),
+                messages: messages.to_vec(),
                 source_box_roles: vec![],
                 path_box_roles: vec![],
                 result_box_roles: vec![],
                 attributions: vec![],
+                details: vec![],
+                annotations: vec![],
             }
         };
     }
@@ -1692,7 +2037,12 @@ fn eval_constraint<'a, S: ResultSink>(
     // `if` above each of these — is shared, and only the reporting is skipped.
     macro_rules! emit {
         ($result:expr) => {
-            if sink.violation(|| $result).stopped() {
+            if sink.violation(severity, || $result).stopped() {
+                return Ok(Flow::Stop);
+            }
+        };
+        (severity = $severity:expr; $result:expr) => {
+            if sink.violation($severity, || $result).stopped() {
                 return Ok(Flow::Stop);
             }
         };
@@ -1738,27 +2088,30 @@ fn eval_constraint<'a, S: ResultSink>(
 
         // ── Class (per value node; honors asserted rdfs:subClassOf, §4.2.5) ────
         //
-        // The CONSTANT-FOLDED branch: `None` = the data graph interns no term for
-        // this class, so no value node can be an instance of it and every one of
-        // them violates. That is a real verdict, not a failure to compute one, and
-        // it was decided at BIND — once for the whole validation, not once per
-        // value node of every focus node. The per-value-node arm below still runs
-        // its own `is_none_or` test, so this fold is a shortcut around work whose
-        // answer is already known and not a second statement of the rule.
-        PlannedConstraint::Class(None) => {
+        // SHACL 1.2 Core §4.1.1: a value node violates when it "is either a
+        // literal, or a non-literal that is not a SHACL instance of any of the
+        // classes" — so the class set is a DISJUNCTION, and a single-IRI value is
+        // simply a one-member set.
+        //
+        // The CONSTANT-FOLDED branch: an empty id set = the data graph interns no
+        // term for any of the classes, so no value node can be an instance of one
+        // and every one of them violates. That is a real verdict, not a failure to
+        // compute one, and it was decided at BIND — once for the whole validation,
+        // not once per value node of every focus node. The per-value-node arm
+        // below still runs its own membership test, so this fold is a shortcut
+        // around work whose answer is already known and not a second statement of
+        // the rule.
+        PlannedConstraint::Class(classes) if classes.is_empty() => {
             violate_every_value_node!(sh::CLASS_CONSTRAINT_COMPONENT)
         }
-        PlannedConstraint::Class(id) => {
-            let class_id = id;
+        PlannedConstraint::Class(classes) => {
             for vn in value_nodes {
                 // Id-native instance test: an interned value node's class membership
                 // is decided entirely in `TermId` space (literal check + `rdf:type`
                 // edge walk), so a conforming value is never materialized. A
                 // non-interned value node has no `rdf:type` edge and is no instance.
                 let violates = match vn.as_id(ds) {
-                    Some(id) => {
-                        class_id.is_none_or(|class| !store.class_view().is_instance(id, class))
-                    }
+                    Some(id) => !classes.any(|class| store.class_view().is_instance(id, class)),
                     None => true,
                 };
                 if violates {
@@ -1771,10 +2124,13 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
 
-        // ── Datatype (per value node) ──────────────────────────────────────────
-        PlannedConstraint::Datatype(dt_iri) => {
+        // ── Datatype (per value node; any member of the set matches) ──────────
+        PlannedConstraint::Datatype(datatypes) => {
             for value in value_nodes {
-                if !check_value_datatype(value, ds, dt_iri) {
+                if !datatypes
+                    .iter()
+                    .any(|dt_iri| check_value_datatype(value, ds, dt_iri))
+                {
                     emit!(result!(
                         sh::DATATYPE_CONSTRAINT_COMPONENT,
                         Some(value.to_term(ds))
@@ -1784,15 +2140,286 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
 
-        // ── NodeKind (per value node) ──────────────────────────────────────────
-        PlannedConstraint::NodeKind(kind) => {
+        // ── NodeKind (per value node; any member of the set matches) ──────────
+        PlannedConstraint::NodeKind(kinds) => {
             for value in value_nodes {
                 // Kind-only check on the borrowed discriminant: the owned term is
                 // built only for a violation, not per conforming value node.
-                if !check_value_kind(value.kind(ds), kind) {
+                let kind_of_value = value.kind(ds);
+                if !kinds
+                    .iter()
+                    .any(|kind| check_value_kind(kind_of_value, kind))
+                {
                     emit!(result!(
                         sh::NODE_KIND_CONSTRAINT_COMPONENT,
                         Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── List components (SHACL 1.2 Core §4.9; per value node) ─────────────
+        //
+        // Each component first requires the value node to be a SHACL list: "Each
+        // value node v must be a SHACL list - if v is not a SHACL list there is a
+        // validation result." A value node that is not one gets exactly that
+        // result, and its members are never examined.
+        PlannedConstraint::MinListLength(min) => {
+            for value in value_nodes {
+                let violates = ShaclList::of(ds, value).is_none_or(|list| (list.len as u64) < min);
+                if violates {
+                    emit!(result!(
+                        sh::MIN_LIST_LENGTH_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::MaxListLength(max) => {
+            for value in value_nodes {
+                let violates = ShaclList::of(ds, value).is_none_or(|list| (list.len as u64) > max);
+                if violates {
+                    emit!(result!(
+                        sh::MAX_LIST_LENGTH_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::UniqueMembers(unique) => {
+            for value in value_nodes {
+                let Some(list) = ShaclList::of(ds, value) else {
+                    emit!(result!(
+                        sh::UNIQUE_MEMBERS_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                    continue;
+                };
+                if !unique {
+                    continue;
+                }
+                // Each DISTINCT member occurring more than once, in first-occurrence
+                // order; interned terms are equal exactly when their ids are. The
+                // seen-set is inline for the short lists SHACL lists usually are.
+                let mut seen: SmallVec<[TermId; 16]> = SmallVec::new();
+                let mut duplicated: SmallVec<[TermId; 4]> = SmallVec::new();
+                for member in list.members(ds) {
+                    if seen.contains(&member) {
+                        if !duplicated.contains(&member) {
+                            duplicated.push(member);
+                        }
+                    } else {
+                        seen.push(member);
+                    }
+                }
+                if !duplicated.is_empty() {
+                    // "Each duplicate member m of a list v should be reported as a
+                    // separate sh:detail in the validation result for v."
+                    emit!({
+                        let mut outer = result!(
+                            sh::UNIQUE_MEMBERS_CONSTRAINT_COMPONENT,
+                            Some(value.to_term(ds))
+                        );
+                        outer.details = duplicated
+                            .iter()
+                            .map(|&member| {
+                                result!(
+                                    sh::UNIQUE_MEMBERS_CONSTRAINT_COMPONENT,
+                                    Some(term_id_to_native(ds, member))
+                                )
+                            })
+                            .collect();
+                        outer
+                    });
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::MemberShape(member_shape) => {
+            for value in value_nodes {
+                let Some(list) = ShaclList::of(ds, value) else {
+                    emit!(result!(
+                        sh::MEMBER_SHAPE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                    continue;
+                };
+                let mut conforms = true;
+                for member in list.members(ds) {
+                    if !conforms_memoized(context, member_shape, &FocusNode::Interned(member))? {
+                        conforms = false;
+                        break;
+                    }
+                }
+                if conforms {
+                    continue;
+                }
+                // "Each member m of a value node v that does not conform to the
+                // $memberShape should be reported as a separate sh:detail": the
+                // details are each failing member's own results against the member
+                // shape, in list order and once per distinct member, collected
+                // only by a sink that records results.
+                let mut details: Vec<ValidationResult> = Vec::new();
+                if S::RECORDS_RESULTS {
+                    let mut reported: Vec<TermId> = Vec::new();
+                    for member in list.members(ds) {
+                        if reported.contains(&member) {
+                            continue;
+                        }
+                        reported.push(member);
+                        details.extend(collect_shape(
+                            context.inner(member_shape),
+                            &FocusNode::Interned(member),
+                        )?);
+                    }
+                }
+                emit!({
+                    let mut outer = result!(
+                        sh::MEMBER_SHAPE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    );
+                    outer.details = details;
+                    outer
+                });
+            }
+            Flow::Continue
+        }
+
+        // ── SingleLine (SHACL 1.2 Core §7.4.4; per value node) ────────────────
+        //
+        // "If $singleLine is true, then, for each value node that is a literal
+        // where the lexical form matches the regular expression (as defined by the
+        // SPARQL REGEX function) [\f\r\n\v], there is a validation result."
+        //
+        // The class names four characters — form feed, carriage return, line feed
+        // and vertical tab — and a lexical form matches it exactly when it contains
+        // one of them, so the test is that membership scan rather than a compiled
+        // regex. IRIs, blank nodes and triple terms are not literals and are never
+        // judged. The result carries the value node as `sh:value`, which §6.7.2.3
+        // permits ("at most one RDF term that has caused the result").
+        PlannedConstraint::SingleLine(false) => Flow::Continue,
+        PlannedConstraint::SingleLine(true) => {
+            for value in value_nodes {
+                let breaks = value.literal_view(ds).is_some_and(|literal| {
+                    literal
+                        .lexical
+                        .contains(['\u{000C}', '\r', '\n', '\u{000B}'])
+                });
+                if breaks {
+                    emit!(result!(
+                        sh::SINGLE_LINE_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── RootClass (SHACL 1.2 Core §7.9.4; per value node) ─────────────────
+        //
+        // "For each value node that is either not an IRI, or an IRI for which there
+        // exists no class in classes such that the data graph entails valueNode
+        // rdfs:subClassOf* class, there is a validation result with the value node
+        // as sh:value."
+        //
+        // `*` is reflexive, so a value node that IS a root conforms whether or not
+        // the data graph mentions it; that half compares IRIs. The transitive half
+        // walks the asserted default-graph `rdfs:subClassOf` edges — the same
+        // relation `sh:class` reads its subclass closure from — and needs an
+        // interned value node, since an IRI the data graph does not intern is the
+        // subject of no edge.
+        PlannedConstraint::RootClass { roots, ids } => {
+            for value in value_nodes {
+                let conforms = match value.kind(ds) {
+                    ValueKind::Iri => match value.as_id(ds) {
+                        Some(id) => {
+                            ids.contains(&id) || store.class_view().reaches_by_subclass(id, ids)
+                        }
+                        None => value
+                            .lexical(ds)
+                            .is_some_and(|iri| roots.iter().any(|root| root.as_str() == iri)),
+                    },
+                    ValueKind::Blank | ValueKind::Literal | ValueKind::Triple => false,
+                };
+                if !conforms {
+                    emit!(result!(
+                        sh::ROOT_CLASS_CONSTRAINT_COMPONENT,
+                        Some(value.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+
+        // ── SomeValue (SHACL 1.2 Core §7.8.3; over the value-node SET) ────────
+        //
+        // "A failure MUST be produced if the conformance checking of any value node
+        // against $someValue produces a failure, unless at least one of the value
+        // nodes conforms to $someValue. Otherwise, if none of the value nodes
+        // conforms to $someValue, there is a validation result."
+        //
+        // The value nodes are asked in order and the first conforming one ends the
+        // check. A failure met on the way is held, not returned: a later value node
+        // that conforms discards it, and only when every value node was asked
+        // without one conforming is it produced. The result names no `sh:value` —
+        // no single value node caused it.
+        PlannedConstraint::SomeValue(some_value) => {
+            let mut failure: Option<String> = None;
+            let mut any_conforms = false;
+            for value in value_nodes {
+                match conforms_memoized(context, some_value, &value.as_focus(ds)) {
+                    Ok(true) => {
+                        any_conforms = true;
+                        break;
+                    }
+                    Ok(false) => {}
+                    Err(error) => {
+                        failure.get_or_insert(error);
+                    }
+                }
+            }
+            if !any_conforms {
+                if let Some(error) = failure {
+                    return Err(error);
+                }
+                emit!(result!(sh::SOME_VALUE_CONSTRAINT_COMPONENT, None));
+            }
+            Flow::Continue
+        }
+
+        // ── UniqueValuesFor (SHACL 1.2 Core §7.9.5; per value node, CROSS-FOCUS) ─
+        //
+        // "Let $targetNodes be the target nodes of S. For each value node V for
+        // which there exists another node in $targetNodes that has exactly the same
+        // values for all properties in $properties as V there is a validation
+        // result. No result is produced if V has no values for any of the
+        // properties in $properties."
+        //
+        // The target set is the declaring shape's FULL target set in the bound
+        // data graph, grouped once per binding (`crate::unique_values`) — never the
+        // focus nodes a bounded request happened to name. A value node the data
+        // graph does not intern is the subject of no triple, so it has no values
+        // and produces nothing.
+        //
+        // On a node shape the value node IS the focus node, and the result names
+        // no `sh:value` — the W3C SHACL 1.2 tests `core/node/uniqueValuesFor-001`
+        // to `-005` expect exactly that. On a property shape several value nodes
+        // of one focus node can each collide, so the result names the colliding
+        // value node as `sh:value` (§6.7.2.3: "at most one RDF term that has
+        // caused the result"), which keeps those results distinct.
+        PlannedConstraint::UniqueValuesFor(slot) => {
+            let groups = context.plan.unique_groups(store, slot)?;
+            for value in value_nodes {
+                let duplicated = value
+                    .as_id(ds)
+                    .is_some_and(|id| groups.is_duplicated(ds, id));
+                if duplicated {
+                    emit!(result!(
+                        sh::UNIQUE_VALUES_FOR_CONSTRAINT_COMPONENT,
+                        path.map(|_| value.to_term(ds))
                     ));
                 }
             }
@@ -1896,10 +2523,18 @@ fn eval_constraint<'a, S: ResultSink>(
                     flags.map_or_default(|f| format!(" with sh:flags {f:?}"))
                 )
             });
-            let violation_message = match (&compile_error, message) {
-                (Some(error), Some(shape_message)) => Some(format!("{shape_message} ({error})")),
-                (Some(error), None) => Some(error.clone()),
-                (None, shape_message) => shape_message.clone(),
+            // Every declared message is kept, each marked with the compile error
+            // in its own language literal; with none declared, the error is the
+            // message.
+            let violation_messages: Vec<Literal> = match &compile_error {
+                Some(error) if messages.is_empty() => {
+                    vec![Literal::new_simple_literal(error.clone())]
+                }
+                Some(error) => messages
+                    .iter()
+                    .map(|m| m.with_value(format!("{} ({error})", m.value())))
+                    .collect(),
+                None => messages.to_vec(),
             };
             for value in value_nodes {
                 let violates = match (compiled, value.lexical(ds)) {
@@ -1918,11 +2553,13 @@ fn eval_constraint<'a, S: ResultSink>(
                         ),
                         source_shape: source_shape.clone(),
                         severity: severity.clone(),
-                        message: violation_message.clone(),
+                        messages: violation_messages.clone(),
                         source_box_roles: vec![],
                         path_box_roles: vec![],
                         result_box_roles: vec![],
                         attributions: vec![],
+                        details: vec![],
+                        annotations: vec![],
                     });
                 }
             }
@@ -2017,38 +2654,45 @@ fn eval_constraint<'a, S: ResultSink>(
 
         // ── UniqueLang (on the SET) ────────────────────────────────────────────
         PlannedConstraint::UniqueLang(true) => {
+            // SHACL 1.2 Core §7.4.6: "for each non-empty language tag that is
+            // used by at least two value nodes, there is a validation result. For
+            // value nodes of datatype rdf:dirLangString, the base direction is
+            // included in the uniqueness condition, e.g., "1"@ar--rtl and
+            // "1"@ar-ltr are different, as is the pair "1"@ar--rtl and "1"@ar."
+            // So the group key is the PAIR (language tag, base direction): `@ar`,
+            // `@ar--ltr` and `@ar--rtl` are three groups, and two `@ar--ltr`
+            // values are one group with two members.
+            //
             // Tallied over BORROWED tags in an inline buffer, and the buffer is
-            // indexed by DISTINCT language rather than by value node — a focus
-            // node carries a handful of languages however many labels it has, so
-            // the scan is over a few entries and the whole tally allocates
-            // nothing. The two things this replaced both cost one allocation per
-            // conforming focus node: the map's table on its first insert, and an
-            // owned lowercased key per value node. Case folding is now a
-            // comparison rather than a new string, which is the same relation
-            // BCP 47 tags are compared under (they are ASCII).
-            let mut seen_langs: SmallVec<[(&str, usize); UNIQUE_LANG_INLINE]> = SmallVec::new();
+            // indexed by DISTINCT (language, direction) rather than by value node
+            // — a focus node carries a handful of languages however many labels
+            // it has, so the scan is over a few entries and the whole tally
+            // allocates nothing. The language tag compares ASCII
+            // case-insensitively, the relation BCP 47 tags are compared under
+            // (RDF 1.2 Concepts: the value space of a language tag is lower
+            // case); the direction is one of two tokens and compares exactly.
+            let mut seen_langs: SmallVec<
+                [(&str, Option<RdfTextDirection>, usize); UNIQUE_LANG_INLINE],
+            > = SmallVec::new();
             for value in value_nodes {
-                // Content arm on the BORROWED language tag: `ValueNode::language`
-                // is `None` for every node that is not a language-tagged literal,
-                // which is exactly the set the owned-term match skipped, so the
-                // counted population is unchanged and no value node is
-                // materialized to be counted.
-                if let Some(lang) = value.language(ds) {
-                    if let Some(entry) = seen_langs
-                        .iter_mut()
-                        .find(|(seen, _)| seen.eq_ignore_ascii_case(lang))
-                    {
-                        entry.1 += 1;
+                // `language_and_direction` is `None` for every node that is not a
+                // language-tagged literal, which is exactly the population the
+                // constraint does not count, so no value node is materialized to
+                // be counted.
+                if let Some((lang, direction)) = value.language_and_direction(ds) {
+                    if let Some(entry) = seen_langs.iter_mut().find(|(seen, seen_dir, _)| {
+                        *seen_dir == direction && seen.eq_ignore_ascii_case(lang)
+                    }) {
+                        entry.2 += 1;
                     } else {
-                        seen_langs.push((lang, 1));
+                        seen_langs.push((lang, direction, 1));
                     }
                 }
             }
-            // First-seen order, where the map this replaced iterated in hash
-            // order. Both are re-sorted by `finish_report` on the full serialized
-            // result identity, so the report bytes are unchanged — and this one
-            // does not depend on the hasher.
-            for (lang, count) in &seen_langs {
+            // First-seen order, re-sorted by `finish_report` on the full
+            // serialized result identity, so the report bytes do not depend on
+            // the order value nodes arrived in.
+            for (lang, direction, count) in &seen_langs {
                 if *count > 1 {
                     emit!(ValidationResult {
                         focus_node: focus_node.to_term(ds),
@@ -2060,14 +2704,19 @@ fn eval_constraint<'a, S: ResultSink>(
                         ),
                         source_shape: source_shape.clone(),
                         severity: severity.clone(),
-                        message: message.clone().or_else(|| Some(format!(
-                            "duplicate language tag: {}",
-                            lang.to_lowercase()
-                        ))),
+                        messages: if messages.is_empty() {
+                            vec![Literal::new_simple_literal(duplicate_language_message(
+                                lang, *direction,
+                            ))]
+                        } else {
+                            messages.to_vec()
+                        },
                         source_box_roles: vec![],
                         path_box_roles: vec![],
                         result_box_roles: vec![],
                         attributions: vec![],
+                        details: vec![],
+                        annotations: vec![],
                     });
                 }
             }
@@ -2246,17 +2895,18 @@ fn eval_constraint<'a, S: ResultSink>(
             Flow::Continue
         }
 
-        // ── Property-pair constraints (§4.3): compare the value nodes against
-        //    the objects of the given predicate from the SAME focus node. ──────
-        PlannedConstraint::Equals(pred) => {
+        // ── Property-pair constraints (SHACL 1.2 Core §7.6): compare the value
+        //    nodes against "the set of nodes that can be reached from the focus
+        //    node via $path" — the SAME focus node. ──────────────────────────────
+        PlannedConstraint::Equals(other) => {
             // Membership is identity, so the comparison stays in `TermId` space
             // end to end: the comparands are collected as ids and never
             // materialized, and only an OFFENDING term is ever built.
-            let others = PairComparands::collect(ds, focus_node, pred);
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
             // The dedup set is only ever touched by an OFFENDING value node, so a
             // conforming focus node never allocates it.
             let mut seen: FastSet<Term> = FastSet::default();
-            // Value nodes missing from the predicate's objects…
+            // Value nodes missing from the comparands…
             for v in value_nodes {
                 if !others.contains_value(ds, v) {
                     let term = v.to_term(ds);
@@ -2269,7 +2919,7 @@ fn eval_constraint<'a, S: ResultSink>(
                     }
                 }
             }
-            // …and predicate objects missing from the value nodes. Building the
+            // …and comparands missing from the value nodes. Building the
             // value-node index is itself gated on there being a comparand to ask
             // about, so an empty comparand set costs nothing.
             if !others.is_empty() {
@@ -2286,13 +2936,28 @@ fn eval_constraint<'a, S: ResultSink>(
                         }
                     }
                 }
+                // A comparand this dataset does not intern can only be matched by
+                // a value node it does not intern either, and only by term
+                // equality.
+                for other in others.foreign() {
+                    let matched = value_nodes
+                        .iter()
+                        .any(|v| v.as_id(ds).is_none() && v.to_term(ds) == *other);
+                    if !matched && seen.insert(other.clone()) {
+                        emit!(result!(
+                            sh::EQUALS_CONSTRAINT_COMPONENT,
+                            focus_node.to_term(ds),
+                            Some(other.clone())
+                        ));
+                    }
+                }
             }
             Flow::Continue
         }
-        PlannedConstraint::Disjoint(pred) => {
+        PlannedConstraint::Disjoint(other) => {
             // Identity check in `TermId` space; only offending value nodes are
             // materialized.
-            let others = PairComparands::collect(ds, focus_node, pred);
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
             for v in value_nodes {
                 if others.contains_value(ds, v) {
                     emit!(result!(
@@ -2304,11 +2969,28 @@ fn eval_constraint<'a, S: ResultSink>(
             }
             Flow::Continue
         }
-        PlannedConstraint::LessThan(pred) => {
+        PlannedConstraint::SubsetOf(other) => {
+            // "For each value node that does not exist in $otherNodes, there is a
+            // validation result with the value node as sh:value." The value nodes
+            // are already a set, so each offender is reported once.
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            for v in value_nodes {
+                if !others.contains_value(ds, v) {
+                    emit!(result!(
+                        sh::SUBSET_OF_CONSTRAINT_COMPONENT,
+                        focus_node.to_term(ds),
+                        Some(v.to_term(ds))
+                    ));
+                }
+            }
+            Flow::Continue
+        }
+        PlannedConstraint::LessThan(other) => {
             // Order comparison reads the numeric/string/temporal value space, but
             // it reads it through BORROWED lexical forms on both sides, so neither
             // the value nodes nor the comparands are materialized to compare them.
-            for value in pair_order_offenders(ds, focus_node, value_nodes, pred, false) {
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            for value in pair_order_offenders(ds, value_nodes, &others, false) {
                 emit!(result!(
                     sh::LESS_THAN_CONSTRAINT_COMPONENT,
                     focus_node.to_term(ds),
@@ -2317,8 +2999,9 @@ fn eval_constraint<'a, S: ResultSink>(
             }
             Flow::Continue
         }
-        PlannedConstraint::LessThanOrEquals(pred) => {
-            for value in pair_order_offenders(ds, focus_node, value_nodes, pred, true) {
+        PlannedConstraint::LessThanOrEquals(other) => {
+            let others = PairComparands::collect(ds, focus_node, other, context.plan.binding())?;
+            for value in pair_order_offenders(ds, value_nodes, &others, true) {
                 emit!(result!(
                     sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT,
                     focus_node.to_term(ds),
@@ -2396,11 +3079,12 @@ fn eval_constraint<'a, S: ResultSink>(
         // substituting $this for this focus node (SparqlRequest.substitutions).
         PlannedConstraint::Sparql {
             select,
-            message: cmsg,
+            messages: cmsg,
             severity: csev,
+            annotations,
         } => {
-            let sev = csev.clone().unwrap_or_else(|| severity.clone());
-            let msg = cmsg.clone().or_else(|| message.clone());
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
             // SHACL-SPARQL §5.3.2: on a property shape, the `$PATH` placeholder
             // stands for the shape's path in SPARQL surface syntax.
             let query = substitute_path_placeholder(select, path);
@@ -2425,7 +3109,8 @@ fn eval_constraint<'a, S: ResultSink>(
                 &NamedNode::from(sh::SPARQL_CONSTRAINT_COMPONENT),
                 source_shape,
                 &sev,
-                msg.as_ref(),
+                msg,
+                annotations,
                 shapes_graph_iri,
                 Some(source_shape),
             )
@@ -2434,7 +3119,7 @@ fn eval_constraint<'a, S: ResultSink>(
             // per-value-node verdict, so the query runs whatever the sink is;
             // what the sink decides is only whether they are kept.
             for produced_result in produced {
-                emit!(produced_result);
+                emit!(severity = &sev; produced_result);
             }
             Flow::Continue
         }
@@ -2449,11 +3134,11 @@ fn eval_constraint<'a, S: ResultSink>(
         PlannedConstraint::Expression {
             expr,
             lowered,
-            message: cmsg,
+            messages: cmsg,
             severity: csev,
         } => {
-            let sev = csev.clone().unwrap_or_else(|| severity.clone());
-            let msg = cmsg.clone().or_else(|| message.clone());
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
             // Seed the guard with the ambient filter/exists depth so a
             // `sh:filterShape` re-entry through this expression keeps the
             // cross-shape recursion count monotone (fail-closed at the depth
@@ -2489,13 +3174,13 @@ fn eval_constraint<'a, S: ResultSink>(
                 )
                 .map_err(|e| format!("sh:expression constraint on shape {source_shape}: {e}"))?;
                 if !crate::expression::is_true(&out) {
-                    emit!({
+                    emit!(severity = &sev; {
                         let mut r = result!(
                             sh::EXPRESSION_CONSTRAINT_COMPONENT,
                             Some(value_node.clone())
                         );
                         r.severity.clone_from(&sev);
-                        r.message.clone_from(&msg);
+                        r.messages = msg.to_vec();
                         r
                     });
                 }
@@ -2514,11 +3199,11 @@ fn eval_constraint<'a, S: ResultSink>(
             lowered,
             shapes,
             index,
-            message: cmsg,
+            messages: cmsg,
             severity: csev,
         } => {
-            let sev = csev.clone().unwrap_or_else(|| severity.clone());
-            let msg = cmsg.clone().or_else(|| message.clone());
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
             // The index is filled at the end of the shapes-graph parse; an unfilled
             // one means this constraint escaped that parse, which would silently
             // make every conformance check vacuous. Refuse loudly instead.
@@ -2605,13 +3290,13 @@ fn eval_constraint<'a, S: ResultSink>(
                                     )
                                 })?;
                         if !conforms {
-                            emit!({
+                            emit!(severity = &sev; {
                                 let mut r = result!(
                                     sh::NODE_BY_EXPRESSION_CONSTRAINT_COMPONENT,
                                     Some(value_node.to_term(ds))
                                 );
                                 r.severity.clone_from(&sev);
-                                r.message.clone_from(&msg);
+                                r.messages = msg.to_vec();
                                 r
                             });
                         }
@@ -2620,7 +3305,17 @@ fn eval_constraint<'a, S: ResultSink>(
 
                 match &produced {
                     crate::expression::ShapeNodes::Terms(terms) => {
-                        for shape_node in terms.as_ref() {
+                        // §7.2 checks v against "each output node" s of the
+                        // expression, and a validation result is keyed by (v, s):
+                        // the node shapes form a SET, so a shape an order-preserving
+                        // expression yields twice (`shnex:concat ( ex:S ex:S )`) is
+                        // checked, and reported, once. The scan is over the prefix
+                        // already visited, so it allocates nothing.
+                        let terms = terms.as_ref();
+                        for (position, shape_node) in terms.iter().enumerate() {
+                            if terms[..position].contains(shape_node) {
+                                continue;
+                            }
                             check_against!(
                                 context.plan.indexed(index, shape_node, resolved)?,
                                 shape_node
@@ -2646,11 +3341,12 @@ fn eval_constraint<'a, S: ResultSink>(
             source_shape,
             bindings,
             validator,
-            message: cmsg,
+            messages: cmsg,
             severity: csev,
+            annotations,
         } => {
-            let sev = csev.clone().unwrap_or_else(|| severity.clone());
-            let msg = cmsg.clone().or_else(|| message.clone());
+            let sev = source.severity_over(csev.as_ref());
+            let msg = source.messages_over(cmsg);
             let dataset = store.sparql_view();
             // The custom-component validators run over the owned term model; resolve
             // the value nodes for the ASK validator's per-value binding.
@@ -2676,7 +3372,8 @@ fn eval_constraint<'a, S: ResultSink>(
                     source_shape,
                     path,
                     &sev,
-                    msg.as_ref(),
+                    msg,
+                    annotations,
                     shapes_graph_iri,
                     Some(source_shape),
                 ),
@@ -2690,7 +3387,8 @@ fn eval_constraint<'a, S: ResultSink>(
                     source_shape,
                     path,
                     &sev,
-                    msg.as_ref(),
+                    msg,
+                    annotations,
                     shapes_graph_iri,
                     Some(source_shape),
                 ),
@@ -2699,7 +3397,7 @@ fn eval_constraint<'a, S: ResultSink>(
             // As for `sh:sparql`: a custom component answers in results, so the
             // validator runs whatever the sink is.
             for produced_result in produced {
-                emit!(produced_result);
+                emit!(severity = &sev; produced_result);
             }
             Flow::Continue
         }
@@ -2937,6 +3635,136 @@ fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> boo
     }
 }
 
+/// A value node that is a well-formed SHACL list in the data graph: its head
+/// cell and its length. Walking it again is allocation-free — see
+/// [`ShaclList::members`].
+#[derive(Clone, Copy)]
+struct ShaclList {
+    /// The first cell; `None` only for an empty list that is not interned.
+    head: Option<TermId>,
+    /// The number of members.
+    len: usize,
+    /// `rdf:first`, which every non-empty list's cells carry.
+    first: Option<TermId>,
+    /// `rdf:rest`, likewise.
+    rest: Option<TermId>,
+}
+
+impl ShaclList {
+    /// `value` as a SHACL list, or `None` when it is not one.
+    ///
+    /// SHACL 1.2 Core §1.4: "A SHACL list in an RDF graph G is an IRI or a blank
+    /// node that is either rdf:nil (provided that rdf:nil has no value for either
+    /// rdf:first or rdf:rest), or has exactly one value for the property rdf:first
+    /// in G and exactly one value for the property rdf:rest in G that is also a
+    /// SHACL list in G, and the list does not have itself as a value of the
+    /// property path rdf:rest+ in G."
+    ///
+    /// Every clause is checked in id space and WITHOUT allocating, because the
+    /// list components run once per value node on the change path: a cycle is
+    /// found by Floyd's two-pointer walk (the fast pointer checks every cell's
+    /// shape as it reaches it first), not by a visited set. A value node that is
+    /// not interned is the subject of no quad, so it is a list only as `rdf:nil`.
+    fn of(ds: &impl ShaclRead, value: &ValueNode) -> Option<Self> {
+        let first = ds.term_id_by_iri(rdf::FIRST);
+        let rest = ds.term_id_by_iri(rdf::REST);
+        let nil = ds.term_id_by_iri(rdf::NIL);
+        let Some(head) = value.as_id(ds) else {
+            let empty = Self {
+                head: None,
+                len: 0,
+                first,
+                rest,
+            };
+            return matches!(value, ValueNode::Foreign(Term::NamedNode(n)) if n.as_str() == rdf::NIL)
+                .then_some(empty);
+        };
+        // One well-formed step from `cell`: `Ok(None)` at `rdf:nil`,
+        // `Ok(Some(next))` from a proper cell, `Err(())` for anything else.
+        let step = |cell: TermId| -> Result<Option<TermId>, ()> {
+            let head_value = single_object(ds, cell, first)?;
+            let tail = single_object(ds, cell, rest)?;
+            if Some(cell) == nil {
+                return if head_value.is_none() && tail.is_none() {
+                    Ok(None)
+                } else {
+                    Err(())
+                };
+            }
+            if !matches!(ds.resolve(cell), TermRef::Iri(_) | TermRef::Blank { .. }) {
+                return Err(());
+            }
+            match (head_value, tail) {
+                (Some(_), Some(next)) => Ok(Some(next)),
+                _ => Err(()),
+            }
+        };
+        let mut len = 0usize;
+        let mut slow = head;
+        let mut fast = head;
+        // The fast pointer advances two cells per round; every cell is first
+        // reached — and so checked — by it. The slow pointer trails it one cell
+        // per round, over cells the fast pointer has already checked.
+        while let Some(next) = step(fast).ok()? {
+            len += 1;
+            let Some(after) = step(next).ok()? else {
+                break;
+            };
+            len += 1;
+            fast = after;
+            slow = step(slow).ok().flatten()?;
+            if slow == fast {
+                return None;
+            }
+        }
+        Some(Self {
+            head: Some(head),
+            len,
+            first,
+            rest,
+        })
+    }
+
+    /// The members, in list order. The structure was checked by [`Self::of`], so
+    /// this walk cannot fail; it allocates nothing.
+    fn members<D: ShaclRead>(self, ds: &D) -> impl Iterator<Item = TermId> + '_ {
+        let mut cell = self.head;
+        (0..self.len).filter_map(move |_| {
+            let here = cell?;
+            let member = single_object(ds, here, self.first).ok().flatten()?;
+            cell = single_object(ds, here, self.rest).ok().flatten();
+            Some(member)
+        })
+    }
+}
+
+/// The single distinct object of `(subject, predicate, ?)`: `Ok(None)` when there
+/// is none, `Err(())` when there are two. A statement asserted in several named
+/// graphs is still one value.
+fn single_object(
+    ds: &impl ShaclRead,
+    subject: TermId,
+    predicate: Option<TermId>,
+) -> Result<Option<TermId>, ()> {
+    let Some(predicate) = predicate else {
+        return Ok(None);
+    };
+    let mut found: Option<TermId> = None;
+    for quad in quads_for_pattern_ids(
+        ds,
+        Some(subject),
+        Some(predicate),
+        None,
+        GraphFilter::AnyGraph,
+    ) {
+        match found {
+            Some(existing) if existing != quad.o => return Err(()),
+            _ => found = Some(quad.o),
+        }
+    }
+    Ok(found)
+}
+
 /// Check that a `Term` satisfies `sh:nodeKind`.
 ///
 /// The constraint arm evaluates [`check_value_kind`] on the borrowed
@@ -2959,13 +3787,14 @@ fn check_node_kind(value: &Term, kind: &NodeKindValue) -> bool {
             NodeKindValue::Literal
                 | NodeKindValue::BlankNodeOrLiteral
                 | NodeKindValue::IriOrLiteral
-        )
+        ) | (Term::Triple(_), NodeKindValue::TripleTerm)
     )
 }
 
 /// `sh:nodeKind` on the bare discriminant: `Iri`/`Blank`/`Literal` match the
-/// `sh:nodeKind` values that include them; a `Triple` (quoted triple term)
-/// matches NO node kind, exactly as the owned-`Term` form's fall-through.
+/// `sh:nodeKind` values that include them, and a `Triple` (an RDF 1.2 triple
+/// term) matches `sh:TripleTerm` only (SHACL 1.2 Core §4.1.3: "Any triple term
+/// matches only sh:TripleTerm"), exactly as the owned-`Term` form.
 fn check_value_kind(value: ValueKind, kind: &NodeKindValue) -> bool {
     matches!(
         (value, kind),
@@ -2982,7 +3811,7 @@ fn check_value_kind(value: ValueKind, kind: &NodeKindValue) -> bool {
             NodeKindValue::Literal
                 | NodeKindValue::BlankNodeOrLiteral
                 | NodeKindValue::IriOrLiteral
-        )
+        ) | (ValueKind::Triple, NodeKindValue::TripleTerm)
     )
 }
 
@@ -3172,8 +4001,10 @@ fn temporal_parts_cmp(
     if !TEMPORAL.contains(&a_datatype) || !TEMPORAL.contains(&b_datatype) {
         return None;
     }
-    let va = purrdf_xsd::parse_by_iri(a_lexical, a_datatype).ok()??;
-    let vb = purrdf_xsd::parse_by_iri(b_lexical, b_datatype).ok()??;
+    // The three datatypes fix `whiteSpace` = `collapse`; a lexical form with an
+    // interior space is not one, so the collapse is the trim.
+    let va = purrdf_xsd::parse_by_iri(collapse_trim(a_lexical), a_datatype).ok()??;
+    let vb = purrdf_xsd::parse_by_iri(collapse_trim(b_lexical), b_datatype).ok()??;
     purrdf_xsd::value_cmp(&va, &vb)
 }
 
@@ -3183,13 +4014,26 @@ fn terms_equal(a: &Term, b: &Term) -> bool {
     a == b
 }
 
-/// Distinct language tags one `sh:uniqueLang` tally holds before spilling.
+/// Distinct `(language tag, base direction)` groups one `sh:uniqueLang` tally
+/// holds before spilling.
 ///
-/// The tally is indexed by DISTINCT tag, not by value node, so this is a bound
+/// The tally is indexed by DISTINCT group, not by value node, so this is a bound
 /// on how many languages one focus node labels itself in — not on how many
 /// labels it has. A focus node past this bound spills the buffer once and keeps
 /// working; nothing about the verdict or the reported messages changes.
 const UNIQUE_LANG_INLINE: usize = 8;
+
+/// The default message of a `sh:uniqueLang` result: the duplicated language tag,
+/// lower-cased, with its base direction in the RDF 1.2 `--dir` spelling when the
+/// duplicated values are `rdf:dirLangString`s (`ar--ltr`), so the message names
+/// exactly the group the result is about.
+fn duplicate_language_message(lang: &str, direction: Option<RdfTextDirection>) -> String {
+    let lang = lang.to_ascii_lowercase();
+    match direction {
+        Some(direction) => format!("duplicate language tag: {lang}--{}", direction.as_str()),
+        None => format!("duplicate language tag: {lang}"),
+    }
+}
 
 /// Distinct comparands a [`PairComparands`] holds inline before it allocates.
 ///
@@ -3206,13 +4050,13 @@ const PAIR_COMPARANDS_INLINE: usize = 4;
 /// back O(1) probes.
 const PAIR_COMPARANDS_INDEX_AT: usize = 16;
 
-/// The distinct objects of `(focus, pred, ?)` in the default graph, first-seen
-/// order — the "other" side of a property-pair constraint (§4.3) — held as
-/// INTERNED IDS.
+/// The distinct nodes reachable from the focus node along the compared path, in
+/// first-seen order — `$otherNodes`, the "other" side of a property-pair
+/// constraint (SHACL 1.2 Core §7.6) — held as INTERNED IDS.
 ///
-/// Every comparand comes out of the data graph and is therefore interned, and the
-/// interner is injective, so identity between a comparand and an interned value
-/// node is exactly id equality, and order between two comparable literals is
+/// Every comparand a path step reaches comes out of the data graph and is
+/// therefore interned, and the interner is injective, so identity between a
+/// comparand and an interned value node is exactly id equality, and order between two comparable literals is
 /// decided from their borrowed lexical forms. Neither needs an owned [`Term`], so
 /// the comparand set is never materialized: on the change path a conforming focus
 /// node used to pay two string allocations per comparand for terms that were only
@@ -3231,11 +4075,62 @@ struct PairComparands {
     /// Membership index over `ids`, populated only once `ids` grows past
     /// [`PAIR_COMPARANDS_INDEX_AT`]. Empty means "scan `ids`".
     index: IdSet,
+    /// The comparands this dataset does NOT intern, in first-seen order. The only
+    /// one a path can reach is a focus node the dataset does not intern, through a
+    /// path that admits the zero-length step (`sh:zeroOrMorePath`,
+    /// `sh:zeroOrOnePath`): every other step reads a quad, and a quad's terms are
+    /// interned. Empty — and therefore never allocated — for an interned focus.
+    foreign: Vec<Term>,
 }
 
 impl PairComparands {
+    /// Collect `$otherNodes`: the nodes reachable from `focus` along `other` in
+    /// the default graph.
+    ///
+    /// An IRI path is one hop, read straight off the quad index by the
+    /// predicate's bound identity; every other path is walked by the one path
+    /// evaluator, the same one that computes the value nodes.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the lowered path names a slot the walk never handed
+    /// out — a defect in this crate, never in a caller's data.
+    fn collect(
+        ds: &impl ShaclRead,
+        focus: &FocusNode,
+        other: PairPath<'_>,
+        binding: &DatasetBinding,
+    ) -> Result<Self, String> {
+        match other {
+            PairPath::Predicate(pred) => Ok(Self::collect_predicate(ds, focus, pred)),
+            PairPath::Path(lowered) => {
+                let mut out = Self::default();
+                match focus {
+                    FocusNode::Interned(id) => {
+                        for reached in path::eval_planned_ids_from_id(ds, *id, lowered, binding)? {
+                            out.push(reached);
+                        }
+                    }
+                    FocusNode::Foreign(term) => {
+                        for reached in path::eval_planned(ds, term, lowered, binding)? {
+                            match resolve_id(ds, &reached) {
+                                Some(id) => out.push(id),
+                                None => {
+                                    if !out.foreign.contains(&reached) {
+                                        out.foreign.push(reached);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(out)
+            }
+        }
+    }
+
     /// Collect the comparands of `(focus, pred, ?)` from the default graph.
-    fn collect(ds: &impl ShaclRead, focus: &FocusNode, pred: Option<TermId>) -> Self {
+    fn collect_predicate(ds: &impl ShaclRead, focus: &FocusNode, pred: Option<TermId>) -> Self {
         let mut out = Self::default();
         // The comparand predicate's identity was resolved at BIND. `None` means
         // this data graph interns no such IRI, so it has no objects at all — an
@@ -3299,15 +4194,22 @@ impl PairComparands {
             Some(id) => self.contains_id(id),
             None => {
                 let term = value.to_term(ds);
-                self.iter()
-                    .any(|id| terms_equal(&term_id_to_native(ds, id), &term))
+                self.foreign.iter().any(|other| terms_equal(other, &term))
+                    || self
+                        .iter()
+                        .any(|id| terms_equal(&term_id_to_native(ds, id), &term))
             }
         }
     }
 
     /// Whether there are no comparands at all.
     fn is_empty(&self) -> bool {
-        self.ids.is_empty()
+        self.ids.is_empty() && self.foreign.is_empty()
+    }
+
+    /// The comparands this dataset does not intern, in first-seen order.
+    fn foreign(&self) -> &[Term] {
+        &self.foreign
     }
 
     /// The comparands in first-seen order.
@@ -3355,8 +4257,8 @@ impl<'a> ValueNodeIds<'a> {
 }
 
 /// The value nodes violating `sh:lessThan` (`allow_equal = false`) or
-/// `sh:lessThanOrEquals` (`allow_equal = true`) against the objects of `pred`
-/// from the same focus node.
+/// `sh:lessThanOrEquals` (`allow_equal = true`) against `$otherNodes`, the nodes
+/// reachable from the same focus node along the compared path.
 ///
 /// Per spec §4.3.3–4.3.4 a result exists for every offending `(value, other)`
 /// pair; a result records only the value node, so a value offending against
@@ -3370,24 +4272,29 @@ impl<'a> ValueNodeIds<'a> {
 /// not allocate.
 fn pair_order_offenders(
     ds: &impl ShaclRead,
-    focus: &FocusNode,
     value_nodes: &[ValueNode],
-    pred: Option<TermId>,
+    others: &PairComparands,
     allow_equal: bool,
 ) -> Vec<Term> {
-    let others = PairComparands::collect(ds, focus, pred);
+    let ordered = |right: Option<LiteralView<'_>>, left: Option<LiteralView<'_>>| {
+        match compare_literal_views(left, right) {
+            Some(std::cmp::Ordering::Less) => true,
+            Some(std::cmp::Ordering::Equal) => allow_equal,
+            Some(std::cmp::Ordering::Greater) | None => false,
+        }
+    };
     let mut offending: Vec<Term> = Vec::new();
     for v in value_nodes {
         // Identity is an id here; ORDER is not — interning order is insertion
         // order. The comparison key is the value space, read back off each id.
         let left = v.literal_view(ds);
         for o in others.iter() {
-            let ok = match compare_literal_views(left, literal_view_of_id(ds, o)) {
-                Some(std::cmp::Ordering::Less) => true,
-                Some(std::cmp::Ordering::Equal) => allow_equal,
-                Some(std::cmp::Ordering::Greater) | None => false,
-            };
-            if !ok {
+            if !ordered(literal_view_of_id(ds, o), left) {
+                offending.push(v.to_term(ds));
+            }
+        }
+        for o in others.foreign() {
+            if !ordered(literal_view_of_term(o), left) {
                 offending.push(v.to_term(ds));
             }
         }
@@ -3518,7 +4425,7 @@ mod tests {
     use super::*;
     use crate::report::Severity;
     use crate::shapes::Constraint;
-    use crate::term::{Literal, NamedNode};
+    use crate::term::{Literal, NamedNode, Triple};
 
     /// Build a [`ShaclData`] holder over a projected test dataset: Core lookups and
     /// the SPARQL dataset are the same frozen graph (no shapes-graph overlay).
@@ -3698,7 +4605,8 @@ mod tests {
             constraints,
             property_shapes: vec![],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -3714,17 +4622,21 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex(&format!("{id}-property")),
                 path: Path::Predicate(NamedNode::new_unchecked(path_iri)),
+                values: None,
+                default_value: None,
                 constraints,
                 property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -3845,7 +4757,7 @@ mod tests {
         let results = validate_shape(&store, &ex("alice"), shape);
         let messages: Vec<Option<&str>> = results
             .iter()
-            .map(|result| result.message.as_deref())
+            .map(|result| result.messages.first().map(Literal::value))
             .collect();
         assert_eq!(
             messages,
@@ -3853,6 +4765,142 @@ mod tests {
             "ex:alpha sorts before ex:zeta canonically and interns after it, so this order is \
              the canonical one and its reverse is the insertion one"
         );
+        // Each result names the reifier it judged as the focus node of its
+        // `sh:detail` results, so the order is observable there as well as in the
+        // message; `sh:value` is the value node for both.
+        let values: Vec<Option<&Term>> =
+            results.iter().map(|result| result.value.as_ref()).collect();
+        assert_eq!(values, vec![Some(&ex("bob")), Some(&ex("bob"))]);
+        let judged: Vec<Vec<&Term>> = results
+            .iter()
+            .map(|result| result.details.iter().map(|d| &d.focus_node).collect())
+            .collect();
+        assert_eq!(judged, vec![vec![&ex("alpha")], vec![&ex("zeta")]]);
+    }
+
+    /// The reifier-shape fixture: `ex:Shape` requires every `ex:knows` reifier to
+    /// carry an `ex:source` and an `ex:date`, and `sh:reificationRequired` when
+    /// `required`.
+    fn reifier_shapes(required: bool) -> crate::shapes::Shapes {
+        crate::engine::parse_shapes(
+            &format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix ex: <http://example.org/ns#> .\n\
+                 ex:Shape a sh:NodeShape ;\n\
+                     sh:property [ sh:path ex:knows ; sh:reifierShape ex:ReifierShape ; \
+                     sh:reificationRequired {required} ] .\n\
+                 ex:ReifierShape a sh:NodeShape ;\n\
+                     sh:property [ sh:path ex:source ; sh:minCount 1 ] ;\n\
+                     sh:property [ sh:path ex:date ; sh:minCount 1 ] .\n"
+            ),
+            None,
+        )
+        .expect("the reifier shapes graph must parse")
+    }
+
+    fn triple_term(s: &str, p: &str, o: &str) -> Term {
+        let iri = |local: &str| NamedNode::new_unchecked(format!("{EX}{local}"));
+        Term::Triple(Box::new(Triple::new(ex(s), iri(p), ex(o))))
+    }
+
+    /// **SHACL 1.2 Core §7.8.5: "For each reifier t that does not conform to
+    /// $reifierShape, there is a validation result with t as sh:value"**, read
+    /// as the approved W3C test `core/property/reifierShape-001` reads it: the
+    /// value is the VALUE NODE.
+    ///
+    /// `ex:bad` breaks BOTH halves of the reifier shape, and still yields exactly
+    /// one result — one per non-conforming reifier, not one per inner result —
+    /// whose `sh:value` is the value node `ex:bob`, and whose `sh:detail` holds
+    /// the reifier's own two results, each with `ex:bad` as its focus node. The
+    /// conforming reifier `ex:good` of the same statement yields nothing, and
+    /// neither does a statement whose only reifier conforms.
+    #[test]
+    fn reifier_shape_result_names_the_value_node_and_details_the_reifier() {
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             ex:alice ex:knows ex:bob .\n\
+             ex:bad rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:good rdf:reifies <<( ex:alice ex:knows ex:bob )>> .\n\
+             ex:good ex:source ex:doc ; ex:date \"2026-01-01\" .\n\
+             ex:carol ex:knows ex:dave .\n\
+             ex:fine rdf:reifies <<( ex:carol ex:knows ex:dave )>> .\n\
+             ex:fine ex:source ex:doc ; ex:date \"2026-01-01\" .\n",
+        );
+        let shapes = reifier_shapes(false);
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|shape| shape.id == ex("Shape"))
+            .expect("ex:Shape must be parsed as a node shape");
+
+        let results = validate_shape(&store, &ex("alice"), shape);
+        assert_eq!(
+            results.len(),
+            1,
+            "one non-conforming reifier, one result: {results:?}"
+        );
+        assert_eq!(results[0].value.as_ref(), Some(&ex("bob")));
+        assert_ne!(
+            results[0].value.as_ref(),
+            Some(&triple_term("alice", "knows", "bob")),
+            "the value node, not the triple term"
+        );
+        let details: Vec<(&Term, Option<&Term>)> = results[0]
+            .details
+            .iter()
+            .map(|d| (&d.focus_node, d.result_path.as_ref()))
+            .collect();
+        let source = Term::NamedNode(NamedNode::new_unchecked(format!("{EX}source")));
+        let date = Term::NamedNode(NamedNode::new_unchecked(format!("{EX}date")));
+        assert_eq!(
+            details,
+            vec![(&ex("bad"), Some(&source)), (&ex("bad"), Some(&date))],
+            "the non-conforming reifier's own results, the reifier as focus node"
+        );
+        assert!(component_iri(&results)[0].ends_with("#ReifierShapeConstraintComponent"));
+
+        // Valid neighbour: the statement's only reifier conforms.
+        assert!(validate_shape(&store, &ex("carol"), shape).is_empty());
+    }
+
+    /// **SHACL 1.2 Core §7.8.5: "If $reificationRequired is set to true and there
+    /// is no reified statement for the triple term t in the data graph, there is
+    /// a validation result with t as sh:value"**, read as the approved W3C test
+    /// `core/property/reifierShape-002` reads it: `sh:value` is the value node,
+    /// not the triple term. The valid neighbour, a statement with a conforming
+    /// reifier, yields nothing.
+    #[test]
+    fn reification_required_result_names_the_value_node() {
+        let store = load_store(
+            "@prefix ex: <http://example.org/ns#> .\n\
+             @prefix rdf: <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .\n\
+             ex:alice ex:knows ex:bob .\n\
+             ex:carol ex:knows ex:dave .\n\
+             ex:fine rdf:reifies <<( ex:carol ex:knows ex:dave )>> .\n\
+             ex:fine ex:source ex:doc ; ex:date \"2026-01-01\" .\n",
+        );
+        let shapes = reifier_shapes(true);
+        let shape = shapes
+            .node_shapes
+            .iter()
+            .find(|shape| shape.id == ex("Shape"))
+            .expect("ex:Shape must be parsed as a node shape");
+
+        let results = validate_shape(&store, &ex("alice"), shape);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(results[0].value.as_ref(), Some(&ex("bob")));
+        assert_ne!(
+            results[0].value.as_ref(),
+            Some(&triple_term("alice", "knows", "bob"))
+        );
+        assert!(
+            results[0].details.is_empty(),
+            "no reifier, nothing to detail"
+        );
+        assert!(component_iri(&results)[0].ends_with("#ReifierShapeConstraintComponent"));
+
+        assert!(validate_shape(&store, &ex("carol"), shape).is_empty());
     }
 
     /// **`sh:nodeByExpression` resolves every shape node its expression can
@@ -3985,17 +5033,21 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![named_role(&vocab.box_config_box)],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![named_role(&vocab.box_tbox)],
             rules: vec![],
@@ -4036,17 +5088,21 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -4073,12 +5129,13 @@ mod tests {
         let reifier_shape = Shape {
             id: ex("ReifierShape"),
             targets: vec![],
-            constraints: vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            constraints: vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}RequiredReifierClass"
-            )))],
+            ))])],
             property_shapes: vec![],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![named_role(&vocab.box_config_box)],
             rules: vec![],
@@ -4090,17 +5147,21 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
                 constraints: vec![],
                 property_shapes: vec![],
                 reifier_shapes: vec![reifier_shape],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![named_role(&vocab.box_tbox)],
             rules: vec![],
@@ -4148,9 +5209,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Foo"
-            )))],
+            ))])],
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert!(results.is_empty());
@@ -4168,9 +5229,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Foo"
-            )))],
+            ))])],
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
@@ -4188,9 +5249,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Foo"
-            )))],
+            ))])],
         );
         assert!(
             validate_shape(&store, &ex("a"), &shape).is_empty(),
@@ -4207,9 +5268,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}A"
-            )))],
+            ))])],
         );
         assert!(
             validate_shape(&store, &ex("a"), &shape).is_empty(),
@@ -4227,9 +5288,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}age"),
-            vec![Constraint::Datatype(NamedNode::new_unchecked(format!(
-                "{XSD}integer"
-            )))],
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}integer"),
+            )])],
         );
         assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
     }
@@ -4242,9 +5303,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}age"),
-            vec![Constraint::Datatype(NamedNode::new_unchecked(format!(
-                "{XSD}integer"
-            )))],
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}integer"),
+            )])],
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
@@ -4259,9 +5320,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}n"),
-            vec![Constraint::Datatype(NamedNode::new_unchecked(format!(
-                "{XSD}integer"
-            )))],
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}integer"),
+            )])],
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
@@ -4281,9 +5342,9 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}n"),
-            vec![Constraint::Datatype(NamedNode::new_unchecked(format!(
-                "{XSD}nonNegativeInteger"
-            )))],
+            vec![Constraint::Datatype(vec![NamedNode::new_unchecked(
+                format!("{XSD}nonNegativeInteger"),
+            )])],
         );
         assert!(
             validate_shape(&store, &ex("a"), &shape).is_empty(),
@@ -4329,7 +5390,7 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::NodeKind(NodeKindValue::Iri)],
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
         );
         assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
     }
@@ -4340,7 +5401,7 @@ mod tests {
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
-            vec![Constraint::NodeKind(NodeKindValue::Iri)],
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
         );
         let results = validate_shape(&store, &ex("a"), &shape);
         assert_eq!(results.len(), 1);
@@ -4637,10 +5698,10 @@ mod tests {
                 "{regex:?} must still report the Pattern constraint component"
             );
             for result in &results {
-                let message = result
-                    .message
-                    .as_deref()
-                    .unwrap_or_else(|| panic!("{regex:?} / {flags:?} must carry a message"));
+                let message = result.messages.first().map_or_else(
+                    || panic!("{regex:?} / {flags:?} must carry a message"),
+                    Literal::value,
+                );
                 assert!(
                     message.contains("invalid sh:pattern"),
                     "{regex:?} / {flags:?}: message {message:?} must mark the SHAPE as invalid"
@@ -4925,6 +5986,71 @@ mod tests {
         assert!(component_iri(&results)[0].contains("UniqueLang"));
     }
 
+    /// The number of `sh:uniqueLang` results for `ex:a`'s `ex:label` values,
+    /// each given as a Turtle literal suffix (`"@en"`, `"@ar--ltr"`); every value
+    /// has its own lexical form, so the store keeps them all.
+    fn unique_lang_results(tags: &[&str]) -> Vec<ValidationResult> {
+        let labels: Vec<String> = tags
+            .iter()
+            .enumerate()
+            .map(|(index, tag)| format!("\"v{index}\"{tag}"))
+            .collect();
+        let store = load_store(&format!(
+            "@prefix ex: <{EX}> . ex:a ex:label {} .",
+            labels.join(", ")
+        ));
+        let shape = prop_shape(
+            "S",
+            &format!("{EX}label"),
+            vec![Constraint::UniqueLang(true)],
+        );
+        validate_shape(&store, &ex("a"), &shape)
+    }
+
+    /// **SHACL 1.2 Core §7.4.6: "For value nodes of datatype rdf:dirLangString,
+    /// the base direction is included in the uniqueness condition, e.g.,
+    /// "1"@ar--rtl and "1"@ar-ltr are different, as is the pair "1"@ar--rtl and
+    /// "1"@ar."** The group key is (language tag, base direction).
+    #[test]
+    fn unique_lang_groups_by_language_and_direction() {
+        // `@ar`, `@ar--ltr` and `@ar--rtl` are three groups of one.
+        assert!(unique_lang_results(&["@ar", "@ar--ltr", "@ar--rtl"]).is_empty());
+        // `@en` and `@en--ltr` are two groups of one.
+        assert!(unique_lang_results(&["@en", "@en--ltr"]).is_empty());
+        // A plain string is in no group at all.
+        assert!(unique_lang_results(&["", "@en--ltr"]).is_empty());
+
+        // Two `@en--ltr` are one group of two: one result, naming the group.
+        let results = unique_lang_results(&["@en--ltr", "@en--ltr", "@en"]);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("duplicate language tag: en--ltr")
+        );
+        // Two `@en` without a direction are still one group of two.
+        let results = unique_lang_results(&["@en", "@en", "@en--rtl"]);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("duplicate language tag: en")
+        );
+        // Two duplicated groups, two results.
+        assert_eq!(
+            unique_lang_results(&["@ar--rtl", "@ar--rtl", "@ar", "@ar"]).len(),
+            2
+        );
+    }
+
+    /// Language tags compare case-insensitively (BCP 47; RDF 1.2 Concepts gives a
+    /// language tag a lower-case value space), and the direction still splits the
+    /// group: `@EN-GB` and `@en-gb` are one group, `@EN-GB--rtl` another.
+    #[test]
+    fn unique_lang_tag_case_is_not_a_distinction() {
+        let results = unique_lang_results(&["@EN-GB", "@en-gb"]);
+        assert_eq!(results.len(), 1, "{results:?}");
+        assert!(unique_lang_results(&["@EN-GB", "@en-gb--rtl"]).is_empty());
+    }
+
     // ── minInclusive ───────────────────────────────────────────────────────────
 
     #[test]
@@ -5134,12 +6260,12 @@ mod tests {
             "@prefix ex: <{EX}> . @prefix rdf: <{RDF}> . ex:a rdf:type ex:Foo ."
         ));
         // sh:and ([ sh:nodeKind sh:IRI ] [ sh:class ex:Foo ]) on focus node directly.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
         let member2 = shape_with(
             "M2",
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Foo"
-            )))],
+            ))])],
         );
         let shape = shape_with("S", vec![Constraint::And(vec![member1, member2])]);
         assert!(validate_shape(&store, &ex("a"), &shape).is_empty());
@@ -5151,12 +6277,12 @@ mod tests {
             "@prefix ex: <{EX}> . @prefix rdf: <{RDF}> . ex:a rdf:type ex:Bar ."
         ));
         // ex:a is IRI (passes M1) but type is ex:Bar not ex:Foo (fails M2).
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
         let member2 = shape_with(
             "M2",
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Foo"
-            )))],
+            ))])],
         );
         let shape = shape_with("S", vec![Constraint::And(vec![member1, member2])]);
         let results = validate_shape(&store, &ex("a"), &shape);
@@ -5170,8 +6296,11 @@ mod tests {
     fn or_pass_first_member() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
         // ex:b is an IRI, passes M1.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
-        let member2 = shape_with("M2", vec![Constraint::NodeKind(NodeKindValue::Literal)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with(
+            "M2",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Literal])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5184,7 +6313,10 @@ mod tests {
     fn or_fail_no_member() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
         // Both members require Literal; ex:b is IRI → fails both.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Literal)]);
+        let member1 = shape_with(
+            "M1",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Literal])],
+        );
         let member2 = shape_with(
             "M2",
             vec![Constraint::MinLength(999)], // impossible length
@@ -5205,8 +6337,11 @@ mod tests {
     fn xone_pass_exactly_one() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
         // ex:b is IRI: M1 (IRI) passes, M2 (Literal) fails → exactly 1.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
-        let member2 = shape_with("M2", vec![Constraint::NodeKind(NodeKindValue::Literal)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with(
+            "M2",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Literal])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5219,8 +6354,8 @@ mod tests {
     fn xone_fail_zero() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"hello\" ."));
         // Both require IRI; literal fails both → 0 conforming → violation.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
-        let member2 = shape_with("M2", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with("M2", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5235,8 +6370,8 @@ mod tests {
     fn xone_fail_two() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
         // Both members allow IRI → 2 conforming → violation.
-        let member1 = shape_with("M1", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
-        let member2 = shape_with("M2", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let member1 = shape_with("M1", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
+        let member2 = shape_with("M2", vec![Constraint::NodeKind(vec![NodeKindValue::Iri])]);
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5253,7 +6388,10 @@ mod tests {
     fn node_pass() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
         // sh:node targets ex:b; inner shape requires IRI.
-        let inner = shape_with("Inner", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5265,7 +6403,10 @@ mod tests {
     #[test]
     fn node_fail() {
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"notAnIRI\" ."));
-        let inner = shape_with("Inner", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5295,17 +6436,21 @@ mod tests {
                 path: Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(
                     format!("{EX}parent"),
                 )))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -5350,17 +6495,21 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("S-property"),
                 path: composite(),
+                values: None,
+                default_value: None,
                 constraints,
                 property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -5407,17 +6556,21 @@ mod tests {
                 path: Path::Inverse(Box::new(Path::Predicate(NamedNode::new_unchecked(
                     format!("{EX}parent"),
                 )))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -5576,10 +6729,11 @@ mod tests {
         let shape = Shape {
             id: ex("S"),
             targets: vec![],
-            constraints: vec![Constraint::NodeKind(NodeKindValue::Iri)],
+            constraints: vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
             property_shapes: vec![],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: true,
             box_roles: vec![],
             rules: vec![],
@@ -5650,7 +6804,10 @@ mod tests {
         // Inner shape requires NodeKind(Iri); the value is a literal, so it does
         // NOT conform → sh:not is satisfied.
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p \"lit\" ."));
-        let inner = shape_with("Inner", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5668,7 +6825,10 @@ mod tests {
         // Inner shape requires NodeKind(Iri); the value IS an IRI, so it conforms
         // → sh:not is violated.
         let store = load_store(&format!("@prefix ex: <{EX}> . ex:a ex:p ex:b ."));
-        let inner = shape_with("Inner", vec![Constraint::NodeKind(NodeKindValue::Iri)]);
+        let inner = shape_with(
+            "Inner",
+            vec![Constraint::NodeKind(vec![NodeKindValue::Iri])],
+        );
         let shape = prop_shape(
             "S",
             &format!("{EX}p"),
@@ -5689,12 +6849,15 @@ mod tests {
             .map(|(index, p)| PropertyShape {
                 id: ex(&format!("Property-{index}")),
                 path: Path::Predicate(NamedNode::new_unchecked(*p)),
+                values: None,
+                default_value: None,
                 constraints: vec![],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             })
@@ -5702,10 +6865,14 @@ mod tests {
         Shape {
             id: ex("S"),
             targets: vec![],
-            constraints: vec![Constraint::Closed { ignored }],
+            constraints: vec![Constraint::Closed {
+                ignored,
+                mode: crate::shapes::ClosedMode::Declared,
+            }],
             property_shapes,
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -5805,8 +6972,8 @@ mod tests {
 
     // ── Property-pair constraints (§4.3) ───────────────────────────────────────
 
-    fn pair_pred(local: &str) -> NamedNode {
-        NamedNode::new_unchecked(format!("{EX}{local}"))
+    fn pair_pred(local: &str) -> Path {
+        Path::Predicate(NamedNode::new_unchecked(format!("{EX}{local}")))
     }
 
     #[test]
@@ -5999,9 +7166,9 @@ mod tests {
         Constraint::QualifiedValueShape {
             shape: Box::new(shape_with(
                 "Q",
-                vec![Constraint::Class(NamedNode::new_unchecked(format!(
+                vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                     "{EX}{class_local}"
-                )))],
+                ))])],
             )),
             siblings,
             min_count,
@@ -6062,9 +7229,9 @@ mod tests {
         ));
         let finger_sibling = shape_with(
             "FingerQ",
-            vec![Constraint::Class(NamedNode::new_unchecked(format!(
+            vec![Constraint::Class(vec![NamedNode::new_unchecked(format!(
                 "{EX}Finger"
-            )))],
+            ))])],
         );
 
         let without_disjoint = prop_shape(
@@ -6109,17 +7276,21 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Violation,
-                message: None,
+                messages: vec![],
+                constraint_annotations: vec![],
                 deactivated: true,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -6140,17 +7311,21 @@ mod tests {
             property_shapes: vec![PropertyShape {
                 id: ex("Property"),
                 path: Path::Predicate(NamedNode::new_unchecked(format!("{EX}p"))),
+                values: None,
+                default_value: None,
                 constraints: vec![Constraint::MinCount(1)],
                 property_shapes: vec![],
                 reifier_shapes: vec![],
                 reification_required: false,
                 severity: Severity::Info,
-                message: Some("p is recommended".to_owned()),
+                messages: vec![Literal::new_simple_literal("p is recommended")],
+                constraint_annotations: vec![],
                 deactivated: false,
                 box_roles: vec![],
             }],
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
+            constraint_annotations: vec![],
             deactivated: false,
             box_roles: vec![],
             rules: vec![],
@@ -6162,6 +7337,9 @@ mod tests {
             Severity::Info,
             "the property shape's severity overrides the parent's"
         );
-        assert_eq!(results[0].message.as_deref(), Some("p is recommended"));
+        assert_eq!(
+            results[0].messages.first().map(Literal::value),
+            Some("p is recommended")
+        );
     }
 }

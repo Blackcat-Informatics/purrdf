@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Engine-side variable **pre-binding** (purrdf S6).
+//! Engine-side variable **pre-binding**.
 //!
 //! Bridges the engine's egress term model ([`TermValue`]) to the algebra's
 //! [`Query::substitute_variable`] rewrite. Each `(name, value)` of a
@@ -498,7 +498,7 @@ pub(crate) fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
 ///
 /// After this rewrite the pattern carries the constant, so `crate::bgp`'s
 /// `compile_pattern` resolves it to a [`Pos::Bound`](crate::bgp) and the
-/// index-nested-loop join probes the P4 permutation index directly.
+/// index-nested-loop join probes the permutation index directly.
 ///
 /// # Why it is sound
 ///

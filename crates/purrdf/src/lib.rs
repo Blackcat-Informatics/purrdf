@@ -135,8 +135,9 @@ pub mod profile;
 pub use profile::{OntologyProfile, ReifierVocab};
 pub mod reasoning;
 pub use reasoning::{
-    ClosureRelations, GovernedEntailment, QueryEntailment, QueryEntailmentPlan, ReasoningError,
-    RelationRebuilder, query_with_entailment, query_with_entailment_governed,
+    ClosureRelations, EntailmentClosure, GovernedEntailment, QueryEntailment, QueryEntailmentPlan,
+    ReasoningError, RelationRebuilder, query_with_entailment,
+    query_with_entailment_closure_governed, query_with_entailment_governed,
 };
 
 /// Bidirectional, byte-deterministic five-table Parquet codec.
@@ -353,10 +354,10 @@ mod tests {
         let _ = RdfDatasetBuilder::new();
         let _ = slice::rdf_query::DatasetAccumulator::new();
         let _ = shapes::SanitizePolicy::Rename;
-        let _ = shapes::report::ValidationReport {
-            conforms: true,
-            results: Vec::new(),
-        };
+        let _ = shapes::report::ValidationReport::from_results(
+            Vec::new(),
+            shapes::report::ConformanceDisallows::default(),
+        );
         let _ = shex::parse_shexc("PREFIX ex: <https://example.org/>\nex:S { ex:p . }", None)
             .expect("shex facade parses");
     }

@@ -96,6 +96,12 @@ jobs:
       - name: Check every thread-local is in the interleaving ledger with its reason
         run: python3 scripts/check-thread-locals.py
 
+      - name: Check the shapes-parser silent-drop gate can still fail
+        run: python3 scripts/check-shapes-parser-drops.py --self-test
+
+      - name: Check the shapes parser drops no shapes-graph value silently
+        run: python3 scripts/check-shapes-parser-drops.py
+
       - name: Check the tracked-path gate can still fail
         run: python3 scripts/check-tracked-paths.py --self-test
 
@@ -273,11 +279,14 @@ jobs:
       # every leg is sized to fit the budget without one. One key per shard, since
       # the legs build different graphs. Saved from `main` alone, so six per-branch
       # target directories do not evict main's (and the wasm lanes') caches from
-      # the repository's shared quota; a branch restores main's.
+      # the repository's shared quota; a branch restores main's. The key is a
+      # `shared-key` so that jobs outside this matrix can restore a shard's build
+      # by name: the Python and conformance lanes restore `test-hosts`, the shard
+      # that builds the Python binding and the conformance harness.
       - name: Cache the Rust build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          key: test-${{ matrix.shard }}
+          shared-key: test-${{ matrix.shard }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Install Node for the Unicode ECMAScript oracle
@@ -693,12 +702,21 @@ jobs:
   # The SIMD asm evidence gate. It builds the audited packages seven times -- x86_64
   # (baseline, x86-64-v3, x86-64-v4), aarch64 (baseline, neoverse-v1) and wasm32
   # (baseline, +simd128) -- in release with one codegen unit and LTO off, and counts
-  # the vector work each manifest site compiled to. It is its own job because those
-  # builds are most of its run time; each configuration is a cold build of the graph.
-  simd-asm:
+  # the vector work each manifest site compiled to. Each configuration is a cold build
+  # of the graph, so each runs on its own runner and writes its measured cells; the
+  # `simd-asm` job then checks the document against all seven, exactly as the
+  # single-process `make simd-asm` does (scripts/check-simd-asm.py, "Split runs").
+  # The build directory is scratch the gate deletes, so there is no build to cache.
+  simd-asm-config:
+    name: simd-asm (${{ matrix.config }})
     runs-on: ubuntu-latest
-    # Seven configurations at roughly seven minutes each, with margin.
-    timeout-minutes: 75
+    # One cold release build of the audited graph.
+    timeout-minutes: 30
+    strategy:
+      # A cancelled configuration is a configuration nobody measured.
+      fail-fast: false
+      matrix:
+        config: [x86_64, x86_64-v3, x86_64-v4, aarch64, aarch64-neoverse-v1, wasm32, wasm32-simd128]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -722,11 +740,50 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
 
-      - name: Count the vector work in emitted asm on seven target configurations
+      - name: Count the vector work in emitted asm on this configuration
         # Every manifest site must still compile to the vector instructions that prove
         # its shape, with no fused multiply-add where the arithmetic is exact and no
-        # relaxed-simd anywhere.
-        run: make simd-asm
+        # relaxed-simd anywhere. The cells are written even when a site fails, so the
+        # document check below reports every configuration's problems together.
+        env:
+          CONFIG: ${{ matrix.config }}
+        run: make simd-asm SIMD_ASM_ARGS="--config $CONFIG --emit-cells target/simd-asm-cells/$CONFIG.json"
+
+      - name: Upload this configuration's cells
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: simd-asm-cells-${{ matrix.config }}
+          path: target/simd-asm-cells/${{ matrix.config }}.json
+          if-no-files-found: error
+
+  simd-asm:
+    needs: simd-asm-config
+    # Runs whatever the configurations concluded: a failed site's cells are still
+    # judged here, and a configuration that wrote none fails here by name.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Download every configuration's cells
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: simd-asm-cells-*
+          merge-multiple: true
+          path: target/simd-asm-cells
+
+      - name: Check the audit document against all seven configurations
+        run: make simd-asm SIMD_ASM_ARGS="--doc-from-cells target/simd-asm-cells"
+
+      - name: Require every configuration job to have succeeded
+        env:
+          CONFIGS_RESULT: ${{ needs.simd-asm-config.result }}
+        run: test "$CONFIGS_RESULT" = success
 
   # The third ISA the distance arithmetic's bit-identity claim is EXECUTED on. The
   # exact law pins one summation order in source, so its results must be the same
@@ -852,14 +909,26 @@ jobs:
             --test float_environment_x87 --test float_environment_x87_rayon
 
   # riscv64 runs apart from i686 because the distribution's multilib and riscv64
-  # cross compilers cannot be installed together. Its HNSW worker-count digest under
-  # emulation is the long pole.
+  # cross compilers cannot be installed together. Under emulation one HNSW digest
+  # takes minutes, so the suites run on four runners. The `determinism-*` parts each
+  # run the determinism tests they name, and fail unless every named test ran; the
+  # `suites` part runs everything else, the rest of the determinism file included
+  # (it skips exactly the names the other parts own), so a test added to the file
+  # later runs there without being listed anywhere.
   cross-arch-riscv64:
+    name: cross-arch-riscv64 (${{ matrix.part }})
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        part: [suites, determinism-serial, determinism-one-worker, determinism-more-workers]
     env:
       CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_LINKER: riscv64-linux-gnu-gcc
       CARGO_TARGET_RISCV64GC_UNKNOWN_LINUX_GNU_RUNNER: qemu-riscv64 -L /usr/riscv64-linux-gnu
+      DETERMINISM_SERIAL: a_serial_insert_builds_a_different_graph
+      DETERMINISM_ONE_WORKER: the_digest_is_identical_under_one_worker
+      DETERMINISM_MORE_WORKERS: the_digest_is_identical_under_two_workers the_digest_is_identical_under_four_workers the_digest_is_identical_under_eight_workers
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -878,16 +947,47 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
 
-      - name: Run the distance, kNN and HNSW suites on riscv64 under emulation
+      - name: Run the distance, kNN and HNSW suites on riscv64 under emulation (this part)
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable
+          PART: ${{ matrix.part }}
+        shell: bash
         run: |
-          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-core --lib distance
-          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
-          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-sparql-eval \
-            --test knn_wasm_determinism --test knn_wasm_reassociated
-          cargo test --locked --target riscv64gc-unknown-linux-gnu -p purrdf-hnsw \
-            --test determinism --test conformance --test wasm_reassociated
+          set -euo pipefail
+          target=riscv64gc-unknown-linux-gnu
+          # Run the named determinism tests, then require each to have run and passed:
+          # an `--exact` filter that matches nothing runs zero tests and exits 0.
+          determinism() {
+            log="$RUNNER_TEMP/determinism-$PART.log"
+            cargo test --locked --target "$target" -p purrdf-hnsw --test determinism \
+              -- --color never --exact "$@" 2>&1 | tee "$log"
+            for name in "$@"; do
+              grep -qx "test $name ... ok" "$log" || { echo "::error::$name did not run on this part"; exit 1; }
+            done
+          }
+          # Word splitting of the DETERMINISM_* lists is intended: each is a list of
+          # test names.
+          # shellcheck disable=SC2086
+          case "$PART" in
+          suites)
+            cargo test --locked --target "$target" -p purrdf-core --lib distance
+            cargo test --locked --target "$target" -p purrdf-sparql-eval --lib knn
+            cargo test --locked --target "$target" -p purrdf-sparql-eval \
+              --test knn_wasm_determinism --test knn_wasm_reassociated
+            cargo test --locked --target "$target" -p purrdf-hnsw \
+              --test conformance --test wasm_reassociated
+            skips=()
+            for name in $DETERMINISM_SERIAL $DETERMINISM_ONE_WORKER $DETERMINISM_MORE_WORKERS; do
+              skips+=(--skip "$name")
+            done
+            cargo test --locked --target "$target" -p purrdf-hnsw --test determinism \
+              -- --exact "${skips[@]}"
+            ;;
+          determinism-serial) determinism $DETERMINISM_SERIAL ;;
+          determinism-one-worker) determinism $DETERMINISM_ONE_WORKER ;;
+          determinism-more-workers) determinism $DETERMINISM_MORE_WORKERS ;;
+          *) echo "::error::unknown part $PART"; exit 1 ;;
+          esac
 
   # The x86_64 dispatch paths a hosted runner does not guarantee, EXECUTED. GitHub's
   # x86_64 runners promise neither AVX2+FMA nor AVX-512F, so without this job the
@@ -946,7 +1046,7 @@ jobs:
   # opt-in top-level `rdflib` shadow package is never installed in this env.
   pytest:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -957,6 +1057,15 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      # The test lane's `hosts` shard build, restored and never re-saved: the
+      # module build and the emitter oracle's cargo run share most dependency units
+      # with it, and no new cache entry competes for the repository's quota.
+      - name: Restore the workspace test lane's dependency build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: test-hosts
+          save-if: false
 
       - name: Install uv
         run: |
@@ -982,9 +1091,21 @@ jobs:
   # failure (a red run, an XPASS, or a stale ledger key). The matrix is also
   # published to the job summary via $GITHUB_STEP_SUMMARY. The REAL rdflib is the
   # differential oracle (installed by uv), never the top-level rdflib shadow.
-  conformance:
+  #
+  # The suites run on four runners, one per shard of scripts/conformance-matrix.py's
+  # SHARDS (suites that compile the same crates share one), and each writes its rows
+  # unjudged. The `conformance` job reassembles every shard's rows in matrix order
+  # and judges the whole matrix -- the ratchet and its orphan check, the scoreboard,
+  # the job summary and the docs/CONFORMANCE.md drift check -- exactly as a single
+  # `make conformance` run does; a missing or incomplete shard is a failure there.
+  conformance-shard:
+    name: conformance (${{ matrix.shard }})
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [core, sparql, shapes, python]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -996,10 +1117,58 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
+      # The build the test lane's `hosts` shard saves, restored and never re-saved:
+      # the conformance suites are that shard's test targets, so most dependency units
+      # are already compiled, and no new cache entry competes for the repository's quota.
+      - name: Restore the workspace test lane's dependency build
+        uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+        with:
+          shared-key: test-hosts
+          save-if: false
+
       - name: Install uv
+        if: matrix.shard == 'python'
         run: |
           curl -LsSf https://astral.sh/uv/install.sh | sh
           echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
+      - name: Conformance matrix (this shard's suites)
+        env:
+          SHARD: ${{ matrix.shard }}
+        run: make conformance CONFORMANCE_ARGS="--shard $SHARD --emit-results target/conformance-results/$SHARD.json"
+
+      - name: Upload this shard's rows
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        with:
+          name: conformance-results-${{ matrix.shard }}
+          path: target/conformance-results/${{ matrix.shard }}.json
+          if-no-files-found: error
+
+  conformance:
+    needs: conformance-shard
+    # Runs whatever the shards concluded, so a red suite is still reported in the one
+    # scoreboard; a shard that wrote no rows fails here by name.
+    if: ${{ !cancelled() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Download every shard's rows
+        uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
+        with:
+          pattern: conformance-results-*
+          merge-multiple: true
+          path: target/conformance-results
+
       - name: Conformance matrix (native Rust suites + rdflib gate)
-        run: make conformance
+        run: make conformance CONFORMANCE_ARGS="--from-results target/conformance-results"
+
+      - name: Require every shard job to have succeeded
+        env:
+          SHARDS_RESULT: ${{ needs.conformance-shard.result }}
+        run: test "$SHARDS_RESULT" = success

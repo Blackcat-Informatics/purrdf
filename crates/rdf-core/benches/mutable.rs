@@ -5,7 +5,7 @@
 // which would otherwise trip the workspace `missing_docs` lint.
 #![allow(missing_docs)]
 
-//! The copy-on-write `MutableDataset` measured hypothesis (purrdf P5).
+//! The copy-on-write `MutableDataset` measured hypothesis.
 //!
 //! The PLAN frames COW as *"a measured hypothesis, not an assumed win — benchmark it
 //! against a simpler hash-indexed mutable store before committing"*. This harness is

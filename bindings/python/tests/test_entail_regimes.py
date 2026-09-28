@@ -144,7 +144,7 @@ def _dataset(text: str = SCHEMA) -> RdfDataset:
 
 def test_owl_rl_derives_what_parsing_does_not() -> None:
     """OWL-RL infers triples that are in neither the input nor a Simple closure."""
-    closure, _report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
+    closure, _report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "", [], [])
     closed = closure.to_nquads()
 
     assert SUBCLASS_INFERENCE in closed, closed
@@ -153,21 +153,21 @@ def test_owl_rl_derives_what_parsing_does_not() -> None:
     assert SUBCLASS_INFERENCE not in SCHEMA
     assert SYMMETRY_INFERENCE not in SCHEMA
     # `simple` is the identity closure: the same input yields neither.
-    identity, _ = entail.materialize(_dataset(), entail.Regime.SIMPLE, "")
+    identity, _ = entail.materialize(_dataset(), entail.Regime.SIMPLE, "", [], [])
     assert SUBCLASS_INFERENCE not in identity.to_nquads()
     assert SYMMETRY_INFERENCE not in identity.to_nquads()
 
 
 def test_symmetry_is_owl_only_not_rdfs() -> None:
     """`prp-symp` is an OWL rule: RDFS must NOT license the symmetric triple."""
-    rdfs, _ = entail.materialize(_dataset(), entail.Regime.RDFS, "")
+    rdfs, _ = entail.materialize(_dataset(), entail.Regime.RDFS, "", [], [])
     assert SUBCLASS_INFERENCE in rdfs.to_nquads(), "rdfs9/cax-sco still fires"
     assert SYMMETRY_INFERENCE not in rdfs.to_nquads()
 
 
 def test_base_triples_survive_the_closure() -> None:
     """A closure adds; it never drops. Every input triple is still present."""
-    closure, _ = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
+    closure, _ = entail.materialize(_dataset(), entail.Regime.OWL_RL, "", [], [])
     closed = closure.to_nquads()
     for line in SCHEMA.splitlines():
         assert line in closed, f"input triple dropped by the closure: {line}"
@@ -176,7 +176,7 @@ def test_base_triples_survive_the_closure() -> None:
 
 def test_report_names_the_rules_that_fired() -> None:
     """The report is not optional and says what the run actually did."""
-    _closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
+    _closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "", [], [])
     assert report.startswith("purrdf-reasoning-report 4\n")
     assert "\nregime owl-rl\n" in report
     # The conclusion counts are the engine's to report, so only the fact that
@@ -188,14 +188,67 @@ def test_report_names_the_rules_that_fired() -> None:
     assert report.endswith("inconsistency none\n")
 
 
+# ── The evaluation limits ───────────────────────────────────────────────────────
+
+
+def _stored_facts(report: str) -> int:
+    for line in report.splitlines():
+        if line.startswith("budget stored-facts "):
+            return int(line.removeprefix("budget stored-facts "))
+    raise AssertionError(f"no stored-facts line:\n{report}")
+
+
+def test_the_evaluation_limits_refuse_naming_this_hosts_keyword() -> None:
+    """A passed limit names the keyword argument of the function called; the store the
+    run needs, stated exactly, admits the same closure, and one fact fewer refuses."""
+    closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "", [], [])
+    needed = _stored_facts(report)
+    with pytest.raises(ValueError) as short:
+        entail.materialize(
+            _dataset(), entail.Regime.OWL_RL, "", [], [], max_stored_facts=needed - 1
+        )
+    assert f"{needed - 1} permitted (the caller's limit)" in str(short.value)
+    assert str(short.value).endswith("raise it with materialize(max_stored_facts=...)")
+    exact, _ = entail.materialize(
+        _dataset(), entail.Regime.OWL_RL, "", [], [], max_stored_facts=needed
+    )
+    assert exact.to_nquads() == closure.to_nquads()
+
+    with pytest.raises(ValueError) as steps:
+        entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "", [], [], max_join_steps=1)
+    assert "evaluation exceeded the join-step limit: " in str(steps.value)
+    assert str(steps.value).endswith("raise it with materialize_nt(max_join_steps=...)")
+    with pytest.raises(ValueError) as text_facts:
+        entail.materialize_nt(SCHEMA, entail.Regime.RDFS, "", [], [], max_stored_facts=1)
+    assert str(text_facts.value).endswith(
+        "raise it with materialize_nt(max_stored_facts=...)"
+    )
+
+
+def test_the_limits_in_force_reach_the_contract_hash() -> None:
+    """Raising a limit past the default names a different calculus; the closure is the
+    same one."""
+    def hash_of(report: str) -> str:
+        return next(
+            line for line in report.splitlines() if line.startswith("contract-hash ")
+        )
+
+    closure, report = entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "", [], [])
+    raised, raised_report = entail.materialize_nt(
+        SCHEMA, entail.Regime.OWL_RL, "", [], [], max_stored_facts=1 << 23
+    )
+    assert raised == closure
+    assert hash_of(raised_report) != hash_of(report)
+
+
 # ── The two entry points are one path ───────────────────────────────────────────
 
 
 def test_materialize_nt_matches_the_dataset_path_byte_for_byte() -> None:
     """The string wrapper is the same boundary call, not a second engine path."""
-    text_closure, text_report = entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "")
+    text_closure, text_report = entail.materialize_nt(SCHEMA, entail.Regime.OWL_RL, "", [], [])
     dataset_closure, dataset_report = entail.materialize(
-        _dataset(), entail.Regime.OWL_RL, ""
+        _dataset(), entail.Regime.OWL_RL, "", [], []
     )
     assert text_closure == dataset_closure.to_nquads()
     assert text_report == dataset_report
@@ -203,7 +256,7 @@ def test_materialize_nt_matches_the_dataset_path_byte_for_byte() -> None:
 
 def test_to_nquads_round_trips() -> None:
     """A serialized closure re-parses, and re-serializes to the same bytes."""
-    closure, _ = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
+    closure, _ = entail.materialize(_dataset(), entail.Regime.OWL_RL, "", [], [])
     serialized = closure.to_nquads()
     reparsed = RdfDataset(serialized, RdfFormat.N_QUADS)
     assert reparsed.to_nquads() == serialized
@@ -223,15 +276,15 @@ def test_repeated_calls_are_byte_identical(regime: entail.Regime, program: str) 
     would diverge across these calls; a one-in-two divergence cannot pass by luck
     at this repetition count.
     """
-    first_closure, first_report = entail.materialize(_dataset(), regime, program)
+    first_closure, first_report = entail.materialize(_dataset(), regime, program, [], [])
     first = first_closure.to_nquads()
     for _ in range(11):
-        closure, report = entail.materialize(_dataset(), regime, program)
+        closure, report = entail.materialize(_dataset(), regime, program, [], [])
         assert closure.to_nquads() == first
         assert report == first_report
     # …and the text path is stable in the same way.
-    text = entail.materialize_nt(SCHEMA, regime, program)
-    assert entail.materialize_nt(SCHEMA, regime, program) == text
+    text = entail.materialize_nt(SCHEMA, regime, program, [], [])
+    assert entail.materialize_nt(SCHEMA, regime, program, [], []) == text
 
 
 # ── Every regime member is accepted ─────────────────────────────────────────────
@@ -248,12 +301,12 @@ def test_every_regime_member_materializes(regime: entail.Regime, program: str) -
     """
     assert isinstance(entail.rules(regime), list)
     assert isinstance(entail.implemented_rules(regime), list)
-    closure, report = entail.materialize(_dataset(), regime, program)
+    closure, report = entail.materialize(_dataset(), regime, program, [], [])
     assert closure.quad_count() >= 4
     assert report.startswith("purrdf-reasoning-report 4\n")
     assert report.endswith("inconsistency none\n")
     # …and the text path agrees, byte for byte, on the same regime and program.
-    text_closure, text_report = entail.materialize_nt(SCHEMA, regime, program)
+    text_closure, text_report = entail.materialize_nt(SCHEMA, regime, program, [], [])
     assert text_closure == closure.to_nquads()
     assert text_report == report
 
@@ -265,7 +318,7 @@ def test_the_rif_lane_entails_under_the_supplied_rules() -> None:
     because the rule fired, and the RDFS axiomatic vocabulary does not, because
     no rule table ran.
     """
-    closure, report = entail.materialize(_dataset(), entail.Regime.RIF, RIF_PROGRAM)
+    closure, report = entail.materialize(_dataset(), entail.Regime.RIF, RIF_PROGRAM, [], [])
     closed = closure.to_nquads()
     assert RIF_INFERENCE in closed, closed
     assert "\nregime rif\n" in report
@@ -274,7 +327,7 @@ def test_the_rif_lane_entails_under_the_supplied_rules() -> None:
 
 def test_owl_direct_materializes_the_query_independent_augmentation() -> None:
     """`OWL_DIRECT` closes: the tableau states what it decides about named terms."""
-    closure, report = entail.materialize(_dataset(), entail.Regime.OWL_DIRECT, "")
+    closure, report = entail.materialize(_dataset(), entail.Regime.OWL_DIRECT, "", [], [])
     assert SUBCLASS_INFERENCE in closure.to_nquads(), closure.to_nquads()
     assert "\nregime owl-direct\n" in report
 
@@ -287,8 +340,8 @@ def test_a_rule_document_belongs_to_rif_alone(
     if program:
         return
     for call in (
-        lambda: entail.materialize(_dataset(), regime, RIF_PROGRAM),
-        lambda: entail.materialize_nt(SCHEMA, regime, RIF_PROGRAM),
+        lambda: entail.materialize(_dataset(), regime, RIF_PROGRAM, [], []),
+        lambda: entail.materialize_nt(SCHEMA, regime, RIF_PROGRAM, [], []),
     ):
         with pytest.raises(ValueError, match="takes no rule document"):
             call()
@@ -374,7 +427,7 @@ def test_extensions_name_what_this_build_adds_beyond_the_table() -> None:
 
     # And the report names the same rules the inventory does, so the two
     # disclosures cannot drift apart.
-    _closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "")
+    _closure, report = entail.materialize(_dataset(), entail.Regime.OWL_RL, "", [], [])
     reported = [
         line.removeprefix("extension ")
         for line in report.splitlines()
@@ -396,7 +449,7 @@ def test_the_gap_is_exactly_the_reports_missing_lines(regime: entail.Regime) -> 
     fired = entail.implemented_rules(regime)
     gap = [rule for rule in spec if rule not in fired]
 
-    _closure, report = entail.materialize(_dataset(), regime, "")
+    _closure, report = entail.materialize(_dataset(), regime, "", [], [])
     missing = [
         line.removeprefix("missing ")
         for line in report.splitlines()
@@ -422,7 +475,7 @@ def test_the_gap_is_exactly_the_reports_missing_lines(regime: entail.Regime) -> 
 def test_malformed_input_raises_value_error() -> None:
     """A malformed document is an error, not an empty closure."""
     with pytest.raises(ValueError):
-        entail.materialize_nt("this is not n-quads\n", entail.Regime.RDFS, "")
+        entail.materialize_nt("this is not n-quads\n", entail.Regime.RDFS, "", [], [])
     with pytest.raises(ValueError):
         RdfDataset("this is not n-quads\n", RdfFormat.N_QUADS)
 
@@ -455,14 +508,14 @@ def test_a_reserved_vocabulary_closure_raises_value_error_naming_it() -> None:
     """
     with pytest.raises(ValueError, match="urn:purrdf:rdfc:reifies"):
         entail.materialize_nt(
-            _RESERVED_PREDICATE_PLAIN_OBJECT, entail.Regime.SIMPLE, ""
+            _RESERVED_PREDICATE_PLAIN_OBJECT, entail.Regime.SIMPLE, "", [], []
         )
 
 
 def test_an_ordinary_closure_neighbouring_the_reserved_iri_still_materializes() -> None:
     """The refusal above is not an over-refusal of an ordinary, unrelated IRI."""
     closed_nquads, _report = entail.materialize_nt(
-        _NEIGHBOURING_ORDINARY_PREDICATE, entail.Regime.SIMPLE, ""
+        _NEIGHBOURING_ORDINARY_PREDICATE, entail.Regime.SIMPLE, "", [], []
     )
     assert "urn:purrdf:other:annotation" in closed_nquads, closed_nquads
 
@@ -470,8 +523,8 @@ def test_an_ordinary_closure_neighbouring_the_reserved_iri_still_materializes() 
 def test_unknown_regime_spelling_names_the_accepted_set() -> None:
     """The error a caller three language boundaries away has to act on."""
     for call in (
-        lambda: entail.materialize(_dataset(), "rdfs-plus", ""),
-        lambda: entail.materialize_nt(SCHEMA, "rdfs-plus", ""),
+        lambda: entail.materialize(_dataset(), "rdfs-plus", "", [], []),
+        lambda: entail.materialize_nt(SCHEMA, "rdfs-plus", "", [], []),
         lambda: entail.rules("rdfs-plus"),
         lambda: entail.implemented_rules("rdfs-plus"),
     ):
@@ -578,7 +631,7 @@ def test_the_golden_vector_matches_through_python(case: dict[str, str]) -> None:
     report, not a fourth fixture that quietly stopped agreeing with them.
     """
     closure, report = entail.materialize_nt(
-        case["input"], case["regime"], case.get("program", "")
+        case["input"], case["regime"], case.get("program", ""), [], []
     )
     assert closure == case["closure"]
     assert report == case["report"]
@@ -610,7 +663,7 @@ def test_the_withheld_surrogate_count_is_visible_from_python() -> None:
     "counted here" and pointed at a number that was not in the string.
     """
     def withheld(regime: entail.Regime) -> int:
-        _closure, report = entail.materialize_nt(SCHEMA, regime, "")
+        _closure, report = entail.materialize_nt(SCHEMA, regime, "", [], [])
         for line in report.splitlines():
             if line.startswith("withheld-surrogates "):
                 return int(line.removeprefix("withheld-surrogates "))
@@ -636,7 +689,7 @@ def test_an_inconsistent_run_raises_with_its_report_and_witness_triples() -> Non
     premise order.
     """
     with pytest.raises(ValueError) as raised:
-        entail.materialize_nt(INCONSISTENT, entail.Regime.OWL_RL, "")
+        entail.materialize_nt(INCONSISTENT, entail.Regime.OWL_RL, "", [], [])
     message = str(raised.value)
 
     assert "cax-dw was satisfied by 3 asserted triples" in message
@@ -662,7 +715,7 @@ def test_the_dataset_path_refuses_an_inconsistent_run_the_same_way() -> None:
     """The parsed-dataset entry point carries the same evidence as the text one."""
     dataset = _dataset(INCONSISTENT)
     with pytest.raises(ValueError) as raised:
-        entail.materialize(dataset, entail.Regime.OWL_RL, "")
+        entail.materialize(dataset, entail.Regime.OWL_RL, "", [], [])
     message = str(raised.value)
     assert "purrdf-reasoning-report 4\n" in message
     assert message.count("\ninconsistency-premise ") == 3
@@ -680,7 +733,7 @@ def test_certain_answers_enumerate_entailed_bindings_and_disclose_completeness()
     of the asserted one.
     """
     pattern = f"<https://example.org/x> <{RDF_TYPE}> ?c .\n"
-    answer, certificate = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern, [])
+    answer, certificate = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, pattern, [], [])
 
     assert answer.startswith("mechanism strict-table\nvar c\n")
     # `A` is asserted; `B` is derived by cax-sco and is a certain answer all the same.
@@ -730,16 +783,16 @@ def test_a_variable_is_projected_from_every_position_including_the_predicate() -
             "row <https://example.org/s> <https://example.org/p> <https://example.org/o>\n",
         ),
     ]:
-        answer, _ = entail.certain_answers(entail.Regime.SIMPLE, one, pattern, [])
+        answer, _ = entail.certain_answers(entail.Regime.SIMPLE, one, pattern, [], [])
         assert answer == expected, pattern
 
     # …and the predicate column ranges over what the CHASE entailed. No triple of
     # `SCHEMA` states `x rdf:type B`; `cax-sco` is the only reason the row exists.
     bridge = "<https://example.org/x> ?p <https://example.org/B> .\n"
-    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, bridge, [])
+    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, SCHEMA, bridge, [], [])
     assert answer.startswith("mechanism strict-table\nvar p\n")
     assert f"\nrow <{RDF_TYPE}>\n" in answer
-    asserted, _ = entail.certain_answers(entail.Regime.SIMPLE, SCHEMA, bridge, [])
+    asserted, _ = entail.certain_answers(entail.Regime.SIMPLE, SCHEMA, bridge, [], [])
     assert asserted == "mechanism strict-table\nvar p\n"
 
 
@@ -759,6 +812,7 @@ def test_a_question_mark_that_is_not_a_variable_is_not_read_as_one() -> None:
         query_string,
         "<https://example.org/s> <https://example.org/p?zzz=1> ?o .\n",
         [],
+        [],
     )
     assert answer == "mechanism strict-table\nvar o\nrow <https://example.org/o>\n"
 
@@ -767,6 +821,7 @@ def test_a_question_mark_that_is_not_a_variable_is_not_read_as_one() -> None:
         entail.Regime.SIMPLE,
         quoted,
         '<https://example.org/s> ?p "is ?zzz a variable" .\n',
+        [],
         [],
     )
     assert answer == "mechanism strict-table\nvar p\nrow <https://example.org/p>\n"
@@ -777,6 +832,7 @@ def test_a_question_mark_that_is_not_a_variable_is_not_read_as_one() -> None:
         one,
         "# is ?zzz a variable? it is prose.\n"
         "<https://example.org/s> ?p <https://example.org/o> .\n",
+        [],
         [],
     )
     assert answer == "mechanism strict-table\nvar p\nrow <https://example.org/p>\n"
@@ -807,10 +863,10 @@ def test_an_open_predicate_is_a_named_limit_rather_than_a_short_answer() -> None
         f"<https://example.org/p> <{RDF_TYPE}> "
         "<http://www.w3.org/2002/07/owl#TransitiveProperty> .\n"
     )
-    verdict, _ = entail.graph_entails(entail.Regime.OWL_RL, chain, transitive, [])
+    verdict, _ = entail.graph_entails(entail.Regime.OWL_RL, chain, transitive, [], [])
     assert verdict == "mechanism freeze\nentailment entailed\n"
 
-    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, chain, "?s ?p ?o .\n", [])
+    answer, _ = entail.certain_answers(entail.Regime.OWL_RL, chain, "?s ?p ?o .\n", [], [])
     assert "owl#TransitiveProperty" not in answer
     limits = [line for line in answer.splitlines() if line.startswith("limit ")]
     assert len(limits) == 1, answer
@@ -831,7 +887,7 @@ def test_the_variable_stand_in_never_reaches_a_python_caller() -> None:
         "?s ?p ?o .\n?o ?p2 ?s .\n",
     ]:
         for regime in (entail.Regime.SIMPLE, entail.Regime.RDFS, entail.Regime.OWL_RL):
-            answer, certificate = entail.certain_answers(regime, one, pattern, [])
+            answer, certificate = entail.certain_answers(regime, one, pattern, [], [])
             assert "urn:purrdf" not in answer + certificate
             assert "purrdfQvar" not in answer + certificate
 
@@ -859,12 +915,14 @@ def test_a_variable_in_a_literal_datatype_is_refused_rather_than_matched() -> No
         premise,
         '?s <https://example.org/p> "5"^^<https://example.org/dt> .\n',
         [],
+        [],
     )
     assert answer == "mechanism strict-table\nvar s\nrow <https://example.org/caller>\n"
     answer, _ = entail.certain_answers(
         entail.Regime.SIMPLE,
         premise,
         f'?s <https://example.org/p> "5"^^<{probe}> .\n',
+        [],
         [],
     )
     assert answer == "mechanism strict-table\nvar s\nrow <https://example.org/probe>\n"
@@ -877,7 +935,7 @@ def test_a_variable_in_a_literal_datatype_is_refused_rather_than_matched() -> No
     ]:
         for regime in (entail.Regime.SIMPLE, entail.Regime.RDFS, entail.Regime.OWL_RL):
             with pytest.raises(ValueError) as refused:
-                entail.certain_answers(regime, premise, pattern, [])
+                entail.certain_answers(regime, premise, pattern, [], [])
             message = str(refused.value)
             assert "a variable is not a datatype IRI" in message
             assert "`?d`" in message
@@ -894,18 +952,18 @@ def test_graph_entails_gives_three_verdicts_and_names_the_mechanism() -> None:
     caller's data.
     """
     entailed = f"{SUBCLASS_INFERENCE}\n"
-    answer, certificate = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, entailed, [])
+    answer, certificate = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, entailed, [], [])
     assert answer == "mechanism strict-table\nentailment entailed\n"
     assert "\nfired cax-sco " in certificate
 
     never = f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/Never> .\n"
-    answer, _ = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, never, [])
+    answer, _ = entail.graph_entails(entail.Regime.OWL_RL, SCHEMA, never, [], [])
     assert answer.startswith("mechanism strict-table\nentailment not-entailed\n")
     assert "\nmiss " in answer
 
     # `D` realizes datatype entailment as the five dt-* rules and states no theorem
     # that they are all of it, so it can PROVE an entailment and never refute one.
-    answer, _ = entail.graph_entails(entail.Regime.D, SCHEMA, never, [])
+    answer, _ = entail.graph_entails(entail.Regime.D, SCHEMA, never, [], [])
     assert answer.startswith("mechanism strict-table\nentailment undecided\n")
     assert "\nundecided " in answer
 
@@ -919,14 +977,14 @@ def test_verify_entailment_re_decides_its_own_warrant() -> None:
     """
     entailed = f"{SUBCLASS_INFERENCE}\n"
     answer, certificate = entail.verify_entailment(
-        entail.Regime.OWL_RL, SCHEMA, entailed, []
+        entail.Regime.OWL_RL, SCHEMA, entailed, [], []
     )
     assert answer.startswith("mechanism strict-table\nentailment entailed\n")
     assert answer.endswith("warrant present\nverified true\n")
     assert certificate.startswith("purrdf-reasoning-report 4\n")
 
     never = f"<https://example.org/x> <{RDF_TYPE}> <https://example.org/Never> .\n"
-    answer, _ = entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, never, [])
+    answer, _ = entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, never, [], [])
     assert answer.endswith("warrant absent\nverified not-applicable\n")
 
 
@@ -944,10 +1002,10 @@ def test_the_regimes_defined_by_a_missing_input_are_refused_by_name() -> None:
         (entail.Regime.RIF, "rif"),
     ]:
         with pytest.raises(ValueError) as raised:
-            entail.graph_entails(regime, SCHEMA, entailed, [])
+            entail.graph_entails(regime, SCHEMA, entailed, [], [])
         assert spelling in str(raised.value)
         with pytest.raises(ValueError) as raised:
-            entail.certain_answers(regime, SCHEMA, pattern, [])
+            entail.certain_answers(regime, SCHEMA, pattern, [], [])
         assert spelling in str(raised.value)
 
 
@@ -1001,18 +1059,18 @@ def test_webont_imports_011_answers_from_its_own_premise_imports_intact() -> Non
     imports = [(SUPPORT_011_A, support)]
 
     answer, certificate = entail.graph_entails(
-        entail.Regime.OWL_RL, premise, conclusion, imports
+        entail.Regime.OWL_RL, premise, conclusion, imports, []
     )
     assert answer.startswith("mechanism strict-table\nentailment entailed\n")
     assert certificate.startswith("purrdf-reasoning-report 4\n")
 
     # The other two services answer the same question the same way.
     answer, _ = entail.certain_answers(
-        entail.Regime.OWL_RL, premise, conclusion, imports
+        entail.Regime.OWL_RL, premise, conclusion, imports, []
     )
     assert answer == "mechanism strict-table\nrow\n"
     answer, _ = entail.verify_entailment(
-        entail.Regime.OWL_RL, premise, conclusion, imports
+        entail.Regime.OWL_RL, premise, conclusion, imports, []
     )
     assert answer.endswith("warrant present\nverified true\n")
 
@@ -1027,7 +1085,7 @@ def test_an_unsupplied_import_refuses_by_name_rather_than_reasoning_without_it()
     premise = _corpus_nquads("cases/webont-imports-011/premise.rdf")
     conclusion = _corpus_nquads("cases/webont-imports-011/conclusion.rdf")
     with pytest.raises(ValueError) as raised:
-        entail.graph_entails(entail.Regime.OWL_RL, premise, conclusion, [])
+        entail.graph_entails(entail.Regime.OWL_RL, premise, conclusion, [], [])
     assert SUPPORT_011_A in str(raised.value)
 
 
@@ -1043,6 +1101,7 @@ def test_a_malformed_import_table_is_refused_by_entry() -> None:
             premise,
             conclusion,
             [(SUPPORT_011_A, "this is not n-quads\n")],
+            [],
         )
     assert "the import document for" in str(raised.value)
 
@@ -1052,12 +1111,13 @@ def test_a_malformed_import_table_is_refused_by_entry() -> None:
             premise,
             conclusion,
             [(SUPPORT_011_A, support), (SUPPORT_011_A, "")],
+            [],
         )
     assert "twice" in str(raised.value)
 
     with pytest.raises(ValueError) as raised:
         entail.graph_entails(
-            entail.Regime.OWL_RL, premise, conclusion, [("", support)]
+            entail.Regime.OWL_RL, premise, conclusion, [("", support)], []
         )
     assert "empty ontology IRI" in str(raised.value)
 
@@ -1079,6 +1139,37 @@ def test_the_import_table_is_required_rather_than_defaulted() -> None:
         entail.verify_entailment(entail.Regime.OWL_RL, SCHEMA, entailed)  # type: ignore[call-arg]
 
 
+def test_py_entail_premise_iris() -> None:
+    """`premise_iris` names the document the premise was read from.
+
+    A premise whose ontology header imports its OWN IRI, with an empty import table, is
+    refused when the caller declares no premise IRI and answered when it names that IRI:
+    the two calls differ in `premise_iris` alone, so an argument that was silently
+    dropped would make both refuse.
+    """
+    premise_iri = "http://example.org/premise"
+    premise = (
+        f"<{premise_iri}#ontology> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://www.w3.org/2002/07/owl#Ontology> .\n"
+        f"<{premise_iri}#ontology> <http://www.w3.org/2002/07/owl#imports> <{premise_iri}> .\n"
+        "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n"
+    )
+    conclusion = "<https://example.org/x> <https://example.org/p> <https://example.org/y> .\n"
+    pattern = "<https://example.org/x> <https://example.org/p> ?o .\n"
+    for call, question in (
+        (entail.graph_entails, conclusion),
+        (entail.verify_entailment, conclusion),
+        (entail.certain_answers, pattern),
+    ):
+        with pytest.raises(ValueError) as raised:
+            call(entail.Regime.SIMPLE, premise, question, [], [])
+        assert premise_iri in str(raised.value)
+        answer, _ = call(entail.Regime.SIMPLE, premise, question, [], [premise_iri])
+        assert answer.startswith("mechanism strict-table\n"), answer
+    with pytest.raises(TypeError):
+        entail.graph_entails(entail.Regime.SIMPLE, premise, conclusion, [])  # type: ignore[call-arg]
+
+
 def test_every_regime_member_selects_a_distinct_native_regime() -> None:
     """Seven members, seven native regimes, in the order the enum declares them.
 
@@ -1097,7 +1188,7 @@ def test_every_regime_member_selects_a_distinct_native_regime() -> None:
     """
     reported = []
     for regime, program in REGIME_CALLS:
-        _, report = entail.materialize_nt(SCHEMA, regime, program)
+        _, report = entail.materialize_nt(SCHEMA, regime, program, [], [])
         lines = [
             line.removeprefix("regime ")
             for line in report.splitlines()
@@ -1131,3 +1222,130 @@ def test_the_python_enum_has_exactly_the_seven_members_these_tests_range_over() 
         "seven; a member on one side and not the other is untested surface"
     )
     assert len(exported) == len(ALL_REGIMES) == len(REGIME_CALLS) == 7
+
+
+def test_every_conclusion_directed_service_refuses_an_unreached_import_pair() -> None:
+    """A pair the premise's ``owl:imports`` closure never names raises ``ValueError``
+    naming it, on all three services; the importing neighbour answers from it."""
+    lib = "http://example.org/lib"
+    schema = (
+        "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> "
+        "<http://example.org/B> .\n"
+    )
+    fact = (
+        "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://example.org/A> .\n"
+    )
+    importing = (
+        "<http://example.org/o> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://www.w3.org/2002/07/owl#Ontology> .\n"
+        f"<http://example.org/o> <http://www.w3.org/2002/07/owl#imports> <{lib}> .\n" + fact
+    )
+    conclusion = (
+        "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+        "<http://example.org/B> .\n"
+    )
+    pattern = "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n"
+    table = [(lib, schema)]
+    for service, question in (
+        (entail.graph_entails, conclusion),
+        (entail.verify_entailment, conclusion),
+        (entail.certain_answers, pattern),
+    ):
+        with pytest.raises(ValueError) as refused:
+            service("rdfs", fact, question, table, [])
+        assert f"<{lib}>" in str(refused.value), str(refused.value)
+        assert "would be read and never used" in str(refused.value), str(refused.value)
+        answer, _ = service("rdfs", importing, question, table, [])
+        assert answer.startswith("mechanism "), answer
+
+
+# ── The import table: materialize and consistency close over the imports closure ──
+
+_IMPORT_LIB = "http://example.org/lib"
+_LIB = (
+    "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> "
+    "<http://example.org/B> .\n"
+    "<http://example.org/A> <http://www.w3.org/2002/07/owl#disjointWith> "
+    "<http://example.org/C> .\n"
+)
+_FACTS = (
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+    "<http://example.org/A> .\n"
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+    "<http://example.org/C> .\n"
+)
+_IMPORTING_PREMISE = (
+    "<http://example.org/o> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+    "<http://www.w3.org/2002/07/owl#Ontology> .\n"
+    f"<http://example.org/o> <http://www.w3.org/2002/07/owl#imports> <{_IMPORT_LIB}> .\n"
+    + _FACTS
+)
+_DERIVED_B = (
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+    "<http://example.org/B> ."
+)
+
+
+def test_materialize_and_consistency_close_over_the_import_table() -> None:
+    """Each answer observes the import: `x : B` joins the closure, and the imported
+    disjointness makes the ontology inconsistent, only when the table supplies it."""
+    table = [(_IMPORT_LIB, _LIB)]
+    importing = RdfDataset(_IMPORTING_PREMISE, RdfFormat.N_QUADS)
+    plain = RdfDataset(_FACTS, RdfFormat.N_QUADS)
+
+    with pytest.raises(ValueError, match="example.org/lib"):
+        entail.materialize(importing, entail.Regime.RDFS, "", [], [])
+    with pytest.raises(ValueError, match="example.org/lib"):
+        entail.materialize_nt(_IMPORTING_PREMISE, entail.Regime.RDFS, "", [], [])
+    closure, report = entail.materialize(importing, entail.Regime.RDFS, "", table, [])
+    assert _DERIVED_B in closure.to_nquads()
+    assert "\nboundary ontology-import-resolved " in report
+    text, _ = entail.materialize_nt(_IMPORTING_PREMISE, entail.Regime.RDFS, "", table, [])
+    assert _DERIVED_B in text
+    with pytest.raises(ValueError, match="would be read and never used"):
+        entail.materialize(plain, entail.Regime.RDFS, "", table, [])
+    unimported, _ = entail.materialize(plain, entail.Regime.RDFS, "", [], [])
+    assert _DERIVED_B not in unimported.to_nquads()
+
+    with pytest.raises(ValueError, match="example.org/lib"):
+        entail.consistency(_IMPORTING_PREMISE, [], [])
+    answer, certificate = entail.consistency(_IMPORTING_PREMISE, table, [])
+    assert answer == "consistency false\n"
+    assert "\nboundary ontology-import-resolved " in certificate
+    with pytest.raises(ValueError, match="example.org/lib"):
+        entail.consistency(_FACTS, table, [])
+    assert entail.consistency(_FACTS, [], [])[0] == "consistency true\n"
+
+
+# ── The conclusion-directed services take the evaluation limits ──────────────────
+
+
+@pytest.mark.parametrize(
+    ("service", "name", "question"),
+    [
+        (entail.certain_answers, "certain_answers", f"{SUBCLASS_INFERENCE}\n"),
+        (entail.graph_entails, "graph_entails", f"{SUBCLASS_INFERENCE}\n"),
+        (entail.verify_entailment, "verify_entailment", f"{SUBCLASS_INFERENCE}\n"),
+    ],
+)
+def test_a_conclusion_directed_limit_names_this_functions_keyword(service, name, question) -> None:
+    """A passed limit raises naming the keyword of the function called; the neighbour with
+    the limit raised answers."""
+    with pytest.raises(ValueError) as refused:
+        service(entail.Regime.OWL_RL, SCHEMA, question, [], [], max_join_steps=1)
+    assert "evaluation exceeded the join-step limit: " in str(refused.value)
+    assert str(refused.value).endswith(f"raise it with {name}(max_join_steps=...)")
+    with pytest.raises(ValueError) as refused:
+        service(entail.Regime.OWL_RL, SCHEMA, question, [], [], max_stored_facts=1)
+    assert str(refused.value).endswith(f"raise it with {name}(max_stored_facts=...)")
+    answer, _ = service(
+        entail.Regime.OWL_RL,
+        SCHEMA,
+        question,
+        [],
+        [],
+        max_stored_facts=4194304,
+        max_join_steps=1048576,
+    )
+    assert answer.startswith("mechanism ")

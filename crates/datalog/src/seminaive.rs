@@ -60,82 +60,415 @@
 //! strictly in program order; `par_sort`/`par_bridge` are never used, because they are not
 //! order-stable.
 //!
-//! # Budgets are constants
+//! # Limits are parameters; the arena ceiling is a constant
 //!
-//! [`MAX_JOIN_STEPS`], [`MAX_STORED_FACTS`] and [`MAX_TERM_ARENA_BYTES`] are fixed
-//! `const`s. Exceeding one returns [`EvalError::BudgetExhausted`] carrying an accurate
-//! [`BudgetReport`] — never a panic, never a truncated answer presented as complete. See
-//! the crate docs for why a caller-supplied budget is not offered.
+//! The stored-fact limit and the join-step limit are the caller's, on [`EvalOptions`]
+//! ([`EvalOptions::with_max_stored_facts`], [`EvalOptions::with_max_join_steps`]), with a
+//! default sized for the target ([`DEFAULT_MAX_STORED_FACTS`], [`DEFAULT_MAX_JOIN_STEPS`]).
+//! [`MAX_TERM_ARENA_BYTES`] stays a fixed `const`. Exceeding any of them returns
+//! [`EvalError::BudgetExhausted`] carrying an accurate [`BudgetReport`] — never a panic,
+//! never a truncated answer presented as complete. [`EvalOptions`] also carries the two
+//! limits on term generation: term-generating rounds and generated terms.
 
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
 
 use rayon::prelude::*;
 
-use crate::clause::{ClauseTerm, DlClause, HeadForm};
+use crate::clause::{ClauseAtom, ClauseTerm, DlClause, HeadForm};
 use crate::cursor::{LendingIterator, VALUE_OBJECT, VALUE_SUBJECT, ValueCursor};
+use crate::guard::{Guard, GuardCall, GuardEvaluator, GuardSite, Negation, NoGuards};
 use crate::id::{RowId, TermId};
 use smallvec::{SmallVec, smallvec};
 
 use crate::plan::{
     ATOM_ARITY, AtomOperator, AtomShape, CyclicPlan, Executable, IndexChoice, JoinGroup,
     POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT, Parsed, PositionPlan,
-    RulePlan, datalog_head, predicate_symbol,
+    RulePlan, predicate_symbol,
 };
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{Bound, Fact, PartitionRef, RelationStore};
 
 // ── Budgets ─────────────────────────────────────────────────────────────────────
 
-/// The maximum number of candidate solutions one evaluation may enumerate.
-///
-/// A "join step" is one partial or complete solution appended by a body-atom extension —
-/// the unit that actually grows without bound when a rule set is accidentally Cartesian.
-/// It is deliberately NOT "one committed derivation": committed derivations are already
-/// bounded by [`MAX_STORED_FACTS`], so counting them would make this ceiling redundant,
-/// while a blow-up that enumerates millions of candidates and commits three facts would
-/// slip past unseen.
-///
-/// This is a `const`, not a parameter: a caller-supplied budget would mean two callers
-/// running the same program over the same input get different answers — the same semantic
-/// optionality the project's no-Cargo-features rule exists to prevent, merely arriving
-/// through an argument. Consumption is *reported* in [`BudgetReport`] instead.
-pub const MAX_JOIN_STEPS: u64 = 1 << 20;
-
-/// The maximum number of facts (seeded plus derived) one evaluation's store may hold.
+/// The stored-fact limit's default on `wasm32` targets ([`DEFAULT_MAX_STORED_FACTS`]).
 ///
 /// Sized so a saturated store stays comfortably inside a `wasm32` linear memory: at this
 /// count the arrangement's columns, the row-id space and the term dictionary together are
-/// a few tens of megabytes, well under the ceiling a browser imposes.
-pub const MAX_STORED_FACTS: usize = 1 << 17;
+/// a few tens of megabytes, well under the ceiling a browser imposes on one module's
+/// memory.
+pub const WASM_DEFAULT_MAX_STORED_FACTS: u64 = 1 << 17;
+
+/// The join-step limit's default on `wasm32` targets ([`DEFAULT_MAX_JOIN_STEPS`]).
+///
+/// A browser runs the evaluation on the thread that paints its page, so the default keeps
+/// the work an accidentally Cartesian body can enumerate there small; it is the value every
+/// target used before the limit became a parameter.
+pub const WASM_DEFAULT_MAX_JOIN_STEPS: u64 = 1 << 20;
+
+/// The stored-fact limit's default on every target but `wasm32`
+/// ([`DEFAULT_MAX_STORED_FACTS`]).
+///
+/// A native process addresses the host's memory rather than one linear memory, so the
+/// default admits ordinary terminating workloads — a non-recursive rule copying one
+/// predicate over tens of thousands of triples, the transitive closure of a thousand-node
+/// chain (half a million facts) — and still refuses a least model of more than four
+/// million facts before the arrangement, the provenance and the term dictionary grow
+/// without bound.
+pub const NATIVE_DEFAULT_MAX_STORED_FACTS: u64 = 1 << 22;
+
+/// The join-step limit's default on every target but `wasm32`
+/// ([`DEFAULT_MAX_JOIN_STEPS`]): the same value as [`WASM_DEFAULT_MAX_JOIN_STEPS`].
+///
+/// Unlike the stored-fact limit, the join-step limit does not grow with the target's
+/// memory, and the reason is measured: a body's candidate solutions for one round are
+/// materialised before the limit is checked. A body joining two unrelated atoms over
+/// 20,000 nodes — 400 million candidates — is refused at this default after about two
+/// seconds, having held under half a gigabyte; at 268,435,456 join steps (2^28) it had
+/// allocated about 20 GB, and was still enumerating, when the process was stopped at a
+/// 24 GB address-space cap. A default a Cartesian body can exhaust memory under before it
+/// is refused is no limit at all.
+///
+/// It is no longer what stops a divergent rule. A SHACL shape rule minting one new focus
+/// node per iteration used to re-execute for every earlier focus node every iteration,
+/// and only the join-step limit refused it promptly (in about seven seconds, and still
+/// running after minutes at 2^28). Shape rules are now re-executed only for the focus
+/// nodes whose inputs changed, so such a rule is refused by the term limits within a few
+/// seconds under this default and under 2^28 alike: by the term-generating round limit
+/// when its new terms are of bounded length, and by the term-arena ceiling
+/// ([`MAX_TERM_ARENA_BYTES`]) when every term is longer than the last.
+///
+/// Reach is the caller's to buy: a program that genuinely needs more work — the
+/// NON-linear transitive closure of a thousand-node chain, `connected(x, z) :-
+/// connected(x, y), connected(y, z)`, which enumerates more than 67 million candidates —
+/// completes when the caller raises the limit ([`EvalOptions::with_max_join_steps`]).
+/// The LINEAR closure of the same chain fits the default.
+pub const NATIVE_DEFAULT_MAX_JOIN_STEPS: u64 = 1 << 20;
+
+/// The stored-fact limit in force when the caller states none
+/// ([`EvalOptions::with_max_stored_facts`]): [`WASM_DEFAULT_MAX_STORED_FACTS`] on `wasm32`,
+/// [`NATIVE_DEFAULT_MAX_STORED_FACTS`] everywhere else.
+///
+/// The default differs by target because the memory the store lives in does; it is chosen
+/// at compile time from the target architecture, never by a Cargo feature. A caller who
+/// needs one answer on every target states the limit, and every caller passing the same
+/// limit gets the same answer or the same refusal.
+#[cfg(target_arch = "wasm32")]
+pub const DEFAULT_MAX_STORED_FACTS: u64 = WASM_DEFAULT_MAX_STORED_FACTS;
+
+/// The stored-fact limit in force when the caller states none
+/// ([`EvalOptions::with_max_stored_facts`]): [`WASM_DEFAULT_MAX_STORED_FACTS`] on `wasm32`,
+/// [`NATIVE_DEFAULT_MAX_STORED_FACTS`] everywhere else.
+///
+/// The default differs by target because the memory the store lives in does; it is chosen
+/// at compile time from the target architecture, never by a Cargo feature. A caller who
+/// needs one answer on every target states the limit, and every caller passing the same
+/// limit gets the same answer or the same refusal.
+#[cfg(not(target_arch = "wasm32"))]
+pub const DEFAULT_MAX_STORED_FACTS: u64 = NATIVE_DEFAULT_MAX_STORED_FACTS;
+
+/// The join-step limit in force when the caller states none
+/// ([`EvalOptions::with_max_join_steps`]): [`WASM_DEFAULT_MAX_JOIN_STEPS`] on `wasm32`,
+/// [`NATIVE_DEFAULT_MAX_JOIN_STEPS`] everywhere else — today the same value, for the
+/// reasons [`NATIVE_DEFAULT_MAX_JOIN_STEPS`] gives.
+#[cfg(target_arch = "wasm32")]
+pub const DEFAULT_MAX_JOIN_STEPS: u64 = WASM_DEFAULT_MAX_JOIN_STEPS;
+
+/// The join-step limit in force when the caller states none
+/// ([`EvalOptions::with_max_join_steps`]): [`WASM_DEFAULT_MAX_JOIN_STEPS`] on `wasm32`,
+/// [`NATIVE_DEFAULT_MAX_JOIN_STEPS`] everywhere else — today the same value, for the
+/// reasons [`NATIVE_DEFAULT_MAX_JOIN_STEPS`] gives.
+#[cfg(not(target_arch = "wasm32"))]
+pub const DEFAULT_MAX_JOIN_STEPS: u64 = NATIVE_DEFAULT_MAX_JOIN_STEPS;
 
 /// The maximum bytes of interned term surfaces one evaluation's store may hold
 /// ([`RelationStore::term_bytes`]).
 ///
-/// Facts are counted by [`MAX_STORED_FACTS`], but a fact set of a legal size can still be
+/// Facts are counted by the stored-fact limit, but a fact set of a legal size can still be
 /// arbitrarily large if its terms are: one relation of a thousand megabyte-long IRIs is a
 /// hundred-fold smaller in facts and a thousand-fold larger in bytes. This ceiling closes
 /// that gap. It is checked on the seeded store and again after every round, so no future
-/// term-minting extension can grow past it unobserved.
+/// term-minting extension can grow past it unobserved. Unlike the stored-fact and
+/// join-step limits it is not a parameter: it is the same on every target.
 pub const MAX_TERM_ARENA_BYTES: usize = 1 << 24;
 
-/// What an evaluation actually consumed of the three fixed ceilings.
+/// The default limit on TERM-GENERATING rounds ([`EvalOptions`]).
+///
+/// Chosen by measurement: a rule counting a value up with no bound — the cheapest
+/// program that never stops generating, one new term per round — reaches this many rounds
+/// over a one-triple graph in well under a second, and twice as many in about three, so
+/// the default refuses a runaway counter promptly while admitting any program that needs
+/// fewer than sixteen thousand generating rounds. A counter stepping to 10,000 needs
+/// 10,000 and completes.
+pub const DEFAULT_MAX_TERM_GENERATING_ROUNDS: u64 = 16_384;
+
+/// The floor of the default GENERATED-TERM budget ([`EvalOptions`]).
+pub const GENERATED_TERM_BUDGET_FLOOR: u64 = 65_536;
+
+/// The generated terms the default budget grants per distinct term of the seeded store
+/// ([`EvalOptions`]).
+pub const GENERATED_TERMS_PER_INPUT_TERM: u64 = 4;
+
+/// The caller's evaluation governors: the STORED-FACT and JOIN-STEP limits, the limit on
+/// term-generating ROUNDS and the budget of GENERATED TERMS.
+///
+/// # The stored-fact and join-step limits
+///
+/// The stored-fact limit bounds the facts (seeded plus derived) one evaluation's store may
+/// hold; the join-step limit bounds the candidate solutions it may enumerate. A "join
+/// step" is one partial or complete solution appended by a body-atom extension — the unit
+/// that actually grows without bound when a rule set is accidentally Cartesian. It is
+/// deliberately NOT "one committed derivation": committed derivations are already bounded
+/// by the stored-fact limit, so counting them would make this limit redundant, while a
+/// blow-up that enumerates millions of candidates and commits three facts would slip past
+/// unseen.
+///
+/// Both are parameters ([`Self::with_max_stored_facts`], [`Self::with_max_join_steps`])
+/// with a default sized for the target: [`DEFAULT_MAX_STORED_FACTS`] and
+/// [`DEFAULT_MAX_JOIN_STEPS`], which are the `wasm32` values
+/// ([`WASM_DEFAULT_MAX_STORED_FACTS`], [`WASM_DEFAULT_MAX_JOIN_STEPS`]) on `wasm32` and the
+/// native values ([`NATIVE_DEFAULT_MAX_STORED_FACTS`], [`NATIVE_DEFAULT_MAX_JOIN_STEPS`])
+/// everywhere else. A fixed ceiling sized for a browser refused ordinary terminating rule
+/// sets on a server — a single non-recursive rule copying a predicate over 70,000 triples
+/// — and a fixed ceiling sized for a server would let a browser evaluation exhaust its
+/// linear memory, so neither value can serve every target.
+///
+/// What keeps a parameter from making the answer the caller's choice is that it can only
+/// REFUSE. A run inside both limits returns the program's least model — the same model
+/// under every limit that admits it, on every target — and a run past one returns no model
+/// at all ([`EvalError::BudgetExhausted`]), never a truncated one. Every caller passing
+/// the same options gets the same answer or the same refusal. The join-step count is a
+/// property of the evaluator's plan as well as of the program, so a limit sized tightly
+/// against one release's count can refuse under another's; a limit with headroom cannot
+/// change a completed answer under either. The limits in force are part of the result's
+/// identity: [`contract_hash_with`](crate::cache::contract_hash_with) folds their
+/// effective values into every program's contract hash.
+///
+/// # The term limits
+///
+/// The stored-fact, join-step and arena limits bound what a run HOLDS and ENUMERATES;
+/// none bounds how long a run that holds little can keep going. A guard-free program
+/// cannot run away: every term it can commit is a body binding or one of its own finitely
+/// many constants, so its round count is bounded by its fact count. A guard can compute a
+/// NEW term each round — `?n + 1`, `CONCAT(?s, "x")`, a triple term nesting its own match,
+/// a fresh blank node — and a rule that feeds such a term back into its own body derives
+/// more facts every round, forever. Two shapes of that run away, and each has its limit:
+///
+/// * A **round** is term-generating when it commits a term a guard computed and the store
+///   had never interned. A program that keeps generating a few terms per round — a
+///   counter with no bound — is stopped after at most
+///   [`max_term_generating_rounds`](Self::max_term_generating_rounds) such rounds,
+///   [`DEFAULT_MAX_TERM_GENERATING_ROUNDS`] unless the caller states another.
+/// * The **generated terms** are the terms the evaluation added to the store beyond the
+///   `N` distinct terms it was seeded with. A program whose terms multiply every round —
+///   each term begetting two — reaches any round limit only after exhausting memory, so
+///   it is stopped once more than [`generated_term_budget`](Self::generated_term_budget)
+///   terms have been added: `max(GENERATED_TERM_BUDGET_FLOOR, GENERATED_TERMS_PER_INPUT_TERM
+///   × N)` (65,536 and 4) unless the caller states another. The budget grows with the
+///   input, since a program whose new terms its data bounds adds a few per input term.
+///
+/// A round that commits only terms already interned is never counted, and adds no term:
+/// a value-preserving recursion (a transitive closure, a label propagated down a chain)
+/// is bounded by the stored-fact limit and runs as many rounds as it needs.
+///
+/// Whether a guarded program terminates is undecidable, so no limit PROVES divergence,
+/// and a refusal says only which limit a run passed and by how much — a counter stepping
+/// `?n + 1` up to `FILTER (?n < N)` terminates after `N` term-generating rounds for every
+/// `N`, and a caller who knows a larger bound states it. The limits can only REFUSE,
+/// never truncate — a refused run returns no model, exactly as every other limit does —
+/// and they are part of the result's identity:
+/// [`contract_hash_with`](crate::cache::contract_hash_with) folds both into a guarded
+/// program's contract hash, so two runs under different limits never claim the same
+/// calculus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub struct EvalOptions {
+    /// The caller's stored-fact limit, or `None` for the target's default.
+    stored_facts: Option<u64>,
+    /// The caller's join-step limit, or `None` for the target's default.
+    join_steps: Option<u64>,
+    /// The caller's term-generating round limit, or `None` for the default.
+    term_generating_rounds: Option<u64>,
+    /// The caller's generated-term budget, or `None` for the input-derived default.
+    generated_terms: Option<u64>,
+}
+
+impl EvalOptions {
+    /// Permit a store of exactly `facts` facts, seeded plus derived; one more is refused
+    /// with [`EvalError::BudgetExhausted`] naming [`BudgetResource::StoredFacts`].
+    #[must_use]
+    pub fn with_max_stored_facts(mut self, facts: u64) -> Self {
+        self.stored_facts = Some(facts);
+        self
+    }
+
+    /// Permit exactly `steps` enumerated candidate solutions; one more is refused with
+    /// [`EvalError::BudgetExhausted`] naming [`BudgetResource::JoinSteps`].
+    #[must_use]
+    pub fn with_max_join_steps(mut self, steps: u64) -> Self {
+        self.join_steps = Some(steps);
+        self
+    }
+
+    /// The stored-fact limit in force: the caller's, or [`DEFAULT_MAX_STORED_FACTS`].
+    #[must_use]
+    pub fn max_stored_facts(&self) -> u64 {
+        self.stored_facts.unwrap_or(DEFAULT_MAX_STORED_FACTS)
+    }
+
+    /// The caller's stored-fact limit, or `None` for the target's default.
+    #[must_use]
+    pub fn stated_max_stored_facts(&self) -> Option<u64> {
+        self.stored_facts
+    }
+
+    /// The join-step limit in force: the caller's, or [`DEFAULT_MAX_JOIN_STEPS`].
+    #[must_use]
+    pub fn max_join_steps(&self) -> u64 {
+        self.join_steps.unwrap_or(DEFAULT_MAX_JOIN_STEPS)
+    }
+
+    /// The caller's join-step limit, or `None` for the target's default.
+    #[must_use]
+    pub fn stated_max_join_steps(&self) -> Option<u64> {
+        self.join_steps
+    }
+
+    /// Permit exactly `rounds` term-generating rounds; one more is refused with
+    /// [`EvalError::TermLimitExceeded`] naming [`BudgetResource::TermGeneratingRounds`].
+    #[must_use]
+    pub fn with_max_term_generating_rounds(mut self, rounds: u64) -> Self {
+        self.term_generating_rounds = Some(rounds);
+        self
+    }
+
+    /// Permit exactly `terms` generated terms; one more is refused with
+    /// [`EvalError::TermLimitExceeded`] naming [`BudgetResource::GeneratedTerms`].
+    #[must_use]
+    pub fn with_max_generated_terms(mut self, terms: u64) -> Self {
+        self.generated_terms = Some(terms);
+        self
+    }
+
+    /// The term-generating round limit in force.
+    #[must_use]
+    pub fn max_term_generating_rounds(&self) -> u64 {
+        self.term_generating_rounds
+            .unwrap_or(DEFAULT_MAX_TERM_GENERATING_ROUNDS)
+    }
+
+    /// The caller's term-generating round limit, or `None` for the default.
+    #[must_use]
+    pub fn stated_max_term_generating_rounds(&self) -> Option<u64> {
+        self.term_generating_rounds
+    }
+
+    /// The generated-term budget in force over a seeded store of `input_terms` distinct
+    /// terms.
+    #[must_use]
+    pub fn generated_term_budget(&self, input_terms: usize) -> u64 {
+        self.generated_terms.unwrap_or_else(|| {
+            GENERATED_TERM_BUDGET_FLOOR.max(
+                GENERATED_TERMS_PER_INPUT_TERM
+                    .saturating_mul(u64::try_from(input_terms).unwrap_or(u64::MAX)),
+            )
+        })
+    }
+
+    /// The caller's generated-term budget, or `None` for the input-derived default.
+    #[must_use]
+    pub fn stated_max_generated_terms(&self) -> Option<u64> {
+        self.generated_terms
+    }
+}
+
+/// The four limits one evaluation runs under, and which of them the caller stated.
+///
+/// The stated flags are one bit set rather than four `bool`s, which keeps a
+/// [`BudgetReport`] — carried by value in every [`EvalError`] — small.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+struct Limits {
+    /// The join-step limit.
+    join_steps: u64,
+    /// The stored-fact limit.
+    stored_facts: u64,
+    /// The term-generating round limit.
+    term_generating_rounds: u64,
+    /// The generated-term budget.
+    generated_terms: u64,
+    /// Which limits the caller stated: the `STATED_*` bits.
+    stated: u8,
+}
+
+/// [`Limits::stated`]: the join-step limit is the caller's.
+const STATED_JOIN_STEPS: u8 = 1;
+/// [`Limits::stated`]: the stored-fact limit is the caller's.
+const STATED_STORED_FACTS: u8 = 1 << 1;
+/// [`Limits::stated`]: the term-generating round limit is the caller's.
+const STATED_TERM_GENERATING_ROUNDS: u8 = 1 << 2;
+/// [`Limits::stated`]: the generated-term budget is the caller's.
+const STATED_GENERATED_TERMS: u8 = 1 << 3;
+
+impl Limits {
+    /// The limits `options` states, over a seeded store of `input_terms` distinct terms.
+    fn of(options: &EvalOptions, input_terms: usize) -> Self {
+        let bit = |stated: Option<u64>, flag: u8| if stated.is_some() { flag } else { 0 };
+        Self {
+            join_steps: options.max_join_steps(),
+            stored_facts: options.max_stored_facts(),
+            term_generating_rounds: options.max_term_generating_rounds(),
+            generated_terms: options.generated_term_budget(input_terms),
+            stated: bit(options.stated_max_join_steps(), STATED_JOIN_STEPS)
+                | bit(options.stated_max_stored_facts(), STATED_STORED_FACTS)
+                | bit(
+                    options.stated_max_term_generating_rounds(),
+                    STATED_TERM_GENERATING_ROUNDS,
+                )
+                | bit(options.stated_max_generated_terms(), STATED_GENERATED_TERMS),
+        }
+    }
+
+    /// Whether the caller stated the limit `flag` names.
+    const fn is_stated(self, flag: u8) -> bool {
+        self.stated & flag != 0
+    }
+}
+
+/// What an evaluation actually consumed, against the limits it ran under.
 ///
 /// Returned on success ([`Evaluation::budget`]) and on failure
 /// ([`EvalError::BudgetExhausted`]) alike; on failure the field naming the exhausted
-/// resource holds the observation that proved the ceiling was passed, so the report is
+/// resource holds the observation that proved the limit was passed, so the report is
 /// never rounded down to the limit it exceeded.
 ///
-/// Every field is a deterministic function of the input: the same program over the same
-/// facts reports the same numbers on every target.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+/// Every measurement is a deterministic function of the input: the same program over the
+/// same facts reports the same numbers on every target. The limits it carries are the ones
+/// in force ([`EvalOptions`]), so a default limit reads differently on `wasm32` than
+/// elsewhere ([`DEFAULT_MAX_STORED_FACTS`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BudgetReport {
-    /// Candidate solutions enumerated, against [`MAX_JOIN_STEPS`].
+    /// Candidate solutions enumerated, against [`Self::join_step_limit`].
     join_steps: u64,
-    /// Facts held by the store, against [`MAX_STORED_FACTS`].
+    /// Facts held by the store, against [`Self::stored_fact_limit`].
     stored_facts: usize,
     /// Interned term surface bytes, against [`MAX_TERM_ARENA_BYTES`].
     term_arena_bytes: usize,
+    /// Term-generating rounds run, against [`Self::term_generating_round_limit`].
+    term_generating_rounds: u64,
+    /// Terms added to the store beyond the seeded ones, against
+    /// [`Self::generated_term_budget`].
+    generated_terms: u64,
+    /// The distinct terms of the seeded store.
+    input_terms: usize,
+    /// The limits the run was governed by ([`EvalOptions`]).
+    limits: Limits,
+}
+
+impl Default for BudgetReport {
+    /// The zero measurement, governed by the default limits.
+    fn default() -> Self {
+        Self::new(0, 0, 0)
+    }
 }
 
 impl BudgetReport {
@@ -145,9 +478,9 @@ impl BudgetReport {
     /// that one type can say "what did this evaluation consume" for a run this crate did
     /// not perform — `purrdf-entail`'s `Simple` lane, which copies a dataset and evaluates
     /// no program at all, reports the zero measurement through here rather than growing a
-    /// second budget type for the case. It takes MEASUREMENTS, never limits: the three
-    /// ceilings stay `const` and stay this crate's, so nothing here re-opens the
-    /// caller-supplied-budget door the crate docs close.
+    /// second budget type for the case. It takes MEASUREMENTS, never limits: the report it
+    /// builds carries the default limits ([`EvalOptions::default`]), and
+    /// [`Self::governed_by`] restates them for a run that was governed by others.
     ///
     /// The coordinates mean exactly what they mean for [`evaluate`]: candidate solutions
     /// enumerated, facts held when evaluation stopped, and interned term surface bytes. An
@@ -158,12 +491,55 @@ impl BudgetReport {
             join_steps,
             stored_facts,
             term_arena_bytes,
+            term_generating_rounds: 0,
+            generated_terms: 0,
+            input_terms: 0,
+            limits: Limits::of(&EvalOptions::default(), 0),
+        }
+    }
+
+    /// This report, stating the stored-fact and join-step limits of `options` as the ones
+    /// the run was governed by. The measurements are unchanged.
+    #[must_use]
+    pub fn governed_by(self, options: &EvalOptions) -> Self {
+        let capacity = Limits::of(options, 0);
+        let kept = self.limits.stated & !(STATED_JOIN_STEPS | STATED_STORED_FACTS);
+        Self {
+            limits: Limits {
+                join_steps: capacity.join_steps,
+                stored_facts: capacity.stored_facts,
+                stated: kept | (capacity.stated & (STATED_JOIN_STEPS | STATED_STORED_FACTS)),
+                ..self.limits
+            },
+            ..self
         }
     }
 
     /// Candidate solutions enumerated across every round of every stratum.
     pub fn join_steps(self) -> u64 {
         self.join_steps
+    }
+
+    /// The join-step limit the run was governed by ([`EvalOptions::max_join_steps`]).
+    pub fn join_step_limit(self) -> u64 {
+        self.limits.join_steps
+    }
+
+    /// Whether the join-step limit was the caller's rather than
+    /// [`DEFAULT_MAX_JOIN_STEPS`].
+    pub fn join_step_limit_stated(self) -> bool {
+        self.limits.is_stated(STATED_JOIN_STEPS)
+    }
+
+    /// The stored-fact limit the run was governed by ([`EvalOptions::max_stored_facts`]).
+    pub fn stored_fact_limit(self) -> u64 {
+        self.limits.stored_facts
+    }
+
+    /// Whether the stored-fact limit was the caller's rather than
+    /// [`DEFAULT_MAX_STORED_FACTS`].
+    pub fn stored_fact_limit_stated(self) -> bool {
+        self.limits.is_stated(STATED_STORED_FACTS)
     }
 
     /// Facts held by the store when evaluation stopped (seeded plus derived).
@@ -175,35 +551,87 @@ impl BudgetReport {
     pub fn term_arena_bytes(self) -> usize {
         self.term_arena_bytes
     }
+
+    /// Term-generating rounds run ([`EvalOptions`]). Always zero for a guard-free
+    /// program, which has no guard to compute a term.
+    pub fn term_generating_rounds(self) -> u64 {
+        self.term_generating_rounds
+    }
+
+    /// The term-generating round limit the run was governed by ([`EvalOptions`]).
+    pub fn term_generating_round_limit(self) -> u64 {
+        self.limits.term_generating_rounds
+    }
+
+    /// Whether the term-generating round limit was the caller's rather than
+    /// [`DEFAULT_MAX_TERM_GENERATING_ROUNDS`].
+    pub fn term_generating_round_limit_stated(self) -> bool {
+        self.limits.is_stated(STATED_TERM_GENERATING_ROUNDS)
+    }
+
+    /// Terms the evaluation added to the store beyond the seeded ones ([`EvalOptions`]).
+    pub fn generated_terms(self) -> u64 {
+        self.generated_terms
+    }
+
+    /// The generated-term budget the run was governed by ([`EvalOptions`]).
+    pub fn generated_term_budget(self) -> u64 {
+        self.limits.generated_terms
+    }
+
+    /// Whether the generated-term budget was the caller's rather than the input-derived
+    /// default.
+    pub fn generated_term_budget_stated(self) -> bool {
+        self.limits.is_stated(STATED_GENERATED_TERMS)
+    }
+
+    /// The distinct terms of the seeded store.
+    pub fn input_terms(self) -> usize {
+        self.input_terms
+    }
 }
 
-/// Which fixed ceiling an exhausted evaluation passed.
+/// Which limit an exhausted evaluation passed.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[non_exhaustive]
 pub enum BudgetResource {
-    /// [`MAX_JOIN_STEPS`] — too many candidate solutions enumerated.
+    /// The join-step limit ([`EvalOptions::with_max_join_steps`]) — too many candidate
+    /// solutions enumerated.
     JoinSteps,
-    /// [`MAX_STORED_FACTS`] — too many facts seeded or derived.
+    /// The stored-fact limit ([`EvalOptions::with_max_stored_facts`]) — too many facts
+    /// seeded or derived.
     StoredFacts,
     /// [`MAX_TERM_ARENA_BYTES`] — too many interned term surface bytes.
     TermArenaBytes,
+    /// The term-generating round limit ([`EvalOptions`]) — too many rounds committed a
+    /// guard-computed term.
+    TermGeneratingRounds,
+    /// The generated-term budget ([`EvalOptions`]) — too many terms added to the store.
+    GeneratedTerms,
 }
 
 impl BudgetResource {
-    /// The ceiling this resource is measured against, rendered for a diagnostic.
-    fn limit(self) -> u64 {
+    /// The limit this resource is measured against in `report`.
+    #[must_use]
+    pub fn limit(self, report: BudgetReport) -> u64 {
         match self {
-            Self::JoinSteps => MAX_JOIN_STEPS,
-            Self::StoredFacts => MAX_STORED_FACTS as u64,
+            Self::JoinSteps => report.limits.join_steps,
+            Self::StoredFacts => report.limits.stored_facts,
             Self::TermArenaBytes => MAX_TERM_ARENA_BYTES as u64,
+            Self::TermGeneratingRounds => report.limits.term_generating_rounds,
+            Self::GeneratedTerms => report.limits.generated_terms,
         }
     }
 
     /// The observation that tripped this resource, taken from `report`.
-    fn observed(self, report: BudgetReport) -> u64 {
+    #[must_use]
+    pub fn observed(self, report: BudgetReport) -> u64 {
         match self {
             Self::JoinSteps => report.join_steps,
             Self::StoredFacts => report.stored_facts as u64,
             Self::TermArenaBytes => report.term_arena_bytes as u64,
+            Self::TermGeneratingRounds => report.term_generating_rounds,
+            Self::GeneratedTerms => report.generated_terms,
         }
     }
 
@@ -213,14 +641,16 @@ impl BudgetResource {
             Self::JoinSteps => "join steps",
             Self::StoredFacts => "stored facts",
             Self::TermArenaBytes => "term arena bytes",
+            Self::TermGeneratingRounds => "term-generating rounds",
+            Self::GeneratedTerms => "generated terms",
         }
     }
 }
 
 /// A per-rule allowance for one round's candidate enumeration.
 ///
-/// The governor is the ported step budget, with the ceiling moved from a caller parameter
-/// to [`MAX_JOIN_STEPS`]. Each rule task in a round is handed the SAME allowance — the
+/// The governor charges the join-step limit in force ([`EvalOptions::max_join_steps`]).
+/// Each rule task in a round is handed the SAME allowance — the
 /// evaluation's remaining budget plus one — so a task that reaches it has proved the
 /// ceiling is passed while bounding one round's work to `rules × allowance`. Whether the
 /// round actually exceeded the ceiling is decided once, after the tasks are merged in
@@ -317,27 +747,168 @@ pub enum EvalError {
         /// The unbindable variable, as authored.
         variable: String,
     },
-    /// A fixed ceiling was passed. The report is accurate at the point evaluation stopped.
+    /// The stored-fact or join-step limit in force ([`EvalOptions`]), or the fixed
+    /// term-arena ceiling, was passed. The report is accurate at the point evaluation
+    /// stopped, and carries the limit that was passed.
     BudgetExhausted {
         /// Which ceiling.
         resource: BudgetResource,
-        /// Consumption of all three ceilings when evaluation stopped.
+        /// Consumption, and the limits in force, when evaluation stopped.
+        report: BudgetReport,
+    },
+    /// The run passed a term limit ([`EvalOptions`]): the term-generating round limit
+    /// ([`BudgetResource::TermGeneratingRounds`]) or the generated-term budget
+    /// ([`BudgetResource::GeneratedTerms`]). It is a statement about the limit, never a
+    /// verdict that the program diverges — whether it would have terminated is
+    /// undecidable — and it names the rules that generated a term in the refused round.
+    TermLimitExceeded {
+        /// Which limit.
+        resource: BudgetResource,
+        /// The rules whose derivations committed a guard-computed term in the refused
+        /// round, in authored program order.
+        rules: Vec<usize>,
+        /// Consumption when evaluation stopped, the limit in force included.
         report: BudgetReport,
     },
     /// The caller's [`crate::stop::StopSignal`] fired at a round boundary.
     ///
     /// A refusal exactly as total as [`Self::BudgetExhausted`]: there is no partial least
     /// model here either, and the rounds already committed are not an answer to anything.
-    /// It is a DISTINCT variant because the two say different things to a caller — a fixed
-    /// ceiling was passed by the program and the data, whereas this run was stopped by the
-    /// host that asked for it — and only one of them is a reason to change the input.
+    /// It is a DISTINCT variant because the two say different things to a caller — a limit
+    /// was passed by the program and the data, whereas this run was stopped by the host
+    /// that asked for it — and only one of them is a reason to change the input or the
+    /// limit.
     ///
     /// The report is accurate at the point evaluation stopped, so a host can say what the
     /// stopped run had already consumed rather than only that it was stopped.
     Stopped {
-        /// Consumption of all three ceilings when the signal was observed.
+        /// Consumption, and the limits in force, when the signal was observed.
         report: BudgetReport,
     },
+    /// A guard ([`crate::guard`]) could not be evaluated: the caller's
+    /// [`GuardEvaluator`] reported an error.
+    ///
+    /// Total, like every refusal here: a guard that could not decide is never read as
+    /// a guard that said no, because that would silently drop derivations.
+    Guard {
+        /// The rule's index in authored program order.
+        rule: usize,
+        /// Which of the rule's guards failed.
+        site: GuardSite,
+        /// The guard's content identity.
+        guard: String,
+        /// The evaluator's message.
+        message: String,
+    },
+    /// A rule carries a guard that reads the evaluation model
+    /// ([`crate::guard::GuardReads::Model`]), which the stratified fixpoint cannot
+    /// place: what the guard reads, and with which polarity, is caller code rather than
+    /// clause text, so no stratification can be shown to decide it against completed
+    /// relations. The ordered schedule ([`crate::schedule`]) evaluates such a rule
+    /// under the schedule its rule language defines.
+    ModelReadingGuard {
+        /// The rule's index in authored program order.
+        rule: usize,
+    },
+    /// No stratification of the RULES exists: a closed dependency — through a negation
+    /// or into a run-once rule — lies inside a dependency cycle
+    /// ([`crate::schedule::stratify_rules`]).
+    ///
+    /// The payload names one closed edge and one concrete cycle through it, as rule
+    /// indices in dependency order, starting and implicitly closing at `rule`.
+    NonStratifiableRules {
+        /// The rule whose closed dependency lies in the cycle.
+        rule: usize,
+        /// The rule it depends on through that closed edge.
+        depends_on: usize,
+        /// The cycle, `rule -> depends_on -> … -> rule`, as rule indices.
+        cycle: Vec<usize>,
+    },
+    /// An ordered schedule ([`crate::schedule::Schedule`]) is not a partition of the
+    /// program's rules: a rule is scheduled twice, never, or does not exist.
+    MalformedSchedule {
+        /// What is wrong with the schedule.
+        detail: String,
+    },
+    /// The caller's [`LayerHooks`](crate::schedule::LayerHooks) reported an error.
+    LayerHook {
+        /// The layer whose hook failed, or `None` for the end-of-evaluation hook.
+        layer: Option<usize>,
+        /// The hook's message.
+        message: String,
+    },
+}
+
+/// Where a report's stored-fact limit came from, for a diagnostic.
+#[must_use]
+pub fn stored_fact_limit_origin(report: BudgetReport) -> &'static str {
+    if report.limits.is_stated(STATED_STORED_FACTS) {
+        "the caller's limit"
+    } else {
+        "the default for this target"
+    }
+}
+
+/// Where a report's join-step limit came from, for a diagnostic.
+#[must_use]
+pub fn join_step_limit_origin(report: BudgetReport) -> &'static str {
+    if report.limits.is_stated(STATED_JOIN_STEPS) {
+        "the caller's limit"
+    } else {
+        "the default for this target"
+    }
+}
+
+/// Render a passed stored-fact or join-step limit, naming `knob` as what raises it — the
+/// one wording every host gives the refusal, each with its own spelling of the knob.
+///
+/// `None` for any other resource.
+#[must_use]
+pub fn render_capacity_refusal(
+    resource: BudgetResource,
+    report: BudgetReport,
+    knob: &str,
+) -> Option<String> {
+    match resource {
+        BudgetResource::StoredFacts => Some(format!(
+            "evaluation exceeded the stored-fact limit: {} facts observed, {} permitted ({}); \
+             raise it with {knob}",
+            report.stored_facts,
+            report.limits.stored_facts,
+            stored_fact_limit_origin(report),
+        )),
+        BudgetResource::JoinSteps => Some(format!(
+            "evaluation exceeded the join-step limit: {} join steps observed, {} permitted \
+             ({}); raise it with {knob}",
+            report.join_steps,
+            report.limits.join_steps,
+            join_step_limit_origin(report),
+        )),
+        _ => None,
+    }
+}
+
+/// Where a report's term-generating round limit came from, for a diagnostic.
+#[must_use]
+pub fn term_generating_round_limit_origin(report: BudgetReport) -> String {
+    if report.limits.is_stated(STATED_TERM_GENERATING_ROUNDS) {
+        "the caller's limit".to_owned()
+    } else {
+        "the default".to_owned()
+    }
+}
+
+/// Where a report's generated-term budget came from, for a diagnostic.
+#[must_use]
+pub fn generated_term_budget_origin(report: BudgetReport) -> String {
+    if report.limits.is_stated(STATED_GENERATED_TERMS) {
+        "the caller's budget".to_owned()
+    } else {
+        format!(
+            "the default, max({GENERATED_TERM_BUDGET_FLOOR}, {GENERATED_TERMS_PER_INPUT_TERM} per \
+             input term)"
+        )
+    }
 }
 
 impl fmt::Display for EvalError {
@@ -364,19 +935,103 @@ impl fmt::Display for EvalError {
                 "rule {rule} is not range-restricted: head variable {variable} is not bound by \
                  any positive body atom"
             ),
-            Self::BudgetExhausted { resource, report } => write!(
-                f,
-                "evaluation exceeded the fixed {} ceiling: {} observed, {} permitted",
-                resource.name(),
-                resource.observed(*report),
-                resource.limit()
-            ),
+            Self::TermLimitExceeded {
+                resource,
+                rules,
+                report,
+            } => {
+                let rules: Vec<String> = rules.iter().map(ToString::to_string).collect();
+                let rules = if rules.is_empty() {
+                    String::new()
+                } else {
+                    format!(
+                        "; rule(s) {} generated a term in the last round",
+                        rules.join(", ")
+                    )
+                };
+                match resource {
+                    BudgetResource::GeneratedTerms => write!(
+                        f,
+                        "evaluation exceeded the generated-term budget: {} terms were added to \
+                         the store beyond its {} input terms, past the budget of {} ({}){rules}; \
+                         if the rule set terminates, raise it with \
+                         EvalOptions::with_max_generated_terms",
+                        report.generated_terms,
+                        report.input_terms,
+                        report.limits.generated_terms,
+                        generated_term_budget_origin(*report),
+                    ),
+                    _ => write!(
+                        f,
+                        "evaluation exceeded the term-generating round limit: {} rounds \
+                         committed a term the store did not hold, past the limit of {} ({}){rules}; \
+                         if the rule set terminates, raise it with \
+                         EvalOptions::with_max_term_generating_rounds",
+                        report.term_generating_rounds,
+                        report.limits.term_generating_rounds,
+                        term_generating_round_limit_origin(*report),
+                    ),
+                }
+            }
+            Self::BudgetExhausted { resource, report } => {
+                let knob = match resource {
+                    BudgetResource::StoredFacts => "EvalOptions::with_max_stored_facts",
+                    _ => "EvalOptions::with_max_join_steps",
+                };
+                match render_capacity_refusal(*resource, *report, knob) {
+                    Some(rendered) => f.write_str(&rendered),
+                    None => write!(
+                        f,
+                        "evaluation exceeded the fixed {} ceiling: {} observed, {} permitted",
+                        resource.name(),
+                        resource.observed(*report),
+                        resource.limit(*report)
+                    ),
+                }
+            }
             Self::Stopped { report } => write!(
                 f,
                 "evaluation was stopped by the caller's stop signal after {} join steps, \
                  holding {} facts: no least model was computed",
                 report.join_steps, report.stored_facts
             ),
+            Self::Guard {
+                rule,
+                site,
+                guard,
+                message,
+            } => write!(
+                f,
+                "rule {rule}'s {site} ({guard}) could not be evaluated: {message}"
+            ),
+            Self::ModelReadingGuard { rule } => write!(
+                f,
+                "rule {rule} carries a guard that reads the evaluation model, which the \
+                 stratified fixpoint cannot place; evaluate it under an ordered schedule"
+            ),
+            Self::NonStratifiableRules {
+                rule,
+                depends_on,
+                cycle,
+            } => {
+                let path: Vec<String> = cycle.iter().map(|index| format!("rule {index}")).collect();
+                write!(
+                    f,
+                    "rule set is not stratifiable: rule {rule} has a closed dependency on rule \
+                     {depends_on} (through a negation or a run-once rule) inside the cycle {} -> \
+                     rule {rule}",
+                    path.join(" -> ")
+                )
+            }
+            Self::MalformedSchedule { detail } => write!(f, "malformed schedule: {detail}"),
+            Self::LayerHook {
+                layer: Some(layer),
+                message,
+            } => write!(f, "the layer hook of layer {layer} failed: {message}"),
+            Self::LayerHook {
+                layer: None,
+                message,
+            } => write!(f, "the end-of-evaluation hook failed: {message}"),
         }
     }
 }
@@ -431,7 +1086,7 @@ pub struct Evaluation {
     facts: RelationStore,
     /// Every derivation, in lexical `(fact, rule, sources)` order.
     derivations: Vec<Derivation>,
-    /// What the run consumed of the three fixed ceilings.
+    /// What the run consumed, against the limits it ran under.
     budget: BudgetReport,
 }
 
@@ -451,7 +1106,7 @@ impl Evaluation {
         &self.derivations
     }
 
-    /// What the run consumed of the three fixed ceilings.
+    /// What the run consumed, against the limits it ran under.
     pub fn budget(&self) -> BudgetReport {
         self.budget
     }
@@ -485,6 +1140,13 @@ pub fn compile(rules: Vec<DlClause>) -> Result<Executable, EvalError> {
         }
     }
 
+    // A guard that reads the model has no place in a stratification (see
+    // [`EvalError::ModelReadingGuard`]); it is refused before the stratifier is asked
+    // to decide over edges the clause does not state.
+    if let Some(index) = rules.iter().position(DlClause::reads_model) {
+        return Err(EvalError::ModelReadingGuard { rule: index });
+    }
+
     // Stratifiability is decided next, and against the BORROWED program so the failing
     // branch can still walk the rules to name the offending cycle. It is the more
     // fundamental of the remaining two defects: an unstratifiable program has no least
@@ -497,15 +1159,31 @@ pub fn compile(rules: Vec<DlClause>) -> Result<Executable, EvalError> {
     // Range restriction ranges over all FOUR positions: a head that writes a variable
     // predicate or a variable graph needs that variable bound by the positive body just as
     // much as a head subject does, and a positive body atom binds all four of its own.
+    check_range_restricted(&rules)?;
+
+    Ok(Parsed::new(rules)
+        .expect("every head form was just established to be atomic on the same rules")
+        .stratify()
+        .expect("stratifiability was just established on the same rules")
+        .plan()
+        .into_executable())
+}
+
+/// Refuse a rule whose head carries a variable nothing in its body binds.
+///
+/// Range restriction ranges over all FOUR positions of every head atom: a head that
+/// writes a variable predicate or a variable graph needs that variable bound just as
+/// much as a head subject does. A variable is bound by a positive body atom (which
+/// binds all four of its own positions) or by a guard's output
+/// ([`DlClause::bound_variables`]); a negated atom or a negated conjunction binds
+/// nothing.
+///
+/// # Errors
+///
+/// [`EvalError::UnboundHeadVariable`] naming the first offending rule and variable.
+pub(crate) fn check_range_restricted(rules: &[DlClause]) -> Result<(), EvalError> {
     for (index, rule) in rules.iter().enumerate() {
-        let mut bound: BTreeSet<&str> = BTreeSet::new();
-        for atom in rule.body().iter().filter(|atom| !atom.is_negated()) {
-            for term in atom.terms() {
-                if let Some(name) = term.variable() {
-                    bound.insert(name);
-                }
-            }
-        }
+        let bound = rule.bound_variables();
         for head in rule.head_atoms() {
             for term in head.terms() {
                 if let Some(name) = term.variable()
@@ -519,13 +1197,7 @@ pub fn compile(rules: Vec<DlClause>) -> Result<Executable, EvalError> {
             }
         }
     }
-
-    Ok(Parsed::new(rules)
-        .expect("every head form was just established to be atomic on the same rules")
-        .stratify()
-        .expect("stratifiability was just established on the same rules")
-        .plan()
-        .into_executable())
+    Ok(())
 }
 
 /// Name one negative dependency edge that lies inside a cycle.
@@ -558,7 +1230,12 @@ fn negative_cycle(rules: &[DlClause]) -> EvalError {
     for rule in rules {
         for head in rule.head_atoms() {
             let head_symbol = predicate_symbol(head);
-            for atom in rule.body().iter().filter(|atom| atom.is_negated()) {
+            let negated_atoms = rule
+                .body()
+                .iter()
+                .filter(|atom| atom.is_negated())
+                .chain(rule.negations().iter().flat_map(Negation::atoms));
+            for atom in negated_atoms {
                 let negated = predicate_symbol(atom);
                 let Some(path) = shortest_dependency_path(&depends, &negated, &head_symbol) else {
                     continue;
@@ -618,16 +1295,16 @@ fn shortest_dependency_path<'a>(
 /// ALWAYS a contiguous span: delta membership is one range compare, with no per-round
 /// bitset allocation and no hashing.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-struct Delta {
+pub(crate) struct Delta {
     /// Inclusive lower row index of the round's committed span.
-    lo: usize,
+    pub(crate) lo: usize,
     /// Exclusive upper row index of the round's committed span.
-    hi: usize,
+    pub(crate) hi: usize,
 }
 
 impl Delta {
     /// The round-1 seed: every accumulated row `[0, row_count)` is new this round.
-    fn all(row_count: usize) -> Self {
+    pub(crate) fn all(row_count: usize) -> Self {
         Self {
             lo: 0,
             hi: row_count,
@@ -766,6 +1443,21 @@ struct SlotSolution {
     /// The matched body rows, in physical execution order until the plan's swap program
     /// restores authored order.
     sources: Vec<SourceRow>,
+    /// Slots a guard bound to a surface the store has never interned, with that
+    /// surface. Empty — and therefore allocation-free to clone — for every solution of
+    /// a guard-free rule; a slot listed here is `None` in `bindings`.
+    computed: Vec<(usize, Box<str>)>,
+}
+
+/// What one frame slot holds.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SlotValue<'s> {
+    /// A term the store has interned.
+    Interned(TermId),
+    /// A guard-computed surface the store has never interned.
+    Computed(&'s str),
+    /// Nothing yet.
+    Unbound,
 }
 
 impl SlotSolution {
@@ -774,13 +1466,45 @@ impl SlotSolution {
         Self {
             bindings: smallvec![None; slot_count],
             sources: Vec::new(),
+            computed: Vec::new(),
         }
     }
 
-    /// The value bound in `slot`, if any.
+    /// The interned value bound in `slot`, if any.
     #[inline]
     fn get(&self, slot: usize) -> Option<TermId> {
         self.bindings[slot]
+    }
+
+    /// Everything `slot` may hold, a computed surface included.
+    fn value(&self, slot: usize) -> SlotValue<'_> {
+        if let Some(id) = self.bindings[slot] {
+            return SlotValue::Interned(id);
+        }
+        self.computed
+            .iter()
+            .find(|(computed, _)| *computed == slot)
+            .map_or(SlotValue::Unbound, |(_, surface)| {
+                SlotValue::Computed(surface)
+            })
+    }
+
+    /// The lexical surface bound in `slot`, if any.
+    fn surface<'s>(&'s self, slot: usize, rel: &'s RelationStore) -> Option<&'s str> {
+        match self.value(slot) {
+            SlotValue::Interned(id) => Some(rel.interner().resolve(id)),
+            SlotValue::Computed(surface) => Some(surface),
+            SlotValue::Unbound => None,
+        }
+    }
+
+    /// Bind `slot` to `surface`: as an interned id when the store knows the term, as a
+    /// computed surface otherwise.
+    fn bind_surface(&mut self, slot: usize, surface: &str, rel: &RelationStore) {
+        match rel.term_id(surface) {
+            Some(id) => self.bindings[slot] = Some(id),
+            None => self.computed.push((slot, surface.into())),
+        }
     }
 }
 
@@ -1377,7 +2101,7 @@ fn extend_solutions_leapfrog(
 /// verification instrument, not a caller-facing option: the planner's choice is always at
 /// least as good, so nothing outside the test suite has a reason to override it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum JoinStrategy {
+pub(crate) enum JoinStrategy {
     /// Follow the plan: leapfrog for a certified cyclic subplan, binary otherwise.
     Planned,
     /// Force the indexed binary fallback even for a certified cyclic rule.
@@ -1385,20 +2109,20 @@ enum JoinStrategy {
     ForcedBinary,
 }
 
-/// Join a rule's positive body against the round snapshot, then apply its NAF filters.
+/// Join a rule's positive body against the round snapshot.
 ///
-/// The positive join is the semi-naive delta decomposition; negated atoms are evaluated
-/// AFTER it, against the accumulated store, which stratification guarantees holds the
-/// negated predicate's final extension.
+/// The positive join is the semi-naive delta decomposition. Guards, negated atoms and
+/// negated conjunctions are applied AFTER it by [`evaluate_rule`], against the
+/// accumulated store — which, under the stratified fixpoint, stratification guarantees
+/// holds every negated relation's final extension.
 fn join_body(
     plan: &RulePlan,
-    runtime: &RuleRuntime,
-    snapshot: RoundSnapshot<'_>,
+    snapshot: JoinSnapshot<'_>,
     strategy: JoinStrategy,
     governor: &mut StepGovernor,
 ) -> Vec<SlotSolution> {
     let leapfrog = plan.has_cyclic_subplan() && matches!(strategy, JoinStrategy::Planned);
-    let mut solutions = if plan.positive().is_empty() {
+    if plan.positive().is_empty() {
         // The empty conjunction is relational identity: one empty substitution, so an
         // unconditional or NAF-only rule fires exactly once. Its head is suppressed on the
         // following round by the store's own membership test.
@@ -1407,29 +2131,61 @@ fn join_body(
         join_positive_leapfrog(plan, snapshot, governor)
     } else {
         join_positive_binary(plan, snapshot, governor)
-    };
-
-    if !runtime.negated.is_empty() {
-        solutions.retain(|solution| {
-            !runtime
-                .negated
-                .iter()
-                .any(|atom| atom.satisfied(solution, snapshot.rel))
-        });
     }
-    solutions
+}
+
+/// What a positive join reads: the accumulated store and the delta it is decomposed over.
+#[derive(Debug, Clone, Copy)]
+struct JoinSnapshot<'a> {
+    /// The accumulated store.
+    rel: &'a RelationStore,
+    /// The rows this evaluation treats as new.
+    delta: Delta,
+}
+
+/// Whether the atom `operator` can match a row of `snapshot`'s delta: some partition its
+/// constant predicate and graph positions admit holds a row minted at or after the
+/// delta's first row.
+///
+/// A semi-naive decomposition whose delta atom cannot match is skipped. It would otherwise
+/// enumerate every atom before the delta position in full — a whole relation, for a rule
+/// whose recursive atom is planned first — and then match nothing, so a linear recursion
+/// such as `connected(x, z) :- connected(x, y), link(y, z)` would spend a scan of the
+/// whole closure per round on the decomposition anchored at `link`, which gains no row
+/// after the first round. Skipping it changes no solution: the delta scan admits only
+/// rows at or after the delta's first row, and there are none to admit. It changes only
+/// the candidates enumerated, which is the join-step count.
+fn delta_can_match(operator: &AtomOperator, snapshot: JoinSnapshot<'_>) -> bool {
+    let shape = operator.shape();
+    let [_, predicate, _, graph] = constant_positions(shape, snapshot.rel);
+    let known = |value: Option<PositionValue>| match value {
+        Some(PositionValue::Known(id)) => Ok(Some(id)),
+        Some(PositionValue::Missing) => Err(()),
+        Some(PositionValue::Free) | None => Ok(None),
+    };
+    let (Ok(predicate), Ok(graph)) = (known(predicate), known(graph)) else {
+        // A constant the store never interned matches nothing, delta or not.
+        return false;
+    };
+    snapshot
+        .rel
+        .partitions(predicate, graph)
+        .any(|partition| partition.has_row_from(snapshot.delta.lo))
 }
 
 /// The indexed binary positive join: every planned operator in execution order, for every
-/// semi-naive delta position.
+/// semi-naive delta position whose delta atom can match ([`delta_can_match`]).
 fn join_positive_binary(
     plan: &RulePlan,
-    snapshot: RoundSnapshot<'_>,
+    snapshot: JoinSnapshot<'_>,
     governor: &mut StepGovernor,
 ) -> Vec<SlotSolution> {
     let operators = plan.operators();
     let mut all: Vec<SlotSolution> = Vec::new();
     for delta_position in 0..operators.len() {
+        if !delta_can_match(&operators[delta_position], snapshot) {
+            continue;
+        }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
         for (position, operator) in operators.iter().enumerate() {
             partial = extend_slot_solutions(
@@ -1458,14 +2214,18 @@ fn join_positive_binary(
 }
 
 /// The hybrid positive join for a rule with at least one certified cyclic subplan: each
-/// physical group in execution order, for every semi-naive delta position.
+/// physical group in execution order, for every semi-naive delta position whose delta atom
+/// can match ([`delta_can_match`]).
 fn join_positive_leapfrog(
     plan: &RulePlan,
-    snapshot: RoundSnapshot<'_>,
+    snapshot: JoinSnapshot<'_>,
     governor: &mut StepGovernor,
 ) -> Vec<SlotSolution> {
     let mut all: Vec<SlotSolution> = Vec::new();
     for delta_position in 0..plan.positive().len() {
+        if !delta_can_match(plan.operator_at(delta_position), snapshot) {
+            continue;
+        }
         let mut partial = vec![SlotSolution::empty(plan.variables().len())];
         for group in plan.join_groups() {
             partial = match group {
@@ -1520,6 +2280,18 @@ enum ArgShape {
     Const(String),
 }
 
+/// What an [`ArgShape`] resolves to under one solution, for a store probe.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ProbeValue {
+    /// Pinned to this interned term.
+    Known(TermId),
+    /// Unconstrained: an unbound slot.
+    Free,
+    /// Pinned to a term the store has never interned — a constant it never saw or a
+    /// guard-computed surface — so no stored fact can match.
+    Absent,
+}
+
 impl ArgShape {
     /// Lower `term` against the plan's slot table.
     ///
@@ -1530,12 +2302,7 @@ impl ArgShape {
     /// a planner contradiction.
     fn of(term: &ClauseTerm, variables: &[String]) -> Self {
         match term.variable() {
-            Some(name) => Self::Slot(
-                variables
-                    .iter()
-                    .position(|slot| slot == name)
-                    .expect("every rule variable has a plan frame slot"),
-            ),
+            Some(name) => Self::Slot(slot_of(name, variables)),
             None => Self::Const(
                 term.surface()
                     .expect("a non-variable term always has a lexical surface"),
@@ -1545,22 +2312,36 @@ impl ArgShape {
 
     /// The four lowered arguments of `atom`, in `(subject, predicate, object, graph)`
     /// order.
-    fn of_atom(atom: &crate::clause::ClauseAtom, variables: &[String]) -> [Self; ATOM_ARITY] {
+    fn of_atom(atom: &ClauseAtom, variables: &[String]) -> [Self; ATOM_ARITY] {
         let terms = atom.terms();
         std::array::from_fn(|position| Self::of(terms[position], variables))
     }
 
-    /// The interned value of this argument under `solution`.
-    ///
-    /// `None` means the argument cannot match anything in `rel`: either the slot is
-    /// unbound, or the constant has never been interned, which is the same probe-miss the
-    /// store defines.
-    fn interned(&self, solution: &SlotSolution, rel: &RelationStore) -> Option<TermId> {
+    /// This argument under `solution`, for a store probe.
+    fn probe(&self, solution: &SlotSolution, rel: &RelationStore) -> ProbeValue {
         match self {
-            Self::Slot(slot) => solution.get(*slot),
-            Self::Const(surface) => rel.term_id(surface),
+            Self::Slot(slot) => match solution.value(*slot) {
+                SlotValue::Interned(id) => ProbeValue::Known(id),
+                SlotValue::Computed(_) => ProbeValue::Absent,
+                SlotValue::Unbound => ProbeValue::Free,
+            },
+            Self::Const(surface) => rel
+                .term_id(surface)
+                .map_or(ProbeValue::Absent, ProbeValue::Known),
         }
     }
+}
+
+/// The frame slot of `name`.
+///
+/// # Panics
+///
+/// Panics if the plan has no slot for `name` — see [`ArgShape::of`].
+fn slot_of(name: &str, variables: &[String]) -> usize {
+    variables
+        .iter()
+        .position(|slot| slot == name)
+        .expect("every rule variable has a plan frame slot")
 }
 
 /// A negated body atom, lowered once per evaluation.
@@ -1586,17 +2367,18 @@ impl NegatedAtom {
     ///   to the same kind of position. Repeated unbound variables are NOT required to
     ///   agree, matching the reference semantics exactly.
     ///
-    /// A ground term the store never interned constrains to zero rows, so the atom is not
-    /// satisfied and the rule fires.
+    /// A ground term the store never interned — a constant it never saw, or a surface a
+    /// guard computed — constrains to zero rows, so the atom is not satisfied and the
+    /// rule fires.
     fn satisfied(&self, solution: &SlotSolution, rel: &RelationStore) -> bool {
         let mut values = [None; ATOM_ARITY];
         for (position, arg) in self.args.iter().enumerate() {
-            let interned = arg.interned(solution, rel);
-            if interned.is_none() && matches!(arg, ArgShape::Const(_)) {
+            match arg.probe(solution, rel) {
+                ProbeValue::Known(id) => values[position] = Some(id),
+                ProbeValue::Free => {}
                 // A ground position whose term is absent from the store matches nothing.
-                return false;
+                ProbeValue::Absent => return false,
             }
-            values[position] = interned;
         }
         let bound = match (values[POSITION_SUBJECT], values[POSITION_OBJECT]) {
             (Some(subject), Some(object)) => Bound::Both(subject, object),
@@ -1609,34 +2391,386 @@ impl NegatedAtom {
     }
 }
 
+/// One argument of a negated conjunction's atom or guard.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum GroupArg {
+    /// A variable the enclosing rule binds: read from this frame slot.
+    Outer(usize),
+    /// A variable existentially quantified inside the group: this local slot.
+    Local(usize),
+    /// A constant surface.
+    Const(String),
+}
+
+/// A value bound to one of a negated conjunction's local variables.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum LocalValue {
+    /// An interned term.
+    Interned(TermId),
+    /// A guard-computed surface the store has never interned.
+    Computed(Box<str>),
+}
+
+/// A guard inside a negated conjunction, lowered once per evaluation.
+#[derive(Debug, Clone)]
+struct GroupGuard {
+    /// Where each input is read from.
+    inputs: Vec<GroupArg>,
+    /// The local slot each output binds.
+    outputs: Vec<usize>,
+}
+
+/// A negated conjunction ([`Negation`]), lowered once per evaluation.
+#[derive(Debug, Clone)]
+struct NegationRuntime {
+    /// The group's index in its rule.
+    index: usize,
+    /// The group's atoms, each with its four lowered arguments.
+    atoms: Vec<[GroupArg; ATOM_ARITY]>,
+    /// The group's guards, in authored order.
+    guards: Vec<GroupGuard>,
+    /// How many local variables the group quantifies.
+    locals: usize,
+}
+
+/// What one probe of a negated conjunction needs besides the group itself.
+#[derive(Clone, Copy)]
+struct GroupProbe<'a> {
+    /// The enclosing rule's solution.
+    solution: &'a SlotSolution,
+    /// The accumulated store.
+    rel: &'a RelationStore,
+    /// The caller's guard evaluator.
+    guards: &'a dyn GuardEvaluator,
+    /// The rule's index in authored program order.
+    rule: usize,
+    /// The rule itself, for its guards' declarations.
+    clause: &'a DlClause,
+}
+
+impl NegationRuntime {
+    /// Lower `negation` against the enclosing rule's frame.
+    fn new(index: usize, negation: &Negation, rule: &DlClause, variables: &[String]) -> Self {
+        let bound = rule.bound_variables();
+        let mut locals: Vec<String> = Vec::new();
+        let arg = |term: &ClauseTerm, locals: &mut Vec<String>| -> GroupArg {
+            match term.variable() {
+                Some(name) if bound.contains(name) => GroupArg::Outer(slot_of(name, variables)),
+                Some(name) => GroupArg::Local(match locals.iter().position(|l| l == name) {
+                    Some(local) => local,
+                    None => {
+                        locals.push(name.to_owned());
+                        locals.len() - 1
+                    }
+                }),
+                None => GroupArg::Const(
+                    term.surface()
+                        .expect("a non-variable term always has a lexical surface"),
+                ),
+            }
+        };
+        let atoms: Vec<[GroupArg; ATOM_ARITY]> = negation
+            .atoms()
+            .iter()
+            .map(|atom| {
+                let terms = atom.terms();
+                std::array::from_fn(|position| arg(terms[position], &mut locals))
+            })
+            .collect();
+        let guards = negation
+            .guards()
+            .iter()
+            .map(|guard| GroupGuard {
+                inputs: guard
+                    .inputs()
+                    .iter()
+                    .map(|input| arg(&ClauseTerm::var(input.clone()), &mut locals))
+                    .collect(),
+                outputs: guard
+                    .outputs()
+                    .iter()
+                    .map(
+                        |output| match arg(&ClauseTerm::var(output.clone()), &mut locals) {
+                            GroupArg::Local(local) => local,
+                            GroupArg::Outer(_) | GroupArg::Const(_) => unreachable!(
+                                "a group guard output is fresh in the group (DlClause scoping)"
+                            ),
+                        },
+                    )
+                    .collect(),
+            })
+            .collect();
+        Self {
+            index,
+            atoms,
+            guards,
+            locals: locals.len(),
+        }
+    }
+
+    /// Whether the group HOLDS under `probe.solution`: some extension of its local
+    /// variables matches every atom and passes every guard.
+    fn holds(&self, probe: GroupProbe<'_>) -> Result<bool, EvalError> {
+        let mut locals: Vec<Option<LocalValue>> = vec![None; self.locals];
+        self.match_atom(0, probe, &mut locals)
+    }
+
+    /// The store probe value of `arg` under the current bindings.
+    fn probe_value(
+        arg: &GroupArg,
+        probe: GroupProbe<'_>,
+        locals: &[Option<LocalValue>],
+    ) -> ProbeValue {
+        match arg {
+            GroupArg::Outer(slot) => match probe.solution.value(*slot) {
+                SlotValue::Interned(id) => ProbeValue::Known(id),
+                SlotValue::Computed(_) => ProbeValue::Absent,
+                SlotValue::Unbound => {
+                    unreachable!("an outer group variable is bound by the enclosing rule")
+                }
+            },
+            GroupArg::Local(local) => match &locals[*local] {
+                Some(LocalValue::Interned(id)) => ProbeValue::Known(*id),
+                Some(LocalValue::Computed(_)) => ProbeValue::Absent,
+                None => ProbeValue::Free,
+            },
+            GroupArg::Const(surface) => probe
+                .rel
+                .term_id(surface)
+                .map_or(ProbeValue::Absent, ProbeValue::Known),
+        }
+    }
+
+    /// Match atom `k` onward.
+    fn match_atom(
+        &self,
+        k: usize,
+        probe: GroupProbe<'_>,
+        locals: &mut Vec<Option<LocalValue>>,
+    ) -> Result<bool, EvalError> {
+        let Some(atom) = self.atoms.get(k) else {
+            return self.match_guard(0, probe, locals);
+        };
+        let mut values = [ProbeValue::Free; ATOM_ARITY];
+        for (position, arg) in atom.iter().enumerate() {
+            values[position] = Self::probe_value(arg, probe, locals);
+            if values[position] == ProbeValue::Absent {
+                return Ok(false);
+            }
+        }
+        let known = |value: ProbeValue| match value {
+            ProbeValue::Known(id) => Some(id),
+            ProbeValue::Free | ProbeValue::Absent => None,
+        };
+        let bound = match (
+            known(values[POSITION_SUBJECT]),
+            known(values[POSITION_OBJECT]),
+        ) {
+            (Some(subject), Some(object)) => Bound::Both(subject, object),
+            (Some(subject), None) => Bound::Subject(subject),
+            (None, Some(object)) => Bound::Object(object),
+            (None, None) => Bound::Any,
+        };
+        let partitions: Vec<PartitionRef<'_>> = probe
+            .rel
+            .partitions(
+                known(values[POSITION_PREDICATE]),
+                known(values[POSITION_GRAPH]),
+            )
+            .collect();
+        for partition in partitions {
+            let (predicate, graph) = (partition.predicate(), partition.graph());
+            let mut cursor = partition.select(bound);
+            while let Some((subject, object, _row)) = cursor.next() {
+                let matched = [subject, predicate, object, graph];
+                // Bind every free local position, requiring a local repeated inside
+                // the atom to agree with itself.
+                let mut newly: Vec<usize> = Vec::new();
+                let mut consistent = true;
+                for (position, arg) in atom.iter().enumerate() {
+                    if let GroupArg::Local(local) = arg {
+                        match &locals[*local] {
+                            None => {
+                                locals[*local] = Some(LocalValue::Interned(matched[position]));
+                                newly.push(*local);
+                            }
+                            Some(LocalValue::Interned(id)) if *id == matched[position] => {}
+                            Some(_) => {
+                                consistent = false;
+                                break;
+                            }
+                        }
+                    }
+                }
+                let found = consistent && self.match_atom(k + 1, probe, locals)?;
+                for local in newly {
+                    locals[local] = None;
+                }
+                if found {
+                    return Ok(true);
+                }
+            }
+        }
+        Ok(false)
+    }
+
+    /// Evaluate guard `j` onward, every atom having matched.
+    fn match_guard(
+        &self,
+        j: usize,
+        probe: GroupProbe<'_>,
+        locals: &mut Vec<Option<LocalValue>>,
+    ) -> Result<bool, EvalError> {
+        let Some(guard) = self.guards.get(j) else {
+            return Ok(true);
+        };
+        let declared = &probe.clause.negations()[self.index].guards()[j];
+        let site = GuardSite::Negation {
+            negation: self.index,
+            guard: j,
+        };
+        let rows = {
+            let mut inputs: Vec<&str> = Vec::with_capacity(guard.inputs.len());
+            for input in &guard.inputs {
+                let surface = match input {
+                    GroupArg::Outer(slot) => probe
+                        .solution
+                        .surface(*slot, probe.rel)
+                        .expect("an outer group variable is bound by the enclosing rule"),
+                    GroupArg::Local(local) => match &locals[*local] {
+                        Some(LocalValue::Interned(id)) => probe.rel.interner().resolve(*id),
+                        Some(LocalValue::Computed(surface)) => surface,
+                        None => unreachable!(
+                            "a group guard input is bound before it (DlClause scoping)"
+                        ),
+                    },
+                    GroupArg::Const(surface) => surface,
+                };
+                inputs.push(surface);
+            }
+            call_guard(
+                probe.guards,
+                &GuardCall {
+                    rule: probe.rule,
+                    site,
+                    guard: declared,
+                    inputs: &inputs,
+                    model: probe.rel,
+                },
+            )?
+        };
+        for row in rows {
+            for (&local, surface) in guard.outputs.iter().zip(&row) {
+                locals[local] = Some(match probe.rel.term_id(surface) {
+                    Some(id) => LocalValue::Interned(id),
+                    None => LocalValue::Computed(surface.as_str().into()),
+                });
+            }
+            let found = self.match_guard(j + 1, probe, locals)?;
+            for &local in &guard.outputs {
+                locals[local] = None;
+            }
+            if found {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+}
+
+/// Call the caller's evaluator for one guard, checking the answer's shape.
+///
+/// # Errors
+///
+/// [`EvalError::Guard`] when the evaluator reports an error, or answers a row whose
+/// width is not the guard's output count — a malformed answer is not read as some
+/// answer.
+fn call_guard(
+    guards: &dyn GuardEvaluator,
+    call: &GuardCall<'_>,
+) -> Result<Vec<Vec<String>>, EvalError> {
+    let refuse = |message: String| EvalError::Guard {
+        rule: call.rule,
+        site: call.site,
+        guard: call.guard.name().to_owned(),
+        message,
+    };
+    let rows = guards.evaluate(call).map_err(refuse)?;
+    let width = call.guard.outputs().len();
+    if let Some(row) = rows.iter().find(|row| row.len() != width) {
+        return Err(refuse(format!(
+            "the evaluator answered a row of {} values for {width} outputs",
+            row.len()
+        )));
+    }
+    Ok(rows)
+}
+
+/// A body guard, lowered once per evaluation.
+#[derive(Debug, Clone)]
+struct GuardRuntime {
+    /// The frame slot of each input, in declared order.
+    inputs: Vec<usize>,
+    /// The frame slot of each output, in declared order.
+    outputs: Vec<usize>,
+}
+
 /// Everything about one rule that is a static function of the rule, hoisted out of every
-/// round: the head's lowered arguments and the negated atoms' lowered probes.
+/// round: the head's lowered arguments, the guards' slots and the negations' probes.
 ///
 /// Constant surfaces are rendered ONCE here rather than per candidate — including the head
 /// predicate's, which is now a term like any other and so may equally well be a slot.
 #[derive(Debug, Clone)]
-struct RuleRuntime {
-    /// The head's four lowered arguments, in `(subject, predicate, object, graph)` order.
-    head: [ArgShape; ATOM_ARITY],
+pub(crate) struct RuleRuntime {
+    /// Each head atom's four lowered arguments, in `(subject, predicate, object, graph)`
+    /// order. One atom under the stratified fixpoint; a conjunctive head under the ordered
+    /// schedule ([`crate::schedule`]) asserts every conjunct from one solution.
+    head: Vec<[ArgShape; ATOM_ARITY]>,
     /// The rule's negated body atoms, in authored order.
     negated: Vec<NegatedAtom>,
+    /// The rule's body guards, in authored order.
+    guards: Vec<GuardRuntime>,
+    /// The rule's negated conjunctions, in authored order.
+    negations: Vec<NegationRuntime>,
 }
 
 impl RuleRuntime {
     /// Lower one rule's static shapes.
-    fn new(rule: &DlClause, plan: &RulePlan) -> Self {
+    pub(crate) fn new(rule: &DlClause, plan: &RulePlan) -> Self {
         let variables = plan.variables();
-        // Every clause inside an `Executable` came through `Parsed::new`, which admits
-        // only the atomic head form, so "the head" exists here by construction.
-        let head = datalog_head(rule);
         Self {
-            head: ArgShape::of_atom(head, variables),
+            head: rule
+                .head_atoms()
+                .map(|atom| ArgShape::of_atom(atom, variables))
+                .collect(),
             negated: plan
                 .negated()
                 .iter()
                 .map(|&index| NegatedAtom {
                     args: ArgShape::of_atom(&rule.body()[index], variables),
                 })
+                .collect(),
+            guards: rule
+                .guards()
+                .iter()
+                .map(|guard: &Guard| GuardRuntime {
+                    inputs: guard
+                        .inputs()
+                        .iter()
+                        .map(|name| slot_of(name, variables))
+                        .collect(),
+                    outputs: guard
+                        .outputs()
+                        .iter()
+                        .map(|name| slot_of(name, variables))
+                        .collect(),
+                })
+                .collect(),
+            negations: rule
+                .negations()
+                .iter()
+                .enumerate()
+                .map(|(index, negation)| NegationRuntime::new(index, negation, rule, variables))
                 .collect(),
         }
     }
@@ -1646,47 +2780,53 @@ impl RuleRuntime {
 
 /// One head argument of a candidate derivation.
 ///
-/// A value that is already in the store is compared by its interned id; a head constant
-/// the store has never seen has no id yet and is compared by its surface. The two cases
-/// are disjoint — a variable binding always comes from a stored row, so it is always
-/// interned — which is what stops one fact from being keyed two different ways.
+/// A value that is already in the store is compared by its interned id; a term the store
+/// has never seen — a head constant, or a surface a guard computed — has no id yet and is
+/// compared by its surface. The two cases are disjoint — a value the store knows is always
+/// keyed by its id — which is what stops one fact from being keyed two different ways.
 ///
 /// The derived order is deterministic (interned before fresh, then by id / by surface); it
 /// is a grouping order only, never an emission order: winners are re-sorted lexically
 /// before they are committed.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 enum HeadTerm<'r> {
     /// A term already present in the store's dictionary.
     Interned(TermId),
-    /// A head constant the store has never interned, so no fact can already carry it.
-    Fresh(&'r str),
+    /// A term the store has never interned, so no fact can already carry it: borrowed
+    /// when it is a head constant, owned when a guard computed it.
+    Fresh(Cow<'r, str>),
 }
 
 impl HeadTerm<'_> {
     /// This argument's interned id, if the store already holds the term.
-    fn interned(self) -> Option<TermId> {
+    fn interned(&self) -> Option<TermId> {
         match self {
-            Self::Interned(id) => Some(id),
+            Self::Interned(id) => Some(*id),
             Self::Fresh(_) => None,
         }
     }
 
+    /// Whether this is a term a guard computed and the store never held.
+    fn is_generated(&self) -> bool {
+        matches!(self, Self::Fresh(Cow::Owned(_)))
+    }
+
     /// This argument's lexical surface.
-    fn surface(self, rel: &RelationStore) -> String {
+    fn surface(&self, rel: &RelationStore) -> String {
         match self {
-            Self::Interned(id) => rel.interner().resolve(id).to_owned(),
-            Self::Fresh(surface) => surface.to_owned(),
+            Self::Interned(id) => rel.interner().resolve(*id).to_owned(),
+            Self::Fresh(surface) => surface.to_string(),
         }
     }
 }
 
-/// The identity of a candidate head fact, allocation-free.
+/// The identity of a candidate head fact.
 ///
 /// All four positions are [`HeadTerm`]s: with the predicate carried as data, a head
 /// predicate can be a bound variable, so it cannot be a borrowed `&str` naming a relation.
 /// The field order is the [`Fact`] order, so the derived `Ord` groups candidates the way
 /// the commit sweep will emit them.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 struct HeadKey<'r> {
     /// The head subject.
     subject: HeadTerm<'r>,
@@ -1696,6 +2836,13 @@ struct HeadKey<'r> {
     object: HeadTerm<'r>,
     /// The head graph.
     graph: HeadTerm<'r>,
+}
+
+impl HeadKey<'_> {
+    /// The four positions, in fact order.
+    fn terms(&self) -> [&HeadTerm<'_>; ATOM_ARITY] {
+        [&self.subject, &self.predicate, &self.object, &self.graph]
+    }
 }
 
 /// One rule firing, before the round's winner is chosen.
@@ -1755,11 +2902,21 @@ impl Candidate {
 /// A `BTreeMap` rather than a hash table: the merge sweep and the commit sweep both
 /// iterate it, so its order reaches an output path and must be total and content-derived.
 #[derive(Debug)]
-struct RoundBuffer<'r> {
+pub(crate) struct RoundBuffer<'r> {
     /// The best candidate seen so far per head fact.
     entries: BTreeMap<HeadKey<'r>, Candidate>,
     /// Candidate solutions enumerated by the task that produced this buffer.
     join_steps: u64,
+    /// Whether some entry carries a term a guard computed and the store never held — a
+    /// TERM-GENERATING round ([`EvalOptions`]).
+    generates_terms: bool,
+    /// The rules of the candidates that carry such a term, for a term-limit refusal to
+    /// name ([`EvalError::TermLimitExceeded`]).
+    generating_rules: BTreeSet<usize>,
+    /// Rows already in the store that the snapshot marks as ASSUMED and a rule of this
+    /// round derived again, each with the derivation that did — see
+    /// [`RoundSnapshot::assumed`].
+    confirmed: Vec<(RowId, Derivation)>,
 }
 
 impl<'r> RoundBuffer<'r> {
@@ -1768,11 +2925,28 @@ impl<'r> RoundBuffer<'r> {
         Self {
             entries: BTreeMap::new(),
             join_steps: 0,
+            generates_terms: false,
+            generating_rules: BTreeSet::new(),
+            confirmed: Vec::new(),
         }
+    }
+
+    /// Whether the round derived nothing new.
+    pub(crate) fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    /// The assumed rows a rule of the round derived again, with the derivations.
+    pub(crate) fn confirmed(&self) -> &[(RowId, Derivation)] {
+        &self.confirmed
     }
 
     /// Insert or quality-merge one candidate.
     fn insert(&mut self, key: HeadKey<'r>, candidate: Candidate, rel: &RelationStore) {
+        if key.terms().iter().any(|term| term.is_generated()) {
+            self.generates_terms = true;
+            self.generating_rules.insert(candidate.rule);
+        }
         match self.entries.get_mut(&key) {
             Some(existing) => {
                 if candidate.preferred_over(existing, rel) {
@@ -1788,24 +2962,44 @@ impl<'r> RoundBuffer<'r> {
     /// Fold a completed rule-local buffer in at the scheduling-erasing serial boundary.
     fn merge_from(&mut self, other: Self, rel: &RelationStore) {
         self.join_steps = self.join_steps.saturating_add(other.join_steps);
+        self.confirmed.extend(other.confirmed);
         for (key, candidate) in other.entries {
             self.insert(key, candidate, rel);
         }
     }
 }
 
-/// The immutable snapshot every rule task reads during one semi-naive round.
+/// The immutable snapshot every rule task reads during one round.
 ///
 /// No task may mutate any of it; the single sorted commit begins only after every task
 /// buffer has been collected and merged in program order.
 #[derive(Debug, Clone, Copy)]
-struct RoundSnapshot<'a> {
+pub(crate) struct RoundSnapshot<'a> {
     /// The accumulated store.
-    rel: &'a RelationStore,
+    pub(crate) rel: &'a RelationStore,
     /// Per-row proof heights, indexed by [`RowId`].
-    depth: &'a [u32],
-    /// The round's delta span.
-    delta: Delta,
+    pub(crate) depth: &'a [u32],
+    /// Per-row ASSUMED flags, indexed by [`RowId`], or empty when nothing is assumed.
+    ///
+    /// An assumed row is a fact the caller asserted for the duration of a schedule layer
+    /// ([`crate::schedule::LayerHooks`]) and will retract at its end unless a rule derives
+    /// it too; a rule that re-derives one is recorded in [`RoundBuffer::confirmed`].
+    pub(crate) assumed: &'a [bool],
+}
+
+/// One rule scheduled into a round, with the delta its positive join is decomposed over.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct RuleEntry<'r> {
+    /// The rule's index in authored program order.
+    pub(crate) index: usize,
+    /// The rule.
+    pub(crate) rule: &'r DlClause,
+    /// Its store-independent join plan.
+    pub(crate) plan: &'r RulePlan,
+    /// Its lowered static shapes.
+    pub(crate) runtime: &'r RuleRuntime,
+    /// The rows this evaluation treats as new.
+    pub(crate) delta: Delta,
 }
 
 /// How one round schedules its immutable per-rule candidate work.
@@ -1814,11 +3008,13 @@ struct RoundSnapshot<'a> {
 /// scheduling cannot affect an answer or a budget observation — which is exactly what
 /// `sequential_and_parallel_rounds_agree` asserts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RoundExecution {
+pub(crate) enum RoundExecution {
     /// Evaluate rules into independent buffers, then merge them in program order.
     ///
     /// Production's only policy. It already degrades to the direct in-order path for a
-    /// single-rule stratum and for a one-worker pool — which is every `wasm32` build.
+    /// single-rule round, for a round holding a guarded rule (a guard runs on the calling
+    /// thread — see [`crate::guard`]) and for a one-worker pool — which is every `wasm32`
+    /// build.
     Parallel,
     /// Force the direct in-order path even where rayon would be used.
     ///
@@ -1832,7 +3028,7 @@ enum RoundExecution {
 impl RoundExecution {
     /// Whether this round has enough independent work and workers to use rayon.
     ///
-    /// A single-rule stratum and a one-worker pool (which is every `wasm32` build) stay on
+    /// A single-rule round and a one-worker pool (which is every `wasm32` build) stay on
     /// the allocation-minimal direct path: there is no parallelism to recover in either.
     fn should_parallelize(self, rule_count: usize) -> bool {
         matches!(self, Self::Parallel) && rule_count > 1 && rayon::current_num_threads() > 1
@@ -1840,47 +3036,104 @@ impl RoundExecution {
 }
 
 /// Evaluate one rule against the frozen round snapshot into a private buffer.
+///
+/// The positive join runs first; then each body guard in authored order, extending or
+/// dropping each solution; then the negated atoms and negated conjunctions, each of which
+/// drops a solution it is satisfied under. Every surviving solution yields one candidate
+/// per head atom.
 fn evaluate_rule<'r>(
-    exe: &'r Executable,
-    runtimes: &'r [RuleRuntime],
-    rule_index: usize,
+    entry: RuleEntry<'r>,
     snapshot: RoundSnapshot<'_>,
     strategy: JoinStrategy,
     allowance: u64,
-) -> RoundBuffer<'r> {
-    let (_, plan) = exe.rule_entry(rule_index);
-    let runtime = &runtimes[rule_index];
+    guards: &dyn GuardEvaluator,
+) -> Result<RoundBuffer<'r>, EvalError> {
+    let (plan, runtime, rel) = (entry.plan, entry.runtime, snapshot.rel);
     let mut governor = StepGovernor::new(allowance);
-    let solutions = join_body(plan, runtime, snapshot, strategy, &mut governor);
+    let mut solutions = join_body(
+        plan,
+        JoinSnapshot {
+            rel,
+            delta: entry.delta,
+        },
+        strategy,
+        &mut governor,
+    );
+
+    for (position, guard) in runtime.guards.iter().enumerate() {
+        let declared = &entry.rule.guards()[position];
+        let mut extended = Vec::with_capacity(solutions.len());
+        for solution in solutions {
+            if governor.spent() {
+                break;
+            }
+            let rows = {
+                let inputs: Vec<&str> = guard
+                    .inputs
+                    .iter()
+                    .map(|&slot| {
+                        solution
+                            .surface(slot, rel)
+                            .expect("a guard input is bound before the guard (DlClause scoping)")
+                    })
+                    .collect();
+                call_guard(
+                    guards,
+                    &GuardCall {
+                        rule: entry.index,
+                        site: GuardSite::Body(position),
+                        guard: declared,
+                        inputs: &inputs,
+                        model: rel,
+                    },
+                )?
+            };
+            for row in rows {
+                let mut next = solution.clone();
+                for (&slot, surface) in guard.outputs.iter().zip(&row) {
+                    next.bind_surface(slot, surface, rel);
+                }
+                governor.charge();
+                extended.push(next);
+            }
+        }
+        solutions = extended;
+    }
+
+    if !runtime.negated.is_empty() {
+        solutions.retain(|solution| {
+            !runtime
+                .negated
+                .iter()
+                .any(|atom| atom.satisfied(solution, rel))
+        });
+    }
+    if !runtime.negations.is_empty() {
+        let mut kept = Vec::with_capacity(solutions.len());
+        for solution in solutions {
+            let mut blocked = false;
+            for negation in &runtime.negations {
+                if negation.holds(GroupProbe {
+                    solution: &solution,
+                    rel,
+                    guards,
+                    rule: entry.index,
+                    clause: entry.rule,
+                })? {
+                    blocked = true;
+                    break;
+                }
+            }
+            if !blocked {
+                kept.push(solution);
+            }
+        }
+        solutions = kept;
+    }
 
     let mut buffer = RoundBuffer::new();
     buffer.join_steps = governor.consumed;
     for solution in solutions {
-        let key = HeadKey {
-            subject: head_term(&runtime.head[POSITION_SUBJECT], &solution, snapshot.rel),
-            predicate: head_term(&runtime.head[POSITION_PREDICATE], &solution, snapshot.rel),
-            object: head_term(&runtime.head[POSITION_OBJECT], &solution, snapshot.rel),
-            graph: head_term(&runtime.head[POSITION_GRAPH], &solution, snapshot.rel),
-        };
-        // A fact a prior round or stratum already derived is not a derivation: earlier
-        // wins, exactly as the reference fixpoint decides it. Every one of the four
-        // positions must already be interned for the quad to be present.
-        if let (Some(subject), Some(predicate), Some(object), Some(graph)) = (
-            key.subject.interned(),
-            key.predicate.interned(),
-            key.object.interned(),
-            key.graph.interned(),
-        ) && snapshot
-            .rel
-            .partition(predicate, graph)
-            .is_some_and(|partition| {
-                partition
-                    .select(Bound::Both(subject, object))
-                    .any_remaining()
-            })
-        {
-            continue;
-        }
         let mut proof_height = 0u32;
         let mut sum_source_height = 0u64;
         for source in &solution.sources {
@@ -1888,103 +3141,199 @@ fn evaluate_rule<'r>(
             proof_height = proof_height.max(height);
             sum_source_height = sum_source_height.saturating_add(u64::from(height));
         }
-        buffer.insert(
-            key,
-            Candidate {
-                rule: rule_index,
-                sources: solution.sources,
-                proof_height: proof_height.saturating_add(1),
-                sum_source_height,
-            },
-            snapshot.rel,
-        );
+        for head in &runtime.head {
+            let key = HeadKey {
+                subject: head_term(&head[POSITION_SUBJECT], &solution),
+                predicate: head_term(&head[POSITION_PREDICATE], &solution),
+                object: head_term(&head[POSITION_OBJECT], &solution),
+                graph: head_term(&head[POSITION_GRAPH], &solution),
+            };
+            let key = intern_key(key, rel);
+            // A fact a prior round or stratum already derived is not a derivation: earlier
+            // wins, exactly as the reference fixpoint decides it. Every one of the four
+            // positions must already be interned for the quad to be present.
+            if let Some(row) = present_row(&key, rel) {
+                if snapshot.assumed.get(row.index()).copied().unwrap_or(false) {
+                    let [subject, predicate, object, graph] =
+                        key.terms().map(|term| term.surface(rel));
+                    buffer.confirmed.push((
+                        row,
+                        Derivation {
+                            fact: Fact {
+                                subject,
+                                predicate,
+                                object,
+                                graph,
+                            },
+                            rule: entry.index,
+                            sources: solution.sources.iter().map(|s| s.fact(rel)).collect(),
+                            proof_height: proof_height.saturating_add(1),
+                        },
+                    ));
+                }
+                continue;
+            }
+            buffer.insert(
+                key,
+                Candidate {
+                    rule: entry.index,
+                    sources: solution.sources.clone(),
+                    proof_height: proof_height.saturating_add(1),
+                    sum_source_height,
+                },
+                rel,
+            );
+        }
     }
-    buffer
+    Ok(buffer)
+}
+
+/// The store row of the fact `key` names, if it is present.
+fn present_row(key: &HeadKey<'_>, rel: &RelationStore) -> Option<RowId> {
+    let (subject, predicate, object, graph) = (
+        key.subject.interned()?,
+        key.predicate.interned()?,
+        key.object.interned()?,
+        key.graph.interned()?,
+    );
+    let partition = rel.partition(predicate, graph)?;
+    let mut cursor = partition.select(Bound::Both(subject, object));
+    cursor.next().map(|(_, _, row)| row)
+}
+
+/// Key a head term the store DOES know by its id, whatever produced it.
+///
+/// A guard may compute a surface the store already holds, and a head constant may have
+/// been interned since the plan was lowered; keying either as fresh would let one fact be
+/// keyed two ways and committed twice.
+fn intern_key<'r>(key: HeadKey<'r>, rel: &RelationStore) -> HeadKey<'r> {
+    let resolve = |term: HeadTerm<'r>| match term {
+        HeadTerm::Fresh(surface) => rel
+            .term_id(&surface)
+            .map_or(HeadTerm::Fresh(surface), HeadTerm::Interned),
+        interned @ HeadTerm::Interned(_) => interned,
+    };
+    HeadKey {
+        subject: resolve(key.subject),
+        predicate: resolve(key.predicate),
+        object: resolve(key.object),
+        graph: resolve(key.graph),
+    }
 }
 
 /// Lower one head argument to its round-key term.
 ///
 /// # Panics
 ///
-/// Panics if a head variable is unbound. [`compile`] refuses a rule whose head carries a
-/// variable no positive body atom binds, and every positive atom binds all four of its
-/// variable positions before the join completes, so an unbound head slot here would be a
-/// contradiction in the range-restriction check.
-fn head_term<'r>(
-    shape: &'r ArgShape,
-    solution: &SlotSolution,
-    rel: &RelationStore,
-) -> HeadTerm<'r> {
+/// Panics if a head variable is unbound. Compilation refuses a rule whose head carries a
+/// variable nothing in its body binds, and every positive atom binds all four of its
+/// variable positions before the join completes (every guard output is bound by its guard),
+/// so an unbound head slot here would be a contradiction in the range-restriction check.
+fn head_term<'r>(shape: &'r ArgShape, solution: &SlotSolution) -> HeadTerm<'r> {
     match shape {
-        ArgShape::Slot(slot) => HeadTerm::Interned(
-            solution
-                .get(*slot)
-                .expect("a range-restricted head variable is bound by the positive join"),
-        ),
-        ArgShape::Const(surface) => rel
-            .term_id(surface)
-            .map_or(HeadTerm::Fresh(surface.as_str()), HeadTerm::Interned),
+        ArgShape::Slot(slot) => match solution.value(*slot) {
+            SlotValue::Interned(id) => HeadTerm::Interned(id),
+            SlotValue::Computed(surface) => HeadTerm::Fresh(Cow::Owned(surface.to_owned())),
+            SlotValue::Unbound => {
+                unreachable!("a range-restricted head variable is bound by the body")
+            }
+        },
+        ArgShape::Const(surface) => HeadTerm::Fresh(Cow::Borrowed(surface.as_str())),
     }
 }
 
-/// Evaluate every rule of a stratum for one round, erasing scheduling order.
-fn evaluate_round<'r>(
-    exe: &'r Executable,
-    runtimes: &'r [RuleRuntime],
-    stratum: usize,
+/// Evaluate every scheduled rule of one round, erasing scheduling order.
+///
+/// A round holding a guarded rule runs on the calling thread in program order: a guard is
+/// caller code, and the caller's thread-scoped evaluation context has to reach it. A
+/// guard-free round keeps the rule-parallel path, which cannot reach a guard at all.
+pub(crate) fn evaluate_round<'r>(
+    entries: &[RuleEntry<'r>],
     snapshot: RoundSnapshot<'_>,
     execution: RoundExecution,
     strategy: JoinStrategy,
     allowance: u64,
-) -> RoundBuffer<'r> {
-    let rule_indices = exe.stratum_rule_indices(stratum);
-    if !execution.should_parallelize(rule_indices.len()) {
-        let mut round = RoundBuffer::new();
-        for &rule_index in rule_indices {
-            let buffer = evaluate_rule(exe, runtimes, rule_index, snapshot, strategy, allowance);
+    guards: &dyn GuardEvaluator,
+) -> Result<RoundBuffer<'r>, EvalError> {
+    let guarded = entries.iter().any(|entry| entry.rule.is_guarded());
+    let mut round = RoundBuffer::new();
+    if guarded || !execution.should_parallelize(entries.len()) {
+        for &entry in entries {
+            let buffer = evaluate_rule(entry, snapshot, strategy, allowance, guards)?;
             round.merge_from(buffer, snapshot.rel);
         }
-        return round;
+        return Ok(round);
     }
 
     // `par_iter` over a slice is INDEXED, so `collect::<Vec<_>>()` restores program order
     // regardless of completion order; the merge below then folds strictly in that order.
     // This indexed form is the ONLY parallelism this crate uses — see the module docs for
-    // the unordered rayon adaptors it must never reach for.
-    let buffers: Vec<RoundBuffer<'r>> = rule_indices
+    // the unordered rayon adaptors it must never reach for. No rule here is guarded, so the
+    // evaluator every task receives is the one that refuses every call.
+    let buffers: Vec<Result<RoundBuffer<'r>, EvalError>> = entries
         .par_iter()
-        .map(|&rule_index| evaluate_rule(exe, runtimes, rule_index, snapshot, strategy, allowance))
+        .map(|&entry| evaluate_rule(entry, snapshot, strategy, allowance, &NoGuards))
         .collect();
 
-    let mut round = RoundBuffer::new();
     for buffer in buffers {
-        round.merge_from(buffer, snapshot.rel);
+        round.merge_from(buffer?, snapshot.rel);
     }
-    round
+    Ok(round)
 }
 
 // ── The fixpoint ────────────────────────────────────────────────────────────────
 
 /// The mutable working set carried across every stratum of one evaluation.
 #[derive(Debug)]
-struct FixpointState {
+pub(crate) struct FixpointState {
     /// The accumulated store: the seeded EDB plus everything derived so far.
-    rel: RelationStore,
+    pub(crate) rel: RelationStore,
     /// Per-row proof heights, indexed by [`RowId`] and pushed in lockstep with the store.
-    depth: Vec<u32>,
+    pub(crate) depth: Vec<u32>,
     /// Every committed derivation.
-    derivations: Vec<Derivation>,
+    pub(crate) derivations: Vec<Derivation>,
     /// Candidate solutions enumerated so far.
-    join_steps: u64,
+    pub(crate) join_steps: u64,
+    /// Term-generating rounds committed so far.
+    pub(crate) term_generating_rounds: u64,
+    /// The limits in force.
+    limits: Limits,
+    /// The distinct terms of the seeded store.
+    input_terms: usize,
+    /// The rules that generated a term in the latest term-generating round.
+    generating_rules: BTreeSet<usize>,
 }
 
 impl FixpointState {
+    /// A state over the seeded store `edb`, governed by `options`.
+    pub(crate) fn seeded(edb: RelationStore, options: EvalOptions) -> Self {
+        let depth = vec![0u32; edb.row_count()];
+        let input_terms = edb.interner().len();
+        Self {
+            rel: edb,
+            depth,
+            derivations: Vec::new(),
+            join_steps: 0,
+            term_generating_rounds: 0,
+            limits: Limits::of(&options, input_terms),
+            input_terms,
+            generating_rules: BTreeSet::new(),
+        }
+    }
+
     /// The budget consumption observed so far.
-    fn report(&self) -> BudgetReport {
+    pub(crate) fn report(&self) -> BudgetReport {
         BudgetReport {
             join_steps: self.join_steps,
             stored_facts: self.rel.row_count(),
             term_arena_bytes: self.rel.term_bytes(),
+            term_generating_rounds: self.term_generating_rounds,
+            generated_terms: u64::try_from(
+                self.rel.interner().len().saturating_sub(self.input_terms),
+            )
+            .unwrap_or(u64::MAX),
+            input_terms: self.input_terms,
+            limits: self.limits,
         }
     }
 
@@ -1995,6 +3344,44 @@ impl FixpointState {
             ..self.report()
         }
     }
+
+    /// The join-step allowance one round's rule tasks each receive.
+    pub(crate) fn allowance(&self) -> u64 {
+        self.limits
+            .join_steps
+            .saturating_sub(self.join_steps)
+            .saturating_add(1)
+    }
+
+    /// Account for a completed round's work, commit its winners and check every ceiling.
+    ///
+    /// # Errors
+    ///
+    /// [`EvalError::BudgetExhausted`] when the round passed a ceiling — decided before a
+    /// single surface is materialised where the fact count alone proves it.
+    pub(crate) fn absorb(&mut self, round: RoundBuffer<'_>) -> Result<(), EvalError> {
+        self.join_steps = self.join_steps.saturating_add(round.join_steps);
+        check_budget(self)?;
+        if round.entries.is_empty() {
+            return Ok(());
+        }
+        // Every entry was gated on absence from the store when it was created, and the
+        // entries are unique by head fact, so this projection is exact rather than an
+        // over-estimate: the limit is decided before a single surface is materialised.
+        let projected = self.rel.row_count().saturating_add(round.entries.len());
+        if u64::try_from(projected).unwrap_or(u64::MAX) > self.limits.stored_facts {
+            return Err(EvalError::BudgetExhausted {
+                resource: BudgetResource::StoredFacts,
+                report: self.projected_report(round.entries.len()),
+            });
+        }
+        if round.generates_terms {
+            self.term_generating_rounds = self.term_generating_rounds.saturating_add(1);
+            self.generating_rules.clone_from(&round.generating_rules);
+        }
+        commit_round(round, self);
+        check_budget(self)
+    }
 }
 
 /// Evaluate `exe` over the seeded store `edb`, running each stratum to its least fixpoint.
@@ -2004,13 +3391,17 @@ impl FixpointState {
 ///
 /// # Errors
 ///
-/// [`EvalError::BudgetExhausted`] if the run passes any of the three fixed ceilings. There
-/// is no partial answer: a budget refusal is total.
+/// [`EvalError::BudgetExhausted`] if the run passes the default stored-fact or join-step
+/// limit ([`EvalOptions::default`]) or the term-arena ceiling. There is no partial answer: a budget refusal is total. [`EvalError::Guard`] if the program
+/// carries a guard, which this entry point has no evaluator for — see
+/// [`evaluate_guarded`].
 pub fn evaluate(exe: &Executable, edb: RelationStore) -> Result<Evaluation, EvalError> {
     evaluate_with(
         exe,
         edb,
         None,
+        &NoGuards,
+        EvalOptions::default(),
         RoundExecution::Parallel,
         JoinStrategy::Planned,
     )
@@ -2043,6 +3434,41 @@ pub fn evaluate_until(
         exe,
         edb,
         stop,
+        &NoGuards,
+        EvalOptions::default(),
+        RoundExecution::Parallel,
+        JoinStrategy::Planned,
+    )
+}
+
+/// [`evaluate_until`] for a program carrying guard literals ([`crate::guard`]), whose
+/// meaning `guards` supplies.
+///
+/// Every guard is a pure function of its bindings here — [`compile`] refuses one that
+/// reads the model — so the semi-naive decomposition stays exact: a guard is re-evaluated
+/// only for the solutions a round's delta produces, exactly as an atom is re-joined only
+/// for them. A rule with no positive body atom is evaluated in the first round of its
+/// stratum only, because nothing a later round adds can change its answer.
+///
+/// `options` carries the caller's governors ([`EvalOptions`]).
+///
+/// # Errors
+///
+/// [`EvalError::Guard`] when `guards` cannot evaluate a guard, and every error
+/// [`evaluate_until`] returns.
+pub fn evaluate_guarded(
+    exe: &Executable,
+    edb: RelationStore,
+    guards: &dyn GuardEvaluator,
+    options: &EvalOptions,
+    stop: Option<&dyn StopSignal>,
+) -> Result<Evaluation, EvalError> {
+    evaluate_with(
+        exe,
+        edb,
+        stop,
+        guards,
+        *options,
         RoundExecution::Parallel,
         JoinStrategy::Planned,
     )
@@ -2056,6 +3482,8 @@ fn evaluate_with(
     exe: &Executable,
     edb: RelationStore,
     stop: Option<&dyn StopSignal>,
+    guards: &dyn GuardEvaluator,
+    options: EvalOptions,
     execution: RoundExecution,
     strategy: JoinStrategy,
 ) -> Result<Evaluation, EvalError> {
@@ -2066,13 +3494,7 @@ fn evaluate_with(
         })
         .collect();
 
-    let depth = vec![0u32; edb.row_count()];
-    let mut state = FixpointState {
-        rel: edb,
-        depth,
-        derivations: Vec::new(),
-        join_steps: 0,
-    };
+    let mut state = FixpointState::seeded(edb, options);
     check_budget(&state)?;
 
     for stratum in 0..exe.stratum_count() {
@@ -2080,31 +3502,48 @@ fn evaluate_with(
             continue;
         }
         run_stratum(
-            exe, &runtimes, stratum, &mut state, stop, execution, strategy,
+            exe,
+            &runtimes,
+            stratum,
+            &mut state,
+            StratumRun {
+                stop,
+                guards,
+                execution,
+                strategy,
+            },
         )?;
     }
 
-    // Derivations are produced in per-round lexical order; sorting the whole vector makes
-    // that one total order across strata as well, so the output is a pure function of the
-    // program and the facts rather than of the stratum boundaries.
-    state.derivations.sort();
-    Ok(Evaluation {
-        budget: state.report(),
-        facts: state.rel,
-        derivations: state.derivations,
-    })
+    Ok(state.finish())
+}
+
+impl FixpointState {
+    /// Seal the state into an [`Evaluation`].
+    ///
+    /// Derivations are produced in per-round lexical order; sorting the whole vector makes
+    /// that one total order across strata as well, so the output is a pure function of the
+    /// program and the facts rather than of the stratum boundaries.
+    pub(crate) fn finish(mut self) -> Evaluation {
+        self.derivations.sort();
+        Evaluation {
+            budget: self.report(),
+            facts: self.rel,
+            derivations: self.derivations,
+        }
+    }
 }
 
 /// Whether any ceiling is already passed.
-fn check_budget(state: &FixpointState) -> Result<(), EvalError> {
+pub(crate) fn check_budget(state: &FixpointState) -> Result<(), EvalError> {
     let report = state.report();
-    if report.join_steps > MAX_JOIN_STEPS {
+    if report.join_steps > report.limits.join_steps {
         return Err(EvalError::BudgetExhausted {
             resource: BudgetResource::JoinSteps,
             report,
         });
     }
-    if report.stored_facts > MAX_STORED_FACTS {
+    if u64::try_from(report.stored_facts).unwrap_or(u64::MAX) > report.limits.stored_facts {
         return Err(EvalError::BudgetExhausted {
             resource: BudgetResource::StoredFacts,
             report,
@@ -2116,7 +3555,32 @@ fn check_budget(state: &FixpointState) -> Result<(), EvalError> {
             report,
         });
     }
+    for resource in [
+        BudgetResource::TermGeneratingRounds,
+        BudgetResource::GeneratedTerms,
+    ] {
+        if resource.observed(report) > resource.limit(report) {
+            return Err(EvalError::TermLimitExceeded {
+                resource,
+                rules: state.generating_rules.iter().copied().collect(),
+                report,
+            });
+        }
+    }
     Ok(())
+}
+
+/// The per-evaluation policies one stratum runs under.
+#[derive(Clone, Copy)]
+struct StratumRun<'a> {
+    /// The caller's stop signal.
+    stop: Option<&'a dyn StopSignal>,
+    /// The caller's guard evaluator.
+    guards: &'a dyn GuardEvaluator,
+    /// The round scheduling policy.
+    execution: RoundExecution,
+    /// The join-kernel policy.
+    strategy: JoinStrategy,
 }
 
 /// Run one stratum's semi-naive fixpoint into `state`.
@@ -2125,60 +3589,62 @@ fn run_stratum(
     runtimes: &[RuleRuntime],
     stratum: usize,
     state: &mut FixpointState,
-    stop: Option<&dyn StopSignal>,
-    execution: RoundExecution,
-    strategy: JoinStrategy,
+    run: StratumRun<'_>,
 ) -> Result<(), EvalError> {
     // Seed the delta with EVERY accumulated row, so this stratum's rules fire against the
     // whole accumulated store in round one. Row ids are dense, so "everything" is the
     // contiguous span `[0, row_count)` — no per-key materialisation and no bitset.
     let mut delta = Delta::all(state.rel.row_count());
+    let mut first_round = true;
 
     loop {
         // The caller's stop signal, polled BEFORE the round it would prevent. Checking here
         // rather than after the round is what makes the refusal cost bounded by one round
         // rather than by two, and it is the same place `check_budget` is decided from.
-        if is_stopped(stop) {
+        if is_stopped(run.stop) {
             return Err(EvalError::Stopped {
                 report: state.report(),
             });
         }
-        let allowance = MAX_JOIN_STEPS
-            .saturating_sub(state.join_steps)
-            .saturating_add(1);
+        // A rule with no positive body atom has no delta to be decomposed over: its answer
+        // is fixed by the relations below its stratum, so it runs in the first round only.
+        let entries: Vec<RuleEntry<'_>> = exe
+            .stratum_rule_indices(stratum)
+            .iter()
+            .filter_map(|&index| {
+                let (rule, plan) = exe.rule_entry(index);
+                (first_round || !plan.positive().is_empty()).then_some(RuleEntry {
+                    index,
+                    rule,
+                    plan,
+                    runtime: &runtimes[index],
+                    delta,
+                })
+            })
+            .collect();
+        first_round = false;
+        if entries.is_empty() {
+            return Ok(());
+        }
         let round = evaluate_round(
-            exe,
-            runtimes,
-            stratum,
+            &entries,
             RoundSnapshot {
                 rel: &state.rel,
                 depth: &state.depth,
-                delta,
+                assumed: &[],
             },
-            execution,
-            strategy,
-            allowance,
-        );
-        state.join_steps = state.join_steps.saturating_add(round.join_steps);
-        check_budget(state)?;
-
-        if round.entries.is_empty() {
-            return Ok(()); // stratum fixpoint
-        }
-
-        // Every entry was gated on absence from the store when it was created, and the
-        // entries are unique by head fact, so this projection is exact rather than an
-        // over-estimate: the ceiling is decided before a single surface is materialised.
-        if state.rel.row_count() + round.entries.len() > MAX_STORED_FACTS {
-            return Err(EvalError::BudgetExhausted {
-                resource: BudgetResource::StoredFacts,
-                report: state.projected_report(round.entries.len()),
-            });
+            run.execution,
+            run.strategy,
+            state.allowance(),
+            run.guards,
+        )?;
+        if round.is_empty() {
+            state.join_steps = state.join_steps.saturating_add(round.join_steps);
+            return check_budget(state); // stratum fixpoint
         }
 
         let round_lo = state.rel.row_count();
-        commit_round(round, state);
-        check_budget(state)?;
+        state.absorb(round)?;
 
         // The next round's delta is exactly the rows committed this round — a contiguous
         // span, because the commit loop mints row ids densely in one sorted pass.
@@ -2855,7 +4321,7 @@ mod tests {
     /// A SIGNAL THAT FIRES PRODUCES NO ANSWER AT ALL — never a truncated one.
     ///
     /// The refusal is its own variant rather than a budget's, because "the host stopped this
-    /// run" and "the program passed a fixed ceiling" are different facts and only one of them
+    /// run" and "the program passed a limit" are different facts and only one of them
     /// is a reason to change the input. The report is the consumption measured at the point
     /// the signal was observed, so a stopped run can still say what it had spent.
     #[test]
@@ -2976,6 +4442,8 @@ mod tests {
                 &exe,
                 workload.edb(),
                 None,
+                &NoGuards,
+                EvalOptions::default(),
                 RoundExecution::Parallel,
                 JoinStrategy::Planned,
             )
@@ -2984,6 +4452,8 @@ mod tests {
                 &exe,
                 workload.edb(),
                 None,
+                &NoGuards,
+                EvalOptions::default(),
                 RoundExecution::Parallel,
                 JoinStrategy::ForcedBinary,
             )
@@ -3080,6 +4550,8 @@ mod tests {
                 &exe,
                 workload.edb(),
                 None,
+                &NoGuards,
+                EvalOptions::default(),
                 RoundExecution::Sequential,
                 JoinStrategy::Planned,
             )
@@ -3088,6 +4560,8 @@ mod tests {
                 &exe,
                 workload.edb(),
                 None,
+                &NoGuards,
+                EvalOptions::default(),
                 RoundExecution::Parallel,
                 JoinStrategy::Planned,
             )
@@ -3373,11 +4847,14 @@ mod tests {
 
     // ── Budgets ────────────────────────────────────────────────────────────────
 
-    /// The join-step ceiling stops a Cartesian blow-up that commits almost nothing, and
+    /// The join-step limit stops a Cartesian blow-up that commits almost nothing, and
     /// the returned report is the exact observation that tripped it — not a truncated
-    /// answer, not a panic.
+    /// answer, not a panic. A limit of exactly the candidates the run enumerates admits
+    /// it, and one fewer refuses it.
     #[test]
     fn the_join_step_ceiling_is_a_distinguishable_error() {
+        // The candidates the run enumerates: the n² pair joins and the atom scans around them.
+        const JOIN_STEPS_OBSERVED: u64 = 1_212_200;
         // sink(?c, ?c) :- src(?x, ?c), src(?y, ?c). One head fact, n^2 candidates.
         let src = "https://example.org/src";
         let sink = "https://example.org/sink";
@@ -3385,7 +4862,7 @@ mod tests {
             ClauseAtom::positive(v("?c"), sink, v("?c")),
             vec![atom("?x", src, "?c"), atom("?y", src, "?c")],
         )];
-        let n = 1100usize; // 1_210_000 candidate solutions > MAX_JOIN_STEPS
+        let n = 1100usize; // over a million candidate solutions > the wasm32 default
         let mut edb = RelationStore::new();
         for i in 0..n {
             edb.insert(
@@ -3396,17 +4873,44 @@ mod tests {
             );
         }
         let exe = compile(rules).expect("the fixture compiles");
-        let error = evaluate(&exe, edb).expect_err("the join-step ceiling must be passed");
-        let EvalError::BudgetExhausted { resource, report } = error else {
+        let limited = EvalOptions::default().with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS);
+        let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &limited, None)
+            .expect_err("the join-step limit must be passed");
+        let EvalError::BudgetExhausted { resource, report } = error.clone() else {
             panic!("expected a budget refusal, got {error:?}");
         };
         assert_eq!(resource, BudgetResource::JoinSteps);
         assert_eq!(
             report.join_steps(),
-            MAX_JOIN_STEPS + 1,
-            "one task, so the report is exactly the observation that passed the ceiling"
+            WASM_DEFAULT_MAX_JOIN_STEPS + 1,
+            "one task, so the report is exactly the observation that passed the limit"
         );
+        assert_eq!(report.join_step_limit(), WASM_DEFAULT_MAX_JOIN_STEPS);
+        assert!(report.join_step_limit_stated());
         assert!(report.stored_facts() <= n + 1);
+        let rendered = error.to_string();
+        assert!(
+            rendered
+                .contains("1048577 join steps observed, 1048576 permitted (the caller's limit)")
+                && rendered.ends_with("raise it with EvalOptions::with_max_join_steps"),
+            "{rendered}"
+        );
+
+        // The valid neighbour: the same program over the same store under a limit of
+        // exactly the candidates it enumerates completes, with its one head fact.
+        let admitted = EvalOptions::default().with_max_join_steps(JOIN_STEPS_OBSERVED);
+        let model = evaluate_guarded(&exe, edb.clone(), &NoGuards, &admitted, None)
+            .expect("a limit the run fits under admits it");
+        assert_eq!(model.facts().row_count(), n + 1);
+        assert_eq!(model.budget().join_steps(), JOIN_STEPS_OBSERVED);
+        let short = EvalOptions::default().with_max_join_steps(JOIN_STEPS_OBSERVED - 1);
+        assert!(matches!(
+            evaluate_guarded(&exe, edb, &NoGuards, &short, None),
+            Err(EvalError::BudgetExhausted {
+                resource: BudgetResource::JoinSteps,
+                ..
+            })
+        ));
     }
 
     /// The stored-fact ceiling stops a program whose least model is simply too large, and
@@ -3420,7 +4924,7 @@ mod tests {
             atom("?x", pair, "?y"),
             vec![atom("?x", src, "?c"), atom("?y", src, "?c")],
         )];
-        let n = 400usize; // 160_000 derived facts > MAX_STORED_FACTS
+        let n = 400usize; // 160_000 derived facts > the wasm32 default
         let mut edb = RelationStore::new();
         for i in 0..n {
             edb.insert(
@@ -3431,8 +4935,10 @@ mod tests {
             );
         }
         let exe = compile(rules).expect("the fixture compiles");
-        let error = evaluate(&exe, edb).expect_err("the stored-fact ceiling must be passed");
-        let EvalError::BudgetExhausted { resource, report } = error else {
+        let limited = EvalOptions::default().with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+        let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &limited, None)
+            .expect_err("the stored-fact limit must be passed");
+        let EvalError::BudgetExhausted { resource, report } = error.clone() else {
             panic!("expected a budget refusal, got {error:?}");
         };
         assert_eq!(resource, BudgetResource::StoredFacts);
@@ -3441,7 +4947,150 @@ mod tests {
             n + n * n,
             "the report is the count the round would have produced"
         );
-        assert!(report.join_steps() <= MAX_JOIN_STEPS);
+        assert_eq!(report.stored_fact_limit(), WASM_DEFAULT_MAX_STORED_FACTS);
+        assert!(report.join_steps() <= report.join_step_limit());
+        let rendered = error.to_string();
+        assert!(
+            rendered.contains("160400 facts observed, 131072 permitted (the caller's limit)")
+                && rendered.ends_with("raise it with EvalOptions::with_max_stored_facts"),
+            "{rendered}"
+        );
+
+        // The valid neighbour: a limit of exactly the least model's size admits it, and
+        // one fact fewer does not.
+        let exact = EvalOptions::default().with_max_stored_facts((n + n * n) as u64);
+        let model = evaluate_guarded(&exe, edb.clone(), &NoGuards, &exact, None)
+            .expect("a limit of exactly the model's size admits it");
+        assert_eq!(model.facts().row_count(), n + n * n);
+        let short = EvalOptions::default().with_max_stored_facts((n + n * n - 1) as u64);
+        assert!(matches!(
+            evaluate_guarded(&exe, edb, &NoGuards, &short, None),
+            Err(EvalError::BudgetExhausted {
+                resource: BudgetResource::StoredFacts,
+                ..
+            })
+        ));
+    }
+
+    /// A store past the NATIVE default is refused under the default, naming the limit, the
+    /// numbers and the knob, and the same store completes when the limit is raised to
+    /// exactly what the run holds. The grid is 2,049 × 2,048 rows over one partition, so
+    /// the interner stays small while the row count passes 4,194,304.
+    #[test]
+    fn a_store_past_the_native_default_is_refused_and_completes_when_raised() {
+        const SIDE: usize = 2_048;
+        let grid = "https://example.org/grid";
+        let small = "https://example.org/small";
+        let copy = "https://example.org/copy";
+        let rules = vec![DlClause::datalog(
+            atom("?x", copy, "?y"),
+            vec![atom("?x", small, "?y")],
+        )];
+        let mut edb = RelationStore::new();
+        let objects: Vec<String> = (0..SIDE)
+            .map(|j| surface(&format!("https://example.org/o{j}")))
+            .collect();
+        let (grid, small) = (surface(grid), surface(small));
+        for i in 0..=SIDE {
+            let subject = surface(&format!("https://example.org/s{i}"));
+            for object in &objects {
+                edb.insert(&subject, &grid, object, RelationStore::DEFAULT_GRAPH);
+            }
+        }
+        edb.insert(
+            &objects[0],
+            &small,
+            &objects[1],
+            RelationStore::DEFAULT_GRAPH,
+        );
+        let seeded = (SIDE + 1) * SIDE + 1;
+        assert!(seeded as u64 > NATIVE_DEFAULT_MAX_STORED_FACTS);
+        let exe = compile(rules).expect("the fixture compiles");
+        let native = EvalOptions::default().with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+        let error = evaluate_guarded(&exe, edb.clone(), &NoGuards, &native, None)
+            .expect_err("the native default is passed by the seeded store");
+        assert_eq!(
+            error.to_string(),
+            "evaluation exceeded the stored-fact limit: 4196353 facts observed, 4194304 \
+             permitted (the caller's limit); raise it with EvalOptions::with_max_stored_facts"
+        );
+        if !cfg!(target_arch = "wasm32") {
+            assert_eq!(
+                evaluate(&exe, edb.clone())
+                    .expect_err("the native default refuses it unstated too")
+                    .to_string(),
+                "evaluation exceeded the stored-fact limit: 4196353 facts observed, 4194304 \
+                 permitted (the default for this target); raise it with \
+                 EvalOptions::with_max_stored_facts"
+            );
+        }
+        let raised = EvalOptions::default().with_max_stored_facts(seeded as u64 + 1);
+        let model = evaluate_guarded(&exe, edb, &NoGuards, &raised, None)
+            .expect("raised to exactly the model's size");
+        assert_eq!(model.facts().row_count(), seeded + 1);
+    }
+
+    /// Each target's defaults are the values its documentation states: the `wasm32`
+    /// values are the ceilings every target had before the limits became parameters, the
+    /// native stored-fact limit admits a least model thirty-two times larger, and the
+    /// join-step limit is the same everywhere. A native build runs the native defaults.
+    #[test]
+    fn the_default_limits_are_sized_per_target() {
+        assert_eq!(WASM_DEFAULT_MAX_STORED_FACTS, 131_072);
+        assert_eq!(WASM_DEFAULT_MAX_JOIN_STEPS, 1_048_576);
+        assert_eq!(NATIVE_DEFAULT_MAX_STORED_FACTS, 4_194_304);
+        assert_eq!(NATIVE_DEFAULT_MAX_JOIN_STEPS, 1_048_576);
+        if cfg!(target_arch = "wasm32") {
+            assert_eq!(DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_STORED_FACTS);
+            assert_eq!(DEFAULT_MAX_JOIN_STEPS, WASM_DEFAULT_MAX_JOIN_STEPS);
+        } else {
+            assert_eq!(DEFAULT_MAX_STORED_FACTS, NATIVE_DEFAULT_MAX_STORED_FACTS);
+            assert_eq!(DEFAULT_MAX_JOIN_STEPS, NATIVE_DEFAULT_MAX_JOIN_STEPS);
+        }
+        let options = EvalOptions::default();
+        assert_eq!(options.max_stored_facts(), DEFAULT_MAX_STORED_FACTS);
+        assert_eq!(options.max_join_steps(), DEFAULT_MAX_JOIN_STEPS);
+        assert_eq!(options.stated_max_stored_facts(), None);
+        assert_eq!(options.stated_max_join_steps(), None);
+    }
+
+    /// Under the default limits the store past the `wasm32` default completes natively —
+    /// 160,400 facts — and its report says which limits governed it.
+    #[test]
+    fn a_default_native_run_admits_a_model_past_the_wasm32_default() {
+        let src = "https://example.org/src";
+        let pair = "https://example.org/pair";
+        let rules = vec![DlClause::datalog(
+            atom("?x", pair, "?y"),
+            vec![atom("?x", src, "?c"), atom("?y", src, "?c")],
+        )];
+        let n = 400usize;
+        let mut edb = RelationStore::new();
+        for i in 0..n {
+            edb.insert(
+                &surface(&format!("https://example.org/n{i}")),
+                &surface(src),
+                &surface("https://example.org/hub"),
+                RelationStore::DEFAULT_GRAPH,
+            );
+        }
+        let exe = compile(rules).expect("the fixture compiles");
+        let outcome = evaluate(&exe, edb);
+        if cfg!(target_arch = "wasm32") {
+            assert!(outcome.is_err(), "the wasm32 default refuses 160,400 facts");
+        } else {
+            let model = outcome.expect("the native default admits 160,400 facts");
+            assert_eq!(model.facts().row_count(), n + n * n);
+            assert_eq!(
+                model.budget().stored_fact_limit(),
+                NATIVE_DEFAULT_MAX_STORED_FACTS
+            );
+            assert!(!model.budget().stored_fact_limit_stated());
+            assert_eq!(
+                model.budget().join_step_limit(),
+                NATIVE_DEFAULT_MAX_JOIN_STEPS
+            );
+        }
     }
 
     /// The term-arena ceiling stops a legal-sized fact set whose TERMS are enormous, and
@@ -3463,7 +5112,7 @@ mod tests {
                 RelationStore::DEFAULT_GRAPH,
             );
         }
-        assert!(edb.row_count() < MAX_STORED_FACTS);
+        assert!((edb.row_count() as u64) < DEFAULT_MAX_STORED_FACTS);
         let exe = compile(rules).expect("the fixture compiles");
         let error = evaluate(&exe, edb).expect_err("the term-arena ceiling must be passed");
         let EvalError::BudgetExhausted { resource, report } = error else {
@@ -3492,7 +5141,7 @@ mod tests {
             first.facts().term_bytes()
         );
         assert!(first.budget().join_steps() > 0);
-        assert!(first.budget().join_steps() <= MAX_JOIN_STEPS);
+        assert!(first.budget().join_steps() <= first.budget().join_step_limit());
     }
 
     /// The budget refusal is a `std::error::Error` with a message naming the resource and
@@ -3502,15 +5151,24 @@ mod tests {
         let error = EvalError::BudgetExhausted {
             resource: BudgetResource::JoinSteps,
             report: BudgetReport {
-                join_steps: MAX_JOIN_STEPS + 1,
+                join_steps: DEFAULT_MAX_JOIN_STEPS + 1,
                 stored_facts: 3,
                 term_arena_bytes: 4,
+                ..BudgetReport::default()
             },
         };
         let rendered = error.to_string();
-        assert!(rendered.contains("join steps"), "{rendered}");
+        assert!(rendered.contains("join-step limit"), "{rendered}");
         assert!(
-            rendered.contains(&(MAX_JOIN_STEPS + 1).to_string()),
+            rendered.contains(&format!(
+                "{} join steps observed, {DEFAULT_MAX_JOIN_STEPS} permitted (the default for \
+                 this target)",
+                DEFAULT_MAX_JOIN_STEPS + 1
+            )),
+            "{rendered}"
+        );
+        assert!(
+            rendered.ends_with("raise it with EvalOptions::with_max_join_steps"),
             "{rendered}"
         );
         let _: &dyn std::error::Error = &error;

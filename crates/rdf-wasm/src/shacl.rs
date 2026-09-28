@@ -52,46 +52,223 @@
 
 use wasm_bindgen::prelude::*;
 
-use purrdf_validate::ShapesProductRefusal;
+use purrdf_validate::{ShapesError, ShapesProductRefusal};
+
+use crate::operation::{JobError, JobOutcome, SHACL_CODE};
+
+// ---------------------------------------------------------------------------
+// The shapes graph's owl:imports
+// ---------------------------------------------------------------------------
+
+/// A shapes graph's `owl:imports` closure is not in hand, or the import table cannot be
+/// used — the one refusal every shapes-graph entry point raises, on every PurRDF host
+/// alike.
+///
+/// Every function that takes a Turtle shapes graph takes the caller's import table as two
+/// trailing parallel arrays, `importIris` and `importDocuments` — entry `i` declares that
+/// the ontology IRI `importIris[i]` names the Turtle document `importDocuments[i]`, parsed
+/// with that IRI as its base; the same convention `entailCertainAnswers` uses. Omitted,
+/// the table is empty, and the rule still applies. An `owl:imports` is an import only on
+/// the shapes graph's own IRI (`shapesBase`, or the document's own `@base`), on an
+/// `owl:Ontology` header, on a `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included),
+/// or on a node naming one of those as its `owl:versionIRI`; on any other node — one that is
+/// only a `sh:DataGraph` among them — it is data. An import is resolved by a table entry, by
+/// `shapesBase` (or the document's own `@base`) naming the imported document, or by the
+/// closure declaring it (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose
+/// `owl:versionIRI` is `<X>`). Anything
+/// else rejects with this class rather than validating a smaller shapes graph than the one
+/// named. PurRDF fetches nothing.
+///
+/// `kind` is the matchable half — `unresolved-import`, `unreached-import` (a table entry
+/// neither an import nor a data-graph link names), `incompatible-import-versions` (the
+/// closure holds two versions of one series, or a graph another declares
+/// `owl:incompatibleWith`, SHACL 1.2 Core sections 1.3 and 6.1), `invalid-import` (a key that is not an
+/// absolute IRI, a key named twice, or a document that is not Turtle),
+/// `unresolved-shapes-graph-link` (the data graph links a graph with `sh:shapesGraph`,
+/// SHACL 1.2 Core section 6.4, that nothing in hand resolves — pass it in the import
+/// table), `unheld-shapes-graph-link` (a prepared product does not hold a graph the data
+/// graph links) or `invalid-shapes-graph-link` (a data-graph `sh:shapesGraph` value that
+/// is not an IRI) — and `iris` the IRIs (or values) it names. `message` is
+/// prose; do not match on it. Like every other wasm-bindgen class in this package, a
+/// caught instance owns wasm memory and is released with `e.free()`.
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct ShaclImportError {
+    /// The engine's kebab-case kind label.
+    kind: String,
+    /// The IRIs the refusal names.
+    iris: Vec<String>,
+    /// The engine's own rendering.
+    message: String,
+}
+
+#[wasm_bindgen]
+impl ShaclImportError {
+    /// `unresolved-import`, `unreached-import`, `incompatible-import-versions`,
+    /// `invalid-import`, `unresolved-shapes-graph-link`, `unheld-shapes-graph-link` or
+    /// `invalid-shapes-graph-link`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn kind(&self) -> String {
+        self.kind.clone()
+    }
+
+    /// The IRIs the refusal names.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn iris(&self) -> Vec<String> {
+        self.iris.clone()
+    }
+
+    /// The engine's explanation, naming the remedy.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn message(&self) -> String {
+        self.message.clone()
+    }
+
+    /// The engine's own rendering, which leads with the kind label.
+    #[wasm_bindgen(js_name = toString)]
+    #[must_use]
+    pub fn to_js_string(&self) -> String {
+        self.message.clone()
+    }
+}
+
+impl From<&purrdf_validate::ShapesImportError> for ShaclImportError {
+    fn from(error: &purrdf_validate::ShapesImportError) -> Self {
+        Self {
+            kind: error.kind().to_owned(),
+            iris: error.iris().into_iter().map(ToOwned::to_owned).collect(),
+            message: error.to_string(),
+        }
+    }
+}
+
+/// Reject with the shapes-graph error's JS form: a [`ShaclImportError`] for the import
+/// refusal, a plain `Error` carrying [`shapes_error_message`] for anything else.
+fn shapes_rejection(error: ShapesError) -> JsValue {
+    match error {
+        ShapesError::Imports(error) => ShaclImportError::from(&error).into(),
+        other => JsError::new(&shapes_error_message(&other)).into(),
+    }
+}
+
+/// The words a shapes-graph error other than the import refusal rejects with, on the
+/// synchronous and the asynchronous lane alike.
+pub(crate) fn shapes_error_message(error: &ShapesError) -> String {
+    match error {
+        ShapesError::Imports(error) => error.to_string(),
+        ShapesError::Invalid(message) => message.clone(),
+        ShapesError::ShaclJs(refusal) => refusal.message().to_owned(),
+        ShapesError::IllFormed(refusal) => refusal.to_string(),
+        ShapesError::Prebinding(violation) => violation.to_string(),
+        ShapesError::UnsupportedTarget(refusal) => refusal.message().to_owned(),
+        ShapesError::SparqlTargetDisagreement(refusal) => refusal.to_string(),
+    }
+}
+
+/// A SHACL refusal an asynchronous job keeps as the class its synchronous twin throws,
+/// rather than flattening it into a message.
+#[derive(Debug, Clone)]
+pub(crate) enum ShaclRefusal {
+    /// A prepared product's refusal.
+    Product(ShaclProductRefusal),
+    /// The shapes graph's `owl:imports` closure is not in hand, or the import table
+    /// cannot be used.
+    Import(ShaclImportError),
+}
+
+impl ShaclRefusal {
+    /// The refusal's message, as its class's `toString()` spells it.
+    pub(crate) fn to_js_string(&self) -> String {
+        match self {
+            Self::Product(refusal) => refusal.to_js_string(),
+            Self::Import(error) => error.to_js_string(),
+        }
+    }
+}
+
+/// The caller's two import arrays as the boundary's import table, with the length
+/// agreement [`crate::entail::import_pairs`] enforces for every host table.
+fn shapes_import_pairs<'a>(
+    iris: &'a [String],
+    documents: &'a [String],
+) -> Result<Vec<(&'a str, &'a str)>, ShapesError> {
+    crate::entail::import_pairs(iris, documents).map_err(ShapesError::Invalid)
+}
 
 /// Validate `data_nt` against `shapes_ttl` and render the report to SARIF 2.1.0.
 ///
-/// Returns a plain `String` error (NOT a `JsError`) so it is unit-testable on the
-/// native build — constructing a `JsError` calls a wasm-only import that panics
-/// off wasm. The `#[wasm_bindgen]` wrapper maps the `String` to a `JsError`.
+/// Returns the plain Rust [`ShapesError`] (NOT a `JsValue`) so it is unit-testable on
+/// the native build — constructing a JS error calls a wasm-only import that panics
+/// off wasm. The `#[wasm_bindgen]` wrapper maps it through [`shapes_rejection`].
+///
+/// `conformance_disallows` is the request's conformance-disallow set as severity
+/// IRIs; `None` is SHACL's default set, and an empty list or a non-IRI is an error.
+///
+/// The native tests' spelling of [`validate_to_sarif_with_options_impl`] with every
+/// validation option at its default.
+#[cfg(test)]
 pub(crate) fn validate_to_sarif_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     data_nt: &str,
-) -> Result<String, String> {
-    purrdf_validate::validate_to_sarif_string(
+    conformance_disallows: Option<&[String]>,
+    import_iris: &[String],
+    import_documents: &[String],
+    shapes_graph: Option<&str>,
+) -> Result<String, ShapesError> {
+    validate_to_sarif_with_options_impl(
         shapes_ttl,
         shapes_base,
         data_nt,
-        &purrdf_validate::SarifOptions::default(),
+        conformance_disallows,
+        import_iris,
+        import_documents,
+        shapes_graph,
+        false,
     )
 }
 
-/// `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)` → a SARIF 2.1.0 JSON string.
+/// Validate `data_nt` against `shapes_ttl` and render the report to SARIF 2.1.0, with
+/// SHACL 1.2 Core §6.3's `subClassOfInShapesGraph` set as `subclass_of_in_shapes_graph`.
 ///
-/// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
-/// Throws (rejects) if either graph fails to parse.
-///
-/// `shapesBase` is the base IRI the SHAPES document's relative IRI references resolve
-/// against. A browser or Node host has no retrieval IRI of its own — it was handed a
-/// string — so PurRDF will not invent one; omit it and a relative reference is a hard
-/// `iri-relative-no-base` naming the remedy. Passing the document's own URL is what makes
-/// `<PersonShape>` in a fetched shapes graph mean what its author wrote. `dataNt` needs
-/// no such parameter: N-Triples admits no relative IRI by grammar.
-#[wasm_bindgen(js_name = shaclValidateToSarif)]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-pub fn shacl_validate_to_sarif(
+/// Returns the plain Rust [`ShapesError`] (NOT a `JsValue`) so it is unit-testable on
+/// the native build; the `#[wasm_bindgen]` wrapper maps it through [`shapes_rejection`].
+/// `conformance_disallows` is the request's conformance-disallow set as severity IRIs;
+/// `None` is SHACL's default set, and an empty list or a non-IRI is an error.
+#[allow(clippy::too_many_arguments)] // one argument per request input, as the JS signature
+#[allow(clippy::fn_params_excessive_bools)] // one argument per request input
+pub(crate) fn validate_to_sarif_with_options_impl(
     shapes_ttl: &str,
+    shapes_base: Option<&str>,
     data_nt: &str,
-    shapes_base: Option<String>,
-) -> Result<String, JsError> {
-    validate_to_sarif_impl(shapes_ttl, shapes_base.as_deref(), data_nt)
-        .map_err(|e| JsError::new(&e))
+    conformance_disallows: Option<&[String]>,
+    import_iris: &[String],
+    import_documents: &[String],
+    shapes_graph: Option<&str>,
+    subclass_of_in_shapes_graph: bool,
+) -> Result<String, ShapesError> {
+    let imports = shapes_import_pairs(import_iris, import_documents)?;
+    let base_options = purrdf_validate::ValidationOptions::default()
+        .with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
+    let validation = match conformance_disallows {
+        None => base_options,
+        Some(iris) => base_options
+            .with_conformance_disallows(purrdf_validate::ConformanceDisallows::from_iris(iris)?),
+    };
+    purrdf_validate::validate_to_sarif_string_with_shapes_graph(
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        data_nt,
+        &purrdf_validate::SarifOptions {
+            validation,
+            ..purrdf_validate::SarifOptions::default()
+        },
+        &imports,
+    )
 }
 
 /// The outcome of `shaclValidateChangesToSarif`: the SARIF log, and the SCOPE that
@@ -176,106 +353,536 @@ impl ShaclChangeValidation {
 /// Returns a plain `String` error (NOT a `JsError`) for the reason
 /// [`validate_to_sarif_impl`] does, and the engine's own `ChangeScope` rather than
 /// the guest class, so the loop is exercisable off wasm.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is a distinct, independently-named input at the wasm boundary"
+)]
 pub(crate) fn validate_changes_to_sarif_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     data_nt: &str,
     added_nt: Option<&str>,
     removed_nt: Option<&str>,
-) -> Result<(String, purrdf_validate::ChangeScope), String> {
-    purrdf_validate::validate_changes_to_sarif_string(
+    import_iris: &[String],
+    import_documents: &[String],
+    shapes_graph: Option<&str>,
+) -> Result<(String, purrdf_validate::ChangeScope), ShapesError> {
+    let imports = shapes_import_pairs(import_iris, import_documents)?;
+    purrdf_validate::validate_changes_to_sarif_string_with_shapes_graph(
         shapes_ttl,
         shapes_base,
+        shapes_graph,
         data_nt,
         added_nt,
         removed_nt,
         &purrdf_validate::SarifOptions::default(),
+        &imports,
     )
-}
-
-/// `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?, shapesBase?)`
-/// → a `ShaclChangeValidation` carrying a SARIF 2.1.0 JSON string and its scope.
-///
-/// The incremental twin of [`shacl_validate_to_sarif`]: instead of re-validating
-/// the whole graph after an edit, hand it both halves of the delta and the engine
-/// expands the change into the focus nodes it can move and re-validates exactly
-/// those. A host that edits a graph and asks *what did my last change break?* pays
-/// for the change rather than for the graph.
-///
-/// `addedNt` is the rows joining `dataNt` and `removedNt` the rows leaving it,
-/// each an N-Triples string or omitted. Both halves, because a verdict moves when
-/// a row leaves the graph as readily as when one joins, and one parameter would be
-/// half a delta. Additions apply before removals, so a change naming the same row
-/// on both halves settles on *removed*; a removal naming a row `dataNt` does not
-/// carry retracts nothing rather than throwing, because a change set describes
-/// what moved and does not assert what the base contained.
-///
-/// `shapesBase` carries the same meaning it does on [`shacl_validate_to_sarif`] —
-/// the shapes document's own base IRI, supplied by the host because a wasm guest
-/// has no retrieval IRI to derive one from.
-///
-/// **Read `bounded` before the log.** It decides what the log MEANS; see
-/// [`ShaclChangeValidation`]. The unbounded fallback is not optional — a short
-/// expansion and a clean bill of health are indistinguishable in a report.
-///
-/// Throws (rejects) if the shapes graph or any of the three N-Triples documents
-/// fails to parse. Call `.free()` on the returned object when done.
-#[wasm_bindgen(js_name = shaclValidateChangesToSarif)]
-#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-pub fn shacl_validate_changes_to_sarif(
-    shapes_ttl: &str,
-    data_nt: &str,
-    added_nt: Option<String>,
-    removed_nt: Option<String>,
-    shapes_base: Option<String>,
-) -> Result<ShaclChangeValidation, JsError> {
-    let (sarif, scope) = validate_changes_to_sarif_impl(
-        shapes_ttl,
-        shapes_base.as_deref(),
-        data_nt,
-        added_nt.as_deref(),
-        removed_nt.as_deref(),
-    )
-    .map_err(|e| JsError::new(&e))?;
-    Ok(ShaclChangeValidation::new(sarif, scope))
 }
 
 /// Entail `data_nt` under `shapes_ttl` and render the MATERIALIZED dataset (base
 /// graph plus every SHACL-AF `sh:rule` inference) to canonical N-Triples.
 ///
-/// The entailment twin of [`validate_to_sarif_impl`]: returns a plain `String`
-/// error (NOT a `JsError`) so it is unit-testable on the native build; the
-/// `#[wasm_bindgen]` wrapper maps the `String` to a `JsError`.
+/// The entailment twin of [`validate_to_sarif_impl`]: returns the plain Rust
+/// [`ShapesError`] so it is unit-testable on the native build; the
+/// `#[wasm_bindgen]` wrapper maps it through [`shapes_rejection`].
 pub(crate) fn entail_to_ntriples_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
     data_nt: &str,
-) -> Result<String, String> {
-    purrdf_validate::entail_to_ntriples_string(shapes_ttl, shapes_base, data_nt)
+    import_iris: &[String],
+    import_documents: &[String],
+    shapes_graph: Option<&str>,
+    limits: purrdf_validate::RuleLimits,
+) -> Result<purrdf_validate::EntailOutcome, ShapesError> {
+    let imports = shapes_import_pairs(import_iris, import_documents)?;
+    purrdf_validate::entail_to_ntriples(&purrdf_validate::EntailRequest {
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        data_nt,
+        imports: &imports,
+        max_term_generating_rounds: limits.max_term_generating_rounds,
+        max_generated_terms: limits.max_generated_terms,
+        max_stored_facts: limits.max_stored_facts,
+        max_join_steps: limits.max_join_steps,
+        host: purrdf_validate::RulesHost::Wasm,
+    })
 }
 
-/// `shaclEntail(shapesTtl, dataNt, shapesBase?)` → the materialized dataset as an
-/// N-Triples string (the base graph plus every inferred triple).
+/// The outcome of `shaclEntail`: the materialized dataset and the shapes graph's
+/// mandatory diagnostics.
 ///
-/// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
-/// Throws (rejects) if either graph fails to parse or if rule application fails.
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclEntailment {
+    /// The materialized dataset as N-Triples.
+    ntriples: String,
+    /// The mandatory diagnostics.
+    diagnostics: Vec<ShaclDiagnostic>,
+}
+
+impl From<purrdf_validate::EntailOutcome> for ShaclEntailment {
+    fn from(outcome: purrdf_validate::EntailOutcome) -> Self {
+        Self {
+            diagnostics: diagnostic_values(&outcome.diagnostics),
+            ntriples: outcome.ntriples,
+        }
+    }
+}
+
+#[wasm_bindgen]
+impl ShaclEntailment {
+    /// The MATERIALIZED dataset — the base graph plus every inferred triple — as canonical
+    /// N-Triples.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn ntriples(&self) -> String {
+        self.ntriples.clone()
+    }
+
+    /// The shapes graph's mandatory diagnostics, one `{ rule, shape }` per shape with an
+    /// empty `sh:in` or `sh:xone` list, which every run reports.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<ShaclDiagnostic> {
+        self.diagnostics.clone()
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Shapes-graph tools: rules, node expressions, lint
+// ---------------------------------------------------------------------------
+
+/// The outcome of `shaclApplyRules`: the inference graph, and its proof when one was
+/// asked for.
 ///
-/// `shapesBase` carries the same meaning it does on
-/// [`shacl_validate_to_sarif`] — the shapes document's own base IRI, supplied by the
-/// host because a wasm guest has no retrieval IRI to derive one from.
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclRulesInference {
+    /// The inference graph as N-Triples.
+    inferred: String,
+    /// The proof text, when `explain` was set.
+    proof: Option<String>,
+    /// The mandatory diagnostics.
+    diagnostics: Vec<ShaclDiagnostic>,
+}
+
+#[wasm_bindgen]
+impl ShaclRulesInference {
+    /// The INFERENCE GRAPH — the inferred triples only, never the data graph — as
+    /// N-Triples 1.2, one triple per line, in canonical order.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn inferred(&self) -> String {
+        self.inferred.clone()
+    }
+
+    /// The proof of every inferred triple, or `undefined` when `explain` was not set:
+    /// `derived S P O .`, then `  rule R` and one `  premise S P O .` per fact the rule's
+    /// body matched, or `  data-block` for a SPARQL 1.2 RL data-block triple.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn proof(&self) -> Option<String> {
+        self.proof.clone()
+    }
+
+    /// The shapes graph's mandatory diagnostics, one `{ rule, shape }` per shape with an
+    /// empty `sh:in` or `sh:xone` list, which every run reports; empty for an `srl` rule
+    /// set, which has no shapes graph.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<ShaclDiagnostic> {
+        self.diagnostics.clone()
+    }
+}
+
+/// Run a rule set over `data_nt`. Native-testable core of [`shacl_apply_rules`]; the
+/// plain Rust [`ShapesError`] for the reason [`validate_to_sarif_impl`] gives.
+impl From<purrdf_validate::RulesOutcome> for ShaclRulesInference {
+    fn from(outcome: purrdf_validate::RulesOutcome) -> Self {
+        Self {
+            diagnostics: diagnostic_values(&outcome.diagnostics),
+            inferred: outcome.inferred_ntriples,
+            proof: outcome.proof,
+        }
+    }
+}
+
+pub(crate) fn apply_rules_impl(
+    request: &purrdf_validate::RulesRequest<'_>,
+) -> Result<purrdf_validate::RulesOutcome, ShapesError> {
+    purrdf_validate::apply_rules_to_ntriples(request)
+}
+
+/// The outcome of `shaclCheckRules`: a SPARQL 1.2 RL rule set that passed every check
+/// its level asks for.
 ///
-/// Nothing is dropped on the way out: the underlying writer is the graph-carrying
-/// canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
-/// are single-graph syntaxes, not because a graph slot was discarded.
-#[wasm_bindgen(js_name = shaclEntail)]
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclRulesCheck {
+    /// The checked rule set.
+    checked: purrdf_validate::CheckedRuleSet,
+}
+
+#[wasm_bindgen]
+impl ShaclRulesCheck {
+    /// The level the rule set passed: `"syntax"`, `"well-formed"` or `"stratified"`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn level(&self) -> String {
+        self.checked.level().name().to_owned()
+    }
+
+    /// Every rule of the combined rule set — the rule set's own, then every imported
+    /// rule — described by its IRI or by where it is written.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn rules(&self) -> Vec<String> {
+        self.checked
+            .document()
+            .rules()
+            .iter()
+            .map(purrdf::shapes::srl::SrlRule::describe)
+            .collect()
+    }
+
+    /// The number of data-block triples of the combined rule set.
+    #[wasm_bindgen(getter = dataTriples)]
+    #[must_use]
+    pub fn data_triples(&self) -> usize {
+        self.checked.document().data().len()
+    }
+
+    /// The IRIs of the imported rule sets, each once, in the order they were read.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn imported(&self) -> Vec<String> {
+        self.checked.imported().to_vec()
+    }
+
+    /// The `VERSION` labels, in document order.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn versions(&self) -> Vec<String> {
+        self.checked.document().versions().to_vec()
+    }
+
+    /// The number of stratification layers, or `undefined` below `"stratified"`, which
+    /// does not stratify.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn strata(&self) -> Option<usize> {
+        self.checked.strata().map(<[_]>::len)
+    }
+
+    /// The one-line summary every PurRDF host reports.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn summary(&self) -> String {
+        self.checked.summary()
+    }
+}
+
+/// Check a SPARQL 1.2 RL rule set. Native-testable core of [`shacl_check_rules`]; the
+/// plain Rust [`ShapesError`] for the reason [`validate_to_sarif_impl`] gives.
+pub(crate) fn check_rules_impl(
+    srl: &str,
+    srl_base: Option<&str>,
+    import_iris: &[String],
+    import_documents: &[String],
+    level: Option<&str>,
+) -> Result<purrdf_validate::CheckedRuleSet, ShapesError> {
+    let imports = shapes_import_pairs(import_iris, import_documents)?;
+    let level = purrdf_validate::parse_check_level(level)?;
+    purrdf_validate::check_rules(srl, srl_base, &imports, level)
+}
+
+/// `shaclCheckRules(srl, srlBase?, importIris?, importDocuments?, level?)` → a
+/// `ShaclRulesCheck`.
+///
+/// Checks the SPARQL 1.2 RL rule set `srl` WITHOUT evaluating it: the grammar, the
+/// `IMPORTS` closure resolved from `importIris` / `importDocuments` (rule-set texts, as
+/// `shaclApplyRules` takes them), well-formedness and stratification — every static check
+/// `shaclApplyRules` applies before it runs — with no data graph read and no rule run.
+/// `srlBase` is the rule set's base IRI.
+///
+/// `level` is how far the check goes, each level including the ones before it: `"syntax"`
+/// (the grammar, for the rule set and every document its imports read), `"well-formed"`
+/// (every rule, imported ones included, is well formed) or `"stratified"` (the combined
+/// rule set can be stratified); omitted, `"stratified"`. Any other name throws.
+///
+/// Throws, naming the stage, for a rule set a check refuses: a syntax error, an import the
+/// table does not supply or an entry its closure never names, an ill-formed rule, a rule
+/// set that cannot be stratified. Call `.free()` on the result.
+#[wasm_bindgen(js_name = shaclCheckRules)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
-pub fn shacl_entail(
+pub fn shacl_check_rules(
+    srl: &str,
+    srl_base: Option<String>,
+    import_iris: Option<Vec<String>>,
+    import_documents: Option<Vec<String>>,
+    level: Option<String>,
+) -> Result<ShaclRulesCheck, JsValue> {
+    check_rules_impl(
+        srl,
+        srl_base.as_deref(),
+        import_iris.as_deref().unwrap_or_default(),
+        import_documents.as_deref().unwrap_or_default(),
+        level.as_deref(),
+    )
+    .map(|checked| ShaclRulesCheck { checked })
+    .map_err(shapes_rejection)
+}
+
+/// The expression selector's four optional inputs, as `shaclEvalNodeExpr` receives them:
+/// `expr`, `exprAt`, `exprVia` and `exprTurtle`.
+#[derive(Debug, Clone, Copy, Default)]
+pub(crate) struct ExprInputs<'a> {
+    pub(crate) expr: Option<&'a str>,
+    pub(crate) at: Option<&'a str>,
+    pub(crate) via: &'a [String],
+    pub(crate) turtle: Option<&'a str>,
+}
+
+#[cfg(test)]
+impl<'a> ExprInputs<'a> {
+    /// `expr` alone — the node form.
+    const fn node(expr: &'a str) -> Self {
+        Self {
+            expr: Some(expr),
+            at: None,
+            via: &[],
+            turtle: None,
+        }
+    }
+}
+
+/// Evaluate one node expression. Native-testable core of [`shacl_eval_node_expr`]:
+/// `scope` holds `NAME=TERM` bindings, and `expr` is mapped to the one selector it names
+/// by [`purrdf_validate::ExprSelector::from_parts`].
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is a distinct, independently-named input at the wasm boundary"
+)]
+pub(crate) fn eval_node_expr_impl(
     shapes_ttl: &str,
+    shapes_base: Option<&str>,
     data_nt: &str,
+    expr: ExprInputs<'_>,
+    focus: &str,
+    scope: &[String],
+    import_iris: &[String],
+    import_documents: &[String],
+) -> Result<purrdf_validate::NodeExprOutcome, ShapesError> {
+    let via: Vec<&str> = expr.via.iter().map(String::as_str).collect();
+    let expr = purrdf_validate::ExprSelector::from_parts(expr.expr, expr.at, &via, expr.turtle)?;
+    let imports = shapes_import_pairs(import_iris, import_documents)?;
+    let bindings = scope
+        .iter()
+        .map(|binding| purrdf_validate::parse_scope_binding(binding))
+        .collect::<Result<Vec<_>, _>>()?;
+    purrdf_validate::eval_node_expr(&purrdf_validate::NodeExprRequest {
+        shapes_ttl,
+        shapes_base,
+        data_nt,
+        expr,
+        focus,
+        scope: &bindings,
+        imports: &imports,
+    })
+}
+
+/// One mandatory diagnostic of a shapes graph — a shape whose `sh:in` or `sh:xone` list is
+/// empty — as the structured value every host carries: the rule, then the shape.
+///
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShaclDiagnostic {
+    /// The syntax rule's id.
+    rule: String,
+    /// The shape, as an N-Triples term.
+    shape: String,
+}
+
+#[wasm_bindgen]
+impl ShaclDiagnostic {
+    /// The syntax rule's id: `in-minListLength` or `xone-minListLength` (SHACL 1.2 Core,
+    /// Appendix A).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn rule(&self) -> String {
+        self.rule.clone()
+    }
+
+    /// The shape whose list is empty, as an N-Triples term (`<iri>` or `_:label`).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn shape(&self) -> String {
+        self.shape.clone()
+    }
+}
+
+/// The shapes graph's mandatory diagnostics as this host's structured values.
+fn diagnostic_values(diagnostics: &[purrdf_validate::MandatoryDiagnostic]) -> Vec<ShaclDiagnostic> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| ShaclDiagnostic {
+            rule: diagnostic.rule.to_owned(),
+            shape: diagnostic.shape.to_string(),
+        })
+        .collect()
+}
+
+/// The outcome of `shaclEvalNodeExpr`: the expression's output nodes and the shapes graph's
+/// mandatory diagnostics.
+///
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclNodeExprOutcome {
+    /// The output nodes, as N-Triples 1.2 terms.
+    outputs: Vec<String>,
+    /// The mandatory diagnostics.
+    diagnostics: Vec<ShaclDiagnostic>,
+}
+
+#[wasm_bindgen]
+impl ShaclNodeExprOutcome {
+    /// The output nodes, as N-Triples 1.2 terms in the order the expression's sequence
+    /// semantics define.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn outputs(&self) -> Vec<String> {
+        self.outputs.clone()
+    }
+
+    /// The shapes graph's mandatory diagnostics — one `{ rule, shape }` per shape of its
+    /// `owl:imports` closure with an empty `sh:in` or `sh:xone` list — which every run
+    /// reports. They change no output.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<ShaclDiagnostic> {
+        self.diagnostics.clone()
+    }
+}
+
+/// The outcome of `shaclLintShapes`: the cold-certify report of a shapes graph.
+///
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclLintReport {
+    /// The engine's report.
+    report: purrdf_validate::LintReport,
+}
+
+#[wasm_bindgen]
+impl ShaclLintReport {
+    /// Whether the report carries no finding: the loader accepted the graph, every
+    /// `shacl-shacl.ttl` result is superseded (flagged there, well-formed SHACL 1.2 Core),
+    /// no unexecuted query violates a pre-binding restriction and no mandatory diagnostic
+    /// applies.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn clean(&self) -> bool {
+        self.report.is_clean()
+    }
+
+    /// The finding count: one for a load refusal, plus every `shacl-shacl.ttl` result no
+    /// supersession covers, plus every unexecuted query that violates a pre-binding
+    /// restriction, plus every mandatory diagnostic (an empty `sh:in` or `sh:xone` list).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn findings(&self) -> usize {
+        self.report.findings()
+    }
+
+    /// The loader's refusal, or `undefined` when it accepted the graph.
+    #[wasm_bindgen(getter = loadError)]
+    #[must_use]
+    pub fn load_error(&self) -> Option<String> {
+        self.report.load_error().map(ToOwned::to_owned)
+    }
+
+    /// The whole report as the deterministic text every PurRDF host prints: the `load`,
+    /// `shacl-shacl` (`result …` lines, `superseded NAME` where SHACL 1.2 Core makes the
+    /// flagged graph well-formed), `functions` (`call BINDING <IRI> in OWNER`),
+    /// `validators` (`alternative <COMPONENT> <ATTACHMENT> VALIDATOR LANGUAGE
+    /// superseded-by-native`, one per validator declared for a built-in component) and
+    /// `unexecuted` (`violation DECLARATION`, one per query that violates a pre-binding
+    /// restriction and that nothing executes), `diagnostics` (`diagnostic RULE SHAPE`, one
+    /// per shape whose `sh:in` or `sh:xone` list is empty, `RULE` being
+    /// `in-minListLength` or `xone-minListLength`; each a finding, and the
+    /// `shacl-shacl` warning on the same list is marked `diagnosed RULE` and not counted) and
+    /// `unanchored-imports` (`unanchored
+    /// SUBJECT OBJECT document -|<IRI>`, one per `owl:imports` triple of the closure whose
+    /// subject is no anchor of its document, so it is data and imported nothing; never a
+    /// finding) sections, then `findings N` and `clean true|false`.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn report(&self) -> String {
+        self.report.render()
+    }
+}
+
+/// Certify a shapes graph. Native-testable core of [`shacl_lint_shapes`].
+pub(crate) fn lint_shapes_impl(
+    shapes_ttl: &str,
+    shapes_base: Option<&str>,
+    import_iris: &[String],
+    import_documents: &[String],
+    shapes_graph: Option<&str>,
+) -> Result<purrdf_validate::LintReport, ShapesError> {
+    let imports = shapes_import_pairs(import_iris, import_documents)?;
+    purrdf_validate::lint_shapes_ttl_with_shapes_graph(
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        &imports,
+    )
+}
+
+/// `shaclLintShapes(shapesTtl, shapesBase?, importIris?, importDocuments?, shapesGraph?)`
+/// → a `ShaclLintReport`.
+///
+/// Certifies a Turtle shapes graph COLD — its whole `owl:imports` closure, resolved
+/// against `importIris` / `importDocuments` (see [`ShaclImportError`]): the loader's
+/// verdict, every result of validating it against the W3C `shacl-shacl.ttl`, and which
+/// implementation every node-expression function call binds to (`native`, `custom`,
+/// `sparql-registered`, `host-extension`). Rejects with a [`ShaclImportError`] when the
+/// closure is not in hand — never a report about the importing document alone. Otherwise
+/// throws only when the document is not Turtle; a malformed shapes graph is a report with
+/// findings, not an exception. `shapesGraph` configures the loader as `purrdf shapes lint
+/// --shapes-graph` does (see [`shacl_validate_to_sarif`]). Call `.free()` on the result.
+#[wasm_bindgen(js_name = shaclLintShapes)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+pub fn shacl_lint_shapes(
+    shapes_ttl: &str,
     shapes_base: Option<String>,
-) -> Result<String, JsError> {
-    entail_to_ntriples_impl(shapes_ttl, shapes_base.as_deref(), data_nt)
-        .map_err(|e| JsError::new(&e))
+    import_iris: Option<Vec<String>>,
+    import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
+) -> Result<ShaclLintReport, JsValue> {
+    lint_shapes_impl(
+        shapes_ttl,
+        shapes_base.as_deref(),
+        import_iris.as_deref().unwrap_or_default(),
+        import_documents.as_deref().unwrap_or_default(),
+        shapes_graph.as_deref(),
+    )
+    .map(|report| ShaclLintReport { report })
+    .map_err(shapes_rejection)
 }
 
 // ---------------------------------------------------------------------------
@@ -289,8 +896,9 @@ pub fn shacl_entail(
 /// labels (`magic`, `format-version`, `stage-id`, `profile`, `truncated`, `trailer`,
 /// `section-digest`, `container-digest`, `dataset-identity`, `shapes-graph`,
 /// `prefixes`, `base`, `vocabulary`, `function-registry`, `aggregate-registry`,
-/// `property-function-registry`, `class-catalog`, `unsupported-capability`,
-/// `depth-limit`, `malformed`), or `undefined` when the failure happened before any
+/// `property-function-registry`, `class-catalog`, `parse-configuration`,
+/// `included-graphs`, `unsupported-capability`, `depth-limit`, `malformed`), or
+/// `undefined` when the failure happened before any
 /// product existed — a shapes or data DOCUMENT that did not parse was never admitted,
 /// and naming a dimension for it would claim a product was inspected when none was.
 ///
@@ -339,7 +947,7 @@ impl From<ShapesProductRefusal> for ShaclProductRefusal {
     fn from(refusal: ShapesProductRefusal) -> Self {
         Self {
             dimension: refusal.dimension_label().map(ToOwned::to_owned),
-            message: refusal.message().to_owned(),
+            message: refusal.message().into_owned(),
         }
     }
 }
@@ -351,11 +959,22 @@ impl From<ShapesProductRefusal> for ShaclProductRefusal {
 pub(crate) fn pack_product_impl(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
+    import_iris: &[String],
+    import_documents: &[String],
+    shapes_graph: Option<&str>,
 ) -> Result<Vec<u8>, ShapesProductRefusal> {
-    purrdf_validate::pack_shapes_product(shapes_ttl, shapes_base)
+    let imports =
+        shapes_import_pairs(import_iris, import_documents).map_err(ShapesProductRefusal::Shapes)?;
+    purrdf_validate::pack_shapes_product_with_shapes_graph(
+        shapes_ttl,
+        shapes_base,
+        shapes_graph,
+        &imports,
+    )
 }
 
-/// `shaclPackProduct(shapesTtl, shapesBase?)` → the prepared product as a `Uint8Array`.
+/// `shaclPackProduct(shapesTtl, shapesBase?, importIris?, importDocuments?, shapesGraph?)`
+/// → the prepared product as a `Uint8Array`.
 ///
 /// Compile once, restore many times: the product carries the compiled SHACL model AND
 /// the shapes dataset it came from, under a per-section SHA-256 and a whole-container
@@ -371,14 +990,34 @@ pub(crate) fn pack_product_impl(
 /// in the product, so a restore resolves the same relative references without the
 /// document.
 ///
-/// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done.
+/// `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
+/// [`ShaclImportError`]); the product carries the merged closure, so a restore needs no
+/// documents. `shapesGraph` (see [`shacl_validate_to_sarif`]) is recorded in the product
+/// and bound by its identity, as `purrdf shacl pack --shapes-graph` records it.
+///
+/// Rejects with a [`ShaclImportError`] — the same refusal `shaclValidateToSarif` raises —
+/// when the shapes graph's `owl:imports` closure is not in hand, and with a
+/// [`ShaclProductRefusal`] otherwise; call `.free()` on either when done.
 #[wasm_bindgen(js_name = shaclPackProduct)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn shacl_pack_product(
     shapes_ttl: &str,
     shapes_base: Option<String>,
-) -> Result<Vec<u8>, ShaclProductRefusal> {
-    pack_product_impl(shapes_ttl, shapes_base.as_deref()).map_err(ShaclProductRefusal::from)
+    import_iris: Option<Vec<String>>,
+    import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
+) -> Result<Vec<u8>, JsValue> {
+    pack_product_impl(
+        shapes_ttl,
+        shapes_base.as_deref(),
+        import_iris.as_deref().unwrap_or_default(),
+        import_documents.as_deref().unwrap_or_default(),
+        shapes_graph.as_deref(),
+    )
+    .map_err(|refusal| match refusal.import_error() {
+        Some(error) => ShaclImportError::from(error).into(),
+        None => ShaclProductRefusal::from(refusal).into(),
+    })
 }
 
 /// Read a prepared product's self-description. Native-testable core.
@@ -435,30 +1074,6 @@ pub(crate) fn product_validate_impl(
     )
 }
 
-/// `shaclProductValidateToSarif(product, dataNt)` → a SARIF 2.1.0 JSON string.
-///
-/// The point of a product: restore the preparation instead of re-parsing the shapes
-/// graph, then validate. The verdict is the identical one
-/// [`shacl_validate_to_sarif`] reaches over the shapes document the product was packed
-/// from — the same engine entry point runs, over the same restored `Shapes`.
-///
-/// Admission runs first and in full: the container's framing, every section digest,
-/// the whole-container digest, then the product's stage id, profile and complete input
-/// binding, all before a single focus node is resolved. A product prepared under a
-/// different prefix map, base, vocabulary or registry is REFUSED rather than validated
-/// into a report about a shapes graph nobody asked for.
-///
-/// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A malformed
-/// `dataNt` rejects with `dimension === undefined`: the data graph is not a product and
-/// no admission dimension names it.
-#[wasm_bindgen(js_name = shaclProductValidateToSarif)]
-pub fn shacl_product_validate_to_sarif(
-    product: &[u8],
-    data_nt: &str,
-) -> Result<String, ShaclProductRefusal> {
-    product_validate_impl(product, data_nt).map_err(ShaclProductRefusal::from)
-}
-
 /// Rebuild a prepared product and validate a data graph with it. Native-testable
 /// core.
 pub(crate) fn product_validate_rebuild_impl(
@@ -470,33 +1085,6 @@ pub(crate) fn product_validate_rebuild_impl(
         data_nt,
         &purrdf_validate::SarifOptions::default(),
     )
-}
-
-/// `shaclProductValidateToSarifRebuild(product, dataNt)` → a SARIF 2.1.0 JSON
-/// string, restoring the preparation by RE-DERIVING it from the shapes dataset the
-/// product carries rather than admitting its memo.
-///
-/// The forward-compatibility path: [`shacl_product_validate_to_sarif`] refuses a
-/// product whose stage id this guest does not know with `dimension ===
-/// "stage-id"`, and this is the remedy it names. No RDF text is parsed and no
-/// file is read — the dataset travels inside the product under the envelope's
-/// own digests, and this re-derives the shapes graph from it.
-///
-/// Also correct, and does the identical work, over a CURRENT product whose stage
-/// id this guest already knows: rebuilding re-derives from the SAME carried
-/// dataset [`shacl_product_validate_to_sarif`] restores a memo of, so the two
-/// reach the byte-identical report. This function is a second DOOR onto one
-/// product, never a second, divergent answer.
-///
-/// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A
-/// malformed `dataNt` rejects with `dimension === undefined`, for the same
-/// reason [`shacl_product_validate_to_sarif`] does.
-#[wasm_bindgen(js_name = shaclProductValidateToSarifRebuild)]
-pub fn shacl_product_validate_to_sarif_rebuild(
-    product: &[u8],
-    data_nt: &str,
-) -> Result<String, ShaclProductRefusal> {
-    product_validate_rebuild_impl(product, data_nt).map_err(ShaclProductRefusal::from)
 }
 
 /// Rebuild a prepared product bound to an expected identity and validate a data
@@ -528,38 +1116,6 @@ pub(crate) fn product_validate_rebuild_expecting_impl(
         &purrdf_validate::SarifOptions::default(),
     )
     .map_err(ShaclProductRefusal::from)
-}
-
-/// `shaclProductValidateToSarifRebuildExpecting(product, dataNt, expectIdentity)` →
-/// a SARIF 2.1.0 JSON string, restoring the preparation by RE-DERIVING it from
-/// the shapes dataset the product carries rather than admitting its memo, but
-/// only from the product whose input binding is `expectIdentity`.
-///
-/// The bound twin of [`shacl_product_validate_to_sarif_rebuild`], for the same
-/// reason [`shacl_product_validate_to_sarif_expecting`] exists beside
-/// [`shacl_product_validate_to_sarif`]: the forward-compatibility rescue is not
-/// a reason to stop asking *is this the product the host meant?* — a product
-/// fetched over the network or read out of a cache under a stage id this guest
-/// does not recognize is still just bytes that could be the wrong ones. The
-/// 32-byte comparison runs FIRST, ahead of the re-derivation, exactly as it does
-/// on [`shacl_product_validate_to_sarif_expecting`].
-///
-/// `expectIdentity` carries the same meaning it does on
-/// [`shacl_product_validate_to_sarif_expecting`] — the 64 hexadecimal digits
-/// `shaclProductExplain` prints on its `identity-digest` line.
-///
-/// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A
-/// product carrying a different binding rejects with `dimension ===
-/// "shapes-graph"`; an `expectIdentity` that is not 64 hexadecimal digits
-/// rejects with `dimension === undefined`, because no product was ever
-/// inspected.
-#[wasm_bindgen(js_name = shaclProductValidateToSarifRebuildExpecting)]
-pub fn shacl_product_validate_to_sarif_rebuild_expecting(
-    product: &[u8],
-    data_nt: &str,
-    expect_identity: &str,
-) -> Result<String, ShaclProductRefusal> {
-    product_validate_rebuild_expecting_impl(product, data_nt, expect_identity)
 }
 
 /// Admit a prepared product bound to an expected identity and validate a data graph
@@ -597,37 +1153,616 @@ pub(crate) fn product_validate_expecting_impl(
     .map_err(ShaclProductRefusal::from)
 }
 
-/// `shaclProductValidateToSarifExpecting(product, dataNt, expectIdentity)` → a SARIF
-/// 2.1.0 JSON string, but only from the product whose input binding is
-/// `expectIdentity`.
-///
-/// Everything [`shacl_product_validate_to_sarif`] checks is a question about the
-/// executing guest — its build, its registries, its class analysis. None of them asks
-/// whether these are the bytes the host meant, because nothing in a product states
-/// which product was wanted. A host that fetches a product over the network, reads one
-/// out of a cache, or builds its path from a configuration string has no other way to
-/// say so, and admitting the wrong one produces a decided, well-formed SARIF log about
-/// a shapes graph nobody asked about.
-///
-/// `expectIdentity` is the 64 hexadecimal digits `shaclProductExplain` prints on its
-/// `identity-digest` line — one spelling, readable off the artifact, so the selector
-/// can be pinned in a manifest beside the product it names.
-///
-/// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A product
-/// carrying a different binding rejects with `dimension === "shapes-graph"`; an
-/// `expectIdentity` that is not 64 hexadecimal digits rejects with
-/// `dimension === undefined`, because no product was ever inspected.
-#[wasm_bindgen(js_name = shaclProductValidateToSarifExpecting)]
-pub fn shacl_product_validate_to_sarif_expecting(
-    product: &[u8],
-    data_nt: &str,
-    expect_identity: &str,
-) -> Result<String, ShaclProductRefusal> {
-    product_validate_expecting_impl(product, data_nt, expect_identity)
+// ---------------------------------------------------------------------------
+// The entries that can evaluate SPARQL, and the requests both lanes run
+// ---------------------------------------------------------------------------
+
+/// Declare every SHACL entry point that can evaluate SPARQL once, from one argument
+/// list and one body: the body as a function of the arguments (in `requests`, the one
+/// body both lanes execute), the synchronous `#[wasm_bindgen]` entry that calls it, the
+/// [`ShaclRequest`] variant that carries the arguments as one value, and the
+/// [`ShaclJobRequest`] constructor the asynchronous twin builds that value with. Adding
+/// or reordering an argument is one edit here.
+macro_rules! shacl_entries {
+    ($(
+        $(#[$meta:meta])*
+        $js:ident: fn $sync:ident($($param:ident: $ty:ty),* $(,)?) -> Result<$out:ty, $err:ty>
+            => $variant:ident, $ctor_js:ident / $ctor:ident
+            $body:block
+    )*) => {
+        /// Each request's body: the one function its synchronous entry and its
+        /// asynchronous job both run, named for the request's [`ShaclJobRequest`]
+        /// constructor.
+        pub(crate) mod requests {
+            #[allow(clippy::wildcard_imports)] // a body names what its entry names
+            use super::*;
+
+            $(
+                #[doc = concat!("`", stringify!($js), "`'s body.")]
+                #[allow(clippy::too_many_arguments)] // one argument per request input
+                #[allow(clippy::needless_pass_by_value)] // the request owns its arguments
+                pub(crate) fn $ctor($($param: $ty),*) -> Result<$out, $err> $body
+            )*
+        }
+
+        /// The arguments of one SHACL entry point that can evaluate SPARQL, as one value:
+        /// what its synchronous entry runs, and what an asynchronous job carries.
+        #[derive(Debug)]
+        pub(crate) enum ShaclRequest {
+            $(
+                #[doc = concat!("`", stringify!($js), "`'s arguments.")]
+                $variant { $($param: $ty),* },
+            )*
+        }
+
+        impl ShaclRequest {
+            /// Run the request as a job: its entry's own body, the answer or refusal
+            /// carried as the value its synchronous entry returns or throws.
+            pub(crate) fn run_job(self) -> JobOutcome {
+                match self {
+                    $(Self::$variant { $($param),* } => {
+                        requests::$ctor($($param),*)
+                            .map_or_else(ShaclFailure::into_outcome, ShaclAnswer::into_outcome)
+                    })*
+                }
+            }
+        }
+
+        $(
+            $(#[$meta])*
+            #[wasm_bindgen(js_name = $js)]
+            #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+            #[allow(clippy::too_many_arguments)] // one argument per request input
+            pub fn $sync($($param: $ty),*) -> Result<$out, JsValue> {
+                requests::$ctor($($param),*).map_err(ShaclFailure::into_rejection)
+            }
+        )*
+
+        /// A SHACL request an asynchronous twin hands `AsyncJob.beginShacl`: built by the
+        /// constructor named for its synchronous entry, over exactly that entry's
+        /// arguments, and consumed by the job that runs it.
+        #[wasm_bindgen]
+        #[derive(Debug)]
+        pub struct ShaclJobRequest {
+            request: ShaclRequest,
+        }
+
+        impl ShaclJobRequest {
+            /// The request, for the job that runs it.
+            pub(crate) fn into_request(self) -> ShaclRequest {
+                self.request
+            }
+        }
+
+        #[wasm_bindgen]
+        impl ShaclJobRequest {
+            $(
+                #[doc = concat!(
+                    "The request `", stringify!($js), "` runs, over exactly its arguments."
+                )]
+                #[wasm_bindgen(js_name = $ctor_js)]
+                #[allow(clippy::too_many_arguments)] // one argument per request input
+                #[must_use]
+                pub fn $ctor($($param: $ty),*) -> Self {
+                    Self {
+                        request: ShaclRequest::$variant { $($param),* },
+                    }
+                }
+            )*
+        }
+    };
+}
+
+shacl_entries! {
+    /// `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?, conformanceDisallows?,
+    /// importIris?, importDocuments?, shapesGraph?)` → a SARIF 2.1.0 JSON string.
+    ///
+    /// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
+    /// Throws (rejects) if either graph fails to parse.
+    ///
+    /// `conformanceDisallows` is the conformance-disallow set: severity IRIs whose results make
+    /// the data non-conforming. Omitted, it is SHACL's default set (`sh:Violation`,
+    /// `sh:Warning`, `sh:Info`); an empty array or a non-IRI throws. The log's run carries
+    /// `properties.shaclConforms` and `properties.shaclConformanceDisallows` (the set the
+    /// report was judged against), because the results alone cannot say whether the data
+    /// conforms: an `sh:Debug` / `sh:Trace` result — SARIF `kind` `informational`, `level`
+    /// `none` — appears in the log of a conforming report.
+    ///
+    /// `shapesBase` is the base IRI the SHAPES document's relative IRI references resolve
+    /// against. A browser or Node host has no retrieval IRI of its own — it was handed a
+    /// string — so PurRDF will not invent one; omit it and a relative reference is a hard
+    /// `iri-relative-no-base` naming the remedy. Passing the document's own URL is what makes
+    /// `<PersonShape>` in a fetched shapes graph mean what its author wrote. `dataNt` needs
+    /// no such parameter: N-Triples admits no relative IRI by grammar.
+    ///
+    /// `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
+    /// [`ShaclImportError`]); an incomplete closure rejects with that class.
+    ///
+    /// `shapesGraph` is the IRI SHACL-SPARQL sees the shapes graph under, as `purrdf validate
+    /// --shapes-graph` names it: `$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph {
+    /// … }` reads the shapes graph — SHACL 1.0's pre-binding, which SHACL 1.2 removed.
+    /// Omitted, no graph is named and `$shapesGraph` is an ordinary variable. A relative IRI
+    /// resolves against `shapesBase`; one with no base throws (`iri-relative-no-base`).
+    ///
+    /// `subClassOfInShapesGraph` is SHACL 1.2 Core §6.3's parameter of that name: `true`
+    /// reads the shapes graph's `rdfs:subClassOf` triples, in addition to the data graph's,
+    /// wherever SHACL type decides class membership (`sh:targetClass`, implicit class targets,
+    /// `sh:class`, `sh:rootClass`, `shnex:instancesOf`). Omitted or `false`, the
+    /// specification's default: the data graph alone.
+    shaclValidateToSarif: fn shacl_validate_to_sarif(
+        shapes_ttl: String,
+        data_nt: String,
+        shapes_base: Option<String>,
+        conformance_disallows: Option<Vec<String>>,
+        import_iris: Option<Vec<String>>,
+        import_documents: Option<Vec<String>>,
+        shapes_graph: Option<String>,
+        subclass_of_in_shapes_graph: Option<bool>,
+    ) -> Result<String, ShapesError> => ValidateToSarif, validateToSarif / validate_to_sarif
+    {
+        validate_to_sarif_with_options_impl(
+            &shapes_ttl,
+            shapes_base.as_deref(),
+            &data_nt,
+            conformance_disallows.as_deref(),
+            import_iris.as_deref().unwrap_or_default(),
+            import_documents.as_deref().unwrap_or_default(),
+            shapes_graph.as_deref(),
+            subclass_of_in_shapes_graph.unwrap_or(false),
+        )
+    }
+
+    /// `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?, shapesBase?,
+    /// importIris?, importDocuments?, shapesGraph?)` → a `ShaclChangeValidation` carrying a
+    /// SARIF 2.1.0 JSON string and its scope.
+    ///
+    /// The incremental twin of [`shacl_validate_to_sarif`]: instead of re-validating
+    /// the whole graph after an edit, hand it both halves of the delta and the engine
+    /// expands the change into the focus nodes it can move and re-validates exactly
+    /// those. A host that edits a graph and asks *what did my last change break?* pays
+    /// for the change rather than for the graph.
+    ///
+    /// `addedNt` is the rows joining `dataNt` and `removedNt` the rows leaving it,
+    /// each an N-Triples string or omitted. Both halves, because a verdict moves when
+    /// a row leaves the graph as readily as when one joins, and one parameter would be
+    /// half a delta. Additions apply before removals, so a change naming the same row
+    /// on both halves settles on *removed*; a removal naming a row `dataNt` does not
+    /// carry retracts nothing rather than throwing, because a change set describes
+    /// what moved and does not assert what the base contained.
+    ///
+    /// `shapesBase` carries the same meaning it does on [`shacl_validate_to_sarif`] —
+    /// the shapes document's own base IRI, supplied by the host because a wasm guest
+    /// has no retrieval IRI to derive one from.
+    ///
+    /// **Read `bounded` before the log.** It decides what the log MEANS; see
+    /// [`ShaclChangeValidation`]. The unbounded fallback is not optional — a short
+    /// expansion and a clean bill of health are indistinguishable in a report.
+    ///
+    /// `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
+    /// [`ShaclImportError`]), and `shapesGraph` the IRI SHACL-SPARQL sees the shapes graph
+    /// under, exactly as [`shacl_validate_to_sarif`] takes them.
+    ///
+    /// Throws (rejects) if the shapes graph or any of the three N-Triples documents
+    /// fails to parse, and with a [`ShaclImportError`] when the shapes graph's
+    /// `owl:imports` closure is not in hand. Call `.free()` on the returned object when
+    /// done.
+    shaclValidateChangesToSarif: fn shacl_validate_changes_to_sarif(
+        shapes_ttl: String,
+        data_nt: String,
+        added_nt: Option<String>,
+        removed_nt: Option<String>,
+        shapes_base: Option<String>,
+        import_iris: Option<Vec<String>>,
+        import_documents: Option<Vec<String>>,
+        shapes_graph: Option<String>,
+    ) -> Result<ShaclChangeValidation, ShapesError> => ValidateChangesToSarif, validateChangesToSarif / validate_changes_to_sarif
+    {
+        let (sarif, scope) = validate_changes_to_sarif_impl(
+            &shapes_ttl,
+            shapes_base.as_deref(),
+            &data_nt,
+            added_nt.as_deref(),
+            removed_nt.as_deref(),
+            import_iris.as_deref().unwrap_or_default(),
+            import_documents.as_deref().unwrap_or_default(),
+            shapes_graph.as_deref(),
+        )?;
+        Ok(ShaclChangeValidation::new(sarif, scope))
+    }
+
+    /// `shaclEntail(shapesTtl, dataNt, shapesBase?, importIris?, importDocuments?,
+    /// shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?,
+    /// maxJoinSteps?)` → a `ShaclEntailment`: `ntriples`, the materialized dataset as an
+    /// N-Triples string (the base graph plus every inferred triple), and `diagnostics`, the
+    /// shapes graph's mandatory diagnostics (a `ShaclDiagnostic` — `rule`, `shape` — per shape
+    /// with an empty `sh:in` or `sh:xone` list). Call `.free()` on the result.
+    ///
+    /// Its parameters after `dataNt` are `shaclApplyRules`' in the same order: the shapes
+    /// document's base, the import table, `shapesGraph`, then the four rule-evaluation
+    /// limits.
+    ///
+    /// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
+    /// Throws (rejects) if either graph fails to parse or if rule application fails.
+    ///
+    /// `shapesBase` carries the same meaning it does on
+    /// [`shacl_validate_to_sarif`] — the shapes document's own base IRI, supplied by the
+    /// host because a wasm guest has no retrieval IRI to derive one from.
+    ///
+    /// Nothing is dropped on the way out: the underlying writer is the graph-carrying
+    /// canonical N-Quads serializer, and the output is N-Triples because BOTH inputs
+    /// are single-graph syntaxes, not because a graph slot was discarded.
+    ///
+    /// `importIris` / `importDocuments` are the shapes graph's `owl:imports` table (see
+    /// [`ShaclImportError`]): an imported document's rules run.
+    ///
+    /// `shapesGraph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+    /// [`shacl_apply_rules`] takes it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it.
+    /// A relative one resolves against `shapesBase`; omitted, `$shapesGraph` is an ordinary
+    /// variable.
+    ///
+    /// `maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts` and `maxJoinSteps`
+    /// (each a `bigint`) are the four rule-evaluation limits, exactly as
+    /// [`shacl_apply_rules`] takes them and with the same defaults: the evaluation rounds that
+    /// infer a term the graph did not hold (16384), the terms inferred beyond the input's
+    /// (max(65536, 4 × N) for N distinct input terms), the facts the evaluation store may hold
+    /// (131072 on this target) and the candidate solutions the rule bodies may enumerate
+    /// (1048576). A run past one throws naming the limit, the numbers and the argument that
+    /// raises it.
+    shaclEntail: fn shacl_entail(
+        shapes_ttl: String,
+        data_nt: String,
+        shapes_base: Option<String>,
+        import_iris: Option<Vec<String>>,
+        import_documents: Option<Vec<String>>,
+        shapes_graph: Option<String>,
+        max_term_generating_rounds: Option<u64>,
+        max_generated_terms: Option<u64>,
+        max_stored_facts: Option<u64>,
+        max_join_steps: Option<u64>,
+    ) -> Result<ShaclEntailment, ShapesError> => Entail, entail / entail
+    {
+        entail_to_ntriples_impl(
+            &shapes_ttl,
+            shapes_base.as_deref(),
+            &data_nt,
+            import_iris.as_deref().unwrap_or_default(),
+            import_documents.as_deref().unwrap_or_default(),
+            shapes_graph.as_deref(),
+            purrdf_validate::RuleLimits {
+                max_term_generating_rounds,
+                max_generated_terms,
+                max_stored_facts,
+                max_join_steps,
+            },
+        )
+        .map(ShaclEntailment::from)
+    }
+
+    /// `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?, importIris?,
+    /// importDocuments?, shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?,
+    /// maxStoredFacts?, maxJoinSteps?)` → a `ShaclRulesInference`.
+    ///
+    /// The import table, then `shapesGraph`, then the four rule-evaluation limits in the order
+    /// `shaclEntail` takes them: the two SHACL rule entry points spell their shared parameters
+    /// in one order, so a caller moving between them moves no argument.
+    ///
+    /// Runs exactly one rule source over the N-Triples data graph: the SHACL 1.2 rules of the
+    /// Turtle shapes graph `shapesTtl` (its default rule set), or the SPARQL 1.2 RL rule set
+    /// `srl`. Naming neither or both throws. `shapesBase` / `srlBase` are the documents' base
+    /// IRIs — a guest has no retrieval IRI to derive one from.
+    ///
+    /// `maxTermGeneratingRounds` (a `bigint`) bounds the evaluation rounds that infer a term
+    /// the graph did not hold (default 16384), and `maxGeneratedTerms` (a `bigint`) the terms
+    /// inferred beyond the input's (default max(65536, 4 × N) for N distinct input terms). A
+    /// run past either throws naming the limit, the numbers, the rules that inferred a new
+    /// term last, and the argument that raises it.
+    ///
+    /// `maxStoredFacts` (a `bigint`) bounds the facts the evaluation store may hold — the data
+    /// graph, a rule set's data and every inferred triple — and `maxJoinSteps` (a `bigint`)
+    /// the candidate solutions the rule bodies may enumerate. Omitted, each is this target's
+    /// default: 131072 facts and 1048576 join steps, sized for one WebAssembly linear memory
+    /// (a native build's defaults are 4194304 and 1048576). A run past either throws naming
+    /// the limit, the numbers and the argument that raises it.
+    ///
+    /// `importIris` / `importDocuments` are the rule source's import table: the shapes graph's
+    /// `owl:imports` table (Turtle documents, see [`ShaclImportError`]) beside `shapesTtl`, the
+    /// rule set's `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
+    /// imported document's rules run. An import no entry supplies, and an entry the import
+    /// closure never names, throw.
+    ///
+    /// `shapesGraph` is the shapes-graph IRI the SHACL rules see the shapes graph under, as
+    /// `purrdf rules --shapes-graph` names it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound
+    /// to it and `GRAPH $shapesGraph { … }` reads the shapes graph. A relative one resolves
+    /// against `shapesBase`; omitted, `$shapesGraph` is an ordinary variable. Naming one beside
+    /// `srl` throws: a SPARQL 1.2 RL rule set has no shapes graph.
+    ///
+    /// Throws on a document that does not parse, an ill-formed or unstratifiable rule set, a
+    /// rule failing during execution, and a passed evaluation limit; rejects with a
+    /// [`ShaclImportError`] when the shapes graph's `owl:imports` closure is not in hand. Call
+    /// `.free()` on the result.
+    shaclApplyRules: fn shacl_apply_rules(
+        data_nt: String,
+        shapes_ttl: Option<String>,
+        srl: Option<String>,
+        shapes_base: Option<String>,
+        srl_base: Option<String>,
+        explain: Option<bool>,
+        import_iris: Option<Vec<String>>,
+        import_documents: Option<Vec<String>>,
+        shapes_graph: Option<String>,
+        max_term_generating_rounds: Option<u64>,
+        max_generated_terms: Option<u64>,
+        max_stored_facts: Option<u64>,
+        max_join_steps: Option<u64>,
+    ) -> Result<ShaclRulesInference, ShapesError> => ApplyRules, applyRules / apply_rules
+    {
+        let imports = shapes_import_pairs(
+            import_iris.as_deref().unwrap_or_default(),
+            import_documents.as_deref().unwrap_or_default(),
+        )?;
+        apply_rules_impl(&purrdf_validate::RulesRequest {
+            data_nt: &data_nt,
+            shapes_ttl: shapes_ttl.as_deref(),
+            shapes_base: shapes_base.as_deref(),
+            shapes_graph: shapes_graph.as_deref(),
+            imports: &imports,
+            srl: srl.as_deref(),
+            srl_base: srl_base.as_deref(),
+            explain: explain.unwrap_or(false),
+            max_term_generating_rounds,
+            max_generated_terms,
+            max_stored_facts,
+            max_join_steps,
+            host: purrdf_validate::RulesHost::Wasm,
+        })
+        .map(ShaclRulesInference::from)
+    }
+
+    /// `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?, importIris?,
+    /// importDocuments?, exprAt?, exprVia?, exprTurtle?)` → a `ShaclNodeExprOutcome`:
+    /// `outputs`, the output nodes as an array of N-Triples 1.2 terms in the order the
+    /// expression's sequence semantics define, and `diagnostics`, the shapes graph's mandatory
+    /// diagnostics (`{ rule, shape }` per shape with an empty `sh:in` or `sh:xone` list). Call
+    /// `.free()` on the result.
+    ///
+    /// Evaluates ONE node expression of the Turtle shapes graph — SHACL 1.2 Node Expressions'
+    /// `evalExpr(expr, focusGraph, focusNode, scope)` — against a focus node of the
+    /// N-Triples data graph. The expression is named exactly one way: `expr` is an absolute
+    /// IRI or `"_:label"` for a blank node the shapes document labels so; or `expr` is
+    /// `undefined` and `exprAt` names a node and `exprVia` the predicate IRIs a walk from it
+    /// follows, each step reaching exactly one value (how an anonymous `[ … ]` expression is
+    /// named); or `expr` is `undefined` and `exprTurtle` is the expression as a Turtle
+    /// document, read under the shapes document's prefixes and base, whose one root blank node
+    /// is the expression. None or several selectors, a walk step reaching no value or several,
+    /// and an inline document without exactly one root throw. `focus` is an absolute IRI or
+    /// any N-Triples term; `scope` is
+    /// an array of `"NAME=TERM"` bindings read by `shnex:var "NAME"`, the term spelled as
+    /// `focus` is. Throws on a label the shapes document never wrote, a binding named
+    /// `focusNode` or bound twice (neither could ever be read), and any parse or evaluation
+    /// failure. `importIris` / `importDocuments` are the shapes graph's `owl:imports` table
+    /// (see [`ShaclImportError`]); an imported document's functions and shapes are in scope.
+    shaclEvalNodeExpr: fn shacl_eval_node_expr(
+        shapes_ttl: String,
+        data_nt: String,
+        expr: Option<String>,
+        focus: String,
+        scope: Option<Vec<String>>,
+        shapes_base: Option<String>,
+        import_iris: Option<Vec<String>>,
+        import_documents: Option<Vec<String>>,
+        expr_at: Option<String>,
+        expr_via: Option<Vec<String>>,
+        expr_turtle: Option<String>,
+    ) -> Result<ShaclNodeExprOutcome, ShapesError> => EvalNodeExpr, evalNodeExpr / eval_node_expr
+    {
+        eval_node_expr_impl(
+            &shapes_ttl,
+            shapes_base.as_deref(),
+            &data_nt,
+            ExprInputs {
+                expr: expr.as_deref(),
+                at: expr_at.as_deref(),
+                via: expr_via.as_deref().unwrap_or_default(),
+                turtle: expr_turtle.as_deref(),
+            },
+            &focus,
+            scope.as_deref().unwrap_or_default(),
+            import_iris.as_deref().unwrap_or_default(),
+            import_documents.as_deref().unwrap_or_default(),
+        )
+        .map(|outcome| ShaclNodeExprOutcome {
+            diagnostics: diagnostic_values(&outcome.diagnostics),
+            outputs: outcome.outputs,
+        })
+    }
+
+    /// `shaclProductValidateToSarif(product, dataNt)` → a SARIF 2.1.0 JSON string.
+    ///
+    /// The point of a product: restore the preparation instead of re-parsing the shapes
+    /// graph, then validate. The verdict is the identical one
+    /// [`shacl_validate_to_sarif`] reaches over the shapes document the product was packed
+    /// from — the same engine entry point runs, over the same restored `Shapes`.
+    ///
+    /// Admission runs first and in full: the container's framing, every section digest,
+    /// the whole-container digest, then the product's stage id, profile and complete input
+    /// binding, all before a single focus node is resolved. A product prepared under a
+    /// different prefix map, base, vocabulary or registry is REFUSED rather than validated
+    /// into a report about a shapes graph nobody asked for.
+    ///
+    /// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A malformed
+    /// `dataNt` rejects with `dimension === undefined`: the data graph is not a product and
+    /// no admission dimension names it.
+    shaclProductValidateToSarif: fn shacl_product_validate_to_sarif(
+        product: Vec<u8>,
+        data_nt: String,
+    ) -> Result<String, ShaclProductRefusal> => ProductValidateToSarif, productValidateToSarif / product_validate_to_sarif
+    {
+        product_validate_impl(&product, &data_nt).map_err(ShaclProductRefusal::from)
+    }
+
+    /// `shaclProductValidateToSarifRebuild(product, dataNt)` → a SARIF 2.1.0 JSON
+    /// string, restoring the preparation by RE-DERIVING it from the shapes dataset the
+    /// product carries rather than admitting its memo.
+    ///
+    /// The forward-compatibility path: [`shacl_product_validate_to_sarif`] refuses a
+    /// product whose stage id this guest does not know with `dimension ===
+    /// "stage-id"`, and this is the remedy it names. No RDF text is parsed and no
+    /// file is read — the dataset travels inside the product under the envelope's
+    /// own digests, and this re-derives the shapes graph from it.
+    ///
+    /// Also correct, and does the identical work, over a CURRENT product whose stage
+    /// id this guest already knows: rebuilding re-derives from the SAME carried
+    /// dataset [`shacl_product_validate_to_sarif`] restores a memo of, so the two
+    /// reach the byte-identical report. This function is a second DOOR onto one
+    /// product, never a second, divergent answer.
+    ///
+    /// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A
+    /// malformed `dataNt` rejects with `dimension === undefined`, for the same
+    /// reason [`shacl_product_validate_to_sarif`] does.
+    shaclProductValidateToSarifRebuild: fn shacl_product_validate_to_sarif_rebuild(
+        product: Vec<u8>,
+        data_nt: String,
+    ) -> Result<String, ShaclProductRefusal> => ProductValidateToSarifRebuild, productValidateToSarifRebuild / product_validate_to_sarif_rebuild
+    {
+        product_validate_rebuild_impl(&product, &data_nt).map_err(ShaclProductRefusal::from)
+    }
+
+    /// `shaclProductValidateToSarifExpecting(product, dataNt, expectIdentity)` → a SARIF
+    /// 2.1.0 JSON string, but only from the product whose input binding is
+    /// `expectIdentity`.
+    ///
+    /// Everything [`shacl_product_validate_to_sarif`] checks is a question about the
+    /// executing guest — its build, its registries, its class analysis. None of them asks
+    /// whether these are the bytes the host meant, because nothing in a product states
+    /// which product was wanted. A host that fetches a product over the network, reads one
+    /// out of a cache, or builds its path from a configuration string has no other way to
+    /// say so, and admitting the wrong one produces a decided, well-formed SARIF log about
+    /// a shapes graph nobody asked about.
+    ///
+    /// `expectIdentity` is the 64 hexadecimal digits `shaclProductExplain` prints on its
+    /// `identity-digest` line — one spelling, readable off the artifact, so the selector
+    /// can be pinned in a manifest beside the product it names.
+    ///
+    /// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A product
+    /// carrying a different binding rejects with `dimension === "shapes-graph"`; an
+    /// `expectIdentity` that is not 64 hexadecimal digits rejects with
+    /// `dimension === undefined`, because no product was ever inspected.
+    shaclProductValidateToSarifExpecting: fn shacl_product_validate_to_sarif_expecting(
+        product: Vec<u8>,
+        data_nt: String,
+        expect_identity: String,
+    ) -> Result<String, ShaclProductRefusal> => ProductValidateToSarifExpecting, productValidateToSarifExpecting / product_validate_to_sarif_expecting
+    {
+        product_validate_expecting_impl(&product, &data_nt, &expect_identity)
+    }
+
+    /// `shaclProductValidateToSarifRebuildExpecting(product, dataNt, expectIdentity)` →
+    /// a SARIF 2.1.0 JSON string, restoring the preparation by RE-DERIVING it from
+    /// the shapes dataset the product carries rather than admitting its memo, but
+    /// only from the product whose input binding is `expectIdentity`.
+    ///
+    /// The bound twin of [`shacl_product_validate_to_sarif_rebuild`], for the same
+    /// reason [`shacl_product_validate_to_sarif_expecting`] exists beside
+    /// [`shacl_product_validate_to_sarif`]: the forward-compatibility rescue is not
+    /// a reason to stop asking *is this the product the host meant?* — a product
+    /// fetched over the network or read out of a cache under a stage id this guest
+    /// does not recognize is still just bytes that could be the wrong ones. The
+    /// 32-byte comparison runs FIRST, ahead of the re-derivation, exactly as it does
+    /// on [`shacl_product_validate_to_sarif_expecting`].
+    ///
+    /// `expectIdentity` carries the same meaning it does on
+    /// [`shacl_product_validate_to_sarif_expecting`] — the 64 hexadecimal digits
+    /// `shaclProductExplain` prints on its `identity-digest` line.
+    ///
+    /// Rejects with a [`ShaclProductRefusal`]; call `.free()` on it when done. A
+    /// product carrying a different binding rejects with `dimension ===
+    /// "shapes-graph"`; an `expectIdentity` that is not 64 hexadecimal digits
+    /// rejects with `dimension === undefined`, because no product was ever
+    /// inspected.
+    shaclProductValidateToSarifRebuildExpecting: fn shacl_product_validate_to_sarif_rebuild_expecting(
+        product: Vec<u8>,
+        data_nt: String,
+        expect_identity: String,
+    ) -> Result<String, ShaclProductRefusal> => ProductValidateToSarifRebuildExpecting, productValidateToSarifRebuildExpecting / product_validate_to_sarif_rebuild_expecting
+    {
+        product_validate_rebuild_expecting_impl(&product, &data_nt, &expect_identity)
+    }
+}
+
+/// What a SHACL entry answers, as its synchronous entry returns it and as a job keeps it.
+trait ShaclAnswer {
+    /// The job's outcome holding this answer.
+    fn into_outcome(self) -> JobOutcome;
+}
+
+impl ShaclAnswer for String {
+    fn into_outcome(self) -> JobOutcome {
+        JobOutcome::Raw(self)
+    }
+}
+
+impl ShaclAnswer for ShaclChangeValidation {
+    fn into_outcome(self) -> JobOutcome {
+        JobOutcome::ShaclChange(self)
+    }
+}
+
+impl ShaclAnswer for ShaclEntailment {
+    fn into_outcome(self) -> JobOutcome {
+        JobOutcome::ShaclEntailment(self)
+    }
+}
+
+impl ShaclAnswer for ShaclRulesInference {
+    fn into_outcome(self) -> JobOutcome {
+        JobOutcome::ShaclRules(self)
+    }
+}
+
+impl ShaclAnswer for ShaclNodeExprOutcome {
+    fn into_outcome(self) -> JobOutcome {
+        JobOutcome::ShaclNodeExpr(self)
+    }
+}
+
+/// Why a SHACL entry refused, as its synchronous entry throws it and as a job keeps it.
+trait ShaclFailure {
+    /// The value the synchronous entry throws.
+    fn into_rejection(self) -> JsValue;
+    /// The job's outcome: a refusal kept as the class the synchronous entry throws, or
+    /// the job's error in the synchronous entry's words.
+    fn into_outcome(self) -> JobOutcome;
+}
+
+impl ShaclFailure for ShapesError {
+    fn into_rejection(self) -> JsValue {
+        shapes_rejection(self)
+    }
+
+    fn into_outcome(self) -> JobOutcome {
+        match self {
+            Self::Imports(error) => {
+                JobOutcome::Refused(ShaclRefusal::Import(ShaclImportError::from(&error)))
+            }
+            other => {
+                JobOutcome::Failed(JobError::message(SHACL_CODE, shapes_error_message(&other)))
+            }
+        }
+    }
+}
+
+impl ShaclFailure for ShaclProductRefusal {
+    fn into_rejection(self) -> JsValue {
+        self.into()
+    }
+
+    fn into_outcome(self) -> JobOutcome {
+        JobOutcome::Refused(ShaclRefusal::Product(self))
+    }
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
@@ -642,14 +1777,77 @@ mod tests {
 
     #[test]
     fn validate_emits_sarif_2_1_0() {
-        let sarif = validate_to_sarif_impl(SHAPES, None, DATA).expect("sarif produced");
+        let sarif = validate_to_sarif_impl(SHAPES, None, DATA, None, &[], &[], None)
+            .expect("sarif produced");
         assert!(sarif.contains("\"version\": \"2.1.0\""));
         assert!(sarif.contains("\"level\": \"error\""));
     }
 
+    /// The conformance-disallow set reaches the validation: a Warning-only
+    /// graph does not conform under the default set, conforms under
+    /// {sh:Violation}, and an empty set or a non-IRI is an error.
+    #[test]
+    fn wasm_validate_subclass_of_in_shapes_graph() {
+        // A class target reached only through the shapes graph's rdfs:subClassOf fires
+        // with the parameter and not without it; the control, a direct instance of the
+        // target class, fires both ways.
+        let shapes = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+            @prefix ex: <http://example.org/> .\n\
+            ex:Student rdfs:subClassOf ex:Person .\n\
+            ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;\n\
+              sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n";
+        let data = "<http://example.org/alice> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Student> .\n\
+            <http://example.org/bob> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+        let run = |on: bool| {
+            validate_to_sarif_with_options_impl(shapes, None, data, None, &[], &[], None, on)
+                .expect("validates")
+        };
+        let off = run(false);
+        assert!(off.contains("http://example.org/bob"), "{off}");
+        assert!(!off.contains("http://example.org/alice"), "{off}");
+        let on = run(true);
+        assert!(on.contains("http://example.org/bob"), "{on}");
+        assert!(on.contains("http://example.org/alice"), "{on}");
+    }
+
+    #[test]
+    fn wasm_validate_conformance_disallows() {
+        let shapes = SHAPES.replace(
+            "sh:path ex:age ;",
+            "sh:path ex:age ; sh:severity sh:Warning ;",
+        );
+        let conforms = |disallows: Option<&[String]>| -> serde_json::Value {
+            let sarif = validate_to_sarif_impl(&shapes, None, DATA, disallows, &[], &[], None)
+                .expect("sarif produced");
+            let log: serde_json::Value = serde_json::from_str(&sarif).expect("json");
+            log["runs"][0]["properties"]["shaclConforms"].clone()
+        };
+        assert_eq!(conforms(None), serde_json::json!(false));
+        let violation = ["http://www.w3.org/ns/shacl#Violation".to_owned()];
+        assert_eq!(conforms(Some(&violation)), serde_json::json!(true));
+        assert!(validate_to_sarif_impl(&shapes, None, DATA, Some(&[]), &[], &[], None).is_err());
+        assert!(
+            validate_to_sarif_impl(
+                &shapes,
+                None,
+                DATA,
+                Some(&["Violation".to_owned()]),
+                &[],
+                &[],
+                None
+            )
+            .is_err()
+        );
+    }
+
     #[test]
     fn malformed_shapes_is_an_error() {
-        assert!(validate_to_sarif_impl("@@@ not turtle", None, DATA).is_err());
+        assert!(
+            validate_to_sarif_impl("@@@ not turtle", None, DATA, None, &[], &[], None).is_err()
+        );
     }
 
     /// A conforming base, so every violation a change test sees is the change's.
@@ -664,23 +1862,47 @@ mod tests {
     /// produces — a cheaper route to ONE answer, never a second answer.
     #[test]
     fn a_change_reaches_the_full_validations_own_log() {
-        let (sarif, scope) =
-            validate_changes_to_sarif_impl(SHAPES, None, CHANGE_BASE, Some(BAD_AGE), None)
-                .expect("the change validates");
+        let (sarif, scope) = validate_changes_to_sarif_impl(
+            SHAPES,
+            None,
+            CHANGE_BASE,
+            Some(BAD_AGE),
+            None,
+            &[],
+            &[],
+            None,
+        )
+        .expect("the change validates");
         assert_eq!(scope.focus_nodes(), Some(1));
         assert!(scope.is_bounded());
         assert_eq!(
             sarif,
-            validate_to_sarif_impl(SHAPES, None, &format!("{CHANGE_BASE}{BAD_AGE}"))
-                .expect("full validation"),
+            validate_to_sarif_impl(
+                SHAPES,
+                None,
+                &format!("{CHANGE_BASE}{BAD_AGE}"),
+                None,
+                &[],
+                &[],
+                None
+            )
+            .expect("full validation"),
         );
 
         // The retract half is a real half: taking the row back out restores
         // conformance through the same one call.
         let merged = format!("{CHANGE_BASE}{BAD_AGE}");
-        let (sarif, scope) =
-            validate_changes_to_sarif_impl(SHAPES, None, &merged, None, Some(BAD_AGE))
-                .expect("the retraction validates");
+        let (sarif, scope) = validate_changes_to_sarif_impl(
+            SHAPES,
+            None,
+            &merged,
+            None,
+            Some(BAD_AGE),
+            &[],
+            &[],
+            None,
+        )
+        .expect("the retraction validates");
         assert!(scope.is_bounded());
         assert!(!sarif.contains("\"level\": \"error\""), "{sarif}");
     }
@@ -697,9 +1919,17 @@ mod tests {
                 sh:message \"every person needs a name\" ;\n\
                 sh:select \"\"\"SELECT $this WHERE { FILTER NOT EXISTS \
                   { $this <http://example.org/name> ?n } }\"\"\" ] .\n";
-        let (sarif, scope) =
-            validate_changes_to_sarif_impl(SPARQL_SHAPES, None, CHANGE_BASE, Some(BAD_AGE), None)
-                .expect("the change validates");
+        let (sarif, scope) = validate_changes_to_sarif_impl(
+            SPARQL_SHAPES,
+            None,
+            CHANGE_BASE,
+            Some(BAD_AGE),
+            None,
+            &[],
+            &[],
+            None,
+        )
+        .expect("the change validates");
         let validation = ShaclChangeValidation { sarif, scope };
 
         assert!(!validation.bounded());
@@ -715,9 +1945,17 @@ mod tests {
         );
 
         // The neighbouring BOUNDED case still reports a count and no reason.
-        let (sarif, scope) =
-            validate_changes_to_sarif_impl(SHAPES, None, CHANGE_BASE, Some(BAD_AGE), None)
-                .expect("the change validates");
+        let (sarif, scope) = validate_changes_to_sarif_impl(
+            SHAPES,
+            None,
+            CHANGE_BASE,
+            Some(BAD_AGE),
+            None,
+            &[],
+            &[],
+            None,
+        )
+        .expect("the change validates");
         let bounded = ShaclChangeValidation { sarif, scope };
         assert!(bounded.bounded());
         assert_eq!(bounded.focus_nodes(), Some(1));
@@ -733,12 +1971,24 @@ mod tests {
                 CHANGE_BASE,
                 Some("@@@ not n-triples"),
                 None,
+                &[],
+                &[],
+                None,
             )
             .is_err()
         );
         // The neighbouring VALID case still succeeds — a refusal is a claim too.
-        validate_changes_to_sarif_impl(SHAPES, None, CHANGE_BASE, Some(BAD_AGE), None)
-            .expect("a well-formed change document still validates");
+        validate_changes_to_sarif_impl(
+            SHAPES,
+            None,
+            CHANGE_BASE,
+            Some(BAD_AGE),
+            None,
+            &[],
+            &[],
+            None,
+        )
+        .expect("a well-formed change document still validates");
     }
 
     // A shapes graph with a `sh:TripleRule` that types every `ex:Person` as an
@@ -755,8 +2005,17 @@ mod tests {
 
     #[test]
     fn entail_materializes_inferred_triple() {
-        let nt =
-            entail_to_ntriples_impl(RULE_SHAPES, None, RULE_DATA).expect("entailment produced");
+        let nt = entail_to_ntriples_impl(
+            RULE_SHAPES,
+            None,
+            RULE_DATA,
+            &[],
+            &[],
+            None,
+            purrdf_validate::RuleLimits::default(),
+        )
+        .expect("entailment produced")
+        .ntriples;
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
         ));
@@ -769,12 +2028,23 @@ mod tests {
 
     #[test]
     fn entail_malformed_shapes_is_an_error() {
-        assert!(entail_to_ntriples_impl("@@@ not turtle", None, RULE_DATA).is_err());
+        assert!(
+            entail_to_ntriples_impl(
+                "@@@ not turtle",
+                None,
+                RULE_DATA,
+                &[],
+                &[],
+                None,
+                purrdf_validate::RuleLimits::default()
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn a_product_round_trips_and_reaches_the_same_verdict() {
-        let product = pack_product_impl(SHAPES, None).expect("product packed");
+        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
         product_certify_impl(&product).expect("certified");
         assert!(
             product_explain_impl(&product)
@@ -785,7 +2055,8 @@ mod tests {
         // Restoring the product and parsing the shapes graph are two routes to ONE
         // verdict, which is the property a cache is only allowed to have.
         let via_product = product_validate_impl(&product, DATA).expect("validated via product");
-        let via_document = validate_to_sarif_impl(SHAPES, None, DATA).expect("validated directly");
+        let via_document = validate_to_sarif_impl(SHAPES, None, DATA, None, &[], &[], None)
+            .expect("validated directly");
         assert_eq!(via_product, via_document);
 
         // Rebuilding a CURRENT product reaches the byte-identical verdict too: the
@@ -797,7 +2068,8 @@ mod tests {
 
     #[test]
     fn a_refused_product_keeps_its_dimension_across_the_boundary() {
-        let mut wrong_magic = pack_product_impl(SHAPES, None).expect("product packed");
+        let mut wrong_magic =
+            pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
         wrong_magic[0] = b'X';
 
         let refusal = ShaclProductRefusal::from(
@@ -810,7 +2082,7 @@ mod tests {
 
         // A DATA graph that does not parse never reached the admission boundary, so
         // it truthfully names no dimension rather than borrowing one.
-        let product = pack_product_impl(SHAPES, None).expect("product packed");
+        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
         let data_refusal = ShaclProductRefusal::from(
             product_validate_impl(&product, "@@@ not n-triples").expect_err("refused"),
         );
@@ -840,8 +2112,10 @@ mod tests {
 
     #[test]
     fn a_product_that_is_not_the_expected_one_is_refused_across_the_boundary() {
-        let held = pack_product_impl(SHAPES, None).expect("product packed");
-        let wanted = rendered_selector(&pack_product_impl(OTHER_SHAPES, None).expect("packed"));
+        let held = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
+        let wanted = rendered_selector(
+            &pack_product_impl(OTHER_SHAPES, None, &[], &[], None).expect("packed"),
+        );
         assert_ne!(wanted, rendered_selector(&held));
 
         let refusal = product_validate_expecting_impl(&held, DATA, &wanted)
@@ -860,7 +2134,7 @@ mod tests {
 
     #[test]
     fn a_product_required_to_be_itself_validates_identically() {
-        let product = pack_product_impl(SHAPES, None).expect("product packed");
+        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
         let own = rendered_selector(&product);
 
         let bound = product_validate_expecting_impl(&product, DATA, &own)
@@ -885,8 +2159,10 @@ mod tests {
     /// happily re-derive it.
     #[test]
     fn a_rebuilt_product_that_is_not_the_expected_one_is_refused_across_the_boundary() {
-        let held = pack_product_impl(SHAPES, None).expect("product packed");
-        let wanted = rendered_selector(&pack_product_impl(OTHER_SHAPES, None).expect("packed"));
+        let held = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
+        let wanted = rendered_selector(
+            &pack_product_impl(OTHER_SHAPES, None, &[], &[], None).expect("packed"),
+        );
         assert_ne!(wanted, rendered_selector(&held));
 
         let refusal = product_validate_rebuild_expecting_impl(&held, DATA, &wanted)
@@ -910,7 +2186,7 @@ mod tests {
     /// unbound rebuild and the bound admission-based validation both reach.
     #[test]
     fn a_rebuilt_product_required_to_be_itself_validates_identically() {
-        let product = pack_product_impl(SHAPES, None).expect("product packed");
+        let product = pack_product_impl(SHAPES, None, &[], &[], None).expect("product packed");
         let own = rendered_selector(&product);
 
         let bound_rebuild = product_validate_rebuild_expecting_impl(&product, DATA, &own)
@@ -935,5 +2211,800 @@ mod tests {
         // care about.
         product_validate_rebuild_expecting_impl(&product, DATA, &own.to_uppercase())
             .expect("an upper-case selector names the same product");
+    }
+
+    /// The shapes-graph tools' fixture: the W3C SHACL 1.2 declaration of
+    /// `sh:SPARQLExprExpression` verbatim, a `sh:sparqlExpr` node naming `ex:yes` through
+    /// `sh:prefixes` (`ex:Tag`), a labelled `shnex:var` node, a rule tagging every
+    /// `ex:Item` through the same expression, and a counter rule stepping `ex:n` to 5 —
+    /// exactly four term-generating rounds.
+    pub(crate) const TOOLS_SHAPES: &str = r#"
+@prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://example.org/ns#> .
+
+sh:SPARQLExprExpression a sh:NamedParameterExpressionFunction ;
+  rdfs:label "SPARQL expr expression"@en ;
+  rdfs:comment "The class of node expressions based on SPARQL expressions (sh:sparqlExpr)."@en ;
+  rdfs:isDefinedBy sh: ;
+  rdfs:subClassOf sh:NamedParameterExpression,
+  sh:SPARQLExecutable ;
+  sh:parameter sh:SPARQLExprExpression-prefixes,
+  sh:SPARQLExprExpression-sparqlExpr .
+
+sh:SPARQLExprExpression-prefixes a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:description "The prefixes that shall be applied before parsing the SPARQL query that gets derived from the sh:sparqlExpr expression. The object should define those prefixes using sh:declare."@en ;
+  sh:name "prefixes"@en ;
+  sh:nodeKind sh:BlankNodeOrIRI ;
+  sh:path sh:prefixes .
+
+sh:SPARQLExprExpression-sparqlExpr a sh:Parameter ;
+  rdfs:isDefinedBy sh: ;
+  sh:datatype xsd:string ;
+  sh:description "The SPARQL expression that is executed during evaluation of this node expression."@en ;
+  sh:keyParameter true ;
+  sh:name "SPARQL expr"@en ;
+  sh:path sh:sparqlExpr .
+
+ex:Prefixes sh:declare [ sh:prefix "ex" ; sh:namespace "http://example.org/ns#"^^xsd:anyURI ] .
+ex:Tag sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes .
+_:suffix shnex:var "suffix" .
+
+ex:Tagger a sh:NodeShape ;
+  sh:targetClass ex:Item ;
+  sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:tagged ;
+            sh:object [ sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ] ] .
+
+ex:Counter a sh:NodeShape ;
+  sh:targetSubjectsOf ex:n ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 AS ?m) }""" ] .
+"#;
+
+    /// One `ex:Item` whose counter starts at 1.
+    pub(crate) const TOOLS_DATA: &str = "<http://example.org/ns#a> \
+        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Item> .\n\
+        <http://example.org/ns#a> <http://example.org/ns#n> \
+        \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n";
+
+    /// The inference graph the fixture's rules produce, in canonical order.
+    fn tools_inference() -> String {
+        let mut out = String::new();
+        for n in 2..=5 {
+            out.push_str("<http://example.org/ns#a> <http://example.org/ns#n> \"");
+            out.push_str(&n.to_string());
+            out.push_str("\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n");
+        }
+        out.push_str(
+            "<http://example.org/ns#a> <http://example.org/ns#tagged> \
+             <http://example.org/ns#yes> .\n",
+        );
+        out
+    }
+
+    /// The stored-fact and join-step limits name this host's own arguments, and the
+    /// `wasm32` default refuses a 70,000-triple copy (140,000 facts) that a larger stated
+    /// limit admits. The default is STATED here, because this native test binary runs the
+    /// native default; `the_default_limits_are_sized_per_target` in `purrdf-datalog` pins
+    /// that a `wasm32` build's default is exactly this value.
+    #[test]
+    fn wasm_apply_rules_capacity_limits() {
+        use std::fmt::Write as _;
+        let mut data = String::new();
+        for i in 0..70_000 {
+            writeln!(
+                data,
+                "<http://example.org/ns#s{i}> <http://example.org/ns#p> \
+                 <http://example.org/ns#o{i}> ."
+            )
+            .expect("write to String");
+        }
+        let copy =
+            "PREFIX ex: <http://example.org/ns#>\nRULE { ?s ex:q ?o } WHERE { ?s ex:p ?o }\n";
+        let request = purrdf_validate::RulesRequest {
+            data_nt: &data,
+            srl: Some(copy),
+            max_stored_facts: Some(purrdf::datalog::seminaive::WASM_DEFAULT_MAX_STORED_FACTS),
+            host: purrdf_validate::RulesHost::Wasm,
+            ..purrdf_validate::RulesRequest::default()
+        };
+        let refused = apply_rules_impl(&request)
+            .expect_err("140,000 facts pass the wasm32 default")
+            .to_string();
+        assert!(
+            refused.contains("140000 facts observed, 131072 permitted (the caller's limit)")
+                && refused.ends_with("raise it with shaclApplyRules's maxStoredFacts"),
+            "{refused}"
+        );
+        let raised = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_stored_facts: Some(140_000),
+            ..request
+        })
+        .expect("a limit of exactly the store admits it");
+        assert_eq!(raised.inferred_ntriples.lines().count(), 70_000);
+        let steps = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_stored_facts: None,
+            max_join_steps: Some(1),
+            ..request
+        })
+        .expect_err("one join step")
+        .to_string();
+        assert!(
+            steps.ends_with("raise it with shaclApplyRules's maxJoinSteps"),
+            "{steps}"
+        );
+    }
+
+    /// `shaclEntail`'s four rule-evaluation limits reach the engine and each refusal names
+    /// THIS host's argument; the same run with the limits raised materializes the closure.
+    #[test]
+    fn wasm_entail_limits() {
+        let run = |limits: purrdf_validate::RuleLimits| {
+            entail_to_ntriples_impl(TOOLS_SHAPES, None, TOOLS_DATA, &[], &[], None, limits)
+        };
+        let cases = [
+            (
+                purrdf_validate::RuleLimits {
+                    max_term_generating_rounds: Some(1),
+                    ..purrdf_validate::RuleLimits::default()
+                },
+                "shaclEntail's maxTermGeneratingRounds",
+            ),
+            (
+                purrdf_validate::RuleLimits {
+                    max_generated_terms: Some(1),
+                    ..purrdf_validate::RuleLimits::default()
+                },
+                "shaclEntail's maxGeneratedTerms",
+            ),
+            (
+                purrdf_validate::RuleLimits {
+                    max_stored_facts: Some(1),
+                    ..purrdf_validate::RuleLimits::default()
+                },
+                "shaclEntail's maxStoredFacts",
+            ),
+            (
+                purrdf_validate::RuleLimits {
+                    max_join_steps: Some(1),
+                    ..purrdf_validate::RuleLimits::default()
+                },
+                "shaclEntail's maxJoinSteps",
+            ),
+        ];
+        for (limits, knob) in cases {
+            let refused = run(limits).expect_err("a limit of one").to_string();
+            assert!(refused.ends_with(knob), "{refused}");
+        }
+        let raised = run(purrdf_validate::RuleLimits {
+            max_term_generating_rounds: Some(64),
+            max_generated_terms: Some(64),
+            max_stored_facts: Some(64),
+            max_join_steps: Some(4_096),
+        })
+        .expect("raised limits admit the counter")
+        .ntriples;
+        assert!(
+            raised.contains(
+                "<http://example.org/ns#a> <http://example.org/ns#n> \
+                 \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
+            ),
+            "{raised}"
+        );
+    }
+
+    /// A shapes graph whose `sh:SPARQLRule` infers `COALESCE($shapesGraph, ex:none)` and
+    /// reads the shapes graph through `GRAPH $shapesGraph`.
+    const SHAPES_GRAPH_RULES: &str = r#"@prefix ex: <http://example.org/ns#> .
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """
+    CONSTRUCT { $this <http://example.org/ns#shapesGraph> ?g }
+    WHERE { BIND (COALESCE($shapesGraph, <http://example.org/ns#none>) AS ?g) }""" ] ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """
+    CONSTRUCT { $this <http://example.org/ns#marked> ?m }
+    WHERE { GRAPH $shapesGraph { $currentShape <http://example.org/ns#marker> ?m } }""" ] .
+"#;
+
+    /// `shaclApplyRules`' and `shaclEntail`'s `shapesGraph`: named, a SPARQL rule's
+    /// `$shapesGraph` is the IRI and `GRAPH $shapesGraph` reads the shapes graph; omitted,
+    /// it is an ordinary variable. Beside `srl` it throws, and the rule set alone runs.
+    #[test]
+    fn wasm_rules_shapes_graph() {
+        let data = "<http://example.org/ns#alice> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/ns#Person> .\n";
+        let named = "<http://example.org/ns#alice> <http://example.org/ns#shapesGraph> \
+            <http://example.org/shapes-graph> .";
+        let unnamed = "<http://example.org/ns#alice> <http://example.org/ns#shapesGraph> \
+            <http://example.org/ns#none> .";
+        let marked = "<http://example.org/ns#alice> <http://example.org/ns#marked> \
+            <http://example.org/ns#secret> .";
+        let request = purrdf_validate::RulesRequest {
+            data_nt: data,
+            shapes_ttl: Some(SHAPES_GRAPH_RULES),
+            ..purrdf_validate::RulesRequest::default()
+        };
+        let with = apply_rules_impl(&purrdf_validate::RulesRequest {
+            shapes_graph: Some("http://example.org/shapes-graph"),
+            ..request
+        })
+        .expect("rules run")
+        .inferred_ntriples;
+        assert!(with.contains(named) && with.contains(marked), "{with}");
+        let without = apply_rules_impl(&request)
+            .expect("rules run")
+            .inferred_ntriples;
+        assert!(
+            without.contains(unnamed) && !without.contains(marked),
+            "{without}"
+        );
+
+        let entailed = entail_to_ntriples_impl(
+            SHAPES_GRAPH_RULES,
+            None,
+            data,
+            &[],
+            &[],
+            Some("http://example.org/shapes-graph"),
+            purrdf_validate::RuleLimits::default(),
+        )
+        .expect("entails")
+        .ntriples;
+        assert!(
+            entailed.contains(named) && entailed.contains(marked),
+            "{entailed}"
+        );
+        let plain = entail_to_ntriples_impl(
+            SHAPES_GRAPH_RULES,
+            None,
+            data,
+            &[],
+            &[],
+            None,
+            purrdf_validate::RuleLimits::default(),
+        )
+        .expect("entails")
+        .ntriples;
+        assert!(
+            plain.contains(unnamed) && !plain.contains(marked),
+            "{plain}"
+        );
+
+        let srl = purrdf_validate::RulesRequest {
+            data_nt: data,
+            srl: Some(
+                "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:tagged true } WHERE { ?x a ex:Person }\n",
+            ),
+            ..purrdf_validate::RulesRequest::default()
+        };
+        assert!(
+            apply_rules_impl(&purrdf_validate::RulesRequest {
+                shapes_graph: Some("http://example.org/shapes-graph"),
+                ..srl
+            })
+            .is_err()
+        );
+        assert!(apply_rules_impl(&srl).is_ok());
+    }
+
+    /// The rules entry point: the inference graph alone, the proof on request, the
+    /// round limit refusing at 3 and completing at 4, and SPARQL 1.2 RL text.
+    #[test]
+    fn wasm_apply_rules() {
+        let request = purrdf_validate::RulesRequest {
+            data_nt: TOOLS_DATA,
+            shapes_ttl: Some(TOOLS_SHAPES),
+            ..purrdf_validate::RulesRequest::default()
+        };
+        let plain = apply_rules_impl(&request).expect("rules run");
+        assert_eq!(plain.inferred_ntriples, tools_inference());
+        assert_eq!(plain.proof, None);
+        let explained = apply_rules_impl(&purrdf_validate::RulesRequest {
+            explain: true,
+            ..request
+        })
+        .expect("rules run");
+        let proof = explained.proof.expect("a proof was asked for");
+        assert_eq!(proof.matches("derived ").count(), 5, "{proof}");
+        let refused = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_term_generating_rounds: Some(3),
+            ..request
+        })
+        .expect_err("three rounds are too few")
+        .to_string();
+        assert!(refused.contains("past the limit of 3"), "{refused}");
+        let enough = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_term_generating_rounds: Some(4),
+            ..request
+        })
+        .expect("four rounds suffice");
+        assert_eq!(enough.inferred_ntriples, tools_inference());
+        let srl = apply_rules_impl(&purrdf_validate::RulesRequest {
+            data_nt: TOOLS_DATA,
+            srl: Some(
+                "PREFIX ex: <http://example.org/ns#>\n\
+                 RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\nDATA { ex:d ex:q 2 }\n",
+            ),
+            explain: true,
+            ..purrdf_validate::RulesRequest::default()
+        })
+        .expect("SPARQL 1.2 RL runs");
+        assert_eq!(
+            srl.inferred_ntriples,
+            "<http://example.org/ns#a> <http://example.org/ns#q> \
+             \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n\
+             <http://example.org/ns#d> <http://example.org/ns#q> \
+             \"2\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n"
+        );
+        assert!(srl.proof.expect("proof").contains("  data-block\n"));
+        assert!(
+            apply_rules_impl(&purrdf_validate::RulesRequest {
+                data_nt: TOOLS_DATA,
+                ..purrdf_validate::RulesRequest::default()
+            })
+            .is_err(),
+            "no rule source"
+        );
+    }
+
+    /// A passed rule-evaluation limit names this host's own argument, and the
+    /// generated-term budget is exact: the tools rule set adds six terms (the counter's
+    /// four steps, `ex:tagged` and `ex:yes`), so a budget of 6 admits it and 5 does not.
+    #[test]
+    fn wasm_apply_rules_names_its_own_limit_arguments() {
+        let request = purrdf_validate::RulesRequest {
+            data_nt: TOOLS_DATA,
+            shapes_ttl: Some(TOOLS_SHAPES),
+            host: purrdf_validate::RulesHost::Wasm,
+            ..purrdf_validate::RulesRequest::default()
+        };
+        let rounds = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_term_generating_rounds: Some(3),
+            ..request
+        })
+        .expect_err("three rounds are too few")
+        .to_string();
+        assert!(
+            rounds.ends_with("raise the limit with shaclApplyRules's maxTermGeneratingRounds"),
+            "{rounds}"
+        );
+        let terms = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_generated_terms: Some(5),
+            ..request
+        })
+        .expect_err("five terms are too few")
+        .to_string();
+        assert!(
+            terms.contains("6 terms were inferred beyond the input's"),
+            "{terms}"
+        );
+        assert!(
+            terms.contains("past the budget of 5 (the caller's budget)"),
+            "{terms}"
+        );
+        assert!(
+            terms.ends_with("raise the budget with shaclApplyRules's maxGeneratedTerms"),
+            "{terms}"
+        );
+        let enough = apply_rules_impl(&purrdf_validate::RulesRequest {
+            max_generated_terms: Some(6),
+            ..request
+        })
+        .expect("six terms suffice");
+        assert_eq!(enough.inferred_ntriples, tools_inference());
+    }
+
+    /// A SPARQL 1.2 RL rule set's `IMPORTS` resolve from the import table: the imported
+    /// rule's inference appears, an unsupplied import and an unused entry are refused with
+    /// the shared boundary's text.
+    #[test]
+    fn wasm_apply_rules_resolves_srl_imports() {
+        const IMPORTING: &str = "PREFIX ex: <http://example.org/ns#>\n\
+            IMPORTS <http://example.org/more>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+        const IMPORTED: &str = "PREFIX ex: <http://example.org/ns#>\n\
+            RULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n";
+        const LONE: &str =
+            "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+        const COUNTED: &str = "<http://example.org/ns#a> <http://example.org/ns#counted> \
+            \"true\"^^<http://www.w3.org/2001/XMLSchema#boolean> .\n";
+        let table = [("http://example.org/more", IMPORTED)];
+        let run = |srl: &'static str, imports: &[(&str, &str)]| {
+            apply_rules_impl(&purrdf_validate::RulesRequest {
+                data_nt: TOOLS_DATA,
+                srl: Some(srl),
+                imports,
+                ..purrdf_validate::RulesRequest::default()
+            })
+            .map(|outcome| outcome.inferred_ntriples)
+            .map_err(|error| error.to_string())
+        };
+        assert!(run(IMPORTING, &table).expect("resolves").contains(COUNTED));
+        assert_eq!(
+            run(IMPORTING, &[]).expect_err("unsupplied"),
+            "SPARQL 1.2 RL import <http://example.org/more> failed: no import-table entry \
+             supplies the rule set it names, and PurRDF fetches nothing it was not handed; \
+             supply that rule set's text under this IRI"
+        );
+        assert_eq!(
+            run(LONE, &table).expect_err("unused"),
+            "the SPARQL 1.2 RL rule set's import closure never reaches \
+             <http://example.org/more>, so the import table's rule set would be read and never \
+             used; remove it"
+        );
+    }
+
+    /// The node-expression entry point: a `sh:sparqlExpr` node natively with its
+    /// prefixes, a labelled blank node reading a `NAME=TERM` scope binding, and the
+    /// refusals beside them.
+    #[test]
+    fn wasm_eval_node_expr() {
+        assert_eq!(
+            eval_node_expr_impl(
+                TOOLS_SHAPES,
+                None,
+                TOOLS_DATA,
+                ExprInputs::node("http://example.org/ns#Tag"),
+                "http://example.org/ns#a",
+                &[],
+                &[],
+                &[]
+            )
+            .map(|outcome| outcome.outputs),
+            Ok(vec!["<http://example.org/ns#yes>".to_owned()])
+        );
+        assert_eq!(
+            eval_node_expr_impl(
+                TOOLS_SHAPES,
+                None,
+                TOOLS_DATA,
+                ExprInputs::node("_:suffix"),
+                "http://example.org/ns#a",
+                &["suffix=\"!\"@en".to_owned()],
+                &[],
+                &[]
+            )
+            .map(|outcome| outcome.outputs),
+            Ok(vec!["\"!\"@en".to_owned()])
+        );
+        let unknown = eval_node_expr_impl(
+            TOOLS_SHAPES,
+            None,
+            TOOLS_DATA,
+            ExprInputs::node("_:nosuch"),
+            "http://example.org/ns#a",
+            &[],
+            &[],
+            &[],
+        )
+        .expect_err("an unknown label")
+        .to_string();
+        assert!(
+            unknown.contains("mentions no blank node _:nosuch"),
+            "{unknown}"
+        );
+        let no_equals = eval_node_expr_impl(
+            TOOLS_SHAPES,
+            None,
+            TOOLS_DATA,
+            ExprInputs::node("_:suffix"),
+            "http://example.org/ns#a",
+            &["suffix".to_owned()],
+            &[],
+            &[],
+        )
+        .expect_err("a binding with no `=`")
+        .to_string();
+        assert!(no_equals.contains("not NAME=TERM"), "{no_equals}");
+    }
+
+    /// A node-expression evaluation reports the shapes graph's mandatory diagnostic — a
+    /// shape with an empty `sh:in` list — as a structured `{ rule, shape }`, and none for the
+    /// neighbour whose list has a member; the output is the expression's either way.
+    #[test]
+    fn wasm_eval_node_expr_reports_the_mandatory_diagnostic() {
+        let shapes = |members: &str| {
+            format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix ex: <http://example.org/ns#> .\n\
+                 ex:Listed a sh:NodeShape ; sh:in ( {members} ) .\n"
+            )
+        };
+        let eval = |shapes: &str| {
+            eval_node_expr_impl(
+                shapes,
+                None,
+                TOOLS_DATA,
+                ExprInputs::node("http://example.org/ns#Constant"),
+                "http://example.org/ns#a",
+                &[],
+                &[],
+                &[],
+            )
+            .expect("evaluates")
+        };
+        let empty = eval(&shapes(""));
+        assert_eq!(empty.outputs, ["<http://example.org/ns#Constant>"]);
+        let values = diagnostic_values(&empty.diagnostics);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].rule(), "in-minListLength");
+        assert_eq!(values[0].shape(), "<http://example.org/ns#Listed>");
+        let member = eval(&shapes("ex:one"));
+        assert_eq!(member.outputs, ["<http://example.org/ns#Constant>"]);
+        assert_eq!(diagnostic_values(&member.diagnostics).len(), 0);
+    }
+
+    /// An anonymous expression named by a walk and inline as Turtle, each refusal beside
+    /// a valid neighbour: a step reaching two values beside one reaching one, two roots
+    /// beside one, and two selectors beside one.
+    #[test]
+    fn wasm_eval_node_expr_selectors() {
+        const SH: &str = "http://www.w3.org/ns/shacl#";
+        let eval = |expr: ExprInputs<'_>| {
+            eval_node_expr_impl(
+                TOOLS_SHAPES,
+                None,
+                TOOLS_DATA,
+                expr,
+                "http://example.org/ns#a",
+                &[],
+                &[],
+                &[],
+            )
+            .map(|outcome| outcome.outputs)
+            .map_err(|error| error.to_string())
+        };
+        let yes = Ok(vec!["<http://example.org/ns#yes>".to_owned()]);
+        let tagger_walk = [format!("{SH}rule"), format!("{SH}object")];
+        assert_eq!(
+            eval(ExprInputs {
+                at: Some("http://example.org/ns#Tagger"),
+                via: &tagger_walk,
+                ..ExprInputs::default()
+            }),
+            yes
+        );
+        let one = ["http://www.w3.org/2000/01/rdf-schema#isDefinedBy".to_owned()];
+        let parameter = format!("{SH}SPARQLExprExpression");
+        assert_eq!(
+            eval(ExprInputs {
+                at: Some(&parameter),
+                via: &one,
+                ..ExprInputs::default()
+            }),
+            Ok(vec![format!("<{SH}>")])
+        );
+        let two = [format!("{SH}parameter")];
+        let refused = eval(ExprInputs {
+            at: Some(&parameter),
+            via: &two,
+            ..ExprInputs::default()
+        })
+        .expect_err("two values");
+        assert!(refused.contains("reaches 2 values"), "{refused}");
+
+        assert_eq!(
+            eval(ExprInputs {
+                turtle: Some("[ sh:sparqlExpr \"ex:yes\" ; sh:prefixes ex:Prefixes ] ."),
+                ..ExprInputs::default()
+            }),
+            yes
+        );
+        let roots = eval(ExprInputs {
+            turtle: Some("[ shnex:var \"a\" ] . [ shnex:var \"b\" ] ."),
+            ..ExprInputs::default()
+        })
+        .expect_err("two roots");
+        assert!(roots.contains("has 2 root blank nodes"), "{roots}");
+        let both = eval(ExprInputs {
+            expr: Some("http://example.org/ns#Tag"),
+            turtle: Some("[ shnex:var \"a\" ] ."),
+            ..ExprInputs::default()
+        })
+        .expect_err("two selectors");
+        assert!(both.contains("2 of the expression node"), "{both}");
+    }
+
+    /// The lint entry point: the fixture certifies clean with `sh:sparqlExpr`'s function
+    /// bound natively; a malformed neighbour carries findings.
+    #[test]
+    fn wasm_lint_shapes() {
+        let clean = ShaclLintReport {
+            report: lint_shapes_impl(TOOLS_SHAPES, None, &[], &[], None).expect("lint runs"),
+        };
+        assert!(clean.clean());
+        assert_eq!(clean.findings(), 0);
+        assert_eq!(clean.load_error(), None);
+        assert!(
+            clean.report().contains(
+                "call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on \
+                 <http://example.org/ns#Tagger>\n"
+            ),
+            "{}",
+            clean.report()
+        );
+        let malformed = ShaclLintReport {
+            report: lint_shapes_impl(
+                &format!(
+                    "{TOOLS_SHAPES}ex:Bad a sh:NodeShape ; \
+                     sh:property [ sh:path ex:p ; sh:minCount \"one\" ] .\n"
+                ),
+                None,
+                &[],
+                &[],
+                None,
+            )
+            .expect("lint runs"),
+        };
+        assert!(!malformed.clean());
+        assert!(malformed.findings() >= 2, "{}", malformed.report());
+        assert!(malformed.load_error().is_some());
+        assert!(malformed.report().ends_with("clean false\n"));
+        assert!(lint_shapes_impl("@@@ not turtle", None, &[], &[], None).is_err());
+
+        // An empty sh:in list is a mandatory diagnostic, named by rule id; the clean
+        // fixture above is its neighbour and carries none.
+        assert!(
+            clean.report().contains("diagnostics 0\n"),
+            "{}",
+            clean.report()
+        );
+        let empty_in = ShaclLintReport {
+            report: lint_shapes_impl(
+                &format!("{TOOLS_SHAPES}ex:Empty a sh:NodeShape ; sh:in () .\n"),
+                None,
+                &[],
+                &[],
+                None,
+            )
+            .expect("lint runs"),
+        };
+        assert!(!empty_in.clean());
+        assert_eq!(empty_in.findings(), 1, "{}", empty_in.report());
+        assert_eq!(empty_in.load_error(), None);
+        assert!(
+            empty_in.report().contains(
+                "diagnostics 1\ndiagnostic in-minListLength <http://example.org/ns#Empty>\n"
+            ),
+            "{}",
+            empty_in.report()
+        );
+    }
+
+    /// `shaclCheckRules`' native core: every level answers its own question, a check
+    /// refuses by stage, the import table resolves `IMPORTS`, and an unknown level is
+    /// refused rather than read as the default.
+    #[test]
+    fn check_rules_answers_each_level() {
+        let cyclic = "PREFIX ex: <http://example.org/ns#>\n\
+            RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:p ex:z } }\n";
+        let acyclic = "PREFIX ex: <http://example.org/ns#>\n\
+            RULE { ?x ex:p ex:z } WHERE { ?x ex:q ex:o NOT { ?x ex:r ex:z } }\n";
+        for level in ["syntax", "well-formed"] {
+            let checked = check_rules_impl(cyclic, None, &[], &[], Some(level)).expect(level);
+            assert_eq!(checked.level().name(), level);
+            assert!(checked.strata().is_none());
+        }
+        let refused = check_rules_impl(cyclic, None, &[], &[], None).expect_err("cyclic");
+        assert!(
+            matches!(&refused, ShapesError::Invalid(message) if message.contains("is not stratifiable")),
+            "{refused}"
+        );
+        let checked = check_rules_impl(acyclic, None, &[], &[], None).expect("acyclic");
+        assert_eq!(checked.strata().map(<[_]>::len), Some(1));
+
+        let importing = "PREFIX ex: <http://example.org/ns#>\nIMPORTS <http://example.org/more>\n\
+            RULE { ?x ex:q ?y } WHERE { ?x ex:n ?y }\n";
+        let imported = "PREFIX ex: <http://example.org/ns#>\nRULE { ?x ex:counted true } WHERE { ?x ex:q ?y }\n";
+        assert!(check_rules_impl(importing, None, &[], &[], None).is_err());
+        let resolved = check_rules_impl(
+            importing,
+            None,
+            &["http://example.org/more".to_owned()],
+            &[imported.to_owned()],
+            None,
+        )
+        .expect("resolved");
+        assert_eq!(resolved.imported(), ["http://example.org/more".to_owned()]);
+        assert_eq!(resolved.document().rules().len(), 2);
+
+        let unknown =
+            check_rules_impl(acyclic, None, &[], &[], Some("stratify")).expect_err("no such level");
+        assert!(
+            unknown
+                .to_string()
+                .contains("is not a SPARQL 1.2 RL check level")
+        );
+    }
+
+    /// W3C SHACL 1.0 `sparql/pre-binding/shapesGraph-001` through the exported
+    /// `shaclValidateToSarif`, `shaclValidateChangesToSarif`, `shaclPackProduct` and
+    /// `shaclLintShapes` cores: with `shapesGraph` named, the approved ONE result; without
+    /// it, SHACL 1.2's ordinary unbound variable and a conforming data graph. A relative
+    /// IRI with no base is refused beside its absolute neighbour.
+    #[test]
+    fn shapes_graph_001_honours_the_shapes_graph_iri() {
+        let path = std::path::PathBuf::from(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../vectors/shacl/sparql/pre-binding/shapesGraph-001.ttl"
+        ))
+        .canonicalize()
+        .expect("the vendored W3C test file");
+        let base = format!("file://{}", path.display());
+        let shapes = std::fs::read_to_string(&path).expect("reads");
+        // The test's data graph is the same file: its triples, as N-Triples.
+        let dataset =
+            purrdf::parse_dataset(shapes.as_bytes(), "text/turtle", Some(&base)).expect("parses");
+        let data = String::from_utf8(
+            purrdf::serialize_dataset(
+                &*dataset,
+                "application/n-quads",
+                purrdf::SerializeGraph::Dataset,
+            )
+            .expect("serializes"),
+        )
+        .expect("N-Quads is UTF-8");
+        let results = |sarif: &str| -> usize {
+            let log: serde_json::Value = serde_json::from_str(sarif).expect("json");
+            log["runs"][0]["results"]
+                .as_array()
+                .expect("a completed run always carries results")
+                .len()
+        };
+        for (graph, expected) in [(Some(base.as_str()), 1usize), (None, 0)] {
+            let sarif = validate_to_sarif_impl(&shapes, Some(&base), &data, None, &[], &[], graph)
+                .expect("validates");
+            assert_eq!(results(&sarif), expected, "validate, {graph:?}");
+            let (sarif, _) = validate_changes_to_sarif_impl(
+                &shapes,
+                Some(&base),
+                "",
+                Some(&data),
+                None,
+                &[],
+                &[],
+                graph,
+            )
+            .expect("the change validates");
+            assert_eq!(results(&sarif), expected, "change path, {graph:?}");
+            let product = pack_product_impl(&shapes, Some(&base), &[], &[], graph).expect("packs");
+            let sarif = purrdf_validate::validate_with_shapes_product(
+                &product,
+                &data,
+                &purrdf_validate::SarifOptions::default(),
+            )
+            .expect("the product validates");
+            assert_eq!(results(&sarif), expected, "product, {graph:?}");
+            assert!(lint_shapes_impl(&shapes, Some(&base), &[], &[], graph).is_ok());
+        }
+        let relative = validate_to_sarif_impl(
+            &shapes,
+            None,
+            &data,
+            None,
+            &[],
+            &[],
+            Some("shapesGraph-001.ttl"),
+        )
+        .expect_err("no base: the relative IRI names no graph");
+        assert!(
+            relative
+                .to_string()
+                .starts_with("shapes graph `shapesGraph-001.ttl`: iri-relative-no-base"),
+            "{relative}"
+        );
+        let resolved = validate_to_sarif_impl(
+            &shapes,
+            Some(&base),
+            &data,
+            None,
+            &[],
+            &[],
+            Some("shapesGraph-001.ttl"),
+        )
+        .expect("resolves against the base");
+        assert_eq!(results(&resolved), 1);
     }
 }

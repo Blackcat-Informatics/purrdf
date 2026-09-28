@@ -17,7 +17,7 @@
 //! SHACL-SPARQL paths over the combined data(+shapes) dataset.
 
 use crate::data_view::{ShaclDatasetView, ShaclRead};
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use ::purrdf::{GraphMatch, QuadIds};
 use ::purrdf::{RdfDataset, TermId};
@@ -129,6 +129,9 @@ pub struct ShaclData {
     sparql_view: ClassMembershipView,
     /// The named-graph IRI under which the shapes dataset is exposed, when known.
     shapes_graph_iri: Option<String>,
+    /// The NODES of the Core data graph, derived on first use and shared by every
+    /// `sh:targetWhere` the bound shapes declare (see [`Self::graph_nodes`]).
+    graph_nodes: OnceLock<Box<[TermId]>>,
 }
 
 impl ShaclData {
@@ -157,11 +160,25 @@ impl ShaclData {
         sparql: Arc<ShaclDatasetView>,
         shapes_graph_iri: Option<String>,
     ) -> Self {
-        let class_membership = ClassMembershipView::from_view(Arc::clone(&core));
+        Self::from_views_with_supplement(core, sparql, shapes_graph_iri, &[])
+    }
+
+    /// [`Self::from_views`], with SHACL type also following `supplement`: the
+    /// `(subclass, superclass)` IRI pairs of the shapes graph's `rdfs:subClassOf`
+    /// triples, when the caller asked for them (SHACL 1.2 Core §6.3,
+    /// `subClassOfInShapesGraph`). Both views must intern every IRI of the pairs.
+    pub(crate) fn from_views_with_supplement(
+        core: Arc<ShaclDatasetView>,
+        sparql: Arc<ShaclDatasetView>,
+        shapes_graph_iri: Option<String>,
+        supplement: &[(String, String)],
+    ) -> Self {
+        let class_membership =
+            ClassMembershipView::from_view_with_supplement(Arc::clone(&core), supplement);
         let sparql_view = if Arc::ptr_eq(&core, &sparql) {
             class_membership.clone()
         } else {
-            ClassMembershipView::from_view(Arc::clone(&sparql))
+            ClassMembershipView::from_view_with_supplement(Arc::clone(&sparql), supplement)
         };
         Self {
             core,
@@ -169,7 +186,47 @@ impl ShaclData {
             class_membership,
             sparql_view,
             shapes_graph_iri,
+            graph_nodes: OnceLock::new(),
         }
+    }
+
+    /// The NODES of the Core data graph, as RDF 1.2 Concepts defines them: "The
+    /// set of nodes of an RDF graph is the set of subjects and objects of the
+    /// asserted triples of the graph." Across every graph of the dataset, as every
+    /// Core lookup reads, deduplicated and in first-seen order.
+    ///
+    /// A triple term that is the OBJECT of an asserted triple is a node; a term
+    /// that occurs only INSIDE a triple term is not, because the triple term's
+    /// constituents are not subjects or objects of an asserted triple.
+    ///
+    /// Built once per holder, on the first `sh:targetWhere` that has to scan the
+    /// whole graph, and reused by every later one; a shapes graph with none never
+    /// pays for it.
+    pub(crate) fn graph_nodes(&self) -> &[TermId] {
+        self.graph_nodes.get_or_init(|| {
+            let mut seen = ::purrdf::IdSet::default();
+            let mut nodes: Vec<TermId> = Vec::new();
+            for quad in quads_for_pattern_ids(&*self.core, None, None, None, GraphFilter::AnyGraph)
+            {
+                for node in [quad.s, quad.o] {
+                    if seen.insert(node) {
+                        nodes.push(node);
+                    }
+                }
+            }
+            nodes.into_boxed_slice()
+        })
+    }
+
+    /// Whether `node` is a NODE of the Core data graph (see
+    /// [`Self::graph_nodes`]): the subject or the object of an asserted triple.
+    pub(crate) fn is_graph_node(&self, node: TermId) -> bool {
+        quads_for_pattern_ids(&*self.core, Some(node), None, None, GraphFilter::AnyGraph)
+            .next()
+            .is_some()
+            || quads_for_pattern_ids(&*self.core, None, None, Some(node), GraphFilter::AnyGraph)
+                .next()
+                .is_some()
     }
 
     /// Materialize the projected data graph at an explicit compatibility boundary.
@@ -215,6 +272,55 @@ impl ShaclData {
     #[inline]
     pub(crate) fn sparql_view_shares_core_ids(&self) -> bool {
         Arc::ptr_eq(&self.core, &self.sparql)
+    }
+
+    /// This holder with SHACL type also following `supplement`, the `(subclass,
+    /// superclass)` IRI pairs of the shapes graph's `rdfs:subClassOf` triples (SHACL 1.2
+    /// Core §6.3, `subClassOfInShapesGraph`).
+    ///
+    /// The rows both views read are unchanged. An IRI of the pairs the Core view does
+    /// not intern — a class only the shapes graph names — is added to both views' term
+    /// tables ([`ShaclDatasetView::with_extra_terms`]), so a class target or
+    /// `sh:class` naming it resolves and derives its members through the supplement.
+    ///
+    /// # Errors
+    /// A composite or handle mapping exceeding the default view limits.
+    pub(crate) fn with_class_supplement(
+        &self,
+        supplement: &[(String, String)],
+    ) -> Result<Self, String> {
+        let mut missing: Vec<&str> = supplement
+            .iter()
+            .flat_map(|(child, parent)| [child.as_str(), parent.as_str()])
+            .filter(|iri| self.core.term_id_by_iri(iri).is_none())
+            .collect();
+        missing.sort_unstable();
+        missing.dedup();
+        let (core, sparql) = if missing.is_empty() {
+            (Arc::clone(&self.core), Arc::clone(&self.sparql))
+        } else {
+            let mut terms = ::purrdf::RdfDatasetBuilder::new();
+            for iri in missing {
+                terms.intern_iri(iri);
+            }
+            let terms = terms
+                .freeze()
+                .map_err(|error| format!("the subClassOfInShapesGraph terms: {error}"))?;
+            let limits = ::purrdf::ir::ViewLimits::default();
+            let core = Arc::new(self.core.with_extra_terms(Arc::clone(&terms), limits)?);
+            let sparql = if self.sparql_view_shares_core_ids() {
+                Arc::clone(&core)
+            } else {
+                Arc::new(self.sparql.with_extra_terms(terms, limits)?)
+            };
+            (core, sparql)
+        };
+        Ok(Self::from_views_with_supplement(
+            core,
+            sparql,
+            self.shapes_graph_iri.clone(),
+            supplement,
+        ))
     }
 
     /// Retain the native validation carrier for repeated prepared bindings.

@@ -25,8 +25,8 @@ use pyo3::types::{PyBytes, PyCapsule, PyDict};
 
 use super::canon::PyCanonicalizationAlgorithm;
 use super::io::{
-    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss, parse_quads,
-    read_input,
+    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss,
+    parse_quads_and_prefixes, read_input,
 };
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
@@ -41,10 +41,10 @@ use super::term::{
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::py_store::iri_value_error;
 use crate::{
-    BlankScope, ClosureRelations, DatasetMut, GraphMatchValue, QueryEntailmentPlan, RdfDataset,
-    RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SerializeOptions,
-    SparqlRequest, StatementLayer, TermValue, query_with_entailment_governed,
-    serialize_dataset_with,
+    BlankScope, ClosureRelations, DatasetMut, EntailmentClosure, GraphMatchValue,
+    QueryEntailmentPlan, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm, RdfTriple,
+    SerializeGraph, SerializeOptions, SparqlRequest, StatementLayer, TermValue,
+    query_with_entailment_closure_governed, serialize_dataset_with,
 };
 
 /// An in-memory RDF 1.2 quad store with SPARQL. Mirrors the oxigraph Python `Store`.
@@ -69,6 +69,11 @@ impl PyStore {
 
     /// Load RDF into the store. Either `input` (bytes/str data) or the keyword
     /// `path` (a file to read) must be given, together with `format`.
+    ///
+    /// Returns the document's prefix map, from the same parse: the `@prefix` /
+    /// `PREFIX` bindings a Turtle or TriG document left in force at its end, as
+    /// `(prefix, namespace)` pairs sorted by prefix, each namespace resolved. Empty for
+    /// every other format.
     #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
     fn load(
         &mut self,
@@ -77,7 +82,7 @@ impl PyStore {
         format: Option<PyRdfFormat>,
         path: Option<String>,
         base: Option<String>,
-    ) -> PyResult<()> {
+    ) -> PyResult<Vec<(String, String)>> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
         // Parse natively into the flat quad stream, then insert into the COW set.
@@ -96,14 +101,15 @@ impl PyStore {
         // plain Rust data.
         py.detach(move || {
             let base_ref = base.as_deref();
-            for quad in parse_quads(&data, format.to_native(), base_ref)
-                .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?
-            {
+            let (quads, prefixes) =
+                parse_quads_and_prefixes(&data, format.to_native(), base_ref)
+                    .map_err(|e| PyValueError::new_err(format!("load error: {e}")))?;
+            for quad in quads {
                 inner
                     .insert(rdf_quad_to_values_scoped(&quad, scope))
                     .map_err(|e| iri_value_error(&e))?;
             }
-            Ok(())
+            Ok(prefixes)
         })
     }
 
@@ -117,7 +123,7 @@ impl PyStore {
         format: Option<PyRdfFormat>,
         path: Option<String>,
         base: Option<String>,
-    ) -> PyResult<()> {
+    ) -> PyResult<Vec<(String, String)>> {
         self.load(py, input, format, path, base)
     }
 
@@ -567,11 +573,30 @@ impl PyStore {
     /// instead is what used to make the two halves of one query disagree, silently and at
     /// success. See [`purrdf::ClosureRelations`] for the order and for the one
     /// `owl-direct` pairing it refuses.
+    ///
+    /// `imports` and `premise_iris` are the store's `owl:imports` table, spelled as
+    /// [`purrdf.entail.certain_answers`](crate::py_entail) spells them: a sequence of
+    /// `(ontology_iri, nquads_document)` pairs and the IRIs the store's data was read from.
+    /// OWL 2 defines an ontology's imports closure to BE the ontology, so the closure the
+    /// query runs over is materialized over the store merged with every document the table
+    /// supplies. An `owl:imports` the table does not resolve, and the store does not already
+    /// hold, raises `ValueError` naming it — never a closure of a smaller premise — and so
+    /// does an entry the closure never reaches. Omitted, both are empty.
+    ///
+    /// `max_stored_facts` and `max_join_steps` are the closure's evaluation limits, exactly as
+    /// `purrdf.entail.materialize` takes them, for the `rdf`, `rdfs`, `owl-rl` and `d`
+    /// regimes; `None` keeps the default. A closure past one raises `ValueError` naming the
+    /// limit, the numbers and this method's keyword; the governors price the evaluation over
+    /// the closure and never become a limit on it.
     #[pyo3(signature = (
         query,
         entailment,
         *,
         program="",
+        imports=None,
+        premise_iris=None,
+        max_stored_facts=None,
+        max_join_steps=None,
         substitutions=None,
         extension_namespaces=None,
         property_fn_namespaces=None,
@@ -598,6 +623,10 @@ impl PyStore {
         query: &str,
         entailment: &str,
         program: &str,
+        imports: Option<Vec<(String, String)>>,
+        premise_iris: Option<Vec<String>>,
+        max_stored_facts: Option<u64>,
+        max_join_steps: Option<u64>,
         substitutions: Option<&Bound<'_, PyDict>>,
         extension_namespaces: Option<Vec<String>>,
         property_fn_namespaces: Option<Vec<String>>,
@@ -618,6 +647,15 @@ impl PyStore {
         let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let plan =
             QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
+        // The store's `owl:imports` table, parsed by the shared boundary before any closure
+        // work. Absent is EMPTY — "imports nothing" — so a store that does import a document
+        // is refused by name rather than closed without it.
+        let imports = crate::py_entail::entailment_import_map(imports, premise_iris)?;
+        let limits = purrdf_validate::MaterializeLimits {
+            max_stored_facts,
+            max_join_steps,
+            host: purrdf_validate::RegimeHost::Python,
+        };
         let args = GovernorArgs {
             fuel,
             deadline_ms,
@@ -656,7 +694,7 @@ impl PyStore {
             let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             let aggregates = build_aggregates(aggregate_namespace);
-            query_with_entailment_governed(
+            query_with_entailment_closure_governed(
                 &engine,
                 &dataset,
                 SparqlRequest {
@@ -664,7 +702,8 @@ impl PyStore {
                     base_iri: None,
                     substitutions: &subs,
                 },
-                plan.entailment(),
+                &EntailmentClosure::new(plan.entailment(), &imports)
+                    .with_limits(limits.eval_options()),
                 purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
                     parser_options,
                     registry.as_ref(),
@@ -673,7 +712,20 @@ impl PyStore {
                 &relations,
                 governors,
             )
-            .map_err(|e| PyValueError::new_err(format!("entailment query failed: {e}")))
+            .map_err(|error| match error {
+                // Rendered by the shared boundary, so a passed evaluation limit names this
+                // method's keyword rather than a Rust type a Python caller cannot reach.
+                crate::ReasoningError::Entailment(error) => PyValueError::new_err(format!(
+                    "entailment query failed: {}",
+                    purrdf_validate::render_entail_error_in(
+                        entailment,
+                        &error,
+                        purrdf_validate::RegimeHost::Python,
+                        purrdf_validate::RegimeService::Query,
+                    )
+                )),
+                other => PyValueError::new_err(format!("entailment query failed: {other}")),
+            })
         })?;
         materialize_entailment_outcome(py, outcome)
     }

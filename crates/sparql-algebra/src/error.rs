@@ -136,7 +136,11 @@ impl fmt::Display for ParseError {
                 write!(f, "SPARQL syntax error at byte {at}: {reason}")
             }
             Self::Unsupported(feature) => {
-                write!(f, "unsupported SPARQL construct: {feature}")
+                write!(
+                    f,
+                    "unsupported SPARQL construct: {feature} is outside the SPARQL 1.2 \
+                     query language this processor implements"
+                )
             }
             Self::Iri { lexical, reason } => {
                 write!(f, "invalid IRI {lexical:?} in term position: {reason}")
@@ -184,6 +188,19 @@ mod tests {
             .byte_offset(),
             None
         );
+    }
+
+    /// The text reaches users (a SHACL `sh:select` body surfaces it), so it names the
+    /// construct and the language, never an internal work label.
+    #[test]
+    fn unsupported_names_the_construct_in_the_languages_terms() {
+        let text = ParseError::unsupported("solution modifiers on ASK").to_string();
+        assert_eq!(
+            text,
+            "unsupported SPARQL construct: solution modifiers on ASK is outside the SPARQL \
+             1.2 query language this processor implements"
+        );
+        assert!(!text.contains("purrdf"), "{text}");
     }
 
     #[test]

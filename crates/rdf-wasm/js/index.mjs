@@ -4,10 +4,12 @@
 // purrdf — the idiomatic RDF/JS surface over the wasm engine.
 //
 // The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term,
-// RegimeClosure, ReasoningAnswer, SerializeLoss, ServiceCatalog, ShaclProductRefusal,
-// SparqlProtocolRequest)
+// RegimeClosure, ReasoningAnswer, SerializeLoss, ServiceCatalog, ShaclImportError,
+// ShaclProductRefusal, ShaclEntailment, ShaclRulesInference, ShaclRulesCheck,
+// ShaclLintReport, ShaclNodeExprOutcome, ShaclDiagnostic, SparqlProtocolRequest)
 // and the free functions (version,
 // shaclValidateToSarif, shaclValidateChangesToSarif, shaclEntail,
+// shaclApplyRules, shaclCheckRules, shaclEvalNodeExpr, shaclLintShapes,
 // shaclPackProduct, shaclProductExplain,
 // shaclProductCertify, shaclProductValidateToSarif,
 // shaclProductValidateToSarifRebuild, shaclProductValidateToSarifExpecting,
@@ -101,17 +103,28 @@ import init, {
   RunStatus,
   SerializeLoss,
   ServiceCatalog,
+  shaclApplyRules,
   ShaclChangeValidation,
+  shaclCheckRules,
+  ShaclDiagnostic,
   shaclEntail,
+  ShaclEntailment,
+  shaclEvalNodeExpr,
+  ShaclImportError,
+  ShaclLintReport,
+  shaclLintShapes,
   shaclPackProduct,
   shaclProductCertify,
   shaclProductExplain,
-  ShaclAsyncOperation,
+  ShaclJobRequest,
+  ShaclNodeExprOutcome,
   ShaclProductRefusal,
   shaclProductValidateToSarif,
   shaclProductValidateToSarifExpecting,
   shaclProductValidateToSarifRebuild,
   shaclProductValidateToSarifRebuildExpecting,
+  ShaclRulesCheck,
+  ShaclRulesInference,
   shaclValidateChangesToSarif,
   shaclValidateToSarif,
   Sink,
@@ -294,7 +307,31 @@ function normalizeEntailmentGovernedOptions(options) {
   return {
     ...governed,
     program: options?.program ?? undefined,
+    // The dataset's `owl:imports` table. Absent means EMPTY, which is the ordinary
+    // "imports nothing" case: a dataset that does import something is then refused by name
+    // in Rust rather than closed without its imports, so the default can never be a silent
+    // drop.
+    importIris: stringArrayOption(options?.importIris, "importIris"),
+    importDocuments: stringArrayOption(options?.importDocuments, "importDocuments"),
+    premiseIris: stringArrayOption(options?.premiseIris, "premiseIris"),
+    // The closure's evaluation limits, `bigint`s at the binding. A `number` is accepted and
+    // widened exactly; absent is this target's default.
+    maxStoredFacts: limitOption(options?.maxStoredFacts),
+    maxJoinSteps: limitOption(options?.maxJoinSteps),
   };
+}
+
+function limitOption(value) {
+  if (value == null) return undefined;
+  return typeof value === "bigint" ? value : BigInt(value);
+}
+
+function stringArrayOption(value, name) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${name} must be an array of strings when supplied`);
+  }
+  return value;
 }
 
 function visualizationOptionsJson(options) {
@@ -872,51 +909,27 @@ const utf8 = new TextDecoder();
 // The asynchronous SHACL twins
 // ---------------------------------------------------------------------------
 //
-// Each runs its synchronous twin's own Rust body as a job (`AsyncJob.beginShacl`) under
-// the job's signal and SERVICE/LOAD sources, and settles into exactly what the
-// synchronous twin returns: the same SARIF text, the same `ShaclChangeValidation`, the
-// same N-Triples, and — for the product twins — a rejection with the same
-// `ShaclProductRefusal` the synchronous twin throws.
-
-/**
- * Begin and drive a SHACL job for `operation`: `args` are the synchronous twin's
- * arguments by name, `options` the host options (`resolveService`, `resolveLoad`,
- * `signal`, `yieldEveryPolls`, `catalog`, `localServices`).
- */
-async function driveShaclJob(operation, args, options, settle, fail) {
-  assertAsyncQueries();
-  return driveAsyncJob(
-    AsyncOperationKind.Shacl,
-    options,
-    undefined,
-    (jobOptions) =>
-      AsyncJob.beginShacl(
-        operation,
-        jobOptions,
-        args.dataNt,
-        args.shapesTtl,
-        args.shapesBase ?? undefined,
-        args.addedNt ?? undefined,
-        args.removedNt ?? undefined,
-        args.product,
-        args.expectIdentity,
-      ),
-    settle,
-    fail,
-  );
-}
+// Each takes exactly its synchronous twin's arguments, then the host options, and runs
+// its synchronous twin's own Rust body as a job under the job's signal and SERVICE/LOAD
+// sources: the arguments are handed, as they came, to the `ShaclJobRequest` constructor
+// named for the synchronous entry — which declares the same argument list as that entry,
+// from the one declaration in Rust — and the request is the one value the job carries.
+// Each settles into exactly what the synchronous twin returns: the same SARIF text, the
+// same `ShaclChangeValidation`, `ShaclEntailment`, `ShaclRulesInference` or output
+// nodes, and a rejection with the same `ShaclImportError` or `ShaclProductRefusal` the
+// synchronous twin throws.
 
 const takeText = (job) => utf8.decode(job.takeRawBytes());
 
 /**
- * A product job's rejection: the `ShaclProductRefusal` its synchronous twin throws when
- * the job was refused (carrying the job's evidence, as every asynchronous rejection
- * does), and the ordinary asynchronous rejection otherwise — a cancellation, a deadline,
- * a fault.
+ * A SHACL job's rejection: the `ShaclProductRefusal` or `ShaclImportError` its
+ * synchronous twin throws when the job was refused that way (carrying the job's
+ * evidence, as every asynchronous rejection does), and the ordinary asynchronous
+ * rejection otherwise — an engine error, a cancellation, a deadline, a fault.
  */
 function shaclRefusalFailure(job, signal) {
   if (job.errorKind === "error") {
-    const refusal = job.takeShaclRefusal();
+    const refusal = job.takeShaclRefusal() ?? job.takeShaclImportError();
     if (refusal !== undefined) {
       refusal.evidence = { async: asyncEvidenceToObject(job.takeEvidence()) };
       return refusal;
@@ -926,110 +939,79 @@ function shaclRefusalFailure(job, signal) {
 }
 
 /**
- * The twin of `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)`: resolves to the
- * same SARIF 2.1.0 JSON string.
+ * The asynchronous twin of a SHACL entry: `request` names the `ShaclJobRequest`
+ * constructor that declares the entry's argument list, `settle` drains the finished job
+ * into what the entry returns. The twin's arguments are the constructor's, then the host
+ * options (`resolveService`, `resolveLoad`, `signal`, `yieldEveryPolls`, `catalog`,
+ * `localServices`).
  */
-export async function shaclValidateToSarifAsync(shapesTtl, dataNt, shapesBase, options) {
-  return driveShaclJob(
-    ShaclAsyncOperation.ValidateToSarif,
-    { shapesTtl, dataNt, shapesBase },
-    options,
-    takeText,
-  );
+function shaclTwin(request, settle) {
+  const build = ShaclJobRequest[request];
+  const arity = build.length;
+  return async function (...args) {
+    assertAsyncQueries();
+    return driveAsyncJob(
+      AsyncOperationKind.Shacl,
+      args[arity],
+      undefined,
+      (jobOptions) => AsyncJob.beginShacl(jobOptions, build(...args.slice(0, arity))),
+      settle,
+      shaclRefusalFailure,
+    );
+  };
 }
+
+/** The twin of `shaclValidateToSarif`: resolves to the same SARIF 2.1.0 JSON string. */
+export const shaclValidateToSarifAsync = shaclTwin("validateToSarif", takeText);
 
 /**
- * The twin of `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?,
- * shapesBase?)`: resolves to the same `ShaclChangeValidation` (call `.free()` on it).
+ * The twin of `shaclValidateChangesToSarif`: resolves to the same `ShaclChangeValidation`
+ * (call `.free()` on it).
  */
-export async function shaclValidateChangesToSarifAsync(
-  shapesTtl,
-  dataNt,
-  addedNt,
-  removedNt,
-  shapesBase,
-  options,
-) {
-  return driveShaclJob(
-    ShaclAsyncOperation.ValidateChangesToSarif,
-    { shapesTtl, dataNt, addedNt, removedNt, shapesBase },
-    options,
-    (job) => job.takeShaclChangeValidation(),
-  );
-}
+export const shaclValidateChangesToSarifAsync = shaclTwin("validateChangesToSarif", (job) =>
+  job.takeShaclChangeValidation(),
+);
+
+/** The twin of `shaclEntail`: resolves to the same `ShaclEntailment` (call `.free()` on it). */
+export const shaclEntailAsync = shaclTwin("entail", (job) => job.takeShaclEntailment());
 
 /**
- * The twin of `shaclEntail(shapesTtl, dataNt, shapesBase?)`: resolves to the same
- * N-Triples.
+ * The twin of `shaclApplyRules`: resolves to the same `ShaclRulesInference` (call
+ * `.free()` on it).
  */
-export async function shaclEntailAsync(shapesTtl, dataNt, shapesBase, options) {
-  return driveShaclJob(
-    ShaclAsyncOperation.Entail,
-    { shapesTtl, dataNt, shapesBase },
-    options,
-    takeText,
-  );
-}
+export const shaclApplyRulesAsync = shaclTwin("applyRules", (job) => job.takeShaclRulesInference());
 
 /**
- * The twin of `shaclProductValidateToSarif(product, dataNt)`: resolves to the same SARIF
- * string, or rejects with the same `ShaclProductRefusal`.
+ * The twin of `shaclEvalNodeExpr`: resolves to the same `ShaclNodeExprOutcome` (call
+ * `.free()` on it).
  */
-export async function shaclProductValidateToSarifAsync(product, dataNt, options) {
-  return driveShaclJob(
-    ShaclAsyncOperation.ProductValidateToSarif,
-    { product, dataNt },
-    options,
-    takeText,
-    shaclRefusalFailure,
-  );
-}
-
-/** The twin of `shaclProductValidateToSarifRebuild(product, dataNt)`. */
-export async function shaclProductValidateToSarifRebuildAsync(product, dataNt, options) {
-  return driveShaclJob(
-    ShaclAsyncOperation.ProductValidateToSarifRebuild,
-    { product, dataNt },
-    options,
-    takeText,
-    shaclRefusalFailure,
-  );
-}
-
-/** The twin of `shaclProductValidateToSarifExpecting(product, dataNt, expectIdentity)`. */
-export async function shaclProductValidateToSarifExpectingAsync(
-  product,
-  dataNt,
-  expectIdentity,
-  options,
-) {
-  return driveShaclJob(
-    ShaclAsyncOperation.ProductValidateToSarifExpecting,
-    { product, dataNt, expectIdentity },
-    options,
-    takeText,
-    shaclRefusalFailure,
-  );
-}
+export const shaclEvalNodeExprAsync = shaclTwin("evalNodeExpr", (job) =>
+  job.takeShaclNodeExprOutcome(),
+);
 
 /**
- * The twin of `shaclProductValidateToSarifRebuildExpecting(product, dataNt,
- * expectIdentity)`.
+ * The twin of `shaclProductValidateToSarif`: resolves to the same SARIF string, or
+ * rejects with the same `ShaclProductRefusal`.
  */
-export async function shaclProductValidateToSarifRebuildExpectingAsync(
-  product,
-  dataNt,
-  expectIdentity,
-  options,
-) {
-  return driveShaclJob(
-    ShaclAsyncOperation.ProductValidateToSarifRebuildExpecting,
-    { product, dataNt, expectIdentity },
-    options,
-    takeText,
-    shaclRefusalFailure,
-  );
-}
+export const shaclProductValidateToSarifAsync = shaclTwin("productValidateToSarif", takeText);
+
+/** The twin of `shaclProductValidateToSarifRebuild`. */
+export const shaclProductValidateToSarifRebuildAsync = shaclTwin(
+  "productValidateToSarifRebuild",
+  takeText,
+);
+
+/** The twin of `shaclProductValidateToSarifExpecting`. */
+export const shaclProductValidateToSarifExpectingAsync = shaclTwin(
+  "productValidateToSarifExpecting",
+  takeText,
+);
+
+/** The twin of `shaclProductValidateToSarifRebuildExpecting`. */
+export const shaclProductValidateToSarifRebuildExpectingAsync = shaclTwin(
+  "productValidateToSarifRebuildExpecting",
+  takeText,
+);
 
 /**
  * Whether this JavaScript engine can run the asynchronous twins: it provides JSPI
@@ -1260,6 +1242,11 @@ export async function ready(wasmBytesOrUrl) {
           o.base,
           entailment,
           o.program,
+          o.importIris,
+          o.importDocuments,
+          o.premiseIris,
+          o.maxStoredFacts,
+          o.maxJoinSteps,
           o.aggregateNamespace,
           o.fuel,
           o.deadlineMs,
@@ -1606,16 +1593,27 @@ export {
   RegimeClosure,
   SerializeLoss,
   ServiceCatalog,
+  shaclApplyRules,
   ShaclChangeValidation,
+  shaclCheckRules,
+  ShaclDiagnostic,
   shaclEntail,
+  ShaclEntailment,
+  shaclEvalNodeExpr,
+  ShaclImportError,
+  ShaclLintReport,
+  shaclLintShapes,
   shaclPackProduct,
   shaclProductCertify,
   shaclProductExplain,
+  ShaclNodeExprOutcome,
   ShaclProductRefusal,
   shaclProductValidateToSarif,
   shaclProductValidateToSarifExpecting,
   shaclProductValidateToSarifRebuild,
   shaclProductValidateToSarifRebuildExpecting,
+  ShaclRulesCheck,
+  ShaclRulesInference,
   shaclValidateChangesToSarif,
   shaclValidateToSarif,
   Sink,

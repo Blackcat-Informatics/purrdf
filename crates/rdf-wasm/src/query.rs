@@ -88,7 +88,9 @@ use crate::codec::resolve_format;
 use crate::convert::term_value_into_rdf_term;
 use crate::dataset::{Dataset, serialize_frozen_with_options};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
-use crate::operation::{JobOutcome, OPTIONS_CODE, OperationInput, coded_error, diagnostic_to_js};
+use crate::operation::{
+    ClosureInputs, JobOutcome, OPTIONS_CODE, OperationInput, coded_error, diagnostic_to_js,
+};
 use crate::term::Term;
 
 /// The typed result kind exposed to the package-root JavaScript wrapper.
@@ -1511,10 +1513,27 @@ impl QueryEngine {
     /// default) leaves every one of the ten names an ordinary unregistered custom-aggregate
     /// IRI.
     ///
+    /// `import_iris`, `import_documents` and `premise_iris` are `entailCertainAnswers`'s, and
+    /// apply to `dataset`: OWL 2 defines an ontology's imports closure to BE the ontology, so
+    /// the closure the query runs over is materialized over the dataset merged with every
+    /// N-Quads document the table supplies, and the report then states
+    /// `ontology-import-resolved`. An `owl:imports` the table does not resolve, and the
+    /// dataset does not already hold, throws by name — never a closure of a smaller premise —
+    /// and so does a table entry the closure never reaches. Empty arrays are the ordinary
+    /// "imports nothing" case, and all three are required rather than defaulted.
+    ///
+    /// `max_stored_facts` and `max_join_steps` (each a `bigint`, or `undefined` for this
+    /// target's default of 131072 facts and 1048576 join steps) are the closure's evaluation
+    /// limits for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, exactly as `entailMaterialize`
+    /// takes them. A closure past one throws naming the limit, the numbers and this method's
+    /// argument (`queryEntailmentGoverned's maxStoredFacts`, …); the governors price the
+    /// evaluation over the closure and never become a limit on it.
+    ///
     /// # Errors
     ///
-    /// An invalid regime/program, query parse/evaluation failure, entailment failure, or
-    /// malformed ceiling. A governor trip is returned in [`EntailmentQueryOutcome`].
+    /// An invalid regime/program, an import-table refusal, query parse/evaluation failure,
+    /// entailment failure, or malformed ceiling. A governor trip is returned in
+    /// [`EntailmentQueryOutcome`].
     #[wasm_bindgen(js_name = queryEntailmentGoverned)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     #[allow(
@@ -1528,6 +1547,11 @@ impl QueryEngine {
         base: Option<String>,
         regime: &str,
         program: Option<String>,
+        import_iris: Vec<String>,
+        import_documents: Vec<String>,
+        premise_iris: Vec<String>,
+        max_stored_facts: Option<u64>,
+        max_join_steps: Option<u64>,
         aggregate_namespace: Option<String>,
         fuel: Option<i64>,
         deadline_ms: Option<i64>,
@@ -1553,6 +1577,13 @@ impl QueryEngine {
         )?;
         input.regime = Some(regime.to_owned());
         input.program = program;
+        input.closure = ClosureInputs {
+            import_iris,
+            import_documents,
+            premise_iris,
+            max_stored_facts,
+            max_join_steps,
+        };
         input.aggregate_namespace = aggregate_namespace;
         input.ceilings = args;
         match input.run_offline(args.stop_watch(cancel.as_ref()))? {

@@ -5995,3 +5995,34 @@ summary = "`json_schema::compile_schema`, the SHACL to JSON Schema compiler"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
+
+[[site]]
+id = "shapes.instance-projection"
+summary = "`instance::project_graph`, the JSON-LD instance projection: the subject collection and per-subject node assembly, and `ListIndex::build`, the list-cell census"
+
+  [[site.measure]]
+  label = "graph"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_shapes"
+  symbol = "purrdf_shapes::instance::project_graph"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "subject"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_shapes"
+  symbol = "purrdf_shapes::instance::project_subject_data"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true
+
+  [[site.measure]]
+  label = "list index"
+  configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
+  crate = "purrdf_shapes"
+  symbol = "<purrdf_shapes::instance::ListIndex>::build"
+  min_vector_ops = 0
+  max_fma = 0
+  forbid_relaxed = true

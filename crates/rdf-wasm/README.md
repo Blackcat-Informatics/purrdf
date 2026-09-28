@@ -86,16 +86,36 @@ const reparsed = Dataset.parse(nq, "nquads");
   handlers for `SERVICE` and `LOAD`. See
   [Asynchronous queries and federation](#asynchronous-queries-and-federation).
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples data
-  graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
+  graph against a Turtle shapes graph and returns a SARIF 2.1.0 report (a trailing
+  `shapesGraph` names the IRI SHACL-SPARQL's `$shapesGraph` is pre-bound to, as
+  `purrdf validate --shapes-graph` does);
   `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?)` validates a
   CHANGE to that graph instead — both halves of the delta, expanded into the focus
   nodes it can move — and returns the report beside the scope it describes, because
   a shapes graph whose constraints read through SPARQL query text has no bounded
   footprint and falls back to validating everything;
-  `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
-  N-Triples.
-- **Entailment regimes** — `entailMaterialize(document, regime, program)` closes an N-Quads
-  (or N-Triples) document under any of the SEVEN SPARQL entailment regimes
+  `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences,
+  bounded by the same four rule-evaluation limits `shaclApplyRules` takes
+  (`maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts`, `maxJoinSteps`),
+  and returns a `ShaclEntailment` (`ntriples`, and `diagnostics`: the shapes graph's
+  mandatory diagnostics, one `ShaclDiagnostic` — `rule`, `shape` — per empty `sh:in` /
+  `sh:xone` list, which every run reports — `ShaclRulesInference` and
+  `shaclEvalNodeExpr`'s `ShaclNodeExprOutcome` carry the same array, and
+  a validation's SARIF log carries them as note-level
+  `invocations[0].toolExecutionNotifications`). Beside validation, `shaclApplyRules(dataNt, shapesTtl?, srl?, …)` runs
+  SHACL 1.2 rules or a SPARQL 1.2 RL rule set and returns the inference graph (and,
+  on request, its proof), `shaclCheckRules(srl, srlBase?, importIris?,
+  importDocuments?, level?)` checks a SPARQL 1.2 RL rule set to a level (`syntax`,
+  `well-formed`, or `stratified` by default) without running it,
+  `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, …)`
+  evaluates one node expression, named by IRI or label, by a walk from a named node
+  (`exprAt` / `exprVia`), or inline as Turtle (`exprTurtle`), and
+  `shaclLintShapes(shapesTtl)` certifies a shapes graph against the W3C
+  `shacl-shacl.ttl` and reports every function call's binding.
+- **Entailment regimes** — `entailMaterialize(document, regime, program, importIris,
+  importDocuments, premiseIris)` closes an N-Quads (or N-Triples) document — together with
+  its `owl:imports` closure, supplied by the caller — under any of the SEVEN SPARQL
+  entailment regimes
   (`simple` / `rdf` / `rdfs` / `owl-rl` / `d` / `owl-direct` / `rif`; none is
   refused for being the regime it is) and returns both the canonical N-Quads closure and a
   byte-stable reasoning report; `entailRules(regime)` /
@@ -141,17 +161,21 @@ the parsing, the evaluation, the joins, the `SILENT` semantics and the result en
   reads a snapshot of the dataset taken when it starts and resolves to its synchronous
   twin's shape.
 - **SHACL twins** — `shaclValidateToSarifAsync`, `shaclValidateChangesToSarifAsync`,
-  `shaclEntailAsync`, `shaclProductValidateToSarifAsync`,
-  `shaclProductValidateToSarifRebuildAsync`, `shaclProductValidateToSarifExpectingAsync`
-  and `shaclProductValidateToSarifRebuildExpectingAsync`. SHACL evaluates SPARQL, so each
-  runs its synchronous twin's own body as a job whose signal and sources are installed as
-  the SHACL engine's execution scope (`purrdf_shapes::sparql::enter_execution_scope`):
-  every query the validation runs reaches the host's `SERVICE` answer, and the signal is
-  polled between focus nodes as well as inside queries. The engine's per-thread scopes
+  `shaclEntailAsync`, `shaclApplyRulesAsync`, `shaclEvalNodeExprAsync`,
+  `shaclProductValidateToSarifAsync`, `shaclProductValidateToSarifRebuildAsync`,
+  `shaclProductValidateToSarifExpectingAsync` and
+  `shaclProductValidateToSarifRebuildExpectingAsync`, each taking exactly its synchronous
+  twin's arguments, then the host options. SHACL evaluates SPARQL, so each runs its
+  synchronous twin's own body as a job whose signal and sources are installed as the
+  SHACL engine's execution scope (`purrdf_shapes::sparql::enter_execution_scope`): the
+  signal is polled between focus nodes as well as inside queries. SHACL-SPARQL admits no
+  `SERVICE` in any query, so a shapes graph with one is refused while it loads, on either
+  lane. The engine's per-thread scopes
   are swapped with the stack context at every suspension, so a synchronous validation
   run while a job waits sees none of the job's governors, sources or registries. Each
   resolves to exactly what its synchronous twin returns; a refused product rejects with
-  the same `ShaclProductRefusal`.
+  the same `ShaclProductRefusal`, and an `owl:imports` closure not in hand with the same
+  `ShaclImportError`.
 - **Host handlers** — `resolveService(request, ctx)` answers a `SERVICE` request with
   SPARQL Results JSON, a `Response`, or a typed failure: `{ kind: "transport" }` or
   `{ kind: "denied" }`. Either fails the query, and under `SERVICE SILENT` either is the

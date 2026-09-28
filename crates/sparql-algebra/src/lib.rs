@@ -6,13 +6,12 @@
 //!
 //! A pure-Rust, wasm-clean leaf crate that parses SPARQL query text into a
 //! purrdf-owned, **RDF 1.2-native** query algebra ([`Query`]/[`GraphPattern`]).
-//! It is the drop-in replacement for the oxigraph-family SPARQL parser (purrdf S5,
-//! ) and the front-end the downstream evaluator S6 (`sparql-eval`,
-//! ) consumes. It builds only on the two CLOSED foundation leaves
+//! It is the drop-in replacement for the oxigraph-family SPARQL parser and the
+//! front-end the downstream evaluator (`sparql-eval`) consumes. It builds only on the two CLOSED foundation leaves
 //! [`purrdf_iri`] and [`purrdf_xsd`], and deliberately does **not**
 //! depend on `purrdf-core`.
 //!
-//! # Scope (purrdf S5)
+//! # Scope
 //!
 //! Parse + algebra **only** — no evaluation. The in-scope SPARQL surface is
 //! corpus-driven (the project's `queries/**/*.rq` plus the DSL-generated

@@ -482,6 +482,25 @@ impl Reasoner {
         self
     }
 
+    /// The same reasoner, stating that the ontology's `owl:imports` closure was RESOLVED
+    /// before it was built.
+    ///
+    /// The reverse mapping surveys the dataset it is handed, and a premise merged with its
+    /// imports by [`resolve_imports`](crate::resolve_imports) still carries the `owl:imports`
+    /// triples the merge resolved — so the survey raises
+    /// [`Construct::UnresolvedOntologyImport`], which is false of that dataset. This swaps it
+    /// for [`Construct::ResolvedOntologyImport`] in the boundary list every certificate of
+    /// this reasoner is sealed over, exactly as
+    /// [`ReasoningReport::with_resolved_imports`](crate::ReasoningReport::with_resolved_imports)
+    /// does for a chase's report. Call it only on a reasoner built over a premise whose
+    /// imports that function resolved, merged or found in place.
+    #[must_use]
+    pub fn with_resolved_imports(mut self) -> Self {
+        self.boundaries.remove(&Construct::UnresolvedOntologyImport);
+        self.boundaries.insert(Construct::ResolvedOntologyImport);
+        self
+    }
+
     /// The per-decision step cap every tableau run of this reasoner runs under.
     #[must_use]
     pub const fn step_cap(&self) -> u64 {

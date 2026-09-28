@@ -103,6 +103,12 @@ ALLOWLIST: dict[tuple[str, str], str] = {
     ): "The SPARQL XML results READER's stack of triple terms being decoded. It holds input under construction, not output.",
     (
         "crates/rdf/src/native_codecs/rdfxml.rs",
+        "pending",
+    ): "The RDF/XML READER's depth-first work stack over the parsed element tree, "
+    "which collects a document's `xmlns` declarations. It holds input elements "
+    "still to visit, not output.",
+    (
+        "crates/rdf/src/native_codecs/rdfxml.rs",
         "stack",
     ): "The RDF/XML writer's open-element stack. Popping it closes a tag; the "
     "bytes for that tag were already emitted and are not touched.",

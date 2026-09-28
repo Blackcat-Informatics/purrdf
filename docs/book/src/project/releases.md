@@ -40,8 +40,8 @@ The MSRV is a promise to consumers; the development toolchain is a tool
 choice, and the two are orthogonal. `rust-toolchain.toml` names a **floating
 nightly** for local work and the CI gates, because nightly clippy and rustdoc
 carry lints stable lacks and its default borrow checker is the stronger one —
-but the source is nightly-free by policy (zero `#![feature(...)]` attributes,
-which the MSRV job proves on every change), and the release lanes build every
+but by policy the source uses zero nightly (unstable) features (no
+`#![feature(...)]` attributes, which the MSRV job proves on every change), and the release lanes build every
 published artifact on stable.
 
 ## Tag-driven trusted publishing

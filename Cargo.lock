@@ -1384,6 +1384,7 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-validate",
+ "purrdf-xsd",
  "rustix",
  "serde_json",
  "sha2",
@@ -1635,6 +1636,7 @@ dependencies = [
  "proptest",
  "purrdf-alloc-probe",
  "purrdf-core",
+ "purrdf-datalog",
  "purrdf-gts",
  "purrdf-iri",
  "purrdf-rdf",
@@ -1792,6 +1794,7 @@ version = "2.0.2"
 dependencies = [
  "pretty_assertions",
  "purrdf-core",
+ "purrdf-datalog",
  "purrdf-entail",
  "purrdf-iri",
  "purrdf-rdf",

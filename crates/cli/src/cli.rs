@@ -3,7 +3,7 @@
 
 //! The clap command tree: the `purrdf` binary's argument model.
 //!
-//! One pipeline, twelve subcommands ([`Command`]), and two global flags
+//! One pipeline, sixteen subcommands ([`Command`]), and two global flags
 //! (`--loss-ledger`, `--jsonld-options`). The format / regime / results-format
 //! choices are modeled as
 //! [`clap::ValueEnum`] wrappers so `--help` enumerates the legal values and clap
@@ -278,7 +278,7 @@ impl Cli {
     }
 }
 
-/// The twelve pipeline subcommands.
+/// The sixteen pipeline subcommands.
 #[derive(Subcommand, Debug)]
 pub(crate) enum Command {
     /// Convert RDF between syntaxes, and to/from the native pack container.
@@ -325,6 +325,31 @@ pub(crate) enum Command {
         #[allow(clippy::option_option)]
         #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
         report: Option<Option<PathBuf>>,
+        /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
+        /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
+        /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
+        /// and the numbers. Omitted, the limit is 4194304 facts. The limit can only refuse:
+        /// a run it admits writes exactly the closure a larger limit would.
+        #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
+        max_stored_facts: Option<u64>,
+        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+        /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
+        /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
+        #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
+        max_join_steps: Option<u64>,
+        /// An `owl:imports` the premise declares, resolved to a local document:
+        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+        /// imports closure to BE the ontology, so the `--entailment` closure is
+        /// materialized over the premise — the merged sources — with every imported document. PurRDF fetches nothing: an
+        /// `owl:imports` no pair resolves, that does not name the premise document itself
+        /// (a source's `file://` retrieval IRI or `--base`), and whose ontology the premise does
+        /// not already hold, is refused by name (exit 1), and a pair the closure never
+        /// reaches is refused as unused (exit 2). The premise's imports are the
+        /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+        /// other is a premise triple. The IRI half must be ABSOLUTE.
+        #[arg(long = "import", value_name = "IRI=FILE", requires = "entailment")]
+        imports: Vec<String>,
         /// Emit RDFC-1.0 canonical N-Quads instead of `--to`. Canonical output is
         /// always N-Quads, so `--to` may be omitted — and is REFUSED (not silently
         /// ignored) when named beside `--canonical`, since it would otherwise be
@@ -356,11 +381,12 @@ pub(crate) enum Command {
         /// Materialize an entailment regime's closure in memory before querying
         /// (the query then runs over the closure, not the raw view). Combines with
         /// every governor flag: the ceilings bound the QUERY over the closure, and
-        /// `--deadline` additionally bounds computing the closure itself — a numeric
-        /// ceiling cannot, because a caller-settable budget on a reasoning run would
-        /// make the closure itself depend on the caller. A deadline that expires while
-        /// the closure is still being computed prints the governor report, writes no
-        /// rows, and exits 3.
+        /// `--deadline` additionally bounds computing the closure itself. The query
+        /// governors never become limits on the reasoning run; `--max-stored-facts` and
+        /// `--max-join-steps` are its limits, and like every evaluation limit they can
+        /// only refuse, never truncate a closure. A deadline that expires while the
+        /// closure is still being computed prints the governor report, writes no rows,
+        /// and exits 3.
         #[arg(long, value_enum, value_name = "REGIME")]
         entailment: Option<CliRegime>,
         /// RIF-in-XML rule document for `rif`; required by that regime and
@@ -372,6 +398,32 @@ pub(crate) enum Command {
         #[allow(clippy::option_option)]
         #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
         report: Option<Option<PathBuf>>,
+        /// An `owl:imports` the data declares, resolved to a local document:
+        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+        /// imports closure to BE the ontology, so the `--entailment` closure the query
+        /// runs over is materialized over the data merged with every imported document.
+        /// PurRDF fetches nothing: an `owl:imports` no pair resolves, that does not name
+        /// the data document itself (its `file://` retrieval IRI or `--base`), and whose
+        /// ontology the data does not already hold, is refused by name (exit 1), and a
+        /// pair the closure never reaches is refused as unused (exit 2). The data's
+        /// imports are the `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+        /// other is a data triple. The IRI half must be ABSOLUTE; each document's format
+        /// is inferred from its extension.
+        #[arg(long = "import", value_name = "IRI=FILE", requires = "entailment")]
+        imports: Vec<String>,
+        /// Permit exactly `N` facts in each evaluation store the `--entailment` closure is
+        /// computed in, for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the
+        /// run (exit 1) naming the limit and the numbers. Omitted, the limit is 4194304
+        /// facts. The limit can only refuse: a run it admits answers over exactly the
+        /// closure a larger limit would.
+        #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
+        max_stored_facts: Option<u64>,
+        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+        /// while the `--entailment` closure is computed, for the `rdf`, `rdfs`, `owl-rl` and
+        /// `d` regimes; one more fails the run (exit 1). Omitted, the limit is 1048576 steps.
+        #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
+        max_join_steps: Option<u64>,
         /// Result serialization: a SPARQL-results format (json/xml/csv/tsv) for
         /// SELECT/ASK, or an RDF syntax (turtle/trig/…) for CONSTRUCT/DESCRIBE.
         /// Defaults to `json` when omitted. `None` here (the flag genuinely
@@ -556,7 +608,33 @@ pub(crate) enum Command {
         #[allow(clippy::option_option)]
         #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
         report: Option<Option<PathBuf>>,
-        /// Input format override; inferred from the input extension when omitted.
+        /// Permit exactly `N` facts in each evaluation store — one per graph of the input,
+        /// holding its triples, the regime's axioms and every conclusion — for the `rdf`,
+        /// `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1) naming the limit
+        /// and the numbers. Omitted, the limit is 4194304 facts. The limit can only refuse:
+        /// a run it admits writes exactly the closure a larger limit would.
+        #[arg(long = "max-stored-facts", value_name = "N")]
+        max_stored_facts: Option<u64>,
+        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+        /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
+        /// naming the limit and the numbers. Omitted, the limit is 1048576 steps.
+        #[arg(long = "max-join-steps", value_name = "N")]
+        max_join_steps: Option<u64>,
+        /// An `owl:imports` the premise declares, resolved to a local document:
+        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+        /// imports closure to BE the ontology, so the closure is materialized over the
+        /// premise merged with every imported document. PurRDF fetches nothing: an
+        /// `owl:imports` no pair resolves, that does not name the premise document itself
+        /// (its `file://` retrieval IRI or `--base`), and whose ontology the premise does
+        /// not already hold, is refused by name (exit 1), and a pair the closure never
+        /// reaches is refused as unused (exit 2). The premise's imports are the
+        /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+        /// other is a premise triple. The IRI half must be ABSOLUTE.
+        #[arg(long = "import", value_name = "IRI=FILE")]
+        imports: Vec<String>,
+        /// Input format override (the input and every `--import` document); inferred from
+        /// each path's extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
         /// Output format override; inferred from the output extension when omitted.
@@ -608,13 +686,31 @@ pub(crate) enum Command {
         verify: bool,
         /// An `owl:imports` the premise declares, resolved to a local document:
         /// repeatable, `IRI=FILE`. PurRDF fetches nothing, so an import no pair
-        /// resolves is refused by name rather than treated as an empty document.
+        /// resolves, that does not name the premise document itself (its `file://`
+        /// retrieval IRI or `--base`), and whose ontology the premise does not already
+        /// hold (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an `owl:versionIRI`
+        /// naming it), is refused by name rather than treated as an empty document. The
+        /// premise's imports are the `owl:imports` on its own IRI, on an `owl:Ontology`
+        /// header, on a `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a
+        /// node naming one of those as its `owl:versionIRI`; any other is a premise triple.
         /// The IRI half must be ABSOLUTE — it is matched against the premise's
         /// `owl:imports` objects, which are — and a relative or malformed one is
         /// refused by name here rather than surfacing as an unresolved import
         /// attributed to the premise's data.
         #[arg(long = "import", value_name = "IRI=FILE")]
         imports: Vec<String>,
+        /// Permit exactly `N` facts in each evaluation store the question is answered with —
+        /// the premise's closure and every re-chase a mechanism beyond the rule table runs —
+        /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
+        /// naming the limit and the numbers. Omitted, the limit is 4194304 facts. The limit
+        /// can only refuse: a run it admits answers exactly as a larger limit would.
+        #[arg(long = "max-stored-facts", value_name = "N")]
+        max_stored_facts: Option<u64>,
+        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+        /// in each of those evaluations; one more fails the run (exit 1). Omitted, the limit
+        /// is 1048576 steps.
+        #[arg(long = "max-join-steps", value_name = "N")]
+        max_join_steps: Option<u64>,
         /// Surface the reasoning certificate: bare writes it to stderr,
         /// `--report=PATH` writes it to PATH.
         #[allow(clippy::option_option)]
@@ -709,7 +805,23 @@ pub(crate) enum Command {
         /// to `work-budget` in its certificate.
         #[arg(long, value_name = "N", default_value_t = 0)]
         work_cap: u32,
-        /// Input format override; inferred from the input extension when omitted.
+        /// An `owl:imports` the ontology declares, resolved to a local document:
+        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+        /// imports closure to BE the ontology, so consistency is decided for the ontology
+        /// merged with every imported document, and the certificate names
+        /// `ontology-import-resolved`. PurRDF fetches nothing: an `owl:imports` no pair
+        /// resolves, that does not name the input document itself (its `file://` retrieval
+        /// IRI or `--base`), and whose ontology the input does not already hold, is refused
+        /// by name (exit 1) rather than decided over a smaller ontology, and a pair the
+        /// closure never reaches is refused as unused (exit 2). The input's imports are the
+        /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+        /// other is an ontology triple. The IRI half must be ABSOLUTE. `--proof` records,
+        /// and `--check-proof` checks, a proof over that merged ontology.
+        #[arg(long = "import", value_name = "IRI=FILE")]
+        imports: Vec<String>,
+        /// Input format override (the input and every `--import` document); inferred from
+        /// each path's extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
         /// Base IRI for resolving relative IRIs while parsing the input. A PARSE
@@ -784,15 +896,19 @@ pub(crate) enum Command {
     ///
     /// Exit codes: **0** whether the data CONFORMS or does not — both are decided verdicts,
     /// exactly as `consistency true|false` and a `false` ASK are, and the report on stdout is
-    /// the answer either way. **1** for a malformed data or shapes document and for an
-    /// unsupported SHACL construct (the engine hard-fails rather than skipping it). **2** for
+    /// the answer either way. **1** for a malformed data or shapes document, for an
+    /// unsupported SHACL construct (the engine hard-fails rather than skipping it), and for
+    /// an `owl:imports` in the shapes graph or a data-graph `sh:shapesGraph` link that is
+    /// unresolved (see `--import`). **2** for
     /// a usage error. **3** when a `--fuel`/`--deadline`/`--max-*` ceiling stopped the run:
     /// the engine returns no partial report by design (every SHACL constraint is a negative
     /// claim, so a truncated solution bag and a complete empty one read identically), so
     /// stdout carries NOTHING and stderr carries the governor report.
     ///
     /// The one-line verdict (`shacl conforms true|false`) and the result count are ALWAYS
-    /// written to stderr, so a shell learns the answer without parsing the artifact on
+    /// written to stderr, followed by one `shacl diagnostic RULE SHAPE` line per shape with
+    /// an empty `sh:in` or `sh:xone` list (a mandatory diagnostic that changes neither the
+    /// verdict nor the report), so a shell learns the answer without parsing the artifact on
     /// stdout — and stdout stays a well-formed RDF or SARIF document, which it could not if
     /// the verdict were interleaved into it.
     Validate {
@@ -809,8 +925,9 @@ pub(crate) enum Command {
         /// A PREPARED SHACL product `FILE` written by `purrdf shacl pack`, restored instead of
         /// parsing a shapes document. The product carries its own shapes graph, the base it was
         /// parsed under, its prefix map, its `sh:shapesGraph` IRI and its box-role vocabulary, so
-        /// `--shapes-from`, `--shapes-graph`, `--import` and `--box-role-vocab` name a parse
-        /// that does not happen here and are refused by name rather than accepted and ignored.
+        /// `--shapes-from`, `--shapes-graph`, `--shapes-base`, `--import` and
+        /// `--box-role-vocab` name a parse that does not happen here and are refused by name
+        /// rather than accepted and ignored.
         ///
         /// The bytes are UNTRUSTED: the product's stage id, profile and full input binding are
         /// checked before any of it reaches the validator, and a mismatch is refused on a named
@@ -864,12 +981,14 @@ pub(crate) enum Command {
         #[arg(long)]
         rebuild: bool,
         /// Shapes-graph format override; inferred from the shapes path's extension when
-        /// omitted. Turtle is read through `purrdf_shapes::engine::parse_shapes`, the exact
-        /// boundary every other host uses, which additionally recovers the shapes DOCUMENT's
-        /// `@prefix`/`PREFIX` map as the fallback prefix environment for SHACL-AF `sh:select`
-        /// queries. Every other syntax is parsed by the native codec into the same IR and
-        /// carries no such fallback (it is a recovery from Turtle source text), so a SHACL-AF
-        /// query in a non-Turtle shapes graph must declare its own `sh:prefixes`.
+        /// omitted. Whatever the syntax, the shapes DOCUMENT's own declarations travel with
+        /// its graph: the prefix map its codec recorded — Turtle's and TriG's
+        /// `@prefix`/`PREFIX`, RDF/XML's `xmlns` — is the fallback prefix environment for
+        /// SHACL-SPARQL and SHACL-AF queries, and the base it declares (`@base`, a root
+        /// `xml:base`, a JSON-LD `@base`) is its own IRI for `owl:imports`. So the same
+        /// shapes graph written in Turtle, TriG or RDF/XML validates identically. A syntax
+        /// that declares no prefixes (N-Triples, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD,
+        /// a pack, GTS) has no fallback, and its queries declare their own `sh:prefixes`.
         #[arg(long = "shapes-from", value_enum)]
         shapes_from: Option<CliRdfFormat>,
         /// Expose the shapes graph to SHACL-SPARQL paths as a named graph under this IRI,
@@ -881,15 +1000,42 @@ pub(crate) enum Command {
         /// shapes graph has none (stdin, or a container).
         #[arg(long = "shapes-graph", value_name = "IRI")]
         shapes_graph: Option<String>,
+        /// Base IRI the SHAPES document's relative IRI references resolve against, in place
+        /// of its `file://` retrieval IRI — the same flag `shacl pack --base` is, for the
+        /// shapes document `validate --shapes` parses. It is also the shapes document's own
+        /// IRI for `owl:imports`: an import of it names the document being read, so it needs
+        /// no `--import`. An `@base` inside the document still wins over it there, as Turtle
+        /// specifies. `--shapes-graph` resolves against it too. Stdin has no retrieval IRI,
+        /// so this is the only base a `--shapes -` document can have.
+        ///
+        /// Refused against `--shapes-product`, which recorded the base it was packed under,
+        /// and against a pack or GTS shapes container, which stores resolved IRIs and has no
+        /// base to set.
+        #[arg(long = "shapes-base", value_name = "IRI", value_parser = parse_base_iri)]
+        shapes_base: Option<String>,
         /// Resolve an `owl:imports` in the shapes graph to a LOCAL document: the ontology
         /// IRI the shapes document imports, then the file that is it. Repeatable, and
         /// followed transitively — an imported document's own `owl:imports` are resolved
         /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
-        /// import is only ever the document the operator named. Naming any pair makes the
-        /// closure MANDATORY: an `owl:imports` no pair resolves is then refused by name
-        /// rather than folded in as an empty graph, and a pair the closure never reaches is
-        /// refused as unused. With no `--import` at all the imports are reported on stderr
-        /// and the shapes graph validates alone, exactly as it did before this flag existed.
+        /// import is only ever the document the operator named. An import of the shapes
+        /// document's own IRI (`--shapes-base`, its `file://` retrieval IRI, or `@base`), of a
+        /// graph already IN the shapes graph (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`,
+        /// or an ontology whose `owl:versionIRI` is `<X>`) needs no pair. Only an
+        /// `owl:imports` on the shapes document's own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a node naming
+        /// one of those as its `owl:versionIRI` is an import; on any other node it is data (a
+        /// node that is only a `sh:DataGraph`, and SHACL's
+        /// `sh:prefixes/owl:imports*/sh:declare` prefix edges, among them). The data
+        /// graph's own `owl:imports` are never enacted. Any import no pair resolves
+        /// is refused by name (exit 1) rather than validated as if the shapes graph were
+        /// complete, and a pair the closure never reaches is refused as unused (exit 2).
+        ///
+        /// The same pairs resolve the DATA graph's `sh:shapesGraph` links (SHACL 1.2 Core
+        /// section 6.4): a `sh:shapesGraph` on the data document's own IRI (`--base` or its
+        /// `file://` retrieval IRI) or on a `sh:DataGraph` node names a graph that is folded
+        /// into the shapes graph exactly as an import is — version IRI, own `owl:imports`
+        /// and all — or refused by name (exit 1). On any other node it is data. A
+        /// `--shapes-product` cannot take a graph in, so a link it does not hold is refused.
         #[arg(long, value_name = "IRI=FILE")]
         import: Vec<String>,
         /// The caller-supplied graph-box role vocabulary NAMESPACE — the SAME namespace
@@ -906,12 +1052,35 @@ pub(crate) enum Command {
         /// `--box-role-vocab` to `purrdf shacl pack` instead, and re-pack.
         #[arg(long = "box-role-vocab", value_name = "NS")]
         box_role_vocab: Option<String>,
+        /// A severity IRI in the conformance-disallow set: a result whose severity is in
+        /// the set makes the data non-conforming — the report's `sh:conforms` and every
+        /// nested `sh:node` / `sh:not` / `sh:and` / `sh:or` / `sh:xone` /
+        /// `sh:qualifiedValueShape` check alike — and a result whose severity is not in it
+        /// is reported without blocking. Repeatable; the set is exactly the IRIs named.
+        /// Omitted, the set is SHACL's default, `sh:Violation`, `sh:Warning` and
+        /// `sh:Info` (`sh:Debug` and `sh:Trace` are "not a constraint violation"). A
+        /// non-default set is echoed in the report as `sh:conformanceDisallows`. Each
+        /// value must be an absolute IRI, for example
+        /// `http://www.w3.org/ns/shacl#Violation`; any IRI is a severity, so a custom
+        /// one blocks exactly when it is named here.
+        #[arg(long = "conformance-disallows", value_name = "IRI")]
+        conformance_disallows: Vec<String>,
+        /// SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`: read the shapes graph's
+        /// `rdfs:subClassOf` triples, in addition to the data graph's, wherever SHACL
+        /// type decides class membership — `sh:targetClass`, implicit class targets,
+        /// `sh:class`, `sh:rootClass` and `shnex:instancesOf`. Off by default, as the
+        /// specification's default is the data graph alone. Only class membership
+        /// changes: the shapes graph's triples do not become data-graph triples, and
+        /// `rdf:type` triples are still read from the data graph only.
+        #[arg(long = "subclass-of-in-shapes-graph")]
+        subclass_of_in_shapes_graph: bool,
         /// Data-graph format override; inferred from the input extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
         /// Base IRI for resolving relative IRIs while parsing the DATA graph. The shapes
         /// graph is a separate document and resolves against its OWN `file://` retrieval
-        /// IRI (or its own `@base`), so this flag never silently retargets it. A PARSE
+        /// IRI, `--shapes-base`, or its own `@base`, so this flag never silently retargets
+        /// it. A PARSE
         /// base only: the validation report is a graph the engine mints with absolute
         /// terms, and it is serialized with no base rather than under this one.
         #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
@@ -1125,6 +1294,352 @@ pub(crate) enum Command {
         #[command(subcommand)]
         command: ShaclCommand,
     },
+    /// Run a rule set over a data graph and write the INFERENCE GRAPH: the SHACL 1.2 rules
+    /// of a shapes graph (`--shapes`), or a SPARQL 1.2 RL rule set (`--srl`).
+    ///
+    /// The output is the inferred triples alone — SHACL 1.2 Inference Rules' "inferred
+    /// triples", SPARQL 1.2 RL's "graph GI of inferred triples" — never the data graph they
+    /// were inferred from, serialized in the `--to` syntax in one canonical order, so two
+    /// runs over the same inputs write identical bytes. Both frontends lower to the one
+    /// rules engine every PurRDF host reaches (`purrdf_shapes::infer`,
+    /// `purrdf_shapes::srl::infer`).
+    ///
+    /// Exit codes: **0** when the rule set ran to completion, whether it inferred anything
+    /// or not. **1** for a malformed data graph, shapes graph or rule set; a rule set that is
+    /// ill-formed or cannot be stratified; a `sh:ruleProcessor` this engine does not handle;
+    /// a rule that fails during execution; a rule set that holds or enumerates more than
+    /// `--max-stored-facts` or `--max-join-steps` permits; and a rule set that passes
+    /// `--max-term-generating-rounds` or `--max-generated-terms` — SHACL 1.2 Inference Rules
+    /// lets an engine "report a failure after a pre-configured maximum iteration count has
+    /// been exceeded", and this one does, writing no graph. **2** for a usage error.
+    ///
+    /// The count of inferred triples is always written to stderr as `rules inferred N`.
+    ///
+    /// `--check` runs no rule: it applies every static check SPARQL 1.2 RL defines to the
+    /// `--srl` rule set — the grammar, the `IMPORTS` closure resolved from `--import`,
+    /// well-formedness and stratification — reads no data graph, and writes one summary line
+    /// to stdout. It exits **0** when the rule set passes, **1** when a check refuses it
+    /// (naming the stage), and **2** for a usage error or an `--import` pair the closure
+    /// never reaches, exactly as a run would.
+    Rules {
+        /// The SHACL shapes graph `FILE` whose rules run (its default rule set), or `-` for
+        /// stdin (which requires `--shapes-from`). Exactly one of this and `--srl` is
+        /// required: a shapes graph and a SPARQL 1.2 RL rule set are two rule sets, and
+        /// neither specification defines running them as one.
+        #[arg(
+            long,
+            value_name = "FILE",
+            required_unless_present = "srl",
+            conflicts_with = "srl"
+        )]
+        shapes: Option<String>,
+        /// Shapes-graph format override; inferred from the shapes path's extension when
+        /// omitted.
+        #[arg(long = "shapes-from", value_enum, requires = "shapes")]
+        shapes_from: Option<CliRdfFormat>,
+        /// Base IRI the SHAPES document's relative IRI references resolve against, in place
+        /// of its `file://` retrieval IRI; also its own IRI for `owl:imports`. The same flag
+        /// `validate --shapes-base` is.
+        #[arg(
+            long = "shapes-base",
+            value_name = "IRI",
+            value_parser = parse_base_iri,
+            requires = "shapes"
+        )]
+        shapes_base: Option<String>,
+        /// Expose the shapes graph to the SHACL-SPARQL rules as a named graph under this
+        /// IRI, as `validate --shapes-graph` does: a `sh:SPARQLRule`'s `$shapesGraph` is
+        /// pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes graph. PurRDF
+        /// mints no vocabulary IRIs, so there is no default: without this flag
+        /// `$shapesGraph` is an ordinary variable. A relative value resolves against the
+        /// shapes document's base and is refused when it has none. A SPARQL 1.2 RL rule set
+        /// has no shapes graph, so the flag requires `--shapes`.
+        #[arg(long = "shapes-graph", value_name = "IRI", requires = "shapes")]
+        shapes_graph: Option<String>,
+        /// The SPARQL 1.2 RL rule-set `FILE`, or `-` for stdin.
+        #[arg(long, value_name = "FILE")]
+        srl: Option<String>,
+        /// Base IRI the rule set's relative IRI references resolve against, in place of its
+        /// `file://` retrieval IRI. Stdin has no retrieval IRI, so this is the only base a
+        /// `--srl -` rule set can have.
+        #[arg(
+            long = "srl-base",
+            value_name = "IRI",
+            value_parser = parse_base_iri,
+            requires = "srl"
+        )]
+        srl_base: Option<String>,
+        /// Resolve an import of the rule source to a LOCAL document: an `owl:imports` of
+        /// the shapes graph, or an `IMPORTS` of the SPARQL 1.2 RL rule set. Repeatable and
+        /// followed transitively. PurRDF fetches nothing, so an import no pair resolves is
+        /// refused by name (exit 1), and a pair the imports never reach is refused as
+        /// unused (exit 2).
+        #[arg(long, value_name = "IRI=FILE")]
+        import: Vec<String>,
+        /// Check the `--srl` rule set and evaluate NOTHING: no data graph is read and no
+        /// rule runs. `LEVEL` is how far the check goes, each level including the ones
+        /// before it: `syntax` (the SPARQL 1.2 RL grammar, the rule set and every document
+        /// its imports read), `well-formed` (every rule, imported ones included, is well
+        /// formed) or `stratified` (the combined rule set can be stratified — every static
+        /// check a run applies before it evaluates). Bare `--check` is `--check=stratified`.
+        /// On success one summary line goes to stdout; a refusal names the stage and exits 1.
+        /// The data-graph, output, proof and limit flags configure an evaluation, which a
+        /// check does not run, so they are refused beside it.
+        #[arg(
+            long,
+            value_enum,
+            value_name = "LEVEL",
+            num_args = 0..=1,
+            require_equals = true,
+            default_missing_value = "stratified",
+            requires = "srl",
+            conflicts_with_all = [
+                "explain",
+                "max_term_generating_rounds",
+                "max_generated_terms",
+                "max_stored_facts",
+                "max_join_steps",
+                "from",
+                "to",
+                "base",
+                "input",
+                "output",
+            ]
+        )]
+        check: Option<CliSrlCheckLevel>,
+        /// Write the PROOF of every inferred triple: bare writes it to stderr,
+        /// `--explain=PATH` writes it to PATH. One block per inferred triple, in the
+        /// output's order — `derived S P O .`, then `  rule R` and one `  premise S P O .`
+        /// per fact the rule's body matched (a SHACL rule executed as one producer over the
+        /// whole graph — every rule but a global SPARQL rule whose query is a conjunctive
+        /// pattern — lists none), or `  data-block` for a SPARQL 1.2 RL data-block
+        /// triple. Terms are N-Triples 1.2, with the blank-node labels of the evaluation.
+        #[allow(clippy::option_option)]
+        #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
+        explain: Option<Option<PathBuf>>,
+        /// Permit exactly `N` evaluation rounds that infer a term the evaluation graph did
+        /// not hold; one more fails the run naming the limit, the numbers and the rules
+        /// that inferred a new term last. Omitted, the limit is 16384 rounds: a rule
+        /// stepping a value to 10,000 completes, and one counting with no bound is refused
+        /// in well under a second. A rule set that needs more states it here.
+        #[arg(long = "max-term-generating-rounds", value_name = "N")]
+        max_term_generating_rounds: Option<u64>,
+        /// Permit exactly `N` terms inferred beyond the input's; one more fails the run
+        /// naming the budget and the numbers. Omitted, the budget is max(65536, 4 × T)
+        /// for T distinct input terms: a rule set whose new terms multiply every
+        /// iteration is refused within a few iterations. A rule set that needs more
+        /// states it here.
+        #[arg(long = "max-generated-terms", value_name = "N")]
+        max_generated_terms: Option<u64>,
+        /// Permit exactly `N` facts in the evaluation store — the data graph, a rule set's
+        /// data and every inferred triple; one more fails the run naming the limit and the
+        /// numbers. Omitted, the limit is 4194304 facts: a rule copying a predicate over
+        /// tens of thousands of triples, or the closure of a thousand-node chain,
+        /// completes. The limit can only refuse: a run it admits writes exactly the
+        /// inference graph a larger limit would.
+        #[arg(long = "max-stored-facts", value_name = "N")]
+        max_stored_facts: Option<u64>,
+        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate;
+        /// one more fails the run naming the limit and the numbers. Omitted, the limit is
+        /// 1048576 steps. It bounds a rule body that enumerates far more candidates than
+        /// it infers triples.
+        #[arg(long = "max-join-steps", value_name = "N")]
+        max_join_steps: Option<u64>,
+        /// Data-graph format override; inferred from the input extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Output format override; inferred from the output extension when omitted.
+        #[arg(long, value_enum)]
+        to: Option<CliRdfFormat>,
+        /// Base IRI, on BOTH legs of the data: a relative IRI in `IN` resolves against it
+        /// while parsing, and a `--to` syntax that can write a base directive emits it as
+        /// the inference graph's base and relativizes against it.
+        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+        base: Option<String>,
+        /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+        /// Output path `OUT`, or `-` for stdout (which requires `--to`).
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
+    /// Evaluate ONE node expression of a shapes graph against a focus node of a data graph
+    /// — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph, focusNode, scope)`.
+    ///
+    /// The expression is a node of the shapes graph, parsed by the shapes parser itself,
+    /// so its custom-function calls, shape references and SPARQL prefixes bind exactly as
+    /// they would inside a shape. The answer is the expression's output nodes, one
+    /// N-Triples 1.2 term per line, in the order its sequence semantics define.
+    ///
+    /// The expression is named exactly one way. `--expr` names the node itself.
+    /// `--expr-at NODE --expr-via PREDICATE…` names the node a walk reaches from a named
+    /// node, each step reaching exactly one value — how an anonymous `[ … ]` expression is
+    /// named: `--expr-at ex:S --expr-via sh:values` (IRIs written in full) is `ex:S`'s
+    /// `sh:values` expression, and a W3C `sht:EvalNodeExpr` entry's expression is
+    /// `--expr-at ENTRY --expr-via mf:action --expr-via sht:nodeExpr`. `--expr-turtle` and
+    /// `--expr-turtle-file` give the expression inline, as a Turtle document read under
+    /// the shapes document's prefixes and base and merged into the shapes graph; the
+    /// expression is its one root, the blank node that is the subject of a triple and the
+    /// object of none.
+    ///
+    /// Exit codes: **0** when the expression evaluated, whether to nodes or to none.
+    /// **1** for a malformed shapes graph or data graph, an expression that does not parse
+    /// or fails to evaluate, an expression blank node the shapes document never labelled,
+    /// a walk step reaching no value or several, and an inline expression that is not
+    /// Turtle or has no single root. **2** for a usage error, including a selector term
+    /// that is not one. The output count is always written to stderr as `node-expr
+    /// outputs N`, followed by one `shacl diagnostic RULE SHAPE` line per shape of the
+    /// shapes graph's `owl:imports` closure with an empty `sh:in` or `sh:xone` list — the
+    /// mandatory diagnostic every run reports, exactly as `validate` and `rules` print it.
+    /// A diagnostic changes no output and no exit code.
+    #[command(group(
+        clap::ArgGroup::new("expression")
+            .required(true)
+            .multiple(false)
+            .args(["expr", "expr_at", "expr_turtle", "expr_turtle_file"])
+    ))]
+    NodeExpr {
+        /// The shapes graph `FILE` carrying the expression, or `-` for stdin (which
+        /// requires `--shapes-from`).
+        #[arg(long, value_name = "FILE")]
+        shapes: String,
+        /// Shapes-graph format override; inferred from the shapes path's extension when
+        /// omitted.
+        #[arg(long = "shapes-from", value_enum)]
+        shapes_from: Option<CliRdfFormat>,
+        /// Base IRI the SHAPES document's relative IRI references resolve against, in place
+        /// of its `file://` retrieval IRI.
+        #[arg(long = "shapes-base", value_name = "IRI", value_parser = parse_base_iri)]
+        shapes_base: Option<String>,
+        /// Resolve an `owl:imports` in the shapes graph to a LOCAL document, as `validate
+        /// --import` does.
+        #[arg(long, value_name = "IRI=FILE")]
+        import: Vec<String>,
+        /// The expression node: an absolute IRI, or `_:LABEL` for a blank node the shapes
+        /// document labels `_:LABEL`. An IRI that is the subject of no triple is a constant
+        /// expression, evaluating to itself; a label the document never wrote is refused.
+        #[arg(long, value_name = "IRI|_:LABEL")]
+        expr: Option<String>,
+        /// Name the expression by a walk: start from this node (an absolute IRI, or
+        /// `_:LABEL`) and follow each `--expr-via` predicate in turn. Every step must reach
+        /// exactly one value of the shapes graph; none or several is refused, naming the
+        /// step and the count.
+        #[arg(long = "expr-at", value_name = "IRI|_:LABEL", requires = "expr_via")]
+        expr_at: Option<String>,
+        /// One predicate (an absolute IRI) of the `--expr-at` walk. Repeatable, followed
+        /// in the order given.
+        #[arg(long = "expr-via", value_name = "IRI", requires = "expr_at")]
+        expr_via: Vec<String>,
+        /// The expression, inline, as a Turtle document read under the shapes document's
+        /// prefixes and base (its own directives outrank them), e.g. `'[ sh:path ex:p ] .'`.
+        /// Its blank nodes are standardized apart from the shapes document's.
+        #[arg(long = "expr-turtle", value_name = "TURTLE")]
+        expr_turtle: Option<String>,
+        /// `--expr-turtle`, read from `FILE` (`-` is not accepted: stdin is `IN`'s or
+        /// `--shapes`').
+        #[arg(long = "expr-turtle-file", value_name = "FILE")]
+        expr_turtle_file: Option<String>,
+        /// The focus node: an absolute IRI, or any N-Triples 1.2 term (`"-3"^^<…>`,
+        /// `_:b`, …). A blank node names the node the data document labels so.
+        #[arg(long, value_name = "TERM")]
+        focus: String,
+        /// Bind a scope variable, read by `shnex:var "NAME"`: `NAME=TERM`, the term spelled
+        /// as `--focus` is. Repeatable; a name bound twice, and the name `focusNode` (which
+        /// SHACL 1.2 Node Expressions resolves to the focus node before the scope is
+        /// searched), are refused, since neither binding could ever be read.
+        #[arg(long, value_name = "NAME=TERM")]
+        scope: Vec<String>,
+        /// Data-graph format override; inferred from the input extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Base IRI for resolving relative IRIs while parsing the DATA graph.
+        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+        base: Option<String>,
+        /// Data-graph path `IN`, or `-` for stdin (which requires `--from`).
+        #[arg(value_name = "IN", default_value = "-")]
+        input: String,
+        /// Output path `OUT`, or `-` for stdout (the default).
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
+    /// Shapes-graph authoring tools.
+    Shapes {
+        /// The shapes subcommand to run.
+        #[command(subcommand)]
+        command: ShapesCommand,
+    },
+}
+
+/// The `shapes` subcommands.
+#[derive(Subcommand, Debug)]
+pub(crate) enum ShapesCommand {
+    /// Certify a shapes graph, COLD: everything PurRDF can say about it before any data is
+    /// validated, in one deterministic report.
+    ///
+    /// Six sections. `load`: the loader's own verdict — accepted, or the refusal it
+    /// raised (an unknown `sh:` term, an ill-typed parameter, an unresolved function, a
+    /// SHACL-SPARQL or SHACL-AF declaration that violates a syntax rule — every such
+    /// violation, each with its rule id, whether or not a shape reaches it — or a
+    /// pre-binding violation in a query a shape executes, …).
+    /// `shacl-shacl`: every result of validating the shapes graph, as data, against the
+    /// W3C's `shacl-shacl.ttl`, the shapes graph for shapes graphs; a result SHACL 1.2
+    /// Core makes well-formed where that file still flags it (`sh:closed sh:ByTypes`, a
+    /// list-valued `sh:nodeKind`, …) is marked `superseded NAME` and is not a finding.
+    /// `functions`: which implementation every node-expression function call binds to —
+    /// `native`, `custom`, `sparql-registered` or `host-extension`. `validators`: every
+    /// validator the graph declares for a built-in constraint component (a vocabulary
+    /// such as DASH gives SHACL Core components SPARQL validators), which the native
+    /// implementation supersedes and never runs; never a finding. `unexecuted`: every
+    /// query that violates a pre-binding restriction (a `MINUS`, a `VALUES`, an `AS ?var`
+    /// for a pre-bound variable) and that nothing executes — a validator of a built-in
+    /// component, a validator no use of its component selects, a `sh:SPARQLFunction`
+    /// nothing calls — which the load accepts; each is a finding. `diagnostics`: every
+    /// shape whose `sh:in` or `sh:xone` list is empty (`diagnostic in-minListLength|
+    /// xone-minListLength SHAPE`) — a mandatory diagnostic: the graph is well-formed and
+    /// validates, and each line is a finding. `unanchored-imports`:
+    /// every `owl:imports` triple of the closure whose subject is no anchor of its
+    /// document — not the IRI it was read or imported under, not an ontology header, not a
+    /// shapes graph, not a node versioning one of those — so it is data and imported
+    /// nothing (`unanchored SUBJECT OBJECT document -|<IRI>`); never a finding.
+    ///
+    /// Validation never pays for the `shacl-shacl.ttl` pass; this verb is where it is paid,
+    /// on request.
+    ///
+    /// Exit codes follow `shacl verify`, the other certify verb: **0** when the report is
+    /// clean — the loader accepted the graph, every `shacl-shacl` result is superseded, no
+    /// unexecuted query violates a pre-binding restriction and no mandatory diagnostic
+    /// applies.
+    /// **1** when it carries a finding, and for a document that does not parse or an
+    /// `owl:imports` no `--import` resolves; the report is still written when there is one.
+    /// **2** for a usage error. `shapes lint clean true|false` and `shapes lint findings N`
+    /// are always written to stderr.
+    Lint {
+        /// Shapes-graph format override; inferred from the path's extension when omitted.
+        #[arg(long, value_enum)]
+        from: Option<CliRdfFormat>,
+        /// Base IRI the shapes document's relative IRI references resolve against, in place
+        /// of its `file://` retrieval IRI.
+        #[arg(long, value_name = "IRI", value_parser = parse_base_iri)]
+        base: Option<String>,
+        /// Resolve an `owl:imports` in the shapes graph to a LOCAL document, as `validate
+        /// --import` does: the graph certified is the one validation would use.
+        #[arg(long, value_name = "IRI=FILE")]
+        import: Vec<String>,
+        /// The graph-box role vocabulary NAMESPACE the loader is configured with, as
+        /// `validate --box-role-vocab`.
+        #[arg(long = "box-role-vocab", value_name = "NS")]
+        box_role_vocab: Option<String>,
+        /// The shapes-graph IRI the loader is configured with, as `validate
+        /// --shapes-graph`; resolved against the document's base.
+        #[arg(long = "shapes-graph", value_name = "IRI")]
+        shapes_graph: Option<String>,
+        /// Shapes-graph path `FILE`, or `-` for stdin (which requires `--from`).
+        #[arg(value_name = "FILE", default_value = "-")]
+        input: String,
+        /// Report path `OUT`, or `-` for stdout (the default).
+        #[arg(value_name = "OUT", default_value = "-")]
+        output: String,
+    },
 }
 
 /// The `--format` choices `validate` accepts: the nine native RDF syntaxes, which serialize
@@ -1247,8 +1762,8 @@ pub(crate) enum PackCommand {
 /// back what one says it was compiled from.
 #[derive(Subcommand, Debug)]
 pub(crate) enum ShaclCommand {
-    /// Parse a Turtle shapes graph, fold its `owl:imports` closure, prepare the result, and
-    /// write the prepared product.
+    /// Parse a shapes graph, fold its `owl:imports` closure, prepare the result, and write
+    /// the prepared product.
     ///
     /// The product carries the compiled model AND the shapes dataset it was derived from —
     /// the ROOT graph merged with every document `--import` resolved — both under the
@@ -1262,12 +1777,17 @@ pub(crate) enum ShaclCommand {
     /// identical bytes — no hash-iteration order, no wall clock and no randomness reach the
     /// writer.
     Pack {
-        /// The Turtle shapes graph `FILE`. Turtle because it is the one syntax carrying a
-        /// `@prefix`/`PREFIX` map recoverable from source text, which is the fallback
-        /// prefix environment every SHACL-AF `sh:select` body resolves against and which
-        /// the product records.
+        /// The shapes graph `FILE`, read as Turtle unless `--shapes-from` names another
+        /// syntax. Its prefix map — the fallback prefix environment every SHACL-SPARQL and
+        /// SHACL-AF query resolves against — is recorded in the product.
         #[arg(long, value_name = "FILE", required = true)]
         shapes: String,
+        /// The shapes document's syntax; Turtle when omitted. The prefix map its codec
+        /// records — Turtle's and TriG's `@prefix`/`PREFIX`, RDF/XML's `xmlns` — and the
+        /// base it declares travel with it exactly as they do on `validate --shapes`, so
+        /// one shapes graph packs to the same product whichever of those it is spelled in.
+        #[arg(long = "shapes-from", value_enum)]
+        shapes_from: Option<CliRdfFormat>,
         /// Base IRI the shapes document's relative IRI references resolve against, RECORDED
         /// in the product so a restore resolves them identically without the document.
         /// Omitted, the document's own `file://` retrieval IRI is derived — the same base
@@ -1278,12 +1798,18 @@ pub(crate) enum ShaclCommand {
         /// IRI the shapes document imports, then the file that is it. Repeatable, and
         /// followed transitively — an imported document's own `owl:imports` are resolved
         /// from the same table. PurRDF ships no HTTP client and fetches nothing, so an
-        /// import is only ever the document the operator named. Naming any pair makes the
-        /// closure MANDATORY: an `owl:imports` no pair resolves is then refused by name
-        /// rather than folded in as an empty graph, and a pair the closure never reaches is
-        /// refused as unused. With no `--import` at all the imports are reported on stderr
-        /// and the shapes graph packs alone, exactly as `validate --shapes` with no
-        /// `--import` validates it alone.
+        /// import is only ever the document the operator named. An import of the shapes
+        /// document's own IRI (`--base`, its `file://` retrieval IRI, or `@base`), of a
+        /// graph already IN the shapes graph (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`,
+        /// or an ontology whose `owl:versionIRI` is `<X>`) needs no pair. Only an
+        /// `owl:imports` on the shapes document's own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph` (`sh:RulesGraph` and subclasses included), or on a node naming
+        /// one of those as its `owl:versionIRI` is an import; on any other node it is data (a
+        /// node that is only a `sh:DataGraph`, and SHACL's
+        /// `sh:prefixes/owl:imports*/sh:declare` prefix edges, among them). Any import no
+        /// pair resolves is refused by name (exit 1) rather than packed as if the shapes graph were
+        /// complete, exactly as `validate --shapes` refuses it, and a pair the closure never
+        /// reaches is refused as unused (exit 2).
         #[arg(long, value_name = "IRI=FILE")]
         import: Vec<String>,
         /// RECORD the shapes graph as exposed under this IRI to SHACL-SPARQL paths,
@@ -1537,6 +2063,29 @@ impl CliNativeRdfFormat {
             Self::Hextuples => NativeRdfFormat::HexTuples,
             Self::Jsonld => NativeRdfFormat::JsonLd,
             Self::Yamlld => NativeRdfFormat::YamlLd,
+        }
+    }
+}
+
+/// How far `rules --check` takes a SPARQL 1.2 RL rule set: each level is one of the
+/// specification's conformance questions and includes the ones before it.
+#[derive(ValueEnum, Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CliSrlCheckLevel {
+    /// The SPARQL 1.2 RL grammar, for the rule set and every document its imports read.
+    Syntax,
+    /// `syntax`, and every rule — imported ones included — is well formed.
+    WellFormed,
+    /// `well-formed`, and the combined rule set can be stratified.
+    Stratified,
+}
+
+impl CliSrlCheckLevel {
+    /// The engine's level.
+    pub(crate) const fn level(self) -> purrdf::shapes::srl::CheckLevel {
+        match self {
+            Self::Syntax => purrdf::shapes::srl::CheckLevel::Syntax,
+            Self::WellFormed => purrdf::shapes::srl::CheckLevel::WellFormed,
+            Self::Stratified => purrdf::shapes::srl::CheckLevel::Stratified,
         }
     }
 }

@@ -38,8 +38,8 @@ Reifier bindings and annotations survive every star-capable codec round-trip;
 projections into star-incapable formats drop them *loudly*, with the realized
 count handed to the loss ledger (see
 [Slices, Mappings & Provenance](../slices.md)). SHACL support for validating
-reified statements — the draft `sh:reifierShape` / `sh:reificationRequired`
-surface — is covered in [SHACL](../validation/shacl.md).
+reified statements — the SHACL 1.2 `sh:reifierShape` /
+`sh:reificationRequired` surface — is covered in [SHACL](../validation/shacl.md).
 
 ## Base-direction literals
 
@@ -58,10 +58,10 @@ the N-Quads round-trip.
 ## RDF 1.2 is a complete target, not a draft excuse
 
 PurRDF treats the RDF 1.2 / SPARQL 1.2 specifications as a complete,
-implementable target. Where a feature is scoped (for example, the SHACL 1.2
-reifier-shape support is a scoped Working Draft feature, not full SHACL 1.2
-conformance), the scope is stated explicitly and gated by tests — never left
-as a silent partial implementation. The live per-feature status is the
+implementable target, and so is SHACL 1.2: the W3C SHACL 1.2 test suite,
+reifier shapes included, passes in full. Where a feature is scoped, the scope
+is stated explicitly and gated by tests — never left as a silent partial
+implementation. The live per-feature status is the
 conformance matrix in
 [`docs/CONFORMANCE.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/CONFORMANCE.md).
 
@@ -70,7 +70,7 @@ conformance matrix in
 | Feature | IR | Codecs | SPARQL | SHACL | RDF/JS | GTS |
 | --- | --- | --- | --- | --- | --- | --- |
 | Triple terms (object position) | interned term | star-capable formats | `<<( s p o )>>` | via paths/values | `quotedTriple` | mapped per spec |
-| Reifiers / annotations | side-tables | star-capable formats | reifier surface | `sh:reifierShape` (draft) | — | `rdf:reifies` mapping |
+| Reifiers / annotations | side-tables | star-capable formats | reifier surface | `sh:reifierShape`, `sh:reificationRequired` | — | `rdf:reifies` mapping |
 | Base-direction literals | literal kind | round-trips | matched/produced | value nodes | `directionalLiteral` | carried |
 
 The GTS mapping of triple terms and `rdf:reifies` is formalized in the

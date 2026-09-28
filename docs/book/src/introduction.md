@@ -86,8 +86,9 @@ reimplemented per language.
   ([Embedding Nearest Neighbours](sparql/embedding-knn.md)) — each a consumer
   of the extension seams, registered under IRIs the caller supplies.
 - **SHACL and ShEx** — native validators for both shape languages; the SHACL
-  engine covers Core, SHACL-SPARQL and SHACL-AF, aligned with the SHACL 1.2
-  node-expression and rule-layering drafts. See [Validation](validation/shacl.md).
+  engine implements SHACL 1.2 Core, SPARQL Extensions, Node Expressions and
+  Inference Rules, and the SPARQL 1.2 RL rule language. See
+  [Validation](validation/shacl.md).
 - **Entailment** — Simple/RDF/RDFS/OWL-RL/D materialization (all 78 OWL 2 RL
   rules implemented — rule-table coverage, distinct from entailment
   conformance, where the OWL 2 RL entailment tests score 27 of 27 positive and
@@ -155,7 +156,8 @@ model: **triple terms** that can appear in object position, **reifiers** that
 name occurrences of a triple, and **base-direction literals**
 (`rdf:dirLangString`) for bidirectional text. PurRDF treats these as core data
 model, not an extension: they flow through the IR, the codecs, SPARQL, SHACL
-(a scoped SHACL 1.2 feature), the RDF/JS surface, and the GTS transport.
+1.2 (reifier shapes and triple-term node kinds), the RDF/JS surface, and the
+GTS transport.
 See [RDF 1.2 Features](concepts/rdf12.md).
 
 ## Where PurRDF sits

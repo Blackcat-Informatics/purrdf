@@ -46,9 +46,14 @@ import {
   type VisualExport,
   type VisualModel,
   type VisualSvgDocument,
+  shaclApplyRulesAsync,
   shaclEntailAsync,
+  shaclEvalNodeExprAsync,
+  ShaclEntailment,
   shaclPackProduct,
   ShaclChangeValidation,
+  ShaclNodeExprOutcome,
+  ShaclRulesInference,
   shaclProductValidateToSarifAsync,
   shaclProductValidateToSarifExpectingAsync,
   shaclProductValidateToSarifRebuildAsync,
@@ -238,7 +243,7 @@ const entailed: EntailmentQueryOutcome = engine.queryEntailmentGoverned(
   matched,
   "SELECT ?s WHERE { ?s ?p ?o }",
   "rdfs",
-  { fuel: 100_000, program: null },
+  { fuel: 100_000, program: null, importIris: [], importDocuments: [], premiseIris: [] },
 );
 const entailmentPhase: "answered" | "closure-stopped" = entailed.phase;
 const ledger: string = engine.explainQuery(matched, "SELECT ?s WHERE { ?s ?p ?o }");
@@ -341,7 +346,17 @@ const shaclOptions: AsyncShaclOptions = {
 };
 const shaclShapes = "@prefix sh: <http://www.w3.org/ns/shacl#> .";
 const shaclData = "<https://example.org/s> <https://example.org/p> <https://example.org/o> .";
-const asyncSarif: Promise<string> = shaclValidateToSarifAsync(shaclShapes, shaclData, null, shaclOptions);
+const asyncSarif: Promise<string> = shaclValidateToSarifAsync(
+  shaclShapes,
+  shaclData,
+  null,
+  ["http://www.w3.org/ns/shacl#Violation"],
+  ["https://example.org/imported"],
+  ["<https://example.org/imported> a <http://www.w3.org/2002/07/owl#Ontology> ."],
+  "https://example.org/shapes",
+  true,
+  shaclOptions,
+);
 const asyncSarifBased: Promise<string> = shaclValidateToSarifAsync(shaclShapes, shaclData, "https://example.org/");
 const asyncChange: Promise<ShaclChangeValidation> = shaclValidateChangesToSarifAsync(
   shaclShapes,
@@ -349,9 +364,54 @@ const asyncChange: Promise<ShaclChangeValidation> = shaclValidateChangesToSarifA
   shaclData,
   null,
   undefined,
+  undefined,
+  undefined,
+  null,
   { signal: AbortSignal.timeout(1_000) },
 );
-const asyncShaclEntailed: Promise<string> = shaclEntailAsync(shaclShapes, shaclData, undefined, shaclOptions);
+const asyncShaclEntailed: Promise<ShaclEntailment> = shaclEntailAsync(
+  shaclShapes,
+  shaclData,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  10n,
+  undefined,
+  undefined,
+  undefined,
+  shaclOptions,
+);
+const asyncRules: Promise<ShaclRulesInference> = shaclApplyRulesAsync(
+  shaclData,
+  shaclShapes,
+  undefined,
+  undefined,
+  undefined,
+  true,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  shaclOptions,
+);
+const asyncNodes: Promise<ShaclNodeExprOutcome> = shaclEvalNodeExprAsync(
+  shaclShapes,
+  shaclData,
+  "https://example.org/expr",
+  "https://example.org/s",
+  ["x=<https://example.org/x>"],
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  undefined,
+  { yieldEveryPolls: 0 },
+);
 const shaclProduct: Uint8Array = shaclPackProduct(shaclShapes);
 const asyncProductSarif: Promise<string> = shaclProductValidateToSarifAsync(shaclProduct, shaclData, shaclOptions);
 const asyncProductRebuilt: Promise<string> = shaclProductValidateToSarifRebuildAsync(shaclProduct, shaclData);
@@ -368,7 +428,7 @@ const asyncProductRebuiltExpected: Promise<string> = shaclProductValidateToSarif
   { yieldEveryPolls: 1_024 },
 );
 // @ts-expect-error — no synchronous SHACL entry takes a ceiling, so neither does its twin.
-void shaclValidateToSarifAsync(shaclShapes, shaclData, null, { fuel: 10 });
+void shaclValidateToSarifAsync(shaclShapes, shaclData, null, null, null, null, null, null, { fuel: 10 });
 const asyncEvidence: AsyncEvidence = asyncGoverned.evidence.async;
 const stackHighWater: number = asyncEvidence.stackHighWaterBytes;
 const asyncEntailed: AsyncEntailmentQueryOutcome = await engine.queryEntailmentGovernedAsync(

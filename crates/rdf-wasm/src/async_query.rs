@@ -249,7 +249,7 @@ use crate::codec::resolve_media_type;
 use crate::dataset::{Dataset, UpdateClaim};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::operation::{
-    JobError, JobOutcome, JobRun, OPTIONS_CODE, OperationInput, SHACL_CODE, SHACL_REFUSAL_CODE,
+    ClosureInputs, JobError, JobOutcome, JobRun, OPTIONS_CODE, OperationInput, SHACL_REFUSAL_CODE,
     USAGE_CODE, coded_error, coded_type_error,
 };
 use crate::query::{
@@ -259,10 +259,8 @@ use crate::query::{
     query_result_from_sparql, update_outcome_from_governed,
 };
 use crate::shacl::{
-    ShaclChangeValidation, ShaclProductRefusal, entail_to_ntriples_impl,
-    product_validate_expecting_impl, product_validate_impl,
-    product_validate_rebuild_expecting_impl, product_validate_rebuild_impl,
-    validate_changes_to_sarif_impl, validate_to_sarif_impl,
+    ShaclChangeValidation, ShaclEntailment, ShaclImportError, ShaclJobRequest,
+    ShaclNodeExprOutcome, ShaclProductRefusal, ShaclRefusal, ShaclRequest, ShaclRulesInference,
 };
 use crate::shadow_stack::STACK_ALIGN;
 
@@ -2216,12 +2214,12 @@ pub enum AsyncOperationKind {
     /// [`AsyncJob::take_raw_bytes`]. EXPLAIN evaluates the query to measure it, so its
     /// measuring run suspends on `SERVICE`, yields and stops exactly as a query does.
     Explain = 8,
-    /// A SHACL surface — validation to SARIF, change validation, SHACL-AF entailment, or
-    /// validation with a prepared product ([`ShaclAsyncOperation`] names which). Its
-    /// `sh:SPARQLTarget` queries, SHACL-SPARQL constraints, node expressions and rules
-    /// run under the job's signal and reach its `SERVICE` and `LOAD` sources, and the
-    /// signal is polled between focus nodes too, so a validation with no SPARQL in it
-    /// still yields and stops. Started through `AsyncJob.beginShacl`.
+    /// A SHACL entry that can evaluate SPARQL — validation to SARIF, change validation,
+    /// SHACL-AF entailment, a rules run, a node expression, or validation with a
+    /// prepared product ([`ShaclRequest`] names which). Its `sh:SPARQLTarget` queries,
+    /// SHACL-SPARQL constraints, node expressions and rules run under the job's signal,
+    /// and the signal is polled between focus nodes too, so a validation with no SPARQL
+    /// in it still yields and stops. Started through `AsyncJob.beginShacl`.
     Shacl = 9,
 }
 
@@ -2247,237 +2245,6 @@ fn sparql_operation(input: OperationInput<'static>) -> Operation {
 pub(crate) const SHACL_STARTS_ELSEWHERE: &str =
     "a shacl operation reads no dataset and no SPARQL text; it starts through AsyncJob.beginShacl";
 
-/// Which SHACL surface a [`AsyncOperationKind::Shacl`] job runs: one per synchronous
-/// entry point that evaluates SPARQL, each returning exactly what that entry returns.
-#[wasm_bindgen]
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ShaclAsyncOperation {
-    /// `shaclValidateToSarif`: a SARIF log, taken through [`AsyncJob::take_raw_bytes`].
-    ValidateToSarif = 0,
-    /// `shaclValidateChangesToSarif`: a [`ShaclChangeValidation`], taken through
-    /// [`AsyncJob::take_shacl_change_validation`].
-    ValidateChangesToSarif = 1,
-    /// `shaclEntail`: canonical N-Triples, taken through [`AsyncJob::take_raw_bytes`].
-    Entail = 2,
-    /// `shaclProductValidateToSarif`.
-    ProductValidateToSarif = 3,
-    /// `shaclProductValidateToSarifRebuild`.
-    ProductValidateToSarifRebuild = 4,
-    /// `shaclProductValidateToSarifExpecting`.
-    ProductValidateToSarifExpecting = 5,
-    /// `shaclProductValidateToSarifRebuildExpecting`.
-    ProductValidateToSarifRebuildExpecting = 6,
-}
-
-impl ShaclAsyncOperation {
-    const fn name(self) -> &'static str {
-        match self {
-            Self::ValidateToSarif => "shaclValidateToSarif",
-            Self::ValidateChangesToSarif => "shaclValidateChangesToSarif",
-            Self::Entail => "shaclEntail",
-            Self::ProductValidateToSarif => "shaclProductValidateToSarif",
-            Self::ProductValidateToSarifRebuild => "shaclProductValidateToSarifRebuild",
-            Self::ProductValidateToSarifExpecting => "shaclProductValidateToSarifExpecting",
-            Self::ProductValidateToSarifRebuildExpecting => {
-                "shaclProductValidateToSarifRebuildExpecting"
-            }
-        }
-    }
-}
-
-/// A SHACL job's arguments, exactly those of the synchronous entry it twins.
-#[derive(Debug)]
-enum ShaclRequest {
-    Validate {
-        shapes: String,
-        shapes_base: Option<String>,
-        data: String,
-    },
-    ValidateChanges {
-        shapes: String,
-        shapes_base: Option<String>,
-        data: String,
-        added: Option<String>,
-        removed: Option<String>,
-    },
-    Entail {
-        shapes: String,
-        shapes_base: Option<String>,
-        data: String,
-    },
-    Product {
-        product: Vec<u8>,
-        data: String,
-        rebuild: bool,
-        expect_identity: Option<String>,
-    },
-}
-
-/// The arguments `AsyncJob.beginShacl` was handed, before they are matched to an operation.
-#[derive(Debug, Default)]
-struct ShaclArguments {
-    shapes: Option<String>,
-    shapes_base: Option<String>,
-    data: String,
-    added: Option<String>,
-    removed: Option<String>,
-    product: Option<Vec<u8>>,
-    expect_identity: Option<String>,
-}
-
-impl ShaclRequest {
-    /// Match `arguments` to `operation`, refusing a missing argument and one the
-    /// operation would ignore, by name.
-    fn build(operation: ShaclAsyncOperation, arguments: ShaclArguments) -> Result<Self, String> {
-        let ShaclArguments {
-            shapes,
-            shapes_base,
-            data,
-            added,
-            removed,
-            product,
-            expect_identity,
-        } = arguments;
-        let op = operation.name();
-        let refuse = |name: &str| format!("{op} takes no {name}");
-        let is_product = matches!(
-            operation,
-            ShaclAsyncOperation::ProductValidateToSarif
-                | ShaclAsyncOperation::ProductValidateToSarifRebuild
-                | ShaclAsyncOperation::ProductValidateToSarifExpecting
-                | ShaclAsyncOperation::ProductValidateToSarifRebuildExpecting
-        );
-        let expecting = matches!(
-            operation,
-            ShaclAsyncOperation::ProductValidateToSarifExpecting
-                | ShaclAsyncOperation::ProductValidateToSarifRebuildExpecting
-        );
-        if operation != ShaclAsyncOperation::ValidateChangesToSarif
-            && (added.is_some() || removed.is_some())
-        {
-            return Err(refuse("change document"));
-        }
-        if !expecting && expect_identity.is_some() {
-            return Err(refuse("expected identity"));
-        }
-        if is_product {
-            if shapes.is_some() {
-                return Err(refuse("shapes graph: a product carries its own"));
-            }
-            if shapes_base.is_some() {
-                return Err(refuse("shapesBase: a product records its own"));
-            }
-            let product = product.ok_or_else(|| format!("{op} needs a product"))?;
-            if expecting && expect_identity.is_none() {
-                return Err(format!("{op} needs an expected identity"));
-            }
-            return Ok(Self::Product {
-                product,
-                data,
-                rebuild: matches!(
-                    operation,
-                    ShaclAsyncOperation::ProductValidateToSarifRebuild
-                        | ShaclAsyncOperation::ProductValidateToSarifRebuildExpecting
-                ),
-                expect_identity,
-            });
-        }
-        if product.is_some() {
-            return Err(refuse("product"));
-        }
-        let shapes = shapes.ok_or_else(|| format!("{op} needs a shapes graph"))?;
-        Ok(match operation {
-            ShaclAsyncOperation::ValidateToSarif => Self::Validate {
-                shapes,
-                shapes_base,
-                data,
-            },
-            ShaclAsyncOperation::ValidateChangesToSarif => Self::ValidateChanges {
-                shapes,
-                shapes_base,
-                data,
-                added,
-                removed,
-            },
-            _ => Self::Entail {
-                shapes,
-                shapes_base,
-                data,
-            },
-        })
-    }
-
-    /// Run the synchronous entry's own body. Every one reaches the engine through the
-    /// ambient scopes, so the execution scope [`execute_shacl`] installs around this is
-    /// what governs it: nothing here is a second implementation of any surface.
-    fn run(self) -> JobOutcome {
-        let text = |result: Result<String, String>| match result {
-            Ok(text) => JobOutcome::Raw(text),
-            Err(message) => JobOutcome::Failed(JobError::message(SHACL_CODE, message)),
-        };
-        let refusable = |result: Result<String, ShaclProductRefusal>| match result {
-            Ok(text) => JobOutcome::Raw(text),
-            Err(refusal) => JobOutcome::Refused(refusal),
-        };
-        match self {
-            Self::Validate {
-                shapes,
-                shapes_base,
-                data,
-            } => text(validate_to_sarif_impl(
-                &shapes,
-                shapes_base.as_deref(),
-                &data,
-            )),
-            Self::ValidateChanges {
-                shapes,
-                shapes_base,
-                data,
-                added,
-                removed,
-            } => match validate_changes_to_sarif_impl(
-                &shapes,
-                shapes_base.as_deref(),
-                &data,
-                added.as_deref(),
-                removed.as_deref(),
-            ) {
-                Ok((sarif, scope)) => {
-                    JobOutcome::ShaclChange(ShaclChangeValidation::new(sarif, scope))
-                }
-                Err(message) => JobOutcome::Failed(JobError::message(SHACL_CODE, message)),
-            },
-            Self::Entail {
-                shapes,
-                shapes_base,
-                data,
-            } => text(entail_to_ntriples_impl(
-                &shapes,
-                shapes_base.as_deref(),
-                &data,
-            )),
-            Self::Product {
-                product,
-                data,
-                rebuild,
-                expect_identity,
-            } => refusable(match (rebuild, expect_identity.as_deref()) {
-                (false, None) => {
-                    product_validate_impl(&product, &data).map_err(ShaclProductRefusal::from)
-                }
-                (true, None) => product_validate_rebuild_impl(&product, &data)
-                    .map_err(ShaclProductRefusal::from),
-                (false, Some(expected)) => {
-                    product_validate_expecting_impl(&product, &data, expected)
-                }
-                (true, Some(expected)) => {
-                    product_validate_rebuild_expecting_impl(&product, &data, expected)
-                }
-            }),
-        }
-    }
-}
-
 /// Run `request` under the job: its signal and its sources installed as the SHACL
 /// engine's execution scope, so every SPARQL query the surface runs — a
 /// `sh:SPARQLTarget`, a SHACL-SPARQL constraint, a node expression, a rule — reaches the
@@ -2493,7 +2260,7 @@ fn execute_shacl(request: ShaclRequest, run: &JobRun<'_>) -> JobOutcome {
     let outcome = {
         let _scope =
             purrdf_shapes::sparql::enter_execution_scope(Arc::clone(&state), run.sources());
-        run.evaluate(|| request.run())
+        run.evaluate(|| request.run_job())
     };
     run.record_silenced(&state.evidence());
     match state.tripped() {
@@ -2614,9 +2381,9 @@ struct JobInner {
     error: RefCell<Option<JobError>>,
     /// The frozen result an applied update offers `commitUpdate`, until it is taken.
     pending_commit: RefCell<Option<Arc<RdfDataset>>>,
-    /// A SHACL product job's refusal, beside the error it also stored, until it is
-    /// taken ([`AsyncJob::take_shacl_refusal`]).
-    refusal: RefCell<Option<ShaclProductRefusal>>,
+    /// A SHACL job's refusal, beside the error it also stored, until it is taken
+    /// ([`AsyncJob::take_shacl_refusal`], [`AsyncJob::take_shacl_import_error`]).
+    refusal: RefCell<Option<ShaclRefusal>>,
 }
 
 impl fmt::Debug for JobInner {
@@ -3329,11 +3096,68 @@ impl AsyncJob {
         }
     }
 
+    /// A SHACL-AF entailment job's outcome: the materialized dataset and its
+    /// diagnostics, exactly as `shaclEntail` returns them.
+    #[wasm_bindgen(js_name = takeShaclEntailment)]
+    pub fn take_shacl_entailment(&self) -> Result<ShaclEntailment, JsValue> {
+        match self.take("takeShaclEntailment", &[AsyncOperationKind::Shacl])? {
+            JobOutcome::ShaclEntailment(entailment) => Ok(entailment),
+            _ => Err(usage_error(
+                "takeShaclEntailment: the job holds no entailment",
+            )),
+        }
+    }
+
+    /// A rules job's outcome: the inference graph, proof and diagnostics, exactly as
+    /// `shaclApplyRules` returns them.
+    #[wasm_bindgen(js_name = takeShaclRulesInference)]
+    pub fn take_shacl_rules_inference(&self) -> Result<ShaclRulesInference, JsValue> {
+        match self.take("takeShaclRulesInference", &[AsyncOperationKind::Shacl])? {
+            JobOutcome::ShaclRules(inference) => Ok(inference),
+            _ => Err(usage_error(
+                "takeShaclRulesInference: the job holds no rules inference",
+            )),
+        }
+    }
+
+    /// A node-expression job's `ShaclNodeExprOutcome` — its output nodes and the shapes
+    /// graph's mandatory diagnostics — exactly as `shaclEvalNodeExpr` returns it.
+    #[wasm_bindgen(js_name = takeShaclNodeExprOutcome)]
+    pub fn take_shacl_node_expr_outcome(&self) -> Result<ShaclNodeExprOutcome, JsValue> {
+        match self.take("takeShaclNodeExprOutcome", &[AsyncOperationKind::Shacl])? {
+            JobOutcome::ShaclNodeExpr(outcome) => Ok(outcome),
+            _ => Err(usage_error(
+                "takeShaclNodeExprOutcome: the job holds no node-expression outcome",
+            )),
+        }
+    }
+
     /// A SHACL product job's refusal, once — the `ShaclProductRefusal` the synchronous
-    /// twin throws — or `undefined` when the job was not refused.
+    /// twin throws — or `undefined` when the job was not refused that way.
     #[wasm_bindgen(js_name = takeShaclRefusal)]
     pub fn take_shacl_refusal(&self) -> Option<ShaclProductRefusal> {
-        self.inner.refusal.borrow_mut().take()
+        let mut refusal = self.inner.refusal.borrow_mut();
+        match refusal.take() {
+            Some(ShaclRefusal::Product(product)) => Some(product),
+            other => {
+                *refusal = other;
+                None
+            }
+        }
+    }
+
+    /// A shapes-graph job's import refusal, once — the `ShaclImportError` the synchronous
+    /// twin throws — or `undefined` when the job was not refused that way.
+    #[wasm_bindgen(js_name = takeShaclImportError)]
+    pub fn take_shacl_import_error(&self) -> Option<ShaclImportError> {
+        let mut refusal = self.inner.refusal.borrow_mut();
+        match refusal.take() {
+            Some(ShaclRefusal::Import(error)) => Some(error),
+            other => {
+                *refusal = other;
+                None
+            }
+        }
     }
 
     /// A snapshot of the job's evidence. Callable at any time, as often as wanted.
@@ -3435,10 +3259,14 @@ enum OptionShape {
     Catalog,
     /// An object mapping endpoint IRIs to `Dataset`s.
     LocalServices,
+    /// An array of strings.
+    TextList,
+    /// An evaluation limit: a non-negative integer as a `number` or a `bigint`.
+    Limit,
 }
 
 /// Every option key an asynchronous operation reads, and its shape.
-const OPTION_SHAPES: [(&str, OptionShape); 16] = [
+const OPTION_SHAPES: [(&str, OptionShape); 21] = [
     ("base", OptionShape::Text),
     ("format", OptionShape::Text),
     ("provenanceNamespace", OptionShape::Provenance),
@@ -3455,6 +3283,11 @@ const OPTION_SHAPES: [(&str, OptionShape); 16] = [
     ("maxRemoteRequests", OptionShape::Ceiling),
     ("yieldEveryPolls", OptionShape::Count),
     ("catalog", OptionShape::Catalog),
+    ("importIris", OptionShape::TextList),
+    ("importDocuments", OptionShape::TextList),
+    ("premiseIris", OptionShape::TextList),
+    ("maxStoredFacts", OptionShape::Limit),
+    ("maxJoinSteps", OptionShape::Limit),
 ];
 
 /// The shape of option `key`, or `None` for a key no operation reads.
@@ -3555,6 +3388,11 @@ impl AsyncOperationKind {
                     "maxScratchBytes",
                     "maxRemoteRequests",
                     "program",
+                    "importIris",
+                    "importDocuments",
+                    "premiseIris",
+                    "maxStoredFacts",
+                    "maxJoinSteps",
                 ],
                 true,
                 Some("regime"),
@@ -3604,6 +3442,8 @@ pub(crate) enum OptionValue {
     },
     Catalog(NativeServiceCatalog),
     LocalServices(Vec<(String, Arc<RdfDataset>)>),
+    TextList(Vec<String>),
+    Limit(u64),
     /// A key no operation reads; refused by name.
     Unknown,
 }
@@ -3668,6 +3508,7 @@ pub struct AsyncJobOptions {
     aggregate_namespace: Option<String>,
     regime: Option<String>,
     program: Option<String>,
+    closure: ClosureInputs,
     accept: Option<String>,
     ceilings: GovernorArgs,
     quantum: u32,
@@ -3738,6 +3579,8 @@ fn read_option(
             OptionsError::type_error(format!("query option {key} must be a number when supplied"))
         }),
         OptionShape::Ceiling => read_ceiling(key, value).map(OptionValue::Ceiling),
+        OptionShape::TextList => read_text_list(key, value).map(OptionValue::TextList),
+        OptionShape::Limit => read_limit(key, value).map(OptionValue::Limit),
         OptionShape::Provenance => {
             if !value.is_object() {
                 return Err(OptionsError::type_error(
@@ -3813,6 +3656,47 @@ fn read_option(
 /// Read a governor ceiling: an integer as a `bigint`, a safe-integer `number` or an
 /// integral string. Its sign is checked when the job begins, with the synchronous
 /// entries' own message.
+/// Read an array-of-strings option.
+fn read_text_list(key: &str, value: &JsValue) -> Result<Vec<String>, OptionsError> {
+    let refused =
+        || OptionsError::type_error(format!("{key} must be an array of strings when supplied"));
+    if !is_array(value) {
+        return Err(refused());
+    }
+    let length = reflect_get(value, "length")
+        .ok()
+        .and_then(|length| length.as_f64())
+        .ok_or_else(refused)?;
+    (0..length as u32)
+        .map(|index| {
+            reflect_get(value, &index.to_string())
+                .ok()
+                .and_then(|item| item.as_string())
+                .ok_or_else(refused)
+        })
+        .collect()
+}
+
+/// Read an evaluation-limit option: a non-negative integer as a `bigint`, or as a `number`
+/// widened exactly.
+fn read_limit(key: &str, value: &JsValue) -> Result<u64, OptionsError> {
+    let refused = || {
+        OptionsError::type_error(format!(
+            "query option {key} must be a non-negative integer (bigint or number)"
+        ))
+    };
+    if value.is_bigint() {
+        return u64::try_from(value.clone()).map_err(|_| refused());
+    }
+    if let Some(number) = value.as_f64() {
+        const MAX_SAFE: f64 = 9_007_199_254_740_991.0;
+        return (number.fract() == 0.0 && (0.0..=MAX_SAFE).contains(&number))
+            .then_some(number as u64)
+            .ok_or_else(refused);
+    }
+    Err(refused())
+}
+
 fn read_ceiling(key: &str, value: &JsValue) -> Result<i64, OptionsError> {
     let refused = || {
         OptionsError::type_error(format!(
@@ -3987,6 +3871,19 @@ impl AsyncJobOptions {
                     options.aggregate_namespace = Some(text);
                 }
                 ("program", OptionValue::Text(text)) => options.program = Some(text),
+                ("importIris", OptionValue::TextList(list)) => options.closure.import_iris = list,
+                ("importDocuments", OptionValue::TextList(list)) => {
+                    options.closure.import_documents = list;
+                }
+                ("premiseIris", OptionValue::TextList(list)) => {
+                    options.closure.premise_iris = list;
+                }
+                ("maxStoredFacts", OptionValue::Limit(limit)) => {
+                    options.closure.max_stored_facts = Some(limit);
+                }
+                ("maxJoinSteps", OptionValue::Limit(limit)) => {
+                    options.closure.max_join_steps = Some(limit);
+                }
                 ("accept", OptionValue::Text(text)) => options.accept = Some(text),
                 ("provenanceNamespace", OptionValue::Provenance { prefix, iri }) => {
                     options.provenance = Some((prefix, iri));
@@ -4365,6 +4262,7 @@ fn begin_job(
         jsonld,
         regime: options.regime.clone(),
         program: options.program.clone(),
+        closure: options.closure.clone(),
         accept: options.accept.clone(),
     };
     register_operation(
@@ -4444,17 +4342,11 @@ fn register_operation(
     Ok(AsyncJob { inner })
 }
 
-/// Match the arguments to `operation` and register the SHACL job `options` were
-/// validated for. Native-testable core of [`AsyncJob::begin_shacl`].
-fn begin_shacl_job(
-    operation: ShaclAsyncOperation,
-    arguments: ShaclArguments,
-    options: &AsyncJobOptions,
-) -> Result<AsyncJob, JobError> {
+/// Register the SHACL job `options` were validated for, running `request`.
+/// Native-testable core of [`AsyncJob::begin_shacl`].
+fn begin_shacl_job(request: ShaclRequest, options: &AsyncJobOptions) -> Result<AsyncJob, JobError> {
     options
         .require_kind(AsyncOperationKind::Shacl)
-        .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
-    let request = ShaclRequest::build(operation, arguments)
         .map_err(|message| JobError::message(OPTIONS_CODE, message))?;
     register_operation(
         AsyncOperationKind::Shacl,
@@ -4473,50 +4365,27 @@ fn begin_refused(error: &JobError) -> JsValue {
 
 #[wasm_bindgen]
 impl AsyncJob {
-    /// Start an asynchronous SHACL operation: the twin of the synchronous entry
-    /// `operation` names, over the same arguments, under `options` (from
-    /// `AsyncJobOptions.fromJs` for the `shacl` kind).
+    /// Start an asynchronous SHACL operation: run `request` — built by the
+    /// `ShaclJobRequest` constructor named for the synchronous entry it twins, over
+    /// exactly that entry's arguments — under `options` (from `AsyncJobOptions.fromJs`
+    /// for the `shacl` kind). The job runs the synchronous entry's own body.
     ///
-    /// `shapesTtl`, `shapesBase`, `addedNt` and `removedNt` are the text-shapes entries'
-    /// arguments and `product` and `expectIdentity` the product entries'; an argument the
-    /// operation does not take is refused by name. The documents are parsed when the job
-    /// runs, so a parse error — like a product refusal — is the job's error, with the
-    /// synchronous twin's words.
+    /// The documents are parsed when the job runs, so a parse error — like a product or
+    /// import refusal — is the job's error, with the synchronous twin's words.
     ///
     /// A static constructor rather than a free function: it is the package root's
     /// plumbing, reached through its `shacl…Async` twins, never a consumer entry point.
     ///
     /// # Errors
     ///
-    /// Options validated for another kind, or an argument the operation does not take or
-    /// is missing.
+    /// Options validated for another kind.
     #[wasm_bindgen(js_name = beginShacl)]
-    #[allow(clippy::too_many_arguments)] // one argument per synchronous twin's argument
+    #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     pub fn begin_shacl(
-        operation: ShaclAsyncOperation,
         options: &AsyncJobOptions,
-        data_nt: String,
-        shapes_ttl: Option<String>,
-        shapes_base: Option<String>,
-        added_nt: Option<String>,
-        removed_nt: Option<String>,
-        product: Option<Vec<u8>>,
-        expect_identity: Option<String>,
+        request: ShaclJobRequest,
     ) -> Result<Self, JsValue> {
-        begin_shacl_job(
-            operation,
-            ShaclArguments {
-                shapes: shapes_ttl,
-                shapes_base,
-                data: data_nt,
-                added: added_nt,
-                removed: removed_nt,
-                product,
-                expect_identity,
-            },
-            options,
-        )
-        .map_err(|error| begin_refused(&error))
+        begin_shacl_job(request.into_request(), options).map_err(|error| begin_refused(&error))
     }
 }
 
@@ -4608,6 +4477,9 @@ mod tests {
 
     use super::*;
     use crate::query::sparql_request;
+    use crate::shacl::requests;
+    use crate::shacl::tests::{TOOLS_DATA, TOOLS_SHAPES};
+    use purrdf_validate::ShapesError;
 
     const SEED_NT: &str = concat!(
         "<http://example.org/s> <http://example.org/p> <http://example.org/o> .\n",
@@ -4944,6 +4816,48 @@ mod tests {
             .validate(AsyncOperationKind::EntailmentGoverned)
             .expect("the regime is the argument");
         assert_eq!(with_regime.regime.as_deref(), Some("rdfs"));
+        // The closure's import table and evaluation limits are the entailment twin's
+        // options, exactly as `queryEntailmentGoverned` takes them, and no other
+        // operation's: a governed query would ignore them, so it refuses them by name.
+        let closure = || {
+            options()
+                .argument("rdfs")
+                .with(
+                    "importIris",
+                    OptionValue::TextList(vec!["http://example.org/schema".to_owned()]),
+                )
+                .with(
+                    "importDocuments",
+                    OptionValue::TextList(vec![String::new()]),
+                )
+                .with(
+                    "premiseIris",
+                    OptionValue::TextList(vec!["http://example.org/data".to_owned()]),
+                )
+                .with("maxStoredFacts", OptionValue::Limit(140_000))
+                .with("maxJoinSteps", OptionValue::Limit(1))
+        };
+        let with_closure = closure()
+            .validate(AsyncOperationKind::EntailmentGoverned)
+            .expect("the closure's inputs are the entailment twin's options");
+        assert_eq!(
+            with_closure.closure.import_iris,
+            ["http://example.org/schema"]
+        );
+        assert_eq!(with_closure.closure.import_documents, [""]);
+        assert_eq!(
+            with_closure.closure.premise_iris,
+            ["http://example.org/data"]
+        );
+        assert_eq!(with_closure.closure.max_stored_facts, Some(140_000));
+        assert_eq!(with_closure.closure.max_join_steps, Some(1));
+        assert!(
+            options()
+                .with("importIris", OptionValue::TextList(Vec::new()))
+                .validate(AsyncOperationKind::Governed)
+                .expect_err("a governed query has no closure to import into")
+                .contains("unknown query option \"importIris\"")
+        );
         assert!(
             options()
                 .argument("rdfs")
@@ -7142,18 +7056,39 @@ mod tests {
         "<http://example.org/bob> <http://example.org/age> \"40\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
     );
 
-    fn shacl_arguments(shapes: Option<String>, data: &str) -> ShaclArguments {
-        ShaclArguments {
-            shapes,
-            data: data.to_owned(),
-            ..ShaclArguments::default()
-        }
+    /// `shaclValidateToSarif`'s request over `shapes` and `data`, every other argument
+    /// omitted.
+    fn validate(shapes: &str, data: &str) -> ShaclRequest {
+        ShaclJobRequest::validate_to_sarif(
+            shapes.to_owned(),
+            data.to_owned(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
+        .into_request()
+    }
+
+    /// `shaclValidateToSarif` itself, as its request's body answers it.
+    fn validate_sync(shapes: &str, data: &str) -> Result<String, ShapesError> {
+        requests::validate_to_sarif(
+            shapes.to_owned(),
+            data.to_owned(),
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+        )
     }
 
     /// Begin a SHACL job and run it to completion on the native build.
     fn run_shacl(
-        operation: ShaclAsyncOperation,
-        arguments: ShaclArguments,
+        request: ShaclRequest,
         options: impl std::borrow::Borrow<Opts>,
     ) -> (AsyncJob, RunStatus) {
         let options = options
@@ -7161,7 +7096,7 @@ mod tests {
             .clone()
             .validate(AsyncOperationKind::Shacl)
             .expect("options are valid");
-        let job = begin_shacl_job(operation, arguments, &options).expect("the job begins");
+        let job = begin_shacl_job(request, &options).expect("the job begins");
         let status = run_job(job.id());
         (job, status)
     }
@@ -7169,13 +7104,9 @@ mod tests {
     #[test]
     fn a_shacl_job_answers_what_each_synchronous_entry_answers() {
         let shapes = core_shapes();
-        let (job, status) = run_shacl(
-            ShaclAsyncOperation::ValidateToSarif,
-            shacl_arguments(Some(shapes.clone()), PEOPLE_NT),
-            options(),
-        );
+        let (job, status) = run_shacl(validate(&shapes, PEOPLE_NT), options());
         assert_eq!(status, RunStatus::Outcome);
-        let expected = validate_to_sarif_impl(&shapes, None, PEOPLE_NT).expect("sync entry");
+        let expected = validate_sync(&shapes, PEOPLE_NT).expect("sync entry");
         assert!(
             expected.contains("DatatypeConstraintComponent"),
             "the fixture violates"
@@ -7188,24 +7119,34 @@ mod tests {
         job.finish();
 
         let added = "<http://example.org/bob> <http://example.org/age> \"x\" .\n";
+        let changes = || {
+            (
+                shapes.clone(),
+                PEOPLE_NT.to_owned(),
+                Some(added.to_owned()),
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        let (s, d, a, r, b, i, docs, g) = changes();
         let (job, status) = run_shacl(
-            ShaclAsyncOperation::ValidateChangesToSarif,
-            ShaclArguments {
-                added: Some(added.to_owned()),
-                ..shacl_arguments(Some(shapes.clone()), PEOPLE_NT)
-            },
+            ShaclJobRequest::validate_changes_to_sarif(s, d, a, r, b, i, docs, g).into_request(),
             options(),
         );
         assert_eq!(status, RunStatus::Outcome);
-        let (sarif, scope) =
-            validate_changes_to_sarif_impl(&shapes, None, PEOPLE_NT, Some(added), None)
-                .expect("sync entry");
+        let (s, d, a, r, b, i, docs, g) = changes();
+        let sync =
+            requests::validate_changes_to_sarif(s, d, a, r, b, i, docs, g).expect("sync entry");
         let changed = job
             .take_shacl_change_validation()
             .expect("a change validation");
-        assert_eq!(changed.sarif(), sarif);
-        assert_eq!(changed.bounded(), scope.is_bounded());
+        assert_eq!(changed.sarif(), sync.sarif());
+        assert_eq!(changed.bounded(), sync.bounded());
         assert_eq!(changed.focus_nodes(), Some(1));
+        assert_eq!(changed.focus_nodes(), sync.focus_nodes());
         job.finish();
 
         let rules = format!(
@@ -7213,104 +7154,187 @@ mod tests {
              sh:rule [ a sh:TripleRule ; sh:subject sh:this ; sh:predicate ex:adult ; \
              sh:object ex:yes ] .\n"
         );
+        let entail = || {
+            (
+                rules.clone(),
+                PEOPLE_NT.to_owned(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        let (s, d, b, i, docs, g, r, t, f, j) = entail();
         let (job, status) = run_shacl(
-            ShaclAsyncOperation::Entail,
-            shacl_arguments(Some(rules.clone()), PEOPLE_NT),
+            ShaclJobRequest::entail(s, d, b, i, docs, g, r, t, f, j).into_request(),
             options(),
         );
         assert_eq!(status, RunStatus::Outcome);
-        let entailed = entail_to_ntriples_impl(&rules, None, PEOPLE_NT).expect("sync entry");
-        assert!(entailed.contains("<http://example.org/adult>"));
-        assert_eq!(raw_text(&job), entailed);
+        let (s, d, b, i, docs, g, r, t, f, j) = entail();
+        let entailed = requests::entail(s, d, b, i, docs, g, r, t, f, j).expect("sync entry");
+        assert!(entailed.ntriples().contains("<http://example.org/adult>"));
+        let entailment = job.take_shacl_entailment().expect("an entailment");
+        assert_eq!(entailment.ntriples(), entailed.ntriples());
+        assert_eq!(entailment.diagnostics(), entailed.diagnostics());
         job.finish();
 
-        let product = crate::shacl::pack_product_impl(&shapes, None).expect("packs");
-        for operation in [
-            ShaclAsyncOperation::ProductValidateToSarif,
-            ShaclAsyncOperation::ProductValidateToSarifRebuild,
+        let rules_run = || {
+            (
+                TOOLS_DATA.to_owned(),
+                Some(TOOLS_SHAPES.to_owned()),
+                None,
+                None,
+                None,
+                Some(true),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        let (d, sh, srl, b, sb, e, i, docs, g, r, t, f, j) = rules_run();
+        let (job, status) = run_shacl(
+            ShaclJobRequest::apply_rules(d, sh, srl, b, sb, e, i, docs, g, r, t, f, j)
+                .into_request(),
+            options(),
+        );
+        assert_eq!(status, RunStatus::Outcome);
+        let (d, sh, srl, b, sb, e, i, docs, g, r, t, f, j) = rules_run();
+        let applied = requests::apply_rules(d, sh, srl, b, sb, e, i, docs, g, r, t, f, j)
+            .expect("sync entry");
+        assert!(
+            applied
+                .inferred()
+                .contains("<http://example.org/ns#tagged>"),
+            "the fixture's node-expression rule fires: {}",
+            applied.inferred()
+        );
+        let inference = job.take_shacl_rules_inference().expect("an inference");
+        assert_eq!(inference.inferred(), applied.inferred());
+        assert_eq!(inference.proof(), applied.proof());
+        assert_eq!(inference.diagnostics(), applied.diagnostics());
+        job.finish();
+
+        let node_expr = |focus: &str| {
+            (
+                TOOLS_SHAPES.to_owned(),
+                TOOLS_DATA.to_owned(),
+                Some("http://example.org/ns#Tag".to_owned()),
+                focus.to_owned(),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+                None,
+            )
+        };
+        let (sh, d, x, f, sc, b, i, docs, at, via, tt) = node_expr("http://example.org/ns#a");
+        let (job, status) = run_shacl(
+            ShaclJobRequest::eval_node_expr(sh, d, x, f, sc, b, i, docs, at, via, tt)
+                .into_request(),
+            options(),
+        );
+        assert_eq!(status, RunStatus::Outcome);
+        let (sh, d, x, f, sc, b, i, docs, at, via, tt) = node_expr("http://example.org/ns#a");
+        let evaluated =
+            requests::eval_node_expr(sh, d, x, f, sc, b, i, docs, at, via, tt).expect("sync entry");
+        assert_eq!(evaluated.outputs(), ["<http://example.org/ns#yes>"]);
+        let outcome = job
+            .take_shacl_node_expr_outcome()
+            .expect("a node-expression outcome");
+        assert_eq!(outcome.outputs(), evaluated.outputs());
+        assert_eq!(outcome.diagnostics(), evaluated.diagnostics());
+        job.finish();
+
+        let product =
+            crate::shacl::pack_product_impl(&shapes, None, &[], &[], None).expect("packs");
+        for request in [
+            ShaclJobRequest::product_validate_to_sarif(product.clone(), PEOPLE_NT.to_owned()),
+            ShaclJobRequest::product_validate_to_sarif_rebuild(product, PEOPLE_NT.to_owned()),
         ] {
-            let (job, status) = run_shacl(
-                operation,
-                ShaclArguments {
-                    product: Some(product.clone()),
-                    ..shacl_arguments(None, PEOPLE_NT)
-                },
-                options(),
-            );
-            assert_eq!(status, RunStatus::Outcome, "{operation:?}");
-            assert_eq!(raw_text(&job), expected, "{operation:?}");
+            let request = request.into_request();
+            let label = format!("{request:?}");
+            let (job, status) = run_shacl(request, options());
+            assert_eq!(status, RunStatus::Outcome, "{label}");
+            assert_eq!(raw_text(&job), expected, "{label}");
             job.finish();
         }
     }
 
-    #[test]
-    fn a_shacl_job_reaches_its_local_service_where_the_synchronous_entry_has_no_source() {
-        let shapes = service_target_shapes();
-        let refused = validate_to_sarif_impl(&shapes, None, PEOPLE_NT)
-            .expect_err("no SERVICE source offline");
-        assert!(
-            refused.contains("no remote query source configured"),
-            "{refused}"
-        );
-        let (job, status) = run_shacl(
-            ShaclAsyncOperation::ValidateToSarif,
-            shacl_arguments(Some(shapes.clone()), PEOPLE_NT),
-            options(),
-        );
-        assert_eq!(
-            status,
-            RunStatus::Error,
-            "a job with no source refuses it the same way"
-        );
-        assert!(
-            job.error_message()
-                .expect("an error")
-                .contains("no remote query source configured")
-        );
-        job.finish();
+    /// A SPARQL target selecting every person with a status of "banned" from the data
+    /// graph itself: the neighbour of [`service_target_shapes`] with no `SERVICE`.
+    fn local_target_shapes() -> String {
+        format!(
+            "{SHACL_PREFIXES}ex:BannedShape a sh:NodeShape ;\n\
+             sh:target [ a sh:SPARQLTarget ; sh:select \"\"\"SELECT ?this WHERE {{ \
+             ?this a <http://example.org/Person> ; \
+             <http://example.org/status> \"banned\" }}\"\"\" ] ;\n\
+             sh:property [ sh:path ex:clearance ; sh:minCount 1 ] .\n"
+        )
+    }
 
-        // Two registries: the report's focus node is the one each bans.
-        for (banned, other) in [("alice", "bob"), ("bob", "alice")] {
-            let registry = Dataset::parse(
-                &format!(
-                    "<http://example.org/{banned}> <http://example.org/status> \"banned\" .\n"
-                ),
-                "ntriples",
-                None,
+    /// SHACL-SPARQL admits no `SERVICE` in any query, a `sh:SPARQLTarget`'s included:
+    /// the shapes graph is refused while it loads, on either lane, whether or not the job
+    /// has a source for the endpoint. The same target reading the data graph answers, and
+    /// the job answers exactly what the synchronous entry does.
+    #[test]
+    fn a_service_in_a_shacl_query_is_refused_on_both_lanes_whatever_the_job_sources() {
+        const REFUSAL: &str = "a federated query (SERVICE) is not allowed";
+        let shapes = service_target_shapes();
+        let refused = validate_sync(&shapes, PEOPLE_NT)
+            .expect_err("SERVICE is refused offline")
+            .to_string();
+        assert!(refused.contains(REFUSAL), "{refused}");
+
+        let registry = Dataset::parse(
+            "<http://example.org/alice> <http://example.org/status> \"banned\" .\n",
+            "ntriples",
+            None,
+        )
+        .expect("registry parses");
+        let mut local = options();
+        local
+            .add_local_frozen(
+                ENDPOINT.to_owned(),
+                registry.view().freeze().expect("freeze"),
             )
-            .expect("registry parses");
-            let mut local = options();
-            local
-                .add_local_frozen(
-                    ENDPOINT.to_owned(),
-                    registry.view().freeze().expect("freeze"),
-                )
-                .expect("declared");
-            let (job, status) = run_shacl(
-                ShaclAsyncOperation::ValidateToSarif,
-                shacl_arguments(Some(shapes.clone()), PEOPLE_NT),
-                &local,
-            );
-            assert_eq!(status, RunStatus::Outcome);
-            let sarif = raw_text(&job);
-            assert!(
-                sarif.contains(&format!("http://example.org/{banned}")),
-                "{sarif}"
-            );
-            assert!(
-                !sarif.contains(&format!("http://example.org/{other}")),
-                "{sarif}"
-            );
+            .expect("declared");
+        for (label, options) in [("no source", options()), ("a local source", local)] {
+            let (job, status) = run_shacl(validate(&shapes, PEOPLE_NT), &options);
+            assert_eq!(status, RunStatus::Error, "{label}");
+            let message = job.error_message().expect("an error");
+            assert!(message.contains(REFUSAL), "{label}: {message}");
             job.finish();
         }
+
+        let data = format!(
+            "{PEOPLE_NT}<http://example.org/alice> <http://example.org/status> \"banned\" .\n"
+        );
+        let shapes = local_target_shapes();
+        let expected =
+            validate_sync(&shapes, &data).expect("a target reading the data graph is admitted");
+        assert!(expected.contains("http://example.org/alice"), "{expected}");
+        assert!(!expected.contains("http://example.org/bob"), "{expected}");
+        let (job, status) = run_shacl(validate(&shapes, &data), options());
+        assert_eq!(status, RunStatus::Outcome);
+        assert_eq!(raw_text(&job), expected);
+        job.finish();
     }
 
     #[test]
     fn a_cancelled_shacl_job_errors_as_cancelled_and_an_uncancelled_one_answers() {
         let (job, status) = {
             let job = begin_shacl_job(
-                ShaclAsyncOperation::ValidateToSarif,
-                shacl_arguments(Some(core_shapes()), PEOPLE_NT),
+                validate(&core_shapes(), PEOPLE_NT),
                 &options()
                     .validate(AsyncOperationKind::Shacl)
                     .expect("valid"),
@@ -7323,43 +7347,41 @@ mod tests {
         assert_eq!(status, RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("cancelled"));
         job.finish();
-        let (job, status) = run_shacl(
-            ShaclAsyncOperation::ValidateToSarif,
-            shacl_arguments(Some(core_shapes()), PEOPLE_NT),
-            options(),
-        );
+        let (job, status) = run_shacl(validate(&core_shapes(), PEOPLE_NT), options());
         assert_eq!(status, RunStatus::Outcome);
         job.finish();
     }
 
     #[test]
     fn a_refused_product_job_keeps_the_refusal_class_and_a_valid_product_answers() {
-        let product = crate::shacl::pack_product_impl(&core_shapes(), None).expect("packs");
+        let product =
+            crate::shacl::pack_product_impl(&core_shapes(), None, &[], &[], None).expect("packs");
         let mut corrupted = product.clone();
         let middle = corrupted.len() / 2;
         corrupted[middle] ^= 0xff;
         let (job, status) = run_shacl(
-            ShaclAsyncOperation::ProductValidateToSarif,
-            ShaclArguments {
-                product: Some(corrupted),
-                ..shacl_arguments(None, PEOPLE_NT)
-            },
+            ShaclJobRequest::product_validate_to_sarif(corrupted, PEOPLE_NT.to_owned())
+                .into_request(),
             options(),
         );
         assert_eq!(status, RunStatus::Error);
         assert_eq!(job.error_kind().as_deref(), Some("error"));
+        assert!(
+            job.take_shacl_import_error().is_none(),
+            "not an import error"
+        );
         let refusal = job.take_shacl_refusal().expect("the refusal is kept");
         assert_eq!(refusal.dimension().as_deref(), Some("section-digest"));
         assert!(job.take_shacl_refusal().is_none(), "taken once");
         job.finish();
 
         let (job, status) = run_shacl(
-            ShaclAsyncOperation::ProductValidateToSarifExpecting,
-            ShaclArguments {
-                product: Some(product.clone()),
-                expect_identity: Some("not-hex".to_owned()),
-                ..shacl_arguments(None, PEOPLE_NT)
-            },
+            ShaclJobRequest::product_validate_to_sarif_expecting(
+                product.clone(),
+                PEOPLE_NT.to_owned(),
+                "not-hex".to_owned(),
+            )
+            .into_request(),
             options(),
         );
         assert_eq!(status, RunStatus::Error);
@@ -7368,11 +7390,8 @@ mod tests {
         job.finish();
 
         let (job, status) = run_shacl(
-            ShaclAsyncOperation::ProductValidateToSarif,
-            ShaclArguments {
-                product: Some(product),
-                ..shacl_arguments(None, PEOPLE_NT)
-            },
+            ShaclJobRequest::product_validate_to_sarif(product, PEOPLE_NT.to_owned())
+                .into_request(),
             options(),
         );
         assert_eq!(status, RunStatus::Outcome);
@@ -7381,7 +7400,63 @@ mod tests {
     }
 
     #[test]
-    fn a_shacl_operation_refuses_what_it_would_ignore_and_takes_what_its_twin_takes() {
+    fn an_unresolved_import_keeps_the_import_error_class_and_a_resolved_one_answers() {
+        let shapes = format!(
+            "{SHACL_PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+             <http://example.org/shapes> a owl:Ontology ; \
+             owl:imports <http://example.org/imported> .\n{}",
+            core_shapes()
+        );
+        let refused = validate_sync(&shapes, PEOPLE_NT).expect_err("the closure is not in hand");
+        let expected = ShaclImportError::from(refused.as_imports().expect("an import refusal"));
+        let (job, status) = run_shacl(validate(&shapes, PEOPLE_NT), options());
+        assert_eq!(status, RunStatus::Error);
+        assert_eq!(job.error_kind().as_deref(), Some("error"));
+        assert!(job.take_shacl_refusal().is_none(), "not a product refusal");
+        let error = job
+            .take_shacl_import_error()
+            .expect("the import error is kept");
+        assert_eq!(error.kind(), expected.kind());
+        assert_eq!(error.iris(), expected.iris());
+        assert_eq!(error.message(), expected.message());
+        assert!(job.take_shacl_import_error().is_none(), "taken once");
+        job.finish();
+
+        // The resolved neighbour: the import table supplied, the job answers exactly what
+        // the synchronous entry does.
+        let imported = format!(
+            "{SHACL_PREFIXES}<http://example.org/imported> a \
+             <http://www.w3.org/2002/07/owl#Ontology> .\n"
+        );
+        let resolved = || {
+            (
+                shapes.clone(),
+                PEOPLE_NT.to_owned(),
+                None,
+                None,
+                Some(vec!["http://example.org/imported".to_owned()]),
+                Some(vec![imported.clone()]),
+                None,
+                None,
+            )
+        };
+        let (s, d, b, c, i, docs, g, sub) = resolved();
+        let (job, status) = run_shacl(
+            ShaclJobRequest::validate_to_sarif(s, d, b, c, i, docs, g, sub).into_request(),
+            options(),
+        );
+        assert_eq!(status, RunStatus::Outcome);
+        let (s, d, b, c, i, docs, g, sub) = resolved();
+        assert_eq!(
+            raw_text(&job),
+            requests::validate_to_sarif(s, d, b, c, i, docs, g, sub).expect("sync entry")
+        );
+        assert!(job.take_shacl_import_error().is_none());
+        job.finish();
+    }
+
+    #[test]
+    fn a_shacl_job_refuses_the_options_no_synchronous_entry_takes() {
         assert!(
             options()
                 .ceiling("fuel", 10)
@@ -7397,96 +7472,5 @@ mod tests {
                 .contains("unknown query option \"base\"")
         );
         assert!(options().validate(AsyncOperationKind::Shacl).is_ok());
-
-        let shapes = || Some(core_shapes());
-        let product = || Some(vec![0_u8; 4]);
-        for (operation, arguments, refusal) in [
-            (
-                ShaclAsyncOperation::ValidateToSarif,
-                shacl_arguments(None, PEOPLE_NT),
-                "needs a shapes graph",
-            ),
-            (
-                ShaclAsyncOperation::ValidateToSarif,
-                ShaclArguments {
-                    product: product(),
-                    ..shacl_arguments(shapes(), PEOPLE_NT)
-                },
-                "takes no product",
-            ),
-            (
-                ShaclAsyncOperation::Entail,
-                ShaclArguments {
-                    added: Some(String::new()),
-                    ..shacl_arguments(shapes(), PEOPLE_NT)
-                },
-                "takes no change document",
-            ),
-            (
-                ShaclAsyncOperation::ProductValidateToSarif,
-                shacl_arguments(shapes(), PEOPLE_NT),
-                "takes no shapes graph",
-            ),
-            (
-                ShaclAsyncOperation::ProductValidateToSarif,
-                ShaclArguments {
-                    expect_identity: Some("00".to_owned()),
-                    ..shacl_arguments(None, PEOPLE_NT)
-                },
-                "takes no expected identity",
-            ),
-            (
-                ShaclAsyncOperation::ProductValidateToSarifExpecting,
-                ShaclArguments {
-                    product: product(),
-                    ..shacl_arguments(None, PEOPLE_NT)
-                },
-                "needs an expected identity",
-            ),
-            (
-                ShaclAsyncOperation::ProductValidateToSarifRebuild,
-                shacl_arguments(None, PEOPLE_NT),
-                "needs a product",
-            ),
-        ] {
-            let error = ShaclRequest::build(operation, arguments).expect_err("refused");
-            assert!(error.contains(refusal), "{operation:?}: {error}");
-            assert!(error.starts_with(operation.name()), "{error}");
-        }
-        // The valid neighbour of each shape of refusal.
-        for (operation, arguments) in [
-            (
-                ShaclAsyncOperation::ValidateToSarif,
-                shacl_arguments(shapes(), PEOPLE_NT),
-            ),
-            (
-                ShaclAsyncOperation::ValidateChangesToSarif,
-                ShaclArguments {
-                    added: Some(String::new()),
-                    removed: Some(String::new()),
-                    ..shacl_arguments(shapes(), PEOPLE_NT)
-                },
-            ),
-            (
-                ShaclAsyncOperation::ProductValidateToSarif,
-                ShaclArguments {
-                    product: product(),
-                    ..shacl_arguments(None, PEOPLE_NT)
-                },
-            ),
-            (
-                ShaclAsyncOperation::ProductValidateToSarifRebuildExpecting,
-                ShaclArguments {
-                    product: product(),
-                    expect_identity: Some("00".to_owned()),
-                    ..shacl_arguments(None, PEOPLE_NT)
-                },
-            ),
-        ] {
-            assert!(
-                ShaclRequest::build(operation, arguments).is_ok(),
-                "{operation:?}"
-            );
-        }
     }
 }

@@ -64,7 +64,105 @@ pub(crate) fn check_select(query: &Query, prebound: &[&str]) -> Result<(), Strin
         // Non-SELECT forms are rejected elsewhere (shape-load SELECT-form check).
         return Ok(());
     };
-    check_query_body(pattern, prebound)
+    check_query_body(pattern, prebound, Rules::Strict)
+}
+
+/// Which reading of the pre-binding restrictions a check applies.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Rules {
+    /// The reading every SHACL-SPARQL constraint, validator and rule query gets:
+    /// Appendix A's three MUSTs, plus `SERVICE`, EVERY `VALUES` (the corpus-decided
+    /// divergence in the module docs) and the subquery-projection rule.
+    Strict,
+    /// Appendix A's three MUSTs, verbatim — no `MINUS`, no `VALUES` that mentions a
+    /// potentially pre-bound variable, no `AS ?var` for one — and no `SERVICE`. The
+    /// reading a `sh:SPARQLFunction` body and a `sh:SPARQLTargetType` query get (see
+    /// [`check_function_body`], [`check_target_type`]).
+    AppendixA,
+    /// `SERVICE` alone: the reading a SHACL-SPARQL query that pre-binds nothing gets
+    /// (see [`check_no_service`]). Appendix A's MUSTs are about pre-bound variables, so
+    /// a query with none has none to break; its `SERVICE` sentence is not, and is read
+    /// for every SHACL-SPARQL query.
+    ServiceOnly,
+}
+
+/// The refusal of a `SERVICE` in a SHACL-SPARQL query. SHACL 1.2 SPARQL Extensions,
+/// Appendix A: "Furthermore, SPARQL queries SHOULD not contain a federated query
+/// (SERVICE). Implementations that do not permit SERVICE MUST report a failure as
+/// mentioned above." PurRDF reads the SHOULD as a MUST and does not permit it: a
+/// validation verdict that depended on what a remote endpoint answered today would not be
+/// a verdict about the data graph, and this engine fetches nothing.
+const SERVICE_REFUSAL: &str = "a federated query (SERVICE) is not allowed in a SHACL-SPARQL \
+     query (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of Variables in SPARQL \
+     Queries: \"SPARQL queries SHOULD not contain a federated query (SERVICE)\", read as a \
+     must; PurRDF does not permit SERVICE, and reports the failure the same sentence \
+     requires)";
+
+/// Check any SHACL-SPARQL query for `SERVICE` alone — a query that pre-binds no
+/// variable: a `sh:SPARQLTarget`'s `sh:select`, a `sh:SPARQLFunction` with no
+/// parameters. See [`SERVICE_REFUSAL`].
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the `SERVICE`.
+pub(crate) fn check_no_service(query: &Query) -> Result<(), String> {
+    match query {
+        Query::Select { pattern, .. }
+        | Query::Construct { pattern, .. }
+        | Query::Describe { pattern, .. } => check_query_body(pattern, &[], Rules::ServiceOnly),
+        Query::Ask { pattern, .. } => check_pattern(pattern, &[], Rules::ServiceOnly),
+    }
+}
+
+/// Check a `sh:SPARQLTargetType`'s `sh:select` against the pre-binding restrictions,
+/// with its parameter variables as the potentially pre-bound ones.
+///
+/// SHACL Advanced Features, "SPARQL-based Target Types": "Similar to SPARQL-based
+/// constraint components, such targets take parameters and the parameter values become
+/// pre-bound variables in the associated SPARQL queries", so the query is "executed with
+/// pre-bound variables" and Appendix A's MUSTs apply to it, read as a function body's
+/// are ([`Rules::AppendixA`]); and no `SERVICE`, as for every SHACL-SPARQL query. A target
+/// type with no parameters pre-binds nothing, and only `SERVICE` is refused.
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the offending construct.
+pub(crate) fn check_target_type(query: &Query, parameters: &[&str]) -> Result<(), String> {
+    if parameters.is_empty() {
+        return check_no_service(query);
+    }
+    match query {
+        Query::Select { pattern, .. } => check_query_body(pattern, parameters, Rules::AppendixA),
+        _ => check_no_service(query),
+    }
+}
+
+/// Check the body of a SHACL-AF `sh:SPARQLFunction` against the pre-binding
+/// restrictions, with its parameter variables as the potentially pre-bound ones.
+///
+/// SHACL Advanced Features, "SPARQL-based Functions": "When the function is executed,
+/// the SPARQL processor needs to pre-bind variables based on the provided arguments of
+/// the function call", so a function body is a query "executed with pre-bound
+/// variables" and Appendix A's MUSTs apply to it: no `MINUS`, no `VALUES` that mentions
+/// a parameter variable, no `AS ?var` for one. The stricter extras the validators get
+/// are NOT applied here: the corpus that decides them for validators has no function
+/// case, and a body with a `VALUES` over its own local variables or a subquery is a
+/// query Appendix A permits. `SERVICE` is refused, as in every SHACL-SPARQL query (see
+/// [`SERVICE_REFUSAL`]). A function with no parameters pre-binds nothing, so only
+/// `SERVICE` is restricted.
+///
+/// # Errors
+///
+/// Returns `Err(String)` naming the offending construct.
+pub(crate) fn check_function_body(query: &Query, parameters: &[&str]) -> Result<(), String> {
+    if parameters.is_empty() {
+        return check_no_service(query);
+    }
+    match query {
+        Query::Select { pattern, .. } => check_query_body(pattern, parameters, Rules::AppendixA),
+        Query::Ask { pattern, .. } => check_pattern(pattern, parameters, Rules::AppendixA),
+        _ => Ok(()),
+    }
 }
 
 /// Check a SHACL-AF `sh:construct` CONSTRUCT query (a `sh:SPARQLRule` head)
@@ -80,13 +178,13 @@ pub(crate) fn check_construct(query: &Query, prebound: &[&str]) -> Result<(), St
         // Non-CONSTRUCT forms are rejected elsewhere (rule-load CONSTRUCT check).
         return Ok(());
     };
-    check_query_body(pattern, prebound)
+    check_query_body(pattern, prebound, Rules::Strict)
 }
 
 /// Strip the outer solution modifiers down to the outermost `Project` and check
 /// its BODY — nested `Project`s inside the body are subqueries. Shared by
 /// [`check_select`] and [`check_construct`].
-fn check_query_body(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String> {
+fn check_query_body(pattern: &GraphPattern, prebound: &[&str], rules: Rules) -> Result<(), String> {
     let mut node = pattern;
     loop {
         match node {
@@ -96,12 +194,12 @@ fn check_query_body(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), Str
             GraphPattern::OrderBy { inner, expression } => {
                 for order in expression {
                     let (OrderExpression::Asc(e) | OrderExpression::Desc(e)) = order;
-                    check_expression(e, prebound)?;
+                    check_expression(e, prebound, rules)?;
                 }
                 node = inner;
             }
-            GraphPattern::Project { inner, .. } => return check_pattern(inner, prebound),
-            other => return check_pattern(other, prebound),
+            GraphPattern::Project { inner, .. } => return check_pattern(inner, prebound, rules),
+            other => return check_pattern(other, prebound, rules),
         }
     }
 }
@@ -115,7 +213,7 @@ fn check_query_body(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), Str
 /// Returns `Err(String)` naming the offending construct.
 pub(crate) fn check_ask(query: &Query, prebound: &[&str]) -> Result<(), String> {
     match query {
-        Query::Ask { pattern, .. } => check_pattern(pattern, prebound),
+        Query::Ask { pattern, .. } => check_pattern(pattern, prebound, Rules::Strict),
         _ => Ok(()),
     }
 }
@@ -129,25 +227,27 @@ enum Pending<'a> {
 
 /// Walk a graph pattern, rejecting every construct the pre-binding
 /// restrictions forbid.
-fn check_pattern(pattern: &GraphPattern, prebound: &[&str]) -> Result<(), String> {
-    check(Pending::Pattern(pattern), prebound)
+fn check_pattern(pattern: &GraphPattern, prebound: &[&str], rules: Rules) -> Result<(), String> {
+    check(Pending::Pattern(pattern), prebound, rules)
 }
 
 /// Walk an expression tree; `EXISTS { … }` bodies are graph patterns and are
 /// checked too.
-fn check_expression(expr: &Expression, prebound: &[&str]) -> Result<(), String> {
-    check(Pending::Expr(expr), prebound)
+fn check_expression(expr: &Expression, prebound: &[&str], rules: Rules) -> Result<(), String> {
+    check(Pending::Expr(expr), prebound, rules)
 }
 
 /// Check `root` and everything under it the restrictions reach, depth first over a
 /// work list: each node's own restrictions before its operands', its operands in
 /// written order, so the first construct refused is the first one written.
-fn check(root: Pending<'_>, prebound: &[&str]) -> Result<(), String> {
+fn check(root: Pending<'_>, prebound: &[&str], rules: Rules) -> Result<(), String> {
     let mut pending = vec![root];
     while let Some(next) = pending.pop() {
         let first = pending.len();
         match next {
-            Pending::Pattern(pattern) => check_pattern_node(pattern, prebound, &mut pending)?,
+            Pending::Pattern(pattern) => {
+                check_pattern_node(pattern, prebound, rules, &mut pending)?;
+            }
             Pending::Expr(expr) => check_expression_node(expr, &mut pending),
         }
         pending[first..].reverse();
@@ -160,6 +260,7 @@ fn check(root: Pending<'_>, prebound: &[&str]) -> Result<(), String> {
 fn check_pattern_node<'a>(
     pattern: &'a GraphPattern,
     prebound: &[&str],
+    rules: Rules,
     pending: &mut Vec<Pending<'a>>,
 ) -> Result<(), String> {
     match pattern {
@@ -172,6 +273,9 @@ fn check_pattern_node<'a>(
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }
         | GraphPattern::PropertyFunction(_) => {}
+        GraphPattern::Minus { left, right } if rules == Rules::ServiceOnly => {
+            pending.extend([Pending::Pattern(left), Pending::Pattern(right)]);
+        }
         GraphPattern::Minus { .. } => {
             return Err(
                 "MINUS is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
@@ -179,14 +283,8 @@ fn check_pattern_node<'a>(
                     .to_owned(),
             );
         }
-        GraphPattern::Service { .. } => {
-            return Err(
-                "federated queries (SERVICE) are not allowed in a query with pre-bound variables \
-             (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of Variables in SPARQL \
-             Queries)"
-                    .to_owned(),
-            );
-        }
+        GraphPattern::Service { .. } => return Err(SERVICE_REFUSAL.to_owned()),
+        GraphPattern::Values { .. } if rules == Rules::ServiceOnly => {}
         // The DIVERGENCE recorded in this module's docs lives here: the Working
         // Draft forbids only a `VALUES` that mentions a potentially pre-bound
         // variable, while this arm refuses every `VALUES`. The frozen W3C case
@@ -195,6 +293,19 @@ fn check_pattern_node<'a>(
         // Appendix it diverges from, so an operator who hits it can find the exact
         // text — including the specification's own at-risk marker, quoted in the
         // module docs.
+        GraphPattern::Values { variables, .. } if rules == Rules::AppendixA => {
+            if let Some(variable) = variables
+                .iter()
+                .find(|variable| prebound.contains(&variable.as_str()))
+            {
+                return Err(format!(
+                    "a VALUES clause that mentions the potentially pre-bound variable ?{} is \
+                     not allowed (SHACL 1.2 SPARQL Extensions, Appendix A: Pre-binding of \
+                     Variables in SPARQL Queries)",
+                    variable.as_str()
+                ));
+            }
+        }
         GraphPattern::Values { .. } => {
             return Err(
                 "VALUES is not allowed in a query with pre-bound variables (SHACL 1.2 SPARQL \
@@ -268,6 +379,11 @@ fn check_pattern_node<'a>(
         // algebra) to the body's in-scope variables — a FILTER-only body
         // exposes nothing, so `$this` is NOT projected and the query must be
         // rejected (W3C pre-binding-006).
+        GraphPattern::Project { inner, .. }
+            if matches!(rules, Rules::AppendixA | Rules::ServiceOnly) =>
+        {
+            pending.push(Pending::Pattern(inner));
+        }
         GraphPattern::Project { inner, variables } => {
             for name in prebound {
                 if !variables.iter().any(|v| v.as_str() == *name) {

@@ -135,30 +135,47 @@ SPARQL、ShEx 与 SHACL 都经由它报告 IRI 失败。两个与基础 IRI 相�
 
 | 代码 | 含义 | 补救 |
 | --- | --- | --- |
-| `native-sparql-query-parse` | 查询文本在 SPARQL 1.1/1.2 语法（含强制的 `VERSION` 声明）下无法解析。 | 在报告的位置修正查询。 |
-| `native-sparql-update-parse` | 更新请求无法解析。 | 在报告的位置修正更新语句。 |
-| `native-sparql-query-explain` | `--explain` 下的求值失败；求值器的错误在消息中给出。 | 处理底层的求值错误。 |
-| `native-sparql-property-function` | 属性函数扩展点（seam）拒绝了该查询：已声明命名空间下的某谓词没有注册、调用位置的元数与关系不匹配、没有任何全序能服务某条链，或者一个已准备的计划正在与其准备时不同的注册表下求值。 | 注册该关系、更正元数，或在同一注册表下准备并求值。 |
-| `native-sparql-aggregate-function` | 自定义聚合扩展点拒绝了该查询：`AGG(<iri>, …)` 指名了未注册的聚合，或者一个已准备的计划正在不同的聚合注册表下求值。 | 注册该聚合，或在同一注册表下准备并求值。 |
-| `native-sparql-custom-function` | 某函数或聚合 IRI 未解析到任何已注册的自定义函数、原生函数或 XSD 构造器。 | 在该 IRI 下注册函数，或使用原生函数。 |
-| `native-sparql-quoted-triple-term-variable` | 在基本图模式或属性路径中，变量占据了引用三元组项的某个组成部分；结构性的三元组项匹配不在范围内。 | 把三元组项作为整体绑定，或经由具体化节点匹配其组成部分。 |
-| `native-sparql-heldin-unconfigured` | 调用 `heldIn` 时没有调用方提供的立场谓词（standpoint predicate）配置。 | 使用 `heldIn` 之前先配置立场谓词。 |
-| `native-sparql-evaluation-stack-exhausted` | 请求的嵌套深度超出了求值它的线程栈所能容纳的范围：求值器在每一个递归步骤都测量剩余的栈空间，并在耗尽之前拒绝，而不是让进程中止或让 wasm 实例陷入 trap。解析器已接受该请求，在更大的栈上同一请求可以得到应答。 | 在栈更大的线程上求值（原生平台上以更大的栈创建线程；异步 wasm 作业则使用更大的 `stackBytes`），或减少请求的嵌套深度。 |
-| `native-sparql-unsupported` | 请求本身格式正确，但使用了本引擎拒绝按原样求值的内容——例如没有任何解为其指明端点的 `SERVICE ?e`、绑定到字面量的 `?e`，或无法识别的 `VERSION`。消息会指出具体是什么，并在可行时给出改写方式。Cloudflare 适配器以 `400` 应答。 | 按消息所述改写请求。 |
-| `native-sparql-host-stack-exhausted` | 仅限 wasm：请求的嵌套深度超出了 JavaScript 引擎自身调用栈所能容纳的范围。PurRDF 为每个请求保留该栈中固定的一份预算（例如 637 层嵌套圆括号或 283 层嵌套图模式），而 V8 为同步通道和异步作业分配的栈大小相同，因此两个通道上的上限相同，调大 `stackBytes` 也无法提高它。 | 减少请求的嵌套深度。 |
-| `native-sparql-bnode-mint-prefix` | 选项中提供的空节点生成前缀无效。 | 提供合法的前缀。 |
-| `native-sparql-service-denied` | 已安装的 `ServiceCatalog` 未向请求指名的某个 `SERVICE` 端点授予所需的能力——该端点没有 profile，或其 profile 未授予 `query` 或 `network`——因此没有联系任何端点。即使在 `SERVICE SILENT` 下它也会让请求失败。Cloudflare 适配器以 `403` 应答。 | 在目录中为该端点授予该能力，或去掉 `SERVICE`。 |
-| `native-sparql-service-host-denied` | 宿主自己的服务解析器依据其自身策略拒绝了某个 `SERVICE` 请求，且没有指名任何目录能力——例如某个 JavaScript `resolveService` 应答了 `{ kind: "denied" }`——因此没有联系任何端点。即使在 `SERVICE SILENT` 下它也会让请求失败。Cloudflare 适配器以 `403` 应答。 | 在宿主策略中允许该请求，或去掉 `SERVICE`。 |
-| `native-sparql-service-failed` | 已联系某个 `SERVICE` 端点，但它没有给出可用的应答：传输失败、HTTP 错误状态、重定向、解析器自身的超时，或无法解码的响应体。`SERVICE SILENT` 会吞掉它。Cloudflare 适配器以 `502` 应答。 | 让该端点可达，或写作 `SERVICE SILENT`。 |
-| `native-sparql-service-unconfigured` | 没有任何远程查询来源能到达请求指名的某个 `SERVICE` 端点：要么没有配置来源，要么已配置的来源应答说它所持有的内容都到达不了该端点。没有联系任何端点，因此即使在 `SERVICE SILENT` 下它也会让请求失败。Cloudflare 适配器以 `500` 应答。 | 配置一个能到达该端点的来源，或去掉 `SERVICE`。 |
-| `native-sparql-load-no-resolver` | 请求了 `LOAD <iri>`，但没有提供 `GraphResolver` 宿主扩展点。 | 注入一个解析器，或去掉 `LOAD`。 |
-| `native-sparql-load-denied` | 某个 `GraphResolver` 依据宿主策略拒绝了该 `LOAD` 来源——例如某个 JavaScript `resolveLoad` 应答了 `{ kind: "denied" }`；当 Cloudflare 适配器的 `ServiceCatalog` 没有授予该来源 `network` 能力时，适配器的处理函数就会这样应答。即使在 `LOAD SILENT` 下它也会让请求失败，与被拒绝的 `SERVICE` 一致。Cloudflare 适配器以 `403` 应答。 | 在宿主策略中授予该来源，或去掉 `LOAD`。 |
-| `native-sparql-load-failed` | wasm 包的异步 `resolveLoad` 应答了 `{ kind: "transport" }`：文档无法获取或读取。`LOAD SILENT` 会吞掉它。Cloudflare 适配器以 `502` 应答。 | 让该来源可达，或写作 `LOAD SILENT`。 |
-| `native-sparql-load-stopped` | 在等待 `LOAD` 期间，异步作业的停止信号（取消或截止时间）被触发。请求报告的是 governor 触发，而不是这个代码。 | 放宽截止时间，或不要取消该作业。 |
-| `native-sparql-load-fault` | 异步 `resolveLoad` 什么也没有应答，或应答了不属于 `LOAD` 应答的内容。该故障即使在 `LOAD SILENT` 下也会让作业失败。 | 返回一份带媒体类型的文档、一个 `Response`、一个 `Dataset` 或一个带类型的失败——绝不要抛出异常。 |
-| `native-sparql-update-bad-destination` | `ADD`/`MOVE`/`COPY`/`LOAD` 的目标是 `NAMED` 或 `ALL`；目标必须是 `DEFAULT` 或单个命名 `GRAPH`。 | 指名单个目标图。 |
-| `native-sparql-subst-iri` | 某代换值不是合法的 IRI。 | 提供合法的 IRI。 |
-| `native-sparql-subst-triple-predicate` | 某代换进来的引用三元组的谓词不是 IRI。 | 使用 IRI 谓词。 |
+| `native-sparql-query-parse` | 查询文本无法按 SPARQL 1.1/1.2 语法解析（包括强制执行的 `VERSION` 声明）。 | 在所报告的位置修正查询。 |
+| `native-sparql-update-parse` | 更新请求无法解析。 | 在所报告的位置修正更新。 |
+| `native-sparql-query-explain` | 在 `--explain` 下求值失败；求值器的错误包含在消息中。 | 处理底层的求值错误。 |
+| `native-sparql-query-eval` | 查询求值失败，且没有更具体的代码对该错误分类；求值器的错误包含在消息中。 | 处理底层的求值错误。 |
+| `native-sparql-update-eval` | 更新求值失败，且没有更具体的代码对该错误分类；求值器的错误包含在消息中。 | 处理底层的求值错误。 |
+| `native-sparql-algebra` | 查询的代数在求值之前被拒绝：`Query::validate` 拒绝了它，或者某个预备好的计划需要针对本次求值提供的注册表重新规划。 | 按消息所说修正查询，或在执行之前预备改动后的代数。 |
+| `native-sparql-construct` | 类型化的图构建收到的查询不是 `CONSTRUCT`。 | 用 `CONSTRUCT` 查询构建图。 |
+| `native-sparql-execution-parameter` | 预备好的执行收到了它未声明的参数名或槽位。 | 只绑定该执行所声明的参数；消息中列出了它们。 |
+| `native-sparql-relation-incomplete` | 某个属性函数关系只用其部分数据作答，而所在的入口没有用于标注这一不完整应答的证据槽（不受管控的查询通道，以及 UPDATE）。消息会指名该关系及其自身给出的原因。 | 在受 governor 管控的入口上运行查询——其回执携带该关系的见证——或等待该关系完整。 |
+| `native-sparql-property-function` | 属性函数（property function）扩展点拒绝了该查询：某个已声明命名空间下的谓词没有注册，某个调用点的元数与该关系不匹配，没有任何全序能用于某条链，或者一个预备好的计划正在一个与其预备时不同的注册表下求值。 | 注册该关系、更正元数，或在同一个注册表下预备并求值。 |
+| `native-sparql-aggregate-function` | 自定义聚合扩展点拒绝了该查询：某个 `AGG(<iri>, …)` 没有指向任何已注册的聚合，或者一个预备好的计划正在另一个聚合注册表下求值。 | 注册该聚合，或在同一个注册表下预备并求值。 |
+| `native-sparql-custom-function` | 某个函数或聚合 IRI 没有解析到任何已注册的自定义函数、原生函数或 XSD 构造函数。 | 在该 IRI 下注册函数，或使用原生函数。 |
+| `native-sparql-quoted-triple-term-variable` | 在基本图模式或属性路径中，某个变量占据了引用三元组项的一个组成部分；结构化的三元组项匹配不在支持范围之内。 | 把三元组项作为整体绑定，或通过具体化节点接口匹配其组成部分。 |
+| `native-sparql-heldin-unconfigured` | 调用 `heldIn` 时没有调用方提供的 standpoint（立场）谓词配置。 | 在使用 `heldIn` 之前先配置 standpoint 谓词。 |
+| `native-sparql-evaluation-stack-exhausted` | 请求的嵌套深度超出了求值它的线程栈所能容纳的范围：在递归遍历开始之前，求值器会用剩余的栈空间衡量计划的整体高度（关联替换在其所做副本的每一层也会检查），并在耗尽之前拒绝，而不是让进程中止或让 wasm 实例陷入 trap。解析器已接受该请求，在更大的栈上同一请求可以得到应答。 | 在以更大的栈创建的原生线程上求值，或减少请求的嵌套深度。在 wasm 中，两条通道运行在大小相同的栈上——异步作业的栈区域与模块自身的影子栈完全一样大——因此在那里的补救办法是减少嵌套深度，消息也不会给出其他办法。 |
+| `native-sparql-unsupported` | 请求本身是良构的，但使用了本引擎拒绝按原样求值的内容——例如没有任何解为其指明端点的 `SERVICE ?e`、（不写 `SILENT` 时）绑定到字面量的 `?e`，或无法识别的 `VERSION`。消息会指出具体是什么，并在可行时给出改写方式。Cloudflare 适配器以 `400` 应答。 | 按消息所述改写请求。 |
+| `native-sparql-host-stack-exhausted` | 仅限 wasm：请求的嵌套深度超出了 JavaScript 引擎自身调用栈所能容纳的范围。PurRDF 为求值每个请求保留该栈中固定的 640 KiB 预算——图模式最多嵌套 284 层，整棵树最多 2 048 层外加每个嵌套组八层，表达式与路径最多 2 304 层——而 V8 为同步通道和异步作业分配的栈相同，因此超出预算的计划会在运行之前被拒绝，两条通道一致。解析不消耗该栈的任何部分。Cloudflare 适配器以 `400` 应答。 | 减少请求的嵌套深度。 |
+| `native-sparql-bnode-mint-prefix` | 选项中提供的空节点生成前缀无效。 | 提供一个有效的前缀。 |
+| `native-sparql-service-denied` | 已安装的 `ServiceCatalog` 未向请求指名的某个 `SERVICE` 端点授予所需的能力——该端点没有 profile，或其 profile 未授予 `query` 或 `network`——因此没有联系任何端点。在 `SERVICE SILENT` 下该子句则是连接的单位元，并记录为一次被静默的 `denied` 调用。Cloudflare 适配器以 `403` 应答。 | 在目录中为该端点授予该能力，或去掉 `SERVICE`。 |
+| `native-sparql-service-host-denied` | 宿主自己的服务解析器依据其自身策略拒绝了某个 `SERVICE` 请求，且没有指名任何目录能力——例如某个 JavaScript `resolveService` 应答了 `{ kind: "denied" }`——因此没有联系任何端点。在 `SERVICE SILENT` 下该子句则是连接的单位元，并记录为一次被静默的 `host-denied` 调用。Cloudflare 适配器以 `403` 应答。 | 在宿主策略中允许该请求，或去掉 `SERVICE`。 |
+| `native-sparql-service-failed` | 已联系某个 `SERVICE` 端点，但它没有给出可用的应答：传输失败、HTTP 错误状态、重定向、解析器自身的超时，或无法解码的响应体。在 `SERVICE SILENT` 下该子句则是连接的单位元，并记录为一次被静默的调用。Cloudflare 适配器以 `502` 应答。 | 让该端点可达，或写作 `SERVICE SILENT`。 |
+| `native-sparql-service-unconfigured` | 没有任何远程查询来源能到达请求指名的某个 `SERVICE` 端点：要么没有配置来源，要么已配置的来源应答说它所持有的内容都到达不了该端点。在 `SERVICE SILENT` 下该子句则是连接的单位元，并记录为一次被静默的 `unconfigured` 调用。Cloudflare 适配器以 `500` 应答。 | 配置一个能到达该端点的来源，或去掉 `SERVICE`。 |
+| `native-sparql-load-no-resolver` | 请求了 `LOAD <iri>`，但没有提供 `GraphResolver` 宿主扩展点。`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为一次被静默的 `unconfigured` 调用。 | 注入一个解析器，或去掉该 `LOAD`。 |
+| `native-sparql-load-denied` | 已安装的 `ServiceCatalog` 未向 `LOAD` 来源授予所需的能力（`LoadError::Denied`）——该来源或某次重定向指明的位置没有 profile，或其 profile 未授予 `network`——因此没有抓取任何内容。`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为一次被静默的 `denied` 调用。Cloudflare 适配器以 `403` 应答。 | 在目录中为该来源授予 `network`，或去掉 `LOAD`。 |
+| `native-sparql-load-host-denied` | 宿主自己的 `LOAD` 解析器依据其自身策略拒绝了该来源，且没有指名任何目录能力（`LoadError::HostDenied`）——例如某个 JavaScript `resolveLoad` 应答了 `{ kind: "denied" }`。`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为一次被静默的 `host-denied` 调用。Cloudflare 适配器以 `403` 应答。 | 在宿主策略中允许该来源，或去掉 `LOAD`。 |
+| `native-sparql-load-failed` | `GraphResolver` 无法抓取该文档（`LoadError::Transport`）——例如 wasm 包的异步 `resolveLoad` 应答了 `{ kind: "transport" }`、抓取超出了其目录 profile 的超时，或跟随了五次以上的重定向。`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为一次被静默的调用。Cloudflare 适配器以 `502` 应答。 | 让该来源可达，或写作 `LOAD SILENT`。 |
+| `native-sparql-load-decode` | `GraphResolver` 抓取到了文档，但无法解析它（`LoadError::Decode`）——例如 wasm 包的异步 `resolveLoad` 交付的文档所用的媒体类型没有解析器可读，或者字节并不是所指名的语法。`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为一次被静默的调用。Cloudflare 适配器以 `502` 应答。 | 以解析器能够解析的语法提供文档，或写作 `LOAD SILENT`。 |
+| `native-sparql-load-stopped` | 在等待 `LOAD` 期间，请求自身的停止信号（取消或截止时间）被触发（`LoadError::Governed`）。受 governor 管控的请求报告的是 governor 触发，而不是这个代码，无论是否写了 `SILENT`。 | 放宽截止时间，或不要取消该作业。 |
+| `native-sparql-load-fault` | `GraphResolver` 的处理函数发生故障（`LoadError::Fault`）——例如 wasm 包的异步 `resolveLoad` 抛出异常、返回被拒绝的 Promise、什么也没有应答，或指明了协议未定义的失败种类。消息携带处理函数自己的原话。`LOAD SILENT` 则会成功返回、不加载任何内容，并记录为一次被静默的 `fault` 调用。Cloudflare 适配器以经过清理的 `500` 应答，真正的原话以关联 id 写入其日志。 | 返回一份带媒体类型的文档、一个 `Response`、一个 `Dataset`、一次重定向或一个带类型的失败——绝不要抛出异常。 |
+| `native-sparql-cancelled` | wasm 异步通道：一个不受 governor 管控的操作被取消（其 `AbortSignal` 已触发）。受管控的操作则在其结果中报告这次触发。Cloudflare 适配器以 `503` 应答。 | 不要取消该操作。 |
+| `native-sparql-deadline` | wasm 异步通道：一个不受 governor 管控的操作超过了截止时间。Cloudflare 适配器以 `503` 应答。 | 放宽截止时间。 |
+| `native-sparql-not-acceptable` | wasm 异步通道：一个协商查询的结果——一个带有命名图的图——没有任何 `Accept` 请求头允许的格式能够承载。Cloudflare 适配器以 `406` 应答，并列出能够承载它的格式。 | 接受 TriG、N-Quads 或 JSON-LD。 |
+| `native-sparql-update-in-flight` | wasm 异步通道：同一数据集的另一个异步更新已在途，或者数据集在该更新运行期间被修改，因此该更新被拒绝，而不是针对一个它从未见过的状态求值（或提交在其之上）。Cloudflare 适配器以 `409` 应答。 | 等待第一个更新完成，再发送下一个。 |
+| `native-sparql-host-fault` | 失败的是宿主，而不是请求，也不是某个端点：某个 `SERVICE` 来源的处理函数在不带 `SILENT` 的子句中发生故障（`EvalError::ServiceHostFault`）——例如某个 wasm `resolveService` 抛出异常、返回被拒绝的 Promise、以不是应答的内容作答，或指明了协议未定义的失败种类（在 `SERVICE SILENT` 下该故障是连接的单位元，并在证据中记录为一次被静默的 `fault`）；或者，在 wasm 异步通道上，某个作业的交付协议被破坏，或其栈帧覆写了其栈区域的金丝雀字。Cloudflare 适配器以经过清理的 `500` 应答，真正的原话以关联 id 写入其日志。 | 修正宿主的处理函数。 |
+| `native-sparql-governor-ceiling` | 协议边界：某个确定性的 governor 上限叫停了该操作——上限已达到，或规划器的估算已经超出。操作的结果携带这次触发；这是宿主据以应答它的 problem 的 `code`（Cloudflare 适配器的 `422`）。 | 提高上限，或收窄请求。 |
+| `native-sparql-evaluation` | 协议边界：操作的求值失败，且没有更具体的代码；这是宿主据以应答它的 problem 的 `code`。 | 处理底层的求值错误。 |
+| `native-sparql-update-bad-destination` | `ADD`/`MOVE`/`COPY`/`LOAD` 的目标是 `NAMED` 或 `ALL`；它必须是 `DEFAULT` 或单个命名的 `GRAPH`。 | 指定单个目标图。 |
+| `native-sparql-subst-iri` | 某个替换值不是有效的 IRI。 | 提供一个有效的 IRI。 |
+| `native-sparql-subst-triple-predicate` | 某个被替换的引用三元组的谓词不是 IRI。 | 使用 IRI 谓词。 |
+| `native-sparql-subst-literal-datatype` | 被替换的字面量的数据类型不是 IRI。 | 使用 IRI 数据类型。 |
+| `native-sparql-subst-langtag` | 预绑定字面量的语言标签不是该词法 profile 所接受的。 | 提供一个良构的语言标签。 |
 
 ## `reasoning-*`——蕴涵机制下的 SPARQL（`purrdf`）
 

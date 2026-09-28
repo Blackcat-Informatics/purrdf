@@ -486,3 +486,318 @@ same ending for the same rows. Pinned by
 `multimodal_read_bound::the_on_demand_read_returns_the_answer_the_materialised_read_returns`,
 which holds every configuration's terminal statuses, and its rows, to the
 materialized read's.
+
+### An unresolved shapes-graph import warns and validates the shapes graph alone
+
+**Was stated in** `crates/cli/src/shapes_source.rs`, the module documentation:
+
+> Naming no `--import` at all leaves the imports UNRESOLVED but does not refuse them: it
+> reports each one on stderr and the caller proceeds with the shapes graph alone. That
+> asymmetry is deliberate and load-bearing.
+
+**Why it was believed.** Some shapes documents, including two in the vendored W3C
+SHACL corpus, carry an `owl:Ontology` header whose imports do not affect their shapes.
+Refusing every unresolved import looked like it would reject valid input. The check
+also had no rule for telling a missing ontology from one already in hand: every
+`owl:imports` object counted as unresolved.
+
+**What changed.** The over-refusal risk came from that missing rule, not from
+refusing. An import is now resolved when it names a document already read (the
+shapes document's own retrieval IRI, `--shapes-base`, `shacl pack --base` or
+`@base`, or an `--import` document), or when the closure already holds the
+ontology it names (`<X> a owl:Ontology`, or an ontology whose `owl:versionIRI` is
+`<X>`), or — for a shapes graph — when the closure describes `<X>` with
+`sh:declare`. That last case is SHACL's `sh:prefixes/owl:imports*/sh:declare`
+prefix idiom, where the import target is a node the shapes graph declares prefixes
+on; the W3C `prefixes-001` vectors write it, and validate as written. A shapes document that merges the W3C SHACL 1.2 vocabularies is therefore complete as written.
+With that rule in place, the warn-and-continue path could only mean one thing: a
+verdict about a smaller shapes graph than the one named, printed next to a warning
+that does not undo it.
+
+**The rule now.** `purrdf_core::imports` decides, for entailment and SHACL alike.
+Every shapes-graph entry point on every host — every `Shapes` constructor, and so
+validation, the change path, rules, node expressions, lint and the prepared product,
+through the Rust API, the command line, Python, WebAssembly and C — resolves the
+closure through `purrdf_shapes::imports::resolve_shapes_imports` against the caller's
+import table and refuses an incomplete one with the typed
+`ShapesError::Imports(ShapesImportError::Unresolved)`: exit 1 on the command line,
+naming each IRI and its `--import IRI=FILE` pair; `ShapesImportError` in Python;
+`ShaclImportError` in JavaScript; `PURRDF_STATUS_SHAPES_IMPORT_ERROR` in C. `entails`
+refuses it with `EntailError::UnresolvedImport`. Pinned by
+`merged_vocabulary_needs_no_import_flag` and `unresolved_import_is_refused` (CLI),
+`merged_vocabulary_packs` and `unresolved_import_refused` (product),
+`import_present_in_graph_is_resolved`, `absent_import_is_unresolved` and
+`self_import_is_resolved` (the rule), `the_w3c_prefix_idiom_needs_no_import_flag_and_a_header_import_is_refused`
+(the W3C `prefixes-001` vector), and the cross-host verdict tests
+(`crates/validate/tests/shapes_owl_imports.rs`,
+`every_shapes_lane_gives_the_same_owl_imports_verdict`,
+`every_shapes_entry_point_gives_the_same_owl_imports_verdict`,
+`test_shacl_owl_imports.py`, `shacl-owl-imports.test.mjs`).
+
+### A shapes graph's `owl:imports` rule is applied by every host
+
+**Was stated in** the `owl:imports` section of `docs/book/src/validation/shacl.md`
+and `crates/cli/src/shapes_source.rs`:
+
+> The prepared-product packer that the WebAssembly and C-ABI hosts call applies the
+> same rule, so every host agrees on which shapes graphs are complete.
+
+**Why it was believed.** The command line and the product packer both called the
+one resolution rule, and the product packer is what the three binding hosts reach
+when they pack.
+
+**What changed.** Packing is one entry point of many. The engine's own
+constructors, the SARIF, rules, node-expression and lint boundaries, and therefore
+every Python, WebAssembly and C function except pack, never applied the rule: the
+same shapes graph was refused on the command line and validated, given an empty
+inference graph, or certified clean on the other hosts.
+
+**The rule now.** The enforcement is at the shapes engine boundary itself, as the
+entry above states: a `Shapes` value is complete by construction, and every host
+takes the import table in its own spelling and raises the same typed refusal.
+
+### A built-in constraint component given a validator is a duplicate definition
+
+**Was stated in** `crates/shapes/src/spec/mod.rs` (the linker's outcome table),
+`crates/shapes/README.md`, the "Built-in declarations and the W3C vocabularies" section
+of `docs/book/src/validation/shacl.md`, and the test
+`imported_native_validator_is_a_duplicate_definition`:
+
+> A built-in component's declaration carrying a VALIDATOR is a second definition of the
+> built-in, refused at load — neither silently ignored (the validator would never run
+> while the author believed it did) nor silently preferred (the native semantics would
+> be replaced behind the author's back).
+
+**Why it was believed.** A validator is what gives a SPARQL-based component its
+meaning, so a validator on a component the engine already implements read as a second,
+competing implementation, and the only choices seemed to be refusing it, ignoring it
+or running it instead.
+
+**What changed.** The specification makes several validators on one component
+ordinary. SHACL 1.2 SPARQL Extensions, "Validators": "For a given constraint, a
+validator is selected from the constraint component using the following rules, in
+order: For node shapes, use one of the values of sh:nodeValidator, if present. For
+property shapes, use one of the values of sh:propertyValidator, if present. Otherwise,
+use one of the values of sh:validator." Every value is an implementation of the same
+component, and "SHACL processors may choose alternative approaches as long as the
+outcome is equivalent" ("Validation with SPARQL-based Constraint Components"). The
+native implementation is the approach this engine chooses, with the specification's
+semantics, so an alternative is neither a competing definition nor a dropped
+constraint. Real vocabularies write such declarations (DASH gives most SHACL Core
+components SPARQL validators), and refusing a well-formed one is over-refusal: the
+rejected input is valid.
+
+**The rule now.** A built-in component's declared validators bind as alternatives the
+native implementation supersedes. Each is checked for well-formedness and never run,
+and `shapes lint` lists each one (`alternative … superseded-by-native`) without
+counting it as a finding. What still changes the component is still refused: a body,
+`sh:ask` or `sh:select` on the component itself, a contradicting signature, a validator
+that is not a well-formed SPARQL validator of its attachment, and any other `sh:`
+statement except `sh:message`, `sh:labelTemplate` and the non-validating
+characteristics (`crates/shapes/src/spec/link.rs`, `BUILTIN_COMPONENT_ANNOTATIONS`).
+Pinned by `a_builtin_component_given_validators_binds_natively`,
+`an_ill_formed_alternative_on_a_builtin_is_refused`,
+`a_semantic_statement_on_a_builtin_declaration_is_refused`,
+`lint_reports_superseded_alternatives_without_findings` (`tests/spec_linker.rs`),
+`imported_native_validator_binds_as_a_superseded_alternative`
+(`tests/component_parameters.rs`) and
+`cli_shapes_lint_reports_superseded_builtin_validators`.
+
+### A pre-binding violation refuses the load whether or not the query executes
+
+**Was stated in** `crates/shapes/src/validator_alternatives.rs`, `crates/shapes/README.md`,
+the "Built-in declarations and the W3C vocabularies" section of
+`docs/book/src/validation/shacl.md`, the rule of the entry above, and the tests
+`an_ill_formed_alternative_on_a_builtin_is_refused`,
+`validator_declarations_enforce_attachment_kind_and_query_datatype` and the
+`sparql_function_with_*_is_rejected` family:
+
+> A validator that is not a well-formed SPARQL validator of its attachment is refused
+> at load, on a built-in or a custom component — its query grammar and its
+> pre-binding restrictions alike — and a malformed `sh:SPARQLFunction` declaration is
+> refused at load, because SHACL 1.2 Core says a processor "SHOULD produce a failure"
+> for an ill-formed shapes graph.
+
+**Why it was believed.** The pre-binding check ran in the same parse as the grammar
+check, and its refusal read like every other ill-formedness refusal, so the two were
+treated as one rule.
+
+**What changed.** They are two rules with two different scopes. SHACL 1.2 Core,
+"Handling of Ill-formed Shapes Graphs": "If the shapes graph contains ill-formed nodes,
+then the result of the validation process is undefined. A SHACL processor SHOULD
+produce a failure in this case." That sentence has no reachability qualifier, and the
+nodes it covers are the ones that violate a syntax rule — SHACL 1.2 SPARQL Extensions,
+"Summary of Syntax Rules": "Nodes that violate these rules in a shapes graph are
+ill-formed". SHACL 1.2 SPARQL Extensions, Appendix A, scopes the pre-binding failure
+differently: "SHACL-SPARQL processors MUST report a failure when it is operating on a
+shapes graph that contains SHACL-SPARQL queries (via sh:ask, sh:construct and
+sh:select) that are executed with pre-bound variables and violate any of these MUST
+restrictions." A `MINUS` in a validator that never runs is not in that scope.
+
+An intermediate reading went further, and is withdrawn. It judged every ill-formed
+declaration only where a shape reached it and reported the rest in a `shapes lint`
+section named `inert`, so that a shapes graph importing a library such as DASH
+(`<http://datashapes.org/dash>`) would load. DASH declares an ASK validator under
+`sh:nodeValidator` for `sh:HasValueConstraintComponent`, an ASK
+`sh:propertyValidator` for `dash:SubSetOfConstraintComponent` and a `sh:SPARQLFunction`
+parameter named `value`. Those are syntax-rule violations, and Core's sentence covers
+them whether or not a shape reaches them. PurRDF treats that SHOULD as a MUST. Only
+the pre-binding part of that relaxation had a basis in the specification.
+
+**The rule now.** A SHACL-SPARQL or SHACL-AF declaration that violates a syntax rule
+refuses the load whether or not anything reaches it. That covers a non-SELECT value of
+`sh:nodeValidator` or `sh:propertyValidator` and a non-ASK value of `sh:validator`
+(`nodeValidator-class`, `propertyValidator-class`, `validator-class`, "The values of
+sh:nodeValidator must be SELECT-based validators", "The values of sh:validator must be
+ASK-based validators") on built-in and custom components alike. It covers a component
+parameter name the rule `parameter-name-not-in` reserves ("Parameter names must not be
+one of the following: this, path, PATH, value"). It covers a `sh:SPARQLFunction`
+parameter named one of those or `shapesGraph` or `currentShape`: SHACL Advanced
+Features, "Function Parameters", says "the same syntax rules apply" and links the
+SHACL version whose list names those two. And it covers a `sh:SPARQLFunction`
+without exactly one `sh:ask` or `sh:select` (SHACL Advanced Features, "SPARQL-based
+Functions": "SPARQL-based functions have exactly one value for either sh:ask or
+sh:select"). The refusal is `ShapesError::IllFormed`, and it lists every violation in
+the graph with its declaration and rule id. A pre-binding violation refuses the load, as
+`ShapesError::Prebinding`, only where the query executes: the validator a use of a
+custom component selects, and a `sh:SPARQLFunction` that a node expression or reachable
+SPARQL calls. A validator declared for a built-in component never executes, because the
+native implementation supersedes it. A validator no use selects and a function nothing
+calls never execute either. Those load, and `purrdf shapes lint` lists each in its
+`unexecuted` section as a finding. SHACL-JS reachability is unchanged. Pinned by
+`an_ill_formed_alternative_on_a_builtin_is_refused` and
+`a_prebinding_violation_is_refused_only_where_the_query_executes`
+(`tests/spec_linker.rs`),
+`ill_formed_declarations_refuse_the_load_whether_or_not_a_shape_reaches_them` and
+`a_function_body_violating_prebinding_is_refused_only_where_a_call_executes_it`
+(`tests/shapes_graph_wellformedness.rs`),
+`validator_declarations_enforce_attachment_kind_and_query_datatype` and
+`parameter_names_shacl_pre_binds_are_refused_at_load_and_near_misses_are_not`
+(`tests/component_parameters.rs`), and the `sparql_function_with_*_is_rejected` tests
+in `crates/shapes/src/shapes.rs`.
+
+### Every `owl:imports` triple is an import, and a `sh:declare` description resolves one
+
+**Was stated in** `crates/rdf-core/src/imports.rs`, `crates/shapes/src/imports.rs`, the
+`owl:imports` section of `docs/book/src/validation/shacl.md`, `crates/shapes/README.md`,
+`crates/cli/README.md` and the host documentation of the shapes-graph import table:
+
+> An `owl:imports <X>` is also resolved when the closure holds a triple `X sh:declare ?d`
+> ... SHACL-SPARQL collects a query's prefix declarations along
+> `sh:prefixes/owl:imports*/sh:declare` WITHIN the shapes graph, so the target of such an
+> `owl:imports` is a node the shapes graph describes with `sh:declare`, not a document
+> that has to be fetched.
+
+**Why it was believed.** The imports rule read every `owl:imports` triple of a graph as
+an import, whatever its subject. The W3C `sparql/node/prefixes-001` test writes
+`ex:TestPrefixes owl:imports <http://example.com/ns#>` for its prefix path, so under that
+reading the test needed a special route that counted the `sh:declare` node as present.
+
+**What changed.** Neither specification reads an import off an arbitrary node. OWL 2's
+*Mapping to RDF Graphs* §3.1.2 extracts Imp(G) from the ontology header patterns of Table 4,
+`x rdf:type owl:Ontology . x owl:imports y`, and SHACL 1.2 Core follows imports from the
+shapes graph's own IRI along `^owl:versionIRI?/owl:imports`. `ex:TestPrefixes` is
+neither, so its triple was never an import, and the special route answered a question the
+specification never asks. The same misreading made `sparql/component/validator-001` —
+whose `owl:imports <http://datashapes.org/dash>` sits on a node that is neither the test
+document's IRI nor an `owl:Ontology` — demand a document its approved report is computed
+without.
+
+**The rule now.** An `owl:imports` triple is an import exactly when its subject is an
+anchor of its document: an IRI the document was loaded under (for an imported document,
+the IRI it was imported by), a subject the document types `owl:Ontology`, or a subject
+naming one of those as its `owl:versionIRI`. Any other `owl:imports` triple is data. The
+`sh:declare` route is gone; SHACL-SPARQL's prefix path walks `owl:imports` edges within
+the shapes graph as prefix collection. The rule is `purrdf_core::imports::imported_iris`,
+for entailment and SHACL alike. Pinned by the kernel tests in
+`crates/rdf-core/src/imports.rs`, `crates/shapes/src/imports.rs` and
+`crates/entail/src/entails/imports.rs`,
+`the_prefixes_path_follows_version_iris_and_imports` (`tests/sparql_prefixes.rs`) and
+`the_w3c_validator_001_vectors_validate_with_no_import` (the command line).
+
+### The kernel's import rule names no vocabulary beyond OWL's own
+
+**Was stated in** `crates/rdf-core/src/imports.rs`, the module documentation of the one
+`owl:imports` rule:
+
+> The kernel registers no such predicate and names no vocabulary beyond OWL's own; an
+> `ImportMap` built with [`ImportMap::new`] applies the three routes above and nothing
+> else.
+
+The sentence left with the `sh:declare` route the entry above retires, but the rule it
+described kept its shape: the anchors were the loaded IRI, OWL 2's `owl:Ontology` header
+and the `^owl:versionIRI` step, and nothing SHACL names.
+
+**Why it was believed.** `owl:imports` is an OWL term, OWL 2's *Mapping to RDF Graphs*
+Table 4 reads it off the ontology header, and a kernel that stayed inside OWL's
+vocabulary looked like the neutral choice for a rule both engines share.
+
+**What changed.** OWL 2 is the floor of the rule, not its limit. SHACL 1.2 Core §6.1 names
+the class a document declares a shapes graph with — "The sh:ShapesGraph class MAY be used
+as an rdf:type of the IRI of a graph that typically acts in the role of a shapes graph" —
+and follows a shapes graph's `owl:imports`. Under the OWL-only rule,
+`<G> a sh:ShapesGraph ; owl:imports <lib>` was silently data: validation ran without
+`<lib>`'s shapes and nothing was refused. SHACL 1.2 SPARQL Extensions already read the
+same graph classes for its implicit prefixes, from a second, private list in
+`purrdf-shapes`, so two rules classified one document two ways.
+
+**The rule now.** The kernel names the W3C graph classes directly. `purrdf_core::graph_roles`
+classifies every node as a SHACL instance (`rdf:type/rdfs:subClassOf*`) of `owl:Ontology`,
+`sh:ShapesGraph` (with `sh:RulesGraph` counted in its own right) and `sh:DataGraph`. The
+import rule's anchors are the loaded IRI, every ontology header, every shapes graph, and
+the `^owl:versionIRI` step from any of them; a node whose only role is `sh:DataGraph` is
+not one (SHACL 1.2 Core §6.2, "owl:imports in the data graph is not enacted"). The
+implicit prefix collection selects every role from the same classifier. These are the
+W3C's classes, not minted ones; PurRDF still mints no vocabulary. Pinned by
+`graph_roles::tests`, `imports::tests::every_shapes_graph_instance_imports_and_an_unrelated_type_does_not`
+and `a_data_graph_alone_anchors_nothing_and_a_data_graph_ontology_does` in
+`crates/rdf-core`, the engine tests
+`an_import_on_every_shapes_graph_instance_is_followed_and_an_unrelated_type_is_data`
+(`crates/shapes/src/imports.rs`) and
+`a_shapes_graph_node_imports_in_entailment_as_in_validation`
+(`crates/entail/src/entails/imports.rs`), and
+`a_document_validated_as_data_enacts_no_import_and_loaded_as_shapes_it_does`
+(`crates/validate/tests/shapes_owl_imports.rs`).
+
+### A SHACL-JS validator is inert vocabulary where it is declared
+
+**Was stated in** `crates/shapes/src/validator_alternatives.rs`, the module
+documentation of the built-in alternatives:
+
+> A SHACL JavaScript Extensions `sh:JSValidator` is declared vocabulary, not a load
+> error: libraries such as DASH declare them beside SPARQL validators, and this engine
+> never runs one. On a built-in it is listed here as a `ValidatorLanguage::JavaScript`
+> alternative, never parsed and never run. On a custom component it is refused only
+> where a shape uses the component and the validator SHACL selects for that shape is
+> JavaScript-only; a use with a SPARQL validator to select runs that one.
+
+**Why it was believed.** SHACL-JS extends the three attachments with its own validator
+class, and a validator nothing runs looked like vocabulary. So a component's
+`sh:JSValidator` was exempted from the attachment's class rule, like a `sh:JSFunction`
+nothing calls.
+
+**What changed.** The class rules of SHACL 1.2 SPARQL Extensions have no such exemption:
+"The values of sh:validator must be ASK-based validators" (`validator-class`), and the
+values of `sh:nodeValidator` and `sh:propertyValidator` "must be SELECT-based
+validators" (`nodeValidator-class`, `propertyValidator-class`). A `sh:JSValidator` is
+neither, so a graph that attaches one is ill-formed. SHACL 1.2 Core's "A SHACL processor
+SHOULD produce a failure in this case" has no reachability qualifier, and PurRDF treats
+that SHOULD as a MUST. Under the old reading `shapes lint` reported such a graph clean.
+A `sh:JSFunction` or `sh:JSLibrary` is not attached through those properties, so no
+syntax rule reaches it.
+
+**The rule now.** A value of an attachment that is not a SPARQL validator of the
+attachment's query form — a `sh:JSValidator` included — refuses the load as
+`ShapesError::IllFormed`, naming the rule. That holds on built-in and custom components,
+whether or not a shape reaches it, and on every other subject of those properties.
+`ValidatorLanguage` has no JavaScript variant. A `sh:JSFunction` or `sh:JSLibrary`
+nothing reaches stays inert, and a SHACL-JS construct a shape reaches stays refused as
+`ShapesError::ShaclJs`. Pinned by
+`a_javascript_validator_on_a_builtin_is_ill_formed_under_every_attachment` and
+`a_custom_components_javascript_validator_is_ill_formed_reached_or_not`
+(`crates/shapes/tests/spec_linker.rs`), and by
+`a_shacl_js_validator_is_ill_formed_and_its_ask_equivalent_validates`,
+`a_validator_of_a_non_component_owner_is_judged_by_the_class_rules`,
+`declared_shacl_js_no_shape_reaches_is_inert_and_ordinary_constraints_fire` and
+`every_shacl_js_construct_a_shape_reaches_is_a_typed_refusal`
+(`crates/shapes/tests/shapes_graph_wellformedness.rs`).

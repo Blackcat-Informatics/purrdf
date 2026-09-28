@@ -37,8 +37,8 @@ quads = purrdf.parse(
 )
 ```
 
-`purrdf.parse` accepts Turtle, TriG, N-Triples, N-Quads, TriX, and HexTuples
-(`purrdf.RdfFormat`); JSON-LD and RDF/XML travel through the dedicated
+`purrdf.parse` accepts Turtle, TriG, N-Triples, N-Quads, TriX, HexTuples, and
+RDF/XML (`purrdf.RdfFormat`); JSON-LD and RDF/XML also have the dedicated
 `purrdf.from_json_ld` / `purrdf.to_json_ld` and `purrdf.from_rdf_xml` /
 `purrdf.to_rdf_xml` converters. All codecs are first-party with
 byte-deterministic output.
@@ -151,7 +151,7 @@ For large LPG carriers, `purrdf.project_artifacts(...)` invokes a transactional
 artifact callback with package/artifact begin, bounded chunk, artifact finish,
 commit, and abort events. An optional progress callback receives immutable
 `ProjectionProgress` snapshots; callback exceptions abort the package and are
-returned unchanged. This path retains the selected canonical LPG model but not
+re-raised unchanged. This path retains the selected canonical LPG model but not
 complete artifact bodies or USTAR bytes. See the runnable atomic-directory
 [`projection_stream.py`](https://github.com/Blackcat-Informatics/purrdf/blob/main/bindings/python/examples/projection_stream.py)
 example.
@@ -168,9 +168,83 @@ report = shapes.validate(shapes_ttl=my_shapes, data_nt=my_data)
 print(report["conforms"])
 ```
 
-Complete SHACL Core, SHACL-SPARQL constraints/targets, and SHACL-AF `sh:rule`
-entailment via `shapes.entail(...)`. Reusable parsed shapes are available as
-`shapes.Shapes(shapes_ttl).validate_nt(data_nt)`.
+SHACL 1.2 Core, SPARQL Extensions and Node Expressions, and SHACL rules
+entailment via `shapes.entail(...)`, which returns `{"ntriples", "diagnostics"}`.
+A shape whose `sh:in` or `sh:xone` list is empty is a mandatory diagnostic every
+run reports, beside the verdict and never among the results: `shapes.validate`'s
+dict, `ValidationReport.diagnostics`, and the `apply_rules` and `entail` dicts
+carry a `diagnostics` list of `{"rule", "shape"}` dicts, and `to_sarif()` carries
+each as a note-level `toolExecutionNotifications` entry. Reusable parsed shapes are available as
+`shapes.Shapes(shapes_ttl).validate_nt(data_nt)`. Each result dict carries
+`messages`: every `sh:resultMessage` as a dict with `text` and, when present,
+`language`, `direction` and `datatype`. `shapes.validate(...,
+conformance_disallows=[...])` sets the severity IRIs that make a report
+non-conforming (by default `sh:Violation`, `sh:Warning` and `sh:Info`), and
+the dict's `conformance_disallows` names the set the report was judged
+against. `shapes_graph=IRI` on `shapes.validate`, `shapes.Shapes`,
+`shapes.pack_product` and `shapes.lint_shapes` names the IRI SHACL-SPARQL sees
+the shapes graph under, as `purrdf validate --shapes-graph` does: `$shapesGraph`
+is pre-bound to it and `GRAPH $shapesGraph { ... }` reads the shapes graph
+(SHACL 1.0's pre-binding, which SHACL 1.2 removed). Omitted, `$shapesGraph` is
+an ordinary variable. A `Shapes` carries it into `prepare()` and its products.
+`shapes.apply_rules` and `shapes.entail` take the same keyword, pre-binding a
+`sh:SPARQLRule`'s `$shapesGraph`; `apply_rules` raises `ValueError` when it is
+named beside `srl`, which has no shapes graph. `shapes.entail` also takes the four
+rule-evaluation limits `apply_rules` takes — `max_term_generating_rounds`,
+`max_generated_terms`, `max_stored_facts` and `max_join_steps`, with the same
+defaults — and a run past one raises `ValueError` naming the limit, the numbers
+and the keyword that raises it (`entail(max_stored_facts=...)`).
+`subclass_of_in_shapes_graph=True` on `shapes.validate` and `shapes.Shapes` is
+SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`: the shapes graph's
+`rdfs:subClassOf` triples are read, in addition to the data graph's, wherever
+SHACL type decides class membership (`sh:targetClass`, implicit class targets,
+`sh:class`, `sh:rootClass`, `shnex:instancesOf`). It is off by default, the
+specification's default. A shapes graph whose `owl:imports` closure holds two
+versions of one series, or a graph another declares `owl:incompatibleWith`,
+raises `ShapesImportError` with kind `incompatible-import-versions`.
+
+Four tools sit beside validation, each the same library call the CLI, WebAssembly
+and C surfaces make:
+
+```python
+# Run the SHACL 1.2 rules of a shapes graph, or a SPARQL 1.2 RL rule set (srl=...),
+# and get the INFERENCE GRAPH: the inferred triples only, as N-Triples. With
+# explain=True, "proof" carries the proof of every inferred triple.
+out = shapes.apply_rules(my_data, my_shapes, explain=True)
+out["inferred"], out["proof"]
+
+# Two limits stop a rule set that keeps inferring new terms: 16384 term-generating
+# rounds, and max(65536, 4 x the input's distinct terms) generated terms. A rule set
+# that needs more states it; a run past either raises ValueError naming the limit.
+shapes.apply_rules(my_data, srl=counting_rules, max_term_generating_rounds=50_000)
+
+# Two more bound what a run holds and enumerates: 4194304 stored facts (the data
+# graph, a rule set's data and every inferred triple) and 1048576 join steps. A
+# run past either raises ValueError naming the limit and the keyword argument.
+shapes.apply_rules(my_data, my_shapes, max_stored_facts=8_000_000)
+
+# Check a SPARQL 1.2 RL rule set WITHOUT running it: the grammar, the IMPORTS
+# closure (from `imports`), well-formedness and stratification -- every static
+# check apply_rules(srl=...) applies first. level="syntax" or "well-formed" stops
+# earlier. A refused rule set raises ValueError naming the stage.
+shapes.check_rules(counting_rules)["summary"]
+
+# Evaluate one node expression of a shapes graph against a focus node. The
+# expression is an IRI or "_:label"; the scope binds shnex:var names. The result is
+# {"outputs": [...], "diagnostics": [{"rule", "shape"}, ...]}: the output nodes, and
+# the shapes graph's mandatory diagnostics (an empty sh:in / sh:xone list).
+shapes.eval_node_expr(my_shapes, my_data, "http://example.org/Tag",
+                      "http://example.org/a", scope={"suffix": '"!"'})["outputs"]
+
+# Certify a shapes graph: the loader's verdict, the W3C shacl-shacl.ttl results,
+# which implementation every function call binds to, and the validators a
+# vocabulary declares for built-in components (superseded, never run).
+lint = shapes.lint_shapes(my_shapes)
+lint["clean"], lint["findings"], lint["calls"], lint["alternatives"], lint["report"]
+```
+
+A malformed shapes graph is a `lint_shapes` report with findings, not an
+exception; only a document that is not Turtle raises `ValueError`.
 
 ## Validate with ShEx
 
@@ -201,14 +275,23 @@ import purrdf
 from purrdf import entail
 
 dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
-closure, report = entail.materialize(dataset, "rdfs", "")
+closure, report = entail.materialize(dataset, "rdfs", "", [], [])
 print(closure.to_nquads())
 print(report)
 ```
 
+The fourth and fifth arguments are the dataset's `owl:imports` table — a list of
+`(ontology_iri, nquads_document)` pairs — and the IRIs the dataset was read from, spelled
+exactly as `entail.certain_answers` spells them. OWL 2 defines an ontology's imports
+closure to BE the ontology, so a dataset that imports a document is closed over the merge;
+an import the table does not resolve raises `ValueError` naming it, and so does an entry
+the closure never reaches. `[]`, `[]` imports nothing. `entail.consistency(data, imports,
+premise_iris)` and `Store.query_entailment_governed(..., imports=…, premise_iris=…)` take
+the same table.
+
 For callers holding a document rather than a parsed dataset,
-`entail.materialize_nt(text, regime, program)` takes N-Triples/N-Quads and returns
-`(canonical_nquads, report)`. Both accept the regime as a plain string (`"simple"`,
+`entail.materialize_nt(text, regime, program, imports, premise_iris)` takes
+N-Triples/N-Quads and returns `(canonical_nquads, report)`. Both accept the regime as a plain string (`"simple"`,
 `"rdf"`, `"rdfs"`, `"owl-rl"`, `"owl-direct"`, `"rif"`, `"d"`) or as
 `entail.Regime.RDFS`.
 
@@ -219,7 +302,7 @@ rather than being silently discarded. `"rif"` is the exception: it entails under
 RIF-in-XML document:
 
 ```python
-closure, report = entail.materialize(dataset, "rif", my_rif_xml)
+closure, report = entail.materialize(dataset, "rif", my_rif_xml, [], [])
 ```
 
 `"owl-direct"` takes no program either, and that is a statement rather than an
@@ -232,8 +315,8 @@ ontology's own named terms).
 **The report is the second return value and is never optional.** It is a
 byte-stable rendering naming which rules fired and how often, which specification
 rules did *not* fire, which constructs the run left at a boundary, what it
-consumed of the evaluator's fixed ceilings, and the contract hash of the calculus
-that ran — so a cached closure minted under a different rule set can be refused
+consumed against the evaluation limits it ran under, and the contract hash of the
+calculus that ran under those limits — so a cached closure minted under a different rule set can be refused
 rather than trusted.
 
 The rule tables are readable directly, so coverage is something you measure
@@ -281,9 +364,17 @@ other suite are in
 `ValueError` is raised for an unknown regime spelling (the message names the
 accepted set), for a `program` that is wrong for the regime — a non-empty one for
 any regime but `"rif"`, or one `"rif"` cannot parse as a normative RIF-in-XML
-document — and for an exhausted evaluation ceiling. An exhausted ceiling is a
-refusal, never a truncated closure handed back as a complete one. Being
-`"owl-direct"` or `"rif"` is not itself a refusal: both materialize.
+document — and for a passed evaluation limit. A passed limit is a refusal, never a
+truncated closure handed back as a complete one. Being `"owl-direct"` or `"rif"` is
+not itself a refusal: both materialize.
+
+`materialize` and `materialize_nt` take two keyword-only evaluation limits for the
+`"rdf"`, `"rdfs"`, `"owl-rl"` and `"d"` regimes: `max_stored_facts` (the facts each
+graph's store may hold, default 4194304) and `max_join_steps` (the candidate
+solutions the rules may enumerate, default 1048576). A run past either raises
+`ValueError` naming the limit, the numbers and the keyword argument; a run inside them
+returns the closure any larger limits would, and the report's `contract-hash` names the
+calculus under the limits in force.
 
 ## Description-Logic reasoning services
 
@@ -295,7 +386,7 @@ being able to not ask for it:
 
 | Service | Call | Answer |
 | --- | --- | --- |
-| Consistency | `entail.consistency(data)` | `consistency true` / `false` / `unknown` — `unknown` means the tableau reached its step cap, and is never collapsed to `false` |
+| Consistency | `entail.consistency(data, imports, premise_iris)` | `consistency true` / `false` / `unknown` — `unknown` means the tableau reached its step cap, and is never collapsed to `false` |
 | Classification | `entail.classify(data)` | `equivalent`, `subclass` (transitively closed), `direct` (its reduction) and `unsatisfiable` lines |
 | Realization | `entail.realize(data)` | `type` lines for the named individuals, then the most specific `direct-type` lines |
 | Instance retrieval | `entail.instances(data, class_)` | `instance <term>` lines; `class_` is ONE N-Triples term, angle brackets included |
@@ -341,9 +432,9 @@ table* whether a premise entails a conclusion *graph*.
 
 | Service | Call | Answer |
 | --- | --- | --- |
-| Certain answers | `entail.certain_answers(regime, data, pattern, imports)` | `mechanism`, one `var` line per projected variable, one `row` per certain answer, and a `limit` line per reason the row set may not be exhaustive |
-| Graph entailment | `entail.graph_entails(regime, premise, conclusion, imports)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
-| Verified entailment | `entail.verify_entailment(regime, premise, conclusion, imports)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
+| Certain answers | `entail.certain_answers(regime, data, pattern, imports, premise_iris)` | `mechanism`, one `var` line per projected variable, one `row` per certain answer, and a `limit` line per reason the row set may not be exhaustive |
+| Graph entailment | `entail.graph_entails(regime, premise, conclusion, imports, premise_iris)` | `mechanism <name>`, then `entailment entailed` / `not-entailed` / `undecided` — three verdicts, never two |
+| Verified entailment | `entail.verify_entailment(regime, premise, conclusion, imports, premise_iris)` | the above plus `warrant present`/`absent` and `verified true`/`false`/`not-applicable` |
 
 `pattern` is N-Triples with `?name` in any position, the **predicate** included; a blank
 node in it is a non-distinguished variable, constrained by the match and not projected,
@@ -397,6 +488,12 @@ same position on all four hosts, so one call shape works from Python, from JavaS
 from C and from Rust. Resolution is transitive to a fixpoint, so a supplied document's
 own `owl:imports` is followed too.
 
+`premise_iris` is the list of IRIs the premise document was read from — its URL, or the
+base you parsed it under, when you know one. An `owl:imports` of one of those names the
+premise itself and is resolved in place, with no `imports` entry; so is an import of an
+ontology the premise already declares. Text you were handed with no location has no such
+IRI, and `[]` is that ordinary case. Like `imports`, the argument is required.
+
 ```python
 from purrdf import entail
 
@@ -416,14 +513,14 @@ conclusion = (
 )
 
 answer, _ = entail.graph_entails(
-    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)]
+    "owl-rl", premise, conclusion, [("https://example.org/schema", schema)], []
 )
 assert "entailment entailed" in answer
 
 # The same call with nothing supplied refuses BY NAME rather than reasoning over a
 # premise that is missing the axioms it told you about.
 try:
-    entail.graph_entails("owl-rl", premise, conclusion, [])
+    entail.graph_entails("owl-rl", premise, conclusion, [], [])
 except ValueError as refusal:
     assert "https://example.org/schema" in str(refusal)
 ```
@@ -440,7 +537,7 @@ ontology = (
     " <https://example.org/Cat> .\n"
 )
 
-answer, certificate = entail.consistency(ontology)
+answer, certificate = entail.consistency(ontology, [], [])
 assert answer.strip() == "consistency true"
 assert certificate.startswith("purrdf-dl-certificate 1")
 assert "completeness decided" in certificate

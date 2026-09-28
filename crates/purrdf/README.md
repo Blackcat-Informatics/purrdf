@@ -86,9 +86,9 @@ caller-supplied configuration.
   every Simple Features, Egenhofer and RCC8 relation over an exact DE-9IM, the
   `geof:` family on the scalar seam and spatial-relation rewrite on the
   property-function seam, with the OGC vocabulary supplied by the caller.
-- **SHACL** — the complete SHACL Core feature set, SHACL-SPARQL constraints and
-  targets, and SHACL-AF (node expressions and SHACL Rules, aligned with the
-  SHACL 1.2 node-expression and rule-layering drafts), on PurRDF's own engine.
+- **SHACL** — SHACL 1.2 Core, SPARQL Extensions, Node Expressions and
+  Inference Rules, and the SPARQL 1.2 RL rule language, on PurRDF's own engine;
+  the W3C SHACL 1.2 test suite passes in full.
 - **ShEx 2.1** — ShExC/ShExJ schemas and shape-map validation, gated against the
   official shexTest suite.
 - **Entailment** — Simple / RDF / RDFS / OWL 2 RL / D forward materialization

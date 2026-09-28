@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-"""RDFLib ``rdflib.plugins.sparql`` compat shim (purrdf P0).
+"""RDFLib ``rdflib.plugins.sparql`` compat shim.
 
 ``prepareQuery`` in RDFLib pre-parses a query for reuse. The native engine parses
 on each call, so here it folds any ``initNs`` prefix bindings into the query text

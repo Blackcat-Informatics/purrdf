@@ -131,12 +131,20 @@ Design pillars:
   constant regular expressions once; each row then runs the program on an
   explicit value stack. Kleene `&&`/`||`, `IF`/`COALESCE`/`IN` laziness, `BNODE`
   memoization and the order of every charge are the SPARQL evaluation order.
-- **No walk recurses over its input's depth.** Nested triple terms, property
-  paths (compiled into a flat path program with reach caches indexed by
-  program op), algebra analyses and rewrites, CONSTRUCT templates and
-  substitution all run over explicit work lists, so how deeply a request or a
-  term nests is bounded by memory and by the governors, not by the thread's
-  stack.
+- **A term's nesting costs no stack; a plan's height is admitted first.**
+  Nested triple terms, property paths (compiled into a flat path program with
+  reach caches indexed by program op) and CONSTRUCT templates run over explicit
+  work lists, so how deeply a term nests is bounded by memory and by the
+  governors. The evaluator's analyses and its evaluation proper recurse once
+  per level of the plan, so a plan is measured iteratively before they run,
+  at preparation and on every evaluation, against the stack the evaluating
+  thread has left above `purrdf_stack::MARGIN_BYTES`: a plan too tall for it
+  is refused with `EvalError::StackExhausted`
+  (`native-sparql-evaluation-stack-exhausted`), and on `wasm32` a plan past
+  the budget kept under the JavaScript engine's call stack with
+  `EvalError::HostStackExhausted` (`native-sparql-host-stack-exhausted`). A
+  correlated substitution copies its subtree inside a scope that discards the
+  half-built copy and refuses the same way when the stack runs low.
 - **One per-row checkpoint.** `FILTER`, `BIND`, `UNFOLD` and aggregate loops pass
   every row through the same checkpoint: a latched trip is observed first, and a
   loop that forks across threads forks only the rows the remaining fuel admits

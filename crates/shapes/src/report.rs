@@ -16,35 +16,46 @@ use std::convert::Infallible;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use ::purrdf::FastSet;
 use ::purrdf::RdfDatasetBuilder;
 use ::purrdf::provenance::Attribution;
+use ::purrdf::{FastMap, FastSet};
 use ::purrdf::{RdfQuad, RdfTerm, SerializeGraph, serialize_dataset};
 
 use ::purrdf::RdfDataset;
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::{rdf, sh, xsd};
-#[cfg(test)]
-use crate::term::Literal;
-use crate::term::{NamedNode, Term};
+use crate::term::{Literal, NamedNode, Term};
 
 // ── Severity ──────────────────────────────────────────────────────────────────
 
 /// SHACL result severity levels, ordered from most to least severe.
 ///
-/// SHACL permits ANY IRI as an `sh:severity` value (spec §2.1.5); the three
-/// `sh:` severities are only the built-in defaults. A custom severity IRI is
-/// carried verbatim in [`Severity::Other`] so validation reports preserve it
-/// (W3C `core/misc/severity-002`) instead of coercing it to `sh:Violation`.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+/// SHACL 1.2 Core, "Declaring the Severity of a Shape or Constraint", names five built-in levels — "SHACL includes the IRIs listed in the table
+/// below to represent severities": `sh:Trace` ("A trace message that is not a
+/// constraint violation"), `sh:Debug` ("A debug message that is not a constraint
+/// violation"), `sh:Info` ("A non-critical constraint violation indicating an
+/// informative message"), `sh:Warning` ("A non-critical constraint violation
+/// indicating a warning") and `sh:Violation` ("A constraint violation"). "Any IRI
+/// can be used as a severity", so a custom severity IRI is carried verbatim in
+/// [`Severity::Other`] and reports preserve it (W3C `core/misc/severity-002`)
+/// instead of coercing it to `sh:Violation`.
+///
+/// Whether a level blocks conformance is NOT a property of the level: it is
+/// decided by the validation request's [`ConformanceDisallows`] set.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Severity {
     /// `sh:Violation` — the most severe level.
     Violation,
     /// `sh:Warning`.
     Warning,
-    /// `sh:Info` — the least severe level.
+    /// `sh:Info`.
     Info,
+    /// `sh:Debug` — "a debug message that is not a constraint violation".
+    Debug,
+    /// `sh:Trace` — the least severe built-in level, "a trace message that is not
+    /// a constraint violation".
+    Trace,
     /// Any other severity IRI, preserved verbatim.
     Other(NamedNode),
 }
@@ -56,20 +67,216 @@ impl Severity {
             Self::Violation => sh::VIOLATION,
             Self::Warning => sh::WARNING,
             Self::Info => sh::INFO,
+            Self::Debug => sh::DEBUG,
+            Self::Trace => sh::TRACE,
             Self::Other(iri) => iri.as_str(),
         }
     }
 
-    /// Parse one of the three built-in `sh:` severities from its IRI string,
-    /// returning `None` if unrecognised (use [`Severity::Other`] to carry a
-    /// custom severity IRI).
+    /// Parse one of the five built-in `sh:` severities from its IRI string,
+    /// returning `None` if unrecognised (use [`Severity::from_iri_open`] to carry
+    /// a custom severity IRI).
     pub fn from_iri(s: &str) -> Option<Self> {
         match s {
-            "http://www.w3.org/ns/shacl#Violation" => Some(Self::Violation),
-            "http://www.w3.org/ns/shacl#Warning" => Some(Self::Warning),
-            "http://www.w3.org/ns/shacl#Info" => Some(Self::Info),
+            sh::VIOLATION => Some(Self::Violation),
+            sh::WARNING => Some(Self::Warning),
+            sh::INFO => Some(Self::Info),
+            sh::DEBUG => Some(Self::Debug),
+            sh::TRACE => Some(Self::Trace),
             _ => None,
         }
+    }
+
+    /// The severity an IRI names: a built-in level for one of the five `sh:`
+    /// severity IRIs, and [`Severity::Other`] carrying the IRI verbatim for any
+    /// other ("Any IRI can be used as a severity").
+    #[must_use]
+    pub fn from_iri_open(s: &str) -> Self {
+        Self::from_iri(s).unwrap_or_else(|| Self::Other(NamedNode::from(s)))
+    }
+
+    /// This level's bit in a [`ConformanceDisallows`] built-in mask, `None` for a
+    /// custom IRI.
+    const fn builtin_bit(&self) -> Option<u8> {
+        match self {
+            Self::Violation => Some(1),
+            Self::Warning => Some(1 << 1),
+            Self::Info => Some(1 << 2),
+            Self::Debug => Some(1 << 3),
+            Self::Trace => Some(1 << 4),
+            Self::Other(_) => None,
+        }
+    }
+}
+
+// ── The conformance-disallow set ─────────────────────────────────────────────
+
+/// The five built-in levels, in [`Severity`] order.
+const BUILTIN_SEVERITIES: [Severity; 5] = [
+    Severity::Violation,
+    Severity::Warning,
+    Severity::Info,
+    Severity::Debug,
+    Severity::Trace,
+];
+
+/// The built-in mask of the default set: `sh:Violation`, `sh:Warning`, `sh:Info`.
+const DEFAULT_DISALLOW_MASK: u8 = 0b111;
+
+/// The set of disallowed severity levels a validation checks conformance against.
+///
+/// SHACL 1.2 Core, "Conformance Checking": "A focus node conforms to a shape
+/// if and only if the set of result of the validation of the focus node against
+/// the shape does not contain any validation results with a severity level of the
+/// set of disallowed levels and no failure has been reported by it. The set of
+/// disallowed severity levels is defined as the objects of triples with predicate
+/// sh:conformanceDisallows and the validation report as subject. If the
+/// validation report contains no such triples, sh:Violation, sh:Warning, and
+/// sh:Info are set as defaults."
+///
+/// The "Conformance-Disallow Set" section makes it the engine's to choose: "The conformance-disallow set is
+/// defined by the validation engine. A validation engine MAY provide mechanisms
+/// to customize this set." This type is that mechanism. It is a parameter of the
+/// validation REQUEST ([`crate::engine::ValidationOptions`]), never read from the
+/// shapes graph, and the same set decides both the report's `sh:conforms` and
+/// every nested conformance check (`sh:node`, `sh:not`, `sh:and`, `sh:or`,
+/// `sh:xone`, `sh:qualifiedValueShape`, …) the run performs — "all
+/// shape-expecting constraint parameters of SHACL Core rely on conformance
+/// checking" with that one definition.
+///
+/// # The empty set is refused
+///
+/// The report ECHOES the set ([`ValidationReport::to_dataset`]), and a report
+/// with no `sh:conformanceDisallows` triple means the DEFAULT set. So an empty set
+/// has no report that states it: the report it produced would be read back as
+/// the default set, contradicting the `sh:conforms` it carries. It is refused at
+/// construction rather than emitted as a report that means something else.
+///
+/// The representation is a bit mask over the five built-in levels plus the sorted
+/// custom IRIs, so the default set — and every set without a custom level —
+/// costs no allocation to build, clone or consult.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct ConformanceDisallows {
+    /// One bit per built-in level ([`Severity::builtin_bit`]).
+    builtin: u8,
+    /// The custom severity IRIs, sorted and de-duplicated.
+    others: Box<[NamedNode]>,
+}
+
+impl Default for ConformanceDisallows {
+    /// `sh:Violation`, `sh:Warning` and `sh:Info` — the set SHACL 1.2 Core names
+    /// for a report that declares none.
+    fn default() -> Self {
+        Self {
+            builtin: DEFAULT_DISALLOW_MASK,
+            others: Box::new([]),
+        }
+    }
+}
+
+impl ConformanceDisallows {
+    /// A set holding exactly `levels`.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `levels` is empty: see the type docs for why an empty
+    /// set cannot be echoed truthfully.
+    pub fn new(levels: impl IntoIterator<Item = Severity>) -> Result<Self, String> {
+        let mut builtin = 0u8;
+        let mut others: Vec<NamedNode> = Vec::new();
+        for level in levels {
+            match level.builtin_bit() {
+                Some(bit) => builtin |= bit,
+                None => {
+                    if let Severity::Other(iri) = level {
+                        others.push(iri);
+                    }
+                }
+            }
+        }
+        if builtin == 0 && others.is_empty() {
+            return Err(
+                "the conformance-disallow set is empty; a validation report with no \
+                 sh:conformanceDisallows triple means the DEFAULT set (sh:Violation, sh:Warning, \
+                 sh:Info), so an empty set has no report that states it — name at least one \
+                 severity"
+                    .to_owned(),
+            );
+        }
+        others.sort_unstable();
+        others.dedup();
+        Ok(Self {
+            builtin,
+            others: others.into_boxed_slice(),
+        })
+    }
+
+    /// A set holding the severity levels the IRIs name (a built-in level for an
+    /// `sh:` severity IRI, [`Severity::Other`] for any other).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when `iris` is empty, or when an entry is not an absolute
+    /// IRI ("All values of sh:conformanceDisallows MUST be IRIs", SHACL 1.2 Core,
+    /// "Conformance-Disallow Set").
+    pub fn from_iris<I, S>(iris: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = S>,
+        S: AsRef<str>,
+    {
+        let mut levels = Vec::new();
+        for iri in iris {
+            let iri = iri.as_ref();
+            let absolute = purrdf_iri::parse(iri).is_ok_and(|parsed| parsed.has_scheme());
+            if !absolute {
+                return Err(format!(
+                    "sh:conformanceDisallows value {iri:?} is not an absolute IRI; all values of \
+                     sh:conformanceDisallows must be IRIs"
+                ));
+            }
+            levels.push(Severity::from_iri_open(iri));
+        }
+        Self::new(levels)
+    }
+
+    /// Whether a result of `severity` blocks conformance.
+    #[inline]
+    #[must_use]
+    pub fn contains(&self, severity: &Severity) -> bool {
+        match severity.builtin_bit() {
+            Some(bit) => self.builtin & bit != 0,
+            None => match severity {
+                Severity::Other(iri) => self.others.binary_search(iri).is_ok(),
+                _ => false,
+            },
+        }
+    }
+
+    /// Whether this is the default set (`sh:Violation`, `sh:Warning`, `sh:Info`).
+    #[must_use]
+    pub fn is_default(&self) -> bool {
+        self.builtin == DEFAULT_DISALLOW_MASK && self.others.is_empty()
+    }
+
+    /// The levels in the set, in [`Severity`] order: the built-in levels most
+    /// severe first, then the custom IRIs in IRI order.
+    #[must_use]
+    pub fn levels(&self) -> Vec<Severity> {
+        BUILTIN_SEVERITIES
+            .iter()
+            .filter(|level| self.contains(level))
+            .cloned()
+            .chain(self.others.iter().cloned().map(Severity::Other))
+            .collect()
+    }
+
+    /// The set as IRI strings, in [`Self::levels`] order.
+    #[must_use]
+    pub fn iris(&self) -> Vec<String> {
+        self.levels()
+            .iter()
+            .map(|level| level.iri().to_owned())
+            .collect()
     }
 }
 
@@ -100,21 +307,45 @@ pub struct ValidationResult {
     pub source_shape: Term,
     /// The severity of this result.
     pub severity: Severity,
-    /// An optional human-readable message.
-    pub message: Option<String>,
+    /// The result's messages (`sh:resultMessage`), each an RDF 1.2 literal that
+    /// keeps its datatype, language tag and base direction, in the canonical order
+    /// [`canonical_messages`] gives. Empty when the result has no message.
+    ///
+    /// SHACL 1.2 Core, "Declaring Messages for a Shape or Constraint": "If a shape
+    /// has at least one value for sh:message in the shapes graph, then all
+    /// validation results produced as a result of the shape will have exactly
+    /// these messages as their value of sh:resultMessage, i.e. the values will be
+    /// copied from the shapes graph into the results graph." So every message is
+    /// carried — `"Too many characters"@en` beside `"Zu viele Zeichen"@de` — never
+    /// one chosen from several.
+    pub messages: Vec<Literal>,
     /// PurRDF graph-box roles attached to the source shape, if any.
     pub source_box_roles: Vec<NamedNode>,
     /// PurRDF graph-box roles attached to the result path/predicate, if any.
     pub path_box_roles: Vec<NamedNode>,
     /// Deterministic union of source/path/component roles relevant to this result.
     pub result_box_roles: Vec<NamedNode>,
-    /// Structured slice attributions for this result (§9 / S5).
+    /// Structured slice attributions for this result.
     ///
     /// Records which compilation units (identified by their runtime `UnitId`,
     /// resolved to public slice IRIs at the serialization boundary) played which
     /// roles in producing this result. An empty vec means no attribution context
     /// is available (e.g. in legacy or unit-test scenarios).
     pub attributions: Vec<Attribution>,
+    /// The nested results that detail this one (`sh:detail`, SHACL 1.2 Core
+    /// §3.6.2.7), in a deterministic order: for `sh:memberShape`, the results of
+    /// each list member that does not conform to the member shape; for
+    /// `sh:uniqueMembers`, one result per duplicated member. Empty for every
+    /// other component.
+    pub details: Vec<Self>,
+    /// The result's SHACL-SPARQL result annotations: `(annotation property,
+    /// value)` pairs the SPARQL-based constraint or validator that produced it
+    /// declares with `sh:resultAnnotation`, copied from the solution's binding of
+    /// the annotation's variable or, when it is unbound, from its
+    /// `sh:annotationValue` defaults (SHACL 1.2 SPARQL Extensions, "Annotation
+    /// Properties"). Sorted by property IRI, then by the value's N-Triples
+    /// rendering, without duplicates; empty for every other result.
+    pub annotations: Vec<(NamedNode, Term)>,
 }
 
 impl ValidationResult {
@@ -162,6 +393,49 @@ impl ValidationResult {
     }
 }
 
+/// The canonical order of a result's messages: by lexical form, then language
+/// tag, then base direction, then datatype — so two literals that differ only in
+/// their tag (or in being `rdf:HTML` rather than `xsd:string`) are ordered and
+/// kept apart, and equal ones collapse.
+#[must_use]
+pub fn canonical_messages(mut messages: Vec<Literal>) -> Vec<Literal> {
+    messages.sort_by(|a, b| message_key(a).cmp(&message_key(b)));
+    messages.dedup();
+    messages
+}
+
+/// The sort key of one message literal — see [`canonical_messages`].
+fn message_key(message: &Literal) -> (&str, Option<&str>, Option<u8>, &str) {
+    (
+        message.value(),
+        message.language(),
+        message.direction().map(|direction| match direction {
+            ::purrdf::RdfTextDirection::Ltr => 0,
+            ::purrdf::RdfTextDirection::Rtl => 1,
+        }),
+        message.datatype_str(),
+    )
+}
+
+/// A deterministic textual key for a result's messages, for total sort orders.
+pub(crate) fn messages_sort_key(messages: &[Literal]) -> String {
+    messages
+        .iter()
+        .map(|m| Term::Literal(m.clone()).to_string())
+        .collect::<Vec<_>>()
+        .join("\u{1f}")
+}
+
+/// A deterministic textual key for a result's annotations, for total sort orders.
+/// Allocates nothing for the common result, which has none.
+pub(crate) fn annotations_sort_key(annotations: &[(NamedNode, Term)]) -> String {
+    annotations
+        .iter()
+        .map(|(property, value)| format!("{property}\u{1e}{value}"))
+        .collect::<Vec<_>>()
+        .join("\u{1f}")
+}
+
 fn dedup_roles(roles: &[NamedNode]) -> Vec<NamedNode> {
     if roles.is_empty() {
         return Vec::new();
@@ -177,10 +451,148 @@ fn dedup_roles(roles: &[NamedNode]) -> Vec<NamedNode> {
 /// A SHACL validation report (`sh:ValidationReport`).
 #[derive(Debug, Clone)]
 pub struct ValidationReport {
-    /// Whether the data graph conforms to the shapes graph.
+    /// Whether the data graph conforms to the shapes graph: no result's severity
+    /// is in [`Self::conformance_disallows`] (and no failure was reported, which
+    /// is an `Err` rather than a report).
     pub conforms: bool,
-    /// Individual violation/warning/info results.
+    /// Individual violation/warning/info/debug/trace results.
     pub results: Vec<ValidationResult>,
+    /// The conformance-disallow set `conforms` was judged against, which the
+    /// report graph echoes as `sh:conformanceDisallows` (see
+    /// [`Self::to_dataset`]).
+    pub conformance_disallows: ConformanceDisallows,
+    /// What the processor determined about the shapes graph's well-formedness, which
+    /// the report graph states as `sh:shapesGraphWellFormed` (see [`Self::to_dataset`]).
+    ///
+    /// SHACL 1.2 Core §6.7.1.4: "Implementations that do perform such checks (e.g., when
+    /// the shapes graph is installed in the system, or before or during the validation)
+    /// SHOULD use the property sh:shapesGraphWellFormed to inform the consumer of the
+    /// validation report about this fact. If a SHACL instance of sh:ValidationReport in
+    /// the results graph has true as the value for sh:shapesGraphWellFormed then the
+    /// processor was certain that the shapes graph that was used for the validation
+    /// process is well-formed." PurRDF checks every shapes graph before validating it and
+    /// refuses an ill-formed one, so every report the engine produces states
+    /// `Some(true)`. Appendix A's `in-minListLength` and `xone-minListLength` ("Each such
+    /// list SHOULD have at least one member") constrain the document's author: PurRDF
+    /// applies them as a mandatory diagnostic that [`crate::lint`] always reports, and the
+    /// approved W3C tests `core/node/in-002`, `in-003`, `xone-002` and `xone-003` validate
+    /// such a graph, so an empty `sh:in` or `sh:xone` list leaves the graph well-formed.
+    /// `None` — a report assembled by [`Self::from_results`] rather than by a
+    /// validation — states nothing.
+    pub shapes_graph_well_formed: Option<bool>,
+    /// The shapes graph's mandatory diagnostics — every shape with an empty `sh:in` or
+    /// `sh:xone` list ([`crate::lint::MandatoryDiagnostic`]) — which every run reports.
+    ///
+    /// Beside the results, never among them: an empty list leaves the shapes graph
+    /// well-formed and every verdict unchanged, so a diagnostic is not a
+    /// `sh:ValidationResult`, does not affect [`Self::conforms`], and is not written into
+    /// the report graph ([`Self::to_dataset`]) — SHACL defines no report term for a
+    /// diagnostic about the shapes graph, and PurRDF mints no vocabulary. Hosts carry it in
+    /// their own slot: SARIF `invocations[].toolExecutionNotifications`, a `diagnostics`
+    /// list on the Python, WebAssembly and C report objects, and a `shacl diagnostic` line
+    /// on the command line. Empty for a report assembled by [`Self::from_results`].
+    pub diagnostics: Vec<crate::lint::MandatoryDiagnostic>,
+}
+
+/// The graph a blank node a validation report carries was read from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum BlankOrigin {
+    /// The data graph: a focus node, a value, an annotation value.
+    DataGraph,
+    /// The shapes graph: a source shape, a blank result path that is not a complex path.
+    ShapesGraph,
+}
+
+impl BlankOrigin {
+    /// The label stem of this graph's label space in a report.
+    const fn stem(self) -> &'static str {
+        match self {
+            Self::DataGraph => "dg",
+            Self::ShapesGraph => "sg",
+        }
+    }
+}
+
+/// The relabelling [`ValidationReport::with_report_blank_labels`] applied: which report
+/// label stands for which blank node of which source graph.
+#[derive(Debug, Clone, Default)]
+pub struct ReportBlankLabels {
+    /// `(origin, source label)` → report label.
+    forward: FastMap<(BlankOrigin, String), String>,
+    /// Report label → `(origin, source label)`.
+    back: FastMap<String, (BlankOrigin, String)>,
+    /// The next counter of each graph's label space.
+    next: [usize; 2],
+}
+
+impl ReportBlankLabels {
+    /// The graph and source label a report label stands for, or `None` for a label the
+    /// relabelling did not assign.
+    #[must_use]
+    pub fn source_of(&self, report_label: &str) -> Option<(BlankOrigin, &str)> {
+        self.back
+            .get(report_label)
+            .map(|(origin, label)| (*origin, label.as_str()))
+    }
+
+    /// The report label of the `origin` blank node `label`, assigning the next one of
+    /// its graph's space on first sight.
+    fn label(&mut self, origin: BlankOrigin, label: &str) -> String {
+        let key = (origin, label.to_owned());
+        if let Some(assigned) = self.forward.get(&key) {
+            return assigned.clone();
+        }
+        let slot = match origin {
+            BlankOrigin::DataGraph => 0,
+            BlankOrigin::ShapesGraph => 1,
+        };
+        let assigned = format!("{}{}", origin.stem(), self.next[slot]);
+        self.next[slot] += 1;
+        self.back.insert(assigned.clone(), key.clone());
+        self.forward.insert(key, assigned.clone());
+        assigned
+    }
+
+    /// `term` with its blank nodes, triple terms included, relabelled as `origin`'s.
+    fn term(&mut self, origin: BlankOrigin, term: &Term) -> Term {
+        match term {
+            Term::BlankNode(label) => Term::BlankNode(self.label(origin, label)),
+            Term::Triple(triple) => Term::Triple(Box::new(crate::term::Triple {
+                subject: self.term(origin, &triple.subject),
+                predicate: triple.predicate.clone(),
+                object: self.term(origin, &triple.object),
+            })),
+            Term::NamedNode(_) | Term::Literal(_) => term.clone(),
+        }
+    }
+
+    /// `result` and its details with every carried blank node relabelled, visiting the
+    /// fields in the order [`ValidationReport::with_report_blank_labels`] documents.
+    fn relabel_result(&mut self, result: &ValidationResult) -> ValidationResult {
+        let mut out = result.clone();
+        out.focus_node = self.term(BlankOrigin::DataGraph, &result.focus_node);
+        out.source_shape = self.term(BlankOrigin::ShapesGraph, &result.source_shape);
+        // A blank result path paired with a path structure is a complex path the
+        // report MINTS, not a carried node; any other blank result path is carried.
+        if let (Some(path), None) = (&result.result_path, &result.path_structure) {
+            out.result_path = Some(self.term(BlankOrigin::ShapesGraph, path));
+        }
+        out.value = result
+            .value
+            .as_ref()
+            .map(|value| self.term(BlankOrigin::DataGraph, value));
+        out.annotations = result
+            .annotations
+            .iter()
+            .map(|(property, value)| (property.clone(), self.term(BlankOrigin::DataGraph, value)))
+            .collect();
+        out.details = result
+            .details
+            .iter()
+            .map(|detail| self.relabel_result(detail))
+            .collect();
+        out
+    }
 }
 
 /// The tuple type used for deterministic comparison of result sets.
@@ -196,6 +608,40 @@ pub type ResultTuple = (
 );
 
 impl ValidationReport {
+    /// The report of `results` judged against `disallows`: it conforms iff no
+    /// result's severity is in the set (SHACL 1.2 Core, "Conformance-Disallow
+    /// Set": "Presence of any sh:ValidationResult with a severity level in the set
+    /// of disallowed severity levels MUST result in a sh:conforms value of false
+    /// on the associated sh:ValidationReport instance").
+    #[must_use]
+    pub fn from_results(results: Vec<ValidationResult>, disallows: ConformanceDisallows) -> Self {
+        let conforms = !results
+            .iter()
+            .any(|result| disallows.contains(&result.severity));
+        Self {
+            conforms,
+            results,
+            conformance_disallows: disallows,
+            shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
+        }
+    }
+
+    /// This report stating `diagnostics` (see [`Self::diagnostics`]).
+    #[must_use]
+    pub fn with_diagnostics(mut self, diagnostics: Vec<crate::lint::MandatoryDiagnostic>) -> Self {
+        self.diagnostics = diagnostics;
+        self
+    }
+
+    /// This report stating `sh:shapesGraphWellFormed` as `well_formed` (see
+    /// [`Self::shapes_graph_well_formed`]).
+    #[must_use]
+    pub const fn with_shapes_graph_well_formed(mut self, well_formed: bool) -> Self {
+        self.shapes_graph_well_formed = Some(well_formed);
+        self
+    }
+
     /// Materialize the report graph as a frozen PurRDF [`RdfDataset`].
     ///
     /// This is the report's primal RDF form: the quads are built straight from
@@ -225,8 +671,71 @@ impl ValidationReport {
     /// interior nodes of a complex `sh:path`) are guaranteed distinct from every
     /// blank node the report CARRIES: a data graph is free to contain `_:r0`, and
     /// the minted nodes step into a reserved label namespace when it does.
+    ///
+    /// # Blank nodes from two graphs
+    ///
+    /// A report carries blank nodes from TWO graphs: a focus node, a value and an
+    /// annotation value are data-graph nodes, a source shape (and a blank result path
+    /// that is not a complex path) a shapes-graph node. Each graph's labels are local
+    /// to that graph, so both routinely use the same one — and written into one report
+    /// graph as they were, a shapes-graph shape and a data-graph value would become one
+    /// node. The report is therefore written under [`Self::with_report_blank_labels`]:
+    /// every carried blank node relabelled into its OWN graph's label space, distinct
+    /// nodes distinct and the same node the same label everywhere it appears.
     #[must_use]
     pub fn to_dataset(&self) -> Arc<RdfDataset> {
+        self.with_report_blank_labels().0.dataset_as_carried()
+    }
+
+    /// This report with every blank node it CARRIES relabelled into the label space of
+    /// the graph it came from, and the [`ReportBlankLabels`] mapping back.
+    ///
+    /// A data-graph blank node becomes `_:dg{n}` and a shapes-graph blank node `_:sg{n}`,
+    /// `n` counting each graph's distinct nodes in their order of first appearance in
+    /// the report — the results in order, and within a result its focus node, source
+    /// shape, carried result path, value, annotation values and then its `sh:detail`
+    /// results. Two occurrences of one node keep one label; a data-graph node and a
+    /// shapes-graph node that shared a label in their own graphs get two. Blank nodes
+    /// inside a triple term are relabelled in the space of the term that holds them.
+    ///
+    /// Every report serialization — the report graph ([`Self::to_dataset`], so every RDF
+    /// syntax), and the SARIF projection — is written from this form, so a node has one
+    /// label across all of them, and the labels do not depend on which parser labelled
+    /// the documents. The in-memory [`Self::results`] keep the labels of the graphs they
+    /// were read from, which is what a caller joining a result back to its data needs.
+    #[must_use]
+    pub fn with_report_blank_labels(&self) -> (Self, ReportBlankLabels) {
+        let mut labels = ReportBlankLabels::default();
+        let results = self
+            .results
+            .iter()
+            .map(|result| labels.relabel_result(result))
+            .collect();
+        // A diagnostic names a shapes-graph node, labelled AFTER every result so the
+        // results' labels do not depend on whether the shapes graph has a diagnostic.
+        let diagnostics = self
+            .diagnostics
+            .iter()
+            .map(|diagnostic| crate::lint::MandatoryDiagnostic {
+                rule: diagnostic.rule,
+                shape: labels.term(BlankOrigin::ShapesGraph, &diagnostic.shape),
+            })
+            .collect();
+        (
+            Self {
+                conforms: self.conforms,
+                results,
+                conformance_disallows: self.conformance_disallows.clone(),
+                shapes_graph_well_formed: self.shapes_graph_well_formed,
+                diagnostics,
+            },
+            labels,
+        )
+    }
+
+    /// The report graph with the carried blank-node labels exactly as the results hold
+    /// them: [`Self::to_dataset`] after relabelling.
+    fn dataset_as_carried(&self) -> Arc<RdfDataset> {
         let mut builder = RdfDatasetBuilder::new();
         // Complex-path structure roots already emitted (keyed by root label).
         let mut emitted_paths: FastSet<String> = FastSet::default();
@@ -258,100 +767,49 @@ impl ValidationReport {
             )),
         );
 
-        for (i, r) in self.results.iter().enumerate() {
-            let result_subj = RdfTerm::blank_node(format!("{mint}r{i}"));
+        // _:report sh:conformanceDisallows <level> — the set `sh:conforms` was
+        // judged against. "If no values are present in the results graph for the
+        // property sh:conformanceDisallows, then a default set MUST be used,
+        // comprised of sh:Violation, sh:Warning, and sh:Info", so the default set
+        // is echoed by stating nothing: that is exactly what a reader recovers from
+        // it, and every report under the default set keeps its bytes. Any other
+        // set is echoed level by level, in `ConformanceDisallows::levels` order.
+        if !self.conformance_disallows.is_default() {
+            for level in self.conformance_disallows.levels() {
+                push_triple(
+                    &mut builder,
+                    report_subj.clone(),
+                    sh::CONFORMANCE_DISALLOWS,
+                    RdfTerm::iri(level.iri()),
+                );
+            }
+        }
 
+        // _:report sh:shapesGraphWellFormed "true"^^xsd:boolean — SHACL 1.2 Core
+        // §6.7.1.4: a processor that checks the shapes graph "SHOULD use the property
+        // sh:shapesGraphWellFormed to inform the consumer of the validation report".
+        if let Some(well_formed) = self.shapes_graph_well_formed {
+            push_triple(
+                &mut builder,
+                report_subj.clone(),
+                sh::SHAPES_GRAPH_WELL_FORMED,
+                RdfTerm::Literal(::purrdf::RdfLiteral::typed(
+                    if well_formed { "true" } else { "false" },
+                    xsd::BOOLEAN,
+                )),
+            );
+        }
+
+        for (i, r) in self.results.iter().enumerate() {
+            let label = format!("{mint}r{i}");
             // _:report sh:result _:r{i}
             push_triple(
                 &mut builder,
                 report_subj.clone(),
                 sh::RESULT,
-                result_subj.clone(),
+                RdfTerm::blank_node(label.clone()),
             );
-
-            // _:r{i} rdf:type sh:ValidationResult
-            push_triple(
-                &mut builder,
-                result_subj.clone(),
-                rdf::TYPE,
-                RdfTerm::iri(sh::VALIDATION_RESULT),
-            );
-
-            // sh:focusNode
-            push_triple(
-                &mut builder,
-                result_subj.clone(),
-                sh::FOCUS_NODE,
-                r.focus_node.to_rdf_term(),
-            );
-
-            // sh:resultSeverity
-            push_triple(
-                &mut builder,
-                result_subj.clone(),
-                sh::RESULT_SEVERITY,
-                RdfTerm::iri(r.severity.iri()),
-            );
-
-            // sh:sourceConstraintComponent
-            push_triple(
-                &mut builder,
-                result_subj.clone(),
-                sh::SOURCE_CONSTRAINT_COMPONENT,
-                RdfTerm::iri(r.source_constraint_component.as_str()),
-            );
-
-            // sh:sourceShape
-            push_triple(
-                &mut builder,
-                result_subj.clone(),
-                sh::SOURCE_SHAPE,
-                r.source_shape.to_rdf_term(),
-            );
-
-            // sh:resultPath (optional). A complex path is a blank node the report
-            // MINTS (see `path::path_to_term`), so it carries the mint prefix
-            // like every other minted node; its full SHACL path structure is
-            // emitted once per distinct root label (two results sharing a path
-            // share the structure bnodes).
-            if let Some(path) = &r.result_path {
-                let root = match (path, &r.path_structure) {
-                    (Term::BlankNode(label), Some(_)) => Some(format!("{mint}{label}")),
-                    _ => None,
-                };
-                push_triple(
-                    &mut builder,
-                    result_subj.clone(),
-                    sh::RESULT_PATH,
-                    root.clone()
-                        .map_or_else(|| path.to_rdf_term(), RdfTerm::blank_node),
-                );
-                if let (Some(root), Some(structure)) = (root, &r.path_structure)
-                    && emitted_paths.insert(root.clone())
-                {
-                    emit_path_structure(&mut builder, &root, structure);
-                }
-            }
-
-            // sh:value (optional)
-            if let Some(value) = &r.value {
-                push_triple(
-                    &mut builder,
-                    result_subj.clone(),
-                    sh::VALUE,
-                    value.to_rdf_term(),
-                );
-            }
-
-            // sh:resultMessage (optional plain string literal)
-            if let Some(msg) = &r.message {
-                push_triple(
-                    &mut builder,
-                    result_subj,
-                    sh::RESULT_MESSAGE,
-                    RdfTerm::Literal(::purrdf::RdfLiteral::simple(msg.as_str())),
-                );
-            }
+            emit_result(&mut builder, &label, r, &mint, &mut emitted_paths);
         }
 
         // `freeze` only rejects structural violations (out-of-range term ids, a
@@ -480,18 +938,30 @@ fn mint_prefix(report: &ValidationReport) -> String {
 fn carried_blank_labels(report: &ValidationReport) -> FastSet<&str> {
     let mut labels = FastSet::default();
     for r in &report.results {
-        collect_blank_labels(&r.focus_node, &mut labels);
-        collect_blank_labels(&r.source_shape, &mut labels);
-        if let Some(value) = &r.value {
-            collect_blank_labels(value, &mut labels);
-        }
-        // A blank `result_path` with no `path_structure` is not a minted complex
-        // path root (see `ValidationResult::result_path`), so it is carried.
-        if let (Some(path), None) = (&r.result_path, &r.path_structure) {
-            collect_blank_labels(path, &mut labels);
-        }
+        collect_result_blank_labels(r, &mut labels);
     }
     labels
+}
+
+/// [`carried_blank_labels`] for one result and every result nested under it.
+fn collect_result_blank_labels<'a>(r: &'a ValidationResult, labels: &mut FastSet<&'a str>) {
+    collect_blank_labels(&r.focus_node, labels);
+    collect_blank_labels(&r.source_shape, labels);
+    if let Some(value) = &r.value {
+        collect_blank_labels(value, labels);
+    }
+    // A blank `result_path` with no `path_structure` is not a minted complex
+    // path root (see `ValidationResult::result_path`), so it is carried.
+    if let (Some(path), None) = (&r.result_path, &r.path_structure) {
+        collect_blank_labels(path, labels);
+    }
+    // An annotation value is a solution binding, so it may be a data blank node.
+    for (_, value) in &r.annotations {
+        collect_blank_labels(value, labels);
+    }
+    for detail in &r.details {
+        collect_result_blank_labels(detail, labels);
+    }
 }
 
 /// The root labels of the report's complex paths — blank nodes the report MINTS
@@ -499,14 +969,21 @@ fn carried_blank_labels(report: &ValidationReport) -> FastSet<&str> {
 /// collision check is a hash lookup per carried label rather than a rescan of
 /// every result.
 fn minted_path_roots(report: &ValidationReport) -> FastSet<&str> {
-    report
-        .results
-        .iter()
-        .filter_map(|r| match (&r.result_path, &r.path_structure) {
-            (Some(Term::BlankNode(root)), Some(_)) => Some(root.as_str()),
-            _ => None,
-        })
-        .collect()
+    let mut roots = FastSet::default();
+    for r in &report.results {
+        collect_minted_path_roots(r, &mut roots);
+    }
+    roots
+}
+
+/// [`minted_path_roots`] for one result and every result nested under it.
+fn collect_minted_path_roots<'a>(r: &'a ValidationResult, roots: &mut FastSet<&'a str>) {
+    if let (Some(Term::BlankNode(root)), Some(_)) = (&r.result_path, &r.path_structure) {
+        roots.insert(root.as_str());
+    }
+    for detail in &r.details {
+        collect_minted_path_roots(detail, roots);
+    }
 }
 
 /// Add every blank-node label reachable from `term`, descending through RDF 1.2
@@ -529,17 +1006,137 @@ fn collides_with_minted(label: &str, result_count: usize, roots: &FastSet<&str>)
     if label == "report" || roots.contains(label) {
         return true;
     }
-    if let Some(index) = label.strip_prefix('r')
-        && let Ok(index) = index.parse::<usize>()
-        && index < result_count
-    {
-        return true;
+    // A result node is `r{i}`, and a detail node nested under it
+    // `r{i}d{j}d{k}…`: every such label is minted when `i` names a result.
+    if let Some(rest) = label.strip_prefix('r') {
+        let mut parts = rest.split('d');
+        if let Some(index) = parts.next()
+            && let Ok(index) = index.parse::<usize>()
+            && index < result_count
+            && parts.all(|part| !part.is_empty() && part.bytes().all(|b| b.is_ascii_digit()))
+        {
+            return true;
+        }
     }
     // An interior node is `{root}-{n}`; the counter carries no `-`, so the LAST
     // `-` is the one that separates it from the root.
     label
         .rsplit_once('-')
         .is_some_and(|(stem, counter)| counter.parse::<usize>().is_ok() && roots.contains(stem))
+}
+
+/// Emit one validation result rooted at the blank node `label`, and — through
+/// `sh:detail` — every result nested under it, each at `{label}d{j}`.
+fn emit_result(
+    builder: &mut RdfDatasetBuilder,
+    label: &str,
+    r: &ValidationResult,
+    mint: &str,
+    emitted_paths: &mut FastSet<String>,
+) {
+    let result_subj = RdfTerm::blank_node(label.to_owned());
+
+    // _:r rdf:type sh:ValidationResult
+    push_triple(
+        builder,
+        result_subj.clone(),
+        rdf::TYPE,
+        RdfTerm::iri(sh::VALIDATION_RESULT),
+    );
+
+    // sh:focusNode
+    push_triple(
+        builder,
+        result_subj.clone(),
+        sh::FOCUS_NODE,
+        r.focus_node.to_rdf_term(),
+    );
+
+    // sh:resultSeverity
+    push_triple(
+        builder,
+        result_subj.clone(),
+        sh::RESULT_SEVERITY,
+        RdfTerm::iri(r.severity.iri()),
+    );
+
+    // sh:sourceConstraintComponent
+    push_triple(
+        builder,
+        result_subj.clone(),
+        sh::SOURCE_CONSTRAINT_COMPONENT,
+        RdfTerm::iri(r.source_constraint_component.as_str()),
+    );
+
+    // sh:sourceShape
+    push_triple(
+        builder,
+        result_subj.clone(),
+        sh::SOURCE_SHAPE,
+        r.source_shape.to_rdf_term(),
+    );
+
+    // sh:resultPath (optional). A complex path is a blank node the report MINTS
+    // (see `path::path_to_term`), so it carries the mint prefix like every other
+    // minted node; its full SHACL path structure is emitted once per distinct
+    // root label (two results sharing a path share the structure bnodes).
+    if let Some(path) = &r.result_path {
+        let root = match (path, &r.path_structure) {
+            (Term::BlankNode(root_label), Some(_)) => Some(format!("{mint}{root_label}")),
+            _ => None,
+        };
+        push_triple(
+            builder,
+            result_subj.clone(),
+            sh::RESULT_PATH,
+            root.clone()
+                .map_or_else(|| path.to_rdf_term(), RdfTerm::blank_node),
+        );
+        if let (Some(root), Some(structure)) = (root, &r.path_structure)
+            && emitted_paths.insert(root.clone())
+        {
+            emit_path_structure(builder, &root, structure);
+        }
+    }
+
+    // sh:value (optional)
+    if let Some(value) = &r.value {
+        push_triple(builder, result_subj.clone(), sh::VALUE, value.to_rdf_term());
+    }
+
+    // sh:resultMessage — one per message, each literal as it was declared
+    // (language tag, base direction and datatype preserved), in canonical order.
+    for msg in &r.messages {
+        push_triple(
+            builder,
+            result_subj.clone(),
+            sh::RESULT_MESSAGE,
+            Term::Literal(msg.clone()).to_rdf_term(),
+        );
+    }
+
+    // SHACL-SPARQL result annotations: each `(property, value)` the constraint's
+    // `sh:resultAnnotation`s produced for this result, in canonical order.
+    for (property, value) in &r.annotations {
+        push_triple(
+            builder,
+            result_subj.clone(),
+            property.as_str(),
+            value.to_rdf_term(),
+        );
+    }
+
+    // sh:detail (optional nested results), in the result's own detail order.
+    for (j, detail) in r.details.iter().enumerate() {
+        let detail_label = format!("{label}d{j}");
+        push_triple(
+            builder,
+            result_subj.clone(),
+            sh::DETAIL,
+            RdfTerm::blank_node(detail_label.clone()),
+        );
+        emit_result(builder, &detail_label, detail, mint, emitted_paths);
+    }
 }
 
 // ── Builder helpers ───────────────────────────────────────────────────────────
@@ -725,11 +1322,24 @@ fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
 
 /// Walk a SHACL report dataset and extract result tuples.
 ///
-/// Finds all `?r rdf:type sh:ValidationResult` nodes and reads their mandatory and
-/// optional predicates, building the same tuple shape as
-/// [`ValidationReport::result_tuples`].
+/// Reads the report's TOP-LEVEL results — the objects of `sh:result` — and their
+/// mandatory and optional predicates, building the same tuple set as
+/// [`ValidationReport::result_tuples`], which is top-level too. A nested
+/// `sh:detail` result is typed `sh:ValidationResult` as well, but it is not a
+/// result of the report: reading every typed node would count each detail as a
+/// report result of its own, so a round trip of a report with details would not
+/// give back its own tuples.
 pub fn tuples_from_dataset(data: &RdfDataset) -> BTreeSet<ResultTuple> {
-    let result_nodes = subjects_typed(data, sh::VALIDATION_RESULT);
+    let result_nodes: Vec<Term> = native_quads(
+        data,
+        None,
+        Some(&Term::NamedNode(NamedNode::from(sh::RESULT))),
+        None,
+        GraphFilter::AnyGraph,
+    )
+    .into_iter()
+    .map(|(_, _, result)| result)
+    .collect();
 
     let mut tuples = BTreeSet::new();
 
@@ -758,6 +1368,43 @@ pub fn tuples_from_dataset(data: &RdfDataset) -> BTreeSet<ResultTuple> {
     }
 
     tuples
+}
+
+/// The conformance-disallow set a report dataset declares: the objects of its
+/// `sh:conformanceDisallows` triples, or — when it has none — the default set
+/// (SHACL 1.2 Core: "If the validation report contains no such triples,
+/// sh:Violation, sh:Warning, and sh:Info are set as defaults").
+///
+/// # Errors
+///
+/// Returns an error when a value of `sh:conformanceDisallows` is not an IRI ("All
+/// values of sh:conformanceDisallows MUST be IRIs").
+pub fn conformance_disallows_from_dataset(
+    data: &RdfDataset,
+) -> Result<ConformanceDisallows, String> {
+    let predicate = Term::NamedNode(NamedNode::from(sh::CONFORMANCE_DISALLOWS));
+    let mut levels = Vec::new();
+    for report_node in subjects_typed(data, sh::VALIDATION_REPORT) {
+        for (_, _, object) in native_quads(
+            data,
+            Some(&report_node),
+            Some(&predicate),
+            None,
+            GraphFilter::AnyGraph,
+        ) {
+            let Term::NamedNode(level) = object else {
+                return Err(format!(
+                    "sh:conformanceDisallows value {object} is not an IRI; all values of \
+                     sh:conformanceDisallows must be IRIs"
+                ));
+            };
+            levels.push(Severity::from_iri_open(level.as_str()));
+        }
+    }
+    if levels.is_empty() {
+        return Ok(ConformanceDisallows::default());
+    }
+    ConformanceDisallows::new(levels)
 }
 
 /// Extract the `sh:conforms` boolean from a report dataset, if present.
@@ -826,11 +1473,13 @@ mod tests {
             ),
             source_shape: Term::NamedNode(NamedNode::new_unchecked("http://example.org/ShapeA")),
             severity: Severity::Violation,
-            message: Some("must have at least one value".to_owned()),
+            messages: vec![Literal::new_simple_literal("must have at least one value")],
             source_box_roles: vec![],
             path_box_roles: vec![],
             result_box_roles: vec![],
             attributions: vec![],
+            details: vec![],
+            annotations: vec![],
         }
     }
 
@@ -839,6 +1488,9 @@ mod tests {
         let report = ValidationReport {
             conforms: false,
             results: vec![make_result()],
+            conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: Some(true),
+            diagnostics: Vec::new(),
         };
 
         let nt = report.to_ntriples();
@@ -851,6 +1503,49 @@ mod tests {
         assert_eq!(
             parsed, expected,
             "round-trip tuples must match original tuples"
+        );
+    }
+
+    /// A report whose result carries a `sh:detail` round-trips to its own
+    /// top-level tuples: the detail is emitted (typed `sh:ValidationResult`) but
+    /// is not read back as a result of the report. The control is the detail's
+    /// own tuple, which differs from the parent's in every compared field but the
+    /// component, so reading it as a report result would be visible.
+    #[test]
+    fn a_detail_result_is_not_read_back_as_a_report_result() {
+        let mut detail = make_result();
+        detail.focus_node = Term::NamedNode(NamedNode::new_unchecked("http://example.org/inner"));
+        detail.result_path = None;
+        detail.value = Some(Term::Literal(Literal::new_simple_literal("inner value")));
+        detail.source_shape =
+            Term::NamedNode(NamedNode::new_unchecked("http://example.org/InnerShape"));
+        let mut parent = make_result();
+        parent.details = vec![detail.clone()];
+        let report = ValidationReport {
+            conforms: false,
+            results: vec![parent],
+            conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
+        };
+
+        let nt = report.to_ntriples();
+        assert!(
+            nt.contains("<http://www.w3.org/ns/shacl#detail>"),
+            "the detail is emitted: {nt}"
+        );
+        let parsed = tuples_from_ntriples(&nt).expect("the report parses");
+        assert_eq!(parsed, report.result_tuples(), "only the top-level result");
+        let as_report = ValidationReport {
+            conforms: false,
+            results: vec![detail],
+            conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
+        };
+        assert!(
+            parsed.is_disjoint(&as_report.result_tuples()),
+            "the detail's own tuple is not a report result"
         );
     }
 
@@ -914,14 +1609,47 @@ mod tests {
             "re-parsed report must carry the emitted triples"
         );
 
+        // The report writes its own labels, never the data's hostile ones, and each
+        // maps back to the data node it stands for.
+        let (labelled, labels) = report.with_report_blank_labels();
+        for label in hostile_labels {
+            assert!(!nt.contains(label), "{nt}");
+        }
+        let mut sources: Vec<&str> = ["dg0", "dg1"]
+            .iter()
+            .map(|label| {
+                let (origin, source) = labels.source_of(label).expect("assigned");
+                assert_eq!(origin, BlankOrigin::DataGraph);
+                source
+            })
+            .collect();
+        sources.sort_unstable();
+        let mut expected = hostile_labels.to_vec();
+        expected.sort_unstable();
+        assert_eq!(sources, expected);
+
         // The result tuples must still round-trip identically through text.
         let parsed =
             tuples_from_ntriples(&nt).expect("N-Triples from to_ntriples() must parse cleanly");
         assert_eq!(
             parsed,
-            report.result_tuples(),
-            "round-trip tuples must match original tuples even with hostile blank labels"
+            labelled.result_tuples(),
+            "round-trip tuples must match the report's tuples even with hostile blank labels"
         );
+    }
+
+    /// The report graph as the emission layer writes it with the carried labels as the
+    /// results hold them — the layer [`ValidationReport::to_dataset`] writes through
+    /// after relabelling, whose own guarantees (escaping, minted-label separation) hold
+    /// for any label it is handed.
+    fn carried_ntriples(report: &ValidationReport) -> String {
+        let buf = serialize_dataset(
+            &report.dataset_as_carried(),
+            "application/n-quads",
+            SerializeGraph::DefaultGraph,
+        )
+        .expect("N-Triples serialisation of report quads");
+        String::from_utf8(buf).expect("UTF-8")
     }
 
     /// Every [`::purrdf::TermId`] in `dataset`'s dense term table.
@@ -961,11 +1689,13 @@ mod tests {
             source_constraint_component: component,
             source_shape: Term::NamedNode(ex("ShapeA")),
             severity: Severity::Violation,
-            message: None,
+            messages: vec![],
             source_box_roles: vec![],
             path_box_roles: vec![],
             result_box_roles: vec![],
             attributions: vec![],
+            details: vec![],
+            annotations: vec![],
         };
 
         let mut results = Vec::new();
@@ -973,7 +1703,7 @@ mod tests {
         // 1. IRI focus, plain predicate path, typed literal value, message.
         let mut r = base.clone();
         r.value = Some(Term::Literal(Literal::new_typed_literal("-3", ex("Count"))));
-        r.message = Some("must have at least one value".to_owned());
+        r.messages = vec![Literal::new_simple_literal("must have at least one value")];
         results.push(r);
 
         // 2. Blank-node focus, complex path (structure emitted), warning,
@@ -986,7 +1716,7 @@ mod tests {
         r.value = Some(Term::Literal(
             Literal::new_language_tagged_literal_unchecked("valeur", "fr"),
         ));
-        r.message = Some("langue".to_owned());
+        r.messages = vec![Literal::new_simple_literal("langue")];
         results.push(r);
 
         // 3. The SAME complex path on a second result — the structure must be
@@ -1005,7 +1735,7 @@ mod tests {
         r.result_path = None;
         r.value = Some(quoted);
         r.severity = Severity::Other(ex("Advisory"));
-        r.message = Some("statement-level result".to_owned());
+        r.messages = vec![Literal::new_simple_literal("statement-level result")];
         results.push(r);
 
         // 5. No path, no value, no message — the minimal result.
@@ -1017,6 +1747,9 @@ mod tests {
         ValidationReport {
             conforms: false,
             results,
+            conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         }
     }
 
@@ -1094,6 +1827,9 @@ mod tests {
         let report = ValidationReport {
             conforms: true,
             results: vec![],
+            conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
 
         let direct = report.to_dataset();
@@ -1117,9 +1853,9 @@ mod tests {
         let mut report = hostile_report();
         report.results[1].focus_node = Term::blank("a\u{d7}b");
 
-        let direct = report.to_dataset();
+        let direct = report.dataset_as_carried();
         let round_tripped =
-            dataset_from_ntriples(&report.to_ntriples()).expect("escaped text must parse");
+            dataset_from_ntriples(&carried_ntriples(&report)).expect("escaped text must parse");
 
         // Same graph up to blank labelling…
         assert_eq!(
@@ -1133,7 +1869,13 @@ mod tests {
                 direct.resolve(id),
                 ::purrdf::TermRef::Blank { label, .. } if label == "a\u{d7}b"
             )),
-            "to_dataset() must carry the hostile blank label verbatim"
+            "the emission layer must carry the hostile blank label verbatim"
+        );
+        // …and the public report graph is the same graph under the report's labels.
+        assert_eq!(
+            ::purrdf::canonicalize(&direct).nquads,
+            ::purrdf::canonicalize(&report.to_dataset()).nquads,
+            "relabelling must not change the graph"
         );
     }
 
@@ -1149,10 +1891,13 @@ mod tests {
             let mut report = ValidationReport {
                 conforms: false,
                 results: vec![make_result()],
+                conformance_disallows: ConformanceDisallows::default(),
+                shapes_graph_well_formed: None,
+                diagnostics: Vec::new(),
             };
             report.results[0].focus_node = Term::blank(hostile);
 
-            let dataset = report.to_dataset();
+            let dataset = report.dataset_as_carried();
             let focus = object_string(&dataset, &Term::blank(hostile), sh::FOCUS_NODE);
             assert!(
                 focus.is_none(),
@@ -1180,7 +1925,7 @@ mod tests {
 
             // The mark is grammar-legal: the minted labels reach the text
             // verbatim, never through the codec's escape envelope.
-            let nt = report.to_ntriples();
+            let nt = carried_ntriples(&report);
             assert!(
                 nt.contains("_:_report ") && nt.contains("_:_r0 "),
                 "minted labels must be written as-is under a `_` mark:\n{nt}"
@@ -1188,6 +1933,18 @@ mod tests {
             assert!(
                 !nt.contains("purrdfesc"),
                 "a `_`-marked label never needs escaping:\n{nt}"
+            );
+
+            // The public report never meets the collision: the carried focus node is
+            // written in the data graph's own label space.
+            let public = report.to_ntriples();
+            assert!(
+                public.contains("_:report ") && public.contains("_:r0 "),
+                "{public}"
+            );
+            assert!(
+                public.contains("<http://www.w3.org/ns/shacl#focusNode> _:dg0 ."),
+                "{public}"
             );
         }
     }
@@ -1201,6 +1958,9 @@ mod tests {
         let mut report = ValidationReport {
             conforms: false,
             results: vec![make_result()],
+            conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
         // `r1` is one past the last result index, and `reports` is not `report`:
         // neither is a label this report mints.
@@ -1228,7 +1988,7 @@ mod tests {
         let mint = mint_prefix(&report);
         assert_ne!(mint, "", "a carried root label must force a mint prefix");
 
-        let dataset = report.to_dataset();
+        let dataset = report.dataset_as_carried();
         // The carried nodes are still only focus nodes — never path structure.
         for carried in ["path0", "path0-1"] {
             assert!(
@@ -1241,9 +2001,67 @@ mod tests {
         assert_eq!(
             ::purrdf::canonicalize(&dataset).nquads,
             ::purrdf::canonicalize(
-                &dataset_from_ntriples(&report.to_ntriples()).expect("must parse")
+                &dataset_from_ntriples(&carried_ntriples(&report)).expect("must parse")
             )
             .nquads
+        );
+        assert_eq!(
+            ::purrdf::canonicalize(&dataset).nquads,
+            ::purrdf::canonicalize(&report.to_dataset()).nquads,
+            "relabelling must not change the graph"
+        );
+    }
+
+    /// A shapes-graph blank node and a data-graph blank node that carry the SAME label in
+    /// their own graphs are two nodes in the report — in the report graph and in its
+    /// relabelling — while one node reported twice keeps one label.
+    #[test]
+    fn a_shapes_blank_and_a_data_blank_sharing_a_label_stay_two_nodes() {
+        let mut first = make_result();
+        first.focus_node = Term::blank("b0");
+        first.source_shape = Term::blank("b0");
+        first.value = Some(Term::blank("b0"));
+        let mut second = make_result();
+        second.focus_node = Term::blank("b1");
+        second.source_shape = Term::blank("b0");
+        second.value = Some(Term::blank("b0"));
+        let report = ValidationReport {
+            conforms: false,
+            results: vec![first, second],
+            conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
+        };
+        let (labelled, labels) = report.with_report_blank_labels();
+        assert_eq!(labelled.results[0].focus_node, Term::blank("dg0"));
+        assert_eq!(labelled.results[0].source_shape, Term::blank("sg0"));
+        assert_eq!(labelled.results[0].value, Some(Term::blank("dg0")));
+        assert_eq!(labelled.results[1].focus_node, Term::blank("dg1"));
+        assert_eq!(labelled.results[1].source_shape, Term::blank("sg0"));
+        assert_eq!(labelled.results[1].value, Some(Term::blank("dg0")));
+        assert_eq!(
+            labels.source_of("sg0"),
+            Some((BlankOrigin::ShapesGraph, "b0"))
+        );
+        assert_eq!(
+            labels.source_of("dg0"),
+            Some((BlankOrigin::DataGraph, "b0"))
+        );
+
+        let nt = report.to_ntriples();
+        assert!(
+            nt.contains("<http://www.w3.org/ns/shacl#sourceShape> _:sg0 .")
+                && nt.contains("<http://www.w3.org/ns/shacl#value> _:dg0 ."),
+            "{nt}"
+        );
+        assert!(!nt.contains("_:b0"), "{nt}");
+        // The observing control: written with the labels as carried, the shapes node and
+        // the data node collapse into one — the defect relabelling removes.
+        let carried = carried_ntriples(&report);
+        assert!(
+            carried.contains("<http://www.w3.org/ns/shacl#sourceShape> _:b0 .")
+                && carried.contains("<http://www.w3.org/ns/shacl#value> _:b0 ."),
+            "{carried}"
         );
     }
 
@@ -1252,6 +2070,9 @@ mod tests {
         let report = ValidationReport {
             conforms: true,
             results: vec![],
+            conformance_disallows: ConformanceDisallows::default(),
+            shapes_graph_well_formed: None,
+            diagnostics: Vec::new(),
         };
 
         let nt = report.to_ntriples();
@@ -1403,7 +2224,7 @@ mod tests {
                 "http://example.org/RequiredPropertyShape",
             )),
             severity: Severity::Violation,
-            message: Some("missing required property".to_owned()),
+            messages: vec![Literal::new_simple_literal("missing required property")],
             source_box_roles: vec![],
             path_box_roles: vec![],
             result_box_roles: vec![],
@@ -1420,6 +2241,8 @@ mod tests {
                     evidence: None,
                 },
             ],
+            details: vec![],
+            annotations: vec![],
         };
 
         // No value (absence-based) — this is the critical invariant.

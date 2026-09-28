@@ -63,8 +63,8 @@ the *same engine* rather than a port.
 
 Across the toolkit, out-of-scope input is a **typed error**, never a partial
 answer: malformed RDF is an `RdfDiagnostic`, an unsupported SPARQL builtin is
-`EvalError::Unsupported`, a malformed ShEx schema is a `ShexError`, an exhausted
-evaluation ceiling is `EntailError::Evaluate` rather than a truncated closure, and
+`EvalError::Unsupported`, a malformed ShEx schema is a `ShexError`, a passed
+evaluation limit is `EntailError::Evaluate` rather than a truncated closure, and
 an unsupported results projection is a typed format error. Lossy-by-design
 projections are permitted but *loud*, via the
 [loss ledger](../slices.md#the-loss-ledger).
@@ -97,7 +97,7 @@ on their expected-failure ledgers. See
   adjective ([Performance](performance.md)).
 - **One version, lockstep releases** — crates.io, PyPI, and npm ship one
   workspace version ([Versioning & Releases](releases.md)).
-- **Nightly-free source, stable MSRV** — there are no `#![feature(...)]`
+- **Zero nightly features, stable MSRV** — there are no `#![feature(...)]`
   attributes anywhere in the workspace and the MSRV floor (currently 1.98, on
   the stable channel) is enforced by a dedicated CI job that builds on exactly
   that compiler. Contributors and the CI gates run a *floating* nightly named in

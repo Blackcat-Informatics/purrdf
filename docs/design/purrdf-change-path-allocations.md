@@ -261,11 +261,11 @@ The relocation was TRIED first and is recorded here because it is the more
 attractive of the two and it is wrong. Establishing the nesting fact at admission
 reads as obviously right — admission is once, and the plan is immutable afterwards
 — and it silently moved an acceptance boundary the crate states and tests:
-preparation accepts the PARSER's envelope, and the evaluator's narrower depth limit
-belongs to execution. A flat `OPTIONAL {} OPTIONAL {} …` spine sits inside the
-parser's budget at two brace levels and lowers to a `LeftJoin` chain far past the
-evaluator's limit, so preparing it must succeed and evaluating it must return a
-typed diagnostic. With the guard at admission, preparing it became an error — as
+preparation accepts every tree the parser builds whose walks fit the admitting
+thread's stack, and the evaluator's narrower `wasm32` graph-pattern count belongs
+to execution. A flat `OPTIONAL {} OPTIONAL {} …` spine written at two brace
+levels lowers to a `LeftJoin` chain far past that count, so preparing it must
+succeed and evaluating it there must return a typed diagnostic. With the guard at admission, preparing it became an error — as
 did preparing one of this workspace's own generated corpus queries. Every test in
 the module holding the changed code still passed. Measured
 on `crates/sparql-eval/tests/prepared_execution.rs`'s `query_prepared` pin over a

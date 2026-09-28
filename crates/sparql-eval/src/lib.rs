@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Native, RDF-1.2-first **multiset SPARQL evaluator** (purrdf S6).
+//! Native, RDF-1.2-first **multiset SPARQL evaluator**.
 //!
 //! This crate is the evaluation runtime that consumes the
-//! [`purrdf_sparql_algebra`] front-end (S5) and evaluates it over the
+//! [`purrdf_sparql_algebra`] front-end and evaluates it over the
 //! [`purrdf_core`] IR's [`DatasetView`](purrdf_core::DatasetView) read trait
 //! **entirely in interned [`TermId`](purrdf_core::TermId) space**. It is the
 //! native replacement for the oxigraph-family `spareval` on the query path and
@@ -15,7 +15,7 @@
 //!
 //! - **TermId hot path.** Basic-graph-pattern matching and joins never leave
 //!   interned-id space: constants resolve to a dataset
-//!   [`purrdf_core::TermId`] once (via `term_id_by_value`, P4) and
+//!   [`purrdf_core::TermId`] once (via `term_id_by_value`) and
 //!   solutions carry [`SolutionTerm`]s that are a single integer compare apart.
 //!   Computed terms (FILTER/BIND results not already in the dataset) are interned
 //!   in a per-query scratch table — but a computed value that *does* exist in the
@@ -25,7 +25,7 @@
 //!   [`scratch`].
 //! - **Multiset (bag) semantics.** Solutions are a bag, preserved until
 //!   `DISTINCT`/`REDUCED`. See [`solution`].
-//! - **Property paths in-engine (S8).** The `Path` graph pattern is evaluated
+//! - **Property paths in-engine.** The `Path` graph pattern is evaluated
 //!   over the same indexed surface, wasm-safe, covering the full algebra
 //!   (`* + ? / | ^ !()` and the PurRDF `{n,m}` / `<any>` extensions) — see the
 //!   `path` module.

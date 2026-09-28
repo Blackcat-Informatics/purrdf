@@ -16,8 +16,8 @@ use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule, PyDict};
 
 use super::io::{
-    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss, parse_quads,
-    read_input,
+    PyRdfFormat, PySerializeLoss, dataset_from_quads_verbatim, dump_quads_with_loss,
+    parse_quads_and_prefixes, read_input,
 };
 use super::query::{
     EngineConfig, GovernorArgs, PyCancellationToken, PyEntailmentQueryOutcome, PyQueryOutcome,
@@ -33,10 +33,10 @@ use super::term::{
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::py_store::iri_value_error;
 use crate::{
-    BlankScope, ClosureRelations, DatasetMut, GraphMatchValue, QueryEntailmentPlan, RdfDataset,
-    RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm, RdfTriple, SerializeGraph, SerializeOptions,
-    SparqlRequest, StatementLayer, TermValue, query_with_entailment_governed,
-    serialize_dataset_with,
+    BlankScope, ClosureRelations, DatasetMut, EntailmentClosure, GraphMatchValue,
+    QueryEntailmentPlan, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm, RdfTriple,
+    SerializeGraph, SerializeOptions, SparqlRequest, StatementLayer, TermValue,
+    query_with_entailment_closure_governed, serialize_dataset_with,
 };
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -60,6 +60,8 @@ impl PyMutableDataset {
     }
 
     /// Load RDF into the mutable dataset.
+    ///
+    /// Returns the document's prefix map exactly as `Store.load` does.
     #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
     fn load(
         &mut self,
@@ -68,7 +70,7 @@ impl PyMutableDataset {
         format: Option<PyRdfFormat>,
         path: Option<String>,
         base: Option<String>,
-    ) -> PyResult<()> {
+    ) -> PyResult<Vec<(String, String)>> {
         let format = format.ok_or_else(|| PyValueError::new_err("load: format is required"))?;
         let data = read_input(input, path)?;
         let blank_scope = self.allocate_blank_scope();
@@ -76,14 +78,15 @@ impl PyMutableDataset {
         // Parse + insert run detached (GIL released); only plain Rust data is touched.
         py.detach(move || {
             let base_ref = base.as_deref();
-            for quad in parse_quads(&data, format.to_native(), base_ref)
-                .map_err(|e| PyValueError::new_err(format!("load parse error: {e}")))?
-            {
+            let (quads, prefixes) =
+                parse_quads_and_prefixes(&data, format.to_native(), base_ref)
+                    .map_err(|e| PyValueError::new_err(format!("load parse error: {e}")))?;
+            for quad in quads {
                 inner
                     .insert(rdf_quad_to_values_scoped(&quad, blank_scope))
                     .map_err(|e| iri_value_error(&e))?;
             }
-            Ok(())
+            Ok(prefixes)
         })
     }
 
@@ -439,11 +442,20 @@ impl PyMutableDataset {
     /// and `path_relations` snapshots its edges — from the CLOSURE the regime materializes,
     /// exactly as `Store.query_entailment_governed` does, including the one `owl-direct`
     /// pairing [`purrdf::ClosureRelations`] refuses.
+    ///
+    /// `imports` and `premise_iris` are `Store.query_entailment_governed`'s: the closure is
+    /// materialized over the dataset's `owl:imports` closure, and an import the table does
+    /// not resolve raises `ValueError` by name. `max_stored_facts` and `max_join_steps` are
+    /// the closure's evaluation limits, as on `Store.query_entailment_governed`.
     #[pyo3(signature = (
         query,
         entailment,
         *,
         program="",
+        imports=None,
+        premise_iris=None,
+        max_stored_facts=None,
+        max_join_steps=None,
         substitutions=None,
         extension_namespaces=None,
         property_fn_namespaces=None,
@@ -470,6 +482,10 @@ impl PyMutableDataset {
         query: &str,
         entailment: &str,
         program: &str,
+        imports: Option<Vec<(String, String)>>,
+        premise_iris: Option<Vec<String>>,
+        max_stored_facts: Option<u64>,
+        max_join_steps: Option<u64>,
         substitutions: Option<&Bound<'_, PyDict>>,
         extension_namespaces: Option<Vec<String>>,
         property_fn_namespaces: Option<Vec<String>>,
@@ -490,6 +506,15 @@ impl PyMutableDataset {
         let specs = collect_relations(relations, relations_from_graph, path_relations)?;
         let plan =
             QueryEntailmentPlan::parse(entailment, program).map_err(PyValueError::new_err)?;
+        // The store's `owl:imports` table, parsed by the shared boundary before any closure
+        // work. Absent is EMPTY — "imports nothing" — so a store that does import a document
+        // is refused by name rather than closed without it.
+        let imports = crate::py_entail::entailment_import_map(imports, premise_iris)?;
+        let limits = purrdf_validate::MaterializeLimits {
+            max_stored_facts,
+            max_join_steps,
+            host: purrdf_validate::RegimeHost::Python,
+        };
         let args = GovernorArgs {
             fuel,
             deadline_ms,
@@ -528,7 +553,7 @@ impl PyMutableDataset {
             let parser_options = engine_parser_options(&config);
             let engine = build_engine(config);
             let aggregates = build_aggregates(aggregate_namespace);
-            query_with_entailment_governed(
+            query_with_entailment_closure_governed(
                 &engine,
                 &dataset,
                 SparqlRequest {
@@ -536,7 +561,8 @@ impl PyMutableDataset {
                     base_iri: None,
                     substitutions: &subs,
                 },
-                plan.entailment(),
+                &EntailmentClosure::new(plan.entailment(), &imports)
+                    .with_limits(limits.eval_options()),
                 purrdf_sparql_eval::QueryOptions::new().with_env(&extension_env(
                     parser_options,
                     registry.as_ref(),
@@ -545,7 +571,20 @@ impl PyMutableDataset {
                 &relations,
                 governors,
             )
-            .map_err(|e| PyValueError::new_err(format!("entailment query failed: {e}")))
+            .map_err(|error| match error {
+                // Rendered by the shared boundary, so a passed evaluation limit names this
+                // method's keyword rather than a Rust type a Python caller cannot reach.
+                crate::ReasoningError::Entailment(error) => PyValueError::new_err(format!(
+                    "entailment query failed: {}",
+                    purrdf_validate::render_entail_error_in(
+                        entailment,
+                        &error,
+                        purrdf_validate::RegimeHost::Python,
+                        purrdf_validate::RegimeService::Query,
+                    )
+                )),
+                other => PyValueError::new_err(format!("entailment query failed: {other}")),
+            })
         })?;
         materialize_entailment_outcome(py, outcome)
     }

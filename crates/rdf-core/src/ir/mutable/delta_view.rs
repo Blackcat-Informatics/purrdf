@@ -170,12 +170,17 @@ impl DeltaDatasetView {
                     u32::try_from(index).expect("native index fits u32"),
                 ))
             })
-            .chain(
-                self.delta_ids
-                    .iter()
-                    .copied()
-                    .filter(|id| matches!(id, DeltaViewId::Delta(_))),
-            )
+            .chain(self.added_term_ids())
+    }
+
+    /// The handles of the terms this snapshot adds to its base, in the order
+    /// [`Self::term_ids`] lists them after the base's: the delta's own terms, read in
+    /// time proportional to the delta rather than to the base.
+    pub fn added_term_ids(&self) -> impl Iterator<Item = DeltaViewId> + '_ {
+        self.delta_ids
+            .iter()
+            .copied()
+            .filter(|id| matches!(id, DeltaViewId::Delta(_)))
     }
 
     /// Resolve the complete owned RDF value at an explicit consumer boundary.

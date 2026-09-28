@@ -116,6 +116,15 @@ pub enum ProductDimension {
     /// silent-wrong-answer shape [`Self::PropertyFunctionRegistry`] exists to refuse,
     /// reached through the other half of the same seam.
     ParseConfiguration,
+    /// The graphs the product's shapes graph was assembled from by name — its loaded
+    /// IRIs, each `owl:imports` document its closure absorbed, each data-graph link it
+    /// resolved — are not the ones supplied for execution.
+    ///
+    /// They decide which data-graph `sh:shapesGraph` links (SHACL 1.2 Core section 6.4)
+    /// the restored preparation holds, so two products that differ here validate the
+    /// same data graph differently — one refuses a link the other accepts — even when
+    /// their merged datasets are identical.
+    IncludedGraphs,
     /// The product declares a capability this build does not implement. The
     /// bytes are well formed; this build simply cannot honour what they ask for.
     ///
@@ -140,7 +149,7 @@ impl ProductDimension {
     /// Every admission dimension, in declaration order — the order in which a
     /// decoder checks them. Iterate this rather than hand-listing variants, so a
     /// new dimension reaches every consumer.
-    pub const ALL: [Self; 21] = [
+    pub const ALL: [Self; 22] = [
         Self::Magic,
         Self::FormatVersion,
         Self::StageId,
@@ -159,6 +168,7 @@ impl ProductDimension {
         Self::PropertyFunctionRegistry,
         Self::ClassCatalog,
         Self::ParseConfiguration,
+        Self::IncludedGraphs,
         Self::UnsupportedCapability,
         Self::DepthLimit,
         Self::Malformed,
@@ -194,6 +204,7 @@ impl ProductDimension {
             Self::PropertyFunctionRegistry => "property-function-registry",
             Self::ClassCatalog => "class-catalog",
             Self::ParseConfiguration => "parse-configuration",
+            Self::IncludedGraphs => "included-graphs",
             Self::UnsupportedCapability => "unsupported-capability",
             Self::DepthLimit => "depth-limit",
             Self::Malformed => "malformed",
@@ -329,9 +340,10 @@ mod tests {
                 ProductDimension::PropertyFunctionRegistry => 15,
                 ProductDimension::ClassCatalog => 16,
                 ProductDimension::ParseConfiguration => 17,
-                ProductDimension::UnsupportedCapability => 18,
-                ProductDimension::DepthLimit => 19,
-                ProductDimension::Malformed => 20,
+                ProductDimension::IncludedGraphs => 18,
+                ProductDimension::UnsupportedCapability => 19,
+                ProductDimension::DepthLimit => 20,
+                ProductDimension::Malformed => 21,
             };
             assert_eq!(
                 ProductDimension::ALL[declared_index],

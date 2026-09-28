@@ -2,18 +2,19 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 // Node real-execution tests for the asynchronous SHACL twins — `shaclValidateToSarifAsync`,
-// `shaclValidateChangesToSarifAsync`, `shaclEntailAsync` and the four
-// `shaclProductValidateToSarif…Async` — driven through the package root against the
-// actual optimized wasm module under WebAssembly JavaScript Promise Integration.
+// `shaclValidateChangesToSarifAsync`, `shaclEntailAsync`, `shaclApplyRulesAsync`,
+// `shaclEvalNodeExprAsync` and the four `shaclProductValidateToSarif…Async` — driven
+// through the package root against the actual optimized wasm module under WebAssembly
+// JavaScript Promise Integration.
 //
 // SHACL evaluates SPARQL (`sh:SPARQLTarget` queries, SHACL-SPARQL constraints, SHACL-AF
 // rules and node expressions), so each twin runs its synchronous twin's own body as a
-// job: every query suspends on the host's SERVICE handler, the job yields and stops on
-// its signal, and the signal is polled between focus nodes too. Every oracle compares an
-// asynchronous answer with an independent observation — the synchronous twin's bytes, a
-// report whose focus nodes a mock resolver's answer decides, or `queryAsync`'s rows for
-// the same query — and every fixture pair is chosen so the compared values differ from
-// case to case, so an equality cannot be satisfied by a twin that returns a constant.
+// job: the job yields and stops on its signal, and the signal is polled between focus
+// nodes too. SHACL-SPARQL admits no `SERVICE` in any query, so a shapes graph with one is
+// refused while it loads, on either lane, and no host handler is ever asked. Every oracle
+// compares an asynchronous answer with an independent observation — the synchronous
+// twin's value — and every fixture pair is chosen so the compared values differ from case
+// to case, so an equality cannot be satisfied by a twin that returns a constant.
 //
 // Wall-clock bounds are never asserted: the machine running this is not quiet.
 
@@ -21,14 +22,17 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 
 import {
-  Dataset,
-  QueryEngine,
   ready,
   shaclEntail,
   shaclEntailAsync,
   shaclPackProduct,
   shaclProductExplain,
+  ShaclImportError,
   ShaclProductRefusal,
+  shaclApplyRules,
+  shaclApplyRulesAsync,
+  shaclEvalNodeExpr,
+  shaclEvalNodeExprAsync,
   shaclProductValidateToSarif,
   shaclProductValidateToSarifAsync,
   shaclProductValidateToSarifExpecting,
@@ -84,9 +88,9 @@ ex:NickShape a sh:NodeShape ;
 `;
 
 // A SPARQL-based TARGET that asks a remote registry which people are banned, and a
-// constraint every person here violates (none has a clearance): the report's focus nodes
-// are exactly the people the registry's answer names. The SERVICE is in the target
-// because SHACL forbids it in a constraint's query, where `$this` is pre-bound.
+// constraint every person violates (none has a clearance). SHACL-SPARQL admits no
+// SERVICE in any query, a target's included, so this shapes graph is refused while it
+// loads.
 const serviceShapes = (silent) => `${PREFIXES}
 ex:BannedShape a sh:NodeShape ;
   sh:target [
@@ -100,7 +104,24 @@ ex:BannedShape a sh:NodeShape ;
   ] ;
   sh:property [ sh:path ex:clearance ; sh:minCount 1 ] .
 `;
-const TARGET_QUERY = `SELECT ?this WHERE { ?this a <${EX}Person> . SERVICE SILENT <${ENDPOINT}> { ?this <${EX}status> "banned" } }`;
+const SERVICE_REFUSAL = /a federated query \(SERVICE\) is not allowed/;
+
+// The neighbour of `serviceShapes`: the same target reading the data graph itself.
+const LOCAL_TARGET_SHAPES = `${PREFIXES}
+ex:BannedShape a sh:NodeShape ;
+  sh:target [
+    a sh:SPARQLTarget ;
+    sh:select """
+      SELECT ?this WHERE { ?this a <${EX}Person> ; <${EX}status> "banned" }
+    """ ;
+  ] ;
+  sh:property [ sh:path ex:clearance ; sh:minCount 1 ] .
+`;
+
+// A node expression walking `ex:age` from its focus node, for the node-expression twin.
+const PATH_EXPRESSION_SHAPES = `${PREFIXES}
+ex:AgeOf sh:path ex:age .
+`;
 
 // A SHACL-AF triple rule, for the entailment twin.
 const RULE_SHAPES = `${PREFIXES}
@@ -131,12 +152,40 @@ const NONCONFORMING = people(12, { badAge: (i) => i % 4 === 0, shortNick: (i) =>
 // Two people, Alice and Bob.
 const ALICE_AND_BOB = `<${EX}alice> <${RDF_TYPE}> <${EX}Person> .\n<${EX}bob> <${RDF_TYPE}> <${EX}Person> .\n`;
 
-/** The registry's SPARQL Results JSON answer to the forwarded pattern, banning `who`. */
-const registryAnswer = (...who) =>
-  JSON.stringify({
-    head: { vars: ["this"] },
-    results: { bindings: who.map((name) => ({ this: { type: "uri", value: `${EX}${name}` } })) },
-  });
+/** `ALICE_AND_BOB`, with each of `who` banned. */
+const banning = (...who) =>
+  `${ALICE_AND_BOB}${who.map((name) => `<${EX}${name}> <${EX}status> "banned" .\n`).join("")}`;
+
+/** `shaclValidateToSarifAsync` over the shapes, data and `shapesBase`, with host `options`. */
+const validateAsync = (shapes, data, shapesBase, options) =>
+  shaclValidateToSarifAsync(shapes, data, shapesBase, undefined, undefined, undefined, undefined, undefined, options);
+
+/** `shaclEntailAsync` over the shapes, data and `shapesBase`, with host `options`. */
+const entailAsync = (shapes, data, shapesBase, options) =>
+  shaclEntailAsync(shapes, data, shapesBase, undefined, undefined, undefined, undefined, undefined, undefined, undefined, options);
+
+/** A `ShaclEntailment`'s two facts, the entailment freed. */
+/** A `ShaclDiagnostic` array as plain `{ rule, shape }` values, comparable across calls. */
+function diagnosticFacts(diagnostics) {
+  return diagnostics.map((diagnostic) => ({ rule: diagnostic.rule, shape: diagnostic.shape }));
+}
+
+function entailmentFacts(entailment) {
+  try {
+    return { ntriples: entailment.ntriples, diagnostics: diagnosticFacts(entailment.diagnostics) };
+  } finally {
+    entailment.free();
+  }
+}
+
+/** A `ShaclNodeExprOutcome`'s output nodes and diagnostics, freeing it. */
+function nodeExprFacts(outcome) {
+  try {
+    return { outputs: outcome.outputs, diagnostics: diagnosticFacts(outcome.diagnostics) };
+  } finally {
+    outcome.free();
+  }
+}
 
 /** How many results a SARIF log reports (a log with none omits the array). */
 function resultCount(sarif) {
@@ -203,7 +252,7 @@ test("async SHACL twins return exactly their synchronous twins' results on core 
     // The fixture is not vacuous: its violation count is the one the case names.
     assert.equal(resultCount(sync), violations, label);
     assert.equal(await shaclValidateToSarifAsync(shapes, data), sync, label);
-    assert.equal(await shaclValidateToSarifAsync(shapes, data, null, { yieldEveryPolls: 0 }), sync, label);
+    assert.equal(await validateAsync(shapes, data, null, { yieldEveryPolls: 0 }), sync, label);
   }
   // The reports differ from case to case, so the equalities above compared real reports.
   assert.notEqual(
@@ -251,9 +300,46 @@ test("the change, entailment and product twins return their synchronous twins' v
   sparql.free();
 
   // Entailment.
-  const entailed = shaclEntail(RULE_SHAPES, CONFORMING);
-  assert.equal(await shaclEntailAsync(RULE_SHAPES, CONFORMING), entailed);
-  assert.equal(entailed.split("\n").filter((line) => line.includes(`<${EX}adult>`)).length, 12);
+  const entailed = entailmentFacts(shaclEntail(RULE_SHAPES, CONFORMING));
+  assert.deepEqual(entailmentFacts(await shaclEntailAsync(RULE_SHAPES, CONFORMING)), entailed);
+  assert.equal(entailed.ntriples.split("\n").filter((line) => line.includes(`<${EX}adult>`)).length, 12);
+
+  // Rules: the inference graph, its proof and its diagnostics.
+  const ruleFacts = (inference) => {
+    try {
+      return {
+        inferred: inference.inferred,
+        proof: inference.proof,
+        diagnostics: diagnosticFacts(inference.diagnostics),
+      };
+    } finally {
+      inference.free();
+    }
+  };
+  const applied = ruleFacts(shaclApplyRules(CONFORMING, RULE_SHAPES, undefined, undefined, undefined, true));
+  assert.equal(applied.inferred.split("\n").filter((line) => line.includes(`<${EX}adult>`)).length, 12);
+  assert.deepEqual(
+    ruleFacts(await shaclApplyRulesAsync(CONFORMING, RULE_SHAPES, undefined, undefined, undefined, true)),
+    applied,
+  );
+  assert.notEqual(
+    ruleFacts(await shaclApplyRulesAsync(NONCONFORMING, RULE_SHAPES)).inferred,
+    ruleFacts(await shaclApplyRulesAsync(people(3), RULE_SHAPES)).inferred,
+  );
+
+  // A node expression: the same output nodes, which differ from focus node to focus node.
+  for (const focus of [`${EX}p1`, `${EX}p2`]) {
+    const nodes = nodeExprFacts(shaclEvalNodeExpr(PATH_EXPRESSION_SHAPES, CONFORMING, `${EX}AgeOf`, focus));
+    assert.equal(nodes.outputs.length, 1, focus);
+    assert.deepEqual(
+      nodeExprFacts(await shaclEvalNodeExprAsync(PATH_EXPRESSION_SHAPES, CONFORMING, `${EX}AgeOf`, focus)),
+      nodes,
+    );
+  }
+  assert.notDeepEqual(
+    nodeExprFacts(await shaclEvalNodeExprAsync(PATH_EXPRESSION_SHAPES, CONFORMING, `${EX}AgeOf`, `${EX}p1`)).outputs,
+    nodeExprFacts(await shaclEvalNodeExprAsync(PATH_EXPRESSION_SHAPES, CONFORMING, `${EX}AgeOf`, `${EX}p2`)).outputs,
+  );
 
   // Every product door, current product and bound identity alike.
   const product = shaclPackProduct(SPARQL_SHAPES);
@@ -312,97 +398,88 @@ test("a refused product rejects with the synchronous twin's ShaclProductRefusal,
   );
 });
 
-test("a SERVICE target: the synchronous twin refuses it, the asynchronous twin answers through the host and reports the remote answer", async () => {
-  const shapes = serviceShapes(false);
-
-  // The offline lane's refusal, by name.
-  const refused = syncThrow(() => shaclValidateToSarif(shapes, ALICE_AND_BOB));
-  assert.match(refused.message, /no remote query source configured/);
-  // And the asynchronous twin with no handler refuses it the same way.
-  const unhandled = await rejection(shaclValidateToSarifAsync(shapes, ALICE_AND_BOB));
-  assert.match(unhandled.message, /no remote query source configured/);
-
-  // Two registries, two answers, two different reports — each naming exactly the person
-  // the registry banned.
-  const alice = recordingResolver(async () => registryAnswer("alice", "carol"));
-  const aliceReport = await shaclValidateToSarifAsync(shapes, ALICE_AND_BOB, null, { resolveService: alice.resolveService });
-  assert.deepEqual(focusNodes(aliceReport), [`${EX}alice`]);
-  assert.equal(alice.calls.length, 1, "one target query, one remote request");
-  const [{ request, ctx }] = alice.calls;
-  assert.equal(request.kind, "service");
-  assert.equal(request.endpoint, ENDPOINT);
-  assert.match(request.queryText, /^SELECT/);
-  assert.match(request.queryText, new RegExp(`<${EX}status>`));
-  assert.match(request.queryText, /"banned"/);
-  assert.equal(ctx.silent, false);
-
-  const bob = recordingResolver(async () => registryAnswer("bob"));
-  const bobReport = await shaclValidateToSarifAsync(shapes, ALICE_AND_BOB, null, { resolveService: bob.resolveService });
-  assert.deepEqual(focusNodes(bobReport), [`${EX}bob`]);
-  assert.equal(bob.calls[0].request.queryText, request.queryText, "the same forwarded text");
-
-  const nobody = await shaclValidateToSarifAsync(shapes, ALICE_AND_BOB, null, { resolveService: async () => registryAnswer() });
-  assert.equal(resultCount(nobody), 0, "a registry banning nobody here: the data conforms");
-
-  // An endpoint served in process answers identically, with no host call.
-  const registry = Dataset.parse(`<${EX}bob> <${EX}status> "banned" .\n`, "nquads");
-  try {
-    assert.equal(
-      await shaclValidateToSarifAsync(shapes, ALICE_AND_BOB, null, { localServices: { [ENDPOINT]: registry } }),
-      bobReport,
-    );
-  } finally {
-    registry.free();
-  }
-
-  // The change and entailment twins reach the host too.
-  const changed = await shaclValidateChangesToSarifAsync(shapes, ALICE_AND_BOB, null, null, null, {
-    resolveService: async () => registryAnswer("alice"),
+test("a SERVICE in a SHACL-SPARQL target is refused on both lanes and no host handler is asked; the local target answers", async () => {
+  const resolver = recordingResolver(async () => {
+    throw new Error("a refused shapes graph asks no endpoint");
   });
-  try {
-    assert.equal(changed.bounded, false, "a SPARQL target has no bounded footprint");
-    assert.deepEqual(focusNodes(changed.sarif), [`${EX}alice`]);
-  } finally {
-    changed.free();
+  for (const silent of [false, true]) {
+    const shapes = serviceShapes(silent);
+    const refused = syncThrow(() => shaclValidateToSarif(shapes, ALICE_AND_BOB));
+    assert.match(refused.message, SERVICE_REFUSAL);
+    for (const options of [undefined, { resolveService: resolver.resolveService }]) {
+      const rejected = await rejection(validateAsync(shapes, ALICE_AND_BOB, null, options));
+      assert.equal(rejected.message, refused.message);
+      assert.equal(typeof rejected.evidence.async.polls, "number");
+    }
+    const changed = await rejection(
+      shaclValidateChangesToSarifAsync(shapes, ALICE_AND_BOB, null, null, null, undefined, undefined, undefined, {
+        resolveService: resolver.resolveService,
+      }),
+    );
+    assert.match(changed.message, SERVICE_REFUSAL);
+  }
+  assert.equal(resolver.calls.length, 0, "no endpoint was asked");
+
+  // The neighbour: the same target over the data graph is admitted, and each report
+  // names exactly the people the data bans.
+  for (const who of [["alice"], ["bob"], []]) {
+    const data = banning(...who);
+    const sync = shaclValidateToSarif(LOCAL_TARGET_SHAPES, data);
+    assert.deepEqual(focusNodes(sync), who.map((name) => `${EX}${name}`).sort());
+    assert.equal(await validateAsync(LOCAL_TARGET_SHAPES, data), sync);
   }
 });
 
-test("SERVICE SILENT in a target with a failing resolver is the join identity, exactly as on queryAsync", async () => {
-  const shapes = serviceShapes(true);
-  const failing = () => recordingResolver(async () => ({ kind: "transport", message: "registry unreachable" }));
+test("the shapes-graph arguments reach the job exactly as they reach the synchronous twin", async () => {
+  // An unresolved `owl:imports` rejects with the same `ShaclImportError`.
+  const importing = `${PREFIXES}@prefix owl: <http://www.w3.org/2002/07/owl#> .
+<${EX}shapes> a owl:Ontology ; owl:imports <${EX}imported> .
+${CORE_SHAPES}`;
+  const sync = syncThrow(() => shaclValidateToSarif(importing, NONCONFORMING));
+  assert.ok(sync instanceof ShaclImportError);
+  const refused = await rejection(shaclValidateToSarifAsync(importing, NONCONFORMING));
+  assert.ok(refused instanceof ShaclImportError, "the rejection is the structured import class");
+  assert.equal(refused.kind, sync.kind);
+  assert.deepEqual(refused.iris, sync.iris);
+  assert.equal(refused.message, sync.message);
+  assert.equal(typeof refused.evidence.async.polls, "number");
+  refused.free();
+  sync.free();
 
-  const shaclMock = failing();
-  const report = await shaclValidateToSarifAsync(shapes, ALICE_AND_BOB, null, { resolveService: shaclMock.resolveService });
-  assert.equal(shaclMock.calls.length, 1, "SILENT still asked the endpoint");
-  assert.equal(shaclMock.calls[0].ctx.silent, true);
-
-  // queryAsync's answer to the target query under the same failure: the identity, which
-  // joined with the local people selects every one of them.
-  const queryMock = failing();
-  const data = Dataset.parse(ALICE_AND_BOB, "nquads");
-  try {
-    const result = await new QueryEngine().queryAsync(data, TARGET_QUERY, { resolveService: queryMock.resolveService });
-    const targeted = result.rows
-      .toArray()
-      .map((row) => row.this.value)
-      .sort();
-    assert.deepEqual(targeted, [`${EX}alice`, `${EX}bob`]);
-    assert.deepEqual(focusNodes(report), targeted, "the report's focus nodes are queryAsync's rows");
-  } finally {
-    data.free();
-  }
-  // And it is the synchronous twin's SILENT answer with no source at all.
-  assert.equal(report, shaclValidateToSarif(shapes, ALICE_AND_BOB));
-
-  // The answered neighbour differs: a registry banning Bob targets Bob alone.
-  const answered = await shaclValidateToSarifAsync(shapes, ALICE_AND_BOB, null, { resolveService: async () => registryAnswer("bob") });
-  assert.deepEqual(focusNodes(answered), [`${EX}bob`]);
-
-  // The non-SILENT neighbour of the same failure rejects, with the transport's words.
-  const loud = await rejection(
-    shaclValidateToSarifAsync(serviceShapes(false), ALICE_AND_BOB, null, { resolveService: failing().resolveService }),
+  // The resolved neighbour: the import table supplied, both lanes validate.
+  const importIris = [`${EX}imported`];
+  const importDocuments = [`<${EX}imported> a <http://www.w3.org/2002/07/owl#Ontology> .\n`];
+  assert.equal(
+    await shaclValidateToSarifAsync(importing, NONCONFORMING, undefined, undefined, importIris, importDocuments),
+    shaclValidateToSarif(importing, NONCONFORMING, undefined, undefined, importIris, importDocuments),
   );
-  assert.match(loud.message, /SERVICE <http:\/\/example\.org\/sparql>: transport: registry unreachable/);
+
+  // A conformance-disallow set changes the verdict the log records, on both lanes.
+  const disallows = ["http://www.w3.org/ns/shacl#Violation"];
+  const judged = shaclValidateToSarif(CORE_SHAPES, NONCONFORMING, undefined, disallows);
+  assert.equal(await shaclValidateToSarifAsync(CORE_SHAPES, NONCONFORMING, undefined, disallows), judged);
+  const empty = syncThrow(() => shaclValidateToSarif(CORE_SHAPES, NONCONFORMING, undefined, []));
+  assert.equal((await rejection(shaclValidateToSarifAsync(CORE_SHAPES, NONCONFORMING, undefined, []))).message, empty.message);
+
+  // `shapesGraph` names the graph a SPARQL rule's `$shapesGraph` is pre-bound to: named
+  // and omitted, the two entailments differ, and each job's is its synchronous twin's.
+  const shapesGraphRule = `${PREFIXES}
+ex:S a sh:NodeShape ; sh:targetClass ex:Person ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """
+    CONSTRUCT { $this <${EX}shapesGraph> ?g }
+    WHERE { BIND (COALESCE($shapesGraph, <${EX}none>) AS ?g) }""" ] .
+`;
+  const named = entailmentFacts(
+    shaclEntail(shapesGraphRule, ALICE_AND_BOB, undefined, undefined, undefined, `${EX}shapes-graph`),
+  );
+  const unnamed = entailmentFacts(shaclEntail(shapesGraphRule, ALICE_AND_BOB));
+  assert.match(named.ntriples, new RegExp(`<${EX}shapes-graph>`));
+  assert.notEqual(named.ntriples, unnamed.ntriples);
+  assert.deepEqual(
+    entailmentFacts(await shaclEntailAsync(shapesGraphRule, ALICE_AND_BOB, undefined, undefined, undefined, `${EX}shapes-graph`)),
+    named,
+  );
+  assert.deepEqual(entailmentFacts(await shaclEntailAsync(shapesGraphRule, ALICE_AND_BOB)), unnamed);
 });
 
 // Large enough that the synchronous validation plainly occupies the event loop.
@@ -417,7 +494,7 @@ test("a heavy validation with no SPARQL in it yields to the event loop; the sync
     const sync = shaclValidateToSarif(CORE_SHAPES, HEAVY);
     const syncTicks = ticks;
     ticks = 0;
-    const report = await shaclValidateToSarifAsync(CORE_SHAPES, HEAVY, null, { yieldEveryPolls: 64 });
+    const report = await validateAsync(CORE_SHAPES, HEAVY, null, { yieldEveryPolls: 64 });
     const asyncTicks = ticks;
     assert.equal(syncTicks, 0, "the synchronous twin never turns the event loop");
     assert.ok(asyncTicks > 0, `the interval ticked ${asyncTicks} times during the asynchronous validation`);
@@ -434,7 +511,7 @@ test("a signal stops a SHACL validation: its reason, a timeout, and an already-a
   const reason = new Error("the caller gave up");
   setTimeout(() => controller.abort(reason), 1);
   const aborted = await rejection(
-    shaclValidateToSarifAsync(CORE_SHAPES, HEAVY, null, { signal: controller.signal, yieldEveryPolls: 16 }),
+    validateAsync(CORE_SHAPES, HEAVY, null, { signal: controller.signal, yieldEveryPolls: 16 }),
   );
   assert.equal(aborted, reason, "the twin rejects with the signal's own reason");
 
@@ -442,14 +519,14 @@ test("a signal stops a SHACL validation: its reason, a timeout, and an already-a
   const entailController = new AbortController();
   setTimeout(() => entailController.abort(reason), 1);
   assert.equal(
-    await rejection(shaclEntailAsync(RULE_SHAPES, HEAVY, null, { signal: entailController.signal, yieldEveryPolls: 16 })),
+    await rejection(entailAsync(RULE_SHAPES, HEAVY, null, { signal: entailController.signal, yieldEveryPolls: 16 })),
     reason,
   );
 
   // A timeout signal rejects with its TimeoutError, as on every ungoverned twin.
   const deadline = AbortSignal.timeout(1);
   const timedOut = await rejection(
-    shaclValidateToSarifAsync(CORE_SHAPES, HEAVY, null, { signal: deadline, yieldEveryPolls: 16 }),
+    validateAsync(CORE_SHAPES, HEAVY, null, { signal: deadline, yieldEveryPolls: 16 }),
   );
   assert.equal(timedOut.name, "TimeoutError");
   assert.equal(timedOut, deadline.reason);
@@ -457,51 +534,54 @@ test("a signal stops a SHACL validation: its reason, a timeout, and an already-a
   // An already-aborted signal rejects before any job begins: the resolver is never asked.
   const early = new AbortController();
   early.abort(reason);
-  const never = recordingResolver(async () => registryAnswer("alice"));
+  const never = recordingResolver(async () => {
+    throw new Error("no job ran");
+  });
   assert.equal(
-    await rejection(shaclValidateToSarifAsync(serviceShapes(false), ALICE_AND_BOB, null, { signal: early.signal, resolveService: never.resolveService })),
+    await rejection(validateAsync(LOCAL_TARGET_SHAPES, banning("alice"), null, { signal: early.signal, resolveService: never.resolveService })),
     reason,
   );
   assert.equal(
     await rejection(shaclProductValidateToSarifAsync(shaclPackProduct(CORE_SHAPES), CONFORMING, { signal: early.signal })),
     reason,
   );
-  assert.equal(never.calls.length, 0, "no job ran, so no SERVICE was asked");
+  assert.equal(never.calls.length, 0, "no job ran, so no handler was asked");
 
   // A ceiling is refused by name — no synchronous SHACL entry takes one — and so is a
   // SPARQL operation's `base`.
-  const ceiling = await rejection(shaclValidateToSarifAsync(CORE_SHAPES, CONFORMING, null, { deadlineMs: 20 }));
+  const ceiling = await rejection(validateAsync(CORE_SHAPES, CONFORMING, null, { deadlineMs: 20 }));
   assert.ok(ceiling instanceof TypeError);
   assert.match(ceiling.message, /deadlineMs is an execution governor/);
-  const base = await rejection(shaclValidateToSarifAsync(CORE_SHAPES, CONFORMING, null, { base: EX }));
+  const base = await rejection(validateAsync(CORE_SHAPES, CONFORMING, null, { base: EX }));
   assert.ok(base instanceof TypeError);
   assert.match(base.message, /unknown query option "base"/);
 
   // The neighbour: a signal that never fires resolves to the synchronous twin's report.
   assert.equal(
-    await shaclValidateToSarifAsync(CORE_SHAPES, NONCONFORMING, null, { signal: new AbortController().signal, yieldEveryPolls: 0 }),
+    await validateAsync(CORE_SHAPES, NONCONFORMING, null, { signal: new AbortController().signal, yieldEveryPolls: 0 }),
     shaclValidateToSarif(CORE_SHAPES, NONCONFORMING),
   );
   assert.equal(stackPointer(), IDLE);
 });
 
-// Two different validations suspended at once, at every poll, with synchronous
-// validations run on the main stack while both wait. The SHACL engine keeps its
-// governors, SERVICE sources, registries and call depth in per-thread scopes installed
-// by RAII guards; guards assume they nest, and suspended jobs do not. Each job's scopes
-// must travel with it: a synchronous validation must see none of them (it must still
-// refuse a SERVICE for want of a source while a job holding one is suspended, and must
-// not poll a suspended job's signal), and each job must resume under its own.
+// Different validations suspended at once, at every poll, with synchronous validations
+// run on the main stack while they wait. The SHACL engine keeps its governors, sources,
+// registries and call depth in per-thread scopes installed by RAII guards; guards assume
+// they nest, and suspended jobs do not. Each job's scopes must travel with it: a
+// synchronous validation must see none of them (it must not poll a suspended job's
+// signal), and each job must resume under its own.
 test("concurrent SHACL validations suspended at every poll, interleaved with synchronous validations, all answer their synchronous baselines", async () => {
   const sparqlData = people(40, { shortNick: (i) => i % 5 === 0 });
-  const serviceData = `${ALICE_AND_BOB}<${EX}dave> <${RDF_TYPE}> <${EX}Person> .\n`;
+  const targetData = `${banning("bob", "dave")}<${EX}dave> <${RDF_TYPE}> <${EX}Person> .\n`;
   const baseline = {
     sparql: shaclValidateToSarif(SPARQL_SHAPES, sparqlData),
     core: shaclValidateToSarif(CORE_SHAPES, NONCONFORMING),
-    entail: shaclEntail(RULE_SHAPES, CONFORMING),
+    target: shaclValidateToSarif(LOCAL_TARGET_SHAPES, targetData),
+    entail: entailmentFacts(shaclEntail(RULE_SHAPES, CONFORMING)),
   };
   assert.equal(focusNodes(baseline.sparql).length, 8);
   assert.equal(focusNodes(baseline.core).length, 3);
+  assert.deepEqual(focusNodes(baseline.target), [`${EX}bob`, `${EX}dave`]);
 
   const yieldEvery = { yieldEveryPolls: 0 };
   let settled = 0;
@@ -516,37 +596,26 @@ test("concurrent SHACL validations suspended at every poll, interleaved with syn
   const turn = async () => {
     assert.equal(shaclValidateToSarif(CORE_SHAPES, NONCONFORMING), baseline.core, `sync core, turn ${turns}`);
     assert.equal(shaclValidateToSarif(SPARQL_SHAPES, sparqlData), baseline.sparql, `sync sparql, turn ${turns}`);
-    // A suspended job's SERVICE source is its own: the synchronous lane still has none.
-    assert.match(
-      syncThrow(() => shaclValidateToSarif(serviceShapes(false), serviceData)).message,
-      /no remote query source configured/,
-      `sync service, turn ${turns}`,
-    );
+    assert.equal(shaclValidateToSarif(LOCAL_TARGET_SHAPES, targetData), baseline.target, `sync target, turn ${turns}`);
     assert.equal(stackPointer(), IDLE);
     turns += 1;
     await new Promise((resolve) => setTimeout(resolve, 0));
   };
 
-  const jobs = { sparql: track(shaclValidateToSarifAsync(SPARQL_SHAPES, sparqlData, null, yieldEvery)) };
+  const jobs = { sparql: track(validateAsync(SPARQL_SHAPES, sparqlData, null, yieldEvery)) };
   await turn();
   await turn();
-  jobs.service = track(
-    shaclValidateToSarifAsync(serviceShapes(false), serviceData, null, {
-      ...yieldEvery,
-      resolveService: async () => registryAnswer("bob", "dave"),
-    }),
-  );
-  jobs.entail = track(shaclEntailAsync(RULE_SHAPES, CONFORMING, null, yieldEvery));
+  jobs.target = track(validateAsync(LOCAL_TARGET_SHAPES, targetData, null, yieldEvery));
+  jobs.entail = track(entailAsync(RULE_SHAPES, CONFORMING, null, yieldEvery));
   while (settled < Object.keys(jobs).length) await turn();
   assert.ok(turns > 10, `the jobs interleaved over ${turns} turns`);
 
   assert.equal(await jobs.sparql, baseline.sparql, "the SHACL-SPARQL job's report");
-  assert.deepEqual(focusNodes(await jobs.service), [`${EX}bob`, `${EX}dave`], "the SERVICE job's report");
-  assert.equal(await jobs.entail, baseline.entail, "the entailment job's graph");
+  assert.equal(await jobs.target, baseline.target, "the SPARQL-target job's report");
+  assert.deepEqual(entailmentFacts(await jobs.entail), baseline.entail, "the entailment job's graph");
 
   // Afterwards every lane still answers exactly: nothing a job installed outlives it.
   assert.equal(shaclValidateToSarif(SPARQL_SHAPES, sparqlData), baseline.sparql);
-  assert.match(syncThrow(() => shaclValidateToSarif(serviceShapes(false), serviceData)).message, /no remote query source configured/);
-  assert.equal(await shaclValidateToSarifAsync(CORE_SHAPES, NONCONFORMING, null, yieldEvery), baseline.core);
+  assert.equal(await validateAsync(CORE_SHAPES, NONCONFORMING, null, yieldEvery), baseline.core);
   assert.equal(stackPointer(), IDLE);
 });

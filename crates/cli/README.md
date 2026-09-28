@@ -20,7 +20,7 @@ text/XML/JSON codecs, the pack container, the SPARQL 1.2 evaluator, and the
 entailment closures — so anything the CLI does, it does with byte-for-byte the
 same behavior as the Rust, Python, WebAssembly, and C surfaces.
 
-Every invocation is one `Source → [transform] → Sink` pipeline, exposed as twelve
+Every invocation is one `Source → [transform] → Sink` pipeline, exposed as sixteen
 subcommands:
 
 | Subcommand | Pipeline |
@@ -37,6 +37,10 @@ subcommands:
 | [`project`](#project) | materialize a deterministic graph/tabular USTAR carrier |
 | [`lift`](#lift) | reconstruct RDF from a strict bidirectional carrier |
 | `pack` | verify a pack container's full canonical integrity |
+| `shacl` | write, certify and inspect a prepared SHACL shapes product |
+| [`rules`](#rules) | run SHACL 1.2 rules or a SPARQL 1.2 RL rule set and write the inference graph |
+| [`node-expr`](#node-expr) | evaluate one SHACL node expression against a focus node |
+| [`shapes lint`](#shapes-lint) | certify a shapes graph: loader verdict, `shacl-shacl.ttl` results, function bindings |
 
 A single global flag, [`--loss-ledger`](#the-loss-ledger), surfaces the
 machine-readable loss record for a conversion, projection, or lift.
@@ -92,7 +96,8 @@ arriving on stdin is read into a buffer and verified the same way. A `pack → p
 ## `convert`
 
 ```text
-purrdf convert [--from <F>] [--to <F>] [--base <IRI>] [--entailment <R>] [--canonical] [IN] [OUT]
+purrdf convert [--from <F>] [--to <F>] [--base <IRI>] [--entailment <R>] [--import <IRI>=<FILE>]...
+               [--canonical] [IN] [OUT]
 ```
 
 Transcode a source into a target syntax or the pack container.
@@ -105,6 +110,12 @@ Transcode a source into a target syntax or the pack container.
   serializing (see [`reason`](#reason) for the seven regimes and their inputs).
 - `--rules <FILE>` — the RIF-in-XML rule document `--entailment rif` runs;
   required by that regime and a usage error for any other.
+- `--max-stored-facts <N>` / `--max-join-steps <N>` — the evaluation limits
+  `--entailment` runs under, exactly as on [`reason`](#reason); each requires
+  `--entailment`.
+- `--import <IRI>=<FILE>` — repeatable; resolves one `owl:imports` of the premise
+  (the merged sources) to a local document, exactly as on [`reason`](#reason), so
+  `--entailment` closes the whole imports closure. Requires `--entailment`.
 - `--canonical` — emit the RDFC-1.0 canonical N-Quads document instead of `--to`.
   Canonical output is **always** N-Quads, so `--canonical` overrides (and lets you
   omit) `--to`.
@@ -314,7 +325,8 @@ purrdf query --data people.ttl --entailment rdfs \
 ## `reason`
 
 ```text
-purrdf reason --regime <R> [--rules <FILE>] [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
+purrdf reason --regime <R> [--rules <FILE>] [--max-stored-facts <N>] [--max-join-steps <N>]
+              [--import <IRI>=<FILE>]... [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
 ```
 
 Materialize an entailment regime's closure over the source graph and write it out.
@@ -322,13 +334,35 @@ Materialize an entailment regime's closure over the source graph and write it ou
 - `--regime <R>` — the entailment regime to close under.
 - `--rules <FILE>` — the RIF-in-XML rule document `--regime rif` runs; required by
   that regime and a usage error for any other (see below).
+- `--max-stored-facts <N>` / `--max-join-steps <N>` — the evaluation limits of the
+  `rdf`, `rdfs`, `owl-rl` and `d` regimes: the facts each graph's store may hold
+  (default 4194304) and the candidate solutions the rules may enumerate (default
+  1048576). A run past either fails (exit 1) naming the limit, the numbers and
+  the flag, and writes no closure; a run inside them writes the closure larger limits
+  would. `convert --entailment` takes the same two flags.
 - `--from <F>` / `--to <F>` — input/output format overrides; inferred from the
   `IN`/`OUT` extension when omitted. `IN`/`OUT` default to `-` (stdin/stdout); a
   path of `-` has no extension, so it **requires** the matching explicit
   `--from`/`--to`.
+- `--import <IRI>=<FILE>` — repeatable; resolves one `owl:imports` of the premise
+  to a local document, followed transitively (see below). `--from` and `--base`
+  apply to each `--import` document too.
 - `--base <IRI>` — base IRI for the input parse, also threaded into the serializer.
 
-**Regimes the CLI materializes — all seven. None is refused.**
+**The premise is its `owl:imports` closure.** OWL 2 defines an ontology's imports
+closure to *be* the ontology, so `reason` (and `convert --entailment`) close the
+premise merged with every document its `owl:imports` name. **PurRDF fetches
+nothing**: each `--import` pair resolves one ontology IRI to one local document. An
+`owl:imports` no pair resolves, that does not name the premise document itself
+(its `file://` retrieval IRI or `--base`), and whose ontology the premise does not
+already hold, is refused by name (exit 1), with the pair that resolves it — never
+closed as a smaller premise. A pair the closure never reaches is a usage error
+(exit 2): it would be read and never used; when the premise does state that
+`owl:imports` on a node that anchors nothing, the refusal says so. The imports read
+are the ones `entails` and `validate` read (see [`entails`](#entails)). The report
+of a run whose imports were resolved states `boundary ontology-import-resolved`. A
+premise that imports nothing, with no pair, runs exactly as before — a pack over its
+zero-copy view.
 
 | `--regime` | Meaning | `--rules` |
 |---|---|---|
@@ -442,7 +476,7 @@ of every answer is `mechanism <name>`:
 |---|---|
 | `strict-table` | The regime's own rule table, run once. The only mechanism a `not-entailed` can carry: refuting needs the completeness half of a theorem, and only the table has one. |
 | `refutation` | A **negative fact** (`owl:differentFrom`, membership in an `owl:complementOf` class). No head in OWL 2 Profiles §4.3 Tables 4–9 has that shape, so the seventeen `false`-concluding rules decide it instead. |
-| `freeze` | A **schema axiom** (a property characteristic, an inclusion). Theorem PR1 claims completeness only for *assertional* conclusions, so an absent schema triple is not a fact about the premise — and that holds for an inclusion too, which Table 9's `scm-*` rules do conclude. |
+| `freeze` | A **schema axiom** (a property characteristic, an inclusion). Theorem PR1 of [OWL 2 Profiles §4.3](https://www.w3.org/TR/owl2-profiles/#Reasoning_in_OWL_2_RL_and_RDF_Graphs_using_Rules) (the completeness theorem for the OWL 2 RL rule table) claims completeness only for *assertional* conclusions, so an absent schema triple is not a fact about the premise — and that holds for an inclusion too, which Table 9's `scm-*` rules do conclude. |
 | `comprehension` | An **anonymous class expression** the conclusion names, under the RDF-Based comprehension conditions. |
 | `reflexivity` | A conclusion's **self-loops**, read off the premise's `owl:ReflexiveProperty` typings. `owl:ReflexiveProperty` is outside the OWL 2 RL syntax. |
 | `data-range` | A **containment between value spaces** (`xsd:byte ⊑ xsd:short`), which no join over triples can discover. |
@@ -466,8 +500,17 @@ defined by.
 ontology's imports closure to *be* the ontology, so a premise carrying an
 `owl:imports` this command was not handed is a different premise from the one you
 asked about. **PurRDF fetches nothing and mints no vocabulary**, so each pair
-resolves one ontology IRI to one local document; an `owl:imports` no pair resolves
-is refused by name (exit 1) rather than treated as an empty document, and a
+resolves one ontology IRI to one local document; an `owl:imports` no pair resolves,
+that does not name the premise document itself (its `file://` retrieval IRI or
+`--base`), and whose ontology the premise does not already hold (`<X> a
+owl:Ontology`, `<X> a sh:ShapesGraph`, or an `owl:versionIRI` naming it), is
+refused by name (exit 1) rather than treated as an empty document, and a pair the
+premise's closure never reaches is refused as unused (exit 2), as `validate` refuses
+one. The `owl:imports` read are the ones `shapes lint` and `validate` read: on the premise
+document's own IRI, on an `owl:Ontology` header, on a `sh:ShapesGraph`
+(`sh:RulesGraph` and subclasses included), or on a node naming one of those as
+its `owl:versionIRI`; an `owl:imports` on any other node — one that is only a
+`sh:DataGraph` among them — is a premise triple. A
 malformed pair (no `=`) is a usage error (exit 2) rather than a skipped import. The
 IRI is everything before the *first* `=`.
 
@@ -591,16 +634,21 @@ purrdf consistency ontology.purrpck
 ## `validate`
 
 ```text
-purrdf validate --shapes <FILE> [--shapes-from <F>] [--shapes-graph <IRI>]
+purrdf validate (--shapes <FILE> [--shapes-from <F>] [--shapes-graph <IRI>]
+                 [--shapes-base <IRI>] [--import <IRI>=<FILE>]... [--box-role-vocab <NS>]
+                 | --shapes-product <FILE> [--expect-identity <HEX>] [--rebuild])
+                [--conformance-disallows <IRI>]... [--subclass-of-in-shapes-graph]
+                [--changes <FILE>] [--changes-removed <FILE>] [--changes-from <F>]
                 [--from <F>] [--base <IRI>] [--format <F>]
                 [--fuel <N>] [--deadline <D>] [--max-intermediate-cells <N>]
                 [--max-scratch-bytes <N>] [--max-remote-requests <N>]
                 [IN] [OUT]
 ```
 
-Validate an RDF data graph against a SHACL shapes graph — full SHACL Core plus
-SHACL-SPARQL and SHACL-AF, over the same `purrdf-shapes` engine the Rust,
-Python, WebAssembly and C surfaces reach.
+Validate an RDF data graph against a SHACL shapes graph — SHACL 1.2 Core,
+SPARQL Extensions and Node Expressions, with the SHACL-AF 1.0 spellings, over
+the same `purrdf-shapes` engine the Rust, Python, WebAssembly and C surfaces
+reach.
 
 **The answer is the W3C validation report.** The SHACL specification defines the
 validation process to produce a validation *report* — an RDF graph of
@@ -626,14 +674,41 @@ same one the WASM and C-ABI hosts use), so they can never disagree.
 document, which it could not if the verdict were interleaved into it, so two
 `key value` lines — `shacl conforms true|false` and `shacl results N` — go to
 stderr on every run. A shell branches on those without parsing the artifact.
+They are followed by one `shacl diagnostic RULE SHAPE` line per shape whose
+`sh:in` or `sh:xone` list is empty (`in-minListLength`, `xone-minListLength`;
+SHACL 1.2 Core Appendix A, "Each such list SHOULD have at least one member").
+The diagnostic is reported on every run, beside the verdict and never inside it:
+it changes neither the verdict nor the report. The SARIF format carries it as a
+note-level notification in `invocations[0].toolExecutionNotifications`, and the
+RDF report graph does not carry it, because SHACL defines no term for it.
+`purrdf rules` writes the same lines after `rules inferred N`.
 
 **Exit codes.** `0` whether the data conforms **or not** — both are decided
 verdicts, exactly like `consistency true|false` and a `false` ASK; `1` for a
-malformed document or an unsupported/structurally incomplete SHACL construct
-(hard-failed, never silently skipped); `2` for a usage error; `3` when a
+malformed document, an unsupported/structurally incomplete SHACL construct
+(hard-failed, never silently skipped), or an unresolved `owl:imports`; `2` for a usage error; `3` when a
 governor stopped the run — and then **no report is written at all**, because
 every SHACL constraint is a negative claim and a truncated solution bag cannot
 license a `conforms`.
+
+**`--conformance-disallows <IRI>`** (repeatable) names the severities whose
+results make the data non-conforming. Omitted, the set is SHACL's default:
+`sh:Violation`, `sh:Warning` and `sh:Info` (`sh:Debug` and `sh:Trace` never
+block). A non-default set is echoed in the report as `sh:conformanceDisallows`.
+
+**`--subclass-of-in-shapes-graph`** is SHACL 1.2 Core §6.3's
+`subClassOfInShapesGraph`: the shapes graph's `rdfs:subClassOf` triples are read,
+in addition to the data graph's, wherever SHACL type decides class membership —
+`sh:targetClass`, implicit class targets, `sh:class`, `sh:rootClass` and
+`shnex:instancesOf` — so a class hierarchy kept beside the shapes reaches
+instance data that states only `rdf:type`. Off by default, as the specification's
+default is the data graph alone. Only class membership changes: the shapes
+graph's triples do not become data-graph triples, and `rdf:type` is still read
+from the data graph only. It applies on the `--shapes-product` route too.
+
+`--shapes-product` restores a prepared product written by `purrdf shacl pack`
+instead of parsing a shapes document, and `--changes` / `--changes-removed`
+validate a change set incrementally; `purrdf validate --help` describes both.
 
 **Inputs.** The data graph is any of the nine syntaxes or a verified pack,
 resolved by `--from`/extension. The shapes graph is resolved by
@@ -643,6 +718,62 @@ environment for SHACL-AF `sh:select`), every other syntax is parsed by the
 native codec. `--shapes-graph <IRI>` exposes the shapes graph to SHACL-SPARQL
 paths as a named graph; there is no default IRI, because PurRDF mints no
 vocabulary.
+
+**Two documents, two bases.** `--base <IRI>` is the DATA graph's parse base
+only. The shapes document parses under its own `file://` retrieval IRI, or
+under `--shapes-base <IRI>` when given — the same flag `shacl pack --base` is,
+so a document validated and a document packed parse identically. An `@base`
+inside the shapes document still wins inside it, as Turtle specifies.
+`--shapes-base` is also the shapes document's own IRI for `owl:imports`, and
+it is refused against `--shapes-product` and against a container.
+
+**`owl:imports` in the shapes graph.** PurRDF fetches nothing: `--import
+<IRI>=<FILE>` (repeatable, followed transitively) resolves one imported
+ontology to one local document. An `owl:imports` is an import only on the
+shapes document's own IRI (its `file://` retrieval IRI, `--shapes-base` or
+`@base`), on an `owl:Ontology` header, on a `sh:ShapesGraph` — every one the
+document declares, `sh:RulesGraph` and classes declared `rdfs:subClassOf
+sh:ShapesGraph` included — or on a node naming one of those as its
+`owl:versionIRI`: OWL 2's ontology header, SHACL 1.2 Core's `sh:ShapesGraph`
+and SHACL 1.2's `^owl:versionIRI?/owl:imports`. On any other node it is data:
+a node that is only a `sh:DataGraph` ("owl:imports in the data graph is not
+enacted", SHACL 1.2 Core §6.2) and SHACL's
+`sh:prefixes/owl:imports*/sh:declare` prefix edges are such triples, `shapes
+lint` lists them under `unanchored-imports`, and the W3C `prefixes-001` and
+`validator-001` vectors validate as written. The data graph's own
+`owl:imports` are never enacted. An import needs no pair when it names a
+document already read — the shapes document's own IRI, or an `--import`
+document — or a graph already in the shapes graph: `<X> a owl:Ontology`,
+`<X> a sh:ShapesGraph`, or an ontology whose `owl:versionIRI` is `<X>`, as
+when the W3C SHACL 1.2 vocabularies are merged into one document. Any other
+unresolved
+import is refused (exit `1`), naming each IRI, the `--import` pair that
+resolves it, and — for a document that imports its own published IRI — the
+`--shapes-base` that reads it under that IRI; a pair the closure never reaches
+is a usage error (exit `2`). A closure that holds two versions of one series
+(two graphs declaring one IRI with different `owl:versionIRI` values), or a graph
+another declares `owl:incompatibleWith`, is ill-formed (SHACL 1.2 Core §1.3 and
+§6.1, OWL 2 §3.4) and refused (exit `1`, `incompatible-import-versions`), naming
+both graphs.
+
+**`sh:shapesGraph` in the data graph.** SHACL 1.2 Core §6.4 lets a data graph
+name the shapes graphs that validate it: `<G> a sh:DataGraph ; sh:shapesGraph
+<S>`. Every such `<S>` — on a `sh:DataGraph` node, or on the data document's own
+IRI (`--base`, or its `file://` retrieval IRI) — is resolved through the same
+`--import` pairs, by the same rule (a version IRI, a graph already in the
+shapes graph, the linked graph's own `owl:imports`), and unioned into the
+`--shapes` graph; a pair only a link names is used, not unreached. A link no
+pair resolves is refused (exit `1`, `unresolved-shapes-graph-link`) naming the
+`--import` pair that resolves it, and a link value that is not an IRI is
+refused as `invalid-shapes-graph-link`. A `sh:shapesGraph` on any other node is
+data. `--shapes` stays required; an empty shapes document makes the linked
+graphs the whole shapes graph. A `--shapes-product` was prepared before the
+data graph existed and cannot take a graph in: a link it does not hold (its
+base, a document it was packed with — the product records every `--import`
+document its closure reached — or a graph it declares) is refused as
+`unheld-shapes-graph-link`. A
+`--changes` run whose change adds or retracts a link validates in full, and its
+`shacl change-expansion everything` line says why.
 
 ```sh
 # The results graph, N-Triples on stdout, verdict on stderr.
@@ -661,6 +792,311 @@ purrdf query --data report.nt --results-format csv \
 
 # Bound the SHACL-SPARQL paths; a trip writes no report and exits 3.
 purrdf validate --shapes shapes.ttl --deadline 5s data.ttl
+```
+
+## `rules`
+
+```text
+purrdf rules (--shapes <FILE> [--shapes-from <F>] [--shapes-base <IRI>]
+                       [--shapes-graph <IRI>]
+              | --srl <FILE> [--srl-base <IRI>])
+             [--import <IRI>=<FILE>]... [--explain[=<PATH>]]
+             [--max-term-generating-rounds <N>] [--max-generated-terms <N>]
+             [--max-stored-facts <N>] [--max-join-steps <N>]
+             [--from <F>] [--to <F>] [--base <IRI>] [IN] [OUT]
+```
+
+Run a rule set over a data graph and write the **inference graph**: the triples
+the rules inferred, and nothing else. The rule source is exactly one of
+`--shapes`, whose SHACL 1.2 rules run (the shapes graph's default rule set), and
+`--srl`, a SPARQL 1.2 RL rule set. A shapes graph and an SRL rule set are two
+rule sets, and neither specification defines running them together, so naming
+both is a usage error. Both frontends lower to the one rules engine every
+PurRDF host reaches.
+
+`reason` writes a closure: the input plus everything entailed. `rules` writes
+only what the rules added. SHACL 1.2 Inference Rules calls these "the inferred
+triples", and SPARQL 1.2 RL's `infer` outputs exactly that graph. The graph is
+serialized in `--to` in one canonical order, so two runs over the same inputs
+write the same bytes. `rules inferred N` goes to stderr.
+
+**`--shapes-graph <IRI>`** exposes the shapes graph to the SHACL-AF SPARQL rules
+under that IRI, as `validate --shapes-graph` does: a `sh:SPARQLRule`'s
+`$shapesGraph` is pre-bound to it and `GRAPH $shapesGraph { … }` reads the shapes
+graph. Without it `$shapesGraph` is an ordinary variable; there is no default IRI,
+because PurRDF mints no vocabulary. A relative value resolves against the shapes
+document's base. A `--srl` rule set has no shapes graph, so the flag beside
+`--srl` is a usage error (exit `2`).
+
+**`--explain`** writes the proof of every inferred triple, to stderr (bare) or
+to `PATH` (`--explain=PATH`), in the output's order:
+
+```text
+derived <http://example.org/a> <http://example.org/q> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+  rule _:srl-rule-0
+  premise <http://example.org/a> <http://example.org/n> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .
+derived <http://example.org/d> <http://example.org/q> "2"^^<http://www.w3.org/2001/XMLSchema#integer> .
+  data-block
+```
+
+Each block opens with `derived` and the conclusion. `rule` names the rule that
+derived it, followed by one `premise` line for each fact its body matched, in
+body order. A SHACL rule that runs as one producer over the whole graph lists no
+premises. A global SPARQL rule whose query is a conjunctive pattern runs as rule
+elements, and lists the facts its triple patterns matched. A SPARQL 1.2 RL data-block triple has `data-block` instead. Terms
+are N-Triples 1.2 and keep the blank-node labels of the evaluation.
+
+**`--max-term-generating-rounds <N>`** bounds the evaluation rounds that infer a
+term the graph did not already hold, such as a computed literal. Omitted, the
+limit is 16384 rounds. A counter stepping to 10,000 completes, and a counter with
+no bound is refused in well under a second.
+
+**`--max-generated-terms <N>`** bounds the terms inferred beyond the input's.
+Omitted, the budget is `max(65536, 4 × N)` for `N` distinct terms in the data
+graph (and in a SPARQL 1.2 RL rule set's data blocks). A rule set whose new terms
+double every iteration reaches it within a few iterations.
+
+**`--max-stored-facts <N>`** bounds the facts the evaluation store holds: the
+data graph, a rule set's data and every inferred triple. Omitted, the limit is
+4194304 facts, so a rule copying a predicate over 70,000 triples, or the
+transitive closure of a thousand-node chain, completes.
+
+**`--max-join-steps <N>`** bounds the candidate solutions the rule bodies
+enumerate. Omitted, the limit is 1048576. It bounds a rule body that
+enumerates far more candidates than it infers triples.
+
+A run past any limit fails, and no graph is written. The error names the limit,
+the numbers, the flag that raises it and, for the two term limits, the rules
+that inferred a new term in the last iteration. PurRDF cannot prove that a rule
+set diverges, so the error only says which limit it passed. A limit can only
+refuse: a run it admits writes the inference graph any larger limit would.
+
+**`--import <IRI>=<FILE>`** resolves the rule source's imports to local
+documents: an `owl:imports` of the shapes graph (exactly as `validate --import`
+does), or an `IMPORTS` of the SRL rule set. PurRDF fetches nothing. An import no
+pair resolves is refused (exit `1`), and a pair nothing imports is a usage
+error (exit `2`).
+
+**`--check[=LEVEL]`** checks the `--srl` rule set and evaluates nothing: no
+data graph is read and no rule runs. `LEVEL` is how far the check goes, each
+level including the ones before it: `syntax` (the SPARQL 1.2 RL grammar, for the
+rule set and every document its `--import` closure reads), `well-formed` (every
+rule, imported ones included, is well formed) or `stratified` (the combined rule
+set can be stratified). Bare `--check` is `--check=stratified`, which is every
+static check a run applies before it evaluates. A rule set that passes writes one
+summary line to stdout and exits `0`; one a check refuses exits `1` with an
+error naming the stage. The imports resolve exactly as a run's do. `IN`, `OUT`,
+`--from`, `--to`, `--base`, `--explain` and the four limits configure an
+evaluation, so they are usage errors beside `--check`.
+
+**Exit codes.** `0` when the rule set ran to completion, whether or not it
+inferred anything, or passed `--check`. `1` for a malformed document, an
+ill-formed or unstratifiable rule set, a `sh:ruleProcessor` this engine does not
+handle, a rule that fails during execution, or a passed round limit. `2` for a
+usage error.
+
+```sh
+# The SHACL rules of a shapes graph, N-Triples on stdout.
+purrdf rules --shapes shapes.ttl --to ntriples data.ttl
+
+# A SPARQL 1.2 RL rule set, with its proof in a file.
+purrdf rules --srl closure.srl --explain=proof.txt --to turtle data.ttl inferred.ttl
+
+# An untrusted rule set: fail fast rather than run long.
+purrdf rules --srl untrusted.srl --max-term-generating-rounds 64 --to ntriples data.ttl
+
+# Check a rule set without running it; --check=syntax asks the grammar alone.
+purrdf rules --srl closure.srl --import https://example.org/lib=lib.srl --check
+```
+
+## `node-expr`
+
+```text
+purrdf node-expr --shapes <FILE> [--shapes-from <F>] [--shapes-base <IRI>]
+                 [--import <IRI>=<FILE>]...
+                 (--expr <IRI|_:LABEL>
+                  | --expr-at <IRI|_:LABEL> --expr-via <IRI>...
+                  | --expr-turtle <TURTLE> | --expr-turtle-file <FILE>)
+                 --focus <TERM> [--scope <NAME>=<TERM>]...
+                 [--from <F>] [--base <IRI>] [IN] [OUT]
+```
+
+Evaluate one node expression of a shapes graph against a focus node of a data
+graph. This is SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph,
+focusNode, scope)`. The expression is parsed by the shapes parser itself, so its
+custom-function calls, shape references and `sh:prefixes` bind exactly as they
+would inside a shape. The output nodes go to `OUT`, one N-Triples 1.2 term per
+line, in the order the expression's sequence semantics define.
+`node-expr outputs N` goes to stderr.
+
+The expression is named exactly one way:
+
+- `--expr` is the expression node: an absolute IRI, or `_:LABEL` for a blank
+  node the shapes document labels `_:LABEL`. An IRI that is the subject of no
+  triple is a constant expression and evaluates to itself. A label the document
+  never wrote is refused (exit `1`) rather than evaluated as the empty
+  expression.
+- `--expr-at NODE --expr-via PREDICATE...` names the node a walk reaches. It
+  starts from `NODE` (an absolute IRI or `_:LABEL`) and follows each
+  `--expr-via` predicate (an absolute IRI) in order. Every step must reach
+  exactly one value. A step reaching none or several is refused (exit `1`),
+  naming the step and the count. This is how an anonymous `[ … ]` expression
+  is named: `--expr-at http://example.org/Label --expr-via
+  http://www.w3.org/ns/shacl#values` is that property shape's `sh:values`
+  expression. A W3C `sht:EvalNodeExpr` entry's expression is `--expr-at ENTRY
+  --expr-via` `mf:action` `--expr-via` `sht:nodeExpr`, IRIs written in full.
+- `--expr-turtle TURTLE` (or `--expr-turtle-file FILE`) gives the expression
+  inline as a Turtle document, such as `'[ sh:path ex:name ] .'`. It is read
+  under the shapes document's prefixes and base, and its own directives outrank
+  them. It is merged into the shapes graph, so its shape references and function
+  calls bind there, and its blank nodes are kept apart from the shapes
+  document's. The expression is the document's one root: the blank node that is
+  the subject of a triple and the object of none. No root, several roots, or a
+  document that is not Turtle is refused (exit `1`).
+
+The other flags:
+
+- `--focus` is an absolute IRI or any N-Triples term, such as
+  `'"-3"^^<http://www.w3.org/2001/XMLSchema#integer>'` or `_:b`. A blank node
+  names the node the data document labels so.
+- `--scope NAME=TERM` binds a variable that `shnex:var "NAME"` reads. The term
+  is spelled as `--focus` is. A name bound twice, and the name `focusNode`,
+  are refused: SHACL 1.2 resolves `shnex:var "focusNode"` to the focus node
+  before it searches the scope, so neither binding could ever be read.
+
+**Exit codes.** `0` when the expression evaluated, whether to nodes or to none.
+`1` for a malformed document, an expression that does not parse or fails to
+evaluate, an unknown blank-node label, a walk step reaching no value or several,
+or an inline expression that is not Turtle or has no single root. `2` for a
+usage error, including a malformed `--expr`, `--expr-at`, `--expr-via`,
+`--focus` or `--scope` value, and a selector named twice or not at all.
+
+```sh
+purrdf node-expr --shapes shapes.ttl --expr http://example.org/Tag \
+  --focus http://example.org/a data.ttl
+purrdf node-expr --shapes shapes.ttl --expr _:suffix --focus http://example.org/a \
+  --scope 'suffix="!"@en' data.ttl
+purrdf node-expr --shapes shapes.ttl --expr-at http://example.org/Label \
+  --expr-via http://www.w3.org/ns/shacl#values --focus http://example.org/a data.ttl
+purrdf node-expr --shapes shapes.ttl --expr-turtle '[ sh:path ex:name ] .' \
+  --focus http://example.org/a data.ttl
+```
+
+## `shapes lint`
+
+```text
+purrdf shapes lint [--from <F>] [--base <IRI>] [--import <IRI>=<FILE>]...
+                   [--box-role-vocab <NS>] [--shapes-graph <IRI>] [FILE] [OUT]
+```
+
+Certify a shapes graph cold: everything PurRDF can say about it before any data
+is validated, in one deterministic report. Validation never pays for this; the
+verb is where it is paid, on request. The loader is configured by the same
+`--import`, `--box-role-vocab` and `--shapes-graph` flags `validate` takes, so
+the graph certified is the graph validation would use. The report has six
+sections:
+
+```text
+load accepted
+shacl-shacl 1
+result <http://www.w3.org/ns/shacl#DatatypeConstraintComponent> focus <http://example.org/S> path <http://www.w3.org/ns/shacl#closed> value <http://www.w3.org/ns/shacl#ByTypes> shape _:… severity <http://www.w3.org/ns/shacl#Violation> superseded closed-by-types
+functions 1
+call native <http://www.w3.org/ns/shacl#SPARQLExprExpression> in sh:rule on <http://example.org/Tagger>
+validators 1
+alternative <http://www.w3.org/ns/shacl#MinCountConstraintComponent> <http://www.w3.org/ns/shacl#validator> <http://example.org/minCountAsk> sparql-ask superseded-by-native
+unexecuted 0
+diagnostics 0
+unanchored-imports 1
+unanchored <http://example.org/Other> <http://example.org/Target> document -
+findings 0
+clean true
+```
+
+- **`load`** is the loader's own verdict: `accepted`, or `refused` followed by
+  the refusal (an unknown `sh:` term, an ill-typed parameter, an unresolved or
+  duplicate function definition, and so on). A SHACL-SPARQL or SHACL-AF
+  declaration that violates a syntax rule — an ASK validator under
+  `sh:nodeValidator`, a parameter named `value`, a `sh:SPARQLFunction` without
+  exactly one `sh:ask`/`sh:select` — is refused here whether or not any shape
+  reaches it, and the refusal lists every such violation in the graph, each
+  with its rule id (`[syntax rule nodeValidator-class]`). So is a query a shape
+  executes that violates a pre-binding restriction (`[syntax rule
+  pre-binding-limitations]`).
+- **`shacl-shacl`** lists every result of validating the shapes graph, as data,
+  against the W3C's `shacl-shacl.ttl`, the shapes graph for shapes graphs. The
+  vendored file predates some SHACL 1.2 Core relaxations (`sh:closed
+  sh:ByTypes`, a list-valued `sh:nodeKind`, a path-valued `sh:equals`, a
+  node-expression `sh:targetNode`), so it flags some well-formed graphs. Such a
+  result is marked `superseded NAME` and is not a finding. This applies only
+  when the loader accepted the graph: over a refused graph, every result counts.
+- **`functions`** names the implementation every node-expression function call
+  binds to: `native` (a built-in the engine implements), `custom` (a
+  `sh:bodyExpression` function the graph declares), `sparql-registered` (a
+  `sh:SPARQLFunction`), or `host-extension` (an IRI the graph does not declare,
+  resolved against the host's registry at evaluation). It reads `functions
+  unavailable` when the loader refused the graph.
+- **`validators`** lists every validator the graph declares for a built-in
+  constraint component. Vocabularies such as DASH give SHACL Core components
+  SPARQL validators; SHACL selects "one of the values" of a component's
+  validators, and for a built-in the native implementation is the one that
+  runs, so each declared validator is `superseded-by-native` and is never
+  executed. These lines are not findings. It reads `validators unavailable`
+  when the loader refused the graph.
+- **`unexecuted`** lists every query the graph declares that violates a
+  pre-binding restriction of SHACL 1.2 SPARQL Extensions, Appendix A (a
+  `MINUS`, a `VALUES`, an `AS ?var` for a pre-bound variable) and that nothing
+  executes: a validator of a built-in component, a validator of a custom
+  component no use selects, or a `sh:SPARQLFunction` nothing calls. Appendix A
+  requires a failure only for a query "executed with pre-bound variables", so
+  the loader accepts these; each is a `violation` line naming the declaration,
+  followed by its `error` lines, and each is a finding here. A declaration
+  that violates a syntax rule never appears here: it refuses the load. It
+  reads `unexecuted unavailable` when the loader refused the graph.
+- **`diagnostics`** lists every mandatory diagnostic: a `diagnostic RULE SHAPE`
+  line for each shape whose `sh:in` or `sh:xone` list is empty, `RULE` being the
+  SHACL 1.2 Core syntax rule id `in-minListLength` or `xone-minListLength`
+  ("Each such list SHOULD have at least one member"). The shapes graph is still
+  well-formed — the approved W3C tests `core/node/in-002`, `in-003`, `xone-002`
+  and `xone-003` validate it, and its validation report states
+  `sh:shapesGraphWellFormed true` — but the rule constrains the author, so lint
+  always reports it, whether or not the load succeeded, and each line is a
+  finding. `shacl-shacl.ttl` warns about the same empty list (`sh:minListLength`
+  on the `sh:in` / `sh:xone` path); that result is listed marked
+  `diagnosed RULE` and is not counted a second time.
+- **`unanchored-imports`** lists every `owl:imports` triple of the shapes
+  graph's closure that is **not** an import, because its subject is no anchor of
+  the document it occurs in. The anchors are the IRI the document was read
+  under (`--base`, or for an imported document the IRI it was imported by), every
+  `owl:Ontology` header, every `sh:ShapesGraph` (a `sh:RulesGraph`, or a class the
+  document declares `rdfs:subClassOf sh:ShapesGraph`, included), and a node that
+  names one of those as its `owl:versionIRI`. A node whose only graph role is
+  `sh:DataGraph` is not one: SHACL 1.2 Core says "owl:imports in the data graph
+  is not enacted". Such a triple is data, so no document was looked for; each is
+  an `unanchored SUBJECT OBJECT document D` line, where `D` is `-` for the shapes
+  document itself and the import IRI for an imported one. These lines are never
+  findings: the triple may well be meant as data. They are listed so that an
+  author who meant an import can see it is not one. The case the W3C flags is
+  covered by `shacl-shacl`: its `shsh:DataGraphImportsShape` reports, at
+  severity `sh:Info`, a `sh:DataGraph` that uses `owl:imports` without also
+  being typed `owl:Ontology`, and that result is a finding like any other.
+
+A report is clean when the loader accepted the graph, every `shacl-shacl`
+result is superseded (an `sh:Info` result counts like any other), no
+unexecuted query violates a pre-binding restriction and no mandatory diagnostic
+applies. `unanchored-imports` never affects it.
+
+The report goes to `OUT` either way, and `shapes lint clean true|false` and
+`shapes lint findings N` always go to stderr.
+
+**Exit codes** follow `shacl verify`, the other certify verb: `0` when the
+report is clean, and `1` when it carries a finding, or for a document that does
+not parse or an `owl:imports` no `--import` resolves. `2` for a usage error.
+Unlike `validate`, a finding here is a refusal: `shapes lint` judges the shapes
+graph itself, as a precondition of every validation run against it.
+
+```sh
+purrdf shapes lint shapes.ttl
+purrdf shapes lint --import http://example.org/common=common.ttl shapes.ttl report.txt
 ```
 
 ## `shex`
@@ -907,7 +1343,7 @@ purrdf --loss-ledger=convert.loss.json convert star-data.ttl plain.trix
 | Code | Meaning |
 |---|---|
 | `0` | success — including every **decided negative verdict** (see below) |
-| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise), an unsupported or structurally incomplete SHACL construct, or a ShEx schema whose semantics this boundary cannot supply (an unresolved `IMPORT`, an `EXTERNAL` shape, a semantic action) |
+| `1` | runtime failure — a parse/serialize diagnostic, a pack-integrity failure, an I/O error, a result/shape mismatch, a refusal from the entailment boundary (an unserved regime, an unresolved `owl:imports`, an inconsistent premise), an unsupported or structurally incomplete SHACL construct, a ShEx schema whose semantics this boundary cannot supply (an unresolved `IMPORT`, an `EXTERNAL` shape, a semantic action), a [`rules`](#rules) run that fails or passes `--max-term-generating-rounds`, `--max-generated-terms`, `--max-stored-facts` or `--max-join-steps`, a `reason` or `convert --entailment` run that passes `--max-stored-facts` or `--max-join-steps`, or a [`shapes lint`](#shapes-lint) report with a finding |
 | `2` | usage error — a malformed command line (clap), or a pipeline usage error such as `-` without an explicit format, `--regime rif` without `--rules`, a malformed `--import` pair, two documents reading stdin, or a flag that names something the selected mode does not produce |
 | `3` | a caller-set [execution governor](#execution-governors) stopped a `query`, an `update` or a [`validate`](#validate); or [`consistency`](#consistency) answered `unknown`. **Not a failure**: for `query`, the certified answers are on stdout and the governor report is on stderr; for `update` and `validate`, nothing was produced (a mutation is atomic and a truncated SHACL run cannot license a verdict) and the receipt is on stderr; for `consistency`, the verdict and the full certificate — including which cap it was — are on stdout as always |
 
@@ -919,7 +1355,10 @@ conclusion, an inconsistent ontology, a non-conforming SHACL data graph and a
 nonconformant ShEx node all exit `0` and put the answer on stdout. The run did
 exactly what it was asked to do, and mapping "the answer is no" onto a failure
 code would put it in the same bucket as a corrupt pack — the flattening the
-governor code exists to prevent, in the other direction. Because
+governor code exists to prevent, in the other direction. The certify verbs are
+the exception, and it is deliberate: `shacl verify`, `shacl diff` and
+`shapes lint` judge an ARTIFACT the rest of the pipeline depends on, so a
+finding there is a refusal of that artifact and exits `1`. Because
 [`validate`](#validate) and [`shex`](#shex) must keep stdout a well-formed RDF
 or JSON document, each also writes its one-line verdict to **stderr** on every
 run, so a shell can branch on conformance without parsing the artifact:

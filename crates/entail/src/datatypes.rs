@@ -27,9 +27,10 @@
 //! `DT_DIFFERENT` is the largest of the four and the only one that is quadratic in the
 //! number of literals. That is inherent — an inequality over `n` values IS `n²` pairs — and
 //! it is bounded by
-//! [`MAX_STORED_FACTS`](purrdf_datalog::seminaive::MAX_STORED_FACTS) like every other fact,
-//! so a dataset with more distinct valued literals than that admits is REFUSED with an
-//! accurate report rather than closed incompletely.
+//! the stored-fact limit
+//! ([`EvalOptions::with_max_stored_facts`](purrdf_datalog::seminaive::EvalOptions::with_max_stored_facts))
+//! like every other fact, so a dataset with more distinct valued literals than that admits
+//! is REFUSED with an accurate report rather than closed incompletely.
 //!
 //! Restricting to the literals the dataset holds is the
 //! [`Construct::DatatypeValueSpace`](crate::Construct::DatatypeValueSpace) boundary, which
@@ -179,8 +180,8 @@ impl LiteralIndex {
         // This is the quadratic pass, and it is quadratic because the RULE is: an
         // inequality over `n` values is `n²` pairs, and it cannot be expressed as a
         // negation here (see [`crate::calculus::dt`] and [`crate::lists`]). It is bounded
-        // by `MAX_STORED_FACTS` like every other fact, so a dataset with a few hundred
-        // distinct valued literals is REFUSED with an accurate report rather than
+        // by the stored-fact limit like every other fact, so a dataset with more distinct
+        // valued literals than it admits is REFUSED with an accurate report rather than
         // truncated.
         for (left, left_value) in &values {
             for (right, right_value) in &values {

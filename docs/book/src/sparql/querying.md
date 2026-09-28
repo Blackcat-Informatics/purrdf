@@ -240,17 +240,18 @@ or `dayTimeDuration` component decides the same way, in the same bounded
 work, as a small one. The computation is judged as
 a whole, not component by component: a duration's months half can land on an
 intermediate day whose clamp is itself year-dependent even though the
-*finished* answer, after the days half also runs, is not — `"--01-31"^^xsd:gMonthDay
-+ "P1M1D"^^xsd:duration` is `"--03-01"` from every anchor (the day after
-either Feb 28 or Feb 29 is always Mar 1), even though `"--01-31"^^xsd:gMonthDay
-+ "P1M"^^xsd:yearMonthDuration` alone is genuinely ambiguous. The one
+*finished* answer, after the days half also runs, is not —
+`"--01-31"^^xsd:gMonthDay + "P1M1D"^^xsd:duration` is `"--03-01"` from every
+anchor (the day after either Feb 28 or Feb 29 is always Mar 1), even though
+`"--01-31"^^xsd:gMonthDay + "P1M"^^xsd:yearMonthDuration` alone is genuinely
+ambiguous. The one
 recurring example of a refused class is February: every other month has the
 same length in every year, so a shift landing there is always safe, while a
 shift landing on February with the day being clamped the 29th or later is
 the case whose answer can turn on a year `xsd:gMonthDay` does not carry —
 that is an example of the refused class, not the rule itself.
-RDF4J answers these by fabricating the missing field (year 0, January, or day
-1) through its underlying JAXP calendar and returning a value built on that
+RDF4J answers these by fabricating the missing field (year 0, January, or
+day 1) through its underlying JAXP calendar and returning a value built on that
 fabrication — for example `"---31"^^xsd:gDay + "P1M"^^xsd:yearMonthDuration`
 answers `"---29"`, clamped against a fabricated leap year. `purrdf` matches
 RDF4J on every case whose answer does not depend on the fabricated field —
@@ -563,7 +564,7 @@ proceeds unchanged. PurRDF reads "otherwise" as written:
 
 | Outcome | `SERVICE` | `SERVICE SILENT` |
 |---|---|---|
-| The invocation fails, for any reason: the endpoint is unreachable or its response undecodable; no source reaches it; a capability was denied or the host refused the request; a variable endpoint is bound to a term that is not an IRI | query error | join identity, recorded on the evidence |
+| The invocation fails, for any reason: the endpoint is unreachable or its response undecodable; no source reaches it; a capability was denied or the host refused the request; the host's handler faulted; a variable endpoint is bound to a term that is not an IRI | query error | join identity, recorded on the evidence |
 | This engine's own governor tripped, or its stack ran out | truncation, or the stack refusal | truncation, or the stack refusal |
 
 `SILENT` is a statement about the invocation, never about the caller's own
@@ -576,7 +577,7 @@ The answer `SILENT` gives is indistinguishable from an endpoint that answered
 with nothing to add, so every silenced invocation is recorded:
 `GovernorEvidence::silenced` lists one `SilencedInvocation` per failure — the
 endpoint, the kind of failure (`transport`, `decode`, `disabled`,
-`unconfigured`, `denied`, `host-denied`, `not-an-iri`) and the message the
+`unconfigured`, `denied`, `host-denied`, `not-an-iri`, `fault`) and the message the
 error would have carried. Every governed query carries it; an ungoverned call
 returns a bare result, so run it under `QueryGovernors::METERED` to read the
 record. A denial raised by a `SERVICE` nested inside a body an
@@ -1107,12 +1108,12 @@ inside a composite literal in a query is never the `_:b` in the data.
 
 ### Limits, and what a composite refuses
 
-Nesting is bounded, and the bounds are an invariant of the value — the
-programmatic constructors enforce them exactly as the parser does:
+A composite is bounded by memory in its nesting, and by two bounds that are an
+invariant of the value — the programmatic constructors enforce them exactly as
+the parser does, and every nesting level counts as one element:
 
 | Bound | Value |
 |---|---|
-| Nesting depth | 64 |
 | Total elements, all levels | 2²⁰ (1 048 576) |
 | Lexical bytes | 64 MiB |
 
@@ -1673,9 +1674,11 @@ graph pattern. `?step` and `?len` are `xsd:integer` literals precisely so
 
 There is no default relation IRI and no default traversal envelope. PurRDF mints
 no vocabulary IRIs, so the name a query spells in predicate position is
-caller-supplied; and a zero-hop path has no witness while an unbounded depth is a
-stack-overflow abort, so the minimum and maximum hop counts and the two resource
-guards are stated every time rather than invented by the library.
+caller-supplied; and a zero-hop path has no witness while an unbounded walk has no
+end, so the minimum and maximum hop counts and the two resource guards are stated
+every time rather than invented by the library. Any `max_hops` a `u32` holds is
+accepted: the traversal keeps its per-depth state on the heap, and the two
+resource guards bound the work a walk does.
 
 Two relation TYPES, not one with a mode switch: `PathWitnessRelation` enumerates
 every simple-prefix walk (exponential in the worst case) and

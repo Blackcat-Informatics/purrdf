@@ -120,11 +120,11 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
         "same as the pydantic oracle: a `uv`-driven emitter check needing the built Python "
         "environment, with `make linkml-oracle` as the local entry point"
     ),
-    "scripts/conformance-matrix.py": (
+    "scripts/conformance-matrix.py $(CONFORMANCE_ARGS)": (
         "evaluates the full W3C corpora, tens of minutes. `make conformance` is the local "
         "entry point; only its `--self-test` arm is cheap enough for `make check`"
     ),
-    "scripts/check-simd-asm.py --doc": (
+    "scripts/check-simd-asm.py $(SIMD_ASM_ARGS)": (
         "emits asm for seven target configurations; needs the wasm32 and aarch64 std "
         "targets. `make simd-asm` is the local entry point; only its `--self-test` arm "
         "runs in `make check`"

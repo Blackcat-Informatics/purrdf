@@ -27,8 +27,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicU64;
 
 use purrdf::{
-    ClosureRelations, GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan, RdfDataset,
-    ReasoningError, query_with_entailment_governed,
+    ClosureRelations, EntailmentClosure, GovernedEntailment, JsonLdSerializeOptions,
+    QueryEntailmentPlan, RdfDataset, ReasoningError, query_with_entailment_closure_governed,
 };
 use purrdf_core::{RdfDiagnostic, SparqlResult};
 use purrdf_sparql_eval::protocol::{FailureCode, negotiate};
@@ -45,7 +45,9 @@ use crate::query::{
     GovernorArgs, NegotiatedValue, aggregate_env_message, build_aggregates, negotiable_result_kind,
     serialize_configured_graph, serialize_query_result, sparql_request,
 };
-use crate::shacl::{ShaclChangeValidation, ShaclProductRefusal};
+use crate::shacl::{
+    ShaclChangeValidation, ShaclEntailment, ShaclNodeExprOutcome, ShaclRefusal, ShaclRulesInference,
+};
 
 // ---------------------------------------------------------------------------
 // Codes of the failures that are not an engine diagnostic
@@ -284,9 +286,16 @@ pub(crate) enum JobOutcome {
     Negotiated(Box<NegotiatedValue>),
     /// A change validation's log beside the scope it describes.
     ShaclChange(ShaclChangeValidation),
-    /// A prepared-product refusal: the job's error, carried as the class the synchronous
-    /// twin rejects with rather than flattened into a message.
-    Refused(ShaclProductRefusal),
+    /// A SHACL-AF entailment's materialized dataset beside its diagnostics.
+    ShaclEntailment(ShaclEntailment),
+    /// A rules run's inference graph, proof and diagnostics.
+    ShaclRules(ShaclRulesInference),
+    /// A node expression's output nodes beside the shapes graph's mandatory diagnostics.
+    ShaclNodeExpr(ShaclNodeExprOutcome),
+    /// A SHACL refusal — a prepared product's, or the shapes graph's import refusal: the
+    /// job's error, carried as the class the synchronous twin rejects with rather than
+    /// flattened into a message.
+    Refused(ShaclRefusal),
     Failed(JobError),
 }
 
@@ -301,6 +310,9 @@ impl fmt::Debug for JobOutcome {
             Self::UpdateGoverned { .. } => "UpdateGoverned",
             Self::Negotiated(_) => "Negotiated",
             Self::ShaclChange(_) => "ShaclChange",
+            Self::ShaclEntailment(_) => "ShaclEntailment",
+            Self::ShaclRules(_) => "ShaclRules",
+            Self::ShaclNodeExpr(_) => "ShaclNodeExpr",
             Self::Refused(_) => "Refused",
             Self::Failed(_) => "Failed",
         })
@@ -411,6 +423,19 @@ impl JobRun<'_> {
 // Operations
 // ---------------------------------------------------------------------------
 
+/// What an entailment query's closure is materialized over and under: the dataset's
+/// `owl:imports` table (two parallel arrays), the IRIs the dataset was read from, and the
+/// closure's evaluation limits — `queryEntailmentGoverned`'s own arguments. Empty arrays
+/// are the ordinary "imports nothing" case; `None` is this target's default limit.
+#[derive(Debug, Clone, Default)]
+pub(crate) struct ClosureInputs {
+    pub(crate) import_iris: Vec<String>,
+    pub(crate) import_documents: Vec<String>,
+    pub(crate) premise_iris: Vec<String>,
+    pub(crate) max_stored_facts: Option<u64>,
+    pub(crate) max_join_steps: Option<u64>,
+}
+
 /// Everything an operation is built from.
 pub(crate) struct OperationInput<'a> {
     pub(crate) kind: AsyncOperationKind,
@@ -425,6 +450,7 @@ pub(crate) struct OperationInput<'a> {
     pub(crate) jsonld: Option<JsonLdSerializeOptions>,
     pub(crate) regime: Option<String>,
     pub(crate) program: Option<String>,
+    pub(crate) closure: ClosureInputs,
     pub(crate) accept: Option<String>,
 }
 
@@ -450,6 +476,7 @@ impl<'a> OperationInput<'a> {
             jsonld: None,
             regime: None,
             program: None,
+            closure: ClosureInputs::default(),
             accept: None,
         }
     }
@@ -514,6 +541,7 @@ impl OperationInput<'_> {
             jsonld,
             regime,
             program,
+            closure,
             accept,
         } = self;
         let base = base.as_deref();
@@ -591,15 +619,24 @@ impl OperationInput<'_> {
                 let regime = regime.unwrap_or_default();
                 let plan = QueryEntailmentPlan::parse(&regime, program.as_deref().unwrap_or(""))
                     .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
+                let imports = crate::entail::entailment_import_map(
+                    &closure.import_iris,
+                    &closure.import_documents,
+                    &closure.premise_iris,
+                )
+                .map_err(|message| JobError::message(ENTAILMENT_CODE, message))?;
+                let limits =
+                    crate::entail::wasm_limits(closure.max_stored_facts, closure.max_join_steps);
                 let env = governed_env(aggregate_namespace)?;
                 let governors = run.governors(ceilings.ceilings());
                 let outcome = run
                     .evaluate(|| {
-                        query_with_entailment_governed(
+                        query_with_entailment_closure_governed(
                             &engine,
                             &frozen,
                             request,
-                            plan.entailment(),
+                            &EntailmentClosure::new(plan.entailment(), &imports)
+                                .with_limits(limits.eval_options()),
                             run.options(&env),
                             // This surface registers no relation, so there is none to
                             // re-derive over the closure.
@@ -607,7 +644,21 @@ impl OperationInput<'_> {
                             &governors,
                         )
                     })
-                    .map_err(|error| JobError::reasoning(&error))?;
+                    .map_err(|error| match error {
+                        // Rendered by the shared boundary, so a passed evaluation limit
+                        // names `queryEntailmentGoverned`'s argument rather than a Rust type
+                        // a JavaScript caller cannot reach.
+                        ReasoningError::Entailment(error) => JobError::message(
+                            ENTAILMENT_CODE,
+                            purrdf_validate::render_entail_error_in(
+                                &regime,
+                                &error,
+                                purrdf_validate::RegimeHost::Wasm,
+                                purrdf_validate::RegimeService::Query,
+                            ),
+                        ),
+                        other => JobError::reasoning(&other),
+                    })?;
                 if let Some(answered) = outcome.outcome() {
                     run.record_silenced(answered.evidence());
                 }

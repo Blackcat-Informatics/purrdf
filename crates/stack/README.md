@@ -8,8 +8,10 @@ How much stack the running thread has left, for the PurRDF SPARQL stack.
 Running out of stack is not an error anywhere: natively the process aborts, and
 on `wasm32-unknown-unknown` the shadow stack runs below its floor and traps with
 the instance's memory in an unknown state. The SPARQL evaluator
-(`purrdf-sparql-eval`) therefore measures the stack actually left at every
-recursive entry and refuses, typed, when less than `MARGIN_BYTES` remain. (The
+(`purrdf-sparql-eval`) therefore measures the stack actually left — against a
+plan's whole height before its recursive passes run, and at every level of a
+walk that has no error channel — and refuses, typed, rather than spend the last
+`MARGIN_BYTES`. (The
 SPARQL parser, `purrdf-sparql-algebra`, does not recurse on a request's nesting
 and needs no such check.) This crate is that measurement, in one place:
 
@@ -21,6 +23,9 @@ and needs no such check.) This crate is that measurement, in one place:
   get back the one it replaces. The PurRDF wasm package installs the linker's
   `__stack_low` when its instance starts and each asynchronous job's own region
   whenever it switches onto it.
+* `walk` and `walk_is_low` — a scope for a walk with no error channel: a level
+  that finds the stack low stops descending, and the scope discards the
+  half-built result and reports the refusal.
 * `MARGIN_BYTES` — 128 KiB natively, 64 KiB on `wasm32`, with the measurements
   they are derived from in their documentation.
 

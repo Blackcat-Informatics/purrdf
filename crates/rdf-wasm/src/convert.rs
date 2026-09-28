@@ -5,7 +5,7 @@
 //! dataset-independent value space ([`QuadValues`]/[`TermValue`]) that the COW
 //! [`MutableDataset`](purrdf::ir::MutableDataset) mutates and queries by.
 //!
-//! `TermValue` is the engine's value→id lookup key (purrdf P4): every component is by
+//! `TermValue` is the engine's value→id lookup key: every component is by
 //! value, with literals canonicalized exactly as the interner canonicalizes them, so a
 //! JS-built quad and an engine-stored quad resolve to the same term ids.
 

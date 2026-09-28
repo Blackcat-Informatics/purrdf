@@ -7,7 +7,7 @@
 //! [`purrdf_gts::writer::Writer`] to canonicalise it. All interning, term remapping,
 //! and frame authoring is delegated to `purrdf-gts`.
 //!
-//! The writer consumes the IR directly (purrdf P2c part 1): it reads the
+//! The writer consumes the IR directly: it reads the
 //! frozen dataset's quad/reifier/annotation tables and resolves each row to the
 //! owned model at the boundary, then interns into the GTS term table. Out-of-band material
 //! (GTS metadata, suppressions) is passed in explicitly as an [`RdfLookaside`]

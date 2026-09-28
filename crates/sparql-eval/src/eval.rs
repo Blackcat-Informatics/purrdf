@@ -15,7 +15,7 @@
 //! rather than returning a partial bag (the `no-optionality` doctrine).
 //!
 //! Evaluation pins the **concrete** [`RdfDataset`] rather than a generic
-//! `DatasetView`: the value→id bridge [`RdfDataset::term_id_by_value`] (P4),
+//! `DatasetView`: the value→id bridge [`RdfDataset::term_id_by_value`],
 //! which BGP constant-resolution needs, is an inherent method on the frozen dataset
 //! and is not part of the `DatasetView` trait. The dataset still exposes its
 //! indexed read surface through `DatasetView` (the inherent `quads_for_pattern`

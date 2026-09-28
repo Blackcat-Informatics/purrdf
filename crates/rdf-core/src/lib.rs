@@ -3,7 +3,7 @@
 
 //! `purrdf-core` -- oxigraph-free, PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
 //!
-//! This crate is the ring-fenced core (purrdf P2b) extracted out of
+//! This crate is the ring-fenced core extracted out of
 //! `purrdf`: the immutable value-interned IR, the owned value model, structured
 //! diagnostics, dataset capability flags, the loss ledger, and provenance. It
 //! models RDF 1.2 terms directly, preserves
@@ -65,7 +65,7 @@ pub mod content_store;
 // slicer first among them), kept in the kernel so two formats cannot
 // drift apart on it.
 pub mod cover;
-// The static, allocation-free read view over an RDF dataset (purrdf P2):
+// The static, allocation-free read view over an RDF dataset:
 // `DatasetView` + `GraphMatch`. PyO3-free, oxigraph-free — pure kernel.
 pub mod dataset_view;
 pub mod describe;
@@ -102,9 +102,17 @@ pub mod hash;
 // `purrdf-datalog`'s proof keys — not `purrdf-core` internals. Pure
 // `core`/`alloc`, dependency-free and wasm-clean.
 pub mod hex;
+// The one graph-role classifier: which nodes declare an OWL 2 ontology header, a SHACL
+// shapes graph or a SHACL data graph. The import rule and SHACL-SPARQL's implicit prefixes
+// both select from it.
+pub mod graph_roles;
+// `owl:imports`: the one rule for when a graph's imports closure is in hand, and the one
+// merge that folds a resolved closure into a dataset. Shared by entailment and SHACL, which
+// do not depend on each other; it reads nothing but the IR it sits beside.
+pub mod imports;
 // The immutable, value-interned RDF 1.2 dataset IR (C1).
 pub mod ir;
-// Generic provenance sidecar for the immutable RDF 1.2 dataset (S2):
+// Generic provenance sidecar for the immutable RDF 1.2 dataset:
 // UnitId/ArtifactId/OriginSetId newtypes, interners, AssertionOccurrence,
 // DatasetProvenance, and the provenance gate. No PurRDF-specific concepts here.
 /// Structured non-triple material ([`RdfLookaside`]) that travels with an RDF

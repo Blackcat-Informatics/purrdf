@@ -91,7 +91,9 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples
   data graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule`
-  inferences as N-Triples.
+  inferences and returns a `ShaclEntailment`: `ntriples` holds the result as
+  N-Triples, and `diagnostics` holds the shapes graph's mandatory diagnostics.
+  Call `free()` on it.
 - **`Sink`** — a streaming consumer (`push(quad)` / `finish() → Dataset`);
   `datasetToStream` / `streamToDataset` are the async RDF/JS Stream/Sink
   helpers.
@@ -127,15 +129,16 @@ bounded.
 SHACL validation evaluates SPARQL as well: `sh:SPARQLTarget` queries,
 SHACL-SPARQL constraints, and SHACL-AF node expressions and rules. The SHACL
 functions therefore have twins too: `shaclValidateToSarifAsync`,
-`shaclValidateChangesToSarifAsync`, `shaclEntailAsync`, and
-`shaclProductValidateToSarifAsync` with its `Rebuild`, `Expecting` and
-`RebuildExpecting` forms. Each takes its synchronous twin's arguments followed
-by the host options and returns exactly what the synchronous twin returns; a
-refused product rejects with the same `ShaclProductRefusal`. The `signal` is
-polled between focus nodes as well as inside queries, so a validation with no
-SPARQL in it still yields and stops. SHACL admits `SERVICE` only in a query that
-pre-binds nothing, such as a `sh:SPARQLTarget`; a constraint query that uses
-`SERVICE` is refused when the shapes graph loads, on either lane.
+`shaclValidateChangesToSarifAsync`, `shaclEntailAsync`, `shaclApplyRulesAsync`,
+`shaclEvalNodeExprAsync`, and `shaclProductValidateToSarifAsync` with its
+`Rebuild`, `Expecting` and `RebuildExpecting` forms. Each takes exactly its
+synchronous twin's arguments followed by the host options and returns exactly
+what the synchronous twin returns; a refused product rejects with the same
+`ShaclProductRefusal`, and an `owl:imports` closure not in hand with the same
+`ShaclImportError`. The `signal` is polled between focus nodes as well as inside
+queries, so a validation with no SPARQL in it still yields and stops.
+SHACL-SPARQL admits no `SERVICE` in any query, a `sh:SPARQLTarget`'s included;
+a query that uses it is refused, on either lane.
 
 The twins run over WebAssembly JavaScript Promise Integration (JSPI), on by
 default in Chrome and Edge 137+, Firefox 139+, Safari 27, Node 24.20+ and
@@ -154,12 +157,14 @@ carries `signal` (fires on cancellation, the request's timeout or the deadline),
 `remainingDeadlineMs`, `silent` and `maxIntermediateCells`. The handler answers
 with SPARQL Results JSON (bytes or a string), a `Response` (a non-2xx status is a
 transport failure), `{ kind: "transport", message }` or
-`{ kind: "denied", message }`. Either fails the query; under `SERVICE SILENT`
-either is the join identity, and the evidence's `silenced` records the endpoint
-and the failure's `kind`. A handler that throws, rejects or returns
-anything else has faulted, and a fault fails the job even under `SERVICE
-SILENT`, because it is not an answer. `ctx.silent` is for information only: an
-empty answer is not the handler's to invent.
+`{ kind: "denied", message }`. A handler that throws, rejects, returns anything
+else or names a failure kind the protocol does not define has faulted, and the
+fault is the failure of the one invocation it was answering, `{ kind: "fault" }`.
+Any failure fails the query — a fault with `native-sparql-host-fault`, its
+message carrying the handler's words; under `SERVICE SILENT` it is the join
+identity, and the evidence's `silenced` records the endpoint and the failure's
+`kind` (`transport`, `denied`, `fault`, …). `ctx.silent` is for information
+only: an empty answer is not the handler's to invent.
 
 ```js resolve-service-recipe
 import { ready, Dataset, QueryEngine } from "@blackcatinformatics/purrdf";
@@ -183,7 +188,7 @@ async function resolveService(request, { signal }) {
       signal,
     });
   } catch (error) {
-    // Never rethrow: a throw is a fault, which fails the query even under SERVICE SILENT.
+    // A network error is a transport failure; a throw would report a handler bug (a fault).
     return { kind: "transport", message: String(error) };
   }
 }
@@ -265,9 +270,10 @@ before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
   governed twins, `deadlineMs` includes the time spent waiting for the handlers,
   and a trip — a deadline or a cancellation included — is an outcome, not a
   rejection.
-- A query reads its own snapshot; asynchronous updates on one dataset run one at
-  a time, in call order, and an update is applied only if the dataset was not
-  mutated while it ran. `configureAsync({ maxConcurrentJobs })` bounds the jobs
+- A query reads its own snapshot. One asynchronous update of a dataset may be in
+  flight at a time: another begun meanwhile is refused with
+  `native-sparql-update-in-flight`, not queued, and an update is applied only if
+  the dataset was not mutated while it ran. `configureAsync({ maxConcurrentJobs })` bounds the jobs
   in flight (16 by default).
 - Each job evaluates on its own stack region, exactly as large as the module's
   own shadow stack — the stack the synchronous lane runs on; no option sizes it.
@@ -278,14 +284,16 @@ before the clause, as in `?s ex:endpoint ?e . SERVICE ?e { … }`.
   the same size as the synchronous lane's (984 KiB by default, set for the whole
   process), and PurRDF keeps a fixed budget of it for evaluating a request, so on
   both lanes a request's graph patterns nest at most 284 levels deep. Past that
-  is `native-sparql-host-stack-exhausted`, which no lane raises: nest the request
-  less deeply. Parsing keeps a request's nesting in
+  is `native-sparql-host-stack-exhausted`, refused before evaluation on either
+  lane: nest the request less deeply. Parsing keeps a request's nesting in
   linear memory and spends neither stack on it.
-- A job whose frames run past its region's base fails with a fault naming the
-  region. A job that traps poisons the instance, and so does a trap or a Rust panic in any synchronous call: from then on every
-  call into the package — synchronous ones and objects created before the trap
-  included — throws, and only a fresh JavaScript realm (a new page, Worker
-  isolate or process) can load it again.
+- A job whose frames overwrite the canary word at its region's base fails with a
+  fault naming the region. A trap, a Rust panic or a JavaScript exception thrown
+  through the module's frames poisons the instance, on either lane: from then on
+  every call into the package — synchronous ones and objects created before the
+  trap included — throws, the asynchronous twins and `ready()` reject, and
+  releasing an object (`free()`, `[Symbol.dispose]()`) does nothing. Only a fresh
+  JavaScript realm (a new page, Worker isolate or process) can load it again.
 
 ### Cloudflare Workers
 
@@ -314,7 +322,10 @@ the query — no resolver reaching a named endpoint, a
 adapter did not otherwise classify — never reaches the response as its own
 message or stack: the client gets a fixed generic `detail` and a
 `correlationId`, and the real error goes to `onInternalError` (one
-`console.error` line by default) alone. A `Content-Length` over the bound is
+`console.error` line by default) alone. A throwing handler under `SERVICE
+SILENT` or `LOAD SILENT` is the clause's own answer instead — the response is
+that answer (`200`, or `204` for an update), and the bug still goes to
+`onInternalError` under its correlation id. A `Content-Length` over the bound is
 refused before anything is read; a missing or understated one is still
 caught by counting bytes as the body streams in, so a lying header never
 buys a larger body than an honest one would. Both resolvers fetch with

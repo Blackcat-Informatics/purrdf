@@ -103,6 +103,8 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-terminal-predicates.py
 	python3 scripts/check-thread-locals.py --self-test
 	python3 scripts/check-thread-locals.py
+	python3 scripts/check-shapes-parser-drops.py --self-test
+	python3 scripts/check-shapes-parser-drops.py
 	python3 scripts/check-licenses.py --self-test
 	python3 scripts/check-licenses.py
 	python3 scripts/check-banned-deps.py --self-test
@@ -384,8 +386,12 @@ pytest: ## Build the native module + run the Python binding test suite (own gate
 	python3 scripts/check-python-binding-tests.py
 	cd bindings/python && uv run maturin develop && uv run pytest tests
 
+# CI runs the matrix split across runners through CONFORMANCE_ARGS: one
+# `--shard NAME --emit-results FILE` per shard, then one `--from-results DIR` that
+# judges the whole matrix exactly as a single run does. Empty is the full run.
+CONFORMANCE_ARGS ?=
 conformance: ## Umbrella conformance matrix: native Rust W3C suites + the Python rdflib drop-in gate, one scoreboard (see docs/CONFORMANCE.md).
-	python3 scripts/conformance-matrix.py
+	python3 scripts/conformance-matrix.py $(CONFORMANCE_ARGS)
 
 iri-resolver-hygiene: ## Prove the resolver ring-fence: RFC 3986 reference resolution only in crates/iri/src.
 	python3 scripts/check-iri-resolver-singleton.py
@@ -576,8 +582,14 @@ hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are i
 # generated count cells equal this measurement, and every workspace member and bench
 # file is covered. `--doc` hard-fails when the document is missing; it never skips.
 # `python3 scripts/check-simd-asm.py --write-doc` regenerates the count cells.
+#
+# CI runs the same gate split across runners through SIMD_ASM_ARGS: one
+# `--config NAME --emit-cells FILE` per configuration, then one
+# `--doc-from-cells DIR` that checks the document against all seven (see the
+# script's "Split runs"). With no SIMD_ASM_ARGS this is the single-process `--doc`.
+SIMD_ASM_ARGS ?= --doc
 simd-asm: ## Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).
-	python3 scripts/check-simd-asm.py --doc
+	python3 scripts/check-simd-asm.py $(SIMD_ASM_ARGS)
 
 wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
 	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they

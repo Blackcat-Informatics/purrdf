@@ -4,8 +4,7 @@
 //! Evented, ID-addressed OUTPUT of a frozen [`RdfDataset`] (C6).
 //!
 //! [`RdfDatasetVisitor`] is the **frozen-dataset OUTPUT visitor**: it is the dual of
-//! the permissive ingestion protocol (the `purrdf-events` `RdfEventSink`, purrdf
-//! P6) — where that ingestion sink folds an
+//! the permissive ingestion protocol (the `purrdf-events` `RdfEventSink`) — where that ingestion sink folds an
 //! *external* event stream *into* the
 //! IR, [`RdfDataset::emit`] walks an *already-frozen* dataset and streams it *out* as
 //! events, so downstream consumers — the chase materializer, SHACL result emission,

@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The copy-on-write, suppression-delta **mutable dataset** (purrdf P5).
+//! The copy-on-write, suppression-delta **mutable dataset**.
 //!
 //! A [`MutableDataset`] branches cheaply off a shared, frozen
 //! [`Arc<RdfDataset>`](RdfDataset) base and records mutations as an *append delta*
@@ -27,7 +27,7 @@
 //! `Delta`. `MutTermId`/`DeltaTermId` are strictly INTERNAL — the outside world only
 //! ever sees frozen base `TermId`s (pre-mutation) or post-`freeze()` dense `TermId`s.
 //!
-//! # The four mutation rules (P5, explicit + unit-tested)
+//! # The four mutation rules (explicit + unit-tested)
 //!
 //! 1. insert of a currently-SUPPRESSED *base* quad → **un-suppresses** it (removes
 //!    it from `suppressed`), and does NOT also add it to `added`.
@@ -177,7 +177,7 @@ impl DeltaBuilder {
     }
 }
 
-/// A copy-on-write mutable RDF dataset (purrdf P5). Branches cheaply off a
+/// A copy-on-write mutable RDF dataset. Branches cheaply off a
 /// shared frozen base; records mutations as an append delta + a suppression set; and
 /// compacts back to a frozen [`RdfDataset`] via [`freeze`](Self::freeze).
 ///

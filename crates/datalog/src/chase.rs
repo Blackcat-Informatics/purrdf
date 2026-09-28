@@ -96,7 +96,8 @@
 //!   is no stratifier here to make the test decidable.
 //! * [`ChaseError::UnboundHeadVariable`] — a head variable that is neither existentially
 //!   quantified nor bound by the body cannot be grounded without fabricating a term.
-//! * [`ChaseError::BudgetExhausted`] — one of the crate's three fixed ceilings was passed.
+//! * [`ChaseError::BudgetExhausted`] — the stored-fact or join-step limit in force
+//!   ([`EvalOptions`]), or the fixed term-arena ceiling, was passed.
 //!
 //! The forms that DO fire are the atomic head (a Datalog rule), the conjunctive head
 //! (`m = 1`, several conjuncts, no existential) and the single-disjunct existential head.
@@ -126,7 +127,7 @@ use crate::plan::{
     ATOM_ARITY, POSITION_GRAPH, POSITION_OBJECT, POSITION_PREDICATE, POSITION_SUBJECT,
 };
 use crate::seminaive::{
-    BudgetReport, BudgetResource, MAX_JOIN_STEPS, MAX_STORED_FACTS, MAX_TERM_ARENA_BYTES,
+    BudgetReport, BudgetResource, EvalOptions, MAX_TERM_ARENA_BYTES, render_capacity_refusal,
 };
 use crate::stop::{StopSignal, is_stopped};
 use crate::store::{Bound, Fact, RelationStore};
@@ -730,6 +731,16 @@ pub enum ChaseError {
         /// The negated atom's index in the clause's authored body.
         body_index: usize,
     },
+    /// A clause carries a guard literal or a negated conjunction ([`crate::guard`]).
+    ///
+    /// A restricted chase decides whether an obligation is already witnessed by matching
+    /// the clause text against the model; a guard's truth is caller code that match cannot
+    /// run, and a negated conjunction is negation as failure, which a chase has no meaning
+    /// for (see [`Self::NegatedBodyAtom`]).
+    GuardedClause {
+        /// The clause's index in authored program order.
+        clause: usize,
+    },
     /// A head variable is neither existentially quantified nor bound by the body.
     ///
     /// Grounding the head would mean fabricating a term for it. An existential head variable
@@ -740,26 +751,26 @@ pub enum ChaseError {
         /// The unbindable variable, as authored.
         variable: String,
     },
-    /// A fixed ceiling was passed. The report is accurate at the point the chase stopped.
+    /// A limit was passed. The report is accurate at the point the chase stopped.
     ///
-    /// The ceilings are [`MAX_JOIN_STEPS`], [`MAX_STORED_FACTS`] and
-    /// [`MAX_TERM_ARENA_BYTES`] — this crate's own constants, charged exactly as
-    /// [`crate::seminaive::evaluate`] charges them. There is no caller-facing budget
-    /// parameter, and there is never a truncated answer presented as complete.
+    /// The limits are the stored-fact and join-step limits of the caller's [`EvalOptions`]
+    /// ([`chase_with`]; the target's defaults for [`chase`] and [`chase_until`]) and the
+    /// fixed [`MAX_TERM_ARENA_BYTES`], charged exactly as [`crate::seminaive::evaluate`]
+    /// charges them. There is never a truncated answer presented as complete.
     BudgetExhausted {
         /// Which ceiling.
         resource: BudgetResource,
-        /// Consumption of all three ceilings when the chase stopped.
+        /// Consumption, and the limits in force, when the chase stopped.
         report: BudgetReport,
     },
     /// The caller's [`crate::stop::StopSignal`] fired at a round boundary.
     ///
     /// As total a refusal as [`Self::BudgetExhausted`]: the rounds already committed are not
     /// a universal model of anything, and no witness the chase had minted crosses this
-    /// boundary. Distinct from it because a fixed ceiling being passed is a fact about the
-    /// program and the data, while this is a decision the host made about this one run.
+    /// boundary. Distinct from it because a limit being passed is a fact about the program,
+    /// the data and the limits, while this is a decision the host made about this one run.
     Stopped {
-        /// Consumption of all three ceilings when the signal was observed.
+        /// Consumption, and the limits in force, when the signal was observed.
         report: BudgetReport,
     },
 }
@@ -790,6 +801,10 @@ impl fmt::Display for ChaseError {
                 "clause {clause} has an empty (false) head: the chase returns a model, not a \
                  consistency verdict"
             ),
+            Self::GuardedClause { clause } => write!(
+                f,
+                "clause {clause} carries guard literals, which the chase cannot evaluate"
+            ),
             Self::NegatedBodyAtom { clause, body_index } => write!(
                 f,
                 "clause {clause} body atom {body_index} is negated: negation as failure has no \
@@ -800,14 +815,23 @@ impl fmt::Display for ChaseError {
                 "clause {clause} head variable {variable} is neither existentially quantified \
                  nor bound by the body, so it cannot be grounded"
             ),
-            Self::BudgetExhausted { resource, report } => write!(
-                f,
-                "the chase exceeded a fixed ceiling ({resource:?}): {} join step(s), {} stored \
-                 fact(s), {} term arena byte(s)",
-                report.join_steps(),
-                report.stored_facts(),
-                report.term_arena_bytes()
-            ),
+            Self::BudgetExhausted { resource, report } => {
+                let knob = match resource {
+                    BudgetResource::StoredFacts => "EvalOptions::with_max_stored_facts",
+                    _ => "EvalOptions::with_max_join_steps",
+                };
+                match render_capacity_refusal(*resource, *report, knob) {
+                    Some(rendered) => write!(f, "the chase did not complete: {rendered}"),
+                    None => write!(
+                        f,
+                        "the chase exceeded a fixed ceiling ({resource:?}): {} join step(s), \
+                         {} stored fact(s), {} term arena byte(s)",
+                        report.join_steps(),
+                        report.stored_facts(),
+                        report.term_arena_bytes()
+                    ),
+                }
+            }
             Self::Stopped { report } => write!(
                 f,
                 "the chase was stopped by the caller's stop signal after {} join step(s), \
@@ -829,8 +853,8 @@ impl std::error::Error for ChaseError {}
 /// walk reaches an output.
 type Binding = BTreeMap<String, String>;
 
-/// The candidate-solution meter, charged exactly as [`crate::seminaive`] charges
-/// [`MAX_JOIN_STEPS`]: one step per partial or complete solution appended by an atom
+/// The candidate-solution meter, charged exactly as [`crate::seminaive`] charges the
+/// join-step limit: one step per partial or complete solution appended by an atom
 /// extension.
 ///
 /// Charging inside the join — rather than counting committed facts afterwards — is what
@@ -838,13 +862,20 @@ type Binding = BTreeMap<String, String>;
 /// candidates while committing three facts, and a ceiling on commits alone would never see
 /// it. The meter permits ONE step past the ceiling so that reaching it is proof the ceiling
 /// was passed; the refusal is then raised by [`ChaseState::check_budget`].
-#[derive(Debug, Clone, Copy, Default)]
+#[derive(Debug, Clone, Copy)]
 struct StepMeter {
     /// Candidate solutions enumerated so far.
     consumed: u64,
+    /// The join-step limit in force.
+    limit: u64,
 }
 
 impl StepMeter {
+    /// A meter charging against `limit`.
+    fn new(limit: u64) -> Self {
+        Self { consumed: 0, limit }
+    }
+
     /// Record one enumerated candidate.
     fn charge(&mut self) {
         self.consumed = self.consumed.saturating_add(1);
@@ -852,7 +883,7 @@ impl StepMeter {
 
     /// Whether the ceiling has been passed, so no further candidate may be enumerated.
     fn spent(self) -> bool {
-        self.consumed > MAX_JOIN_STEPS
+        self.consumed > self.limit
     }
 }
 
@@ -1088,6 +1119,11 @@ fn plan_firings(program: &[DlClause]) -> Result<Vec<Firing>, ChaseError> {
                 });
             }
         }
+        if clause.is_guarded() {
+            return Err(ChaseError::GuardedClause {
+                clause: clause_index,
+            });
+        }
 
         let frontier = clause.frontier_variables();
         let existentials: BTreeSet<&str> =
@@ -1125,6 +1161,8 @@ struct ChaseState {
     witnesses: SkolemRegistry,
     /// The candidate-solution meter.
     meter: StepMeter,
+    /// The limits in force.
+    options: EvalOptions,
 }
 
 impl ChaseState {
@@ -1135,22 +1173,23 @@ impl ChaseState {
             self.store.row_count(),
             self.store.term_bytes(),
         )
+        .governed_by(&self.options)
     }
 
-    /// Refuse if any of the three fixed ceilings is already passed.
+    /// Refuse if any limit is already passed.
     ///
     /// Mirrors [`crate::seminaive`]'s own check exactly, including the order the ceilings
     /// are tested in, so the same overrun is reported under the same resource name whichever
     /// engine observed it.
     fn check_budget(&self) -> Result<(), ChaseError> {
         let report = self.report();
-        if report.join_steps() > MAX_JOIN_STEPS {
+        if report.join_steps() > report.join_step_limit() {
             return Err(ChaseError::BudgetExhausted {
                 resource: BudgetResource::JoinSteps,
                 report,
             });
         }
-        if report.stored_facts() > MAX_STORED_FACTS {
+        if u64::try_from(report.stored_facts()).unwrap_or(u64::MAX) > report.stored_fact_limit() {
             return Err(ChaseError::BudgetExhausted {
                 resource: BudgetResource::StoredFacts,
                 report,
@@ -1212,7 +1251,7 @@ pub struct ChaseOutcome {
     derivations: Vec<ChaseDerivation>,
     /// The witnesses the chase invented.
     witnesses: SkolemRegistry,
-    /// What the run consumed of the three fixed ceilings.
+    /// What the run consumed, against the limits it ran under.
     budget: BudgetReport,
     /// The termination certificate that admitted the program.
     termination: ChaseTermination,
@@ -1261,7 +1300,7 @@ impl ChaseOutcome {
         &self.witnesses
     }
 
-    /// What the run consumed of the three fixed ceilings.
+    /// What the run consumed, against the limits it ran under.
     pub fn budget(&self) -> BudgetReport {
         self.budget
     }
@@ -1300,10 +1339,11 @@ impl ChaseOutcome {
 ///
 /// # Budgets
 ///
-/// There is no budget parameter. Consumption is charged against this crate's fixed
-/// [`MAX_JOIN_STEPS`], [`MAX_STORED_FACTS`] and [`MAX_TERM_ARENA_BYTES`] exactly as
-/// [`crate::seminaive::evaluate`] charges them, and passing one is a refusal
-/// ([`ChaseError::BudgetExhausted`]) carrying an accurate report — never a truncated answer.
+/// Consumption is charged against the target's default stored-fact and join-step limits
+/// ([`EvalOptions::default`]; [`chase_with`] takes the caller's) and the fixed
+/// [`MAX_TERM_ARENA_BYTES`], exactly as [`crate::seminaive::evaluate`] charges them, and
+/// passing one is a refusal ([`ChaseError::BudgetExhausted`]) carrying an accurate report —
+/// never a truncated answer.
 ///
 /// # Errors
 ///
@@ -1327,6 +1367,26 @@ pub fn chase_until(
     edb: RelationStore,
     stop: Option<&dyn StopSignal>,
 ) -> Result<ChaseOutcome, ChaseError> {
+    chase_with(program, edb, &EvalOptions::default(), stop)
+}
+
+/// [`chase_until`] under the caller's stored-fact and join-step limits
+/// ([`EvalOptions::with_max_stored_facts`], [`EvalOptions::with_max_join_steps`]).
+///
+/// The limits can only refuse: a run inside them returns exactly what [`chase`] returns
+/// for the same program and store, and a run past one returns
+/// [`ChaseError::BudgetExhausted`] naming it. The term limits of `options` have no effect
+/// here: the chase refuses a guarded clause, so no term it commits is computed by a guard.
+///
+/// # Errors
+///
+/// Every error [`chase_until`] returns.
+pub fn chase_with(
+    program: &[DlClause],
+    edb: RelationStore,
+    options: &EvalOptions,
+    stop: Option<&dyn StopSignal>,
+) -> Result<ChaseOutcome, ChaseError> {
     let termination = certify(program);
     if let ChaseTermination::Unbounded { violations } = termination {
         return Err(ChaseError::NonTerminating { violations });
@@ -1337,7 +1397,8 @@ pub fn chase_until(
         store: edb,
         derivations: Vec::new(),
         witnesses: SkolemRegistry::new(),
-        meter: StepMeter::default(),
+        meter: StepMeter::new(options.max_join_steps()),
+        options: *options,
     };
     state.check_budget()?;
 
@@ -1431,16 +1492,18 @@ pub fn chase_until(
             break; // the natural fixpoint: this round derived nothing new
         }
         // Every fact here is absent from the store and unique within the round, so the
-        // projection is exact rather than an over-estimate: the ceiling is decided before a
+        // projection is exact rather than an over-estimate: the limit is decided before a
         // single row is inserted.
-        if state.store.row_count() + fresh.len() > MAX_STORED_FACTS {
+        let projected = state.store.row_count().saturating_add(fresh.len());
+        if u64::try_from(projected).unwrap_or(u64::MAX) > options.max_stored_facts() {
             return Err(ChaseError::BudgetExhausted {
                 resource: BudgetResource::StoredFacts,
                 report: BudgetReport::new(
                     state.meter.consumed,
-                    state.store.row_count() + fresh.len(),
+                    projected,
                     state.store.term_bytes(),
-                ),
+                )
+                .governed_by(options),
             });
         }
         for derivation in fresh {
@@ -1646,6 +1709,57 @@ mod tests {
         assert!(
             report.join_steps() > 0,
             "the first admitted round must have recorded work before the refusal"
+        );
+    }
+
+    // ── The caller's stored-fact and join-step limits ─────────────────────────
+
+    /// The chase honours the caller's limits exactly as the semi-naive evaluator does: a
+    /// stored-fact limit of exactly the universal model's size admits it — the same model
+    /// [`chase`] returns — one fewer refuses it naming the knob, and a join-step limit the
+    /// run passes refuses it naming that knob.
+    #[test]
+    fn the_callers_limits_refuse_exactly_and_admit_the_same_model() {
+        let program = [restriction()];
+        let edb = || store_of(&[("a", TYPE, A), ("b", TYPE, A)]);
+        let unlimited = run(&program, edb());
+        let size = unlimited.facts().row_count() as u64;
+        assert_eq!(size, 6, "two seeds, two witnesses, two head atoms each");
+
+        let exact = EvalOptions::default().with_max_stored_facts(size);
+        let admitted = chase_with(&program, edb(), &exact, None).expect("exactly the model");
+        assert_eq!(closure(&admitted), closure(&unlimited));
+        assert_eq!(admitted.budget().stored_fact_limit(), size);
+        assert!(admitted.budget().stored_fact_limit_stated());
+
+        let short = EvalOptions::default().with_max_stored_facts(size - 1);
+        let refused = chase_with(&program, edb(), &short, None).expect_err("one fact short");
+        assert!(matches!(
+            refused,
+            ChaseError::BudgetExhausted {
+                resource: BudgetResource::StoredFacts,
+                ..
+            }
+        ));
+        assert_eq!(
+            refused.to_string(),
+            "the chase did not complete: evaluation exceeded the stored-fact limit: 6 facts \
+             observed, 5 permitted (the caller's limit); raise it with \
+             EvalOptions::with_max_stored_facts"
+        );
+
+        let steps = EvalOptions::default().with_max_join_steps(1);
+        let refused = chase_with(&program, edb(), &steps, None).expect_err("one step");
+        assert!(
+            refused.to_string().ends_with(
+                "1 permitted (the caller's limit); raise it with EvalOptions::with_max_join_steps"
+            ),
+            "{refused}"
+        );
+        let steps = EvalOptions::default().with_max_join_steps(unlimited.budget().join_steps());
+        assert_eq!(
+            closure(&chase_with(&program, edb(), &steps, None).expect("exactly its steps")),
+            closure(&unlimited)
         );
     }
 

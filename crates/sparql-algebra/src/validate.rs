@@ -74,6 +74,29 @@ impl Query {
     /// Refuses invalid absolute IRIs, language tags, binding widths and output-name
     /// collisions, and malformed typed calls or ranges.
     pub fn validate(&self) -> Result<()> {
+        self.walk(&mut BTreeSet::new())
+    }
+
+    /// The IRIs of every extension function the query calls: each
+    /// [`Function::Custom`] in an expression anywhere in the algebra — a `FILTER`, a
+    /// `BIND`, a projection, an `ORDER BY`, a `HAVING`, an aggregate's argument, and
+    /// inside `EXISTS` / `NOT EXISTS` and sub-queries — sorted and de-duplicated.
+    ///
+    /// A host that can say which IRIs it cannot evaluate learns, before running the
+    /// query, whether the query would reach one. Custom aggregates
+    /// ([`crate::AggregateFunction::Custom`]) are a separate seam and are not listed.
+    ///
+    /// # Errors
+    /// Whatever [`Self::validate`] refuses: the walk is the same one.
+    pub fn custom_function_calls(&self) -> Result<BTreeSet<String>> {
+        let mut calls = BTreeSet::new();
+        self.walk(&mut calls)?;
+        Ok(calls.into_iter().map(ToOwned::to_owned).collect())
+    }
+
+    /// [`Self::validate`]'s walk, recording every [`Function::Custom`] IRI it passes
+    /// in `calls`.
+    fn walk<'a>(&'a self, calls: &mut BTreeSet<&'a str>) -> Result<()> {
         let (pattern, dataset, base) = match self {
             Self::Select {
                 pattern,
@@ -124,7 +147,7 @@ impl Query {
             Self::Select { .. } | Self::Ask { .. } => {}
         }
         while let Some(node) = stack.pop() {
-            check(node)?;
+            check(node, calls)?;
             node.for_each_child(|child| stack.push(child));
         }
         Ok(())
@@ -219,10 +242,11 @@ fn literal(value: &Literal) -> Result<()> {
 }
 
 /// The checks of `node` itself; its children are checked when they are reached.
-fn check(node: NodeRef<'_>) -> Result<()> {
+/// Every [`Function::Custom`] IRI `node` calls is recorded in `calls`.
+fn check<'a>(node: NodeRef<'a>, calls: &mut BTreeSet<&'a str>) -> Result<()> {
     match node {
         NodeRef::Pattern(pattern) => check_pattern(pattern),
-        NodeRef::Expr(expr) => check_expression(expr),
+        NodeRef::Expr(expr) => check_expression(expr, calls),
         NodeRef::Path(path) => check_path(path),
         NodeRef::Triple(triple) => named(&triple.predicate),
         NodeRef::Term(term) => match term {
@@ -320,14 +344,17 @@ fn check_pattern(pattern: &GraphPattern) -> Result<()> {
     Ok(())
 }
 
-fn check_expression(expr: &Expression) -> Result<()> {
+fn check_expression<'a>(expr: &'a Expression, calls: &mut BTreeSet<&'a str>) -> Result<()> {
     use Expression as E;
     match expr {
         E::NamedNode(n) => iri(n.as_str())?,
         E::Literal(l) => literal(l)?,
         E::Variable(v) | E::Bound(v) => variable(v)?,
         E::FunctionCall(function, args) => match function {
-            Function::Custom(n) => iri(n.as_str())?,
+            Function::Custom(n) => {
+                iri(n.as_str())?;
+                calls.insert(n.as_str());
+            }
             Function::Cdt(call) => {
                 if crate::CdtFn::from_iri(&call.iri) != Some(call.fn_kind)
                     || !call.fn_kind.arity().admits(args.len())
@@ -395,4 +422,57 @@ fn check_path(path: &PropertyPathExpression) -> Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::SparqlParser;
+
+    /// Every extension-function call is listed, wherever the expression sits — a
+    /// `FILTER`, a `BIND`, a projection, an aggregate's argument, and a `FILTER` inside
+    /// `NOT EXISTS` — and nothing else is: the same IRIs in predicate or object position
+    /// and a built-in call are not calls.
+    #[test]
+    fn every_extension_function_call_is_listed_and_a_predicate_iri_is_not() {
+        let query = SparqlParser::new()
+            .parse_query(
+                "PREFIX ex: <http://example.org/ns#>
+                 SELECT ?s (ex:project(?s) AS ?p) (SUM(ex:aggregated(?o)) AS ?sum)
+                 WHERE {
+                   ?s ex:inFilter ?o .
+                   ?s ex:object ex:inFilter .
+                   BIND (ex:bound(?o) AS ?b)
+                   FILTER (ex:inFilter(?o) && STRLEN(STR(?o)) > 0)
+                   FILTER NOT EXISTS { ?s ?q ?r FILTER (ex:inExists(?r)) }
+                 }
+                 GROUP BY ?s",
+            )
+            .expect("the query parses");
+        let calls: Vec<String> = query
+            .custom_function_calls()
+            .expect("the query is well-formed")
+            .into_iter()
+            .collect();
+        assert_eq!(
+            calls,
+            [
+                "http://example.org/ns#aggregated",
+                "http://example.org/ns#bound",
+                "http://example.org/ns#inExists",
+                "http://example.org/ns#inFilter",
+                "http://example.org/ns#project",
+            ]
+        );
+        let none = SparqlParser::new()
+            .parse_query(
+                "PREFIX ex: <http://example.org/ns#>
+                 SELECT ?s WHERE { ?s ex:inFilter ex:bound FILTER (STRLEN(STR(?s)) > 0) }",
+            )
+            .expect("the query parses");
+        assert!(
+            none.custom_function_calls()
+                .expect("the query is well-formed")
+                .is_empty()
+        );
+    }
 }

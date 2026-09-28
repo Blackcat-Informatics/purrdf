@@ -237,12 +237,42 @@ ownership, and all limits. Complete examples are in
   while it measures, and stops on its `signal`.
 - `shaclValidateToSarif(shapesTtl, dataNt, shapesBase?)` /
   `shaclEntail(shapesTtl, dataNt, shapesBase?)` — SHACL validation to a SARIF
-  2.1.0 report and SHACL-AF `sh:rule` entailment to N-Triples. `shapesBase` is
+  2.1.0 report and SHACL-AF `sh:rule` entailment, returned as a
+  `ShaclEntailment` (`ntriples`, `diagnostics`; call `free()`). A shape whose
+  `sh:in` or `sh:xone` list is empty is a mandatory diagnostic every run reports,
+  beside the verdict and never among the results: the SARIF log carries each as a
+  `level: "note"` notification in `invocations[0].toolExecutionNotifications`,
+  and `ShaclEntailment.diagnostics`, `ShaclRulesInference.diagnostics` and
+  `ShaclNodeExprOutcome.diagnostics` carry `ShaclDiagnostic` values — `rule`
+  (`in-minListLength`, `xone-minListLength`) and `shape` as separate fields, the one
+  encoding every host shares. `shapesBase` is
   the base the shapes document's relative IRI references resolve against; a
   browser or Node host has no retrieval IRI of its own, so omit it and a
   relative reference throws rather than being mis-parsed (`dataNt` needs no
   counterpart — N-Triples admits no relative IRI by grammar). `Dataset.parse`
-  takes the same optional third argument.
+  takes the same optional third argument. `shaclValidateToSarif` also takes
+  `conformanceDisallows?`, `importIris?`, `importDocuments?` and a trailing
+  `shapesGraph?`: the IRI SHACL-SPARQL sees the shapes graph under, as `purrdf
+  validate --shapes-graph` names it. `$shapesGraph` is pre-bound to it and `GRAPH
+  $shapesGraph { … }` reads the shapes graph (SHACL 1.0's pre-binding, which SHACL
+  1.2 removed); omitted, `$shapesGraph` is an ordinary variable. A relative IRI
+  resolves against `shapesBase`, and one with no base throws.
+  `shaclValidateChangesToSarif`, `shaclPackProduct` (which records it in the
+  product), `shaclLintShapes`, `shaclApplyRules` and `shaclEntail` take the same
+  `shapesGraph?`, right after the import table; on the two rules entry points a
+  `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it, and `shaclApplyRules` throws
+  when it is named beside `srl`, which has no shapes graph. After `shapesGraph?`, both
+  rules entry points take `maxTermGeneratingRounds?`, `maxGeneratedTerms?`,
+  `maxStoredFacts?` and `maxJoinSteps?` (each a `bigint`), contiguous and in that
+  order: the four rule-evaluation limits, with the same defaults, bounding an
+  entailment run the way they bound a rules run. A run past one throws naming the limit, the numbers and the argument
+  that raises it (`shaclEntail's maxStoredFacts`, …).
+  `shaclValidateToSarif` takes one more, `subClassOfInShapesGraph?`: SHACL 1.2
+  Core §6.3's parameter of that name. `true` reads the shapes graph's
+  `rdfs:subClassOf` triples, in addition to the data graph's, wherever SHACL type
+  decides class membership (`sh:targetClass`, implicit class targets, `sh:class`,
+  `sh:rootClass`, `shnex:instancesOf`); omitted or `false`, the specification's
+  default, the data graph alone.
 - `shaclValidateChangesToSarif(shapesTtl, dataNt, addedNt?, removedNt?, shapesBase?)`
   — validates a CHANGE to `dataNt` rather than the whole graph: hand it the rows
   joining and the rows leaving, and the engine re-validates only the focus nodes
@@ -253,14 +283,69 @@ ownership, and all limits. Complete examples are in
   back to a FULL validation, and an empty log means *the graph conforms*. Call
   `free()` when done.
 - SHACL evaluates SPARQL — `sh:SPARQLTarget` queries, SHACL-SPARQL constraints,
-  SHACL-AF node expressions and rules — so every SHACL entry that validates or entails
+  SHACL-AF node expressions and rules — so every SHACL entry that can evaluate SPARQL
   has a Promise-returning twin: `shaclValidateToSarifAsync`,
-  `shaclValidateChangesToSarifAsync`, `shaclEntailAsync` and the four
-  `shaclProductValidateToSarif…Async`. Each takes its synchronous twin's arguments and
-  then the host options, answers a `SERVICE` through the host, yields while it
-  validates and stops on its `signal`. See
+  `shaclValidateChangesToSarifAsync`, `shaclEntailAsync`, `shaclApplyRulesAsync`,
+  `shaclEvalNodeExprAsync` and the four `shaclProductValidateToSarif…Async`. Each takes
+  exactly its synchronous twin's arguments and then the host options, yields while it
+  validates and stops on its `signal`. SHACL-SPARQL admits no `SERVICE` in any query, so
+  a shapes graph with one is refused while it loads, on either lane. See
   [Asynchronous queries, federation and the Cloudflare adapter](#asynchronous-queries-federation-and-the-cloudflare-adapter).
-- `entailMaterialize(document, regime, program)` — SPARQL entailment-**regime**
+- `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
+  importIris?, importDocuments?, shapesGraph?, maxTermGeneratingRounds?,
+  maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)` —
+  runs exactly one rule source, the SHACL 1.2 rules of `shapesTtl` or the SPARQL 1.2
+  RL rule set `srl`, and returns a `ShaclRulesInference`: `inferred` is the
+  inference graph (the inferred triples only) as N-Triples, `proof` is the proof
+  of every inferred triple when `explain` is set, and `diagnostics` the shapes
+  graph's mandatory diagnostics as `ShaclDiagnostic` values (`rule`, `shape`). Two limits stop a rule set that
+  keeps inferring new terms. `maxTermGeneratingRounds` (a `bigint`) bounds the
+  evaluation rounds that infer a term the graph did not hold (default 16384), and
+  `maxGeneratedTerms` (a `bigint`) the terms inferred beyond the input's (default
+  `max(65536, 4 × N)` for `N` distinct input terms). A run past either throws
+  naming the limit, the numbers, the rules that inferred a new term last, and the
+  argument that raises it; a rule set that needs more states it here.
+  `maxStoredFacts` (a `bigint`) bounds the facts the evaluation store holds — the
+  data graph, a rule set's data and every inferred triple — and `maxJoinSteps` (a
+  `bigint`) the candidate solutions the rule bodies enumerate. Omitted, each is the
+  WebAssembly default: 131072 facts and 1048576 join steps, sized for one linear
+  memory (a native build's defaults are 4194304 and 1048576). A rule copying a
+  predicate over 70,000 triples holds 140,000 facts and is refused here naming
+  `maxStoredFacts`; stating `140000n` admits it. A run past either throws naming
+  the limit, the numbers and the argument.
+  `importIris` / `importDocuments` are the rule source's import table: the shapes
+  graph's `owl:imports` table (Turtle documents) beside `shapesTtl`, the rule set's
+  `IMPORTS` table (SPARQL 1.2 RL texts) beside `srl`, followed transitively. An
+  imported document's rules run. An import no entry supplies, and an entry the
+  import closure never names, throw. Call `free()` when done.
+- `shaclCheckRules(srl, srlBase?, importIris?, importDocuments?, level?)` — checks
+  the SPARQL 1.2 RL rule set `srl` WITHOUT evaluating it: the grammar, the `IMPORTS`
+  closure resolved from `importIris` / `importDocuments` exactly as `shaclApplyRules`
+  resolves it, well-formedness and stratification, with no data graph read and no
+  rule run. `level` is `"syntax"`, `"well-formed"` or `"stratified"` (the default,
+  every static check `shaclApplyRules` applies before it runs), each including the
+  ones before it. Returns a `ShaclRulesCheck` — `level`, `rules`, `dataTriples`,
+  `imported`, `versions`, `strata` (`undefined` below `"stratified"`) and the
+  one-line `summary` every host reports; a refused rule set throws naming the
+  stage. Call `free()` when done.
+- `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?,
+  importIris?, importDocuments?, exprAt?, exprVia?, exprTurtle?)` — evaluates
+  one node expression of the shapes graph against a focus node, with `scope` as
+  `"NAME=TERM"` strings, and returns a `ShaclNodeExprOutcome`: `outputs`, the
+  output nodes as N-Triples terms in sequence order, and `diagnostics`, the shapes
+  graph's mandatory diagnostics as `ShaclDiagnostic` values (`rule`, `shape`). The expression is named one way: `expr` is an IRI or
+  `"_:label"`; or `expr` is `undefined` and `exprAt` plus `exprVia` walk from a
+  named node to an anonymous expression, each step reaching exactly one value;
+  or `exprTurtle` gives the expression inline as Turtle, whose one root blank
+  node is the expression.
+- `shaclLintShapes(shapesTtl, shapesBase?, importIris?, importDocuments?, shapesGraph?)` — certifies a shapes graph: the
+  loader's verdict, every result of validating it against the W3C
+  `shacl-shacl.ttl`, which implementation every function call binds to, and
+  every validator declared for a built-in component (superseded by the native
+  implementation, never run). Returns a `ShaclLintReport` with `clean`, `findings`, `loadError` and the
+  deterministic `report` text. Call `free()` when done.
+- `entailMaterialize(document, regime, program, importIris, importDocuments, premiseIris, maxStoredFacts?, maxJoinSteps?)` —
+  SPARQL entailment-**regime**
   materialization over all SEVEN regimes (`"simple"` / `"rdf"` / `"rdfs"` /
   `"owl-rl"` / `"d"` / `"owl-direct"` / `"rif"` — none is refused), returning
   `{ nquads, report }`: the canonical N-Quads closure and a byte-stable reasoning
@@ -269,7 +354,19 @@ ownership, and all limits. Complete examples are in
   it names which rules fired, which specification rules did **not**, which
   constructs were left at a boundary, the evaluation budget and the calculus's
   contract hash, so "OWL-RL entailment" can never be claimed without saying how
-  much of OWL-RL actually ran.
+  much of OWL-RL actually ran. `maxStoredFacts` and `maxJoinSteps` (`bigint`s) are
+  the evaluation limits of the `rdf`, `rdfs`, `owl-rl` and `d` lanes — omitted, the
+  WebAssembly defaults of 131072 facts and 1048576 join steps. A run past either
+  throws naming the limit and the argument; the report's contract hash names the
+  calculus under the limits in force, so it differs from a native build's report
+  unless the native defaults (4194304 and 1048576) are stated. `importIris` /
+  `importDocuments` / `premiseIris` are the document's `owl:imports` table (`[]`,
+  `[]`, `[]` imports nothing): the closure is taken over the document merged with
+  every imported N-Quads document, and an import the table does not resolve throws
+  by name rather than closing a smaller ontology. `entailConsistency(document,
+  importIris, importDocuments, premiseIris, stepCap, workCap)` and
+  `queryEntailmentGoverned`'s `importIris`/`importDocuments`/`premiseIris` options
+  take the same table.
 - `entailRules(regime)` / `entailImplementedRules(regime)` — the rule table the
   specification *defines* the regime by, and the subset this build fires. The
   difference is the measurable gap, and is exactly the report's `missing` lines.
@@ -316,7 +413,8 @@ clauses:
   header, which has no synchronous twin);
 - on `Dataset`: `queryAsync`;
 - the SHACL functions: `shaclValidateToSarifAsync`, `shaclValidateChangesToSarifAsync`,
-  `shaclEntailAsync`, `shaclProductValidateToSarifAsync`,
+  `shaclEntailAsync`, `shaclApplyRulesAsync`, `shaclEvalNodeExprAsync`,
+  `shaclProductValidateToSarifAsync`,
   `shaclProductValidateToSarifRebuildAsync`, `shaclProductValidateToSarifExpectingAsync`
   and `shaclProductValidateToSarifRebuildExpectingAsync`.
 
@@ -324,12 +422,12 @@ Each twin runs the same evaluator as its synchronous twin, over a snapshot of th
 dataset taken when the call starts, and resolves to exactly the shape the synchronous
 twin returns. A SHACL twin takes its synchronous twin's arguments, then the host options
 (and no ceiling, as no synchronous SHACL entry takes one; a deadline is a `signal`).
-Every query the validation runs reaches the host's `SERVICE` answer, and the `signal` is
-polled between focus nodes as well as inside queries, so a validation with no SPARQL in
-it still yields and stops. SHACL admits `SERVICE` only in a query that pre-binds nothing,
-such as a `sh:SPARQLTarget`: a constraint's query with `SERVICE` in it is refused while
-the shapes graph loads, on either lane. A refused product rejects with the same
-`ShaclProductRefusal` the synchronous twin throws. It runs as a *job*: the job suspends while the host answers a `SERVICE`
+The `signal` is polled between focus nodes as well as inside queries, so a validation
+with no SPARQL in it still yields and stops. SHACL-SPARQL admits no `SERVICE` in any
+query, a `sh:SPARQLTarget`'s included: a shapes graph with one is refused while it
+loads, on either lane. A refused product rejects with the same `ShaclProductRefusal` the
+synchronous twin throws, and an `owl:imports` closure not in hand with the same
+`ShaclImportError`. It runs as a *job*: the job suspends while the host answers a `SERVICE`
 or `LOAD`, and it gives the event loop back at regular intervals while it evaluates.
 The host does the I/O and owns its policy. PurRDF keeps the parsing, the evaluation,
 the joins, the `SILENT` semantics and the result encoding.

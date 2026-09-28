@@ -21,11 +21,13 @@ stratified semi-naive fixpoint, carrying no ambient I/O, no wall clock and no
 RNG.
 
 A rule set is *data* — a table of clauses over a relation store — rather than a
-hand-written loop. Its consumer today is
-[`purrdf-entail`](https://crates.io/crates/purrdf-entail): the RDF, RDFS, OWL 2
+hand-written loop. Its consumers are
+[`purrdf-entail`](https://crates.io/crates/purrdf-entail) — the RDF, RDFS, OWL 2
 RL and D calculi are declared as DL-clause programs and evaluated here, which is
 what lets a reasoning report carry a *contract hash* of the exact program that
-ran instead of a claim about which rules were meant to.
+ran instead of a claim about which rules were meant to — and
+[`purrdf-shapes`](https://crates.io/crates/purrdf-shapes), whose SHACL rules
+and SPARQL 1.2 RL rule sets run on this crate's ordered schedule.
 
 ## Design commitments
 
@@ -44,6 +46,14 @@ ran instead of a claim about which rules were meant to.
   [`purrdf-entail`](https://crates.io/crates/purrdf-entail)'s OWL-Direct
   hypertableau, which classifies its own `SHOIQ(D)` DL-clauses through this
   crate's `HeadForm` and branches on exactly that form.
+* **Guards and an ordered schedule, still one evaluator.** A guard literal is a
+  body literal whose meaning a caller supplies at evaluation time — a SPARQL
+  `FILTER` or assignment, a SHACL node expression, a CONSTRUCT query — so a rule
+  language with an expression sublanguage lowers onto the same join, commit and
+  budgets as a pure Datalog program. The ordered schedule runs such a program in
+  the layers, run-once rules and concurrently evaluated groups SHACL 1.2 Inference
+  Rules and SPARQL 1.2 RL define; the SPARQL 1.2 RL rule-level stratifier builds
+  that schedule, or names the cycle that makes one impossible.
 * **Plans are content-addressed.** A compiled program is keyed by a BLAKE3
   digest over the planner version, the caller's contract hash and a canonical
   digest of the clause program. The cache is owned by the caller, never a
@@ -51,12 +61,32 @@ ran instead of a claim about which rules were meant to.
 * **Deterministic by construction.** Per-key rows keep insertion order, the
   arrangement is sorted, and no map iteration order reaches an output path.
   Identical input yields byte-identical output, on every target.
-* **Budgets are constants, not knobs.** Step, fact and arena ceilings are fixed
-  workspace constants and their consumption is *reported*, never configured —
-  two callers with the same input always get the same answer. Nothing numeric is
-  caller-settable here: a settable ceiling drags a charge schedule behind it, and
-  a reasoner's step count is an artifact of the plan, so pinning one would pin the
-  planner and make a caller's *model* move when the join order does.
+* **Limits refuse; they never truncate.** The STORED-FACT and JOIN-STEP limits
+  are the caller's (`EvalOptions::with_max_stored_facts`,
+  `EvalOptions::with_max_join_steps`), with a default sized for the target:
+  131,072 facts and 1,048,576 join steps on `wasm32`, where the store lives in
+  one linear memory, and 4,194,304 facts and 1,048,576 join steps everywhere
+  else (`DEFAULT_MAX_STORED_FACTS`, `DEFAULT_MAX_JOIN_STEPS`, chosen at compile
+  time from the target architecture). The term-arena ceiling
+  (`MAX_TERM_ARENA_BYTES`) stays a constant. A limit can only refuse: a run
+  inside its limits returns the least model, the same under every limit that
+  admits it, and a run past one returns `EvalError::BudgetExhausted` naming the
+  limit, the numbers and the knob that raises it — never a truncated model.
+  Every caller passing the same options gets the same answer or the same
+  refusal, and the effective limits are folded into every program's contract
+  hash, so a result computed under one set of limits never claims another's
+  identity. A join-step count is also a property of the plan, so a limit sized
+  tightly against one release can refuse under the next; headroom cannot change
+  a completed answer. The limits on term generation by a guarded program are the
+  caller's too: whether such a program terminates is undecidable, so any fixed
+  limit refuses some program that terminates (`EvalOptions`). The
+  TERM-GENERATING ROUND limit defaults to `DEFAULT_MAX_TERM_GENERATING_ROUNDS`
+  (16,384). The GENERATED-TERM budget, the terms added beyond the seeded store's
+  `N`, defaults to `max(65,536, 4 × N)`. A run past either is refused as
+  `EvalError::TermLimitExceeded`, naming the limit, the numbers and the rules
+  that generated a term in the last round, and never as divergent. The limits
+  count rounds and terms rather than pricing work, only ever refuse, cannot bind
+  a guard-free program, and are folded into the program's contract hash.
 * **A stop signal is admitted, because it is answer-blind.** `StopSignal` is a
   two-line trait polled at round boundaries the fixpoint was going to reach
   anyway. It carries no number and cannot be asked *where* to stop, only whether
@@ -79,7 +109,8 @@ This crate is one member of the [PurRDF](https://github.com/Blackcat-Informatics
 workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
 entailment, and the GTS graph transport, carried into Python, WebAssembly, and
 C (the GTS container itself reaches Python and C, not the wasm package). It is the evaluator beneath
-[`purrdf-entail`](https://crates.io/crates/purrdf-entail) and is published
+[`purrdf-entail`](https://crates.io/crates/purrdf-entail) and
+[`purrdf-shapes`](https://crates.io/crates/purrdf-shapes)'s rules engine, and is published
 separately so a caller can depend on the fixpoint alone. Note that it is not
 re-exported by the umbrella [`purrdf`](https://crates.io/crates/purrdf) crate.
 

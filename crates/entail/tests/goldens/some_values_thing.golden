@@ -373,6 +373,30 @@
 #   all four premises are identical, and eq_diff1_consistent's stored-facts rises by
 #   exactly the two triples named above (106 -> 108).
 #
+# AND EVERY GOLDEN MOVED AN EIGHTH TIME — every contract hash, and the OWL-RL join steps.
+# Every closure, every witness, every stored-facts and term-arena-bytes figure is
+# byte-identical to the previous golden. Two causes.
+#
+#   1. EVERY CONTRACT HASH MOVED, AND NO RULE CHANGED. The stored-fact and join-step
+#      limits are the caller's now. The stored-fact default is per target: 131,072 on
+#      wasm32 — the value every target used while it was fixed — and 4,194,304
+#      natively; the join-step default is 1,048,576 everywhere. The contract hash
+#      folds the EFFECTIVE limits, so a closure minted under one set never claims the
+#      identity of one minted under another. These goldens are written by a native
+#      build under the native defaults, so all five lanes' digests moved. Under the
+#      wasm32 values, stated, every digest is exactly the one the previous golden showed.
+#
+#   2. THE OWL-RL JOIN STEPS FELL IN EVERY SECTION, AND ROSE IN NONE. A semi-naive round
+#      evaluates one decomposition per body atom, each anchored on that atom's new rows,
+#      and a decomposition whose anchor gained no row since the last round derives
+#      nothing. It used to enumerate every atom planned before its anchor anyway; it is
+#      now skipped, which changes no solution and only the candidates counted. 178
+#      OWL-RL sections moved, each downward, by 6% to 67%: 285,412 join steps across the
+#      corpus became 244,208, and the largest single section went from 5,066 to 4,383.
+#      The RDF and RDFS lanes are evaluated by the restricted chase, which has no such
+#      decomposition, and the D lane enumerates no candidates in this corpus, so none of
+#      their figures moved.
+#
 # WHAT MOVED IN THIS GOLDEN:
 #
 # NEW FIXTURE — no committed golden moved; this one did not exist.
@@ -396,7 +420,7 @@
   boundaries: (0)
   withheld-surrogates: 0
   budget: join-steps=0 stored-facts=0 term-arena-bytes=0
-  contract-hash: 4151090ce6c2ecdae843e351420ddcf10f79e525c60b4c6d07bebeabaa07fbd5
+  contract-hash: 2947634d38a6668b09634bb6233e82565233e5be7ef03c084c986f8aa16c1ade
   termination: none
   inconsistency: none
   overclaims: false
@@ -420,7 +444,7 @@
       axiomatic-triples datatype-value-space surrogate
   withheld-surrogates: 3
   budget: join-steps=41 stored-facts=10 term-arena-bytes=580
-  contract-hash: 9724540a02daf06f349ba8aecf52f9e3e21abf7042d1bfcc630172baa7f23ee3
+  contract-hash: 293e637ed65ae6f23259f17b46b59e1a591ccebd291c33eff97db1adc3c6a9a3
   termination: weakly-acyclic positions=10 existential-edges=4
   inconsistency: none
   overclaims: false
@@ -567,7 +591,7 @@
       axiomatic-triples datatype-value-space surrogate
   withheld-surrogates: 11
   budget: join-steps=8776 stored-facts=189 term-arena-bytes=2039
-  contract-hash: f6a5eff90528f49ba8d3b83ae7feac8e3b71586f320fb478c6ddb60ca6dc979e
+  contract-hash: edac936406f51671f34dc305b0e90d1f0c4be08915522a445fcffc692174d0ca
   termination: weakly-acyclic positions=27 existential-edges=8
   inconsistency: none
   overclaims: false
@@ -695,8 +719,8 @@
   boundaries: (1)
       datatype-value-space
   withheld-surrogates: 0
-  budget: join-steps=2282 stored-facts=110 term-arena-bytes=2421
-  contract-hash: 8f93a9083fda8e971f558750cf5291b38b6f4838c82148a3b67e3ce7c5dc9c09
+  budget: join-steps=1831 stored-facts=110 term-arena-bytes=2421
+  contract-hash: abb12b9af5fa9c022ed2dbf846e0b3e8c4184f5c2bb8c49a3c0dbac20e1f5243
   termination: none
   inconsistency: none
   overclaims: false
@@ -748,7 +772,7 @@
       datatype-value-space
   withheld-surrogates: 0
   budget: join-steps=0 stored-facts=35 term-arena-bytes=1744
-  contract-hash: 20ac9aa48ce8dd9b25bc7239798566da2d1559458c6ed12befa520c3fdb16cb7
+  contract-hash: 8110c4437c3d0158450816bbf6e291f33426d18cbabc641aa7b6fe60b511746c
   termination: none
   inconsistency: none
   overclaims: false

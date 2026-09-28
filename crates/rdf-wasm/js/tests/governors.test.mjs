@@ -159,6 +159,62 @@ test("queryEntailmentGoverned carries the query outcome and closure report toget
   assert.equal(outcome.outcome.result.rowCount, 1);
 });
 
+// The same subclass axiom, moved into an IMPORTED document: `tom` is an Animal only through
+// the import, so the row count observes whether the import took part.
+const IMPORTING = `
+@prefix ex: <https://example.org/> .
+@prefix owl: <http://www.w3.org/2002/07/owl#> .
+ex:o a owl:Ontology ; owl:imports ex:schema .
+ex:tom a ex:Cat .
+`;
+const IMPORTED_SCHEMA =
+  "<https://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <https://example.org/Animal> .\n";
+
+test("queryEntailmentGoverned closes over the dataset's owl:imports table", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(IMPORTING, "turtle");
+  // No table: refused BY NAME, never answered over the dataset alone.
+  assert.throws(
+    () => engine.queryEntailmentGoverned(ds, RDFS_QUERY, "rdfs"),
+    /https:\/\/example\.org\/schema/,
+  );
+  const options = {
+    importIris: ["https://example.org/schema"],
+    importDocuments: [IMPORTED_SCHEMA],
+  };
+  const outcome = engine.queryEntailmentGoverned(ds, RDFS_QUERY, "rdfs", options);
+  assert.equal(outcome.phase, "answered");
+  assert.equal(outcome.outcome.result.rowCount, 1);
+  assert.match(outcome.report, /\nboundary ontology-import-resolved /);
+  // An entry a dataset that imports nothing never reaches is refused; the same dataset
+  // with no table answers.
+  const plain = Dataset.parse(RDFS, "turtle");
+  assert.throws(
+    () => engine.queryEntailmentGoverned(plain, RDFS_QUERY, "rdfs", options),
+    /would be read and never used/,
+  );
+  assert.equal(
+    engine.queryEntailmentGoverned(plain, RDFS_QUERY, "rdfs").outcome.result.rowCount,
+    1,
+  );
+});
+
+test("queryEntailmentGoverned takes the closure's evaluation limits, naming its own option", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(RDFS, "turtle");
+  assert.throws(
+    () => engine.queryEntailmentGoverned(ds, RDFS_QUERY, "owl-rl", { maxJoinSteps: 1 }),
+    (error) =>
+      error.message.includes("evaluation exceeded the join-step limit: ") &&
+      error.message.endsWith("raise it with queryEntailmentGoverned's maxJoinSteps"),
+  );
+  const answered = engine.queryEntailmentGoverned(ds, RDFS_QUERY, "owl-rl", {
+    maxStoredFacts: 131072n,
+    maxJoinSteps: 1048576,
+  });
+  assert.equal(answered.outcome.result.rowCount, 1);
+});
+
 test("queryEntailmentGoverned exposes a closure stop without an answer or report", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(RDFS, "turtle");
