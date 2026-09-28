@@ -307,7 +307,7 @@ fn rdf12_triple_terms_are_ordinary_nodes() {
         stdout(&as_object)
     );
 
-    // The triple term itself selected as a FOCUS node, and written back in the `<< … >>` term
+    // The triple term itself selected as a FOCUS node, and written back in the `<<( … )>>` term
     // syntax the shape-map grammar uses.
     let as_focus = run(&[
         "shex",
@@ -321,8 +321,8 @@ fn rdf12_triple_terms_are_ordinary_nodes() {
     let body = stdout(&as_focus);
     assert!(
         body.contains(
-            "<< <http://example.org/alice> <http://example.org/knows> \
-                       <http://example.org/bob> >>"
+            "<<( <http://example.org/alice> <http://example.org/knows> \
+                       <http://example.org/bob> )>>"
         ),
         "the triple term is the reported focus node:\n{body}"
     );

@@ -8,7 +8,7 @@
 use purrdf_core::TermBox;
 use std::sync::Arc;
 
-use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
+use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfTextDirection, TermValue};
 use purrdf_shex::{
     ConformanceStatus, NodeSelector, ResultEntry, ResultShapeMap, ShapeSelector, parse_shape_map,
     parse_shexc, validate,
@@ -163,7 +163,7 @@ fn round_trips_literal_forms() {
 #[test]
 fn round_trips_literal_escapes_including_backspace_and_form_feed() {
     // Quote, backslash, newline, carriage return, tab, backspace (U+0008),
-    // form feed (U+000C) — every escape `turtle_escape` must emit and
+    // form feed (U+000C) — every escape the shared writer must emit and
     // `parse_shape_map` must parse back.
     let lexical = "a\"b\\c\nd\re\tf\u{8}g\u{c}h";
     let literal = TermValue::simple_literal(lexical);
@@ -205,6 +205,25 @@ fn round_trips_quoted_triple_with_escaped_literal_object() {
         )),
     };
     assert_eq!(round_trip(&triple), triple);
+}
+
+#[test]
+fn round_trips_direction_and_scoped_blank_in_rdf12_triple() {
+    let triple = TermValue::Triple {
+        s: TermBox::new(TermValue::Blank {
+            label: "focus".into(),
+            scope: BlankScope(3),
+        }),
+        p: TermBox::new(TermValue::iri("http://a.example/p")),
+        o: TermBox::new(TermValue::Literal {
+            lexical_form: "right \"quoted\"".into(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".into(),
+            language: Some("ar".into()),
+            direction: Some(RdfTextDirection::Rtl),
+        }),
+    };
+    assert_eq!(round_trip(&triple), triple);
+    assert!(emitted_node_term(&triple).starts_with("<<( "));
 }
 
 #[test]

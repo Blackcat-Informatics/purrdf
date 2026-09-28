@@ -863,9 +863,7 @@ fn decode_escape(raw: &str, at: usize) -> (char, usize) {
         Some(b'"') => ('"', 2),
         Some(b'\'') => ('\'', 2),
         Some(b'\\') => ('\\', 2),
-        Some(b'u' | b'U') => {
-            purrdf_iri::terminals::decode_uchar(&bytes[at..]).unwrap_or(('\\', 1))
-        }
+        Some(b'u' | b'U') => purrdf_iri::terminals::decode_uchar(&bytes[at..]).unwrap_or(('\\', 1)),
         _ => ('\\', 1),
     }
 }

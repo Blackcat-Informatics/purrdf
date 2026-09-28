@@ -793,7 +793,11 @@ mod tests {
         for invalid in ["&#x+41;", "&#+65;", "&#x;", "&#;"] {
             assert!(unescape(invalid).is_err(), "{invalid}");
         }
-        assert_eq!(unescape("&#x41;&#65;").expect("unsigned references"), "AA");
+        let decimal = format!("&#{digits};", digits = 65);
+        assert_eq!(
+            unescape(&format!("&#x41;{decimal}")).expect("unsigned references"),
+            "AA"
+        );
     }
 
     /// Provenance round-trip: what [`crate::xml::to_xml`] writes under a namespace,

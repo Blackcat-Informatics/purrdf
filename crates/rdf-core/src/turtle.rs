@@ -50,6 +50,7 @@ use crate::{
     blank_label::{LabelAlphabet, encode_blank_label, retarget_owned_label},
     iri_escape::push_escaped,
 };
+use purrdf_iri::literal_escape::{LiteralEscapes, escape_body};
 use std::borrow::Cow;
 use std::fmt::Write as _;
 
@@ -108,7 +109,7 @@ pub fn rule_iri(base: &str, rule_name: &str) -> String {
 /// Escape a string for embedding in a double-quoted Turtle literal.
 ///
 /// Backslash first (so later escapes are not doubled), then the quote and the
-/// readable ECHAR forms (`\n \r \t`). The remaining C0 control characters and
+/// readable ECHAR forms (`\n \r \t \b \f`). The remaining C0 control characters and
 /// DEL (`0x7F`) are escaped as `\uXXXX` — the N-Triples/N-Quads literal grammar
 /// forbids them raw. The C1 block (`0x80`-`0x9F`) is left **raw**: the
 /// N-Triples/N-Quads literal grammar permits it and the W3C RDFC-1.0 fixtures
@@ -121,19 +122,7 @@ fn escape_literal(value: &str) -> String {
 }
 
 fn write_literal_escaped<W: TextOut + ?Sized>(value: &str, out: &mut W) {
-    for ch in value.chars() {
-        match ch {
-            '\\' => out.push_str("\\\\"),
-            '"' => out.push_str("\\\""),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 || c as u32 == 0x7f => {
-                let _ = write!(out, "\\u{:04X}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
+    let _ = escape_body(out, value, LiteralEscapes::Canonical);
 }
 
 /// Render an [`RdfLiteral`] as an N-Triples/Turtle literal token.
@@ -245,7 +234,7 @@ pub fn write_dataset_term<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId,
                         unreachable!("literal datatype must resolve to an IRI")
                     };
                     out.push_str("^^<");
-                    out.push_str(datatype);
+                    write_iri_escaped(datatype, out);
                     out.push('>');
                 }
             }
@@ -269,7 +258,7 @@ fn write_dataset_predicate<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId
         unreachable!("predicate must resolve to an IRI")
     };
     out.push('<');
-    out.push_str(iri);
+    write_iri_escaped(iri, out);
     out.push('>');
 }
 
@@ -668,6 +657,32 @@ mod tests {
             "<http://example.org/outer> <http://example.org/concludes> \
 <<( <http://example.org/s> <http://example.org/p> <http://example.org/o> )>> .\n"
         );
+    }
+
+    #[test]
+    fn borrowed_writer_uses_canonical_short_control_forms() {
+        let mut builder = crate::RdfDatasetBuilder::new();
+        let s = builder.intern_iri("http://example.org/s");
+        let p = builder.intern_iri("http://example.org/p");
+        let o = builder.intern_literal(RdfLiteral::typed(
+            "a\u{8}b\u{c}c",
+            "http://example.org/datatype",
+        ));
+        builder.push_quad(s, p, o, None);
+        let dataset = builder.freeze().expect("dataset freezes");
+
+        let mut out = String::new();
+        for quad in dataset.quads() {
+            write_dataset_quad(&dataset, quad, &mut out);
+        }
+        assert_eq!(
+            out,
+            "<http://example.org/s> <http://example.org/p> \
+\"a\\bb\\fc\"^^<http://example.org/datatype> .\n"
+        );
+        let mut escaped = String::new();
+        write_iri_escaped("http://example.org/a<b", &mut escaped);
+        assert_eq!(escaped, "http://example.org/a\\u003Cb");
     }
 
     #[test]

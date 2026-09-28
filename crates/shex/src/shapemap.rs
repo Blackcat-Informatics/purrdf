@@ -102,8 +102,9 @@
 //! where a token STOPS, either direction re-tokenizes silently rather than
 //! erroring; see [`terminals`] for the worked counterexample.
 
-use purrdf_core::TermBox;
+use purrdf_core::blank_label::{LabelAlphabet, decode_blank_label};
 use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermValue};
+use purrdf_core::{RdfTextDirection, TermBox};
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag, terminals};
 
 use crate::ast::Schema;
@@ -500,22 +501,27 @@ impl MapParser {
     }
 
     /// A term: an IRI, a blank node, a literal, or an RDF-1.2 quoted-triple term
-    /// `<< subject predicate object >>`, tolerating arbitrary whitespace between the
+    /// `<<( subject predicate object )>>`, tolerating arbitrary whitespace between the
     /// tokens. The three inner positions accept any node the emitter can produce,
-    /// including nested `<< >>` terms.
+    /// including nested triple terms. The older `<< subject predicate object >>`
+    /// spelling remains accepted for existing shape maps.
     ///
     /// Nested quoted triples are parsed by a loop over the triples opened and not yet
     /// closed, each holding the components parsed so far: `<<` opens one, a finished
     /// term becomes the next component of the innermost open one, and its third
     /// component is followed by the `>>` that closes it.
     fn parse_term(&mut self) -> Result<TermValue> {
-        let mut open: Vec<Vec<TermValue>> = Vec::new();
+        let mut open: Vec<(Vec<TermValue>, bool)> = Vec::new();
         loop {
             let mut term = match self.peek() {
                 Some('<') if self.peek_at(1) == Some('<') => {
                     self.pos += 2; // '<<'
+                    let rdf12 = self.peek() == Some('(');
+                    if rdf12 {
+                        self.pos += 1;
+                    }
                     self.skip_ws();
-                    open.push(Vec::with_capacity(3));
+                    open.push((Vec::with_capacity(3), rdf12));
                     continue;
                 }
                 Some('<') => TermValue::iri(self.parse_iri()?),
@@ -534,7 +540,7 @@ impl MapParser {
                 }
             };
             loop {
-                let Some(components) = open.last_mut() else {
+                let Some((components, rdf12)) = open.last_mut() else {
                     return Ok(term);
                 };
                 components.push(term);
@@ -542,12 +548,15 @@ impl MapParser {
                 if components.len() < 3 {
                     break;
                 }
+                if *rdf12 {
+                    self.expect(')')?;
+                }
                 if self.peek() != Some('>') || self.peek_at(1) != Some('>') {
                     return Err(self.err("expected '>>' to close a quoted-triple term"));
                 }
                 self.pos += 2;
                 let [s, p, o] = <[TermValue; 3]>::try_from(
-                    open.pop().expect("the innermost quoted triple is open"),
+                    open.pop().expect("the innermost quoted triple is open").0,
                 )
                 .unwrap_or_else(|_| unreachable!("a quoted triple closes after three components"));
                 term = TermValue::Triple {
@@ -831,7 +840,11 @@ impl MapParser {
             label.truncate(label.len() - trailing_dots);
             self.pos -= trailing_dots;
         }
-        Ok(TermValue::blank(label))
+        let (label, scope) = decode_blank_label(&label, LabelAlphabet::BlankNodeLabel);
+        Ok(TermValue::Blank {
+            label: label.into_owned(),
+            scope,
+        })
     }
 
     fn parse_literal(&mut self) -> Result<TermValue> {
@@ -870,13 +883,25 @@ impl MapParser {
                     break;
                 }
             }
-            if let Err(error) = langtag::parse_with(&tag, LANGTAG_PROFILE) {
+            let (language, direction) = match tag.rsplit_once("--") {
+                Some((language, "ltr")) => (language, Some(RdfTextDirection::Ltr)),
+                Some((language, "rtl")) => (language, Some(RdfTextDirection::Rtl)),
+                _ => (tag.as_str(), None),
+            };
+            if let Err(error) = langtag::parse_with(language, LANGTAG_PROFILE) {
                 return Err(self.err(&format!(
                     "expected a language tag: {error} [{code}]",
                     code = error.diagnostic_code()
                 )));
             }
-            Ok(TermValue::lang_literal(lexical, &tag))
+            Ok(TermValue::Literal {
+                lexical_form: lexical,
+                datatype: purrdf_iri::vocab::language_datatype_iri(true, direction.is_some())
+                    .expect("a language tag has a language datatype")
+                    .into(),
+                language: Some(language.to_lowercase()),
+                direction,
+            })
         } else {
             Ok(TermValue::simple_literal(lexical))
         }
@@ -1164,6 +1189,10 @@ mod term_walk_tests {
             return p.parse_term();
         }
         p.pos += 2;
+        let rdf12 = p.peek() == Some('(');
+        if rdf12 {
+            p.pos += 1;
+        }
         p.skip_ws();
         let s = reference_parse(p)?;
         p.skip_ws();
@@ -1171,6 +1200,9 @@ mod term_walk_tests {
         p.skip_ws();
         let o = reference_parse(p)?;
         p.skip_ws();
+        if rdf12 {
+            p.expect(')')?;
+        }
         if p.peek() != Some('>') || p.peek_at(1) != Some('>') {
             return Err(p.err("expected '>>' to close a quoted-triple term"));
         }
@@ -1182,12 +1214,12 @@ mod term_walk_tests {
         })
     }
 
-    /// The shape-map spelling of a generated term, `<< s p o >>` for a triple term: the
+    /// The shape-map spelling of a generated term, `<<( s p o )>>` for a triple term: the
     /// recursive reference of `validate::node_term_string`.
     fn spelled(value: &TermValue) -> String {
         match value {
             TermValue::Triple { s, p, o } => {
-                format!("<< {} {} {} >>", spelled(s), spelled(p), spelled(o))
+                format!("<<( {} {} {} )>>", spelled(s), spelled(p), spelled(o))
             }
             leaf => crate::validate::node_term_string(leaf),
         }
@@ -1242,11 +1274,11 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let open = "<< <http://example.org/s> <http://example.org/p> ";
+                let open = "<<( <http://example.org/s> <http://example.org/p> ";
                 let text = format!(
                     "{}<http://example.org/o>{}",
                     open.repeat(LEVELS),
-                    " >>".repeat(LEVELS)
+                    " )>>".repeat(LEVELS)
                 );
                 let parsed = parser(&text).parse_term().expect("the spelling parses");
                 assert_eq!(parsed, crate::test_terms::triple_chain(LEVELS));

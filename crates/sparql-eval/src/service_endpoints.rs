@@ -76,12 +76,10 @@
 //! and the rewrite, with or without `SILENT`: `SILENT` absorbs an invocation that fails,
 //! and there is none.
 
-use std::convert::Infallible;
-use std::fmt::Write as _;
-use std::ops::ControlFlow;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, TermValue, TermVisit};
+use purrdf_core::term_write::{TermWriteStyle, write_term_value};
+use purrdf_core::{DatasetView, TermValue};
 use purrdf_sparql_algebra::{Expression, GraphPattern, NamedNodePattern, Variable};
 
 use crate::error::EvalError;
@@ -1328,59 +1326,10 @@ fn describe_non_iri(value: &TermValue) -> String {
 /// term nested to any depth costs no machine stack.
 fn endpoint_text(value: &TermValue) -> String {
     let mut out = String::new();
-    let mut first = true;
-    let ControlFlow::Continue(()) =
-        value.visit_terms_pre_post(|event: TermVisit<'_>| -> ControlFlow<Infallible> {
-            match event {
-                TermVisit::Open(_) => {
-                    separate(&mut out, &mut first);
-                    out.push_str("<<(");
-                    first = false;
-                }
-                TermVisit::Close(_) => out.push_str(" )>>"),
-                TermVisit::Leaf(term) => {
-                    let nested = !first;
-                    separate(&mut out, &mut first);
-                    match term {
-                        // The record's own endpoint is written bare; inside a triple
-                        // term an IRI is bracketed.
-                        TermValue::Iri(iri) if nested => write!(out, "<{iri}>"),
-                        TermValue::Iri(iri) => write!(out, "{iri}"),
-                        TermValue::Blank { label, .. } => write!(out, "_:{label}"),
-                        TermValue::Literal {
-                            lexical_form,
-                            datatype,
-                            language,
-                            ..
-                        } => match language {
-                            Some(language) => write!(out, "\"{lexical_form}\"@{language}"),
-                            None if datatype == XSD_STRING => write!(out, "\"{lexical_form}\""),
-                            None => write!(out, "\"{lexical_form}\"^^<{datatype}>"),
-                        },
-                        TermValue::Triple { .. } => {
-                            unreachable!("a triple term is opened and closed, never a leaf")
-                        }
-                    }
-                    .expect("a String accepts text");
-                }
-            }
-            ControlFlow::Continue(())
-        });
+    write_term_value(value, TermWriteStyle::SERVICE_ENDPOINT, &mut out)
+        .expect("a String accepts text");
     out
 }
-
-/// Put the space that separates a triple term's components before the next one:
-/// nothing before the record's own endpoint, a space before everything after it.
-fn separate(out: &mut String, first: &mut bool) {
-    if *first {
-        *first = false;
-    } else {
-        out.push(' ');
-    }
-}
-
-/// The datatype a simple literal carries.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 /// What one endpoint contributed to the clause.
 enum Block<I: purrdf_core::ViewTermId> {
@@ -3130,9 +3079,11 @@ mod endpoint_text_tests {
     //! The silenced-invocation endpoint text against its recursive reference, and at a
     //! hundred thousand levels on a 128 KiB thread.
 
-    use purrdf_core::{TermBox, TermValue};
+    use purrdf_core::{RdfTextDirection, TermBox, TermValue};
 
-    use super::{XSD_STRING, endpoint_text};
+    use super::endpoint_text;
+
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
     const DEPTH: usize = 100_000;
     const SMALL_STACK: usize = 128 * 1024;
@@ -3269,6 +3220,17 @@ mod endpoint_text_tests {
             "http://example.org/e",
             "the endpoint's own IRI is bare"
         );
+    }
+
+    #[test]
+    fn endpoint_text_preserves_literal_direction_and_quotes() {
+        let value = TermValue::Literal {
+            lexical_form: "a\"b\\c".into(),
+            datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".into(),
+            language: Some("ar".into()),
+            direction: Some(RdfTextDirection::Rtl),
+        };
+        assert_eq!(endpoint_text(&value), "\"a\\\"b\\\\c\"@ar--rtl");
     }
 
     /// A triple term a hundred thousand levels deep is spelled on a 128 KiB thread: every

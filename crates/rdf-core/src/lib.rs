@@ -157,6 +157,7 @@ pub mod small;
 pub mod sssom;
 /// Dataset/import capability flags ([`RdfStoreCapabilities`]).
 pub mod store;
+pub mod term_write;
 pub mod turtle;
 // The canonical, review-friendly Turtle RENDERER over the IR — the oxigraph-free half
 // of the on-disk normalizer (the oxigraph-coupled text parser stays in `purrdf`).
@@ -287,6 +288,9 @@ pub use sssom::{
     SssomMeta, SssomSetComment,
 };
 pub use store::RdfStoreCapabilities;
+pub use term_write::{
+    BlankSpelling, IriSpelling, RootIriSpelling, StringDatatype, TermWriteStyle, write_term_value,
+};
 pub use turtle::{
     display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
     write_dataset_annotation, write_dataset_annotation_nquad, write_dataset_nquad,
