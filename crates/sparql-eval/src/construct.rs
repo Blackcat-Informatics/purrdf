@@ -1224,13 +1224,13 @@ fn push_loss_code(
 /// A deterministic blank-node label for a loss node, derived PURELY from the loss
 /// code and the resolved triple-term content. Identical drops (same triple term)
 /// produce the same label so the builder dedups them to ONE node; no counter, no
-/// randomness. Uses a fixed-seed hash of the term value for a compact, stable label.
+/// randomness. The preimage frames the code and appends the term's injective,
+/// target-independent canonical bytes before applying spec-fixed FNV-1a.
 fn loss_node_label(code: &str, inner: &TermValue) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    code.hash(&mut h);
-    inner.hash(&mut h);
-    format!("loss-{:016x}", h.finish())
+    let mut preimage = Vec::new();
+    purrdf_hash::frame::frame_le(&mut preimage, code.as_bytes());
+    inner.canonical_bytes(&mut preimage);
+    format!("loss-{:016x}", purrdf_hash::fnv::fnv1a64(&preimage))
 }
 
 /// Instantiate one template triple for `row`, interning into `builder`. Returns
@@ -2202,6 +2202,37 @@ mod tests {
     /// The fixture's caller-supplied loss vocabulary.
     fn ex_loss_vocab() -> crate::eval::LossVocabulary {
         crate::eval::LossVocabulary::new(PROJECTION_LOSS, LOSS_CODE, LOST_REIFIES)
+    }
+
+    #[test]
+    fn loss_node_label_is_fixed_and_distinguishes_content() {
+        let iri = TermValue::iri("https://example.org/x");
+        assert_eq!(
+            loss_node_label("reifier-layer-dropped", &iri),
+            "loss-2a71c75c7cee734e"
+        );
+        assert_eq!(
+            loss_node_label("reifier-layer-dropped", &iri.clone()),
+            loss_node_label("reifier-layer-dropped", &iri)
+        );
+        assert_ne!(
+            loss_node_label("reifier-layer-dropped", &iri),
+            loss_node_label("annotation-layer-dropped", &iri)
+        );
+        let triple = TermValue::Triple {
+            s: TermBox::new(iri),
+            p: TermBox::new(TermValue::iri("https://example.org/p")),
+            o: TermBox::new(TermValue::simple_literal("x")),
+        };
+        let changed = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("https://example.org/x")),
+            p: TermBox::new(TermValue::iri("https://example.org/p")),
+            o: TermBox::new(TermValue::simple_literal("y")),
+        };
+        assert_ne!(
+            loss_node_label("reifier-layer-dropped", &triple),
+            loss_node_label("reifier-layer-dropped", &changed)
+        );
     }
 
     /// A dataset with one reifier `:r rdf:reifies <<( :alice :age 42 )>>`, with two
