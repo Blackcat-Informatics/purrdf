@@ -91,8 +91,9 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
   `select` / `ask` / `construct` / `describe`、原子的 `update`，以及
   `queryRaw` 序列化。`Dataset.query(...)` 仍作为兼容用的裸字符串辅助方法保留。
 - **SHACL**——`shaclValidateToSarif(shapesTtl, dataNt)` 用一份 Turtle 形状图验证一份
-  N-Triples 数据图并返回 SARIF 2.1.0 报告；`shaclEntail(shapesTtl, dataNt)` 把
-  SHACL-AF `sh:rule` 的推论物化为 N-Triples。
+  N-Triples 数据图并返回 SARIF 2.1.0 报告；`shaclEntail(shapesTtl, dataNt)` 物化
+  SHACL-AF `sh:rule` 的推论，并返回一个 `ShaclEntailment`：`ntriples` 以 N-Triples 形式
+  保存结果，`diagnostics` 保存形状图的强制诊断。须对它调用 `free()`。
 - **`Sink`**——流式消费者（`push(quad)` / `finish() → Dataset`）；
   `datasetToStream` / `streamToDataset` 是异步的 RDF/JS Stream/Sink 辅助方法。
 
