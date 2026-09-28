@@ -55,6 +55,12 @@ struct Unioner {
     blob_index: DigestIndex,
     blob_meta_index: DigestIndex,
     intern: HashMap<InternKey, usize>,
+    /// Union id of every segment term already mapped, by `(segment, term id)`. A term
+    /// is mapped once: a later reference — a component shared by two triple terms, or
+    /// the component a triple's key and its output both name — takes its id from here
+    /// instead of walking the term's components again, so mapping a chain costs time
+    /// linear in its length.
+    mapped: HashMap<(usize, usize), usize>,
 }
 
 /// Where a term being mapped by [`Unioner::map_term`] stands: each stage waits for the
@@ -165,6 +171,18 @@ impl Unioner {
                 frames.push(MapFrame::new(call));
                 continue;
             }
+            if matches!(frame.stage, MapStage::Start)
+                && let Some(&known) = self.mapped.get(&(seg_idx, frame.tid))
+            {
+                frames.pop();
+                match frames.last_mut() {
+                    Some(parent) => {
+                        parent.results.push(known);
+                        continue;
+                    }
+                    None => return known,
+                }
+            }
             // `seg` is a parameter, not a field of `self`, so the term can be
             // borrowed across the `&mut self` mappings; only the two `Option<String>`
             // fields that move into the pushed `Term` are cloned below.
@@ -256,7 +274,8 @@ impl Unioner {
                     new_id
                 }
             };
-            frames.pop();
+            let done = frames.pop().expect("a term is being mapped");
+            self.mapped.insert((seg_idx, done.tid), mapped);
             match frames.last_mut() {
                 Some(parent) => parent.results.push(mapped),
                 None => return mapped,
