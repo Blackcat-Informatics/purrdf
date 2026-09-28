@@ -2216,7 +2216,7 @@ pub enum AsyncOperationKind {
     Explain = 8,
     /// A SHACL entry that can evaluate SPARQL — validation to SARIF, change validation,
     /// SHACL-AF entailment, a rules run, a node expression, or validation with a
-    /// prepared product ([`ShaclRequest`] names which). Its `sh:SPARQLTarget` queries,
+    /// prepared product (`ShaclRequest` names which). Its `sh:SPARQLTarget` queries,
     /// SHACL-SPARQL constraints, node expressions and rules run under the job's signal,
     /// and the signal is polled between focus nodes too, so a validation with no SPARQL
     /// in it still yields and stops. Started through `AsyncJob.beginShacl`.
@@ -3487,7 +3487,7 @@ impl fmt::Display for OptionsError {
 }
 
 /// The configuration of one asynchronous job: an options object read and validated
-/// against its operation's [`OperationSpec`] ([`Self::from_js`]).
+/// against its operation's `OperationSpec` ([`Self::from_js`]).
 ///
 /// Every option a kind would ignore is refused by name rather than dropped: an option a
 /// caller believes applies and that nothing enforces is the silent hole this surface

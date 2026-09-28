@@ -152,7 +152,7 @@ pub enum RemoteError {
     /// The host answering the invocation broke the resolver protocol: its handler threw
     /// or rejected, or answered with something that is not an answer — a value the
     /// protocol does not define, a failure kind it does not name. The invocation failed,
-    /// so `SILENT` silences it (recorded as [`SilencedKind::Fault`]); without `SILENT` it
+    /// so `SILENT` silences it (recorded as [`SilencedKind::Fault`](purrdf_core::SilencedKind::Fault)); without `SILENT` it
     /// is [`EvalError::ServiceHostFault`]. Its own variant rather than
     /// [`Self::Transport`], because the endpoint was never shown to be at fault: the
     /// host's adapter was, and a host reading the evidence is owed that distinction.

@@ -502,7 +502,7 @@ impl ShaclRulesInference {
 }
 
 /// Run a rule set over `data_nt`. Native-testable core of [`shacl_apply_rules`]; the
-/// plain Rust [`ShapesError`] for the reason [`validate_to_sarif_impl`] gives.
+/// plain Rust [`ShapesError`] for the reason `validate_to_sarif_impl` gives.
 impl From<purrdf_validate::RulesOutcome> for ShaclRulesInference {
     fn from(outcome: purrdf_validate::RulesOutcome) -> Self {
         Self {

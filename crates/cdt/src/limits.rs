@@ -26,7 +26,7 @@
 //!
 //! # Every value carries its own measure
 //!
-//! A [`crate::CdtValue`] stores the [`Extent`] it was built with — its element count
+//! A [`crate::CdtValue`] stores the `Extent` it was built with — its element count
 //! at every level and the exact byte length of its canonical form — so measuring a
 //! composite that holds it costs one read rather than a walk. That is what keeps
 //! building a value one level at a time linear: each constructor measures its

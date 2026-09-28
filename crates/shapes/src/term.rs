@@ -800,7 +800,7 @@ impl Term {
     /// Convert this native term into the owned [`RdfTerm`](purrdf::RdfTerm) model — used when
     /// building a report dataset for serialization.
     ///
-    /// A quoted triple is converted bottom-up over [`Self::fold_nested`]'s work list.
+    /// A quoted triple is converted bottom-up over `Self::fold_nested`'s work list.
     pub fn to_rdf_term(&self) -> ::purrdf::RdfTerm {
         use purrdf::{RdfLiteral, RdfTerm, RdfTriple};
         let converted = self.fold_nested(
@@ -845,7 +845,7 @@ impl Term {
     /// Convert this native term into a dataset-independent [`TermValue`] — the SPARQL
     /// substitution value and the canonical lookup key.
     ///
-    /// A quoted triple is converted bottom-up over [`Self::fold_nested`]'s work list.
+    /// A quoted triple is converted bottom-up over `Self::fold_nested`'s work list.
     pub fn to_term_value(&self) -> TermValue {
         let converted = self.fold_nested(
             &mut (),

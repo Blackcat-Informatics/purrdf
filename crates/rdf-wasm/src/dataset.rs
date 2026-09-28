@@ -257,7 +257,7 @@ static NEXT_DATASET_ID: AtomicU64 = AtomicU64::new(1);
 /// could detect.
 ///
 /// An asynchronous UPDATE also *claims* the dataset while it is in flight
-/// ([`Dataset::claim_update`]): a second asynchronous update of the same dataset is
+/// (`Dataset::claim_update`): a second asynchronous update of the same dataset is
 /// refused until the first is finished, rather than evaluated against a snapshot its
 /// commit would then be refused over.
 #[wasm_bindgen]

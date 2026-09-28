@@ -69,7 +69,7 @@
 //!
 //! The one place a walk meets a value that is not in the input is a `cdt:`-typed
 //! literal: the value relations see through it to the composite its lexical form
-//! denotes (see [`composite_reach`]), and that composite has to be parsed into a value
+//! denotes (see `composite_reach`), and that composite has to be parsed into a value
 //! nobody else owns. The walk **owns** it: the parsed value goes onto the same work
 //! list as the borrowed input, as an owned item beside the borrowed ones, and is
 //! taken apart there position by position exactly as a nested composite written with
