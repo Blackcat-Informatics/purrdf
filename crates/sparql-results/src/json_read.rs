@@ -11,9 +11,18 @@
 //!
 //! # Wasm discipline
 //!
-//! A hand-rolled recursive-descent parser over `&[u8]` — **no `serde`, no
-//! `std::io`** — symmetric with the hand-rolled writers and keeping the crate
-//! wasm-clean and oxigraph-free.
+//! A hand-rolled parser over `&[u8]` — **no `serde`, no `std::io`** — symmetric
+//! with the hand-rolled writers and keeping the crate wasm-clean and
+//! oxigraph-free.
+//!
+//! # Nesting depth
+//!
+//! Every walk over input nesting — parsing a JSON value, skipping one, dropping a
+//! parsed value, and decoding an RDF 1.2 triple-term binding — runs over an
+//! explicit heap stack rather than the machine stack. A document nested to any
+//! depth is therefore parsed (or refused for a syntax or shape error) with a
+//! machine-stack footprint independent of that depth, which is what keeps a remote
+//! `SERVICE` endpoint's deeply nested answer from overflowing the stack.
 
 use purrdf_core::TermBox;
 use purrdf_core::terminals::find_first_json_string_special;
@@ -348,9 +357,89 @@ pub fn provenance_from_json(
     })
 }
 
-/// Decode one SPARQL-JSON binding object into a [`TermValue`] (recursive for
-/// RDF 1.2 triple terms).
+/// Decode one SPARQL-JSON binding object into a [`TermValue`].
+///
+/// An RDF 1.2 triple term nests further binding objects under its `subject`,
+/// `predicate` and `object` members to any depth. They are decoded over an explicit
+/// heap stack of partly decoded triple terms, so the machine stack used does not
+/// grow with the nesting depth. Components are decoded in the order `subject`,
+/// `predicate`, `object`, and a triple term's predicate is checked to be an IRI only
+/// after its object has been decoded, so the first error reported for a malformed
+/// document is the one a depth-first descent in that order meets first.
 fn decode_binding(value: &Json) -> Result<TermValue, Error> {
+    let mut open: Vec<OpenTriple<'_>> = Vec::new();
+    let mut next = value;
+    loop {
+        let mut term = match decode_binding_node(next)? {
+            BindingNode::Term(term) => term,
+            BindingNode::Triple(inner) => {
+                next = obj_get(inner, "subject").ok_or_else(|| fmt("triple has no subject"))?;
+                open.push(OpenTriple {
+                    inner,
+                    subject: None,
+                    predicate: None,
+                });
+                continue;
+            }
+        };
+        // Hand the finished term to the innermost open triple term; every triple term
+        // it completes is handed on to the one enclosing it in turn.
+        loop {
+            let Some(triple) = open.last_mut() else {
+                return Ok(term);
+            };
+            if triple.subject.is_none() {
+                triple.subject = Some(term);
+                next = obj_get(triple.inner, "predicate")
+                    .ok_or_else(|| fmt("triple has no predicate"))?;
+                break;
+            }
+            if triple.predicate.is_none() {
+                triple.predicate = Some(term);
+                next =
+                    obj_get(triple.inner, "object").ok_or_else(|| fmt("triple has no object"))?;
+                break;
+            }
+            let OpenTriple {
+                subject, predicate, ..
+            } = open
+                .pop()
+                .expect("the innermost open triple term was just read");
+            let (Some(s), Some(p)) = (subject, predicate) else {
+                unreachable!(
+                    "an open triple term holding its object holds its subject and predicate"
+                );
+            };
+            if !matches!(p, TermValue::Iri(_)) {
+                return Err(fmt("triple-term predicate is not an IRI"));
+            }
+            term = TermValue::Triple {
+                s: TermBox::new(s),
+                p: TermBox::new(p),
+                o: TermBox::new(term),
+            };
+        }
+    }
+}
+
+/// A triple-term binding whose components are still being decoded: its `value`
+/// object and the components decoded so far, in `subject`, `predicate` order.
+struct OpenTriple<'a> {
+    inner: &'a [(String, Json)],
+    subject: Option<TermValue>,
+    predicate: Option<TermValue>,
+}
+
+/// One binding object read at a single level: a finished term, or the `value`
+/// object of a triple term whose components remain to be decoded.
+enum BindingNode<'a> {
+    Term(TermValue),
+    Triple(&'a [(String, Json)]),
+}
+
+/// Decode the binding object `value` down to, but not into, the components of a
+/// triple term.
+fn decode_binding_node(value: &Json) -> Result<BindingNode<'_>, Error> {
     let obj = value
         .as_object()
         .ok_or_else(|| fmt("binding is not an object"))?;
@@ -360,14 +449,14 @@ fn decode_binding(value: &Json) -> Result<TermValue, Error> {
     match ty {
         "uri" => {
             let v = binding_value(obj)?;
-            Ok(TermValue::Iri(v.to_owned()))
+            Ok(BindingNode::Term(TermValue::Iri(v.to_owned())))
         }
         "bnode" => {
             let v = binding_value(obj)?;
-            Ok(TermValue::Blank {
+            Ok(BindingNode::Term(TermValue::Blank {
                 label: v.to_owned(),
                 scope: BlankScope::DEFAULT,
-            })
+            }))
         }
         "literal" | "typed-literal" => {
             let v = binding_value(obj)?;
@@ -396,35 +485,17 @@ fn decode_binding(value: &Json) -> Result<TermValue, Error> {
             };
             let datatype = obj_get(obj, "datatype").and_then(Json::as_str);
             let datatype = resolve_datatype(datatype, language.is_some(), direction.is_some());
-            Ok(TermValue::Literal {
+            Ok(BindingNode::Term(TermValue::Literal {
                 lexical_form: v.to_owned(),
                 datatype,
                 language: language.map(str::to_owned),
                 direction,
-            })
+            }))
         }
-        "triple" => {
-            let inner = obj_get(obj, "value")
-                .and_then(Json::as_object)
-                .ok_or_else(|| fmt("triple binding has no object `value`"))?;
-            let s = decode_binding(
-                obj_get(inner, "subject").ok_or_else(|| fmt("triple has no subject"))?,
-            )?;
-            let p = decode_binding(
-                obj_get(inner, "predicate").ok_or_else(|| fmt("triple has no predicate"))?,
-            )?;
-            let o = decode_binding(
-                obj_get(inner, "object").ok_or_else(|| fmt("triple has no object"))?,
-            )?;
-            if !matches!(p, TermValue::Iri(_)) {
-                return Err(fmt("triple-term predicate is not an IRI"));
-            }
-            Ok(TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
-            })
-        }
+        "triple" => obj_get(obj, "value")
+            .and_then(Json::as_object)
+            .map(BindingNode::Triple)
+            .ok_or_else(|| fmt("triple binding has no object `value`")),
         other => Err(fmt(&format!("unknown binding type `{other}`"))),
     }
 }
@@ -458,19 +529,64 @@ fn obj_get<'a>(obj: &'a [(String, Json)], key: &str) -> Option<&'a Json> {
     obj.iter().find(|(k, _)| k == key).map(|(_, v)| v)
 }
 
-/// A minimal JSON value (numbers retained as their lexical form — SPARQL-JSON
-/// never needs them numerically).
-#[derive(Debug, Clone, PartialEq)]
+/// A minimal JSON value. A number is syntax-scanned and kept only as the fact of
+/// being a number: no SPARQL-JSON member this reader decodes holds one.
+///
+/// Its drop takes nested arrays and objects apart over a heap work list, so dropping
+/// a value of any nesting depth uses a fixed amount of machine stack.
 enum Json {
     Null,
     Bool(bool),
-    Number(String),
+    Number,
     String(String),
     Array(Vec<Self>),
     Object(Vec<(String, Self)>),
 }
 
+impl Drop for Json {
+    fn drop(&mut self) {
+        if !self.has_children() {
+            return;
+        }
+        let mut pending = Vec::new();
+        self.move_children_into(&mut pending);
+        while let Some(mut node) = pending.pop() {
+            node.move_children_into(&mut pending);
+            // `node` now holds no children, so its own drop returns at once.
+        }
+    }
+}
+
 impl Json {
+    /// Whether this is a non-empty array or object.
+    fn has_children(&self) -> bool {
+        match self {
+            Self::Array(items) => !items.is_empty(),
+            Self::Object(entries) => !entries.is_empty(),
+            _ => false,
+        }
+    }
+
+    /// Move every child array or object that itself has children onto `pending`,
+    /// leaving this value's own array or object empty; every other child is dropped
+    /// here.
+    fn move_children_into(&mut self, pending: &mut Vec<Self>) {
+        match self {
+            Self::Array(items) => {
+                pending.extend(items.drain(..).filter(Self::has_children));
+            }
+            Self::Object(entries) => {
+                pending.extend(
+                    entries
+                        .drain(..)
+                        .map(|(_, value)| value)
+                        .filter(Self::has_children),
+                );
+            }
+            _ => {}
+        }
+    }
+
     fn as_str(&self) -> Option<&str> {
         match self {
             Self::String(s) => Some(s),
@@ -485,7 +601,15 @@ impl Json {
     }
 }
 
-/// A hand-rolled recursive-descent JSON parser over `&[u8]`.
+/// An array or object [`JsonParser::parse_value`] has opened and not yet closed: the
+/// entries parsed into it so far and, for an object, the key of the entry whose value
+/// is being parsed.
+enum OpenContainer {
+    Array(Vec<Json>),
+    Object(Vec<(String, Json)>, String),
+}
+
+/// A hand-rolled JSON parser over `&[u8]`; nested values are tracked on heap stacks.
 struct JsonParser<'a> {
     bytes: &'a [u8],
     pos: usize,
@@ -685,62 +809,134 @@ impl<'a> JsonParser<'a> {
         self.peek()
     }
 
-    /// Syntax-validate and discard one JSON value without building its recursive tree.
+    /// Syntax-validate and discard one JSON value without building its tree.
+    ///
+    /// The closing bracket of every array and object still open is held on a heap
+    /// stack, so the machine stack used does not grow with the value's nesting depth.
     fn skip_value(&mut self) -> Result<(), Error> {
-        self.skip_ws();
-        match self.peek() {
-            Some(b'{') => {
-                self.pos += 1;
-                self.skip_ws();
-                if self.peek() == Some(b'}') {
+        let mut open: Vec<u8> = Vec::new();
+        loop {
+            self.skip_ws();
+            match self.peek() {
+                Some(b'{') => {
                     self.pos += 1;
-                    return Ok(());
-                }
-                loop {
-                    drop(self.parse_object_key()?);
-                    self.skip_value()?;
-                    if self.finish_entry(b'}', "expected `,` or `}` in object")? {
-                        return Ok(());
+                    self.skip_ws();
+                    if self.peek() == Some(b'}') {
+                        self.pos += 1;
+                    } else {
+                        drop(self.parse_object_key()?);
+                        open.push(b'}');
+                        continue;
                     }
                 }
-            }
-            Some(b'[') => {
-                self.pos += 1;
-                self.skip_ws();
-                if self.peek() == Some(b']') {
+                Some(b'[') => {
                     self.pos += 1;
-                    return Ok(());
-                }
-                loop {
-                    self.skip_value()?;
-                    if self.finish_entry(b']', "expected `,` or `]` in array")? {
-                        return Ok(());
+                    self.skip_ws();
+                    if self.peek() == Some(b']') {
+                        self.pos += 1;
+                    } else {
+                        open.push(b']');
+                        continue;
                     }
                 }
+                Some(b'"') => drop(self.parse_string()?),
+                Some(b't') => self.parse_lit("true", Json::Bool(true)).map(drop)?,
+                Some(b'f') => self.parse_lit("false", Json::Bool(false)).map(drop)?,
+                Some(b'n') => self.parse_lit("null", Json::Null).map(drop)?,
+                Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number().map(drop)?,
+                _ => return Err(fmt("unexpected token while parsing a value")),
             }
-            Some(b'"') => {
-                drop(self.parse_string()?);
-                Ok(())
+            // A value is complete: close every array or object it completes, then
+            // step to the next entry of the innermost one still open.
+            loop {
+                let Some(&closing) = open.last() else {
+                    return Ok(());
+                };
+                let message = if closing == b'}' {
+                    "expected `,` or `}` in object"
+                } else {
+                    "expected `,` or `]` in array"
+                };
+                if self.finish_entry(closing, message)? {
+                    open.pop();
+                } else {
+                    if closing == b'}' {
+                        drop(self.parse_object_key()?);
+                    }
+                    break;
+                }
             }
-            Some(b't') => self.parse_lit("true", Json::Bool(true)).map(drop),
-            Some(b'f') => self.parse_lit("false", Json::Bool(false)).map(drop),
-            Some(b'n') => self.parse_lit("null", Json::Null).map(drop),
-            Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number().map(drop),
-            _ => Err(fmt("unexpected token while parsing a value")),
         }
     }
 
+    /// Parse one JSON value into a tree.
+    ///
+    /// Every array and object still open is held on a heap stack together with the
+    /// entries parsed into it so far, so the machine stack used does not grow with
+    /// the value's nesting depth.
     fn parse_value(&mut self) -> Result<Json, Error> {
-        self.skip_ws();
-        match self.peek() {
-            Some(b'{') => self.parse_object(),
-            Some(b'[') => self.parse_array(),
-            Some(b'"') => Ok(Json::String(self.parse_string()?)),
-            Some(b't') => self.parse_lit("true", Json::Bool(true)),
-            Some(b'f') => self.parse_lit("false", Json::Bool(false)),
-            Some(b'n') => self.parse_lit("null", Json::Null),
-            Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number(),
-            _ => Err(fmt("unexpected token while parsing a value")),
+        let mut open: Vec<OpenContainer> = Vec::new();
+        loop {
+            self.skip_ws();
+            let mut value = match self.peek() {
+                Some(b'{') => {
+                    self.pos += 1;
+                    self.skip_ws();
+                    if self.peek() == Some(b'}') {
+                        self.pos += 1;
+                        Json::Object(Vec::new())
+                    } else {
+                        let key = self.parse_object_key()?;
+                        open.push(OpenContainer::Object(Vec::new(), key));
+                        continue;
+                    }
+                }
+                Some(b'[') => {
+                    self.pos += 1;
+                    self.skip_ws();
+                    if self.peek() == Some(b']') {
+                        self.pos += 1;
+                        Json::Array(Vec::new())
+                    } else {
+                        open.push(OpenContainer::Array(Vec::new()));
+                        continue;
+                    }
+                }
+                Some(b'"') => Json::String(self.parse_string()?),
+                Some(b't') => self.parse_lit("true", Json::Bool(true))?,
+                Some(b'f') => self.parse_lit("false", Json::Bool(false))?,
+                Some(b'n') => self.parse_lit("null", Json::Null)?,
+                Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number()?,
+                _ => return Err(fmt("unexpected token while parsing a value")),
+            };
+            // A value is complete: add it to the innermost open array or object,
+            // closing each one it completes, then step to that container's next entry.
+            loop {
+                match open.last_mut() {
+                    None => return Ok(value),
+                    Some(OpenContainer::Array(items)) => {
+                        items.push(value);
+                        if !self.finish_entry(b']', "expected `,` or `]` in array")? {
+                            break;
+                        }
+                        let Some(OpenContainer::Array(items)) = open.pop() else {
+                            unreachable!("the innermost open container was just read as an array");
+                        };
+                        value = Json::Array(items);
+                    }
+                    Some(OpenContainer::Object(entries, key)) => {
+                        entries.push((core::mem::take(key), value));
+                        if !self.finish_entry(b'}', "expected `,` or `}` in object")? {
+                            *key = self.parse_object_key()?;
+                            break;
+                        }
+                        let Some(OpenContainer::Object(entries, _)) = open.pop() else {
+                            unreachable!("the innermost open container was just read as an object");
+                        };
+                        value = Json::Object(entries);
+                    }
+                }
+            }
         }
     }
 
@@ -754,7 +950,6 @@ impl<'a> JsonParser<'a> {
     }
 
     fn parse_number(&mut self) -> Result<Json, Error> {
-        let start = self.pos;
         while let Some(c) = self.peek() {
             if c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'.' | b'e' | b'E') {
                 self.pos += 1;
@@ -762,70 +957,7 @@ impl<'a> JsonParser<'a> {
                 break;
             }
         }
-        let raw = core::str::from_utf8(&self.bytes[start..self.pos])
-            .map_err(|_| fmt("non-UTF-8 number"))?;
-        Ok(Json::Number(raw.to_owned()))
-    }
-
-    fn parse_array(&mut self) -> Result<Json, Error> {
-        self.pos += 1; // consume '['
-        let mut items = Vec::new();
-        self.skip_ws();
-        if self.peek() == Some(b']') {
-            self.pos += 1;
-            return Ok(Json::Array(items));
-        }
-        loop {
-            items.push(self.parse_value()?);
-            self.skip_ws();
-            match self.peek() {
-                Some(b',') => {
-                    self.pos += 1;
-                }
-                Some(b']') => {
-                    self.pos += 1;
-                    break;
-                }
-                _ => return Err(fmt("expected `,` or `]` in array")),
-            }
-        }
-        Ok(Json::Array(items))
-    }
-
-    fn parse_object(&mut self) -> Result<Json, Error> {
-        self.pos += 1; // consume '{'
-        let mut entries = Vec::new();
-        self.skip_ws();
-        if self.peek() == Some(b'}') {
-            self.pos += 1;
-            return Ok(Json::Object(entries));
-        }
-        loop {
-            self.skip_ws();
-            if self.peek() != Some(b'"') {
-                return Err(fmt("expected string key in object"));
-            }
-            let key = self.parse_string()?;
-            self.skip_ws();
-            if self.peek() != Some(b':') {
-                return Err(fmt("expected `:` after object key"));
-            }
-            self.pos += 1;
-            let value = self.parse_value()?;
-            entries.push((key, value));
-            self.skip_ws();
-            match self.peek() {
-                Some(b',') => {
-                    self.pos += 1;
-                }
-                Some(b'}') => {
-                    self.pos += 1;
-                    break;
-                }
-                _ => return Err(fmt("expected `,` or `}` in object")),
-            }
-        }
-        Ok(Json::Object(entries))
+        Ok(Json::Number)
     }
 
     /// Parse one JSON string, positioned at its opening quote.
@@ -1717,6 +1849,199 @@ mod tests {
                     direction: None,
                 }),
                 "the gate must not alter the tag it lets through ({tag:?})"
+            );
+        }
+    }
+
+    /// The nesting depth every deep-input test uses.
+    const DEEP: usize = 1_000_000;
+
+    /// Run `body` on a thread with a 128 KiB machine stack: a walk that recursed once
+    /// per nesting level would overflow it after a few hundred levels.
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(body)
+            .expect("spawn a small-stack thread")
+            .join()
+            .expect("the small-stack thread finished without overflowing")
+    }
+
+    /// `depth` nested JSON arrays around nothing: `[[…[]…]]`.
+    fn nested_arrays(depth: usize) -> String {
+        let mut text = "[".repeat(depth);
+        text.push_str(&"]".repeat(depth));
+        text
+    }
+
+    fn select_with_binding(cell: &str) -> Vec<u8> {
+        format!(r#"{{"head":{{"vars":["x"]}},"results":{{"bindings":[{{"x":{cell}}}]}}}}"#)
+            .into_bytes()
+    }
+
+    fn format_error(message: &str) -> Error {
+        Error::Format(format!("SPARQL-JSON: {message}"))
+    }
+
+    #[test]
+    fn a_deeply_nested_value_in_a_binding_position_is_refused_without_overflow() {
+        let (full, bounded, truncated) = on_small_stack(|| {
+            let doc = select_with_binding(&nested_arrays(DEEP));
+            // The same nesting with its innermost array left unclosed.
+            let unclosed = select_with_binding(&"[".repeat(DEEP));
+            (
+                from_json(&doc),
+                from_json_bounded(&doc, u64::MAX).map(|bounded| bounded.solutions),
+                from_json(&unclosed),
+            )
+        });
+        let not_an_object = format_error("binding is not an object");
+        assert_eq!(full, Err(not_an_object.clone()));
+        assert_eq!(bounded, Err(not_an_object));
+        assert_eq!(
+            truncated,
+            Err(format_error("unexpected token while parsing a value"))
+        );
+    }
+
+    #[test]
+    fn a_deeply_nested_ignored_member_parses_without_overflow() {
+        let (full, bounded, skipped) = on_small_stack(|| {
+            let deep = nested_arrays(DEEP);
+            let doc = format!(
+                r#"{{"head":{{"vars":["x"],"link":{deep}}},"results":{{"bindings":[{{"x":{{"type":"uri","value":"http://example.org/a"}},"y":{deep}}}]}},"extra":{deep}}}"#
+            )
+            .into_bytes();
+            // A second binding past a one-cell ceiling is skipped, not decoded.
+            let over_limit = format!(
+                r#"{{"head":{{"vars":["x"]}},"results":{{"bindings":[{{"x":{{"type":"uri","value":"http://example.org/a"}}}},{deep}]}}}}"#
+            )
+            .into_bytes();
+            (
+                from_json(&doc),
+                from_json_bounded(&doc, u64::MAX),
+                from_json_bounded(&over_limit, 1),
+            )
+        });
+        let expected = ParsedSolutions {
+            variables: vec!["x".to_owned()],
+            rows: vec![vec![Some(TermValue::Iri(
+                "http://example.org/a".to_owned(),
+            ))]],
+        };
+        assert_eq!(full.as_ref(), Ok(&expected));
+        assert_eq!(
+            bounded,
+            Ok(BoundedParsedSolutions {
+                solutions: expected.clone(),
+                truncated: false,
+            })
+        );
+        assert_eq!(
+            skipped,
+            Ok(BoundedParsedSolutions {
+                solutions: expected,
+                truncated: true,
+            })
+        );
+    }
+
+    /// A triple term nesting `depth` triple terms in object position, around an IRI.
+    fn nested_triple_binding(depth: usize) -> String {
+        let open = r#"{"type":"triple","value":{"subject":{"type":"bnode","value":"b"},"predicate":{"type":"uri","value":"http://example.org/p"},"object":"#;
+        let mut text = open.repeat(depth);
+        text.push_str(r#"{"type":"uri","value":"http://example.org/o"}"#);
+        text.push_str(&"}}".repeat(depth));
+        text
+    }
+
+    /// The triple-term nesting depth of `term`, counted along object positions.
+    fn object_chain_depth(mut term: &TermValue) -> usize {
+        let mut depth = 0;
+        while let TermValue::Triple { s, p, o } = term {
+            assert!(matches!(&**s, TermValue::Blank { label, .. } if label == "b"));
+            assert_eq!(&**p, &TermValue::Iri("http://example.org/p".to_owned()));
+            depth += 1;
+            term = o;
+        }
+        assert_eq!(term, &TermValue::Iri("http://example.org/o".to_owned()));
+        depth
+    }
+
+    #[test]
+    fn a_deeply_nested_triple_term_binding_decodes_without_overflow() {
+        let (full, bounded) = on_small_stack(|| {
+            let doc = select_with_binding(&nested_triple_binding(DEEP));
+            let full = from_json(&doc).map(|parsed| {
+                let [row] = parsed.rows.as_slice() else {
+                    panic!("one row");
+                };
+                object_chain_depth(row[0].as_ref().expect("bound"))
+            });
+            let bounded = from_json_bounded(&doc, u64::MAX).map(|bounded| {
+                object_chain_depth(bounded.solutions.rows[0][0].as_ref().expect("bound"))
+            });
+            (full, bounded)
+        });
+        assert_eq!(full, Ok(DEEP));
+        assert_eq!(bounded, Ok(DEEP));
+    }
+
+    #[test]
+    fn a_shallow_nested_triple_term_decodes_to_the_same_term() {
+        let parsed = from_json(&select_with_binding(&nested_triple_binding(2))).expect("parse");
+        let triple = |o: TermValue| TermValue::Triple {
+            s: TermBox::new(TermValue::Blank {
+                label: "b".to_owned(),
+                scope: BlankScope::DEFAULT,
+            }),
+            p: TermBox::new(TermValue::Iri("http://example.org/p".to_owned())),
+            o: TermBox::new(o),
+        };
+        let expected = triple(triple(TermValue::Iri("http://example.org/o".to_owned())));
+        assert_eq!(parsed.rows, vec![vec![Some(expected)]]);
+    }
+
+    #[test]
+    fn a_nested_triple_term_reports_its_first_error_in_component_order() {
+        // The predicate is not an IRI, and the object is malformed: the object is
+        // decoded before the predicate is checked, so the object's error is reported.
+        let both = r#"{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"literal","value":"p"},"object":{"type":"nonsense"}}}"#;
+        assert_eq!(
+            from_json(&select_with_binding(both)),
+            Err(format_error("unknown binding type `nonsense`"))
+        );
+        let predicate_only = r#"{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"literal","value":"p"},"object":{"type":"uri","value":"http://example.org/o"}}}"#;
+        assert_eq!(
+            from_json(&select_with_binding(predicate_only)),
+            Err(format_error("triple-term predicate is not an IRI"))
+        );
+        let no_object = r#"{"type":"triple","value":{"subject":{"type":"uri","value":"http://example.org/s"},"predicate":{"type":"uri","value":"http://example.org/p"}}}"#;
+        assert_eq!(
+            from_json(&select_with_binding(no_object)),
+            Err(format_error("triple has no object"))
+        );
+    }
+
+    #[test]
+    fn malformed_nesting_reports_the_same_errors() {
+        for (doc, message) in [
+            (r#"{"a":[1,2}"#, "expected `,` or `]` in array"),
+            (r#"{"a":{"b":1]}"#, "expected `,` or `}` in object"),
+            (r#"{"a":{"b" 1}}"#, "expected `:` after object key"),
+            (r#"{"a":[{ 7 }]}"#, "expected string key in object"),
+            (r#"{"a":[1,]}"#, "unexpected token while parsing a value"),
+            (r#"{"a":[[[]]]} x"#, "trailing data after JSON value"),
+        ] {
+            assert_eq!(
+                from_json(doc.as_bytes()),
+                Err(format_error(message)),
+                "tree parser on {doc}"
+            );
+            assert_eq!(
+                from_json_bounded(doc.as_bytes(), u64::MAX),
+                Err(format_error(message)),
+                "skipping parser on {doc}"
             );
         }
     }
