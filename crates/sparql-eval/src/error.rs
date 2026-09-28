@@ -28,12 +28,12 @@
 
 use purrdf_sparql_algebra::ParseError;
 
-/// Which of the narrow, ENUMERATED S6-deferral residue an
+/// Which of the narrow, ENUMERATED classified-unsupported residue an
 /// [`EvalError::Unsupported`] belongs to — see that variant's docs for the full
 /// list and why each entry is there. Absent (`None`, in
 /// [`EvalError::Unsupported`]'s `kind` field / [`EvalError::diagnostic_code`])
-/// for every OTHER unsupported construct — a genuine gap, not a scoped
-/// deferral: `SERVICE`, `LATERAL`, a property function, a custom aggregate, an
+/// for every OTHER unsupported construct — a genuine gap, not a classified
+/// construct: `SERVICE`, `LATERAL`, a property function, a custom aggregate, an
 /// unrecognized `VERSION`, and a Basic-profile triple-term refusal are all
 /// evaluated (or refused) in-engine and never carry a kind.
 ///
@@ -114,7 +114,7 @@ pub enum EvalError {
     /// an RDF 1.2 triple-term/reification construct outside that profile (SPARQL 1.2
     /// Query specification §4.3.1) is refused the same way, by the same chokepoint
     /// (see `crate::basic_profile`). The string names the unsupported
-    /// construct. (Property paths are evaluated in-engine — S8 — and
+    /// construct. (Property paths are evaluated in-engine and
     /// `DESCRIBE` evaluates via the canonical Symmetric CBD, so neither is here
     /// either. A property-function call whose predicate IRI resolves to no registered
     /// relation, or whose access pattern no declared mode admits, is
@@ -128,7 +128,7 @@ pub enum EvalError {
     Unsupported {
         /// Human-readable detail naming the construct.
         what: String,
-        /// The closed S6-deferral classification, when this instance is one of
+        /// The closed unsupported-construct classification, when this instance is one of
         /// the narrow enumerated residue [`UnsupportedKind`]'s docs list;
         /// `None` for a genuine gap. Set ONLY by `EvalError::unsupported_deferred`
         /// (a crate-private constructor, not part of this public field's own API).
@@ -290,7 +290,7 @@ pub enum EvalError {
 
 impl EvalError {
     /// Construct an unclassified [`EvalError::Unsupported`] from any displayable
-    /// construct name — a genuine gap, not one of the narrow S6-deferral residue.
+    /// construct name — a genuine gap, not one of the narrow classified residue.
     pub fn unsupported(what: impl Into<String>) -> Self {
         Self::Unsupported {
             what: what.into(),
@@ -299,7 +299,7 @@ impl EvalError {
     }
 
     /// Construct a CLASSIFIED [`EvalError::Unsupported`] — used ONLY by the four
-    /// call sites producing the narrow, enumerated S6-deferral residue
+    /// call sites producing the narrow, enumerated classified residue
     /// [`UnsupportedKind`]'s docs list. Every other unsupported construct stays
     /// [`EvalError::unsupported`].
     pub(crate) fn unsupported_deferred(kind: UnsupportedKind, what: impl Into<String>) -> Self {
@@ -309,13 +309,13 @@ impl EvalError {
         }
     }
 
-    /// The stable, machine-readable diagnostic code for this error's S6-deferral
+    /// The stable, machine-readable diagnostic code for this error's unsupported-construct
     /// classification, if it has one — `None` for every other error, INCLUDING an
-    /// unclassified [`EvalError::Unsupported`] (a genuine gap, not a scoped
-    /// deferral). [`crate::engine`]'s `SparqlEngine` boundary reads this to set
+    /// unclassified [`EvalError::Unsupported`] (a genuine gap, not a classified
+    /// construct). [`crate::engine`]'s `SparqlEngine` boundary reads this to set
     /// [`purrdf_core::RdfDiagnostic::code`] when reducing this typed error to a
-    /// diagnostic; a caller further downstream that needs to tell "known S6
-    /// deferral" from "real regression" reads that `RdfDiagnostic::code` field —
+    /// diagnostic; a caller further downstream that needs to tell "a classified
+    /// unsupported construct" from "real regression" reads that `RdfDiagnostic::code` field —
     /// never `Display` text.
     #[must_use]
     pub fn diagnostic_code(&self) -> Option<&'static str> {
@@ -404,7 +404,7 @@ impl core::fmt::Display for EvalError {
         match self {
             Self::Parse(msg) => write!(f, "SPARQL parse error: {msg}"),
             Self::Unsupported { what, .. } => {
-                write!(f, "unsupported in sparql-eval (S6 scope): {what}")
+                write!(f, "not supported by the SPARQL evaluator: {what}")
             }
             Self::Internal(msg) => write!(f, "internal evaluator error: {msg}"),
             Self::Remote(msg) => write!(f, "SERVICE federation error: {msg}"),
@@ -461,13 +461,15 @@ mod tests {
     #[test]
     fn unsupported_names_the_construct() {
         let e = EvalError::unsupported("SERVICE");
-        assert!(e.to_string().contains("SERVICE"));
-        assert!(e.to_string().contains("scope"));
+        assert_eq!(
+            e.to_string(),
+            "not supported by the SPARQL evaluator: SERVICE"
+        );
     }
 
     /// An unclassified `Unsupported` (a genuine gap) carries no diagnostic
     /// code — the classifier at the `SparqlEngine` boundary must fall back to
-    /// the generic per-callsite code for it, never mistake it for the S6
+    /// the generic per-callsite code for it, never mistake it for the classified
     /// residue.
     #[test]
     fn unclassified_unsupported_has_no_diagnostic_code() {

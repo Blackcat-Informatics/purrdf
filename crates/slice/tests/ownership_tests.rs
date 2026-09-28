@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Hermetic acceptance tests for the native ownership + dependency analyzer
-//! ( §10 / S4). Each test builds minimal slice directories on disk
+//! Hermetic acceptance tests for the native ownership + dependency analyzer.
+//! Each test builds minimal slice directories on disk
 //! under a `tempfile::TempDir`, discovers them via [`SliceCatalog::discover`],
 //! and asserts on the [`OwnershipReport`].
 
@@ -463,7 +463,8 @@ fn semantic_vs_nonsemantic() {
 // A term typed as owl:Class in a slice's module.ttl but with NO
 // rdfs:isDefinedBy must yield OwnershipStatus::Unowned + an
 // OwnershipDiagnostic::Unowned, and must NOT prevent Validated terms from
-// being so (regression guard for the dead-code fix in Phase 2).
+// being so (a regression guard: one unowned term must never stop its
+// neighbours validating).
 
 #[test]
 fn declared_but_unowned_term() {
@@ -545,7 +546,7 @@ fn declared_but_unowned_term() {
 
 #[test]
 fn group_aggregate_iri_reaches_dependency_walk() {
-    // G4-B regression guard: the previous Group arm in walk_graph_pattern only
+    // Regression guard: the previous Group arm in walk_graph_pattern only
     // walked `inner` and silently dropped the `aggregates` field.  A purrdf
     // extension-function IRI referenced ONLY inside an aggregate expression
     // therefore vanished from the dependency set, creating an invisible build-dep gap.

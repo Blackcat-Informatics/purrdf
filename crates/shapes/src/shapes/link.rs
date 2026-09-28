@@ -60,7 +60,7 @@
 //!
 //! Nothing here touches the filesystem, a clock, a thread, or randomness.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf::FastMap;
@@ -69,9 +69,11 @@ use purrdf_sparql_eval::{Arity, ExprFnCall, UserFunctionRegistry};
 use crate::expression::{CustomFnKind, CustomFunction, FnCall, NodeExpr, ShapeArg};
 use crate::product::ast::MAX_DEPTH;
 use crate::product::{ProductDimension, ShapesProductError};
-use crate::rules::RuleBody;
-use crate::shapes::parser::functions::invoke_expression_function;
-use crate::shapes::{Constraint, PropertyShape, Shape};
+use crate::rules::{Rule, RuleBody};
+use crate::shapes::parser::functions::{
+    NativeListCallee, invoke_expression_function, invoke_native_list_function,
+};
+use crate::shapes::{Constraint, PropertyShape, Shape, Target};
 use crate::term::Term;
 
 /// The shapes graph's ONE `sh:nodeByExpression` resolution table.
@@ -132,7 +134,10 @@ fn depth_limit() -> ShapesProductError {
 ///    test, and the shape clones are never built in that (normal) case.
 /// 3. **Registration.** Every `sh:ListParameterExpressionFunction` is registered
 ///    into `registry` as a callable SPARQL function (SHACL 1.2 SPARQL Extensions
-///    §7.3), as an `Arc<dyn Fn>` closure over the declaration handle.
+///    §7.3), as an `Arc<dyn Fn>` closure over the declaration handle — a custom
+///    one over its body, a declared BUILT-IN (`native_list`) over its native
+///    implementation. An IRI already registered is not redefined, as §7.3
+///    requires (see [`register_native_list_functions`]).
 ///
 /// # Errors
 ///
@@ -141,17 +146,113 @@ fn depth_limit() -> ShapesProductError {
 /// is missing after installation, or when any reachable shape-index handle is not
 /// the one `shape_index` names. [`ProductDimension::DepthLimit`] when the model
 /// nests past [`MAX_DEPTH`].
+/// Prove the GLOBAL rules' shape-index handles are the graph's one handle, exactly as
+/// [`link_shapes`] proves every shape's: a global rule's node expressions and condition
+/// shapes reach a `sh:nodeByExpression` constraint just as a shape rule's do.
+///
+/// # Errors
+///
+/// A handle that is not the shared one.
+pub(crate) fn link_global_rules(
+    rules: &[Rule],
+    shape_index: &ShapeIndex,
+) -> Result<(), ShapesProductError> {
+    let mut walk = ShapeIndexWalk {
+        index: shape_index,
+        depth: 0,
+        seen_fns: Vec::new(),
+    };
+    for rule in rules {
+        walk.rule(rule)?;
+    }
+    Ok(())
+}
+
 pub(crate) fn link_shapes(
     node_shapes: &[Shape],
     shape_index: &ShapeIndex,
     custom_fns: &[Arc<CustomFunction>],
+    native_list: &BTreeSet<String>,
     bodies: BTreeMap<String, NodeExpr>,
     registry: &mut UserFunctionRegistry,
 ) -> Result<(), ShapesProductError> {
     install_bodies(custom_fns, bodies)?;
+    // Registered BEFORE the shape index is installed: a native
+    // `shnex:conformsToShape` registration holds a handle on the index, and that
+    // handle is what tells the installer somebody will read it.
+    register_native_list_functions(native_list, shape_index, registry);
     install_shape_index(node_shapes, shape_index, custom_fns)?;
     register_expression_bodied_functions(custom_fns, registry);
     Ok(())
+}
+
+/// Whether §7.3's "already registered" rule leaves `iri` alone: SHACL 1.2 SPARQL
+/// Extensions §7.3 — "If a function with the same IRI is already registered, SHACL
+/// engines MUST ignore the attempt to redefine it unless the function was
+/// previously added as a custom SPARQL function."
+///
+/// A native (host) or expression-bodied registration is kept and the new one
+/// ignored. A SPARQL-bodied one — a custom SPARQL function — is the exception the
+/// sentence names, and is replaced.
+fn keep_existing_registration(iri: &str, registry: &mut UserFunctionRegistry) -> bool {
+    if registry.resolve_native(iri).is_some() || registry.resolve_expr(iri).is_some() {
+        return true;
+    }
+    if registry.resolve(iri).is_some() {
+        registry.remove_sparql_bodied(iri);
+    }
+    false
+}
+
+/// Register every built-in LIST-parameter function the shapes graph declares as a
+/// callable SPARQL function with its NATIVE implementation (SHACL 1.2 SPARQL
+/// Extensions §7.3: "SPARQL engines SHOULD register a function for any SHACL
+/// instance of sh:ListParameterExpressionFunction from any provided shapes
+/// graph.").
+///
+/// `shnex:conformsToShape` resolves its shape argument against `shape_index`; a
+/// `sparql:<NAME>` renders its SPARQL form for the call's arity. Only DECLARED
+/// built-ins are registered, so a shapes graph that does not merge the vocabulary
+/// registers nothing and pays nothing.
+pub(crate) fn register_native_list_functions(
+    native_list: &BTreeSet<String>,
+    shape_index: &ShapeIndex,
+    registry: &mut UserFunctionRegistry,
+) {
+    for iri in native_list {
+        if keep_existing_registration(iri, registry) {
+            continue;
+        }
+        let arity = if iri == crate::model::shnex::CONFORMS_TO_SHAPE {
+            Arity::Exact(2)
+        } else {
+            Arity::AtLeast(0)
+        };
+        let name = iri.clone();
+        // Resolved here, at load, so a call pays only the arity-dependent render.
+        let callee = NativeListCallee::resolve(iri);
+        let index = Arc::clone(shape_index);
+        registry.register_expr(
+            iri.clone(),
+            arity,
+            Arc::new(move |call: &ExprFnCall<'_>| {
+                invoke_native_list_function(&name, &callee, &index, call)
+            }),
+        );
+    }
+}
+
+/// A shape index filled from `node_shapes`, for a restore path that assembles a
+/// function registry without re-running the linking pass.
+pub(crate) fn standalone_shape_index(node_shapes: &[Shape]) -> ShapeIndex {
+    let index: ShapeIndex = Arc::new(OnceLock::new());
+    let map: FastMap<Term, Shape> = node_shapes
+        .iter()
+        .map(|shape| (shape.id.clone(), shape.clone()))
+        .collect();
+    // A freshly minted cell cannot already be full.
+    let _ = index.set(map);
+    index
 }
 
 /// Step 1: fill each declaration's body cell, then prove every one of them is full.
@@ -274,6 +375,9 @@ pub(crate) fn register_expression_bodied_functions(
         if !matches!(func.kind, CustomFnKind::ListParameter) {
             continue;
         }
+        if keep_existing_registration(func.iri.as_str(), registry) {
+            continue;
+        }
         let arity = if func.required == func.params.len() {
             Arity::Exact(func.required)
         } else {
@@ -358,9 +462,29 @@ impl ShapeIndexWalk<'_> {
         Ok(())
     }
 
+    /// Walk the target declarations that can reach a handle: a structured
+    /// `sh:targetNode` is a node expression, and a `sh:targetWhere` is a shape.
+    /// Wildcard-free for the reason the constraint walk is.
+    fn targets(&mut self, targets: &[Target]) -> Result<(), ShapesProductError> {
+        for target in targets {
+            match target {
+                Target::Class(_)
+                | Target::SubjectsOf(_)
+                | Target::ObjectsOf(_)
+                | Target::Node(_)
+                | Target::ImplicitClass(_)
+                | Target::Sparql { .. } => {}
+                Target::NodeExpression(expr) => self.node_expr(expr)?,
+                Target::Where(shape) => self.shape(shape)?,
+            }
+        }
+        Ok(())
+    }
+
     /// Walk a node shape.
     fn shape(&mut self, shape: &Shape) -> Result<(), ShapesProductError> {
         self.enter()?;
+        self.targets(&shape.targets)?;
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
         }
@@ -368,29 +492,41 @@ impl ShapeIndexWalk<'_> {
             self.property_shape(property)?;
         }
         for rule in &shape.rules {
-            match &rule.body {
-                RuleBody::Triple {
-                    subject,
-                    predicate,
-                    object,
-                } => {
-                    self.node_expr(subject)?;
-                    self.node_expr(predicate)?;
-                    self.node_expr(object)?;
-                }
-                RuleBody::Sparql { construct: _ } => {}
-            }
-            for condition in &rule.conditions {
-                self.shape(condition)?;
-            }
+            self.rule(rule)?;
         }
         self.leave();
+        Ok(())
+    }
+
+    /// Walk a rule: its node expressions and its condition shapes.
+    fn rule(&mut self, rule: &Rule) -> Result<(), ShapesProductError> {
+        match &rule.body {
+            RuleBody::Triple {
+                subject,
+                predicate,
+                object,
+            } => {
+                for expr in [subject, predicate, object].into_iter().flatten() {
+                    self.node_expr(expr)?;
+                }
+            }
+            RuleBody::Sparql {
+                construct: _,
+                parameters: _,
+            } => {}
+        }
+        for condition in &rule.conditions {
+            self.shape(condition)?;
+        }
         Ok(())
     }
 
     /// Walk a property shape.
     fn property_shape(&mut self, shape: &PropertyShape) -> Result<(), ShapesProductError> {
         self.enter()?;
+        for expr in shape.values.iter().chain(&shape.default_value) {
+            self.node_expr(expr)?;
+        }
         for constraint in &shape.constraints {
             self.constraint(constraint)?;
         }
@@ -429,10 +565,22 @@ impl ShapeIndexWalk<'_> {
             | Constraint::Sparql { .. }
             | Constraint::Equals(_)
             | Constraint::Disjoint(_)
+            | Constraint::SubsetOf(_)
             | Constraint::LessThan(_)
             | Constraint::LessThanOrEquals(_)
+            | Constraint::MinListLength(_)
+            | Constraint::MaxListLength(_)
+            | Constraint::UniqueMembers(_)
+            | Constraint::SingleLine(_)
+            | Constraint::RootClass(_)
             | Constraint::Component { .. } => {}
-            Constraint::Not(shape) | Constraint::Node(shape) => self.shape(shape)?,
+            Constraint::UniqueValuesFor { targets, .. } => self.targets(targets)?,
+            Constraint::Not(shape)
+            | Constraint::Node(shape)
+            | Constraint::MemberShape(shape)
+            | Constraint::SomeValue(shape) => {
+                self.shape(shape)?;
+            }
             Constraint::And(shapes) | Constraint::Or(shapes) | Constraint::Xone(shapes) => {
                 for shape in shapes {
                     self.shape(shape)?;
@@ -479,7 +627,6 @@ impl ShapeIndexWalk<'_> {
             | NodeExpr::Empty
             | NodeExpr::Var(_)
             | NodeExpr::List(_)
-            | NodeExpr::InstancesOf(_)
             | NodeExpr::Select { .. } => {}
             NodeExpr::Filter { nodes, shape }
             | NodeExpr::FindFirst { nodes, shape }
@@ -506,6 +653,7 @@ impl ShapeIndexWalk<'_> {
             | NodeExpr::Sum(of)
             | NodeExpr::Limit { of, .. }
             | NodeExpr::Offset { of, .. }
+            | NodeExpr::InstancesOf(of)
             | NodeExpr::Exists(of) => self.node_expr(of)?,
             NodeExpr::OrderBy { of, key, .. } => {
                 self.node_expr(of)?;

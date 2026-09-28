@@ -95,7 +95,7 @@ fn an_ordinary_ontology_decides_far_inside_its_step_budget() {
          triples:\n{document}"
     );
 
-    let answer = purrdf_validate::regime::consistency_to_string(&document, 0, 0)
+    let answer = purrdf_validate::regime::consistency_to_string(&document, &[], &[], 0, 0)
         .expect("the ontology reverse-maps");
     assert_eq!(
         answer.answer(),

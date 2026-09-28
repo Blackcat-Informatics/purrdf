@@ -690,6 +690,9 @@ pub(crate) struct Relation {
     tail: Tail,
     /// The number of rows across batches + tail (the dense per-relation row count).
     len: usize,
+    /// The store-global id of the newest row, or `None` for an empty relation. Row ids are
+    /// minted in ascending order, so this is the largest id the relation holds.
+    newest_row: Option<RowId>,
 }
 
 impl Relation {
@@ -715,6 +718,7 @@ impl Relation {
         }
         self.tail.push(s_id, o_id, row_id);
         self.len += 1;
+        self.newest_row = Some(self.newest_row.map_or(row_id, |newest| newest.max(row_id)));
         if self.tail.len() >= TAIL_SEAL_THRESHOLD {
             self.seal();
         }
@@ -864,6 +868,15 @@ impl<'a> PartitionRef<'a> {
         self.relation.row_count()
     }
 
+    /// Whether this partition holds a row whose store-global id is at least `index` —
+    /// one O(1) comparison against the newest row id, so a semi-naive round can tell that
+    /// a partition gained nothing since row `index` without scanning it.
+    pub fn has_row_from(self, index: usize) -> bool {
+        self.relation
+            .newest_row
+            .is_some_and(|newest| newest.index() >= index)
+    }
+
     /// A galloping lending [`RowCursor`] over the id rows selected by `bound`.
     pub fn select(self, bound: Bound) -> RowCursor<'a> {
         self.relation.select(bound)
@@ -992,6 +1005,10 @@ pub struct RelationStore {
     /// insertion order, so at any point the live rows are exactly `0..row_count`. This
     /// is the single row-id source, and the id never enters a provenance identity.
     row_count: usize,
+    /// Every row's `(partition slot, subject, object)`, indexed by [`RowId`] — the row
+    /// ORDER the arrangements do not keep, so [`Self::rows_from`] reads the rows a round
+    /// added without scanning a partition.
+    row_log: Vec<(u32, TermId, TermId)>,
     /// A permanently-empty partition handed to [`select`](Self::select) on a partition
     /// miss, so an unknown key yields an empty [`RowCursor`] with NO `Option` branch on
     /// the per-row scan. Never inserted into.
@@ -1037,7 +1054,29 @@ impl RelationStore {
             .insert(&mut self.interner, subject, object, row_id)
             .map(|(s_id, o_id)| {
                 self.row_count += 1;
+                self.row_log.push((
+                    u32::try_from(slot).expect("partition slots fit u32"),
+                    s_id,
+                    o_id,
+                ));
                 (s_id, o_id, row_id)
+            })
+    }
+
+    /// The rows from row `since` on, in row order, as `(subject, predicate, object,
+    /// graph)` interned ids — the facts the store gained since it held `since` rows,
+    /// read in time proportional to their number.
+    pub fn rows_from(&self, since: usize) -> impl Iterator<Item = (RowId, [TermId; 4])> + '_ {
+        let since = since.min(self.row_log.len());
+        self.row_log[since..]
+            .iter()
+            .enumerate()
+            .map(move |(offset, &(slot, subject, object))| {
+                let (predicate, graph) = self.keys[slot as usize];
+                (
+                    RowId::from_index(since + offset),
+                    [subject, predicate, object, graph],
+                )
             })
     }
 
@@ -1232,6 +1271,35 @@ impl RelationStore {
             .map(|&(_, graph)| self.interner.resolve(graph))
             .collect::<BTreeSet<_>>()
             .into_iter()
+    }
+
+    /// Every live row with its [`RowId`], in ROW order — the order the rows were inserted.
+    ///
+    /// The rebuild seam for a caller that must drop facts: this store has no deletion,
+    /// because the semi-naive delta addresses rows as a dense range, so a retraction is a
+    /// new store built from the surviving rows in their original order — which keeps the
+    /// relative row order, and with it every order-derived observable, unchanged.
+    pub(crate) fn facts_in_row_order(&self) -> Vec<(RowId, Fact)> {
+        let mut rows = Vec::with_capacity(self.row_count);
+        for &slot in &self.order {
+            let (predicate, graph) = self.keys[slot];
+            let predicate = self.interner.resolve(predicate);
+            let graph = self.interner.resolve(graph);
+            let mut cursor = self.relations[slot].select(Bound::Any);
+            while let Some((s_id, o_id, row)) = crate::cursor::LendingIterator::next(&mut cursor) {
+                rows.push((
+                    row,
+                    Fact {
+                        subject: self.interner.resolve(s_id).to_owned(),
+                        predicate: predicate.to_owned(),
+                        object: self.interner.resolve(o_id).to_owned(),
+                        graph: graph.to_owned(),
+                    },
+                ));
+            }
+        }
+        rows.sort_unstable_by_key(|(row, _)| row.index());
+        rows
     }
 
     /// Project every live row back to a [`Fact`] quad of lexical surfaces, in sorted
@@ -1731,6 +1799,34 @@ mod tests {
     /// intern, and is the same whichever order the terms arrive in — so the evaluator's
     /// arena ceiling is a property of the data, not of an insertion sequence. Predicate
     /// and graph surfaces are counted too: they are terms.
+    #[test]
+    fn rows_from_reads_the_rows_added_since_in_row_order() {
+        let mut s = RelationStore::new();
+        s.insert("<a>", "<p>", "<b>", RelationStore::DEFAULT_GRAPH);
+        s.insert("<b>", "<q>", "<c>", "<g>");
+        assert!(
+            s.insert("<a>", "<p>", "<b>", RelationStore::DEFAULT_GRAPH)
+                .is_none(),
+            "a duplicate adds no row"
+        );
+        s.insert("<c>", "<p>", "<d>", RelationStore::DEFAULT_GRAPH);
+        let surfaces = |since: usize| -> Vec<(usize, [&str; 4])> {
+            s.rows_from(since)
+                .map(|(row, ids)| (row.index(), ids.map(|id| s.interner().resolve(id))))
+                .collect()
+        };
+        assert_eq!(
+            surfaces(1),
+            vec![
+                (1, ["<b>", "<q>", "<c>", "<g>"]),
+                (2, ["<c>", "<p>", "<d>", RelationStore::DEFAULT_GRAPH]),
+            ]
+        );
+        assert_eq!(surfaces(0).len(), s.row_count());
+        assert_eq!(surfaces(3), Vec::new());
+        assert_eq!(surfaces(7), Vec::new());
+    }
+
     #[test]
     fn store_term_bytes_counts_each_distinct_surface_once() {
         let default = RelationStore::DEFAULT_GRAPH;

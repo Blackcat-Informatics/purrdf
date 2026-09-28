@@ -399,9 +399,10 @@ struct Fixture {
     ///
     /// Rendered into the golden beneath [`ENGINE_SWAP`], [`AXIOMATIC_PATH`],
     /// [`OWL_RL_TABLES`], [`OWL_RL_COMPLETE`], [`EXISTENTIAL_CHASE`], [`REPORT_SURFACE`]
-    /// and [`EXTENSION_AND_CERTIFICATE`], each of which states one change's causes ONCE;
-    /// these lines name the actual triples and tallies each cause moved HERE. The last
-    /// three of those changes moved no fixture's own data in a way a per-fixture note could
+    /// [`EXTENSION_AND_CERTIFICATE`] and [`CAPACITY_LIMITS`], each of which states one
+    /// change's causes ONCE; these lines name the actual triples and tallies each cause
+    /// moved HERE. The last four of those changes moved no fixture's own data in a way a
+    /// per-fixture note could
     /// add to, so they name the goldens they DID move inside the shared block instead. It is
     /// append-only — a fixture's entry accumulates one section per change it lived
     /// through, so a reader of one golden can see the whole history of that answer without
@@ -854,6 +855,38 @@ const EXTENSION_AND_CERTIFICATE: &[&str] = &[
     "  term-arena-bytes are identical in dt_diff_clash and eq_diff1_clash, both witnesses and",
     "  all four premises are identical, and eq_diff1_consistent's stored-facts rises by",
     "  exactly the two triples named above (106 -> 108).",
+];
+
+/// What moved when the stored-fact and join-step limits became the caller's, with native
+/// defaults above the `wasm32` ones, and the semi-naive evaluator stopped enumerating a
+/// decomposition whose delta atom had gained no row.
+///
+/// A shared block for the reason [`EXTENSION_AND_CERTIFICATE`] is one: no fixture's data
+/// changed and no closure moved, and the two causes act identically on every file.
+const CAPACITY_LIMITS: &[&str] = &[
+    "AND EVERY GOLDEN MOVED AN EIGHTH TIME — every contract hash, and the OWL-RL join steps.",
+    "Every closure, every witness, every stored-facts and term-arena-bytes figure is",
+    "byte-identical to the previous golden. Two causes.",
+    "",
+    "  1. EVERY CONTRACT HASH MOVED, AND NO RULE CHANGED. The stored-fact and join-step",
+    "     limits are the caller's now. The stored-fact default is per target: 131,072 on",
+    "     wasm32 — the value every target used while it was fixed — and 4,194,304",
+    "     natively; the join-step default is 1,048,576 everywhere. The contract hash",
+    "     folds the EFFECTIVE limits, so a closure minted under one set never claims the",
+    "     identity of one minted under another. These goldens are written by a native",
+    "     build under the native defaults, so all five lanes' digests moved. Under the",
+    "     wasm32 values, stated, every digest is exactly the one the previous golden showed.",
+    "",
+    "  2. THE OWL-RL JOIN STEPS FELL IN EVERY SECTION, AND ROSE IN NONE. A semi-naive round",
+    "     evaluates one decomposition per body atom, each anchored on that atom's new rows,",
+    "     and a decomposition whose anchor gained no row since the last round derives",
+    "     nothing. It used to enumerate every atom planned before its anchor anyway; it is",
+    "     now skipped, which changes no solution and only the candidates counted. 178",
+    "     OWL-RL sections moved, each downward, by 6% to 67%: 285,412 join steps across the",
+    "     corpus became 244,208, and the largest single section went from 5,066 to 4,383.",
+    "     The RDF and RDFS lanes are evaluated by the restricted chase, which has no such",
+    "     decomposition, and the D lane enumerates no candidates in this corpus, so none of",
+    "     their figures moved.",
 ];
 
 // ── The corpus ──────────────────────────────────────────────────────────────────
@@ -5887,6 +5920,8 @@ fn render_golden(fixture: &Fixture) -> String {
     write_comment_block(&mut out, REPORT_SURFACE);
     out.push_str("#\n");
     write_comment_block(&mut out, EXTENSION_AND_CERTIFICATE);
+    out.push_str("#\n");
+    write_comment_block(&mut out, CAPACITY_LIMITS);
     out.push_str("#\n# WHAT MOVED IN THIS GOLDEN:\n#\n");
     write_comment_block(&mut out, fixture.changed);
     let _ = writeln!(out, "# exercises: {}", fixture.exercises.join(" "));

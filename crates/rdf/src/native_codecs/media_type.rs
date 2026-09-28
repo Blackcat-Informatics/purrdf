@@ -1,10 +1,10 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Media-type → native RDF text format routing (S3).
+//! Media-type → native RDF text format routing.
 //!
 //! [`NativeRdfFormat`] is the single chokepoint the eventual `oxigraph::io::RdfFormat`
-//! removal (S14) retargets: every codec consumer names a format by media type at the
+//! removal retargets: every codec consumer names a format by media type at the
 //! contract boundary and [`classify`] resolves it once. Unknown media types HARD-fail
 //! (`native-codec-unsupported-format`) rather than degrading — no optional fallback
 //! codec (`.goals` no-optionality).

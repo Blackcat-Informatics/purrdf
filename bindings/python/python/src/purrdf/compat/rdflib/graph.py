@@ -96,23 +96,6 @@ def _de_skolemize_uri(uri: URIRef) -> BNode:
     return bnode
 
 
-#: A Turtle/TriG/N3/SPARQL prefix declaration: ``@prefix foo: <iri>`` / ``PREFIX foo: <iri>``.
-_PREFIX_DECL_RE = re.compile(r"@?prefix\s+([^\s:]*)\s*:\s*<([^>\s]*)>", re.IGNORECASE)
-
-
-def _scan_prefixes(text: str) -> list[tuple[str, str]]:
-    """Extract ``(prefix, iri)`` declarations from Turtle/TriG/N3/SPARQL source text.
-
-    A lightweight lexical scan (no full parse). rdflib records document prefixes on
-    the graph's ``NamespaceManager`` during parsing; the native parser does not
-    surface them directly, so we recover them from the source for the Turtle-family
-    formats. JSON-LD ``@context`` prefixes are extracted after the parse by walking
-    the parsed JSON context, and RDF/XML ``xmlns:`` prefixes are recovered by the
-    RDF/XML parser. There are no remaining prefix-wiring divergences.
-    """
-    return [(m.group(1), m.group(2)) for m in _PREFIX_DECL_RE.finditer(text)]
-
-
 #: A graph triple of compat terms.
 _Triple = tuple[Identifier, Identifier, Identifier]
 #: A wildcard triple pattern (``None`` = any).
@@ -915,13 +898,15 @@ class Graph:
 
     # ── parse / serialize ─────────────────────────────────────────────────────────
 
-    def _bind_source_prefixes(self, payload: bytes) -> None:
-        """Bind any ``@prefix``/``PREFIX`` declarations found in ``payload`` text."""
-        try:
-            text = payload.decode("utf-8")
-        except UnicodeDecodeError:
-            return
-        for prefix, iri in _scan_prefixes(text):
+    def _bind_document_prefixes(self, prefixes: list[tuple[str, str]]) -> None:
+        """Bind the prefix map a native ``load`` reported for the parsed document.
+
+        The map is the parser's own record of the document's ``@prefix`` /
+        ``PREFIX`` directives (Turtle and TriG), returned by the same parse that
+        loaded the triples, so a ``PREFIX`` line quoted inside a string literal is
+        never bound, and nothing is bound for a document that failed to load.
+        """
+        for prefix, iri in prefixes:
             self._nsm.bind(prefix, iri)
 
     def parse(
@@ -977,12 +962,12 @@ class Graph:
                 raw = reader()
                 payload = raw.encode("utf-8") if isinstance(raw, str) else raw
             elif native_format is not None:
-                # A path source for an oxigraph-native format loads directly. Recover
-                # document prefixes (turtle/trig/n3) from the file text so serialize/
-                # qname see them, since the native loader does not surface them.
+                # A path source for a native format loads directly. The load reports
+                # the document's prefixes (turtle/trig/n3) from the same parse, so
+                # serialize/qname see them.
+                prefixes = self._store.load(path=str(src), format=native_format, base=base)
                 if prefix_bearing:
-                    self._bind_source_prefixes(Path(str(src)).read_bytes())
-                self._store.load(path=str(src), format=native_format, base=base)
+                    self._bind_document_prefixes(prefixes)
                 return self
             else:
                 payload = Path(str(src)).read_bytes()
@@ -1093,19 +1078,18 @@ class Graph:
 
     # ── query ─────────────────────────────────────────────────────────────────────
 
-    def _build_prefix_block(
-        self, query_text: str, initNs: dict[str, object] | None
-    ) -> str:
-        """Return a deterministic ``PREFIX`` prologue block for ``query_text``.
+    def _build_prefix_block(self, initNs: dict[str, object] | None) -> str:
+        """Return a deterministic ``PREFIX`` prologue block for a query or update.
 
         Graph namespace-manager bindings are merged with ``initNs`` and prepended
-        to the query/update body. Prefixes already declared in the text (either
-        SPARQL ``PREFIX`` or Turtle ``@prefix`` form) are skipped so the prologue
-        stays duplicate-free. ``initNs`` takes precedence over graph bindings:
+        to the query/update body. ``initNs`` takes precedence over graph bindings:
         a prefix supplied in ``initNs`` overrides the graph's binding for that
-        prefix name, and graph bindings never shadow an in-text declaration.
+        prefix name. A ``PREFIX`` the query text declares itself comes AFTER this
+        block in the prologue, and SPARQL binds a redeclared prefix to its last
+        declaration, so graph bindings never shadow an in-text declaration — with
+        no reading of the query text here, which could not tell a declaration from
+        the same characters inside a string literal or an IRI.
         """
-        seen = {m.group(1) for m in _PREFIX_DECL_RE.finditer(query_text)}
         merged: dict[str, object] = {
             prefix: ns for prefix, ns in self._nsm.namespaces() if prefix
         }
@@ -1114,7 +1098,7 @@ class Graph:
         lines = [
             f"PREFIX {prefix}: <{ns}>"
             for prefix, ns in sorted(merged.items(), key=lambda x: x[0])
-            if prefix and prefix not in seen
+            if prefix
         ]
         return "\n".join(lines) + "\n" if lines else ""
 
@@ -1147,7 +1131,7 @@ class Graph:
             raise TypeError(
                 f"Graph.query() got unsupported keyword argument(s): {sorted(kwargs)}"
             )
-        prefix_block = self._build_prefix_block(query_object, initNs)
+        prefix_block = self._build_prefix_block(initNs)
         if prefix_block:
             query_object = prefix_block + query_object
         if base:
@@ -1215,7 +1199,7 @@ class Graph:
             raise TypeError(
                 f"Graph.update() got unsupported keyword argument(s): {sorted(kwargs)}"
             )
-        prefix_block = self._build_prefix_block(update_object, initNs)
+        prefix_block = self._build_prefix_block(initNs)
         if prefix_block:
             update_object = prefix_block + update_object
         if initBindings:

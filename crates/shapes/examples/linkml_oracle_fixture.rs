@@ -6,6 +6,13 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 
+#[path = "support/shacl_lists.rs"]
+mod shacl_lists;
+#[path = "support/shacl_temporal.rs"]
+mod shacl_temporal;
+#[path = "support/shacl_value_shapes.rs"]
+mod shacl_value_shapes;
+
 use purrdf::loss::{LossLedger, check_ledger_sound};
 use purrdf_shapes::json_schema::CompiledSchema;
 use purrdf_shapes::{
@@ -165,7 +172,7 @@ fn lossy_schema() -> Value {
                             { "type": "integer" }
                         ],
                         "contains": { "const": 7 },
-                        "minContains": 1,
+                        "minContains": 2,
                         "unevaluatedItems": false
                     },
                     "ex:choice": {
@@ -255,7 +262,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let expected_losses = BTreeSet::from([
         (
             "array-contains-validation-dropped",
-            "#/$defs/Lossy/properties/ex:array/contains",
+            "#/$defs/Lossy/properties/ex:array/minContains",
         ),
         ("conditional-validation-dropped", "#/$defs/Lossy/if"),
         (
@@ -335,7 +342,57 @@ fn main() -> Result<(), Box<dyn Error>> {
         }
     }
 
+    // The SHACL list-component fixture (see `support/shacl_lists.rs`): the
+    // projected instances of real data and their SHACL verdicts.
+    let list_schema = shacl_lists::compiled()?;
+    let lists = emit_linkml(&list_schema, &config)?;
+    check_ledger_sound(&lists.losses, "json-schema", "linkml-1.11")?;
+    let list_probes = shacl_lists::cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+
+    // The temporal range-bound fixture (see `support/shacl_temporal.rs`).
+    let temporal_schema = shacl_temporal::compiled()?;
+    let temporal = emit_linkml(&temporal_schema, &config)?;
+    check_ledger_sound(&temporal.losses, "json-schema", "linkml-1.11")?;
+    let temporal_probes = shacl_temporal::cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+
+    // The value-position shape-constraint fixture (see
+    // `support/shacl_value_shapes.rs`).
+    let value_shape_schema = shacl_value_shapes::compiled()?;
+    let value_shapes = emit_linkml(&value_shape_schema, &config)?;
+    check_ledger_sound(&value_shapes.losses, "json-schema", "linkml-1.11")?;
+    let value_shape_probes = shacl_value_shapes::cases()?
+        .into_iter()
+        .map(|case| json!({ "label": case.label, "value": case.value, "conforms": case.conforms }))
+        .collect::<Vec<_>>();
+
     let output = json!({
+        "value_shapes": {
+            "element_names": value_shapes.element_names,
+            "losses": serde_json::from_str::<Value>(&value_shapes.losses.render_json())?,
+            "probes": value_shape_probes,
+            "schema": serde_json::from_str::<Value>(&value_shape_schema.schema_json)?,
+            "yaml": value_shapes.yaml,
+        },
+        "temporal": {
+            "element_names": temporal.element_names,
+            "losses": serde_json::from_str::<Value>(&temporal.losses.render_json())?,
+            "probes": temporal_probes,
+            "schema": serde_json::from_str::<Value>(&temporal_schema.schema_json)?,
+            "yaml": temporal.yaml,
+        },
+        "lists": {
+            "element_names": lists.element_names,
+            "losses": serde_json::from_str::<Value>(&lists.losses.render_json())?,
+            "probes": list_probes,
+            "schema": serde_json::from_str::<Value>(&list_schema.schema_json)?,
+            "yaml": lists.yaml,
+        },
         "exact": {
             "element_names": exact.element_names,
             "reverse": reverse_payload(&exact, &import_config)?,

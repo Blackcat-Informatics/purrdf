@@ -84,6 +84,7 @@ MIT, Apache-2.0, or MulanPSL-2.0.
 | `crates/rdf/tests/fixtures/obographs-0.3.2/` | official OBO Graphs JSON Schema closure | BSD-3-Clause |
 | `vectors/shacl/` (`core/`, `sparql/`) | W3C SHACL `data-shapes-test-suite` | W3C Software and Document License |
 | `vectors/shacl/af/` | pySHACL DASH tests | Apache-2.0 |
+| `vectors/shacl12/`, `crates/shapes/spec/` | W3C SHACL 1.2 vocabularies + `shacl12-test-suite` | W3C Software and Document License |
 | `vectors/shexTest/` | shexTest v2.1.0 | MIT (per upstream `package.json`) |
 
 The first-party selectors, harnesses, and reconstructed expected-result files
@@ -103,10 +104,10 @@ whole repository:
   committed MulanPSL-2.0 text against its pinned digest. Today that covers
   the four W3C SPARQL/OWL 2 suites and the OBO Graphs schema closure.
 - `scripts/check-corpus-frozen.py` SHA-256-verifies `vectors/shacl`,
-  `vectors/shexTest`, `crates/shapes/corpus`,
-  `crates/sparql-conformance/entailment-suite/w3c-owl2` and
-  `crates/sparql-conformance/entailment-suite/w3c-owl2-rl` against committed
-  freeze manifests, so vendored bytes cannot be edited in place.
+  `vectors/shacl12`, `vectors/shexTest`, `crates/shapes/corpus`,
+  `crates/shapes/spec`, `crates/sparql-conformance/entailment-suite/w3c-owl2`
+  and `crates/sparql-conformance/entailment-suite/w3c-owl2-rl` against
+  committed freeze manifests, so vendored bytes cannot be edited in place.
 
 ## Proprietary / commercial licensing
 

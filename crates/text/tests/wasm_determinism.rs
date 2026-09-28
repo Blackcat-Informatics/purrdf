@@ -31,7 +31,7 @@
 //! One test body, two attributes. Natively each is an ordinary `#[test]` picked
 //! up by `cargo test --workspace`. On `wasm32-unknown-unknown` each is a
 //! `#[wasm_bindgen_test]`, compiled to wasm and executed in Node by `make
-//! wasm-test` (and by CI's wasm job):
+//! wasm-test` (and by CI's `wasm-test` job):
 //!
 //! ```text
 //! cargo test -p purrdf-text --target wasm32-unknown-unknown --test wasm_determinism

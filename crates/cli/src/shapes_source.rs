@@ -1,20 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Reading a SHACL shapes graph and folding its `owl:imports` closure — the ONE seam every
+//! Reading a SHACL shapes graph and its `--import IRI=FILE` documents — the ONE seam every
 //! lane that starts from a shapes DOCUMENT reads through.
 //!
-//! `validate --shapes` and `shacl pack` are two commands with one job in common: turn a
-//! shapes document (plus whatever `--import IRI=FILE` resolves) into the dataset a shapes
-//! graph is parsed from. Before this module existed they did that job twice, at two
-//! different seams, and the two copies quietly diverged — `shacl pack` read raw Turtle text
-//! straight into [`purrdf_shapes::engine::parse_shapes`], which never sees an `--import`
-//! table and cannot fold a closure or even report one as unresolved, so a product packed
-//! from a shapes graph with an `owl:imports` silently carried FEWER shapes than
-//! `validate --shapes` validated against, with nothing printed to say so. Extracting the
-//! read-then-fold sequence here, for both lanes to call, is what makes that divergence
-//! impossible to reintroduce: there is exactly one implementation of "what does this shapes
-//! graph mean", and every command that needs it calls the same one.
+//! `validate --shapes`, `shacl pack`, `rules --shapes`, `node-expr` and `shapes lint` all
+//! turn a shapes document (plus whatever `--import IRI=FILE` names) into the shapes graph
+//! the engine parses. They read the document with [`read_shapes_document`] and the pairs
+//! with [`shapes_imports`], and hand both to the engine, which resolves the `owl:imports`
+//! closure itself — through `purrdf_shapes::imports::resolve_shapes_imports`, the one helper
+//! every PurRDF host resolves through. This module does not walk the closure: a second walk
+//! here is how the command line once refused shapes graphs the library accepted, so the
+//! command line now asks the same question every other host asks and renders the one
+//! answer ([`shapes_error`]) in flags.
 //!
 //! # Why this is not a fetch
 //!
@@ -22,25 +20,37 @@
 //! not: it ships no HTTP client, every release crate must build for `wasm32-unknown-unknown`,
 //! and a validation verdict that depends on what a URL served today is not reproducible. So
 //! the closure is caller-supplied configuration, the same answer `entails --import` and
-//! `shex --import` give — see `purrdf_entail::entails::imports`, whose doctrine paragraph is
-//! the one this follows.
+//! `shex --import` give — see `purrdf_core::imports`, whose doctrine paragraph is the one
+//! this follows.
 //!
-//! # Why an unresolved import is not always a refusal
+//! # An unresolved import is a refusal; an import already in the graph is not unresolved
 //!
-//! Naming no `--import` at all leaves the imports UNRESOLVED but does not refuse them: it
-//! reports each one on stderr and the caller proceeds with the shapes graph alone. That
-//! asymmetry is deliberate and load-bearing. A shapes document may legitimately carry an
-//! `owl:Ontology` header whose imports are irrelevant to its shapes — two vectors in this
-//! repo's own W3C SHACL corpus do exactly that
-//! (`vectors/shacl/sparql/component/validator-001.ttl`,
-//! `vectors/shacl/sparql/node/prefixes-001.ttl`) — and refusing them would reject input that
-//! is valid, which is the mirror-image bug of the silent drop this module exists to fix. The
-//! pre-flag behaviour was to say NOTHING, which is the actual defect: a shapes graph whose
-//! shapes all live in an imported document validated everything successfully against no
-//! shapes at all.
+//! An `owl:imports` whose ontology is not in hand is REFUSED, naming every such IRI and the
+//! `--import IRI=FILE` pair that resolves it. The alternative — validating against the
+//! shapes graph alone — is a verdict about a different, smaller shapes graph than the one the
+//! operator named: a shapes graph whose shapes all live in an imported document would
+//! "conform" against no shapes at all. A warning beside that verdict does not undo it, so
+//! there is no warn-and-continue path.
 //!
-//! Naming ANY pair flips the closure to mandatory, because at that point the operator has
-//! asserted that the imports matter and a half-resolved closure is a different shapes graph.
+//! What keeps this from refusing valid input is the rule in `purrdf_core::imports`, in two
+//! halves. An `owl:imports` triple is an import only when its subject is the shapes
+//! document's own IRI — a `loaded` IRI below — an `owl:Ontology` header of the document, a
+//! `sh:ShapesGraph` it declares (`sh:RulesGraph` and subclasses included), or a node naming
+//! one of those as its `owl:versionIRI` (SHACL 1.2's `^owl:versionIRI?/owl:imports`, OWL 2's
+//! ontology header, SHACL 1.2 Core's `sh:ShapesGraph`); on any other node — one that is only
+//! a `sh:DataGraph` among them — it is data, and the W3C `validator-001` and `prefixes-001`
+//! vectors validate as written. And an import is resolved when it names a document already
+//! LOADED — the shapes document's own retrieval IRI or base (including an in-document
+//! `@base`), or an `--import` document's — or when the closure already HOLDS the graph it
+//! names (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose
+//! `owl:versionIRI` is `<X>`).
+//! A shapes document that merges the W3C SHACL 1.2 vocabularies — `shnex.ttl` importing
+//! `sh:`, beside the `shacl.ttl` that declares it — is therefore complete as written and needs
+//! no `--import`.
+//!
+//! Naming a pair also makes it MANDATORY that the pair is used: a pair the closure never
+//! reaches is refused, because it would be read and never used — the engine's
+//! `unreached-import`, rendered here as a usage error.
 //!
 //! # `--shapes-graph` lives here too, for the same reason
 //!
@@ -48,13 +58,14 @@
 //! agree on: both read a `--shapes-graph IRI` argument and both have to resolve it against
 //! the SAME base their shapes document parses under, or a product packed with one answer and
 //! a document validated with the other would expose `$shapesGraph` under two different IRIs
-//! for what is supposed to be one shapes graph. Living beside [`fold_shapes_imports`] is what
-//! keeps that agreement from being re-derived per caller the way the import fold used to be.
+//! for what is supposed to be one shapes graph. Living beside [`shapes_imports`] is what
+//! keeps that agreement from being re-derived per caller.
 
-use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
+use purrdf::shapes::{ShapesError, ShapesImportError, ShapesImports, UnanchoredNote};
 use purrdf_core::RdfDataset;
+use purrdf_core::imports::imported_iris;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 
@@ -62,7 +73,7 @@ use crate::error::CliError;
 use crate::{format, source};
 
 /// A shapes document READ but not yet parsed into `Shapes`: the frozen graph plus the
-/// `@prefix`/`PREFIX` map recovered from its source text.
+/// prefix map its syntax declared.
 ///
 /// The two travel together because they are only jointly meaningful. SHACL-AF `sh:select`
 /// bodies may use prefixed names, the frozen IR does not retain a document's prefix map, and
@@ -71,9 +82,19 @@ use crate::{format, source};
 pub(crate) struct ShapesDocument {
     /// The document's quads.
     pub(crate) dataset: Arc<RdfDataset>,
-    /// Its own prefix declarations, empty for any non-Turtle syntax (the recovery is a scan
-    /// of Turtle source text, which no other syntax offers).
+    /// Its own prefix declarations, as the codec that parsed it recorded them
+    /// (`purrdf_rdf::ParseOutcome::document_prefixes`): Turtle's and TriG's
+    /// `@prefix`/`PREFIX` directives, RDF/XML's `xmlns` declarations. Empty for a syntax
+    /// that declares none (N-Triples, N-Quads, TriX, HexTuples, JSON-LD, YAML-LD, a pack or
+    /// a GTS container).
     pub(crate) prefixes: Vec<(String, String)>,
+    /// The IRIs this document was read FROM: the base it was parsed under (its `file://`
+    /// retrieval IRI, `--base`, or the ontology IRI an `--import` pair named) and the base
+    /// the document itself established — a Turtle or TriG `@base`, an RDF/XML root
+    /// `xml:base`, a JSON-LD `@context` `@base`. Each is the document's own IRI: an
+    /// `owl:imports` on one of these is an import, and an `owl:imports` of one of these names
+    /// a document already loaded, so it is resolved in place.
+    pub(crate) loaded: Vec<String>,
 }
 
 /// Read one shapes document, by the same two routes `purrdf_shapes::engine::parse_shapes`
@@ -82,139 +103,231 @@ pub(crate) struct ShapesDocument {
 /// Stopping short is what makes an import closure possible at all: the imports have to be
 /// read off the GRAPH, and the documents merged as graphs, before anything is asked to be a
 /// shape. The composition is deliberately the identical one `parse_shapes` performs —
-/// `parse_turtle_to_dataset` + `extract_prefixes`, then `from_dataset_with_config(…, None)` —
+/// `parse_turtle_document` (the dataset and the codec's own prefix map, from one parse),
+/// then `from_dataset_with_config(…, None)` —
 /// so a single document with no imports parses to exactly the `Shapes` it did before this
-/// seam existed. `what` names the flag for the diagnostic, since this reads `--shapes` and
-/// `--import` alike.
+/// seam existed. Every other RDF syntax takes the same one-parse route through the codec
+/// (`purrdf_rdf::parse_dataset_with`), so a TriG or RDF/XML shapes document carries its
+/// prefixes and its own base exactly as the Turtle spelling of the same graph does. `what`
+/// names the flag for the diagnostic, since this reads `--shapes` and `--import` alike.
 pub(crate) fn read_shapes_document(
     path: &str,
     format: SourceFormat,
     base: Option<&str>,
     what: &str,
 ) -> Result<ShapesDocument, CliError> {
-    if format == SourceFormat::Native(NativeRdfFormat::Turtle) {
+    let native = match format {
+        SourceFormat::Native(native) => native,
+        SourceFormat::Pack | SourceFormat::Gts => {
+            return Ok(ShapesDocument {
+                dataset: source::load_dataset(path, format, base)?,
+                prefixes: Vec::new(),
+                loaded: base.into_iter().map(str::to_owned).collect(),
+            });
+        }
+    };
+    let (dataset, document_base, prefixes) = if native == NativeRdfFormat::Turtle {
         let bytes = source::read_bytes(path)?;
         let text = String::from_utf8(bytes).map_err(|error| {
             CliError::Runtime(format!("{what} {path}: not UTF-8 text: {error}"))
         })?;
-        let dataset = purrdf::shapes::text_ingest::parse_turtle_to_dataset(&text, base)
-            .map_err(|errors| CliError::Runtime(format!("{what} {path}: {}", errors.join("\n"))))?;
-        return Ok(ShapesDocument {
+        let purrdf::shapes::text_ingest::TurtleDocument {
             dataset,
-            prefixes: purrdf::shapes::text_ingest::extract_prefixes(&text),
-        });
+            base: document_base,
+            prefixes,
+        } = purrdf::shapes::text_ingest::parse_turtle_document(&text, base)
+            .map_err(|errors| CliError::Runtime(format!("{what} {path}: {}", errors.join("\n"))))?;
+        (dataset, document_base, prefixes)
+    } else {
+        let outcome = source::load_native_document(path, native, base)?;
+        let document_base = outcome.document_base_iri().map(str::to_owned);
+        (outcome.dataset, document_base, outcome.document_prefixes)
+    };
+    let mut loaded: Vec<String> = base.into_iter().map(str::to_owned).collect();
+    if let Some(document_base) = document_base
+        && !loaded.contains(&document_base)
+    {
+        loaded.push(document_base);
     }
-
     Ok(ShapesDocument {
-        dataset: source::load_dataset(path, format, base)?,
-        prefixes: Vec::new(),
+        dataset,
+        prefixes,
+        loaded,
     })
 }
 
-/// Fold the shapes graph's transitive `owl:imports` closure in from the `--import IRI=FILE`
-/// table.
+/// Build the shapes graph's `owl:imports` table from the `--import IRI=FILE` pairs.
 ///
 /// `imports` is the raw `--import IRI=FILE` table exactly as the operator wrote it — this
 /// function is agnostic to which command line it came from, which is what lets
-/// `validate --shapes` and `shacl pack` share it rather than each open-coding their own
-/// walk. See the [module documentation](self) for why an unresolved import warns rather than
-/// refuses when the table is empty, and refuses once it is not.
-pub(crate) fn fold_shapes_imports(
-    root: ShapesDocument,
+/// `validate --shapes`, `shacl pack`, `shacl rules`, `shacl node-expr` and `shapes lint`
+/// share it. Every pair is decided before any file is opened, then each document is read
+/// under its ontology IRI as its base (the per-document base an `owl:imports` names), with
+/// its own prefix map. The IRIs the shapes document itself was read under (`root.loaded`)
+/// and those an imported document's `@base` declares are declared loaded.
+///
+/// This builds the TABLE only. Whether the closure is complete — and whether every pair is
+/// reached — is decided by the engine, by the one helper every host resolves through
+/// (`purrdf_shapes::imports::resolve_shapes_imports`), when the shapes graph is parsed;
+/// [`shapes_error`] renders its refusal in command-line terms.
+pub(crate) fn shapes_imports(
+    root: &ShapesDocument,
     imports: &[String],
-) -> Result<ShapesDocument, CliError> {
+) -> Result<ShapesImports, CliError> {
     let pairs = resolve_shapes_import_pairs(imports)?;
-    let direct = purrdf_entail::entails::imports::imported_iris(&root.dataset);
-    if direct.is_empty() {
-        if let Some(pair) = pairs.first() {
-            return Err(CliError::Usage(format!(
-                "--import {spec}: the shapes graph has no owl:imports at all, so this \
-                 document would be read and never used. Remove the pair, or import <{iri}> \
-                 from the shapes graph",
-                spec = pair.spec,
-                iri = pair.iri
-            )));
-        }
-        return Ok(root);
+    let mut table = ShapesImports::new();
+    for iri in &root.loaded {
+        table.declare_loaded(iri.clone());
     }
-
-    if pairs.is_empty() {
-        // The diagnostic that replaces the silent drop. Not a refusal: see the doc comment.
-        for iri in &direct {
-            eprintln!(
-                "shacl warning: the shapes graph owl:imports <{iri}>, which is not resolved. \
-                 PurRDF fetches nothing — pass `--import <{iri}>=FILE` to fold it in. \
-                 Validating against the shapes graph alone."
-            );
-        }
-        return Ok(root);
-    }
-
-    // Breadth-first to a FIXPOINT over the import graph, each document read once. Two
-    // properties are inherited from `purrdf_entail::entails::imports::resolve`, and both
-    // matter: an imported document's OWN imports are followed, and a CYCLE terminates
-    // rather than looping — OWL 2 §3.4 defines the closure as the transitive one and
-    // explicitly permits `A` to import `B` to import `A`, so refusing a cycle would refuse
-    // an ontology the specification allows.
-    let mut queue: VecDeque<String> = direct.into_iter().collect();
-    let mut requested: BTreeSet<String> = BTreeSet::new();
-    let mut documents: Vec<ShapesDocument> = Vec::new();
-    while let Some(iri) = queue.pop_front() {
-        if !requested.insert(iri.clone()) {
-            continue;
-        }
-        let Some(pair) = pairs.iter().find(|pair| pair.iri == iri) else {
-            return Err(CliError::Runtime(format!(
-                "the shapes graph imports <{iri}>, and no `--import <{iri}>=FILE` pair \
-                 resolves it. PurRDF fetches nothing the operator did not name, so an \
-                 unresolved import is refused rather than folded in as an empty graph"
-            )));
-        };
-        // The imported document parses under the ONTOLOGY IRI as its base, which is the
-        // per-document base an `owl:imports` names — not the root's base and not `--base`.
+    for pair in &pairs {
         let document = read_shapes_document(
             pair.path,
             pair.format,
             Some(pair.iri),
-            &format!("--import {iri}"),
+            &format!("--import {}", pair.iri),
         )?;
-        queue.extend(purrdf_entail::entails::imports::imported_iris(
-            &document.dataset,
-        ));
-        documents.push(document);
+        for loaded in &document.loaded {
+            if loaded != pair.iri {
+                table.declare_loaded(loaded.clone());
+            }
+        }
+        table
+            .insert(pair.iri, document.dataset, document.prefixes)
+            .map_err(|error| CliError::Usage(format!("--import {}: {error}", pair.spec)))?;
     }
+    Ok(table)
+}
 
-    // A pair the closure never reached, quoted back exactly as the operator wrote it. A
-    // USAGE error (exit 2) that nevertheless needs the closure walked to detect: the fault
-    // is in the command line, and only its DISCOVERY needed the documents.
-    if let Some(pair) = pairs.iter().find(|pair| !requested.contains(pair.iri)) {
-        return Err(CliError::Usage(format!(
-            "--import {spec}: the shapes graph's import closure never reaches <{iri}>, so \
-             this document would be read and never used. Remove the pair, or import the IRI \
-             from the shapes graph",
-            spec = pair.spec,
-            iri = pair.iri
-        )));
-    }
-
-    // `union` standardizes blank nodes apart per source document and dedupes, which is what
-    // keeps two documents' independently-labelled property shapes from colliding.
-    let merged = {
-        let graphs: Vec<&RdfDataset> = std::iter::once(root.dataset.as_ref())
-            .chain(documents.iter().map(|doc| doc.dataset.as_ref()))
-            .collect();
-        Arc::new(RdfDataset::union(&graphs))
+/// Render a shapes-graph refusal for the command line.
+///
+/// The typed [`ShapesImportError`] is the SAME refusal every host raises; only its remedy is
+/// spelled here in flags. An unresolved import is a runtime refusal (exit 1) naming every
+/// missing IRI, the `--import IRI=FILE` pair that resolves each, and — for a document that
+/// imports its own IRI — `base_flag`, the flag that sets the shapes document's base on the
+/// calling command (`--shapes-base` for `validate`, `--base` for `shacl pack`). A pair the
+/// closure never reaches is a USAGE error (exit 2): the fault is in the command line, and
+/// only its discovery needed the documents. Any other refusal is `context: message`.
+pub(crate) fn shapes_error(
+    error: ShapesError,
+    context: &str,
+    root: &ShapesDocument,
+    base_flag: &str,
+) -> CliError {
+    let error = match error {
+        ShapesError::Imports(error) => error,
+        ShapesError::Invalid(message) => return CliError::Runtime(format!("{context}: {message}")),
+        ShapesError::ShaclJs(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
+        ShapesError::IllFormed(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
+        ShapesError::Prebinding(violation) => {
+            return CliError::Runtime(format!("{context}: {violation}"));
+        }
+        ShapesError::UnsupportedTarget(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
+        ShapesError::SparqlTargetDisagreement(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
     };
-    // The root's prefixes come FIRST so its declarations win a collision: it is the document
-    // the operator named, and `from_dataset_with_prefixes` takes the first match.
-    let mut prefixes = root.prefixes;
-    for document in documents {
-        prefixes.extend(document.prefixes);
+    match error {
+        ShapesImportError::Unresolved { iris } => {
+            let named: Vec<String> = iris.iter().map(|iri| format!("<{iri}>")).collect();
+            let remedy: Vec<String> = iris
+                .iter()
+                .map(|iri| format!("`--import {iri}=FILE`"))
+                .collect();
+            CliError::Runtime(format!(
+                "unresolved-import: the shapes graph's owl:imports closure names {named}, which \
+                 {verb} not in the shapes graph and no --import pair resolves. PurRDF fetches \
+                 nothing the operator did not name, and going on without an imported document \
+                 would use a different, smaller shapes graph than the one named. Pass {remedy} \
+                 to fold {it} in, or merge the imported ontology into the shapes document. If \
+                 the shapes document IS {one_of}, read it under that IRI with {self_remedy}",
+                named = named.join(", "),
+                verb = if iris.len() == 1 { "is" } else { "are" },
+                remedy = remedy.join(" "),
+                it = if iris.len() == 1 { "it" } else { "them" },
+                one_of = if iris.len() == 1 {
+                    named.join("")
+                } else {
+                    format!("one of {}", named.join(", "))
+                },
+                self_remedy = if iris.len() == 1 {
+                    format!("`{base_flag} {}`", iris[0])
+                } else {
+                    format!("`{base_flag} IRI`")
+                },
+            ))
+        }
+        ShapesImportError::Unreached { iris, unanchored } => {
+            let named: Vec<String> = iris.iter().map(|iri| format!("<{iri}>")).collect();
+            let these = if iris.len() == 1 {
+                "this document"
+            } else {
+                "these documents"
+            };
+            // The one sentence every host adds when an owl:imports names the entry from a
+            // subject that is no anchor, with this command's lint spelled as a command.
+            let note = if unanchored.is_empty() {
+                String::new()
+            } else {
+                format!(
+                    ". {}",
+                    UnanchoredNote {
+                        iris: &unanchored,
+                        lint: Some("purrdf shapes lint"),
+                    }
+                )
+            };
+            let loaded: Vec<&str> = root.loaded.iter().map(String::as_str).collect();
+            if imported_iris(root.dataset.as_ref(), &loaded).is_empty() {
+                return CliError::Usage(format!(
+                    "unreached-import: --import {named}: the shapes graph imports nothing — no \
+                     owl:imports of it is anchored — and the data graph links no such graph, so \
+                     {these} would be read and never used. Remove the pair, import the IRI from \
+                     the shapes graph, or link it from the data graph with sh:shapesGraph{note}",
+                    named = named.join(", "),
+                ));
+            }
+            CliError::Usage(format!(
+                "unreached-import: --import {named}: the shapes graph's import closure never \
+                 reaches {it} and no data-graph sh:shapesGraph link names {it}, so {these} \
+                 would be read and never used. Remove the pair, import the IRI from the shapes \
+                 graph, or link it from the data graph{note}",
+                named = named.join(", "),
+                it = if iris.len() == 1 { "it" } else { "them" },
+            ))
+        }
+        error @ ShapesImportError::InvalidEntry { .. } => {
+            CliError::Usage(format!("--import {error}"))
+        }
+        ShapesImportError::UnresolvedLink { iris } => {
+            let named: Vec<String> = iris.iter().map(|iri| format!("<{iri}>")).collect();
+            let remedy: Vec<String> = iris
+                .iter()
+                .map(|iri| format!("`--import {iri}=FILE`"))
+                .collect();
+            CliError::Runtime(format!(
+                "unresolved-shapes-graph-link: the data graph links {named} with \
+                 sh:shapesGraph (SHACL 1.2 Core section 6.4), which {verb} not in the shapes \
+                 graph and no --import pair resolves. A linked graph is part of the shapes \
+                 graph that validates this data graph, PurRDF fetches nothing the operator \
+                 did not name, and going on without it would use a smaller shapes graph than \
+                 the data graph names. Pass {remedy} to fold {it} in, or merge {it} into the \
+                 shapes document",
+                named = named.join(", "),
+                verb = if iris.len() == 1 { "is" } else { "are" },
+                remedy = remedy.join(" "),
+                it = if iris.len() == 1 { "it" } else { "them" },
+            ))
+        }
+        error @ (ShapesImportError::UnheldLink { .. }
+        | ShapesImportError::InvalidLink { .. }
+        | ShapesImportError::IncompatibleVersions { .. }) => CliError::Runtime(error.to_string()),
     }
-    Ok(ShapesDocument {
-        dataset: merged,
-        prefixes,
-    })
 }
 
 /// One `--import IRI=FILE` argument for the SHACL lane, fully DECIDED but not yet read.

@@ -40,7 +40,7 @@ from .purrdf_native import slice as _slice
 _module.__file__ = __file__
 
 # Make the swapped native module a *package* for the import system: pure-Python
-# subpackages of `purrdf` (e.g. `purrdf.compat.rdflib`, the purrdf P0 shim)
+# subpackages of `purrdf` (e.g. `purrdf.compat.rdflib`, the rdflib compatibility shim)
 # live beside this file on disk. After the `sys.modules` swap below the path-based
 # finder resolves `purrdf.<subpkg>` against `__path__`; without this the native
 # module object carries no `__path__` and `import purrdf.compat.rdflib` would

@@ -88,7 +88,9 @@ const hello = f.directionalLiteral("مرحبا", "ar", "rtl");
 - **SHACL** — `shaclValidateToSarif(shapesTtl, dataNt)` validates an N-Triples
   data graph against a Turtle shapes graph and returns a SARIF 2.1.0 report;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule`
-  inferences as N-Triples.
+  inferences and returns a `ShaclEntailment`: `ntriples` holds the result as
+  N-Triples, and `diagnostics` holds the shapes graph's mandatory diagnostics.
+  Call `free()` on it.
 - **`Sink`** — a streaming consumer (`push(quad)` / `finish() → Dataset`);
   `datasetToStream` / `streamToDataset` are the async RDF/JS Stream/Sink
   helpers.

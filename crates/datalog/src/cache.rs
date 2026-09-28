@@ -22,8 +22,9 @@
 //! # The contract hash is computed over DATA, never over source text
 //!
 //! [`contract_hash`] identifies the calculus a result came from. It hashes the things that
-//! can change an answer — the clause program in canonical form, the three fixed budget
-//! constants, and the hand-maintained [`CALCULUS_VERSION`] — and it hashes them AS DATA.
+//! can change an answer — the clause program in canonical form, the stored-fact and
+//! join-step limits in force and the fixed term-arena ceiling, and the hand-maintained
+//! [`CALCULUS_VERSION`] — and it hashes them AS DATA.
 //!
 //! The obvious alternative is to embed the evaluator's own source text in the binary and
 //! checksum that. This crate does not, and the reason is a hard budget rather than taste:
@@ -53,11 +54,11 @@ use std::fmt;
 use std::sync::Arc;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause};
+use crate::guard::{Guard, GuardReads};
 use crate::plan::Executable;
 use crate::resolve_fol::hex_lower;
-use crate::seminaive::{
-    EvalError, MAX_JOIN_STEPS, MAX_STORED_FACTS, MAX_TERM_ARENA_BYTES, compile,
-};
+use crate::schedule::Schedule;
+use crate::seminaive::{EvalError, EvalOptions, MAX_TERM_ARENA_BYTES, compile};
 
 /// Version of the planner and its executable-kernel shape.
 ///
@@ -75,6 +76,21 @@ pub const PLAN_SOLVER_VERSION: &str = "purrdf-datalog-plan-v1";
 /// a constant one hash under different variant tags, where before every predicate was one
 /// length-prefixed string) and the graph position joined the encoding.
 const CLAUSE_IR_DIGEST_TAG: &str = "purrdf-datalog-dl-clause-ir-v3";
+
+/// Domain-separation tag for [`canonical_rule_hash`] over a GUARDED program — one in
+/// which some clause carries a guard literal or a negated conjunction
+/// ([`crate::guard`]).
+///
+/// A guard-free program hashes under [`CLAUSE_IR_DIGEST_TAG`] exactly as it always has,
+/// so no existing digest moves; a guarded one hashes under this tag, and every clause's
+/// encoding is then followed by its guard section — a guard count, then per guard its
+/// name, inputs, outputs and read kind, then a negation count, then per negated
+/// conjunction its atoms and guards — framed unconditionally, so within this domain the
+/// encoding is injective too.
+const GUARDED_CLAUSE_IR_DIGEST_TAG: &str = "purrdf-datalog-guarded-dl-clause-ir-v1";
+
+/// Domain-separation tag for [`scheduled_contract_hash`].
+const SCHEDULED_CONTRACT_DIGEST_TAG: &str = "purrdf-datalog-scheduled-contract-v1";
 
 /// Domain-separation tag for [`PlanIdentity`].
 const PLAN_IDENTITY_TAG: &str = "purrdf-datalog-plan-identity-v1";
@@ -171,8 +187,16 @@ fn hash_atom(hasher: &mut blake3::Hasher, atom: &ClauseAtom) {
 /// Hashing any of the five order-insensitively would let two programs with different
 /// observable behaviour share a cached plan.
 pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
+    let guarded = rules.iter().any(DlClause::is_guarded);
     let mut hasher = blake3::Hasher::new();
-    frame_str(&mut hasher, CLAUSE_IR_DIGEST_TAG);
+    frame_str(
+        &mut hasher,
+        if guarded {
+            GUARDED_CLAUSE_IR_DIGEST_TAG
+        } else {
+            CLAUSE_IR_DIGEST_TAG
+        },
+    );
     hasher.update(&(rules.len() as u64).to_le_bytes());
     for rule in rules {
         hasher.update(&(rule.body().len() as u64).to_le_bytes());
@@ -190,8 +214,39 @@ pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
                 hash_atom(&mut hasher, atom);
             }
         }
+        if guarded {
+            hash_guards(&mut hasher, rule.guards());
+            hasher.update(&(rule.negations().len() as u64).to_le_bytes());
+            for negation in rule.negations() {
+                hasher.update(&(negation.atoms().len() as u64).to_le_bytes());
+                for atom in negation.atoms() {
+                    hash_atom(&mut hasher, atom);
+                }
+                hash_guards(&mut hasher, negation.guards());
+            }
+        }
     }
     *hasher.finalize().as_bytes()
+}
+
+/// Hash a guard list: its length, then per guard its name, inputs, outputs and read kind.
+fn hash_guards(hasher: &mut blake3::Hasher, guards: &[Guard]) {
+    hasher.update(&(guards.len() as u64).to_le_bytes());
+    for guard in guards {
+        frame_str(hasher, guard.name());
+        hasher.update(&(guard.inputs().len() as u64).to_le_bytes());
+        for input in guard.inputs() {
+            frame_str(hasher, input);
+        }
+        hasher.update(&(guard.outputs().len() as u64).to_le_bytes());
+        for output in guard.outputs() {
+            frame_str(hasher, output);
+        }
+        hasher.update(&[match guard.reads() {
+            GuardReads::Bindings => 0,
+            GuardReads::Model => 1,
+        }]);
+    }
 }
 
 // ── The contract hash: which calculus produced this result ──────────────────────
@@ -278,9 +333,15 @@ impl fmt::Display for ContractHash {
 /// * [`canonical_rule_hash`] of the clause program — reused, never re-derived, so the
 ///   contract hash inherits every order-sensitivity and every field separation that function
 ///   already proves;
-/// * the three fixed budget ceilings [`MAX_JOIN_STEPS`], [`MAX_STORED_FACTS`] and
-///   [`MAX_TERM_ARENA_BYTES`] — a budget change turns an answer into a refusal or a refusal
-///   into an answer, which is as large a difference as an answer can have;
+/// * the EFFECTIVE join-step and stored-fact limits
+///   ([`EvalOptions::max_join_steps`], [`EvalOptions::max_stored_facts`]) and the fixed
+///   [`MAX_TERM_ARENA_BYTES`] — a limit change turns an answer into a refusal or a refusal
+///   into an answer, which is as large a difference as an answer can have. The effective
+///   value is hashed, never "the default": the default differs by target
+///   ([`DEFAULT_MAX_STORED_FACTS`](crate::seminaive::DEFAULT_MAX_STORED_FACTS)), so a
+///   result computed natively under the default never shares an identity with a `wasm32`
+///   evaluation under its default, and a caller who states the target's default value gets
+///   the identity the default has;
 /// * [`CALCULUS_VERSION`], covering the evaluator semantics that are code rather than data.
 ///   See that constant for exactly when a change obliges a bump.
 ///
@@ -300,24 +361,118 @@ impl fmt::Display for ContractHash {
 /// is this result from?", and the planner is not the calculus: the two join kernels are held
 /// to producing identical relations by a differential test, so which one ran is not
 /// something a result's identity should record.
+///
+/// # The caller's limits
+///
+/// Every limit is a caller parameter ([`EvalOptions`]), so [`contract_hash_with`] takes the
+/// options in force and this function is that recipe under [`EvalOptions::default`] — the
+/// current target's defaults. The stored-fact and join-step limits can bind any program,
+/// so they reach every program's hash. A GUARDED program's answer also depends on the term
+/// limits it runs under (the term-generating round limit and the generated-term budget):
+/// the same program refused under one limit completes under a larger one. A guard-free
+/// program cannot be bound by either (see [`EvalOptions`]), so its contract hash leaves
+/// those two out.
 pub fn contract_hash(rules: &[DlClause]) -> ContractHash {
-    contract_digest(
+    contract_hash_with(rules, &EvalOptions::default())
+}
+
+/// [`contract_hash`] under the caller's `options`: the effective stored-fact and
+/// join-step limits are folded into every program's hash, and the term limits in force
+/// into a GUARDED program's; a guard-free program's hash is independent of the term
+/// limits.
+pub fn contract_hash_with(rules: &[DlClause], options: &EvalOptions) -> ContractHash {
+    let digest = contract_digest(
         rules,
         CALCULUS_VERSION,
-        MAX_JOIN_STEPS,
-        MAX_STORED_FACTS as u64,
+        options.max_join_steps(),
+        options.max_stored_facts(),
         MAX_TERM_ARENA_BYTES as u64,
-    )
+    );
+    if !rules.iter().any(DlClause::is_guarded) {
+        return digest;
+    }
+    let mut hasher = blake3::Hasher::new();
+    frame_str(&mut hasher, CONTRACT_DIGEST_TAG);
+    hasher.update(digest.digest());
+    fold_term_generating_limit(&mut hasher, options);
+    ContractHash {
+        digest: *hasher.finalize().as_bytes(),
+    }
+}
+
+/// Fold the term limits in force: each a tag byte, then the caller's value, or the rule
+/// its default is derived by — the default round limit, and the generated-term budget's
+/// floor and per-input-term factor — so a change to either is a change of calculus.
+fn fold_term_generating_limit(hasher: &mut blake3::Hasher, options: &EvalOptions) {
+    match options.stated_max_term_generating_rounds() {
+        Some(rounds) => {
+            hasher.update(&[0]);
+            hasher.update(&rounds.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[1]);
+            hasher.update(&crate::seminaive::DEFAULT_MAX_TERM_GENERATING_ROUNDS.to_le_bytes());
+        }
+    }
+    match options.stated_max_generated_terms() {
+        Some(terms) => {
+            hasher.update(&[2]);
+            hasher.update(&terms.to_le_bytes());
+        }
+        None => {
+            hasher.update(&[3]);
+            hasher.update(&crate::seminaive::GENERATED_TERM_BUDGET_FLOOR.to_le_bytes());
+            hasher.update(&crate::seminaive::GENERATED_TERMS_PER_INPUT_TERM.to_le_bytes());
+        }
+    }
+}
+
+/// The identity of the calculus a program compiled for the ORDERED schedule
+/// ([`crate::schedule`]) is evaluated under.
+///
+/// Everything [`contract_hash_with`] covers — the effective stored-fact and join-step
+/// limits, and the caller's term limits whether or not the program is guarded, and the SCHEDULE: the layers, and in each its run-once and
+/// iterating groups with their rule indices, in order. Two programs whose clauses agree
+/// but whose schedules differ can derive different facts — a negation decided before or
+/// after a rule ran — so they never share an identity. Domain-separated from
+/// [`contract_hash`], so a scheduled program and a stratified one never collide either.
+pub fn scheduled_contract_hash(
+    rules: &[DlClause],
+    schedule: &Schedule,
+    options: &EvalOptions,
+) -> ContractHash {
+    let mut hasher = blake3::Hasher::new();
+    frame_str(&mut hasher, SCHEDULED_CONTRACT_DIGEST_TAG);
+    frame_str(&mut hasher, CALCULUS_VERSION);
+    hasher.update(&options.max_join_steps().to_le_bytes());
+    hasher.update(&options.max_stored_facts().to_le_bytes());
+    hasher.update(&(MAX_TERM_ARENA_BYTES as u64).to_le_bytes());
+    fold_term_generating_limit(&mut hasher, options);
+    hasher.update(&canonical_rule_hash(rules));
+    hasher.update(&(schedule.layers().len() as u64).to_le_bytes());
+    for layer in schedule.layers() {
+        for groups in [layer.once(), layer.iterating()] {
+            hasher.update(&(groups.len() as u64).to_le_bytes());
+            for group in groups {
+                hasher.update(&(group.len() as u64).to_le_bytes());
+                for &rule in group {
+                    hasher.update(&(rule as u64).to_le_bytes());
+                }
+            }
+        }
+    }
+    ContractHash {
+        digest: *hasher.finalize().as_bytes(),
+    }
 }
 
 /// The digest recipe behind [`contract_hash`], with every input passed explicitly.
 ///
 /// The parameters exist so the tests can prove each input actually reaches the digest: a
-/// `const` cannot be perturbed at runtime, so a test that could only call
-/// [`contract_hash`] could assert the budgets matter only by rebuilding the crate. The
-/// public entry point supplies exactly the real constants, and
-/// `the_contract_hash_is_the_recipe_over_the_real_constants` pins that, so this seam cannot
-/// drift away from the thing it stands in for.
+/// `const` cannot be perturbed at runtime, and the defaults differ by target. The public
+/// entry points supply exactly the limits in force and the real arena constant, and
+/// `the_contract_hash_is_the_recipe_over_the_limits_in_force` pins that, so this seam
+/// cannot drift away from the thing it stands in for.
 fn contract_digest(
     rules: &[DlClause],
     calculus_version: &str,
@@ -548,7 +703,11 @@ impl PlanCache {
 mod tests {
     use super::*;
     use crate::clause::HeadDisjunct;
-    use crate::seminaive::evaluate;
+    use crate::seminaive::{
+        DEFAULT_MAX_JOIN_STEPS, DEFAULT_MAX_STORED_FACTS, NATIVE_DEFAULT_MAX_JOIN_STEPS,
+        NATIVE_DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_JOIN_STEPS,
+        WASM_DEFAULT_MAX_STORED_FACTS, evaluate,
+    };
     use crate::store::RelationStore;
 
     const P: &str = "https://example.org/p";
@@ -1068,24 +1227,69 @@ mod tests {
 
     // ── The contract hash ───────────────────────────────────────────────────────
 
-    /// The public entry point IS the recipe over the real constants.
+    /// The public entry point IS the recipe over the limits in force.
     ///
     /// The tests below perturb the recipe's parameters, which is only evidence about
     /// `contract_hash` because this equality holds: it is what stops the seam from drifting
-    /// away from the constants it stands in for.
+    /// away from the limits it stands in for. It holds for the target's defaults and for
+    /// stated limits alike.
     #[test]
-    fn the_contract_hash_is_the_recipe_over_the_real_constants() {
+    fn the_contract_hash_is_the_recipe_over_the_limits_in_force() {
         let rules = transitive_step(Q);
         assert_eq!(
             contract_hash(&rules),
             contract_digest(
                 &rules,
                 CALCULUS_VERSION,
-                MAX_JOIN_STEPS,
-                MAX_STORED_FACTS as u64,
+                DEFAULT_MAX_JOIN_STEPS,
+                DEFAULT_MAX_STORED_FACTS,
                 MAX_TERM_ARENA_BYTES as u64,
             )
         );
+        let stated = EvalOptions::default()
+            .with_max_join_steps(12_345)
+            .with_max_stored_facts(678);
+        assert_eq!(
+            contract_hash_with(&rules, &stated),
+            contract_digest(
+                &rules,
+                CALCULUS_VERSION,
+                12_345,
+                678,
+                MAX_TERM_ARENA_BYTES as u64
+            )
+        );
+    }
+
+    /// The EFFECTIVE limits are hashed, never "the default": stating the target's default
+    /// value is the default's identity, and every other value — the other target's default
+    /// included — is a different contract, for a guard-free program as much as a guarded
+    /// one.
+    #[test]
+    fn the_effective_limits_reach_every_programs_hash() {
+        let rules = transitive_step(Q);
+        let default = contract_hash(&rules);
+        let restated = EvalOptions::default()
+            .with_max_join_steps(DEFAULT_MAX_JOIN_STEPS)
+            .with_max_stored_facts(DEFAULT_MAX_STORED_FACTS);
+        assert_eq!(contract_hash_with(&rules, &restated), default);
+        let wasm = EvalOptions::default()
+            .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS)
+            .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+        let native = EvalOptions::default()
+            .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS)
+            .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+        assert_ne!(
+            contract_hash_with(&rules, &wasm),
+            contract_hash_with(&rules, &native),
+            "a native result never shares an identity with a wasm32 one"
+        );
+        for options in [
+            EvalOptions::default().with_max_join_steps(DEFAULT_MAX_JOIN_STEPS + 1),
+            EvalOptions::default().with_max_stored_facts(DEFAULT_MAX_STORED_FACTS + 1),
+        ] {
+            assert_ne!(contract_hash_with(&rules, &options), default, "{options:?}");
+        }
     }
 
     /// EVERY input moves the hash: the rule table, each of the three budget ceilings, and
@@ -1113,20 +1317,20 @@ mod tests {
             contract_digest(&rules, CALCULUS_VERSION, steps, facts, bytes)
         };
         let real = (
-            MAX_JOIN_STEPS,
-            MAX_STORED_FACTS as u64,
+            DEFAULT_MAX_JOIN_STEPS,
+            DEFAULT_MAX_STORED_FACTS,
             MAX_TERM_ARENA_BYTES as u64,
         );
         assert_eq!(recipe(real.0, real.1, real.2), reference);
         assert_ne!(
             reference,
             recipe(real.0 + 1, real.1, real.2),
-            "MAX_JOIN_STEPS must reach the digest"
+            "the join-step limit must reach the digest"
         );
         assert_ne!(
             reference,
             recipe(real.0, real.1 + 1, real.2),
-            "MAX_STORED_FACTS must reach the digest"
+            "the stored-fact limit must reach the digest"
         );
         assert_ne!(
             reference,
@@ -1152,22 +1356,35 @@ mod tests {
         assert_ne!(recipe(7, 9, real.2), recipe(9, 7, real.2));
     }
 
-    /// The contract hash is byte-STABLE: the same program hashes to the same 32 bytes on
-    /// every run and on every target.
+    /// The contract hash is byte-STABLE: the same program under the same limits hashes to
+    /// the same 32 bytes on every run and on every target.
     ///
-    /// The frozen value is the point. Recomputing the digest twice in one process proves
-    /// nothing about a second process, so the expected hex is pinned here. If this
-    /// assertion fails, exactly one of two things happened: the digest's ENCODING changed
-    /// (legitimate, and the new value goes here in the same change that bumps
-    /// [`CALCULUS_VERSION`]), or an input drifted without anyone deciding it should.
+    /// The frozen values are the point. Recomputing the digest twice in one process proves
+    /// nothing about a second process, so the expected hex is pinned here — under the
+    /// `wasm32` defaults and under the native defaults, each STATED, so both pins hold on
+    /// every target. If this assertion fails, exactly one of two things happened: the
+    /// digest's ENCODING changed (legitimate, and the new value goes here in the same
+    /// change that bumps [`CALCULUS_VERSION`]), or an input drifted without anyone
+    /// deciding it should.
     #[test]
     fn the_contract_hash_is_frozen() {
-        let hash = contract_hash(&transitive_step(Q));
+        let wasm = EvalOptions::default()
+            .with_max_join_steps(WASM_DEFAULT_MAX_JOIN_STEPS)
+            .with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
         assert_eq!(
-            hash.to_hex(),
+            contract_hash_with(&transitive_step(Q), &wasm).to_hex(),
             "562beee0c93eadac0dd410551abba8f622ce14883694ac03a7467f626f129cfd",
-            "the contract hash of the fixture program moved"
+            "the contract hash of the fixture program under the wasm32 defaults moved"
         );
+        let native = EvalOptions::default()
+            .with_max_join_steps(NATIVE_DEFAULT_MAX_JOIN_STEPS)
+            .with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+        assert_eq!(
+            contract_hash_with(&transitive_step(Q), &native).to_hex(),
+            "af18b301d88e37d456fef993c51e1cfcc9446f05f716ae47e9fb317c91e2dc96",
+            "the contract hash of the fixture program under the native defaults moved"
+        );
+        let hash = contract_hash(&transitive_step(Q));
         // Recomputation is stable, and the two renderings agree.
         assert_eq!(hash, contract_hash(&transitive_step(Q)));
         assert_eq!(hash.to_string(), hash.to_hex());

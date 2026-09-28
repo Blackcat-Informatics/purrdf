@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Container-aware source/target routing identity (S3).
+//! Container-aware source/target routing identity.
 //!
 //! [`SourceFormat`] is the ONE shared routing identity `purrdf-rdf` hands every
 //! caller (starting with the CLI) that needs to resolve "what is this path/media-type

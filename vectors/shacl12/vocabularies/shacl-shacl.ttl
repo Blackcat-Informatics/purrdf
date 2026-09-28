@@ -1,0 +1,549 @@
+# A SHACL shapes graph to validate SHACL shapes graphs
+
+# THIS VERSION IS UNDER DEVELOPMENT BY THE DATA-SHAPES (SHACL 1.2) WG
+
+@prefix dcterms: <http://purl.org/dc/terms/> .
+@prefix owl:     <http://www.w3.org/2002/07/owl#> .
+@prefix rdf:     <http://www.w3.org/1999/02/22-rdf-syntax-ns#> .
+@prefix rdfs:    <http://www.w3.org/2000/01/rdf-schema#> .
+@prefix sh:      <http://www.w3.org/ns/shacl#> .
+@prefix shsh:    <http://www.w3.org/ns/shacl-shacl#> .
+@prefix xsd:     <http://www.w3.org/2001/XMLSchema#> .
+
+shsh:
+    a owl:Ontology ;
+    owl:imports <http://www.w3.org/ns/shacl#> ;
+    owl:versionIRI shsh:1.2 ;
+	rdfs:label "W3C SHACL for SHACL Validator"@en ;
+	rdfs:comment "This shapes graph can be used to validate SHACL shapes graphs against a subset of the syntax rules."@en ;
+    dcterms:creator "W3C Data Shapes Working Group" ;
+    dcterms:publisher "World Wide Web Consortium" ;
+    # dcterms:created ""^^xsd:date ;
+    # dcterms:issued ""^^xsd:date ;
+    # dcterms:modified ""^^xsd:date ;
+    dcterms:license "https://www.w3.org/copyright/software-license/"^^xsd:anyURI ;
+	sh:declare [
+		sh:prefix "shsh" ;
+		sh:namespace "http://www.w3.org/ns/shacl-shacl#"^^xsd:anyURI ;
+	] ;
+.
+
+	
+shsh:ListShape
+	a sh:NodeShape ;
+	rdfs:label "List shape"@en ;
+	rdfs:comment "A shape describing well-formed RDF lists. Currently does not check for non-recursion (this could be expressed using SHACL-SPARQL)."@en ;
+	rdfs:seeAlso <https://www.w3.org/TR/shacl/#syntax-rule-SHACL-list> ;
+	sh:property [
+		sh:path [ sh:zeroOrMorePath rdf:rest ] ;
+		rdfs:comment "Each list member (including this node) must have the shape shsh:ListNodeShape."@en ;
+		sh:hasValue rdf:nil ;
+		sh:node shsh:ListNodeShape ;
+	] .
+
+shsh:ListNodeShape
+	a sh:NodeShape ;
+	rdfs:label "List node shape"@en ;
+	rdfs:comment "Defines constraints on what it means for a node to be a node within a well-formed RDF list. Note that this does not check whether the rdf:rest items are also well-formed lists as this would lead to unsupported recursion."@en ;
+	sh:or ( [
+				sh:hasValue rdf:nil ;
+        		sh:property [
+					sh:path rdf:first ;
+					sh:maxCount 0 ;
+				] ;
+				sh:property [
+					sh:path rdf:rest ;
+					sh:maxCount 0 ;
+				] ;
+			]
+			[
+				sh:not [ sh:hasValue rdf:nil ] ;
+				sh:property [
+					sh:path rdf:first ;
+					sh:maxCount 1 ;
+					sh:minCount 1 ;
+				] ;
+				sh:property [
+					sh:path rdf:rest ;
+					sh:maxCount 1 ;
+					sh:minCount 1 ;
+				] ;
+			] ) .
+
+shsh:ShapeShape
+	a sh:NodeShape ;
+	rdfs:label "Shape shape"@en ;
+	rdfs:comment "A shape that can be used to validate syntax rules for other shapes."@en ;
+	
+	# See https://www.w3.org/TR/shacl/#shapes for what counts as a shape
+	sh:targetClass sh:NodeShape ;
+	sh:targetClass sh:PropertyShape ;
+
+	sh:targetSubjectsOf sh:targetClass ;
+	sh:targetSubjectsOf sh:targetNode ;
+	sh:targetSubjectsOf sh:targetObjectsOf ;
+	sh:targetSubjectsOf sh:targetSubjectsOf ;
+	sh:targetSubjectsOf sh:and ;
+	sh:targetSubjectsOf sh:class ;
+	sh:targetSubjectsOf sh:closed ;
+	sh:targetSubjectsOf sh:datatype ;
+	sh:targetSubjectsOf sh:disjoint ;
+	sh:targetSubjectsOf sh:equals ;
+	sh:targetSubjectsOf sh:flags ;
+	sh:targetSubjectsOf sh:hasValue ;
+	sh:targetSubjectsOf sh:ignoredProperties ;
+	sh:targetSubjectsOf sh:in ;
+	sh:targetSubjectsOf sh:languageIn ;
+	sh:targetSubjectsOf sh:lessThan ;
+	sh:targetSubjectsOf sh:lessThanOrEquals ;
+	sh:targetSubjectsOf sh:maxCount ;
+	sh:targetSubjectsOf sh:maxExclusive ;
+	sh:targetSubjectsOf sh:maxInclusive ;
+	sh:targetSubjectsOf sh:maxLength ;
+	sh:targetSubjectsOf sh:maxListLength ;
+	sh:targetSubjectsOf sh:memberShape ;
+	sh:targetSubjectsOf sh:minCount ;
+	sh:targetSubjectsOf sh:minExclusive ;
+	sh:targetSubjectsOf sh:minInclusive ;
+	sh:targetSubjectsOf sh:minLength ;
+	sh:targetSubjectsOf sh:minListLength ;
+	sh:targetSubjectsOf sh:node ;
+	sh:targetSubjectsOf sh:nodeKind ;
+	sh:targetSubjectsOf sh:not ;
+	sh:targetSubjectsOf sh:or ;
+	sh:targetSubjectsOf sh:pattern ;
+	sh:targetSubjectsOf sh:property ;
+	sh:targetSubjectsOf sh:qualifiedMaxCount ;
+	sh:targetSubjectsOf sh:qualifiedMinCount ;
+	sh:targetSubjectsOf sh:qualifiedValueShape ;
+	sh:targetSubjectsOf sh:qualifiedValueShapesDisjoint ;
+	sh:targetSubjectsOf sh:singleLine ;
+	sh:targetSubjectsOf sh:uniqueLang ;
+	sh:targetSubjectsOf sh:uniqueMembers ;
+	sh:targetSubjectsOf sh:xone ;
+
+	sh:targetObjectsOf sh:memberShape ; # memberShape-node
+	sh:targetObjectsOf sh:node ;        # node-node
+	sh:targetObjectsOf sh:not ;         # not-node
+	sh:targetObjectsOf sh:property ;    # property-node
+	sh:targetObjectsOf sh:qualifiedValueShape ; # qualifiedValueShape-node
+
+	# Shapes are either node shapes or property shapes
+	sh:xone ( shsh:NodeShapeShape shsh:PropertyShapeShape ) ;
+
+	sh:property [
+		sh:path sh:targetNode ;
+		sh:nodeKind	sh:IRIOrLiteral ;   # targetNode-nodeKind
+	] ; 
+	sh:property [
+		sh:path sh:targetClass ;
+		sh:nodeKind sh:IRI ;            # targetClass-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:targetSubjectsOf ;
+		sh:nodeKind sh:IRI ;            # targetSubjectsOf-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:targetObjectsOf ;
+		sh:nodeKind sh:IRI ;            # targetObjectsOf-nodeKind
+	] ;
+	sh:or ( [ sh:not [ 
+				sh:class rdfs:Class ; 
+				sh:or ( [ sh:class sh:NodeShape ] [ sh:class sh:PropertyShape ] )
+			] ]
+			[ sh:nodeKind sh:IRI ]
+		  ) ;                           # implicit-targetClass-nodeKind
+	
+	sh:property [
+		sh:path sh:severity ;
+		sh:maxCount 1 ;                 # severity-maxCount
+		sh:nodeKind sh:IRI ;            # severity-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:message ;
+		sh:or ( [ sh:datatype xsd:string ] [ sh:datatype rdf:langString ] ) ;   # message-datatype
+	] ;
+	sh:property [
+		sh:path sh:deactivated ;
+		sh:maxCount 1 ;                 # deactivated-maxCount
+		sh:datatype xsd:boolean ;       # deactivated-datatype
+	] ;
+	sh:property [
+		sh:path sh:and ;
+		sh:memberShape shsh:ShapeShape ;   # and-memberShape
+	] ;
+	sh:property [
+		sh:path sh:class ;
+		sh:or (
+			[ sh:nodeKind sh:IRI ]
+			[ sh:memberShape [ sh:nodeKind sh:IRI ] ]
+		) ;            # class-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:closed ;
+		sh:datatype xsd:boolean ;       # closed-datatype
+		sh:maxCount 1 ;                 # multiple-parameters
+	] ;
+	sh:property [
+		sh:path sh:ignoredProperties ;
+		sh:memberShape [ sh:nodeKind sh:IRI ] ; # languageIn-members-datatype
+		sh:minListLength 1 ;                    # languageIn-members-datatype
+		sh:maxCount 1 ;                         # multiple-parameters
+	] ;
+	sh:property [
+		sh:path sh:datatype ;
+		sh:or (
+			[ sh:nodeKind sh:IRI ]
+			[ sh:memberShape [ sh:nodeKind sh:IRI ] ]
+		) ;            # datatype-nodeKind
+		sh:maxCount 1 ;                 # datatype-maxCount
+	] ;
+	sh:property [
+		sh:path sh:disjoint ;
+		sh:nodeKind sh:IRI ;            # disjoint-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:equals ;
+		sh:nodeKind sh:IRI ;            # equals-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:in ;
+		sh:maxCount 1 ;                     # in-maxCount
+	] ;
+	sh:property [
+		sh:path sh:languageIn ;
+		sh:maxCount 1 ;                             # languageIn-maxCount
+		sh:minListLength 1 ;                        # languageIn-minListLength
+		sh:memberShape [ sh:datatype xsd:string ] ; # languageIn-members-datatype
+	] ;
+	sh:property [
+		sh:path sh:lessThan ;
+		sh:nodeKind sh:IRI ;            # lessThan-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:lessThanOrEquals ;
+		sh:nodeKind sh:IRI ;            # lessThanOrEquals-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:maxCount ;
+		sh:datatype xsd:integer ;       # maxCount-datatype
+		sh:maxCount 1 ;                 # maxCount-maxCount
+		sh:minInclusive 0 ;             # maxCount-minInclusive
+	] ;
+	sh:property [
+		sh:path sh:maxExclusive ;
+		sh:maxCount 1 ;                 # maxExclusive-maxCount
+		sh:nodeKind sh:Literal ;        # maxExclusive-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:maxInclusive ;
+		sh:maxCount 1 ;                 # maxInclusive-maxCount
+		sh:nodeKind sh:Literal ;        # maxInclusive-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:maxLength ;
+		sh:datatype xsd:integer ;       # maxLength-datatype
+		sh:maxCount 1 ;                 # maxLength-maxCount
+		sh:minInclusive 0 ;             # maxLength-minInclusive
+	] ;
+	sh:property [
+		sh:path sh:minCount ;
+		sh:datatype xsd:integer ;       # minCount-datatype
+		sh:maxCount 1 ;                 # minCount-maxCount
+		sh:minInclusive 0 ;             # minCount-minInclusive
+	] ;
+	sh:property [
+		sh:path sh:minExclusive ;
+		sh:maxCount 1 ;                 # minExclusive-maxCount
+		sh:nodeKind sh:Literal ;        # minExclusive-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:minInclusive ;
+		sh:maxCount 1 ;                 # minInclusive-maxCount
+		sh:nodeKind sh:Literal ;        # minInclusive-nodeKind
+	] ;
+	sh:property [
+		sh:path sh:minLength ;
+		sh:datatype xsd:integer ;       # minLength-datatype
+		sh:maxCount 1 ;                 # minLength-maxCount
+		sh:minInclusive 0 ;             # minLength-minInclusive
+	] ;
+	sh:property [
+		sh:path sh:memberShape ;
+		sh:node shsh:NodeShapeShape ;   # memberShape-node
+	] ;
+	sh:property [
+		sh:path sh:minListLength ;
+		sh:datatype xsd:integer ;       # minListLength-datatype
+		sh:maxCount 1 ;                 # minListLength-maxCount
+		sh:minInclusive 0 ;             # minListLength-minInclusive
+	] ;
+	sh:property [
+		sh:path sh:maxListLength ;
+		sh:datatype xsd:integer ;       # maxListLength-datatype
+		sh:maxCount 1 ;                 # maxListLength-maxCount
+		sh:minInclusive 0 ;             # maxListLength-minInclusive
+	] ;
+	sh:property [
+		sh:path sh:uniqueMembers ;
+		sh:datatype xsd:boolean ;       # uniqueMembers-datatype
+		sh:maxCount 1 ;                        # uniqueMembers-maxCount
+	] ;
+	sh:property [
+		sh:path sh:nodeKind ;
+		sh:in ( sh:BlankNode sh:IRI sh:Literal sh:BlankNodeOrIRI sh:BlankNodeOrLiteral sh:IRIOrLiteral ) ;	# nodeKind-in
+		sh:maxCount 1 ;                 # nodeKind-maxCount
+	] ;
+	sh:property [
+		sh:path sh:or ;
+		sh:memberShape shsh:ShapeShape ; # or-memberShape
+	] ;
+	sh:property [
+		sh:path sh:pattern ;
+		sh:datatype xsd:string ;        # pattern-datatype
+		sh:maxCount 1 ;                 # multiple-parameters
+		# Not implemented: syntax rule pattern-regex
+	] ;
+	sh:property [
+		sh:path sh:singleLine ;
+		sh:datatype xsd:boolean ;	# singleLine-datatype
+		sh:maxCount 1 ;                 # multiple-parameters
+	] ;
+	sh:property [
+		sh:path sh:flags ;
+		sh:datatype xsd:string ;        # flags-datatype
+		sh:maxCount 1 ;                 # multiple-parameters
+	] ;
+	sh:property [
+		sh:path sh:qualifiedMaxCount ;
+		sh:datatype xsd:integer ;       # qualifiedMaxCount-datatype
+		sh:maxCount 1 ;                 # multiple-parameters
+		sh:minInclusive 0 ;             # qualifiedMaxCount-minInclusive
+	] ;
+	sh:property [
+		sh:path sh:qualifiedMinCount ;
+		sh:datatype xsd:integer ;       # qualifiedMinCount-datatype
+		sh:maxCount 1 ;                 # multiple-parameters
+		sh:minInclusive 0 ;             # qualifiedMinCount-minInclusive
+	] ;
+	sh:property [
+		sh:path sh:qualifiedValueShape ;
+		sh:maxCount 1 ;                 # multiple-parameters
+		sh:node shsh:ShapeShape ;       # qualifiedValueShape-node
+	] ;
+	sh:property [
+		sh:path sh:qualifiedValueShapesDisjoint ;
+		sh:datatype xsd:boolean ;       # qualifiedValueShapesDisjoint-datatype
+		sh:maxCount 1 ;                 # multiple-parameters
+	] ;
+	sh:property [
+		sh:path sh:uniqueLang ;
+		sh:datatype xsd:boolean ;       # uniqueLang-datatype
+		sh:maxCount 1 ;                 # uniqueLang-maxCount
+	] ;
+	sh:property [
+		sh:path sh:xone ;
+		sh:memberShape shsh:ShapeShape ; # xone-members-node
+	] .
+	
+shsh:NodeShapeShape
+	a sh:NodeShape ;
+	sh:targetObjectsOf sh:node ;        # node-node
+	sh:property [
+		sh:path sh:path ;
+		sh:maxCount 0 ;                 # NodeShape-path-maxCount
+	] ;
+	sh:property [
+		sh:path sh:lessThan ;
+		sh:maxCount 0 ;                 # lessThan-scope
+	] ;
+	sh:property [
+		sh:path sh:lessThanOrEquals ;
+		sh:maxCount 0 ;                 # lessThanOrEquals-scope
+	] ;
+	sh:property [
+		sh:path sh:maxCount ;
+		sh:maxCount 0 ;                 # maxCount-scope
+	] ;
+	sh:property [
+		sh:path sh:minCount ;
+		sh:maxCount 0 ;                 # minCount-scope
+	] ;
+	sh:property [
+		sh:path sh:qualifiedValueShape ;
+		sh:maxCount 0 ;                 # qualifiedValueShape-scope
+	] ;
+	sh:property [
+		sh:path sh:uniqueLang ;
+		sh:maxCount 0 ;                 # uniqueLang-scope
+	] .
+
+shsh:PropertyShapeShape
+	a sh:NodeShape ;
+	sh:targetObjectsOf sh:property ;    # property-node
+	sh:property [
+		sh:path sh:path ;
+		sh:maxCount 1 ;                 # path-maxCount
+		sh:minCount 1 ;                 # PropertyShape-path-minCount
+		sh:node shsh:PathShape ;        # path-node
+	] .
+
+# Values of sh:and, sh:or and sh:xone must be lists of shapes
+shsh:ShapesListShape
+	a sh:NodeShape ;
+	sh:targetObjectsOf sh:and ;         # and-members-node
+	sh:targetObjectsOf sh:or ;          # or-members-node
+	sh:targetObjectsOf sh:xone ;        # xone-members-node
+	sh:memberShape shsh:ShapeShape .
+
+# Values of sh:in and sh:xone should have length >= 1.
+shsh:inSubjectsShape
+	a sh:NodeShape ;
+	rdfs:comment "A shape that raises warnings on unsatisfiable lists.  If some use case requires a length-0 list on 'sh:in', this graph should be supplemented with 'shsh:inSubjectsShape sh:deactivated true .'."@en ;
+	sh:property shsh:inSubjectsShapeInPropertyShape ;
+	sh:targetSubjectsOf sh:in ;
+	.
+
+shsh:inSubjectsShapeInPropertyShape
+	a sh:PropertyShape ;
+	sh:path sh:in ;
+	sh:minListLength 1 ;        # in-minListLength
+	sh:severity sh:Warning ;
+	.
+
+shsh:xoneSubjectsShape
+	a sh:NodeShape ;
+	rdfs:comment "A shape that raises warnings on unsatisfiable lists.  If some use case requires a length-0 list on 'sh:xone', this graph should be supplemented with 'shsh:xoneSubjectsShape sh:deactivated true .'."@en ;
+	sh:property shsh:xoneSubjectsShapeXonePropertyShape ;
+	sh:targetSubjectsOf sh:xone ;
+	.
+
+shsh:xoneSubjectsShapeXonePropertyShape
+	a sh:PropertyShape ;
+	sh:path sh:xone ;
+	sh:minListLength 1 ;        # xone-minListLength
+	sh:severity sh:Warning ;
+	.
+
+# A path of blank node path syntax, used to simulate recursion
+_:PathPath
+	sh:alternativePath (
+		( [ sh:zeroOrMorePath rdf:rest ] rdf:first )
+		( sh:alternativePath [ sh:zeroOrMorePath rdf:rest ] rdf:first )
+		sh:inversePath
+		sh:zeroOrMorePath
+		sh:oneOrMorePath
+		sh:zeroOrOnePath 
+	) .
+
+shsh:PathShape
+	a sh:NodeShape ;
+	rdfs:label "Path shape"@en ;
+	rdfs:comment "A shape that can be used to validate the syntax rules of well-formed SHACL paths."@en ;
+	rdfs:seeAlso <https://www.w3.org/TR/shacl/#property-paths> ;
+	sh:property [
+		sh:path [ sh:zeroOrMorePath _:PathPath ] ;
+		sh:node shsh:PathNodeShape ;
+	] .
+
+shsh:PathNodeShape
+	sh:xone (                           # path-metarule
+			[ sh:nodeKind sh:IRI ]          # 2.3.1.1: Predicate path
+			[ sh:nodeKind sh:BlankNode ;    # 2.3.1.2: Sequence path
+			  sh:memberShape shsh:PathShape ; # sequence-memberShape
+				sh:minListLength 2 ;            # sequence-minListLength
+			]
+			[ sh:nodeKind sh:BlankNode ;    # 2.3.1.3: Alternative path
+			  sh:closed true ;
+			  sh:property [
+			    sh:path sh:alternativePath ;
+			    sh:memberShape shsh:PathShape ; # alternativePath-memberShape
+			    sh:minListLength 2 ;            # alternativePath-minListLength
+			    sh:minCount 1 ;
+			    sh:maxCount 1 ;
+			  ]
+			]
+			[ sh:nodeKind sh:BlankNode ;    # 2.3.1.4: Inverse path
+			  sh:closed true ;
+			  sh:property [
+			    sh:path sh:inversePath ;
+			    sh:minCount 1 ;
+			    sh:maxCount 1 ;
+			  ] 
+			]
+			[ sh:nodeKind sh:BlankNode ;    # 2.3.1.5: Zero-or-more path
+			  sh:closed true ;
+			  sh:property [
+			    sh:path sh:zeroOrMorePath ;
+			    sh:minCount 1 ;
+			    sh:maxCount 1 ;
+			  ] 
+			]
+			[ sh:nodeKind sh:BlankNode ;    # 2.3.1.6: One-or-more path
+			  sh:closed true ;
+			  sh:property [
+			    sh:path sh:oneOrMorePath ;
+			    sh:minCount 1 ;
+			    sh:maxCount 1 ;
+			  ] 
+			]
+			[ sh:nodeKind sh:BlankNode ;    # 2.3.1.7: Zero-or-one path
+			  sh:closed true ;
+			  sh:property [
+			    sh:path sh:zeroOrOnePath ;
+			    sh:minCount 1 ;
+			    sh:maxCount 1 ;
+			  ] 
+			]
+		) .
+
+shsh:DataGraphImportsShape
+	a sh:NodeShape ;
+	sh:message 'In light of the OWL RDF mapping section "Resolving Included RDF Graphs" and its reliance on certain triples being present, sh:DataGraphs using owl:imports should explicitly include the type owl:Ontology.'@en ;
+	rdfs:seeAlso
+		<https://www.w3.org/TR/2012/REC-owl2-mapping-to-rdf-20121211/#Resolving_Included_RDF_Graphs> ,
+		<https://www.w3.org/TR/shacl12-core/#data-graph>
+		;
+	sh:severity sh:Info ;
+	sh:or (
+		[
+			sh:property [
+				sh:maxCount 0 ;
+				sh:path owl:imports ;
+			] ;
+		]
+		[
+			sh:property [
+				sh:hasValue owl:Ontology ;
+				sh:path rdf:type ;
+			] ;
+		]
+	) ;	# owlImportsOnDataGraph
+	sh:targetClass sh:DataGraph ;
+	.
+
+shsh:ShapesGraphShape
+	a sh:NodeShape ;
+	sh:targetObjectsOf sh:shapesGraph ;
+	sh:nodeKind sh:IRI .                # shapesGraph-nodeKind
+
+shsh:EntailmentShape
+	a sh:NodeShape ;
+	sh:targetObjectsOf sh:entailment ;
+	sh:nodeKind sh:IRI .                # entailment-nodeKind
+
+shsh:ValidationReportShape
+	a sh:NodeShape ;
+	sh:targetClass sh:ValidationReport ;
+	sh:property [
+		sh:path sh:usedDataGraph ;
+		sh:nodeKind sh:IRI ;
+	] ;
+	sh:property [
+		sh:path sh:usedShapesGraph ;
+		sh:nodeKind sh:IRI ;
+	] ;
+	sh:property [
+		sh:path sh:usedConfiguration ;
+		sh:maxCount 1 ;
+	] .

@@ -1009,3 +1009,111 @@ fn report_without_entailment_is_a_usage_error() {
         );
     }
 }
+
+/// `reason --max-stored-facts` and `--max-join-steps` refuse naming the numbers and this
+/// command's own flag, and write no closure; a limit of exactly the store the run needs
+/// writes the same closure as the default, and one fact fewer refuses. `convert
+/// --entailment` takes the same two flags.
+#[test]
+fn reason_honours_the_callers_evaluation_limits() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let input = write_file(
+        dir.path(),
+        "in.nt",
+        "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> \
+         <http://example.org/B> .\n<http://example.org/x> \
+         <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n",
+    );
+    let default_out = path(dir.path(), "default.nt");
+    let out = run(&["reason", "--regime", "rdfs", &input, &default_out]);
+    assert!(out.status.success(), "{}", stderr(&out));
+
+    let limited = |flag: &str, value: &str, output: &str| {
+        run(&["reason", "--regime", "rdfs", flag, value, &input, output])
+    };
+    let observed = |refusal: &str| -> u64 {
+        let (_, tail) = refusal
+            .split_once("evaluation exceeded the stored-fact limit: ")
+            .unwrap_or_else(|| panic!("not a stored-fact refusal: {refusal}"));
+        tail.split(' ')
+            .next()
+            .and_then(|count| count.parse().ok())
+            .unwrap_or_else(|| panic!("no observed count: {refusal}"))
+    };
+    let admitted_out = path(dir.path(), "admitted.nt");
+    let mut limit = 1_u64;
+    loop {
+        let out = limited("--max-stored-facts", &limit.to_string(), &admitted_out);
+        if out.status.success() {
+            break;
+        }
+        assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+        let refusal = stderr(&out);
+        assert!(
+            refusal.contains("entailment regime \"rdfs\": ")
+                && refusal.contains(&format!("{limit} permitted (the caller's limit)"))
+                && refusal
+                    .trim_end()
+                    .ends_with("raise it with --max-stored-facts"),
+            "{refusal}"
+        );
+        let seen = observed(&refusal);
+        assert!(seen > limit, "{refusal}");
+        limit = seen;
+    }
+    assert_eq!(sorted_lines(&admitted_out), sorted_lines(&default_out));
+    let short = limited(
+        "--max-stored-facts",
+        &(limit - 1).to_string(),
+        &path(dir.path(), "short.nt"),
+    );
+    assert_eq!(short.status.code(), Some(1), "{}", stderr(&short));
+
+    let steps = limited("--max-join-steps", "1", &path(dir.path(), "steps.nt"));
+    assert_eq!(steps.status.code(), Some(1), "{}", stderr(&steps));
+    assert!(
+        stderr(&steps).contains("evaluation exceeded the join-step limit: ")
+            && stderr(&steps)
+                .trim_end()
+                .ends_with("raise it with --max-join-steps"),
+        "{}",
+        stderr(&steps)
+    );
+
+    let converted = path(dir.path(), "converted.nt");
+    let convert = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--max-stored-facts",
+        &limit.to_string(),
+        &input,
+        &converted,
+    ]);
+    assert!(convert.status.success(), "{}", stderr(&convert));
+    assert_eq!(sorted_lines(&converted), sorted_lines(&default_out));
+    let refused = run(&[
+        "convert",
+        "--entailment",
+        "rdfs",
+        "--max-stored-facts",
+        &(limit - 1).to_string(),
+        &input,
+        &path(dir.path(), "refused.nt"),
+    ]);
+    assert_eq!(refused.status.code(), Some(1), "{}", stderr(&refused));
+    assert!(
+        stderr(&refused)
+            .trim_end()
+            .ends_with("raise it with --max-stored-facts"),
+        "{}",
+        stderr(&refused)
+    );
+    let orphan = run(&["convert", "--max-join-steps", "5", &input, &converted]);
+    assert_eq!(
+        orphan.status.code(),
+        Some(2),
+        "--max-join-steps without --entailment is a usage error: {}",
+        stderr(&orphan)
+    );
+}

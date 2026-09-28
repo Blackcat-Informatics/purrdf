@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Generic provenance sidecar for the immutable RDF 1.2 dataset (S2).
+//! Generic provenance sidecar for the immutable RDF 1.2 dataset.
 //!
 //! This module realizes the normative S0 provenance contract from
 //! `docs/design/820-slices-first-class.md`. The types here are **kernel-generic**:
@@ -116,7 +116,7 @@ impl fmt::Display for OriginSetId {
 /// `purrdf-slice` layer interprets `Slice`-kind units by wrapping `UnitId`.
 ///
 /// There is deliberately **no** `Unknown` variant: an unattributable origin is a
-/// hard failure (no-optionality / hard-fail, S0.2).
+/// hard failure (no-optionality / hard-fail).
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum OriginKind {
     /// A source artifact authored directly (e.g. a Turtle module file belonging

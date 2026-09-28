@@ -181,7 +181,7 @@ fn validate_with(
     relations: Arc<PropertyFunctionRegistry>,
 ) -> Result<ValidationReport, String> {
     let _relations = enter_property_function_scope(relations);
-    validate_dataset(&data(), &shapes(predicate))
+    validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
 }
 
 /// The focus nodes a report names, in report order.
@@ -302,7 +302,7 @@ fn validate_under_declared_namespace(
         property_fn_namespaces: vec![REL_NS.to_owned()],
         ..ParserOptions::default()
     }));
-    validate_dataset(&data(), &shapes(predicate))
+    validate_dataset(&data(), &shapes(predicate)).map_err(Into::into)
 }
 
 /// A host-DECLARED namespace makes an unregistered IRI under it a hard error, not a
@@ -693,7 +693,7 @@ fn validate_constraint_under_declared_namespace(
         property_fn_namespaces: vec![REL_NS.to_owned()],
         ..ParserOptions::default()
     }));
-    validate_dataset(&data(), &sparql_constraint_shapes(predicate))
+    validate_dataset(&data(), &sparql_constraint_shapes(predicate)).map_err(Into::into)
 }
 
 /// A declared namespace reaches a `sh:sparql` body, not only a `sh:SPARQLFunction`
@@ -873,7 +873,8 @@ fn an_incomplete_index_declared_from_a_function_body_refuses_the_verdict() {
         None,
         &purrdf_sparql_eval::QueryGovernors::UNBOUNDED,
     )
-    .expect_err("a verdict over an index declared not whole is refused");
+    .expect_err("a verdict over an index declared not whole is refused")
+    .to_string();
 
     assert!(
         opens.load(Ordering::Relaxed) > 0,
@@ -996,7 +997,7 @@ fn validate_ttl_under_declared_namespace(shapes_ttl: &str) -> Result<ValidationR
         ..ParserOptions::default()
     }));
     let shapes = purrdf_shapes::engine::parse_shapes(shapes_ttl, None).expect("the fixture loads");
-    validate_dataset(&data(), &shapes)
+    validate_dataset(&data(), &shapes).map_err(Into::into)
 }
 
 /// The same shapes graph with the registry installed but NOTHING declared.
@@ -1004,7 +1005,7 @@ fn validate_ttl_undeclared(shapes_ttl: &str) -> Result<ValidationReport, String>
     let (relations, _) = registry();
     let _relations = enter_property_function_scope(relations);
     let shapes = purrdf_shapes::engine::parse_shapes(shapes_ttl, None).expect("the fixture loads");
-    validate_dataset(&data(), &shapes)
+    validate_dataset(&data(), &shapes).map_err(Into::into)
 }
 
 /// A `sh:SPARQLTarget` naming `predicate`.
@@ -1435,4 +1436,42 @@ ex:Second
         2,
         "both call sites must be reported, not just the first: {reached:?}"
     );
+}
+
+/// The report reads EVERY SPARQL text validation executes: a custom constraint
+/// component's validator, and a `sh:sparql` inside an INLINE shape a constraint
+/// nests (`sh:node [ … ]`), which is anonymous and never top-level. Under an empty
+/// environment each names its predicate as a data edge. The control nests nothing
+/// and declares no component, and names neither predicate.
+#[test]
+fn extension_usage_reads_component_validators_and_inline_nested_shapes() {
+    const VALIDATED: &str = "http://example.org/rel/validated";
+    const NESTED: &str = "http://example.org/rel/nested";
+    let turtle = format!(
+        r#"
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <{EX}> .
+ex:Component a sh:ConstraintComponent ;
+    sh:parameter [ sh:path ex:arg ] ;
+    sh:validator [ a sh:SPARQLAskValidator ;
+                   sh:ask "ASK {{ $value <{VALIDATED}> ?o }}" ] .
+ex:S a sh:NodeShape ; sh:targetNode ex:a ;
+    sh:property [ sh:path ex:p ; ex:arg true ] ;
+    sh:node [ sh:sparql [ sh:select "SELECT $this WHERE {{ $this <{NESTED}> ?o }}" ] ] .
+"#
+    );
+    let shapes = purrdf_shapes::engine::parse_shapes(&turtle, None).expect("the shapes load");
+    let usage = shapes.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    assert!(usage.data().contains(VALIDATED), "{usage:?}");
+    assert!(usage.data().contains(NESTED), "{usage:?}");
+    let control = purrdf_shapes::engine::parse_shapes(
+        &format!(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> . @prefix ex: <{EX}> .
+             ex:S a sh:NodeShape ; sh:targetNode ex:a ; sh:property [ sh:path ex:p ] ."
+        ),
+        None,
+    )
+    .expect("the control loads");
+    let usage = control.extension_usage(purrdf_sparql_eval::ExtensionEnv::empty());
+    assert!(!usage.data().contains(VALIDATED) && !usage.data().contains(NESTED));
 }

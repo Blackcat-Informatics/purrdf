@@ -1,0 +1,39 @@
+@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix shnex: <http://www.w3.org/ns/shacl-node-expr#> .
+@prefix sparql: <http://www.w3.org/ns/sparql#> .
+@prefix xsd: <http://www.w3.org/2001/XMLSchema#> .
+@prefix ex: <http://example.org/ns#> .
+
+# Declarations of BUILT-INS, as the W3C SHACL 1.2 vocabularies state them. None
+# carries a body or a validator: the engine implements each, and loading binds the
+# declaration to that implementation rather than indexing it as a custom function.
+sh:SPARQLExprExpression
+    a sh:NamedParameterExpressionFunction ;
+    sh:parameter sh:SPARQLExprExpression-sparqlExpr, sh:SPARQLExprExpression-prefixes .
+sh:SPARQLExprExpression-sparqlExpr
+    a sh:Parameter ;
+    sh:path sh:sparqlExpr ;
+    sh:keyParameter true ;
+    sh:datatype xsd:string .
+sh:SPARQLExprExpression-prefixes
+    a sh:Parameter ;
+    sh:path sh:prefixes ;
+    sh:nodeKind sh:BlankNodeOrIRI .
+
+sparql:abs a sh:ListParameterExpressionFunction .
+
+sh:MinCountConstraintComponent
+    a sh:ConstraintComponent ;
+    sh:parameter sh:MinCountConstraintComponent-minCount .
+sh:MinCountConstraintComponent-minCount
+    a sh:Parameter ;
+    sh:path sh:minCount ;
+    sh:datatype xsd:integer .
+
+# The shape uses all three built-ins, each with its NATIVE semantics.
+ex:ItemShape
+    a sh:NodeShape ;
+    sh:targetClass ex:Item ;
+    sh:property [ sh:path ex:qty ; sh:minCount 1 ] ;
+    sh:expression [ sparql:less-than ( [ sparql:abs ( [ sh:path ex:delta ] ) ] 10 ) ] ;
+    sh:expression [ sh:sparqlExpr "$this != ex:banned" ] .

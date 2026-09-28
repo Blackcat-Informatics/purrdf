@@ -78,12 +78,19 @@ fn c_abi_smoke() {
     // A directory layout is Cargo's to change whenever it likes; whether this
     // compilation has debug assertions is a property of the compilation itself.
     //
-    // The mapping is exact for every profile this workspace declares: `dev` is
-    // the only one leaving debug assertions on, and `bench` inherits `release`
-    // codegen. Matching is a build-time economy, not a correctness requirement —
-    // the cdylib is located from Cargo's JSON output below, never from this name.
+    // With debug assertions on, this binary was compiled by `cargo test` under the
+    // `test` profile, so that is the profile the cdylib is built under. It used to
+    // be `dev`, which has the same codegen (`[profile.test]` inherits `dev` and
+    // overrides only `debug`, see Cargo.toml) but different debug info — so every
+    // workspace crate under purrdf-capi was compiled a second time, at opt-level 3,
+    // for one shared library: most of this test's five-minute run. Under `test`
+    // the nested build reuses the units `cargo test` already compiled. Without
+    // debug assertions the harness came from `cargo test --release` or `cargo
+    // bench`, and `bench` inherits `release` codegen. Matching is a build-time
+    // economy, not a correctness requirement — the cdylib is located from Cargo's
+    // JSON output below, never from this name.
     let profile = if cfg!(debug_assertions) {
-        "dev"
+        "test"
     } else {
         "release"
     };

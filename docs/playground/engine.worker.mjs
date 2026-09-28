@@ -219,7 +219,10 @@ const HANDLERS = {
     const ds = requireCurrent();
     const dataNt = ds.serialize("ntriples");
     const entailed = shaclEntail(shapes, dataNt);
-    return { ntriples: entailed };
+    const ntriples = entailed.ntriples;
+    const diagnostics = entailed.diagnostics;
+    entailed.free();
+    return { ntriples, diagnostics };
   },
 
   identity({ aText, aFormat, bText, bFormat }) {

@@ -3,16 +3,16 @@
 
 //! The caller-owned **stop signal** a long fixpoint polls at its round boundary.
 //!
-//! # A stop signal is not a budget, and that distinction is the whole module
+//! # A stop signal is not a limit, and that distinction is the whole module
 //!
-//! This crate states, and keeps, that [budgets are constants, not
-//! knobs](crate#budgets-are-constants-not-knobs): step, fact and arena ceilings are fixed
-//! and merely *reported*, because a caller-supplied ceiling would mean two callers running
-//! the same program over the same input get different **answers** — semantic optionality
-//! arriving through a parameter instead of through a Cargo feature.
+//! This crate's [limits refuse; they never truncate](crate#limits-refuse-they-never-truncate):
+//! the stored-fact and join-step limits are the caller's, with per-target defaults, and
+//! each is a NUMBER the caller states before the run — every caller passing the same
+//! options gets the same answer or the same refusal, and the effective limits are part of
+//! the result's contract hash.
 //!
-//! A [`StopSignal`] is the other thing, and it is admitted for exactly the reason a budget
-//! is refused. It changes no answer. A run that is not stopped returns precisely the answer
+//! A [`StopSignal`] is the other thing. It carries no number and is part of no identity,
+//! because it changes no answer. A run that is not stopped returns precisely the answer
 //! it would have returned with no signal attached — the poll is a load and a branch at a
 //! round boundary, and the rounds are the ones the fixpoint was going to run anyway — and a
 //! run that IS stopped returns **no answer at all**: a typed refusal

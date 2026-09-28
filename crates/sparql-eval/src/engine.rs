@@ -704,7 +704,7 @@ impl PlanCacheKey<'_> {
     }
 }
 
-/// The native, RDF-1.2-first multiset SPARQL engine (purrdf S6).
+/// The native, RDF-1.2-first multiset SPARQL engine.
 ///
 /// Domain-vocabulary seams are **caller configuration**, never engine constants:
 ///
@@ -2911,7 +2911,7 @@ where
 
 /// The [`RdfDiagnostic`] code for an evaluation failure: the error's own
 /// [`crate::error::EvalError::diagnostic_code`] when it names one of the narrow,
-/// enumerated S6-deferral residue, else `fallback` — each call site's existing,
+/// enumerated classified-unsupported residue, else `fallback` — each call site's existing,
 /// unclassified generic code (`"native-sparql-query-eval"` for a query,
 /// `"native-sparql-update-eval"` for [`crate::update`]'s identical `WHERE`-clause
 /// evaluation seam), preserved for every genuine gap: an unclassified
@@ -4431,7 +4431,7 @@ mod tests {
         assert_eq!(col0(all).len(), 3, "the cached parse is unmodified");
     }
 
-    // ── SHACL-SPARQL pre-binding (Stage 1) ───────────────────────────────────
+    // ── SHACL-SPARQL pre-binding ─────────────────────────────────────────────
 
     /// Run a SELECT query through the SHACL pre-binding path and return the
     /// sorted first-column debug strings.

@@ -173,6 +173,14 @@ pub enum ProofError {
         /// The unbound head variable, as authored.
         variable: String,
     },
+    /// A rule application names a clause carrying guard literals or negated conjunctions
+    /// ([`crate::guard`]). Their truth is caller code the checker has no evaluator for, so
+    /// it cannot re-derive the step — and it refuses rather than accept a step it did not
+    /// check.
+    GuardedRule {
+        /// The cited clause index.
+        rule: usize,
+    },
     /// The conclusion the checker DERIVED from the premises and the named rule is not the
     /// conclusion the proof stated.
     GoalMismatch {
@@ -242,6 +250,10 @@ impl fmt::Display for ProofError {
             Self::UnboundHeadVariable { rule, variable } => write!(
                 f,
                 "clause {rule} head variable {variable} is not bound by the checked premises"
+            ),
+            Self::GuardedRule { rule } => write!(
+                f,
+                "clause {rule} carries guard literals, whose truth this checker cannot re-derive"
             ),
             Self::GoalMismatch {
                 rule,
@@ -643,6 +655,9 @@ impl ProofArena {
                 rule,
                 form: clause.head_form(),
             })?;
+        if clause.is_guarded() {
+            return Err(ProofError::GuardedRule { rule });
+        }
 
         // A negated body atom is a refutation obligation, not a premise, so the premises
         // pair with the POSITIVE atoms alone — in authored body order, which is the order

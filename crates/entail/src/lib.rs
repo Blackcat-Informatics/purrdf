@@ -118,6 +118,7 @@ use std::sync::Arc;
 
 use purrdf_core::{DatasetView, RdfDataset};
 use purrdf_datalog::StopSignal;
+use purrdf_datalog::seminaive::EvalOptions;
 
 pub(crate) mod axioms;
 pub(crate) mod calculus;
@@ -142,13 +143,14 @@ pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
 pub use combined::{CombinedMaterialization, materialize_combined, materialize_combined_until};
+pub use entails::imports::resolve as resolve_imports;
 pub use entails::{
     Binding, CertainAnswers, CompositeWarrant, ComprehensionWarrant, DataRangeWarrant,
     EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, EntailmentWarrant,
     FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization,
     HomomorphismWarrant, ImportMap, MATCH_BUDGET, MissReason, NegativeFact, REFUTATION_BUDGET,
     ReflexivityWarrant, Refutation, RefutationWarrant, UndecidedReason, VarKey, certain_answers,
-    entails, verify,
+    certain_answers_with, entails, entails_with, rif_resolver, verify,
 };
 pub use explain::{
     BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
@@ -331,12 +333,14 @@ pub enum EntailError {
     /// [`materialize`] runs [`calculus_program`] through `purrdf-datalog`'s semi-naive
     /// evaluator, and that evaluator refuses rather than approximates: a program it has no
     /// semantics for, and — the case a caller will actually meet — an input that passes
-    /// one of its three fixed evaluation ceilings. A budget refusal is TOTAL, which is why
+    /// the stored-fact or join-step limit in force ([`materialize_with`] states them; the
+    /// target's defaults otherwise) or the fixed term-arena ceiling. A limit refusal is
+    /// TOTAL, which is why
     /// it is an error and not a boundary: there is no partial closure to hand back with a
     /// note attached, and a truncated closure presented as a complete one is exactly the
     /// failure a [`ReasoningReport`] exists to prevent. The carried
-    /// [`EvalError`](purrdf_datalog::seminaive::EvalError) names which ceiling and what
-    /// the run had consumed when it stopped.
+    /// [`EvalError`](purrdf_datalog::seminaive::EvalError) names which limit, what the run
+    /// had consumed when it stopped, and the knob that raises it.
     Evaluate(purrdf_datalog::seminaive::EvalError),
     /// The declared calculus states an EXISTENTIAL rule the restricted chase refused.
     ///
@@ -344,7 +348,7 @@ pub enum EntailError {
     /// least-fixpoint evaluator over definite clauses has no semantics for that head form,
     /// so the `RDF` and `RDFS` lanes run through `purrdf-datalog`'s restricted chase
     /// instead. The chase refuses rather than approximates, and the refusal a caller will
-    /// actually meet is one of the three fixed evaluation ceilings —
+    /// actually meet is a passed evaluation limit —
     /// [`ChaseError::BudgetExhausted`](purrdf_datalog::chase::ChaseError::BudgetExhausted)
     /// — carrying an accurate report. The one refusal that is about the CALCULUS rather
     /// than the input is
@@ -413,7 +417,10 @@ pub enum EntailError {
     /// regime they did. So the refusal names the regime, and a caller that wants those two
     /// reaches [`materialize`] with the input they are defined by.
     UnsupportedRegime(Regime),
-    /// A premise `owl:imports` a document the caller's [`ImportMap`] does not resolve.
+    /// A premise `owl:imports` a document the caller's [`ImportMap`] does not resolve, that
+    /// is not the premise document itself, and that the premise does not already contain (the
+    /// rule
+    /// [`entails::imports::unresolved_imports`] states).
     ///
     /// OWL 2 defines an ontology's imports closure to BE the ontology, so this is not a
     /// slightly smaller premise — it is a different one, and every answer over it would be
@@ -422,6 +429,34 @@ pub enum EntailError {
     /// configuration, and its absence is a refusal that carries the IRI so the caller learns
     /// exactly which document to supply.
     UnresolvedImport(String),
+    /// The caller's [`ImportMap`] supplies documents no `owl:imports` in the premise's
+    /// closure names, so each would be read and never used.
+    ///
+    /// A supplied document is configuration the caller believes matters: an entry the
+    /// closure never reaches is a typo in an IRI, a document meant for another premise, or an
+    /// `owl:imports` the author stated on a node that anchors nothing — and answering without
+    /// it would answer a question the caller did not ask while reporting that it had used
+    /// what it was given. The SHACL engine refuses the same unused entry for a shapes graph.
+    UnreachedImport {
+        /// The unreached map keys, in IRI order.
+        iris: Vec<String>,
+        /// The unreached keys an `owl:imports` triple of the closure DOES name, on a
+        /// subject that is no anchor of the document it occurs in — so the triple is a
+        /// premise triple, not an import ([`ImportMap::unanchored_imports`]). A subset of
+        /// `iris`, in its order.
+        unanchored: Vec<String>,
+    },
+    /// The premise's `owl:imports` closure holds two ontologies that are different versions
+    /// of one ontology series, or of which one declares `owl:incompatibleWith` the other.
+    ///
+    /// OWL 2 Structural Specification §3.4: "The import closure of O SHOULD NOT contain
+    /// ontologies O1 and O2 such that O1 and O2 are different ontology versions from the same
+    /// ontology series, or O1 contains an ontology annotation owl:incompatibleWith with the
+    /// value equal to either the ontology IRI or the version IRI of O2." PurRDF reads that
+    /// SHOULD NOT as a MUST NOT, in every engine: the kernel's closure walk finds each pair
+    /// ([`purrdf_core::imports::ImportClosure::conflicts`]), and SHACL refuses the same
+    /// closure. Each conflict names both ontologies.
+    IncompatibleImports(Vec<purrdf_core::imports::VersionConflict>),
     /// A blank-node match visited [`MATCH_BUDGET`] candidate triples without finishing.
     ///
     /// Graph homomorphism is NP-complete in general, and a conclusion with many blank nodes
@@ -435,17 +470,18 @@ pub enum EntailError {
     ///
     /// # Not a budget, and not a partial closure
     ///
-    /// This crate's ceilings are constants for the reason
-    /// [`purrdf_datalog`](purrdf_datalog#budgets-are-constants-not-knobs) states: a
-    /// caller-supplied ceiling would make the ANSWER depend on the caller. A stop signal
-    /// does not — it either lets the run finish, in which case the closure is bit-for-bit
+    /// The evaluation limits are numbers the caller states before the run
+    /// ([`materialize_with`]; see
+    /// [`purrdf_datalog`](purrdf_datalog#limits-refuse-they-never-truncate)), and they are
+    /// part of the closure's contract hash. A stop signal carries no number and is part of
+    /// no identity — it either lets the run finish, in which case the closure is bit-for-bit
     /// the one an ungoverned run produces, or it ends the run with nothing. This variant is
     /// the "with nothing" case, and it carries no partial closure by construction: there is
     /// no field on it a caller could read one out of.
     ///
     /// It is deliberately distinct from [`Self::Evaluate`] and [`Self::Chase`], which report
-    /// a FIXED ceiling being passed by the program and the data. That is a reason to change
-    /// the input; this is not a statement about the input at all.
+    /// an evaluation limit being passed by the program and the data. That is a reason to
+    /// change the input or raise the limit; this is not a statement about the input at all.
     ///
     /// Reachable only from the `*_until` entry points ([`materialize_until`]); an ungoverned
     /// call names no signal and so can never see it.
@@ -461,6 +497,19 @@ pub enum EntailError {
     /// parsed at a wasm/Python/C-ABI boundary — so this comes back as a value rather than
     /// the panic [`purrdf_core::canonicalize`] would raise for the same refusal.
     Canonicalization(purrdf_core::CanonError),
+}
+
+impl EntailError {
+    /// This error, with any report it carries restated for a run whose `owl:imports` were
+    /// resolved by [`resolve_imports`] — the error-side twin of
+    /// [`ReasoningReport::with_resolved_imports`], and under the same precondition.
+    ///
+    /// Only [`EntailError::Inconsistent`] carries a report; every other variant is returned
+    /// unchanged.
+    #[must_use]
+    pub fn with_resolved_imports(self) -> Self {
+        entails::resolved_imports_error(self)
+    }
 }
 
 impl std::fmt::Display for EntailError {
@@ -497,8 +546,56 @@ impl std::fmt::Display for EntailError {
             ),
             Self::UnresolvedImport(iri) => write!(
                 f,
-                "the premise owl:imports <{iri}>, which the supplied import map does not resolve"
+                "the premise owl:imports <{iri}>, which the supplied import map does not \
+                 resolve and the premise does not contain"
             ),
+            Self::UnreachedImport { iris, unanchored } => {
+                let named = |iris: &[String]| {
+                    iris.iter()
+                        .map(|iri| format!("<{iri}>"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                };
+                write!(
+                    f,
+                    "the supplied import map resolves {}, which no owl:imports in the premise's \
+                     closure names, so {} would be read and never used; remove the {}, or \
+                     import the IRI from the premise's ontology header",
+                    named(iris),
+                    if iris.len() == 1 { "it" } else { "they" },
+                    if iris.len() == 1 { "entry" } else { "entries" },
+                )?;
+                if !unanchored.is_empty() {
+                    write!(
+                        f,
+                        ". The premise does state owl:imports {}, but on a subject that is not \
+                         anchored — not the IRI the premise was read under, not an \
+                         owl:Ontology header, not a sh:ShapesGraph, and not a node naming one \
+                         of those as its owl:versionIRI — so that triple is a premise triple, \
+                         not an import. State the owl:imports on the premise's ontology header \
+                         to import it",
+                        named(unanchored),
+                    )?;
+                }
+                Ok(())
+            }
+            Self::IncompatibleImports(conflicts) => {
+                write!(
+                    f,
+                    "the premise's owl:imports closure holds {} pair{} of ontologies OWL 2 \
+                     section 3.4 says it SHOULD NOT hold together (two versions of one \
+                     ontology series, or one declaring owl:incompatibleWith the other):",
+                    conflicts.len(),
+                    if conflicts.len() == 1 { "" } else { "s" },
+                )?;
+                for conflict in conflicts {
+                    let rendered = conflict
+                        .to_string()
+                        .replace("the importing graph", "the premise");
+                    write!(f, "\n  {rendered}")?;
+                }
+                Ok(())
+            }
             Self::MatchBudget => write!(
                 f,
                 "the blank-node match exceeded its {MATCH_BUDGET}-candidate budget"
@@ -528,7 +625,9 @@ impl std::error::Error for EntailError {
     ///
     /// The rest return `None` because they genuinely have no cause to name.
     /// `Build`, `Parse`, `MalformedList` and `UnresolvedImport` carry a `String` — a
-    /// rendered message, not an error value — and `Unsatisfiable`, `MatchBudget` and
+    /// rendered message, not an error value — `UnreachedImport` carries the unused table keys,
+    /// `IncompatibleImports` carries the conflicting
+    /// pairs, which are the refusal itself rather than a cause of it, and `Unsatisfiable`, `MatchBudget` and
     /// `UnsupportedRegime` and `ProofsNotRecorded` are complete statements in themselves. `Inconsistent` carries
     /// an `InconsistentRun`, which is a WITNESS rather than a failure: it is evidence
     /// that the premise has no model, and the run it describes succeeded at producing
@@ -546,6 +645,8 @@ impl std::error::Error for EntailError {
             | Self::Unsatisfiable
             | Self::UnsupportedRegime(_)
             | Self::UnresolvedImport(_)
+            | Self::UnreachedImport { .. }
+            | Self::IncompatibleImports(_)
             | Self::MatchBudget
             | Self::ProofsNotRecorded
             | Self::Stopped => None,
@@ -598,8 +699,9 @@ impl std::error::Error for EntailError {
 /// # Errors
 ///
 /// [`EntailError::Inconsistent`] if a rule that concludes `false` matched;
-/// [`EntailError::Evaluate`] if the run passes one of `purrdf-datalog`'s three fixed
-/// evaluation ceilings; [`EntailError::Build`] if the derived dataset cannot be frozen. The
+/// [`EntailError::Evaluate`] or [`EntailError::Chase`] if the run passes the default
+/// stored-fact or join-step limit ([`materialize_with`] states others) or the fixed
+/// term-arena ceiling; [`EntailError::Build`] if the derived dataset cannot be frozen. The
 /// two delegated lanes add their own: [`EntailError::Unsatisfiable`] and
 /// [`EntailError::Parse`].
 ///
@@ -660,12 +762,12 @@ pub fn materialize<D: DatasetView>(
 ///
 /// # What a stop signal is, and what it is emphatically not
 ///
-/// It is **not** a budget. `purrdf-datalog`'s three ceilings are constants for a stated
-/// reason — [budgets are constants, not
-/// knobs](purrdf_datalog#budgets-are-constants-not-knobs) — and nothing here weakens it: no
-/// charge is configurable, no schedule is named, and no number a caller passes can change
-/// which triples a closure holds. A [`purrdf_datalog::StopSignal`] is answer-blind by
-/// construction. There are exactly two outcomes:
+/// It is **not** a limit. The evaluation limits are numbers the caller states before the
+/// run ([`materialize_with`]) and are folded into the closure's contract hash — see
+/// [limits refuse; they never
+/// truncate](purrdf_datalog#limits-refuse-they-never-truncate). A
+/// [`purrdf_datalog::StopSignal`] carries no number and is answer-blind by construction.
+/// There are exactly two outcomes:
 ///
 /// * the signal never fires, and this function returns **bit-for-bit** what [`materialize`]
 ///   returns for the same input — the poll is a load and a branch at a boundary the fixpoint
@@ -684,9 +786,9 @@ pub fn materialize<D: DatasetView>(
 /// Every lane, at the finest boundary that lane HAS:
 ///
 /// * `Rdf`, `Rdfs` — once per restricted-chase round (`purrdf-datalog`'s
-///   [`chase_until`](purrdf_datalog::chase::chase_until));
+///   [`chase_with`](purrdf_datalog::chase::chase_with));
 /// * `OwlRl`, `D` — once per semi-naive round
-///   ([`evaluate_until`](purrdf_datalog::seminaive::evaluate_until));
+///   ([`evaluate_guarded`](purrdf_datalog::seminaive::evaluate_guarded));
 /// * every rule-table lane, additionally once per NAMED GRAPH, because a dataset is closed
 ///   graph by graph and the copying between two evaluations is otherwise unpollable;
 /// * `OwlDirect` — once per hypertableau derivation round and once per work item of the
@@ -705,24 +807,108 @@ pub fn materialize_until<D: DatasetView>(
     plan: Materialization<'_>,
     stop: Option<&Arc<dyn StopSignal>>,
 ) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    materialize_with(ds, plan, &EvalOptions::default(), stop)
+}
+
+/// [`materialize_until`] under the caller's evaluation limits: the stored-fact and
+/// join-step limits of `options`
+/// ([`EvalOptions::with_max_stored_facts`](purrdf_datalog::seminaive::EvalOptions::with_max_stored_facts),
+/// [`EvalOptions::with_max_join_steps`](purrdf_datalog::seminaive::EvalOptions::with_max_join_steps)).
+///
+/// # What the limits govern
+///
+/// The four rule-table lanes — `Rdf`, `Rdfs`, `OwlRl` and `D` — are evaluated by
+/// `purrdf-datalog`, each graph of the dataset in its own store, and every one of those
+/// evaluations runs under `options`. Unstated, a limit is the target's default: 4,194,304
+/// stored facts and 1,048,576 join steps natively, 131,072 and 1,048,576 on `wasm32`
+/// ([`DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::DEFAULT_MAX_STORED_FACTS),
+/// [`DEFAULT_MAX_JOIN_STEPS`](purrdf_datalog::seminaive::DEFAULT_MAX_JOIN_STEPS)). A run
+/// past one is refused ([`EntailError::Evaluate`], [`EntailError::Chase`]) naming the
+/// limit, the numbers and `EvalOptions`' knob; a run inside them returns exactly the
+/// closure any larger limits would, and its report's
+/// [`contract_hash`](ReasoningReport::contract_hash) names the calculus under `options`.
+///
+/// `Simple` evaluates nothing, `OwlDirect` is the tableau under its own step and work
+/// caps, and `Rif` is evaluated by this crate's RIF forward chainer, so none of the three
+/// is governed by `options`: their closures are exactly [`materialize_until`]'s. Their
+/// reports still name the calculus under `options`, so every report one call produces
+/// carries an identity computed the same way on every target. The term limits of
+/// `options` govern no lane, because no lane's calculus carries a guard.
+///
+/// # Errors
+///
+/// Every error [`materialize_until`] returns.
+pub fn materialize_with<D: DatasetView>(
+    ds: &D,
+    plan: Materialization<'_>,
+    options: &EvalOptions,
+    stop: Option<&Arc<dyn StopSignal>>,
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
     if stop.is_some_and(|stop| stop.stopped()) {
         return Err(EntailError::Stopped);
     }
     let regime = plan.regime();
     let (closure, stats) = match plan {
-        Materialization::Simple => (engine::copy_of(ds)?, report::RunStats::none()),
+        Materialization::Simple => (engine::copy_of(ds)?, report::RunStats::none(*options)),
         Materialization::Rdf
         | Materialization::Rdfs
         | Materialization::OwlRl
-        | Materialization::D => engine::close(ds, regime, stop)?,
+        | Materialization::D => engine::close(ds, regime, options, stop)?,
         // The two query-directed lanes are DELEGATED, not restated: each already assembles
-        // its own report, so returning here is what keeps one implementation per lane.
+        // its own report, so returning here is what keeps one implementation per lane. The
+        // report names the calculus under `options` like every other lane's does.
         Materialization::OwlDirect(query_bgp) => {
-            return materialize_dl_reported_until(ds, query_bgp, stop);
+            return materialize_dl_reported_until(ds, query_bgp, stop)
+                .map(|(closure, report)| (closure, report.under(options)));
         }
-        Materialization::Rif(rules) => return materialize_rif_until(ds, rules, stop),
+        Materialization::Rif(rules) => {
+            return materialize_rif_until(ds, rules, stop)
+                .map(|(closure, report)| (closure, report.under(options)));
+        }
     };
     Ok((closure, ReasoningReport::of_run(ds, regime, &stats)))
+}
+
+/// [`materialize_with`] over `premise` TOGETHER WITH its whole `owl:imports` closure, the
+/// documents supplied by `imports`.
+///
+/// OWL 2 defines an ontology's imports closure to BE the ontology, so a premise that
+/// imports a document is closed over the merge — exactly as [`entails()`] and
+/// [`certain_answers`] decide over it. Before anything is materialized the closure is
+/// resolved against `imports`, and three things refuse the whole call: an `owl:imports`
+/// nothing in hand resolves ([`EntailError::UnresolvedImport`]), a map entry the closure
+/// never reaches ([`EntailError::UnreachedImport`]) and two incompatible ontologies in the
+/// closure ([`EntailError::IncompatibleImports`]). An import is read off the premise's
+/// anchors — its ontology headers, its shapes graphs, the IRIs `imports` declares loaded
+/// ([`ImportMap::declare_loaded`], the IRI the premise was read under) and nodes versioning
+/// one of those; an `owl:imports` on any other node is a premise triple.
+///
+/// A premise that imports nothing and an empty map is [`materialize_with`] exactly. When the
+/// closure WAS resolved — merged, or found already in the premise — the report states the
+/// `ontology-import-resolved` boundary instead of the chase's `ontology-import-unresolved`,
+/// on the closure's report and on an inconsistent run's alike.
+///
+/// # Errors
+///
+/// The three import refusals above, then everything [`materialize_with`] refuses.
+pub fn materialize_with_imports(
+    premise: &RdfDataset,
+    plan: Materialization<'_>,
+    imports: &ImportMap,
+    options: &EvalOptions,
+    stop: Option<&Arc<dyn StopSignal>>,
+) -> Result<(Arc<RdfDataset>, ReasoningReport), EntailError> {
+    let merged = entails::imports::resolve(premise, imports)?;
+    let resolved = merged.is_some() || !imports.imported_iris(premise).is_empty();
+    let run = match &merged {
+        Some(merged) => materialize_with(merged.as_ref(), plan, options, stop),
+        None => materialize_with(premise, plan, options, stop),
+    };
+    if !resolved {
+        return run;
+    }
+    run.map(|(closure, report)| (closure, report.with_resolved_imports()))
+        .map_err(entails::resolved_imports_error)
 }
 
 #[cfg(test)]
@@ -2253,24 +2439,31 @@ mod tests {
         );
     }
 
-    /// A ceiling is a REFUSAL, and it reaches the caller as one.
+    /// A limit is a REFUSAL, and it reaches the caller as one.
     ///
-    /// `materialize` evaluates the declared program through `purrdf-datalog`, and that
-    /// evaluator holds three fixed ceilings. There is no partial answer behind one: a
-    /// truncated closure returned as a complete one is precisely the failure a
-    /// [`ReasoningReport`] exists to prevent, so an exhausted budget is
-    /// [`EntailError::Evaluate`] and the closure is not produced at all.
+    /// `materialize` evaluates the declared program through `purrdf-datalog` under the
+    /// caller's evaluation limits. There is no partial answer behind one: a truncated
+    /// closure returned as a complete one is precisely the failure a [`ReasoningReport`]
+    /// exists to prevent, so an exhausted limit is [`EntailError::Chase`] (or
+    /// [`EntailError::Evaluate`]) and the closure is not produced at all.
     ///
-    /// The input is the smallest cross product that passes a ceiling: `p` carries 360
-    /// `rdfs:domain` declarations and 380 triples use `p`, so rdfs2 alone must conclude
-    /// 136 800 typings — more than [`MAX_STORED_FACTS`](purrdf_datalog::seminaive::MAX_STORED_FACTS)
-    /// admits. The report is asserted to carry the OBSERVATION that proved the ceiling was
-    /// passed rather than the ceiling itself, because a figure rounded down to the limit
-    /// would tell a caller nothing about how far over they are.
+    /// The input is a cross product past the `wasm32` default stored-fact limit: `p`
+    /// carries 360 `rdfs:domain` declarations and 380 triples use `p`, so rdfs2 alone must
+    /// conclude 136 800 typings — more than the 131,072 facts
+    /// [`WASM_DEFAULT_MAX_STORED_FACTS`](purrdf_datalog::seminaive::WASM_DEFAULT_MAX_STORED_FACTS)
+    /// admits, and well inside the native default. Under the `wasm32` limit, stated, the
+    /// run is refused naming the knob, and the report carries the OBSERVATION that proved
+    /// the limit was passed rather than the limit itself, because a figure rounded down to
+    /// the limit would tell a caller nothing about how far over they are. Under the native
+    /// stored-fact default the run passes the default join-step limit instead, naming that
+    /// knob, and completes when it is raised too; its report names the calculus under the
+    /// limits in force.
     #[test]
     fn an_exhausted_budget_is_a_refusal_with_an_accurate_report() {
         use purrdf_datalog::chase::ChaseError;
-        use purrdf_datalog::seminaive::{BudgetResource, MAX_STORED_FACTS};
+        use purrdf_datalog::seminaive::{
+            BudgetResource, NATIVE_DEFAULT_MAX_STORED_FACTS, WASM_DEFAULT_MAX_STORED_FACTS,
+        };
 
         /// `rdfs:domain` declarations on `p`.
         const CLASSES: usize = 360;
@@ -2292,19 +2485,66 @@ mod tests {
         let ds = b.freeze().expect("freeze");
 
         // The `RDFS` lane runs through the restricted chase (it states four existential
-        // rules), so its ceiling refusal is the chase's — the SAME three fixed constants,
-        // charged the same way, refused by name rather than truncated.
-        let Err(EntailError::Chase(ChaseError::BudgetExhausted { resource, report })) =
-            materialize(&ds, Materialization::Rdfs)
-        else {
-            panic!("a cross product past a fixed ceiling must be refused, not truncated");
+        // rules), so its limit refusal is the chase's — the SAME limits, charged the same
+        // way, refused by name rather than truncated.
+        let wasm = EvalOptions::default().with_max_stored_facts(WASM_DEFAULT_MAX_STORED_FACTS);
+        let refused = materialize_with(&ds, Materialization::Rdfs, &wasm, None)
+            .expect_err("a cross product past the limit must be refused, not truncated");
+        let EntailError::Chase(ChaseError::BudgetExhausted { resource, report }) = &refused else {
+            panic!("expected the chase's limit refusal, got {refused:?}");
         };
-        assert_eq!(resource, BudgetResource::StoredFacts);
+        assert_eq!(*resource, BudgetResource::StoredFacts);
         assert!(
-            report.stored_facts() > MAX_STORED_FACTS,
-            "the report must carry the observation that passed the ceiling, not the \
-             ceiling: {} vs {MAX_STORED_FACTS}",
+            report.stored_facts() as u64 > WASM_DEFAULT_MAX_STORED_FACTS,
+            "the report must carry the observation that passed the limit, not the limit: \
+             {} vs {WASM_DEFAULT_MAX_STORED_FACTS}",
             report.stored_facts()
+        );
+        assert_eq!(report.stored_fact_limit(), WASM_DEFAULT_MAX_STORED_FACTS);
+        let rendered = refused.to_string();
+        assert!(
+            rendered.contains("131072 permitted (the caller's limit)")
+                && rendered.ends_with("raise it with EvalOptions::with_max_stored_facts"),
+            "{rendered}"
+        );
+
+        // The valid neighbour: the native stored-fact default holds every typing. The chase
+        // enumerates more candidates than the default join-step limit admits, so that is
+        // refused naming its own knob, and a raised join-step limit admits the run.
+        let native_facts =
+            EvalOptions::default().with_max_stored_facts(NATIVE_DEFAULT_MAX_STORED_FACTS);
+        let steps = materialize_with(&ds, Materialization::Rdfs, &native_facts, None)
+            .expect_err("the default join-step limit is passed")
+            .to_string();
+        assert!(
+            steps.ends_with("raise it with EvalOptions::with_max_join_steps"),
+            "{steps}"
+        );
+        let native = native_facts.with_max_join_steps(1 << 24);
+        let (closed, report) = materialize_with(&ds, Materialization::Rdfs, &native, None)
+            .expect("raised limits admit the cross product");
+        let typed = closed
+            .quad_refs()
+            .filter(|q| matches!(q.p, TermRef::Iri(p) if p == RDF_TYPE))
+            .filter(|q| matches!(q.o, TermRef::Iri(o) if o.starts_with("http://example.org/C")))
+            .count();
+        assert_eq!(
+            typed,
+            CLASSES * TRIPLES,
+            "rdfs2 types every subject by every class"
+        );
+        assert_eq!(
+            report.budget().stored_fact_limit(),
+            NATIVE_DEFAULT_MAX_STORED_FACTS
+        );
+        assert_eq!(
+            report.contract_hash(),
+            purrdf_datalog::cache::contract_hash_with(&calculus_program(Regime::Rdfs), &native)
+        );
+        assert_ne!(
+            report.contract_hash(),
+            purrdf_datalog::cache::contract_hash_with(&calculus_program(Regime::Rdfs), &wasm),
+            "a run under other limits names a different calculus"
         );
         // The refusal is the EVALUATOR's, not the façade's: the same input copies fine.
         let (copied, simple) = materialize(&ds, Materialization::Simple).expect("simple");

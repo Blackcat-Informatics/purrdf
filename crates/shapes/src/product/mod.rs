@@ -195,8 +195,9 @@ const SECTION_AST: u32 = 2;
 const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 
 /// The PREPARATION STAGE ID: a content-derived capability digest over the whole
-/// declarative model, the tables the model's meaning depends on, and the CLASS
-/// ANALYSIS DERIVATION a product carries the result of.
+/// declarative model, the tables the model's meaning depends on — the spec symbol
+/// table ([`crate::spec`]) among them — and the CLASS ANALYSIS DERIVATION a product
+/// carries the result of.
 ///
 /// The last of those is the one that is not a declaration. The class walk is an
 /// algorithm, so its meaning lives in function bodies: a build could stop
@@ -210,16 +211,16 @@ const SPEC: ArtifactSpec = ArtifactSpec::new(MAGIC, FORMAT_VERSION, 3);
 /// which re-derives.
 ///
 /// Derived, never hand-incremented. `crates/shapes/tests/product_model_census.rs`
-/// computes it from the live sources with `syn` and pins the result as
-/// `STAGE_ID_GOLDEN`; the bytes here are that digest. Re-derive them from a
-/// failing `stage_id_matches_golden` rather than editing either by hand. A
+/// computes it from the live sources with `syn`, and
+/// `stage_id_matches_shipped_constant` asserts it equals these bytes. Re-derive
+/// them from that test's failure message rather than editing them by hand. A
 /// hand-maintained version counter is precisely how an authenticated cache serves
 /// stale-but-verified wrong answers: the bytes verify, the counter matches, and
 /// the meaning moved underneath both. Here the digest IS the meaning, so it
 /// cannot.
 pub const STAGE_ID: [u8; 32] = [
-    0x10, 0xfb, 0x65, 0x93, 0x69, 0x14, 0x91, 0x0c, 0x8e, 0xf2, 0x6a, 0x51, 0x76, 0xf5, 0x80, 0x1f,
-    0x4f, 0x6d, 0x2a, 0x36, 0x45, 0xe3, 0xb0, 0xb3, 0xf3, 0x42, 0x48, 0x60, 0x21, 0x30, 0x12, 0xce,
+    0x45, 0x04, 0xff, 0x68, 0xf4, 0x0d, 0x1a, 0x27, 0x88, 0x46, 0x8f, 0x8f, 0xf8, 0x5b, 0xf9, 0x55,
+    0x09, 0xfc, 0x0e, 0xd6, 0x86, 0x47, 0x62, 0x29, 0xdd, 0x2f, 0xb8, 0xff, 0xeb, 0x48, 0xa6, 0x3d,
 ];
 
 /// The canonical empty SPARQL function registry a [`HostBindings::empty`] borrows.
@@ -624,6 +625,16 @@ fn encode_preamble(shapes: &Shapes) -> Vec<u8> {
         write_text(&mut out, prefix);
         write_text(&mut out, namespace);
     }
+    // The IRIs of every graph the shapes graph was assembled from by name — its loaded
+    // IRIs, each `owl:imports` document its closure reached, each data-graph link it
+    // resolved — sorted by the resolver. The merged dataset alone cannot say which
+    // table-supplied document it absorbed (one with no ontology header declares no IRI
+    // of its own), and a data graph that links such a document is only held by a
+    // product that remembers it (`imports::check_data_graph_links`).
+    write_varint(&mut out, provenance.included_graphs().len() as u64);
+    for iri in provenance.included_graphs() {
+        write_text(&mut out, iri);
+    }
     out
 }
 
@@ -700,6 +711,27 @@ fn decode_preamble(
         doc_prefixes.push((prefix, namespace));
     }
 
+    // The included-graph IRIs close the section. A product of THIS stage always writes
+    // them, so their absence there is a truncation. A product of an earlier stage was
+    // written before they existed; it can never be admitted (its stage id is not this
+    // build's), and `rebuild` re-derives it holding only what its merged dataset
+    // declares, so reading no list for it is the honest answer rather than a guess.
+    let mut included_graphs = Vec::new();
+    if pos < bytes.len() || stage_id == STAGE_ID {
+        let included = read_count(bytes, &mut pos)?;
+        included_graphs.reserve_exact(included);
+        for _ in 0..included {
+            included_graphs.push(read_text(bytes, &mut pos)?);
+        }
+    }
+    if !included_graphs.is_sorted_by(|a, b| a < b) {
+        return Err(malformed(
+            "this product's included-graph IRIs are not strictly sorted; re-prepare the \
+             product, because the writer records each IRI once, in order"
+                .to_owned(),
+        ));
+    }
+
     if pos != bytes.len() {
         return Err(malformed(format!(
             "this product carries {} bytes after the end of its identity section; re-prepare the \
@@ -708,11 +740,9 @@ fn decode_preamble(
         )));
     }
 
-    Ok((
-        stage_id,
-        profile,
-        ParseProvenance::new(base, doc_prefixes, box_role_vocab, shapes_graph),
-    ))
+    let mut provenance = ParseProvenance::new(base, doc_prefixes, box_role_vocab, shapes_graph);
+    provenance.set_included_graphs(included_graphs);
+    Ok((stage_id, profile, provenance))
 }
 
 /// Read one raw byte.
@@ -1264,9 +1294,11 @@ impl<'a> ShapesProductView<'a> {
         // is what the restored `Shapes` must carry for identity row 6 to be the row
         // a parse of this graph would have produced.
         let mut functions = UserFunctionRegistry::new();
-        crate::shapes::register_declared_sparql_functions(
+        let native_list = crate::shapes::register_declared_sparql_functions(
             &dataset,
             &self.provenance,
+            &parts.custom_functions,
+            &parts.node_shapes,
             &mut functions,
         )
         .map_err(|error| {
@@ -1280,9 +1312,11 @@ impl<'a> ShapesProductView<'a> {
             &parts.node_shapes,
             &parts.shape_index,
             &parts.custom_functions,
+            &native_list,
             BTreeMap::new(),
             &mut functions,
         )?;
+        link::link_global_rules(&parts.rules.global_rules, &parts.shape_index)?;
 
         // The two carriers of the parse configuration must agree. Both are
         // authenticated, so a disagreement is not tampering — it is a product whose
@@ -1305,11 +1339,14 @@ impl<'a> ShapesProductView<'a> {
 
         let shapes = Shapes {
             node_shapes: parts.node_shapes,
+            rules: parts.rules,
             box_role_vocab: parts.box_role_vocab,
             functions: Arc::new(functions),
             aggregates: Arc::new(AggregateRegistry::new()),
+            validation_options: crate::engine::ValidationOptions::default(),
             target_types: parts.target_types,
             shapes_graph: parts.shapes_graph,
+            mandatory_diagnostics: crate::lint::mandatory_diagnostics(&dataset),
             shapes_dataset: dataset,
             parse_provenance: self.provenance.clone(),
         };
@@ -1398,7 +1435,10 @@ impl<'a> ShapesProductView<'a> {
         self.refuse_ungovernable_decode()?;
 
         let dataset = dataset::open_dataset(self.section(SECTION_DATASET)?)?;
-        let shapes = crate::shapes::from_dataset_with_base(
+        // The carried dataset IS the shapes graph's resolved `owl:imports` closure — the
+        // packer resolved it before it wrote this product — so it re-derives without
+        // resolving again.
+        let mut shapes = crate::shapes::from_resolved_dataset(
             &dataset,
             self.provenance.base(),
             self.provenance.doc_prefixes(),
@@ -1412,6 +1452,11 @@ impl<'a> ShapesProductView<'a> {
                  shapes graph this build parses"
             ))
         })?;
+        // The graphs the packer's resolution absorbed are a parse input the carried
+        // dataset cannot re-derive; the product recorded them.
+        shapes
+            .parse_provenance
+            .set_included_graphs(self.provenance.included_graphs().to_vec());
 
         CertifiedParts::from_rebuilt(self.declared_identity(), shapes, host)
             .map(CertifiedParts::into_prepared)

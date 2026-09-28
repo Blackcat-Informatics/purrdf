@@ -16,14 +16,13 @@
 
 > **An LLM output is a claim, not a truth.**
 
-`purrdf-shapes` is the native SHACL validator of the PurRDF toolkit — the
-complete SHACL Core feature set, SHACL-SPARQL constraints and targets, and the
-SHACL-AF surface (node expressions, expression constraints, user-defined SPARQL
-functions and target types, and SHACL Rules materialized as a new dataset),
-running entirely on PurRDF's own interned IR and native SPARQL engine. The
-SHACL-AF surface is aligned with the SHACL 1.2 Node Expressions (`shnex:`),
-SPARQL Extensions and SPARQL 1.2 RL Working Drafts: both spellings of a node
-expression parse to one representation, and rules execute as `sh:order` strata.
+`purrdf-shapes` is the native SHACL validator and rules engine of the PurRDF
+toolkit. It implements SHACL 1.2 Core, SHACL 1.2 SPARQL Extensions, SHACL 1.2
+Node Expressions, SHACL 1.2 Inference Rules and the SPARQL 1.2 RL rule
+language, running entirely on PurRDF's own interned IR and native SPARQL
+engine. The `shnex:` spelling of a node expression and the older SHACL-AF
+`sh:` spelling parse to one representation, and SHACL rules and SPARQL 1.2 RL
+rule sets lower to one rule-set representation that runs on `purrdf-datalog`.
 Every IRI it implements is defined by a W3C document; it mints none. It
 validates an RDF 1.2 data graph against a SHACL shapes graph without general
 RDFS or OWL entailment. SHACL class membership follows asserted
@@ -35,25 +34,137 @@ TBox/RBox validation surface, and RDF 1.2 reifier metadata is the CBox. The
 crate preserves existing report keys while adding optional box-role metadata for
 callers that want richer diagnostics.
 
-The crate implements a scoped SHACL 1.2 Working Draft feature:
-`sh:reifierShape` and `sh:reificationRequired` for direct IRI property paths.
-The relevant SHACL 1.2 Core draft is dated 2026-06-02. This is not a claim of
-full SHACL 1.2 conformance.
-
 The Python SHACL surface is exposed from `bindings/python` as part of the
 `purrdf_native` extension. The engine core (`engine.rs`, `shapes.rs`,
 `constraints.rs`, `path.rs`, `report.rs`, `model.rs`) is deliberately
 **PyO3-free** — it links as a plain `rlib` into any Rust consumer without
 any Python dependency.
 
-This crate is gated by a SHACL conformance corpus.
+## SHACL 1.2 support
+
+Every constraint component the SHACL 1.2 vocabulary declares is evaluated
+natively, including the list components, `sh:singleLine`, `sh:rootClass`,
+`sh:someValue`, path-valued property pairs and `sh:subsetOf`,
+`sh:uniqueValuesFor`, `sh:closed sh:ByTypes`, `sh:reifierShape` and
+`sh:reificationRequired`. So are the SHACL 1.2 targets (implicit class targets,
+`sh:shape`, `sh:targetWhere`, node-expression `sh:targetNode`), computed values
+(`sh:values`, `sh:defaultValue`), per-constraint reifier annotations, the
+`sh:Debug` and `sh:Trace` severities with the conformance-disallow set, and
+every `sh:message` with its language tag and direction. Node expressions keep
+the order and multiplicity their evaluation clauses define. Rules follow SHACL
+1.2 Inference Rules: layers, orders, run-once rules, rule sets, templates,
+temporary triples and expected predicates. `purrdf_shapes::srl` parses,
+checks, stratifies and evaluates SPARQL 1.2 RL rule sets.
+
+A shapes graph is loaded faithfully or refused. An unknown term, an ill-typed
+parameter value, or a term the engine does not evaluate fails the load with
+its name, rather than dropping the constraint. The terms the SHACL
+vocabularies define and the engine refuses by name are the SHACL JavaScript
+Extensions, which are not part of SHACL 1.2, and `sh:describe` and `sh:update`
+on a shape, node expression, SPARQL-based constraint, validator or rule. No
+SHACL specification executes the DESCRIBE or UPDATE executable classes they
+belong to, so those terms would otherwise be silently ignored. SHACL-SPARQL
+result annotations (`sh:resultAnnotation`) are copied into every result their
+query produces (`ValidationResult::annotations`), and the SHACL-AF 1.1
+`sh:minus` node expression evaluates as `shnex:remove`.
+
+**Built-in declarations.** The W3C vocabularies `shacl.ttl`, `shnex.ttl` and
+`shnex-sparql.ttl` declare every built-in component and function without a
+body. Loading resolves each declaration against the table of what the engine
+implements (`purrdf_shapes::spec`): a bare declaration of a built-in binds to
+the native implementation and registers nothing, a built-in redefined with a
+body, or a component given `sh:ask` or `sh:select` of its own, is a
+duplicate-definition load error, and a declaration under the wrong class or
+with a contradicting signature is a mismatch. Validators declared for a
+built-in component (vocabularies such as DASH give SHACL Core components SPARQL
+validators) bind as alternatives the native implementation supersedes: SHACL
+1.2 SPARQL Extensions selects "one of the values" of a component's validators,
+so each is an implementation of the same component. An alternative must be a
+well-formed SPARQL validator of its attachment and is never executed;
+`validator_alternatives` and `lint::lint` list every one. Any other `sh:`
+statement on a built-in's declaration, beyond `sh:message`, `sh:labelTemplate`
+and the non-validating characteristics, is refused. A bodiless function the
+engine does not implement is refused in any namespace.
+Merging the W3C vocabularies into a shapes graph is therefore a no-op, and
+`tests/vocabulary_import_invariance.rs` holds every report of three corpora
+byte-identical with and without the merge.
+`FunctionResolution` and `lint::lint` say, per call site, whether a
+node-expression function bound natively, to a custom body, to a SPARQL
+registration or to a host extension.
+
+**Ill-formed declarations and pre-binding.** A SHACL-SPARQL or SHACL-AF
+declaration that violates a syntax rule refuses the load whether or not any
+shape reaches it, because SHACL 1.2 Core says "A SHACL processor SHOULD produce
+a failure in this case" with no reachability qualifier: a non-SELECT value of
+`sh:nodeValidator` or `sh:propertyValidator` and a non-ASK value of
+`sh:validator` (`nodeValidator-class`, `propertyValidator-class`,
+`validator-class`), on a built-in or a custom component; a malformed validator
+query (`ask-count`, `ask-sparql`, `select-query-valid`, …); a component
+parameter named `this`, `path`, `PATH` or `value` (`parameter-name-not-in`);
+a `sh:SPARQLFunction` parameter with one of those names or `shapesGraph` or
+`currentShape`; a `sh:SPARQLFunction` without exactly one `sh:ask` or
+`sh:select` (`SPARQLFunction-query`). The refusal is `ShapesError::IllFormed`,
+and it lists every violation in the graph, each with its declaration and rule
+id. A pre-binding violation — a `MINUS`, a `VALUES`, an `AS ?var` for a
+pre-bound variable — is not a syntax violation: SHACL 1.2 SPARQL Extensions,
+Appendix A, requires a failure for a query "executed with pre-bound
+variables". So it refuses the load, as `ShapesError::Prebinding`, only where a
+query executes: the validator a use of a custom component selects, or a
+`sh:SPARQLFunction` a node expression or reachable SPARQL calls. A validator of
+a built-in component never executes, and neither does a validator no use
+selects or a function nothing calls; those load, and `lint::lint` lists each in
+its `unexecuted` section as a finding.
+
+**SHACL-JS.** SHACL JavaScript Extensions are not part of SHACL 1.2 and the
+engine has no JavaScript engine. A shape that reaches SHACL-JS is refused with
+`ShapesError::ShaclJs`: `sh:js` or a SHACL-JS type on the shape, a `sh:JSTarget`
+or an instance of a `sh:JSTargetType` as its target, a `sh:JSRule` among its
+rules, and a call to a `sh:JSFunction` from a node expression or from SPARQL the
+shape runs. A `sh:JSLibrary` or a `sh:JSFunction` nothing calls is declared
+vocabulary and loads inert. A `sh:JSValidator` attached to a constraint
+component is not: "The values of sh:validator must be ASK-based validators", and
+the values of `sh:nodeValidator` and `sh:propertyValidator` "must be SELECT-based
+validators" (SHACL 1.2 SPARQL Extensions), so a graph that attaches one is
+ill-formed and fails the load with `ShapesError::IllFormed`, naming the rule,
+whether or not a shape uses the component.
+
+**Conformance.** The whole W3C `shacl12-test-suite` (547 tests: 174
+`sht:Validate`, 143 `sht:EvalNodeExpr`, 27 `sht:Infer` and 203 SPARQL 1.2 RL
+tests) runs, and of the 544 an upstream manifest lists, 538 pass as approved
+and 6 are counted apart as non-canonical expected decimals, with an empty
+expected-failure ledger:
+
+```bash
+cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture
+```
+
+Three vendored files that no upstream manifest includes are graded and
+reported apart from the approved suite, never counted among its passes; one of
+them, `core/node/xone-003`, is graded with one amendment that quotes its clause
+(6.7.2.2: a property shape's result carries its `sh:path` as `sh:resultPath`). `sh:reifierShape` and `sh:reificationRequired`
+results carry the value node as `sh:value`, as the approved
+`core/property/reifierShape-001` and `-002` state (7.8.5's textual definition
+names both the triple term and the reifier `t`); a non-conforming reifier's own
+results ride along as `sh:detail`. In six node-expression tests the approved
+result spells a computed `xsd:decimal` non-canonically (`"4.0"`, `"3.0"`,
+`"42.0"`, `"00"` for the XSD 1.1 canonical `"4"`, `"3"`, `"42"`, `"0"`); the
+expected value is correct, and the suite does not say whether "equal" means term
+or value equality. PurRDF emits the XSD 1.1 canonical form and grades these six by
+substituting the canonical spelling, which for them equals value comparison. They
+are counted apart from the passes. `sparql/component/validator-001` passes by
+name with no import supplied: its `owl:imports <http://datashapes.org/dash>` sits
+on a node that is neither the document's own IRI nor an `owl:Ontology` nor a
+`sh:ShapesGraph`, so under OWL 2's mapping to RDF (§3.1.2) and SHACL 1.2 Core the
+triple is data, not an import. SPARQL 1.2 RL grammar rule [2] is implemented as written. The W3C SHACL 1.0
+`data-shapes` suite and a 73-case first-party frozen corpus gate the crate as
+well; `docs/CONFORMANCE.md` has the live numbers.
 
 ---
 
 ## Build
 
 > **Toolchain:** the MSRV floor is `rust-version` in the workspace `Cargo.toml`
-> (currently 1.98, stable channel), and the source is nightly-free. The repo's
+> (currently 1.98, stable channel), and the source uses zero nightly features. The repo's
 > `rust-toolchain.toml` names a *floating nightly* for development and CI lints;
 > `cargo` and `rustup` pick it up automatically, and building on stable 1.98
 > works exactly as the MSRV job proves.
@@ -401,6 +512,13 @@ the topology and version stamp retains the original flat package byte-for-byte.
 Version stamping is independently available in either layout; in the flat
 layout it adds `__about__.py` and updates the `__init__.py` exports.
 
+A JSON Schema `not` has no annotation equivalent. The generated package checks
+it with a before-validator that evaluates the negated schema over the raw JSON
+input. The check covers a closed keyword table, `$ref` included, with JSON
+Schema's semantics, and runs `pattern` through Pydantic's own regex engine. A
+negated schema outside that table stays a located `negation-validation-dropped`
+loss.
+
 Generated classes validate the representable JSON Schema subset and expose the
 originating definition through Pydantic v2's standard
 `model_json_schema(by_alias=True)` surface. Assertions without an exact
@@ -603,8 +721,9 @@ assert_eq!(package.type_names.get("Person").map(String::as_str), Some("Person"))
 The closed dialect is TypeScript 7.0 under `strict` and
 `exactOptionalPropertyTypes`. It represents JSON primitives and literals, exact
 required-versus-optional fields, explicit JSON `null`, local recursive
-references, `anyOf` unions, `allOf` intersections, homogeneous arrays, and
-bounded tuples. It emits type aliases rather than runtime enums or mergeable
+references, `anyOf` unions, `allOf` intersections, arrays and tuples with
+exact length bounds of any size, and pairwise-distinct items over a finite
+scalar item set. It emits type aliases rather than runtime enums or mergeable
 interfaces and never uses `any`. Malformed keyword values, external/dynamic or
 dangling references, reserved names, and normalized-name collisions fail
 closed.
@@ -612,9 +731,9 @@ closed.
 TypeScript's structural assignability cannot encode every runtime JSON Schema
 assertion. Integer subsets, numeric/string predicates, object closure with
 named fields, regex-selected properties, dependencies, conditionals,
-negation, contains/uniqueness, evaluation state, and expansion-budget
-widenings are therefore classified at their JSON Pointer locations by the
-closed loss profile. The compiler oracle checks both fresh literals and values
+negation, contains, uniqueness over infinitely many items (or beyond the
+compiler's enumeration limits), and evaluation state are therefore classified
+at their JSON Pointer locations by the closed loss profile. The compiler oracle checks both fresh literals and values
 passed through variables, so excess-property checks cannot hide structural
 widening:
 
@@ -751,7 +870,10 @@ print(report["results"])   # list of violation dicts
 ```
 
 Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`,
-`component`, `source_shape`, and `message`. When the shapes or path terms carry
+`component`, `source_shape`, and `messages` (every `sh:resultMessage`, each a
+dict with `text` and its `language`, `direction` and `datatype` when present).
+`shacl.validate` takes a `conformance_disallows` keyword, the severity IRIs
+that make a report non-conforming. When the shapes or path terms carry
 `purrdf:graphBoxRole`, result dicts may also include `source_box_roles`,
 `path_box_roles`, and `result_box_roles`.
 
@@ -780,8 +902,74 @@ Related crates:
 
 `Shapes` retains the frozen `Arc<RdfDataset>` it was parsed from, and
 `Shapes::dataset()` borrows it. A consumer that needs the RDF behind a shapes
-graph — to union it with an ontology, to fold `owl:imports`, to hand it to
-SPARQL — reads it from there instead of reparsing the source text.
+graph — to union it with an ontology, to hand it to SPARQL — reads it from there
+instead of reparsing the source text. It is the shapes graph's whole `owl:imports`
+closure, as the constructor resolved it.
+
+## A shapes graph is its `owl:imports` closure
+
+Every `Shapes` constructor resolves the shapes graph's `owl:imports` closure through
+`imports::resolve_shapes_imports` before it reads a shape. An `owl:imports` triple is an
+import only when its subject is an anchor of its document:
+
+- the shapes graph's own IRI (the IRI it was read under; for an imported document, the IRI
+  it was imported by);
+- a SHACL instance of `owl:Ontology`, OWL 2's ontology header;
+- every SHACL instance of `sh:ShapesGraph` (SHACL 1.2 Core §6.1), including
+  `sh:RulesGraph` and any class the document declares `rdfs:subClassOf sh:ShapesGraph`;
+- a node naming one of those as its `owl:versionIRI` (SHACL 1.2's
+  `^owl:versionIRI?/owl:imports`).
+
+A node whose only graph role is `sh:DataGraph` is not an anchor. SHACL 1.2 Core §6.2 says
+"owl:imports in the data graph is not enacted", and the data graph's own `owl:imports` are
+never read at all. The anchors come from the kernel's one graph-role classifier
+(`purrdf_core::graph_roles`), which SHACL-SPARQL's implicit prefixes (`sh:declare` on an
+`owl:Ontology`, `sh:DataGraph`, `sh:ShapesGraph` or `sh:RulesGraph`) select from too, and
+entailment follows the same rule. On any other node the triple is data, as SHACL's
+`sh:prefixes/owl:imports*/sh:declare` prefix edges are, and `lint::lint` lists it in its
+informational `unanchored-imports` section. An import is resolved by a document in the
+caller's `ShapesImports` table, by the IRI the shapes document was read under, or by the
+closure declaring it (`<X> a owl:Ontology`, `<X> a sh:ShapesGraph`, or an ontology whose
+`owl:versionIRI` is `<X>`). The supplied documents are merged in, and an import
+nothing resolves — or a table entry nothing imports — is refused with the typed
+`ShapesError::Imports`. So a `Shapes` value is complete by construction, and every
+entry point built on one gives the same verdict on every host. PurRDF fetches nothing.
+
+```rust
+use purrdf_shapes::{ShapesImports, engine};
+
+let shapes_ttl = "@prefix owl: <http://www.w3.org/2002/07/owl#> .\n\
+    @prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+    <http://example.org/shapes> a sh:ShapesGraph ; owl:imports <http://example.org/lib> .\n";
+let lib_ttl = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+    <http://example.org/lib#S> a sh:NodeShape .\n";
+
+let imports = ShapesImports::from_turtle(&[("http://example.org/lib", lib_ttl)])
+    .expect("the imported document parses");
+let shapes = engine::parse_shapes_with_config(shapes_ttl, None, None, &imports)
+    .expect("every import resolves");
+assert_eq!(shapes.node_shapes.len(), 1);
+```
+
+### A data graph's `sh:shapesGraph` links
+
+SHACL 1.2 Core §6.4 lets a data graph name the graphs that "SHOULD be included into the
+shapes graph used to validate the data graph" — `<G> a sh:DataGraph ; sh:shapesGraph <S>`
+— and PurRDF reads the SHOULD as a MUST. A `sh:shapesGraph` is a link when its subject is
+the data graph's loaded IRI (when the host knows one) or a `sh:DataGraph`, by the same
+classifier; on any other node it is data. `imports::data_graph_links` reads the links and
+`ShapesImports::link_data_graph` puts them in the table, where `resolve_shapes_imports`
+resolves each one exactly as an import — the same table, the same in-place declarations,
+the `^owl:versionIRI` step, the linked graph's own `owl:imports` — and unions it into the
+shapes graph. `engine::validate_graphs_with_options` and the other text entry points do
+this themselves. A link nothing resolves is `ShapesImportError::UnresolvedLink`, a link
+value that is not an IRI is `InvalidLink`, and a table entry only a link names is reached.
+A shapes graph built before the data graph was known — a `Shapes` validated against many
+graphs, a `PreparedShapes`, a prepared product — cannot take a graph in, so every
+validation checks each link is one it already holds (`imports::check_data_graph_links`:
+its loaded IRI, a graph its closure or links folded in, an anchor or version IRI it
+declares) and refuses any other as `UnheldLink`. A change that adds or retracts a link
+changes the shapes graph, so the incremental change path validates in full and says why.
 
 The accessor returns a borrow rather than a clone so the caller decides whether
 to pay for retention; `Arc::clone(shapes.dataset())` keeps the dataset alive

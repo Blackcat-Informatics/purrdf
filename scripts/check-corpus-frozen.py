@@ -39,9 +39,14 @@ from pathlib import Path
 # 489-row upstream `census.tsv`) the OWL 2 RL row grades against, the vendored
 # W3C RDF 1.2 syntax/eval corpus the native text codecs (Turtle / TriG /
 # N-Triples / N-Quads / RDF-XML) round-trip against — which is also where every
-# language-tag and base-direction negative vector lives — and the vendored W3C
-# SPARQL 1.1 and 1.2 suites the conformance matrix grades against — all declared
-# byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
+# language-tag and base-direction negative vector lives — the vendored W3C
+# SPARQL 1.1 and 1.2 suites the conformance matrix grades against — and the
+# vendored W3C SHACL 1.2 vocabularies plus the `shacl12-test-suite` the
+# declared-vs-implemented ratchet and the SHACL 1.2 conformance harness grade
+# against, together with its crate-local runtime copy under
+# `crates/shapes/spec` (the same vocabulary bytes, guarded separately because
+# it sits inside a published crate rather than the workspace `vectors/` tree)
+# — all declared byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
 # in gmeow-gts and is intentionally not policed here; adding a new root is a
 # deliberate edit to this map followed by `--update` — a corpus is NEVER guarded
 # until it appears here.)
@@ -61,9 +66,11 @@ GUARDED_ROOTS: dict[str, str] = {
         "scripts/conformance-frozen/vectors-sparql-governors.sha256"
     ),
     "vectors/shacl": "scripts/conformance-frozen/vectors-shacl.sha256",
+    "vectors/shacl12": "scripts/conformance-frozen/vectors-shacl12.sha256",
     "vectors/shexTest": "scripts/conformance-frozen/vectors-shexTest.sha256",
     "vectors/sparql-cdt": "scripts/conformance-frozen/vectors-sparql-cdt.sha256",
     "crates/shapes/corpus": "scripts/conformance-frozen/shapes-corpus.sha256",
+    "crates/shapes/spec": "scripts/conformance-frozen/shapes-spec.sha256",
     "crates/sparql-conformance/corpus/construct": (
         "scripts/conformance-frozen/sparql-conformance-corpus-construct.sha256"
     ),

@@ -1,6 +1,6 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
-"""``purrdf.compat.rdflib`` — the purrdf P0 rdflib drop-in surface.
+"""``purrdf.compat.rdflib`` — the rdflib drop-in surface.
 
 Re-exports the names internal code imports from ``rdflib`` directly, so a
 migration is a pure import-prefix swap:
