@@ -1566,74 +1566,86 @@ fn enqueue_quoted_triple(
 ///
 /// # Termination
 ///
-/// The `write_property` → `write_triple_node` cycle carries no depth bound and no
-/// visited set. It terminates because the term table it walks does: every producer of a
-/// [`SerGraph`] guarantees that, and the one that takes a caller-supplied graph
-/// (`crate::gts::gts_to_ser`) proves it, refusing a self-reaching table with
-/// `gts-self-reaching-term`. See `ser_model::write_term`.
+/// The explicit stack contains borrowed predicate names, never rendered closing
+/// lines. Producers guarantee an acyclic term table (the GTS boundary checks it).
+/// Indentation stops growing at 64 spaces, so both traversal memory and output
+/// size are linear in nesting depth. Shallow documents retain their exact bytes.
 fn write_property<W: TextOut + ?Sized>(
     out: &mut W,
     indent: &str,
     graph: &SerGraph,
     reifier_index: &ReifierIndex,
-    predicate: usize,
-    object: usize,
+    mut predicate: usize,
+    mut object: usize,
     namespaces: &BTreeMap<String, String>,
 ) -> Result<(), RdfDiagnostic> {
-    let name = serializer_qname(ser_value(ser_term(graph, predicate)?)?, namespaces)?;
-    let term = ser_term(graph, object)?;
-    match term.kind {
-        SerTermKind::Iri => {
-            // `rdf:resource` is an IRI reference and resolves against `xml:base`, so it
-            // is spelled against the document base exactly as `rdf:about` is.
-            out.push_str(indent);
-            out.push('<');
-            out.push_str(&name);
-            push_xml_attribute("rdf:resource", &iri_reference(graph, ser_value(term)?), out)?;
-            out.push_str("/>\n");
-        }
-        SerTermKind::Bnode => {
-            out.push_str(indent);
-            out.push('<');
-            out.push_str(&name);
-            push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
-            out.push_str("/>\n");
-        }
-        SerTermKind::Literal => {
-            let _ = write!(out, "{indent}<{name}");
-            if let Some(language) = &term.lang {
-                push_xml_attribute("xml:lang", language, out)?;
+    let mut closings = Vec::new();
+    loop {
+        let name = serializer_qname(ser_value(ser_term(graph, predicate)?)?, namespaces)?;
+        let term = ser_term(graph, object)?;
+        property_indent(out, indent.len(), closings.len(), 0);
+        let _ = write!(out, "<{name}");
+        match term.kind {
+            SerTermKind::Iri => {
+                push_xml_attribute("rdf:resource", &iri_reference(graph, ser_value(term)?), out)?;
+                out.push_str("/>\n");
             }
-            if let Some(direction) = &term.direction {
-                let _ = write!(out, " xmlns:its=\"{ITS_NS}\" its:dir=\"{direction}\"");
+            SerTermKind::Bnode => {
+                push_xml_attribute("rdf:nodeID", ser_value(term)?, out)?;
+                out.push_str("/>\n");
             }
-            if let Some(datatype) = term.datatype {
-                push_xml_attribute("rdf:datatype", ser_value(ser_term(graph, datatype)?)?, out)?;
+            SerTermKind::Literal => {
+                if let Some(language) = &term.lang {
+                    push_xml_attribute("xml:lang", language, out)?;
+                }
+                if let Some(direction) = &term.direction {
+                    let _ = write!(out, " xmlns:its=\"{ITS_NS}\" its:dir=\"{direction}\"");
+                }
+                if let Some(datatype) = term.datatype {
+                    push_xml_attribute(
+                        "rdf:datatype",
+                        ser_value(ser_term(graph, datatype)?)?,
+                        out,
+                    )?;
+                }
+                out.push('>');
+                push_xml_text(ser_value(term)?, out)?;
+                let _ = writeln!(out, "</{name}>");
             }
-            out.push('>');
-            push_xml_text(ser_value(term)?, out)?;
-            out.push_str("</");
-            out.push_str(&name);
-            out.push_str(">\n");
+            SerTermKind::Triple => {
+                let (subject, nested_predicate, nested_object) = term
+                    .reifier
+                    .and_then(|rf| reifier_index.get(rf))
+                    .ok_or_else(|| serialize_err("a triple term has no reifier binding"))?;
+                out.push_str(" rdf:parseType=\"Triple\">\n");
+                property_indent(out, indent.len(), closings.len(), 2);
+                out.push_str("<rdf:Description");
+                write_node_attribute(out, graph, subject)?;
+                out.push_str(">\n");
+                closings.push(name);
+                predicate = nested_predicate;
+                object = nested_object;
+                continue;
+            }
         }
-        SerTermKind::Triple => {
-            let (s, p, o) = term
-                .reifier
-                .and_then(|rf| reifier_index.get(rf))
-                .ok_or_else(|| serialize_err("a triple term has no reifier binding"))?;
-            let _ = writeln!(out, "{indent}<{name} rdf:parseType=\"Triple\">");
-            write_triple_node(
-                out,
-                &format!("{indent}  "),
-                graph,
-                reifier_index,
-                (s, p, o),
-                namespaces,
-            )?;
-            let _ = writeln!(out, "{indent}</{name}>");
-        }
+        break;
+    }
+    for (depth, name) in closings.into_iter().enumerate().rev() {
+        property_indent(out, indent.len(), depth, 2);
+        out.push_str("</rdf:Description>\n");
+        property_indent(out, indent.len(), depth, 0);
+        let _ = writeln!(out, "</{name}>");
     }
     Ok(())
+}
+
+/// Pretty-printing must not turn a linear term chain into quadratic output.
+fn property_indent<W: TextOut + ?Sized>(out: &mut W, base: usize, depth: usize, extra: usize) {
+    const SPACES: &str = "                                                                ";
+    let count = base
+        .saturating_add(depth.saturating_mul(4))
+        .saturating_add(extra);
+    out.push_str(&SPACES[..count.min(SPACES.len())]);
 }
 
 fn write_triple_node<W: TextOut + ?Sized>(
@@ -1696,10 +1708,10 @@ fn ser_value(term: &SerTerm) -> Result<&str, RdfDiagnostic> {
 /// and since no generated prefix is ever spelled `ns` (they are `ns0`, `ns1`, …), the
 /// element went out bound to an UNDECLARED prefix and the document was not
 /// namespace-well-formed at all. It fails closed instead.
-fn serializer_qname(
-    iri: &str,
-    namespaces: &BTreeMap<String, String>,
-) -> Result<String, RdfDiagnostic> {
+fn serializer_qname<'a>(
+    iri: &'a str,
+    namespaces: &'a BTreeMap<String, String>,
+) -> Result<SerializerQName<'a>, RdfDiagnostic> {
     let (namespace, local) = split_property_iri(iri)?;
     let prefix = namespaces.get(namespace).ok_or_else(|| {
         serialize_err(format!(
@@ -1707,7 +1719,19 @@ fn serializer_qname(
              RDF/XML element name may not use an undeclared prefix"
         ))
     })?;
-    Ok(format!("{prefix}:{local}"))
+    Ok(SerializerQName { prefix, local })
+}
+
+/// A borrowed element name: the explicit traversal stack allocates no strings.
+struct SerializerQName<'a> {
+    prefix: &'a str,
+    local: &'a str,
+}
+
+impl std::fmt::Display for SerializerQName<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}:{}", self.prefix, self.local)
+    }
 }
 
 /// Split a predicate IRI into the `(namespace, local)` halves of an RDF/XML element name,
@@ -1821,6 +1845,114 @@ fn is_ncname_char(ch: char) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn object_chain(depth: usize) -> SerGraph {
+        let term = |kind, value, reifier| SerTerm {
+            kind,
+            value,
+            reifier,
+            datatype: None,
+            lang: None,
+            direction: None,
+        };
+        let mut graph = SerGraph::default();
+        graph.terms.push(term(
+            SerTermKind::Iri,
+            Some("http://example.org/s".into()),
+            None,
+        ));
+        graph.terms.push(term(
+            SerTermKind::Iri,
+            Some("http://example.org/p".into()),
+            None,
+        ));
+        let mut object = 0;
+        for _ in 0..depth {
+            let id = graph.terms.len();
+            graph.terms.push(term(SerTermKind::Triple, None, Some(id)));
+            graph.reifiers.push((id, (0, 1, object), None));
+            object = id;
+        }
+        graph
+    }
+
+    #[test]
+    fn nested_property_preserves_shallow_bytes() {
+        let graph = object_chain(1);
+        let namespaces = BTreeMap::from([("http://example.org/".into(), "ex".into())]);
+        let mut out = String::new();
+        write_property(
+            &mut out,
+            "    ",
+            &graph,
+            &graph.reifier_index(),
+            1,
+            2,
+            &namespaces,
+        )
+        .unwrap();
+        assert_eq!(
+            out,
+            concat!(
+                "    <ex:p rdf:parseType=\"Triple\">\n",
+                "      <rdf:Description rdf:about=\"http://example.org/s\">\n",
+                "        <ex:p rdf:resource=\"http://example.org/s\"/>\n",
+                "      </rdf:Description>\n",
+                "    </ex:p>\n",
+            )
+        );
+    }
+
+    #[test]
+    fn deep_property_has_linear_output_on_small_stack() {
+        // Count and discard output: a regression must fail its byte budget,
+        // never allocate the quadratic document it is intended to detect.
+        struct Counter {
+            bytes: usize,
+            lines: usize,
+        }
+        impl std::fmt::Write for Counter {
+            fn write_str(&mut self, value: &str) -> std::fmt::Result {
+                self.bytes += value.len();
+                self.lines += value.bytes().filter(|&b| b == b'\n').count();
+                assert!(
+                    self.bytes <= 40_000_000,
+                    "nested XML exceeded its linear byte budget"
+                );
+                Ok(())
+            }
+        }
+        impl TextOut for Counter {
+            fn push_str(&mut self, value: &str) {
+                std::fmt::Write::write_str(self, value).unwrap();
+            }
+            fn push(&mut self, value: char) {
+                std::fmt::Write::write_char(self, value).unwrap();
+            }
+        }
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let depth = 100_000;
+                let graph = object_chain(depth);
+                let namespaces = BTreeMap::from([("http://example.org/".into(), "ex".into())]);
+                let mut out = Counter { bytes: 0, lines: 0 };
+                write_property(
+                    &mut out,
+                    "    ",
+                    &graph,
+                    &graph.reifier_index(),
+                    1,
+                    graph.terms.len() - 1,
+                    &namespaces,
+                )
+                .unwrap();
+                assert_eq!(out.lines, 4 * depth + 1);
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
 
     /// The in-scope base a caller-supplied base string produces, matching what the
     /// public `parse_dataset` entry point builds.
