@@ -339,9 +339,8 @@ pub enum EvalError {
     /// on.
     ///
     /// Its own variant because nothing about the request is malformed and nothing about
-    /// the data is wrong: the same request answers
-    /// on a thread with a larger stack (a native thread spawned with more, or a wasm
-    /// asynchronous job given a larger `stackBytes`). Refusing is what stands between an
+    /// the data is wrong: the same request answers on a native thread spawned with a
+    /// larger stack. Refusing is what stands between an
     /// admitted request and a crash — natively an aborted process, on wasm32 a trapped
     /// instance whose memory can no longer be trusted — so this is never a partial
     /// answer and never retried shallower: the request as written does not fit.
@@ -359,9 +358,8 @@ pub enum EvalError {
     ///
     /// Its own variant rather than [`Self::StackExhausted`] because no stack a caller
     /// sizes answers it: the engine's call stack is about 984 KiB under V8 on the
-    /// synchronous lane and on an asynchronous job's suspendable stack alike, and a
-    /// job's `stackBytes` sizes only the shadow stack in linear memory. The remedy is a
-    /// request nested less deeply.
+    /// synchronous lane and on an asynchronous job's suspendable stack alike. The remedy
+    /// is a request nested less deeply.
     HostStackExhausted {
         /// The construct the budget stopped at.
         construct: &'static str,
@@ -497,8 +495,7 @@ impl EvalError {
     /// The stable, machine-readable diagnostic code [`Self::HostStackExhausted`] maps to
     /// at the `SparqlEngine` boundary — the string a host compares against to tell "this
     /// request nests deeper than the JavaScript engine's call stack holds" from a stack a
-    /// caller can size ([`Self::STACK_EXHAUSTED_CODE`]): no lane and no `stackBytes`
-    /// answers it.
+    /// native caller can size ([`Self::STACK_EXHAUSTED_CODE`]): no lane answers it.
     pub const HOST_STACK_EXHAUSTED_CODE: &'static str = "native-sparql-host-stack-exhausted";
 
     /// Construct an [`Self::RelationIncomplete`] naming the relation and quoting its
@@ -615,7 +612,8 @@ impl core::fmt::Display for EvalError {
                      thread has left above its {}-byte reserve)",
                     purrdf_stack::MARGIN_BYTES
                 )?;
-                // A wasm caller has no thread to spawn: each wasm lane names its own remedy.
+                // A wasm caller has no thread to spawn, and both lanes run on stacks the
+                // module sizes: the message names no remedy there.
                 if cfg!(target_arch = "wasm32") {
                     Ok(())
                 } else {
@@ -627,8 +625,7 @@ impl core::fmt::Display for EvalError {
                 "host call stack budget exceeded: the request's {construct} nests deeper \
                  than the JavaScript engine's own call stack holds ({} bytes of it are \
                  budgeted for a request, {} nested graph patterns at most, the same on the \
-                 synchronous and the asynchronous lane; a larger stackBytes does not raise \
-                 it); nest the request less deeply",
+                 synchronous and the asynchronous lane); nest the request less deeply",
                 crate::stack::height::WASM_HOST_STACK_BUDGET,
                 crate::stack::height::WASM_GRAPH_PATTERN_DEPTH
             ),
@@ -734,7 +731,7 @@ mod tests {
         assert!(text.contains("655360 bytes"), "{text}");
         assert!(text.contains("284 nested graph patterns"), "{text}");
         assert!(
-            text.contains("a larger stackBytes does not raise it"),
+            text.contains("the same on the synchronous and the asynchronous lane)"),
             "{text}"
         );
         assert!(text.ends_with("nest the request less deeply"), "{text}");

@@ -1442,11 +1442,10 @@ impl JspiStopWatch {
     /// status (an unknown status is latched as a fault and reported as one).
     ///
     /// The canary is read first: a job whose frames ran past its base does not suspend —
-    /// its fault is latched and reported as the status, and the evaluator winds down
-    /// through the stop signal the fault fires.
+    /// it poisons the instance ([`region_overrun`]).
     fn suspend_on(&self, seq: u32, kind: EffectKind) -> SuspendStatus {
         if let Err(fault) = self.slots.check_canary() {
-            self.slots.latch_fault(fault);
+            region_overrun(&self.slots, fault);
             return SuspendStatus::Fault;
         }
         let started = now_ms();
@@ -2673,7 +2672,7 @@ impl JobInner {
         // The operation's frames are gone; the one word this side reads of the region says
         // whether they all stayed above its base.
         if !self.region.canary_intact() {
-            slots.latch_fault(self.region.bounds().overrun());
+            region_overrun(slots, self.region.bounds().overrun());
         }
         slots.finished.store(true, Ordering::Relaxed);
         // A latched fault outranks whatever the operation reached: that outcome was
@@ -3385,6 +3384,18 @@ impl AsyncJob {
 fn exchange_id(exchange: f64) -> Option<u64> {
     (exchange.is_finite() && exchange.fract() == 0.0 && (1.0..=2f64.powi(53)).contains(&exchange))
         .then_some(exchange as u64)
+}
+
+/// A job's frames ran past the base of its region: the bytes below it belong to other
+/// allocations, so nothing the instance holds can be trusted. On `wasm32` this panics, and
+/// the panic hook poisons the instance before the trap unwinds it, so every entry point
+/// refuses from then on; a native build runs no job on a region, and latches `fault` as
+/// the job's.
+fn region_overrun(slots: &JobSlots, fault: String) {
+    if cfg!(target_arch = "wasm32") {
+        std::panic::panic_any(fault);
+    }
+    slots.latch_fault(fault);
 }
 
 /// The fault for a delivered failure kind the protocol does not define.

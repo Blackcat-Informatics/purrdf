@@ -15,7 +15,7 @@ export const STACK_REFUSAL = /evaluation stack exhausted|host call stack budget 
  * evaluator's (`crates/sparql-eval/src/error.rs`), matched exactly.
  */
 export const HOST_STACK_REFUSAL =
-  /^error native-sparql-host-stack-exhausted: host call stack budget exceeded: the request's [a-z -]+ nests deeper than the JavaScript engine's own call stack holds \(655360 bytes of it are budgeted for a request, 284 nested graph patterns at most, the same on the synchronous and the asynchronous lane; a larger stackBytes does not raise it\); nest the request less deeply$/;
+  /^error native-sparql-host-stack-exhausted: host call stack budget exceeded: the request's [a-z -]+ nests deeper than the JavaScript engine's own call stack holds \(655360 bytes of it are budgeted for a request, 284 nested graph patterns at most, the same on the synchronous and the asynchronous lane\); nest the request less deeply$/;
 export const NUMBERS = [1, 2]
   .map(
     (n) =>
