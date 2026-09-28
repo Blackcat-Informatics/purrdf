@@ -208,6 +208,20 @@ fn families() -> Vec<Family> {
             marker: "Project {",
             occurrences: |n| n + 1,
         },
+        // Each sub-SELECT's `WHERE` group is directly the next sub-SELECT, with no group
+        // of its own around it: `{ SELECT * WHERE { SELECT * WHERE … } }`.
+        Family {
+            name: "sub-SELECT as the WHERE group",
+            form: Form::Query,
+            text: |n| {
+                format!(
+                    "SELECT * WHERE {{ {} }}",
+                    wrapped("{ SELECT * WHERE ", "{ ?s ?p ?innermost }", " }", n)
+                )
+            },
+            marker: "Project {",
+            occurrences: |n| n + 1,
+        },
         Family {
             name: "FILTER EXISTS",
             form: Form::Query,

@@ -378,6 +378,12 @@ enum Step {
     Return(Val),
     /// Read the next element of the innermost group.
     Elements,
+    /// Read a group graph pattern at its `{` ([`Parser::start_group`]). A `SELECT`'s
+    /// `WHERE` group is read through this step rather than by a direct call, because a
+    /// group can itself be a sub-`SELECT` whose `WHERE` group is the next one: read by
+    /// direct calls, `{ SELECT * WHERE { SELECT * WHERE … } }` took a stack frame per
+    /// level.
+    Group,
 }
 
 /// An open group graph pattern.
@@ -502,6 +508,7 @@ impl Parser<'_, '_> {
                 Step::Operand => self.operand()?,
                 Step::Operator(value, closed) => self.operator(value, closed)?,
                 Step::Elements => self.elements()?,
+                Step::Group => self.start_group()?,
                 Step::Return(val) => match self.machine.ctl.pop() {
                     None => return Ok(val),
                     Some(ctl) => self.resume(ctl, val)?,
@@ -1932,7 +1939,7 @@ impl Parser<'_, '_> {
         self.top_select().dataset = dataset;
         self.eat_kw("WHERE");
         self.machine.ctl.push(Ctl::Select(SelectStage::Where));
-        self.start_group()
+        Ok(Step::Group)
     }
 
     /// Hand a `SELECT` the value its stage was reading.
