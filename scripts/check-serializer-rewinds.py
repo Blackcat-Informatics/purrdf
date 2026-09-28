@@ -83,6 +83,26 @@ CHAR_LITERAL = re.compile(r"'(?:\\.|[^\\'])'")
 ALLOWLIST: dict[tuple[str, str], str] = {
     (
         "crates/rdf/src/native_codecs/rdfxml.rs",
+        "closings",
+    ): "Closing tags queued while nested rdf:Description elements are opened; popping one writes it. Nothing popped has been written yet; no emitted byte is touched.",
+    (
+        "crates/rdf/src/native_codecs/ser_model.rs",
+        "held",
+    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    (
+        "crates/sparql-results/src/json.rs",
+        "held",
+    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    (
+        "crates/sparql-results/src/xml.rs",
+        "held",
+    ): "A work stack of pieces still to be written: a nested triple term is emitted front to back by holding its later pieces and popping the next one. Nothing popped has been written yet; no emitted byte is touched.",
+    (
+        "crates/sparql-results/src/xml_read.rs",
+        "frames",
+    ): "The SPARQL XML results READER's stack of triple terms being decoded. It holds input under construction, not output.",
+    (
+        "crates/rdf/src/native_codecs/rdfxml.rs",
         "stack",
     ): "The RDF/XML writer's open-element stack. Popping it closes a tag; the "
     "bytes for that tag were already emitted and are not touched.",

@@ -290,6 +290,12 @@ pub const LEDGER: &[ThreadLocal] = &[
         safety: Safety::NotCompiledIn,
         reason: TEST_ONLY,
     },
+    ThreadLocal {
+        file: "crates/sparql-eval/src/vm/mod.rs",
+        name: "TRACE",
+        safety: Safety::NotCompiledIn,
+        reason: TEST_ONLY,
+    },
     // ── purrdf-core, purrdf-hnsw: test hooks for the distance kernels ───────────────
     ThreadLocal {
         file: "crates/rdf-core/src/distance/binary64.rs",

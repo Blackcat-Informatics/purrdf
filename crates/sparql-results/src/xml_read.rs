@@ -244,13 +244,9 @@ fn decode_term(elem: &Element) -> Result<TermValue, Error> {
                 }
                 _ => {}
             }
-            let [s, p, o] = <[TermValue; 3]>::try_from(
-                frames
-                    .pop()
-                    .expect("the innermost triple is being decoded")
-                    .decoded,
-            )
-            .unwrap_or_else(|_| unreachable!("a triple is assembled from three components"));
+            let innermost = frames.pop().expect("the innermost triple is being decoded");
+            let [s, p, o] = <[TermValue; 3]>::try_from(innermost.decoded)
+                .unwrap_or_else(|_| unreachable!("a triple is assembled from three components"));
             if !matches!(p, TermValue::Iri(_)) {
                 return Err(fmt("triple-term predicate is not an IRI"));
             }

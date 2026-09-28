@@ -1658,6 +1658,14 @@ export interface AsyncJobError extends PurrdfError {
 export function hasAsyncQueries(): boolean;
 
 /**
+ * The size, in bytes, of the stack region every asynchronous job runs on: the module's own
+ * shadow stack, so a request the synchronous lane evaluates the asynchronous lane evaluates
+ * too. Throws, with the host-fault code, when the module's memory layout is not the
+ * stack-first one the asynchronous lane runs on.
+ */
+export function asyncStackRegionBytes(): number;
+
+/**
  * Configure the asynchronous scheduler. `maxConcurrentJobs` (an integer ≥ 1, default 16)
  * bounds how many asynchronous jobs may be in flight at once; a twin started beyond it
  * rejects. Unknown keys are refused.

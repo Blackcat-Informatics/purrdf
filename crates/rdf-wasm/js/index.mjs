@@ -1566,6 +1566,7 @@ export async function streamToDataset(quadStream) {
 }
 
 export {
+  asyncStackRegionBytes,
   CancellationToken,
   CompiledJsonLdContext,
   DataFactory,
