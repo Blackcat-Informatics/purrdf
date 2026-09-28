@@ -1466,7 +1466,7 @@ impl ReasoningReport {
     ///
     /// # Why the swap happens here and not in `boundaries`
     ///
-    /// `boundaries` surveys the dataset the run was over, and on the [`entails`](crate::entails)
+    /// `boundaries` surveys the dataset the run was over, and on the [`entails`](fn@crate::entails)
     /// path that dataset is the MERGED premise — which still carries the `owl:imports`
     /// triples the merge resolved. So no survey of it can tell "resolved" from "not
     /// resolved", and the chase raises the honest-from-where-it-stands

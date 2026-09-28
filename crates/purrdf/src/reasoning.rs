@@ -919,7 +919,7 @@ pub fn query_with_entailment_governed<D: DatasetView>(
 ///
 /// OWL 2 defines an ontology's imports closure to BE the ontology, so a query answered under
 /// a regime over a premise that imports a document is answered over the merge — the rule
-/// [`purrdf_entail::materialize_with_imports`], [`purrdf_entail::entails`] and
+/// [`purrdf_entail::materialize_with_imports`], [`purrdf_entail::entails`](fn@purrdf_entail::entails) and
 /// [`purrdf_entail::certain_answers`] apply. Resolution is
 /// [`purrdf_entail::resolve_imports`]: an `owl:imports` the table does not resolve and the
 /// dataset does not already hold refuses the call with

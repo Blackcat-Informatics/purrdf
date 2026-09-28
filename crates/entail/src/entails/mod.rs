@@ -3,7 +3,7 @@
 
 //! **Conclusion-directed** entailment: does this premise entail this conclusion?
 //!
-//! [`materialize`] answers a different question. It computes a CLOSURE
+//! [`materialize`](crate::materialize) answers a different question. It computes a CLOSURE
 //! — everything the premise entails, as a dataset — and hands it over. That is the right
 //! shape for a caller that will go on asking many questions of one premise, and the wrong
 //! shape for a caller with one question, because turning a closure into a verdict is not
@@ -40,7 +40,7 @@
 //! 2 RL's seventy-eight rules conclude `false` — `eq-diff1..3`, `prp-irp`, `prp-asyp`,
 //! `prp-pdw`, `prp-adp`, `prp-npa1`, `prp-npa2`, `cls-nothing2`, `cls-com`, `cls-maxc1`,
 //! `cls-maxqc1`, `cls-maxqc2`, `cax-dw`, `cax-adc` and `dt-not-type`, the last of which is
-//! also the `D` lane's — and a body match on any of them makes [`materialize`] return
+//! also the `D` lane's — and a body match on any of them makes [`materialize`](crate::materialize) return
 //! [`EntailError::Inconsistent`] instead of a closure. So there is no closure for this
 //! module to match against, and the refusal propagates to the caller carrying the
 //! [`InconsistentRun`] witness that says which rule fired on which
@@ -606,7 +606,7 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
 /// not carry; [`EntailError::UnresolvedImport`] for an `owl:imports` the map does not
 /// resolve; [`EntailError::Inconsistent`] for a premise with no model, carrying the witness
 /// and the run's report; [`EntailError::MatchBudget`] if the match exhausts
-/// [`MATCH_BUDGET`]; and whatever [`materialize`] refuses with.
+/// [`MATCH_BUDGET`]; and whatever [`materialize`](crate::materialize) refuses with.
 ///
 /// ```
 /// use purrdf_core::{RdfDatasetBuilder, TermValue};
@@ -646,7 +646,7 @@ pub fn certain_answers(
 ///
 /// Every evaluation the service runs — the closure it answers over, and each re-chase a
 /// mechanism beyond the rule table runs — is held to `options`' stored-fact and join-step
-/// limits, exactly as [`materialize_with`](crate::materialize_with) holds a closure. A run
+/// limits, exactly as [`materialize_with`] holds a closure. A run
 /// past one is refused ([`EntailError::Evaluate`], [`EntailError::Chase`]) naming the limit
 /// and the numbers; a run inside them answers exactly as larger limits would, and the
 /// report's contract hash names the calculus under `options`.
