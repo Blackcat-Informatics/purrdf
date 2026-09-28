@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-28T00:10:20-06:00\n"
+"POT-Creation-Date: 2026-09-28T02:22:22-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -43,7 +43,7 @@ msgstr "Rust"
 #: src/SUMMARY.md:13 src/concepts/projections.md:451
 #: src/concepts/base-iris.md:55 src/concepts/jsonld.md:74
 #: src/validation/shacl.md:296 src/validation/shacl.md:395
-#: src/validation/shacl.md:430 src/validation/shacl.md:1222
+#: src/validation/shacl.md:430 src/validation/shacl.md:1235
 #: src/entailment.md:51 src/entailment.md:96
 msgid "Python"
 msgstr "Python"
@@ -868,7 +868,7 @@ msgstr ""
 "每个发布的 crate 都能干净地构建到 `wasm32-unknown-unknown`，因此同样的 Rust "
 "代码路径在原生宿主与 wasm 宿主中都能工作。"
 
-#: src/getting-started/rust.md:99 src/getting-started/python.md:135
+#: src/getting-started/rust.md:99 src/getting-started/python.md:139
 msgid "Next steps"
 msgstr "后续步骤"
 
@@ -935,7 +935,7 @@ msgstr ""
 "原生验证引擎以顶层子模块的形式公开，与 Rust 的 `purrdf` 门面 crate（umbrella "
 "crate）保持同构——绝不直接经由内部的 `purrdf_native` 扩展模块："
 
-#: src/getting-started/python.md:37 src/validation/shacl.md:1298
+#: src/getting-started/python.md:37 src/validation/shacl.md:1311
 msgid "\"conforms\""
 msgstr "\"conforms\""
 
@@ -986,15 +986,23 @@ msgstr "# 已触发的、未触发的、边界、预算、契约哈希\n"
 #: src/getting-started/python.md:66
 msgid ""
 "The report is the second return value and is never optional — the same "
-"discipline the Rust, WebAssembly, and C surfaces enforce. "
-"`entail.materialize_nt(text, regime)` is the text-in/text-out twin for "
-"callers holding an N-Triples/N-Quads document."
+"discipline the Rust, WebAssembly, and C surfaces enforce. The two `[]` "
+"arguments are the dataset's `owl:imports` table — `(ontology_iri, nquads)` "
+"pairs — and the IRIs it was read from: a dataset that imports a document is "
+"closed over the merge, and an import the table does not resolve raises "
+"`ValueError` naming it. `entail.materialize_nt(text, regime, program, "
+"imports, premise_iris)` is the text-in/text-out twin for callers holding an "
+"N-Triples/N-Quads document."
 msgstr ""
 "推理报告是第二个返回值，且永远不可省略——这与 Rust、WebAssembly 和 C 接口所执"
-"行的纪律一致。`entail.materialize_nt(text, regime)` 是其对应的文本进、文本出"
-"版本，供持有 N-Triples/N-Quads 文档的调用方使用。"
+"行的纪律一致。两个 `[]` 参数分别是该数据集的 `owl:imports` 表——由 "
+"`(ontology_iri, nquads)` 对组成——以及读取该数据集所用的 IRI：导入了某份文档的"
+"数据集会在合并结果上求推理闭包，而该表无法解析的导入会抛出点名它的 "
+"`ValueError`。`entail.materialize_nt(text, regime, program, imports, "
+"premise_iris)` 是其对应的文本进、文本出版本，供持有 N-Triples/N-Quads 文档的"
+"调用方使用。"
 
-#: src/getting-started/python.md:70
+#: src/getting-started/python.md:74
 msgid ""
 "Coverage is measurable rather than asserted: `entail.rules(regime)` is the "
 "rule table the specification defines the regime by, and "
@@ -1012,19 +1020,19 @@ msgstr ""
 "[蕴涵](../entailment.md)，逐条规则的表格见[规则清单](../entailment-"
 "rules.md)。"
 
-#: src/getting-started/python.md:79
+#: src/getting-started/python.md:83
 msgid "rdflib compatibility"
 msgstr "rdflib 兼容"
 
-#: src/getting-started/python.md:81
+#: src/getting-started/python.md:85
 msgid "The package ships an rdflib compatibility layer:"
 msgstr "本包附带一个 rdflib 兼容层："
 
-#: src/getting-started/python.md:87
+#: src/getting-started/python.md:91
 msgid "For a literal, zero-change `import rdflib`, there is an opt-in extra:"
 msgstr "若需要逐字不改的 `import rdflib`，可选装一个 extra："
 
-#: src/getting-started/python.md:93 src/interop/rdflib.md:37
+#: src/getting-started/python.md:97 src/interop/rdflib.md:37
 msgid ""
 "This pulls in the separate `purrdf-rdflib` distribution, whose top-level "
 "`rdflib` package re-exports the compat surface, so existing third-party code "
@@ -1042,7 +1050,7 @@ msgstr ""
 "者无法共存于同一环境。它是一个独立的分发包（从不打进主 `purrdf` wheel），正是"
 "为了让需要真实 rdflib 的环境直接不装它即可。"
 
-#: src/getting-started/python.md:103
+#: src/getting-started/python.md:107
 msgid ""
 "The compat layer is gated in CI against rdflib 7.6's own vendored test suite "
 "plus a first-party differential parity suite — see [rdflib Compatibility](../"
@@ -1052,21 +1060,21 @@ msgstr ""
 "的差分对等性测试套件把关——细节以及已知的、已入台账的分歧见 [rdflib 兼容](../"
 "interop/rdflib.md)。"
 
-#: src/getting-started/python.md:108
+#: src/getting-started/python.md:112
 msgid "GTS relational rows"
 msgstr "GTS 关系型行"
 
-#: src/getting-started/python.md:110
+#: src/getting-started/python.md:114
 msgid ""
 "The Python package reads a [GTS container](../gts.md) back as in-memory "
 "relational rows:"
 msgstr "Python 包把一个 [GTS 容器](../gts.md)读回为内存中的关系型行："
 
-#: src/getting-started/python.md:116
+#: src/getting-started/python.md:120
 msgid "# terms, quads, reifiers, annotations, blobs\n"
 msgstr "# 项、四元组、具体化节点、注解、二进制块\n"
 
-#: src/getting-started/python.md:119
+#: src/getting-started/python.md:123
 msgid ""
 "`gts_to_sqlite(data, path)`, `gts_to_duckdb(data, path)` and "
 "`gts_to_parquet(data, out_dir)` write those same five tables out, in the "
@@ -1081,11 +1089,11 @@ msgstr ""
 "`ModuleNotFoundError`，并指明需要安装的 extra（`purrdf[duckdb]`、"
 "`purrdf[parquet]`）。"
 
-#: src/getting-started/python.md:126
+#: src/getting-started/python.md:130
 msgid "Graph, tabular, and research-object archives"
 msgstr "图、表格与 Research Object（RO）归档"
 
-#: src/getting-started/python.md:128
+#: src/getting-started/python.md:132
 msgid ""
 "`purrdf.project(data, format=..., profile=..., config=...)` returns "
 "canonical USTAR bytes and structured loss records. `purrdf.lift(archive, "
@@ -1100,27 +1108,27 @@ msgstr ""
 "码路径；各 profile 及完整示例见[图、表格与 Research Object 投影](../concepts/"
 "projections.md)。"
 
-#: src/getting-started/python.md:137
+#: src/getting-started/python.md:141
 msgid ""
 "[rdflib Compatibility](../interop/rdflib.md) — the drop-in story in depth."
 msgstr "[rdflib 兼容](../interop/rdflib.md)——直接替换方案的深入说明。"
 
-#: src/getting-started/python.md:138
+#: src/getting-started/python.md:142
 msgid "[Validation](../validation/shacl.md) — SHACL and ShEx from Python."
 msgstr "[验证](../validation/shacl.md)——在 Python 中使用 SHACL 与 ShEx。"
 
-#: src/getting-started/python.md:139
+#: src/getting-started/python.md:143
 msgid ""
 "[Entailment](../entailment.md) — the regimes, the report, and what each "
 "fires."
 msgstr "[蕴涵](../entailment.md)——各蕴涵机制、推理报告，以及各自触发的规则。"
 
-#: src/getting-started/python.md:140
+#: src/getting-started/python.md:144
 msgid ""
 "[GTS Graph Transport](../gts.md) — the container format the exports read."
 msgstr "[GTS 图传输](../gts.md)——导出功能所读取的容器格式。"
 
-#: src/getting-started/python.md:141
+#: src/getting-started/python.md:145
 msgid ""
 "[Graph, Tabular & Research-Object Projections](../concepts/projections.md) — "
 "LPG, CSVW, OBO, SKOS, and five research-object carriers."
@@ -3470,7 +3478,7 @@ msgstr "各接口的名称遵循同一个 profile/config/archive 契约："
 
 #: src/concepts/projections.md:447 src/validation/shacl.md:292
 #: src/validation/shacl.md:392 src/validation/shacl.md:427
-#: src/validation/shacl.md:1219 src/entailment.md:47 src/entailment.md:92
+#: src/validation/shacl.md:1232 src/entailment.md:47 src/entailment.md:92
 msgid "Host"
 msgstr "宿主"
 
@@ -3509,7 +3517,7 @@ msgstr "`lift_archive`"
 #: src/concepts/projections.md:450 src/concepts/jsonld.md:62
 #: src/validation/shacl.md:295 src/validation/shacl.md:394
 #: src/validation/shacl.md:429 src/validation/shacl.md:1065
-#: src/validation/shacl.md:1221 src/entailment.md:50 src/entailment.md:95
+#: src/validation/shacl.md:1234 src/entailment.md:50 src/entailment.md:95
 msgid "CLI"
 msgstr "CLI"
 
@@ -4181,8 +4189,8 @@ msgstr ""
 "blob/main/docs/COLUMNAR.md)。"
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
-#: src/sparql/querying.md:1929 src/validation/shacl.md:1402
-#: src/validation/shex.md:64 src/entailment.md:326
+#: src/sparql/querying.md:1929 src/validation/shacl.md:1419
+#: src/validation/shex.md:64 src/entailment.md:363
 msgid "Conformance"
 msgstr "一致性"
 
@@ -4314,7 +4322,7 @@ msgid "the `base` argument to `parse_dataset`, the CLI's `--base`"
 msgstr "`parse_dataset` 的 `base` 参数、CLI 的 `--base`"
 
 #: src/concepts/base-iris.md:29 src/sparql/embedding-knn.md:49
-#: src/entailment.md:166 src/entailment-rules.md:61
+#: src/entailment.md:181 src/entailment-rules.md:61
 msgid "3"
 msgstr "3"
 
@@ -4441,7 +4449,7 @@ msgstr "传入基准，或文档自身必须携带基准"
 
 #: src/concepts/base-iris.md:53 src/validation/shacl.md:297
 #: src/validation/shacl.md:396 src/validation/shacl.md:431
-#: src/validation/shacl.md:1065 src/validation/shacl.md:1223
+#: src/validation/shacl.md:1065 src/validation/shacl.md:1236
 msgid "WebAssembly"
 msgstr "WebAssembly"
 
@@ -4451,7 +4459,7 @@ msgid "as above"
 msgstr "同上"
 
 #: src/concepts/base-iris.md:54 src/validation/shacl.md:298
-#: src/validation/shacl.md:1065 src/validation/shacl.md:1224
+#: src/validation/shacl.md:1065 src/validation/shacl.md:1237
 msgid "C ABI"
 msgstr "C ABI"
 
@@ -10592,8 +10600,8 @@ msgstr "名称"
 msgid "role"
 msgstr "作用"
 
-#: src/sparql/embedding-knn.md:46 src/entailment.md:165 src/entailment.md:170
-#: src/entailment.md:171 src/entailment-rules.md:60 src/entailment-rules.md:64
+#: src/sparql/embedding-knn.md:46 src/entailment.md:180 src/entailment.md:185
+#: src/entailment.md:186 src/entailment-rules.md:60 src/entailment-rules.md:64
 #: src/entailment-rules.md:65
 msgid "0"
 msgstr "0"
@@ -11591,7 +11599,7 @@ msgstr ""
 msgid "\"https://example.org/more\""
 msgstr "\"https://example.org/more\""
 
-#: src/validation/shacl.md:344 src/validation/shacl.md:1156
+#: src/validation/shacl.md:344 src/validation/shacl.md:1162
 msgid "\"inferred\""
 msgstr "\"inferred\""
 
@@ -13278,14 +13286,28 @@ msgid ""
 "SHACL rules entry points: the rules run above and SHACL-AF entailment "
 "(Python `shapes.entail`, WebAssembly `shaclEntail`, C "
 "`purrdf_shacl_entail_to_ntriples`), which bounds its run exactly as the "
-"rules run does:"
+"rules run does. In WebAssembly both entry points take them contiguously and "
+"in this order, after the import table and `shapesGraph`: "
+"`shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?, "
+"importIris?, importDocuments?, shapesGraph?, maxTermGeneratingRounds?, "
+"maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)` and "
+"`shaclEntail(shapesTtl, dataNt, shapesBase?, importIris?, importDocuments?, "
+"shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, "
+"maxJoinSteps?)`."
 msgstr ""
 "每个宿主在其两个 SHACL 规则入口点上都接受同样的四个**规则求值上限**：上文的规"
 "则运行，以及 SHACL-AF 蕴涵（Python `shapes.entail`、WebAssembly "
 "`shaclEntail`、C `purrdf_shacl_entail_to_ntriples`），后者对自身运行施加的界"
-"限与规则运行完全相同："
+"限与规则运行完全相同。在 WebAssembly 中，两个入口点都在导入表与 "
+"`shapesGraph` 之后按以下顺序连续接受这些上限：`shaclApplyRules(dataNt, "
+"shapesTtl?, srl?, shapesBase?, srlBase?, explain?, importIris?, "
+"importDocuments?, shapesGraph?, maxTermGeneratingRounds?, "
+"maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)` 与 "
+"`shaclEntail(shapesTtl, dataNt, shapesBase?, importIris?, importDocuments?, "
+"shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, "
+"maxJoinSteps?)`。"
 
-#: src/validation/shacl.md:1085
+#: src/validation/shacl.md:1091
 msgid ""
 "The **term-generating round limit** bounds the evaluation rounds that infer "
 "a term the graph did not already hold. The default is 16384 rounds. A "
@@ -13296,7 +13318,7 @@ msgstr ""
 "轮。一个步进到 10,000 的计数器会完成。一个没有界的计数器每轮推出一个新项，会"
 "在远不到一秒的时间内被拒绝。"
 
-#: src/validation/shacl.md:1089
+#: src/validation/shacl.md:1095
 msgid ""
 "The **generated-term budget** bounds the terms inferred beyond the input's. "
 "The default is `max(65536, 4 × N)`, where `N` is the number of distinct "
@@ -13308,7 +13330,7 @@ msgstr ""
 "其中 `N` 是数据图（以及 SPARQL 1.2 RL 规则集的数据块）中不同项的数量。新项每"
 "次迭代都翻倍的规则集会在几次迭代之内达到该预算，远早于达到轮数上限。"
 
-#: src/validation/shacl.md:1094
+#: src/validation/shacl.md:1100
 msgid ""
 "The **stored-fact limit** bounds the facts the evaluation store holds: the "
 "data graph, a rule set's data and every inferred triple. The default is "
@@ -13323,7 +13345,7 @@ msgstr ""
 "制到 `ex:q` 的规则，或一条千节点链的传递闭包（500,500 条三元组），都能在原生"
 "环境下完成。"
 
-#: src/validation/shacl.md:1100
+#: src/validation/shacl.md:1106
 msgid ""
 "The **join-step limit** bounds the candidate solutions the rule bodies "
 "enumerate. The default is 1,048,576 on every host. It bounds a rule body "
@@ -13333,13 +13355,13 @@ msgid ""
 "that needs more work — the non-linear transitive closure of a thousand-node "
 "chain enumerates over 67 million candidates — states a larger limit."
 msgstr ""
-"**连接步数上限**限制规则体所枚举的候选解。默认值在每个宿主上都是 1,0"
-"48,576。它约束那些枚举的候选远多于其推出三元组的规则体：一个规则体在某"
-"一轮的候选会在检查上限之前就被全部持有，因此大得多的默认值会让笛卡尔积式的规"
-"则体先耗尽内存。需要更多工作量的规则集——千节点链的非线性传递闭包要枚举超过"
-" 6700 万个候选——需声明更大的上限。"
+"**连接步数上限**限制规则体所枚举的候选解。默认值在每个宿主上都是 1,048,576。"
+"它约束那些枚举的候选远多于其推出三元组的规则体：一个规则体在某一轮的候选会在"
+"检查上限之前就被全部持有，因此大得多的默认值会让笛卡尔积式的规则体先耗尽内"
+"存。需要更多工作量的规则集——千节点链的非线性传递闭包要枚举超过 6700 万个候选"
+"——需声明更大的上限。"
 
-#: src/validation/shacl.md:1108
+#: src/validation/shacl.md:1114
 msgid ""
 "A run past any limit is refused. The error names the limit, the numbers, the "
 "knob that raises it and, for the two term limits, the rules that inferred a "
@@ -13373,7 +13395,7 @@ msgstr ""
 "误信息从不称其为发散。声明的上限是精确的，而且上限只能拒绝：它所允许的运行，"
 "推出的内容与在任何更大上限下完全相同。"
 
-#: src/validation/shacl.md:1125
+#: src/validation/shacl.md:1131
 msgid ""
 "A shape rule (a rule linked to a shape, run once per focus node) is re-run "
 "each iteration only for the focus nodes whose answer can have changed: the "
@@ -13394,22 +13416,20 @@ msgid ""
 "than the last — and never by the join-step limit."
 msgstr ""
 "形状规则（即关联到某个形状、对每个焦点节点各运行一次的规则）在每次迭代中只会"
-"针对答案可能已改变的焦点节点重新运行：新出现的焦点节点，以及——按规则的三元"
-"组模式与路径的读取方式——上一次迭代新增的某条三元组所涉及的焦点节点。若规则"
-"读取的某条三元组与 `$this` 相隔一个连接步，则会针对每个焦点节点重新"
-"运行该规则；而答案不可重复的规则——即生成空节点、调用 `RAND()`、`"
-"NOW()`、`UUID()`、`STRUUID()` 或 PurRDF 无"
-"法解读的函数，或以 `LIMIT`、`OFFSET`、`SAMPLE`、`G"
-"ROUP_CONCAT` 或 `FOLD` 挑选解的规则——会按规范的规定，"
-"在每次迭代中针对每个焦点节点运行。规则所读取的图会以每次迭代新增的内容进行扩"
-"展，而不是重新构建。推出的三元组、它们的空节点标签及其证明，都与每次迭代运行"
-"全部焦点节点时完全相同。改变的是代价：一条每次迭代生成一个新焦点节点的形状规"
-"则，每次迭代只需付出一次运行的代价，而不是按迄今为止的焦点节点数各运行一次，"
-"因此一条永不停止的规则会在几秒内被某个项上限拒绝——新项保持较短时为轮数上限"
-"，每个新项都比上一个更长时为固定的 16 MiB 项存储区上限——而绝不会被"
-"连接步数上限拒绝。"
+"针对答案可能已改变的焦点节点重新运行：新出现的焦点节点，以及——按规则的三元组"
+"模式与路径的读取方式——上一次迭代新增的某条三元组所涉及的焦点节点。若规则读取"
+"的某条三元组与 `$this` 相隔一个连接步，则会针对每个焦点节点重新运行该规则；而"
+"答案不可重复的规则——即生成空节点、调用 `RAND()`、`NOW()`、`UUID()`、"
+"`STRUUID()` 或 PurRDF 无法解读的函数，或以 `LIMIT`、`OFFSET`、`SAMPLE`、"
+"`GROUP_CONCAT` 或 `FOLD` 挑选解的规则——会按规范的规定，在每次迭代中针对每个焦"
+"点节点运行。规则所读取的图会以每次迭代新增的内容进行扩展，而不是重新构建。推"
+"出的三元组、它们的空节点标签及其证明，都与每次迭代运行全部焦点节点时完全相"
+"同。改变的是代价：一条每次迭代生成一个新焦点节点的形状规则，每次迭代只需付出"
+"一次运行的代价，而不是按迄今为止的焦点节点数各运行一次，因此一条永不停止的规"
+"则会在几秒内被某个项上限拒绝——新项保持较短时为轮数上限，每个新项都比上一个更"
+"长时为固定的 16 MiB 项存储区上限——而绝不会被连接步数上限拒绝。"
 
-#: src/validation/shacl.md:1143
+#: src/validation/shacl.md:1149
 msgid ""
 "A global SPARQL rule whose query is a conjunctive pattern (triple patterns, "
 "`FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or "
@@ -13427,23 +13447,23 @@ msgstr ""
 "模板三元组中，且模板不得含有空节点。否则，该规则仍像以前一样，作为作用于整个"
 "图的生产者运行。"
 
-#: src/validation/shacl.md:1156
+#: src/validation/shacl.md:1162
 msgid "# the inference graph, N-Triples\n"
 msgstr "# 推理图，N-Triples\n"
 
-#: src/validation/shacl.md:1157
+#: src/validation/shacl.md:1163
 msgid "\"proof\""
 msgstr "\"proof\""
 
-#: src/validation/shacl.md:1157
+#: src/validation/shacl.md:1163
 msgid "# the proof text\n"
 msgstr "# 证明文本\n"
 
-#: src/validation/shacl.md:1158
+#: src/validation/shacl.md:1164
 msgid "# SPARQL 1.2 RL\n"
 msgstr "# SPARQL 1.2 RL\n"
 
-#: src/validation/shacl.md:1161
+#: src/validation/shacl.md:1167
 msgid ""
 "**Checking a SPARQL 1.2 RL rule set.** A rule set can be checked without "
 "being run. The check applies the static checks up to a level, and each level "
@@ -13476,7 +13496,7 @@ msgstr ""
 "stratification」都是有效的，因此以 `syntax` 级别评分。其中十五个在完整检查中"
 "失败，由后面的阶段拒绝。"
 
-#: src/validation/shacl.md:1178
+#: src/validation/shacl.md:1184
 msgid ""
 "The `syntax` stage also holds a rule set to where it announces its version. "
 "SPARQL 1.2 RL §7.1 says \"The version announcement SHOULD be made early in "
@@ -13492,15 +13512,15 @@ msgstr ""
 "`syntax` 阶段被拒绝，并点名该句。规则集可以不宣告任何版本；在较早的 "
 "`VERSION` 之后出现的后续 `VERSION`，对文档中其后的部分而言仍是一条指令。"
 
-#: src/validation/shacl.md:1186
+#: src/validation/shacl.md:1192
 msgid "# every static check\n"
 msgstr "# 全部静态检查\n"
 
-#: src/validation/shacl.md:1187
+#: src/validation/shacl.md:1193
 msgid "# the grammar alone\n"
 msgstr "# 仅检查语法\n"
 
-#: src/validation/shacl.md:1190
+#: src/validation/shacl.md:1196
 msgid ""
 "**Node expressions.** One node expression of a shapes graph is evaluated "
 "against a focus node of a data graph, as SHACL 1.2 Node Expressions' "
@@ -13508,19 +13528,34 @@ msgid ""
 "the shapes parser itself, so custom functions, shape references and "
 "`sh:prefixes` bind as they do inside a shape. Scope variables are bound by "
 "name and read by `shnex:var`. The output nodes come back as N-Triples terms "
-"in the order the expression's sequence semantics define."
+"in the order the expression's sequence semantics define, beside the shapes "
+"graph's mandatory diagnostics, which an evaluation reports like every other "
+"run (see [the report is a dataset](#the-report-is-a-dataset)): `purrdf node-"
+"expr` writes a `shacl diagnostic RULE SHAPE` line to stderr after its `node-"
+"expr outputs N` line, Python's `eval_node_expr` returns `{\"outputs\", "
+"\"diagnostics\"}`, WebAssembly's `shaclEvalNodeExpr` returns a "
+"`ShaclNodeExprOutcome` with `outputs` and `diagnostics`, and C's "
+"`purrdf_shacl_eval_node_expr` writes `diagnostic RULE SHAPE` lines to a non-"
+"NULL `out_diagnostics`."
 msgstr ""
 "**节点表达式。** 形状图中的单个节点表达式针对数据图的某个焦点节点求值，即 "
 "SHACL 1.2 节点表达式中的 `evalExpr(expr, focusGraph, focusNode, scope)`。表达"
 "式由形状解析器本身解析，因此自定义函数、形状引用与 `sh:prefixes` 的绑定方式与"
 "在形状内部相同。作用域变量按名称绑定，并由 `shnex:var` 读取。输出节点以 N-"
-"Triples 项的形式返回，顺序由表达式的序列语义决定。"
+"Triples 项的形式返回，顺序由表达式的序列语义决定，与之并列返回的是形状图的强"
+"制诊断——求值会像其他每一次运行一样报告它们（参见[报告是一个数据集](#报告是一"
+"个数据集)）：`purrdf node-expr` 在其 `node-expr outputs N` 行之后向 stderr 写"
+"出 `shacl diagnostic RULE SHAPE` 行，Python 的 `eval_node_expr` 返回 "
+"`{\"outputs\", \"diagnostics\"}`，WebAssembly 的 `shaclEvalNodeExpr` 返回一个"
+"带有 `outputs` 与 `diagnostics` 的 `ShaclNodeExprOutcome`，C 的 "
+"`purrdf_shacl_eval_node_expr` 则把 `diagnostic RULE SHAPE` 行写入非 NULL 的 "
+"`out_diagnostics`。"
 
-#: src/validation/shacl.md:1198
+#: src/validation/shacl.md:1211
 msgid "Every host names the expression in one of three ways:"
 msgstr "每个宿主都以下列三种方式之一指名表达式："
 
-#: src/validation/shacl.md:1200
+#: src/validation/shacl.md:1213
 msgid ""
 "**The node itself**: an IRI, or `_:label` for a blank node the shapes "
 "document labels. An IRI that is the subject of no triple is a constant "
@@ -13529,7 +13564,7 @@ msgstr ""
 "**节点本身**：一个 IRI，或以 `_:label` 表示形状文档所标注的空节点。不作为任何"
 "三元组主语的 IRI 是常量表达式，求值结果为其自身。"
 
-#: src/validation/shacl.md:1203
+#: src/validation/shacl.md:1216
 msgid ""
 "**A walk from a named node**: a start node and one or more predicates, "
 "followed in order. Each step must reach exactly one value; a step that "
@@ -13549,7 +13584,7 @@ msgstr ""
 "后 `sht:nodeExpr`。该套件全部 143 个节点表达式测试都以这种方式经由 `purrdf "
 "node-expr` 运行。"
 
-#: src/validation/shacl.md:1212
+#: src/validation/shacl.md:1225
 msgid ""
 "**Inline Turtle**: a Turtle document read under the shapes document's "
 "prefixes and base, where its own directives take precedence. It is merged "
@@ -13564,113 +13599,113 @@ msgstr ""
 "与形状文档的空节点保持分离。表达式是该文档唯一的根：作为某个三元组的主语、且"
 "不作为任何三元组宾语的那个空节点。没有根或有多个根的文档会被拒绝。"
 
-#: src/validation/shacl.md:1219
+#: src/validation/shacl.md:1232
 msgid "Node"
 msgstr "节点"
 
-#: src/validation/shacl.md:1219
+#: src/validation/shacl.md:1232
 msgid "Walk"
 msgstr "游走"
 
-#: src/validation/shacl.md:1219
+#: src/validation/shacl.md:1232
 msgid "Inline Turtle"
 msgstr "内联 Turtle"
 
-#: src/validation/shacl.md:1221
+#: src/validation/shacl.md:1234
 msgid "`--expr`"
 msgstr "`--expr`"
 
-#: src/validation/shacl.md:1221
+#: src/validation/shacl.md:1234
 msgid "`--expr-at NODE --expr-via PREDICATE…`"
 msgstr "`--expr-at NODE --expr-via PREDICATE…`"
 
-#: src/validation/shacl.md:1221
+#: src/validation/shacl.md:1234
 msgid "`--expr-turtle`, `--expr-turtle-file`"
 msgstr "`--expr-turtle`, `--expr-turtle-file`"
 
-#: src/validation/shacl.md:1222 src/validation/shacl.md:1223
-#: src/validation/shacl.md:1224
+#: src/validation/shacl.md:1235 src/validation/shacl.md:1236
+#: src/validation/shacl.md:1237
 msgid "`expr`"
 msgstr "`expr`"
 
-#: src/validation/shacl.md:1222
+#: src/validation/shacl.md:1235
 msgid "`expr_at=`, `expr_via=[…]`"
 msgstr "`expr_at=`, `expr_via=[…]`"
 
-#: src/validation/shacl.md:1222
+#: src/validation/shacl.md:1235
 msgid "`expr_turtle=`"
 msgstr "`expr_turtle=`"
 
-#: src/validation/shacl.md:1223
+#: src/validation/shacl.md:1236
 msgid "`exprAt`, `exprVia`"
 msgstr "`exprAt`, `exprVia`"
 
-#: src/validation/shacl.md:1223
+#: src/validation/shacl.md:1236
 msgid "`exprTurtle`"
 msgstr "`exprTurtle`"
 
-#: src/validation/shacl.md:1224
+#: src/validation/shacl.md:1237
 msgid "`expr_at`, `expr_via`, `expr_via_count`"
 msgstr "`expr_at`, `expr_via`, `expr_via_count`"
 
-#: src/validation/shacl.md:1224
+#: src/validation/shacl.md:1237
 msgid "`expr_turtle`"
 msgstr "`expr_turtle`"
 
-#: src/validation/shacl.md:1225
+#: src/validation/shacl.md:1238
 msgid "Rust (`purrdf_validate`)"
 msgstr "Rust（`purrdf_validate`）"
 
-#: src/validation/shacl.md:1225
+#: src/validation/shacl.md:1238
 msgid "`ExprSelector::Node`"
 msgstr "`ExprSelector::Node`"
 
-#: src/validation/shacl.md:1225
+#: src/validation/shacl.md:1238
 msgid "`ExprSelector::At`"
 msgstr "`ExprSelector::At`"
 
-#: src/validation/shacl.md:1225
+#: src/validation/shacl.md:1238
 msgid "`ExprSelector::Turtle`"
 msgstr "`ExprSelector::Turtle`"
 
-#: src/validation/shacl.md:1227
+#: src/validation/shacl.md:1240
 msgid "Naming none of the three, or more than one, is refused."
 msgstr "三者一个都不指名，或指名多于一个，都会被拒绝。"
 
-#: src/validation/shacl.md:1230
+#: src/validation/shacl.md:1243
 msgid "\"_:suffix\""
 msgstr "\"_:suffix\""
 
-#: src/validation/shacl.md:1231 src/validation/shacl.md:1232
-#: src/validation/shacl.md:1235
+#: src/validation/shacl.md:1244 src/validation/shacl.md:1245
+#: src/validation/shacl.md:1248
 msgid "\"http://example.org/a\""
 msgstr "\"http://example.org/a\""
 
-#: src/validation/shacl.md:1231
+#: src/validation/shacl.md:1244
 msgid "\"suffix\""
 msgstr "\"suffix\""
 
-#: src/validation/shacl.md:1231
+#: src/validation/shacl.md:1244
 msgid "'\"!\"'"
 msgstr "'\"!\"'"
 
-#: src/validation/shacl.md:1233
+#: src/validation/shacl.md:1246
 msgid "\"http://example.org/Label\""
 msgstr "\"http://example.org/Label\""
 
-#: src/validation/shacl.md:1234
+#: src/validation/shacl.md:1247
 msgid "\"http://www.w3.org/ns/shacl#values\""
 msgstr "\"http://www.w3.org/ns/shacl#values\""
 
-#: src/validation/shacl.md:1236
+#: src/validation/shacl.md:1249
 msgid "\"[ sh:path ex:name ] .\""
 msgstr "\"[ sh:path ex:name ] .\""
 
-#: src/validation/shacl.md:1240
+#: src/validation/shacl.md:1253
 msgid "'[ sh:path ex:name ] .'"
 msgstr "'[ sh:path ex:name ] .'"
 
-#: src/validation/shacl.md:1244
+#: src/validation/shacl.md:1257
 msgid ""
 "**Certifying a shapes graph.** Loading a shapes graph is the hot path: it "
 "refuses the first construct it cannot evaluate faithfully, and does not pay "
@@ -13681,11 +13716,11 @@ msgstr ""
 "不为依据 W3C `shacl-shacl.ttl` 验证该图付出代价。lint 按需付出这一代价一次，"
 "并报告七个部分："
 
-#: src/validation/shacl.md:1249
+#: src/validation/shacl.md:1262
 msgid "`load`: the loader's verdict, accepted or the refusal it raised."
 msgstr "`load`：加载器的裁决，即接受，或它抛出的拒绝。"
 
-#: src/validation/shacl.md:1250
+#: src/validation/shacl.md:1263
 msgid ""
 "`shacl-shacl`: every result of validating the shapes graph against the "
 "vendored `shacl-shacl.ttl`. That file predates some SHACL 1.2 Core "
@@ -13700,7 +13735,7 @@ msgstr ""
 "`sh:targetNode`）。若某条结果所指出的构造在 SHACL 1.2 Core 中是良构的，该结果"
 "会被标记为 `superseded`，不算作问题，但仅在加载器接受了该图时如此。"
 
-#: src/validation/shacl.md:1256
+#: src/validation/shacl.md:1269
 msgid ""
 "`functions`: which implementation every node-expression function call binds "
 "to — `native`, `custom`, `sparql-registered` or `host-extension`. For a "
@@ -13712,7 +13747,7 @@ msgstr ""
 "状图，即使图中声明了 `sh:SPARQLExprExpression`，`sh:sparqlExpr` 调用仍绑定为 "
 "`native`。"
 
-#: src/validation/shacl.md:1260
+#: src/validation/shacl.md:1273
 msgid ""
 "`validators`: every validator the shapes graph declares for a built-in "
 "constraint component, which the native implementation supersedes and never "
@@ -13721,7 +13756,7 @@ msgstr ""
 "`validators`：形状图为内置约束组件声明的每个验证器，这些验证器被原生实现取"
 "代，从不运行。这些行从不算作问题。"
 
-#: src/validation/shacl.md:1263
+#: src/validation/shacl.md:1276
 msgid ""
 "`unexecuted`: every query that violates a pre-binding restriction and that "
 "nothing runs: a validator of a built-in component, a validator no use of its "
@@ -13735,7 +13770,7 @@ msgstr ""
 "何形状实例化的 `sh:SPARQLTargetType`。加载会接受它们；它们在这里各计为一个问"
 "题。违反语法规则的声明从不列在这里，因为它会使加载失败。"
 
-#: src/validation/shacl.md:1269
+#: src/validation/shacl.md:1282
 msgid ""
 "`diagnostics`: every mandatory diagnostic, one `diagnostic RULE SHAPE` line "
 "per shape whose `sh:in` or `sh:xone` list is empty. `RULE` is the syntax "
@@ -13754,7 +13789,7 @@ msgstr ""
 "`shacl-shacl.ttl` 会就同一个空列表发出警告；该结果列出时标记为 `diagnosed "
 "RULE`，不会被重复计数。"
 
-#: src/validation/shacl.md:1277
+#: src/validation/shacl.md:1290
 msgid ""
 "`unanchored-imports`: every `owl:imports` triple of the closure that is not "
 "an import, because its subject is no anchor of its document (see "
@@ -13771,7 +13806,7 @@ msgstr ""
 "`sh:Info` 严重级别，报告使用了 `owl:imports` 却不带 `owl:Ontology` 类型的 "
 "`sh:DataGraph`。"
 
-#: src/validation/shacl.md:1285
+#: src/validation/shacl.md:1298
 msgid ""
 "A report is clean when the loader accepted the graph, every `shacl-shacl` "
 "result is superseded (an `sh:Info` result counts like any other), no "
@@ -13787,27 +13822,27 @@ msgstr ""
 "文本；[CLI 参考](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
 "crates/cli/README.md#shapes-lint)给出了示例。"
 
-#: src/validation/shacl.md:1292 src/validation/shapes-products.md:795
+#: src/validation/shacl.md:1305 src/validation/shapes-products.md:795
 msgid "From Python"
 msgstr "从 Python 调用"
 
-#: src/validation/shacl.md:1297
+#: src/validation/shacl.md:1310
 msgid "\"...\""
 msgstr "\"...\""
 
-#: src/validation/shacl.md:1298
+#: src/validation/shacl.md:1311
 msgid "# True / False\n"
 msgstr "# True / False\n"
 
-#: src/validation/shacl.md:1299
+#: src/validation/shacl.md:1312
 msgid "\"results\""
 msgstr "\"results\""
 
-#: src/validation/shacl.md:1299
+#: src/validation/shacl.md:1312
 msgid "# list of violation dicts\n"
 msgstr "# 违规字典列表\n"
 
-#: src/validation/shacl.md:1302
+#: src/validation/shacl.md:1315
 msgid ""
 "Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`, "
 "`component`, `source_shape`, and `messages` (every `sh:resultMessage`, each "
@@ -13822,11 +13857,11 @@ msgstr ""
 "SPARQL 结果注解的结果还带有 `annotations`：一个元组列表，每个元组由一个属性 "
 "IRI 与一个采用 N-Triples 语法的值组成。"
 
-#: src/validation/shacl.md:1308
+#: src/validation/shacl.md:1321
 msgid "The report is a dataset"
 msgstr "报告是一个数据集"
 
-#: src/validation/shacl.md:1310
+#: src/validation/shacl.md:1323
 msgid ""
 "`ValidationReport::to_dataset()` materializes the W3C validation report — "
 "the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen "
@@ -13844,7 +13879,7 @@ msgstr ""
 "以任意语法渲染报告就是 `serialize_dataset(&report.to_dataset(), …)`，这正是 "
 "`purrdf validate --format` 所做的。"
 
-#: src/validation/shacl.md:1318
+#: src/validation/shacl.md:1331
 msgid ""
 "A report carries blank nodes from two graphs: a focus node, a value and an "
 "annotation value come from the data graph, and a source shape from the "
@@ -13875,7 +13910,7 @@ msgstr ""
 "的 `results` 保留原始标签。报告所*生成*的空节点（报告节点、每条结果各一个、复"
 "杂 `sh:path` 的内部节点）与这两个标签空间都不相同。"
 
-#: src/validation/shacl.md:1334
+#: src/validation/shacl.md:1347
 msgid ""
 "Every report a validation produces also states `sh:shapesGraphWellFormed`. "
 "SHACL 1.2 Core §6.7.1.4 says a processor that checks the shapes graph "
@@ -13908,7 +13943,7 @@ msgstr ""
 "点名该规则 id 的问题。`ValidationReport::shapes_graph_well_formed` 携带该值，"
 "SARIF 运行则以 `properties.shaclShapesGraphWellFormed` 携带它。"
 
-#: src/validation/shacl.md:1349
+#: src/validation/shacl.md:1362
 msgid ""
 "Every run reports the same diagnostics, not only the lint. A validation "
 "report carries them in `ValidationReport::diagnostics` — one "
@@ -13925,12 +13960,17 @@ msgid ""
 "in `tool.driver.notifications`. The command line writes `shacl diagnostic "
 "RULE SHAPE` to stderr after the verdict lines. Python's `validate` dict and "
 "`ValidationReport` object have a `diagnostics` list of `{\"rule\", \"shape\"}"
-"` dicts. A rules or entailment run reports the same diagnostics: `purrdf "
-"rules` writes the same stderr line, Python's `apply_rules` and `entail` "
-"dicts carry `\"diagnostics\"`, WebAssembly's `ShaclRulesInference` and "
-"`ShaclEntailment` have a `diagnostics` array of `RULE SHAPE` strings, and "
-"C's `purrdf_shacl_apply_rules` and `purrdf_shacl_entail_to_ntriples` write "
-"`diagnostic RULE SHAPE` lines to a non-NULL `out_diagnostics`."
+"` dicts. A rules, entailment or node-expression run reports the same "
+"diagnostics: `purrdf rules` and `purrdf node-expr` write the same stderr "
+"line, Python's `apply_rules`, `entail` and `eval_node_expr` dicts carry "
+"`\"diagnostics\"`, WebAssembly's `ShaclRulesInference`, `ShaclEntailment` "
+"and `ShaclNodeExprOutcome` have a `diagnostics` array of `ShaclDiagnostic` "
+"values (`rule`, `shape`), and C's `purrdf_shacl_apply_rules`, "
+"`purrdf_shacl_entail_to_ntriples` and `purrdf_shacl_eval_node_expr` write "
+"`diagnostic RULE SHAPE` lines to a non-NULL `out_diagnostics`. The encoding "
+"is one across hosts: the rule and the shape are separate fields — dict keys "
+"in Python, getters in WebAssembly — and C's line carries the same two fields "
+"in the same order, the rule first."
 msgstr ""
 "报告这些诊断的不只是 lint：每一次运行都会报告同样的诊断。验证报告把它们放在 "
 "`ValidationReport::diagnostics` 中——每个空列表对应一条 "
@@ -13944,18 +13984,22 @@ msgstr ""
 "SARIF 2.1.0 §3.58.6），其 `descriptor` 在 `tool.driver.notifications` 中点名"
 "该规则。命令行在判定行之后向 stderr 写出 `shacl diagnostic RULE SHAPE`。"
 "Python 的 `validate` 字典与 `ValidationReport` 对象都有一个由 `{\"rule\", "
-"\"shape\"}` 字典组成的 `diagnostics` 列表。规则运行或蕴涵运行也会报告同样的诊"
-"断：`purrdf rules` 写出同样的 stderr 行，Python 的 `apply_rules` 与 `entail` "
-"字典携带 `\"diagnostics\"`，WebAssembly 的 `ShaclRulesInference` 与 "
-"`ShaclEntailment` 有一个由 `RULE SHAPE` 字符串组成的 `diagnostics` 数组，C "
-"的 `purrdf_shacl_apply_rules` 与 `purrdf_shacl_entail_to_ntriples` 则把 "
-"`diagnostic RULE SHAPE` 行写入非 NULL 的 `out_diagnostics`。"
+"\"shape\"}` 字典组成的 `diagnostics` 列表。规则运行、蕴涵运行或节点表达式运行"
+"也会报告同样的诊断：`purrdf rules` 与 `purrdf node-expr` 写出同样的 stderr "
+"行，Python 的 `apply_rules`、`entail` 与 `eval_node_expr` 字典携带 "
+"`\"diagnostics\"`，WebAssembly 的 `ShaclRulesInference`、`ShaclEntailment` "
+"与 `ShaclNodeExprOutcome` 有一个由 `ShaclDiagnostic` 值（`rule`、`shape`）组"
+"成的 `diagnostics` 数组，C 的 `purrdf_shacl_apply_rules`、"
+"`purrdf_shacl_entail_to_ntriples` 与 `purrdf_shacl_eval_node_expr` 则把 "
+"`diagnostic RULE SHAPE` 行写入非 NULL 的 `out_diagnostics`。这种编码在各宿主"
+"间是统一的：规则与形状是两个独立字段——在 Python 中是字典键，在 WebAssembly 中"
+"是 getter——C 的输出行以相同顺序携带同样的两个字段，规则在前。"
 
-#: src/validation/shacl.md:1370
+#: src/validation/shacl.md:1387
 msgid "SARIF output"
 msgstr "SARIF 输出"
 
-#: src/validation/shacl.md:1372
+#: src/validation/shacl.md:1389
 msgid ""
 "Validation reports stay structured in the engine; the SARIF 2.1.0 boundary "
 "is the separate [`purrdf-validate`](https://docs.rs/purrdf-validate) crate "
@@ -13968,7 +14012,7 @@ msgstr ""
 "析器诊断——渲染为可追溯到源位置、逐字节确定性的 SARIF 日志，供编辑器、CI 与代"
 "码扫描仪表板使用："
 
-#: src/validation/shacl.md:1381
+#: src/validation/shacl.md:1398
 msgid ""
 "r#\"\n"
 "    @prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
@@ -13988,7 +14032,7 @@ msgstr ""
 "      sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n"
 "\"#"
 
-#: src/validation/shacl.md:1389
+#: src/validation/shacl.md:1406
 msgid ""
 "r#\"<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-"
 "ns#type> <http://example.org/Person> .\n"
@@ -14000,15 +14044,15 @@ msgstr ""
 "<http://example.org/alice> <http://example.org/age> \"nope\" .\n"
 "\"#"
 
-#: src/validation/shacl.md:1394
+#: src/validation/shacl.md:1411
 msgid "\"sarif produced\""
 msgstr "\"sarif produced\""
 
-#: src/validation/shacl.md:1395
+#: src/validation/shacl.md:1412
 msgid "\"\\\"version\\\": \\\"2.1.0\\\"\""
 msgstr "\"\\\"version\\\": \\\"2.1.0\\\"\""
 
-#: src/validation/shacl.md:1398
+#: src/validation/shacl.md:1415
 msgid ""
 "Lower-level entry points (`build_report_sarif`, `build_diagnostics_sarif`) "
 "build a `SarifLog` value instead of a string, so a host can merge runs "
@@ -14017,7 +14061,7 @@ msgstr ""
 "更底层的入口点（`build_report_sarif`、`build_diagnostics_sarif`）构建的是 "
 "`SarifLog` 值而非字符串，因此宿主可以在序列化之前合并多个 run。"
 
-#: src/validation/shacl.md:1404
+#: src/validation/shacl.md:1421
 msgid ""
 "The validator is gated by the vendored W3C SHACL 1.0 `data-shapes` suite, "
 "the vendored W3C SHACL 1.2 suite, a vendored DASH SHACL-AF/rules corpus, and "
@@ -16473,7 +16517,7 @@ msgstr ""
 "`materialize_dl_reported(...)`，或 `materialize(ds, "
 "Materialization::OwlDirect(bgp))`"
 
-#: src/entailment.md:20 src/entailment.md:170
+#: src/entailment.md:20 src/entailment.md:185
 msgid "`OWL-Direct`"
 msgstr "`OWL-Direct`"
 
@@ -16490,7 +16534,7 @@ msgstr ""
 msgid "`materialize_rif(...)`"
 msgstr "`materialize_rif(...)`"
 
-#: src/entailment.md:21 src/entailment.md:22 src/entailment.md:171
+#: src/entailment.md:21 src/entailment.md:22 src/entailment.md:186
 msgid "`RIF`"
 msgstr "`RIF`"
 
@@ -16606,11 +16650,11 @@ msgstr ""
 
 #: src/entailment.md:51
 msgid ""
-"`purrdf.entail.materialize(dataset, \"rdfs\", \"\")`, "
-"`purrdf.entail.materialize_nt(text, \"rdfs\", \"\")`"
+"`purrdf.entail.materialize(dataset, \"rdfs\", \"\", imports, premise_iris)`, "
+"`purrdf.entail.materialize_nt(text, \"rdfs\", \"\", imports, premise_iris)`"
 msgstr ""
-"`purrdf.entail.materialize(dataset, \"rdfs\", \"\")`、"
-"`purrdf.entail.materialize_nt(text, \"rdfs\", \"\")`"
+"`purrdf.entail.materialize(dataset, \"rdfs\", \"\", imports, premise_iris)`、"
+"`purrdf.entail.materialize_nt(text, \"rdfs\", \"\", imports, premise_iris)`"
 
 #: src/entailment.md:51
 msgid "`purrdf.entail.rules(\"rdfs\")`"
@@ -16621,8 +16665,8 @@ msgid "`purrdf.entail.implemented_rules(\"rdfs\")`"
 msgstr "`purrdf.entail.implemented_rules(\"rdfs\")`"
 
 #: src/entailment.md:52
-msgid "`entailMaterialize(doc, \"rdfs\", \"\")`"
-msgstr "`entailMaterialize(doc, \"rdfs\", \"\")`"
+msgid "`entailMaterialize(doc, \"rdfs\", \"\", iris, docs, premiseIris)`"
+msgstr "`entailMaterialize(doc, \"rdfs\", \"\", iris, docs, premiseIris)`"
 
 #: src/entailment.md:52
 msgid "`entailRules(\"rdfs\")`"
@@ -16833,14 +16877,31 @@ msgid ""
 "import is a refusal naming the document, never a silently truncated premise, "
 "and a table entry the premise's closure never reaches is refused too — it "
 "would be read and never used — on every host, as SHACL validation refuses an "
-"unused shapes-graph entry. The command line's `reason` and `convert --"
-"entailment` take the same `--import IRI=FILE` pairs and close the merged "
-"premise under the same rule (Rust: `materialize_with_imports`). The "
-"`owl:imports` read are the same ones SHACL validation reads: on the "
-"premise's own IRI, on an `owl:Ontology` header, on a `sh:ShapesGraph` "
-"(`sh:RulesGraph` and subclasses included), or on a node naming one of those "
-"as its `owl:versionIRI`. An `owl:imports` on any other node, a node that is "
-"only a `sh:DataGraph` included, is an ordinary premise triple."
+"unused shapes-graph entry. Every other entailment service takes the same "
+"table and applies the same rule: materialization (CLI `reason`, `convert --"
+"entailment`; Python `materialize`/`materialize_nt`; WebAssembly "
+"`entailMaterialize`; C `purrdf_entail_materialize_to_nquads`; Rust "
+"`materialize_with_imports`), the entailment-regime query (CLI `query --"
+"entailment … --import IRI=FILE`; Python "
+"`Store.query_entailment_governed(..., imports=…, premise_iris=…)`; "
+"WebAssembly `queryEntailmentGoverned`'s `importIris`/`importDocuments`/"
+"`premiseIris` options; C `purrdf_query_entailment_governed`'s `import_iris`/"
+"`import_documents`/ `import_count`; Rust "
+"`query_with_entailment_closure_governed`), and the OWL-Direct consistency "
+"question (CLI `consistency --import IRI=FILE`; Python `consistency(data, "
+"imports, premise_iris)`; WebAssembly `entailConsistency(doc, iris, docs, "
+"premiseIris, …)`; C `purrdf_entail_consistency`). Each closes or decides the "
+"merged premise, states `ontology-import-resolved` in its report or "
+"certificate, and refuses an unresolved import or an unreached entry exactly "
+"as `reason` does. The Rust entry points that take no table "
+"(`query_with_entailment`, `query_with_entailment_governed`) resolve against "
+"the empty one, so a premise that imports a document it does not hold is "
+"refused there too, never closed without it. The `owl:imports` read are the "
+"same ones SHACL validation reads: on the premise's own IRI, on an "
+"`owl:Ontology` header, on a `sh:ShapesGraph` (`sh:RulesGraph` and subclasses "
+"included), or on a node naming one of those as its `owl:versionIRI`. An "
+"`owl:imports` on any other node, a node that is only a `sh:DataGraph` "
+"included, is an ordinary premise triple."
 msgstr ""
 "**导入表在每个宿主上都是参数。** 本体的导入闭包*就是*该本体，因此，若前提携带"
 "了一条调用方没有交给本次调用的 `owl:imports`，它就已是另一个前提。PurRDF 不获"
@@ -16853,15 +16914,28 @@ msgstr ""
 "指名它）时，同样无需配对。其他任何未解析的导入都会以点名该文档的方式被拒绝，"
 "绝不会成为一个被静默截断的前提；前提的闭包从未到达的导入表条目同样会被拒绝——"
 "它会被读取，却从未被使用——在每个宿主上都是如此，正如 SHACL 验证会拒绝未被使用"
-"的形状图条目。命令行的 `reason` 与 `convert --entailment` 接受同样的 `--"
-"import IRI=FILE` 配对，并按同一规则对合并后的前提求闭包（Rust："
-"`materialize_with_imports`）。所读取的 `owl:imports` 与 SHACL 验证所读取的相"
-"同：位于前提自身的 IRI 上、`owl:Ontology` 头上、`sh:ShapesGraph`（包括 "
-"`sh:RulesGraph` 及其子类）上，或以其中之一作为其 `owl:versionIRI` 的节点上。"
-"任何其他节点上的 `owl:imports`（包括仅为 `sh:DataGraph` 的节点）都是普通的前"
-"提三元组。"
+"的形状图条目。其他每一个蕴涵服务都接受同一张表并施加同一条规则：物化（CLI "
+"`reason`、`convert --entailment`；Python `materialize`/`materialize_nt`；"
+"WebAssembly `entailMaterialize`；C `purrdf_entail_materialize_to_nquads`；"
+"Rust `materialize_with_imports`）、蕴涵机制查询（CLI `query --entailment … --"
+"import IRI=FILE`；Python `Store.query_entailment_governed(..., imports=…, "
+"premise_iris=…)`；WebAssembly `queryEntailmentGoverned` 的 `importIris`/"
+"`importDocuments`/`premiseIris` 选项；C `purrdf_query_entailment_governed` "
+"的 `import_iris`/`import_documents`/ `import_count`；Rust "
+"`query_with_entailment_closure_governed`），以及 OWL-Direct 相容性问题（CLI "
+"`consistency --import IRI=FILE`；Python `consistency(data, imports, "
+"premise_iris)`；WebAssembly `entailConsistency(doc, iris, docs, premiseIris, "
+"…)`；C `purrdf_entail_consistency`）。每一个服务都对合并后的前提求闭包或作出"
+"判定，在其报告或证书中声明 `ontology-import-resolved`，并完全像 `reason` 那样"
+"拒绝未解析的导入或未被到达的条目。不接受导入表的 Rust 入口点"
+"（`query_with_entailment`、`query_with_entailment_governed`）以空表进行解析，"
+"因此导入了自身不持有的文档的前提在那里同样会被拒绝，绝不会在缺少该文档的情况"
+"下求闭包。所读取的 `owl:imports` 与 SHACL 验证所读取的相同：位于前提自身的 "
+"IRI 上、`owl:Ontology` 头上、`sh:ShapesGraph`（包括 `sh:RulesGraph` 及其子"
+"类）上，或以其中之一作为其 `owl:versionIRI` 的节点上。任何其他节点上的 "
+"`owl:imports`（包括仅为 `sh:DataGraph` 的节点）都是普通的前提三元组。"
 
-#: src/entailment.md:130
+#: src/entailment.md:145
 msgid ""
 "A pattern is N-Triples with `?name` (or `$name`) in any position, the "
 "**predicate** included. RDF reserves that position for an IRI, so the "
@@ -16903,7 +16977,7 @@ msgstr ""
 "都不声称完备。谓词变量还涵盖由规则表之外的判定手段所判定的构造，而结果行所取"
 "自的推理闭包对这些构造不含任何内容。"
 
-#: src/entailment.md:152
+#: src/entailment.md:167
 msgid ""
 "Every answer arrives with the certificate of the run underneath it — the "
 "same `purrdf-reasoning-report` block a materialization renders, plus a "
@@ -16912,11 +16986,11 @@ msgstr ""
 "每个答案都附带其背后那次运行的证书——与物化所输出的相同的 `purrdf-reasoning-"
 "report` 块，外加一行 `mechanism`，指明是六种判定手段中的哪一种得出了裁决。"
 
-#: src/entailment.md:156
+#: src/entailment.md:171
 msgid "Rule coverage"
 msgstr "规则覆盖"
 
-#: src/entailment.md:158
+#: src/entailment.md:173
 msgid ""
 "`rules(regime)` is the rule table the specification defines the regime by; "
 "`implemented(regime)` is the subset the evaluator fires. Both are `&'static` "
@@ -16927,85 +17001,85 @@ msgstr ""
 "实际触发的子集。二者都是按规范表格顺序排列的 `&'static` 切片，因此差距是一个"
 "可执行的工件，而不是一句话："
 
-#: src/entailment.md:163 src/entailment-rules.md:58 src/entailment-rules.md:86
+#: src/entailment.md:178 src/entailment-rules.md:58 src/entailment-rules.md:86
 msgid "Regime"
 msgstr "机制"
 
-#: src/entailment.md:163
+#: src/entailment.md:178
 msgid "Rule table"
 msgstr "规则表"
 
-#: src/entailment.md:163 src/entailment-rules.md:58
+#: src/entailment.md:178 src/entailment-rules.md:58
 msgid "Defined"
 msgstr "定义数"
 
-#: src/entailment.md:163 src/entailment-rules.md:58 src/entailment-rules.md:92
+#: src/entailment.md:178 src/entailment-rules.md:58 src/entailment-rules.md:92
 #: src/entailment-rules.md:100 src/entailment-rules.md:123
 #: src/entailment-rules.md:206
 msgid "Implemented"
 msgstr "已实现"
 
-#: src/entailment.md:165
+#: src/entailment.md:180
 msgid "`Simple`"
 msgstr "`Simple`"
 
-#: src/entailment.md:165
+#: src/entailment.md:180
 msgid "— (identity closure)"
 msgstr "—（恒等闭包）"
 
-#: src/entailment.md:166
+#: src/entailment.md:181
 msgid "`RDF`"
 msgstr "`RDF`"
 
-#: src/entailment.md:166
+#: src/entailment.md:181
 msgid "RDF 1.2 Semantics §8.1.1"
 msgstr "RDF 1.2 Semantics §8.1.1"
 
-#: src/entailment.md:167
+#: src/entailment.md:182
 msgid "`RDFS`"
 msgstr "`RDFS`"
 
-#: src/entailment.md:167
+#: src/entailment.md:182
 msgid "RDF 1.2 Semantics §8.1.1 + §9.2.1"
 msgstr "RDF 1.2 Semantics §8.1.1 + §9.2.1"
 
-#: src/entailment.md:167 src/entailment-rules.md:62
+#: src/entailment.md:182 src/entailment-rules.md:62
 msgid "18"
 msgstr "18"
 
-#: src/entailment.md:168
+#: src/entailment.md:183
 msgid "`OWL-RL`"
 msgstr "`OWL-RL`"
 
-#: src/entailment.md:168
+#: src/entailment.md:183
 msgid "OWL 2 Profiles §4.3 Tables 4–9"
 msgstr "OWL 2 Profiles §4.3 表 4–9"
 
-#: src/entailment.md:168 src/entailment-rules.md:63
+#: src/entailment.md:183 src/entailment-rules.md:63
 msgid "78"
 msgstr "78"
 
-#: src/entailment.md:169
+#: src/entailment.md:184
 msgid "`D`"
 msgstr "`D`"
 
-#: src/entailment.md:169
+#: src/entailment.md:184
 msgid "OWL 2 Profiles §4.3 Table 8"
 msgstr "OWL 2 Profiles §4.3 表 8"
 
-#: src/entailment.md:169 src/entailment-rules.md:66
+#: src/entailment.md:184 src/entailment-rules.md:66
 msgid "5"
 msgstr "5"
 
-#: src/entailment.md:170
+#: src/entailment.md:185
 msgid "— (SHOIQ(D) tableau, not a fixed table)"
 msgstr "—（SHOIQ(D) tableau，而非固定的表）"
 
-#: src/entailment.md:171
+#: src/entailment.md:186
 msgid "— (caller-supplied rule set)"
 msgstr "—（调用方提供的规则集）"
 
-#: src/entailment.md:173
+#: src/entailment.md:188
 msgid ""
 "The per-rule breakdown — every rule id, its specification citation, and "
 "whether it is fired — is [generated from that API](entailment-rules.md) and "
@@ -17014,11 +17088,11 @@ msgstr ""
 "逐条规则的明细——每个规则 id、其规范出处，以及是否触发——是[由该 API 生成的]"
 "(entailment-rules.md)，并受漂移防护，因此不会落后于代码。"
 
-#: src/entailment.md:177
+#: src/entailment.md:192
 msgid "Where the numbers stop:"
 msgstr "数字止步之处："
 
-#: src/entailment.md:179
+#: src/entailment.md:194
 msgid ""
 "**The four existential rules fire, but their conclusions are withheld.** "
 "`rdfD1`, `rdfD1a`, `rdfs14` and `rdfs14a` each conclude about a _fresh_ "
@@ -17038,7 +17112,7 @@ msgstr ""
 "`Construct::Surrogate` 报告。不含替代项的内容不会丢失：把一个项替换为新的空节"
 "点只会削弱一个三元组。"
 
-#: src/entailment.md:188
+#: src/entailment.md:203
 msgid ""
 "**A complete rule table is not a complete closure.** `OWL-RL` fires all 78 "
 "rules, and a run that met a boundary still reports "
@@ -17072,7 +17146,7 @@ msgstr ""
 "有八个是通过**反驳**而非匹配到达的，这些根本不增加任何规则：参见下文的一致性"
 "一节。"
 
-#: src/entailment.md:205
+#: src/entailment.md:220
 msgid ""
 "**Seventeen OWL 2 RL rules conclude `false`.** \"Implemented\" for those "
 "means _decided_: a body match becomes `EntailError::Inconsistent` carrying a "
@@ -17084,11 +17158,11 @@ msgstr ""
 "证，指明该规则以及满足它的那些断言三元组。对一条没有结论的规则而言，这是它唯"
 "一能做的事。"
 
-#: src/entailment.md:210
+#: src/entailment.md:225
 msgid "The chase (Simple / RDF / RDFS / OWL-RL / D)"
 msgstr "chase（Simple / RDF / RDFS / OWL-RL / D）"
 
-#: src/entailment.md:212
+#: src/entailment.md:227
 msgid ""
 "`materialize` runs a forward-materialization chase: a fixed rule set for the "
 "selected regime, applied by a semi-naive fixpoint until no new quads appear. "
@@ -17101,7 +17175,7 @@ msgstr ""
 "定性的——给定的输入与机制总是得出相同的推理闭包——又由于它在 `TermId` 空间中工"
 "作，途中没有任何项会被重新解析或重新序列化。"
 
-#: src/entailment.md:218
+#: src/entailment.md:233
 msgid ""
 "Typical use: materialize first, then query with the plain [SPARQL engine]"
 "(sparql/querying.md) or validate the closure with [SHACL](validation/"
@@ -17110,7 +17184,7 @@ msgstr ""
 "典型用法：先物化，然后用普通的 [SPARQL 引擎](sparql/querying.md)查询，或用 "
 "[SHACL](validation/shacl.md) 验证推理闭包（SHACL 验证器本身不做任何推理）。"
 
-#: src/entailment.md:223
+#: src/entailment.md:238
 msgid ""
 "The rule set is not written twice. `calculus_program(regime)` renders it as "
 "DL clauses and `materialize` evaluates exactly those clauses through "
@@ -17121,7 +17195,7 @@ msgstr ""
 "`materialize` 正是通过 [`purrdf-datalog`](datalog.md) 的半朴素求值器对这些子"
 "句求值，因此报告所携带的契约哈希标识的就是实际运行的子句。"
 
-#: src/entailment.md:228
+#: src/entailment.md:243
 msgid ""
 "The `RDF`, `RDFS`, `OWL-RL` and `D` lanes run under `purrdf-datalog`'s "
 "[evaluation limits](datalog.md#limits-refuse-they-never-truncate): the facts "
@@ -17151,11 +17225,55 @@ msgstr ""
 "限、相关数值以及该宿主上的参数；在上限之内的运行返回的推理闭包，与任何更大上"
 "限下的完全相同，其报告的契约哈希指名的是所生效上限下的演算。"
 
-#: src/entailment.md:243
+#: src/entailment.md:258
+msgid ""
+"Every other service that evaluates a regime's rule table takes the same two "
+"limits, and names the knob of the entry point the caller called — never a "
+"Rust type to a caller who cannot reach one. The conclusion-directed services "
+"hold the premise's closure and every re-chase of the refutation and freeze "
+"mechanisms to them: `entails_with` and `certain_answers_with` in Rust (a "
+"`MaterializeLimits` on the string boundary), `--max-stored-facts` and `--max-"
+"join-steps` on `purrdf entails`, keyword-only `max_stored_facts=` and "
+"`max_join_steps=` on Python's `certain_answers`, `graph_entails` and "
+"`verify_entailment`, trailing `maxStoredFacts` and `maxJoinSteps` on "
+"`entailCertainAnswers`, `entailGraphEntails` and `entailVerifyEntailment`, "
+"and `max_stored_facts` and `max_join_steps` after `premise_iri_count` on the "
+"three C entry points. The entailment-regime query holds its closure to them: "
+"`EntailmentClosure::with_limits` in Rust, `--max-stored-facts` and `--max-"
+"join-steps` beside `purrdf query --entailment`, `max_stored_facts=` and "
+"`max_join_steps=` on `Store.query_entailment_governed`, the `maxStoredFacts` "
+"and `maxJoinSteps` options of `queryEntailmentGoverned`, and the two "
+"parameters of `purrdf_query_entailment_governed`; the query governors still "
+"price only the evaluation over the closure. The OWL-Direct consistency "
+"question runs no rule table: its evaluator is the hypertableau, bounded by "
+"`step_cap` and `work_cap` on every host, so it takes no stored-fact or join-"
+"step knob that would govern nothing."
+msgstr ""
+"其他每一个对某个蕴涵机制的规则表求值的服务，都接受同样的两个上限，并点名调用"
+"方所调用的那个入口点上的参数——绝不会向无从触及 Rust 类型的调用方点名一个 "
+"Rust 类型。以结论为导向的服务用它们约束前提的推理闭包，以及反驳与冻结机制的每"
+"一次重新 chase：Rust 中为 `entails_with` 与 `certain_answers_with`（字符串边"
+"界上为 `MaterializeLimits`），`purrdf entails` 上为 `--max-stored-facts` 与 "
+"`--max-join-steps`，Python 的 `certain_answers`、`graph_entails` 与 "
+"`verify_entailment` 上为仅限关键字的 `max_stored_facts=` 与 "
+"`max_join_steps=`，`entailCertainAnswers`、`entailGraphEntails` 与 "
+"`entailVerifyEntailment` 上为末尾的 `maxStoredFacts` 与 `maxJoinSteps`，三个 "
+"C 入口点上则为位于 `premise_iri_count` 之后的 `max_stored_facts` 与 "
+"`max_join_steps`。蕴涵机制查询用它们约束自身的推理闭包：Rust 中为 "
+"`EntailmentClosure::with_limits`，`purrdf query --entailment` 旁为 `--max-"
+"stored-facts` 与 `--max-join-steps`，`Store.query_entailment_governed` 上为 "
+"`max_stored_facts=` 与 `max_join_steps=`，`queryEntailmentGoverned` 上为 "
+"`maxStoredFacts` 与 `maxJoinSteps` 选项，`purrdf_query_entailment_governed` "
+"上则为这两个参数；查询 governor 仍然只为在推理闭包上的求值计价。OWL-Direct 相"
+"容性问题不运行任何规则表：其求值器是 hypertableau，在每个宿主上都受 "
+"`step_cap` 与 `work_cap` 约束，因此它不接受任何存储事实或连接步参数——那样的参"
+"数什么也约束不了。"
+
+#: src/entailment.md:280
 msgid "Every run says what it did"
 msgstr "每次运行都说明它做了什么"
 
-#: src/entailment.md:245
+#: src/entailment.md:282
 msgid ""
 "`materialize` returns `(closure, ReasoningReport)`. There is deliberately no "
 "report-free variant, because the alternative — two entry points, one of "
@@ -17166,7 +17284,7 @@ msgstr ""
 "为另一种做法——两个入口，其中一个丢弃证据——正是部分规则集被描述成完整规则集的"
 "由来。报告包含："
 
-#: src/entailment.md:250
+#: src/entailment.md:287
 msgid ""
 "**`Completeness`** — derived from `rules(regime)` minus "
 "`implemented(regime)`, so it improves by itself as rules are added, and it "
@@ -17175,25 +17293,25 @@ msgstr ""
 "**`Completeness`**——由 `rules(regime)` 减去 `implemented(regime)` 得出，因此"
 "随着规则的加入会自行改善，并且它点名列出 `missing` 规则，而不只是计数；"
 
-#: src/entailment.md:253
+#: src/entailment.md:290
 msgid ""
 "**per-rule firing counts** — which rules fired and how many conclusions each "
 "contributed;"
 msgstr "**逐规则触发计数**——哪些规则触发了，各自贡献了多少结论；"
 
-#: src/entailment.md:255
+#: src/entailment.md:292
 msgid ""
 "**`Boundary`s** — the constructs the run met and could not close over, each "
 "with its reason;"
 msgstr "**`Boundary`**——本次运行遇到且无法闭合的构造，各附原因；"
 
-#: src/entailment.md:257
+#: src/entailment.md:294
 msgid ""
 "**the evaluation budget** — what the run consumed against the evaluation "
 "limits it ran under;"
 msgstr "**求值预算**——本次运行在其所处的求值上限下消耗了多少；"
 
-#: src/entailment.md:259
+#: src/entailment.md:296
 msgid ""
 "**a contract hash** — `purrdf-datalog`'s digest of the clause program and "
 "the evaluation limits in force, so a cached closure minted under a different "
@@ -17202,7 +17320,7 @@ msgstr ""
 "**契约哈希**——`purrdf-datalog` 对子句程序及所生效求值上限的摘要，因此在另一种"
 "演算下、或在不同上限下生成的缓存推理闭包可以被*拒绝*，而不是被信任；"
 
-#: src/entailment.md:262
+#: src/entailment.md:299
 msgid ""
 "**an inconsistency witness**, when a rule that concludes `false` matched: "
 "the rule id, the asserted triples that satisfied its premises in premise "
@@ -17211,7 +17329,7 @@ msgstr ""
 "**不相容见证**，当一条结论为 `false` 的规则匹配时给出：规则 id、按前提顺序满"
 "足其前提的断言三元组，以及它们所取自的图。"
 
-#: src/entailment.md:266
+#: src/entailment.md:303
 msgid ""
 "A report cannot claim `Exact` while naming a boundary. `ReasoningReport` "
 "stores no completeness field at all: `completeness()` derives the value from "
@@ -17225,7 +17343,7 @@ msgstr ""
 "是被检查。这是有意为之——早先的设计存储了该字段，并把它与对同一组输入的推导结"
 "果相比较，这在构造上就是空洞的，永远不可能失败。"
 
-#: src/entailment.md:273
+#: src/entailment.md:310
 msgid ""
 "The rendering is byte-stable, so the Python, WebAssembly, and C hosts hand "
 "back the same report text as Rust for the same input."
@@ -17233,11 +17351,11 @@ msgstr ""
 "输出是字节稳定的，因此对于相同输入，Python、WebAssembly 与 C 宿主返回的报告文"
 "本与 Rust 相同。"
 
-#: src/entailment.md:276
+#: src/entailment.md:313
 msgid "OWL-Direct: the tableau"
 msgstr "OWL-Direct：tableau"
 
-#: src/entailment.md:278
+#: src/entailment.md:315
 msgid ""
 "`OWL-Direct` semantics is open-world Description Logic, which a forward "
 "chase cannot answer. `materialize_dl_reported` runs an **SHOIQ(D) tableau** "
@@ -17254,11 +17372,11 @@ msgstr ""
 "`materialize` 对 `Materialization::OwlDirect` 委托给它，从而到达同一个 "
 "tableau，而不是重新表述它。"
 
-#: src/entailment.md:286 src/entailment-rules.md:65
+#: src/entailment.md:323 src/entailment-rules.md:65
 msgid "RIF"
 msgstr "RIF"
 
-#: src/entailment.md:288
+#: src/entailment.md:325
 msgid ""
 "`materialize_rif` evaluates **RIF-Core** rules over a parsed `RuleSet`, "
 "covering the SPARQL RIF entailment regime."
@@ -17266,11 +17384,11 @@ msgstr ""
 "`materialize_rif` 在已解析的 `RuleSet` 上求值 **RIF-Core** 规则，覆盖 SPARQL "
 "RIF 蕴涵机制。"
 
-#: src/entailment.md:291
+#: src/entailment.md:328
 msgid "D (datatype) entailment"
 msgstr "D（数据类型）蕴涵"
 
-#: src/entailment.md:293
+#: src/entailment.md:330
 msgid ""
 "`D` is materialized, not refused. PurRDF realizes it as Simple entailment "
 "plus the five `dt-*` rules of OWL 2 Profiles §4.3 Table 8 — the fixed rule "
@@ -17281,7 +17399,7 @@ msgstr ""
 "§4.3 表 8 中的五条 `dt-*` 规则——即前向 chase 能为其枚举的固定规则表——由 "
 "`purrdf-xsd` 在 XSD *值*空间上判定，而不是通过比较词法形式。"
 
-#: src/entailment.md:298
+#: src/entailment.md:335
 msgid ""
 "What Table 8 does not cover is the infinite value spaces themselves, and "
 "that is reported as a `Construct::DatatypeValueSpace` boundary on the run "
@@ -17292,11 +17410,11 @@ msgstr ""
 "`Construct::DatatypeValueSpace` 边界被报告，而不是被声称已覆盖。因此 `D` 推理"
 "闭包是*在其所陈述的边界之内*完备的，而报告正是陈述该边界的地方。"
 
-#: src/entailment.md:303
+#: src/entailment.md:340
 msgid "Every host materializes `d`, the command-line tool included."
 msgstr "每个宿主都能物化 `d`，命令行工具也不例外。"
 
-#: src/entailment.md:305
+#: src/entailment.md:342
 msgid ""
 "There is **no unsupported-regime error**. `materialize` takes a "
 "`Materialization`, which carries each regime's own input — a basic graph "
@@ -17313,11 +17431,11 @@ msgstr ""
 "`ReasoningReport::regime()`、`rules()`、`implemented()` 与 "
 "`Regime::from_iri` 都以它表述。"
 
-#: src/entailment.md:312
+#: src/entailment.md:349
 msgid "Invariants"
 msgstr "不变量"
 
-#: src/entailment.md:314
+#: src/entailment.md:351
 msgid ""
 "**No minted vocabulary.** Every constant in the crate's `vocab` module is a "
 "standard `rdf:`/`rdfs:`/`owl:` IRI drawn from the entailment specs "
@@ -17328,7 +17446,7 @@ msgstr ""
 "的标准 `rdf:`/`rdfs:`/`owl:` IRI——按照[工具包而非本体的规则](project/design-"
 "rules.md)，该 crate 不编造任何词汇。"
 
-#: src/entailment.md:318
+#: src/entailment.md:355
 msgid ""
 "**Dependency-lean and wasm-clean.** The dependencies are `purrdf-core`, "
 "[`purrdf-datalog`](datalog.md), `purrdf-xsd`, `roxmltree`, `blake3`, and two "
@@ -17342,18 +17460,18 @@ msgstr ""
 "构建到该目标），因此这些引擎可以原样带入 Rust、Python、WebAssembly 与 C，不依"
 "赖线程、文件系统或 RNG。"
 
-#: src/entailment.md:323
+#: src/entailment.md:360
 msgid ""
 "**Deterministic.** Same input + regime → same closure, always — and the same "
 "report, byte for byte."
 msgstr ""
 "**确定性。** 相同的输入 + 机制 → 相同的推理闭包，始终如此——报告也逐字节相同。"
 
-#: src/entailment.md:328
+#: src/entailment.md:365
 msgid "Two corpora measure two different things, and the distinction matters:"
 msgstr "两份语料度量的是两件不同的事，这一区别很重要："
 
-#: src/entailment.md:330
+#: src/entailment.md:367
 msgid ""
 "**W3C SPARQL 1.1 entailment-regime group — 70 of 70 cases pass**, with zero "
 "ledgered residuals: the RDF/RDFS/OWL-RL chase, the OWL-Direct (DL) tableau, "
@@ -17364,7 +17482,7 @@ msgstr ""
 "RDF/RDFS/OWL-RL chase、OWL-Direct（DL）tableau、RIF-Core 规则引擎，以及 RDF "
 "公理性的谓词类型推定，全部经由 SPARQL 一致性测试框架运行。"
 
-#: src/entailment.md:334
+#: src/entailment.md:371
 msgid ""
 "**W3C OWL 2 test suite — 258 of 262 cases agree, 4 ledgered**, zero "
 "unledgered. This corpus is _consistency_\\-shaped: all 262 vendored cases "
@@ -17381,7 +17499,7 @@ msgstr ""
 "明。4 个分歧中的每一个都在一个带类型的台账中点名列出；未入台账的分歧，以及已"
 "入台账却开始一致的用例，都是硬失败。"
 
-#: src/entailment.md:342
+#: src/entailment.md:379
 msgid ""
 "Two things this row does **not** say. First, the upstream material is not "
 "free of entailment tests — the W3C manifest holds **206 positive and 23 "
@@ -17406,7 +17524,7 @@ msgstr ""
 "荷的分拣，而非能力限制，而「262 个中 258 个」是基于一份语料的数字，而不是基"
 "于 W3C 所发布内容的数字。"
 
-#: src/entailment.md:355
+#: src/entailment.md:392
 msgid ""
 "Those five figures are a **dated measurement**, recorded in `census.tsv`'s "
 "`dl_probe` column and described in that suite's `PROVENANCE.md`. The harness "
@@ -17421,7 +17539,7 @@ msgstr ""
 "归。重新推导这些数字意味着重新运行探测，这是一项有意的操作，而不是把关检查的"
 "一部分。"
 
-#: src/entailment.md:361
+#: src/entailment.md:398
 msgid ""
 "**W3C OWL 2 RL entailment tests — 50 of 50 cases agree, 0 ledgered**, zero "
 "unledgered. This is the independent oracle for the rule table: W3C's own "
@@ -17434,7 +17552,7 @@ msgstr ""
 "`Regime::OwlRl` 下调用一次 `purrdf_entail::entails()` 作答。两个通道证明的是"
 "不同的事，分开报告。"
 
-#: src/entailment.md:367
+#: src/entailment.md:404
 msgid ""
 "**The negative lane is 23 of 23: no unsoundness.** The chase never derived a "
 "triple W3C publishes as _not_ entailed. That is the safety result, and it "
@@ -17445,14 +17563,14 @@ msgstr ""
 "被蕴涵的三元组。这是安全性结果，它在*全部* 23 个负向用例上都成立——可靠性是每"
 "个用例都必须满足的，因此没有按 profile 过滤任何用例。"
 
-#: src/entailment.md:372
+#: src/entailment.md:409
 msgid ""
 "**Those 23 agreements are two different results, and the harness prints the "
 "split** on a scoreboard line of its own:"
 msgstr ""
 "**这 23 次一致是两种不同的结果，测试框架会打印其划分**，单独占一行记分板："
 
-#: src/entailment.md:379
+#: src/entailment.md:416
 msgid ""
 "Three are _decided_ non-entailments — both halves of Theorem PR1's "
 "hypothesis hold, so the closure's failure to contain the non-conclusion is a "
@@ -17470,7 +17588,7 @@ msgstr ""
 "`refuted 0`。`23 of 23` 应读作「未发现不可靠性」，绝不能读作「证明了 23 个非"
 "蕴涵」。"
 
-#: src/entailment.md:388
+#: src/entailment.md:425
 msgid ""
 "The positive lane is **27 of 27** — the 27 positive entailments W3C itself "
 "places inside the RL profile under RDF-Based semantics — and the typed "
@@ -17485,7 +17603,7 @@ msgstr ""
 "`imports-unresolved` 为 0，且**需要采取行动的项为 0**（`missing-rule` 为 "
 "0）。"
 
-#: src/entailment.md:395
+#: src/entailment.md:432
 msgid ""
 "Every class it used to hold is closed, and the rule table did not change "
 "once to close any of them. `entails()` reaches a conclusion six ways, and "
@@ -17494,7 +17612,7 @@ msgstr ""
 "它过去包含的每一类都已关闭，而为了关闭其中任何一类，规则表一次也没有改变。"
 "`entails()` 以六种方式得出结论，其中五种不是匹配："
 
-#: src/entailment.md:399
+#: src/entailment.md:436
 msgid ""
 "**refutation.** A negative fact still has no head anywhere in Tables 4–9 — "
 "no rule concludes `owl:differentFrom`, and none concludes membership in an "
@@ -17517,7 +17635,7 @@ msgstr ""
 "态，并且恰好在每一对都被驳倒时才被蕴涵——这就是为什么有两个条目随之离开了 "
 "`schema-conclusion` 类。"
 
-#: src/entailment.md:410
+#: src/entailment.md:447
 msgid ""
 "**freeze-and-chase.** `p rdf:type owl:TransitiveProperty` abbreviates a "
 "universally quantified Horn implication, and an implication is decided by "
@@ -17535,7 +17653,7 @@ msgstr ""
 "的一次查找，而且这一步不可省略：模式公理是一个合取式，只确立其中有意思的那一"
 "半，就会声称该语义并不许可的结论。"
 
-#: src/entailment.md:418
+#: src/entailment.md:455
 msgid ""
 "**comprehension.** A conclusion may assert that a CLASS EXISTS — an "
 "anonymous `owl:unionOf`, an anonymous `owl:Restriction` — which the RDF-"
@@ -17548,7 +17666,7 @@ msgstr ""
 "件所许可，但须满足一个关于运算对象的类型附加条件。只生成结论所点名的那些脚手"
 "架，且所用的空节点已检查在两份文档中都不存在。"
 
-#: src/entailment.md:423
+#: src/entailment.md:460
 msgid ""
 "**reflexivity.** `owl:ReflexiveProperty` is outside the RL syntax, so the "
 "profile states no rule for it — and a rule that did would range over every "
@@ -17560,7 +17678,7 @@ msgstr ""
 "给出规则——而如果有这样一条规则，它的取值范围将是每一个资源，从而扩大每个使用"
 "方默认都会计算的推理闭包。结论自身的自环改为从前提的自反类型声明中读出。"
 
-#: src/entailment.md:428
+#: src/entailment.md:465
 msgid ""
 "**datatype containment.** A property's declared `rdfs:range` datatypes "
 "intersect, and the intersection may be contained in one the premise never "
@@ -17574,7 +17692,7 @@ msgstr ""
 "⊓ unsignedInt ⊑ unsignedShort`，这两者都无法通过对三元组做连接来发现。在 XSD "
 "值空间上判定，采用三值逻辑，否定答案只有在反例范围被精确判定时才会给出。"
 
-#: src/entailment.md:435
+#: src/entailment.md:472
 msgid ""
 "The last case needed no mechanism at all, only the document its premise "
 "names: `webont-imports-011` `owl:imports` a support ontology the upstream "
@@ -17587,7 +17705,7 @@ msgstr ""
 "W3C 自己的 URL 获取后随库固化在这些用例旁边，并作为调用方持有的配置提供给 "
 "`entails()`。该库仍然不获取任何内容。"
 
-#: src/entailment.md:441
+#: src/entailment.md:478
 msgid ""
 "Nothing about the inventory moves: `rules(Regime::OwlRl)` and "
 "`implemented(Regime::OwlRl)` are still exactly the same 78, "
@@ -17607,7 +17725,7 @@ msgstr ""
 "结的常量、规则体与规则头；生成的三元组以及许可它们的推理闭包三元组），以及它"
 "自己的检查器，无需运行推理机即可重新判定全部内容。"
 
-#: src/entailment.md:451
+#: src/entailment.md:488
 msgid ""
 "The one case that used to be actionable is closed by an **extension**, and "
 "the extension is labelled rather than absorbed. `a owl:differentFrom b` "
@@ -17635,7 +17753,7 @@ msgstr ""
 "到的推理闭包是表 4–9 再加上一份它可以阅读并拒绝的清单，而 `OWL-RL 78 / 78` 仍"
 "然只是关于表 4–9 的声明，别无其他。"
 
-#: src/entailment.md:465
+#: src/entailment.md:502
 msgid ""
 "The live scoreboard is [`docs/CONFORMANCE.md`](https://github.com/Blackcat-"
 "Informatics/purrdf/blob/main/docs/CONFORMANCE.md)."
@@ -18571,14 +18689,13 @@ msgid ""
 "while the linear closure of the same chain fits the default."
 msgstr ""
 "连接步数的默认值在每个目标平台上都相同，这出于一个经过测量的原因：一个规则体"
-"在某一轮的候选解会在检查上限之前就被物化。一个在 20,000 个节点上连接"
-"两个互不相关原子的规则体（4 亿个候选）在默认值下约两秒即被拒绝，占用内存不"
-"到半 GB；而在 268,435,456 个连接步下，它已分配约 20 GB"
-" 内存且仍在枚举，直到在 24 GB 的地址空间上限处被终止。更大的默认值会"
-"让笛卡尔积式的规则体在能够被拒绝之前就耗尽内存。可达范围应由调用方自行购买："
-"千节点链的非线性传递闭包要枚举超过 6700 万个候选，在调用方提高上限（命"
-"令行上为 `--max-join-steps`）后即可完成，而同一条链的线性"
-"闭包在默认值内即可容纳。"
+"在某一轮的候选解会在检查上限之前就被物化。一个在 20,000 个节点上连接两个互不"
+"相关原子的规则体（4 亿个候选）在默认值下约两秒即被拒绝，占用内存不到半 GB；而"
+"在 268,435,456 个连接步下，它已分配约 20 GB 内存且仍在枚举，直到在 24 GB 的地"
+"址空间上限处被终止。更大的默认值会让笛卡尔积式的规则体在能够被拒绝之前就耗尽"
+"内存。可达范围应由调用方自行购买：千节点链的非线性传递闭包要枚举超过 6700 万"
+"个候选，在调用方提高上限（命令行上为 `--max-join-steps`）后即可完成，而同一条"
+"链的线性闭包在默认值内即可容纳。"
 
 #: src/datalog.md:94
 msgid ""
@@ -18591,12 +18708,12 @@ msgid ""
 "IRI one character longer every round reaches 16 MiB of term surfaces after "
 "about 5,800 rounds)."
 msgstr ""
-"阻止发散规则的并不是连接步数上限。一条每轮生成一个新焦点节点的 SHACL "
-"形状规则，只会针对输入发生变化的焦点节点重新执行，而不是针对此前的每一个焦点"
-"节点，因此无论连接步数上限是多少，它都会在几秒内被下文的项上限拒绝：当其新项"
-"长度有界时，由生成新项的轮数上限拒绝；当每个新项都比上一个更长时，由项存储区"
-"上限拒绝（一条每轮生成的 IRI 都比上一轮长一个字符的规则，约 5,800"
-" 轮后驻留项的词法形式即达到 16 MiB）。"
+"阻止发散规则的并不是连接步数上限。一条每轮生成一个新焦点节点的 SHACL 形状规"
+"则，只会针对输入发生变化的焦点节点重新执行，而不是针对此前的每一个焦点节点，"
+"因此无论连接步数上限是多少，它都会在几秒内被下文的项上限拒绝：当其新项长度有"
+"界时，由生成新项的轮数上限拒绝；当每个新项都比上一个更长时，由项存储区上限拒"
+"绝（一条每轮生成的 IRI 都比上一轮长一个字符的规则，约 5,800 轮后驻留项的词法"
+"形式即达到 16 MiB）。"
 
 #: src/datalog.md:103
 msgid ""

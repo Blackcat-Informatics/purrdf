@@ -216,9 +216,11 @@ shapes.apply_rules(my_data, my_shapes, max_stored_facts=8_000_000)
 shapes.check_rules(counting_rules)["summary"]
 
 # Evaluate one node expression of a shapes graph against a focus node. The
-# expression is an IRI or "_:label"; the scope binds shnex:var names.
+# expression is an IRI or "_:label"; the scope binds shnex:var names. The result is
+# {"outputs": [...], "diagnostics": [{"rule", "shape"}, ...]}: the output nodes, and
+# the shapes graph's mandatory diagnostics (an empty sh:in / sh:xone list).
 shapes.eval_node_expr(my_shapes, my_data, "http://example.org/Tag",
-                      "http://example.org/a", scope={"suffix": '"!"'})
+                      "http://example.org/a", scope={"suffix": '"!"'})["outputs"]
 
 # Certify a shapes graph: the loader's verdict, the W3C shacl-shacl.ttl results,
 # which implementation every function call binds to, and the validators a
@@ -258,13 +260,21 @@ import purrdf
 from purrdf import entail
 
 dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
-closure, report = entail.materialize(dataset, "rdfs", "")
+closure, report = entail.materialize(dataset, "rdfs", "", [], [])
 print(closure.to_nquads())
 print(report)
 ```
 
-对于持有文档而非已解析数据集的调用方，`entail.materialize_nt(text, regime, program)`
-接受 N-Triples/N-Quads 并返回 `(canonical_nquads, report)`。二者都接受以普通字符串
+第四和第五个参数是该数据集的 `owl:imports` 表——一个由 `(ontology_iri, nquads_document)`
+对组成的列表——以及读取该数据集所用的 IRI，其写法与 `entail.certain_answers` 完全一致。
+OWL 2 将一个本体的导入闭包定义为**就是**该本体本身，因此导入了某份文档的数据集会在合并
+结果上求闭包；该表无法解析的导入会抛出指明它的 `ValueError`，闭包从未触及的表条目同样
+如此。`[]`、`[]` 表示什么也不导入。`entail.consistency(data, imports, premise_iris)` 与
+`Store.query_entailment_governed(..., imports=…, premise_iris=…)` 接受同一张表。
+
+对于持有文档而非已解析数据集的调用方，
+`entail.materialize_nt(text, regime, program, imports, premise_iris)` 接受
+N-Triples/N-Quads 并返回 `(canonical_nquads, report)`。二者都接受以普通字符串
 （`"simple"`、`"rdf"`、`"rdfs"`、`"owl-rl"`、`"owl-direct"`、`"rif"`、`"d"`）或
 `entail.Regime.RDFS` 给出的蕴涵机制。
 
@@ -274,7 +284,7 @@ print(report)
 `program` 是一份规范性的 RIF-in-XML 文档：
 
 ```python
-closure, report = entail.materialize(dataset, "rif", my_rif_xml)
+closure, report = entail.materialize(dataset, "rif", my_rif_xml, [], [])
 ```
 
 `"owl-direct"` 同样不接受 program，而这是一项声明而非疏漏：它的额外输入是*查询*的
@@ -340,7 +350,7 @@ hypertableau——它的每一项服务都在 `purrdf.entail` 上。每项服务
 
 | 服务 | 调用 | 答案 |
 | --- | --- | --- |
-| 相容性 | `entail.consistency(data)` | `consistency true` / `false` / `unknown`——`unknown` 表示 tableau 达到了步数上限，且绝不会被折叠为 `false` |
+| 相容性 | `entail.consistency(data, imports, premise_iris)` | `consistency true` / `false` / `unknown`——`unknown` 表示 tableau 达到了步数上限，且绝不会被折叠为 `false` |
 | 分类 | `entail.classify(data)` | `equivalent`、`subclass`（传递闭包）、`direct`（其约简）与 `unsatisfiable` 各行 |
 | 实现（realization） | `entail.realize(data)` | 命名个体的 `type` 行，随后是最具体的 `direct-type` 行 |
 | 实例检索 | `entail.instances(data, class_)` | `instance <term>` 行；`class_` 是**一个** N-Triples 词项，含尖括号 |
@@ -477,7 +487,7 @@ ontology = (
     " <https://example.org/Cat> .\n"
 )
 
-answer, certificate = entail.consistency(ontology)
+answer, certificate = entail.consistency(ontology, [], [])
 assert answer.strip() == "consistency true"
 assert certificate.startswith("purrdf-dl-certificate 1")
 assert "completeness decided" in certificate
