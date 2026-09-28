@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use csv::ReaderBuilder;
+use purrdf_core::csv::{CsvErrorKind, Dialect, Encoding, LineTerminators, Trim, read_table};
 use purrdf_iri::terminals::{is_ws, is_xml_name_char, is_xml_name_start_char};
 use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
@@ -44,50 +44,52 @@ fn parse_table(
     warnings: &mut Vec<CsvwWarning>,
     budget: &mut usize,
 ) -> Result<(), ProjectionError> {
-    if !matches!(table.dialect.encoding.as_str(), "utf-8" | "utf8") {
-        return Err(ProjectionError::configuration(format!(
+    let encoding = Encoding::from_label(&table.dialect.encoding).ok_or_else(|| {
+        ProjectionError::configuration(format!(
             "CSVW encoding `{}` is not available in the portable UTF-8 engine",
             table.dialect.encoding
         ))
-        .at_path(&table.url));
-    }
-    let source = std::str::from_utf8(bytes).map_err(|error| {
-        ProjectionError::syntax(format!("CSVW table is not UTF-8: {error}")).at_path(&table.url)
+        .at_path(&table.url)
     })?;
-    let records = logical_records(
-        source,
-        &table.dialect.line_terminators,
-        table.dialect.quote_char,
-        table.dialect.double_quote,
-    )?;
-    let mut headers: Vec<(usize, Vec<String>)> = Vec::new();
-    let mut data = Vec::new();
-    let mut eligible_index = 0usize;
-    for record in records {
-        if record.source_number <= table.dialect.skip_rows {
-            continue;
+    let terminators: Vec<&str> = table
+        .dialect
+        .line_terminators
+        .iter()
+        .map(String::as_str)
+        .collect();
+    let dialect = Dialect {
+        encoding,
+        line_terminators: LineTerminators::Strings(&terminators),
+        comment_prefix: table.dialect.comment_prefix.as_deref(),
+        header_row_count: table.dialect.header_row_count,
+        skip_rows: table.dialect.skip_rows,
+        skip_columns: table.dialect.skip_columns,
+        skip_blank_rows: table.dialect.skip_blank_rows,
+        ..cell_dialect(table)?
+    };
+    let parsed = read_table(&dialect, bytes).map_err(|error| match error.kind() {
+        CsvErrorKind::NotUtf8 { .. } => {
+            ProjectionError::syntax(format!("CSVW table is not UTF-8: {error}")).at_path(&table.url)
         }
-        if let Some(prefix) = &table.dialect.comment_prefix
-            && record.text.starts_with(prefix)
-        {
-            table.comments.push(record.text[prefix.len()..].to_owned());
-            continue;
+        CsvErrorKind::EmptyLineTerminator => {
+            ProjectionError::configuration("CSVW line terminators must not be empty")
         }
-        let values = parse_record(record.text, table)?;
-        if table.dialect.skip_blank_rows && values.iter().all(String::is_empty) {
-            continue;
+        CsvErrorKind::UnterminatedQuote => {
+            ProjectionError::syntax("CSVW table ends inside a quoted field")
         }
-        let values = values
-            .into_iter()
-            .skip(table.dialect.skip_columns)
-            .collect::<Vec<_>>();
-        if eligible_index < table.dialect.header_row_count {
-            headers.push((record.source_number, values));
-        } else {
-            data.push((record.source_number, values));
-        }
-        eligible_index += 1;
-    }
+        _ => ProjectionError::syntax(format!("invalid CSVW table: {error}")).at_path(&table.url),
+    })?;
+    table.comments.extend(parsed.comments);
+    let headers: Vec<(usize, Vec<String>)> = parsed
+        .header_rows
+        .into_iter()
+        .map(|row| (row.number, row.cells))
+        .collect();
+    let data: Vec<(usize, Vec<String>)> = parsed
+        .rows
+        .into_iter()
+        .map(|row| (row.number, row.cells))
+        .collect();
     reconcile_schema(
         table,
         &headers,
@@ -157,134 +159,33 @@ fn parse_table(
     Ok(())
 }
 
-struct LogicalRecord<'a> {
-    source_number: usize,
-    text: &'a str,
-}
-
-fn logical_records<'a>(
-    source: &'a str,
-    line_terminators: &[String],
-    quote: Option<char>,
-    double_quote: bool,
-) -> Result<Vec<LogicalRecord<'a>>, ProjectionError> {
-    if line_terminators.iter().any(String::is_empty) {
-        return Err(ProjectionError::configuration(
-            "CSVW line terminators must not be empty",
-        ));
-    }
-    let mut records = Vec::new();
-    let mut in_quotes = false;
-    let mut start = 0usize;
-    let mut source_number = 1usize;
-    let mut index = 0usize;
-    while index < source.len() {
-        let remainder = &source[index..];
-        let character = remainder
-            .chars()
-            .next()
-            .expect("a non-empty string has a first character");
-        let character_len = character.len_utf8();
-        if quote.is_some() && !double_quote && character == '\\' {
-            index += character_len;
-            if let Some(escaped) = source[index..].chars().next() {
-                index += escaped.len_utf8();
-            }
-            continue;
-        }
-        if Some(character) == quote {
-            if in_quotes && double_quote && source[index + character_len..].starts_with(character) {
-                index += character_len * 2;
-            } else {
-                in_quotes = !in_quotes;
-                index += character_len;
-            }
-            continue;
-        }
-        if !in_quotes
-            && let Some(terminator) = line_terminators
-                .iter()
-                .find(|terminator| remainder.starts_with(terminator.as_str()))
-        {
-            records.push(LogicalRecord {
-                source_number,
-                text: &source[start..index],
-            });
-            index += terminator.len();
-            start = index;
-            source_number += 1;
-            continue;
-        }
-        index += character_len;
-    }
-    if in_quotes {
-        return Err(ProjectionError::syntax(
-            "CSVW table ends inside a quoted field",
-        ));
-    }
-    if start < source.len() || source.is_empty() {
-        records.push(LogicalRecord {
-            source_number,
-            text: &source[start..],
-        });
-    }
-    Ok(records)
-}
-
-fn parse_record(record: &str, table: &CsvwTable) -> Result<Vec<String>, ProjectionError> {
+/// The table's CSVW cell-level dialect properties.
+fn cell_dialect(table: &CsvwTable) -> Result<Dialect<'static>, ProjectionError> {
     let delimiter = u8::try_from(u32::from(table.dialect.delimiter))
         .map_err(|_| ProjectionError::configuration("CSVW delimiter must be an ASCII byte"))?;
-    let mut builder = ReaderBuilder::new();
-    builder
-        .has_headers(false)
-        .flexible(true)
-        .delimiter(delimiter)
-        // Logical records have already been split using the caller's dialect.
-        // 0xFF cannot occur in the validated UTF-8 source, so CR/LF that are not
-        // declared terminators remain ordinary cell data here.
-        .terminator(csv::Terminator::Any(0xFF))
-        .double_quote(table.dialect.double_quote)
-        .escape(
-            (table.dialect.quote_char.is_some() && !table.dialect.double_quote).then_some(b'\\'),
-        )
-        .trim(csv::Trim::None);
-    if let Some(quote) = table.dialect.quote_char {
-        builder.quote(u8::try_from(u32::from(quote)).map_err(|_| {
-            ProjectionError::configuration("CSVW quote character must be an ASCII byte")
-        })?);
-    } else {
-        builder.quoting(false);
-    }
-    let mut reader = builder.from_reader(record.as_bytes());
-    let mut records = reader.records();
-    let parsed = records
-        .next()
-        .transpose()
-        .map_err(|error| ProjectionError::syntax(format!("invalid CSVW row: {error}")))?
-        .unwrap_or_default();
-    if records.next().is_some() {
-        return Err(ProjectionError::syntax(
-            "CSVW logical record decoded as more than one row",
-        ));
-    }
-    Ok(parsed
-        .iter()
-        .map(|field| normalize_field(field, table.dialect.trim, table.dialect.skip_initial_space))
-        .collect())
-}
-
-fn normalize_field(value: &str, trim: CsvwTrim, skip_initial_space: bool) -> String {
-    let value = if skip_initial_space {
-        value.trim_start_matches([' ', '\t'])
-    } else {
-        value
-    };
-    match trim {
-        CsvwTrim::None => value.to_owned(),
-        CsvwTrim::Start => value.trim_start().to_owned(),
-        CsvwTrim::End => value.trim_end().to_owned(),
-        CsvwTrim::Both => value.trim().to_owned(),
-    }
+    let quote_char = table
+        .dialect
+        .quote_char
+        .map(|quote| {
+            u8::try_from(u32::from(quote)).map_err(|_| {
+                ProjectionError::configuration("CSVW quote character must be an ASCII byte")
+            })
+        })
+        .transpose()?;
+    Ok(Dialect {
+        delimiter,
+        quote_char,
+        double_quote: table.dialect.double_quote,
+        escape: (quote_char.is_some() && !table.dialect.double_quote).then_some(b'\\'),
+        skip_initial_space: table.dialect.skip_initial_space,
+        trim: match table.dialect.trim {
+            CsvwTrim::None => Trim::None,
+            CsvwTrim::Start => Trim::Start,
+            CsvwTrim::End => Trim::End,
+            CsvwTrim::Both => Trim::Both,
+        },
+        ..Dialect::CSVW_CELLS
+    })
 }
 
 fn reconcile_schema(
@@ -1668,69 +1569,6 @@ fn key_tuple(row: &CsvwRow, indices: &[usize]) -> Option<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn record_pairs<'a>(records: &[LogicalRecord<'a>]) -> Vec<(usize, &'a str)> {
-        records
-            .iter()
-            .map(|record| (record.source_number, record.text))
-            .collect()
-    }
-
-    #[test]
-    fn logical_records_honor_declared_terminators_outside_quotes() {
-        let terminators = vec!["\r".to_owned()];
-        let records = logical_records(
-            "name,note\rAlice,\"first\nline\rand second\"\rBob,done\r",
-            &terminators,
-            Some('"'),
-            true,
-        )
-        .expect("records");
-
-        assert_eq!(
-            record_pairs(&records),
-            vec![
-                (1, "name,note"),
-                (2, "Alice,\"first\nline\rand second\""),
-                (3, "Bob,done"),
-            ]
-        );
-    }
-
-    #[test]
-    fn logical_records_honor_escape_and_declared_priority() {
-        let escaped = logical_records(
-            "header\r\"a\\\"b\rc\"\rtail",
-            &["\r".to_owned()],
-            Some('"'),
-            false,
-        )
-        .expect("escaped records");
-        assert_eq!(
-            record_pairs(&escaped),
-            vec![(1, "header"), (2, "\"a\\\"b\rc\""), (3, "tail")]
-        );
-
-        let overlapping = logical_records(
-            "a<><>b<>c␞d",
-            &["<><>".to_owned(), "<>".to_owned(), "␞".to_owned()],
-            None,
-            true,
-        )
-        .expect("overlapping records");
-        assert_eq!(
-            record_pairs(&overlapping),
-            vec![(1, "a"), (2, "b"), (3, "c"), (4, "d")]
-        );
-    }
-
-    #[test]
-    fn logical_records_reject_empty_terminators() {
-        assert!(
-            logical_records("row", &[String::new()], Some('"'), true).is_err(),
-            "an empty terminator cannot make forward progress"
-        );
-    }
 
     /// `xsd:Name` is `NameStartChar (NameChar)*` and nothing else — checked in
     /// BOTH directions, because the transcription this replaced was wrong in

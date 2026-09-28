@@ -422,7 +422,8 @@ payload, and folds the **bytes** with a hand-rolled FNV-1a `u64`.
 
 FNV-1a is chosen because it is six lines of integer arithmetic with published
 constants and no state. `DefaultHasher` is SipHash with an unspecified
-per-process key and `ahash` is seed- and version-sensitive by design; either
+per-process key, and the workspace's table hasher `FixedHasher` computes a
+different function on a build with AES than on one without; either
 would make the digest move for reasons unrelated to the graph, which is exactly
 the false signal the harness exists to remove. A golden that moves under a
 toolchain bump is therefore a serialization defect, never a hasher change.
@@ -430,13 +431,19 @@ toolchain bump is therefore a serialization defect, never a hasher change.
 Two proofs share the one constant:
 
 * `crates/hnsw/tests/determinism.rs` pins the golden at 1, 2, 4 and 8 rayon
-  workers and asserts a serial-insert build produces a different digest;
-* `scripts/check-hnsw-determinism.sh` builds the workspace-excluded cdylib in
-  `crates/hnsw/determinism` for `wasm32-unknown-unknown`, runs it under Node,
-  and fails unless the wasm digest equals the same native golden over the same
-  corpus length.
+  workers natively and asserts a serial-insert build produces a different digest;
+  it is `harness = false` on the shared test runner, so its named cases (all but
+  the worker-count one, since wasm32 has no threads) run on
+  `wasm32-unknown-unknown` too, each printing the digest it computed;
+* `scripts/check-hnsw-determinism.sh` runs that target natively, on wasm32 and on
+  wasm32 with `+simd128`, in Node through `scripts/wasm-test-runner.sh`, and fails
+  unless every named case reports the same digest on all three, equal to its
+  native golden over the same corpus length, and the two wasm modules differ. The
+  digests are computed with every host clock and entropy source sealed, so a
+  build that reached one fails by that source's name.
 
-`make hnsw-determinism` runs the gate. It needs the wasm32 target and Node, so
+`make hnsw-determinism` runs the gate. It needs the wasm32 target, the
+wasm-bindgen CLI and Node, so
 it is **not** part of `make check`; CI runs it in the wasm job where both are
 present, and hard-fails there if the target is absent.
 

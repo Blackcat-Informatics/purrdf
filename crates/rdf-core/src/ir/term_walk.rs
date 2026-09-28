@@ -963,7 +963,7 @@ mod tests {
     use core::hash::{Hash, Hasher};
     use core::ops::ControlFlow;
 
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
     use super::{TermBox, TermValue, TermVisit};
     use crate::RdfTextDirection;
@@ -1137,7 +1137,7 @@ mod tests {
     }
 
     fn small() -> impl Strategy<Value = String> {
-        proptest::sample::select(&["", "a", "ab", "b\n", "\u{e9}"][..]).prop_map(str::to_owned)
+        prop::sample::select(&["", "a", "ab", "b\n", "\u{e9}"][..]).prop_map(str::to_owned)
     }
 
     fn term() -> impl Strategy<Value = TermValue> {
@@ -1150,7 +1150,7 @@ mod tests {
             (
                 small(),
                 small(),
-                proptest::option::of(small()),
+                prop::option::of(small()),
                 prop_oneof![
                     Just(None),
                     Just(Some(RdfTextDirection::Ltr)),
@@ -1175,7 +1175,7 @@ mod tests {
         })
     }
 
-    proptest! {
+    prop_test! {
         /// `Debug`, a copy, `==`, the order, the hash feed and the canonical bytes of
         /// every generated pair agree with the recursive reference.
         #[test]
@@ -1244,7 +1244,7 @@ mod tests {
         Ok(format!("({s} {p} {o})"))
     }
 
-    proptest! {
+    prop_test! {
         /// The fold, the consuming fold and both visits answer what their recursive
         /// references answer, on every generated term.
         #[test]
@@ -1518,7 +1518,7 @@ mod tests {
         }
     }
 
-    proptest! {
+    prop_test! {
         /// `try_fold_nested` enters every node in the order a recursive descent does
         /// and assembles the same answer; `visit_nested` visits in the same pre-order;
         /// `try_write_nested` writes what a recursive writer writes, and its first

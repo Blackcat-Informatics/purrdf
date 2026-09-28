@@ -325,10 +325,10 @@ fn walk_query(query: &mut Query, visit: &mut dyn FnMut(u32, Cell<'_>)) -> u32 {
 /// through the checked constructor when they return. The placeholder is a `COUNT(*)`,
 /// whose empty argument list allocates nothing.
 fn walk_pattern(root: &mut GraphPattern, index: &mut u32, visit: &mut dyn FnMut(u32, Cell<'_>)) {
-    let mut steps: smallvec::SmallVec<[Step; 16]> = smallvec::smallvec![Step::Enter(
+    let mut steps: purrdf_core::SmallVec<[Step; 16]> = purrdf_core::smallvec![Step::Enter(
         Node::Pattern(std::mem::replace(root, pattern_placeholder()))
     )];
-    let mut returned: smallvec::SmallVec<[Node; 16]> = smallvec::SmallVec::new();
+    let mut returned: purrdf_core::SmallVec<[Node; 16]> = purrdf_core::SmallVec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Enter(node) => {
@@ -371,21 +371,22 @@ fn walk_pattern(root: &mut GraphPattern, index: &mut u32, visit: &mut dyn FnMut(
                 children,
             } => {
                 let first = returned.len() - children;
-                {
-                    let mut back = returned.drain(first..);
-                    for_each_child_slot(&mut shell, &mut |slot| {
-                        put(
-                            slot,
-                            back.next()
-                                .expect("every child taken out of a node comes back to it"),
-                        );
-                    });
-                    let extra = back.next();
-                    assert!(
-                        extra.is_none(),
-                        "a node takes back exactly the children it gave out"
+                // Reverse just this node's completed children so popping moves them
+                // back in source order without allocating an intermediate drain.
+                returned[first..].reverse();
+                for_each_child_slot(&mut shell, &mut |slot| {
+                    put(
+                        slot,
+                        returned
+                            .pop()
+                            .expect("every child taken out of a node comes back to it"),
                     );
-                }
+                });
+                assert_eq!(
+                    returned.len(),
+                    first,
+                    "a node takes back exactly its children"
+                );
                 returned.push(match shell {
                     Shell::Pattern(pattern) => Node::Pattern(pattern),
                     Shell::Expression(expression) => Node::Expression(expression),
@@ -714,7 +715,7 @@ fn count_star() -> AggregateExpression {
 /// into is the term as the visitor left it. The walk keeps its own work list, so a
 /// deeper nesting needs no more machine stack.
 fn walk_term(term: &mut TermPattern, index: &mut u32, visit: &mut dyn FnMut(u32, Cell<'_>)) {
-    let mut pending: smallvec::SmallVec<[&mut TermPattern; 8]> = smallvec::smallvec![term];
+    let mut pending: purrdf_core::SmallVec<[&mut TermPattern; 8]> = purrdf_core::smallvec![term];
     while let Some(term) = pending.pop() {
         let here = *index;
         *index += 1;
@@ -1038,7 +1039,7 @@ mod iterative_walk_tests {
     };
 
     use super::{Cell, CellValue, count_star, moved, moved_node, walk_query};
-    use crate::test_rng::splitmix64_next;
+    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 

@@ -11,6 +11,7 @@
 //! strict ASCII subset in URI mode.
 
 use crate::error::{IriError, Result};
+use crate::host::Mode;
 use crate::scan::{ByteRun, byte_runs, count_runs, in_runs};
 use core::ops::Range;
 
@@ -82,6 +83,130 @@ impl Iri {
     /// separately via [`Iri::fragment`].
     pub fn has_scheme(&self) -> bool {
         self.scheme.is_some()
+    }
+
+    /// The URI this IRI maps to under RFC 3987 §3.1.
+    ///
+    /// Every non-ASCII code point (a `ucschar` or `iprivate`) is replaced by
+    /// the `%HH` escapes of its UTF-8 octets, in upper-case hexadecimal; ASCII,
+    /// including existing escapes, is kept as it is. A host that contains
+    /// non-ASCII is instead replaced by its IDNA ASCII form
+    /// ([`idna::to_ascii_mapped`](crate::idna::to_ascii_mapped)) when it has
+    /// one, and percent-encoded like the other components when it does not —
+    /// the two conversions §3.1 permits for an `ireg-name`. An all-ASCII IRI
+    /// maps to itself, and the result always parses under
+    /// [`parse_uri`](crate::parse_uri).
+    ///
+    /// This is a separate, explicit step: parsing never applies it, because
+    /// RFC 3987 compares IRIs code point by code point.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// let iri = purrdf_iri::parse("http://r\u{e9}sum\u{e9}.example.org/caf\u{e9}?q=\u{10300}")?;
+    /// let uri = iri.to_uri();
+    /// assert_eq!(
+    ///     uri.as_str(),
+    ///     "http://xn--rsum-bpad.example.org/caf%C3%A9?q=%F0%90%8C%80"
+    /// );
+    /// assert!(purrdf_iri::parse_uri(uri.as_str()).is_ok());
+    /// # Ok::<(), purrdf_iri::IriError>(())
+    /// ```
+    #[must_use]
+    pub fn to_uri(&self) -> Self {
+        if self.text.is_ascii() {
+            return self.clone();
+        }
+        let mut text = String::with_capacity(self.text.len() * 3);
+        let scheme = self.scheme.clone().map(|r| {
+            text.push_str(&self.text[r]);
+            let span = 0..text.len();
+            text.push(':');
+            span
+        });
+        let authority = self.authority.clone().map(|r| {
+            text.push_str("//");
+            let start = text.len();
+            authority_to_uri(&self.text[r], &mut text);
+            start..text.len()
+        });
+        let start = text.len();
+        percent_encode_non_ascii(self.path(), &mut text);
+        let path = start..text.len();
+        let query = self.query().map(|q| {
+            text.push('?');
+            let start = text.len();
+            percent_encode_non_ascii(q, &mut text);
+            start..text.len()
+        });
+        let fragment = self.fragment().map(|f| {
+            text.push('#');
+            let start = text.len();
+            percent_encode_non_ascii(f, &mut text);
+            start..text.len()
+        });
+        Self {
+            text,
+            scheme,
+            authority,
+            path,
+            query,
+            fragment,
+        }
+    }
+}
+
+/// RFC 3987 §3.1 step 2 over one component: every non-ASCII code point becomes
+/// the upper-case `%HH` escapes of its UTF-8 octets.
+fn percent_encode_non_ascii(component: &str, out: &mut String) {
+    const HEX: &[u8; 16] = b"0123456789ABCDEF";
+    for c in component.chars() {
+        if c.is_ascii() {
+            out.push(c);
+            continue;
+        }
+        let mut utf8 = [0_u8; 4];
+        for &octet in c.encode_utf8(&mut utf8).as_bytes() {
+            out.push('%');
+            out.push(char::from(HEX[usize::from(octet >> 4)]));
+            out.push(char::from(HEX[usize::from(octet & 0x0F)]));
+        }
+    }
+}
+
+/// The URI form of a validated authority: userinfo and port percent-encoded,
+/// an internationalized `ireg-name` converted by IDNA where it can be and
+/// percent-encoded where it cannot.
+fn authority_to_uri(authority: &str, out: &mut String) {
+    let (userinfo, host_port) = match find_first_byte(authority.as_bytes(), b'@') {
+        Some(at) => (Some(&authority[..at]), &authority[at + 1..]),
+        None => (None, authority),
+    };
+    if let Some(userinfo) = userinfo {
+        percent_encode_non_ascii(userinfo, out);
+        out.push('@');
+    }
+    // The same host/port split `validate_authority` makes: a bracketed
+    // IP-literal is ASCII and passes through; otherwise the port follows the
+    // last `:`.
+    let (host, port) = if host_port.starts_with('[') {
+        (host_port, None)
+    } else {
+        match host_port.rfind(':') {
+            Some(colon) => (&host_port[..colon], Some(&host_port[colon + 1..])),
+            None => (host_port, None),
+        }
+    };
+    if host.is_ascii() {
+        out.push_str(host);
+    } else if let Some(ascii) = crate::idna::to_ascii_mapped(host) {
+        out.push_str(&ascii);
+    } else {
+        percent_encode_non_ascii(host, out);
+    }
+    if let Some(port) = port {
+        out.push(':');
+        out.push_str(port);
     }
 }
 
@@ -162,12 +287,6 @@ pub fn parse_uri(s: &str) -> Result<Iri> {
 /// ```
 pub fn is_absolute(s: &str) -> Result<bool> {
     Ok(classify(s)? == IriForm::Absolute)
-}
-
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Mode {
-    Iri,
-    Uri,
 }
 
 /// Whether a VALIDATED IRI reference carries a scheme — the one bit of [`Iri`] a
@@ -447,7 +566,7 @@ fn iri_extra_ok(c: char, allow_iprivate: bool, mode: Mode) -> bool {
 /// The ASCII grammar check is a single [`CLASS`] table lookup + mask; only a
 /// non-ASCII byte (a UTF-8 lead byte, always a char boundary here) is decoded to a
 /// `char` and routed through the `ucschar`/`iprivate` range test.
-fn validate_component(
+pub(crate) fn validate_component(
     s: &str,
     base_off: usize,
     extra_mask: u8,
@@ -643,7 +762,7 @@ fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
         }
     };
 
-    validate_host(host, host_off, mode)?;
+    crate::host::validate_host(host, host_off, mode)?;
     if let (Some(p), Some(poff)) = (port, port_off) {
         for (k, c) in p.char_indices() {
             if !c.is_ascii_digit() {
@@ -654,53 +773,6 @@ fn validate_authority(s: &str, base_off: usize, mode: Mode) -> Result<()> {
         // Transport ranges belong to a scheme's connection policy, not IRI
         // identity. Empty, long, and leading-zero digit strings remain lexical.
     }
-    Ok(())
-}
-
-fn validate_host(s: &str, base_off: usize, mode: Mode) -> Result<()> {
-    if let Some(inner) = s.strip_prefix('[').and_then(|r| r.strip_suffix(']')) {
-        // RFC 3986 §3.2.2: IP-literal = "[" (IPv6address / IPvFuture) "]".
-        // Character membership alone does not establish either production.
-        return validate_ip_literal(inner, base_off + 1);
-    }
-    // reg-name / IPv4: unreserved / pct / sub-delims (+ ucschar in IRI mode).
-    validate_component(s, base_off, 0, false, mode)
-}
-
-/// Validate an IP-literal's contents without normalizing its spelling.
-fn validate_ip_literal(inner: &str, base_off: usize) -> Result<()> {
-    if matches!(inner.as_bytes().first(), Some(b'v' | b'V')) {
-        // ABNF string literals are case-insensitive. The version is nonempty
-        // hexadecimal; the address is a nonempty exact terminal class.
-        let (version, address) = inner[1..].split_once('.').ok_or_else(|| {
-            IriError::BadAuthority(format!(
-                "IPvFuture at byte {base_off} requires a version and '.'"
-            ))
-        })?;
-        if version.is_empty() || address.is_empty() {
-            return Err(IriError::BadAuthority(format!(
-                "IPvFuture at byte {base_off} needs a nonempty version and address"
-            )));
-        }
-        for (at, ch) in version.char_indices() {
-            if !ch.is_ascii_hexdigit() {
-                return Err(IriError::DisallowedChar(ch, base_off + 1 + at));
-            }
-        }
-        let address_off = base_off + version.len() + 2;
-        for (at, ch) in address.char_indices() {
-            if !crate::terminals::is_ipvfuture_address_char(ch) {
-                return Err(IriError::DisallowedChar(ch, address_off + at));
-            }
-        }
-        return Ok(());
-    }
-    // The standard parser is pure address syntax: no lookup, socket, clock or
-    // other I/O. It handles every IPv6 compression and embedded IPv4 form on
-    // native and wasm targets, without adding a second address parser here.
-    inner.parse::<core::net::Ipv6Addr>().map_err(|_| {
-        IriError::BadAuthority(format!("invalid IPv6 address {inner:?} at byte {base_off}"))
-    })?;
     Ok(())
 }
 
@@ -1001,7 +1073,7 @@ mod tests {
         ];
         let mut state = 0x01B1_C0DE_5EED_u64;
         let mut next = move || {
-            usize::try_from(crate::test_rng::splitmix64_next(&mut state) % 1_000_003)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut state) % 1_000_003)
                 .expect("small")
         };
         let mut verdicts = [0_usize; 3];

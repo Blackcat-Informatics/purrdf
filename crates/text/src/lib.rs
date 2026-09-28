@@ -48,7 +48,7 @@
 //! The two halves of what that buys are proven in different places, so they are
 //! claimed separately rather than as one sentence. The **ranking** — the row
 //! order together with every score's decimal lexical — is pinned by a single
-//! test body carrying both `#[test]` and `#[wasm_bindgen_test]`, so `make
+//! test body per case on one shared `harness = false` runner, so `make
 //! wasm-test` executes it on `wasm32-unknown-unknown` against the very
 //! expectations `cargo test` asserts natively. That is the half a divergent
 //! `ln` could actually move, and it is proven on both targets. Byte identity of
@@ -74,6 +74,8 @@ mod ranking;
 mod relation;
 mod score;
 mod term_bytes;
+pub mod unicode;
+mod unicode_tables;
 
 pub use analysis::{Analyzer, Token, UnicodeVersion, UnicodeVersions, unicode_versions};
 pub use error::TextError;
@@ -92,7 +94,7 @@ pub use term_bytes::{FINGERPRINT_BYTES, fingerprint_terms};
 
 /// Exact-token analyzer identity; Unicode versions are bound by the index's
 /// analyzer fingerprint. This identity promises no substring matching.
-pub const ANALYZER_PROFILE_ID: &str = "purrdf-compatibility-caseless-uax29-v1";
+pub const ANALYZER_PROFILE_ID: &str = "purrdf-compatibility-caseless-uax29-v2";
 
 pub use ranking::{
     DOCUMENTS_MAX, FIELD_LENGTH_MAX, FIELD_WEIGHT_MAX, FieldInput, INDEX_CORPUS_PROFILE_ID,

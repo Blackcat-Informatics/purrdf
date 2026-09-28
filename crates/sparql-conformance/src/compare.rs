@@ -6,7 +6,7 @@
 //! * `SELECT` → the solution sequence compared with a **single global
 //!   blank-node bijection** over the whole result set (W3C solution-set
 //!   equality), as a multiset when there is no top-level `ORDER BY` and as an
-//!   ordered sequence when there is (see [`compare_solutions`]).
+//!   ordered sequence when there is (see the private `compare_solutions`).
 //! * `ASK` → boolean equality.
 //! * `CONSTRUCT`/`DESCRIBE` → canonical (RDFC-1.0) N-Quads equality.
 //! * syntax tests → parse success/failure matches the kind.
@@ -19,7 +19,7 @@
 //! blank node across every row at once (never a looser per-row bijection) while
 //! non-blank terms — IRIs, literals including datatype/language/base-direction,
 //! and their variable positions — still compare exactly. See
-//! [`encode_solution_set`].
+//! the private `encode_solution_set`.
 
 use std::convert::Infallible;
 use std::path::Path;
@@ -754,7 +754,7 @@ mod term_walk_tests {
     //! Result-value interning against its recursive reference, and at a hundred thousand
     //! levels on a 128 KiB thread.
 
-    use purrdf_core::test_rng::TermShape;
+    use crate::test_terms::TermShape;
     use purrdf_core::{RdfDatasetBuilder, RdfLiteral, TermId, TermValue};
 
     use super::{VALUE_SCOPE, intern_term_value};
@@ -790,7 +790,7 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(&mut state, &mut budget, TermShape::Any);
+            let value = crate::test_terms::term_value(&mut state, &mut budget, TermShape::Any);
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
                 intern_term_value(&mut found, &value),
@@ -814,7 +814,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let value = crate::test_terms::triple_chain(LEVELS);
                 let mut builder = RdfDatasetBuilder::new();
                 assert_eq!(intern_term_value(&mut builder, &value).index(), LEVELS + 2);
             })

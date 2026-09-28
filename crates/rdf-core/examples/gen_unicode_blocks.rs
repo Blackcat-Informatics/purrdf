@@ -152,9 +152,16 @@ fn main() {
         "// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>"
     )
     .unwrap();
+    // The table is derived from Unicode data, so the file carries the Unicode
+    // licence beside the project's own offer.
     writeln!(
         out,
-        "// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0"
+        "// SPDX-FileCopyrightText: Unicode, Inc. <https://www.unicode.org>"
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "// SPDX-License-Identifier: (MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
     )
     .unwrap();
     writeln!(out).unwrap();

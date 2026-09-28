@@ -19,13 +19,15 @@
 //!
 //! # How it runs on both
 //!
-//! One test body, two attributes. Natively these are ordinary `#[test]`s picked up
-//! by `cargo test -p purrdf-shapes`; on `wasm32-unknown-unknown` they are
-//! `#[wasm_bindgen_test]`s compiled to wasm and executed in Node by
-//! `make wasm-test`:
+//! One test body per case, one runner on both targets. The target is
+//! `harness = false`, and its `main` hands the named cases to
+//! `purrdf_testkit::harness`: natively they run under `cargo test -p purrdf-shapes`,
+//! and on `wasm32-unknown-unknown` the same named cases run in Node through
+//! `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test` sets:
 //!
 //! ```text
-//! cargo test -p purrdf-shapes --target wasm32-unknown-unknown --test product_wasm
+//! CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=scripts/wasm-test-runner.sh \
+//!     cargo test -p purrdf-shapes --target wasm32-unknown-unknown --test product_wasm
 //! ```
 //!
 //! Both runs assert the *same* expectations, so the native run is not a weaker
@@ -54,17 +56,12 @@ mod product_fixture;
 
 use purrdf_shapes::product::{ShapesProduct, ShapesProfile};
 
-#[cfg(target_arch = "wasm32")]
-use wasm_bindgen_test::wasm_bindgen_test;
-
 /// The bytes this target writes for the fixture are the bytes the host wrote.
 ///
 /// The golden was produced by a native build and committed; the wasm run encodes
 /// the same shapes graph from source and compares. A target whose pointer width,
 /// endianness or hash seeding reached the writer renders a different product here
 /// rather than shipping a cache two engines disagree about.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn encoding_matches_the_committed_bytes_on_this_target() {
     let bytes = product_fixture::encode();
 
@@ -95,8 +92,6 @@ fn encoding_matches_the_committed_bytes_on_this_target() {
 /// is still a broken cache. This runs the round trip end to end and checks the
 /// answer, so a decoder that mis-read a field on one target is caught by the
 /// report rather than by the bytes.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn encode_open_admit_validate_on_this_target() {
     let expected = product_fixture::expected_report_nt();
 
@@ -123,8 +118,6 @@ fn encode_open_admit_validate_on_this_target() {
 /// working validator. Encoding and decoding could both be target-dependent in the
 /// same way and still pass the round trip above; only a product from another
 /// target separates them.
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
 fn the_committed_golden_restores_on_this_target() {
     let restored = ShapesProduct::open(product_fixture::GOLDEN)
         .expect("the committed golden opens on this target")
@@ -154,9 +147,6 @@ mod shacl12_subset {
     use purrdf_shapes::srl::{self, InferOptions};
     use purrdf_shapes::term::{NamedNode, Term};
     use purrdf_shapes::text_ingest::parse_turtle_document;
-
-    #[cfg(target_arch = "wasm32")]
-    use wasm_bindgen_test::wasm_bindgen_test;
 
     const SH: &str = "http://www.w3.org/ns/shacl#";
     const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
@@ -272,9 +262,7 @@ mod shacl12_subset {
     }
 
     /// SHACL 1.2 Core `sh:memberShape`, with `sh:detail` results.
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
-    fn member_shape_001_on_this_target() {
+    pub(super) fn member_shape_001_on_this_target() {
         grade_validate(
             "core/node/memberShape-001.ttl",
             include_str!("../../../vectors/shacl12/tests/core/node/memberShape-001.ttl"),
@@ -283,9 +271,7 @@ mod shacl12_subset {
     }
 
     /// SHACL 1.2 Core `sh:closed sh:ByTypes`.
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
-    fn closed_by_types_003_on_this_target() {
+    pub(super) fn closed_by_types_003_on_this_target() {
         grade_validate(
             "core/node/closed-003.ttl",
             include_str!("../../../vectors/shacl12/tests/core/node/closed-003.ttl"),
@@ -294,9 +280,7 @@ mod shacl12_subset {
     }
 
     /// SHACL 1.2 Core `sh:uniqueValuesFor`.
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
-    fn unique_values_for_001_on_this_target() {
+    pub(super) fn unique_values_for_001_on_this_target() {
         grade_validate(
             "core/node/uniqueValuesFor-001.ttl",
             include_str!("../../../vectors/shacl12/tests/core/node/uniqueValuesFor-001.ttl"),
@@ -307,9 +291,7 @@ mod shacl12_subset {
     /// Every `sht:EvalNodeExpr` entry of `shnex/concat.ttl`, through the standalone
     /// evaluator every host reaches, graded term for term and in order against its
     /// `mf:result` list.
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
-    fn node_expr_concat_on_this_target() {
+    pub(super) fn node_expr_concat_on_this_target() {
         let name = "node-expr/shnex/concat.ttl";
         let document = parse_turtle_document(
             include_str!("../../../vectors/shacl12/tests/node-expr/shnex/concat.ttl"),
@@ -349,9 +331,7 @@ mod shacl12_subset {
     }
 
     /// A SPARQL 1.2 RL evaluation entry: the inference graph equals the results file.
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
-    fn srl_eval_filter_01_on_this_target() {
+    pub(super) fn srl_eval_filter_01_on_this_target() {
         let document = srl::parse_and_check(
             include_str!("../../../vectors/shacl12/tests/sparql-rl/eval/eval-filter-01.srl"),
             Some(&base("sparql-rl/eval/eval-filter-01.srl")),
@@ -390,9 +370,7 @@ mod shacl12_subset {
     /// built-in function and component DECLARED, none with a body — loads on this
     /// target, and `sh:sparqlExpr` with `sh:prefixes` still evaluates natively: exactly
     /// the instance whose `ex:size` is not above 2 violates.
-    #[cfg_attr(not(target_arch = "wasm32"), test)]
-    #[cfg_attr(target_arch = "wasm32", wasm_bindgen_test)]
-    fn merged_vocabularies_load_and_validate_on_this_target() {
+    pub(super) fn merged_vocabularies_load_and_validate_on_this_target() {
         let shapes_text = [
             include_str!("../spec/shacl.ttl"),
             include_str!("../spec/shnex.ttl"),
@@ -430,3 +408,21 @@ ex:Big a sh:NodeShape ;
         assert_eq!(focus, vec!["<http://example.org/ns#small>".to_owned()]);
     }
 }
+
+use shacl12_subset::{
+    closed_by_types_003_on_this_target, member_shape_001_on_this_target,
+    merged_vocabularies_load_and_validate_on_this_target, node_expr_concat_on_this_target,
+    srl_eval_filter_01_on_this_target, unique_values_for_001_on_this_target,
+};
+
+purrdf_testkit::harness_main!(
+    encode_open_admit_validate_on_this_target,
+    encoding_matches_the_committed_bytes_on_this_target,
+    the_committed_golden_restores_on_this_target,
+    member_shape_001_on_this_target,
+    closed_by_types_003_on_this_target,
+    unique_values_for_001_on_this_target,
+    node_expr_concat_on_this_target,
+    srl_eval_filter_01_on_this_target,
+    merged_vocabularies_load_and_validate_on_this_target,
+);

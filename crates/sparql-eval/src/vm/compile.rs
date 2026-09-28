@@ -189,15 +189,15 @@ impl Constant {
 #[derive(Debug, Default)]
 pub(crate) struct ExprProgram {
     /// The instructions, inline up to a small expression's length.
-    pub(super) ops: smallvec::SmallVec<[Op; 8]>,
+    pub(super) ops: purrdf_core::SmallVec<[Op; 8]>,
     /// The variables the program reads, one slot each, inline up to two.
-    pub(super) vars: smallvec::SmallVec<[Variable; 2]>,
+    pub(super) vars: purrdf_core::SmallVec<[Variable; 2]>,
     /// The term constants, one per occurrence, inline up to two.
-    pub(super) consts: smallvec::SmallVec<[Constant; 2]>,
+    pub(super) consts: purrdf_core::SmallVec<[Constant; 2]>,
     /// The string-argument constants.
     pub(super) strs: Vec<(String, Option<String>)>,
     /// The functions called, inline up to two.
-    pub(super) calls: smallvec::SmallVec<[Function; 2]>,
+    pub(super) calls: purrdf_core::SmallVec<[Function; 2]>,
     /// For each regex slot, the constant `(pattern, flags)` it links, when both are
     /// constants.
     pub(super) regexes: Vec<Option<(String, String)>>,
@@ -231,7 +231,7 @@ enum Task<'x> {
 
 /// A list of pending compilation units, inline until an expression is wide or deep
 /// enough to need more.
-type Tasks<'x> = smallvec::SmallVec<[Task<'x>; 16]>;
+type Tasks<'x> = purrdf_core::SmallVec<[Task<'x>; 16]>;
 
 /// How many variables a program finds by scanning its variable table before the
 /// compiler indexes them.
@@ -243,7 +243,7 @@ struct Compiler {
     /// Each variable's slot, once the program reads more than [`SCANNED_VARIABLES`];
     /// until then a slot is found by scanning [`ExprProgram::vars`].
     slots: DetHashMap<Variable, u32>,
-    labels: smallvec::SmallVec<[u32; 8]>,
+    labels: purrdf_core::SmallVec<[u32; 8]>,
 }
 
 impl ExprProgram {
@@ -278,10 +278,10 @@ impl ExprProgram {
         let mut compiler = Compiler {
             program,
             slots: DetHashMap::default(),
-            labels: smallvec::SmallVec::new(),
+            labels: purrdf_core::SmallVec::new(),
         };
-        let mut work: Tasks<'_> = smallvec::smallvec![Task::Compile(expr, Mode::Term)];
-        let mut next: Tasks<'_> = smallvec::SmallVec::new();
+        let mut work: Tasks<'_> = purrdf_core::smallvec![Task::Compile(expr, Mode::Term)];
+        let mut next: Tasks<'_> = purrdf_core::SmallVec::new();
         while let Some(task) = work.pop() {
             match task {
                 Task::Compile(expr, mode) => {

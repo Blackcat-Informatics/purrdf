@@ -536,7 +536,7 @@ impl MutableDataset {
         self.suppressed.len()
     }
 
-    /// Iterate the effective quads as value-quads — the independent test/proptest
+    /// Iterate the effective quads as value-quads — the independent test/property-test
     /// oracle for the effective set. `freeze` builds the effective set directly (so it
     /// can carry per-base-quad source locations), so this is a test-only helper; the
     /// public surface is [`DatasetMut`].
@@ -1057,8 +1057,7 @@ const _: fn() = || {
 mod tests {
     use super::*;
     use crate::ir::RdfDatasetBuilder;
-    use pretty_assertions::assert_eq;
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
     use std::collections::HashSet;
 
     // -- helpers ----------------------------------------------------------------------
@@ -1569,15 +1568,15 @@ mod tests {
         assert!(m.should_compact()); // 3 * 2 > 5
     }
 
-    // -- differential proptest --------------------------------------------------------
+    // -- differential property test --------------------------------------------------
 
-    // Mirror of `proptest_indexed_pattern_matches_linear_scan`: apply a random
+    // Mirror of `property_indexed_pattern_matches_linear_scan`: apply a random
     // sequence of insert/remove ops to BOTH a `MutableDataset` and a reference
     // `HashSet` model of the effective quad-value set, then assert `contains` and the
     // effective set agree, and that `freeze()`'s quad-value set equals the model.
-    proptest! {
+    prop_test! {
         #[test]
-        fn proptest_mutations_match_hashset_model(
+        fn property_mutations_match_hashset_model(
             ops in prop::collection::vec(
                 // (is_insert, s, p, o) over a small pool; subjects/objects 0..6 so some
                 // collide with the base's a/b/c terms (ids 0..2) and some are new.
@@ -1671,7 +1670,7 @@ mod term_walk_tests {
 
     use super::{MutableDataset, check_value_absolute, intern_value};
     use crate::backend::TermFactory as _;
-    use crate::test_rng::TermShape;
+    use crate::test_terms::TermShape;
     use crate::{RdfDataset, RdfDatasetBuilder, TermBox, TermId, TermRef, TermValue};
 
     fn reference_base(base: &RdfDataset, id: TermId) -> TermValue {
@@ -1732,7 +1731,8 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_rng::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let value =
+                crate::test_terms::term_value(&mut state, &mut budget, TermShape::WellFormed);
             let mut builder = RdfDatasetBuilder::new();
             let object = builder.intern_value(&value);
             let holder = builder.intern_iri("http://example.org/holder");
@@ -1777,7 +1777,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = crate::test_rng::triple_chain(LEVELS);
+                let value = crate::test_terms::triple_chain(LEVELS);
                 assert!(check_value_absolute(&value).is_ok());
                 let mut builder = RdfDatasetBuilder::new();
                 assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);

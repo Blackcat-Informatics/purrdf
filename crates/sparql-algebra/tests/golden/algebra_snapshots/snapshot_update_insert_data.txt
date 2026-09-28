@@ -1,0 +1,42 @@
+Update {
+    operations: [
+        InsertData {
+            data: [
+                QuadPattern {
+                    triple: TriplePattern {
+                        subject: NamedNode(
+                            <https://x/s>,
+                        ),
+                        predicate: NamedNode(
+                            <https://x/p>,
+                        ),
+                        object: NamedNode(
+                            <https://x/o>,
+                        ),
+                    },
+                    graph: None,
+                },
+                QuadPattern {
+                    triple: TriplePattern {
+                        subject: NamedNode(
+                            <https://x/s>,
+                        ),
+                        predicate: NamedNode(
+                            <https://x/p>,
+                        ),
+                        object: NamedNode(
+                            <https://x/o2>,
+                        ),
+                    },
+                    graph: Some(
+                        NamedNode(
+                            <https://x/g>,
+                        ),
+                    ),
+                },
+            ],
+        },
+    ],
+    base_iri: None,
+    version: None,
+}

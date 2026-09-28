@@ -4,7 +4,6 @@
 //! One test per SEP-0009 production, one per PurRDF superset production, one per
 //! ill-formed shape, and the canonical round-trip for every language-direction case.
 
-use pretty_assertions::assert_eq;
 use purrdf_cdt::{
     CdtEntry, CdtError, CdtKey, CdtLiteral, CdtTerm, CdtValue, TextDirection, XSD_BOOLEAN,
     XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER, XSD_STRING, parse_list, parse_map,

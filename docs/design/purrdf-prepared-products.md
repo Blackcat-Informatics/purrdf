@@ -500,9 +500,10 @@ types themselves lack**: two values are equal exactly when they encode alike.
 Determinism across *targets* is asserted the same way the geometry crate asserts
 its own, and for the same reason — two runs on one target cannot tell a codec that
 is target-independent from one that merely agrees with whichever target it was
-last compiled for. One test body carries two attributes: natively an ordinary
-`#[test]`, and on `wasm32-unknown-unknown` a `wasm_bindgen_test` run by the
-`make wasm-test` lane. Both arms assert against a golden byte string committed
+last compiled for. One test body per case, on one `harness = false` runner: natively
+`cargo test` runs the named cases, and on `wasm32-unknown-unknown` the `make
+wasm-test` lane runs the same named cases in Node through
+`scripts/wasm-test-runner.sh`. Both runs assert against a golden byte string committed
 under `tests/fixtures/` and produced by a *native* build, so the native run is not
 a weaker version of the wasm one — it is the other half of the comparison. Nothing
 in that test opens a file; the shapes graph, the data graph and the golden product

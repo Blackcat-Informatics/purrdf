@@ -316,13 +316,13 @@ fn hash_fact(hasher: &mut impl Hasher, fact: &Fact) {
 
 /// The interning hash of one proof term.
 ///
-/// Fixed-key `ahash`, exactly as [`crate::store::TermInterner`] uses: seeded from constants
+/// The fixed-key `FixedHasher`, exactly as [`crate::store::TermInterner`] uses: keyed by constants
 /// rather than from ambient entropy, which does not exist on `wasm32-unknown-unknown`. The
 /// table this feeds is NEVER iterated and the hash is NEVER persisted — a proof's stable
 /// identity is [`ProofArena::digest`], a BLAKE3 digest over the canonical encoding — so the
 /// hasher's lack of version stability cannot reach an output.
 fn term_hash(term: &ProofTerm) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     match term {
         ProofTerm::Axiom { goal } => {
             hasher.write_u8(KIND_AXIOM);
@@ -789,8 +789,8 @@ impl ProofArena {
 
     /// The BLAKE3 digest of [`encode`](Self::encode) — a proof term's stable identity.
     ///
-    /// BLAKE3 rather than the interning hasher: `ahash` is explicitly not version-stable, so
-    /// it cannot address content across a dependency bump. Only `update` is used, never
+    /// BLAKE3 rather than the interning hasher: `FixedHasher` is a table hasher whose
+    /// function depends on the build's target features, so it cannot address content. Only `update` is used, never
     /// `update_rayon`, so hashing is sequential on every target and the `wasm32` build
     /// carries no thread pool.
     ///
@@ -801,7 +801,7 @@ impl ProofArena {
     ///
     /// Panics if `root` was not minted by this arena.
     pub fn digest(&self, root: ProofId) -> [u8; 32] {
-        *blake3::hash(&self.encode(root)).as_bytes()
+        *purrdf_hash::blake3::hash(&self.encode(root)).as_bytes()
     }
 
     /// The node indices reachable from `root`, in post-order first-visit order.

@@ -40,7 +40,7 @@ it), and test fixtures use `example.org`. Consumer-config types (`SliceVocab`,
 
 Serializers and the GTS writer are byte-deterministic. No iteration-order,
 time, or RNG dependence is permitted in any output path; hot maps use
-fixed-key `ahash` for this reason. Changes that alter emitted bytes must
+fixed-key `FixedHasher` for this reason. Changes that alter emitted bytes must
 update the affected golden files, visibly.
 
 ## The kernel ring-fence

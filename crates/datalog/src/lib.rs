@@ -96,7 +96,7 @@
 //! a budget are false, and are corrected rather than left standing:
 //!
 //! * It does **not** break wasm. The reader is target-split — [`std::time::Instant`]
-//!   natively, `js_sys::Date::now()` on `wasm32-unknown-unknown` — and the wasm half is
+//!   natively, the host's `Date.now()` on `wasm32-unknown-unknown` — and the wasm half is
 //!   demonstrated by an executed Node round-trip against a real module rather than by a
 //!   green cross-compile, because a build that links is no evidence that a clock reads.
 //! * It does not break reproducibility, because **wall time never claims it**. Determinism
@@ -320,25 +320,16 @@ pub(crate) mod test_support {
     //! suite is therefore reproducible on every target: a failure names the seed
     //! that produced it.
 
-    /// One step of the SplitMix64 mixing function — a pure, seed-driven integer
-    /// hash with no ambient state.
-    pub(crate) fn mix(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = *state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
     /// A deterministic permutation of `items` selected by `seed`.
     ///
-    /// A Fisher-Yates shuffle driven by [`mix`]; the same `seed` always yields the
-    /// same order, on every target.
+    /// A Fisher-Yates shuffle driven by the workspace's shared SplitMix64
+    /// step ([`purrdf_testkit::rng::splitmix64_next`]); the same `seed`
+    /// always yields the same order, on every target.
     pub(crate) fn permute<T: Clone>(items: &[T], seed: u64) -> Vec<T> {
         let mut out = items.to_vec();
         let mut state = seed;
         for i in (1..out.len()).rev() {
-            let j = (mix(&mut state) % (i as u64 + 1)) as usize;
+            let j = (purrdf_testkit::rng::splitmix64_next(&mut state) % (i as u64 + 1)) as usize;
             out.swap(i, j);
         }
         out

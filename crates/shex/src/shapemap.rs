@@ -1234,10 +1234,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::IriPredicates,
+                crate::test_terms::TermShape::IriPredicates,
             );
             nested += usize::from(budget < 7);
             assert_eq!(term_key(&value), reference_key(&value), "seed {seed}");
@@ -1282,7 +1282,7 @@ mod term_walk_tests {
                     " >>".repeat(LEVELS)
                 );
                 let parsed = parser(&text).parse_term().expect("the spelling parses");
-                assert_eq!(parsed, purrdf_core::test_rng::triple_chain(LEVELS));
+                assert_eq!(parsed, crate::test_terms::triple_chain(LEVELS));
             })
             .expect("the thread starts")
             .join()

@@ -13,13 +13,16 @@
 //! wall-clock, no RNG. The pack codec honors that contract exactly the same
 //! way the paged backend does: `purrdf-core` never mmaps anything itself.
 //! Instead, [`purrdf_core::PackView::from_bytes`] is zero-copy over any
-//! borrowed `&[u8]` the CALLER supplies — including a slice backed by a
-//! memory-mapped file. This test file plays the role of that external
-//! consumer: it is the ONLY place in this crate's test suite that depends on
-//! `memmap2`, and it does so strictly as a `[dev-dependencies]` entry (see
-//! `crates/rdf-core/Cargo.toml`), never a runtime dependency. The whole file
-//! is gated off the wasm32 target, where mmap has no meaning.
-
+//! borrowed `&[u8]` the CALLER supplies — a file mapping, or the owned buffer
+//! the production pack reader hands it when it does not map.
+//!
+//! This test file plays the role of that external consumer. It writes the pack
+//! to a real file and reads it back with `std::fs::read`, because what it
+//! asserts is the byte-level reader contract (a pack round-tripped through the
+//! filesystem opens, verifies and scans identically to the in-memory bytes),
+//! and no assertion depends on how the borrowed bytes are backed. The CLI's
+//! own mapped tier is exercised in `purrdf-cli`. The whole file is gated off
+//! the wasm32 target, which has no filesystem.
 #![cfg(not(target_arch = "wasm32"))]
 
 use purrdf_core::TermBox;
@@ -41,7 +44,7 @@ fn iri(name: &str) -> TermValue {
 /// `DatasetView`, mirroring the by-value resolution pattern shared by
 /// `tests/pack_dataset_view.rs` and `tests/paged_backend.rs` — the SAME
 /// routine reads the reference `RdfDataset`, the heap-backed `PackView`, and
-/// the mmap-backed `PackView` under test, so their rows can be compared by
+/// the file-backed `PackView` under test, so their rows can be compared by
 /// value (each view mints its own unrelated id space).
 fn to_value<V: DatasetView>(v: &V, id: V::Id) -> TermValue {
     match v.resolve(id) {
@@ -106,7 +109,7 @@ fn id_of<V: DatasetView>(v: &V, value: &TermValue) -> V::Id {
 
 /// Build a rich fixture `RdfDataset`: default graph + a named graph, every
 /// literal shape, a scoped blank node, and a reifier + annotation pair (the
-/// same seams `tests/pack_dataset_view.rs` exercises), so the mmap-backed
+/// same seams `tests/pack_dataset_view.rs` exercises), so the file-backed
 /// query surface below is genuinely non-trivial rather than a smoke test.
 fn build_fixture() -> Arc<RdfDataset> {
     let mut b = RdfDatasetBuilder::new();
@@ -164,85 +167,70 @@ fn build_fixture() -> Arc<RdfDataset> {
 
 /// Builds the fixture pack once, writes it to a `NamedTempFile`, and opens
 /// THREE views over it: the source `RdfDataset`, a heap-backed `PackView`
-/// (over an owned `Vec<u8>`), and an mmap-backed `PackView` (over the same
-/// bytes read back through `memmap2::Mmap`). Every assertion below compares
-/// all three by value.
+/// (over an owned copy of the built bytes), and a file-backed `PackView` (over
+/// the bytes read back from disk with `std::fs::read`). Every assertion below
+/// compares all three by value.
 #[test]
-fn mmap_backed_pack_view_matches_heap_and_source_by_value() {
+fn file_backed_pack_view_matches_heap_and_source_by_value() {
     let dataset = build_fixture();
     let bytes = PackBuilder::build_bytes(&dataset).expect("pack build must succeed");
 
-    // Write the pack bytes to a real temp file the OS can mmap.
-    let mut tmp = tempfile::NamedTempFile::new().expect("create temp file");
+    // Write the pack bytes to a real temp file and read them back from disk.
+    let mut tmp = purrdf_testkit::temp_file!().expect("create temp file");
     tmp.write_all(&bytes).expect("write pack bytes");
     tmp.flush().expect("flush temp file");
-    let path = tmp.path().to_path_buf();
-
-    // Re-open the temp file read-only and mmap it. This is the ONLY unsafe
-    // block in this crate's test suite, and it is the entire point of the
-    // test: `Mmap::map` is unsafe because the OS cannot guarantee the backing
-    // file won't be mutated out from under the mapping by another process,
-    // but the mapping is confined to this test's scope over a freshly written
-    // temp file this test exclusively owns for its whole duration (it is
-    // dropped, unmapping, before `tmp`'s own `Drop` deletes the file).
-    let file = std::fs::File::open(&path).expect("reopen temp file read-only");
-    // SAFETY: `file` is a freshly-written `NamedTempFile` created above and
-    // exclusively owned by this test; nothing else opens, truncates, or
-    // mutates it while `mmap` is alive, so the memory-safety precondition of
-    // `Mmap::map` (no concurrent external mutation of the backing file) holds
-    // for the mapping's entire lifetime, which ends before `tmp` is dropped.
-    let mmap = unsafe { memmap2::Mmap::map(&file).expect("mmap pack file") };
+    let disk = std::fs::read(tmp.path()).expect("read pack file back");
 
     // The library-side seam under test: `PackView::from_bytes` is zero-copy
     // over WHATEVER borrowed `&[u8]` the consumer hands it — here, the
-    // mmap'd slice — with no mmap/filesystem awareness inside purrdf-core.
-    let pack_mmap = PackView::from_bytes(&mmap[..]).expect("pack opens over mmap'd bytes");
+    // bytes read back from disk — with no filesystem awareness inside purrdf-core.
+    let pack_disk = PackView::from_bytes(&disk[..]).expect("pack opens over disk-read bytes");
 
     // The heap-backed twin, over an owned `Vec<u8>` copy of the identical
-    // bytes, for a direct mmap-vs-heap parity comparison.
+    // bytes, for a direct disk-vs-heap parity comparison.
     let heap_bytes = bytes.clone();
     let pack_heap = PackView::from_bytes(&heap_bytes[..]).expect("pack opens over heap bytes");
 
-    // -- Certificate verification over the mmap'd slice --------------------------
-    let mmap_digest =
-        verify_pack(&mmap[..]).expect("verify_pack must succeed over the mmap'd slice");
+    // -- Certificate verification over the disk-read slice --------------------------
+    let disk_digest =
+        verify_pack(&disk[..]).expect("verify_pack must succeed over the disk-read slice");
     let heap_digest =
         verify_pack(&heap_bytes[..]).expect("verify_pack must succeed over the heap slice");
     assert_eq!(
-        mmap_digest, heap_digest,
-        "verify_pack's certified digest must be identical whether the bytes are mmap'd or heap-resident"
+        disk_digest, heap_digest,
+        "verify_pack's certified digest must be identical whether the bytes are read from disk or heap-resident"
     );
     assert_eq!(
-        mmap_digest.as_bytes(),
-        &pack_mmap.rdfc_digest(),
-        "verify_pack's certified digest must match the mmap'd view's own header digest"
+        disk_digest.as_bytes(),
+        &pack_disk.rdfc_digest(),
+        "verify_pack's certified digest must match the disk-read view's own header digest"
     );
 
-    // -- Whole-dataset scan parity: source vs heap vs mmap ------------------------
+    // -- Whole-dataset scan parity: source vs heap vs disk ------------------------
     let source_rows = collect_rows(&*dataset);
     let heap_rows = collect_rows(&pack_heap);
-    let mmap_rows = collect_rows(&pack_mmap);
+    let disk_rows = collect_rows(&pack_disk);
     assert_eq!(
         source_rows, heap_rows,
         "heap-backed PackView must scan identically to the source RdfDataset"
     );
     assert_eq!(
-        heap_rows, mmap_rows,
-        "mmap-backed PackView must scan IDENTICALLY to the heap-backed PackView (zero-copy parity)"
+        heap_rows, disk_rows,
+        "file-backed PackView must scan IDENTICALLY to the heap-backed PackView (zero-copy parity)"
     );
     // Falsifiability: the fixture is non-trivial.
-    assert!(mmap_rows.len() >= 6);
+    assert!(disk_rows.len() >= 6);
 
-    // -- A bound pattern query, driven over the mmap'd view -----------------------
-    let knows_id = id_of(&pack_mmap, &iri("knows"));
-    let alice_id = id_of(&pack_mmap, &iri("alice"));
-    let mut pattern_rows: Vec<Vec<TermValue>> = pack_mmap
+    // -- A bound pattern query, driven over the disk-read view -----------------------
+    let knows_id = id_of(&pack_disk, &iri("knows"));
+    let alice_id = id_of(&pack_disk, &iri("alice"));
+    let mut pattern_rows: Vec<Vec<TermValue>> = pack_disk
         .quads_for_pattern(Some(alice_id), Some(knows_id), None, GraphMatch::Any)
         .map(|q| {
             vec![
-                to_value(&pack_mmap, q.s),
-                to_value(&pack_mmap, q.p),
-                to_value(&pack_mmap, q.o),
+                to_value(&pack_disk, q.s),
+                to_value(&pack_disk, q.p),
+                to_value(&pack_disk, q.o),
             ]
         })
         .collect();
@@ -250,17 +238,17 @@ fn mmap_backed_pack_view_matches_heap_and_source_by_value() {
     assert_eq!(
         pattern_rows,
         vec![vec![iri("alice"), iri("knows"), iri("bob")]],
-        "quads_for_pattern over the mmap'd view must return the expected bound match"
+        "quads_for_pattern over the disk-read view must return the expected bound match"
     );
 
-    // -- Reifier/annotation side-table read over the mmap'd view ------------------
-    let mmap_reifiers: Vec<Vec<TermValue>> = pack_mmap
+    // -- Reifier/annotation side-table read over the disk-read view ------------------
+    let disk_reifiers: Vec<Vec<TermValue>> = pack_disk
         .reifier_quads()
         .map(|q| {
             vec![
-                to_value(&pack_mmap, q.s),
-                to_value(&pack_mmap, q.p),
-                to_value(&pack_mmap, q.o),
+                to_value(&pack_disk, q.s),
+                to_value(&pack_disk, q.p),
+                to_value(&pack_disk, q.o),
             ]
         })
         .collect();
@@ -275,14 +263,10 @@ fn mmap_backed_pack_view_matches_heap_and_source_by_value() {
         })
         .collect();
     assert_eq!(
-        mmap_reifiers, heap_reifiers,
-        "reifier_quads parity between the mmap-backed and heap-backed views"
+        disk_reifiers, heap_reifiers,
+        "reifier_quads parity between the file-backed and heap-backed views"
     );
-    assert_eq!(mmap_reifiers.len(), 1, "the fixture carries one reifier");
+    assert_eq!(disk_reifiers.len(), 1, "the fixture carries one reifier");
 
-    // The mapping (and the file) are dropped here, before `tmp`'s own `Drop`
-    // deletes the underlying temp file — the mapping never outlives the file
-    // it maps.
-    drop(mmap);
-    drop(file);
+    drop(tmp);
 }

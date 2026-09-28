@@ -261,7 +261,7 @@ pub(super) struct Stream(pub(super) u64);
 
 impl Stream {
     pub(super) fn next_u64(&mut self) -> u64 {
-        crate::test_rng::splitmix64_next(&mut self.0)
+        purrdf_testkit::rng::splitmix64_next(&mut self.0)
     }
 
     /// A value in `[-1, 1)`.

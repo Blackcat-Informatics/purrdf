@@ -169,7 +169,7 @@ fn is_spine(pattern: &GraphPattern) -> bool {
 /// first, so the left pops first and the leaves come out left to right, however tall
 /// the spine.
 fn spine_leaves<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a GraphPattern>) {
-    let mut pending: smallvec::SmallVec<[&'a GraphPattern; 8]> = smallvec::smallvec![pattern];
+    let mut pending: purrdf_core::SmallVec<[&'a GraphPattern; 8]> = purrdf_core::smallvec![pattern];
     while let Some(node) = pending.pop() {
         match node {
             GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
@@ -230,7 +230,7 @@ fn leaf_labels<'a>(leaf: &'a GraphPattern, out: &mut Vec<&'a str>) {
 /// The blank node labels in a term, a quoted triple's subject before its object at
 /// every level, over a work list rather than a frame per level.
 fn term_labels<'a>(term: &'a TermPattern, out: &mut Vec<&'a str>) {
-    let mut pending: smallvec::SmallVec<[&'a TermPattern; 8]> = smallvec::smallvec![term];
+    let mut pending: purrdf_core::SmallVec<[&'a TermPattern; 8]> = purrdf_core::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::BlankNode(blank) => out.push(blank.as_str()),
@@ -287,7 +287,7 @@ fn any_spine_leaf<'a>(
     pattern: &'a GraphPattern,
     test: &mut impl FnMut(&'a GraphPattern) -> bool,
 ) -> bool {
-    let mut pending: smallvec::SmallVec<[&'a GraphPattern; 8]> = smallvec::smallvec![pattern];
+    let mut pending: purrdf_core::SmallVec<[&'a GraphPattern; 8]> = purrdf_core::smallvec![pattern];
     while let Some(node) = pending.pop() {
         match node {
             GraphPattern::Join { left, right } | GraphPattern::Lateral { left, right }
@@ -309,7 +309,7 @@ fn any_spine_leaf<'a>(
 /// Whether a leaf writes any blank node at all.
 fn leaf_has_blank(leaf: &GraphPattern) -> bool {
     fn term(term: &TermPattern) -> bool {
-        let mut pending: smallvec::SmallVec<[&TermPattern; 8]> = smallvec::smallvec![term];
+        let mut pending: purrdf_core::SmallVec<[&TermPattern; 8]> = purrdf_core::smallvec![term];
         while let Some(term) = pending.pop() {
             match term {
                 TermPattern::BlankNode(_) => return true,
@@ -368,7 +368,7 @@ fn expression_needs(expr: &Expression) -> bool {
 /// the same whichever order the nodes are examined in, and the walk stops at the
 /// first spine that shares a label.
 fn needs(root: Node<'_>) -> bool {
-    let mut pending: smallvec::SmallVec<[Node<'_>; 16]> = smallvec::smallvec![root];
+    let mut pending: purrdf_core::SmallVec<[Node<'_>; 16]> = purrdf_core::smallvec![root];
     while let Some(node) = pending.pop() {
         match node {
             Node::Pattern(pattern) if is_spine(pattern) => {
@@ -939,7 +939,7 @@ fn rename_leaf(leaf: &mut GraphPattern, shared: &[String], spine: usize) {
 /// [`rename_leaf`] for one term position, a quoted triple's subject and object
 /// included at every level, over a work list.
 fn rename_term(term: &mut TermPattern, shared: &[String], spine: usize) {
-    let mut pending: smallvec::SmallVec<[_; 8]> = smallvec::smallvec![term];
+    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::BlankNode(blank)
@@ -1354,7 +1354,7 @@ mod walk_tests {
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = crate::test_rng::splitmix64_next(&mut self.state);
+            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
             usize::try_from(draw % options as u64).expect("a choice fits usize")
         }
 

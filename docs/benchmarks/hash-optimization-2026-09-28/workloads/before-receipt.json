@@ -1,0 +1,30 @@
+{
+  "head": "a9565da71f977667a909952286e75090afd7a805",
+  "source_sha256": "964faa7cf3a5250ce589f6c0ff4681e64d5e6b1a3fc633b6bb4e7e1282c41c4d",
+  "status": "",
+  "repo": "/tmp/purrdf-pr361-workload-base",
+  "build_command": [
+    "cargo",
+    "build",
+    "--release",
+    "--bins",
+    "--offline",
+    "--jobs",
+    "2",
+    "--message-format=json",
+    "--config",
+    "profile.release.lto=\"fat\"",
+    "--config",
+    "profile.release.opt-level=3",
+    "--config",
+    "profile.release.codegen-units=1"
+  ],
+  "effective_profile_configuration": "profile.dev.debug = 1 # /home/paudley/.cargo/config.toml\nprofile.dev.incremental = false # /home/paudley/.cargo/config.toml\nprofile.dev.package.\"*\".debug = false # /home/paudley/.cargo/config.toml\nprofile.release.codegen-units = 1 # --config cli option\nprofile.release.lto = \"fat\" # --config cli option\nprofile.release.opt-level = 3 # --config cli option\nprofile.release.strip = true # /home/paudley/.cargo/config.toml\n",
+  "lock_sha256": "4ca403e237295fb3e92f80b00aa123698b7a1595321fcf6b6617fcd2a1ace97e",
+  "binary_sha256": {
+    "timing": "a587808408aa34cffbbc2f2b01c37c8a7567d4884175b147135616b9f663a116",
+    "allocations": "3d1d4d490826d9c7896c2665277dc08174ac150a840bab23ebfbab38305c2b4b"
+  },
+  "reused_from": "/tmp/purrdf-workloads-optimized-05/before",
+  "changed_rust_source_sha256": {}
+}

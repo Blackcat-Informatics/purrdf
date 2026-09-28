@@ -396,7 +396,7 @@ struct Open {
     id: NodeId,
     depth: usize,
     visited: usize,
-    children: smallvec::SmallVec<[(ChildEdge, Option<ExprId>); 4]>,
+    children: purrdf_core::SmallVec<[(ChildEdge, Option<ExprId>); 4]>,
 }
 
 impl<'q> Tree<'q> {
@@ -425,7 +425,7 @@ impl<'q> Tree<'q> {
         let mut paths = Vec::new();
         let mut sites = Vec::new();
         // The walk's open ancestors are inline up to a shallow tree's depth.
-        let mut open: smallvec::SmallVec<[Open; 8]> = smallvec::SmallVec::new();
+        let mut open: purrdf_core::SmallVec<[Open; 8]> = purrdf_core::SmallVec::new();
         walk_spine(root, &mut |node, _context, level| {
             while open.last().is_some_and(|ancestor| ancestor.depth >= level) {
                 open.pop();
@@ -450,7 +450,7 @@ impl<'q> Tree<'q> {
                 });
             }
             let first_expr = exprs.len() as u32;
-            let mut children = smallvec::SmallVec::new();
+            let mut children = purrdf_core::SmallVec::new();
             visit_pattern_parts(node, &mut |part| {
                 match part {
                     PatternPart::Child(_, edge) => children.push((edge, None)),
@@ -498,7 +498,7 @@ impl<'q> Tree<'q> {
         }
         // The address order, ranked in a scratch list inline up to a small tree's size and
         // written into the rows' `by_address` column.
-        let mut ranked: smallvec::SmallVec<[(usize, NodeId); 16]> = rows
+        let mut ranked: purrdf_core::SmallVec<[(usize, NodeId); 16]> = rows
             .iter()
             .map(|row| (row.address, row.by_address))
             .collect();
@@ -540,8 +540,8 @@ impl<'q> Tree<'q> {
 }
 
 /// The expressions attached directly to `node`, in the order the shape numbers them.
-fn attached(node: &GraphPattern) -> smallvec::SmallVec<[&Expression; 4]> {
-    let mut exprs = smallvec::SmallVec::new();
+fn attached(node: &GraphPattern) -> purrdf_core::SmallVec<[&Expression; 4]> {
+    let mut exprs = purrdf_core::SmallVec::new();
     visit_pattern_parts(node, &mut |part| {
         if let PatternPart::Expression(expr) = part {
             exprs.push(expr);

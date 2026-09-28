@@ -48,8 +48,8 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test test-shard doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
-	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
+.PHONY: help doctor metadata fmt check test-shard geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
 # the release workflow slices out of it stay byte-reproducible across machines.
@@ -81,9 +81,11 @@ metadata: ## Regenerate + verify workspace metadata and generated artifacts.
 fmt: ## Auto-format the workspace.
 	cargo fmt --all
 
-check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
+check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clippy, build, tests, hygiene.
 	cargo fmt --all --check
+	cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
 	cargo clippy --workspace --all-targets --locked -- -D warnings
+	cargo clippy --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --all-targets --locked -- -D warnings
 	cargo check --workspace --lib --tests --locked
 	python3 scripts/check-no-features.py
 	python3 scripts/check-toolchain-pin.py
@@ -107,6 +109,7 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-shapes-parser-drops.py
 	python3 scripts/check-licenses.py --self-test
 	python3 scripts/check-licenses.py
+	python3 scripts/fetch-locked-deps.py
 	python3 scripts/check-banned-deps.py --self-test
 	python3 scripts/check-banned-deps.py
 	python3 scripts/check-corpus-frozen.py
@@ -126,6 +129,12 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
 	python3 scripts/check-simd-asm.py --self-test
+	python3 scripts/bench-criterion-targets.py --self-test
+	python3 scripts/cleanroom/transcript_audit.py --self-test
+	python3 scripts/cleanroom/guard_hook.py --self-test
+	python3 scripts/cleanroom/deny_settings.py --self-test
+	python3 scripts/cleanroom/similarity.py --self-test
+	python3 scripts/cleanroom/provenance.py --self-test
 	python3 scripts/check-tracked-paths.py --self-test
 	python3 scripts/check-tracked-paths.py
 	python3 scripts/check-test-shards.py --self-test
@@ -135,6 +144,7 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/lubm-queries.py --offline-self-test
 	python3 crates/text/tests/reference/bm25f.py --check
 	cargo test --workspace --locked
+	cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
 	$(MAKE) rdf-core-hygiene
 	$(MAKE) wasm
 
@@ -220,18 +230,32 @@ release-tags: ## Cut + push rust-v/py-v/npm-v tags for VERSION after coherence c
 	git push --atomic origin "rust-v$(VERSION)" "py-v$(VERSION)" "npm-v$(VERSION)"
 	@echo "OK: pushed rust-v$(VERSION), py-v$(VERSION), npm-v$(VERSION)"
 
+binaryen-prerequisite: ## Require the pinned structural wasm validator used by wasm-link.
+	@test "$$(wasm-opt --version 2>/dev/null | sed -n 's/.*version \([0-9][0-9]*\).*/\1/p')" = "$(BINARYEN_VERSION)" || { \
+		echo "ERROR: wasm-opt $(BINARYEN_VERSION) is required; install the pinned Binaryen toolchain." >&2; exit 1; \
+	}
+
 node-prerequisite: ## Require Node for the native Unicode ECMAScript conformance oracle.
 	@command -v node >/dev/null 2>&1 && node --version >/dev/null 2>&1 || { \
 		echo "ERROR: Node.js is required for the native Unicode ECMAScript conformance oracle; install Node.js and put node on PATH." >&2; \
 		exit 1; \
 	}
 
-test: node-prerequisite ## Run the workspace test suite.
+test: node-prerequisite binaryen-prerequisite ## Run the workspace test suite.
 	cargo test --workspace --locked
 
-test-shard: node-prerequisite ## Run one CI test shard locally: make test-shard SHARD=kernel (names: scripts/test-shards.py --matrix).
-	@test -n "$(SHARD)" || { echo "usage: make test-shard SHARD=<name>; shards: $$(python3 scripts/test-shards.py --matrix)" >&2; exit 2; }
-	cargo test --locked $$(python3 scripts/test-shards.py --packages $(SHARD))
+test-shard: node-prerequisite ## Run one CI shard of `make test` (SHARD=lib|doc|integration-1..4).
+	@case "$(SHARD)" in \
+		lib) $(MAKE) binaryen-prerequisite || exit $$?; set -x; cargo test --workspace --exclude purrdf-python --locked --lib --bins ;; \
+		doc) set -x; cargo test --workspace --locked --doc \
+			&& cargo build --workspace --locked --examples --profile test \
+			&& cargo test --workspace --locked --example graphql_oracle_fixture --example typescript_oracle_fixture ;; \
+		integration-1) set -x; cargo test --workspace --locked --test '[a-d]*' -- --exact --skip c_abi_smoke ;; \
+		integration-2) set -x; cargo test --workspace --locked --test '[e-o]*' ;; \
+		integration-3) set -x; cargo test --workspace --locked --test '[p-r]*' ;; \
+		integration-4) set -x; cargo test --workspace --locked --test '[!a-r]*' ;; \
+		*) echo "FAIL: unknown SHARD '$(SHARD)'; expected lib, doc or integration-1..4" >&2; exit 1 ;; \
+	esac
 
 lint-gts-selected-blobs: ## Lint the selected native-import production and test surfaces only.
 	cargo clippy -p purrdf-gts --lib --test bounded_keyed_blobs --locked -- -D warnings
@@ -248,7 +272,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 26 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 29 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -288,7 +312,7 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash -p purrdf-deflate -p purrdf-jsonschema
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #
@@ -375,9 +399,12 @@ typescript-oracle: ## Compile emitted declarations with TypeScript 7.0 and compa
 	npm --prefix crates/rdf-wasm/js ci --ignore-scripts --no-audit --no-fund
 	node crates/shapes/tests/typescript_oracle.mjs
 
-graphql-oracle: ## Validate emitted SDL and variable coercion with locked GraphQL.js and boon.
+graphql-oracle: ## Validate emitted SDL and variable coercion with locked GraphQL.js and purrdf-jsonschema.
 	npm --prefix crates/rdf-wasm/js ci --ignore-scripts --no-audit --no-fund
 	node crates/shapes/tests/graphql_oracle.mjs
+
+jsonschema-pattern-oracle: node-prerequisite ## Re-ask JavaScript's RegExp for every frozen purrdf-jsonschema pattern verdict; fails if any answer moved.
+	node crates/jsonschema/tests/pattern_oracle.mjs
 
 bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NOT a test gate). See docs/BENCHMARKS.md.
 	cd bindings/python && uv run maturin develop && uv run python benchmarks/bench_compat.py
@@ -385,6 +412,22 @@ bench-python: ## Compare the rdflib compat shim vs. real rdflib (report-only; NO
 pytest: ## Build the native module + run the Python binding test suite (own gate, NOT part of `check`).
 	python3 scripts/check-python-binding-tests.py
 	cd bindings/python && uv run maturin develop && uv run pytest tests
+
+miri: ## Check SmallVec storage and BLAKE3 streaming under Miri (own lane, NOT part of `check`).
+	@# `purrdf_core::SmallVec` keeps its inline elements in uninitialised
+	@# storage and moves them with raw pointer copies; its tests pin ownership
+	@# (no double drop, no leak, no uninitialised read) but only an interpreter
+	@# can see an aliasing violation or an out-of-bounds offset that happens to
+	@# work natively. Each run is a distinct model: the default Stacked Borrows,
+	@# Tree Borrows, strict provenance (no integer-to-pointer casts), and a
+	@# 32-bit target, where `usize` arithmetic and layout differ.
+	cargo miri test -p purrdf-core small
+	MIRIFLAGS=-Zmiri-tree-borrows cargo miri test -p purrdf-core small
+	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test -p purrdf-core small
+	cargo miri test -p purrdf-core small --target i686-unknown-linux-gnu
+	@# Bounded streaming vectors cover buffer/tree boundaries and snapshots.
+	@# The scalar rotation uses Rust under Miri; native lowering is checked separately.
+	MIRIFLAGS=-Zmiri-strict-provenance cargo miri test --locked -p purrdf-hash --test blake3 streaming_boundary_answers
 
 # CI runs the matrix split across runners through CONFORMANCE_ARGS: one
 # `--shard NAME --emit-results FILE` per shard, then one `--from-results DIR` that
@@ -417,19 +460,26 @@ build-profile-hygiene: ## Prove the gate really compiles at opt-level 3 with deb
 	python3 scripts/check-build-profiles.py
 
 rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core, zero-dep leaves.
-	@tree=$$(cargo tree -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
+	@tree=$$(cargo tree --color never -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
 	if echo "$$tree" | grep -Eq '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; then \
 		echo "FAIL: purrdf-core pulls an oxigraph-family or PyO3 crate as a NORMAL dependency"; \
 		echo "$$tree" | grep -E '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; exit 1; \
 	fi; \
 	echo "OK: purrdf-core has no oxigraph/PyO3 normal dependency"
-	@for leaf in purrdf-iri purrdf-xsd purrdf-events; do \
-		deps=$$(cargo tree -p $$leaf --edges normal --depth 1 -f "{p}" | tail -n +2); \
+	@for leaf in purrdf-iri purrdf-xsd purrdf-events purrdf-hash; do \
+		tree=$$(cargo tree --color never --prefix none -p $$leaf --edges normal --depth 1 -f "{p}") || { echo "FAIL: cargo tree errored for $$leaf"; exit 1; }; \
+		deps=$$(printf '%s\n' "$$tree" | tail -n +2); \
 		if [ -n "$$deps" ]; then \
 			echo "FAIL: $$leaf must stay zero-dependency but depends on:"; echo "$$deps"; exit 1; \
 		fi; \
 		echo "OK: $$leaf is zero-dependency"; \
 	done
+	@tree=$$(cargo tree --color never --prefix none -p purrdf-deflate --edges normal --depth 1 -f "{p}") || { echo "FAIL: cargo tree errored for purrdf-deflate"; exit 1; }; \
+	deps=$$(printf '%s\n' "$$tree" | tail -n +2 | sed 's/ v.*//'); \
+	if [ "$$deps" != "purrdf-hash" ]; then \
+		echo "FAIL: purrdf-deflate must depend on purrdf-hash alone but depends on:"; echo "$$deps"; exit 1; \
+	fi; \
+	echo "OK: purrdf-deflate depends on purrdf-hash alone"
 
 cnschema-probe: ## Reproduce the pinned cnSchema 4.0 round-trip evidence (fetches by digest; not a CI gate).
 	python3 scripts/cnschema-probe.py --self-test
@@ -504,7 +554,7 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-stack -p purrdf-gts -p purrdf-core -p purrdf-columnar \
+			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-hash -p purrdf-deflate -p purrdf-stack -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
@@ -552,10 +602,18 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 	else \
 		echo "NOT installed — \`make wasm\` SKIPs; 'rustup target add wasm32-unknown-unknown'"; \
 	fi
-	@printf 'wasm-bindgen-test-runner:            '
-	@command -v wasm-bindgen-test-runner >/dev/null 2>&1 \
-		&& echo "on PATH — \`make wasm-test\` runs for real" \
-		|| echo "absent — \`make wasm-test\` SKIPs"
+	@printf 'wasm-bindgen CLI:                    '
+	@PIN=$$(sed -n 's/^wasm-bindgen = "=\([0-9][0-9.]*\)"$$/\1/p' Cargo.toml); \
+	if ! command -v wasm-bindgen >/dev/null 2>&1; then \
+		echo "absent — \`make wasm-test\`, \`make geo-determinism\` and \`make hnsw-determinism\` SKIP; install wasm-bindgen-cli $$PIN"; \
+	else \
+		FOUND=$$(wasm-bindgen --version | sed -n 's/^wasm-bindgen \([0-9][0-9.]*\).*$$/\1/p'); \
+		if [ "$$FOUND" = "$$PIN" ]; then \
+			echo "$$FOUND on PATH — the wasm32 test runner (scripts/wasm-test-runner.sh) runs for real"; \
+		else \
+			echo "$$FOUND on PATH, but Cargo.toml pins $$PIN — the wasm32 test runner refuses it; install wasm-bindgen-cli $$PIN"; \
+		fi; \
+	fi
 	@printf 'node:                                '
 	@command -v node >/dev/null 2>&1 && node --version || echo "absent — make check and make test FAIL; the wasm test harness SKIPs"
 	@printf 'cargo build directory:               '
@@ -563,6 +621,9 @@ doctor: ## Report which build pins this machine actually enforces (never gates; 
 	@echo
 	@echo "A SKIP is not a pass. In CI every line above is a hard failure instead."
 
+# Both determinism gates run their crate's `determinism` test target natively and on
+# wasm32 through the same cargo runner `make wasm-test` uses
+# (scripts/wasm-test-runner.sh), and compare the digest every named case reports.
 geo-determinism: ## Prove purrdf-geo's native and wasm32 answers are byte-identical (own gate, NOT part of `check`).
 	bash scripts/check-geo-determinism.sh
 
@@ -584,12 +645,12 @@ hnsw-determinism: ## Prove purrdf-hnsw's native and wasm32 canonical bytes are i
 # `python3 scripts/check-simd-asm.py --write-doc` regenerates the count cells.
 #
 # CI runs the same gate split across runners through SIMD_ASM_ARGS: one
-# `--config NAME --emit-cells FILE` per configuration, then one
-# `--doc-from-cells DIR` that checks the document against all seven (see the
-# script's "Split runs"). With no SIMD_ASM_ARGS this is the single-process `--doc`.
-SIMD_ASM_ARGS ?= --doc
+# `--config NAME --report FILE` per configuration, then one
+# `--merge-reports DIR` that requires seven matching successful reports and
+# checks the document against them. Empty measures the complete matrix.
+SIMD_ASM_ARGS ?=
 simd-asm: ## Count the vector work in emitted asm on seven target configurations (own gate, NOT part of `check`).
-	python3 scripts/check-simd-asm.py $(SIMD_ASM_ARGS)
+	python3 scripts/check-simd-asm.py --doc $(SIMD_ASM_ARGS)
 
 wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own gate, NOT part of `check`).
 	@# `make wasm` proves the release crates BUILD for wasm32. It cannot prove they
@@ -603,9 +664,22 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# then FUSES those ranked lists: a fused score is a sum of truncated reciprocals,
 	@# and a last bit moved anywhere in that sum swaps two near-tied candidates, so the
 	@# composition needs the same executed proof its inputs do. So this lane
-	@# compiles the tagged tests to wasm32 and runs them in Node, against the same
+	@# compiles the cross-target test targets to wasm32 and runs them in Node, against the same
 	@# pinned expectations the native `cargo test` run asserts. Ordered JSON also
 	@# crosses the same production RDF codecs against a pinned byte corpus.
+	@# purrdf-hash replays its frozen digest vectors there, so the portable MD5,
+	@# SHA-1, SHA-3 and CRC-32 paths wasm32 runs answer as every native path does.
+	@# BLAKE3 replays its full streaming corpus on baseline and SIMD128 builds.
+	@# Base16 tests also run on the baseline and +simd128 builds, so the
+	@# i8x16.swizzle encoder is executed against the portable one. purrdf-core's
+	@# CSV field scanner runs its own kernel differential there too, on the
+	@# baseline and +simd128 builds, through the doc-hidden `csv::backend`
+	@# module (the in-crate differential is a #[cfg(test)] unit test, which does
+	@# not exist on wasm32 at all), so the +simd128 build's `i8x16.eq` kernel is
+	@# executed against the portable one rather than merely built. purrdf-deflate
+	@# runs its round trips, refusals and kernel differentials on the baseline
+	@# build (portable kernels) and the +simd128 build (simd128 kernels), so the
+	@# encoder's bytes and the decoder's output are held to one answer there.
 	@#
 	@# The prepared SHACL product is the same hazard with a longer fuse: a product
 	@# is written by a build tool on a host and restored months later in a browser,
@@ -613,8 +687,18 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# never hits and an `open` that refuses perfectly valid bytes. That row
 	@# compares the bytes wasm32 writes against the golden a native build committed.
 	@#
-	@# wasm-bindgen-test-runner ships in the same pinned wasm-bindgen-cli archive the
-	@# wasm lane already installs, so there is no second version to keep in step.
+	@# The fixed-key table hasher's portable path computes its folded multiplies
+	@# from 32-bit halves on wasm32; its frozen answers are replayed there too.
+	@#
+	@# Every target here is `harness = false` on purrdf_testkit's runner, so the
+	@# same named cases run natively under `cargo test` and here. Cargo hands each
+	@# wasm32 test binary to scripts/wasm-test-runner.sh, which generates its Node
+	@# bindings with the wasm-bindgen CLI (the exact version the root Cargo.toml
+	@# pins the library to, the one the wasm lane already installs) and runs it in
+	@# Node, reporting libtest's console lines and exit status. The runner is
+	@# observed first (scripts/check-wasm-test-runner.sh): a panicking case, a
+	@# refused flag and a sealed host clock read must each fail the run, beside a
+	@# neighbour that passes, before any result below is trusted.
 	@#
 	@# The kNN file runs twice: on the baseline build, and on a +simd128 build, where
 	@# LLVM packs the exact fold's sixteen lanes into f64x2 operations. Both assert the
@@ -642,50 +726,77 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		else \
 			echo "SKIP: wasm32-unknown-unknown target not installed — 'rustup target add wasm32-unknown-unknown' to enable"; \
 		fi; \
-	elif ! command -v wasm-bindgen-test-runner >/dev/null 2>&1; then \
-		if [ -n "$${CI:-}" ]; then echo "FAIL: wasm-bindgen-test-runner absent in CI"; exit 1; fi; \
-		echo "SKIP: wasm-bindgen-test-runner not on PATH — install wasm-bindgen-cli $$(grep -oE 'wasm-bindgen = \"=[0-9.]+' Cargo.toml | cut -d= -f3) to enable"; \
+	elif ! command -v wasm-bindgen >/dev/null 2>&1; then \
+		if [ -n "$${CI:-}" ]; then echo "FAIL: the wasm-bindgen CLI is absent in CI"; exit 1; fi; \
+		echo "SKIP: the wasm-bindgen CLI is not on PATH — install wasm-bindgen-cli $$(sed -n 's/^wasm-bindgen = \"=\([0-9][0-9.]*\)\"$$/\1/p' Cargo.toml) to enable"; \
 	elif ! command -v node >/dev/null 2>&1; then \
 		if [ -n "$${CI:-}" ]; then echo "FAIL: node absent in CI"; exit 1; fi; \
 		echo "SKIP: node not on PATH — the wasm test harness runs the module in Node"; \
 	else \
-		CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		bash scripts/check-wasm-test-runner.sh \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-hnsw --test wasm_reassociated \
 		&& env -u RUSTFLAGS \
-			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-sparql-eval --test knn_wasm_determinism --test knn_wasm_reassociated \
 		&& env -u RUSTFLAGS \
-			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-hnsw --test wasm_reassociated \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-text --test wasm_determinism \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-retrieval --test wasm_determinism \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-json --test roundtrip \
-		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=wasm-bindgen-test-runner \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-shapes --test product_wasm; \
+			-p purrdf-shapes --test product_wasm \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-hash --test digest_differential --test hex --test blake3 \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-hash --test fixed_hasher \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-hash --test hex --test blake3 \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-core --test csv_scan_wasm \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-core --test csv_scan_wasm \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-deflate --test deflate_conformance \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-deflate --test deflate_conformance; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.
 	@# +simd128 is a PLATFORM target feature (not a Cargo feature): it turns on
 	@# the wasm SIMD instruction set so memchr's byte scan (the parser hot path)
-	@# runs vectorized instead of SWAR. BLAKE3 does not change: blake3 compiles
-	@# its own simd128 backend only under its `wasm32_simd` Cargo feature, which
-	@# this workspace does not enable, so it stays on its portable code here --
-	@# `make simd-asm` measures both, on this build and the baseline one. It is
+	@# runs vectorized instead of SWAR. Native BLAKE3 also selects its four-lane
+	@# SIMD128 kernel from this target feature, with no semantic Cargo feature.
+	@# `make simd-asm` measures this build and the portable baseline. It is
 	@# scoped to this npm-artifact build only, so `make wasm` stays baseline-clean.
 	@# This raises the artifact's browser baseline to engines with wasm SIMD
 	@# (all major browsers since ~2021; Node >= 18, the package's engine floor).

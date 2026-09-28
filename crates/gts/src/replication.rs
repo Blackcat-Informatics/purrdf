@@ -341,6 +341,7 @@ fn aggregate_digest(inventory: &Inventory) -> Vec<u8> {
         "gts-segment-heads-v1".into(),
         Value::Array(heads),
     ])))
+    .to_vec()
 }
 
 /// A report string as a whole JSON string: the workspace's one JSON escape

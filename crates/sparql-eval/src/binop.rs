@@ -369,7 +369,7 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
         for v in r.schema.vars() {
             right_schema.push(v.clone());
         }
-        per_row.push((mu.clone(), r));
+        per_row.push((Solution::from_slice(mu), r));
     }
 
     let out = Arc::new(left_schema.union(&right_schema));
@@ -397,7 +397,7 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
 
             // Start from μ: left columns are out[0..left_len] in the same order, then
             // overlay the now-known-compatible ν cells.
-            let mut row = smallvec::smallvec![None; out_len];
+            let mut row = purrdf_core::smallvec![None; out_len];
             row[..left_len].copy_from_slice(mu);
             for (j, cell) in nu.iter().enumerate() {
                 if let Some(term) = cell {
@@ -468,8 +468,8 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
     {
         // Inline for the two arms nearly every `UNION` has, so the common case spends no
         // allocation on holding its arms' results.
-        let mut evaluated: smallvec::SmallVec<[SolutionSeq<D::Id>; 2]> =
-            smallvec::SmallVec::with_capacity(arms.len());
+        let mut evaluated: purrdf_core::SmallVec<[SolutionSeq<D::Id>; 2]> =
+            purrdf_core::SmallVec::with_capacity(arms.len());
         for (ordinal, arm) in arms.iter().enumerate() {
             let Some(rows) = lift.absorb(ordinal, eval_evaluated(arm, ctx)?) else {
                 return Ok(lift.withheld());
@@ -574,7 +574,7 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
         for minted in branch.rows {
             let reinterned =
                 crate::parallel::reintern_minted_row(&mut ctx.scratch, ctx.dataset, minted);
-            let mut row = smallvec::smallvec![None; out_len];
+            let mut row = purrdf_core::smallvec![None; out_len];
             for (j, &cell) in reinterned.iter().enumerate() {
                 row[arm_to_out[j]] = cell;
             }
@@ -604,7 +604,7 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
 /// capped at the intermediate-cell ceiling for the output's width — the one bag this
 /// node materializes.
 fn concat_union<D: DatasetView + Sync>(
-    mut arms: smallvec::SmallVec<[SolutionSeq<D::Id>; 2]>,
+    mut arms: purrdf_core::SmallVec<[SolutionSeq<D::Id>; 2]>,
     ctx: &EvalCtx<'_, D>,
 ) -> SolutionSeq<D::Id> {
     if arms.len() == 1 {
@@ -647,7 +647,7 @@ fn concat_union<D: DatasetView + Sync>(
                 let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                 break 'arms;
             }
-            let mut row = smallvec::smallvec![None; out_len];
+            let mut row = purrdf_core::smallvec![None; out_len];
             for (j, &cell) in rrow.iter().enumerate() {
                 row[arm_to_out[j]] = cell;
             }
@@ -1204,7 +1204,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                     }
                 }
                 if pad_unmatched && acc.len() == before {
-                    let mut row = smallvec::smallvec![None; out_len];
+                    let mut row = purrdf_core::smallvec![None; out_len];
                     row[..left_len].copy_from_slice(lrow);
                     acc.push(row);
                 }
@@ -1255,7 +1255,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
                     let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                     break;
                 }
-                let mut row = smallvec::smallvec![None; out_len];
+                let mut row = purrdf_core::smallvec![None; out_len];
                 row[..left_len].copy_from_slice(lrow);
                 rows.push(row);
             }
@@ -1336,7 +1336,7 @@ fn left_outer_join<D: DatasetView + Sync>(
                     let _ = ctx.observe_cells(rows.len().saturating_add(1), out_len);
                     break;
                 }
-                let mut row = smallvec::smallvec![None; out_len];
+                let mut row = purrdf_core::smallvec![None; out_len];
                 row[..left_len].copy_from_slice(lrow);
                 rows.push(row);
             }
@@ -1369,7 +1369,7 @@ fn left_outer_join<D: DatasetView + Sync>(
             // No compatible right solution → keep the left solution alone (the OPTIONAL
             // contributed nothing, its variables stay unbound).
             if pad_unmatched && acc.len() == before {
-                let mut row = smallvec::smallvec![None; out_len];
+                let mut row = purrdf_core::smallvec![None; out_len];
                 row[..left_len].copy_from_slice(lrow);
                 acc.push(row);
             }
@@ -1554,7 +1554,6 @@ mod tests {
             ctx,
         )
     }
-    use pretty_assertions::assert_eq;
     use purrdf_core::{
         RdfDataset, RdfDatasetBuilder, ResourceDimension as TestResourceDimension, TermValue,
         TrippedGovernor as TestTrippedGovernor,
@@ -1662,13 +1661,13 @@ mod tests {
         let left = SolutionSeq {
             schema: Arc::new(VarSchema::from_vars([Variable::new("left")])),
             rows: (0..100)
-                .map(|_| smallvec::smallvec![Some(SolutionTerm::Existing(left_id))])
+                .map(|_| purrdf_core::smallvec![Some(SolutionTerm::Existing(left_id))])
                 .collect(),
         };
         let right = SolutionSeq {
             schema: Arc::new(VarSchema::from_vars([Variable::new("right")])),
             rows: (0..100)
-                .map(|_| smallvec::smallvec![Some(SolutionTerm::Existing(right_id))])
+                .map(|_| purrdf_core::smallvec![Some(SolutionTerm::Existing(right_id))])
                 .collect(),
         };
         // Two columns, four cells: exactly two rows fit. The 10,000-row unbounded cross
@@ -1820,9 +1819,9 @@ mod tests {
         let inner = SolutionSeq {
             schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
             rows: vec![
-                smallvec::smallvec![t(1)],
-                smallvec::smallvec![t(2)],
-                smallvec::smallvec![None],
+                purrdf_core::smallvec![t(1)],
+                purrdf_core::smallvec![t(2)],
+                purrdf_core::smallvec![None],
             ],
         };
         // Probe layout is the FULL outer schema [x, y]; shared = {x} → [(0, 0)].
@@ -1860,7 +1859,7 @@ mod tests {
         // Same shape but NO wild inner row, so a keyed miss is a true non-match.
         let inner2 = SolutionSeq {
             schema: Arc::new(VarSchema::from_vars([Variable::new("x")])),
-            rows: vec![smallvec::smallvec![t(1)], smallvec::smallvec![t(2)]],
+            rows: vec![purrdf_core::smallvec![t(1)], purrdf_core::smallvec![t(2)]],
         };
         let (keyed2, wild2) = build_index(&inner2, &shared);
         assert_eq!(wild2, [] as [_; 0]);

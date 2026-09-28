@@ -66,8 +66,8 @@ type FlagsCache = FastMap<String, CachedPattern>;
 /// matching [`crate`]'s sibling convention in `purrdf-sparql-eval`'s
 /// `EvalCtx::regex_cache`.
 ///
-/// The tables use the workspace's fixed-key [`FastMap`] (AHASH with fixed
-/// keys, no `RandomState`), per AGENTS.md §4: this is a per-value-node hot
+/// The tables use the workspace's fixed-key [`FastMap`] (`FixedHasher` with
+/// fixed keys, no `RandomState`), per AGENTS.md §4: this is a per-value-node hot
 /// path, and a randomly-seeded hasher has no business on it. The canonical
 /// spelling is `purrdf-core`'s own [`FastHasher`](purrdf_core::FastHasher)
 /// policy, whose aliases the crate already depends on — the same hasher the

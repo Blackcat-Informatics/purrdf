@@ -49,7 +49,7 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | SPARQL CDT (SEP-0009, vendored corpus) | awslabs/SPARQL-CDTs | 658 | 0 | 0 | 0 | GREEN |
 | SPARQL execution governors | purrdf-sparql-governors (first-party) | 50 | 0 | 0 | 0 | GREEN |
 | SPARQL embedding kNN (first-party) | purrdf-embedding-knn (first-party) | 15 | 0 | 0 | 0 | GREEN |
-| HNSW approximate kNN (first-party) | purrdf-hnsw (first-party) | 86 | 0 | 0 | 0 | GREEN |
+| HNSW approximate kNN (first-party) | purrdf-hnsw (first-party) | 87 | 0 | 0 | 0 | GREEN |
 | GeoSPARQL 1.1 determinism corpus | purrdf-geo (first-party; OGC 22-047r1) | 20 | 0 | 0 | 0 | GREEN |
 | Entailment (OWL 2 DL consistency) | W3C OWL 2 test suite | 258 | 4 | 4 | 0 | GREEN |
 | Entailment (OWL 2 RL, W3C entailment tests) | W3C OWL 2 entailment tests | 50 | 0 | 0 | 0 | GREEN |
@@ -62,6 +62,9 @@ change with `python3 scripts/conformance-matrix.py --write-doc`:
 | SHACL Rules | DASH + first-party | 20 | 0 | 0 | 0 | GREEN |
 | ShEx 2.1 validation | shexTest v2.1.0 | 1105 | 0 | 0 | 0 | GREEN |
 | ShEx syntax + ShExC/ShExJ round-trip | shexTest v2.1.0 | 10 | 0 | 0 | 0 | GREEN |
+| JSON Schema draft 2020-12 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 2342 | 0 | 0 | 0 | GREEN |
+| JSON Schema draft 2019-09 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 2298 | 0 | 0 | 0 | GREEN |
+| JSON Schema draft-07 (official suite) | JSON-Schema-Test-Suite 5b0ee16 | 1841 | 0 | 0 | 0 | GREEN |
 | GTS transport (frozen vectors) | gmeow-gts frozen corpus, vectors/ | 38 | 1 | 1 | 0 | GREEN |
 | rdflib LSP drop-in gate | rdflib 7.6 own tests | 81 | 5 | 5 | 0 | GREEN |
 | Python binding suite | first-party (incl. compat differential vs rdflib) | 1105 | 4 | 4 | 0 | GREEN |

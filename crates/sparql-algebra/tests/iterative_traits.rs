@@ -22,7 +22,6 @@ use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
 use std::path::{Path, PathBuf};
 
-use proptest::prelude::*;
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, ArithmeticOperator, BlankNode, Chain, Child,
     Expression, Function, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode,
@@ -30,6 +29,7 @@ use purrdf_sparql_algebra::{
     PropertyFunctionCall, PropertyPathExpression, Query, SparqlParser, TermPattern, TriplePattern,
     Variable,
 };
+use purrdf_testkit::prop::prelude::*;
 
 /// The node types with every trait derived: the recursive reference.
 mod mirror {
@@ -945,8 +945,8 @@ fn pattern() -> BoxedStrategy<GraphPattern> {
     .boxed()
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(256))]
+prop_test! {
+    #![prop_config(Config::with_cases(256))]
 
     /// A generated tree formats, copies, compares and hashes exactly as the derived
     /// reference does.

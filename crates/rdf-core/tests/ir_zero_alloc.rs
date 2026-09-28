@@ -10,9 +10,6 @@
 //! allocator is `#[global_allocator]`, it observes every heap allocation any code
 //! in the loop body would make — there is nowhere for a hidden allocation to hide.
 
-// Rich colored line-diffs on assert_eq! failure; shadows the std macro
-// for this file. Identical behaviour on pass; insta snapshots are unaffected.
-use pretty_assertions::assert_eq;
 use std::hash::{Hash, Hasher};
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};

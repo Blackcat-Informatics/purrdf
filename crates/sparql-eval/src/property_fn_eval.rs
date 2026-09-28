@@ -587,7 +587,7 @@ fn eval_call_over<D: DatasetView + Sync>(
         // own usual width (inline capacity 4, matching `crate::solution::Solution`) —
         // so the common case pays no heap allocation at all, and only an arity wider
         // than that spills, exactly as the plain `Vec` it replaces always did.
-        let refs: smallvec::SmallVec<[Option<&TermValue>; 4]> =
+        let refs: purrdf_core::SmallVec<[Option<&TermValue>; 4]> =
             args.iter().map(Option::as_ref).collect();
         let (subject, object) = refs.split_at(plan.subject_len);
         let pf_args = PfArgs::new(subject, object).with_unobserved(&plan.unobserved);
@@ -711,7 +711,7 @@ fn eval_call_over<D: DatasetView + Sync>(
                 }
                 IngestVerdict::Admitted => {}
             }
-            let mut row: Solution<D::Id> = smallvec::smallvec![None; width];
+            let mut row: Solution<D::Id> = purrdf_core::smallvec![None; width];
             row[..left_len].copy_from_slice(mu);
             for &(slot, column) in &plan.bound_cols {
                 let value = values[slot]
@@ -2886,7 +2886,7 @@ fn call_variables<'q>(
             visible.push((variable, Some(variable)));
         }
     }
-    let mut pending: smallvec::SmallVec<[_; 8]> = smallvec::smallvec![term];
+    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::Variable(variable) => record(variable, visible),
@@ -2953,7 +2953,7 @@ pub(crate) fn open_call_cursor(
     // with nothing before it in its group.
     let free: Vec<Option<TermValue>> = vec![None; plan.slot_count()];
     let args: Vec<Option<TermValue>> = plan.args.iter().map(|arg| arg_value(arg, &free)).collect();
-    let refs: smallvec::SmallVec<[Option<&TermValue>; 4]> =
+    let refs: purrdf_core::SmallVec<[Option<&TermValue>; 4]> =
         args.iter().map(Option::as_ref).collect();
     let (subject, object) = refs.split_at(plan.subject_len);
     let pf_args = PfArgs::new(subject, object).with_unobserved(&plan.unobserved);
@@ -3312,7 +3312,7 @@ fn reaches(root: ReachNode<'_>, kind: ReachKind) -> bool {
     use crate::governor::soundness::{
         ExpressionPart, PatternPart, visit_expression_parts, visit_pattern_parts,
     };
-    let mut pending: smallvec::SmallVec<[ReachNode<'_>; 16]> = smallvec::smallvec![root];
+    let mut pending: purrdf_core::SmallVec<[ReachNode<'_>; 16]> = purrdf_core::smallvec![root];
     while let Some(node) = pending.pop() {
         match node {
             ReachNode::Pattern(pattern) => {
@@ -5842,7 +5842,7 @@ mod walk_tests {
 
         fn choose(&mut self, options: usize) -> usize {
             let bound = u64::try_from(options).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
 

@@ -79,7 +79,7 @@ use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
-use sha1::{Digest, Sha1};
+use purrdf_hash::sha1::Sha1;
 
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause, NonDatalogClause};
 use crate::id::{MetaId, NodeId};

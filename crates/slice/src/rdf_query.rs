@@ -1520,7 +1520,7 @@ mod tests {
     /// IRI sits unused in the caller's hand (RFC-3986 §5.1.3).
     #[test]
     fn parse_file_resolves_relative_iris_against_the_retrieval_iri() {
-        let dir = tempfile::tempdir().expect("tempdir");
+        let dir = purrdf_testkit::TempDir::for_unit_test().expect("tempdir");
         let path = dir.path().join("module.ttl");
         // `<>` is the document itself; `<thing>` is a sibling of it.
         std::fs::write(&path, b"<> <urn:example:declares> <thing> .\n").expect("write");
@@ -1599,10 +1599,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::WellFormed,
+                crate::test_terms::TermShape::WellFormed,
             );
             nested += usize::from(budget < 7);
             let mut builder = RdfDatasetBuilder::new();

@@ -1398,10 +1398,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 6;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             for lose_objects in [false, true] {
                 let text = element_text(&value, lose_objects);

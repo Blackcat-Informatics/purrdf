@@ -93,7 +93,7 @@ pub mod graph;
 // tier and the compute tier alike, so there is no parallel taxonomy. Clock-free,
 // allocation-free, wasm-clean.
 pub mod governor;
-// The workspace's single fixed-key ahash determinism policy: FastHasher and the
+// The workspace's single fixed-key hashing policy (purrdf-hash's FixedHasher): FastHasher and the
 // FastMap/FastSet/IdSet lookup-table aliases (determinism comes from id-sorting,
 // never hash order).
 pub mod hash;
@@ -128,17 +128,17 @@ pub mod model;
 // The one named-graph refusal vocabulary the CLI, Python and wasm hosts share when a
 // graph-carrying result meets a single-graph RDF syntax.
 pub mod named_graph;
+// CSV and TSV on the W3C CSVW dialect model.
+pub mod csv;
+pub mod sink;
+// Shared small-vector primitives (SmallVec / IdVec) for hot, short-lived id rows.
+pub mod small;
 // Native SSSOM (Simple Standard for Sharing Ontology Mappings) TSV codec +
 // validator + RDF serializer. PyO3-free; replaces the `sssom` PyPI
 // package's parse+validate behaviour for the PurRDF mapping artifacts.
-// Shared small-vector primitives (SmallVec / IdVec) for hot, short-lived id rows.
-pub mod sink;
-pub mod small;
 pub mod sssom;
 /// Dataset/import capability flags ([`RdfStoreCapabilities`]).
 pub mod store;
-#[doc(hidden)]
-pub mod test_rng;
 pub mod turtle;
 // The canonical, review-friendly Turtle RENDERER over the IR — the oxigraph-free half
 // of the on-disk normalizer (the oxigraph-coupled text parser stays in `purrdf`).
@@ -261,7 +261,7 @@ pub use purrdf_iri::terminals;
 /// [`purrdf_iri::parse`] under a name that stays unambiguous in this crate's flat
 /// root.
 pub use purrdf_iri::{BaseIri, Iri, IriError, parse as parse_iri};
-pub use small::{IdVec, SmallVec, smallvec};
+pub use small::{IdVec, SmallVec};
 pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomColumnLayout, SssomColumnLayoutError, SssomCommentError,
     SssomCommentKind, SssomCommentPlacement, SssomDiagnostic, SssomMapping, SssomMappingSet,
@@ -303,3 +303,10 @@ pub use ir::{
     OwnerMutability, RetainedCharge, RetentionGuard, RetentionLedger, RetentionSnapshot,
     ScopeBinding, ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
 };
+
+#[cfg(test)]
+extern crate self as purrdf_core;
+
+#[cfg(test)]
+#[path = "../tests/support/term_fixture.rs"]
+mod test_terms;

@@ -7,11 +7,11 @@
 //! vocabulary and compares it with the template regenerated from the indices the body
 //! names. One definition therefore describes both what is written and what is accepted.
 
+use crate::binary::{FunctionBody, Reader};
 use wasm_encoder::{BlockType, Function, Instruction, ValType};
-use wasmparser::{FunctionBody, Operator};
 
 use crate::error::LinkError;
-use crate::scan::{Sig, val_type};
+use crate::scan::Sig;
 
 /// The instruction vocabulary the templates are written in. Any other operator decodes
 /// to [`Op::Other`], which no template contains.
@@ -54,31 +54,6 @@ pub(crate) enum Op {
 }
 
 impl Op {
-    /// The vocabulary entry for a decoded operator.
-    pub(crate) fn of(operator: &Operator<'_>) -> Self {
-        match operator {
-            Operator::LocalGet { local_index } => Self::LocalGet(*local_index),
-            Operator::LocalSet { local_index } => Self::LocalSet(*local_index),
-            Operator::GlobalGet { global_index } => Self::GlobalGet(*global_index),
-            Operator::GlobalSet { global_index } => Self::GlobalSet(*global_index),
-            Operator::I32Const { value } => Self::I32Const(*value),
-            Operator::I32Add => Self::I32Add,
-            Operator::I32Sub => Self::I32Sub,
-            Operator::I32Ne => Self::I32Ne,
-            Operator::If {
-                blockty: wasmparser::BlockType::Empty,
-            } => Self::If,
-            Operator::Unreachable => Self::Unreachable,
-            Operator::End => Self::End,
-            Operator::Call { function_index } => Self::Call(*function_index),
-            Operator::ReturnCall { function_index } => Self::ReturnCall(*function_index),
-            Operator::RefFunc { function_index } => Self::RefFunc(*function_index),
-            Operator::Drop => Self::Drop,
-            Operator::Return => Self::Return,
-            _ => Self::Other,
-        }
-    }
-
     /// The encoder instruction for a template entry.
     fn instruction(self) -> Instruction<'static> {
         match self {
@@ -135,15 +110,19 @@ impl Body {
 
     /// A body decoded into the template vocabulary.
     pub(crate) fn decode(body: &FunctionBody<'_>) -> Result<Self, LinkError> {
+        let mut reader = Reader::new(body.data);
         let mut locals = Vec::new();
-        for local in body.get_locals_reader()? {
-            let (count, ty) = local?;
-            let ty = val_type(ty)?;
-            locals.extend(std::iter::repeat_n(ty, count as usize));
+        for _ in 0..reader.u32()? {
+            let count = reader.u32()? as usize;
+            let ty = reader.val()?;
+            if count > 1_000_000 - locals.len() {
+                return Err(LinkError::Parse("too many locals".into()));
+            }
+            locals.extend(std::iter::repeat_n(ty, count));
         }
         let mut ops = Vec::new();
-        for operator in body.get_operators_reader()? {
-            ops.push(Op::of(&operator?));
+        while !reader.done() {
+            ops.push(reader.op()?.0);
         }
         Ok(Self { locals, ops })
     }

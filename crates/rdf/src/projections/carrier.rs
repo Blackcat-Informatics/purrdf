@@ -1083,7 +1083,10 @@ mod tests {
         .expect("repeat attached project");
         assert_eq!(first.archive, second.archive);
         assert_eq!(
-            format!("{:x}", Sha256::digest(&first.archive)),
+            format!(
+                "{}",
+                purrdf_hash::hex::Lower(&Sha256::digest(&first.archive))
+            ),
             ATTACHED_ARCHIVE_SHA256
         );
         let lifted = lift_archive(&first.archive, LiftProfile::RoCrate13, &config)

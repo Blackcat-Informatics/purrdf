@@ -153,3 +153,7 @@ pub use shapes_tools::{
     apply_rules_to_ntriples, check_rules, eval_node_expr, lint_shapes_ttl,
     lint_shapes_ttl_with_shapes_graph, parse_check_level, parse_scope_binding,
 };
+
+#[cfg(test)]
+#[path = "../../rdf-core/tests/support/term_fixture.rs"]
+mod test_terms;

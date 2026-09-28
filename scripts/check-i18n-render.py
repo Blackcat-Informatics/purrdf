@@ -52,7 +52,13 @@ owner reads.
     python3 scripts/check-i18n-render.py              # render and gate (exit 1 on a hit)
     python3 scripts/check-i18n-render.py --self-test  # prove each arm can go red, then gate
 
-The self-test writes NOTHING under the repository. For each arm it builds a throwaway
+Every file the gate writes — the extracted template, each rendering, each poisoned
+catalogue — goes into one scratch directory under the build tree
+(``target/gate-scratch/``, or ``$CARGO_TARGET_DIR/gate-scratch/``), the convention
+``scripts/build-scratch.sh`` sets out, and is removed on exit. Not ``$TMPDIR``: the
+gate runs ``cargo`` while the scratch is open, and the system temporary directory is
+not guaranteed to keep a directory for the length of a build. The self-test writes
+nothing else. For each arm it builds a throwaway
 catalogue containing one poisoned ``msgstr`` — the arm's OWN self-test specimen, imported
 from the gate script (a bare ``purrdf`` glued to CJK, a hazard id glued to CJK, the
 Chinese attribution of the quad template, the overclaim ban's specimen after a full-width
@@ -518,7 +524,7 @@ def main(argv: list[str]) -> int:
         print(f"check-i18n-render: rendering the {LANGUAGE} book with {_PO.relative_to(_REPO)} —")
         tree = render(scratch / "render")
         pages = sum(1 for _ in tree.rglob("*.md"))
-        print(f"  {pages} page(s) rendered to Markdown under a temporary directory.")
+        print(f"  {pages} page(s) rendered to Markdown under a scratch directory.")
         red = gate_all(tree, _PO)
         report_catalogue(template)
         if red:

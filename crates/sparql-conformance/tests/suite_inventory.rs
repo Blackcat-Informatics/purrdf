@@ -3,7 +3,7 @@
 
 //! On-disk inventory tripwires for `suite/`.
 //!
-//! Every manifest under `suite/` is one datatest case in `sparql_conformance.rs`, so a
+//! Every manifest under `suite/` is one case of `sparql_conformance.rs`, so a
 //! directory that vanishes — a re-sync that dropped a vendored group, a first-party
 //! suite deleted in a refactor — simply stops appearing in the run. Nothing fails, and
 //! the tally still reads GREEN for never having exercised the surface. These tests are
@@ -14,8 +14,8 @@
 //! # Why they live in their own target
 //!
 //! They cannot live beside the cases they guard. `sparql_conformance.rs` is a
-//! `harness = false` target whose `datatest_stable::harness!` expands to the `fn main`
-//! that runs the discovered manifests, and nothing else: a `#[test]` function in that
+//! `harness = false` target whose `fn main` hands the discovered manifests to the
+//! `purrdf_testkit::harness` runner, and does nothing else: a `#[test]` function in that
 //! file is compiled and never called, so an inventory assertion written there would be
 //! a tripwire that cannot trip. This target uses the ordinary libtest harness, so these
 //! run.
@@ -148,7 +148,7 @@ fn first_party_suite_inventory() {
 /// pins the SPECIFIC count and kind breakdown this suite is supposed to carry, so
 /// a change to the loader, the manifest, or a fixture that silently drops a case —
 /// while still leaving `load` itself succeeding — still turns this test red rather
-/// than just quietly reporting fewer cases through the datatest tally line.
+/// than just quietly reporting fewer cases through the manifest's tally line.
 ///
 /// This suite mixes `mf:action` shapes on purpose (a blank node carrying
 /// `qt:query`/`qt:data` for most `mf:QueryEvaluationTest` cases, and a bare IRI
@@ -219,10 +219,10 @@ fn suite_root() -> std::path::PathBuf {
 /// The vendored `vectors/sparql-cdt` root (SEP-0009, `awslabs/SPARQL-CDTs`).
 ///
 /// Deliberately NOT under `suite/`, and for the same reason the two first-party
-/// query-form corpora live under `corpus/`: `sparql_conformance.rs`'s
-/// `datatest_stable::harness!` is rooted at `suite/` and folds every manifest it
-/// finds into ONE matix row, and this corpus reports its OWN row. It is run by
-/// `tests/cdt_corpus.rs` through its `mf:include` aggregator.
+/// query-form corpora live under `corpus/`: `sparql_conformance.rs` discovers its
+/// cases under `suite/` and folds every manifest it finds into ONE matrix row,
+/// and this corpus reports its OWN row. It is run by `tests/cdt_corpus.rs`
+/// through its `mf:include` aggregator.
 ///
 /// What lives HERE is the inventory half: the per-group `mf:entries` and
 /// on-disk file counts below, which catch a re-sync that drops or duplicates a
@@ -316,7 +316,7 @@ fn sparql_cdt_inventory() {
 
 /// The `tests/fixtures/` directory of this crate — deliberately NOT under `suite/`,
 /// so nothing here is ever discovered as a live conformance case by
-/// `sparql_conformance.rs`'s `datatest_stable::harness!` (rooted at `suite/` only).
+/// `sparql_conformance.rs` (which discovers under `suite/` only).
 fn fixtures_root() -> std::path::PathBuf {
     std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("tests")
@@ -368,8 +368,7 @@ fn broken_manifest_with_an_undescribed_entry_is_rejected() {
 /// (and its positive control immediately below) both rely on: the negative fixture
 /// directory lives under `tests/fixtures/`, never under `suite/`, so it is never
 /// discovered as a real (and permanently failing) conformance case by
-/// `sparql_conformance.rs`'s `datatest_stable::harness!`, which is rooted at
-/// `suite/` only.
+/// `sparql_conformance.rs`, which discovers under `suite/` only.
 ///
 /// This is a directory-existence check, not the positive control the module doc
 /// for the test above once claimed to be here — see
@@ -380,7 +379,7 @@ fn broken_manifest_fixture_directory_does_not_leak_into_the_live_suite() {
     assert!(
         !leaked.exists(),
         "the negative fixture must live under tests/fixtures/, not suite/, or the \
-         datatest harness would pick it up as a real (and permanently failing) case"
+         conformance harness would pick it up as a real (and permanently failing) case"
     );
 }
 
@@ -442,15 +441,15 @@ fn broken_manifest_with_a_described_entry_loads_cleanly() {
 /// The PLACEMENT invariant the two first-party query-form corpora rely on: they
 /// live under `corpus/`, never under `suite/`.
 ///
-/// `sparql_conformance.rs`'s `datatest_stable::harness!` is rooted at `suite/`
-/// and folds every manifest it finds into ONE conformance-matrix row. The
+/// `sparql_conformance.rs` discovers its cases under `suite/` and folds every
+/// manifest it finds into ONE conformance-matrix row. The
 /// CONSTRUCT and DESCRIBE corpora each report their OWN row (with their own
 /// ratchet budget in `scripts/conformance-baseline.json`), which only works
 /// while they are outside that root — moved under `suite/` they would be run
 /// twice and counted twice, and their own rows would double-count against the
 /// full-corpus row.
 #[test]
-fn the_first_party_query_form_corpora_live_outside_the_datatest_root() {
+fn the_first_party_query_form_corpora_live_outside_the_suite_root() {
     let corpus = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("corpus");
     for name in ["construct", "describe"] {
         let manifest = corpus.join(name).join("manifest.ttl");
@@ -463,7 +462,7 @@ fn the_first_party_query_form_corpora_live_outside_the_datatest_root() {
         let leaked = suite_root().join(name);
         assert!(
             !leaked.exists(),
-            "the {name} corpus must stay under corpus/, not suite/, or the datatest harness \
+            "the {name} corpus must stay under corpus/, not suite/, or the conformance harness \
              would also run it and both rows would count the same cases"
         );
     }

@@ -12,7 +12,7 @@
 //! error.
 
 use ed25519_dalek::SigningKey;
-use sha1::{Digest, Sha1};
+use purrdf_hash::sha1::Sha1;
 
 /// OpenPGP public-key algorithm id for EdDSA (RFC 9580 §9.1).
 const ED25519_ALGO: u8 = 22;
@@ -413,8 +413,8 @@ fn parse_ed25519_secret_material(body: &[u8]) -> Result<([u8; 32], SigningKey, u
 /// RFC 4880 for v4 fingerprints; it is not used here as a security primitive.
 fn fingerprint(pub_key_body: &[u8]) -> String {
     let mut hasher = Sha1::new();
-    hasher.update([0x99]);
-    hasher.update((pub_key_body.len() as u16).to_be_bytes());
+    hasher.update(&[0x99]);
+    hasher.update(&(pub_key_body.len() as u16).to_be_bytes());
     hasher.update(pub_key_body);
     let digest = hasher.finalize();
     crate::wire::hex(&digest).to_uppercase()

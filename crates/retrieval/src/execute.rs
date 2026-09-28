@@ -454,11 +454,10 @@ pub struct ExecutionResult<'d> {
 /// later change to either — a ceiling added to the lane, a registry injected —
 /// reddens a test rather than quietly making a documented impossibility
 /// possible.
-#[derive(Debug, thiserror::Error)]
+#[derive(Debug)]
 #[non_exhaustive]
 pub enum ExecutionError {
     /// The compiled units were built against a different live registry instance.
-    #[error("compiled units name registry instance {expected:?}, but execution holds {got:?}")]
     RegistryMismatch {
         /// The instance the compiled bundle records.
         expected: RegistryId,
@@ -488,7 +487,6 @@ pub enum ExecutionError {
     /// lane which declined every ceiling. It is the same shape of fact — the run
     /// did not happen under the assumptions it was compiled against — and it is
     /// unreachable through this lane's configuration, per this type's own docs.
-    #[error("stratum {stratum}: the relation witness is not a compiled unit's: {reason}")]
     InconsistentWitness {
         /// The stratum whose unit produced the witness. Boxed because an
         /// [`Iri`] is much wider than the other variant's two ids, and a large
@@ -534,9 +532,6 @@ pub enum ExecutionError {
     /// the tightest among the declared modes that serve it — routinely a coarser mode
     /// than the call was made under. Named without its mode, the figure sent an author
     /// to a declaration the call was not made at.
-    #[error(
-        "stratum {stratum}: the registry declares at most {declared} rows per invocation{mode}, and the read returned {pulled}"
-    )]
     RowBoundBreached {
         /// The stratum whose producer beat its own declaration. Boxed for the
         /// reason [`Self::InconsistentWitness`] boxes its own: an [`Iri`] is
@@ -575,7 +570,6 @@ pub enum ExecutionError {
     /// enforces from a plan into `compile`: a stratum missing from the set is a
     /// producer missing from the answer, and that must be a refusal rather than a
     /// silently narrower read.
-    #[error("the compiled bundle for plan {plan} is not the bundle it was assembled as: {reason}")]
     UnitsNotAsAssembled {
         /// The plan identity the bundle names, so a report can say which bundle
         /// moved. Carried by value: it is a fixed 32-byte digest, not a growable
@@ -594,12 +588,45 @@ pub enum ExecutionError {
     /// every one of this bundle's relation calls to an ordinary triple pattern and
     /// answer over the base graph: a silently narrower read, which is exactly the
     /// outcome the rest of this type exists to prevent.
-    #[error("the execution environment could not be derived from the registry: {reason}")]
     EnvironmentNotDerivable {
         /// The registry's own failure, propagated unchanged.
         reason: String,
     },
 }
+
+impl fmt::Display for ExecutionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::RegistryMismatch { expected, got } => write!(
+                f,
+                "compiled units name registry instance {expected:?}, but execution holds {got:?}"
+            ),
+            Self::InconsistentWitness { stratum, reason } => write!(
+                f,
+                "stratum {stratum}: the relation witness is not a compiled unit's: {reason}"
+            ),
+            Self::RowBoundBreached {
+                stratum,
+                declared,
+                pulled,
+                mode,
+            } => write!(
+                f,
+                "stratum {stratum}: the registry declares at most {declared} rows per invocation{mode}, and the read returned {pulled}"
+            ),
+            Self::UnitsNotAsAssembled { plan, reason } => write!(
+                f,
+                "the compiled bundle for plan {plan} is not the bundle it was assembled as: {reason}"
+            ),
+            Self::EnvironmentNotDerivable { reason } => write!(
+                f,
+                "the execution environment could not be derived from the registry: {reason}"
+            ),
+        }
+    }
+}
+
+impl std::error::Error for ExecutionError {}
 
 /// A concrete ranked stream of `(rank, candidate, block)` rows.
 ///

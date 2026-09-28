@@ -46,7 +46,7 @@
 //! binding. Each has directed tests in `node_expressions.rs`,
 //! `sparql_node_expressions.rs` and `custom_node_expressions.rs`.
 //!
-//! The run is deterministic: a fixed ChaCha seed, [`CASES`] cases, and no
+//! The run is deterministic: a fixed xoshiro256** seed, [`CASES`] cases, and no
 //! on-disk failure persistence.
 
 use std::cmp::Ordering;
@@ -54,8 +54,6 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use proptest::prelude::*;
-use proptest::test_runner::{Config, RngAlgorithm, TestCaseError, TestRng, TestRunner};
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::parse_shapes;
 use purrdf_shapes::expression::{
@@ -64,12 +62,14 @@ use purrdf_shapes::expression::{
 use purrdf_shapes::shapes::{Constraint, Shapes};
 use purrdf_shapes::term::{Literal, NamedNode, Term};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+use purrdf_testkit::prop::Runner;
+use purrdf_testkit::prop::prelude::*;
 
 /// The number of generated worlds the differential property checks.
 const CASES: u32 = 2048;
 
 /// The fixed seed of the generator.
-const SEED: [u8; 32] = *b"shacl12 node-expr reference seed";
+const SEED: u64 = 0x7368_6163_6c31_3221;
 
 const EX: &str = "http://example.org/ns#";
 const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
@@ -1126,15 +1126,11 @@ fn render(terms: &[Term]) -> String {
 /// interpreter produces, or fails exactly where it fails.
 #[test]
 fn production_evaluation_matches_the_reference_interpreter() {
-    let config = Config {
-        cases: CASES,
-        // No on-disk regression files: the fixed seed already makes every run
-        // identical.
-        failure_persistence: None,
-        ..Config::default()
-    };
-    let mut runner =
-        TestRunner::new_with_rng(config, TestRng::from_seed(RngAlgorithm::ChaCha, &SEED));
+    let runner = Runner::with_seed(
+        Config::with_cases(CASES),
+        "production_evaluation_matches_the_reference_interpreter",
+        SEED,
+    );
     let tally = std::cell::RefCell::new(Tally::default());
     let outcome = runner.run(&world(), |world| {
         let reference = Reference {

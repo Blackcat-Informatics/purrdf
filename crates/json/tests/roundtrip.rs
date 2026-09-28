@@ -2,6 +2,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Frozen first-party corpus and adversarial checks through production RDF codecs.
+//!
+//! `harness = false` on `purrdf_testkit::harness`, so the same named cases run
+//! natively under `cargo test` and on `wasm32-unknown-unknown` in Node through
+//! `scripts/wasm-test-runner.sh`, the cargo runner `make wasm-test` sets.
 
 use std::sync::Arc;
 
@@ -49,8 +53,6 @@ fn profile() -> Profile {
     .unwrap()
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn profile_and_document_identities_match_independent_framed_sha256_vectors() {
     // Independently computed from SPEC.md's fixed-width preimage with Python's
     // struct.pack and hashlib, not by serializing the Rust model under test.
@@ -110,8 +112,6 @@ fn integer(value: &str) -> RdfTerm {
     RdfTerm::Literal(RdfLiteral::typed(value, XSD_INTEGER))
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn frozen_corpus_round_trips_through_real_rdf_serialization_and_reparse() {
     assert_eq!(CORPUS.len(), 19);
     let mut corpus_bytes = Vec::new();
@@ -149,8 +149,6 @@ fn frozen_corpus_round_trips_through_real_rdf_serialization_and_reparse() {
     );
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn duplicate_member_occurrences_have_distinct_identity_and_parentage() {
     let profile = profile();
     let text = r#"{"x":{"a":1},"x":{"a":2},"x":[],"":{}}"#;
@@ -180,8 +178,6 @@ fn duplicate_member_occurrences_have_distinct_identity_and_parentage() {
     );
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn pointers_decode_keys_and_escape_each_reference_token() {
     let profile = profile();
     let text = r#"{"a\u002Fb":{"~1":[{"\uD83D\uDE00":"value"}]},"\u0000":1}"#;
@@ -197,8 +193,6 @@ fn pointers_decode_keys_and_escape_each_reference_token() {
     assert_eq!(model.values()[5].path(), "/\0");
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn lexical_strings_and_number_spellings_are_authoritative() {
     let profile = profile();
     let text = r#"["\u0061","a",-0.00e+07,0,1E9999999]"#;
@@ -219,8 +213,6 @@ fn lexical_strings_and_number_spellings_are_authoritative() {
     assert_eq!(lexicals, [r"\u0061", "a", "-0.00e+07", "0", "1E9999999"]);
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn rejects_json_grammar_extensions_and_unrepresentable_member_names() {
     let profile = profile();
     for text in [
@@ -271,8 +263,6 @@ fn rejects_json_grammar_extensions_and_unrepresentable_member_names() {
     ));
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn source_and_vocabulary_require_real_absolute_iris() {
     let profile = profile();
     for id in [
@@ -294,8 +284,6 @@ fn source_and_vocabulary_require_real_absolute_iris() {
     assert!(profile.vocabulary().term("madeUp").is_err());
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn every_resource_bound_is_enforced_and_changes_identity() {
     let standard = Bounds::standard();
     let configurations = [
@@ -368,8 +356,6 @@ fn every_resource_bound_is_enforced_and_changes_identity() {
     ));
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn impossible_profile_bounds_refuse_at_construction() {
     for bounds in [
         Bounds {
@@ -403,8 +389,6 @@ fn impossible_profile_bounds_refuse_at_construction() {
     );
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn profile_mismatch_fails_before_projection_or_decode() {
     let (profile, document, dataset) = encoded("null");
     let other = Profile::new(
@@ -432,8 +416,6 @@ fn profile_mismatch_fails_before_projection_or_decode() {
     ));
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn explicit_selection_isolates_source_revisions_in_a_merged_dataset() {
     let (profile, first, dataset) = encoded(r#"{"x":1}"#);
     let second = analyze(
@@ -460,8 +442,6 @@ fn explicit_selection_isolates_source_revisions_in_a_merged_dataset() {
     assert!(decode_document(&merged, "https://example.org/missing", &profile).is_err());
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn every_required_metadata_fact_is_required() {
     let (profile, document, dataset) = encoded(r#"{"x":[1,"",{}]}"#);
     for (removed, _) in dataset.quads().enumerate() {
@@ -478,8 +458,6 @@ fn every_required_metadata_fact_is_required() {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn cover_success_cannot_launder_fabricated_structural_metadata() {
     let (profile, document, dataset) = encoded(r#"{"x":[1,2]}"#);
     let leaf = format!("{document}#v2");
@@ -511,8 +489,6 @@ fn cover_success_cannot_launder_fabricated_structural_metadata() {
     assert!(decode_document(&damaged, &document, &profile).is_err());
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn rejects_malformed_offsets_wrong_datatypes_and_language_tags() {
     let (profile, document, dataset) = encoded("[1]");
     let leaf = format!("{document}#v1");
@@ -542,8 +518,6 @@ fn rejects_malformed_offsets_wrong_datatypes_and_language_tags() {
     assert!(decode_document(&damaged, &document, &profile).is_err());
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn conflicting_metadata_never_uses_first_or_last_value() {
     let (profile, document, dataset) = encoded("[1]");
     let leaf = format!("{document}#v1");
@@ -559,8 +533,6 @@ fn conflicting_metadata_never_uses_first_or_last_value() {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn rejects_changed_ownership_named_graphs_and_unexpected_predicates() {
     let (profile, document, dataset) = encoded("[{}]");
     let empty = format!("{document}#v1");
@@ -586,8 +558,6 @@ fn rejects_changed_ownership_named_graphs_and_unexpected_predicates() {
     assert!(decode_document(&builder.freeze().unwrap(), &document, &profile).is_err());
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn digest_and_profile_are_mandatory_typed_identity_metadata() {
     let (profile, document, dataset) = encoded("null");
     for (field, replacement) in [
@@ -623,8 +593,6 @@ fn digest_and_profile_are_mandatory_typed_identity_metadata() {
     ));
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn rdf12_side_tables_cannot_hide_conflicting_metadata_or_ownership() {
     let (profile, document, dataset) = encoded("[1]");
     let leaf = format!("{document}#v1");
@@ -665,8 +633,6 @@ fn rdf12_side_tables_cannot_hide_conflicting_metadata_or_ownership() {
     assert!(decode_document(&builder.freeze().unwrap(), &document, &profile).is_err());
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn equivalent_rdf12_metadata_and_unrelated_statement_layers_coexist() {
     let (profile, document, dataset) = encoded("[1]");
     let mut builder = RdfDatasetBuilder::new();
@@ -697,8 +663,6 @@ fn equivalent_rdf12_metadata_and_unrelated_statement_layers_coexist() {
     );
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn document_profile_and_length_refuse_before_owned_subgraph_collection() {
     let (profile, document, dataset) = encoded("null");
     for (field, replacement) in [
@@ -735,8 +699,6 @@ fn document_profile_and_length_refuse_before_owned_subgraph_collection() {
     }
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn sparql_traverses_parent_paths_sizes_and_distinct_raw_values() {
     use purrdf_core::{SparqlResult, TermValue};
     use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
@@ -783,8 +745,6 @@ fn sparql_traverses_parent_paths_sizes_and_distinct_raw_values() {
     );
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn fabricated_container_size_and_extra_scalar_size_are_refused() {
     let (profile, document, dataset) = encoded(r#"{"a":1,"a":2,"empty":[]}"#);
     let root_value = format!("{document}#v0");
@@ -822,8 +782,6 @@ fn fabricated_container_size_and_extra_scalar_size_are_refused() {
     );
 }
 
-#[cfg_attr(not(target_arch = "wasm32"), test)]
-#[cfg_attr(target_arch = "wasm32", wasm_bindgen_test::wasm_bindgen_test)]
 fn document_bases_factor_full_identities_for_every_namespace_shape() {
     for namespace in [
         "https://example.org/json#",
@@ -866,3 +824,29 @@ fn document_bases_factor_full_identities_for_every_namespace_shape() {
         );
     }
 }
+
+purrdf_testkit::harness_main!(
+    conflicting_metadata_never_uses_first_or_last_value,
+    cover_success_cannot_launder_fabricated_structural_metadata,
+    digest_and_profile_are_mandatory_typed_identity_metadata,
+    document_bases_factor_full_identities_for_every_namespace_shape,
+    document_profile_and_length_refuse_before_owned_subgraph_collection,
+    duplicate_member_occurrences_have_distinct_identity_and_parentage,
+    equivalent_rdf12_metadata_and_unrelated_statement_layers_coexist,
+    every_required_metadata_fact_is_required,
+    every_resource_bound_is_enforced_and_changes_identity,
+    explicit_selection_isolates_source_revisions_in_a_merged_dataset,
+    fabricated_container_size_and_extra_scalar_size_are_refused,
+    frozen_corpus_round_trips_through_real_rdf_serialization_and_reparse,
+    impossible_profile_bounds_refuse_at_construction,
+    lexical_strings_and_number_spellings_are_authoritative,
+    pointers_decode_keys_and_escape_each_reference_token,
+    profile_and_document_identities_match_independent_framed_sha256_vectors,
+    profile_mismatch_fails_before_projection_or_decode,
+    rdf12_side_tables_cannot_hide_conflicting_metadata_or_ownership,
+    rejects_changed_ownership_named_graphs_and_unexpected_predicates,
+    rejects_json_grammar_extensions_and_unrepresentable_member_names,
+    rejects_malformed_offsets_wrong_datatypes_and_language_tags,
+    source_and_vocabulary_require_real_absolute_iris,
+    sparql_traverses_parent_paths_sizes_and_distinct_raw_values,
+);

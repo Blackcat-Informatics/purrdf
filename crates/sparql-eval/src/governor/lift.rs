@@ -597,7 +597,6 @@ impl ExpressionBarrier {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
     use purrdf_core::{ResourceDimension, TermId};
     use purrdf_sparql_algebra::{
         Child, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
@@ -635,7 +634,7 @@ mod tests {
     fn one_row() -> SolutionSeq<TermId> {
         SolutionSeq {
             schema: Arc::new(VarSchema::from_vars([Variable::new("s")])),
-            rows: vec![smallvec::smallvec![Some(
+            rows: vec![purrdf_core::smallvec![Some(
                 crate::scratch::SolutionTerm::Existing(TermId::from_index(0))
             )]],
         }

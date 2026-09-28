@@ -438,7 +438,7 @@ fn slice_phase_leaf(
     }
 
     let digest = hasher.finalize();
-    Ok(format!("{digest:x}"))
+    Ok(format!("{}", purrdf_hash::hex::Lower(&digest)))
 }
 
 // ── Merkle cache key ────────────────────────────────────────────────────────
@@ -504,7 +504,7 @@ fn merkle_root(
         hasher.update(b"\x1e");
     }
     let digest = hasher.finalize();
-    Ok(format!("{digest:x}"))
+    Ok(format!("{}", purrdf_hash::hex::Lower(&digest)))
 }
 
 /// Compute the cache key for a **source unit** (one slice) at `phase`.

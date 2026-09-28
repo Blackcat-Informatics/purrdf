@@ -1814,7 +1814,7 @@ fn digest_rows(rows: &[SourceRow]) -> [u8; FINGERPRINT_BYTES] {
 /// large index allocates a bounded amount rather than a buffer per term.
 struct Digest {
     /// The hash state.
-    hasher: blake3::Hasher,
+    hasher: purrdf_hash::blake3::Hasher,
     /// The reused encoding buffer.
     scratch: Vec<u8>,
 }
@@ -1824,7 +1824,7 @@ impl Digest {
     /// the same bytes cannot coincide.
     fn new(domain: &str) -> Self {
         let mut digest = Self {
-            hasher: blake3::Hasher::new(),
+            hasher: purrdf_hash::blake3::Hasher::new(),
             scratch: Vec::new(),
         };
         digest.text(domain);
@@ -1895,7 +1895,6 @@ impl Digest {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
     use purrdf_core::TermValue;
 
     use super::{

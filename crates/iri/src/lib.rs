@@ -53,6 +53,19 @@
 //!   [`terminals::find_first_json_string_special`],
 //!   [`terminals::find_first_xml_special`]): portable chunked scans that find
 //!   the first byte of a class sixteen bytes at a time.
+//! * **Host syntax** — [`host`], the RFC 3986 §3.2.2 `IPv4address`,
+//!   `IPv6address` and `reg-name` productions as predicates. Every authority
+//!   [`parse`] accepts has its host decided by them, and they are public so a
+//!   surface that asks the same question (a JSON Schema `ipv4` format, a mail
+//!   address literal) asks it here instead of carrying a second address parser.
+//! * **IDNA2008** — [`idna`], host names under RFC 5891 over the RFC 5892
+//!   derived property, the RFC 5892 Appendix A contextual rules and the
+//!   RFC 5893 Bidi rule, with RFC 3492 Punycode between A-labels and U-labels
+//!   and a local mapping step (NFKC_Casefold, then NFC). Every Unicode table is
+//!   generated from the Unicode 17.0.0 database vendored under
+//!   `crates/iri/unicode/`. [`Iri::to_uri`] applies it as RFC 3987 §3.1
+//!   describes; [`parse`] never does, because RFC 3987 compares IRIs code point
+//!   by code point.
 //! * **JSON string escape law** — [`json_escape`], the one RFC 8259 §7 string
 //!   body escaper every PurRDF JSON writer shares, over the JSON string-body
 //!   scanner above. It lives in this leaf because it is the one crate every
@@ -75,8 +88,8 @@
 //! [`IriError::diagnostic_code`], which is the single owner of those strings for the
 //! whole workspace.
 //!
-//! There are exactly **two** `Option`-returning surfaces, and in both the `None` is
-//! a *semantic* answer rather than a degraded failure:
+//! The `Option`-returning surfaces are these, and in each the `None` is a
+//! *semantic* answer rather than a degraded failure:
 //!
 //! * [`expand_curie`] — `None` is "not a CURIE / undeclared prefix", faithful to the
 //!   SSSOM behavior this crate subsumes.
@@ -84,6 +97,10 @@
 //!   against this base" (different scheme, different authority, or a target outside
 //!   the base's dot-normalized image); the caller's correct response is to emit the
 //!   absolute IRI, not to raise an error.
+//! * [`idna::to_ascii`], [`idna::to_ascii_mapped`], [`idna::punycode_encode`] and
+//!   [`idna::punycode_decode`] — `None` is the protocol's own answer "not a
+//!   valid name" (or "not Punycode"), each refusal a clause of RFC 3492 or
+//!   RFC 5890–5893.
 //!
 //! # Examples
 //!
@@ -136,6 +153,9 @@
 mod base;
 mod curie;
 mod error;
+pub mod host;
+pub mod idna;
+mod idna_tables;
 pub mod json_escape;
 pub mod langtag;
 mod normalize;
@@ -144,8 +164,6 @@ pub mod pos;
 mod resolve;
 mod scan;
 pub mod terminals;
-#[cfg(test)]
-mod test_rng;
 
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
 pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};

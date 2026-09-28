@@ -51,10 +51,12 @@ impl StrictNumber {
             Self::Signed(value) => serde_json::Number::from(*value),
             Self::Unsigned(value) => serde_json::Number::from(*value),
             Self::Decimal(value) => {
-                crate::json_number::read_json(|| serde_json::from_str::<serde_json::Number>(value))
-                    .map_err(|error| {
+                let parsed =
+                    crate::json_number::read_json(|| value.parse::<f64>()).map_err(|error| {
                         OkfError::new(format!("invalid OKF decimal `{value}`: {error}"))
-                    })?
+                    })?;
+                serde_json::Number::from_f64(parsed)
+                    .ok_or_else(|| OkfError::new("OKF decimal exceeds finite binary64"))?
             }
         };
         Ok(serde_json::Value::Number(number))
@@ -104,6 +106,13 @@ impl StrictValue {
             }
         }
     }
+}
+
+/// Apply the reader's numeric normalization before accepting a writer projection.
+pub(super) fn json_from_yaml(value: serde_yaml::Value) -> Result<serde_json::Value, OkfError> {
+    serde_yaml::from_value::<StrictValue>(value)
+        .map_err(|error| OkfError::new(format!("invalid OKF YAML value: {error}")))?
+        .to_json()
 }
 
 impl<'de> Deserialize<'de> for StrictValue {

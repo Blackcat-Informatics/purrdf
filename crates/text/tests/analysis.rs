@@ -12,7 +12,6 @@
 
 use std::borrow::Cow;
 
-use pretty_assertions::assert_eq;
 use purrdf_text::{Analyzer, Token, unicode_versions};
 
 /// The token texts of `input`, in order.
@@ -323,11 +322,11 @@ fn an_empty_or_punctuation_only_input_yields_no_tokens() {
 
 /// The tripwire.
 ///
-/// Tokenization is a function of four independently versioned Unicode tables —
-/// the standard library's, `unicode-normalization`'s, `caseless`'s and
-/// `unicode-segmentation`'s — and none of them is under this repository's
-/// control. A toolchain bump or a dependency bump can therefore change what a
-/// literal tokenizes to, which changes the term dictionary, which changes which
+/// Tokenization is a function of the Unicode tables it is generated from —
+/// case folding, normalization, word-break properties and the alphanumeric
+/// predicate — all generated in this crate from the one vendored Unicode
+/// Character Database. A regenerated table can therefore change what a literal
+/// tokenizes to, which changes the term dictionary, which changes which
 /// documents a query retrieves. Nothing about that failure announces itself:
 /// the engine still returns rows, just not the same rows, and a ranking that
 /// was reproducible stops being so.
@@ -491,18 +490,12 @@ fn the_scratch_form_agrees_and_borrows_every_token() {
 ///
 /// The versions are pinned **exactly** rather than merely sanity-checked. An
 /// assertion that a major version is non-zero is satisfied by every possible
-/// table and therefore says nothing; these four numbers decide which literals
+/// table and therefore says nothing; these numbers decide which literals
 /// produce which terms, so the whole term dictionary and both index
 /// fingerprints are functions of them, and a change to any of them has to be
-/// seen rather than absorbed.
-///
-/// The `core` table is the one exception to a single number, and not to
-/// exactness: it is the standard library's own and moves with the toolchain,
-/// which this repository floats, so it is pinned to the exact set of vintages
-/// the crate has measured the fold skew under (see
-/// `the_case_folding_skew_is_confined_to_where_it_is_measured` in the crate's
-/// unit tests). A vintage outside that set is a table that moved before its
-/// cost was measured, and fails here by name.
+/// seen rather than absorbed. Every table is generated from one Unicode
+/// version, so all four report it: no table trails another, and none follows
+/// the toolchain.
 #[test]
 fn the_reported_unicode_versions_are_the_pinned_tables() {
     let versions = unicode_versions();
@@ -512,19 +505,10 @@ fn the_reported_unicode_versions_are_the_pinned_tables() {
         "the answer must be a constant"
     );
 
-    const MEASURED_CORE: [&str; 2] = ["17.0.0", "18.0.0"];
-    let core = versions.core.to_string();
-    assert!(
-        MEASURED_CORE.contains(&core.as_str()),
-        "the core (std) table moved to {core}, a vintage whose fold skew this crate has not \
-         measured. Run the crate's unit tests on this toolchain — the skew test prints the runs \
-         it measured — confirm the golden token vectors and fingerprints did not move, then pin \
-         the vintage here and there."
-    );
-
     for (name, version, expected) in [
+        ("core", versions.core, "17.0.0"),
         ("normalization", versions.normalization, "17.0.0"),
-        ("case folding", versions.case_folding, "16.0.0"),
+        ("case folding", versions.case_folding, "17.0.0"),
         ("segmentation", versions.segmentation, "17.0.0"),
     ] {
         assert_eq!(

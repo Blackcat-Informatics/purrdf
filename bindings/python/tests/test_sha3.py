@@ -83,9 +83,9 @@ def _row(query: str) -> purrdf.QuerySolution:
 def test_the_expected_vectors_are_the_published_ones() -> None:
     """The table above agrees with an implementation that is not purrdf.
 
-    `hashlib` is CPython's own SHA-3 (a distinct implementation from the Rust
-    `sha3` crate under test), so this catches a mistranscribed vector here rather
-    than letting it be reported as an engine defect below.
+    `hashlib` is CPython's own SHA-3 (a distinct implementation from
+    `purrdf_hash::sha3` under test), so this catches a mistranscribed vector here
+    rather than letting it be reported as an engine defect below.
     """
     for name, _alias, want in _VECTORS:
         size = name.removeprefix("SHA3-")

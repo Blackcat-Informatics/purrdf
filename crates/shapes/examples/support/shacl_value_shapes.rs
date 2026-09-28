@@ -88,10 +88,9 @@ pub(crate) fn cases() -> Result<Vec<Case>, Box<dyn Error>> {
     let namespaces = namespaces()?;
     let schema: Value = serde_json::from_str(&compiled()?.schema_json)?;
     let location = "mem:///value-shapes.schema.json";
-    let mut schemas = boon::Schemas::new();
-    let mut compiler = boon::Compiler::new();
-    compiler.add_resource(location, schema)?;
-    let holder = compiler.compile(&format!("{location}#/$defs/Holder"), &mut schemas)?;
+    let mut registry = purrdf_jsonschema::Registry::with_metaschemas(metaschemas());
+    registry.add_resource(location, schema)?;
+    let holder = registry.compile(&format!("{location}#/$defs/Holder"))?;
     VARIANTS
         .iter()
         .map(|&(label, property, replacement)| {
@@ -114,7 +113,7 @@ pub(crate) fn cases() -> Result<Vec<Case>, Box<dyn Error>> {
                 })
                 .cloned()
                 .ok_or("the Holder node is projected")?;
-            if schemas.validate(&value, holder).is_ok() != report.conforms {
+            if holder.is_valid(&value)? != report.conforms {
                 return Err(format!(
                     "value-shape variant {label:?}: the compiled schema disagrees with SHACL"
                 )
@@ -127,4 +126,19 @@ pub(crate) fn cases() -> Result<Vec<Case>, Box<dyn Error>> {
             })
         })
         .collect()
+}
+
+fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
+    static SET: std::sync::OnceLock<purrdf_jsonschema::Metaschemas> = std::sync::OnceLock::new();
+    SET.get_or_init(|| {
+        purrdf_jsonschema::Metaschemas::new(
+            purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
+                .iter()
+                .map(|&(uri, text)| {
+                    let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                    (uri, document)
+                }),
+        )
+        .expect("the draft 2020-12 meta-schemas")
+    })
 }

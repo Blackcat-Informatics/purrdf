@@ -374,10 +374,10 @@ mod term_walk_tests {
             for offset in [0, 1, 0, 2] {
                 let mut state = seed * 7 + offset;
                 let mut budget = 6;
-                let term = owned(&purrdf_core::test_rng::term_value(
+                let term = owned(&crate::test_terms::term_value(
                     &mut state,
                     &mut budget,
-                    purrdf_core::test_rng::TermShape::IriPredicates,
+                    crate::test_terms::TermShape::IriPredicates,
                 ));
                 assert_eq!(
                     found.emit_term(&term),

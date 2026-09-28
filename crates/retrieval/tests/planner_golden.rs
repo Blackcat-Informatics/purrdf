@@ -11,7 +11,6 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use pretty_assertions::assert_eq;
 use purrdf_retrieval::{
     DepthCause, DepthInputs, Iri, Metric, Plan, PlanError, RankFidelity, RegistryId,
     RejectionReason, RequestTerm, RetrievalRequest, Statistics, Term, TopK, UnservedReason,

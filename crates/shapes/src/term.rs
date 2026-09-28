@@ -36,7 +36,7 @@ use std::ops::ControlFlow;
 use ::purrdf::blank_label::ESCAPE_MARKER;
 use ::purrdf::{BlankScope, RdfLiteral, TermRef};
 use ::purrdf::{RdfTextDirection, TermId, TermValue};
-use smallvec::SmallVec;
+use purrdf_core::SmallVec;
 
 const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
@@ -1518,10 +1518,10 @@ pub(crate) mod term_walk_tests {
     pub(crate) fn generated(seed: u64) -> Term {
         let mut state = seed;
         let mut budget = 8;
-        native(&purrdf_core::test_rng::term_value(
+        native(&crate::test_terms::term_value(
             &mut state,
             &mut budget,
-            purrdf_core::test_rng::TermShape::WellFormed,
+            crate::test_terms::TermShape::WellFormed,
         ))
     }
 
@@ -1660,7 +1660,7 @@ pub(crate) mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let value = crate::test_terms::triple_chain(LEVELS);
                 let mut term = Term::NamedNode(NamedNode::new_unchecked("http://example.org/o"));
                 for _ in 0..LEVELS {
                     term = Term::Triple(Box::new(Triple::new(

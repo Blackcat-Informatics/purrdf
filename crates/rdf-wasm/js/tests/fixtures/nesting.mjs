@@ -91,4 +91,3 @@ export async function realEnd(run, [what, text, expected]) {
   assert.ok(refusal, `${what}: ${refused} deep is refused`);
   return { deepest, refusal };
 }
-

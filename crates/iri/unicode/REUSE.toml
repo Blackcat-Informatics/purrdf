@@ -1,0 +1,12 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+version = 1
+
+# Unicode Character Database files, vendored verbatim (see
+# PROVENANCE.md beside this file for the source URLs). Their licence is the
+# Unicode-3.0 text in LICENSES/Unicode-3.0.txt; the files carry no SPDX header.
+[[annotations]]
+path = ["16.0.0/*.txt", "17.0.0/*.txt"]
+SPDX-FileCopyrightText = "Unicode, Inc. <https://www.unicode.org>"
+SPDX-License-Identifier = "Unicode-3.0"

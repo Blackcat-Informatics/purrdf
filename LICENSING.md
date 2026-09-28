@@ -86,6 +86,8 @@ MIT, Apache-2.0, or MulanPSL-2.0.
 | `vectors/shacl/af/` | pySHACL DASH tests | Apache-2.0 |
 | `vectors/shacl12/`, `crates/shapes/spec/` | W3C SHACL 1.2 vocabularies + `shacl12-test-suite` | W3C Software and Document License |
 | `vectors/shexTest/` | shexTest v2.1.0 | MIT (per upstream `package.json`) |
+| `crates/jsonschema/tests/suite/` | official JSON-Schema-Test-Suite (`json-schema-org/JSON-Schema-Test-Suite`) | MIT (`tests/suite/LICENSES/MIT.txt`) |
+| `crates/jsonschema/tests/metaschemas/` | JSON Schema draft-07, 2019-09 and 2020-12 meta-schemas (`json-schema-org/json-schema-spec`) | BSD-3-Clause, one of the two licences upstream offers (`tests/metaschemas/REUSE.toml`) |
 
 The first-party selectors, harnesses, and reconstructed expected-result files
 that sit *inside* those trees carry the repository's own
@@ -102,12 +104,52 @@ whole repository:
   fails the build if a file beneath one lacks a `.license` SPDX sidecar, an
   inline SPDX header, or a `REUSE.toml` annotation. It also re-verifies the
   committed MulanPSL-2.0 text against its pinned digest. Today that covers
-  the four W3C SPARQL/OWL 2 suites and the OBO Graphs schema closure.
+  the four W3C SPARQL/OWL 2 suites, the OBO Graphs schema closure, and the
+  JSON-Schema-Test-Suite and meta-schemas under `crates/jsonschema/tests/`.
 - `scripts/check-corpus-frozen.py` SHA-256-verifies `vectors/shacl`,
   `vectors/shacl12`, `vectors/shexTest`, `crates/shapes/corpus`,
   `crates/shapes/spec`, `crates/sparql-conformance/entailment-suite/w3c-owl2`
   and `crates/sparql-conformance/entailment-suite/w3c-owl2-rl` against
   committed freeze manifests, so vendored bytes cannot be edited in place.
+
+## Unicode data compiled into published crates
+
+Four published crates compile tables generated from the Unicode Character
+Database, and so ship Unicode, Inc. data under the
+[Unicode License v3](./LICENSES/Unicode-3.0.txt) (`Unicode-3.0`) alongside
+Blackcat Informatics® code. Their package metadata declares the combined
+expression:
+
+```text
+(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0
+```
+
+You choose one of the three first-party licences as usual; the Unicode-3.0
+terms apply in addition, to the data.
+
+| Crate | Generated file | Generator | Source data |
+|---|---|---|---|
+| `purrdf-iri` | `crates/iri/src/idna_tables.rs` | `cargo run -p purrdf-iri --example gen_idna_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-core` | `crates/rdf-core/src/xsd_regex/blocks.rs` | `cargo run -p purrdf-core --example gen_unicode_blocks` | `crates/rdf-core/vendor/unicode/Blocks.txt` (Unicode 16.0.0) |
+| `purrdf-text` | `crates/text/src/unicode_tables.rs` | `cargo run -p purrdf-text --example gen_unicode_text_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/property_tables.rs` | `cargo run -p purrdf-jsonschema --example gen_ecma_property_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | `python3 crates/jsonschema/examples/gen_ecma_unicode_ranges.py` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+
+Each generated file carries the SPDX header
+
+```text
+SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+SPDX-FileCopyrightText: Unicode, Inc. <https://www.unicode.org>
+SPDX-License-Identifier: (MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0
+```
+
+written by its generator, and `scripts/check-generated.sh` holds each file
+byte-equal to its generator's output. `scripts/check-licenses.py` registers
+each of these files as deliberately carrying the combined expression, so any
+other first-party file that declares it is still reported. The vendored database
+files themselves are verbatim Unicode data (`Unicode-3.0` only), declared by
+`crates/iri/unicode/REUSE.toml` and `crates/rdf-core/vendor/unicode/`'s
+`.license` sidecars.
 
 ## Proprietary / commercial licensing
 

@@ -11,13 +11,16 @@ members = [
     "crates/cli",
     "crates/columnar",
     "crates/datalog",
+    "crates/deflate",
     "crates/entail",
     "crates/envelope-probe",
     "crates/geo",
     "crates/gts",
+    "crates/hash",
     "crates/hnsw",
     "crates/iri",
     "crates/json",
+    "crates/jsonschema",
     "crates/markdown",
     "crates/purrdf",
     "crates/rdf",
@@ -33,6 +36,7 @@ members = [
     "crates/sparql-conformance",
     "crates/sparql-eval",
     "crates/sparql-results",
+    "crates/testkit",
     "crates/stack",
     "crates/text",
     "crates/validate",
@@ -41,14 +45,6 @@ members = [
 ]
 exclude = [
     "crates/gts/fuzz",
-    # The wasm32 half of purrdf-geo's cross-target determinism check: a
-    # one-function cdylib a Node harness calls so the native and wasm
-    # digests can be compared. Never published, depended on by nothing,
-    # and built only by scripts/check-geo-determinism.sh.
-    "crates/geo/determinism",
-    # The same pattern for purrdf-hnsw's cross-target determinism check,
-    # built only by scripts/check-hnsw-determinism.sh.
-    "crates/hnsw/determinism",
 ]
 
 [workspace.package]
@@ -79,13 +75,16 @@ purrdf-cdt = { path = "crates/cdt", version = "2.0.2" }
 purrdf-columnar = { path = "crates/columnar", version = "2.0.2" }
 purrdf-core = { path = "crates/rdf-core", version = "2.0.2" }
 purrdf-datalog = { path = "crates/datalog", version = "2.0.2" }
+purrdf-deflate = { path = "crates/deflate", version = "2.0.2" }
 purrdf-entail = { path = "crates/entail", version = "2.0.2" }
 purrdf-events = { path = "crates/rdf-events", version = "2.0.2" }
 purrdf-geo = { path = "crates/geo", version = "2.0.2" }
 purrdf-gts = { path = "crates/gts", version = "2.0.2" }
+purrdf-hash = { path = "crates/hash", version = "2.0.2" }
 purrdf-hnsw = { path = "crates/hnsw", version = "2.0.2" }
 purrdf-iri = { path = "crates/iri", version = "2.0.2" }
 purrdf-json = { path = "crates/json", version = "2.0.2" }
+purrdf-jsonschema = { path = "crates/jsonschema", version = "2.0.2" }
 purrdf-markdown = { path = "crates/markdown", version = "2.0.2" }
 purrdf-rdf = { path = "crates/rdf", version = "2.0.2" }
 purrdf-retrieval = { path = "crates/retrieval", version = "2.0.2" }
@@ -95,6 +94,12 @@ purrdf-slice = { path = "crates/slice", version = "2.0.2" }
 purrdf-sparql-algebra = { path = "crates/sparql-algebra", version = "2.0.2" }
 purrdf-sparql-eval = { path = "crates/sparql-eval", version = "2.0.2" }
 purrdf-sparql-results = { path = "crates/sparql-results", version = "2.0.2" }
+# DEV-ONLY test support (`publish = false`): goldens, temporary paths under the
+# target directory, frozen differential vectors and the `harness = false`
+# runner. PATH-ONLY with NO `version`, for the reason given for
+# `purrdf-alloc-probe` above. It depends on no `purrdf-*` crate, so any member's
+# tests may use it without closing a cycle.
+purrdf-testkit = { path = "crates/testkit" }
 purrdf-stack = { path = "crates/stack", version = "2.0.2" }
 purrdf-text = { path = "crates/text", version = "2.0.2" }
 purrdf-validate = { path = "crates/validate", version = "2.0.2" }
@@ -104,25 +109,7 @@ purrdf-xsd = { path = "crates/xsd", version = "2.0.2" }
 # Test-only structural source census; both already occur in the resolved graph.
 proc-macro2 = "1"
 syn = { version = "2", features = ["full", "visit"] }
-aes-gcm = { version = "0.10", default-features = false, features = ["aes", "alloc"] }
-ahash = { version = "0.8", default-features = false }
-# rayon feature: multi-threaded hashing for large inputs (rayon executes
-# inline-sequentially on wasm32 without atomics, so the wasm gate holds).
-blake3 = { version = "1", features = ["rayon"] }
-# Pure-Rust JSON Schema (draft 2020-12) validator. DEV-ONLY: crates/shapes tests
-# use it as a trusted external oracle to observe the emitted schema_json's real
-# accept/reject behaviour against JSON-LD instance nodes. Not a runtime/release
-# dependency, so the wasm gate is unaffected (`make wasm` builds `--lib` only).
-boon = "0.6"
-camino = "1"
-# Full Unicode case folding (the `CaseFolding.txt` table, Unicode Annex UAX 21).
-# The text analyzer folds before it segments, and folding is NOT lowercasing:
-# `str::to_lowercase` leaves `ß` alone, so "STRASSE" and "Straße" would index as
-# different terms and a query for one would never retrieve the other. Full case
-# folding maps both to `strasse`. Pure Rust, table-driven, no syscalls and no
-# ambient state; its only dependency is unicode-normalization, already a
-# workspace dependency, so it is wasm32-unknown-unknown-clean.
-caseless = "0.2"
+aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 ciborium = "0.2"
 # Argument parsing for the `purrdf` CLI (native-only binary crate `crates/cli`).
 # `derive` supplies the `Parser`/`Subcommand`/`ValueEnum` macros the CLI models
@@ -131,55 +118,31 @@ ciborium = "0.2"
 # unaffected.
 clap = { version = "4", features = ["derive"] }
 criterion = { version = "0.5", default-features = false, features = ["cargo_bench_support"] }
-csv = "1"
-datatest-stable = "0.3"
-ed25519-dalek = "2"
-filetime = "0.2"
-flate2 = "1"
+ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
 # OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
 # crates/sparql-eval's target-gated dependency section).
 getrandom = "0.3"
-# `HashTable` requires >= 0.14.2 (introduced there); tracked on 0.15.
-hashbrown = "0.15"
-insta = "1.48"
-# Browser wall clock + entropy for SPARQL NOW()/RAND() on wasm32 (see
-# crates/sparql-eval's target-gated dependency section).
-js-sys = "0.3"
-# Raw `pthread_*` declarations for the workspace's one stack measurement
-# (`crates/stack`, which the SPARQL parser and evaluator refuse against): the
-# thread's stack bounds, read once per thread with `pthread_getattr_np`,
-# `pthread_attr_get_np`, `pthread_stackseg_np` or `pthread_get_stackaddr_np` /
-# `pthread_get_stacksize_np`, per platform. Declarations only, resolved against
-# the target's own libc at link time — no bundled C source and no build-time C
-# toolchain, so cross builds never need one. Unix-only — target-gated in that
-# crate's manifest, because wasm32 measures its shadow stack against the
-# linker's own `__stack_low` instead — so it never reaches the wasm build.
+# Only the raw `HashTable` is used; every caller supplies its own fixed-key hash
+# (`purrdf_hash::fixed::FixedHasher`),
+# so the default hasher (foldhash) and allocator-api2 stay OFF. Tracks the same
+# major `indexmap` (via serde_yaml_ng) resolves, so the graph holds one hashbrown.
+hashbrown = { version = "0.17", default-features = false }
+# The C library bindings behind the CLI's immutable-input authority on Linux:
+# `mmap`/`munmap` for the read-only pack mapping, and `memfd_create` + `fcntl`
+# `F_ADD_SEALS`/`F_GET_SEALS` for the sealed snapshot (see
+# crates/cli/src/mmap.rs). Already in the graph through getrandom; used solely
+# from `purrdf-cli` (`publish = false`, absent from the `make wasm` allowlist).
 libc = "0.2"
-md-5 = { version = "0.10", default-features = false }
+# purrdf-stack also uses these target-gated declarations to measure the current
+# native thread stack; wasm32 uses its own shadow-stack floor and no libc.
 # SIMD byte scanning (SWAR fallback, wasm-clean). Used by the purrdf-rdf codec
 # hot paths and the purrdf-sparql-algebra tokenizer.
 memchr = "2"
-# Memory-mapped file I/O. DEV-ONLY (see G5 in
-# docs/design/purrdf-backend-contract.md): the memory-mapped tier is an
-# external-consumer concern, never a published crate's runtime dependency, so
-# this is used solely from `crates/rdf-core/tests/pack_mmap.rs` as a
-# dev-dependency demonstrating the mmap seam. Not wasm32-relevant (mmap has no
-# meaning there); `make wasm` builds `--lib` only, so this never reaches it.
-memmap2 = "0.9"
-pretty_assertions = "1"
-proptest = "1"
 pyo3 = { version = "0.29", features = ["abi3-py313", "extension-module"] }
 rayon = "1"
 regex = "1"
 regex-syntax = "0.8.11"
 roxmltree = "0.20"
-# Safe, pure-Rust syscall wrappers for the CLI's immutable-input authority:
-# `memfd_create` + `fcntl` seals (`F_ADD_SEALS`/`F_GET_SEALS`) make a mapped pack
-# un-truncatable, so a disk pack can be read memory-safely even under a hostile
-# concurrent pathname writer. Native-only — used solely from `purrdf-cli`
-# (`publish = false`, absent from the `make wasm` allowlist), so it reaches no
-# published or wasm crate.
-rustix = { version = "1", features = ["fs"] }
 serde = { version = "1", features = ["derive"] }
 # `float_roundtrip`: a JSON number that becomes an `f64` becomes the binary64
 # nearest its decimal value. Without it `serde_json` scales a `u64` significand
@@ -191,44 +154,20 @@ serde = { version = "1", features = ["derive"] }
 # only where its error bound cannot straddle a midpoint, and otherwise a
 # big-integer comparison against the midpoint over up to 768 digits and a sticky
 # digit. It is one feature for the whole graph, which is the point.
-serde_json = { version = "1", features = ["float_roundtrip"] }
+# Exact JSON Schema bounds need arbitrary_precision. Value visitors must decode
+# typed numbers instead of treating serde's internal number map as a JSON object.
+# RDF binary64 conversion and YAML emission use explicit primitive serializers.
+serde_json = { version = "1", features = ["float_roundtrip", "arbitrary_precision"] }
 # Maintained continuation of the archived serde_yaml 0.9 (same API; the
 # `serde_yaml` name is kept at use sites via this package rename).
 serde_yaml = { package = "serde_yaml_ng", version = "0.10" }
-# Derive-based structured error types for `purrdf-retrieval`'s plan layer. A
-# proc-macro, so it expands at compile time and adds nothing to the wasm or
-# runtime path.
-thiserror = "2"
-# digest-0.10 family, matching sha2/md-5.
-sha1 = { version = "0.10", default-features = false }
-sha2 = { version = "0.10", default-features = false }
-sha3 = { version = "0.10", default-features = false }
-# Small-vector optimization for id-vectors / solution rows. DEFAULT FEATURES
-# ONLY: `union` (adds unsafe) and `serde` stay OFF; wasm-clean, no runtime deps.
-smallvec = "1"
+# SHA-256/384/512 (the SPARQL SHA-2 built-ins, content digests); pure software.
+sha2 = { version = "0.11", default-features = false }
 structured-zstd = "0.0.49"
 # pure-Rust PRNG; used ONLY to deterministically seed structured-zstd's ambient
 # FastCOVER reservoir sampling (which has no seed parameter) so pack dictionaries
 # are byte-reproducible. wasm32-unknown-unknown-clean.
 fastrand = "2"
-tempfile = "3"
-time = { version = "0.3", features = ["formatting", "parsing"] }
-# Unicode normalization (Unicode Annex UAX 15). The text index normalizes every
-# literal BEFORE it segments it: a decomposed combining mark is its own scalar,
-# and the word-boundary rules of UAX 29 would otherwise split it off the base
-# character it modifies, so `é` written as `e` + U+0301 would tokenize as a
-# different word than the precomposed spelling of the same text. The analyzer
-# uses the NFD/NFKD/NFC steps of the compatibility caseless form (see `caseless`
-# above). Pure Rust, table-driven, no syscalls and no ambient state, so it is
-# wasm32-unknown-unknown-clean.
-unicode-normalization = "0.1"
-# Unicode Annex UAX 29 word boundaries — the Unicode-standard tokenization the
-# text index uses in place of an ad-hoc alphanumeric run. A run of
-# `char::is_alphanumeric` is correct only for the scripts whoever wrote it had in
-# mind; UAX 29 is correct across every script, which is the difference between a
-# text index that retrieves Thai or Devanagari and one that silently does not.
-# Pure Rust, table-driven, wasm32-unknown-unknown-clean.
-unicode-segmentation = "1"
 # 1.0.0 is the tri-licensed release and a zero-runtime-dependency leaf (its
 # BLAKE3 is in-tree; the blake3 crate remains only as its dev-dependency).
 visual-hashing = "1.0.0"
@@ -239,25 +178,14 @@ visual-hashing = "1.0.0"
 # manifest — so it never reaches a non-Windows or wasm32 build.
 windows-sys = { version = "0.61", features = ["Win32_System_Threading"] }
 # EXACT pin: the `wasm-bindgen` CLI that generates the JS bindings must match
-# the library version byte-for-byte or it refuses to run. `make wasm-pkg` and
-# the CI Node lane install `wasm-bindgen-cli@0.2.125` to match this.
+# the library version byte-for-byte or it refuses to run. `make wasm-pkg`, the
+# wasm32 test runner (scripts/wasm-test-runner.sh, which reads this line and
+# refuses any other CLI version) and the CI Node lane use
+# `wasm-bindgen-cli@0.2.125` to match this.
 wasm-bindgen = "=0.2.125"
-# The wasm package's post-link rewriter (`crates/wasm-link`, `publish = false`,
-# a host tool that never reaches the wasm32 build): wasmparser reads and
-# validates the wasm-opt output, wasm-encoder writes the rewritten module. Both
-# come from the same wasm-tools release and must move together; their `reencode`
-# bridge (wasm-encoder's `wasmparser` feature) is the translation layer between
-# them.
-wasm-encoder = { version = "0.259", features = ["wasmparser"] }
-wasmparser = "0.259"
-# The wasm32 test harness. Dev-only, and pulled ONLY on wasm32 targets, so a
-# native build never sees it. It exists so a determinism claim about
-# `wasm32-unknown-unknown` can be an executed test rather than an argument:
-# `make wasm-test` compiles the tagged tests to wasm and runs them in Node
-# through `wasm-bindgen-test-runner`, which ships in the same pinned
-# wasm-bindgen-cli archive the wasm lane already installs. Resolves to the
-# 0.3.x release paired with the exact wasm-bindgen pin above.
-wasm-bindgen-test = "0.3"
+# Encoding support for the private host linker. Native byte-preserving reads
+# and the existing Binaryen validator avoid wasmparser and its banned closure.
+wasm-encoder = { version = "0.259", default-features = false }
 
 [workspace.lints.rust]
 missing_docs = "warn"
@@ -323,10 +251,13 @@ strip = "none"
 # `make check` runs the whole test surface and `make conformance` runs every W3C
 # suite through it, so both gates are bounded by how well the engines under them
 # were compiled. `cargo test` builds with the `test` profile, which inherits
-# every value in this block — including the `package` table below. There is
-# deliberately no `[profile.test]` section: it would be a second place to change
-# one thing, and `scripts/check-build-profiles.py` reads the resolved `test`
-# graph, so the inheritance is proven rather than assumed.
+# every value in this block — including the `package` table below. The
+# `[profile.test]` section further down sets exactly one thing, `debug = 0`, and
+# must never set `opt-level`, `debug-assertions` or `overflow-checks`: those are
+# stated once, here, and a second place to change them is how the gate would
+# drift from what this block claims. `scripts/check-build-profiles.py` reads the
+# resolved `test` graph, so the inheritance of those three is proven rather
+# than assumed.
 #
 # This block replaced four hand-written per-crate `opt-level = 2` tables. They
 # were right about the mechanism and wrong about its reach: the `"*"` glob below
@@ -340,7 +271,7 @@ strip = "none"
 # The deleted tables' measured rationale is why the base is opt-3, so it lives
 # on here. At the dev default the zero-copy SPARQL lexer and the id-native
 # string interners pay full un-inlined call overhead on every byte, making the
-# compute-bound parse/proptest suite roughly 300x slower than release (~3 s vs
+# compute-bound parse/property-test suite roughly 300x slower than release (~3 s vs
 # ~10 ms for a ~4350-triple parse) and blowing test timeouts. The OWL-Direct
 # tableau is checked against a naive model-enumeration oracle
 # (`owl_dl::oracle`) that decides satisfiability by enumerating EVERY
@@ -369,7 +300,7 @@ strip = "none"
 #     link step's memory. Release wants them because it ships once; the gate
 #     wants the opposite, because it rebuilds constantly and CI runs it cold.
 #   * no `strip`. At opt-3 inlining already shreds stack frames; deleting the
-#     symbol names as well would leave a failing proptest or conformance case
+#     symbol names as well would leave a failing property test or conformance case
 #     reporting bare addresses, on the one profile whose entire job is finding
 #     bugs.
 [profile.dev]

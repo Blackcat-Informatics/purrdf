@@ -154,8 +154,9 @@ pub(crate) fn ground_term_pattern_to_value(
     };
     // Inline until a term nests deeper than a quoted triple of quoted triples, so a
     // plain term costs only its own value.
-    let mut steps: smallvec::SmallVec<[Step<'_>; 8]> = smallvec::smallvec![Step::Term(pattern)];
-    let mut values: smallvec::SmallVec<[TermValue; 3]> = smallvec::SmallVec::new();
+    let mut steps: purrdf_core::SmallVec<[Step<'_>; 8]> =
+        purrdf_core::smallvec![Step::Term(pattern)];
+    let mut values: purrdf_core::SmallVec<[TermValue; 3]> = purrdf_core::SmallVec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Term(TermPattern::NamedNode(n)) => values.push(named_node_to_value(n)),
@@ -214,8 +215,8 @@ pub(crate) fn ground_term_to_value(term: &GroundTerm) -> TermValue {
     }
     // Inline until a term nests deeper than a quoted triple of quoted triples, so a
     // plain term costs only its own value.
-    let mut steps: smallvec::SmallVec<[Step<'_>; 8]> = smallvec::smallvec![Step::Term(term)];
-    let mut values: smallvec::SmallVec<[TermValue; 3]> = smallvec::SmallVec::new();
+    let mut steps: purrdf_core::SmallVec<[Step<'_>; 8]> = purrdf_core::smallvec![Step::Term(term)];
+    let mut values: purrdf_core::SmallVec<[TermValue; 3]> = purrdf_core::SmallVec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Term(GroundTerm::NamedNode(n)) | Step::Predicate(n) => {
@@ -361,7 +362,7 @@ mod term_walk_tests {
 
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
 

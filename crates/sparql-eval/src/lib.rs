@@ -72,7 +72,10 @@
 #![doc(
     html_favicon_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
-#![forbid(unsafe_code)]
+// Only the wasm host-import macro expansion needs unsafe code. Keep all native
+// builds forbidden and deny new wasm unsafe outside that one import module.
+#![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
+#![cfg_attr(target_arch = "wasm32", deny(unsafe_code))]
 #![warn(missing_docs)]
 
 pub mod agg_fn;
@@ -129,6 +132,9 @@ mod registry_id;
 // parameters applied as text, and response-format negotiation. No I/O.
 pub mod protocol;
 pub mod remote;
+#[cfg(target_arch = "wasm32")]
+#[allow(unsafe_code, reason = "the expansion of #[wasm_bindgen] host imports")]
+mod wasm_host;
 // HTTP-shaped SERVICE source. The actual POST transport is host-injected so this
 // crate stays wasm-portable.
 pub mod remote_http;
@@ -151,8 +157,6 @@ pub mod stat_agg;
 mod statement_layer;
 mod substitute;
 mod template;
-#[doc(hidden)]
-pub mod test_rng;
 pub mod update;
 pub mod user_fn;
 mod vm;
@@ -298,7 +302,7 @@ pub use user_fn::{
 // receipt itself, because a field a caller cannot name is a field it cannot read.
 pub use witness::{RelationAttestations, RelationWitness};
 
-/// A deterministic, seed-free hasher builder (`AHasher` with fixed keys).
+/// A deterministic, seed-free hasher builder: the workspace's fixed-key `FixedHasher`.
 ///
 /// Used for every internal map/set whose construction order or membership could
 /// otherwise depend on a per-process random seed. Two reasons:
@@ -308,11 +312,11 @@ pub use witness::{RelationAttestations, RelationWitness};
 ///    result. We always drive *output* order from `Vec`s, but fixed-key hashing
 ///    removes the hazard entirely (cf. the repo `mappings-determinism` lesson).
 /// 2. **wasm-cleanliness.** `std`'s default `RandomState` would pull a random
-///    source; fixed-key `AHasher` needs none, keeping the crate clean on
+///    source; the fixed-key `FixedHasher` needs none, keeping the crate clean on
 ///    `wasm32-unknown-unknown`.
 ///
 /// This mirrors `purrdf-core`'s own fixed-key value-index hashing.
-pub(crate) type DetHasher = std::hash::BuildHasherDefault<ahash::AHasher>;
+pub(crate) type DetHasher = purrdf_hash::fixed::FixedState;
 
 /// A deterministic, seed-free [`HashMap`](std::collections::HashMap). See [`DetHasher`].
 pub(crate) type DetHashMap<K, V> = std::collections::HashMap<K, V, DetHasher>;

@@ -12,29 +12,26 @@
 
 use std::collections::BTreeMap;
 
-use wasm_encoder::reencode::{Error as ReencodeError, Reencode, utils};
-use wasm_encoder::{
-    CodeSection, ConstExpr, CustomSection, DataCountSection, DataSection, ElementSection,
-    ExportKind, ExportSection, FunctionSection, GlobalSection, GlobalType, ImportSection,
-    Instruction, MemorySection, Module, NameMap, NameSection, StartSection, TableSection,
-    TagSection, TypeSection, ValType,
-};
-use wasmparser::{ExternalKind, Operator, Parser, Payload, WasmFeatures};
-
+use crate::binary::{ExternalKind, Reader, put_u32};
 use crate::error::LinkError;
 use crate::scan::{Scan, Sig};
+use crate::template::Op;
 use crate::template::{self, Body, Gate, GateVariant, stack_pointer_global};
 use crate::{
     ACTIVE_EXPORT, ADD_TO_STACK_POINTER_EXPORT, GateGlobals, IDLE_EXPORT, OUTBOUND_EXPORT,
     PARKED_EXPORT, POISONED_EXPORT, RESERVED_EXPORTS, RUN_EXPORT, Report, STACK_POINTER_EXPORT,
     SUSPEND_NAME, is_release_export, validate,
 };
+use wasm_encoder::{
+    CodeSection, ConstExpr, Encode, ExportKind, ExportSection, FunctionSection, GlobalSection,
+    GlobalType, Module, NameMap, NameSection, RawSection, TypeSection, ValType,
+};
 
 /// Link `bytes`: the rewritten module and what was found.
 pub(crate) fn link(bytes: &[u8]) -> Result<(Vec<u8>, Report), LinkError> {
     let scan = Scan::read(bytes)?;
     let features = scan.features()?;
-    validate(bytes, features, "input")?;
+    validate(bytes, &features, "input")?;
     for export in &scan.exports {
         if RESERVED_EXPORTS.contains(&export.name.as_str()) {
             return Err(LinkError::AlreadyLinked(format!(
@@ -45,14 +42,14 @@ pub(crate) fn link(bytes: &[u8]) -> Result<(Vec<u8>, Report), LinkError> {
     }
     let plan = Plan::new(&scan)?;
     let (output, rewriter) = emit(bytes, &scan, &plan)?;
-    validate(&output, features, "output")?;
+    validate(&output, &features, "output")?;
     if rewriter.suspend_sites == 0 {
         return Err(LinkError::Shape(format!(
             "no function calls {SUSPEND_NAME} (function {}); the asynchronous lane was compiled out",
             plan.suspend_import
         )));
     }
-    Ok((output, plan.report(&rewriter, features)))
+    Ok((output, plan.report(&rewriter, &features)))
 }
 
 /// One gate wrapper: the function it guards and the export names it stands behind.
@@ -218,7 +215,7 @@ impl Plan {
         }
     }
 
-    fn report(&self, rewriter: &Rewriter<'_>, features: WasmFeatures) -> Report {
+    fn report(&self, rewriter: &Rewriter<'_>, features: &[String]) -> Report {
         Report {
             stack_pointer_global: self.sp_global,
             suspend_import: self.suspend_import,
@@ -287,45 +284,64 @@ struct Rewriter<'p> {
     routed_sites: usize,
 }
 
-impl Reencode for Rewriter<'_> {
-    type Error = LinkError;
-
-    fn function_index(&mut self, func: u32) -> Result<u32, ReencodeError<LinkError>> {
-        if func == self.plan.suspend_import {
-            return Err(ReencodeError::UserError(LinkError::Shape(format!(
-                "{SUSPEND_NAME} (function {func}) is referenced other than by a direct call (a table \
-                 element, a start section or ref.func); an indirect call would bypass $suspend"
-            ))));
-        }
-        if func < self.plan.import_count {
+impl Rewriter<'_> {
+    fn redirect(&mut self, index: u32, direct: bool) -> Result<u32, LinkError> {
+        if index == self.plan.suspend_import {
+            if !direct {
+                return Err(LinkError::Shape(format!(
+                    "{SUSPEND_NAME} (function {index}) is referenced other than by a direct call; an indirect call would bypass $suspend"
+                )));
+            }
+            self.suspend_sites += 1;
+        } else if index < self.plan.import_count {
             self.routed_sites += 1;
         }
-        Ok(self.plan.redirect(func))
+        Ok(self.plan.redirect(index))
     }
-
-    fn instruction<'a>(
-        &mut self,
-        operator: Operator<'a>,
-    ) -> Result<Instruction<'a>, ReencodeError<LinkError>> {
-        match operator {
-            Operator::Call { function_index } if function_index == self.plan.suspend_import => {
-                self.suspend_sites += 1;
-                Ok(Instruction::Call(self.plan.redirect(function_index)))
-            }
-            Operator::ReturnCall { function_index }
-                if function_index == self.plan.suspend_import =>
-            {
-                self.suspend_sites += 1;
-                Ok(Instruction::ReturnCall(self.plan.redirect(function_index)))
-            }
-            other => utils::instruction(self, other),
+    fn body(&mut self, data: &[u8]) -> Result<Vec<u8>, LinkError> {
+        let mut r = Reader::new(data);
+        for _ in 0..r.u32()? {
+            r.u32()?;
+            r.val()?;
         }
+        let mut output = data[..r.pos].to_vec();
+        let mut copied = r.pos;
+        while !r.done() {
+            let (op, reference) = r.op()?;
+            if let Some((start, end, index)) = reference {
+                output.extend_from_slice(&data[copied..start]);
+                put_u32(
+                    self.redirect(index, matches!(op, Op::Call(_) | Op::ReturnCall(_)))?,
+                    &mut output,
+                );
+                copied = end;
+            }
+        }
+        output.extend_from_slice(&data[copied..]);
+        Ok(output)
     }
 }
-
-/// The rewritten module bytes and the rewriter that counted the redirects.
+/// Append an encoded section vector to a byte-preserved existing section vector.
+fn append_vector(old: Option<&[u8]>, encoded: &[u8]) -> Result<Vec<u8>, LinkError> {
+    // wasm-encoder's Section encoding starts with its payload length.
+    let mut added = Reader::new(encoded);
+    added.u32()?;
+    let extra = added.u32()?;
+    let mut original = Reader::new(old.unwrap_or(&[0]));
+    let count = original.u32()?;
+    let mut output = Vec::new();
+    put_u32(
+        count
+            .checked_add(extra)
+            .ok_or_else(|| LinkError::Parse("section count overflow".into()))?,
+        &mut output,
+    );
+    output.extend_from_slice(&original.data[original.pos..]);
+    output.extend_from_slice(&added.data[added.pos..]);
+    Ok(output)
+}
 fn emit<'p>(
-    bytes: &[u8],
+    _bytes: &[u8],
     scan: &Scan<'_>,
     plan: &'p Plan,
 ) -> Result<(Vec<u8>, Rewriter<'p>), LinkError> {
@@ -334,80 +350,38 @@ fn emit<'p>(
         suspend_sites: 0,
         routed_sites: 0,
     };
-    let mut types = TypeSection::new();
-    let mut imports = ImportSection::new();
-    let mut functions = FunctionSection::new();
-    let mut tables = TableSection::new();
-    let mut memories = MemorySection::new();
-    let mut tags = TagSection::new();
-    let mut globals = GlobalSection::new();
-    let mut exports = ExportSection::new();
-    let mut start = None;
-    let mut elements = ElementSection::new();
-    let mut data_count = None;
-    let mut code = CodeSection::new();
-    let mut data = DataSection::new();
-    let mut customs: Vec<CustomSection<'_>> = Vec::new();
-    let (mut has_tables, mut has_memories, mut has_tags, mut has_elements, mut has_data) =
-        (false, false, false, false, false);
-
-    for payload in Parser::new(0).parse_all(bytes) {
-        match payload? {
-            Payload::Version { .. }
-            | Payload::End(_)
-            | Payload::CodeSectionStart { .. }
-            | Payload::ExportSection(_) => {}
-            Payload::TypeSection(section) => rewriter.parse_type_section(&mut types, section)?,
-            Payload::ImportSection(section) => {
-                rewriter.parse_import_section(&mut imports, section)?;
-            }
-            Payload::FunctionSection(section) => {
-                rewriter.parse_function_section(&mut functions, section)?;
-            }
-            Payload::TableSection(section) => {
-                has_tables = true;
-                rewriter.parse_table_section(&mut tables, section)?;
-            }
-            Payload::MemorySection(section) => {
-                has_memories = true;
-                rewriter.parse_memory_section(&mut memories, section)?;
-            }
-            Payload::TagSection(section) => {
-                has_tags = true;
-                rewriter.parse_tag_section(&mut tags, section)?;
-            }
-            Payload::GlobalSection(section) => {
-                rewriter.parse_global_section(&mut globals, section)?;
-            }
-            Payload::StartSection { func, .. } => start = Some(rewriter.function_index(func)?),
-            Payload::ElementSection(section) => {
-                has_elements = true;
-                rewriter.parse_element_section(&mut elements, section)?;
-            }
-            Payload::DataCountSection { count, .. } => {
-                data_count = Some(rewriter.data_count(count)?);
-            }
-            Payload::DataSection(section) => {
-                has_data = true;
-                rewriter.parse_data_section(&mut data, section)?;
-            }
-            Payload::CodeSectionEntry(body) => rewriter.parse_function_body(&mut code, body)?,
-            Payload::CustomSection(section) => customs.push(rewriter.custom_section(section)?),
-            other => {
-                return Err(LinkError::Shape(format!(
-                    "unexpected section in a core module: {other:?}"
-                )));
+    let mut sections = BTreeMap::new();
+    let mut customs = Vec::new();
+    for section in &scan.sections {
+        if section.id == 0 {
+            customs.push(section.data);
+            continue;
+        }
+        if section.id == 10 {
+            continue;
+        }
+        let mut data = Vec::new();
+        let mut copied = 0;
+        for &(id, start, end, index, direct) in &scan.references {
+            if id == section.id {
+                data.extend_from_slice(&section.data[copied..start]);
+                put_u32(rewriter.redirect(index, direct)?, &mut data);
+                copied = end;
             }
         }
+        data.extend_from_slice(&section.data[copied..]);
+        sections.insert(section.id, data);
     }
-
-    // The appended type, functions, globals and bodies, in one fixed order: the
-    // trampolines (import order, `$suspend` at the suspending import's position), the
-    // run wrapper, then the gate wrappers.
+    let mut types = TypeSection::new();
     if let Some(sig) = &plan.appended_type {
         types
             .ty()
             .function(sig.params.iter().copied(), sig.results.iter().copied());
+    }
+    let mut functions = FunctionSection::new();
+    let mut code = CodeSection::new();
+    for body in &scan.bodies {
+        code.raw(&rewriter.body(body.data)?);
     }
     let gate = plan.gate;
     for (index, import) in scan.imports.iter().enumerate() {
@@ -426,20 +400,36 @@ fn emit<'p>(
         functions.function(entry.type_index);
         code.function(&template::gate(&entry.sig, entry.inner, gate, entry.variant).encode());
     }
+    let mut globals = GlobalSection::new();
     let counter = GlobalType {
         val_type: ValType::I32,
         mutable: true,
         shared: false,
     };
-    for _ in [
-        gate.idle,
-        gate.poisoned,
-        gate.active,
-        gate.parked,
-        gate.outbound,
-    ] {
+    for _ in 0..5 {
         globals.global(counter, &ConstExpr::i32_const(0));
     }
+    for (id, encoded) in [
+        (1, {
+            let mut v = Vec::new();
+            types.encode(&mut v);
+            v
+        }),
+        (3, {
+            let mut v = Vec::new();
+            functions.encode(&mut v);
+            v
+        }),
+        (6, {
+            let mut v = Vec::new();
+            globals.encode(&mut v);
+            v
+        }),
+    ] {
+        let payload = append_vector(sections.get(&id).map(Vec::as_slice), &encoded)?;
+        sections.insert(id, payload);
+    }
+    let mut exports = ExportSection::new();
     for export in &scan.exports {
         let index = if export.kind == ExternalKind::Func {
             *plan.wrapper_of.get(&export.index).ok_or_else(|| {
@@ -448,7 +438,7 @@ fn emit<'p>(
         } else {
             export.index
         };
-        exports.export(&export.name, rewriter.export_kind(export.kind)?, index);
+        exports.export(&export.name, export.kind.encoded(), index);
     }
     for (name, global) in [
         (STACK_POINTER_EXPORT, gate.sp),
@@ -460,37 +450,25 @@ fn emit<'p>(
     ] {
         exports.export(name, ExportKind::Global, global);
     }
-
     let mut module = Module::new();
-    module.section(&types);
-    module.section(&imports);
-    module.section(&functions);
-    if has_tables {
-        module.section(&tables);
+    // Tags precede globals; data-count precedes code despite their numeric IDs.
+    for id in [1, 2, 3, 4, 5, 13, 6, 7, 8, 9, 12, 10, 11] {
+        match id {
+            7 => {
+                module.section(&exports);
+            }
+            10 => {
+                module.section(&code);
+            }
+            _ => {
+                if let Some(data) = sections.get(&id) {
+                    module.section(&RawSection { id, data });
+                }
+            }
+        }
     }
-    if has_memories {
-        module.section(&memories);
-    }
-    if has_tags {
-        module.section(&tags);
-    }
-    module.section(&globals);
-    module.section(&exports);
-    if let Some(function_index) = start {
-        module.section(&StartSection { function_index });
-    }
-    if has_elements {
-        module.section(&elements);
-    }
-    if let Some(count) = data_count {
-        module.section(&DataCountSection { count });
-    }
-    module.section(&code);
-    if has_data {
-        module.section(&data);
-    }
-    for custom in &customs {
-        module.section(custom);
+    for data in customs {
+        module.section(&RawSection { id: 0, data });
     }
     if !scan.has_name_section {
         module.section(&names(scan, plan));

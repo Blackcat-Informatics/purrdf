@@ -31,9 +31,8 @@ use wasm_bindgen::prelude::*;
 extern "C" {
     /// Any JS object with a `write(chunk: Uint8Array)` method.
     ///
-    /// Declared as an extern type rather than taken as a `js_sys::Function` so this
-    /// crate does not grow a `js-sys` dependency it has otherwise avoided, and so the
-    /// accepted shape is the one hosts already have — a `WritableStreamDefaultWriter`,
+    /// Declared as an extern type so the accepted shape is the one hosts already
+    /// have — a `WritableStreamDefaultWriter`,
     /// a Node `Writable`, or an array collector — rather than a PurRDF-specific type
     /// a caller would have to construct.
     #[wasm_bindgen(js_name = Object, typescript_type = "{ write(chunk: Uint8Array): void }")]

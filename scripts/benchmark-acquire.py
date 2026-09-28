@@ -125,6 +125,17 @@ from typing import Callable, NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+
+def _scratch_root() -> Path:
+    """The build tree's scratch root, ``target/gate-scratch/`` (or under
+    ``$CARGO_TARGET_DIR``), the convention ``scripts/build-scratch.sh`` sets out.
+    Scratch goes there rather than into the system temporary directory, which is
+    not guaranteed to keep a directory for as long as a gate runs."""
+    target = os.environ.get("CARGO_TARGET_DIR")
+    root = (Path(target) if target else REPO_ROOT / "target") / "gate-scratch"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
 # One chunk size for every streamed read in this repository's benchmark surface --
 # digests and the download that feeds them. Claiming "one constant now" while three
 # sites still carried their own, one of them at a quarter the size, is the same
@@ -1032,7 +1043,7 @@ def self_test() -> int:
     def explode(_artifact: Artifact, _dest: Path) -> None:
         raise AssertionError("network fetch attempted on a path that must not fetch")
 
-    with tempfile.TemporaryDirectory(prefix="benchmark-acquire-selftest-") as raw:
+    with tempfile.TemporaryDirectory(prefix="benchmark-acquire-selftest-", dir=_scratch_root()) as raw:
         tmp = Path(raw)
 
         # 1. verify_digest accepts matching bytes (the neighbouring VALID case of
@@ -1172,7 +1183,7 @@ def self_test() -> int:
     #         It was added because a wrong pin printed "md5 ... (publisher-published)"
     #         on every warm-cache run with nothing hashing the bytes -- and then it too
     #         went untested, which is the same omission one layer down.
-    with tempfile.TemporaryDirectory() as raw:
+    with tempfile.TemporaryDirectory(dir=_scratch_root()) as raw:
         warm = Path(raw)
         (warm / fixture.filename).write_bytes(good)
         wrong_md5 = fixture._replace(md5="0" * 32)

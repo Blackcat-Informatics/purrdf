@@ -1326,7 +1326,7 @@ fn finish_report(
     // tiebreakers make the ordering TOTAL: two results that agree on the first five components (e.g. several
     // `sh:uniqueLang` violations on one focus, which differ only in their message
     // text) would otherwise keep their push order, which is a `FastMap`/`FastSet`
-    // iteration order and thus not guaranteed stable across ahash versions or
+    // iteration order and thus not guaranteed stable across hasher paths or
     // targets. Sorting on the full serialized identity closes that leak so report
     // bytes are invariant under data-insertion order and platform.
     let sort_key = |result: &crate::report::ValidationResult| {

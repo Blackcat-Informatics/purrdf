@@ -5,16 +5,14 @@
 //! leave the package's module in, and the link and check run over them.
 
 use std::borrow::Cow;
-use std::convert::Infallible;
 
-use wasm_encoder::reencode::{Error as ReencodeError, Reencode};
+use crate::binary::{ExternalKind, sections};
 use wasm_encoder::{
     CodeSection, ConstExpr, CustomSection, ElementSection, Elements, EntityType, ExportKind,
     ExportSection, Function, FunctionSection, GlobalSection, GlobalType, ImportSection,
     Instruction, MemorySection, MemoryType, Module, RefType, TableSection, TableType, TypeSection,
     ValType,
 };
-use wasmparser::{ExportSectionReader, ExternalKind, Parser};
 
 use crate::scan::{Scan, Sig};
 use crate::template::{self, Body, Gate, GateVariant, Op};
@@ -281,16 +279,12 @@ fn build(fixture: &Fixture) -> Vec<u8> {
 
 /// `(name, kind, index)` for every export of `bytes`.
 fn exports_of(bytes: &[u8]) -> Vec<(String, ExternalKind, u32)> {
-    let mut found = Vec::new();
-    for payload in Parser::new(0).parse_all(bytes) {
-        if let wasmparser::Payload::ExportSection(reader) = payload.expect("a parseable module") {
-            for export in reader {
-                let export = export.expect("a parseable export");
-                found.push((export.name.to_owned(), export.kind, export.index));
-            }
-        }
-    }
-    found
+    Scan::read(bytes)
+        .expect("a parseable module")
+        .exports
+        .into_iter()
+        .map(|entry| (entry.name, entry.kind, entry.index))
+        .collect()
 }
 
 fn export_index(bytes: &[u8], name: &str) -> u32 {
@@ -498,35 +492,27 @@ fn check_refuses_an_unlinked_module() {
     );
 }
 
-/// Re-encodes a linked module with named exports pointed at other functions.
-struct Retarget(Vec<(&'static str, u32)>);
-
-impl Reencode for Retarget {
-    type Error = Infallible;
-
-    fn parse_export_section(
-        &mut self,
-        exports: &mut ExportSection,
-        section: ExportSectionReader<'_>,
-    ) -> Result<(), ReencodeError<Infallible>> {
-        for export in section {
-            let export = export?;
-            let index = self
-                .0
-                .iter()
-                .find(|(name, _)| *name == export.name)
-                .map_or(export.index, |(_, target)| *target);
-            exports.export(export.name, self.export_kind(export.kind)?, index);
-        }
-        Ok(())
-    }
-}
-
-fn retargeted(linked: &[u8], retargets: Vec<(&'static str, u32)>) -> Vec<u8> {
+/// Rewrites only the export section while preserving all other bytes.
+fn retargeted(linked: &[u8], retargets: &[(&'static str, u32)]) -> Vec<u8> {
     let mut tampered = Module::new();
-    Retarget(retargets)
-        .parse_core_module(&mut tampered, Parser::new(0), linked)
-        .expect("the linked module re-encodes");
+    for section in sections(linked).expect("sections") {
+        if section.id == 7 {
+            let mut exports = ExportSection::new();
+            for (name, kind, index) in exports_of(linked) {
+                let index = retargets
+                    .iter()
+                    .find(|(key, _)| *key == name)
+                    .map_or(index, |(_, target)| *target);
+                exports.export(&name, kind.encoded(), index);
+            }
+            tampered.section(&exports);
+        } else {
+            tampered.section(&wasm_encoder::RawSection {
+                id: section.id,
+                data: section.data,
+            });
+        }
+    }
     tampered.finish()
 }
 
@@ -534,7 +520,7 @@ fn retargeted(linked: &[u8], retargets: Vec<(&'static str, u32)>) -> Vec<u8> {
 fn check_refuses_a_linked_module_whose_export_bypasses_the_gate() {
     let input = build(&Fixture::default());
     let (linked, _) = link(&input).expect("the fixture links");
-    let tampered = retargeted(&linked, vec![("noop", NOOP)]);
+    let tampered = retargeted(&linked, &[("noop", NOOP)]);
     let error = check(&tampered).expect_err("noop no longer stands behind a gate");
     assert!(
         matches!(&error, LinkError::NotLinked(message) if message.contains("\"noop\"") && message.contains("Trapping variant of the poison gate")),
@@ -591,13 +577,13 @@ fn check_refuses_a_gate_of_the_variant_the_export_name_does_not_select() {
     let pair_gate = export_index(&linked, "pair");
     // Both gates have the same type, so swapping them still validates; the check must
     // see the release name in front of a trapping gate.
-    let tampered = retargeted(&linked, vec![("__wbg_thing_free", pair_gate)]);
+    let tampered = retargeted(&linked, &[("__wbg_thing_free", pair_gate)]);
     let error = check(&tampered).expect_err("a release export behind a trapping gate");
     assert!(
         matches!(&error, LinkError::NotLinked(message) if message.contains("\"__wbg_thing_free\"") && message.contains("Inert variant")),
         "{error}"
     );
-    let tampered = retargeted(&linked, vec![("pair", release_gate)]);
+    let tampered = retargeted(&linked, &[("pair", release_gate)]);
     let error = check(&tampered).expect_err("a plain export behind an inert gate");
     assert!(
         matches!(&error, LinkError::NotLinked(message) if message.contains("\"pair\"") && message.contains("Trapping variant")),
@@ -665,9 +651,9 @@ fn only_wasm_bindgen_release_names_select_the_inert_gate() {
 #[test]
 fn declared_target_features_widen_validation_and_an_unknown_one_is_refused() {
     let (_, baseline) = link(&build(&Fixture::default())).expect("the fixture links");
-    assert!(baseline.features.contains("SIMD"), "{}", baseline.features);
+    assert!(baseline.features.contains("simd"), "{}", baseline.features);
     assert!(
-        !baseline.features.contains("REFERENCE_TYPES"),
+        !baseline.features.contains("reference-types"),
         "{}",
         baseline.features
     );
@@ -677,7 +663,7 @@ fn declared_target_features_widen_validation_and_an_unknown_one_is_refused() {
     });
     let (_, report) = link(&input).expect("declared known features link");
     assert!(
-        report.features.contains("REFERENCE_TYPES"),
+        report.features.contains("reference-types"),
         "{}",
         report.features
     );
@@ -690,4 +676,186 @@ fn declared_target_features_widen_validation_and_an_unknown_one_is_refused() {
         matches!(&error, LinkError::Shape(message) if message.contains("\"fp16\"")),
         "{error}"
     );
+}
+
+#[test]
+fn check_refuses_an_import_in_a_global_initializer() {
+    let (linked, _) = link(&build(&Fixture {
+        target_features: Some(&["reference-types"]),
+        ..Fixture::default()
+    }))
+    .expect("fixture links");
+    let mut module = Module::new();
+    let global = Scan::read(&linked).expect("scan").global_count();
+    for section in sections(&linked).expect("sections") {
+        if section.id == 6 {
+            let mut reader = crate::binary::Reader::new(section.data);
+            let count = reader.u32().expect("count");
+            let mut data = Vec::new();
+            crate::binary::put_u32(count + 1, &mut data);
+            data.extend_from_slice(&section.data[reader.pos..]);
+            data.extend_from_slice(&[0x70, 0, 0xd2]);
+            crate::binary::put_u32(DROP_REF, &mut data);
+            data.push(0x0b);
+            module.section(&wasm_encoder::RawSection { id: 6, data: &data });
+        } else if section.id == 7 {
+            let mut exports = ExportSection::new();
+            for (name, kind, index) in exports_of(&linked) {
+                exports.export(&name, kind.encoded(), index);
+            }
+            exports.export("raw_import", ExportKind::Global, global);
+            module.section(&exports);
+        } else {
+            module.section(&wasm_encoder::RawSection {
+                id: section.id,
+                data: section.data,
+            });
+        }
+    }
+    let tampered = module.finish();
+    let scan = Scan::read(&tampered).expect("scan");
+    crate::validate(&tampered, &scan.features().expect("features"), "probe").expect("valid wasm");
+    let error = check(&tampered).expect_err("raw imported global reference bypasses trampoline");
+    assert!(
+        matches!(error,LinkError::NotLinked(message) if message.contains("global initializer"))
+    );
+}
+
+#[test]
+fn instruction_immediates_are_never_interpreted_as_calls() {
+    use crate::binary::Reader;
+    // f64 payload, SIMD constant and shuffle bytes deliberately contain call opcodes.
+    for bytes in [
+        &[0x44, 0x10, 0, 0x12, 0, 0xd2, 0, 0x10, 0][..],
+        &[
+            0xfd, 12, 0x10, 0, 0x12, 0, 0xd2, 0, 0x10, 0, 0x10, 0, 0x12, 0, 0xd2, 0, 0x10, 0,
+        ][..],
+    ] {
+        let mut reader = Reader::new(bytes);
+        let (_, reference) = reader.op().expect("one instruction");
+        assert!(reference.is_none());
+        assert!(reader.done());
+    }
+    let mut reader = Reader::new(&[0x10, 0x80, 0x01]);
+    let (_, reference) = reader.op().expect("call");
+    assert_eq!(reference, Some((1, 3, 128)));
+    for bytes in [
+        &[0xff, 0xff, 0xff, 0xff, 0x10][..],
+        &[0x80][..],
+        &[0x80, 0x80, 0x80, 0x80, 0x80, 0][..],
+    ] {
+        assert!(Reader::new(bytes).u32().is_err());
+    }
+    assert_eq!(
+        Reader::new(&[0xff, 0xff, 0xff, 0xff, 0x0f])
+            .u32()
+            .expect("u32 max"),
+        u32::MAX
+    );
+}
+
+#[test]
+fn reference_block_types_and_wide_arithmetic_preserve_instruction_boundaries() {
+    use crate::binary::Reader;
+    for code in 19..=22 {
+        let bytes = [0xfc, code, 0x10, 7];
+        let mut reader = Reader::new(&bytes);
+        assert!(reader.op().expect("wide arithmetic").1.is_none());
+        assert_eq!(reader.op().expect("following call").1, Some((3, 4, 7)));
+        assert!(reader.done());
+    }
+    for nullable in [0x63, 0x64] {
+        for heap in [0x69, 0x6e, 0x6f, 0x70, 0x71, 0x73] {
+            let bytes = [0x02, nullable, heap, 0x10, 7];
+            let mut reader = Reader::new(&bytes);
+            assert!(reader.op().expect("reference block type").1.is_none());
+            assert_eq!(reader.op().expect("following call").1, Some((4, 5, 7)));
+            assert!(reader.done());
+            assert!(Reader::new(&[nullable, heap]).val().is_ok());
+        }
+    }
+}
+
+#[test]
+fn try_table_reference_results_do_not_swallow_catches_or_following_calls() {
+    use crate::binary::Reader;
+    for nullable in [0x63, 0x64] {
+        // Every catch form: catch(tag,label), catch_ref(tag,label),
+        // catch_all(label), catch_all_ref(label). Immediate bytes also equal call.
+        let bytes = [
+            0x1f, nullable, 0x70, 4, 0, 0x10, 0, 1, 0x10, 0, 2, 0x10, 3, 0x10, 0x10, 7,
+        ];
+        let mut reader = Reader::new(&bytes);
+        assert!(
+            reader
+                .op()
+                .expect("try_table reference block type and catches")
+                .1
+                .is_none()
+        );
+        assert_eq!(reader.pos, 14);
+        assert_eq!(reader.op().expect("following call").1, Some((15, 16, 7)));
+        assert!(reader.done());
+    }
+}
+
+#[test]
+fn frozen_instruction_spans_match_the_independent_decoder() {
+    use crate::binary::Reader;
+    let fixture = include_str!("../tests/fixtures/instruction-spans.tsv");
+    let mut count = 0;
+    for line in fixture
+        .lines()
+        .filter(|line| !line.is_empty() && !line.starts_with('#'))
+    {
+        let fields: Vec<_> = line.split('\t').collect();
+        assert_eq!(fields.len(), 3, "invalid frozen fixture row: {line}");
+        let encoded = fields[0].as_bytes();
+        assert_eq!(encoded.len() % 2, 0, "odd-length hex: {line}");
+        let bytes: Vec<_> = encoded
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|pair| {
+                let high = char::from(pair[0]).to_digit(16).expect("hex digit");
+                let low = char::from(pair[1]).to_digit(16).expect("hex digit");
+                ((high << 4) | low) as u8
+            })
+            .collect();
+        let expected_span: usize = fields[1].parse().expect("frozen instruction span");
+        let expected_reference: Option<u32> = if fields[2] == "-" {
+            None
+        } else {
+            Some(fields[2].parse().expect("frozen function index"))
+        };
+        let mut reader = Reader::new(&bytes);
+        let (_, reference) = reader
+            .op()
+            .unwrap_or_else(|error| panic!("row {count}: {line}: {error}"));
+        assert_eq!(
+            reader.pos, expected_span,
+            "instruction boundary in row {count}: {line}"
+        );
+        assert_eq!(
+            reference.map(|(_, _, index)| index),
+            expected_reference,
+            "function reference in row {count}: {line}"
+        );
+        if let Some((start, end, index)) = reference {
+            assert_eq!(end, expected_span, "function immediate end: {line}");
+            assert_eq!(
+                Reader::new(&bytes[start..end])
+                    .u32()
+                    .expect("function immediate"),
+                index
+            );
+        }
+        assert_eq!(
+            reader.op().expect("sentinel call").0,
+            Op::Call(0),
+            "following instruction in row {count}: {line}"
+        );
+        count += 1;
+    }
+    assert_eq!(count, 2_283, "frozen differential coverage must not shrink");
 }

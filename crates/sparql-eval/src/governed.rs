@@ -537,7 +537,7 @@ fn term_value_mentions_withheld_blank(
     term: &TermValue,
     withhold: &mut impl FnMut(&str) -> bool,
 ) -> bool {
-    let mut pending: smallvec::SmallVec<[&TermValue; 8]> = smallvec::smallvec![term];
+    let mut pending: purrdf_core::SmallVec<[&TermValue; 8]> = purrdf_core::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             TermValue::Blank { label, .. } => {
@@ -695,7 +695,7 @@ mod withheld_blank_walk_tests {
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
     }

@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+version = 1
+
+# The JSON Schema draft 2020-12, draft 2019-09 and draft-07 meta-schemas,
+# vendored verbatim from the json-schema-org/json-schema-spec `2020-12`,
+# `2019-09` and `draft-07` branches (see crates/jsonschema/PROVENANCE.md). The
+# upstream project licenses its material under BSD-3-Clause or AFL-3.0, as its
+# LICENSE file (added in 51326f809003) specifies, with the copyright held by
+# the JSON Schema Specification Authors; the files carry no per-file notice.
+# They are taken here under BSD-3-Clause (LICENSES/BSD-3-Clause.txt, that
+# file's BSD section verbatim).
+[[annotations]]
+path = ["draft2020-12/**/*.json", "draft2019-09/**/*.json", "draft-07/**/*.json"]
+SPDX-FileCopyrightText = "JSON Schema Specification Authors"
+SPDX-License-Identifier = "BSD-3-Clause"

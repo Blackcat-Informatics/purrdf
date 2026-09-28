@@ -30,7 +30,7 @@
 //!
 //! # Why its own target, beside `suite/`
 //!
-//! `sparql_conformance.rs`'s `datatest_stable::harness!` is rooted at `suite/`
+//! `sparql_conformance.rs` discovers its cases under `suite/`
 //! and folds every manifest it finds into ONE conformance-matrix row. This
 //! corpus lives under `corpus/` instead so it reports its own row (and carries
 //! its own ratchet budget in `scripts/conformance-baseline.json`) rather than

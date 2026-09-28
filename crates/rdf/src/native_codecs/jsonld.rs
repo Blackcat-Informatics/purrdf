@@ -31,7 +31,6 @@ use purrdf_core::sink::TextSink;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 use std::fmt::Write as _;
-use std::hash::BuildHasherDefault;
 use std::io::Write as IoWrite;
 use std::sync::Arc;
 
@@ -175,8 +174,8 @@ struct Indexes<'a> {
 type QuadGroups = BTreeMap<Option<usize>, BTreeMap<usize, Vec<(usize, usize)>>>;
 /// Reifier id to every `(subject, predicate, object, graph)` binding it owns.
 type BindingsByReifier = BTreeMap<usize, Vec<(usize, usize, usize, Option<usize>)>>;
-type FixedHashMap<K, V> = std::collections::HashMap<K, V, BuildHasherDefault<ahash::AHasher>>;
-type FixedHashSet<T> = HashSet<T, BuildHasherDefault<ahash::AHasher>>;
+type FixedHashMap<K, V> = std::collections::HashMap<K, V, purrdf_core::FastHasher>;
+type FixedHashSet<T> = HashSet<T, purrdf_core::FastHasher>;
 
 // ── serialize-side helpers over the first-party SerGraph ────────────────────────────
 
@@ -2151,7 +2150,7 @@ mod carrier_law_tests {
     #[allow(unused_imports)]
     use std::io::Write as _;
 
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
     use serde_json::json;
 
     use super::*;
@@ -2298,10 +2297,10 @@ mod carrier_law_tests {
         assert!(error.message.contains("working bytes"));
     }
 
-    proptest! {
+    prop_test! {
         #[test]
         fn generated_carriers_obey_exact_compact_expand_equality(
-            rows in prop::collection::btree_set(("[a-z]{1,8}", "[a-z]{1,8}"), 1..32)
+            rows in prop::collection::btree_set((prop::string::regex("[a-z]{1,8}"), prop::string::regex("[a-z]{1,8}")), 1..32)
         ) {
             let mut source = String::new();
             for (predicate, object) in rows {

@@ -1,0 +1,134 @@
+{
+  "compiler": "rustc 1.100.0-nightly (4b6d04e70 2026-09-13)\nbinary: rustc\ncommit-hash: 4b6d04e706108ccfeafe2547fbe857dfe8972bad\ncommit-date: 2026-09-13\nhost: x86_64-unknown-linux-gnu\nrelease: 1.100.0-nightly\nLLVM version: 23.1.1\n",
+  "cpu": 12,
+  "host": "shared",
+  "cpu_model": "Architecture:                            x86_64\nCPU op-mode(s):                          32-bit, 64-bit\nAddress sizes:                           48 bits physical, 48 bits virtual\nByte Order:                              Little Endian\nCPU(s):                                  32\nOn-line CPU(s) list:                     0-31\nVendor ID:                               AuthenticAMD\nModel name:                              AMD RYZEN AI MAX+ 395 w/ Radeon 8060S\nCPU family:                              26\nModel:                                   112\nThread(s) per core:                      2\nCore(s) per socket:                      16\nSocket(s):                               1\nStepping:                                0\nMicrocode version:                       0xb700037\nFrequency boost:                         enabled\nCPU(s) scaling MHz:                      73%\nCPU max MHz:                             5187.5000\nCPU min MHz:                             625.0000\nBogoMIPS:                                6000.67\nFlags:                                   fpu vme de pse tsc msr pae mce cx8 apic sep mtrr pge mca cmov pat pse36 clflush mmx fxsr sse sse2 ht syscall nx mmxext fxsr_opt pdpe1gb rdtscp lm constant_tsc rep_good amd_lbr_v2 nopl xtopology nonstop_tsc cpuid extd_apicid aperfmperf rapl pni pclmulqdq monitor ssse3 fma cx16 sse4_1 sse4_2 movbe popcnt aes xsave avx f16c rdrand lahf_lm cmp_legacy svm extapic cr8_legacy abm sse4a misalignsse 3dnowprefetch osvw ibs skinit wdt tce topoext perfctr_core perfctr_nb bpext perfctr_llc mwaitx cpuid_fault cpb cat_l3 cdp_l3 hw_pstate ssbd mba perfmon_v2 ibrs ibpb stibp ibrs_enhanced vmmcall fsgsbase tsc_adjust bmi1 avx2 smep bmi2 erms invpcid cqm rdt_a avx512f avx512dq rdseed adx smap avx512ifma clflushopt clwb avx512cd sha_ni avx512bw avx512vl xsaveopt xsavec xgetbv1 xsaves cqm_llc cqm_occup_llc cqm_mbm_total cqm_mbm_local user_shstk avx_vnni avx512_bf16 clzero irperf xsaveerptr rdpru wbnoinvd cppc arat npt lbrv svm_lock nrip_save tsc_scale vmcb_clean flushbyasid decodeassists pausefilter pfthreshold avic v_vmsave_vmload vgif x2avic v_spec_ctrl vnmi avx512vbmi umip pku ospke avx512_vbmi2 gfni vaes vpclmulqdq avx512_vnni avx512_bitalg avx512_vpopcntdq rdpid bus_lock_detect movdiri movdir64b overflow_recov succor smca fsrm avx512_vp2intersect flush_l1d amd_lbr_pmc_freeze\nVirtualization:                          AMD-V\nL1d cache:                               768 KiB (16 instances)\nL1i cache:                               512 KiB (16 instances)\nL2 cache:                                16 MiB (16 instances)\nL3 cache:                                64 MiB (2 instances)\nNUMA node(s):                            1\nNUMA node0 CPU(s):                       0-31\nVulnerability Gather data sampling:      Not affected\nVulnerability Ghostwrite:                Not affected\nVulnerability Indirect target selection: Not affected\nVulnerability Itlb multihit:             Not affected\nVulnerability L1tf:                      Not affected\nVulnerability Mds:                       Not affected\nVulnerability Meltdown:                  Not affected\nVulnerability Mmio stale data:           Not affected\nVulnerability Old microcode:             Not affected\nVulnerability Reg file data sampling:    Not affected\nVulnerability Retbleed:                  Not affected\nVulnerability Spec rstack overflow:      Vulnerable\nVulnerability Spec store bypass:         Vulnerable\nVulnerability Spectre v1:                Vulnerable: __user pointer sanitization and usercopy barriers only; no swapgs barriers\nVulnerability Spectre v2:                Vulnerable; IBPB: disabled; STIBP: disabled; PBRSB-eIBRS: Not affected; BHI: Not affected\nVulnerability Srbds:                     Not affected\nVulnerability Tsa:                       Not affected\nVulnerability Tsx async abort:           Not affected\nVulnerability Vmscape:                   Vulnerable\n",
+  "iterations": 3000000,
+  "samples": 12,
+  "flags": [
+    "--edition",
+    "2024",
+    "-C",
+    "opt-level=3",
+    "-C",
+    "target-cpu=x86-64",
+    "-C",
+    "lto=fat",
+    "-C",
+    "codegen-units=1"
+  ],
+  "digests": {
+    "before/fixed/aes.rs": "ec42833d3d107c7a7d6055a6d3e73d297d7b2697471077fc16fb5b571b9e68fa",
+    "before/fixed/fold.rs": "c49dca55af4cbfce85d34a0250b4eb5776fcf8b3bdfa39c452e0e1e20bfe156d",
+    "before/fixed/keys.rs": "674a66a87989635df3804a5b431bee137736805d86a5446b4af9fb5442f1b831",
+    "before/fixed/portable.rs": "e5ded3cdcd779df92d2c968c35b11072e844bf63f51f72d9d3303dd470908e93",
+    "before/fixed.rs": "f3fad6809e24580161d63b3a6fc248e167ec20478f33d7420a8b15d486acc48d",
+    "before/main.rs": "5463a7d543e788a732cb780fa2281cc2de7622b6ddc8d269ac87cdf91fe0c8ea",
+    "before/run": "d6193b5619bb2bd30370da9b8002f88480c576b9dd3e96e0484599b3ecafc512",
+    "after/fixed/aes.rs": "ec42833d3d107c7a7d6055a6d3e73d297d7b2697471077fc16fb5b571b9e68fa",
+    "after/fixed/fold.rs": "c49dca55af4cbfce85d34a0250b4eb5776fcf8b3bdfa39c452e0e1e20bfe156d",
+    "after/fixed/keys.rs": "674a66a87989635df3804a5b431bee137736805d86a5446b4af9fb5442f1b831",
+    "after/fixed/portable.rs": "e5ded3cdcd779df92d2c968c35b11072e844bf63f51f72d9d3303dd470908e93",
+    "after/fixed.rs": "b15438edee21d7d900cef53b30035b0299072afd0f80ae4aa059ac727a667fbb",
+    "after/main.rs": "5463a7d543e788a732cb780fa2281cc2de7622b6ddc8d269ac87cdf91fe0c8ea",
+    "after/run": "20189bfd971101da15497fa209d74f5f49a2fb860c8d5ecbca5de076702303c2",
+    "offset/fixed/aes.rs": "ec42833d3d107c7a7d6055a6d3e73d297d7b2697471077fc16fb5b571b9e68fa",
+    "offset/fixed/fold.rs": "c49dca55af4cbfce85d34a0250b4eb5776fcf8b3bdfa39c452e0e1e20bfe156d",
+    "offset/fixed/keys.rs": "3e535d18a3b6e5a6eb540a7c5bf2958732e39d10a2e9565d45ab1efb0f118179",
+    "offset/fixed/portable.rs": "e5ded3cdcd779df92d2c968c35b11072e844bf63f51f72d9d3303dd470908e93",
+    "offset/fixed.rs": "75312f1f39a01e88983df95b594fef38d12f0bb85eb20af8c0cc13a4414ab0f3",
+    "offset/main.rs": "5463a7d543e788a732cb780fa2281cc2de7622b6ddc8d269ac87cdf91fe0c8ea",
+    "offset/run": "2cc5edb6adadb8d116d26a7d5590ea279ca7f20a3e73b090f3f4a38739d6836d"
+  },
+  "summary": [
+    {
+      "case": "u64",
+      "variant": "after",
+      "median_ratio": 1.000039003849244,
+      "min_ratio": 0.9876861708428426,
+      "max_ratio": 1.0422518782255994
+    },
+    {
+      "case": "u64",
+      "variant": "offset",
+      "median_ratio": 1.00106105038788,
+      "min_ratio": 0.9792477913516024,
+      "max_ratio": 1.0339089550949094
+    },
+    {
+      "case": "triple-local",
+      "variant": "after",
+      "median_ratio": 1.3537485188557368,
+      "min_ratio": 1.3371515138705221,
+      "max_ratio": 1.3707336456612258
+    },
+    {
+      "case": "triple-local",
+      "variant": "offset",
+      "median_ratio": 1.0013333340748187,
+      "min_ratio": 0.9862250510259877,
+      "max_ratio": 1.0174062336520517
+    },
+    {
+      "case": "triple-global",
+      "variant": "after",
+      "median_ratio": 1.609144888868702,
+      "min_ratio": 1.5828333553974578,
+      "max_ratio": 1.6412739244286503
+    },
+    {
+      "case": "triple-global",
+      "variant": "offset",
+      "median_ratio": 1.0007725633272935,
+      "min_ratio": 0.9851904650204135,
+      "max_ratio": 1.0093406140191696
+    },
+    {
+      "case": "bytes16",
+      "variant": "after",
+      "median_ratio": 0.9811015419373478,
+      "min_ratio": 0.9725178603498323,
+      "max_ratio": 0.9859889470101394
+    },
+    {
+      "case": "bytes16",
+      "variant": "offset",
+      "median_ratio": 1.0371792849900892,
+      "min_ratio": 1.0239293375978704,
+      "max_ratio": 1.0388793300709351
+    },
+    {
+      "case": "str26",
+      "variant": "after",
+      "median_ratio": 1.0227620038058585,
+      "min_ratio": 1.0199300842772274,
+      "max_ratio": 1.1041569206514816
+    },
+    {
+      "case": "str26",
+      "variant": "offset",
+      "median_ratio": 1.0262348648598643,
+      "min_ratio": 1.0221133058877685,
+      "max_ratio": 1.1218125962631282
+    },
+    {
+      "case": "bytes64",
+      "variant": "after",
+      "median_ratio": 0.9961052739728153,
+      "min_ratio": 0.984827992544082,
+      "max_ratio": 1.0006450003496468
+    },
+    {
+      "case": "bytes64",
+      "variant": "offset",
+      "median_ratio": 1.019268165399653,
+      "min_ratio": 1.0052639209272762,
+      "max_ratio": 1.0266657939728479
+    }
+  ],
+  "load_average": [
+    6.06689453125,
+    10.19775390625,
+    10.7236328125
+  ]
+}

@@ -131,10 +131,11 @@ const PRESENT: u8 = 0x21;
 
 /// A hand-rolled FNV-1a accumulator.
 ///
-/// FNV-1a rather than `std::hash::DefaultHasher` or the workspace's `ahash`
+/// FNV-1a rather than `std::hash::DefaultHasher` or the workspace's `FixedHasher`
 /// because a fingerprint is compared against one computed by a *different run* of
 /// this code: `DefaultHasher`'s algorithm is explicitly unspecified across
-/// releases, and `ahash`'s output is a function of its version. Either would make
+/// releases, and `FixedHasher` computes a different function on a build whose
+/// target enables AES than on one that does not. Either would make
 /// [`verify_binding`] answer "different dataset" for a dataset that is in fact
 /// identical, the moment a toolchain moved. FNV-1a is a few lines of fully
 /// specified integer arithmetic, so the fingerprint is a pure function of the
@@ -2889,10 +2890,10 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::WellFormed,
+                crate::test_terms::TermShape::WellFormed,
             );
             let (mut found, mut expected) = (Digest::new(), Digest::new());
             found.term(&value);
@@ -2921,8 +2922,8 @@ mod term_walk_tests {
             .stack_size(128 * 1024)
             .spawn(|| {
                 let (mut deep, mut shallower) = (Digest::new(), Digest::new());
-                deep.term(&purrdf_core::test_rng::triple_chain(LEVELS));
-                shallower.term(&purrdf_core::test_rng::triple_chain(LEVELS - 1));
+                deep.term(&crate::test_terms::triple_chain(LEVELS));
+                shallower.term(&crate::test_terms::triple_chain(LEVELS - 1));
                 assert_ne!(deep.finish(), shallower.finish());
             })
             .expect("the thread starts")

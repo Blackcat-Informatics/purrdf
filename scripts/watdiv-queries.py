@@ -119,6 +119,17 @@ from typing import NamedTuple
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
+
+def _scratch_root() -> Path:
+    """The build tree's scratch root, ``target/gate-scratch/`` (or under
+    ``$CARGO_TARGET_DIR``), the convention ``scripts/build-scratch.sh`` sets out.
+    Scratch goes there rather than into the system temporary directory, which is
+    not guaranteed to keep a directory for as long as a gate runs."""
+    target = os.environ.get("CARGO_TARGET_DIR")
+    root = (Path(target) if target else REPO_ROOT / "target") / "gate-scratch"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
 # Everything this lane reads and writes lives under `target/`, which is ignored.
 # WatDiv's use grant is not a redistribution grant, so no byte of it — nor any
 # query mechanically derived from its templates — is ever a tracked file.
@@ -1204,7 +1215,7 @@ def offline_self_test() -> int:
     # THE CACHE IS THE WORKLOAD, so it is checked three ways. Order IS the
     # workload -- every substitution indexes into these pools -- and so are the
     # rows themselves.
-    with tempfile.TemporaryDirectory() as raw:
+    with tempfile.TemporaryDirectory(dir=_scratch_root()) as raw:
         pool = _fixture_pool()
 
         # 1. A valid cache round-trips exactly, canonically ordered. The valid
@@ -1454,7 +1465,7 @@ def offline_self_test() -> int:
         print(f"SELF-TEST FAIL: {label} did not refuse at all")
         ok = False
 
-    with tempfile.TemporaryDirectory() as raw:
+    with tempfile.TemporaryDirectory(dir=_scratch_root()) as raw:
         root = Path(raw)
 
         # The valid neighbour FIRST: a well-formed census must parse, or every
@@ -1747,7 +1758,7 @@ def self_test() -> int:
             "".join(f"<{s}>\t<{p}>\t<{o}> .\n" for s, p, o in rows), encoding="utf-8"
         )
 
-    with tempfile.TemporaryDirectory(prefix="watdiv-selftest-") as raw:
+    with tempfile.TemporaryDirectory(prefix="watdiv-selftest-", dir=_scratch_root()) as raw:
         tmp = Path(raw)
         data = tmp / "fixture.nt"
         write_nt(data, triples)
@@ -1794,7 +1805,7 @@ def self_test() -> int:
 
     # 13. The candidates cache is keyed by the dataset digest, so a cache taken
     #     from other bytes is a MISS and can never be a stale hit.
-    with tempfile.TemporaryDirectory(prefix="watdiv-selftest-") as raw:
+    with tempfile.TemporaryDirectory(prefix="watdiv-selftest-", dir=_scratch_root()) as raw:
         cache = Path(raw) / "candidates.tsv"
         write_candidates(Candidates("a" * 64, pool.by_type), cache)
         hit = read_candidates(cache, "a" * 64)

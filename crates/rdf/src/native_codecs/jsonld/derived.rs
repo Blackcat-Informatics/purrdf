@@ -4,7 +4,6 @@
 //! Deterministic, vocabulary-neutral context derivation from typed carrier IRI slots.
 
 use std::collections::{BTreeMap, HashSet};
-use std::hash::BuildHasherDefault;
 
 use super::carrier::{Document, Node, Term, Value};
 use super::{CompiledJsonLdContext, RdfDiagnostic};
@@ -15,7 +14,7 @@ const MAX_DERIVED_TERMS: usize = 4_096;
 const MAX_DERIVED_CONTEXT_BYTES: usize = 1_048_576;
 const MAX_DERIVATION_WORK: usize = 262_144;
 
-type FixedHashSet<T> = HashSet<T, BuildHasherDefault<ahash::AHasher>>;
+type FixedHashSet<T> = HashSet<T, purrdf_core::FastHasher>;
 
 #[derive(Debug, Clone, Copy)]
 struct DerivationLimits {

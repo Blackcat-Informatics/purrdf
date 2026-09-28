@@ -1148,7 +1148,7 @@ impl Iterator for DeltaListRef<'_> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
     // -- IntVector ------------------------------------------------------------
 
@@ -1470,11 +1470,11 @@ mod tests {
         assert_eq!(decoded, [] as [u64; 0]);
     }
 
-    // -- proptest -----------------------------------------------------------------
+    // -- property tests -----------------------------------------------------------
 
-    proptest! {
+    prop_test! {
         #[test]
-        fn proptest_int_vector_round_trips(
+        fn property_int_vector_round_trips(
             values in prop::collection::vec(any::<u64>(), 0..200)
         ) {
             let max = values.iter().copied().max().unwrap_or(0);
@@ -1496,7 +1496,7 @@ mod tests {
         }
 
         #[test]
-        fn proptest_rank_select_matches_naive_oracle(
+        fn property_rank_select_matches_naive_oracle(
             bits in prop::collection::vec(any::<bool>(), 0..600)
         ) {
             let rs = build_rank_select(&bits);
@@ -1614,7 +1614,7 @@ mod tests {
         // well represented, not only popcounts near 32.
         let mut state = 0x5E1E_C7ED_u64;
         for _ in 0..4096 {
-            let word = crate::test_rng::splitmix64_next(&mut state);
+            let word = purrdf_testkit::rng::splitmix64_next(&mut state);
             assert_select_agrees(word);
             assert_select_agrees(word & word.rotate_left(17) & word.rotate_left(41));
             assert_select_agrees(word | word.rotate_left(17) | word.rotate_left(41));
@@ -1654,11 +1654,11 @@ mod tests {
         }
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(1024))]
+    prop_test! {
+        #![prop_config(Config::with_cases(1024))]
 
         #[test]
-        fn proptest_select_in_word_matches_bitwise(word in any::<u64>()) {
+        fn property_select_in_word_matches_bitwise(word in any::<u64>()) {
             for r in 0..word.count_ones() as usize {
                 prop_assert_eq!(select_in_word(word, r), select_in_word_bitwise(word, r));
             }

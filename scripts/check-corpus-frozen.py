@@ -40,13 +40,13 @@ from pathlib import Path
 # W3C RDF 1.2 syntax/eval corpus the native text codecs (Turtle / TriG /
 # N-Triples / N-Quads / RDF-XML) round-trip against — which is also where every
 # language-tag and base-direction negative vector lives — the vendored W3C
-# SPARQL 1.1 and 1.2 suites the conformance matrix grades against — and the
-# vendored W3C SHACL 1.2 vocabularies plus the `shacl12-test-suite` the
-# declared-vs-implemented ratchet and the SHACL 1.2 conformance harness grade
-# against, together with its crate-local runtime copy under
-# `crates/shapes/spec` (the same vocabulary bytes, guarded separately because
-# it sits inside a published crate rather than the workspace `vectors/` tree)
-# — all declared byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
+# SPARQL 1.1 and 1.2 suites the conformance matrix grades against, and the
+# official JSON-Schema-Test-Suite and the draft 2020-12, 2019-09 and draft-07
+# meta-schemas `purrdf-jsonschema`'s tests register (test data only: the crate
+# compiles no meta-schema in) — together with the vendored W3C SHACL 1.2 vocabularies,
+# shacl12-test-suite and crate-local vocabulary copies under crates/shapes/spec,
+# all declared
+# byte-frozen. (The GTS `vectors/*.gts` corpus is governed separately
 # in gmeow-gts and is intentionally not policed here; adding a new root is a
 # deliberate edit to this map followed by `--update` — a corpus is NEVER guarded
 # until it appears here.)
@@ -92,6 +92,13 @@ GUARDED_ROOTS: dict[str, str] = {
     "crates/rdf/tests/corpus/w3c": (
         "scripts/conformance-frozen/rdf-tests-corpus-w3c.sha256"
     ),
+    "crates/jsonschema/tests/suite": (
+        "scripts/conformance-frozen/jsonschema-suite.sha256"
+    ),
+    "crates/jsonschema/tests/metaschemas": (
+        "scripts/conformance-frozen/jsonschema-metaschemas.sha256"
+    ),
+    "crates/iri/unicode": "scripts/conformance-frozen/iri-unicode.sha256",
 }
 
 

@@ -17,7 +17,7 @@ string arena and addressed by a copyable `TermId` (a niche-optimized
 single integer compare, keeps quads at a fixed small size, and means a term
 that appears in a million quads costs its bytes exactly once.
 
-Hot maps use fixed-key `ahash` — deterministic hashing is part of the
+Hot maps use the fixed-key `FixedHasher` — deterministic hashing is part of the
 [byte-determinism discipline](codecs.md), not just a speed choice.
 
 ## Builder → freeze

@@ -5,17 +5,11 @@
 //! features, read once so the rewrite and the check can reason about indices before
 //! either emits or matches a byte.
 
-use std::convert::Infallible;
-
-use wasm_encoder::ValType;
-use wasm_encoder::reencode::{Reencode as _, RoundtripReencoder};
-use wasmparser::{
-    CompositeInnerType, ElementItems, ExternalKind, FunctionBody, Operator, Parser, Payload,
-    TypeRef, WasmFeatures,
-};
-
+use crate::binary::{ExternalKind, FunctionBody, Reader, Section, sections};
 use crate::error::LinkError;
+use crate::template::Op;
 use crate::{SUSPEND_MODULE, SUSPEND_NAME};
+use wasm_encoder::ValType;
 
 /// A core function signature in wasm-encoder's value types.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -81,6 +75,11 @@ pub(crate) struct Scan<'a> {
     pub(crate) declared_features: Vec<String>,
     /// Every function an element segment references, by index or by `ref.func`.
     pub(crate) element_functions: Vec<u32>,
+    /// References outside functions, including initializer expressions and start.
+    pub(crate) external_functions: Vec<(u32, &'static str)>,
+    /// Original section payloads and function-index immediate ranges within them.
+    pub(crate) sections: Vec<Section<'a>>,
+    pub(crate) references: Vec<(u8, usize, usize, u32, bool)>,
 }
 
 impl<'a> Scan<'a> {
@@ -96,112 +95,211 @@ impl<'a> Scan<'a> {
             has_name_section: false,
             declared_features: Vec::new(),
             element_functions: Vec::new(),
+            external_functions: Vec::new(),
+            sections: sections(bytes)?,
+            references: Vec::new(),
         };
-        for payload in Parser::new(0).parse_all(bytes) {
-            match payload? {
-                Payload::TypeSection(reader) => {
-                    for group in reader {
-                        for sub in group?.into_types() {
-                            let CompositeInnerType::Func(func) = sub.composite_type.inner else {
-                                return Err(LinkError::Shape(format!(
-                                    "type {} is not a plain function type",
-                                    scan.types.len()
-                                )));
-                            };
-                            scan.types.push(Sig {
-                                params: val_types(func.params())?,
-                                results: val_types(func.results())?,
-                            });
-                        }
-                    }
-                }
-                Payload::ImportSection(reader) => {
-                    for imports in reader {
-                        for entry in imports? {
-                            let (_, import) = entry?;
-                            match import.ty {
-                                TypeRef::Func(ty) | TypeRef::FuncExact(ty) => {
-                                    scan.imports.push(ImportedFunc {
-                                        module: import.module.to_owned(),
-                                        name: import.name.to_owned(),
-                                        ty,
-                                    });
-                                }
-                                TypeRef::Global(global) => scan.globals.push(GlobalEntry {
-                                    defined: false,
-                                    mutable: global.mutable,
-                                    val_type: val_type(global.content_type)?,
-                                }),
-                                TypeRef::Table(_) | TypeRef::Memory(_) | TypeRef::Tag(_) => {}
-                            }
-                        }
-                    }
-                }
-                Payload::FunctionSection(reader) => {
-                    for ty in reader {
-                        scan.function_types.push(ty?);
-                    }
-                }
-                Payload::GlobalSection(reader) => {
-                    for global in reader {
-                        let global = global?;
-                        scan.globals.push(GlobalEntry {
-                            defined: true,
-                            mutable: global.ty.mutable,
-                            val_type: val_type(global.ty.content_type)?,
-                        });
-                    }
-                }
-                Payload::ExportSection(reader) => {
-                    for export in reader {
-                        let export = export?;
-                        scan.exports.push(ExportEntry {
-                            name: export.name.to_owned(),
-                            kind: export.kind,
-                            index: export.index,
-                        });
-                    }
-                }
-                Payload::ElementSection(reader) => {
-                    for element in reader {
-                        match element?.items {
-                            ElementItems::Functions(functions) => {
-                                for function in functions {
-                                    scan.element_functions.push(function?);
-                                }
-                            }
-                            ElementItems::Expressions(_, expressions) => {
-                                for expression in expressions {
-                                    for operator in expression?.get_operators_reader() {
-                                        if let Operator::RefFunc { function_index } = operator? {
-                                            scan.element_functions.push(function_index);
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-                Payload::CodeSectionEntry(body) => scan.bodies.push(body),
-                Payload::CustomSection(section) => {
-                    if section.name() == "name" {
+        for section in scan.sections.clone() {
+            let mut r = Reader::new(section.data);
+            match section.id {
+                0 => {
+                    let name = r.name()?;
+                    if name == "name" {
                         scan.has_name_section = true;
                     }
-                    if section.name() == "target_features" {
-                        scan.declared_features = declared_features(section.data())?;
+                    if name == "target_features" {
+                        scan.declared_features = declared_features(&r.data[r.pos..])?;
+                    }
+                    continue;
+                }
+                1 => {
+                    for _ in 0..r.u32()? {
+                        if r.data.get(r.pos) == Some(&0x4e) {
+                            r.byte()?;
+                            for _ in 0..r.u32()? {
+                                scan.types.push(signature(&mut r)?);
+                            }
+                        } else {
+                            scan.types.push(signature(&mut r)?);
+                        }
                     }
                 }
-                _ => {}
+                2 => {
+                    for _ in 0..r.u32()? {
+                        let module = r.name()?.to_owned();
+                        let name = r.name()?.to_owned();
+                        match ExternalKind::read(&mut r)? {
+                            ExternalKind::Func => {
+                                let ty = r.u32()?;
+                                scan.imports.push(ImportedFunc { module, name, ty });
+                            }
+                            ExternalKind::Table => {
+                                r.val()?;
+                                r.limits()?;
+                            }
+                            ExternalKind::Memory => r.limits()?,
+                            ExternalKind::Global => {
+                                let val_type = r.val()?;
+                                let mutable = r.byte()? & 1 != 0;
+                                scan.globals.push(GlobalEntry {
+                                    defined: false,
+                                    mutable,
+                                    val_type,
+                                });
+                            }
+                            ExternalKind::Tag => {
+                                r.byte()?;
+                                r.u32()?;
+                            }
+                        }
+                    }
+                }
+                3 => {
+                    for _ in 0..r.u32()? {
+                        scan.function_types.push(r.u32()?);
+                    }
+                }
+                4 => {
+                    for _ in 0..r.u32()? {
+                        let explicit = r.data.get(r.pos) == Some(&0x40);
+                        if explicit {
+                            r.byte()?;
+                            if r.byte()? != 0 {
+                                return Err(LinkError::Parse(
+                                    "invalid table initializer prefix".into(),
+                                ));
+                            }
+                        }
+                        r.val()?;
+                        r.limits()?;
+                        if explicit {
+                            scan.expression(&mut r, 4, "table initializer", false)?;
+                        }
+                    }
+                }
+                5 => {
+                    for _ in 0..r.u32()? {
+                        r.limits()?;
+                    }
+                }
+                6 => {
+                    for _ in 0..r.u32()? {
+                        let val_type = r.val()?;
+                        let mutable = r.byte()? & 1 != 0;
+                        scan.globals.push(GlobalEntry {
+                            defined: true,
+                            mutable,
+                            val_type,
+                        });
+                        scan.expression(&mut r, 6, "global initializer", false)?;
+                    }
+                }
+                7 => {
+                    for _ in 0..r.u32()? {
+                        let name = r.name()?.to_owned();
+                        let kind = ExternalKind::read(&mut r)?;
+                        let index = r.u32()?;
+                        scan.exports.push(ExportEntry { name, kind, index });
+                    }
+                }
+                8 => {
+                    let start = r.pos;
+                    let index = r.u32()?;
+                    scan.references.push((8, start, r.pos, index, false));
+                    scan.external_functions.push((index, "start section"));
+                }
+                9 => {
+                    for _ in 0..r.u32()? {
+                        let flags = r.u32()?;
+                        if flags > 7 {
+                            return Err(LinkError::Parse("unknown element mode".into()));
+                        }
+                        if flags & 1 == 0 {
+                            if flags & 2 != 0 {
+                                r.u32()?;
+                            }
+                            scan.expression(&mut r, 9, "element offset", false)?;
+                        }
+                        if flags & 4 == 0 {
+                            if flags & 3 != 0 && r.byte()? != 0 {
+                                return Err(LinkError::Parse("invalid element kind".into()));
+                            }
+                            for _ in 0..r.u32()? {
+                                let start = r.pos;
+                                let index = r.u32()?;
+                                scan.references.push((9, start, r.pos, index, false));
+                                scan.element_functions.push(index);
+                            }
+                        } else {
+                            if flags & 3 != 0 {
+                                r.val()?;
+                            }
+                            for _ in 0..r.u32()? {
+                                scan.expression(&mut r, 9, "element segment", true)?;
+                            }
+                        }
+                    }
+                }
+                10 => {
+                    for _ in 0..r.u32()? {
+                        let len = r.u32()? as usize;
+                        scan.bodies.push(FunctionBody { data: r.take(len)? });
+                    }
+                }
+                11 => {
+                    for _ in 0..r.u32()? {
+                        match r.u32()? {
+                            0 => scan.expression(&mut r, 11, "data offset", false)?,
+                            1 => {}
+                            2 => {
+                                r.u32()?;
+                                scan.expression(&mut r, 11, "data offset", false)?;
+                            }
+                            _ => return Err(LinkError::Parse("invalid data mode".into())),
+                        }
+                        let len = r.u32()? as usize;
+                        r.take(len)?;
+                    }
+                }
+                12 => {
+                    r.u32()?;
+                }
+                13 => {
+                    for _ in 0..r.u32()? {
+                        r.byte()?;
+                        r.u32()?;
+                    }
+                }
+                id => return Err(LinkError::Parse(format!("unknown core section {id}"))),
             }
+            r.finish()?;
         }
         if scan.function_types.len() != scan.bodies.len() {
-            return Err(LinkError::Shape(format!(
-                "the function section declares {} functions but the code section holds {} bodies",
-                scan.function_types.len(),
-                scan.bodies.len()
-            )));
+            return Err(LinkError::Shape("function and code counts differ".into()));
         }
         Ok(scan)
+    }
+    fn expression(
+        &mut self,
+        r: &mut Reader<'_>,
+        section: u8,
+        origin: &'static str,
+        element: bool,
+    ) -> Result<(), LinkError> {
+        loop {
+            let (op, reference) = r.op()?;
+            if let Some((start, end, index)) = reference {
+                self.references.push((section, start, end, index, false));
+                if element {
+                    self.element_functions.push(index);
+                } else {
+                    self.external_functions.push((index, origin));
+                }
+            }
+            if op == Op::End {
+                return Ok(());
+            }
+        }
     }
 
     /// The number of imported functions: the first defined function's index.
@@ -291,104 +389,86 @@ impl<'a> Scan<'a> {
         }
     }
 
-    /// The feature set the module is validated under: the WebAssembly MVP, the five
-    /// post-MVP proposals the package build enables in `wasm-opt` (mutable globals,
-    /// non-trapping float-to-int, sign extension, bulk memory, SIMD), and every feature
-    /// a `target_features` custom section declares with `+`.
-    pub(crate) fn features(&self) -> Result<WasmFeatures, LinkError> {
-        let mut features = WasmFeatures::MVP
-            | WasmFeatures::MUTABLE_GLOBAL
-            | WasmFeatures::SATURATING_FLOAT_TO_INT
-            | WasmFeatures::SIGN_EXTENSION
-            | WasmFeatures::BULK_MEMORY
-            | WasmFeatures::SIMD;
+    /// Binaryen flags corresponding exactly to the package baseline and LLVM declarations.
+    pub(crate) fn features(&self) -> Result<Vec<String>, LinkError> {
+        let mut features = vec![
+            "mutable-globals".into(),
+            "nontrapping-float-to-int".into(),
+            "sign-ext".into(),
+            "bulk-memory".into(),
+            "simd".into(),
+        ];
         for name in &self.declared_features {
-            features |= feature_named(name)?;
+            let flag = match name.as_str() {
+                "nontrapping-fptoint" => "nontrapping-float-to-int",
+                "simd128" => "simd",
+                "atomics" => "threads",
+                "mutable-globals"
+                | "sign-ext"
+                | "bulk-memory"
+                | "bulk-memory-opt"
+                | "relaxed-simd"
+                | "reference-types"
+                | "call-indirect-overlong"
+                | "multivalue"
+                | "tail-call"
+                | "exception-handling"
+                | "extended-const"
+                | "multimemory"
+                | "memory64"
+                | "gc"
+                | "wide-arithmetic" => name,
+                other => {
+                    return Err(LinkError::Shape(format!(
+                        "the module declares target feature {other:?}, which this tool has no validator flag for"
+                    )));
+                }
+            };
+            if !features.iter().any(|x| x == flag) {
+                features.push(flag.into());
+            }
         }
         Ok(features)
     }
 }
-
-/// The validator flag for an LLVM `target_features` name.
-fn feature_named(name: &str) -> Result<WasmFeatures, LinkError> {
-    let feature = match name {
-        "mutable-globals" => WasmFeatures::MUTABLE_GLOBAL,
-        "nontrapping-fptoint" => WasmFeatures::SATURATING_FLOAT_TO_INT,
-        "sign-ext" => WasmFeatures::SIGN_EXTENSION,
-        "bulk-memory" | "bulk-memory-opt" => WasmFeatures::BULK_MEMORY,
-        "simd128" => WasmFeatures::SIMD,
-        "relaxed-simd" => WasmFeatures::RELAXED_SIMD,
-        "reference-types" | "call-indirect-overlong" => WasmFeatures::REFERENCE_TYPES,
-        "multivalue" => WasmFeatures::MULTI_VALUE,
-        "tail-call" => WasmFeatures::TAIL_CALL,
-        "exception-handling" => WasmFeatures::EXCEPTIONS,
-        "extended-const" => WasmFeatures::EXTENDED_CONST,
-        "multimemory" => WasmFeatures::MULTI_MEMORY,
-        "atomics" => WasmFeatures::THREADS,
-        "memory64" => WasmFeatures::MEMORY64,
-        "gc" => WasmFeatures::GC,
-        "wide-arithmetic" => WasmFeatures::WIDE_ARITHMETIC,
-        other => {
-            return Err(LinkError::Shape(format!(
-                "the module declares target feature {other:?}, which this tool has no validator flag for"
-            )));
-        }
-    };
-    Ok(feature)
-}
-
-/// The `+` entries of a `target_features` custom section: a count, then a prefix byte
-/// and a length-prefixed name per entry.
 fn declared_features(data: &[u8]) -> Result<Vec<String>, LinkError> {
-    let malformed =
-        || LinkError::Shape("the target_features custom section is malformed".to_owned());
-    let mut cursor = 0usize;
-    let count = read_leb(data, &mut cursor).ok_or_else(malformed)?;
+    let mut r = Reader::new(data);
     let mut enabled = Vec::new();
-    for _ in 0..count {
-        let prefix = *data.get(cursor).ok_or_else(malformed)?;
-        cursor += 1;
-        let length = read_leb(data, &mut cursor).ok_or_else(malformed)? as usize;
-        let name = data.get(cursor..cursor + length).ok_or_else(malformed)?;
-        cursor += length;
-        let name = std::str::from_utf8(name).map_err(|_| malformed())?;
+    for _ in 0..r.u32()? {
+        let prefix = r.byte()?;
+        let name = r.name()?;
         match prefix {
-            b'+' => enabled.push(name.to_owned()),
+            b'+' => enabled.push(name.into()),
             b'-' => {}
-            _ => return Err(malformed()),
+            _ => return Err(LinkError::Parse("invalid target feature prefix".into())),
         }
     }
-    if cursor != data.len() {
-        return Err(malformed());
-    }
+    r.finish()?;
     Ok(enabled)
 }
 
-/// One unsigned LEB128 value at `*cursor`, advancing past it.
-fn read_leb(data: &[u8], cursor: &mut usize) -> Option<u32> {
-    let mut value = 0u32;
-    let mut shift = 0u32;
-    loop {
-        let byte = *data.get(*cursor)?;
-        *cursor += 1;
-        if shift >= 32 {
-            return None;
+/// Plain function types, including explicit recursive groups and subtype headers.
+fn signature(r: &mut Reader<'_>) -> Result<Sig, LinkError> {
+    let mut code = r.byte()?;
+    if matches!(code, 0x4f | 0x50) {
+        for _ in 0..r.u32()? {
+            r.u32()?;
         }
-        value |= u32::from(byte & 0x7f) << shift;
-        if byte & 0x80 == 0 {
-            return Some(value);
-        }
-        shift += 7;
+        code = r.byte()?;
     }
-}
-
-/// wasmparser's value type as wasm-encoder's.
-pub(crate) fn val_type(ty: wasmparser::ValType) -> Result<ValType, LinkError> {
-    let translated: Result<ValType, wasm_encoder::reencode::Error<Infallible>> =
-        RoundtripReencoder.val_type(ty);
-    Ok(translated?)
-}
-
-fn val_types(types: &[wasmparser::ValType]) -> Result<Vec<ValType>, LinkError> {
-    types.iter().map(|ty| val_type(*ty)).collect()
+    if code == 0x65 {
+        code = r.byte()?;
+    }
+    if code != 0x60 {
+        return Err(LinkError::Shape("type is not a plain function type".into()));
+    }
+    let mut params = Vec::new();
+    for _ in 0..r.u32()? {
+        params.push(r.val()?);
+    }
+    let mut results = Vec::new();
+    for _ in 0..r.u32()? {
+        results.push(r.val()?);
+    }
+    Ok(Sig { params, results })
 }

@@ -342,7 +342,10 @@ fn attached_ro_crate_payload_round_trips_through_owned_c_handles() {
         assert!(error.is_null());
         let archive_bytes = buffer_bytes(archive);
         assert_eq!(
-            format!("{:x}", Sha256::digest(&archive_bytes)),
+            format!(
+                "{}",
+                purrdf_hash::hex::Lower(&Sha256::digest(&archive_bytes))
+            ),
             ATTACHED_ARCHIVE_SHA256
         );
         let package = purrdf_rs::ProjectionPackage::from_ustar(&archive_bytes, parsed.limits())

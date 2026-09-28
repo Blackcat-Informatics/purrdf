@@ -459,7 +459,7 @@ enum ScanNode<'a> {
 /// scan every evaluation runs allocates nothing for one and never needs more stack for
 /// a deeper query.
 pub(crate) fn mentions_variable_endpoint(pattern: &GraphPattern) -> bool {
-    let mut pending: smallvec::SmallVec<[ScanNode<'_>; 16]> = smallvec::SmallVec::new();
+    let mut pending: purrdf_core::SmallVec<[ScanNode<'_>; 16]> = purrdf_core::SmallVec::new();
     pending.push(ScanNode::Pattern(pattern));
     while let Some(node) = pending.pop() {
         match node {
@@ -1485,7 +1485,7 @@ fn eval_over_endpoints<D: DatasetView + Sync>(
         let block = match block {
             Block::Rows(block) => block,
             Block::Identity => {
-                rows.push(smallvec::smallvec![None; width]);
+                rows.push(purrdf_core::smallvec![None; width]);
                 continue;
             }
         };
@@ -1503,7 +1503,7 @@ fn eval_over_endpoints<D: DatasetView + Sync>(
             if own.is_some_and(|j| row[j].is_some_and(|t| t != *endpoint)) {
                 continue;
             }
-            let mut out: Solution<D::Id> = smallvec::smallvec![None; width];
+            let mut out: Solution<D::Id> = purrdf_core::smallvec![None; width];
             out[0] = Some(*endpoint);
             for (j, cell) in row.iter().enumerate() {
                 if cell.is_some() {
@@ -2354,7 +2354,7 @@ pub(crate) mod walk_tests {
 
     use super::{EndpointUse, Occurrence, Scope, ServedIndex, indirect, merge, record};
     use crate::governor::soundness::{ExpressionPart, PatternPart};
-    use crate::test_rng::splitmix64_next;
+    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 
@@ -3185,7 +3185,7 @@ mod endpoint_text_tests {
 
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
 

@@ -40,8 +40,9 @@
 //!
 //! # The hash is hand-rolled, deliberately
 //!
-//! FNV-1a, written out below in six lines. Not `ahash` (explicitly not
-//! version-stable, so its output cannot address content), not
+//! FNV-1a, written out below in six lines. Not the table hasher `FixedHasher`
+//! (a different function on a build with AES than on one without, so its output
+//! cannot address content), not
 //! [`std::hash::DefaultHasher`] (SipHash with an unspecified, version-dependent
 //! implementation). A digest that is compared across two builds must be a
 //! function of the bytes and of nothing else, and the only way to be sure of that

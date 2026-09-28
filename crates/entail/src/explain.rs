@@ -725,7 +725,8 @@ impl Justification {
     /// statement about a quad set rather than about an emission sequence.
     #[must_use]
     pub fn digest(&self) -> [u8; 32] {
-        *blake3::hash(purrdf_core::canonicalize(&self.ontology).nquads.as_bytes()).as_bytes()
+        *purrdf_hash::blake3::hash(purrdf_core::canonicalize(&self.ontology).nquads.as_bytes())
+            .as_bytes()
     }
 
     /// [`Self::digest`] as lowercase hex.

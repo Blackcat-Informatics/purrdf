@@ -175,7 +175,10 @@ fn the_corpus_matches_its_pinned_expectations() {
             (Expectation::Golden, Ok(nquads)) => {
                 let canonical = case.file.with_extension("canonical");
                 let digest = case.file.with_extension("digest");
-                let hex = format!("{:x}", Sha256::digest(nquads.as_bytes()));
+                let hex = format!(
+                    "{}",
+                    purrdf_hash::hex::Lower(&Sha256::digest(nquads.as_bytes()))
+                );
                 if updating() {
                     std::fs::write(&canonical, &nquads).expect("write golden");
                     std::fs::write(&digest, format!("{hex}\n")).expect("write digest");
@@ -513,7 +516,7 @@ fn the_corpus_digest_matches_the_constant_a_consumer_pins() {
     let manifest = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../scripts/conformance-frozen/vectors-rdf12-canon.sha256");
     let bytes = std::fs::read(&manifest).expect("the corpus freeze manifest must exist");
-    let computed = format!("{:x}", Sha256::digest(&bytes));
+    let computed = format!("{}", purrdf_hash::hex::Lower(&Sha256::digest(&bytes)));
     assert_eq!(
         computed, CANON_CORPUS_DIGEST,
         "the corpus changed without CANON_CORPUS_DIGEST being re-pinned; a consumer \

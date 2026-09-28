@@ -523,7 +523,7 @@ mod term_walk_tests {
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
     }
@@ -677,7 +677,8 @@ mod term_walk_tests {
         let mut schema = VarSchema::new();
         schema.push(Variable::new("a"));
         schema.push(Variable::new("b"));
-        let row: Solution<TermId> = smallvec::smallvec![Some(SolutionTerm::Existing(bound)), None];
+        let row: Solution<TermId> =
+            purrdf_core::smallvec![Some(SolutionTerm::Existing(bound)), None];
         (schema, row)
     }
 
@@ -780,7 +781,7 @@ mod term_walk_tests {
 
             let (dataset, _) = fixture();
             let schema = VarSchema::new();
-            let row: Solution<TermId> = smallvec::smallvec![];
+            let row: Solution<TermId> = purrdf_core::smallvec![];
             let mut ctx = EvalCtx::new(&*dataset);
             let ordinal = resolve_term(&pattern, &schema);
             let mut blanks = DetHashMap::default();

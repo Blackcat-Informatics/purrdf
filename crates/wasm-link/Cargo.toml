@@ -25,9 +25,5 @@ name = "wasm-link"
 path = "src/main.rs"
 
 [dependencies]
-# Reads the wasm-opt output and validates both the input and the rewritten
-# module against the artifact's feature set.
-wasmparser = { workspace = true }
-# Writes the rewritten module; its `reencode` bridge translates every section
-# and instruction wasmparser read, so the rewrite touches only what it changes.
-wasm-encoder = { workspace = true }
+# Writes the appended templates; existing module bytes remain unchanged.
+wasm-encoder.workspace = true

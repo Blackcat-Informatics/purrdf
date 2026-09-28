@@ -317,6 +317,19 @@ pub const LEDGER: &[ThreadLocal] = &[
         safety: Safety::NotCompiledIn,
         reason: TEST_ONLY,
     },
+    // Test support is never linked into the published wasm package.
+    ThreadLocal {
+        file: "crates/testkit/src/harness.rs",
+        name: "CAPTURE",
+        safety: Safety::NotCompiledIn,
+        reason: "the test harness is a dev-dependency only",
+    },
+    ThreadLocal {
+        file: "crates/testkit/tests/prop.rs",
+        name: "MACRO_CASES",
+        safety: Safety::NotCompiledIn,
+        reason: "a testkit integration-test counter, never compiled into the package",
+    },
     // ── purrdf-alloc-probe: a dev-dependency-only crate ─────────────────────────────
     ThreadLocal {
         file: "crates/alloc-probe/src/lib.rs",

@@ -119,7 +119,6 @@ impl From<TextError> for purrdf_sparql_eval::EvalError {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
     use purrdf_sparql_eval::EvalError;
 
     use super::TextError;

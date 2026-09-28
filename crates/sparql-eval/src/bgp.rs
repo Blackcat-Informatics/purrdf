@@ -231,7 +231,7 @@ pub(crate) fn eval_bgp<D: DatasetView + Sync>(
         let _ = ctx.observe_cells(1, working.len());
         return Ok(empty_over_real_vars(&working));
     }
-    let mut rows: Vec<Solution<D::Id>> = vec![smallvec::smallvec![None; working.len()]];
+    let mut rows: Vec<Solution<D::Id>> = vec![purrdf_core::smallvec![None; working.len()]];
     for (stage, &i) in order.iter().enumerate() {
         let cp = &compiled[i];
         // The probe's bound-axis shape is fixed across this slot's rows (a variable is
@@ -428,7 +428,7 @@ fn structural_order<I: ViewTermId>(compiled: &[CompiledPattern<I>]) -> Vec<usize
     /// Whether every slot reachable from `pos` is already bound, over a work list of
     /// the nested positions in `(s, p, o)` order, stopping at the first unbound slot.
     fn constrained<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
-        let mut pending: smallvec::SmallVec<[&Pos<I>; 8]> = smallvec::smallvec![pos];
+        let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
         while let Some(pos) = pending.pop() {
             match pos {
                 Pos::Bound(_) => {}
@@ -604,7 +604,7 @@ fn bgp_shape_key<I: ViewTermId>(compiled: &[CompiledPattern<I>], scope: &GraphSc
 /// machine stack to the same value.
 fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
     use std::hash::Hash;
-    let mut pending: smallvec::SmallVec<[&Pos<I>; 8]> = smallvec::smallvec![pos];
+    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
     while let Some(pos) = pending.pop() {
         match pos {
             Pos::Slot(c) => {
@@ -974,7 +974,7 @@ fn pattern_connected<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &[bool]) -> 
 /// Whether a position contains an already-bound slot anywhere, over a work list of
 /// the nested positions in `(s, p, o)` order, stopping at the first bound slot.
 fn pos_has_bound_slot<I: ViewTermId>(pos: &Pos<I>, bound: &[bool]) -> bool {
-    let mut pending: smallvec::SmallVec<[&Pos<I>; 8]> = smallvec::smallvec![pos];
+    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
     while let Some(pos) = pending.pop() {
         match pos {
             Pos::Bound(_) => {}
@@ -1000,7 +1000,7 @@ fn mark_bound<I: ViewTermId>(cp: &CompiledPattern<I>, bound: &mut [bool]) {
 /// Visit every slot column reachable from a position (itself, or the inner positions
 /// of a nested quoted triple), in `(s, p, o)` pre-order over a work list.
 fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
-    let mut pending: smallvec::SmallVec<[&Pos<I>; 8]> = smallvec::smallvec![pos];
+    let mut pending: purrdf_core::SmallVec<[&Pos<I>; 8]> = purrdf_core::smallvec![pos];
     while let Some(pos) = pending.pop() {
         match pos {
             Pos::Bound(_) => {}
@@ -1016,8 +1016,8 @@ fn for_each_slot<I: ViewTermId>(pos: &Pos<I>, f: &mut impl FnMut(usize)) {
 ///
 /// Inline for a pattern of up to four slots, which every pattern without a quoted
 /// triple is.
-fn slot_keys(pattern: &TriplePattern) -> smallvec::SmallVec<[Variable; 4]> {
-    let mut keys = smallvec::SmallVec::new();
+fn slot_keys(pattern: &TriplePattern) -> purrdf_core::SmallVec<[Variable; 4]> {
+    let mut keys = purrdf_core::SmallVec::new();
     collect_triple_slot_keys(pattern, &mut keys);
     keys
 }
@@ -1026,7 +1026,7 @@ fn slot_keys(pattern: &TriplePattern) -> smallvec::SmallVec<[Variable; 4]> {
 /// `(s, p, o)` order.
 fn collect_triple_slot_keys(pattern: &TriplePattern, keys: &mut impl Extend<Variable>) {
     collect_slot_keys(
-        smallvec::smallvec![
+        purrdf_core::smallvec![
             SlotPosition::Term(&pattern.object),
             SlotPosition::Predicate(&pattern.predicate),
             SlotPosition::Term(&pattern.subject),
@@ -1046,7 +1046,7 @@ enum SlotPosition<'a> {
 /// blank-node variable, or, for a quoted triple, its inner positions in the same
 /// order. Ground terms yield nothing.
 fn collect_slot_keys(
-    mut pending: smallvec::SmallVec<[SlotPosition<'_>; 8]>,
+    mut pending: purrdf_core::SmallVec<[SlotPosition<'_>; 8]>,
     keys: &mut impl Extend<Variable>,
 ) {
     while let Some(position) = pending.pop() {
@@ -1385,7 +1385,7 @@ fn bind_row<D: DatasetView>(
         }
     }
 
-    let mut out = row.clone();
+    let mut out = Solution::from_slice(row);
     for (pos, id) in [(&cp.s, quad.s), (&cp.p, quad.p), (&cp.o, quad.o)] {
         if !bind_pos(&mut out, pos, id, dataset) {
             return None;
@@ -1395,7 +1395,7 @@ fn bind_row<D: DatasetView>(
 }
 
 /// [`bind_pos`]'s work list: positions still to unify, each with its candidate id.
-type PosWork<'p, I> = smallvec::SmallVec<[(&'p Pos<I>, I); 4]>;
+type PosWork<'p, I> = purrdf_core::SmallVec<[(&'p Pos<I>, I); 4]>;
 
 /// Unify one compiled position against a candidate term id, mutating `out` with any
 /// newly bound slots. Returns `false` (caller rejects the row) on any disagreement:
@@ -1416,7 +1416,7 @@ fn bind_pos<D: DatasetView>(
 ) -> bool {
     // Inline for a plain position and for a quoted triple of plain positions, so
     // binding a row allocates nothing beyond the row it writes.
-    let mut pending: PosWork<'_, D::Id> = smallvec::smallvec![(pos, id)];
+    let mut pending: PosWork<'_, D::Id> = purrdf_core::smallvec![(pos, id)];
     while let Some((pos, id)) = pending.pop() {
         match pos {
             Pos::Bound(want) => {
@@ -2014,7 +2014,7 @@ fn project_out_blanks<I: ViewTermId>(
     rows: Vec<Solution<I>>,
 ) -> SolutionSeq<I> {
     // The working columns that survive, in order.
-    let keep: smallvec::SmallVec<[usize; 8]> = working
+    let keep: purrdf_core::SmallVec<[usize; 8]> = working
         .vars()
         .iter()
         .enumerate()
@@ -2044,7 +2044,6 @@ fn project_out_blanks<I: ViewTermId>(
 mod tests {
     use super::*;
     use crate::scratch::ScratchInterner;
-    use pretty_assertions::assert_eq;
     use purrdf_core::TermBox;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
     use purrdf_sparql_algebra::Child;
@@ -2883,7 +2882,7 @@ mod tests {
         let ops = precision.ops();
         let mut state = 0xc057_u64;
         for _ in 0..20_000 {
-            state = purrdf_core::test_rng::splitmix64_step(state);
+            state = purrdf_testkit::rng::splitmix64_step(state);
             // A term count and cardinalities anywhere a dataset can have them.
             let t = (state >> 11) as f64 / 4096.0 + 1.0;
             let running = (state & 0xffff_ffff) as f64 * 1.0e-3;
@@ -2968,7 +2967,7 @@ mod term_walk_tests {
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
 
@@ -4083,7 +4082,7 @@ mod survey_tests {
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
 

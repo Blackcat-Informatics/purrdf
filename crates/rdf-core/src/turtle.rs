@@ -1026,10 +1026,10 @@ mod tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                crate::test_rng::TermShape::WellFormed,
+                crate::test_terms::TermShape::WellFormed,
             );
             nested += usize::from(budget < 7);
             let term = owned(&value);

@@ -20,6 +20,17 @@ from pydantic import ValidationError
 
 
 REPO = Path(__file__).resolve().parents[3]
+
+
+def _scratch_root() -> Path:
+    """The build tree's scratch root, ``target/gate-scratch/`` (or under
+    ``$CARGO_TARGET_DIR``), the convention ``scripts/build-scratch.sh`` sets out.
+    Scratch goes there rather than into the system temporary directory, which is
+    not guaranteed to keep a directory for as long as a gate runs."""
+    target = os.environ.get("CARGO_TARGET_DIR")
+    root = (Path(target) if target else REPO / "target") / "gate-scratch"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 FLAT_BASELINE_SHA256 = "6d30855141344a4bc9308182af7a7b969a92b381e6d2fca4c953e947876ce692"
 SCHEMA_MAP_KEYWORDS = (
     "$defs",
@@ -438,10 +449,7 @@ def main() -> None:
             "<https://example.org/Person>",
         ],
     )
-    # The scratch lives beside the build output (see scripts/build-scratch.sh).
-    scratch = Path(os.environ.get("CARGO_TARGET_DIR", REPO / "target")) / "gate-scratch"
-    scratch.mkdir(parents=True, exist_ok=True)
-    with tempfile.TemporaryDirectory(prefix="pydantic-oracle.", dir=scratch) as directory:
+    with tempfile.TemporaryDirectory(prefix="purrdf-pydantic-oracle-", dir=_scratch_root()) as directory:
         root = Path(directory)
         for artifacts in [
             payload["artifacts"],

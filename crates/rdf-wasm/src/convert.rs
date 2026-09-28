@@ -295,10 +295,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             let lifted = term_value_to_rdf_term(&value);
             assert_eq!(lifted, reference_lift(&value), "seed {seed}");
@@ -333,7 +333,7 @@ mod term_walk_tests {
                 }
                 assert_eq!(
                     rdf_term_to_term_value(&term),
-                    purrdf_core::test_rng::triple_chain(LEVELS)
+                    crate::test_terms::triple_chain(LEVELS)
                 );
                 // The owned model's derived drop descends once per level, so the chain
                 // is taken apart one level at a time.

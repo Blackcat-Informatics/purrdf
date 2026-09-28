@@ -445,7 +445,7 @@ fn guess_media_type(path: &Path) -> String {
 }
 
 struct HashingWriter<'a> {
-    hasher: &'a mut blake3::Hasher,
+    hasher: &'a mut purrdf_hash::blake3::Hasher,
 }
 
 impl Write for HashingWriter<'_> {
@@ -520,7 +520,7 @@ fn copy_counted_and_hash<R: Read, W: Write>(
     writer: &mut W,
     expected_size: u64,
 ) -> std::io::Result<(String, u64)> {
-    let mut digest = blake3::Hasher::new();
+    let mut digest = purrdf_hash::blake3::Hasher::new();
     let mut written = 0_u64;
     let mut buf = vec![0_u8; STREAM_CHUNK_SIZE];
     loop {
@@ -612,7 +612,7 @@ fn append_blob_path<W: Write>(
     let representation = source.representation.as_deref();
     let mut file =
         fs::File::open(&source.path).map_err(|e| format!("read {:?}: {e}", source.path))?;
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         let mut sink = HashingWriter {
             hasher: &mut hasher,
@@ -656,7 +656,7 @@ fn append_blob_bytes<W: Write>(
     source: FileBlobBytes<'_>,
     expected_digest: &str,
 ) -> Result<(), String> {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         let mut sink = HashingWriter {
             hasher: &mut hasher,
@@ -697,7 +697,7 @@ fn append_blob_range<R: Read + Seek, W: Write>(
     source: FileBlobRange<'_>,
     expected_digest: &str,
 ) -> Result<(), String> {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
         reader
             .seek(SeekFrom::Start(source.offset))
@@ -1191,12 +1191,10 @@ fn format_datetime(time: &std::time::SystemTime) -> Result<String, String> {
         .duration_since(std::time::UNIX_EPOCH)
         .map_err(|e| format!("mtime before unix epoch: {e}"))?;
     let secs = duration.as_secs();
-    let dt = time::OffsetDateTime::from_unix_timestamp(secs as i64)
-        .map_err(|e| format!("invalid mtime timestamp {secs}: {e}"))?;
-    let text = dt
-        .format(&time::format_description::well_known::Rfc3339)
-        .map_err(|e| format!("format datetime: {e}"))?;
-    Ok(text.replace("+00:00", "Z"))
+    i64::try_from(secs)
+        .map_err(|_| "out of range")
+        .and_then(|secs| crate::rfc3339::format(secs, 0))
+        .map_err(|e| format!("invalid mtime timestamp {secs}: {e}"))
 }
 
 /// Read typed files-profile entries from a folded graph, keyed by `files:path`.
@@ -1638,17 +1636,15 @@ fn write_file_without_following_symlink(
             .create_new(true)
             .open(&temp)
         {
-            Ok(mut file) => {
+            Ok(file) => {
                 let result = (|| {
-                    file.write_all(data)
-                        .map_err(|e| format!("write {temp:?}: {e}"))?;
-                    // Closed before the rename below, which some platforms refuse on an
-                    // open file. On wasm32 `File` is an uninhabited stub with no `Drop`.
-                    #[cfg_attr(
-                        target_arch = "wasm32",
-                        allow(clippy::drop_non_drop, reason = "wasm32's File stub has no Drop")
-                    )]
-                    drop(file);
+                    // Scoped so the handle is closed before the rename replaces the
+                    // target.
+                    {
+                        let mut file = file;
+                        file.write_all(data)
+                            .map_err(|e| format!("write {temp:?}: {e}"))?;
+                    }
                     prepare_replace_target(target, archive_path)?;
                     fs::rename(&temp, target).map_err(|e| format!("replace {target:?}: {e}"))?;
                     Ok(())
@@ -1781,18 +1777,69 @@ fn restore_path_metadata(
 ) -> Result<(), String> {
     restore_owner(target, entry, options)?;
 
+    // Symlink entries never reach this point: `materialize_symlink` refuses every
+    // one before metadata is restored, so the only targets here are regular files,
+    // hardlinks (which name a regular file) and directories.
     if let Some(modified) = &entry.modified {
         let (seconds, nanos) = parse_datetime(modified)?;
-        let timestamp = filetime::FileTime::from_unix_time(seconds, nanos);
-        if entry.kind == FileEntryKind::Symlink {
-            filetime::set_symlink_file_times(target, timestamp, timestamp)
-                .map_err(|e| format!("set symlink mtime for {target:?}: {e}"))?;
-        } else {
-            filetime::set_file_mtime(target, timestamp)
-                .map_err(|e| format!("set mtime for {target:?}: {e}"))?;
-        }
+        let instant = system_time_from_unix(seconds, nanos)
+            .ok_or_else(|| format!("mtime {modified} is not representable on this host"))?;
+        set_modified_time(target, instant).map_err(|e| format!("set mtime for {target:?}: {e}"))?;
     }
     Ok(())
+}
+
+/// The instant `seconds` whole seconds (negative: before the epoch) plus
+/// `nanos` nanoseconds after the Unix epoch, or `None` when `nanos` is not a
+/// sub-second part or the host's `SystemTime` cannot hold the instant.
+fn system_time_from_unix(seconds: i64, nanos: u32) -> Option<std::time::SystemTime> {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    if nanos >= 1_000_000_000 {
+        return None;
+    }
+    let whole = Duration::from_secs(seconds.unsigned_abs());
+    let second = if seconds < 0 {
+        UNIX_EPOCH.checked_sub(whole)?
+    } else {
+        UNIX_EPOCH.checked_add(whole)?
+    };
+    second.checked_add(Duration::from_nanos(u64::from(nanos)))
+}
+
+/// Sets `target`'s modification time to `modified`, leaving its access time
+/// as it is. Works for regular files and directories, read-only ones included.
+fn set_modified_time(target: &Path, modified: std::time::SystemTime) -> std::io::Result<()> {
+    open_for_set_times(target)?.set_times(fs::FileTimes::new().set_modified(modified))
+}
+
+/// Opens `target` with exactly the access that setting its times needs.
+///
+/// Setting explicit times requires owning the file, not being able to write
+/// it, so a read-only open serves read-only files and directories alike.
+#[cfg(not(windows))]
+fn open_for_set_times(target: &Path) -> std::io::Result<fs::File> {
+    fs::File::open(target)
+}
+
+/// Opens `target` with exactly the access that setting its times needs.
+///
+/// `SetFileTime` needs a handle with `FILE_WRITE_ATTRIBUTES`, and asking for
+/// that right alone keeps read-only files openable; a directory handle can
+/// only be opened with `FILE_FLAG_BACKUP_SEMANTICS`.
+#[cfg(windows)]
+fn open_for_set_times(target: &Path) -> std::io::Result<fs::File> {
+    use std::os::windows::fs::OpenOptionsExt as _;
+
+    /// `FILE_WRITE_ATTRIBUTES` (WinNT.h, "File Access Rights Constants").
+    const FILE_WRITE_ATTRIBUTES: u32 = 0x0000_0100;
+    /// `FILE_FLAG_BACKUP_SEMANTICS` (fileapi.h, `CreateFileW` flags).
+    const FILE_FLAG_BACKUP_SEMANTICS: u32 = 0x0200_0000;
+
+    fs::OpenOptions::new()
+        .access_mode(FILE_WRITE_ATTRIBUTES)
+        .custom_flags(FILE_FLAG_BACKUP_SEMANTICS)
+        .open(target)
 }
 
 fn restore_owner(_target: &Path, entry: &FileEntry, options: &UnpackOptions) -> Result<(), String> {
@@ -1806,16 +1853,7 @@ fn restore_owner(_target: &Path, entry: &FileEntry, options: &UnpackOptions) -> 
 }
 
 fn parse_datetime(text: &str) -> Result<(i64, u32), String> {
-    let text = text.strip_suffix('Z').unwrap_or(text);
-    let dt = time::OffsetDateTime::parse(text, &time::format_description::well_known::Rfc3339)
-        .or_else(|_| {
-            time::OffsetDateTime::parse(
-                &(text.to_string() + "+00:00"),
-                &time::format_description::well_known::Rfc3339,
-            )
-        })
-        .map_err(|e| format!("parse datetime {text}: {e}"))?;
-    Ok((dt.unix_timestamp(), dt.nanosecond()))
+    crate::rfc3339::parse(text).map_err(|e| format!("parse datetime {text}: {e}"))
 }
 
 /// Compare an archive to a directory by content digest.

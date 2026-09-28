@@ -827,7 +827,7 @@ mod term_walk_tests {
 
     use super::owned_term;
     use crate::backend::TermFactory as _;
-    use crate::test_rng::TermShape;
+    use crate::test_terms::TermShape;
     use crate::{RdfDataset, RdfDatasetBuilder, RdfTerm, RdfTriple, TermId, TermRef};
 
     fn reference(dataset: &RdfDataset, id: TermId) -> RdfTerm {
@@ -853,7 +853,8 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_rng::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let value =
+                crate::test_terms::term_value(&mut state, &mut budget, TermShape::WellFormed);
             let mut builder = RdfDatasetBuilder::new();
             let object = builder.intern_value(&value);
             let holder = builder.intern_iri("http://example.org/holder");

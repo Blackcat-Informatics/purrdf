@@ -62,21 +62,20 @@ purrdf = { workspace = true }
 # second renderer described as equivalent; `regime_name` is the same regime
 # vocabulary `--regime`/`--entailment` accept.
 purrdf-validate = { workspace = true }
-# Zero-copy memory-mapped reads of on-disk pack files: a pack source is mmap'd
-# and handed to `PackView::from_bytes` with no materialization. Native-only —
-# this crate is never built for wasm32 (it is absent from the `make wasm`
-# `-p` allowlist), so mmap's absence there is a non-issue.
-memmap2 = { workspace = true }
-# The immutable-input authority's kernel-seal path: `memfd_create` + `fcntl`
-# add/get-seals make a mapped pack un-truncatable, so a disk pack maps
-# memory-safely even under a hostile concurrent pathname writer. Linux-gated in
-# code (`#[cfg(target_os = "linux")]`); other targets take the owned-buffer tier.
-rustix = { workspace = true }
 # Command-tree argument parsing (`Parser`/`Subcommand`/`ValueEnum`).
 clap = { workspace = true }
 # `--provenance-namespace`'s `query_hash`: a content hash of the query text, computed
 # from data this host already has in hand (see `query::build_query_provenance`).
 sha2 = { workspace = true }
+# Lowercase hex rendering of those SHA-256 digests.
+purrdf-hash = { workspace = true }
+
+[target.'cfg(target_os = "linux")'.dependencies]
+# The immutable-input authority's kernel path (`src/mmap.rs`): a read-only
+# `mmap` of a sealed descriptor, and `memfd_create` + `fcntl` add/get-seals, so
+# a disk pack maps memory-safely even under a hostile concurrent pathname
+# writer. Other targets take the owned-buffer tier and need neither.
+libc = { workspace = true }
 
 [dev-dependencies]
 # The workspace's shared counting allocator, for the `pack_input_alloc` bench
@@ -84,8 +83,9 @@ sha2 = { workspace = true }
 # does not provide). Path-only and unpublished, and this crate is never
 # published in any case.
 purrdf-alloc-probe = { workspace = true }
-# Isolated temp files/dirs for the integration tests that drive the built binary.
-tempfile = { workspace = true }
+# Isolated temporary files and directories, under the target directory, for the
+# integration tests that drive the built binary and for the unit tests.
+purrdf-testkit = { workspace = true }
 # Constructs the ONE test fixture the built binary cannot: a well-formed prepared
 # product carrying a stage id no build wrote, by repacking a real product's
 # sections (the same technique `purrdf-shapes`' own refusal-matrix tests use) so
@@ -103,7 +103,7 @@ purrdf-xsd = { workspace = true }
 purrdf-gts = { workspace = true }
 # Frames the gzip and zstd fixtures the transport integration tests feed to the binary.
 # Both are already workspace-pinned (purrdf-gts links them); test-only here.
-flate2 = { workspace = true }
+purrdf-deflate = { workspace = true }
 structured-zstd = { workspace = true }
 # Parse the machine-readable runtime ledger in projection CLI integration tests.
 serde_json = { workspace = true }

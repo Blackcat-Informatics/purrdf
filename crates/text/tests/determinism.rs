@@ -24,7 +24,6 @@
 
 use std::sync::Arc;
 
-use pretty_assertions::assert_eq;
 use purrdf_core::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlRequest, SparqlResult, TermValue,
 };
@@ -565,7 +564,7 @@ fn no_source_file_mentions_a_float_width() {
     // is scanned, rather than passing the count while never being read.
     assert_eq!(
         sources.len(),
-        9,
+        11,
         "expected to scan every module of the crate, scanned {sources:?}"
     );
     assert_eq!(

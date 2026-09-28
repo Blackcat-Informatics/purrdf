@@ -6,7 +6,7 @@
 // optimized wasm module rather than a native build of the same Rust.
 //
 // That distinction is the reason this file exists. The engine's wall deadline is written
-// per target: `std::time::Instant` on native, `js_sys::Date::now()` on wasm32. The native
+// per target: `std::time::Instant` on native, host `Date.now()` on wasm32. The native
 // spelling COMPILES for wasm32 and panics at run time, so a green native test suite and a
 // green `make wasm` build together prove nothing about whether a deadline works in a
 // browser. Only executing one inside a real module does. `deadlineMs` is therefore
@@ -336,7 +336,7 @@ test("a non-zero wall deadline trips a query it cannot cover, so the wasm clock 
   assert.equal(outcome.tripped.label, "deadline-exceeded");
   assert.equal(outcome.tripped.kind, "stopped");
   // A zero deadline would trip on the snapshot alone; this one can only trip because a
-  // LATER read of js_sys::Date::now() returned a larger value than the one at construction.
+  // LATER read of host Date.now() returned a larger value than the one at construction.
   assert.ok(outcome.evidence.consumed.fuel > 0n, "the query must have run before it stopped");
 });
 

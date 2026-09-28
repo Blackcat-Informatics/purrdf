@@ -20,7 +20,6 @@
 //!
 //! Every fixture uses `example.org`.
 
-use pretty_assertions::assert_eq;
 use purrdf_cdt::{
     CdtLiteral, CdtTerm, CdtValue, LexicalSpace, TextDirection, key_lexical_space, lexical_space,
     literal_lexical_space, parse_list, parse_map, term_lexical_space,

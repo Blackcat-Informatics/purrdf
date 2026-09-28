@@ -201,5 +201,7 @@ pub use range::{
     is_exactly_decided, same_value, satisfiability,
 };
 pub use simple::{normalize_whitespace_collapse, normalize_whitespace_replace};
-pub use temporal::{datetime_epoch, datetime_from_unix_seconds, duration_equal};
+pub use temporal::{
+    datetime_epoch, datetime_from_unix_seconds, days_from_civil, days_in_month, duration_equal,
+};
 pub use value::{XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};

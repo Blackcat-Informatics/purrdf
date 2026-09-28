@@ -10,9 +10,9 @@ use std::sync::Arc;
 
 use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_columnar::plain_bench::PlainInt64;
-use purrdf_columnar::test_rng::mix;
 use purrdf_columnar::{Compression, read, write};
 use purrdf_core::{BlankScope, ContentStore, RdfDataset, RdfDatasetBuilder, RdfLiteral};
+use purrdf_testkit::rng::splitmix64_next as mix;
 
 const ROWS: u32 = 500;
 

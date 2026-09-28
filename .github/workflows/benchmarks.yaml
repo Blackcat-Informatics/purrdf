@@ -22,6 +22,14 @@ on:
     # runners and the top of the hour is where everyone else's cron already is.
     - cron: "17 4 * * 0"
   workflow_dispatch:
+    inputs:
+      base_ref:
+        description: >-
+          Base commit for the x86_64 and aarch64 criterion comparison. Empty means the
+          merge-base of origin/main and the dispatched commit.
+        required: false
+        default: ""
+        type: string
 
 permissions:
   contents: read
@@ -100,6 +108,8 @@ jobs:
           cargo bench -p purrdf-xsd --no-run --locked
           cargo bench -p purrdf-sparql-algebra --bench tokenize --no-run --locked
           cargo bench -p purrdf-sparql-results --no-run --locked
+          cargo bench -p purrdf-hash --no-run --locked
+          cargo bench -p purrdf-deflate --no-run --locked
 
       - name: Run native criterion suites
         run: |
@@ -117,6 +127,8 @@ jobs:
           cargo bench -p purrdf-xsd --locked
           cargo bench -p purrdf-sparql-algebra --bench tokenize --locked
           cargo bench -p purrdf-sparql-results --locked
+          cargo bench -p purrdf-hash --locked
+          cargo bench -p purrdf-deflate --locked
 
       - name: Run Python compat harness
         working-directory: bindings/python
@@ -132,4 +144,165 @@ jobs:
           path: |
             target/criterion/
             bindings/python/bench_compat.json
+          if-no-files-found: warn
+
+  # THE HEAD AGAINST ITS BASE, ON ONE MACHINE, IN ONE RUN. Two criterion runs on two
+  # different runners compare two machines as much as two commits; the numbers only
+  # mean something when the base and the head are measured back to back on the same
+  # host. So each matrix entry builds and runs one criterion target on the base commit
+  # with `--save-baseline base`, then on the head against that baseline, sharing one
+  # target directory so criterion's baseline store (`target/criterion`) is the same
+  # directory for both.
+  #
+  # Every target runs on both architectures the library ships on: `ubuntu-latest`
+  # (x86_64) and `ubuntu-24.04-arm` (aarch64). A regression can live on one only --
+  # a SIMD kernel, a layout that packs differently, a branch the other predictor
+  # hides -- so the matrix is runner x target, and each entry compares within its
+  # own runner.
+  #
+  # Dispatch-only: a scheduled run is on `main`, whose merge-base with `origin/main`
+  # is itself. And NOT `continue-on-error` -- this job exists to answer one question
+  # ("did this change regress a suite?"), and a red answer that renders as green
+  # answers nothing. It gates no merge either way, because nothing on a pull request
+  # triggers it.
+  #
+  # One matrix entry per criterion target, not per crate, because every CI job must
+  # fit in 30 minutes: one entry is two optimized builds of one bench binary plus two
+  # runs of it, and the largest crate carries fourteen suites. The target list is
+  # computed by `scripts/bench-criterion-targets.py` from the `make bench` crate list,
+  # so the population cannot drift from the Makefile, and only criterion suites are
+  # in it -- the allocation probes are plain `main` functions that do not accept
+  # criterion's baseline flags.
+  bench-compare-plan:
+    if: github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+    outputs:
+      base: ${{ steps.base.outputs.sha }}
+      targets: ${{ steps.targets.outputs.targets }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      # The input reaches the shell through the environment, never interpolated into
+      # the script text, so a ref name is data and not code.
+      - name: Resolve the base commit
+        id: base
+        env:
+          BASE_REF: ${{ inputs.base_ref }}
+        run: |
+          set -euo pipefail
+          if [ -n "$BASE_REF" ]; then
+            sha="$(git rev-parse --verify --end-of-options "${BASE_REF}^{commit}")"
+          else
+            sha="$(git merge-base origin/main HEAD)"
+          fi
+          echo "base commit: $sha (head: $(git rev-parse HEAD))"
+          echo "sha=$sha" >> "$GITHUB_OUTPUT"
+
+      - name: List the criterion targets of the head and the base
+        id: targets
+        env:
+          BASE_SHA: ${{ steps.base.outputs.sha }}
+        run: |
+          set -euo pipefail
+          git worktree add --detach ../base "$BASE_SHA"
+          targets="$(python3 scripts/bench-criterion-targets.py --root . --base-root ../base)"
+          echo "$targets"
+          echo "targets=$targets" >> "$GITHUB_OUTPUT"
+
+  bench-compare:
+    needs: bench-compare-plan
+    name: bench-compare (${{ matrix.runner }} / ${{ matrix.target.crate }} / ${{ matrix.target.bench }})
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    permissions:
+      contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+        target: ${{ fromJSON(needs.bench-compare-plan.outputs.targets) }}
+    env:
+      # Each tree builds into its own target directory: the two trees contain path
+      # crates with the same name and version, and a shared directory lets the head
+      # build link against units compiled from the base's sources. Only criterion's
+      # baselines are shared, through CRITERION_HOME, so the head run finds exactly
+      # what the base run saved.
+      CARGO_TARGET_DIR: ${{ github.workspace }}/target
+      CRITERION_HOME: ${{ github.workspace }}/target/criterion
+      BASE_SHA: ${{ needs.bench-compare-plan.outputs.base }}
+      RUNNER_LABEL: ${{ matrix.runner }}
+      CRATE: ${{ matrix.target.crate }}
+      BENCH: ${{ matrix.target.bench }}
+      IN_BASE: ${{ matrix.target.in_base }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      - name: Check out the base commit beside the head
+        run: git worktree add --detach ../base "$BASE_SHA"
+
+      - name: Record the base commit's baseline
+        if: matrix.target.in_base
+        env:
+          CARGO_TARGET_DIR: ${{ github.workspace }}/../base-target
+        run: |
+          set -euo pipefail
+          cd ../base
+          cargo bench --locked -p "$CRATE" --bench "$BENCH" -- --save-baseline base \
+            2>&1 | tee "$GITHUB_WORKSPACE/bench-base.log"
+
+      # `--baseline-lenient` rather than `--baseline`: the strict form aborts the whole
+      # target when ONE benchmark in it has no saved baseline, which is exactly the
+      # state of a benchmark function added by the change under test. The lenient form
+      # still compares every benchmark the base recorded.
+      - name: Measure the head against the base baseline
+        run: |
+          set -euo pipefail
+          if [ "$IN_BASE" = "true" ]; then
+            compare=(--baseline-lenient base)
+          else
+            echo "$CRATE/$BENCH does not exist at $BASE_SHA; recording the head without a comparison"
+            compare=()
+          fi
+          cargo bench --locked -p "$CRATE" --bench "$BENCH" -- "${compare[@]}" \
+            2>&1 | tee bench-head.log
+
+      - name: Fail on any regression criterion reports
+        run: |
+          set -euo pipefail
+          if grep -n -B2 'Performance has regressed' bench-head.log; then
+            echo "::error::criterion reports a regression in $CRATE/$BENCH on $RUNNER_LABEL against $BASE_SHA"
+            exit 1
+          fi
+          echo "no regression reported in $CRATE/$BENCH on $RUNNER_LABEL against $BASE_SHA"
+
+      - name: Upload the comparison
+        if: success() || failure()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: bench-compare-${{ matrix.runner }}-${{ matrix.target.crate }}-${{ matrix.target.bench }}
+          path: |
+            bench-base.log
+            bench-head.log
+            target/criterion/
           if-no-files-found: warn

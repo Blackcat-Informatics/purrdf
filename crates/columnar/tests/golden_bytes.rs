@@ -9,12 +9,12 @@
 //! them changes the written bytes, which the byte-determinism contract
 //! forbids without a golden update and its reason.
 
-use purrdf_columnar::test_rng::mix;
 use purrdf_columnar::{Compression, Table, read, write};
 use purrdf_core::{
     BlankScope, ContentDigest, ContentStore, RdfDataset, RdfDatasetBuilder, RdfLiteral,
     RdfTextDirection,
 };
+use purrdf_testkit::rng::splitmix64_next as mix;
 
 /// Every term kind in a seeded mix, so each nullable `INT64` column of the
 /// terms table (datatype, direction, scope, the triple components) holds runs

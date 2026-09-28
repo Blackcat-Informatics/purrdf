@@ -34,23 +34,24 @@ purrdf-events = { workspace = true }
 # (its `[lib]` note states the contract) and is already wasm32-clean, so it drags
 # nothing in and `make wasm` stays green.
 purrdf-iri = { workspace = true }
-# Fixed-key (no runtime RNG seeding) hasher for the segment-decode / event-bridge
-# dedup maps — mirrors the workspace's `FastHasher` policy (`crates/rdf-core/src/hash.rs`);
-# wasm-clean since `getrandom` is absent on wasm32 and `default-features = false` here.
-ahash = { workspace = true }
+# Proleptic-Gregorian calendar arithmetic for the files/tar profiles' RFC 3339
+# `modified` timestamps (the grammar itself is `src/rfc3339.rs`). Another
+# zero-runtime-dependency, wasm32-clean leaf, so the edge adds nothing below it.
+purrdf-xsd = { workspace = true }
 # emojihash + randomart visual fingerprints, published from
 # Blackcat-Informatics/visual-hashing.
 visual-hashing = { workspace = true }
-blake3 = { workspace = true }
 # Data-parallel BLAKE3 verification: per-frame content ids across a segment,
-# whole segments across a file, and `Hasher::update_rayon` for large payloads.
+# whole segments across a file, and native BLAKE3 subtrees for large payloads.
 # On targets without threads (wasm32) rayon degrades to inline-sequential
 # execution, so results are identical everywhere.
 rayon = { workspace = true }
 ciborium = { workspace = true }
 # Borrowed deterministic-CBOR views serialize recursively without cloning Value trees.
 serde = { workspace = true }
-flate2 = { workspace = true }
+# gzip (RFC 1952) for the `gzip` transform, the transport decoder and gzip tar
+# streams: the workspace's native DEFLATE leaf, deterministic and wasm-clean.
+purrdf-deflate = { workspace = true }
 # pure-Rust zstd encoder/decoder — no C toolchain, wasm-friendly. The
 # `dict_builder` capability (pure-Rust FastCOVER training) is enabled here for the
 # in-band pack dictionaries (GTS-SPEC §5 "dct"); it pulls only std + fastrand,
@@ -59,14 +60,13 @@ flate2 = { workspace = true }
 structured-zstd = { workspace = true, features = ["dict_builder"] }
 # Seeds structured-zstd's ambient FastCOVER reservoir RNG for reproducible dicts.
 fastrand = { workspace = true }
-time = { workspace = true }
-filetime = { workspace = true }
 # pure-Rust Ed25519 (COSE_Sign1, §9.2) — deterministic per RFC 8032, wasm-friendly
 ed25519-dalek = { workspace = true }
-# pure-Rust SHA-1 — only for OpenPGP v4 key fingerprints (RFC 4880 §12.2), not
-# used as a general-purpose hash; wasm-friendly. Workspace-unified on the
-# digest-0.10 family (matching sha2/md-5); defaults re-enabled here (std).
-sha1 = { workspace = true, default-features = true }
+# SHA-1 — only for OpenPGP v4 key fingerprints (RFC 4880 §12.2), not used as a
+# general-purpose hash — and the fixed-key `FixedHasher` (no runtime seeding,
+# wasm-clean) for the segment-decode / event-bridge dedup maps and the digest
+# index. The workspace's zero-dependency hashing leaf.
+purrdf-hash = { workspace = true }
 # pure-Rust AES-256-GCM (COSE_Encrypt0, §9.3). Callers provide the nonce/IV
 # through the portable core API, so this crate does not need an OS RNG.
 aes-gcm = { workspace = true }
@@ -76,6 +76,9 @@ aes-gcm = { workspace = true }
 # Path-only and unpublished, so it is stripped from the packaged manifest;
 # std-only and dependency-free, so it is wasm32-clean and needs no target gate.
 purrdf-alloc-probe = { workspace = true }
+# Isolated temporary directories under the target directory for the unpack
+# tests. Path-only and unpublished, so it is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
 # Authoring hot-path regression watch. Defaults off like sibling crates so the
 # bench lane stays lightweight and report-only.
 criterion = { workspace = true }
@@ -92,4 +95,10 @@ getrandom = { workspace = true }
 # GTS writer/codec authoring hot paths: rsyncable zstd block compression and
 # deterministic graph snapshot emission. Report-only; excluded from check.
 name = "authoring"
+harness = false
+
+[[bench]]
+# RFC 3339 `modified` stamps (files/tar profiles): parse and format, one call
+# per archive entry. Report-only; excluded from check.
+name = "rfc3339"
 harness = false

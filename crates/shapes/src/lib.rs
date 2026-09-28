@@ -117,3 +117,7 @@ pub use typescript::{
 /// Crate version string for cache/toolchain salt parity with Python package
 /// versions (`metadata.version("purrdf-shapes")`).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
+
+#[cfg(test)]
+#[path = "../../rdf-core/tests/support/term_fixture.rs"]
+mod test_terms;

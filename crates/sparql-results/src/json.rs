@@ -483,7 +483,6 @@ fn json_binding<W: TextOut + ?Sized>(value: &TermValue, out: &mut W) -> Result<(
 mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
-    use pretty_assertions::assert_eq;
     use purrdf_core::TermBox;
     use purrdf_core::terminals::find_first_json_string_special;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
@@ -529,7 +528,7 @@ mod tests {
 
     impl SplitMix {
         const fn next(&mut self) -> u64 {
-            crate::test_rng::splitmix64_next(&mut self.0)
+            purrdf_testkit::rng::splitmix64_next(&mut self.0)
         }
 
         fn below(&mut self, n: usize) -> usize {
@@ -1085,10 +1084,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             let (mut written, mut expected) = (String::new(), String::new());
             let result = json_binding(&value, &mut written);
@@ -1108,7 +1107,7 @@ mod term_walk_tests {
             .stack_size(128 * 1024)
             .spawn(|| {
                 let mut written = String::new();
-                json_binding(&purrdf_core::test_rng::triple_chain(LEVELS), &mut written)
+                json_binding(&crate::test_terms::triple_chain(LEVELS), &mut written)
                     .expect("every predicate is an IRI");
                 assert_eq!(written.matches("\"type\":\"triple\"").count(), LEVELS);
                 assert!(written.ends_with(&"}}".repeat(LEVELS)));

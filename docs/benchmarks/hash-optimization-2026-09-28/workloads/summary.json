@@ -1,0 +1,1967 @@
+{
+  "reference": "before",
+  "cases": {
+    "intern-iri": {
+      "before": {
+        "time_ns": {
+          "median": 1090375.1206896552,
+          "min": 1084323.08045977,
+          "max": 1145417.7011494252,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 19725772.564393938,
+              "min": 19725772.564393938,
+              "max": 19725772.606060605,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 4506079.621212121,
+              "min": 4505132.1022727275,
+              "max": 4508576.208333333,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 3652671.9393939395,
+              "min": 3652671.9393939395,
+              "max": 3652671.981060606,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.0872727272727274,
+              "min": 1.0847727272727272,
+              "max": 1.0925,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "checkpoint": {
+        "time_ns": {
+          "median": 1070726.3793103448,
+          "min": 1066753.8620689656,
+          "max": 1079359.2068965517,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.9820986513746732,
+          "min": 0.9423280309125798,
+          "max": 0.9903132374014945,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 20076990.636363637,
+              "min": 20076990.59469697,
+              "max": 20076990.674242426,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0178050350536672,
+              "min": 1.017805030791466,
+              "max": 1.017805036973936,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 4566069.416666667,
+              "min": 4551576.125,
+              "max": 4568972.8977272725,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0133959561961727,
+              "min": 1.0100966932705109,
+              "max": 1.0135261992346902,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 3608884.587121212,
+              "min": 3608884.5454545454,
+              "max": 3608884.625,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9880122406284335,
+              "min": 0.988012217950831,
+              "max": 0.9880122509985924,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.0737121212121212,
+              "min": 1.062840909090909,
+              "max": 1.0754545454545454,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9843977532764717,
+              "min": 0.9797821076890844,
+              "max": 0.9875278706800446,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "candidate": {
+        "time_ns": {
+          "median": 1013562.3218390804,
+          "min": 1008594.2068965518,
+          "max": 1028183.816091954,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.9291411854733366,
+          "min": 0.8846736330891286,
+          "max": 0.9479939152121466,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 19260739.625,
+              "min": 19260739.617424242,
+              "max": 19260751.59469697,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9764251089342201,
+              "min": 0.9764251085501663,
+              "max": 0.9764257136766972,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 4298519.753787879,
+              "min": 4293653.15530303,
+              "max": 4323397.15530303,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9534095810208996,
+              "min": 0.9528578090566565,
+              "max": 0.959660462147599,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 3564460.5757575757,
+              "min": 3564460.5681818184,
+              "max": 3564461.5454545454,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9758501817026032,
+              "min": 0.9758501796285715,
+              "max": 0.9758504360469709,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.0127651515151515,
+              "min": 1.0092045454545455,
+              "max": 1.0172727272727273,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9311420844601623,
+              "min": 0.9303373140582444,
+              "max": 0.9314729654403566,
+              "samples": 3
+            }
+          }
+        }
+      }
+    },
+    "intern-mixed": {
+      "before": {
+        "time_ns": {
+          "median": 4464959.9772727275,
+          "min": 4388624.409090909,
+          "max": 4687385.0,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 60413887.08955224,
+              "min": 60413886.95522388,
+              "max": 60413898.80597015,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 18788133.80597015,
+              "min": 18721985.074626867,
+              "max": 18833954.746268656,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 10493720.119402984,
+              "min": 10493719.985074626,
+              "max": 10493720.835820895,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 4.387611940298508,
+              "min": 4.367611940298508,
+              "max": 4.395373134328358,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "checkpoint": {
+        "time_ns": {
+          "median": 4568559.181818182,
+          "min": 4478802.454545454,
+          "max": 5532186.0,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0265431367223137,
+          "min": 1.0015586829858907,
+          "max": 1.2605740396786373,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 62835966.3880597,
+              "min": 62835966.29850746,
+              "max": 62835978.268656716,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.040091435179977,
+              "min": 1.040091229674089,
+              "max": 1.0400916295207785,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 19268043.43283582,
+              "min": 19227724.298507463,
+              "max": 19276519.731343284,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0255432302016698,
+              "min": 1.0234982504225412,
+              "max": 1.0270131197020345,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 10656467.507462686,
+              "min": 10656467.417910447,
+              "max": 10656468.388059702,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0155090399419404,
+              "min": 1.0155089490787679,
+              "max": 1.0155091108591503,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 4.484626865671642,
+              "min": 4.482388059701492,
+              "max": 4.491791044776119,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0221110997720855,
+              "min": 1.021936228734422,
+              "max": 1.0262789187711443,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "candidate": {
+        "time_ns": {
+          "median": 4392831.136363637,
+          "min": 4352801.909090909,
+          "max": 4768723.363636363,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.9925631093758434,
+          "min": 0.9706441018189707,
+          "max": 1.0310609764482195,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 61351644.91044776,
+              "min": 61351644.82089552,
+              "max": 61351645.104477614,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0155222214050428,
+              "min": 1.0155220291529141,
+              "max": 1.0155222251453362,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 19013648.14925373,
+              "min": 18670863.925373133,
+              "max": 19018476.164179105,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.009540927829864,
+              "min": 0.997269458924897,
+              "max": 1.0122599913641108,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 10620093.029850746,
+              "min": 10620092.940298507,
+              "max": 10620093.223880596,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0120427093020956,
+              "min": 1.0120426672328011,
+              "max": 1.0120427307909743,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 4.433731343283582,
+              "min": 4.3595522388059695,
+              "max": 4.434776119402985,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0087269516791741,
+              "min": 0.9981546663021561,
+              "max": 1.0107493961968905,
+              "samples": 3
+            }
+          }
+        }
+      }
+    },
+    "parse-nquads": {
+      "before": {
+        "time_ns": {
+          "median": 17965326.0,
+          "min": 17848399.8,
+          "max": 20336523.0,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 272798020.88235295,
+              "min": 272797950.64705884,
+              "max": 272798227.35294116,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 80002978.76470588,
+              "min": 79771393.8235294,
+              "max": 80397869.88235295,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 50807764.64705882,
+              "min": 50807689.5882353,
+              "max": 50807960.11764706,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 17.88823529411765,
+              "min": 17.78235294117647,
+              "max": 18.05529411764706,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "checkpoint": {
+        "time_ns": {
+          "median": 18026290.1,
+          "min": 17901266.0,
+          "max": 22061158.6,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.00527228094339,
+          "min": 0.8825975118755552,
+          "max": 1.2135832529289554,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 279454424.7647059,
+              "min": 279454360.35294116,
+              "max": 279454649.2352941,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0244004845080001,
+              "min": 1.0243994730632484,
+              "max": 1.0244015710984853,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 80614825.1764706,
+              "min": 80437135.11764705,
+              "max": 86300728.1764706,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.005426752349035,
+              "min": 1.0026985204264132,
+              "max": 1.0818505737455886,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 51151060.64705882,
+              "min": 51151010.705882356,
+              "max": 51151241.705882356,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0067567625221212,
+              "min": 1.006751906343828,
+              "max": 1.0067618134268914,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 18.006470588235295,
+              "min": 17.99235294117647,
+              "max": 19.709411764705884,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0058204537980926,
+              "min": 0.9972958884472536,
+              "max": 1.1083691696989746,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "candidate": {
+        "time_ns": {
+          "median": 17602998.5,
+          "min": 17403171.8,
+          "max": 21072853.8,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.9803868725638218,
+          "min": 0.8612315094374785,
+          "max": 1.1410717068774001,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 274900972.7647059,
+              "min": 274900890.2941176,
+              "max": 274901067.88235295,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.007708823823395,
+              "min": 1.0077077588134622,
+              "max": 1.0077094319451654,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 78663107.29411764,
+              "min": 78012653.35294117,
+              "max": 84620122.94117647,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9784227792256959,
+              "min": 0.9751218586795575,
+              "max": 1.060782805530181,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 50805311.23529412,
+              "min": 50805238.4117647,
+              "max": 50805334.0,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9999517118735346,
+              "min": 0.9999464315064794,
+              "max": 0.9999536371707829,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 17.571176470588235,
+              "min": 17.44470588235294,
+              "max": 19.261764705882353,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9752055244985202,
+              "min": 0.9731869420733694,
+              "max": 1.0831955011577903,
+              "samples": 3
+            }
+          }
+        }
+      }
+    },
+    "parse-turtle": {
+      "before": {
+        "time_ns": {
+          "median": 16279213.666666668,
+          "min": 16083918.333333334,
+          "max": 16413302.833333334,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 283337546.5,
+              "min": 283337546.4444444,
+              "max": 283337547.0,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 75208447.66666667,
+              "min": 74707454.66666667,
+              "max": 75665230.55555555,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 52600075.833333336,
+              "min": 52600075.777777776,
+              "max": 52600076.333333336,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 16.28388888888889,
+              "min": 16.172222222222224,
+              "max": 16.492222222222225,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "checkpoint": {
+        "time_ns": {
+          "median": 16654651.916666668,
+          "min": 16579302.666666666,
+          "max": 16886821.166666668,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0266521535988797,
+          "min": 1.0145821148306966,
+          "max": 1.0431331980985687,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 290018866.8333333,
+              "min": 290018865.1111111,
+              "max": 290018877.6666667,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0235807801427368,
+              "min": 1.0235807720574044,
+              "max": 1.0235808181767632,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 76861902.22222222,
+              "min": 76826633.27777778,
+              "max": 77537215.5,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.021516008657473,
+              "min": 1.0158153442192717,
+              "max": 1.0378778911148732,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 52947462.666666664,
+              "min": 52947461.11111111,
+              "max": 52947462.833333336,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0066043028993732,
+              "min": 1.0066042637576484,
+              "max": 1.0066043071310997,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 16.770555555555557,
+              "min": 16.64777777777778,
+              "max": 16.86888888888889,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0359250793217565,
+              "min": 1.0094320555143839,
+              "max": 1.036997595328066,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "candidate": {
+        "time_ns": {
+          "median": 15962598.666666666,
+          "min": 15885299.5,
+          "max": 16284133.5,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.9834653202949675,
+          "min": 0.9711481494845775,
+          "max": 1.0101114249626775,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 285465428.6666667,
+              "min": 285465427.4444444,
+              "max": 285465439.0555556,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0075100608758871,
+              "min": 1.007510054586745,
+              "max": 1.0075100973444604,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 74049510.94444445,
+              "min": 73904033.1111111,
+              "max": 74849402.94444445,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.991193064665931,
+              "min": 0.9767238210798641,
+              "max": 0.9952260054108076,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 52601725.05555555,
+              "min": 52601724.44444445,
+              "max": 52601725.666666664,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0000313539894399,
+              "min": 1.0000313328653874,
+              "max": 1.0000313666637262,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 16.019444444444446,
+              "min": 15.998333333333335,
+              "max": 16.191111111111113,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9905530745448299,
+              "min": 0.9700532237418311,
+              "max": 0.9943024802974993,
+              "samples": 3
+            }
+          }
+        }
+      }
+    },
+    "query-join": {
+      "before": {
+        "time_ns": {
+          "median": 4042509.7083333335,
+          "min": 3970071.5833333335,
+          "max": 4133627.6666666665,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 70939739.21917808,
+              "min": 70939676.56164384,
+              "max": 70939739.79452054,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 18545203.17808219,
+              "min": 18437724.712328766,
+              "max": 18594778.0,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 12433654.12328767,
+              "min": 12433639.08219178,
+              "max": 12433654.671232877,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 4.090958904109589,
+              "min": 4.062602739726027,
+              "max": 4.101369863013698,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "checkpoint": {
+        "time_ns": {
+          "median": 3893162.5416666665,
+          "min": 3852986.9166666665,
+          "max": 3979005.4583333335,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.9642475177006973,
+          "min": 0.9423303163169913,
+          "max": 0.9755727147900219,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 70236783.02739726,
+              "min": 70236639.01369864,
+              "max": 70236807.16438356,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9900907901669865,
+              "min": 0.9900896426087552,
+              "max": 0.9900911384432537,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 17696490.739726026,
+              "min": 17448062.657534245,
+              "max": 17857756.94520548,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9516914232439896,
+              "min": 0.940839660260794,
+              "max": 0.9685445044780673,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 12198665.712328767,
+              "min": 12198630.726027397,
+              "max": 12198671.98630137,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9811006154241672,
+              "min": 0.98109898842882,
+              "max": 0.9811010767835482,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 3.891095890410959,
+              "min": 3.8383561643835615,
+              "max": 3.923013698630137,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9487307949231799,
+              "min": 0.9382534154835254,
+              "max": 0.9656404895977342,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "candidate": {
+        "time_ns": {
+          "median": 3901280.625,
+          "min": 3857100.5833333335,
+          "max": 4025145.25,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.9657647376646736,
+          "min": 0.9381538395290078,
+          "max": 1.0070225193903997,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 69733908.97260274,
+              "min": 69733902.2739726,
+              "max": 69734016.23287672,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9830029167387966,
+              "min": 0.98300195407429,
+              "max": 0.9830035525202624,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 17375633.23287671,
+              "min": 17366252.547945205,
+              "max": 17726628.260273974,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9418869637603875,
+              "min": 0.93693409913202,
+              "max": 0.953312175078077,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 12150097.315068493,
+              "min": 12150096.232876712,
+              "max": 12150123.698630137,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9771955929194218,
+              "min": 0.9771942806959067,
+              "max": 0.9771965327452294,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 3.826986301369863,
+              "min": 3.814657534246576,
+              "max": 3.9034246575342464,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.93896887749941,
+              "min": 0.9354741494776321,
+              "max": 0.951736806947228,
+              "samples": 3
+            }
+          }
+        }
+      }
+    },
+    "gts-author-4k": {
+      "before": {
+        "time_ns": {
+          "median": 1982486.73,
+          "min": 1979999.0,
+          "max": 1988711.54,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 17673359.96,
+              "min": 17673359.786666665,
+              "max": 17673360.073333334,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 9130376.833333334,
+              "min": 9120544.02,
+              "max": 9152716.306666667,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 2263482.6533333333,
+              "min": 2263482.48,
+              "max": 2263482.7666666666,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.9713333333333332,
+              "min": 1.9702666666666668,
+              "max": 1.9819333333333335,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "checkpoint": {
+        "time_ns": {
+          "median": 1280057.5299999998,
+          "min": 1277489.22,
+          "max": 1283589.42,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.6454996062918645,
+          "min": 0.6437272653042404,
+          "max": 0.6468823065062155,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 17223951.69333333,
+              "min": 17223644.94,
+              "max": 17223960.44,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9745714239886903,
+              "min": 0.9745540734179671,
+              "max": 0.9745719347033435,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 5911013.333333333,
+              "min": 5893843.173333333,
+              "max": 6065109.193333333,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6474008073525843,
+              "min": 0.646216186272333,
+              "max": 0.6626567447431558,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 1487206.6866666668,
+              "min": 1487206.6466666667,
+              "max": 1487206.74,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6570435538688674,
+              "min": 0.6570435445329876,
+              "max": 0.6570435865121725,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.2785333333333333,
+              "min": 1.2744,
+              "max": 1.3113333333333332,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6485627324991546,
+              "min": 0.6468159978344724,
+              "max": 0.6616435130680479,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "candidate": {
+        "time_ns": {
+          "median": 1237680.87,
+          "min": 1234655.56,
+          "max": 1249434.3,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.6239446635517267,
+          "min": 0.6215086088770838,
+          "max": 0.6308177888358314,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 14445381.78,
+              "min": 14445369.22,
+              "max": 14445384.433333334,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.8173534524671108,
+              "min": 0.8173527365515555,
+              "max": 0.8173536106151917,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 5698276.84,
+              "min": 5695659.993333333,
+              "max": 5719376.786666667,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6244868706124981,
+              "min": 0.6225776752033144,
+              "max": 0.6264119095047939,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 1482587.5666666667,
+              "min": 1482587.5266666666,
+              "max": 1482587.68,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6550028225236557,
+              "min": 0.6550028073993288,
+              "max": 0.6550029404247918,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.2323333333333333,
+              "min": 1.2318,
+              "max": 1.2368666666666668,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6251945591121336,
+              "min": 0.621783443775438,
+              "max": 0.6274264457220157,
+              "samples": 3
+            }
+          }
+        }
+      }
+    },
+    "gts-read-4k": {
+      "before": {
+        "time_ns": {
+          "median": 1884507.5384615385,
+          "min": 1877373.1346153845,
+          "max": 1888186.2692307692,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 16443846.823899372,
+              "min": 16437524.20754717,
+              "max": 16452468.842767296,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 8677432.465408806,
+              "min": 8673798.522012578,
+              "max": 8689553.421383647,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 2473558.572327044,
+              "min": 2472020.9811320757,
+              "max": 2475742.6163522014,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.8816981132075472,
+              "min": 1.8811949685534592,
+              "max": 1.883018867924528,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "checkpoint": {
+        "time_ns": {
+          "median": 1240735.5,
+          "min": 1237868.75,
+          "max": 1247879.4038461538,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.6590445605764859,
+          "min": 0.6566583155293542,
+          "max": 0.6630395455745645,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 15728522.044025157,
+              "min": 15725624.547169812,
+              "max": 15729752.106918238,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9565737430767555,
+              "min": 0.955821566808983,
+              "max": 0.9568668520532746,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 5707115.238993711,
+              "min": 5698758.075471698,
+              "max": 5712345.93081761,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6573808403962866,
+              "min": 0.6570083523394336,
+              "max": 0.6576963014975007,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 2190560.4150943398,
+              "min": 2189902.9182389937,
+              "max": 2190806.433962264,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.8856901382776735,
+              "min": 0.8845438551547138,
+              "max": 0.886141514094739,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.2408805031446541,
+              "min": 1.239874213836478,
+              "max": 1.2421383647798743,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.65908862960115,
+              "min": 0.6589846359385438,
+              "max": 0.6601156455763896,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "candidate": {
+        "time_ns": {
+          "median": 1244256.25,
+          "min": 1238507.7884615385,
+          "max": 1248078.0384615385,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.6606572826776864,
+          "min": 0.6578356849286565,
+          "max": 0.6631741059057324,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 15719185.786163522,
+              "min": 15718268.823899372,
+              "max": 15724260.710691825,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9562397946834614,
+              "min": 0.9553744774790631,
+              "max": 0.9562988676205978,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 5713135.6918239,
+              "min": 5700886.094339622,
+              "max": 5718431.584905661,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6583901072809728,
+              "min": 0.6560620342479998,
+              "max": 0.6592765061804565,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 2193333.3773584906,
+              "min": 2193294.716981132,
+              "max": 2194729.113207547,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.8872632530626992,
+              "min": 0.8859138678207056,
+              "max": 0.887275982772794,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.24062893081761,
+              "min": 1.2380503144654087,
+              "max": 1.2437106918238994,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6594898197987361,
+              "min": 0.6574816299265197,
+              "max": 0.6609512350011698,
+              "samples": 3
+            }
+          }
+        }
+      }
+    },
+    "gts-author-1m": {
+      "before": {
+        "time_ns": {
+          "median": 1894801.2596153845,
+          "min": 1887480.7115384615,
+          "max": 1932688.5192307692,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 18718314.72077922,
+              "min": 18718314.714285713,
+              "max": 18718314.733766235,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 8629036.642857144,
+              "min": 8615038.402597403,
+              "max": 8632508.123376623,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 257178.85714285713,
+              "min": 257178.85064935064,
+              "max": 257178.87012987013,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.8968831168831168,
+              "min": 1.8932467532467532,
+              "max": 1.8991558441558443,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "checkpoint": {
+        "time_ns": {
+          "median": 1898674.6923076923,
+          "min": 1880057.8846153845,
+          "max": 1909952.1153846155,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0012590072852765,
+          "min": 0.972768175475926,
+          "max": 1.008061094158923,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 18029071.792207792,
+              "min": 18029071.74025974,
+              "max": 18029071.948051948,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9631781529160905,
+              "min": 0.963178149806705,
+              "max": 0.9631781602394497,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 8661723.805194804,
+              "min": 8639294.66883117,
+              "max": 8669167.012987014,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0037880430563149,
+              "min": 1.0028155726185102,
+              "max": 1.0042466093383822,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 164587.87012987013,
+              "min": 164587.81818181818,
+              "max": 164588.02597402598,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6399743591446279,
+              "min": 0.6399741409939982,
+              "max": 0.6399749166442498,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.875194805194805,
+              "min": 1.8697402597402597,
+              "max": 1.8755844155844155,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9875840307312389,
+              "min": 0.9873833213662938,
+              "max": 0.9887717376420648,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "candidate": {
+        "time_ns": {
+          "median": 1926239.298076923,
+          "min": 1900460.8846153845,
+          "max": 1935171.7115384615,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0176909200460522,
+          "min": 0.9896149348670862,
+          "max": 1.0219070297784092,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 17908478.915584415,
+              "min": 17908478.88961039,
+              "max": 17908478.974025972,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9567356447575408,
+              "min": 0.9567356443656084,
+              "max": 0.9567356485434958,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 8860384.824675325,
+              "min": 8804210.649350649,
+              "max": 8870738.337662337,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0268104298768606,
+              "min": 1.0198902246624084,
+              "max": 1.02968064947776,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 165433.9935064935,
+              "min": 165433.96753246753,
+              "max": 165434.05194805196,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.6432643296976641,
+              "min": 0.6432642774270259,
+              "max": 0.6432645894221274,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 1.9171428571428573,
+              "min": 1.90487012987013,
+              "max": 1.9196103896103895,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0094710568605327,
+              "min": 1.0042105983842258,
+              "max": 1.0139250926052956,
+              "samples": 3
+            }
+          }
+        }
+      }
+    },
+    "gts-read-1m": {
+      "before": {
+        "time_ns": {
+          "median": 3293027.0666666664,
+          "min": 3210367.8333333335,
+          "max": 3351902.033333333,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 1.0,
+          "min": 1.0,
+          "max": 1.0,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 10973600.197802197,
+              "min": 10972685.615384616,
+              "max": 10973745.923076924,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 8305133.67032967,
+              "min": 8168167.054945055,
+              "max": 8463223.648351649,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 319738.8791208791,
+              "min": 319713.1758241758,
+              "max": 319801.1208791209,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 3.296813186813187,
+              "min": 3.2637362637362637,
+              "max": 3.335384615384615,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0,
+              "min": 1.0,
+              "max": 1.0,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "checkpoint": {
+        "time_ns": {
+          "median": 3268097.533333333,
+          "min": 3234664.433333333,
+          "max": 3392446.1,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.9979721106389723,
+          "min": 0.9804132098147587,
+          "max": 1.0223614402032486,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 10629819.076923076,
+              "min": 10629406.725274725,
+              "max": 10631610.472527472,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9687527237651999,
+              "min": 0.968621544528557,
+              "max": 0.9688352300876408,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 8518967.846153846,
+              "min": 8358529.21978022,
+              "max": 8554915.846153846,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0300756358343188,
+              "min": 0.9876294857702573,
+              "max": 1.0429473086004544,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 275756.5934065934,
+              "min": 275476.52747252746,
+              "max": 275924.8791208791,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.8622752560983815,
+              "min": 0.8616364551207111,
+              "max": 0.8629694326806098,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 3.344175824175824,
+              "min": 3.324065934065934,
+              "max": 3.3873626373626373,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.01436618779374,
+              "min": 0.9966064839219821,
+              "max": 1.0378787878787878,
+              "samples": 3
+            }
+          }
+        }
+      },
+      "candidate": {
+        "time_ns": {
+          "median": 3264483.45,
+          "min": 3194200.033333333,
+          "max": 3381114.466666667,
+          "samples": 12
+        },
+        "paired_time_ratio": {
+          "median": 0.9969878160365329,
+          "min": 0.9728767629754017,
+          "max": 1.0162872302223727,
+          "samples": 12
+        },
+        "counters_per_operation": {
+          "instructions:u": {
+            "value": {
+              "median": 10558132.483516483,
+              "min": 10557622.23076923,
+              "max": 10558497.538461538,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.9621598324285829,
+              "min": 0.9621393428959691,
+              "max": 0.9621730359217225,
+              "samples": 3
+            }
+          },
+          "cycles:u": {
+            "value": {
+              "median": 8453404.384615384,
+              "min": 8363980.582417582,
+              "max": 8455472.57142857,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.018101924311705,
+              "min": 0.9882736094356438,
+              "max": 1.0349206043108097,
+              "samples": 3
+            }
+          },
+          "branches:u": {
+            "value": {
+              "median": 276209.5164835165,
+              "min": 276194.83516483515,
+              "max": 276340.5494505495,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 0.8639291007368933,
+              "min": 0.8636456132661019,
+              "max": 0.8642694632893779,
+              "samples": 3
+            }
+          },
+          "task-clock:u": {
+            "value": {
+              "median": 3.3278021978021974,
+              "min": 3.31989010989011,
+              "max": 3.3428571428571425,
+              "samples": 3
+            },
+            "paired_ratio": {
+              "median": 1.0093996866771107,
+              "min": 0.9953545071164998,
+              "max": 1.0242424242424242,
+              "samples": 3
+            }
+          }
+        }
+      }
+    }
+  }
+}

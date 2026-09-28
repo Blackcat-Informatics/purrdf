@@ -708,7 +708,7 @@ pub(crate) fn invocation_mode(
 /// A blank node is a non-distinguished variable and is never bound; a quoted triple is
 /// bound only when every component is, its nested triples walked over a work list.
 fn term_is_bound(term: &TermPattern, bound: &DetHashSet<Variable>) -> bool {
-    let mut pending: smallvec::SmallVec<[_; 8]> = smallvec::smallvec![term];
+    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
@@ -4381,8 +4381,8 @@ mod iterative_walk_tests {
     use super::*;
     use crate::agg_fn::{AggregateAccumulator, AlgebraicClass, CustomAggregate};
     use crate::property_fn::{PfArgs, PfCursor, PfRow, PropertyFunction};
-    use crate::test_rng::splitmix64_next;
     use crate::user_fn::{Arity, Volatility};
+    use purrdf_testkit::rng::splitmix64_next;
 
     // ── The recursive references ───────────────────────────────────────────────────
 

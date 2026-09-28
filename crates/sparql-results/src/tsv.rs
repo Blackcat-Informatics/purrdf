@@ -173,7 +173,6 @@ fn push_var_header<W: TextOut + ?Sized>(var: &str, out: &mut W) {
 mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
-    use pretty_assertions::assert_eq;
     use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, TermValue};
 

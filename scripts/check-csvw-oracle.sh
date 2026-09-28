@@ -17,5 +17,6 @@ tmp="$(build_scratch_dir csvw-oracle)"
 trap 'rm -rf "${tmp}"' EXIT
 
 cargo run --quiet --locked -p purrdf-rdf --example write_csvw_oracle_fixture -- "${tmp}"
-UV_CACHE_DIR="${UV_CACHE_DIR:-${TMPDIR:-/tmp}/purrdf-csvw-uv-cache}" \
+# uv's cache persists beside the build output too, not under $TMPDIR.
+UV_CACHE_DIR="${UV_CACHE_DIR:-${CARGO_TARGET_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/target}/uv-cache/csvw-oracle}" \
   uv run --no-project --locked --script scripts/csvw_oracle.py "${tmp}"

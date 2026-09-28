@@ -18,7 +18,7 @@ live in
 The engine-level speed comes from the IR design
 ([The Interned Dataset IR](../concepts/interned-dataset.md)): every term
 stored once in a string arena addressed by copyable `NonZeroU32` ids,
-fixed-key `ahash` everywhere hot, frozen `Box<[QuadRow]>` quad tables with
+fixed-key `FixedHasher` everywhere hot, frozen `Box<[QuadRow]>` quad tables with
 lazy ordinal permutation indexes (~4 bytes/quad per axis), and evaluation in
 `TermId` space so solution comparison is an integer compare.
 
@@ -51,6 +51,15 @@ the criterion bench merely watches for regressions.
 `NativeSparqlEngine::explain_query` exposes the chosen BGP join order so
 planner decisions can be audited without running the query
 ([SPARQL: Querying](../sparql/querying.md)).
+
+## Rust, LLVM and hardware paths
+
+The [Rust and SIMD optimization guide](https://github.com/Blackcat-Informatics/purrdf/blob/main/docs/design/purrdf-simd.md)
+explains the source formulations, mathematical contracts, assembly checks and
+measurement discipline. Its hashing and compression sections cover constant
+indices and rotations, bounded round expansion, SIMD chunk and parent batching,
+streaming state, direct output sinks and allocation floors. It distinguishes
+instruction coverage from throughput measured on the target hardware.
 
 ## Reproducing locally
 

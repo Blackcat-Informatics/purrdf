@@ -27,12 +27,23 @@ purrdf-core.workspace = true
 purrdf-alloc-probe.workspace = true
 purrdf-rdf.workspace = true
 purrdf-sparql-eval.workspace = true
+# The shared test support, and the `harness = false` runner `tests/roundtrip.rs`
+# runs on, natively and on wasm32-unknown-unknown alike. Path-only and
+# unpublished, so it is stripped from the packaged manifest; wasm32-clean, so it
+# needs no target gate.
+purrdf-testkit.workspace = true
 
 [target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
+# Native-only: criterion drives benches, which the wasm lane never runs, and it
+# is not wasm32-clean (it reaches for processes, terminals and wall-clock timing).
 criterion.workspace = true
 
-[target.'cfg(target_arch = "wasm32")'.dev-dependencies]
-wasm-bindgen-test.workspace = true
+# The frozen corpus crossed through the production RDF codecs, on every target:
+# `harness = false` on the shared runner, so `make wasm-test` runs the same named
+# cases in Node through scripts/wasm-test-runner.sh that `cargo test` runs natively.
+[[test]]
+name = "roundtrip"
+harness = false
 
 [[bench]]
 name = "ordered_json"

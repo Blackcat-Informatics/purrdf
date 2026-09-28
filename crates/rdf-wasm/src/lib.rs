@@ -156,11 +156,8 @@ pub fn install_stack_floor() {
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __purrdf_test_panic() -> u32 {
-    let armed = js_sys::Reflect::get(
-        &js_sys::global(),
-        &JsValue::from_str(panic_poison::TEST_PANIC_FLAG),
-    )
-    .is_ok_and(|flag| flag.as_bool() == Some(true));
+    let armed =
+        test_flag(panic_poison::TEST_PANIC_FLAG).is_ok_and(|flag| flag.as_bool() == Some(true));
     assert!(!armed, "the armed test panic fired");
     0
 }
@@ -179,11 +176,8 @@ pub extern "C" fn __purrdf_test_panic() -> u32 {
 #[doc(hidden)]
 #[unsafe(no_mangle)]
 pub extern "C" fn __purrdf_test_trap() -> u32 {
-    let armed = js_sys::Reflect::get(
-        &js_sys::global(),
-        &JsValue::from_str(panic_poison::TEST_TRAP_FLAG),
-    )
-    .is_ok_and(|flag| flag.as_bool() == Some(true));
+    let armed =
+        test_flag(panic_poison::TEST_TRAP_FLAG).is_ok_and(|flag| flag.as_bool() == Some(true));
     if armed {
         core::arch::wasm32::unreachable();
     }
@@ -207,4 +201,24 @@ mod tests {
     fn version_is_the_crate_semver() {
         assert_eq!(version(), env!("CARGO_PKG_VERSION"));
     }
+}
+
+#[cfg(test)]
+#[path = "../../rdf-core/tests/support/term_fixture.rs"]
+mod test_terms;
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen(thread_local_v2, js_name = globalThis)]
+    static GLOBAL_THIS: JsValue;
+
+    #[wasm_bindgen(catch, js_namespace = Reflect, js_name = get)]
+    fn global_property(target: &JsValue, name: &JsValue) -> Result<JsValue, JsValue>;
+}
+
+/// Read the current test flag; only the stable global object is cached.
+#[cfg(target_arch = "wasm32")]
+fn test_flag(name: &str) -> Result<JsValue, JsValue> {
+    GLOBAL_THIS.with(|global| global_property(global, &JsValue::from_str(name)))
 }

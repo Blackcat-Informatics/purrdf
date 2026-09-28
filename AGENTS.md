@@ -54,8 +54,12 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-retrieval` (`crates/retrieval`) | Composition layer over the ranked producers: plan → compile → execute → fuse, with a canonical BLAKE3 plan identity and an exact, content-addressed fusion law; producers, strata and weights are caller-supplied |
 | `purrdf-validate` (`crates/validate`) | Shared string boundary every language binding routes through |
 | `purrdf-json` (`crates/json`) | Ordered JSON byte-cover codec with queryable occurrences, strict reconstruction and caller-selected profile; sole runtime dependency is `purrdf-core` |
+| `purrdf-hash` (`crates/hash`) | Native, zero-dependency hashing: BLAKE3-256, MD5 (RFC 1321), SHA-1 (FIPS 180-4), SHA3-224/256/384/512 (FIPS 202) and CRC-32 (ISO-HDLC), streaming and one-shot; SHA-1 and CRC-32 run on the x86 SHA/`pclmulqdq` and Armv8 SHA1/CRC32 instructions when detected at run time, the portable source otherwise; the SPARQL hash built-ins, OpenPGP fingerprints and derivation identities compute through it. Also `fixed::FixedHasher`, the workspace's fixed-key table hasher: folded multiplies, or an AES accumulator on a build whose target enables AES (compile-time only, never run-time detection; wasm32 and 32-bit targets use the portable function), each function pinned by frozen self-vectors |
+| `purrdf-deflate` (`crates/deflate`) | Native DEFLATE (RFC 1951) and gzip (RFC 1952): a push-based streaming decoder that decodes every gzip member, verifies each trailer and refuses trailing garbage and output past a caller's limit, and a deterministic encoder (gzip `MTIME` 0, `XFL` 0, `OS` 255; the same bytes on every path and however the input is chunked); match copies, match-length compares and window hashing run on SSE2/AVX2, NEON or wasm simd128, portable code otherwise; sole runtime dependency is `purrdf-hash` (the CRC-32) |
+| `purrdf-jsonschema` (`crates/jsonschema`) | Native JSON Schema validation for drafts 2020-12, 2019-09 and 07, each schema resource in its own dialect: every vocabulary, `$dynamicRef`, `$recursiveRef`, `unevaluated*`, `$vocabulary`, the flag/basic/detailed output formats, exact decimal numbers, and ECMA-262 `/u` patterns using `regex` for regular expressions and a bounded explicit-stack matcher for lookaround, backreferences and scoped modifiers; `Schema::is_valid`/`evaluate` return typed errors on resource exhaustion; depends on `serde_json`, `regex` and `purrdf-iri` only |
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
-| `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
+| `purrdf-iri`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash` | Zero-dependency foundations |
+| `purrdf-deflate` | Leaf over `purrdf-hash` alone |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
 | `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, read via target-gated `libc`/`windows-sys` declarations with no C toolchain needed; wasm32 shadow stack against an installable floor) and the margin the SPARQL evaluator refuses at |
 | `purrdf-wasm`, `purrdf-capi`, `bindings/python` | WASM, C-ABI, and PyO3 bindings |
@@ -63,6 +67,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
 | `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
+| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, and the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property); depends on no `purrdf-*` crate (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
 
 ## 2. Hard constraints (violating these fails CI or review)
@@ -74,8 +79,9 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   semantics per consumer, which is forbidden. Do not add any other feature,
   optional dependency, or feature-gated behavior.
 * **Kernel ring-fence.** `purrdf-core` must never depend on oxigraph or PyO3.
-  `purrdf-iri`, `purrdf-xsd`, and `purrdf-events` must keep **zero runtime
-  dependencies**.
+  `purrdf-iri`, `purrdf-xsd`, `purrdf-events`, and `purrdf-hash` must keep
+  **zero runtime dependencies**, and `purrdf-deflate`'s only runtime
+  dependency is `purrdf-hash` (`make rdf-core-hygiene` checks both).
 * **Terminal ring-fence: a scanner's character classes are exact, in both
   directions.** They decide **token boundaries**, not merely membership, so
   substituting a Unicode property for a production's enumerated set does not
@@ -96,7 +102,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
   and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
   nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every release crate (all 26 publishable crates,
+* **Everything is wasm-able.** Every release crate (all 29 publishable crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -104,12 +110,14 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 * **Byte determinism.** Serializers and the GTS writer are byte-deterministic.
   If your change alters emitted bytes, you must update the affected goldens and
   say why in the PR. Never introduce iteration-order, time, or RNG dependence
-  into output paths (hashers are fixed-key `ahash` for this reason).
+  into output paths (hashers are the fixed-key `purrdf_hash::fixed::FixedHasher`
+  for this reason).
 * **Conformance corpora are the contract**: W3C SPARQL 1.1
   (`crates/sparql-conformance`), the W3C SHACL suite (`vectors/shacl/`), the
   shexTest v2.1.0 suite (`vectors/shexTest/`), the first-party SHACL corpus
   (`crates/shapes/corpus/`), RDFC-1.0 fixtures
-  (`crates/rdf/tests/fixtures/rdfc/`), and the **frozen** GTS vectors in
+  (`crates/rdf/tests/fixtures/rdfc/`), the official JSON-Schema-Test-Suite
+  (`crates/jsonschema/tests/suite/`), and the **frozen** GTS vectors in
   `vectors/` (shared byte-exact with the other GTS engines — never regenerate or
   "fix" them here; the GTS wire format is governed in `gmeow-gts`). Harnesses
   assert exact counts and enforce XPASS discipline on their xfail ledgers —
@@ -206,7 +214,8 @@ interner). When touching parse/serialize/eval paths:
   assertion. Add or extend a bench when you claim a win.
 * Avoid per-token/per-term `String` allocation; move values out of buffers
   instead of cloning; pre-size collections in parse loops.
-* Hot maps use fixed-key `ahash` (see `crates/rdf-core/src/ir/builder.rs` for
+* Hot maps use the fixed-key `purrdf_hash::fixed::FixedHasher` (`FixedState`,
+  or `purrdf_core::FastHasher`; see `crates/rdf-core/src/ir/builder.rs` for
   the canonical store-once interner pattern) — never default SipHash in a hot
   path, and never a randomly-seeded hasher in an output path.
 
@@ -231,10 +240,13 @@ asserted against the graph Cargo actually resolves, not against the manifest:
 Reading effective values is deliberate — it catches a `[profile.*]` table in
 `$CARGO_HOME/config.toml` or anywhere on the walk up from the workspace (your
 home directory is on that walk), a `CARGO_PROFILE_*` variable, or a `--config`
-override, none of which the manifest can see. Do not add a `[profile.test]`
-block (`test` inherits `dev`), and do not set `lto` or `codegen-units = 1` there:
-both serialize codegen and inflate link memory, which is what a
-constantly-rebuilt, cold-in-CI gate wants least.
+override, none of which the manifest can see. The `[profile.test]` block
+exists and sets only `debug = 0` (test binaries carry no debug info). It must
+not set `opt-level`, `debug-assertions` or `overflow-checks` — `test` inherits
+those from `dev`, and `scripts/check-build-profiles.py` asserts the inherited
+values — and neither it nor `[profile.dev]` may set `lto` or
+`codegen-units = 1`: both serialize codegen and inflate link memory, which is
+what a constantly-rebuilt, cold-in-CI gate wants least.
 
 ## 5. Brand & naming
 
@@ -246,16 +258,17 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (26 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (29 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Eight members never reach
+is single-sourced in `[workspace.package]`. Nine members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,
-`purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`, `wasm-link`, and
-`purrdf-python` (PyPI via maturin instead). `purrdf-alloc-probe` is a
-dev-dependency of published crates, so its root `[workspace.dependencies]` entry
-is path-only with **no `version`** — cargo then strips it from the packaged
-manifest, which is the only way `cargo publish`'s dev-dependency-resolving
-verification step can succeed.
+`purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`,
+`purrdf-testkit`, `wasm-link`, and `purrdf-python` (PyPI via maturin instead).
+`purrdf-alloc-probe` and `purrdf-testkit` are dev-dependencies of published
+crates, so their root `[workspace.dependencies]` entries are path-only with
+**no `version`** — cargo then strips them from the packaged manifest, which is
+the only way `cargo publish`'s dev-dependency-resolving verification step can
+succeed.
 
 ## 7. Provenance
 

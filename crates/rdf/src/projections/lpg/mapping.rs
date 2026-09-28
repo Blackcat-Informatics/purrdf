@@ -854,7 +854,6 @@ mod tests {
     use super::super::model::{
         LpgExecutionLimits, LpgIriSelection, LpgNamedGraphSelection, LpgScope,
     };
-    use proptest::prelude::*;
     use purrdf_core::loss::{
         LOSS_LPG_ANNOTATION_SIDEBAND, LOSS_LPG_BLANK_SCOPE_SIDEBAND, LOSS_LPG_EDGE_ID_DROPPED,
         LOSS_LPG_EDGE_SEMANTICS_LOWERED, LOSS_LPG_EDGE_TYPE_INTERPRETED,
@@ -866,6 +865,7 @@ mod tests {
     use purrdf_core::{
         PackBuilder, PackView, RdfTextDirection, assert_ledger_complete, datasets_isomorphic,
     };
+    use purrdf_testkit::prop::prelude::*;
 
     use super::*;
 
@@ -1246,12 +1246,12 @@ mod tests {
         assert_eq!(lifted.dataset.named_graphs().count(), 2);
     }
 
-    proptest! {
-        #![proptest_config(ProptestConfig::with_cases(48))]
+    prop_test! {
+        #![prop_config(Config::with_cases(48))]
 
         #[test]
         fn arbitrary_literal_and_blank_identity_round_trip_stably(
-            lexical in "[ -~]{0,32}",
+            lexical in prop::string::regex("[ -~]{0,32}"),
             integer in any::<i64>(),
             scope in any::<u16>(),
             named in any::<bool>(),

@@ -16,7 +16,6 @@
 //! plain literals exactly the content, split chains present in the
 //! graphs that claim to exercise them.
 
-use pretty_assertions::assert_eq;
 use purrdf_core::ir::RdfDataset;
 use purrdf_markdown::{
     Claim, ClaimKind, DecodeError, Profile, SourceDocument, Vocabulary, decode_document,

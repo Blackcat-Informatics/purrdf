@@ -401,7 +401,7 @@ narrowed rather than deleted. The **evaluation** tier ships exactly one clock re
 caller obligation — requiring every caller to hand-roll a `StopSignal` would leave two
 callers with two different notions of "expired", which is the optionality this
 document exists to refuse. It is target-split (`std::time::Instant` natively,
-`js_sys::Date::now()` on `wasm32-unknown-unknown`), so it costs the wasm build
+the host's `Date.now()` through `wasm-bindgen` on `wasm32-unknown-unknown`), so it costs the wasm build
 nothing, and it latches: the first poll that observes expiry — or that observes the
 clock stepping backwards behind the start snapshot, which on a steppable wall clock
 would otherwise make a deadline un-trippable — sets a bit every later poll
@@ -710,8 +710,8 @@ vocabulary or policy defaults.
 
 Determinism in PurRDF comes from **id-sorting and BTree egress** and from applying
 **canonical ordering before serialization** — never from hash iteration order. The
-interners use fixed-key ahash rather than a randomized hasher (getrandom is absent
-on wasm32, and ids are insertion-ordered), so hash-map iteration order is never a
+interners use the fixed-key `FixedHasher` rather than a randomized hasher (wasm32 has no
+entropy source, and ids are insertion-ordered), so hash-map iteration order is never a
 source of observable order: every serializer and the GTS writer sort or fold
 through ordered structures first. The `TermId` niche, `GraphMatch`, the by-value
 mutation boundary (C4), and the by-value page translation (G1) all preserve this:

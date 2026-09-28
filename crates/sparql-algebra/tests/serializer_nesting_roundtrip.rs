@@ -12,12 +12,12 @@
 //! forwarded and re-parsed on the test thread's own stack — nothing but memory bounds
 //! how deep either the parse or the rendering goes.
 
-use proptest::prelude::*;
 use purrdf_sparql_algebra::{
     ArithmeticOperator, Child, Expression, Function, GraphPattern, Literal, NamedNode,
     NamedNodePattern, NegatedPathElement, PropertyPathExpression, Query, SparqlParser, TermPattern,
     TriplePattern, Variable, pattern_to_select_query,
 };
+use purrdf_testkit::prop::prelude::*;
 
 const EX: &str = "http://example.org/";
 const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
@@ -684,8 +684,8 @@ fn path_tree() -> impl Strategy<Value = PropertyPathExpression> {
     })
 }
 
-proptest! {
-    #![proptest_config(ProptestConfig::with_cases(512))]
+prop_test! {
+    #![prop_config(Config::with_cases(512))]
 
     /// Every generated expression tree, filtered over a triple, is rendered into
     /// text the parser admits and re-parses to the identical tree.

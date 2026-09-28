@@ -241,10 +241,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             assert_eq!(show(&value), reference(&value), "seed {seed}");
         }
@@ -258,7 +258,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let shown = show(&purrdf_core::test_rng::triple_chain(LEVELS));
+                let shown = show(&crate::test_terms::triple_chain(LEVELS));
                 let level = "<<<http://example.org/s> <http://example.org/p> ".len() + ">>".len();
                 assert_eq!(shown.len(), LEVELS * level + "<http://example.org/o>".len());
             })

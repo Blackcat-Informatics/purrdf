@@ -44,7 +44,7 @@
 //! exact matching the note requires, with no value-space coercion.
 
 use ::purrdf::{FastSet, IdSet, TermId};
-use smallvec::SmallVec;
+use purrdf_core::SmallVec;
 
 use crate::data::{GraphFilter, ShaclData, quads_for_pattern_ids};
 use crate::data_view::ShaclRead;

@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
-use ::csv::{Reader, ReaderBuilder, StringRecord, Terminator, Trim, Writer, WriterBuilder};
+use purrdf_core::csv::{CsvError, Dialect, Reader, StringRecord, Writer};
 use purrdf_core::{DatasetView, LossLedger};
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -910,12 +910,8 @@ fn neo4j_node_reader<'a>(
     bytes: &'a [u8],
     path: &str,
     property_map: &BTreeMap<String, String>,
-) -> Result<(Reader<&'a [u8]>, Vec<String>), ProjectionError> {
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .flexible(false)
-        .trim(Trim::None)
-        .from_reader(bytes);
+) -> Result<(Reader<'a>, Vec<String>), ProjectionError> {
+    let mut reader = Reader::new(Dialect::LPG_CSV, bytes);
     let actual = reader
         .headers()
         .map_err(|error| csv_read_error(&error, path))?;
@@ -1203,9 +1199,7 @@ where
     S: ProjectionArtifactSink,
     O: LpgProgressObserver,
 {
-    let mut writer = WriterBuilder::new()
-        .terminator(Terminator::Any(b'\n'))
-        .from_writer(output);
+    let mut writer = Writer::new(Dialect::LPG_CSV, output);
     writer
         .write_record(header)
         .map_err(|error| csv_stream_error(&error, "write CSV header", path))?;
@@ -1219,7 +1213,7 @@ fn write_streaming_record<I, T, W>(
 ) -> Result<(), ProjectionError>
 where
     I: IntoIterator<Item = T>,
-    T: AsRef<[u8]>,
+    T: AsRef<str>,
     W: io::Write,
 {
     writer
@@ -1236,7 +1230,7 @@ fn finish_streaming_csv<W: io::Write>(
         .map_err(|error| ProjectionError::integrity(format!("flush CSV: {error}")).at_path(path))
 }
 
-fn csv_stream_error(error: &::csv::Error, action: &str, path: &str) -> ProjectionError {
+fn csv_stream_error(error: &CsvError, action: &str, path: &str) -> ProjectionError {
     ProjectionError::integrity(format!("{action}: {error}")).at_path(path)
 }
 
@@ -1244,12 +1238,8 @@ fn csv_reader<'a>(
     bytes: &'a [u8],
     expected_header: &[&str],
     path: &str,
-) -> Result<Reader<&'a [u8]>, ProjectionError> {
-    let mut reader = ReaderBuilder::new()
-        .has_headers(true)
-        .flexible(false)
-        .trim(Trim::None)
-        .from_reader(bytes);
+) -> Result<Reader<'a>, ProjectionError> {
+    let mut reader = Reader::new(Dialect::LPG_CSV, bytes);
     let actual = reader
         .headers()
         .map_err(|error| csv_read_error(&error, path))?;
@@ -1268,7 +1258,7 @@ fn field<'a>(row: &'a StringRecord, index: usize, path: &str) -> Result<&'a str,
     })
 }
 
-fn csv_read_error(error: &::csv::Error, path: &str) -> ProjectionError {
+fn csv_read_error(error: &CsvError, path: &str) -> ProjectionError {
     ProjectionError::syntax(format!("read CSV: {error}")).at_path(path)
 }
 
@@ -1664,7 +1654,7 @@ mod tests {
             .is_err()
         );
 
-        let mut reader = ReaderBuilder::new().from_reader(nodes);
+        let mut reader = Reader::new(Dialect::LPG_CSV, nodes);
         let header = reader.headers().expect("header").clone();
         let mut rows: Vec<Vec<String>> = reader
             .records()
@@ -1676,10 +1666,8 @@ mod tests {
             })
             .collect();
         rows[0][2] = "{}".to_owned();
-        let mut writer = WriterBuilder::new()
-            .terminator(Terminator::Any(b'\n'))
-            .from_writer(Vec::new());
-        writer.write_record(&header).expect("header");
+        let mut writer = Writer::new(Dialect::LPG_CSV, Vec::new());
+        writer.write_record(header.iter()).expect("header");
         for row in rows {
             writer.write_record(row).expect("row");
         }

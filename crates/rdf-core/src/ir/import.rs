@@ -265,7 +265,7 @@ mod term_walk_tests {
     use super::{DatasetImporter, lookup_native_term};
     use crate::backend::TermFactory as _;
     use crate::hash::FastMap;
-    use crate::test_rng::TermShape;
+    use crate::test_terms::TermShape;
     use crate::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue};
 
     fn reference_lookup(
@@ -340,9 +340,11 @@ mod term_walk_tests {
         let mut found_any = 0;
         for seed in 0..300_u64 {
             let (mut state, mut budget) = (seed, 8);
-            let value = crate::test_rng::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let value =
+                crate::test_terms::term_value(&mut state, &mut budget, TermShape::WellFormed);
             let (mut state, mut budget) = (seed + 9_000, 8);
-            let other = crate::test_rng::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let other =
+                crate::test_terms::term_value(&mut state, &mut budget, TermShape::WellFormed);
             let (source, id) = holding(&value);
             for (target, _) in [holding(&value), holding(&other)] {
                 let (mut memo, mut expected_memo) = (FastMap::default(), FastMap::default());

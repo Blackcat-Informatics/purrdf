@@ -52,7 +52,7 @@
 use core::cmp::Ordering;
 use core::fmt;
 
-use smallvec::{SmallVec, smallvec};
+use purrdf_core::{SmallVec, smallvec};
 
 /// Little-endian base-2<sup>64</sup> magnitude, least significant limb first.
 ///

@@ -704,8 +704,8 @@ pub(crate) fn visit_exists_patterns<'a, F>(expr: &'a Expression, visit: &mut F) 
 where
     F: FnMut(&'a GraphPattern) -> bool,
 {
-    let mut pending: smallvec::SmallVec<[ExpressionPart<'a>; 16]> =
-        smallvec::smallvec![ExpressionPart::Sub(expr)];
+    let mut pending: purrdf_core::SmallVec<[ExpressionPart<'a>; 16]> =
+        purrdf_core::smallvec![ExpressionPart::Sub(expr)];
     while let Some(part) = pending.pop() {
         match part {
             ExpressionPart::Sub(sub) => {
@@ -756,7 +756,7 @@ where
 /// variant two edits of which only one gets found — the exact failure this module exists
 /// to prevent.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub(crate) struct ChildEdges(smallvec::SmallVec<[ChildEdge; 4]>);
+pub(crate) struct ChildEdges(purrdf_core::SmallVec<[ChildEdge; 4]>);
 
 impl ChildEdges {
     /// The edge to the child at `ordinal`.
@@ -772,7 +772,7 @@ impl ChildEdges {
 
 /// The classified edges of `pattern`'s children, in [`visit_classified_children`] order.
 pub(crate) fn child_edges(pattern: &GraphPattern) -> ChildEdges {
-    let mut edges = smallvec::SmallVec::new();
+    let mut edges = purrdf_core::SmallVec::new();
     visit_classified_children(pattern, &mut |_child, edge| {
         edges.push(edge);
         false
@@ -800,11 +800,11 @@ pub(crate) fn walk_spine<'a, F>(root: &'a GraphPattern, visit: &mut F)
 where
     F: FnMut(&'a GraphPattern, SpineContext, usize),
 {
-    let mut stack: smallvec::SmallVec<[(&'a GraphPattern, SpineContext, usize); 16]> =
-        smallvec::smallvec![(root, SpineContext::ROOT, 0_usize)];
+    let mut stack: purrdf_core::SmallVec<[(&'a GraphPattern, SpineContext, usize); 16]> =
+        purrdf_core::smallvec![(root, SpineContext::ROOT, 0_usize)];
     while let Some((node, context, depth)) = stack.pop() {
         visit(node, context, depth);
-        let mut children = smallvec::SmallVec::<[(&GraphPattern, ChildEdge); 4]>::new();
+        let mut children = purrdf_core::SmallVec::<[(&GraphPattern, ChildEdge); 4]>::new();
         visit_classified_children(node, &mut |child, edge| {
             children.push((child, edge));
             false
@@ -1222,7 +1222,7 @@ fn cap_ceilings<'a>(
             recorded(node, NodeId::from_index(out.len()));
         }
         out.push(kept);
-        let mut children = smallvec::SmallVec::<[(&GraphPattern, ChildEdge, usize); 4]>::new();
+        let mut children = purrdf_core::SmallVec::<[(&GraphPattern, ChildEdge, usize); 4]>::new();
         visit_classified_children(node, &mut |child, edge| {
             let ordinal = children.len();
             children.push((child, edge, ordinal));
@@ -2922,7 +2922,7 @@ fn expr_probe_step<'p, 't>(
     table: &'t NodeAnalysisTable,
     pending: &mut Vec<ProbeStep<'p, 't>>,
 ) -> bool {
-    let mut operands: smallvec::SmallVec<[&'p Expression; 4]> = smallvec::SmallVec::new();
+    let mut operands: purrdf_core::SmallVec<[&'p Expression; 4]> = purrdf_core::SmallVec::new();
     let admitted = match expr {
         Expression::NamedNode(_) | Expression::Literal(_) => true,
         Expression::Variable(v) | Expression::Bound(v) => {
@@ -2989,7 +2989,6 @@ fn expr_probe_step<'p, 't>(
 mod tests {
     use std::collections::BTreeSet;
 
-    use pretty_assertions::assert_eq;
     use purrdf_sparql_algebra::{
         AggregateExpression, AggregateFunction, GroundTerm, Literal, NamedNode, NamedNodePattern,
         PropertyPathExpression, TermPattern, TriplePattern, Variable,
@@ -4146,7 +4145,6 @@ mod tests {
 /// stack holds a few hundred frames of any recursion.
 #[cfg(test)]
 mod iterative_walks {
-    use pretty_assertions::assert_eq;
     use purrdf_sparql_algebra::{
         AggregateExpression, AggregateFunction, Args, ArithmeticOperator, BlankNode, Chain, Child,
         GroundTerm, Literal, NamedNode, NamedNodePattern, NonEmpty, PropertyFunctionCall,
@@ -4154,7 +4152,7 @@ mod iterative_walks {
     };
 
     use super::*;
-    use crate::test_rng::splitmix64_next;
+    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 

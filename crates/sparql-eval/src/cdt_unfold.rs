@@ -212,7 +212,7 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
                 }
                 IngestVerdict::Admitted => {}
             }
-            let mut row: Solution<D::Id> = smallvec::smallvec![None; width];
+            let mut row: Solution<D::Id> = purrdf_core::smallvec![None; width];
             row[..in_width].copy_from_slice(mu);
             rows.push(row);
             continue;
@@ -229,7 +229,7 @@ pub(crate) fn eval_unfold<D: DatasetView + Sync>(
                 }
                 IngestVerdict::Admitted => {}
             }
-            let mut row: Solution<D::Id> = smallvec::smallvec![None; width];
+            let mut row: Solution<D::Id> = purrdf_core::smallvec![None; width];
             row[..in_width].copy_from_slice(mu);
             if !bind(&mut row, Some(element_col), element_term, ctx)
                 || !bind(&mut row, companion_col, companion_term, ctx)
@@ -428,7 +428,7 @@ mod tests {
     fn a_refused_tag_costs_its_own_binding_and_nothing_else() {
         let dataset = RdfDatasetBuilder::new().freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&*dataset);
-        let mut row: Solution<_> = smallvec::smallvec![None; 2];
+        let mut row: Solution<_> = purrdf_core::smallvec![None; 2];
 
         assert!(bind(
             &mut row,
@@ -462,7 +462,7 @@ mod tests {
             "abcdefgh",
             "en-x-cantbethislong",
         ] {
-            let mut row: Solution<_> = smallvec::smallvec![None; 1];
+            let mut row: Solution<_> = purrdf_core::smallvec![None; 1];
             assert!(bind(&mut row, Some(0), Some(tagged(tag)), &mut ctx));
             assert!(row[0].is_some(), "{tag} must still bind");
         }
@@ -475,7 +475,7 @@ mod tests {
     fn a_disagreeing_pre_bound_target_is_still_a_non_match() {
         let dataset = RdfDatasetBuilder::new().freeze().expect("freeze");
         let mut ctx = EvalCtx::new(&*dataset);
-        let mut row: Solution<_> = smallvec::smallvec![None; 1];
+        let mut row: Solution<_> = purrdf_core::smallvec![None; 1];
         assert!(bind(
             &mut row,
             Some(0),

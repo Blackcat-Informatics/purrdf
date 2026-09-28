@@ -170,7 +170,7 @@ pub(crate) fn value_bytes(value: &TermValue) -> u64 {
     // stack, so a value of any nesting costs no more machine stack; saturating addition
     // of unsigned terms is associative, so the total is the same in any visit order.
     let mut total: u64 = 0;
-    let mut pending: smallvec::SmallVec<[&TermValue; 8]> = smallvec::smallvec![value];
+    let mut pending: purrdf_core::SmallVec<[&TermValue; 8]> = purrdf_core::smallvec![value];
     while let Some(term) = pending.pop() {
         let payload = match term {
             TermValue::Iri(iri) => iri.len() as u64,
@@ -205,7 +205,7 @@ fn is_query_scoped_blank(value: &TermValue) -> bool {
 }
 
 fn hash_value(value: &TermValue) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     value.hash(&mut hasher);
     hasher.finish()
 }
@@ -239,7 +239,7 @@ pub(crate) const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
 /// before the next, over a work list rather than the call stack; the first tag that
 /// fails the grammar ends the walk.
 pub(crate) fn language_tags_well_formed(value: &TermValue) -> bool {
-    let mut pending: smallvec::SmallVec<[&TermValue; 8]> = smallvec::smallvec![value];
+    let mut pending: purrdf_core::SmallVec<[&TermValue; 8]> = purrdf_core::smallvec![value];
     while let Some(term) = pending.pop() {
         match term {
             TermValue::Iri(_) | TermValue::Blank { .. } => {}
@@ -570,8 +570,9 @@ pub(crate) fn term_id_to_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermVa
     }
     // Inline until a term nests deeper than a quoted triple of quoted triples, so a
     // plain term costs only its own value.
-    let mut steps: smallvec::SmallVec<[Step<D::Id>; 8]> = smallvec::smallvec![Step::Resolve(id)];
-    let mut values: smallvec::SmallVec<[TermValue; 3]> = smallvec::SmallVec::new();
+    let mut steps: purrdf_core::SmallVec<[Step<D::Id>; 8]> =
+        purrdf_core::smallvec![Step::Resolve(id)];
+    let mut values: purrdf_core::SmallVec<[TermValue; 3]> = purrdf_core::SmallVec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Resolve(id) => match dataset.resolve(id) {
@@ -625,7 +626,6 @@ pub(crate) fn term_id_to_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermVa
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
     use purrdf_core::TermBox;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
 
@@ -850,7 +850,7 @@ mod term_walk_tests {
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
     }

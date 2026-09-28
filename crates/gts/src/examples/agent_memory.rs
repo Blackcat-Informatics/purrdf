@@ -17,8 +17,6 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ciborium::value::Value;
-use time::OffsetDateTime;
-use time::format_description::well_known::Rfc3339;
 
 use crate::model::{Graph, Term, TermKind};
 use crate::reader::{SegmentAppendState, read, read_file_segments, segment_append_state};
@@ -879,14 +877,17 @@ impl Memory {
         file_len: u64,
         parts: impl IntoIterator<Item = &'a str>,
     ) -> String {
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = purrdf_hash::blake3::RecordHasher::new();
         hasher.update(kind.as_bytes());
         hasher.update(&file_len.to_le_bytes());
         for part in parts {
             hasher.update(&[0]);
             hasher.update(part.as_bytes());
         }
-        format!("urn:purrdf:{kind}:blake3:{}", hasher.finalize().to_hex())
+        format!(
+            "urn:purrdf:{kind}:blake3:{}",
+            purrdf_hash::hex::Lower(hasher.finalize().as_bytes())
+        )
     }
 }
 
@@ -1093,7 +1094,12 @@ fn term_value(graph: &Graph, term_id: usize) -> &str {
 }
 
 fn now_rfc3339() -> String {
-    OffsetDateTime::now_utc()
-        .format(&Rfc3339)
-        .unwrap_or_else(|_| "1970-01-01T00:00:00Z".to_string())
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .ok()
+        .and_then(|since| {
+            let secs = i64::try_from(since.as_secs()).ok()?;
+            crate::rfc3339::format(secs, since.subsec_nanos()).ok()
+        })
+        .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }

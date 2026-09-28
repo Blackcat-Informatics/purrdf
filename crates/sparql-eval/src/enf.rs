@@ -570,14 +570,14 @@ fn map_spine(original: &GraphPattern, normalized: &GraphPattern, map: &mut Subst
                         counts_rows: true,
                     },
                 );
-                let mut original_children: smallvec::SmallVec<[&GraphPattern; 4]> =
-                    smallvec::SmallVec::new();
+                let mut original_children: purrdf_core::SmallVec<[&GraphPattern; 4]> =
+                    purrdf_core::SmallVec::new();
                 soundness::visit_classified_children(original, &mut |child, _edge| {
                     original_children.push(child);
                     false
                 });
-                let mut normalized_children: smallvec::SmallVec<[&GraphPattern; 4]> =
-                    smallvec::SmallVec::new();
+                let mut normalized_children: purrdf_core::SmallVec<[&GraphPattern; 4]> =
+                    purrdf_core::SmallVec::new();
                 soundness::visit_classified_children(normalized, &mut |child, _edge| {
                     normalized_children.push(child);
                     false
@@ -1196,7 +1196,7 @@ mod iterative_walk_tests {
     use super::{Enf, copied, ledger_source_map, left_join_erasable, normalize, order_by_erasable};
     use crate::expr::{SubstitutionSource, SubstitutionSourceMap};
     use crate::governor::soundness;
-    use crate::test_rng::splitmix64_next;
+    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 

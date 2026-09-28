@@ -90,6 +90,8 @@
 #![deny(unsafe_code)]
 
 use core::cell::Cell;
+use core::marker::PhantomData;
+use std::rc::Rc;
 
 #[cfg(not(target_arch = "wasm32"))]
 #[allow(
@@ -152,7 +154,8 @@ pub const MARGIN_BYTES: usize = 128 * 1024;
 /// evaluator's guard existed, is refused, where 63 nested `FILTER NOT EXISTS` used to
 /// trap and corrupt the instance — and an asynchronous job, which runs on a heap region
 /// exactly as large as that shadow stack with the region's base installed as its floor,
-/// is refused here at the same depth, with the same typed error. The host engine's own
+/// is refused here with the same typed error; compiler frame sizes can make the two
+/// lanes reach that refusal at different depths. The host engine's own
 /// call stack, which this crate cannot read, the SPARQL evaluator bounds with a budget of
 /// its own.
 #[cfg(target_arch = "wasm32")]
@@ -327,6 +330,7 @@ pub fn reserve(bytes: usize) -> Reserve {
         return Reserve {
             bytes: 0,
             scoped: false,
+            thread_bound: PhantomData,
         };
     }
     FLOOR.with(|cell| cell.set(floor.saturating_add(bytes)));
@@ -335,6 +339,7 @@ pub fn reserve(bytes: usize) -> Reserve {
     Reserve {
         bytes,
         scoped: true,
+        thread_bound: PhantomData,
     }
 }
 
@@ -398,7 +403,18 @@ pub fn scoped() -> bool {
 }
 
 /// Stack kept out of reach of every check while it lives; see [`reserve`]. Dropping it
-/// gives the bytes back.
+/// gives the bytes back. The guard belongs to the creating thread, whose context it
+/// updates when dropped; it cannot move to another thread or be shared across threads.
+///
+/// ```compile_fail,E0277
+/// let guard = purrdf_stack::reserve(4096);
+/// std::thread::spawn(move || drop(guard));
+/// ```
+///
+/// ```compile_fail,E0277
+/// fn requires_sync<T: Sync>() {}
+/// requires_sync::<purrdf_stack::Reserve>();
+/// ```
 #[derive(Debug)]
 #[must_use = "the stack is reserved only while the `Reserve` lives"]
 pub struct Reserve {
@@ -406,6 +422,8 @@ pub struct Reserve {
     bytes: usize,
     /// Whether it opened a scope (see [`reserve`]).
     scoped: bool,
+    /// Dropping a reservation updates the creating thread's state.
+    thread_bound: PhantomData<Rc<()>>,
 }
 
 impl Reserve {

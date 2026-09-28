@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 use std::sync::Arc;
 
-use csv::{ReaderBuilder, StringRecord, Terminator, Writer, WriterBuilder};
+use purrdf_core::csv::{Dialect, Reader, StringRecord, Writer};
 use purrdf_core::{
     BlankScope, DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId,
 };
@@ -1379,9 +1379,7 @@ where
     I: IntoIterator<Item = Vec<String>>,
 {
     let sink = LimitedCsvBytes::new(limits.max_artifact_bytes());
-    let mut writer = WriterBuilder::new()
-        .terminator(Terminator::Any(b'\n'))
-        .from_writer(sink);
+    let mut writer = Writer::new(Dialect::RFC4180, sink);
     write_csv_record(&mut writer, header, path)?;
     for row in rows {
         write_csv_record(&mut writer, row, path)?;
@@ -1389,10 +1387,9 @@ where
     writer
         .flush()
         .map_err(|error| csv_write_error(error, path))?;
-    let sink = writer.into_inner().map_err(|error| {
-        let error = error.into_error();
-        csv_write_error(error, path)
-    })?;
+    let sink = writer
+        .into_inner()
+        .map_err(|error| csv_write_error(error, path))?;
     if sink.exceeded {
         return Err(ProjectionError::limit(
             "exact CSVW CSV exceeds the configured artifact byte limit",
@@ -1409,7 +1406,7 @@ fn write_csv_record<I, T>(
 ) -> Result<(), ProjectionError>
 where
     I: IntoIterator<Item = T>,
-    T: AsRef<[u8]>,
+    T: AsRef<str>,
 {
     writer
         .write_record(record)
@@ -1426,10 +1423,7 @@ fn read_records(
     path: &str,
     budget: &mut RecordBudget,
 ) -> Result<Vec<StringRecord>, ProjectionError> {
-    let mut reader = ReaderBuilder::new()
-        .has_headers(false)
-        .flexible(false)
-        .from_reader(bytes);
+    let mut reader = Reader::new(Dialect::RFC4180, bytes);
     let mut records = reader.records();
     let header = records
         .next()

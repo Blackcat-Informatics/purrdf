@@ -5838,8 +5838,8 @@ mod tests {
         })
     }
 
-    /// Validate a JSON-LD instance node against the emitted `schema_json` with a
-    /// trusted external JSON-Schema (draft 2020-12) validator, returning whether
+    /// Validate a JSON-LD instance node against the emitted `schema_json` with an
+    /// independent JSON Schema (draft 2020-12) validator, returning whether
     /// the instance is ACCEPTED.
     ///
     /// This is the production-surface observation the acceptance criteria demand:
@@ -5847,18 +5847,61 @@ mod tests {
     /// downstream consumer (e.g. gmeow-ontology) would, rather than asserting the
     /// schema's JSON shape.
     fn validates(schema_json: &str, instance: &Value) -> bool {
-        use boon::{Compiler, Schemas};
+        emitted_schema(metaschemas(), schema_json)
+            .expect("emitted schema compiles under draft 2020-12")
+            .is_valid(instance)
+            .expect("emitted schema evaluation completes")
+    }
+
+    /// The draft 2020-12 meta-schemas the emitted schema declares, from the
+    /// workspace's test data (`purrdf-jsonschema` carries none).
+    fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
+        static SET: std::sync::OnceLock<purrdf_jsonschema::Metaschemas> =
+            std::sync::OnceLock::new();
+        SET.get_or_init(|| {
+            purrdf_jsonschema::Metaschemas::new(
+                purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
+                    .iter()
+                    .map(|&(uri, text)| {
+                        let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                        (uri, document)
+                    }),
+            )
+            .expect("the draft 2020-12 meta-schemas")
+        })
+    }
+
+    /// Compile an emitted `schema_json` against `metaschemas`.
+    fn emitted_schema(
+        metaschemas: &purrdf_jsonschema::Metaschemas,
+        schema_json: &str,
+    ) -> Result<purrdf_jsonschema::Schema, purrdf_jsonschema::SchemaError> {
         let schema_val: Value = serde_json::from_str(schema_json).expect("schema is valid JSON");
-        let loc = "mem:///instance.schema.json";
-        let mut schemas = Schemas::new();
-        let mut compiler = Compiler::new();
-        compiler
-            .add_resource(loc, schema_val)
-            .expect("schema registers as a boon resource");
-        let sch = compiler
-            .compile(loc, &mut schemas)
-            .expect("emitted schema compiles under draft 2020-12");
-        schemas.validate(instance, sch).is_ok()
+        purrdf_jsonschema::Schema::from_document(
+            metaschemas,
+            "mem:///instance.schema.json",
+            schema_val,
+        )
+    }
+
+    #[test]
+    fn emitted_schema_compiles_with_its_metaschema_and_names_it_when_absent() {
+        let compiled = compile_ttl(
+            r"
+            meta:PersonShape a sh:NodeShape ;
+                sh:targetClass meta:Person ;
+                sh:property [ sh:path meta:name ; sh:maxCount 1 ] .",
+        );
+        emitted_schema(metaschemas(), &compiled.schema_json)
+            .expect("compiles with the 2020-12 meta-schemas");
+        let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, Value)>::new())
+            .expect("an empty set is a set");
+        match emitted_schema(&none, &compiled.schema_json) {
+            Err(purrdf_jsonschema::SchemaError::MissingMetaschema { metaschema, .. }) => {
+                assert_eq!(metaschema, "https://json-schema.org/draft/2020-12/schema");
+            }
+            other => panic!("expected the missing meta-schema to be named, got {other:?}"),
+        }
     }
 
     #[test]
@@ -7433,7 +7476,7 @@ mod tests {
                 .contains("\"not\""),
             "the vacuous `not` must be GONE from the def, got {pat:?}"
         );
-        // Behavioural (boon): the false-reject is gone — the constraint is
+        // Behavioural (a real validator): the false-reject is gone — the constraint is
         // honestly dropped, so every array-valued node is ACCEPTED.
         assert!(
             validates(
@@ -7484,7 +7527,7 @@ mod tests {
                 .contains("\"not\""),
             "the vacuous `not` must be GONE from the def, got {num:?}"
         );
-        // Behavioural (boon): a node with meta:p = [5] is ACCEPTED — the
+        // Behavioural (a real validator): a node with meta:p = [5] is ACCEPTED — the
         // false-reject is gone.
         assert!(
             validates(
@@ -7529,7 +7572,7 @@ mod tests {
                 .contains("\"not\""),
             "the unsound `not` must be GONE from the def, got {person:?}"
         );
-        // Behavioural (boon): the multivalue + absent cases that expose the
+        // Behavioural (a real validator): the multivalue + absent cases that expose the
         // existential axis — single-value alone would NOT catch it. With the
         // constraint honestly dropped, the node is unconstrained by this sh:not,
         // so every case is ACCEPTED (no false-reject, no unsound `not`).

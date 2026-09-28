@@ -5,8 +5,8 @@
 //! establishes, by regenerating each injected body from the indices the module names
 //! and comparing.
 
+use crate::binary::ExternalKind;
 use wasm_encoder::ValType;
-use wasmparser::ExternalKind;
 
 use crate::error::LinkError;
 use crate::scan::{Scan, Sig};
@@ -21,7 +21,7 @@ use crate::{
 pub(crate) fn check(bytes: &[u8]) -> Result<Report, LinkError> {
     let scan = Scan::read(bytes)?;
     let features = scan.features()?;
-    validate(bytes, features, "input")?;
+    validate(bytes, &features, "input")?;
     let gate = gate_globals(&scan)?;
     let import_count = scan.import_count();
     let bodies = scan
@@ -109,6 +109,13 @@ pub(crate) fn check(bytes: &[u8]) -> Result<Report, LinkError> {
             )));
         }
     }
+    for (target, origin) in &scan.external_functions {
+        if *target < import_count {
+            return Err(LinkError::NotLinked(format!(
+                "import {target} is referenced from a {origin}; only its trampoline may reach it"
+            )));
+        }
+    }
     let mut referrers: Vec<Vec<u32>> = vec![Vec::new(); import_count as usize];
     for (offset, body) in bodies.iter().enumerate() {
         let func = import_count + offset as u32;
@@ -168,6 +175,11 @@ pub(crate) fn check(bytes: &[u8]) -> Result<Report, LinkError> {
                 .element_functions
                 .iter()
                 .filter(|target| targets.contains(target))
+                .count()
+            + scan
+                .external_functions
+                .iter()
+                .filter(|(target, _)| targets.contains(target))
                 .count()
     };
 

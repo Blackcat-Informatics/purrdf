@@ -109,7 +109,7 @@ impl PlanId {
     /// Digest canonical plan `bytes` under the plan domain.
     #[must_use]
     pub fn from_canonical(bytes: &[u8]) -> Self {
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = purrdf_hash::blake3::RecordHasher::new();
         hasher.update(PLAN_ID_DOMAIN.as_bytes());
         hasher.update(&[0u8]);
         hasher.update(bytes);
@@ -176,7 +176,7 @@ impl FusionProfileId {
     /// Digest canonical fusion-profile `bytes` under the fusion-profile domain.
     #[must_use]
     pub fn from_canonical(bytes: &[u8]) -> Self {
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = purrdf_hash::blake3::RecordHasher::new();
         hasher.update(FUSION_PROFILE_ID_DOMAIN.as_bytes());
         hasher.update(&[0u8]);
         hasher.update(bytes);
@@ -292,7 +292,7 @@ impl EvidenceId {
     /// Digest canonical evidence `bytes` under the evidence domain.
     #[must_use]
     pub fn from_canonical(bytes: &[u8]) -> Self {
-        let mut hasher = blake3::Hasher::new();
+        let mut hasher = purrdf_hash::blake3::RecordHasher::new();
         hasher.update(EVIDENCE_ID_DOMAIN.as_bytes());
         hasher.update(&[0u8]);
         hasher.update(bytes);

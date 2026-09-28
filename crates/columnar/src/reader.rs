@@ -954,7 +954,7 @@ mod term_walk_tests {
     /// A SplitMix64 draw below `n` from the counter at `state`.
     fn draw(state: &mut u64, n: usize) -> usize {
         let n = u64::try_from(n).expect("a small bound fits");
-        usize::try_from(purrdf_core::test_rng::splitmix64_next(state) % n)
+        usize::try_from(purrdf_testkit::rng::splitmix64_next(state) % n)
             .expect("a draw below a small bound fits")
     }
 
@@ -1046,10 +1046,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
@@ -1093,7 +1093,7 @@ mod term_walk_tests {
                     (vec![0u8; records.len()], vec![None; records.len()]);
                 let value = resolve_term_record(root, &records, &mut states, &mut values)
                     .expect("the chain resolves");
-                assert_eq!(value, purrdf_core::test_rng::triple_chain(LEVELS));
+                assert_eq!(value, crate::test_terms::triple_chain(LEVELS));
             })
             .expect("the thread starts")
             .join()
@@ -1108,7 +1108,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let value = crate::test_terms::triple_chain(LEVELS);
                 let mut builder = RdfDatasetBuilder::new();
                 assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);
             })

@@ -612,7 +612,7 @@ impl SssomDiagnostic {
 /// Parse a PurRDF SSSOM TSV document into an owned [`SssomMappingSet`].
 ///
 /// The `#`-prefixed header (scalars + the nested `curie_map:` block) is parsed
-/// bespoke; the TSV body is parsed with the `csv` crate (tab delimiter, flexible
+/// bespoke; the TSV body is parsed with [`crate::csv`] under [`crate::csv::Dialect::SSSOM_TSV`] (tab delimiter, flexible
 /// column counts, by-name access). Unknown header scalars and unknown columns are
 /// preserved verbatim. Unambiguous `# #…` provenance in the leading envelope
 /// and comments in the trailing envelope are retained as typed set comments.
@@ -868,14 +868,10 @@ fn parse_body(
         ));
     }
 
-    let mut reader = csv::ReaderBuilder::new()
-        .delimiter(b'\t')
-        .flexible(true)
-        .has_headers(true)
-        .from_reader(body.as_bytes());
+    let mut reader = crate::csv::Reader::new(crate::csv::Dialect::SSSOM_TSV, body.as_bytes());
 
-    // `csv` validates the header lazily; fetch it up front so a malformed header
-    // is reported with the right line (the first body line).
+    // Fetch the header up front so a malformed header is reported with the
+    // right line (the first body line).
     let header_line = line_numbers.first().copied().unwrap_or(1);
     let columns: Vec<String> = reader
         .headers()
@@ -914,7 +910,7 @@ fn parse_body(
 /// Map one TSV record onto a [`SssomMapping`] by column name.
 fn parse_row(
     columns: &[String],
-    record: &csv::StringRecord,
+    record: &crate::csv::StringRecord,
     line_no: u32,
 ) -> Result<SssomMapping, RdfDiagnostic> {
     let mut mapping = SssomMapping::default();
@@ -1108,6 +1104,24 @@ fn mapping_instance(mapping: &SssomMapping) -> Option<String> {
 // TSV serialization
 // --------------------------------------------------------------------------- //
 
+/// The table writer [`parse_tsv`] reads back: fields of
+/// [`Dialect::SSSOM_TSV`](crate::csv::Dialect::SSSOM_TSV), so a value holding
+/// a quote character or a TAB is quoted with inner quotes doubled, and a first
+/// field beginning with `#` is quoted so it is not read as a comment line.
+const TSV_FIELDS: crate::csv::FieldWriter = crate::csv::FieldWriter::new(crate::csv::Dialect {
+    comment_prefix: Some("#"),
+    ..crate::csv::Dialect::SSSOM_TSV
+});
+
+/// One table line (no line break) of `fields`.
+fn tsv_line(fields: &[String]) -> String {
+    let mut line = String::new();
+    TSV_FIELDS.write_record(fields, &mut line);
+    // The record terminator is the one line break `serialize_tsv` joins with.
+    line.pop();
+    line
+}
+
 /// Serialize a mapping set back to canonical PurRDF SSSOM TSV.
 ///
 /// Emits the metadata header, before-table provenance, the retained or inferred
@@ -1154,7 +1168,7 @@ pub fn serialize_tsv(set: &SssomMappingSet) -> String {
     }
 
     let columns = serialization_columns(set);
-    lines.push(columns.join("\t"));
+    lines.push(tsv_line(&columns));
 
     let mut sorted: Vec<&SssomMapping> = set.mappings.iter().collect();
     sorted.sort_by(|a, b| {
@@ -1166,7 +1180,7 @@ pub fn serialize_tsv(set: &SssomMappingSet) -> String {
     });
     for mapping in sorted {
         let row: Vec<String> = columns.iter().map(|col| cell(mapping, col)).collect();
-        lines.push(row.join("\t"));
+        lines.push(tsv_line(&row));
     }
 
     for comment in set
@@ -1381,7 +1395,6 @@ mod white_space_law {
         SSSOM_WHITE, SssomCommentPlacement, SssomSetComment, is_blank, parse_tsv, trim_white,
         trim_white_end, trim_white_start, validate,
     };
-    use pretty_assertions::assert_eq;
 
     /// Every Unicode scalar value, in order.
     fn all_scalars() -> impl Iterator<Item = char> {
@@ -1710,6 +1723,27 @@ subject_id\tpredicate_id\tobject_id\tmapping_justification\tconfidence\tcomment
                 "bad\tcolumn".to_owned()
             ))
         );
+    }
+
+    /// A value holding quote characters or a TAB is written quoted and read
+    /// back unchanged; the neighbouring plain value is written as it is.
+    #[test]
+    fn quoted_values_round_trip_through_the_table_writer() {
+        let doc = "# mapping_set_id: https://example.org/x\n\
+                   subject_id\tpredicate_id\tobject_id\tmapping_justification\tobject_label\tcomment\n\
+                   ex:A\tskos:exactMatch\tex:B\tsemapv:ManualMappingCuration\t\"a\tb\"\t\"say \"\"hi\"\"\"\n\
+                   ex:C\tskos:exactMatch\tex:D\tsemapv:ManualMappingCuration\tplain\tplain\n";
+        let set = parse_tsv(doc).expect("parse");
+        assert_eq!(set.mappings[0].object_label.as_deref(), Some("a\tb"));
+        assert_eq!(set.mappings[0].comment.as_deref(), Some("say \"hi\""));
+        let written = serialize_tsv(&set);
+        assert!(
+            written.contains("\t\"a\tb\"\t\"say \"\"hi\"\"\"\n"),
+            "{written}"
+        );
+        assert!(written.contains("\tplain\tplain\n"), "{written}");
+        let reread = parse_tsv(&written).expect("reparse");
+        assert_eq!(reread.mappings, set.mappings);
     }
 
     #[test]

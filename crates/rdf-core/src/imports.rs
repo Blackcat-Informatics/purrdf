@@ -1841,10 +1841,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                crate::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             assert_eq!(scope_of(&value), reference_scope(&value), "seed {seed}");
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());

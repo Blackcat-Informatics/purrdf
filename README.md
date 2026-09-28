@@ -149,8 +149,8 @@ bits may depend on the target and build — and every ordering is canonical:
 document ids are assigned after sorting on
 `(graph, subject, language)`, spatial rows sort in `TermValue`'s total order,
 and kNN ties break on the content-derived `TargetId`. The claim is executed,
-not argued: the text and kNN determinism tests are one body carrying both
-`#[test]` and `#[wasm_bindgen_test]`, run natively by `cargo test` and on
+not argued: the text and kNN determinism tests are one body per case on one
+shared test runner, run natively by `cargo test` and on
 `wasm32-unknown-unknown` by `make wasm-test`, and `make geo-determinism` runs
 the same corpus on both targets and compares bytes.
 
@@ -570,8 +570,9 @@ triple pattern.
   `purrdf-core`, not the slice crate).
 - **Zero-dependency foundations** — `purrdf-iri` (RFC 3987/3986) and `purrdf-xsd`
   (XSD 1.1 value space) have no runtime dependencies at all; `purrdf-events` (the
-  object-safe ingestion seam) has none either, and `purrdf-cdt` is a `no_std`
-  closed leaf over exactly those two.
+  object-safe ingestion seam) and `purrdf-hash` (BLAKE3, MD5, SHA-1, SHA-3 and CRC-32
+  digests) have none either, and `purrdf-cdt` is a `no_std` closed leaf over
+  exactly the first two.
 
 ## Quickstart
 
@@ -717,10 +718,13 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-retrieval`](./crates/retrieval/) | The composition layer over the ranked producers: one request planned, admitted, executed and fused into one ordered answer across every ranked relation a caller registered on the property-function seam. Pure-data plans with a canonical BLAKE3 identity, an exact content-addressed fusion law, per-row per-stratum provenance and per-term unserved evidence; producers, strata and weights are caller-supplied and nothing is defaulted. Re-exported by the umbrella as `purrdf::retrieval`. |
 | [`purrdf-validate`](./crates/validate/) | The shared host boundary: SARIF 2.1.0 diagnostics and the entailment-regime string surface the Python/wasm/C bindings call. |
 | [`purrdf-markdown`](./crates/markdown/) | Structural Markdown-to-RDF 1.2 codec under a shipped specification ([SPEC](./crates/markdown/SPEC.md)): a document becomes a graph of its own headings, verses, and paragraphs with verbatim byte spans and concordance citations, under a caller-supplied vocabulary and a content-addressed profile — and the graph decodes back to the document byte for byte, proven against its own source digest. Re-exported by the umbrella as `purrdf::markdown`. |
+| [`purrdf-jsonschema`](./crates/jsonschema/) | Native JSON Schema validation for drafts 2020-12, 2019-09 and 07, each schema resource in its own dialect: every vocabulary, `$dynamicRef`, `$recursiveRef`, `unevaluated*`, `$vocabulary`, and the flag/basic/detailed output formats. Numbers retain exact decimal values. ECMA-262 `/u` patterns use `regex` for regular expressions and a bounded explicit-stack matcher for lookaround, backreferences and scoped modifiers, with Unicode 17 property ranges; validation returns typed errors if matching exhausts its budget. Checked against the official JSON-Schema-Test-Suite for all three drafts; depends on `serde_json`, `regex` and `purrdf-iri` only, and builds for wasm32. |
 | [`purrdf-slice`](./crates/slice/) | Slice catalog: manifests, typed artifacts, ownership/dependency analysis. |
 | [`purrdf-iri`](./crates/iri/) | Zero-dependency IRI/URI parsing, normalization, CURIEs, and the workspace's single RFC 3986 base-resolution layer (`BaseIri`/`BaseScope`). |
 | [`purrdf-xsd`](./crates/xsd/) | Zero-dependency XSD 1.1 value space with SPARQL numeric promotion. |
 | [`purrdf-events`](./crates/rdf-events/) | Zero-dependency object-safe RDF event sink/source seam. |
+| [`purrdf-hash`](./crates/hash/) | Zero-dependency BLAKE3, MD5, SHA-1, SHA-3 and CRC-32 digests, streaming and one-shot; SHA-1 and CRC-32 run on the processor's SHA and CRC instructions when it has them. |
+| [`purrdf-deflate`](./crates/deflate/) | Native DEFLATE and gzip: a push-based streaming decoder that decodes every gzip member, verifies each trailer and refuses trailing garbage or output past a caller's limit, and a deterministic encoder whose bytes depend only on the input and level. Vector match copies and compares on SSE2/AVX2, NEON and wasm simd128; depends on `purrdf-hash` alone. |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | The wasm32 engine behind the `purrdf` ESM package. |
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI (unpublished; built via cargo-c). |
 | [`purrdf-cli`](./crates/cli/) | The `purrdf` command-line tool: `convert`, `query`, `update`, `reason`, `entails`, `consistency`, `validate`, `shex`, `describe`, `project`, `lift`, `pack verify` (unpublished). `convert` takes any number of `--input` sources, merged by deterministic union under a separate blank-node scope per source, and `--transport auto\|none\|gzip\|zstd` detects a gzip or zstd wrapper by its magic bytes before consulting the suffix and decodes it all-or-nothing; a transport is never applied on output and is refused against a pack source. |
@@ -756,7 +760,7 @@ for drift. Built with cargo-c: `make capi-build`.
 ## Fast by measurement, not by assertion
 
 The IR keeps every term **once** in a string arena addressed by copyable
-`NonZeroU32` ids, hashes with fixed-key `ahash` everywhere hot, and freezes datasets
+`NonZeroU32` ids, hashes with the fixed-key `FixedHasher` everywhere hot, and freezes datasets
 into `Box<[QuadRow]>` tables with lazy ordinal permutation indexes (~4 bytes/quad
 per axis). Performance claims are backed by criterion benchmarks rather than
 adjectives — `crates/rdf-core/benches/ir_layout.rs` measures AoS vs. SoA vs.

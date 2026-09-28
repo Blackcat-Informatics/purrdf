@@ -322,9 +322,9 @@ fn year_width_valid_lexicals_parse_ok() {
 
 mod prop {
     use super::*;
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
-    proptest! {
+    prop_test! {
         /// Integer canonical form re-parses to the same value and is idempotent.
         #[test]
         fn integer_canonical_idempotent(n in any::<i64>()) {

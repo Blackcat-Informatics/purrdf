@@ -36,23 +36,54 @@ use crate::RdfLocation;
 
 /// A fixed-key hash of a value, so the store-once tables are deterministic across
 /// runs. The frozen output is sorted by id, not hash-iteration order, so any hash
-/// would do; fixed-key `AHasher` just avoids SipHash on the hot interning path.
+/// would do; the fixed-key `FixedHasher` just avoids SipHash on the hot interning path.
 fn hash_of<T: Hash>(value: &T) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     value.hash(&mut hasher);
     hasher.finish()
 }
 
 fn hash_lookup_value(lookup: &TermLookup<'_>) -> u64 {
-    let mut hasher = ahash::AHasher::default();
-    hash_lookup(lookup, &mut hasher);
-    hasher.finish()
+    match lookup {
+        TermLookup::Iri(iri) => crate::hash::hash_iri_for_interner(iri),
+        TermLookup::Blank { label, scope } => crate::hash::hash_blank_for_interner(label, scope.0),
+        TermLookup::Literal {
+            lexical,
+            datatype,
+            language,
+            direction,
+        } => crate::hash::hash_literal_for_interner(
+            lexical,
+            datatype.index() as u64,
+            *language,
+            *direction,
+        ),
+        TermLookup::Triple { s, p, o } => crate::hash::hash_triple_for_interner(
+            s.index() as u64,
+            p.index() as u64,
+            o.index() as u64,
+        ),
+    }
 }
 
 fn hash_stored_value(arena: &[u8], term: &InternedTerm) -> u64 {
-    let mut hasher = ahash::AHasher::default();
-    hash_stored(arena, term, &mut hasher);
-    hasher.finish()
+    match term {
+        InternedTerm::Iri(r) => crate::hash::hash_iri_for_interner(arena_str(arena, *r)),
+        InternedTerm::Blank { label, scope } => {
+            crate::hash::hash_blank_for_interner(arena_str(arena, *label), scope.0)
+        }
+        InternedTerm::Literal(lit) => crate::hash::hash_literal_for_interner(
+            arena_str(arena, lit.lexical_form),
+            lit.datatype.index() as u64,
+            lit.language.map(|r| arena_str(arena, r)),
+            lit.direction,
+        ),
+        InternedTerm::Triple { s, p, o } => crate::hash::hash_triple_for_interner(
+            s.index() as u64,
+            p.index() as u64,
+            o.index() as u64,
+        ),
+    }
 }
 
 /// **Store-once** insert-or-find (P3c): `vec` is the sole owner of the values;
@@ -117,69 +148,6 @@ enum OwnedStep<'t> {
 /// dataset holds, which is the disagreement the canonicalization exists to prevent.
 pub(crate) fn is_lowercase(s: &str) -> bool {
     s.chars().flat_map(char::to_lowercase).eq(s.chars())
-}
-
-/// Hash a borrowed lookup. MUST hash byte-identically to [`hash_stored`] for equal
-/// values — explicit discriminant tags + `str::hash` (so the find/insert hashes agree).
-fn hash_lookup<H: Hasher>(lookup: &TermLookup<'_>, state: &mut H) {
-    match lookup {
-        TermLookup::Iri(iri) => {
-            0u8.hash(state);
-            iri.hash(state);
-        }
-        TermLookup::Blank { label, scope } => {
-            1u8.hash(state);
-            label.hash(state);
-            scope.hash(state);
-        }
-        TermLookup::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            2u8.hash(state);
-            lexical.hash(state);
-            datatype.hash(state);
-            language.hash(state);
-            direction.hash(state);
-        }
-        TermLookup::Triple { s, p, o } => {
-            3u8.hash(state);
-            s.hash(state);
-            p.hash(state);
-            o.hash(state);
-        }
-    }
-}
-
-/// Hash a stored term, resolving its `StrRange`s through `arena`. MUST match
-/// [`hash_lookup`] for equal values.
-fn hash_stored<H: Hasher>(arena: &[u8], term: &InternedTerm, state: &mut H) {
-    match term {
-        InternedTerm::Iri(r) => {
-            0u8.hash(state);
-            arena_str(arena, *r).hash(state);
-        }
-        InternedTerm::Blank { label, scope } => {
-            1u8.hash(state);
-            arena_str(arena, *label).hash(state);
-            scope.hash(state);
-        }
-        InternedTerm::Literal(lit) => {
-            2u8.hash(state);
-            arena_str(arena, lit.lexical_form).hash(state);
-            lit.datatype.hash(state);
-            lit.language.map(|r| arena_str(arena, r)).hash(state);
-            lit.direction.hash(state);
-        }
-        InternedTerm::Triple { s, p, o } => {
-            3u8.hash(state);
-            s.hash(state);
-            p.hash(state);
-            o.hash(state);
-        }
-    }
 }
 
 /// Whether a stored term equals a lookup, resolving the stored ranges through `arena`.
@@ -1718,7 +1686,7 @@ mod tests {
     use super::*;
     use crate::RdfTextDirection;
     use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_STRING};
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
     fn lit_simple(s: &str) -> RdfLiteral {
         RdfLiteral::simple(s)
@@ -1732,6 +1700,70 @@ mod tests {
         let d = b.intern_iri("http://example.org/y");
         assert_eq!(a, c);
         assert_ne!(a, d);
+    }
+
+    #[test]
+    fn iri_hash_matches_stored_form_across_lengths_and_table_growth() {
+        let mut interner = Interner::new();
+        let iris: Vec<String> = (2..=33)
+            .map(|len| format!("a:{}", "x".repeat(len - 2)))
+            .chain((0..=128).map(|len| format!("http://example.org/{}", "x".repeat(len))))
+            .collect();
+        let ids: Vec<TermId> = iris
+            .iter()
+            .map(|iri| interner.intern(TermLookup::Iri(iri)))
+            .collect();
+        for (iri, id) in iris.iter().zip(ids) {
+            assert_eq!(
+                hash_lookup_value(&TermLookup::Iri(iri)),
+                hash_stored_value(interner.arena(), interner.term(id)),
+                "borrowed and stored IRI hashes differ at length {}",
+                iri.len()
+            );
+            assert_eq!(interner.lookup_iri(iri), Some(id));
+            assert_eq!(interner.intern(TermLookup::Iri(iri)), id);
+        }
+    }
+
+    #[test]
+    fn all_term_kinds_match_borrowed_and_stored_hashes() {
+        let mut interner = Interner::new();
+        let iri = TermLookup::Iri(RDF_DIR_LANG_STRING);
+        let datatype = interner.intern(iri);
+        let blank = TermLookup::Blank {
+            label: "b",
+            scope: BlankScope(7),
+        };
+        let blank_id = interner.intern(blank);
+        let literal = TermLookup::Literal {
+            lexical: "hello",
+            datatype,
+            language: Some("en"),
+            direction: Some(RdfTextDirection::Ltr),
+        };
+        let literal_id = interner.intern(literal);
+        let triple = TermLookup::Triple {
+            s: blank_id,
+            p: datatype,
+            o: literal_id,
+        };
+        let triple_id = interner.intern(triple);
+        // Rehash the table after every variant is present, then verify that
+        // borrowed keys still find their original stored representatives.
+        for n in 0..256 {
+            interner.intern(TermLookup::Iri(&format!("http://example.org/fill/{n}")));
+        }
+        for (lookup, id) in [
+            (iri, datatype),
+            (blank, blank_id),
+            (literal, literal_id),
+            (triple, triple_id),
+        ] {
+            let hash = hash_lookup_value(&lookup);
+            assert_eq!(hash, hash_stored_value(interner.arena(), interner.term(id)));
+            assert_eq!(interner.intern(lookup), id);
+        }
+        assert_eq!(interner.term_count(), 260);
     }
 
     /// No fabricated default: a plain `new`/`default` builder has content-id
@@ -2292,7 +2324,7 @@ mod tests {
         ]
     }
 
-    proptest! {
+    prop_test! {
         /// Idempotence holds across arbitrary call sequences, and `term_count`
         /// never exceeds the number of distinct values interned.
         ///
@@ -2300,7 +2332,7 @@ mod tests {
         /// literal also interns its datatype IRI, so each literal value contributes
         /// itself plus its (shared) datatype term to the upper bound.
         #[test]
-        fn proptest_idempotence_and_bounded_count(ops in prop::collection::vec(op_strategy(), 0..64)) {
+        fn property_idempotence_and_bounded_count(ops in prop::collection::vec(op_strategy(), 0..64)) {
             use std::collections::HashSet;
 
             let mut b = RdfDatasetBuilder::new();

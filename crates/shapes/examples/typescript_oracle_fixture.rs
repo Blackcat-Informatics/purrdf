@@ -5,6 +5,7 @@
 
 use std::collections::BTreeSet;
 use std::error::Error;
+use std::sync::OnceLock;
 
 #[path = "support/shacl_lists.rs"]
 mod shacl_lists;
@@ -13,7 +14,6 @@ mod shacl_temporal;
 #[path = "support/shacl_value_shapes.rs"]
 mod shacl_value_shapes;
 
-use boon::{Compiler, Schemas};
 use purrdf::loss::{LossLedger, check_ledger_complete, check_ledger_sound};
 use purrdf_shapes::json_schema::{CompiledSchema, Namespaces};
 use purrdf_shapes::{
@@ -413,7 +413,33 @@ fn lossy_schema() -> Value {
     })
 }
 
+/// The draft 2020-12 meta-schemas the emitted schemas declare, from the
+/// workspace's test data (`purrdf-jsonschema` carries none).
+fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
+    static SET: OnceLock<purrdf_jsonschema::Metaschemas> = OnceLock::new();
+    SET.get_or_init(|| {
+        purrdf_jsonschema::Metaschemas::new(
+            purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
+                .iter()
+                .map(|&(uri, text)| {
+                    let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                    (uri, document)
+                }),
+        )
+        .expect("the draft 2020-12 meta-schemas")
+    })
+}
+
 fn validates(schema: &Value, definition: &str, instance: &Value) -> Result<bool, Box<dyn Error>> {
+    validates_in(metaschemas(), schema, definition, instance)
+}
+
+fn validates_in(
+    metaschemas: &purrdf_jsonschema::Metaschemas,
+    schema: &Value,
+    definition: &str,
+    instance: &Value,
+) -> Result<bool, Box<dyn Error>> {
     let escaped = definition.replace('~', "~0").replace('/', "~1");
     let wrapper = json!({
         "$schema": schema["$schema"],
@@ -421,11 +447,10 @@ fn validates(schema: &Value, definition: &str, instance: &Value) -> Result<bool,
         "$ref": format!("#/$defs/{escaped}")
     });
     let location = "mem:///typescript-oracle.schema.json";
-    let mut schemas = Schemas::new();
-    let mut compiler = Compiler::new();
-    compiler.add_resource(location, wrapper)?;
-    let compiled = compiler.compile(location, &mut schemas)?;
-    Ok(schemas.validate(instance, compiled).is_ok())
+    Ok(
+        purrdf_jsonschema::Schema::from_document(metaschemas, location, wrapper)?
+            .is_valid(instance)?,
+    )
 }
 
 fn has_loss(package: &TypeScriptPackage, code: &str, location: &str) -> bool {
@@ -1598,4 +1623,29 @@ fn main() -> Result<(), Box<dyn Error>> {
     });
     println!("{}", serde_json::to_string(&output)?);
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn validates_with_its_metaschema_and_names_it_when_absent() {
+        let schema = json!({
+            "$schema": "https://json-schema.org/draft/2020-12/schema",
+            "$defs": {"Name": {"type": "string"}}
+        });
+        assert!(validates(&schema, "Name", &json!("Ada")).expect("registered"));
+        assert!(!validates(&schema, "Name", &json!(1)).expect("registered"));
+        let none = purrdf_jsonschema::Metaschemas::new(Vec::<(&str, Value)>::new())
+            .expect("an empty set is a set");
+        let error = validates_in(&none, &schema, "Name", &json!("Ada"))
+            .expect_err("no meta-schema registered");
+        match error.downcast_ref::<purrdf_jsonschema::SchemaError>() {
+            Some(purrdf_jsonschema::SchemaError::MissingMetaschema { metaschema, .. }) => {
+                assert_eq!(metaschema, "https://json-schema.org/draft/2020-12/schema");
+            }
+            other => panic!("expected the missing meta-schema to be named, got {other:?}"),
+        }
+    }
 }

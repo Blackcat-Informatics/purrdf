@@ -1531,7 +1531,7 @@ mod escape_tests {
 
     impl SplitMix {
         const fn next(&mut self) -> u64 {
-            crate::test_rng::splitmix64_next(&mut self.0)
+            purrdf_testkit::rng::splitmix64_next(&mut self.0)
         }
 
         fn below(&mut self, n: usize) -> usize {
@@ -2250,10 +2250,10 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::WellFormed,
+                crate::test_terms::TermShape::WellFormed,
             );
             nested += usize::from(budget < 7);
             assert_eq!(surface_of(&value), reference_surface(&value), "seed {seed}");
@@ -2280,7 +2280,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let value = crate::test_terms::triple_chain(LEVELS);
                 let level =
                     "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
                 assert_eq!(

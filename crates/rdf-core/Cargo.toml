@@ -6,7 +6,7 @@ name = "purrdf-core"
 description = "PurRDF RDF 1.2 oxigraph-free kernel: model, diagnostics, IR, store traits, and event ingestion"
 version.workspace = true
 edition.workspace = true
-license.workspace = true
+license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
 repository.workspace = true
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-core"
@@ -51,26 +51,20 @@ purrdf-xsd = { workspace = true }
 # `RdfDataset`, plus the frozen-IR-replay `FrozenDatasetSource`. The protocol crate
 # is dependency-free and uses the same `MIT OR Apache-2.0 OR MulanPSL-2.0` license as this crate.
 purrdf-events = { workspace = true }
-# Fixed-key, non-cryptographic hashing for in-memory IR lookup tables. The tables
+# Fixed-key, non-cryptographic hashing for in-memory IR lookup tables
+# (`purrdf_hash::fixed::FixedHasher`, re-exported as `FastHasher`). The tables
 # never persist hash values and equality still resolves collisions; this replaces
-# SipHash on hot value-index paths without introducing runtime randomness.
-ahash = { workspace = true }
+# SipHash on hot value-index paths without introducing runtime randomness. A
+# zero-dependency leaf, so the kernel's graph gains no third-party package.
+purrdf-hash = { workspace = true }
 # Raw `HashTable` for the store-once builder interner/dedup: each term/
 # row is owned ONCE by its `Vec`, the table holds only indices. (`HashTable` was
-# introduced in hashbrown 0.14.2; the workspace tracks 0.15.)
+# introduced in hashbrown 0.14.2; the workspace tracks 0.17.)
 hashbrown = { workspace = true }
-# Tab-separated body parser for the native SSSOM codec: handles quoting,
-# flexible column counts, and by-name column access. The SSSOM `#`-prefixed YAML
-# header is parsed bespoke (PURRDF owns the format); `csv` only parses the body.
-csv = { workspace = true }
 # Content-addressed blob digest for the content store. Same version as the
 # sibling kernel crates (logic/validate/slice). Default features (std) re-enabled;
 # the workspace-level entry is default-features = false for the wasm-clean eval path.
 sha2 = { workspace = true, default-features = true }
-# Inline small-vector primitive shared workspace-wide (`crate::small`): the
-# generic `IdVec` and re-exported `SmallVec`/`smallvec!`. Default features only
-# (no `union`/`serde`) — wasm-clean, `unsafe`-free.
-smallvec = { workspace = true }
 # The execution engine `xsd_regex::compile` translates XSD/XPath regex source
 # into: a DFA-based, backtracking-free, pure-Rust, wasm32-clean engine already
 # proven elsewhere in this workspace (`purrdf-rdf`, `purrdf-shapes`,
@@ -85,23 +79,15 @@ regex-syntax = { workspace = true }
 # only and unpublished, so it is stripped from the packaged manifest; std-only
 # and dependency-free, so it needs no target gate.
 purrdf-alloc-probe = { workspace = true }
-# Rich colored line-diffs on assert_eq! failure. Drop-in: a shadowing
-# `use pretty_assertions::assert_eq;` per test file; identical on pass.
-pretty_assertions = { workspace = true }
-proptest = { workspace = true }
 # Acceleration-program baselines; light feature set matching
 # the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are
 # off so `make bench` builds fast and the cargo-bench stdout summary is all we need.
 criterion = { workspace = true }
-# DEV-ONLY, native-only: demonstrates the G5 external-consumer mmap seam
-# (docs/design/purrdf-backend-contract.md) in
-# `tests/pack_mmap.rs` — a memory-mapped pack file handed to
-# `PackView::from_bytes` as a borrowed slice. Never a runtime dependency of
-# this crate; excluded from the wasm32 build by the test file's
-# `#![cfg(not(target_arch = "wasm32"))]` gate.
-memmap2 = { workspace = true }
-# Writes the built pack bytes to a real temp file for `pack_mmap.rs` to mmap.
-tempfile = { workspace = true }
+# Writes the built pack bytes to a real temporary file for `pack_mmap.rs` to
+# read back, scratch directories for the other integration tests, and the property
+# harness. Path-only and unpublished, so it is stripped from the packaged
+# manifest.
+purrdf-testkit = { workspace = true }
 
 [[bench]]
 # IR layout / operational-metrics harness: AoS-vs-SoA(-vs-predicate-adjacency)
@@ -144,6 +130,12 @@ harness = false
 # table. Report-only — no timing/speedup assertions. `make bench` lane only —
 # excluded from `make check`.
 name = "intern_absoluteness"
+harness = false
+
+[[bench]]
+# `purrdf_core::csv` read/write throughput over 1 MiB SSSOM-shaped and
+# CSVW-shaped inputs. Report-only; no timing threshold is asserted.
+name = "csv"
 harness = false
 
 [[bench]]
@@ -218,4 +210,23 @@ harness = false
 # and 1536 dimensions. Report-only -- no timing/speedup assertions; the two arithmetics
 # are reported side by side. `make bench` lane only -- excluded from `make check`.
 name = "distance"
+harness = false
+
+[[bench]]
+# `purrdf_core::SmallVec` on the workspace's row shapes: `IdVec` push /
+# from_slice / collect / clone / into_iter inline and spilled, and dense
+# `Option<TermId>` rows built by `smallvec![None; w]`. Report-only -- no
+# timing/speedup assertions. `make bench` lane only -- excluded from `make check`.
+name = "small"
+harness = false
+
+# The CSV field scanner's kernel differential -- the portable oracle, the live
+# dispatch and every explicit vector kernel this build compiles -- run through
+# the doc-hidden `purrdf_core::csv::backend` module on `purrdf_testkit`'s
+# `harness = false` runner, so the same named cases run natively under
+# `cargo test` and on wasm32-unknown-unknown in Node under
+# scripts/wasm-test-runner.sh (`make wasm-test`), baseline and +simd128 --
+# the one test in this crate that EXECUTES the wasm32 `simd128` kernel.
+[[test]]
+name = "csv_scan_wasm"
 harness = false

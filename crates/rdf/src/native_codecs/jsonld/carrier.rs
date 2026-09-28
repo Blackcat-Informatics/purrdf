@@ -1665,8 +1665,12 @@ fn compact_literal(
 }
 
 fn canonical_json_value(lexical: &str) -> Option<JsonValue> {
-    let parsed: JsonValue = crate::json_number::read_json(|| serde_json::from_str(lexical)).ok()?;
-    (serde_json::to_string(&parsed).ok()?.as_str() == lexical).then_some(parsed)
+    let parsed = crate::json_number::parse_strict(lexical.as_bytes(), usize::MAX, 128).ok()?;
+    (serde_json::to_string(&crate::json_value::Binary64(&parsed))
+        .ok()?
+        .as_str()
+        == lexical)
+        .then_some(parsed)
 }
 
 fn literal_matches_mapping(

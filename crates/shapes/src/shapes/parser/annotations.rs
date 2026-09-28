@@ -49,7 +49,7 @@
 //!   loudly instead of validating as if the annotation were absent.
 
 use ::purrdf::{FastMap, TermId, TermRef};
-use smallvec::SmallVec;
+use purrdf_core::SmallVec;
 
 use crate::data::{GraphFilter, native_quads};
 use crate::model::sh;

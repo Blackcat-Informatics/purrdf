@@ -272,7 +272,7 @@ fn file_base_iri(base: &str, path: &std::path::Path) -> String {
 /// and the UPDATE pre-/post-state builders.
 ///
 /// `base` is the declaring manifest's own sentinel base (see
-/// [`crate::manifest::SparqlTestCase::base`]) — see [`file_base_iri`] for why it
+/// [`crate::manifest::SparqlTestCase::base`]) — see the private `file_base_iri` for why it
 /// must be that one and not a harness-wide constant.
 ///
 /// # Every source file is a DOCUMENT, and documents are standardized apart

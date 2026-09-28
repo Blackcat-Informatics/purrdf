@@ -45,6 +45,26 @@ cargo run -p purrdf-entail --example gen_rule_inventory --locked \
 cargo run -p purrdf-core --example gen_unicode_blocks --locked \
   | rustfmt --edition 2024 --emit stdout \
   > "$tmp/blocks.rs"
+# The IDNA2008 tables (RFC 5892 derived property, Joining_Type, Bidi_Class, the
+# Appendix A scripts, and the NFC data) and the purrdf-text analyzer tables (full
+# case folding, UAX 29 word-break properties, UAX 15 normalization), both
+# derived from the one vendored Unicode Character Database under
+# `crates/iri/unicode/` rather than transcribed.
+cargo run -p purrdf-iri --example gen_idna_tables --locked \
+  | rustfmt --edition 2024 --emit stdout \
+  > "$tmp/idna_tables.rs"
+cargo run -p purrdf-text --example gen_unicode_text_tables --locked \
+  | rustfmt --edition 2024 --emit stdout \
+  > "$tmp/unicode_tables.rs"
+# The property names and values an ECMA-262 `\p{…}` escape accepts, read out of
+# the same vendored `PropertyValueAliases.txt` / `PropertyAliases.txt` and
+# filtered to ECMA-262 Tables 65 and 66, rather than transcribed.
+cargo run -p purrdf-jsonschema --example gen_ecma_property_tables --locked \
+  | rustfmt --edition 2024 --emit stdout \
+  > "$tmp/property_tables.rs"
+python3 crates/jsonschema/examples/gen_ecma_unicode_ranges.py \
+  | rustfmt --edition 2024 --emit stdout \
+  > "$tmp/ecma_unicode_ranges.rs"
 
 check_file() {
   local generated="$1"
@@ -69,6 +89,10 @@ sync_file "$tmp/rdf-loss-matrix.json" generated/rdf-loss-matrix.json
 sync_file "$tmp/transcode-loss-matrix.json" generated/transcode-loss-matrix.json
 sync_file "$tmp/entailment-rules.md" docs/book/src/entailment-rules.md
 sync_file "$tmp/blocks.rs" crates/rdf-core/src/xsd_regex/blocks.rs
+sync_file "$tmp/idna_tables.rs" crates/iri/src/idna_tables.rs
+sync_file "$tmp/unicode_tables.rs" crates/text/src/unicode_tables.rs
+sync_file "$tmp/property_tables.rs" crates/jsonschema/src/ecma/property_tables.rs
+sync_file "$tmp/ecma_unicode_ranges.rs" crates/jsonschema/src/ecma/unicode_ranges.rs
 
 # The inventory above is now known-current. Prose elsewhere RESTATES its numbers
 # (and the conformance matrix's), and prose is not covered by any byte-diff — a

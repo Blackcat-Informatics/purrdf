@@ -464,7 +464,6 @@ fn xml_escape_attr<W: TextOut + ?Sized>(value: &str, out: &mut W) -> Result<(), 
 mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
-    use pretty_assertions::assert_eq;
     use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
@@ -1111,10 +1110,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             let (mut written, mut expected) = (String::new(), String::new());
             let result = write_term(&value, &mut written);
@@ -1144,7 +1143,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let value = crate::test_terms::triple_chain(LEVELS);
                 assert!(!term_has_directional_literal(&value));
                 let mut written = String::new();
                 write_term(&value, &mut written).expect("every predicate is an IRI");

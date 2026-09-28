@@ -7,7 +7,7 @@
 //! carries the `kid` (label 4). Ed25519 is deterministic (RFC 8032), so the same
 //! key + id always yields the same signature — gated by `vectors/cose/*.json`.
 
-use aes_gcm::aead::{Aead, AeadInPlace, KeyInit, Payload};
+use aes_gcm::aead::{Aead, AeadInOut, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use ciborium::value::{Integer, Value};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
@@ -205,7 +205,7 @@ pub fn encrypt0_with_iv(plaintext: &[u8], kid: &str, key: &[u8; 32], iv: &[u8; 1
     let cipher = Aes256Gcm::new(key.into());
     let ciphertext = cipher
         .encrypt(
-            Nonce::from_slice(iv),
+            &Nonce::from(*iv),
             Payload {
                 msg: plaintext,
                 aad: &aad,
@@ -355,7 +355,9 @@ fn decrypt_parts(
     if plaintext_len > limit {
         return Err(Limit);
     }
-    let tag = Tag::clone_from_slice(&parts.ciphertext[plaintext_len..]);
+    let tag = Tag::try_from(&parts.ciphertext[plaintext_len..])
+        .map_err(|_| Crypto(Encrypt0Error::AuthFailed))?;
+    let nonce = Nonce::try_from(&parts.iv[..]).map_err(|_| Crypto(Encrypt0Error::Malformed))?;
     let mut plaintext = match parts.ciphertext {
         Cow::Borrowed(bytes) => bytes[..plaintext_len].to_vec(),
         Cow::Owned(mut bytes) => {
@@ -366,7 +368,7 @@ fn decrypt_parts(
     let aad = enc_structure(&parts.protected);
     let cipher = Aes256Gcm::new((&key).into());
     cipher
-        .decrypt_in_place_detached(Nonce::from_slice(&parts.iv), &aad, &mut plaintext, &tag)
+        .decrypt_inout_detached(&nonce, &aad, plaintext.as_mut_slice().into(), &tag)
         .map_err(|_| Crypto(Encrypt0Error::AuthFailed))?;
     Ok(plaintext)
 }

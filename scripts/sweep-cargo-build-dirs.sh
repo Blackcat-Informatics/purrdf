@@ -195,7 +195,7 @@ self_test() {
   # A build directory with nothing but registry sources: unattributable.
   mkdir -p "${fake_root}/cc/opaque/debug/deps"
   : > "${fake_root}/cc/opaque/CACHEDIR.TAG"
-  printf '%s/debug/deps/x.rlib: %s/.cargo/registry/src/index/ahash-0.8.12/crates/build.rs\n' \
+  printf '%s/debug/deps/x.rlib: %s/.cargo/registry/src/index/example-1.0.0/crates/build.rs\n' \
     "${fake_root}/cc/opaque" "${HOME}" > "${fake_root}/cc/opaque/debug/deps/x.d"
 
   local out

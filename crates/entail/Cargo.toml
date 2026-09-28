@@ -53,12 +53,10 @@ roxmltree = { workspace = true }
 # The content digest a justification is IDENTIFIED by. PurRDF mints no vocabulary, so a
 # derivation is not named by a fabricated IRI: it is addressed by BLAKE3 over the canonical
 # N-Quads of the axiom set, which is version-stable across releases and across targets in a
-# way `ahash` deliberately is not. Already a transitive dependency of this crate through
-# purrdf-datalog — whose own proof terms are digested the same way — so the declared edge
-# adds nothing to any artifact, and blake3 is wasm32-unknown-unknown-clean.
-blake3 = { workspace = true }
-# Fixed-key store-once interners and RIF posting-list indexes.
-ahash = { workspace = true }
+# way a table hasher is not. The native digest leaf is shared with purrdf-datalog.
+purrdf-hash = { workspace = true }
+# Fixed-key store-once interners and RIF posting-list indexes: raw tables keyed by
+# `purrdf-core`'s `FastHasher`.
 hashbrown = { workspace = true }
 
 [dev-dependencies]
@@ -66,9 +64,10 @@ hashbrown = { workspace = true }
 criterion = { workspace = true }
 # Generates the random small knowledge bases the OWL-Direct tableau is checked against in
 # `owl_dl::oracle`, where every generated verdict is compared with a naive exponential
-# model-enumeration oracle. Driven from a FIXED ChaCha seed, so the corpus is identical on
-# every run and a failure reproduces; test-only, so it reaches no shipped artifact.
-proptest = { workspace = true }
+# model-enumeration oracle. Driven from a FIXED seed, so the corpus is identical on every
+# run and a failure reproduces; test-only and path-only, so it reaches no shipped artifact
+# and is stripped from the packaged manifest.
+purrdf-testkit = { workspace = true }
 
 [[bench]]
 # Forward-materialization chase latency over a synthetic subclass hierarchy at two

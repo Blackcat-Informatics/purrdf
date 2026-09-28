@@ -21,6 +21,7 @@ vendored root and is enforced with zero changes here.
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import re
 import subprocess
@@ -41,6 +42,17 @@ EXEMPT_SUFFIXES = (".license",)
 
 def repo_root() -> Path:
     return Path(__file__).resolve().parent.parent
+
+
+def _scratch_root() -> Path:
+    """The build tree's scratch root, ``target/gate-scratch/`` (or under
+    ``$CARGO_TARGET_DIR``), the convention ``scripts/build-scratch.sh`` sets out.
+    Scratch goes there rather than into the system temporary directory, which is
+    not guaranteed to keep a directory for as long as a gate runs."""
+    target = os.environ.get("CARGO_TARGET_DIR")
+    root = (Path(target) if target else repo_root() / "target") / "gate-scratch"
+    root.mkdir(parents=True, exist_ok=True)
+    return root
 
 
 def find_vendored_roots(root: Path) -> list[Path]:
@@ -193,6 +205,15 @@ DELIBERATE_OTHER_LICENSE: dict[str, str] = {
     # terms that suit documentation rather than code. Its configuration declares the
     # license of the thing it builds, which is not the license of the tree.
     "docs/book/book.toml": "CC-BY-4.0",
+    # Generated from the Unicode Character Database, so the Unicode-3.0 terms
+    # apply to the tables beside the project's own offer (see LICENSING.md,
+    # "Unicode data compiled into published crates"). Each is a generator's
+    # output, and its generator writes this header.
+    "crates/iri/src/idna_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+    "crates/rdf-core/src/xsd_regex/blocks.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+    "crates/text/src/unicode_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+    "crates/jsonschema/src/ecma/property_tables.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
+    "crates/jsonschema/src/ecma/unicode_ranges.rs": "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0",
 }
 
 
@@ -373,6 +394,9 @@ def self_test() -> int:
     #    diff, or published. In the change whose entire subject is not misrepresenting the
     #    offer. Every function here already takes `root` as a parameter, so no mutation was
     #    ever needed.
+    # This fixture is itself a Git repository. A CI checkout's target directory
+    # is inside the checkout (unlike some local symlinked targets), so it must
+    # use the system temporary directory rather than the build scratch tree.
     with tempfile.TemporaryDirectory(prefix="check-licenses-selftest-") as raw:
         fixture = Path(raw)
         (fixture / "scripts").mkdir()
@@ -392,6 +416,20 @@ def self_test() -> int:
         if any("fine.py" in problem for problem in found):
             print("SELF-TEST FAIL: a file AT the offer was refused alongside it")
             ok = False
+
+    # The guard must still reject a future caller that tries to initialise a
+    # fixture repository below an ordinary, non-symlinked checkout path.
+    try:
+        _assert_outside_repo(root / "plain-target-guard-fixture" / "gate-scratch" / "fixture")
+    except SystemExit as error:
+        if "refusing to build a fixture repository" in str(error):
+            print("OK: self-test — a fixture repository inside the checkout is refused")
+        else:
+            print(f"SELF-TEST FAIL: the fixture guard gave the wrong error: {error}")
+            ok = False
+    else:
+        print("SELF-TEST FAIL: a fixture repository inside the checkout was accepted")
+        ok = False
 
     # 3. A STALE REGISTRATION is caught. The register may only shrink, so an entry whose
     #    file has come back into line must be reported rather than silently honoured.
@@ -427,7 +465,7 @@ def self_test() -> int:
     #    all. All three shapes execute here.
     # IN A FIXTURE ROOT, for the same reason as case 2: this mutated the tracked
     # `crates/iri/README.md` and relied on a `finally` to put it back.
-    with tempfile.TemporaryDirectory(prefix="check-licenses-readme-") as raw:
+    with tempfile.TemporaryDirectory(prefix="check-licenses-readme-", dir=_scratch_root()) as raw:
         fixture = Path(raw)
         crate = fixture / "crates" / "probe"
         crate.mkdir(parents=True)
@@ -480,7 +518,7 @@ def self_test() -> int:
     #    the reader at a FIXTURE manifest rather than by rewriting the real one. The first
     #    version wrote `license = "Zlib OR WTFPL"` into the root `Cargo.toml` and restored
     #    it in a `finally`; see case 2 for why that is not acceptable in a gate.
-    with tempfile.TemporaryDirectory(prefix="check-licenses-expr-") as raw:
+    with tempfile.TemporaryDirectory(prefix="check-licenses-expr-", dir=_scratch_root()) as raw:
         fixture = Path(raw)
         (fixture / "Cargo.toml").write_text(
             '[workspace.package]\nlicense = "Zlib OR WTFPL"\n', encoding="utf-8"
@@ -500,7 +538,7 @@ def self_test() -> int:
             ok = False
 
     # 6. A literal-string license parses. `split('"')[1]` raised IndexError here.
-    with tempfile.TemporaryDirectory(prefix="check-licenses-toml-") as raw:
+    with tempfile.TemporaryDirectory(prefix="check-licenses-toml-", dir=_scratch_root()) as raw:
         fixture = Path(raw)
         (fixture / "Cargo.toml").write_text(
             "[workspace.package]\nlicense = 'MIT OR Apache-2.0'\n", encoding="utf-8"
@@ -510,6 +548,19 @@ def self_test() -> int:
         else:
             print("SELF-TEST FAIL: a literal-string license did not parse")
             ok = False
+
+    # 8. THE PROVENANCE SCHEMA refuses and accepts in both directions (its own self-test
+    #    executes a refused file beside its accepted neighbour), and the tracked tree's
+    #    PROVENANCE.toml files, however many there are, all pass it.
+    if _provenance_module().self_test() != 0:
+        print("SELF-TEST FAIL: the provenance schema self-test failed")
+        ok = False
+    count, problems = provenance_offenders(root)
+    if problems:
+        print(f"SELF-TEST FAIL: tracked PROVENANCE.toml problems: {problems[:3]}")
+        ok = False
+    else:
+        print(f"OK: self-test — all {count} tracked PROVENANCE.toml file(s) follow the schema")
 
     print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
     return 0 if ok else 1
@@ -653,6 +704,40 @@ def published_readme_offenders(root: Path, expected: str) -> list[str]:
     return offenders
 
 
+# ── Every tracked PROVENANCE.toml follows the clean-room provenance schema ────
+#
+# A module that replaces a third-party crate states what it was written from and
+# what proves it right, in a `PROVENANCE.toml` beside it. That statement is a
+# licensing claim -- "the replaced crate's source was not consulted" is what keeps
+# the replaced crate's licence out of this tree -- so it is judged here, by the
+# schema `scripts/cleanroom/provenance.py` owns, over exactly the tracked files.
+def _provenance_module():
+    spec = importlib.util.spec_from_file_location(
+        "cleanroom_provenance", repo_root() / "scripts" / "cleanroom" / "provenance.py"
+    )
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def provenance_offenders(root: Path) -> tuple[int, list[str]]:
+    """How many tracked `PROVENANCE.toml` files there are, and every schema problem in them."""
+    listing = subprocess.run(
+        ["git", "-C", str(root), "ls-files", "-z"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if listing.returncode != 0:
+        sys.exit(f"check-licenses: git ls-files failed: {listing.stderr.strip()}")
+    files = [
+        root / rel
+        for rel in sorted(part for part in listing.stdout.split("\0") if part)
+        if Path(rel).name == "PROVENANCE.toml"
+    ]
+    return len(files), _provenance_module().check(files)
+
+
 def main() -> int:
     # ARGUMENTS ARE PARSED, and an unknown one is refused. This file used to ignore argv
     # entirely, so every flag was a silent no-op that still printed OK.
@@ -720,11 +805,23 @@ def main() -> int:
             print(f"  {problem}", file=sys.stderr)
         return 1
 
+    provenance_count, provenance_problems = provenance_offenders(root)
+    if provenance_problems:
+        print(
+            "License hygiene FAILED: a PROVENANCE.toml does not follow the clean-room\n"
+            "provenance schema (scripts/cleanroom/provenance.py):",
+            file=sys.stderr,
+        )
+        for problem in provenance_problems:
+            print(f"  {problem}", file=sys.stderr)
+        return 1
+
     total = sum(1 for _ in roots)
     print(
         f"OK: {total} vendored root(s) license-clean; MulanPSL-2.0 text matches its pin; "
         f"every first-party SPDX header declares {expected!r}; every published crate "
-        f"README states that offer in full."
+        f"README states that offer in full; {provenance_count} PROVENANCE.toml file(s) "
+        f"follow the provenance schema."
     )
     return 0
 

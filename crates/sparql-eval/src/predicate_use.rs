@@ -414,7 +414,7 @@ mod walk_tests {
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = crate::test_rng::splitmix64_next(&mut self.state);
+            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
             usize::try_from(draw % options as u64).expect("a choice fits usize")
         }
 

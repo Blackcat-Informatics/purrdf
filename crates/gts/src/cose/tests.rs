@@ -332,7 +332,7 @@ fn protected_header_bytes_are_opaque_even_when_they_are_not_cbor() {
         let iv = [u8::try_from(index).unwrap(); 12];
         let ciphertext = cipher
             .encrypt(
-                Nonce::from_slice(&iv),
+                &Nonce::from(iv),
                 Payload {
                     msg: b"opaque protected bytes",
                     aad: &enc_structure(&protected),

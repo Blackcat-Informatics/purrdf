@@ -101,7 +101,7 @@ const STAR_DATA: &str = concat!(
 /// neighbours.
 #[test]
 fn the_description_is_a_symmetric_concise_bounded_description() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     let out = run(&[
@@ -151,7 +151,7 @@ fn the_description_is_a_symmetric_concise_bounded_description() {
 /// "describe" in one binary.
 #[test]
 fn describe_agrees_byte_for_byte_with_sparql_describe() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     for (name, source) in [("plain.ttl", DATA), ("star.ttl", STAR_DATA)] {
         let data = write_file(dir.path(), name, source);
 
@@ -191,7 +191,7 @@ fn describe_agrees_byte_for_byte_with_sparql_describe() {
 /// not — which is one of the three reasons the verb exists rather than being sugar.
 #[test]
 fn the_verb_needs_no_serialization_incantation_the_query_route_does() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let out_path = dir
         .path()
@@ -231,7 +231,7 @@ fn the_verb_needs_no_serialization_incantation_the_query_route_does() {
 /// Several `--iri` values are described as ONE union subgraph.
 #[test]
 fn several_subjects_are_described_as_one_union() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     let out = run(&[
@@ -271,7 +271,7 @@ fn several_subjects_are_described_as_one_union() {
 /// asserted or incoming triples, and "nothing describes it" is a true answer.
 #[test]
 fn an_absent_subject_is_an_empty_description() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     let out = run(&[
@@ -298,7 +298,7 @@ fn an_absent_subject_is_an_empty_description() {
 /// EVERY native source syntax, plus the pack container, reaches the same description.
 #[test]
 fn every_native_source_format_reaches_the_same_description() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let seed = write_file(dir.path(), "seed.ttl", DATA);
     let baseline = run(&[
         "describe",
@@ -358,7 +358,7 @@ fn every_native_source_format_reaches_the_same_description() {
 /// touches the closure ride along with their annotations.
 #[test]
 fn the_rdf12_statement_layer_is_described() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "star.ttl", STAR_DATA);
 
     let out = run(&[
@@ -395,7 +395,7 @@ fn the_rdf12_statement_layer_is_described() {
 /// RDF-emitting verb that shares `convert`'s sink.
 #[test]
 fn a_star_incapable_target_records_the_dropped_statement_rows() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "star.ttl", STAR_DATA);
     let ledger_path = dir
         .path()
@@ -580,7 +580,7 @@ fn base_resolves_relative_iris_while_parsing() {
 /// argument that denoted no resource.
 #[test]
 fn a_relative_iri_selector_resolves_against_the_base_in_force() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "rel.ttl", "<alice> <../knows> <bob> .\n");
 
     // The reproduction, now answered: `--iri alice` denotes what `<alice>` in the document
@@ -687,7 +687,7 @@ fn an_unresolvable_selector_is_refused_and_an_absent_one_is_an_empty_answer() {
         stdout(&refused)
     );
 
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let absent = run(&[
         "describe",
@@ -720,7 +720,7 @@ fn an_unresolvable_selector_is_refused_and_an_absent_one_is_an_empty_answer() {
 /// selector denote anything.
 #[test]
 fn base_is_never_refused_because_the_iri_selector_always_spends_it() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "rel.ttl", "<alice> <../knows> <bob> .\n");
     let pack = dir
         .path()
@@ -800,7 +800,7 @@ fn base_is_never_refused_because_the_iri_selector_always_spends_it() {
 /// A description can be written into the lossless pack container and read back.
 #[test]
 fn a_description_can_be_written_to_a_pack() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "star.ttl", STAR_DATA);
     let pack = dir
         .path()
@@ -834,7 +834,7 @@ fn a_description_can_be_written_to_a_pack() {
 /// silently ignored.
 #[test]
 fn jsonld_options_require_a_jsonld_target() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let options = write_file(
         dir.path(),
@@ -880,7 +880,7 @@ fn jsonld_options_require_a_jsonld_target() {
 /// At least one `--iri` is required: `describe` never describes "everything" by default.
 #[test]
 fn at_least_one_iri_is_required() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
 
     let out = run(&["describe", "--to", "ntriples", &data]);
@@ -891,7 +891,7 @@ fn at_least_one_iri_is_required() {
 /// A malformed source is a runtime failure (exit 1) that writes nothing.
 #[test]
 fn a_malformed_source_is_a_runtime_failure() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "broken.ttl", "<a> <b> .");
 
     let out = run(&[
@@ -928,7 +928,7 @@ const GRAPH_STAR_DATA: &str = concat!(
 /// them. TriG out is where that is observable at all.
 #[test]
 fn the_statement_layer_stays_in_the_graph_it_came_from() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "graphs.trig", GRAPH_STAR_DATA);
 
     let out = run(&[
@@ -989,7 +989,7 @@ fn the_statement_layer_stays_in_the_graph_it_came_from() {
 /// document standing in for the description that was asked for.
 #[test]
 fn a_named_graph_description_is_refused_by_a_single_graph_target() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "graphs.trig", GRAPH_STAR_DATA);
 
     for target in ["turtle", "ntriples", "rdfxml"] {

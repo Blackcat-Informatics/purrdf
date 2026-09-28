@@ -105,7 +105,7 @@ pub fn fingerprint_terms<'a, I>(terms: I) -> Result<[u8; FINGERPRINT_BYTES], Tex
 where
     I: IntoIterator<Item = &'a TermValue>,
 {
-    let mut hasher = blake3::Hasher::new();
+    let mut hasher = purrdf_hash::blake3::Hasher::new();
     let mut buffer = Vec::new();
     for term in terms {
         buffer.clear();
@@ -176,10 +176,9 @@ pub(crate) fn push_str(text: &str, out: &mut Vec<u8>) {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
-    use proptest::prelude::*;
     use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
+    use purrdf_testkit::prop::prelude::*;
 
     use super::{
         FINGERPRINT_BYTES, TAG_BLANK, TAG_IRI, TAG_LITERAL, TAG_TRIPLE, encode_term,
@@ -215,19 +214,21 @@ mod tests {
     /// strings appear as IRIs, as blank labels, as lexical forms and as language
     /// tags — because that is what makes the injectivity property below a real
     /// test: a shared alphabet is where a separator-based encoding would
-    /// collide, so proptest is given every chance to find such a collision.
+    /// collide, so the property harness is given every chance to find such a collision.
     fn leaf_term() -> impl Strategy<Value = TermValue> {
         prop_oneof![
-            "[a-c:/#]{0,4}".prop_map(TermValue::Iri),
-            ("[a-c0-9]{0,4}", 0_u32..3).prop_map(|(label, scope)| TermValue::Blank {
-                label,
-                scope: BlankScope(scope),
+            prop::string::regex("[a-c:/#]{0,4}").prop_map(TermValue::Iri),
+            (prop::string::regex("[a-c0-9]{0,4}"), 0_u32..3).prop_map(|(label, scope)| {
+                TermValue::Blank {
+                    label,
+                    scope: BlankScope(scope),
+                }
             }),
             (
-                "[a-c:/# ]{0,4}",
-                "[a-c:/#]{0,4}",
-                proptest::option::of("[a-c:/#]{0,4}"),
-                proptest::option::of(prop_oneof![
+                prop::string::regex("[a-c:/# ]{0,4}"),
+                prop::string::regex("[a-c:/#]{0,4}"),
+                prop::option::of(prop::string::regex("[a-c:/#]{0,4}")),
+                prop::option::of(prop_oneof![
                     Just(RdfTextDirection::Ltr),
                     Just(RdfTextDirection::Rtl)
                 ]),
@@ -254,7 +255,7 @@ mod tests {
         })
     }
 
-    proptest! {
+    prop_test! {
         /// The whole contract, in both directions: equal terms encode
         /// identically, and distinct terms never encode identically.
         #[test]
@@ -435,7 +436,7 @@ mod tests {
         }
     }
 
-    proptest! {
+    prop_test! {
         /// The work-list encoder appends exactly the bytes the recursive reference
         /// does, nested triple terms included.
         #[test]
@@ -453,7 +454,7 @@ mod tests {
         let deep = nest(TermValue::iri("https://example.org/x"), 1_000);
         assert_eq!(
             fingerprint_terms([&deep]).expect("every term encodes"),
-            *blake3::hash(&encode(&deep)).as_bytes()
+            *purrdf_hash::blake3::hash(&encode(&deep)).as_bytes()
         );
     }
 

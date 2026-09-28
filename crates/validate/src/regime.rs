@@ -3997,7 +3997,7 @@ pub fn graph_entails_to_string(
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
     let parsed_premise = parse_premise(premise)?;
-    let certificate = purrdf_entail::entails_with(
+    let entailment = purrdf_entail::entails_with(
         &parsed_premise,
         &target,
         parsed,
@@ -4008,17 +4008,17 @@ pub fn graph_entails_to_string(
         render_entail_error_in(regime, &error, limits.host, RegimeService::GraphEntails)
     })?;
     Ok(ReasoningAnswer {
-        answer: render_entailment_answer(&certificate),
-        certificate: render_reasoning_report(certificate.report()),
+        answer: render_entailment_answer(&entailment),
+        certificate: render_reasoning_report(entailment.report()),
         proof: None,
     })
 }
 
 /// The `mechanism`/`entailment`/evidence block shared by [`graph_entails_to_string`] and
 /// [`verify_entailment_to_string`].
-fn render_entailment_answer(certificate: &EntailmentCertificate) -> String {
-    let mut answer = render_mechanism(certificate.mechanism());
-    match certificate.outcome() {
+fn render_entailment_answer(entailment: &EntailmentCertificate) -> String {
+    let mut answer = render_mechanism(entailment.mechanism());
+    match entailment.outcome() {
         EntailmentOutcome::Entailed(warrant) => {
             answer.push_str("entailment entailed\n");
             // A COMPOSITE names its constituents, in the fixed cost order the fold tried them.
@@ -4112,7 +4112,7 @@ pub fn verify_entailment_to_string(
     let target = purrdf_rdf::parse_dataset(conclusion.as_bytes(), INPUT_MEDIA_TYPE, None)
         .map_err(|diagnostic| format!("the conclusion is not N-Quads: {diagnostic}"))?;
     let parsed_premise = parse_premise(premise)?;
-    let certificate = purrdf_entail::entails_with(
+    let entailment = purrdf_entail::entails_with(
         &parsed_premise,
         &target,
         parsed,
@@ -4122,8 +4122,8 @@ pub fn verify_entailment_to_string(
     .map_err(|error| {
         render_entail_error_in(regime, &error, limits.host, RegimeService::VerifyEntailment)
     })?;
-    let mut answer = render_entailment_answer(&certificate);
-    match certificate.warrant() {
+    let mut answer = render_entailment_answer(&entailment);
+    match entailment.warrant() {
         Some(warrant) => {
             answer.push_str("warrant present\n");
             let _ = writeln!(
@@ -4139,7 +4139,7 @@ pub fn verify_entailment_to_string(
     }
     Ok(ReasoningAnswer {
         answer,
-        certificate: render_reasoning_report(certificate.report()),
+        certificate: render_reasoning_report(entailment.report()),
         proof: None,
     })
 }
@@ -5016,7 +5016,6 @@ pub fn check_absent_proof_is_not_verifiable() -> Result<(), String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
     use purrdf_core::TermBox;
 
     /// The backward re-derivation runs on the PRODUCTION surface and says so.
@@ -8782,10 +8781,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             let owned = to_owned_term(&value);
             assert_eq!(owned, reference_owned(&value), "seed {seed}");

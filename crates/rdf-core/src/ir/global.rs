@@ -16,7 +16,7 @@
 //! The dictionary mirrors the immutable IR's interning discipline exactly, one
 //! width up: a store-once byte arena (each interned string owned ONCE), a dense
 //! `GlobalInternedTerm` table, a value→dense-index [`HashTable`] using fixed-key
-//! ahash, and a lazily-built reverse value index. Ids are minted in insertion order,
+//! `FixedHasher`, and a lazily-built reverse value index. Ids are minted in insertion order,
 //! so a fixed push sequence is reproducible; no observable output depends on hash
 //! iteration order (buckets are populated in ascending-id order and reads return the
 //! first match).
@@ -196,79 +196,45 @@ enum GlobalTermLookup<'a> {
     },
 }
 
-/// Fixed-key ahash of a lookup (id-based dedup path). MUST hash byte-identically to
-/// [`hash_stored`] for equal values — explicit discriminant tags + `str::hash`.
-fn hash_lookup<H: Hasher>(lookup: &GlobalTermLookup<'_>, state: &mut H) {
+fn hash_lookup_value(lookup: &GlobalTermLookup<'_>) -> u64 {
     match lookup {
-        GlobalTermLookup::Iri(iri) => {
-            0u8.hash(state);
-            iri.hash(state);
-        }
+        GlobalTermLookup::Iri(iri) => crate::hash::hash_iri_for_interner(iri),
         GlobalTermLookup::Blank { label, scope } => {
-            1u8.hash(state);
-            label.hash(state);
-            scope.hash(state);
+            crate::hash::hash_blank_for_interner(label, scope.0)
         }
         GlobalTermLookup::Literal {
             lexical,
             datatype,
             language,
             direction,
-        } => {
-            2u8.hash(state);
-            lexical.hash(state);
-            datatype.hash(state);
-            language.hash(state);
-            direction.hash(state);
-        }
+        } => crate::hash::hash_literal_for_interner(
+            lexical,
+            datatype.0.get() - 1,
+            *language,
+            *direction,
+        ),
         GlobalTermLookup::Triple { s, p, o } => {
-            3u8.hash(state);
-            s.hash(state);
-            p.hash(state);
-            o.hash(state);
+            crate::hash::hash_triple_for_interner(s.0.get() - 1, p.0.get() - 1, o.0.get() - 1)
         }
     }
-}
-
-/// Fixed-key ahash of a stored term, resolving its `StrRange`s through `arena`
-/// (id-based dedup path). MUST match [`hash_lookup`] for equal values.
-fn hash_stored<H: Hasher>(arena: &[u8], term: &GlobalInternedTerm, state: &mut H) {
-    match term {
-        GlobalInternedTerm::Iri(r) => {
-            0u8.hash(state);
-            arena_str(arena, *r).hash(state);
-        }
-        GlobalInternedTerm::Blank { label, scope } => {
-            1u8.hash(state);
-            arena_str(arena, *label).hash(state);
-            scope.hash(state);
-        }
-        GlobalInternedTerm::Literal(lit) => {
-            2u8.hash(state);
-            arena_str(arena, lit.lexical_form).hash(state);
-            lit.datatype.hash(state);
-            lit.language.map(|r| arena_str(arena, r)).hash(state);
-            lit.direction.hash(state);
-        }
-        GlobalInternedTerm::Triple { s, p, o } => {
-            3u8.hash(state);
-            s.hash(state);
-            p.hash(state);
-            o.hash(state);
-        }
-    }
-}
-
-fn hash_lookup_value(lookup: &GlobalTermLookup<'_>) -> u64 {
-    let mut hasher = ahash::AHasher::default();
-    hash_lookup(lookup, &mut hasher);
-    hasher.finish()
 }
 
 fn hash_stored_value(arena: &[u8], term: &GlobalInternedTerm) -> u64 {
-    let mut hasher = ahash::AHasher::default();
-    hash_stored(arena, term, &mut hasher);
-    hasher.finish()
+    match term {
+        GlobalInternedTerm::Iri(r) => crate::hash::hash_iri_for_interner(arena_str(arena, *r)),
+        GlobalInternedTerm::Blank { label, scope } => {
+            crate::hash::hash_blank_for_interner(arena_str(arena, *label), scope.0)
+        }
+        GlobalInternedTerm::Literal(lit) => crate::hash::hash_literal_for_interner(
+            arena_str(arena, lit.lexical_form),
+            lit.datatype.0.get() - 1,
+            lit.language.map(|r| arena_str(arena, r)),
+            lit.direction,
+        ),
+        GlobalInternedTerm::Triple { s, p, o } => {
+            crate::hash::hash_triple_for_interner(s.0.get() - 1, p.0.get() - 1, o.0.get() - 1)
+        }
+    }
 }
 
 /// Whether a stored term equals a lookup, resolving the stored ranges through
@@ -320,7 +286,7 @@ type GlobalValueIndex = HashMap<u64, Vec<GlobalTermId>, FastHasher>;
 /// A `u64`-scaled value-interner keyed on the dataset-independent [`TermValue`] — the
 /// global-identity twin of the frozen IR's `Interner`. Owns a store-once byte arena,
 /// a dense `GlobalInternedTerm` table, a value→dense-index [`HashTable`] (fixed-key
-/// ahash, hash/eq resolving into the arena BY VALUE), and a lazily-built reverse
+/// `FixedHasher`, hash/eq resolving into the arena BY VALUE), and a lazily-built reverse
 /// value index. `Send + Sync` (the lazy index rides an [`OnceLock`], like
 /// [`RdfDataset`](super::RdfDataset)).
 ///
@@ -824,7 +790,7 @@ impl GlobalDictionary {
                 let id = GlobalTermId::from_index(
                     u64::try_from(i).expect("dense index fits u64 for a Vec-bounded table"),
                 );
-                let mut hasher = ahash::AHasher::default();
+                let mut hasher = purrdf_hash::fixed::FixedHasher::default();
                 self.hash_term_value(id, &mut hasher);
                 map.entry(hasher.finish()).or_default().push(id);
             }
@@ -847,11 +813,11 @@ impl GlobalDictionary {
     }
 }
 
-/// Fixed-key ahash of a dataset-independent [`TermValue`] (value-based path). Uses
+/// Fixed-key `FixedHasher` hash of a dataset-independent [`TermValue`] (value-based path). Uses
 /// [`TermValue`]'s hand-written `Hash`, so it matches
 /// [`GlobalDictionary::hash_term_value`] for equal values.
 fn hash_value(value: &TermValue) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     value.hash(&mut hasher);
     hasher.finish()
 }
@@ -860,6 +826,7 @@ fn hash_value(value: &TermValue) -> u64 {
 mod tests {
     use super::*;
     use crate::TermBox;
+    use crate::ir::term::RDF_DIR_LANG_STRING;
 
     /// Intern a fixture value, asserting it satisfies the IR-boundary absoluteness
     /// invariant. Every fixture below is deliberately absolute; the refusal path has
@@ -880,6 +847,71 @@ mod tests {
         assert_eq!(b.index(), a.index() + 1);
         assert_eq!(dict.len(), 2);
         assert!(!dict.is_empty());
+    }
+
+    #[test]
+    fn iri_hash_matches_stored_form_across_lengths_and_table_growth() {
+        let mut dict = GlobalDictionary::new();
+        let iris: Vec<String> = (2..=33)
+            .map(|len| format!("a:{}", "x".repeat(len - 2)))
+            .chain((0..=128).map(|len| format!("http://example.org/{}", "x".repeat(len))))
+            .collect();
+        let ids: Vec<GlobalTermId> = iris
+            .iter()
+            .map(|iri| dict.intern_iri(iri).expect("absolute IRI"))
+            .collect();
+        for (iri, id) in iris.iter().zip(ids) {
+            assert_eq!(
+                hash_lookup_value(&GlobalTermLookup::Iri(iri)),
+                hash_stored_value(&dict.arena, &dict.terms[id.index()]),
+                "borrowed and stored IRI hashes differ at length {}",
+                iri.len()
+            );
+            assert_eq!(dict.intern_iri(iri), Ok(id));
+        }
+    }
+
+    #[test]
+    fn all_term_kinds_match_borrowed_and_stored_hashes() {
+        let mut dict = GlobalDictionary::new();
+        let iri = GlobalTermLookup::Iri(RDF_DIR_LANG_STRING);
+        let datatype = dict.intern_iri(RDF_DIR_LANG_STRING).expect("absolute IRI");
+        let blank = GlobalTermLookup::Blank {
+            label: "b",
+            scope: BlankScope(7),
+        };
+        let blank_id = dict.intern_lookup(blank);
+        let literal = GlobalTermLookup::Literal {
+            lexical: "hello",
+            datatype,
+            language: Some("en"),
+            direction: Some(RdfTextDirection::Ltr),
+        };
+        let literal_id = dict.intern_lookup(literal);
+        let triple = GlobalTermLookup::Triple {
+            s: blank_id,
+            p: datatype,
+            o: literal_id,
+        };
+        let triple_id = dict.intern_lookup(triple);
+        for n in 0..256 {
+            dict.intern_iri(&format!("http://example.org/fill/{n}"))
+                .expect("absolute IRI");
+        }
+        for (lookup, id) in [
+            (iri, datatype),
+            (blank, blank_id),
+            (literal, literal_id),
+            (triple, triple_id),
+        ] {
+            let hash = hash_lookup_value(&lookup);
+            assert_eq!(
+                hash,
+                hash_stored_value(&dict.arena, &dict.terms[id.index()])
+            );
+            assert_eq!(dict.intern_lookup(lookup), id);
+        }
+        assert_eq!(dict.len(), 260);
     }
 
     #[test]
@@ -1155,7 +1187,7 @@ mod tests {
 
     /// The stored hash of `id`'s value.
     fn stored_hash(dict: &GlobalDictionary, id: GlobalTermId) -> u64 {
-        let mut hasher = ahash::AHasher::default();
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
         dict.hash_term_value(id, &mut hasher);
         hasher.finish()
     }
@@ -1169,15 +1201,15 @@ mod tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                crate::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
-            let other = crate::test_rng::term_value(
+            let other = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                crate::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             nested += usize::from(budget < 7);
             let mut dict = GlobalDictionary::new();
@@ -1207,7 +1239,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = crate::test_rng::triple_chain(LEVELS);
+                let value = crate::test_terms::triple_chain(LEVELS);
                 let mut dict = GlobalDictionary::new();
                 let id = intern(&mut dict, &value);
                 assert_eq!(dict.reintern_validated(&value), id);

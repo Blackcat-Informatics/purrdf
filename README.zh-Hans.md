@@ -131,8 +131,8 @@ PurRDF 是 [GMEOW](https://github.com/Blackcat-Informatics/gmeow-ontology) 技�
 以此保证换取速度，其最后几位可能随目标与构建而不同——并且每一种排序
 都是规范的：文档 id 在按 `(graph, subject, language)` 排序后分配，空间行按
 `TermValue` 的全序排序，k 近邻的并列按内容派生的 `TargetId` 打破。这一声称是被执行
-而非被论证的：文本与 k 近邻的确定性测试是同时带有 `#[test]` 与
-`#[wasm_bindgen_test]` 的同一份测试体，由 `cargo test` 在原生上运行，由
+而非被论证的：文本与 k 近邻的确定性测试每个用例只有一份测试体，运行在同一个
+共享的测试运行器上，由 `cargo test` 在原生上运行，由
 `make wasm-test` 在 `wasm32-unknown-unknown` 上运行，而 `make geo-determinism` 在
 两个目标上运行同一语料并比较字节。
 
@@ -441,8 +441,9 @@ ORDER BY ?rank
   SSSOM 映射 TSV 支持与一个 FnO 函数目录编解码器（二者都位于 `purrdf-core` 中，而非
   slice crate）。
 - **零依赖的基础层**——`purrdf-iri`（RFC 3987/3986）与 `purrdf-xsd`（XSD 1.1 值
-  空间）完全没有运行时依赖；`purrdf-events`（对象安全的摄入扩展点）同样没有，而
-  `purrdf-cdt` 是恰好建立在这两者之上的 `no_std` 封闭叶。
+  空间）完全没有运行时依赖；`purrdf-events`（对象安全的摄入扩展点）与 `purrdf-hash`
+  （MD5、SHA-1、SHA-3 与 CRC-32 摘要）同样没有，而 `purrdf-cdt` 是恰好建立在前两者之上的
+  `no_std` 封闭叶。
 
 ## 快速入门
 
@@ -580,10 +581,13 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-retrieval`](./crates/retrieval/) | 位于各带排名生产者（ranked producer）之上的组合层：一个请求经过规划、准入、执行与融合，在调用方于属性函数扩展点上注册的每一个带排名关系之间，得出一个有序答案。纯数据的计划，带规范的 BLAKE3 同一性；一条精确的、内容寻址的融合法则；逐行、逐层（stratum）的溯源，以及逐词项的未服务证据（unserved evidence）。生产者、层与权重均由调用方提供，不设任何默认值。由门面 crate 重新导出为 `purrdf::retrieval`。 |
 | [`purrdf-validate`](./crates/validate/) | 共享的宿主边界：SARIF 2.1.0 诊断，以及 Python/wasm/C 绑定所调用的蕴涵机制字符串接口。 |
 | [`purrdf-markdown`](./crates/markdown/) | Markdown → RDF 1.2 结构化编解码器，遵循一份随附规范（[SPEC](./crates/markdown/SPEC.md)）：一篇文档成为一张图，图中是它自身的各级标题、编号节与段落，带逐字对应的字节区间与对照表引用——全部在调用方提供的词汇表与内容寻址 Profile 之下——且这张图可逐字节解码还原为原文档，并以图中自带的源摘要（哈希）为证。由门面 crate 重新导出为 `purrdf::markdown`。 |
+| [`purrdf-jsonschema`](./crates/jsonschema/) | 原生 JSON Schema 校验，支持 draft 2020-12、2019-09 与 07，每个 schema 资源按其自身方言处理：全部词汇表、`$dynamicRef`、`$recursiveRef`、`unevaluated*`、`$vocabulary`，以及 flag/basic/detailed 三种标准输出格式。数字保留精确十进制值。ECMA-262 `/u` 模式的常规部分由 `regex` 执行，前后查找、反向引用和局部修饰符由有资源上限的显式栈匹配器执行，并使用 Unicode 17 属性范围；匹配耗尽预算时，校验返回带类型的错误。以官方 JSON-Schema-Test-Suite 对三个草案逐一检验；仅依赖 `serde_json`、`regex` 与 `purrdf-iri`，可构建到 wasm32。 |
 | [`purrdf-slice`](./crates/slice/) | 切片目录：清单、带类型的工件、所有权/依赖分析。 |
 | [`purrdf-iri`](./crates/iri/) | 零依赖的 IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
 | [`purrdf-xsd`](./crates/xsd/) | 零依赖的 XSD 1.1 值空间，带 SPARQL 数值提升。 |
 | [`purrdf-events`](./crates/rdf-events/) | 零依赖、对象安全的 RDF 事件汇/源扩展点。 |
+| [`purrdf-hash`](./crates/hash/) | 零依赖的 MD5、SHA-1、SHA-3 与 CRC-32 摘要，支持流式与一次性计算；处理器具备 SHA 与 CRC 指令时，SHA-1 与 CRC-32 直接使用这些指令。 |
+| [`purrdf-deflate`](./crates/deflate/) | 原生 DEFLATE 与 gzip：推送式流解码器逐一解码每个 gzip 成员、校验每个尾部，并拒绝尾随垃圾字节或超出调用方上限的输出；确定性编码器的输出只取决于输入与压缩级别。匹配复制与比较在 SSE2/AVX2、NEON 与 wasm simd128 上向量化；仅依赖 `purrdf-hash`。 |
 | [`purrdf-wasm`](./crates/rdf-wasm/) | `purrdf` ESM 包背后的 wasm32 引擎。 |
 | [`purrdf-capi`](./crates/rdf-capi/) | `libpurrdf` C ABI（不发布；经由 cargo-c 构建）。 |
 | [`purrdf-cli`](./crates/cli/) | `purrdf` 命令行工具：`convert`、`query`、`update`、`reason`、`entails`、`consistency`、`validate`、`shex`、`describe`、`project`、`lift`、`pack verify`（不发布）。`convert` 接受任意数量的 `--input` 源，按确定性的并集合并，每个源使用独立的空节点作用域；`--transport auto\|none\|gzip\|zstd` 先根据魔数检测 gzip 或 zstd 包装再参考后缀，并以全有或全无的方式解码；传输包装从不在输出时施加，对 pack 源则拒绝。 |
@@ -619,7 +623,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 ## 快，靠测量而非断言
 
 IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `NonZeroU32` id 寻址，在所有
-热点处用固定密钥的 `ahash` 做哈希，并把数据集冻结为 `Box<[QuadRow]>` 表，带惰性的
+热点处用固定密钥的 `FixedHasher` 做哈希，并把数据集冻结为 `Box<[QuadRow]>` 表，带惰性的
 序数置换索引（每条四元组每个轴约 4 字节）。性能声称由 criterion 基准而非形容词
 支撑——`crates/rdf-core/benches/ir_layout.rs` 度量结构数组、数组结构与谓词邻接三种
 布局（分配次数、高水位、端到端延迟），最终采用的布局就是胜出的那个。用 `make bench`

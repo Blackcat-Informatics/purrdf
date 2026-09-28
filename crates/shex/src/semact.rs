@@ -171,7 +171,6 @@ const TEST_LEADING_RUN: char = ' ';
 mod test_extension_leading_run {
     use super::{SemActContext, SemActRegistry, TEST_EXTENSION, TEST_LEADING_RUN, test_extension};
     use crate::ast::SemAct;
-    use pretty_assertions::assert_eq;
 
     fn act(code: &str) -> SemAct {
         SemAct {
@@ -217,8 +216,8 @@ mod test_extension_leading_run {
     fn the_registry_dispatches_the_same_reading() {
         let registry = SemActRegistry::with_test();
         let ctx = SemActContext::default();
-        assert_eq!(registry.dispatch(&act("  fail(s)"), &ctx), false);
-        assert_eq!(registry.dispatch(&act("\u{A0}fail(s)"), &ctx), true);
+        assert!(!registry.dispatch(&act("  fail(s)"), &ctx));
+        assert!(registry.dispatch(&act("\u{A0}fail(s)"), &ctx));
     }
 
     /// Keeps the doc's citation from drifting away from the constant it names.

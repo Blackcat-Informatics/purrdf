@@ -91,8 +91,34 @@ fn bench_construct(c: &mut Criterion, label: &str, cols: usize) {
     });
 }
 
-/// Clone/extend: clone an existing row (the copy every join/OPTIONAL output row
-/// pays), then push one more binding onto the copy.
+/// Clone an existing row without changing its width, for comparison with the
+/// Copy path used by BGP unification and expression evaluation.
+fn bench_clone(c: &mut Criterion, label: &str, cols: usize) {
+    let batch = rows(cols);
+    c.bench_function(label, |bencher| {
+        bencher.iter(|| {
+            for r in &batch {
+                black_box(black_box(r).clone());
+            }
+        });
+    });
+}
+
+/// Copy a row whose cells implement `Copy`, using the specialized slice path
+/// available to the evaluator's solution terms.
+fn bench_copy(c: &mut Criterion, label: &str, cols: usize) {
+    let batch = rows(cols);
+    c.bench_function(label, |bencher| {
+        bencher.iter(|| {
+            for r in &batch {
+                black_box(Solution::from_slice(black_box(r)));
+            }
+        });
+    });
+}
+
+/// Clone/extend: clone an existing row, then push one more binding onto the
+/// copy. This also measures growth of a full inline buffer.
 fn bench_clone_extend(c: &mut Criterion, label: &str, cols: usize) {
     let batch = rows(cols);
     c.bench_function(label, |bencher| {
@@ -111,7 +137,13 @@ fn bench_solution_row(c: &mut Criterion) {
     bench_construct(c, "construct_inline_4col", INLINE_COLS);
     bench_construct(c, "construct_spilled_9col", SPILLED_COLS);
 
-    // Clone + extend — the per-output-row cost of a join/OPTIONAL, both regimes.
+    // Compare generic clones with the production callers' Copy path.
+    bench_clone(c, "clone_inline_4col", INLINE_COLS);
+    bench_clone(c, "clone_spilled_9col", SPILLED_COLS);
+    bench_copy(c, "copy_inline_4col", INLINE_COLS);
+    bench_copy(c, "copy_spilled_9col", SPILLED_COLS);
+
+    // Clone + extend exercises the full-inline growth path.
     bench_clone_extend(c, "clone_extend_inline_4col", INLINE_COLS);
     bench_clone_extend(c, "clone_extend_spilled_9col", SPILLED_COLS);
 

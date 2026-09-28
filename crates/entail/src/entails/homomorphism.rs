@@ -990,13 +990,13 @@ mod term_walk_tests {
         let mut state = seed;
         let ControlFlow::Continue(()) = pat.visit(|pat| -> ControlFlow<Infallible> {
             if let Pat::Var(key) = pat
-                && !purrdf_core::test_rng::splitmix64_next(&mut state).is_multiple_of(4)
+                && !purrdf_testkit::rng::splitmix64_next(&mut state).is_multiple_of(4)
             {
                 let mut budget = 1;
-                let value = purrdf_core::test_rng::term_value(
+                let value = crate::test_terms::term_value(
                     &mut state,
                     &mut budget,
-                    purrdf_core::test_rng::TermShape::Any,
+                    crate::test_terms::TermShape::Any,
                 );
                 bound.entry(key.clone()).or_insert(value);
             }
@@ -1024,10 +1024,10 @@ mod term_walk_tests {
             open += usize::from(substituted.is_none());
             let mut state = seed + 1_000;
             let mut budget = 8;
-            let unrelated = purrdf_core::test_rng::term_value(
+            let unrelated = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             for ground in substituted.iter().chain([&unrelated]) {
                 let (mut bound, mut trail) = (Binding::new(), Vec::new());
@@ -1067,7 +1067,7 @@ mod term_walk_tests {
                     TermValue::iri("http://example.org/o"),
                 );
                 let ground = substitute(&pat, &bound).expect("every variable is bound");
-                assert_eq!(ground, purrdf_core::test_rng::triple_chain(LEVELS));
+                assert_eq!(ground, crate::test_terms::triple_chain(LEVELS));
                 let (mut fresh, mut trail) = (Binding::new(), Vec::new());
                 assert!(try_unify(&pat, &ground, &mut fresh, &mut trail));
                 assert_eq!(fresh, bound);

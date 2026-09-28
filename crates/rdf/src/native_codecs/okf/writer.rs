@@ -858,12 +858,16 @@ impl<'a> Projector<'a> {
                 serde_yaml::to_value(value).map_err(|error| yaml_value_error(&error))
             }
             datatype if datatype == self.config.json_datatype() => {
-                let json: serde_json::Value =
-                    crate::json_number::read_json(|| serde_json::from_str(lexical)).map_err(
-                        |error| {
-                            OkfError::new(format!("invalid OKF JSON literal `{lexical}`: {error}"))
-                        },
-                    )?;
+                let json: serde_json::Value = crate::json_number::read_json(|| {
+                    crate::json_number::parse_strict(
+                        lexical.as_bytes(),
+                        super::MAX_OKF_YAML_NODES,
+                        super::MAX_OKF_YAML_DEPTH,
+                    )
+                })
+                .map_err(|error| {
+                    OkfError::new(format!("invalid OKF JSON literal `{lexical}`: {error}"))
+                })?;
                 let canonical = serde_json::to_string(&json).map_err(|error| {
                     OkfError::new(format!("cannot canonicalize OKF JSON: {error}"))
                 })?;
@@ -872,7 +876,13 @@ impl<'a> Projector<'a> {
                         "OKF JSON literal must be canonical; expected `{canonical}`"
                     )));
                 }
-                serde_yaml::to_value(json).map_err(|error| yaml_value_error(&error))
+                let yaml = json_to_yaml(&json)?;
+                if super::reader::json_from_yaml(yaml.clone())? != json {
+                    return Err(OkfError::new(
+                        "OKF JSON literal would lose precision or lexical identity in YAML",
+                    ));
+                }
+                Ok(yaml)
             }
             other => Err(OkfError::new(format!(
                 "OKF extension literal datatype `{other}` is not representable"
@@ -976,6 +986,42 @@ fn parse_known_xsd(lexical: &str, datatype: &str) -> Result<purrdf_xsd::XsdValue
             OkfError::new(format!("invalid `{datatype}` literal `{lexical}`: {error}"))
         })?
         .ok_or_else(|| OkfError::new(format!("unrecognized internal XSD datatype `{datatype}`")))
+}
+
+/// Serialize public scalar values explicitly: arbitrary-precision JSON numbers
+/// have a serde representation that is not a YAML number.
+fn json_to_yaml(value: &serde_json::Value) -> Result<YamlValue, OkfError> {
+    match value {
+        serde_json::Value::Null => Ok(YamlValue::Null),
+        serde_json::Value::Bool(value) => Ok(YamlValue::Bool(*value)),
+        serde_json::Value::String(value) => Ok(YamlValue::String(value.clone())),
+        serde_json::Value::Number(value) => {
+            let yaml = if let Some(value) = value.as_i64() {
+                serde_yaml::to_value(value)
+            } else if let Some(value) = value.as_u64() {
+                serde_yaml::to_value(value)
+            } else {
+                let number = value
+                    .as_f64()
+                    .filter(|number| number.is_finite())
+                    .ok_or_else(|| {
+                        OkfError::new(format!("OKF JSON number `{value}` is not finite in YAML"))
+                    })?;
+                serde_yaml::to_value(number)
+            };
+            yaml.map_err(|error| yaml_value_error(&error))
+        }
+        serde_json::Value::Array(values) => values
+            .iter()
+            .map(json_to_yaml)
+            .collect::<Result<Vec<_>, _>>()
+            .map(YamlValue::Sequence),
+        serde_json::Value::Object(values) => values
+            .iter()
+            .map(|(key, value)| Ok((YamlValue::String(key.clone()), json_to_yaml(value)?)))
+            .collect::<Result<serde_yaml::Mapping, OkfError>>()
+            .map(YamlValue::Mapping),
+    }
 }
 
 fn yaml_value_error(error: &serde_yaml::Error) -> OkfError {
@@ -1099,6 +1145,32 @@ fn record_annotation_loss(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn json_yaml_numbers_and_reserved_names_preserve_identity() {
+        let original = crate::json_number::parse_strict(
+            br#"{"ranks":[1,2,0.25],"$serde_json::private::Number":"123"}"#,
+            16,
+            8,
+        )
+        .expect("JSON");
+        let yaml = json_to_yaml(&original).expect("YAML");
+        assert_eq!(
+            super::super::reader::json_from_yaml(yaml).expect("read"),
+            original
+        );
+        for lexical in ["18446744073709551617", "0.123456789012345678901"] {
+            let original = serde_json::from_str::<serde_json::Value>(lexical).expect("number");
+            let yaml = json_to_yaml(&original).expect("finite YAML candidate");
+            assert_ne!(
+                super::super::reader::json_from_yaml(yaml).expect("read"),
+                original
+            );
+        }
+        let enormous = serde_json::from_str::<serde_json::Value>("1e400").expect("exact JSON");
+        assert!(json_to_yaml(&enormous).is_err());
+    }
+
     use crate::{
         DatasetMut, DatasetSink, MutableDataset, QuadValues, RdfDatasetBuilder, RdfLiteral,
         TermValue, assert_ledger_complete, assert_ledger_sound, datasets_isomorphic,
@@ -1279,6 +1351,36 @@ mod tests {
             builder.push_quad(subject, type_predicate, value, None);
         }
         builder.freeze().expect("valid dataset")
+    }
+
+    #[test]
+    fn json_extensions_round_trip_or_refuse_numeric_loss() {
+        let config = config();
+        for (lexical, accepted) in [
+            (r#"{"$serde_json::private::Number":"123"}"#, true),
+            (r#"{"ranks":[1,2,0.25]}"#, true),
+            (r#"{"n":18446744073709551617}"#, false),
+            (r#"{"n":0.123456789012345678901}"#, false),
+        ] {
+            let base = profile_dataset(&["Concept"]);
+            let mut dataset = MutableDataset::new(base);
+            dataset
+                .insert(QuadValues::triple(
+                    TermValue::iri("https://example.org/doc/concept.md"),
+                    TermValue::iri(config.predicate_iri("producer").expect("predicate")),
+                    TermValue::typed_literal(lexical, config.json_datatype()),
+                ))
+                .expect("extension");
+            let frozen = dataset.freeze().expect("dataset");
+            let result = write_okf_bundle(&frozen, &config);
+            if accepted {
+                let outcome = result.expect("exact YAML representation");
+                let read = lift(&outcome.bundle, &config);
+                assert!(datasets_isomorphic(&frozen, &read), "{lexical}");
+            } else {
+                assert!(result.is_err(), "{lexical}");
+            }
+        }
     }
 
     #[test]

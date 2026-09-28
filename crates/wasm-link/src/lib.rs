@@ -12,6 +12,12 @@
 //! section. The output is validated before it is written, and `--check` proves an
 //! already-linked module still has every property below.
 //!
+//! The host must provide Binaryen 130's `wasm-opt`, the same pinned tool used by
+//! `make wasm-pkg`. It validates input and output under the package feature set.
+//! The first-party reader preserves original section and instruction bytes except
+//! the function-index immediates that must change. `wasm-encoder` only emits the
+//! new sections and templates; no general-purpose parser dependency is needed.
+//!
 //! # The stack pointer
 //!
 //! Rust's shadow stack lives in linear memory behind one mutable `i32` global. The
@@ -126,6 +132,7 @@
 
 #![forbid(unsafe_code)]
 
+mod binary;
 mod error;
 mod rewrite;
 mod scan;
@@ -134,8 +141,6 @@ mod verify;
 
 #[cfg(test)]
 mod tests;
-
-use wasmparser::{Validator, WasmFeatures};
 
 pub use error::LinkError;
 
@@ -276,14 +281,47 @@ pub fn check(bytes: &[u8]) -> Result<Report, LinkError> {
 /// Validate `bytes` under `features`, naming `stage` in the error.
 pub(crate) fn validate(
     bytes: &[u8],
-    features: WasmFeatures,
+    features: &[String],
     stage: &'static str,
 ) -> Result<(), LinkError> {
-    Validator::new_with_features(features)
-        .validate_all(bytes)
-        .map(|_| ())
-        .map_err(|error| LinkError::Invalid {
-            stage,
-            message: error.to_string(),
-        })
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    let failed = |message: String| LinkError::Invalid { stage, message };
+    let mut command = Command::new("wasm-opt");
+    command.args(["-", "-o", "-", "--mvp-features"]);
+    for feature in features {
+        command.arg(format!("--enable-{feature}"));
+    }
+    command
+        .stdin(Stdio::piped())
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let mut child = command
+        .spawn()
+        .map_err(|e| failed(format!("cannot run required Binaryen wasm-opt: {e}")))?;
+    let mut input = child
+        .stdin
+        .take()
+        .ok_or_else(|| failed("validator stdin unavailable".into()))?;
+    // The diagnostic pipe is drained concurrently with input: malformed large inputs
+    // must not deadlock because the validator emitted a diagnostic before consuming EOF.
+    let result = std::thread::scope(|scope| {
+        let writer = scope.spawn(move || {
+            let result = input.write_all(bytes);
+            drop(input);
+            result
+        });
+        let output = child.wait_with_output();
+        let written = writer.join();
+        (output, written)
+    });
+    let output = result.0.map_err(|e| failed(e.to_string()))?;
+    if !output.status.success() {
+        return Err(failed(String::from_utf8_lossy(&output.stderr).into_owned()));
+    }
+    result
+        .1
+        .map_err(|_| failed("validator writer panicked".into()))?
+        .map_err(|e| failed(e.to_string()))?;
+    Ok(())
 }

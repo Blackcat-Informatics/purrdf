@@ -406,7 +406,7 @@ fn run_job(id: u32) -> RunStatus {
 /// remaining budget are read from.
 #[cfg(target_arch = "wasm32")]
 pub(crate) fn now_ms() -> f64 {
-    js_sys::Date::now()
+    date_now_import()
 }
 
 /// Milliseconds since the Unix epoch — the host clock the evidence and the deadline's
@@ -7473,4 +7473,11 @@ mod tests {
         );
         assert!(options().validate(AsyncOperationKind::Shacl).is_ok());
     }
+}
+
+#[cfg(target_arch = "wasm32")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+extern "C" {
+    #[wasm_bindgen::prelude::wasm_bindgen(js_namespace = Date, js_name = now)]
+    fn date_now_import() -> f64;
 }

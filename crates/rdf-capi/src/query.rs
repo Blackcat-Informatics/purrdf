@@ -433,7 +433,7 @@ fn build_query_provenance(
     }
     let digest = Sha256::digest(query.as_bytes());
     purrdf_sparql_results::ResultProvenance {
-        query_hash: Some(format!("sha256:{digest:x}")),
+        query_hash: Some(format!("sha256:{}", purrdf_hash::hex::Lower(&digest))),
         engine: Some("purrdf-sparql-eval".to_owned()),
         solutions: Vec::new(),
     }

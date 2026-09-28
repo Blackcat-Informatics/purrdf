@@ -2344,7 +2344,7 @@ fn deterministic_label(id: usize) -> String {
 
 /// Fixed-key hash of an atom's identity components. Any hash would do for
 /// byte-determinism — term ids come from `terms` push order, never from
-/// hash-iteration order — so a fixed-key `AHasher` just keeps SipHash off the hot
+/// hash-iteration order — so the fixed-key `FixedHasher` just keeps SipHash off the hot
 /// interning path (same pattern as `purrdf-core`'s `ir::builder::hash_of`).
 fn hash_atom(
     kind: SerTermKind,
@@ -2353,8 +2353,8 @@ fn hash_atom(
     direction: Option<&str>,
     datatype: Option<usize>,
 ) -> u64 {
-    use std::hash::{Hash, Hasher};
-    let mut hasher = ahash::AHasher::default();
+    use std::hash::{BuildHasher, Hash, Hasher};
+    let mut hasher = purrdf_core::FastHasher::default().build_hasher();
     let tag: u8 = match kind {
         SerTermKind::Iri => 0,
         SerTermKind::Bnode => 1,

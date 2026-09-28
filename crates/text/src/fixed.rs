@@ -410,7 +410,6 @@ fn div_wide(high: u128, low: u128, divisor: u128) -> u128 {
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
 
     use super::{Fixed, SCALE, SCALE_DIGITS, binade, mul_div};
     use crate::error::TextError;

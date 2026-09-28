@@ -115,7 +115,6 @@ pub(crate) fn ntriples_token(value: &TermValue) -> Result<String, Error> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
     use purrdf_core::BlankScope;
     use purrdf_core::TermBox;
 
@@ -319,10 +318,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             let found = term_value_to_rdf_term(&value);
             assert_eq!(found, reference(&value), "seed {seed}");

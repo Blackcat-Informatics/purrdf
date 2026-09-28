@@ -13,7 +13,7 @@ use std::cell::RefCell;
 use std::sync::OnceLock;
 
 use ::purrdf::{FastMap, FastSet, IdSet, RdfTextDirection, TermId, TermRef};
-use smallvec::SmallVec;
+use purrdf_core::SmallVec;
 
 use crate::data::{GraphFilter, ShaclData, native_quads, quads_for_pattern_ids, resolve_id};
 use crate::engine::FocusNode;

@@ -1,0 +1,16 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+version = 1
+
+# The official JSON-Schema-Test-Suite, vendored verbatim (see
+# crates/jsonschema/PROVENANCE.md for the upstream commit). Its LICENSE is the
+# MIT text in LICENSES/MIT.txt; the files carry no per-file header.
+[[annotations]]
+path = [
+  "tests/**/*.json",
+  "remotes/**/*.json",
+  "output-tests/**/*.json",
+]
+SPDX-FileCopyrightText = "2012 Julian Berman"
+SPDX-License-Identifier = "MIT"

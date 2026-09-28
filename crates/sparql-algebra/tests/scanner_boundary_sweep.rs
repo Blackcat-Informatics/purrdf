@@ -93,7 +93,6 @@
 use std::collections::BTreeSet;
 use std::fmt::Write as _;
 
-use pretty_assertions::assert_eq;
 use purrdf_iri::terminals;
 use purrdf_sparql_algebra::lexer::{tokenize, tokenize_turtle};
 
@@ -494,7 +493,10 @@ fn the_derived_ranges_are_the_snapshotted_ones() {
             .expect("writing to a String cannot fail");
         }
     }
-    insta::assert_snapshot!(rendered);
+    purrdf_testkit::assert_golden!(
+        "scanner_boundary_sweep/the_derived_ranges_are_the_snapshotted_ones.txt",
+        &rendered,
+    );
 }
 
 /// **Derivation one.** U+1680 OGHAM SPACE MARK is the *only* scalar that is both

@@ -48,28 +48,3 @@ impl fmt::Display for LinkError {
 }
 
 impl std::error::Error for LinkError {}
-
-impl From<wasmparser::BinaryReaderError> for LinkError {
-    fn from(error: wasmparser::BinaryReaderError) -> Self {
-        Self::Parse(error.to_string())
-    }
-}
-
-impl From<wasm_encoder::reencode::Error<Self>> for LinkError {
-    fn from(error: wasm_encoder::reencode::Error<Self>) -> Self {
-        match error {
-            wasm_encoder::reencode::Error::UserError(inner) => inner,
-            wasm_encoder::reencode::Error::ParseError(inner) => Self::Parse(inner.to_string()),
-            other => Self::Reencode(other.to_string()),
-        }
-    }
-}
-
-impl From<wasm_encoder::reencode::Error<std::convert::Infallible>> for LinkError {
-    fn from(error: wasm_encoder::reencode::Error<std::convert::Infallible>) -> Self {
-        match error {
-            wasm_encoder::reencode::Error::ParseError(inner) => Self::Parse(inner.to_string()),
-            other => Self::Reencode(other.to_string()),
-        }
-    }
-}

@@ -1,0 +1,43 @@
+{
+  "head": "d501d2b7dc955662707ae653864e71af2797cc54",
+  "source_sha256": "12a2a190c21b14bd79894704917cb715e36762b48cca1a7ee05c74da4fb89ef7",
+  "status": "M AGENTS.md\n M crates/hash/PROVENANCE.md\n M crates/hash/README.md\n M crates/hash/src/arch/mod.rs\n M crates/hash/src/backend.rs\n M crates/hash/src/blake3.rs\n M crates/hash/src/fixed.rs\n M crates/hash/src/fixed/aes.rs\n M crates/hash/src/lib.rs\n M crates/hash/tests/fixed_hasher.rs\n M crates/hash/tests/vectors/fixed_hasher_aes_vectors.txt\n M crates/rdf-core/src/hash.rs\n M crates/rdf/src/native_codecs/rdfxml.rs\n M docs/benchmarks/hash-comparison-2026-09-28/README.md\n M docs/design/purrdf-simd.md\n M scripts/bench-hash-comparison.py\n M scripts/cleanroom/hash_comparison.rs\n?? crates/hash/src/arch/blake3_parents2.rs\n?? crates/hash/src/arch/blake3_rows.rs\n?? docs/benchmarks/hash-optimization-2026-09-28/\n?? scripts/bench-hash-workloads.py\n?? scripts/hash-workloads.rs",
+  "repo": "/tmp/purrdf-final-hash-candidate",
+  "build_command": [
+    "cargo",
+    "build",
+    "--release",
+    "--bins",
+    "--offline",
+    "--jobs",
+    "2",
+    "--message-format=json",
+    "--config",
+    "profile.release.lto=\"fat\"",
+    "--config",
+    "profile.release.opt-level=3",
+    "--config",
+    "profile.release.codegen-units=1"
+  ],
+  "effective_profile_configuration": "profile.dev.debug = 1 # /home/paudley/.cargo/config.toml\nprofile.dev.incremental = false # /home/paudley/.cargo/config.toml\nprofile.dev.package.\"*\".debug = false # /home/paudley/.cargo/config.toml\nprofile.release.codegen-units = 1 # --config cli option\nprofile.release.lto = \"fat\" # --config cli option\nprofile.release.opt-level = 3 # --config cli option\nprofile.release.strip = true # /home/paudley/.cargo/config.toml\n",
+  "binary_sha256": {
+    "timing": "723fa7c36768c73ddb550ccdf5b7fd8048e5358c1e2b99828780682f7fc102eb",
+    "allocations": "56b89bbb197ceea8ffad7fba18fb6cc93d9854de23cf96ab103e6db79d193736"
+  },
+  "lock_sha256": "423f6e19e97c23c1fad2ad4539fe3972a3670f1c7c594807e2a03ad63e22473a",
+  "changed_rust_source_sha256": {
+    "crates/hash/src/arch/blake3_parents2.rs": "9ed31c4905a976ff9113a545eac19bc081c617a4dbf290a7f9092e504770a755",
+    "crates/hash/src/arch/blake3_rows.rs": "615baf3676015a3179bad41e4b81d182ac38bf36e023101cd4800893e182312e",
+    "crates/hash/src/arch/mod.rs": "fb048acf0df461e8a02c23311f09fbcf02d56b47c12bbaf4e23a66d07afc09e3",
+    "crates/hash/src/backend.rs": "fe764b68e3aa91177a84ebb6c53f443df6b2b16383d48698ba9d70be7dace751",
+    "crates/hash/src/blake3.rs": "06933928fc91a9dd6ccbd06e29c0a24d0d8b40a90c9e91ad013dd34506595087",
+    "crates/hash/src/fixed.rs": "f3fad6809e24580161d63b3a6fc248e167ec20478f33d7420a8b15d486acc48d",
+    "crates/hash/src/fixed/aes.rs": "ec42833d3d107c7a7d6055a6d3e73d297d7b2697471077fc16fb5b571b9e68fa",
+    "crates/hash/src/lib.rs": "f5c44da8aaa55e9d6d9571993f97afb9f24b647ebd7c8e64884880a3a6219fc6",
+    "crates/hash/tests/fixed_hasher.rs": "051533898f1d64c18468f2724f152ce7bb8872100808bfe0e8653867d80ce4fa",
+    "crates/rdf-core/src/hash.rs": "e801b35d1e4d2e13fa7528ec2f078218c71dc2e032986f2bec8912069c92459d",
+    "crates/rdf/src/native_codecs/rdfxml.rs": "18e5ae9097a76fc335f438e675e48dfa01057ebc91ef1a5148ba87eb2d23d628",
+    "scripts/cleanroom/hash_comparison.rs": "1efbe0d92341cd9dc6c16838924bae096941814d954b55b220e577c868567ea3",
+    "scripts/hash-workloads.rs": "577e5de4be705f03ded9d093ed09fd6c5caf0a3abd8e6e95f4435bffcbe43977"
+  }
+}

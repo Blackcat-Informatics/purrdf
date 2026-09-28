@@ -1,0 +1,47 @@
+{
+  "intern-iri": {
+    "before": "dataset:10000:80bb83786840cdc043ed8aaecae5866711e562827325d01dd30b175cefe74222",
+    "checkpoint": "dataset:10000:80bb83786840cdc043ed8aaecae5866711e562827325d01dd30b175cefe74222",
+    "candidate": "dataset:10000:80bb83786840cdc043ed8aaecae5866711e562827325d01dd30b175cefe74222"
+  },
+  "intern-mixed": {
+    "before": "dataset:30000:c3b343f298425aecd766cf1e7672ad5ba365ad812e86718f75c023dbfc10d37d",
+    "checkpoint": "dataset:30000:c3b343f298425aecd766cf1e7672ad5ba365ad812e86718f75c023dbfc10d37d",
+    "candidate": "dataset:30000:c3b343f298425aecd766cf1e7672ad5ba365ad812e86718f75c023dbfc10d37d"
+  },
+  "parse-nquads": {
+    "before": "dataset:20000:5fcdeb27586b93f563cdaeeb21dca9f7e2712580ff340abdb73855190f71e8c6",
+    "checkpoint": "dataset:20000:5fcdeb27586b93f563cdaeeb21dca9f7e2712580ff340abdb73855190f71e8c6",
+    "candidate": "dataset:20000:5fcdeb27586b93f563cdaeeb21dca9f7e2712580ff340abdb73855190f71e8c6"
+  },
+  "parse-turtle": {
+    "before": "dataset:20000:5fcdeb27586b93f563cdaeeb21dca9f7e2712580ff340abdb73855190f71e8c6",
+    "checkpoint": "dataset:20000:5fcdeb27586b93f563cdaeeb21dca9f7e2712580ff340abdb73855190f71e8c6",
+    "candidate": "dataset:20000:5fcdeb27586b93f563cdaeeb21dca9f7e2712580ff340abdb73855190f71e8c6"
+  },
+  "query-join": {
+    "before": "dataset:4944:cc78db9ff98b2991559a6c6dafdd33e4e818ca38a219f4e14b8dc4f909584d6d",
+    "checkpoint": "dataset:4944:cc78db9ff98b2991559a6c6dafdd33e4e818ca38a219f4e14b8dc4f909584d6d",
+    "candidate": "dataset:4944:cc78db9ff98b2991559a6c6dafdd33e4e818ca38a219f4e14b8dc4f909584d6d"
+  },
+  "gts-author-4k": {
+    "before": "bytes:1105760:51105164296d3827a877d7e1906e92b3cc3ee1d306e8c538911e3712d7afefdf",
+    "checkpoint": "bytes:1105760:51105164296d3827a877d7e1906e92b3cc3ee1d306e8c538911e3712d7afefdf",
+    "candidate": "bytes:1105760:51105164296d3827a877d7e1906e92b3cc3ee1d306e8c538911e3712d7afefdf"
+  },
+  "gts-read-4k": {
+    "before": "graph:0:256:7cdd54d4fc06d043d6a00c705e13b161dcc08f7e2be4c06c400b58604373a3ac",
+    "checkpoint": "graph:0:256:7cdd54d4fc06d043d6a00c705e13b161dcc08f7e2be4c06c400b58604373a3ac",
+    "candidate": "graph:0:256:7cdd54d4fc06d043d6a00c705e13b161dcc08f7e2be4c06c400b58604373a3ac"
+  },
+  "gts-author-1m": {
+    "before": "bytes:8390792:02cc588a1b9aa2b727ef49c720ff3ee1f8005ea0ad38ac8a9754a0d0daad01ba",
+    "checkpoint": "bytes:8390792:02cc588a1b9aa2b727ef49c720ff3ee1f8005ea0ad38ac8a9754a0d0daad01ba",
+    "candidate": "bytes:8390792:02cc588a1b9aa2b727ef49c720ff3ee1f8005ea0ad38ac8a9754a0d0daad01ba"
+  },
+  "gts-read-1m": {
+    "before": "graph:0:8:0f65a4884b22ab64ae2be601cab6bc5f55cc97ad945156322a102dbb7f99c139",
+    "checkpoint": "graph:0:8:0f65a4884b22ab64ae2be601cab6bc5f55cc97ad945156322a102dbb7f99c139",
+    "candidate": "graph:0:8:0f65a4884b22ab64ae2be601cab6bc5f55cc97ad945156322a102dbb7f99c139"
+  }
+}

@@ -1345,20 +1345,15 @@ impl RdfDataset {
     /// The id of an interned IRI, without allocating an owned [`TermValue`].
     #[must_use]
     pub fn term_id_by_iri(&self, iri: &str) -> Option<TermId> {
-        let mut hasher = ahash::AHasher::default();
-        0u8.hash(&mut hasher);
-        iri.hash(&mut hasher);
-        self.find_term_hashed(hasher.finish(), |id| self.iri_matches(id, iri))
+        self.find_term_hashed(crate::hash::hash_iri_for_interner(iri), |id| {
+            self.iri_matches(id, iri)
+        })
     }
 
     /// The id of an interned blank node, without allocating its label.
     #[must_use]
     pub fn term_id_by_blank(&self, label: &str, scope: BlankScope) -> Option<TermId> {
-        let mut hasher = ahash::AHasher::default();
-        1u8.hash(&mut hasher);
-        label.hash(&mut hasher);
-        scope.hash(&mut hasher);
-        self.find_term_hashed(hasher.finish(), |id| {
+        self.find_term_hashed(crate::hash::hash_blank_for_interner(label, scope.0), |id| {
             matches!(
                 &self.terms[id.index()],
                 InternedTerm::Blank { label: stored, scope: stored_scope }
@@ -1398,13 +1393,13 @@ impl RdfDataset {
         let language = lowered.as_deref().or(language);
 
         let datatype_id = self.term_id_by_iri(datatype)?;
-        let mut hasher = ahash::AHasher::default();
-        2u8.hash(&mut hasher);
-        lexical_form.hash(&mut hasher);
-        datatype_id.hash(&mut hasher);
-        language.hash(&mut hasher);
-        direction.hash(&mut hasher);
-        self.find_term_hashed(hasher.finish(), |id| {
+        let hash = crate::hash::hash_literal_for_interner(
+            lexical_form,
+            datatype_id.index() as u64,
+            language,
+            direction,
+        );
+        self.find_term_hashed(hash, |id| {
             let InternedTerm::Literal(lit) = &self.terms[id.index()] else {
                 return false;
             };
@@ -1427,12 +1422,12 @@ impl RdfDataset {
         {
             return None;
         }
-        let mut hasher = ahash::AHasher::default();
-        3u8.hash(&mut hasher);
-        s.hash(&mut hasher);
-        p.hash(&mut hasher);
-        o.hash(&mut hasher);
-        self.find_term_hashed(hasher.finish(), |id| {
+        let hash = crate::hash::hash_triple_for_interner(
+            s.index() as u64,
+            p.index() as u64,
+            o.index() as u64,
+        );
+        self.find_term_hashed(hash, |id| {
             matches!(
                 self.terms[id.index()],
                 InternedTerm::Triple { s: stored_s, p: stored_p, o: stored_o }
@@ -2301,6 +2296,32 @@ mod tests {
             ),
             None
         );
+    }
+
+    #[test]
+    fn frozen_iri_lookup_round_trips_across_lengths_and_table_growth() {
+        let mut builder = RdfDatasetBuilder::new();
+        let iris: Vec<String> = (2..=33)
+            .map(|len| format!("a:{}", "x".repeat(len - 2)))
+            .chain((0..=128).map(|len| format!("http://example.org/{}", "x".repeat(len))))
+            .collect();
+        let ids: Vec<TermId> = iris.iter().map(|iri| builder.intern_iri(iri)).collect();
+        let dataset = builder.freeze().expect("freeze");
+        for (iri, id) in iris.iter().zip(ids) {
+            assert_eq!(
+                dataset.term_id_by_iri(iri),
+                Some(id),
+                "length {}",
+                iri.len()
+            );
+            assert_eq!(
+                dataset.term_id_by_value(&TermValue::Iri(iri.clone())),
+                Some(id),
+                "length {}",
+                iri.len()
+            );
+        }
+        assert_eq!(dataset.term_id_by_iri("http://example.org/absent"), None);
     }
 
     #[test]
@@ -3215,15 +3236,15 @@ mod tests {
         assert!(cursor.next().is_none());
     }
 
-    use proptest::prelude::*;
+    use purrdf_testkit::prop::prelude::*;
 
-    proptest! {
+    prop_test! {
         /// Build → freeze a random *valid* dataset (IRI subjects/predicates/objects
         /// over a small pool, with optional named graphs), then assert:
         /// - `quads().count()` equals the number of DISTINCT quads pushed (C0.5);
         /// - every yielded `TermId` is in range (`< term_count()`).
         #[test]
-        fn proptest_freeze_quads_count_and_in_range(
+        fn property_freeze_quads_count_and_in_range(
             rows in prop::collection::vec(
                 (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
                 0..48,
@@ -3269,7 +3290,7 @@ mod tests {
         /// GraphMatch` shape. The index only narrows candidates; the residual filter is
         /// the same predicate the scan applies, so any divergence is a range-math bug.
         #[test]
-        fn proptest_indexed_pattern_matches_linear_scan(
+        fn property_indexed_pattern_matches_linear_scan(
             rows in prop::collection::vec(
                 (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
                 0..48,
@@ -3331,7 +3352,7 @@ mod tests {
         /// residual filter can only over-count, never under-count, and never exceeds
         /// the table size.
         #[test]
-        fn proptest_cardinality_estimate_upper_bounds_count(
+        fn property_cardinality_estimate_upper_bounds_count(
             rows in prop::collection::vec(
                 (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
                 0..48,
@@ -3377,7 +3398,7 @@ mod tests {
         /// into the read-path selectivity-guard fallback (which returns the whole-table
         /// size for a low-selectivity prefix).
         #[test]
-        fn proptest_cardinality_estimate_exact_on_index_prefix(
+        fn property_cardinality_estimate_exact_on_index_prefix(
             rows in prop::collection::vec(
                 (0u8..5, 0u8..5, 0u8..5, prop::option::of(0u8..3)),
                 1..48,
@@ -3926,7 +3947,7 @@ mod tests {
     #[test]
     fn chunked_scan_filter_matches_per_row_filter() {
         let mut state = 0x0DA7_A5E7_u64;
-        let mut next = move |bound: u64| crate::test_rng::splitmix64_next(&mut state) % bound;
+        let mut next = move |bound: u64| purrdf_testkit::rng::splitmix64_next(&mut state) % bound;
         let mut sequential = 0_usize;
         let mut permuted = 0_usize;
         for rows in (0..=40).chain([63, 64, 65, 127, 200]) {

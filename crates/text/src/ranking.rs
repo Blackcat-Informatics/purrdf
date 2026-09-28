@@ -147,7 +147,8 @@ impl RankingProfile {
             unclassified,
             fingerprint: [0; FINGERPRINT_BYTES],
         };
-        profile.fingerprint = *blake3::hash(&profile.canonical_description()).as_bytes();
+        profile.fingerprint =
+            *purrdf_hash::blake3::hash(&profile.canonical_description()).as_bytes();
         Ok(profile)
     }
 

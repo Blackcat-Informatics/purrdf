@@ -24,7 +24,6 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
-use pretty_assertions::assert_eq;
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, StopCause, TermValue,
     TrippedGovernor,

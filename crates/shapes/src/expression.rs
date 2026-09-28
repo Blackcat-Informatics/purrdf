@@ -1518,7 +1518,7 @@ pub(crate) fn eval_planned_shape_nodes<'a>(
         NodeExpr::Constant(term) => {
             Some(ShapeNodes::Terms(Cow::Borrowed(std::slice::from_ref(term))))
         }
-        NodeExpr::This => Some(ShapeNodes::Interned(smallvec::smallvec![focus_id])),
+        NodeExpr::This => Some(ShapeNodes::Interned(purrdf_core::smallvec![focus_id])),
         NodeExpr::Path(_) => {
             let ds = store.core_view();
             let mut ids =

@@ -26,8 +26,8 @@ rmeta and a ``.s`` per crate are all produced), LTO off and one codegen unit::
 
 That emits a ``.s`` for EVERY crate in the graph, dependencies included, so a
 dependency's own kernels (memchr's, sha2's) are measured in that dependency's symbols.
-The asm is per crate and before LTO; LTO can only inline further, never remove a vector
-body a crate already compiled.
+The asm is per crate and before LTO. LTO may inline, specialize or eliminate bodies;
+these counts prove this build's kernel lowering, not final-binary throughput.
 
 The flags travel in ``CARGO_TARGET_<TRIPLE>_RUSTFLAGS``. Cargo gives ``RUSTFLAGS`` and
 ``CARGO_ENCODED_RUSTFLAGS`` precedence over every target-scoped value, so a caller with
@@ -37,30 +37,10 @@ from ``cargo -v`` and must carry ``--emit=asm`` and exactly the configuration's
 ``target-cpu``/``target-feature`` values, so a flag injected by any other configuration
 layer is a failure rather than a different measurement.
 
-Build scripts in the graph compile C for their own crates (blake3's NEON and
-assembly backends). Those objects are never measured -- only rustc's emission is -- but
-the build scripts must still succeed. For a configuration whose target is not the host,
-the gate names one C toolchain for them through cc-rs's per-target variables: ``clang``
-(a cross compiler for every target it is given) and ``llvm-ar``, unless the caller has
-set ``CC_<triple>``/``AR_<triple>`` itself.
-
-Host-CPU C flags are stripped from cross builds, and only from them. cc-rs 1.2
-(``src/lib.rs``) reads a flag variable through ``envflags``, which walks
-``target_envs`` -- ``CFLAGS_<target>``, ``CFLAGS_<target_underscored>``,
-``TARGET_CFLAGS``, ``CFLAGS`` -- and appends EVERY one that is set ("Collect from all
-environment variables, in reverse order as in ``getenv_with_target_prefixes``
-precedence"), so a plain ``CFLAGS`` always reaches a cross compile line and no
-target-scoped variable can remove a token from it. A host-tuned ``-march=native`` is
-not a valid flag for a foreign target (clang: "unsupported argument 'native' to option
-'-march='"), and a later flag cannot repair an invalid one. So for a configuration
-whose triple is not the host's, the child's copy of ``CFLAGS`` and ``CXXFLAGS`` loses
-exactly ``-march=native``, ``-mtune=native`` and ``-mcpu=native`` (also split from
-``native``), every other token kept in order, and each removal is printed. Host
-configurations inherit both variables byte-for-byte, and the gate's own environment is
-never modified. The ``-D warnings`` that
-``build.rustflags`` would carry is restated in the per-target flags, which replace it. A
-missing target standard library or a missing tool is a hard failure, locally and in CI;
-nothing here skips.
+The audited graph is pure Rust, including BLAKE3. No C compiler or archiver is
+required, and unrelated CFLAGS/CXXFLAGS are preserved. The ``-D warnings`` that
+``build.rustflags`` would carry is restated in the per-target flags, which replace
+it. Missing Rust target libraries or required Rust tools remain hard failures.
 
 Parsing
 -------
@@ -126,6 +106,22 @@ Static checks
 * The multiplier scan: no speedup multiplier or percentage in the audit document or
   the unreleased CHANGELOG section. Evidence is an instruction count.
 
+Build reuse and parallel execution
+----------------------------------
+
+The driver keeps a separate persistent Cargo context for each compiler, target and
+build graph. Cargo validates freshness on every invocation; assembly digests and
+verified compiler-command receipts bind reused output to its configuration. Parsed
+functions are cached by assembly content, reader version and selectors; verdicts are
+always recomputed. Context leases cover both Cargo and the reader. On Stage the shim
+recognizes the explicit assembly context and preserves the lease and private outputs.
+
+``--jobs`` bounds concurrent configurations within one total Cargo job budget.
+``--config`` runs a checked partial shard; only a full matrix may write the document.
+``--fresh`` allocates new contexts (the external compiler cache remains enabled).
+``--report`` writes checked JSON evidence; ``--merge-reports`` requires all seven
+matching reports and checks the full document without compiling again.
+
 Document mode (``--doc``)
 -------------------------
 
@@ -146,20 +142,6 @@ Coverage: every workspace member has a row; every bench file has a row naming on
 known site ids; every roster site below is in the ``covers`` cell of a row that names a
 function with a manifest entry. ``--doc`` with no document is a failure, not a skip.
 
-Split runs (``--config NAME --emit-cells FILE``, ``--doc-from-cells DIR``)
--------------------------------------------------------------------------
-
-Each configuration is a cold build of the graph, so CI measures them on separate
-runners. ``--config NAME --emit-cells FILE`` builds and measures that one configuration
-exactly as a full run does and writes its cell for every site, its problems and the
-SHA-256 of the manifest it read; it exits non-zero on a problem, after writing. Then
-``--doc-from-cells DIR`` builds nothing: it requires exactly ``DIR/<config>.json`` for
-every configuration, each naming its own configuration and this manifest's digest and
-holding a cell for every site, and runs the static scans, the parity and coverage
-checks and the verdict of ``--doc`` over them -- the same table, the same problems in
-the same order. A missing, stray, mislabelled or stale file is a failure, never a
-smaller table. The single-process modes above are unchanged.
-
 ``--self-test`` exercises every refusal against an embedded fixture, and the valid
 neighbour of each, without building anything.
 """
@@ -168,24 +150,26 @@ from __future__ import annotations
 
 import argparse
 import dataclasses
-import hashlib
 import json
 import os
 import re
 import shlex
 import shutil
-import signal
 import subprocess
 import sys
 import tomllib
 from collections import Counter
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import simd_asm_runtime as runtime
+
+RUN_OPTIONS = argparse.Namespace(jobs=2, fresh=False, probe=None)
+
 REPO_ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = REPO_ROOT / "scripts" / "simd-asm-manifest.toml"
 DOC = REPO_ROOT / "docs" / "design" / "purrdf-simd.md"
 CHANGELOG = REPO_ROOT / "CHANGELOG.md"
-BUILD_SCRATCH = REPO_ROOT / "scripts" / "build-scratch.sh"
 
 
 # --------------------------------------------------------------------------- configs
@@ -778,6 +762,10 @@ def is_vector_work(inst: Instruction, arch: str) -> bool:
                 return False
         return True
     if arch == "aarch64":
+        # SHA1H is a crypto instruction with scalar SIMD-register operands.
+        # Its architectural spelling is `sha1h sD, sN`, not vN/qN.
+        if m == "sha1h":
+            return len(inst.operands) == 2 and all(re.fullmatch(r"s(?:[12]?[0-9]|3[01])", op) for op in inst.operands)
         if m not in VECTOR_ARM or not any(_ARM_VREG.search(op) for op in inst.operands):
             return False
         if m in _IDIOM_ARM and len(inst.operands) == 3 and inst.operands[1] == inst.operands[2]:
@@ -1155,98 +1143,6 @@ def render_cell(results: list[Result]) -> str:
     return "<br>".join(parts) if parts else "—"
 
 
-def config_cells(manifest: Manifest, config: Config, functions: list[Function]) -> tuple[dict[str, str], list[str]]:
-    """One configuration's generated cell for every site, and its problems in manifest order."""
-    results = evaluate_config(manifest, config, functions)
-    problems = [p for r in results for p in r.problems]
-    cells = {site.id: render_cell([r for r in results if r.site == site.id]) for site in manifest.sites}
-    return cells, problems
-
-
-# --------------------------------------------------------------------------- split runs
-#
-# CI measures each configuration on its own runner (`--config NAME --emit-cells FILE`)
-# and then checks the document once (`--doc-from-cells DIR`). A cells file is what one
-# configuration's measurement produced: its cell for every site and its problems, in the
-# order a single run reports them. The judging run refuses anything but exactly one file
-# per configuration, each measured against the manifest it reads itself, so the split
-# gate measures and reports what the single run does, in the same order.
-
-CELLS_FORMAT = "purrdf-simd-asm-cells/1"
-
-
-def manifest_digest(text: str) -> str:
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
-
-
-def cells_payload(config: Config, digest: str, cells: dict[str, str], problems: list[str]) -> str:
-    return json.dumps(
-        {"format": CELLS_FORMAT, "config": config.name, "manifest_sha256": digest, "cells": cells, "problems": problems},
-        ensure_ascii=False, indent=1,
-    ) + "\n"
-
-
-def merge_cells(files: dict[str, str], manifest: Manifest, digest: str) -> tuple[dict, list[str]]:
-    """Every configuration's cells keyed ``(site id, config name)``, and the problems in run order.
-
-    ``files`` maps a file name to its text; exactly ``<config>.json`` per configuration
-    must be present. A missing configuration was not measured, and it is a failure, not
-    a smaller table.
-    """
-    expected = {f"{name}.json" for name in CONFIG_NAMES}
-    missing, extra = sorted(expected - set(files)), sorted(set(files) - expected)
-    if missing or extra:
-        raise GateError(
-            f"--doc-from-cells needs exactly one cells file per configuration; missing {missing}, "
-            f"unexpected {extra}. A configuration with no cells is a configuration nobody measured"
-        )
-    ids = [site.id for site in manifest.sites]
-    cells: dict = {}
-    problems: list[str] = []
-    for name in CONFIG_NAMES:
-        file = f"{name}.json"
-        try:
-            data = json.loads(files[file])
-        except json.JSONDecodeError as err:
-            raise GateError(f"{file} is not JSON: {err}") from None
-        if not isinstance(data, dict) or data.get("format") != CELLS_FORMAT:
-            raise GateError(f"{file} is not a `{CELLS_FORMAT}` cells file")
-        if data.get("config") != name:
-            raise GateError(f"{file} records configuration {data.get('config')!r}")
-        if data.get("manifest_sha256") != digest:
-            raise GateError(f"{file} was measured against a different manifest than {MANIFEST.relative_to(REPO_ROOT)}")
-        site_cells, site_problems = data.get("cells"), data.get("problems")
-        if not isinstance(site_cells, dict) or sorted(site_cells) != sorted(ids) or not all(isinstance(v, str) for v in site_cells.values()):
-            raise GateError(f"{file} does not hold one text cell for every manifest site")
-        if not isinstance(site_problems, list) or not all(isinstance(p, str) for p in site_problems):
-            raise GateError(f"{file} does not hold a list of problems")
-        cells.update({(sid, name): site_cells[sid] for sid in ids})
-        problems += site_problems
-    return cells, problems
-
-
-def read_cells_dir(directory: Path) -> dict[str, str]:
-    """Every entry of ``directory`` by name (a non-file entry reads as unexpected)."""
-    if not directory.is_dir():
-        raise GateError(f"--doc-from-cells: {directory} is not a directory")
-    return {entry.name: entry.read_text(encoding="utf-8") if entry.is_file() else "" for entry in sorted(directory.iterdir())}
-
-
-def mode_errors(args: argparse.Namespace) -> list[str]:
-    """Option combinations that would measure or check something other than they say."""
-    errors = []
-    if args.emit_cells:
-        if not args.config or len(args.config) != 1:
-            errors.append("--emit-cells measures exactly one configuration: give one --config")
-        if args.doc or args.write_doc or args.probe or args.doc_from_cells:
-            errors.append("--emit-cells only measures; the document is checked by --doc-from-cells over every configuration")
-    elif args.config and not args.probe:
-        errors.append("--config selects configurations only with --probe or --emit-cells; a full run measures all of them")
-    if args.doc_from_cells and (args.probe or args.config):
-        errors.append("--doc-from-cells measures nothing; it takes no --probe or --config")
-    return errors
-
-
 # --------------------------------------------------------------------------- building
 
 
@@ -1293,61 +1189,10 @@ def require_targets(configs: tuple[Config, ...]) -> None:
         )
 
 
-HOST_CPU_FLAGS = ("-march", "-mtune", "-mcpu")
-
-
-def strip_host_cpu_flags(value: str) -> tuple[str, list[str]]:
-    """``value`` without its host-CPU tokens, and the tokens removed, in order.
-
-    A host-CPU token is ``-march=native``, ``-mtune=native`` or ``-mcpu=native``, or the
-    same flag split from ``native`` across two tokens (``-march native``). Every other
-    token is kept in its original order. A value with nothing to remove is returned
-    byte-for-byte unchanged, whitespace included.
-    """
-    tokens = value.split()
-    kept: list[str] = []
-    removed: list[str] = []
-    i = 0
-    while i < len(tokens):
-        token = tokens[i]
-        if token in {f"{flag}=native" for flag in HOST_CPU_FLAGS}:
-            removed.append(token)
-            i += 1
-        elif token in HOST_CPU_FLAGS and i + 1 < len(tokens) and tokens[i + 1] == "native":
-            removed.append(f"{token} native")
-            i += 2
-        else:
-            kept.append(token)
-            i += 1
-    return (" ".join(kept), removed) if removed else (value, [])
-
-
-def config_env(config: Config, base: dict[str, str], host: str, which=shutil.which, log=print) -> dict[str, str]:
-    """The child environment for one configuration's build: a copy, never ``os.environ``."""
+def config_env(config: Config, base: dict[str, str]) -> dict[str, str]:
+    """Set this Rust target's flags without changing unrelated toolchain settings."""
     env = dict(base)
     env[f"CARGO_TARGET_{_env_triple(config.triple)}_RUSTFLAGS"] = config.rustflags()
-    if config.triple != host:
-        for var in ("CFLAGS", "CXXFLAGS"):
-            if var not in env:
-                continue
-            stripped, removed = strip_host_cpu_flags(env[var])
-            if removed:
-                env[var] = stripped
-                log(
-                    f"simd-asm: {config.triple}: removed host-CPU flag(s) {' '.join(removed)} "
-                    f"from {var} (cross build)"
-                )
-        suffix = config.triple.replace("-", "_")
-        for var, tool in (("CC", "clang"), ("AR", "llvm-ar")):
-            key = f"{var}_{suffix}"
-            if env.get(key) or env.get(f"{var}_{config.triple}"):
-                continue
-            if which(tool) is None:
-                raise GateError(
-                    f"`{tool}` is not on PATH. Build scripts in the graph compile C for "
-                    f"{config.triple}, and this gate names `{tool}` for that (or set {key})."
-                )
-            env[key] = tool
     return env
 
 
@@ -1461,57 +1306,17 @@ def failure_tail(stderr: str, lines: int = 40) -> str:
 
 def build_commands(config: Config, packages: tuple[str, ...], rlib_packages: tuple[str, ...]) -> list[list[str]]:
     """The cargo invocations for one configuration: one build, then one per rlib-only package."""
+    # `--color never`: the provenance checks read cargo's `Running` lines, and a
+    # coloured stream (CARGO_TERM_COLOR=always, which CI's toolchain action sets)
+    # wraps each in escape codes that no line pattern matches.
     common = [
-        "-v", "--message-format=json-render-diagnostics", "--release", "--locked",
+        "-v", "--color", "never", "--message-format=json-render-diagnostics", "--release", "--locked",
         "--lib", "--target", config.triple,
         "--config", "profile.release.lto=false", "--config", "profile.release.codegen-units=1",
     ]
     cmds = [["cargo", "build", *common, *(arg for p in packages for arg in ("-p", p))]]
     cmds += [["cargo", "rustc", *common, "-p", p, "--crate-type", "rlib"] for p in rlib_packages]
     return cmds
-
-
-def build_config(config: Config, manifest: Manifest, scratch: Path, host: str, chooser) -> list[Function]:
-    """Build one configuration and return the emitted functions ``chooser`` selects."""
-    print(f"== {config.name}: cargo build --target {config.triple} ({config.rustflags()})", flush=True)
-    env = config_env(config, dict(os.environ), host, log=lambda line: print(line, flush=True))
-    env["CARGO_TARGET_DIR"] = str(scratch)
-    paths: dict[Path, int] = {}
-    for graph, cmd in enumerate(build_commands(config, manifest.packages, manifest.rlib_packages)):
-        proc = subprocess.run(cmd, cwd=REPO_ROOT, env=env, capture_output=True, text=True, check=False)
-        if proc.returncode != 0:
-            raise GateError(f"{config.name}: `{' '.join(cmd[:2])}` failed (exit {proc.returncode}):\n{failure_tail(proc.stderr)}")
-        problems = verify_command_lines(proc.stderr, config)
-        if problems:
-            raise GateError("the build was not the configuration it claims:\n  " + "\n  ".join(problems))
-        # A unit an earlier graph already emitted (same crate, same hash) is that graph's.
-        for p in asm_paths(proc.stdout, config):
-            paths.setdefault(p, graph)
-    units = ((str(p), p.read_text(encoding="utf-8", errors="replace"), graph) for p, graph in paths.items())
-    return collect_functions(units, config.arch, chooser.keep, chooser.select)
-
-
-class Scratch:
-    """A scratch build directory from ``scripts/build-scratch.sh``, removed on every exit path."""
-
-    def __enter__(self) -> Path:
-        out = subprocess.run(
-            ["bash", "-c", f'source "{BUILD_SCRATCH}" && build_scratch_dir simd-asm'],
-            capture_output=True, text=True, check=False,
-        )
-        if out.returncode != 0 or not out.stdout.strip():
-            raise GateError(f"build_scratch_dir failed: {out.stderr.strip()}")
-        self.path = Path(out.stdout.strip())
-        self._previous = signal.signal(signal.SIGTERM, self._terminate)
-        return self.path
-
-    @staticmethod
-    def _terminate(_signum, _frame):
-        raise SystemExit(143)
-
-    def __exit__(self, *_exc) -> None:
-        signal.signal(signal.SIGTERM, self._previous)
-        shutil.rmtree(self.path, ignore_errors=True)
 
 
 @dataclasses.dataclass(frozen=True)
@@ -1523,23 +1328,19 @@ class Chooser:
 
 
 def measure_all(manifest: Manifest, configs: tuple[Config, ...], keep_for) -> dict[str, list[Function]]:
-    """Build every configuration; ``keep_for(config)`` is its ``Chooser``."""
-    refuse_overriding_env(dict(os.environ))
-    require_targets(configs)
-    host = host_triple()
-    out: dict[str, list[Function]] = {}
-    with Scratch() as scratch:
-        for config in configs:
-            out[config.name] = build_config(config, manifest, scratch, host, keep_for(config))
-    return out
+    """Build independent configurations in persistent, leased contexts."""
+    return runtime.measure_all(sys.modules[__name__], manifest, configs, keep_for, RUN_OPTIONS)
 
 
 def manifest_keep(manifest: Manifest):
     """For each configuration, parse exactly the functions some measure on it can match."""
     def keep_for(config: Config) -> Chooser:
         measures = [m for site in manifest.sites for m in site.measures if config.name in m.configs]
+        patterns: dict[str, set[str]] = {}
+        for measure in measures:
+            patterns.setdefault(measure.crate, set()).add(measure.symbol)
         return Chooser(
-            select=lambda d: any(d.crate == m.crate and m.symbol in d.path for m in measures),
+            select=lambda d: any(symbol in d.path for symbol in patterns.get(d.crate, ())),
             keep=None,
         )
     return keep_for
@@ -1692,7 +1493,7 @@ def workspace_world() -> DocWorld:
     return DocWorld(tuple(members), dirs, tuple(benches), bench_dirs)
 
 
-def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld) -> list[str]:
+def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld, configs=CONFIG_NAMES, compare=True) -> list[str]:
     """Parity and coverage between the document, the manifest and the measured cells.
 
     ``cells`` maps ``(site id, config name)`` to the generated cell text.
@@ -1739,7 +1540,7 @@ def doc_checks(doc: str, manifest: Manifest, cells: dict, world: DocWorld) -> li
                     f"crate-level row `{rid}`: `{cite}` exists, so `{crate}` has a hot path to "
                     f"measure -- give it a function row with a manifest entry"
                 )
-        for name in CONFIG_NAMES:
+        for name in configs if compare else ():
             expected = cells.get((rid, name), "—")
             if row[col[name]] != expected:
                 problems.append(
@@ -1820,39 +1621,31 @@ def write_doc(doc: str, cells: dict) -> str:
 # --------------------------------------------------------------------------- driver
 
 
-def emit_cells(args: argparse.Namespace, manifest: Manifest, digest: str) -> int:
-    """Measure one configuration and write its cells file; the document is not read."""
-    config = CONFIG_BY_NAME[args.config[0]]
-    functions = measure_all(manifest, (config,), manifest_keep(manifest))[config.name]
-    cells, problems = config_cells(manifest, config, functions)
-    out = Path(args.emit_cells)
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(cells_payload(config, digest, cells, problems), encoding="utf-8")
-    width = max(len(s.id) for s in manifest.sites)
-    print(f"\n{'site'.ljust(width)}  {config.name}")
-    for site in manifest.sites:
-        print(f"{site.id.ljust(width)}  " + cells[site.id].replace("<br>", " / "))
-    print(f"wrote {config.name}'s cells to {out}; `--doc-from-cells` checks the document against every configuration")
-    if problems:
-        print(f"\nFAIL: {len(problems)} problem(s) on {config.name}:", file=sys.stderr)
-        for p in problems:
-            print(f"  - {p}", file=sys.stderr)
-        return 1
-    print(f"\nOK: {len(manifest.sites)} site(s) measured on {config.name}")
-    return 0
-
-
 def run(args: argparse.Namespace) -> int:
-    manifest_text = MANIFEST.read_text(encoding="utf-8")
-    manifest = load_manifest(tomllib.loads(manifest_text))
-    if args.emit_cells:
-        return emit_cells(args, manifest, manifest_digest(manifest_text))
+    manifest = load_manifest(tomllib.loads(MANIFEST.read_text(encoding="utf-8")))
     problems: list[str] = []
     problems += identity_scan(rust_sources())
     problems += multiplier_scan("CHANGELOG.md [Unreleased]", unreleased_changelog(CHANGELOG.read_text(encoding="utf-8")))
-    checks_doc = bool(args.doc or args.write_doc or args.doc_from_cells)
-    if checks_doc:
+    if args.doc or args.write_doc or args.merge_reports:
         require_doc(DOC)
+        problems += doc_checks(DOC.read_text(), manifest, {}, workspace_world(), compare=False)
+    if problems:
+        raise GateError("\n".join(problems))
+    wanted = tuple(c for c in CONFIGS if not args.config or c.name in args.config)
+    if args.write_doc and wanted != CONFIGS:
+        raise GateError("--write-doc requires all seven configurations")
+    if args.report and args.probe:
+        raise GateError("a probe is not gate evidence and cannot write a report")
+    identity = runtime.report_identity(sys.modules[__name__]) if not args.probe else None
+    if args.report:
+        runtime.atomic_json(args.report, dict(identity=identity, status="incomplete", cells={}))
+    if args.merge_reports:
+        cells = runtime.merge_reports(sys.modules[__name__], manifest, args.merge_reports, identity)
+        problems = doc_checks(DOC.read_text(), manifest, cells, workspace_world())
+        if problems:
+            raise GateError("\n".join(problems))
+        print(f"OK: {len(manifest.sites)} sites; seven matching, successful assembly reports")
+        return 0
 
     if args.probe:
         wanted = tuple(CONFIG_BY_NAME[c] for c in (args.config or CONFIG_NAMES))
@@ -1884,30 +1677,34 @@ def run(args: argparse.Namespace) -> int:
                         print(f"{'':24}{inst.mnemonic} {', '.join(inst.operands)}")
         return 0
 
-    if args.doc_from_cells:
-        cells, measured_problems = merge_cells(read_cells_dir(Path(args.doc_from_cells)), manifest, manifest_digest(manifest_text))
-        problems += measured_problems
-    else:
-        functions = measure_all(manifest, CONFIGS, manifest_keep(manifest))
-        cells = {}
-        for config in CONFIGS:
-            config_cell, config_problems = config_cells(manifest, config, functions[config.name])
-            problems += config_problems
-            cells.update({(sid, config.name): cell for sid, cell in config_cell.items()})
+    functions = measure_all(manifest, wanted, manifest_keep(manifest))
+    results: list[Result] = []
+    for config in wanted:
+        results += evaluate_config(manifest, config, functions[config.name])
+    for r in results:
+        problems.extend(r.problems)
+    cells = {}
+    for site in manifest.sites:
+        for config in wanted:
+            cells[(site.id, config.name)] = render_cell([r for r in results if r.site == site.id and r.config == config.name])
 
     width = max(len(s.id) for s in manifest.sites)
-    print(f"\n{'site'.ljust(width)}  " + "  ".join(CONFIG_NAMES))
+    print(f"\n{'site'.ljust(width)}  " + "  ".join(c.name for c in wanted))
     for site in manifest.sites:
-        print(f"{site.id.ljust(width)}  " + "  ".join(cells[(site.id, c)].replace("<br>", " / ") for c in CONFIG_NAMES))
+        print(f"{site.id.ljust(width)}  " + "  ".join(cells[(site.id, c)].replace("<br>", " / ") for c in (config.name for config in wanted)))
 
+    if problems:
+        raise GateError("\n".join(problems))
+    if identity != runtime.report_identity(sys.modules[__name__]):
+        raise GateError("source/compiler changed during measurement; evidence refused")
     if args.write_doc:
         text = DOC.read_text(encoding="utf-8")
         updated = write_doc(text, cells)
         if updated != text:
             DOC.write_text(updated, encoding="utf-8")
             print(f"wrote the measured cells into {DOC.relative_to(REPO_ROOT)}")
-    if checks_doc:
-        problems += doc_checks(DOC.read_text(encoding="utf-8"), manifest, cells, workspace_world())
+    if args.doc or args.write_doc:
+        problems += doc_checks(DOC.read_text(encoding="utf-8"), manifest, cells, workspace_world(), configs=tuple(c.name for c in wanted))
     else:
         print("document parity and coverage: not requested (`--doc`)")
 
@@ -1916,7 +1713,14 @@ def run(args: argparse.Namespace) -> int:
         for p in problems:
             print(f"  - {p}", file=sys.stderr)
         return 1
-    print(f"\nOK: {len(manifest.sites)} site(s) measured on {len(CONFIGS)} configurations")
+    if args.report:
+        if identity != runtime.report_identity(sys.modules[__name__]):
+            raise GateError("source/compiler changed during measurement; report refused")
+        runtime.atomic_json(args.report, dict(identity=identity, status="passed",
+            cells={c.name: {site.id: cells[(site.id, c.name)] for site in manifest.sites} for c in wanted},
+            timings=args.timings))
+    coverage = "complete gate" if wanted == CONFIGS else "partial configuration shard"
+    print(f"\nOK: {len(manifest.sites)} site(s) measured on {len(wanted)} configurations ({coverage})")
     return 0
 
 
@@ -2181,6 +1985,7 @@ def self_test() -> int:
     expect(len(cmds) == 2 and cmds[0][:2] == ["cargo", "build"] and cmds[1][:2] == ["cargo", "rustc"], f"one build plus one rustc per rlib package: {cmds}")
     expect(cmds[1][-4:] == ["-p", "demo-wasm", "--crate-type", "rlib"] and "--target" in cmds[1] and "--lib" in cmds[1], f"the rlib build names its package and crate type: {cmds[1]}")
     expect(len(build_commands(CONFIG_BY_NAME["x86_64"], ("demo",), ())) == 1, "no rlib package, one command")
+    expect(all(c[c.index("--color") + 1] == "never" for c in cmds), f"every build asks cargo for an uncoloured stream: {cmds}")
 
     # -- a wrong-typed field is a named manifest error, never a coercion; its neighbour loads
     base_measure = _manifest_dict()["site"][0]["measure"][0]
@@ -2223,45 +2028,17 @@ def self_test() -> int:
     expect("-D warnings" in v3.rustflags() and "--emit=asm" in v3.rustflags(), "the per-target rustflags carry --emit=asm and -D warnings")
     expect(bool(verify_command_lines(good[:-1] + " -C target-cpu=native`", v3)), "a second target-cpu must fail")
     expect(not verify_command_lines(good.replace("--crate-name memchr", "--crate-name build_script_build").replace(" --target x86_64-unknown-linux-gnu", ""), v3), "host units are out of scope")
-    cross = config_env(
-        CONFIG_BY_NAME["aarch64"], {"CFLAGS": "-march=native", "CC_aarch64_unknown_linux_gnu": "my-cc"},
-        "x86_64-unknown-linux-gnu", which=lambda tool: f"/bin/{tool}", log=lambda _line: None,
-    )
-    expect(cross.get("CC_aarch64_unknown_linux_gnu") == "my-cc", "a caller's CC_<triple> is kept")
-    logged: list[str] = []
-    cross_cfg = CONFIG_BY_NAME["aarch64"]
-    host_triple_name = "x86_64-unknown-linux-gnu"
-    tools = lambda tool: f"/bin/{tool}"  # noqa: E731
-    base_env = {"CFLAGS": "-O2 -march=native -pipe", "CXXFLAGS": "-O2 -pipe"}
-    stripped = config_env(cross_cfg, base_env, host_triple_name, which=tools, log=logged.append)
-    expect(stripped["CFLAGS"] == "-O2 -pipe", f"(a) cross CFLAGS loses -march=native: {stripped['CFLAGS']!r}")
-    expect(logged == ["simd-asm: aarch64-unknown-linux-gnu: removed host-CPU flag(s) -march=native from CFLAGS (cross build)"], f"(a) the removal is logged once, CXXFLAGS not at all: {logged}")
-    expect(base_env["CFLAGS"] == "-O2 -march=native -pipe", "(a) the caller's environment mapping is not mutated")
-    logged.clear()
-    host_env = config_env(CONFIG_BY_NAME["x86_64"], {"CFLAGS": "-O2 -march=native -pipe"}, host_triple_name, log=logged.append)
-    expect(host_env["CFLAGS"] == "-O2 -march=native -pipe" and not logged, "(b) a host configuration keeps CFLAGS byte-for-byte")
-    logged.clear()
-    untouched = config_env(cross_cfg, {"CFLAGS": "-O2  -pipe"}, host_triple_name, which=tools, log=logged.append)
-    expect(untouched["CFLAGS"] == "-O2  -pipe" and not logged, "(c) cross CFLAGS without a native token is unchanged, byte-for-byte, and silent")
-    logged.clear()
-    kept = config_env(cross_cfg, {"CFLAGS": "-march=armv8-a -O2"}, host_triple_name, which=tools, log=logged.append)
-    expect(kept["CFLAGS"] == "-march=armv8-a -O2" and not logged, "(d) a non-native -march is kept")
-    expect(strip_host_cpu_flags("-O2 -march native -mtune=native -mcpu=native -g") == ("-O2 -g", ["-march native", "-mtune=native", "-mcpu=native"]), "split and every host-CPU flag form is removed")
-    expect(strip_host_cpu_flags("-mcpu=cortex-a72 -mtune=generic")[1] == [], "non-native -mcpu/-mtune are kept")
-    wasm_env = config_env(CONFIG_BY_NAME["wasm32"], {"CXXFLAGS": "-mtune=native -O2"}, host_triple_name, which=tools, log=logged.append)
-    expect(wasm_env["CXXFLAGS"] == "-O2", "wasm32 is a cross configuration too")
-    try:
-        config_env(CONFIG_BY_NAME["aarch64"], {}, "x86_64-unknown-linux-gnu", which=lambda _tool: None)
-        failures.append("a cross build with no clang/llvm-ar must be refused")
-    except GateError:
-        pass
-    named = config_env(CONFIG_BY_NAME["aarch64"], {}, "x86_64-unknown-linux-gnu", which=lambda tool: f"/bin/{tool}")
-    expect(named.get("CC_aarch64_unknown_linux_gnu") == "clang" and named.get("AR_aarch64_unknown_linux_gnu") == "llvm-ar", "clang + llvm-ar are named for a cross target when present")
+    base_env = {"CFLAGS": "-O2 -march=native -pipe", "CC_aarch64_unknown_linux_gnu": "my-cc"}
+    for config in (CONFIG_BY_NAME["x86_64"], CONFIG_BY_NAME["aarch64"], CONFIG_BY_NAME["wasm32"]):
+        child = config_env(config, base_env)
+        expect(all(child[k] == v for k, v in base_env.items()), "unrelated C settings are preserved")
+        expect(child[f"CARGO_TARGET_{_env_triple(config.triple)}_RUSTFLAGS"] == config.rustflags(), "each target receives its exact Rust flags")
+        expect(not any(k.startswith("AR_") for k in child), "a pure-Rust build does not require a C archiver")
+    expect(base_env == {"CFLAGS": "-O2 -march=native -pipe", "CC_aarch64_unknown_linux_gnu": "my-cc"}, "the caller's mapping is not mutated")
     everything = frozenset(Path("/sysroot/lib/rustlib") / c.triple / "lib" for c in CONFIGS)
     expect(not missing_targets(CONFIGS, Path("/sysroot"), is_dir=lambda p: p in everything), "every installed target passes")
     expect(missing_targets(CONFIGS, Path("/sysroot"), is_dir=lambda p: "aarch64" not in str(p) and p in everything) == ["aarch64-unknown-linux-gnu"], "a missing aarch64 std is named, not skipped")
-    native = config_env(CONFIG_BY_NAME["x86_64"], {"CFLAGS": "-O2"}, "x86_64-unknown-linux-gnu")
-    expect(native.get("CFLAGS") == "-O2" and "CC_x86_64_unknown_linux_gnu" not in native, "a host-target build keeps the host C configuration")
+
 
     # -- locating each unit's asm: a hashed rlib's `.s`; an unhashed cdylib+rlib unit's
     # `.s` in its own output directory; a unit with no `.s` anywhere is refused
@@ -2289,6 +2066,15 @@ def self_test() -> int:
     # -- a failed build names the compiler's error, not only the command that failed
     noisy = "     Running `rustc --crate-name demo`\n       Fresh memchr v2\n   Compiling demo v1\nerror: linking with `cc` failed\n"
     expect(failure_tail(noisy) == "error: linking with `cc` failed", f"progress lines are dropped, the error kept: {failure_tail(noisy)!r}")
+
+    # SHA1H uses scalar views of the SIMD registers; scalar floating-point
+    # arithmetic must still not count as vector work.
+    sha1h = Instruction("sha1h", ("s18", "s0"))
+    expect(is_vector_work(sha1h, "aarch64"), "sha1h scalar SIMD operands count as crypto work")
+    expect(not is_vector_work(Instruction("fadd", ("s0", "s1", "s2")), "aarch64"), "scalar fadd stays scalar")
+    expect(not is_vector_work(Instruction("sha1h", ("w0", "w1")), "aarch64"), "sha1h needs architectural SIMD operands")
+    crypto = Function("fixture", "fixture", "demo", "fixture.s", [sha1h], 0)
+    expect(satisfies(crypto, "sha1h", "aarch64"), "the emitted sha1h satisfies its manifest requirement")
 
     # -- identity scan
     expect(bool(identity_scan({"crates/rdf-core/src/canon.rs": "let s = a.algebraic_add(b);"})), "algebraic_add in canon.rs must fail")
@@ -2380,83 +2166,13 @@ def self_test() -> int:
     except GateError as err:
         failures.append(f"an existing document must pass the --doc precondition: {err}")
 
-    # -- the split run: one configuration per cells file, reassembled into exactly what a
-    # single run measures and reports, in the same order; every malformed set is refused
-    split_manifest = load_manifest(_manifest_dict(measure=[{**base_measure, "min_vector_ops": 1}]))
-    asm_by_arch = {"x86": _X86_PACKED, "aarch64": _ARM_EXACT, "wasm": _WASM_EXACT}
-    # x86_64 compiles the scalar body, so one configuration carries a problem and the
-    # reassembled problem list is observed keeping its place in the run order.
-    functions_by_config = {
-        c.name: collect_functions([("f.s", _X86_SCALAR if c.name == "x86_64" else asm_by_arch[c.arch], 0)], c.arch)
-        for c in CONFIGS
-    }
-    single_cells: dict = {}
-    single_problems: list[str] = []
-    for c in CONFIGS:
-        results = evaluate_config(split_manifest, c, functions_by_config[c.name])
-        single_problems += [p for r in results for p in r.problems]
-        for site in split_manifest.sites:
-            single_cells[(site.id, c.name)] = render_cell([r for r in results if r.site == site.id and r.config == c.name])
-    digest = manifest_digest("fixture manifest")
-    split_files = {}
-    for c in CONFIGS:
-        c_cells, c_problems = config_cells(split_manifest, c, functions_by_config[c.name])
-        split_files[f"{c.name}.json"] = cells_payload(c, digest, c_cells, c_problems)
-    try:
-        merged_cells, merged_problems = merge_cells(split_files, split_manifest, digest)
-        expect(merged_cells == single_cells, f"the reassembled cells equal a single run's: {merged_cells} vs {single_cells}")
-        expect(merged_problems == single_problems, f"the reassembled problems equal a single run's, in order: {merged_problems} vs {single_problems}")
-        expect(len(single_problems) == 1 and "x86_64" in single_problems[0], f"the fixture's one problem is on x86_64: {single_problems}")
-    except GateError as err:
-        failures.append(f"a complete set of cells files must reassemble: {err}")
-
-    def split_refused(files: dict[str, str], needle: str, what: str, dig: str = digest) -> None:
-        try:
-            merge_cells(files, split_manifest, dig)
-            failures.append(f"{what} must be refused")
-        except GateError as err:
-            expect(needle in str(err), f"{what} must be refused for its own reason ({needle!r}): {err}")
-
-    first, second = CONFIG_NAMES[0], CONFIG_NAMES[1]
-    split_refused({k: v for k, v in split_files.items() if k != f"{first}.json"}, "missing", "a configuration with no cells file")
-    split_refused({**split_files, "riscv64.json": "{}"}, "unexpected", "a stray cells file")
-    split_refused({**split_files, f"{first}.json": split_files[f"{second}.json"]}, "records configuration", "one configuration's cells under another's name")
-    split_refused(split_files, "different manifest", "cells measured against another manifest", dig=manifest_digest("another manifest"))
-    split_refused({**split_files, f"{first}.json": "{"}, "is not JSON", "a truncated cells file")
-    split_refused({**split_files, f"{first}.json": json.dumps({"config": first})}, "cells file", "a file of another format")
-    short = json.loads(split_files[f"{first}.json"])
-    short["cells"] = {}
-    split_refused({**split_files, f"{first}.json": json.dumps(short)}, "every manifest site", "a cells file missing a site")
-    no_problems = json.loads(split_files[f"{first}.json"])
-    del no_problems["problems"]
-    split_refused({**split_files, f"{first}.json": json.dumps(no_problems)}, "list of problems", "a cells file that drops its problems")
-
-    # -- which option combinations are a measurement, and which would silently be another
-    def mode(**kw) -> argparse.Namespace:
-        base = {"doc": False, "write_doc": False, "probe": None, "config": None, "emit_cells": None, "doc_from_cells": None}
-        return argparse.Namespace(**{**base, **kw})
-    for ok_args, what in (
-        (mode(doc=True), "--doc"),
-        (mode(write_doc=True), "--write-doc"),
-        (mode(emit_cells="c.json", config=["aarch64"]), "--emit-cells with one --config"),
-        (mode(doc_from_cells="d"), "--doc-from-cells"),
-        (mode(doc_from_cells="d", write_doc=True), "--doc-from-cells --write-doc"),
-        (mode(probe="dot", config=["x86_64", "aarch64"]), "--probe with --config"),
-    ):
-        expect(not mode_errors(ok_args), f"{what} must be accepted: {mode_errors(ok_args)}")
-    for bad_args, what in (
-        (mode(emit_cells="c.json"), "--emit-cells without --config"),
-        (mode(emit_cells="c.json", config=["x86_64", "aarch64"]), "--emit-cells with two --config"),
-        (mode(emit_cells="c.json", config=["x86_64"], doc=True), "--emit-cells with --doc"),
-        (mode(config=["x86_64"], doc=True), "--config on a full run"),
-        (mode(doc_from_cells="d", config=["x86_64"]), "--doc-from-cells with --config"),
-    ):
-        expect(bool(mode_errors(bad_args)), f"{what} must be refused")
-
     if failures:
         print("FAIL: the simd-asm gate's self-test found refusals that do not fire or neighbours that do not pass:", file=sys.stderr)
         for f in failures:
             print(f"  - {f}", file=sys.stderr)
+        return 1
+    from test_simd_asm_runtime import run_tests
+    if not run_tests(sys.modules[__name__]):
         return 1
     print("OK: simd-asm self-test -- every refusal fires and every valid neighbour passes")
     return 0
@@ -2471,20 +2187,30 @@ def main() -> int:
     parser.add_argument("--probe-operands", action="store_true", help="with --probe: match PATH against instruction operands (call targets) instead of function paths")
     parser.add_argument("--dump", action="store_true", help="with --probe: print every instruction of each match")
     parser.add_argument("--crate", help="with --probe: only this crate")
-    parser.add_argument("--config", action="append", choices=CONFIG_NAMES, help="with --probe: only these configurations; with --emit-cells: the one configuration to measure")
-    parser.add_argument("--emit-cells", metavar="FILE", help="with one --config: measure that configuration only and write its cells and problems to FILE (for --doc-from-cells)")
-    parser.add_argument("--doc-from-cells", metavar="DIR", help="build nothing: take every configuration's cells from DIR/<config>.json and check as --doc does")
+    parser.add_argument("--config", action="append", choices=CONFIG_NAMES, help="measure only these configurations (partial gate evidence)")
+    parser.add_argument("--jobs", type=int, default=2, help="concurrent configurations sharing Cargo's total job budget (default: 2)")
+    parser.add_argument("--fresh", action="store_true", help="use new isolated build contexts and reparse assembly")
+    parser.add_argument("--report", type=Path, help="atomically write this run's checked evidence as JSON")
+    parser.add_argument("--merge-reports", type=Path, help="require seven matching reports and check complete document parity; builds nothing")
     args = parser.parse_args()
+    if args.jobs < 1:
+        parser.error("--jobs must be positive")
+    if args.write_doc and args.report:
+        parser.error("write the document first, then produce reports for the resulting source identity")
+    if args.merge_reports and (args.config or args.probe or args.write_doc or args.report):
+        parser.error("--merge-reports cannot be combined with measurement/writing options")
+    global RUN_OPTIONS
+    RUN_OPTIONS = args
     if args.self_test:
         return self_test()
-    errors = mode_errors(args)
-    if errors:
-        parser.error("; ".join(errors))
     try:
         return run(args)
     except GateError as err:
         print(f"FAIL: {err}", file=sys.stderr)
         return 1
+    except KeyboardInterrupt:
+        print("FAIL: assembly run interrupted", file=sys.stderr)
+        return 130
 
 
 if __name__ == "__main__":

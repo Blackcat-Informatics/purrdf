@@ -157,7 +157,7 @@ pub(crate) fn eval_values<D: DatasetView + Sync>(
             let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
             break;
         }
-        let mut row = smallvec::smallvec![None; width];
+        let mut row = purrdf_core::smallvec![None; width];
         for (i, cell) in binding.iter().enumerate() {
             if let Some(ground) = cell {
                 // The PLAIN door, deliberately: an unbound cell here is not the
@@ -1458,7 +1458,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
                 (ctx.fork_for_worker(), fresh)
             },
             |(child, links), acc, (_, key, idxs)| {
-                let mut row = smallvec::smallvec![None; out_width];
+                let mut row = purrdf_core::smallvec![None; out_width];
                 // `key` was built from `key_cols` (one cell per GROUP BY variable), so
                 // `key.len() == var_count`: one memcpy replaces the indexed loop.
                 row[..var_count].copy_from_slice(key);
@@ -1479,7 +1479,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
     } else {
         let mut rows = Vec::with_capacity(groups.len());
         for (_, key, idxs) in &groups {
-            let mut row = smallvec::smallvec![None; out_width];
+            let mut row = purrdf_core::smallvec![None; out_width];
             // `key.len() == var_count` (built from `key_cols`): one memcpy, no index loop.
             row[..var_count].copy_from_slice(key);
             for (j, ((_, agg), links)) in aggregates.iter().zip(links.iter_mut()).enumerate() {
@@ -6348,7 +6348,7 @@ mod tests {
 #[cfg(test)]
 mod numeric_chain_tests {
     use super::*;
-    use crate::test_rng::splitmix64_next;
+    use purrdf_testkit::rng::splitmix64_next;
 
     const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
     const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
@@ -6716,7 +6716,7 @@ mod sort_key_walk_tests {
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
     }
@@ -6921,7 +6921,7 @@ mod emptiness_proof_tests {
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = crate::test_rng::splitmix64_next(&mut self.state);
+            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
             usize::try_from(draw % options as u64).expect("a choice fits usize")
         }
 

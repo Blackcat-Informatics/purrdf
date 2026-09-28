@@ -72,6 +72,23 @@ test("QueryEngine SELECT returns typed package-root bindings", () => {
   assert.equal(result.rows.remaining, 0);
 });
 
+test("NOW and RAND read the live JavaScript clock and entropy on wasm", () => {
+  const engine = new QueryEngine();
+  const ds = Dataset.parse(TRIG, "trig");
+  const before = new Date().getUTCFullYear();
+  const result = engine.select(
+    ds,
+    "SELECT (YEAR(NOW()) AS ?year) (RAND() AS ?random) WHERE {}",
+  );
+  const after = new Date().getUTCFullYear();
+  assert.equal(result.rowCount, 1);
+  const [row] = result.rows.toArray();
+  const year = Number(row.year.value);
+  assert.ok(year >= before && year <= after, `NOW returned year ${year}`);
+  const random = Number(row.random.value);
+  assert.ok(random >= 0 && random < 1, `RAND returned ${random}`);
+});
+
 test("QueryEngine SELECT rows are a single-owner stream", () => {
   const engine = new QueryEngine();
   const ds = Dataset.parse(TRIG, "trig");

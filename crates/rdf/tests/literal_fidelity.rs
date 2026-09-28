@@ -5,7 +5,7 @@
 //!
 //! # Why these assertions are RAW, never canonical
 //!
-//! The sibling `proptest_roundtrip.rs` compares both sides of a round-trip via the
+//! The sibling `property_roundtrip.rs` compares both sides of a round-trip via the
 //! RDFC-1.0 [`purrdf_rdf::canonical_flat_nquads`] comparator. RDFC-1.0 is allowed to
 //! relabel blank nodes AND to rewrite literal lexical forms into canonical form, so a
 //! comparator-mediated round-trip would happily *mask* a codec that normalizes the

@@ -35,21 +35,11 @@
 //!
 //! # The exact fold, spelled out
 //!
-//! The `caseless` crate exposes **no function that produces** the compatibility
-//! caseless form: its `compatibility_caseless_match_str` is a *predicate* over
-//! two strings, and its `default_case_fold_str` performs only the fold, with no
-//! normalization at all. A tokenizer needs the form, not the verdict, so this
-//! module composes the form from the same two pieces the predicate is built
-//! from:
-//!
-//! 1. [`caseless::Caseless::default_case_fold`] — the full case fold, the
-//!    identical iterator adaptor that backs `default_case_fold_str` and
-//!    `compatibility_caseless_match_str`; and
-//! 2. `unicode_normalization`'s `nfd` / `nfkd` / `nfc`.
-//!
-//! composed in the order the Unicode Standard defines compatibility caseless
-//! matching in (`UAX #21`, "Default Case Algorithms"), which is also the exact
-//! order `compatibility_caseless_match` compares under:
+//! The form is composed from the full case fold (Unicode `CaseFolding.txt`,
+//! statuses `C` and `F`) and the normalization forms of `UAX #15`, both from
+//! [`crate::unicode`], in the order the Unicode Standard defines compatibility
+//! caseless matching in (`UAX #21`, "Default Case Algorithms", definition
+//! D146):
 //!
 //! ```text
 //! NFKD( fold( NFKD( fold( NFD( x ) ) ) ) )
@@ -63,8 +53,8 @@
 //! decomposed input is injective — decomposing an NFC result returns the input
 //! it was composed from — so appending NFC preserves the equivalence class
 //! exactly: two strings analyze to the same token text if and only if they are
-//! compatibility caseless matches of one another. [`Analyzer`] is therefore
-//! interchangeable with `caseless`'s predicate, and a test asserts that.
+//! compatibility caseless matches of one another, and a test asserts that over
+//! the equivalence classes of a fixed sample.
 //!
 //! # Fold first, then segment
 //!
@@ -80,9 +70,8 @@
 //!
 //! `UAX #29` assigns Han ideographs and Hiragana the `Word_Break` property
 //! value `Other`, and rule WB999 breaks between any pair of characters not
-//! joined by an earlier rule. The observable consequence, confirmed against
-//! `unicode-segmentation` and asserted by this crate's tests rather than
-//! assumed:
+//! joined by an earlier rule. The observable consequence, asserted by this
+//! crate's tests rather than assumed:
 //!
 //! * **Han** segments to one token per ideograph — `中文全文検索` yields
 //!   `中`, `文`, `全`, `文`, `検`, `索`, not one token for the phrase.
@@ -91,16 +80,16 @@
 //!   keeps a katakana run together, so `サンドイッチ` is a single token.
 //! * **Hangul syllables** are `ALetter`, so Korean — which is written with
 //!   spaces — segments into whole words.
-//! * None of this is discarded by `unicode_words`. Its filter keeps any segment
-//!   containing an alphanumeric character, and Han, Kana and Hangul are all
-//!   `char::is_alphanumeric`.
+//! * None of this is discarded by the word filter. It keeps any segment
+//!   containing an alphanumeric character ([`crate::unicode::is_alphanumeric`]:
+//!   `Alphabetic`, or a number), and Han, Kana and Hangul are all
+//!   `Alphabetic`.
 //!
 //! Because unspaced CJK arrives as a stream of one-character tokens, expanding
 //! *each token* into bigrams would do nothing at all: every token is already a
 //! single character. Bigrams have to be formed **across adjacent tokens**, so
-//! this module segments with `unicode_word_indices` rather than `unicode_words`
-//! — the same segmentation, but carrying the byte offsets that say whether two
-//! tokens touched in the source. A maximal run of adjacent all-CJK tokens is
+//! this module segments with [`crate::unicode::word_indices`], which carries the
+//! byte offsets that say whether two tokens touched in the source. A maximal run of adjacent all-CJK tokens is
 //! rejoined and expanded into overlapping character bigrams; `中文` and `中 文`
 //! therefore analyze differently, which is the point.
 //!
@@ -122,9 +111,7 @@
 use std::borrow::Cow;
 use std::fmt;
 
-use caseless::Caseless as _;
-use unicode_normalization::UnicodeNormalization as _;
-use unicode_segmentation::UnicodeSegmentation as _;
+use crate::unicode::{self, Compare};
 
 /// One analyzed token: its text and its position in the token stream.
 ///
@@ -157,8 +144,8 @@ pub struct UnicodeVersion {
 }
 
 impl From<(u8, u8, u8)> for UnicodeVersion {
-    /// Widen the `(u8, u8, u8)` shape `unicode_normalization` and the standard
-    /// library publish their table versions in.
+    /// Widen the `(u8, u8, u8)` shape table versions are published in, as
+    /// [`crate::unicode::UNICODE_VERSION`] is.
     fn from((major, minor, patch): (u8, u8, u8)) -> Self {
         Self {
             major: u64::from(major),
@@ -169,8 +156,7 @@ impl From<(u8, u8, u8)> for UnicodeVersion {
 }
 
 impl From<(u64, u64, u64)> for UnicodeVersion {
-    /// Adopt the `(u64, u64, u64)` shape `unicode_segmentation` and `caseless`
-    /// publish their table versions in.
+    /// Adopt a `(u64, u64, u64)` version triple.
     fn from((major, minor, patch): (u64, u64, u64)) -> Self {
         Self {
             major,
@@ -188,13 +174,14 @@ impl fmt::Display for UnicodeVersion {
 
 /// The Unicode table versions this analyzer's output depends on.
 ///
-/// Tokenization is not one table but four, each versioned independently by
-/// whoever ships it, and this crate's headline promise is that the same corpus
-/// and the same query produce the same ranking. A term dictionary is a function
-/// of these tables: raise any of them and a literal may fold, decompose or
-/// segment differently, the index's vocabulary changes, and queries that used
-/// to match stop matching — silently, because nothing about a retrieval that
-/// returns fewer rows announces itself as wrong.
+/// Tokenization is not one table but four — the alphanumeric predicate, the
+/// normalization tables, the case fold and the word-break properties — and this
+/// crate's headline promise is that the same corpus and the same query produce
+/// the same ranking. A term dictionary is a function of these tables: raise any
+/// of them and a literal may fold, decompose or segment differently, the
+/// index's vocabulary changes, and queries that used to match stop matching —
+/// silently, because nothing about a retrieval that returns fewer rows
+/// announces itself as wrong.
 ///
 /// Recording these alongside an index turns that into something detectable. A
 /// later stage folds them into the index fingerprint, so an index built under
@@ -202,116 +189,41 @@ impl fmt::Display for UnicodeVersion {
 /// comparing a single term.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub struct UnicodeVersions {
-    /// The standard library's own tables — `char::UNICODE_VERSION`.
-    ///
-    /// These back `char::is_alphanumeric`, which `unicode_words` filters
-    /// segments with, so they are genuinely part of the pipeline's output and
-    /// not merely ambient.
+    /// The alphanumeric predicate the word filter applies: `Alphabetic` and
+    /// `General_Category` `Nd`, `Nl` and `No`, from this crate's generated
+    /// tables rather than the toolchain's `char` tables.
     pub core: UnicodeVersion,
-    /// `unicode_normalization`'s tables: the NFD, NFKD and NFC steps.
+    /// The NFD, NFKD and NFC tables.
     pub normalization: UnicodeVersion,
-    /// `caseless`'s `CaseFolding.txt` tables: the full case fold.
+    /// The `CaseFolding.txt` tables: the full case fold.
     pub case_folding: UnicodeVersion,
-    /// `unicode_segmentation`'s tables: the `UAX #29` word boundaries.
+    /// The `UAX #29` word-break tables.
     pub segmentation: UnicodeVersion,
 }
 
 /// The Unicode table versions [`Analyzer`] currently resolves against.
 ///
-/// Read from the dependencies themselves rather than restated here, so the
-/// answer cannot drift away from the tables actually linked in.
-///
-/// These four are not obliged to agree, and in practice they do not: a case
-/// folding table can trail the normalization and segmentation tables by a whole
-/// Unicode release, because they are separate crates on separate schedules.
-/// That is precisely why all four are reported rather than one summary number.
-///
-/// # The skew that is actually present, and its measured extent
-///
-/// The tables are **not** level, and one of them is not even fixed by the
-/// lockfile:
-///
-/// | table | crate | version |
-/// |---|---|---|
-/// | `core` | `std` (`char::UNICODE_VERSION`) | tracks the toolchain: 17.0.0 or 18.0.0 as measured |
-/// | `normalization` | `unicode-normalization` | 17.0.0 |
-/// | `segmentation` | `unicode-segmentation` | 17.0.0 |
-/// | **`case_folding`** | **`caseless`** | **16.0.0** |
-///
-/// The fold table trails the crate tables by one Unicode release, and it cannot
-/// be levelled by upgrading: `caseless` 0.2.2 is the newest version published,
-/// its `CaseFolding.txt` tables are at 16.0.0, and it is the only crate in this
-/// workspace that implements the full (`C` + `F`) case fold the compatibility
-/// caseless form is defined in terms of. Substituting `str::to_lowercase` is
-/// not an option for the reason this module opens with — lowercasing is not
-/// folding, and `STRASSE`/`Straße` would stop matching. So the skew is
-/// **carried deliberately**, and the job here is to state exactly what it costs
-/// rather than to leave it as an unquantified caveat.
-///
-/// The `core` tables are the standard library's own and move with the
-/// toolchain, which this repository floats. Two checkouts built on nightlies a
-/// week apart can therefore link 17.0.0 and 18.0.0 tables respectively, and the
-/// distance between the fold table and `core` is a different number under each.
-/// So the cost is measured **per `core` vintage**, by
-/// `the_case_folding_skew_is_confined_to_where_it_is_measured` in this crate's
-/// test suite: the characters on which the 16.0.0 fold table disagrees with the
-/// case-mapping tables — every `c` for which `fold(c)`, `fold(lowercase(c))`
-/// and `fold(uppercase(c))` are not all the same string — pinned as an exact set
-/// for each vintage the crate has been built against, and a vintage outside that
-/// set fails the test by name so its cost is measured before it is carried.
-///
-/// Under **17.0.0** `core` tables the set is exactly these 57 code points:
-///
-/// * `U+0131` LATIN SMALL LETTER DOTLESS I. **Not** a skew: Unicode excludes it
-///   from the default fold on purpose (its case mappings are the Turkic `T`
-///   status, which `C` + `F` folding does not apply), so every version of every
-///   conforming fold table behaves this way.
-/// * `U+A7CE..=U+A7CF` and `U+A7D2..=U+A7D5` — six Latin Extended-D letters.
-/// * `U+16EA0..=U+16EB8` and `U+16EBB..=U+16ED3` — fifty Beria Erfe letters.
-///
-/// Under **18.0.0** `core` tables it is those 57 and 41 more, 98 in all — the
-/// case pairs that release added:
-///
-/// * `U+0277` and `U+027C` (IPA Extensions) and `U+AB4B..=U+AB4C` (Latin
-///   Extended-E) — four lowercase letters present since Unicode 1.1 that only
-///   gained an uppercase partner in 18.0.0 — and `U+A7DD`, `U+A7E2` and
-///   `U+AB6C..=U+AB6D`, the four new capitals themselves.
-/// * `U+1DF40..=U+1DF41`, `U+1DF48..=U+1DF4B`, `U+1DF4D..=U+1DF4E`,
-///   `U+1DF51..=U+1DF52`, `U+1DF68..=U+1DF6F` and `U+1DF72..=U+1DF7F` — sixteen
-///   new Latin Extended-G case pairs — and `U+1DF95`, a new ligature whose
-///   uppercase is a special-casing expansion.
-///
-/// Every real entry in both sets is a character whose *cased partner* the `core`
-/// tables know about and the 16.0.0 fold table does not. An uppercase one of
-/// them therefore indexes and queries as itself rather than folding, so it
-/// matches its own spelling and not its lowercase partner. The four pre-existing
-/// lowercase letters are in the set for the same reason seen from the other
-/// side: they still fold to themselves exactly as they always did, and it is only
-/// their newly minted capitals that fail to reach them. So the guarantee that
-/// makes the skew survivable is this: a text containing no character *introduced
-/// by* the `core` release analyzes to the token vector it always did, and the
-/// test asserts it for every ASCII, Latin-1, Latin Extended-A, Greek, Cyrillic,
-/// Hebrew, Arabic, Hiragana, Katakana, Han and Hangul code point.
-///
-/// When `caseless` does ship newer tables, that test fails — deliberately.
-/// Raising the fold table changes which literals produce which terms, which
-/// changes the term dictionary and both fingerprints, so it is a change that
-/// has to be seen and its goldens re-derived rather than absorbed silently. A
-/// `core` release the crate has not measured under fails the same way, for the
-/// same reason.
+/// Every table is generated by this crate from the one vendored Unicode
+/// Character Database (`crates/iri/unicode/`), so all four report the same
+/// version, [`crate::unicode::UNICODE_VERSION`]: no table trails another, and
+/// none follows the toolchain the crate is built with. Raising the version is
+/// a regeneration, which changes which literals produce which terms, and so
+/// changes the term dictionary, both fingerprints and
+/// [`crate::ANALYZER_PROFILE_ID`] — a change that has to be seen, with its
+/// goldens re-derived, rather than absorbed silently.
 ///
 /// # Versions pin vintage, not contents
 ///
-/// A dependency could ship a corrected mapping without moving its version. The
-/// golden token-vector test in this crate's test suite is what catches that —
-/// it asserts exact token vectors across a spread of scripts, so a changed
+/// The golden token-vector test in this crate's test suite asserts exact token
+/// vectors across a spread of scripts, and the frozen differential vectors
+/// replay every scalar value's fold and normalization forms, so a changed
 /// mapping fails a test rather than rewriting the term dictionary in silence.
 pub fn unicode_versions() -> UnicodeVersions {
     UnicodeVersions {
-        core: char::UNICODE_VERSION.into(),
-        normalization: unicode_normalization::UNICODE_VERSION.into(),
-        case_folding: caseless::UNICODE_VERSION.into(),
-        segmentation: unicode_segmentation::UNICODE_VERSION.into(),
+        core: unicode::UNICODE_VERSION.into(),
+        normalization: unicode::UNICODE_VERSION.into(),
+        case_folding: unicode::FOLD_UNICODE_VERSION.into(),
+        segmentation: unicode::UNICODE_VERSION.into(),
     }
 }
 
@@ -352,7 +264,7 @@ impl Analyzer {
                 });
             });
         } else {
-            let normalized: String = analysis_form_chars(input).collect();
+            let normalized = self.analysis_form(input);
             segment_each(&normalized, |text, position| {
                 out.push(Token {
                     text: Cow::Owned(text.to_owned()),
@@ -382,7 +294,7 @@ impl Analyzer {
         F: FnMut(Token<'_>),
     {
         scratch.clear();
-        scratch.extend(analysis_form_chars(input));
+        unicode::analysis_form(input, scratch);
         segment_each(scratch, |text, position| {
             sink(Token {
                 text: Cow::Borrowed(text),
@@ -398,7 +310,9 @@ impl Analyzer {
     /// two strings did or did not match, needs the same form the tokenizer saw.
     #[must_use]
     pub fn analysis_form(&self, input: &str) -> String {
-        analysis_form_chars(input).collect()
+        let mut form = String::with_capacity(input.len());
+        unicode::analysis_form(input, &mut form);
+        form
     }
 }
 
@@ -450,38 +364,16 @@ const CJK_BLOCKS: [(char, char); 10] = [
     CJK_UNIFIED_IDEOGRAPHS_EXTENSIONS_BEYOND_B,
 ];
 
-/// The compatibility caseless form of `input`, one `char` at a time.
-///
-/// The composition is the module documentation's, and the reason it is an
-/// iterator rather than a `String` is that its two callers want different
-/// things from it: one collects it, the other compares it against the input
-/// without allocating at all.
-fn analysis_form_chars(input: &str) -> impl Iterator<Item = char> + '_ {
-    input
-        .chars()
-        .nfd()
-        .default_case_fold()
-        .nfkd()
-        .default_case_fold()
-        .nfkd()
-        .nfc()
-}
-
 /// Whether `input` is already its own analysis form, decided without
 /// allocating.
 ///
-/// This is what lets [`Analyzer::analyze`] hand back borrowed tokens. It costs
-/// one pass of the fold pipeline, which is why it compares lazily and stops at
-/// the first character that differs rather than building the form and testing
-/// equality.
+/// This is what lets [`Analyzer::analyze`] hand back borrowed tokens. It runs
+/// the fold pipeline against the input and stops at the first character that
+/// differs rather than building the form and testing equality.
 fn is_in_analysis_form(input: &str) -> bool {
-    let mut original = input.chars();
-    for folded in analysis_form_chars(input) {
-        if original.next() != Some(folded) {
-            return false;
-        }
-    }
-    original.next().is_none()
+    let mut compare = Compare::new(input);
+    unicode::analysis_form(input, &mut compare);
+    compare.finish()
 }
 
 /// Whether `word` is entirely CJK, and so joins a bigram run.
@@ -530,7 +422,7 @@ where
     F: FnMut(&'t str, u32),
 {
     let mut position: u32 = 0;
-    let mut words = text.unicode_word_indices().peekable();
+    let mut words = unicode::word_indices(text).peekable();
     while let Some((start, word)) = words.next() {
         if !is_cjk_word(word) {
             if !emit(&mut sink, word, &mut position) {
@@ -577,9 +469,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use pretty_assertions::assert_eq;
 
-    use super::{Analyzer, CJK_BLOCKS, analysis_form_chars, is_cjk_char, is_in_analysis_form};
+    use super::{Analyzer, CJK_BLOCKS, is_cjk_char, is_in_analysis_form};
+    use crate::unicode;
 
     /// The no-allocation predicate must agree with the form it is a shortcut
     /// for, or [`Analyzer::analyze`] would borrow text it had no right to.
@@ -602,7 +494,7 @@ mod tests {
             "don't",
             "3.14",
         ] {
-            let form: String = analysis_form_chars(input).collect();
+            let form = Analyzer::new().analysis_form(input);
             assert_eq!(
                 is_in_analysis_form(input),
                 form == input,
@@ -641,231 +533,69 @@ mod tests {
         assert_eq!(analyzer.analysis_form("ｒｕｓｔ"), "rust");
     }
 
-    /// The form this module composes is the same relation `caseless`'s own
-    /// predicate decides, in both directions.
+    /// The form this module composes decides compatibility caseless matching
+    /// (`UAX #21` D146), in both directions.
     ///
     /// This is the claim the module documentation makes and the one the final
     /// NFC step could have broken: two strings must analyze to the same text
     /// exactly when they are compatibility caseless matches of one another. A
     /// normalization that merged two inequivalent strings would merge two terms
     /// the standard keeps apart, and one that split an equivalent pair would
-    /// lose a match — neither is visible from the outside, so it is checked
-    /// against an independent implementation of the same relation rather than
-    /// against this module's own idea of it.
+    /// lose a match. The classes below are the verdicts of an independent
+    /// implementation of the relation, recorded over every pair of these
+    /// samples before that implementation left this workspace (answers only,
+    /// see `PROVENANCE.md`), and every pair is checked against them.
     #[test]
-    fn the_form_decides_what_the_caseless_predicate_decides() {
+    fn the_form_decides_compatibility_caseless_matching() {
         let analyzer = Analyzer::new();
-        let samples = [
-            "STRASSE",
-            "Straße",
-            "strasse",
-            "straße",
-            "rust",
-            "ｒｕｓｔ",
-            "RUST",
-            "fi",
-            "ﬁ",
-            "café",
-            "cafe\u{0301}",
-            "CAFÉ",
-            "σοφος",
-            "ΣΟΦΟΣ",
-            "σοφός",
-            "中文",
-            "",
+        let classes: [&[&str]; 8] = [
+            &["STRASSE", "Straße", "strasse", "straße"],
+            &["rust", "ｒｕｓｔ", "RUST"],
+            &["fi", "ﬁ"],
+            &["café", "cafe\u{0301}", "CAFÉ"],
+            &["σοφος", "ΣΟΦΟΣ"],
+            &["σοφός"],
+            &["中文"],
+            &[""],
         ];
-        for left in samples {
-            for right in samples {
-                assert_eq!(
-                    analyzer.analysis_form(left) == analyzer.analysis_form(right),
-                    caseless::compatibility_caseless_match_str(left, right),
-                    "the form and the predicate disagreed on {left:?} vs {right:?}"
-                );
+        for (left_class, lefts) in classes.iter().enumerate() {
+            for left in *lefts {
+                for (right_class, rights) in classes.iter().enumerate() {
+                    for right in *rights {
+                        assert_eq!(
+                            analyzer.analysis_form(left) == analyzer.analysis_form(right),
+                            left_class == right_class,
+                            "the form and the recorded verdict disagreed on {left:?} vs {right:?}"
+                        );
+                    }
+                }
             }
         }
     }
 
-    /// The extent of the case-folding table's lag behind the `core` tables, measured
-    /// rather than asserted, per `core` vintage — and confined to characters the
-    /// `core` release itself introduced.
+    /// The case fold and the other tables are one Unicode version, so there
+    /// is no skew between them to measure.
     ///
-    /// `caseless` ships `CaseFolding.txt` at 16.0.0 and cannot be levelled: 0.2.2 is
-    /// the newest version published and it is the only full (`C` + `F`) fold in this
-    /// workspace. The `core` tables are the standard library's and move with the
-    /// toolchain, which this repository floats, so the distance between the two is a
-    /// different number on different nightlies. The skew is carried, and this is what
-    /// carrying it costs under each vintage the crate has been built against.
-    ///
-    /// A character is affected exactly when the fold stops being a case invariant on
-    /// it — when `fold(c)`, `fold(lowercase(c))` and `fold(uppercase(c))` are not all
-    /// the same string. Scanning the whole code space finds 57 such characters under
-    /// 17.0.0 `core` tables and 98 under 18.0.0, and no others. One of them, `U+0131`,
-    /// is not a skew at all: Unicode excludes the dotless i from the default fold on
-    /// purpose. The rest are characters whose cased partner the `core` tables know
-    /// and the 16.0.0 fold table does not — or, for four lowercase letters older than
-    /// the fold table, whose partner 18.0.0 was the first release to mint.
-    ///
-    /// The scan is exhaustive and the answer is pinned as a set per vintage, so this
-    /// fails the day `caseless` ships newer tables, and it fails on a `core` vintage
-    /// nothing here has measured — which is the point both times. Raising the fold
-    /// table rewrites the term dictionary, and that must be a visible change with
-    /// re-derived goldens rather than a silent one; a `core` release must have its
-    /// cost measured before it is carried. Every failure prints the runs it measured,
-    /// so one run on the new toolchain is the measurement.
+    /// The fold is generated from `CaseFolding.txt` of the same release as the
+    /// normalization and word-break tables, all from the vendored database;
+    /// none of them is the toolchain's. What skew there was between a fold
+    /// table and the case mappings is therefore now a property of Unicode
+    /// itself, and the one code point where the fold is not a case invariant
+    /// is Unicode's own deliberate exclusion: `U+0131` LATIN SMALL LETTER
+    /// DOTLESS I, whose Turkic `T` mapping `C` + `F` folding does not apply.
     #[test]
-    fn the_case_folding_skew_is_confined_to_where_it_is_measured() {
-        /// The contiguous runs of affected code points under 17.0.0 `core` tables.
-        const AFFECTED_UNDER_17: &[(u32, u32)] = &[
-            // Unicode's own deliberate exclusion: the Turkic dotless i has `T`
-            // status case mappings, which `C` + `F` folding does not apply. Every
-            // conforming fold table of every version behaves this way.
-            (0x0131, 0x0131),
-            // Latin Extended-D letters whose cased partner postdates the fold table.
-            (0xA7CE, 0xA7CF),
-            (0xA7D2, 0xA7D5),
-            // Beria Erfe — a bicameral script the fold table does not yet carry.
-            (0x16EA0, 0x16EB8),
-            (0x16EBB, 0x16ED3),
-        ];
-        /// The runs under 18.0.0 `core` tables: the 17.0.0 runs and the case pairs
-        /// that release added.
-        const AFFECTED_UNDER_18: &[(u32, u32)] = &[
-            (0x0131, 0x0131),
-            // IPA Extensions letters present since Unicode 1.1 whose capitals
-            // (`U+A7DD`, `U+A7E2`) are 18.0.0's.
-            (0x0277, 0x0277),
-            (0x027C, 0x027C),
-            (0xA7CE, 0xA7CF),
-            (0xA7D2, 0xA7D5),
-            (0xA7DD, 0xA7DD),
-            (0xA7E2, 0xA7E2),
-            // Latin Extended-E script-r letters and their new capitals.
-            (0xAB4B, 0xAB4C),
-            (0xAB6C, 0xAB6D),
-            (0x16EA0, 0x16EB8),
-            (0x16EBB, 0x16ED3),
-            // Latin Extended-G: sixteen new case pairs, and one new ligature whose
-            // uppercase is a special-casing expansion.
-            (0x1DF40, 0x1DF41),
-            (0x1DF48, 0x1DF4B),
-            (0x1DF4D, 0x1DF4E),
-            (0x1DF51, 0x1DF52),
-            (0x1DF68, 0x1DF6F),
-            (0x1DF72, 0x1DF7F),
-            (0x1DF95, 0x1DF95),
-        ];
-
-        let fold = |text: &str| -> String {
-            use caseless::Caseless as _;
-            text.chars().default_case_fold().collect()
-        };
-
-        let mut measured: Vec<u32> = Vec::new();
-        for code_point in 0..=0x0010_FFFF_u32 {
-            let Some(c) = char::from_u32(code_point) else {
-                continue;
-            };
-            let itself = c.to_string();
-            let lowered: String = c.to_lowercase().collect();
-            let raised: String = c.to_uppercase().collect();
-            let folded = fold(&itself);
-            if folded != fold(&lowered) || folded != fold(&raised) {
-                measured.push(code_point);
-            }
+    fn the_case_folding_table_is_level_with_the_others() {
+        let versions = super::unicode_versions();
+        assert_eq!(versions.case_folding, versions.normalization);
+        assert_eq!(versions.case_folding, versions.segmentation);
+        assert_eq!(versions.case_folding, versions.core);
+        assert_eq!(unicode::FOLD_UNICODE_VERSION, unicode::UNICODE_VERSION);
+        // The 17.0.0 capitals the 16.0.0 table did not fold now reach their
+        // lowercase partners.
+        for (capital, small) in [('\u{A7CE}', '\u{A7CF}'), ('\u{16EA0}', '\u{16EBB}')] {
+            assert_eq!(unicode::case_fold(&capital.to_string()), small.to_string());
         }
-
-        // The runs as measured, spelled the way the tables above are, so a failure
-        // on a toolchain nobody has run this under is itself the measurement.
-        let runs = |points: &[u32]| -> String {
-            let mut runs: Vec<(u32, u32)> = Vec::new();
-            for &point in points {
-                match runs.last_mut() {
-                    Some((_, high)) if *high + 1 == point => *high = point,
-                    _ => runs.push((point, point)),
-                }
-            }
-            runs.iter()
-                .map(|(low, high)| format!("(0x{low:04X}, 0x{high:04X})"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        };
-
-        let (major, minor, patch) = char::UNICODE_VERSION;
-        let affected = match (major, minor, patch) {
-            (17, 0, 0) => AFFECTED_UNDER_17,
-            (18, 0, 0) => AFFECTED_UNDER_18,
-            _ => panic!(
-                "the standard library's tables are at Unicode {major}.{minor}.{patch}, a vintage \
-                 this crate has not measured the fold skew under. The skew measured on this \
-                 toolchain is {} code points, in the runs [{}]. Confirm the difference from the \
-                 nearest measured vintage is exactly the case pairs that release added, confirm \
-                 the golden token vectors and fingerprints did not move, then pin this vintage \
-                 beside the others.",
-                measured.len(),
-                runs(&measured)
-            ),
-        };
-        let expected: Vec<u32> = affected
-            .iter()
-            .flat_map(|&(low, high)| low..=high)
-            .collect();
-        assert_eq!(
-            measured.len(),
-            expected.len(),
-            "the measured skew under {major}.{minor}.{patch} core tables is {} code points; got {} \
-             in the runs [{}]",
-            expected.len(),
-            measured.len(),
-            runs(&measured)
-        );
-        assert_eq!(
-            measured,
-            expected,
-            "the case-folding table's disagreement with the {major}.{minor}.{patch} case-mapping \
-             tables moved; measured [{}]. If `caseless` has shipped newer tables this set should \
-             shrink toward just U+0131 — re-derive this crate's golden token vectors and \
-             fingerprints, then narrow this pin. If it grew instead, a table moved underneath the \
-             crate and the term dictionary moved with it.",
-            runs(&measured)
-        );
-
-        // And the guarantee that makes the skew survivable: every script a corpus
-        // written before Unicode 17.0 could possibly hold folds consistently.
-        for (script, low, high) in [
-            ("ASCII", 0x0000_u32, 0x007F_u32),
-            ("Latin-1 Supplement", 0x0080, 0x00FF),
-            ("Latin Extended-A", 0x0100, 0x017F),
-            ("Greek and Coptic", 0x0370, 0x03FF),
-            ("Cyrillic", 0x0400, 0x04FF),
-            ("Hebrew", 0x0590, 0x05FF),
-            ("Arabic", 0x0600, 0x06FF),
-            ("Hiragana", 0x3040, 0x309F),
-            ("Katakana", 0x30A0, 0x30FF),
-            ("CJK Unified Ideographs", 0x4E00, 0x9FFF),
-            ("Hangul Syllables", 0xAC00, 0xD7A3),
-        ] {
-            for code_point in low..=high {
-                let Some(c) = char::from_u32(code_point) else {
-                    continue;
-                };
-                // U+0131 sits inside Latin Extended-A and is Unicode's own
-                // exclusion rather than a table lag, so it is named rather than
-                // quietly skipped.
-                if code_point == 0x0131 {
-                    continue;
-                }
-                let itself = c.to_string();
-                let lowered: String = c.to_lowercase().collect();
-                let raised: String = c.to_uppercase().collect();
-                let folded = fold(&itself);
-                assert_eq!(
-                    (folded.clone(), folded),
-                    (fold(&lowered), fold(&raised)),
-                    "the fold is not a case invariant on U+{code_point:04X} in {script}, so the table \
-                     skew has reached a script real corpora already contain"
-                );
-            }
-        }
+        assert_eq!(unicode::case_fold("\u{0131}"), "\u{0131}");
     }
 
     /// The measured `UAX #29` behaviour the CJK model is built on.
@@ -877,33 +607,32 @@ mod tests {
     /// expand nothing; Katakana does not, because rule WB13 keeps a katakana
     /// run together; Hangul syllables are `ALetter` and segment into whole
     /// space-delimited words; and none of it is dropped by the alphanumeric
-    /// filter `unicode_words` applies.
+    /// filter the word iterator applies.
     #[test]
     fn the_measured_cjk_segmentation_matches_the_documented_model() {
-        use unicode_segmentation::UnicodeSegmentation as _;
-
+        let words = |text: &'static str| -> Vec<&'static str> {
+            unicode::word_indices(text).map(|(_, word)| word).collect()
+        };
         assert_eq!(
-            "中文全文検索".unicode_words().collect::<Vec<_>>(),
+            words("中文全文検索"),
             vec!["中", "文", "全", "文", "検", "索"],
             "Han must segment to one token per ideograph"
         );
         assert_eq!(
-            "私はサンドイッチを食べます"
-                .unicode_words()
-                .collect::<Vec<_>>(),
+            words("私はサンドイッチを食べます"),
             vec!["私", "は", "サンドイッチ", "を", "食", "べ", "ま", "す"],
             "Hiragana must segment per character while a Katakana run stays whole"
         );
         assert_eq!(
-            "한국어 전문 검색".unicode_words().collect::<Vec<_>>(),
+            words("한국어 전문 검색"),
             vec!["한국어", "전문", "검색"],
             "Hangul must segment into whole space-delimited words"
         );
 
         for c in ['中', 'は', 'サ', '한'] {
             assert!(
-                c.is_alphanumeric(),
-                "{c:?} must pass the alphanumeric filter `unicode_words` applies"
+                unicode::is_alphanumeric(c),
+                "{c:?} must pass the alphanumeric filter the word iterator applies"
             );
         }
     }

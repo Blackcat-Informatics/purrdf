@@ -2009,7 +2009,7 @@ struct EmittedRecord {
 }
 
 /// The lookup policy for [`FusionStream`]'s emitted map: the workspace's
-/// fixed-key, seed-free [`ahash`] hasher.
+/// fixed-key, seed-free `FixedHasher` ([`purrdf_core::FastHasher`]).
 ///
 /// # Why a hasher at all, in a crate that is otherwise byte-deterministic
 ///
@@ -2030,7 +2030,7 @@ struct EmittedRecord {
 /// from, and a per-process seed would put nondeterminism into a crate whose
 /// entire claim is the same answer on every target. See `purrdf-core`'s
 /// `hash` module for the workspace policy this follows.
-type EmittedHasher = core::hash::BuildHasherDefault<ahash::AHasher>;
+type EmittedHasher = purrdf_core::FastHasher;
 
 /// The emitted-candidate table, wrapping the one hash map in this crate so that
 /// **the type enforces what the argument above claims**.

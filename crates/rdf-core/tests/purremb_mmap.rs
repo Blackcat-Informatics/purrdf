@@ -1,13 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Heap, immutable-mmap, and deliberately misaligned PURREMB parity.
+//! Heap, section-aligned, and deliberately misaligned PURREMB parity.
+//!
+//! The reader contract is over borrowed bytes: a caller may hand it a file
+//! mapping, a heap buffer, or a slice of a larger buffer. What the reader
+//! observes of that backing is its contents and its address alignment, so these
+//! tests read the golden file into owned buffers and control the alignment
+//! directly: one aligned the way a page-aligned file mapping is, one shifted off
+//! every alignment the format promises.
 
 #![cfg(not(target_arch = "wasm32"))]
 
-use std::fs::File;
-
-use memmap2::MmapOptions;
 use purrdf_core::{
     ArtifactRoot, EmbeddingError, EmbeddingIntegrity, EmbeddingView, TargetId, VectorSpaceId,
     reopen_prevalidated, verify_embedding,
@@ -46,34 +50,53 @@ fn snapshot(bytes: &[u8]) -> Snapshot {
     }
 }
 
-#[test]
-fn heap_mmap_and_misaligned_borrows_are_logically_identical() {
+/// The alignment a file mapping's first byte carries at the least (a page is
+/// larger), and the largest section alignment the PURREMB layout uses.
+const SECTION_ALIGN: usize = 64;
+
+/// The golden PURREMB file's bytes.
+fn golden() -> Vec<u8> {
     let path =
         std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/purremb_v1.bin");
-    let heap = std::fs::read(&path).expect("golden bytes");
-    let file = File::open(&path).expect("golden file");
-    // SAFETY: the checked-in fixture is opened read-only, the mapping is not
-    // mutated or truncated during this test, and every view is dropped first.
-    let mmap = unsafe { MmapOptions::new().map(&file).expect("immutable mmap") };
+    std::fs::read(path).expect("golden bytes")
+}
+
+/// `bytes` copied into `storage` at an offset aligned to [`SECTION_ALIGN`],
+/// returned as the aligned slice: the alignment a page-aligned mapping gives.
+fn aligned_copy<'a>(storage: &'a mut Vec<u8>, bytes: &[u8]) -> &'a [u8] {
+    storage.clear();
+    storage.resize(bytes.len() + SECTION_ALIGN, 0);
+    let start = storage.as_ptr().align_offset(SECTION_ALIGN);
+    storage[start..start + bytes.len()].copy_from_slice(bytes);
+    let aligned = &storage[start..start + bytes.len()];
+    assert_eq!(aligned.as_ptr() as usize % SECTION_ALIGN, 0);
+    aligned
+}
+
+#[test]
+fn heap_aligned_and_misaligned_borrows_are_logically_identical() {
+    let heap = golden();
+    let mut storage = Vec::new();
+    let aligned = aligned_copy(&mut storage, &heap);
     let mut shifted = Vec::with_capacity(heap.len() + 1);
     shifted.push(0xa5);
     shifted.extend_from_slice(&heap);
     let misaligned = &shifted[1..];
 
     let expected = snapshot(&heap);
-    assert_eq!(snapshot(&mmap), expected);
+    assert_eq!(snapshot(aligned), expected);
     assert_eq!(snapshot(misaligned), expected);
 
-    let mut mmap_view = EmbeddingView::from_bytes(&mmap).expect("mmap view");
-    verify_embedding(&mut mmap_view).expect("verified mmap view");
+    let mut aligned_view = EmbeddingView::from_bytes(aligned).expect("aligned view");
+    verify_embedding(&mut aligned_view).expect("verified aligned view");
     assert!(
-        mmap_view
+        aligned_view
             .matrices()
             .next()
             .expect("matrix")
             .native_f32_row(0)
             .is_some(),
-        "page-aligned mmap plus 64-byte section alignment permits native f32"
+        "section-aligned backing bytes permit native f32"
     );
 
     let mut shifted_view = EmbeddingView::from_bytes(misaligned).expect("shifted view");
@@ -91,21 +114,18 @@ fn heap_mmap_and_misaligned_borrows_are_logically_identical() {
 
 #[test]
 fn resident_certificate_reopens_only_the_certified_byte_range() {
-    let path =
-        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/goldens/purremb_v1.bin");
-    let heap = std::fs::read(&path).expect("golden bytes");
-    let file = File::open(&path).expect("golden file");
-    // SAFETY: the checked-in fixture is opened read-only, the mapping is not
-    // mutated or truncated during this test, and every view is dropped first.
-    let mmap = unsafe { MmapOptions::new().map(&file).expect("immutable mmap") };
+    // Two owned copies of the same bytes at different addresses: the certificate
+    // binds the byte range it verified, not merely equal contents.
+    let heap = golden();
+    let resident = golden();
 
     let certificate = {
-        let mut view = EmbeddingView::from_bytes(&mmap).expect("mmap view");
+        let mut view = EmbeddingView::from_bytes(&resident).expect("resident view");
         verify_embedding(&mut view)
-            .expect("verified mmap view")
+            .expect("verified resident view")
             .into_certificate()
     };
-    let reopened = reopen_prevalidated(&mmap, &certificate).expect("same mmap range");
+    let reopened = reopen_prevalidated(&resident, &certificate).expect("same resident range");
     assert_eq!(reopened.integrity(), EmbeddingIntegrity::FullyVerified);
 
     assert!(matches!(

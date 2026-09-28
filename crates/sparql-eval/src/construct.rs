@@ -827,7 +827,7 @@ impl MintTracker {
 /// A triple term's components are visited subject, predicate, object, each fully
 /// before the next, over a work list rather than the call stack.
 fn collect_value_blank_labels(value: &TermValue, out: &mut BTreeSet<String>) {
-    let mut pending: smallvec::SmallVec<[&TermValue; 8]> = smallvec::smallvec![value];
+    let mut pending: purrdf_core::SmallVec<[&TermValue; 8]> = purrdf_core::smallvec![value];
     while let Some(value) = pending.pop() {
         match value {
             TermValue::Blank { label, .. } => {
@@ -2749,7 +2749,7 @@ mod term_walk_tests {
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
     }
@@ -3014,7 +3014,7 @@ mod where_walk_tests {
 
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
 

@@ -27,8 +27,9 @@ Scope, stated rather than implied: only invocations of a ``scripts/`` (or in-rep
 ``crates/.../*.py``) program are compared. ``cargo`` steps and the ``node`` schema
 oracles are out of scope — CI distributes those across jobs (``wasm``, ``pytest``,
 ``capi``) and spells several differently on purpose, so requiring textual equality
-there would refuse a correct workflow. A gate that over-refuses gets disabled, and
-then it guards nothing.
+there would refuse a correct workflow. The explicit preserve-order consumer is a
+bounded exception: its three Cargo gates must remain in both lists because an
+excluded consumer does not run through any workspace command.
 
 ``$(MAKE)`` recursions ARE followed, within this Makefile. They were listed above
 as "deliberately out of scope" under the reason that applies to cargo and node —
@@ -107,6 +108,11 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
         "same as the geo determinism check: a native-versus-wasm32 comparison needing the "
         "wasm toolchain"
     ),
+    "scripts/check-wasm-test-runner.sh": (
+        "observes the wasm32 test runner failing a planted panic, a refused flag and a "
+        "sealed host read, so it needs the wasm32 target, the wasm-bindgen CLI and Node "
+        "that only the wasm job installs; `make wasm-test` is the local entry point"
+    ),
     "scripts/check-i18n-render.py --self-test": (
         "renders the book to check the translation, so it needs mdbook and the pinned "
         "mdbook-i18n-helpers; `make check-i18n` is the local entry point and says so"
@@ -124,7 +130,7 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
         "evaluates the full W3C corpora, tens of minutes. `make conformance` is the local "
         "entry point; only its `--self-test` arm is cheap enough for `make check`"
     ),
-    "scripts/check-simd-asm.py $(SIMD_ASM_ARGS)": (
+    "scripts/check-simd-asm.py --doc $(SIMD_ASM_ARGS)": (
         "emits asm for seven target configurations; needs the wasm32 and aarch64 std "
         "targets. `make simd-asm` is the local entry point; only its `--self-test` arm "
         "runs in `make check`"
@@ -137,7 +143,7 @@ ONE_SIDED_BY_DESIGN: dict[str, str] = {
 # refused an ADDITION. It grew from four to six inside this change, and a stale "Four" in
 # both the changelog and the PR body is the proof that nothing noticed. Growth is now a
 # deliberate, visible edit to this number.
-ONE_SIDED_COUNT = 7
+ONE_SIDED_COUNT = 8
 
 
 def stale_exemptions(local: set[str], reachable: set[str]) -> list[str]:
@@ -750,8 +756,49 @@ def self_test() -> int:
     else:
         print("OK: self-test — a gate paired in both lists with both argument forms is accepted")
 
+    if consumer_gate_problems(real_makefile, real_workflows):
+        print("SELF-TEST FAIL: excluded consumer gates do not agree in the real tree")
+        ok = False
+    for command in CONSUMER_COMMANDS:
+        absent_ci = {name: text.replace(command, "true") for name, text in real_workflows.items()}
+        prose_ci = {name: text.replace(command, f'echo "{command}"') for name, text in real_workflows.items()}
+        absent_local = real_makefile.replace(command, "true")
+        if (not consumer_gate_problems(real_makefile, absent_ci)
+                or not consumer_gate_problems(real_makefile, prose_ci)
+                or not consumer_gate_problems(absent_local, real_workflows)):
+            print(f"SELF-TEST FAIL: excluded consumer omission accepted: {command}")
+            ok = False
+    print("OK: self-test — excluded consumer omissions and quoted prose are refused")
+
     print("SELF-TEST PASS" if ok else "SELF-TEST FAIL")
     return 0 if ok else 1
+
+
+# This excluded downstream consumer proves serde_json feature unification cannot
+# change uniqueItems semantics. Workspace Cargo commands never select it.
+CONSUMER_MANIFEST = "crates/jsonschema/tests/preserve_order_consumer/Cargo.toml"
+CONSUMER_COMMANDS = (
+    f"cargo fmt --manifest-path {CONSUMER_MANIFEST} --check",
+    f"cargo clippy --manifest-path {CONSUMER_MANIFEST} --all-targets --locked -- -D warnings",
+    f"cargo test --manifest-path {CONSUMER_MANIFEST} --locked",
+)
+
+
+def consumer_gate_problems(makefile_text: str, workflow_texts: dict[str, str]) -> list[str]:
+    """Require each excluded-consumer gate locally and in a PR workflow."""
+    def live(text: str) -> str:
+        return " ".join(_drop_prose(strip_yaml_comments(_uncomment(
+            _join_continuations(text), ("#",)
+        ))).split())
+
+    local = live(check_recipe(makefile_text, "check"))
+    ci = " ".join(live(text) for text in merge_blocking(workflow_texts).values())
+    return [
+        f"excluded preserve-order consumer gate `{command}` is absent from {where}"
+        for command in CONSUMER_COMMANDS
+        for where, text in (("make check", local), ("pull-request workflows", ci))
+        if command not in text
+    ]
 
 
 def main() -> int:
@@ -761,7 +808,10 @@ def main() -> int:
     if args.self_test:
         return self_test()
 
-    problems = divergence(MAKEFILE.read_text(encoding="utf-8"), _workflow_texts())
+    makefile_text = MAKEFILE.read_text(encoding="utf-8")
+    workflow_texts = _workflow_texts()
+    problems = divergence(makefile_text, workflow_texts)
+    problems.extend(consumer_gate_problems(makefile_text, workflow_texts))
     if problems:
         sys.exit(
             "FAIL: `make check` and the CI workflows do not run the same gates:\n  "

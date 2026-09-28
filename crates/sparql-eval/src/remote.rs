@@ -663,7 +663,7 @@ fn rebuild_sanitized(node: &GraphPattern, children: Vec<GraphPattern>) -> GraphP
 /// always an IRI, so only the two nested positions are inspected, subject before
 /// object, over a work list that ends at the first blank node found.
 fn ground_term_has_blank_node(term: &GroundTerm) -> bool {
-    let mut pending: smallvec::SmallVec<[_; 8]> = smallvec::smallvec![term];
+    let mut pending: purrdf_core::SmallVec<[_; 8]> = purrdf_core::smallvec![term];
     while let Some(term) = pending.pop() {
         match term {
             GroundTerm::NamedNode(_) | GroundTerm::Literal(_) => {}
@@ -1130,7 +1130,7 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
 pub(crate) fn identity_seq<I: ViewTermId>() -> SolutionSeq<I> {
     SolutionSeq {
         schema: VarSchema::empty_shared(),
-        rows: vec![smallvec::smallvec![]],
+        rows: vec![purrdf_core::smallvec![]],
     }
 }
 
@@ -3047,7 +3047,7 @@ mod body_walk_tests {
 
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
 

@@ -124,8 +124,9 @@ rule with no conclusion can do.
   1,048,576 on `wasm32`. A report that claims
   `Exact` while naming a boundary is a test failure.
 * **wasm-clean and dependency-lean.** Dependencies are `purrdf-core`,
-  `purrdf-datalog`, `purrdf-xsd`, `roxmltree`, `blake3`, and two fixed-key
-  hashers (`ahash` and `hashbrown`) — all `wasm32-unknown-unknown`-clean, so
+  `purrdf-datalog`, `purrdf-xsd`, `roxmltree`, `purrdf-hash`, and `hashbrown`'s raw
+  hash table, keyed by `purrdf-core`'s fixed-key hasher — all
+  `wasm32-unknown-unknown`-clean, so
   this crate carries into Rust, Python, WebAssembly, and C without a
   threads/filesystem/RNG dependency.
 * **Determinism.** The chase is a fixpoint over the frozen IR; a given input and

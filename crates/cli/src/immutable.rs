@@ -81,9 +81,9 @@
 use std::fs::File;
 use std::io::{Read as _, Seek as _};
 
-use memmap2::Mmap;
-
 use crate::error::CliError;
+#[cfg(target_os = "linux")]
+use crate::mmap::Mmap;
 
 /// Which acquisition tier produced an [`ImmutableInput`]'s bytes.
 ///
@@ -111,7 +111,8 @@ pub enum InputTier {
 pub enum ImmutableInput {
     /// A memory mapping whose backing object cannot shrink, grow, or be written for
     /// the mapping's lifetime — a descriptor with verified seals (Tier 0) or our own
-    /// sealed `memfd` snapshot (Tier 1).
+    /// sealed `memfd` snapshot (Tier 1). Linux only: elsewhere every input is owned.
+    #[cfg(target_os = "linux")]
     Mapped {
         /// The read-only mapping. Held alive for the value's lifetime.
         mmap: Mmap,
@@ -126,6 +127,7 @@ impl ImmutableInput {
     /// The immutable bytes. Stable for the lifetime of `self`.
     pub fn as_bytes(&self) -> &[u8] {
         match self {
+            #[cfg(target_os = "linux")]
             Self::Mapped { mmap, .. } => &mmap[..],
             Self::Owned(buffer) => &buffer[..],
         }
@@ -134,6 +136,7 @@ impl ImmutableInput {
     /// The acquisition tier that produced these bytes.
     pub fn tier(&self) -> InputTier {
         match self {
+            #[cfg(target_os = "linux")]
             Self::Mapped { tier, .. } => *tier,
             Self::Owned(_) => InputTier::Owned,
         }
@@ -142,12 +145,12 @@ impl ImmutableInput {
     /// Acquire immutable bytes from a disk `path`, tiered (Tier 0 → 1 → 2).
     ///
     /// The path is opened **exactly once**; the acquisition is then performed by
-    /// [`from_opened_file`](Self::from_opened_file) against that single descriptor,
+    /// the private `from_opened_file` against that single descriptor,
     /// which has no path to re-resolve — so a hostile pathname swap cannot divert it.
     ///
     /// # Errors
     ///
-    /// Returns a [`CliError`] if the path cannot be opened or read. A tier that is
+    /// Returns a `CliError` if the path cannot be opened or read. A tier that is
     /// *unavailable* (no seals, no `memfd`, an empty or non-regular file) is not an
     /// error — it degrades to the next tier; only an actual I/O failure surfaces.
     pub fn from_disk_path(path: &str) -> Result<Self, CliError> {
@@ -212,7 +215,7 @@ impl ImmutableInput {
     ///
     /// # Errors
     ///
-    /// Returns a [`CliError`] if stdin cannot be read.
+    /// Returns a `CliError` if stdin cannot be read.
     pub fn from_stdin() -> Result<Self, CliError> {
         let mut buffer = Vec::new();
         std::io::stdin().read_to_end(&mut buffer)?;
@@ -225,6 +228,11 @@ impl ImmutableInput {
     }
 }
 
+/// The seal set that makes a backing object immutable for a mapping's lifetime:
+/// it can neither shrink, grow, nor be written.
+#[cfg(target_os = "linux")]
+const IMMUTABLE_SEALS: libc::c_int = libc::F_SEAL_SHRINK | libc::F_SEAL_GROW | libc::F_SEAL_WRITE;
+
 /// Tier 0: if `file`'s descriptor already carries the verified complete invariant
 /// `SHRINK | GROW | WRITE`, a direct read-only mapping is sound with **no copy** —
 /// the kernel guarantees the backing object cannot shrink, grow, or be written for
@@ -235,16 +243,14 @@ impl ImmutableInput {
 /// required bits.
 #[cfg(target_os = "linux")]
 fn tier0_sealed_direct(file: &File) -> Result<Option<ImmutableInput>, CliError> {
-    use rustix::fs::{SealFlags, fcntl_get_seals};
-
     // A descriptor that does not support sealing (a regular disk file) errors here;
     // that is not a failure, it just means Tier 0 does not apply.
-    let Ok(seals) = fcntl_get_seals(file) else {
+    let Ok(seals) = crate::mmap::get_seals(file) else {
         return Ok(None);
     };
     // The COMPLETE invariant: shrink AND grow AND write are all sealed. Anything
     // less does not prove the backing object is immutable for the mapping lifetime.
-    if !seals.contains(SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE) {
+    if seals & IMMUTABLE_SEALS != IMMUTABLE_SEALS {
         return Ok(None);
     }
     // SAFETY: the descriptor carries the verified complete seal set
@@ -277,17 +283,13 @@ fn tier1_sealed_snapshot(
     use std::io::Write as _;
     use std::os::unix::fs::FileExt as _;
 
-    use rustix::fs::{MemfdFlags, SealFlags, fcntl_add_seals, fcntl_get_seals, memfd_create};
-
     // An anonymous, sealable, close-on-exec memory file. If the kernel has no
     // `memfd_create`, degrade to the owned tier.
-    let Ok(memfd) = memfd_create(
-        "purrdf-pack",
-        MemfdFlags::ALLOW_SEALING | MemfdFlags::CLOEXEC,
-    ) else {
+    let Ok(mut sink) =
+        crate::mmap::memfd_create(c"purrdf-pack", libc::MFD_ALLOW_SEALING | libc::MFD_CLOEXEC)
+    else {
         return Ok(None);
     };
-    let mut sink = File::from(memfd);
 
     // One O(n) snapshot copy, via `pread` on the caller's descriptor (no offset
     // change, no re-open). If the file shrank under us, we copy only what is there;
@@ -316,18 +318,17 @@ fn tier1_sealed_snapshot(
     }
 
     // Seal the memfd shut: no shrink, no grow, no write, and no further sealing.
-    let seals = SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE | SealFlags::SEAL;
-    if fcntl_add_seals(&sink, seals).is_err() {
+    if crate::mmap::add_seals(&sink, IMMUTABLE_SEALS | libc::F_SEAL_SEAL).is_err() {
         // The seal could not be applied (should not happen for a fresh
         // ALLOW_SEALING memfd, but never map an unsealed object): degrade.
         return Ok(None);
     }
     // Verify the COMPLETE invariant actually holds before we rely on it for memory
     // safety.
-    let Ok(applied) = fcntl_get_seals(&sink) else {
+    let Ok(applied) = crate::mmap::get_seals(&sink) else {
         return Ok(None);
     };
-    if !applied.contains(SealFlags::SHRINK | SealFlags::GROW | SealFlags::WRITE) {
+    if applied & IMMUTABLE_SEALS != IMMUTABLE_SEALS {
         return Ok(None);
     }
 
@@ -348,14 +349,14 @@ mod tests {
     use super::*;
     use std::io::Write as _;
 
-    fn temp_with(payload: &[u8]) -> tempfile::NamedTempFile {
-        let mut file = tempfile::NamedTempFile::new().expect("temp file");
+    fn temp_with(payload: &[u8]) -> purrdf_testkit::NamedTempFile {
+        let mut file = purrdf_testkit::NamedTempFile::for_unit_test().expect("temp file");
         file.write_all(payload).expect("write payload");
         file.flush().expect("flush");
         file
     }
 
-    fn path_of(file: &tempfile::NamedTempFile) -> &str {
+    fn path_of(file: &purrdf_testkit::NamedTempFile) -> &str {
         file.path().to_str().expect("utf-8 path")
     }
 

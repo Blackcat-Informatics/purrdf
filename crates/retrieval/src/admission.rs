@@ -255,7 +255,7 @@ impl core::fmt::Debug for AdmissionEnvironment<'_> {
 /// returns a stable spelling for that dimension — so a caller can tell a deleted
 /// mandatory producer from a stale statistics snapshot rather than receiving one
 /// generic "invalid plan".
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum AdmissionError {
     /// A producer the registry declares mandatory, and whose declaration accepts
@@ -269,7 +269,6 @@ pub enum AdmissionError {
     /// The producer IRI is boxed because [`Iri`] carries five parsed spans and is
     /// large; boxing keeps `Result<_, AdmissionError>` cheap to move, the same
     /// discipline [`PlanError`](crate::PlanError) applies to its boxed terms.
-    #[error("the registry's mandatory producer {producer} is absent from the plan")]
     MissingMandatoryProducer {
         /// The registered producer IRI that must be present.
         producer: Box<Iri>,
@@ -287,10 +286,6 @@ pub enum AdmissionError {
     /// producer's to serve and the second reaches none of its arguments. See
     /// this module's header for why the wider readings refused plans that were
     /// always legitimate.
-    #[error(
-        "the registry's mandatory producer {producer} must receive every request term its \
-         declaration places but is bound to {provided} of {required}"
-    )]
     InsufficientBindings {
         /// The registered producer IRI that was under-bound.
         producer: Box<Iri>,
@@ -325,11 +320,6 @@ pub enum AdmissionError {
     /// the registry declared mandatory, this one refuses a binding set too
     /// *wide* for what the producer can take, on every producer, mandatory or
     /// not.
-    #[error(
-        "producer {producer} is bound to request term {request_term}, which its declaration \
-         cannot receive: nothing of that term is placed into an argument, so the call would \
-         carry none of it"
-    )]
     HollowBinding {
         /// The producer whose binding names a term it cannot receive.
         producer: Box<Iri>,
@@ -363,7 +353,6 @@ pub enum AdmissionError {
     /// [`Self::MissingMandatoryProducer`] boxes its producer: [`Iri`] carries
     /// five parsed spans, and a large error variant is paid for on every
     /// `Result` this module returns.
-    #[error("stratum {stratum} declares a depth of zero, which reads nothing and proves nothing")]
     ZeroDepth {
         /// The stratum whose depth was recorded as zero.
         stratum: Box<Iri>,
@@ -392,12 +381,6 @@ pub enum AdmissionError {
     /// encoding can carry, not past a policy.
     ///
     /// The stratum IRI is boxed for the reason [`Self::ZeroDepth`] boxes its own.
-    #[error(
-        "stratum {stratum} declares depth {depth}, which leaves no room for the probe row: a read \
-         is emitted one row deeper than its depth, so {ceiling} is the deepest depth whose ending \
-         can be observed and anything past it would be reported exhausted without being read to \
-         its end"
-    )]
     DepthWithoutProbe {
         /// The stratum whose depth cannot be probed.
         stratum: Box<Iri>,
@@ -414,9 +397,6 @@ pub enum AdmissionError {
     /// one declared. A producer declaring several modes is the case the layer exists to
     /// serve, and for that producer the refused figure is not findable from the count
     /// alone.
-    #[error(
-        "stratum {stratum} declares depth {requested}, but the registry bounds it at {declared}{mode}"
-    )]
     DepthBoundViolation {
         /// The stratum whose depth was raised.
         stratum: Box<Iri>,
@@ -430,9 +410,6 @@ pub enum AdmissionError {
 
     /// The plan was planned against a different statistics revision than the one
     /// the environment now reports.
-    #[error(
-        "plan was planned against statistics revision {plan_revision:?}, but the environment reports {current_revision:?}"
-    )]
     StaleStatistics {
         /// The revision the plan recorded.
         plan_revision: String,
@@ -453,9 +430,6 @@ pub enum AdmissionError {
     /// deserialized plan's recorded counter names no live registry, so there is
     /// nothing here to compare and the durable content fingerprint carries the
     /// whole claim; see this module's header.
-    #[error(
-        "registry instance mismatch: plan was planned against {expected_instance:?}, environment holds {got_instance:?}"
-    )]
     RegistryMismatch {
         /// The instance the plan recorded.
         expected_instance: RegistryId,
@@ -465,9 +439,6 @@ pub enum AdmissionError {
 
     /// The plan's durable registry content fingerprint does not match the
     /// environment's, so the registry's declared shape has moved.
-    #[error(
-        "registry content fingerprint mismatch: plan recorded {expected:?}, environment declares {got:?}"
-    )]
     RegistryFingerprintMismatch {
         /// The fingerprint the plan recorded.
         expected: String,
@@ -476,7 +447,6 @@ pub enum AdmissionError {
     },
 
     /// The plan carries a layout version this build does not write.
-    #[error("plan layout version {version} is not the version this build admits")]
     InvalidPlanVersion {
         /// The version the plan carries.
         version: u16,
@@ -491,9 +461,6 @@ pub enum AdmissionError {
     /// hand-built or edited. It is refused here rather than emitted as a call
     /// that silently drops the facet — the same reason every other dimension is
     /// re-derived at the waist.
-    #[error(
-        "producer {producer} cannot be invoked for the plan's request terms ({rule}): {detail}"
-    )]
     UnsatisfiablePlacement {
         /// The producer that cannot be invoked.
         producer: Box<Iri>,
@@ -509,12 +476,98 @@ pub enum AdmissionError {
 
     /// The plan is internally inconsistent or a registry declaration could not
     /// be read — a structural defect rather than a policy refusal.
-    #[error("plan is malformed: {reason}")]
     MalformedPlan {
         /// What is inconsistent.
         reason: String,
     },
 }
+
+impl fmt::Display for AdmissionError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingMandatoryProducer { producer } => write!(
+                f,
+                "the registry's mandatory producer {producer} is absent from the plan"
+            ),
+            Self::InsufficientBindings {
+                producer,
+                required,
+                provided,
+            } => write!(
+                f,
+                "the registry's mandatory producer {producer} must receive every request term its \
+         declaration places but is bound to {provided} of {required}"
+            ),
+            Self::HollowBinding {
+                producer,
+                request_term,
+            } => write!(
+                f,
+                "producer {producer} is bound to request term {request_term}, which its declaration \
+         cannot receive: nothing of that term is placed into an argument, so the call would \
+         carry none of it"
+            ),
+            Self::ZeroDepth { stratum } => write!(
+                f,
+                "stratum {stratum} declares a depth of zero, which reads nothing and proves nothing"
+            ),
+            Self::DepthWithoutProbe {
+                stratum,
+                depth,
+                ceiling,
+            } => write!(
+                f,
+                "stratum {stratum} declares depth {depth}, which leaves no room for the probe row: a read \
+         is emitted one row deeper than its depth, so {ceiling} is the deepest depth whose ending \
+         can be observed and anything past it would be reported exhausted without being read to \
+         its end"
+            ),
+            Self::DepthBoundViolation {
+                stratum,
+                declared,
+                requested,
+                mode,
+            } => write!(
+                f,
+                "stratum {stratum} declares depth {requested}, but the registry bounds it at {declared}{mode}"
+            ),
+            Self::StaleStatistics {
+                plan_revision,
+                current_revision,
+            } => write!(
+                f,
+                "plan was planned against statistics revision {plan_revision:?}, but the environment reports {current_revision:?}"
+            ),
+            Self::RegistryMismatch {
+                expected_instance,
+                got_instance,
+            } => write!(
+                f,
+                "registry instance mismatch: plan was planned against {expected_instance:?}, environment holds {got_instance:?}"
+            ),
+            Self::RegistryFingerprintMismatch { expected, got } => write!(
+                f,
+                "registry content fingerprint mismatch: plan recorded {expected:?}, environment declares {got:?}"
+            ),
+            Self::InvalidPlanVersion { version } => write!(
+                f,
+                "plan layout version {version} is not the version this build admits"
+            ),
+            Self::UnsatisfiablePlacement {
+                producer,
+                rule,
+                detail,
+                ..
+            } => write!(
+                f,
+                "producer {producer} cannot be invoked for the plan's request terms ({rule}): {detail}"
+            ),
+            Self::MalformedPlan { reason } => write!(f, "plan is malformed: {reason}"),
+        }
+    }
+}
+
+impl std::error::Error for AdmissionError {}
 
 impl AdmissionError {
     /// The name of the violated dimension.

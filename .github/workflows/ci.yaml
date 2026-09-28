@@ -7,6 +7,8 @@ on:
   push:
     branches:
       - main
+  # Any branch can be run on demand, without opening a pull request for it.
+  workflow_dispatch:
 
 # A newer push to a pull request supersedes the run the previous one started, so that
 # run is cancelled rather than left to hold runners for a result nobody reads. Runs on
@@ -35,6 +37,12 @@ jobs:
 
       - name: Format
         run: cargo fmt --all --check
+
+      - name: Format the preserve-order consumer
+        run: cargo fmt --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --check
+
+      - name: Clippy the preserve-order consumer (deny warnings)
+        run: cargo clippy --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --all-targets --locked -- -D warnings
 
       - name: Check workspace
         run: cargo check --workspace --lib --tests --locked
@@ -129,6 +137,9 @@ jobs:
       - name: Check vendored-corpus license hygiene
         run: python3 scripts/check-licenses.py
 
+      - name: Fetch all locked platform dependencies for the offline audit
+        run: python3 scripts/fetch-locked-deps.py
+
       - name: Check the banned-dependency gate can still fail
         run: python3 scripts/check-banned-deps.py --self-test
 
@@ -186,67 +197,59 @@ jobs:
       - name: Check the SIMD asm evidence gate can still fail
         run: python3 scripts/check-simd-asm.py --self-test
 
+      - name: Check the bench comparison selects criterion suites only
+        run: python3 scripts/bench-criterion-targets.py --self-test
+
+      - name: Check the clean-room transcript audit rejects each forbidden access beside an allowed neighbour
+        run: python3 scripts/cleanroom/transcript_audit.py --self-test
+
+      - name: Check the clean-room guard hook blocks the forbidden tree and allows its neighbour
+        run: python3 scripts/cleanroom/guard_hook.py --self-test
+
+      - name: Check the clean-room deny settings spell every forbidden path and refuse a narrowed rule
+        run: python3 scripts/cleanroom/deny_settings.py --self-test
+
+      - name: Check the similarity check flags planted derivations, passes independent code, and needs its calibration
+        run: python3 scripts/cleanroom/similarity.py --self-test
+
+      - name: Check the clean-room provenance schema refuses an incomplete file and accepts a complete one
+        run: python3 scripts/cleanroom/provenance.py --self-test
+
       - name: Verify BM25F goldens against the independent integer reference
         run: python3 crates/text/tests/reference/bm25f.py --check
 
       - name: Check the kernel ring-fence (no oxigraph/PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
 
-  # `cargo test --workspace` used to run here as ONE job. On a cold runner it
-  # compiled for thirty minutes before the first test started and then ran for nine
-  # more, so it could not fit the per-job budget however the timeout was set. The
-  # same run is now split by package into the shards `scripts/test-shards.py` names,
-  # one matrix leg each, in parallel. `cargo test -p X` selects exactly the targets
-  # `--workspace` selects for X (unit, integration, bins, examples, test-enabled
-  # benches and X's doctests), so the union of the legs IS the workspace run, and
-  # `scripts/check-test-shards.py` (workspace job, `make check`) refuses a member
-  # left in no shard. `make check` itself still runs the unsplit command.
-  #
-  # The matrix is emitted by this planning job rather than hand-copied into the
-  # `strategy:` below, so there is one list and the gate checks that list. It needs
-  # no Rust toolchain: it reads the manifests, and `--matrix` refuses to print a
-  # list that is not an exact partition of the members.
-  test-plan:
-    runs-on: ubuntu-latest
-    timeout-minutes: 5
-    outputs:
-      shards: ${{ steps.plan.outputs.shards }}
-    steps:
-      - name: Checkout
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
-        with:
-          persist-credentials: false
-
-      - name: Emit the test shards (refuses a list that leaves a crate untested)
-        id: plan
-        run: |
-          set -euo pipefail
-          shards="$(python3 scripts/test-shards.py --matrix)"
-          echo "shards=$shards" >> "$GITHUB_OUTPUT"
-          echo "shards: $shards"
-
-  test:
-    needs: test-plan
+  # `cargo test --workspace --locked` (`make test`), as six parallel shards. As one
+  # job it compiled for 25 minutes before running a test and was cancelled at its
+  # timeout; nearly all of that is first-party test targets, so a dependency cache
+  # alone could not bring it back under budget. `make test-shard` defines the
+  # shards and carries the proof that together they are exactly the old command:
+  # every shard selects `--workspace`, so dependency features resolve as they did,
+  # and the lib / doc / four integration-test shards partition its default target
+  # selection. The one test removed from this lane is c_abi_smoke, which the `capi`
+  # job below already runs through `make capi-check`.
+  test-shard:
     name: test (${{ matrix.shard }})
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
-      # Every leg reports: a failure in one shard must not cancel the others and
-      # hide whether they would have passed.
+      # One red shard must not cancel the others: each reports a disjoint slice of
+      # the suite, and a cancelled slice is a slice nobody saw.
       fail-fast: false
       matrix:
-        shard: ${{ fromJSON(needs.test-plan.outputs.shards) }}
+        shard: [lib, doc, integration-1, integration-2, integration-3, integration-4]
     # Debug-info policy is not set here any more. `[profile.dev]` in Cargo.toml
     # owns it (line tables for our crates, none for dependencies), so this job
     # gets the artifact saving it used to buy with CARGO_PROFILE_TEST_DEBUG on
     # every other lane too -- and a second place to set one thing was exactly the
     # kind of manifest shadow `scripts/check-build-profiles.py` now reports.
     steps:
-      # These legs link the workspace's test targets, the largest thing CI builds --
-      # one binary per integration-test file, plus (in the `hosts` shard) the
-      # umbrella crate's doctests, whose link line pulls in every member crate at
-      # once. Splitting shrinks each leg's share, but the heaviest legs still build
-      # most of the library graph, so the reclaim stays on every leg.
+      # This lane links the workspace's test targets, which is the largest thing CI
+      # builds -- one binary per integration-test file, each carrying the line
+      # tables `[profile.dev]` asks for, plus the umbrella crate's doctests, whose
+      # link line pulls in every member crate at once.
       #
       # A hosted runner ships ~30 GB of preinstalled toolchains this repository
       # never uses, and running out of disk here does NOT surface as a disk error:
@@ -275,39 +278,51 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # Warm runs only: a pull request's first run has no cache of its own, and
-      # every leg is sized to fit the budget without one. One key per shard, since
-      # the legs build different graphs. Saved from `main` alone, so six per-branch
-      # target directories do not evict main's (and the wasm lanes') caches from
-      # the repository's shared quota; a branch restores main's. The key is a
-      # `shared-key` so that jobs outside this matrix can restore a shard's build
-      # by name: the Python and conformance lanes restore `test-hosts`, the shard
-      # that builds the Python binding and the conformance harness.
-      - name: Cache the Rust build
+      # One cache for all six shards. Every shard resolves features over the whole
+      # workspace, so each compiles its dependencies identically and one saved set
+      # serves them all; the lib shard, which builds every package's dev-dependencies,
+      # is the one that saves it. First-party crates are never cached (the action
+      # cleans them), so every shard still compiles the code under test.
+      - name: Cache the dependency build (shared by every shard)
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: test-${{ matrix.shard }}
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          shared-key: workspace-test
+          save-if: ${{ matrix.shard == 'lib' }}
 
       - name: Install Node for the Unicode ECMAScript oracle
         uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
         with:
           node-version: 24
 
-      - name: Run this shard's tests (includes doc tests)
+      - name: Install the pinned Binaryen validator for wasm-link tests
+        if: matrix.shard == 'lib'
+        uses: ./.github/actions/binaryen-toolchain
+
+      - name: Run workspace tests (this shard; the six include the doc tests)
         # A hosted x86_64 runner guarantees only the SSE2 baseline, so that is the one
         # reassociated path this job requires; the distance, kNN and HNSW tests still
         # assert they executed every path the runner reports. `avx512-sde` below
         # requires the rest.
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable,sse2
-          SHARD: ${{ matrix.shard }}
-        run: |
-          set -euo pipefail
-          packages="$(python3 scripts/test-shards.py --packages "$SHARD")"
-          echo "shard $SHARD: $packages"
-          # shellcheck disable=SC2086 # one word per `-p` / package name
-          cargo test --locked $packages
+        run: make test-shard SHARD=${{ matrix.shard }}
+
+      - name: Test downstream preserve-order feature unification
+        if: matrix.shard == 'lib'
+        run: cargo test --manifest-path crates/jsonschema/tests/preserve_order_consumer/Cargo.toml --locked
+
+  # The stable name for the sharded workspace tests: it succeeds only when every
+  # shard did.
+  test:
+    needs: test-shard
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Require every shard to succeed
+        env:
+          MATRIX_RESULT: ${{ needs.test-shard.result }}
+        run: test "$MATRIX_RESULT" = success
 
   projection-oracles:
     runs-on: ubuntu-latest
@@ -374,7 +389,7 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # Document exactly the 26 publishable crates with rustdoc lints promoted
+      # Document exactly the 29 publishable crates with rustdoc lints promoted
       # to errors. The four publish=false crates are excluded
       # because purrdf-capi's `[lib] name = "purrdf"` collides with the umbrella
       # crate's output filename in a single --workspace doc run.
@@ -504,6 +519,9 @@ jobs:
             -p purrdf-iri \
             -p purrdf-xsd \
             -p purrdf-cdt \
+            -p purrdf-jsonschema \
+            -p purrdf-hash \
+            -p purrdf-deflate \
             -p purrdf-stack \
             -p purrdf-gts \
             -p purrdf-core \
@@ -528,31 +546,11 @@ jobs:
             -p purrdf-wasm \
             -p purrdf-bench
 
-      - name: Prove purrdf-geo's native and wasm32 answers are byte-identical
-        # purrdf-geo claims that every geometric answer is the same on both
-        # targets because every computation is integer arithmetic. This RUNS the
-        # same digest on both and compares, rather than trusting the argument.
-        run: make geo-determinism
-
-      - name: Prove purrdf-hnsw's native and wasm32 canonical bytes are identical
-        # purrdf-hnsw claims its canonical index image is a pure function of the
-        # input, so a native build and a wasm32 build must produce the same bytes.
-        # This RUNS the same FNV-1a digest of the canonical payload on both targets
-        # and compares, rather than trusting the argument.
-        run: make hnsw-determinism
-
-  # The optimized npm/wasm package build + its JS gates (async/JSPI suites
-  # included). Split from `wasm` above: `make wasm-pkg` sets its own RUSTFLAGS
-  # (see the note above the `wasm` job), so it never reused that job's build
-  # either.
-  # Measured: setup ~26s + wasm-pkg build 317s + Set up Node.js 3s + npm
-  # package gates 14s = 360s (~6min). 360s * 1.5 ~= 540s (~9min); rounded up
-  # to 20 minutes (this split's floor) since `make wasm-pkg`'s own measured
-  # time grew from 219s to 317s (~1.4x) over the three days behind these
-  # numbers.
   wasm-package:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    # Main 9febd07c measured 19m10s including 12m21s of async tests.
+    # Thirty minutes gives 1.5x headroom; schema oracles run independently below.
+    timeout-minutes: 30
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -602,21 +600,16 @@ jobs:
             --ignore-scripts --no-audit --no-fund miniflare@4.20260730.0
           node tests/workerd/run-worker-recipe.mjs
 
-  # The cross-target (wasm32 vs native) determinism suites executed in Node.
-  # Split from `wasm` above: `make wasm-test` builds in DEBUG profile (no
-  # `--release`), a different target-dir subtree from every `--release` step
-  # around it in the old job, so it never reused their output either. It does
-  # NOT read `crates/rdf-wasm/js/pkg/` (the `wasm-package` job's artifact) --
-  # it drives `cargo test --target wasm32-unknown-unknown` directly through
-  # `wasm-bindgen-test-runner` -- so no `actions/upload-artifact` /
-  # `download-artifact` or `needs:` is required between the two jobs.
-  # Measured: setup ~26s + Set up Node.js 3s + wasm-test 477s = 506s
-  # (~8.4min). 506s * 1.5 ~= 759s (~12.6min); rounded up to 25 minutes because
-  # this step's own measured time was the fastest-growing of the whole job
-  # (240s -> 377s -> 477s, ~2x over the three days behind these numbers).
-  wasm-cross-determinism:
+  # The wasm32 execution gates, one per runner. Each builds its own test targets
+  # natively and for wasm32 and runs them in Node, so together with the wasm
+  # job's release build and package they do not fit one 30-minute job.
+  wasm-exec:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        gate: [geo-determinism, hnsw-determinism, wasm-test]
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -637,35 +630,40 @@ jobs:
         with:
           node-version: 24
 
+      - name: Prove purrdf-geo's native and wasm32 answers are byte-identical
+        if: matrix.gate == 'geo-determinism'
+        # purrdf-geo claims that every geometric answer is the same on both
+        # targets because every computation is integer arithmetic. This RUNS the
+        # same named test cases on both (wasm32 through scripts/wasm-test-runner.sh,
+        # the one cargo runner every wasm32 test uses) and compares the digest each
+        # reports, rather than trusting the argument.
+        run: make geo-determinism
+
+      - name: Prove purrdf-hnsw's native and wasm32 canonical bytes are identical
+        if: matrix.gate == 'hnsw-determinism'
+        # purrdf-hnsw claims its canonical index image is a pure function of the
+        # input, so a native build and a wasm32 build must produce the same bytes.
+        # This RUNS the same named test cases natively, on wasm32 and on wasm32
+        # +simd128 (through scripts/wasm-test-runner.sh) and compares the FNV-1a
+        # digest of the canonical payload each reports, rather than trusting the
+        # argument.
+        run: make hnsw-determinism
+
       - name: Execute the cross-target determinism tests on wasm32 (Node)
-        # The `wasm` job's build proves the crates COMPILE for wasm32. This one proves
+        if: matrix.gate == 'wasm-test'
+        # The wasm job proves the crates COMPILE for wasm32. This one proves
         # they ANSWER the same way there: the embedding kNN surface ranks by binary64
         # arithmetic, and a reassociated sum or a fused multiply-add would swap two
         # near-tied neighbours rather than merely shift a last digit. Same test body,
-        # same pinned expectations, executed on both targets. The reassociated HNSW
+        # same pinned expectations, executed on both targets: every target is
+        # `harness = false` on the shared test runner, and Cargo hands each wasm32
+        # binary to scripts/wasm-test-runner.sh, which runs it in Node. The runner
+        # is itself observed failing a planted panic first. The reassociated HNSW
         # index is built, recorded, decoded, verified and searched here too, on the
         # baseline (wasm-scalar) and +simd128 (wasm-simd128) builds alike.
         run: make wasm-test
 
-  # Split out of the `wasm` job above: these two oracles never touch any of
-  # the other wasm jobs' builds. `typescript_oracle.mjs` and
-  # `graphql_oracle.mjs` both run a NATIVE `cargo run -p purrdf-shapes
-  # --example ...` to generate their fixtures and resolve the
-  # `typescript`/`graphql` packages out of `crates/rdf-wasm/js`'s own
-  # node_modules (via `createRequire` against that package.json) -- no wasm32
-  # target, no wasm-bindgen/binaryen toolchain, and no `pkg/` build artifact.
-  # Kept as its own job so it gets its own timeout budget instead of competing
-  # with the wasm32 build+test lanes for the single 30-minute timeout that was
-  # cancelling it mid-run.
-  #
-  # Measured (`gh run view --json jobs`, last run where both oracle steps ran
-  # to completion, 2026-09-24): TypeScript emitter schema oracle 251s, GraphQL
-  # emitter schema oracle 4s. Setup here (checkout + native Rust install +
-  # Node + `npm ci`) adds roughly another 30s, for a ~285s (~4m45s) total.
-  # 285s * 1.5 ~= 428s (~7m08s); rounded up to 20 minutes to also absorb the
-  # oracle's own measured growth trend (200s -> 251s over the two runs before
-  # it, and every other step in the neighbouring wasm jobs grew 1.3-2x over
-  # the same few days as the async/JSPI suites landed).
+  # Native schema oracles need no wasm package and run in parallel.
   wasm-schema-oracles:
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -699,21 +697,12 @@ jobs:
       - name: GraphQL emitter schema oracle
         run: node crates/shapes/tests/graphql_oracle.mjs
 
-  # The SIMD asm evidence gate. It builds the audited packages seven times -- x86_64
-  # (baseline, x86-64-v3, x86-64-v4), aarch64 (baseline, neoverse-v1) and wasm32
-  # (baseline, +simd128) -- in release with one codegen unit and LTO off, and counts
-  # the vector work each manifest site compiled to. Each configuration is a cold build
-  # of the graph, so each runs on its own runner and writes its measured cells; the
-  # `simd-asm` job then checks the document against all seven, exactly as the
-  # single-process `make simd-asm` does (scripts/check-simd-asm.py, "Split runs").
-  # The build directory is scratch the gate deletes, so there is no build to cache.
+
+  # One configuration per runner; the stable aggregate requires every shard.
   simd-asm-config:
-    name: simd-asm (${{ matrix.config }})
     runs-on: ubuntu-latest
-    # One cold release build of the audited graph.
     timeout-minutes: 30
     strategy:
-      # A cancelled configuration is a configuration nobody measured.
       fail-fast: false
       matrix:
         config: [x86_64, x86_64-v3, x86_64-v4, aarch64, aarch64-neoverse-v1, wasm32, wasm32-simd128]
@@ -722,75 +711,70 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-
       - name: Install Rust
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
           targets: wasm32-unknown-unknown, aarch64-unknown-linux-gnu
-
-      - name: Install the C cross toolchain the asm gate's build scripts compile with
-        # blake3's build script compiles C for aarch64 (its NEON backend). The asm gate
-        # never measures that object, but the build script must succeed. The gate names
-        # clang + llvm-ar for every cross target; clang finds the aarch64 C library
-        # headers through the Ubuntu cross installation, which is why the aarch64 gcc
-        # and libc packages are installed beside it.
+      - name: Identify the actual compiler
+        id: compiler
+        run: echo "identity=$(rustc -vV | sha256sum | cut -d ' ' -f 1)" >> "$GITHUB_OUTPUT"
+      - name: Restore assembly build contexts and evidence
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
+        with:
+          path: target/simd-asm
+          key: simd-asm-v1-${{ runner.os }}-${{ matrix.config }}-${{ steps.compiler.outputs.identity }}-${{ hashFiles('Cargo.lock') }}-${{ github.sha }}
+          restore-keys: |
+            simd-asm-v1-${{ runner.os }}-${{ matrix.config }}-${{ steps.compiler.outputs.identity }}-${{ hashFiles('Cargo.lock') }}-
+      - name: Install the C cross toolchain
+        if: startsWith(matrix.config, 'aarch64') || startsWith(matrix.config, 'wasm32')
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             clang llvm gcc-aarch64-linux-gnu libc6-dev-arm64-cross
-
-      - name: Count the vector work in emitted asm on this configuration
-        # Every manifest site must still compile to the vector instructions that prove
-        # its shape, with no fused multiply-add where the arithmetic is exact and no
-        # relaxed-simd anywhere. The cells are written even when a site fails, so the
-        # document check below reports every configuration's problems together.
-        env:
-          CONFIG: ${{ matrix.config }}
-        run: make simd-asm SIMD_ASM_ARGS="--config $CONFIG --emit-cells target/simd-asm-cells/$CONFIG.json"
-
-      - name: Upload this configuration's cells
-        if: ${{ !cancelled() }}
+      - name: Measure and check this configuration
+        run: make simd-asm SIMD_ASM_ARGS="--config ${{ matrix.config }} --jobs 1 --report target/asm-reports/${{ matrix.config }}.json"
+      - name: Upload checked evidence
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
-          name: simd-asm-cells-${{ matrix.config }}
-          path: target/simd-asm-cells/${{ matrix.config }}.json
+          name: simd-asm-${{ matrix.config }}
+          path: target/asm-reports/*.json
           if-no-files-found: error
 
   simd-asm:
     needs: simd-asm-config
-    # Runs whatever the configurations concluded: a failed site's cells are still
-    # judged here, and a configuration that wrote none fails here by name.
-    if: ${{ !cancelled() }}
+    if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
+      - name: Require every configuration to succeed
+        env:
+          MATRIX_RESULT: ${{ needs.simd-asm-config.result }}
+        run: test "$MATRIX_RESULT" = success
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           persist-credentials: false
-
-      - name: Download every configuration's cells
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+      - name: Download all configuration reports
         uses: actions/download-artifact@95815c38cf2ff2164869cbab79da8d1f422bc89e # v4.2.1
         with:
-          pattern: simd-asm-cells-*
+          pattern: simd-asm-*
           merge-multiple: true
-          path: target/simd-asm-cells
-
-      - name: Check the audit document against all seven configurations
-        run: make simd-asm SIMD_ASM_ARGS="--doc-from-cells target/simd-asm-cells"
-
-      - name: Require every configuration job to have succeeded
-        env:
-          CONFIGS_RESULT: ${{ needs.simd-asm-config.result }}
-        run: test "$CONFIGS_RESULT" = success
+          path: target/asm-reports
+      - name: Check complete matrix and document parity
+        run: make simd-asm SIMD_ASM_ARGS="--merge-reports target/asm-reports"
 
   # The third ISA the distance arithmetic's bit-identity claim is EXECUTED on. The
   # exact law pins one summation order in source, so its results must be the same
   # bits on x86_64, wasm32 and aarch64; the asm gate above can only show NEON code
   # exists, and this job runs it. The pinned goldens these tests compare against are
   # the ones x86_64 and wasm32 already hold, so a divergent aarch64 fold fails here.
-  # The reassociated arithmetic runs its NEON path too, against its error bound.
+  # The reassociated arithmetic runs its NEON path too, against its error bound, and
+  # the CSV field scanner runs its NEON kernel against its portable one.
   aarch64:
     runs-on: ubuntu-24.04-arm
     timeout-minutes: 45
@@ -825,6 +809,43 @@ jobs:
           cargo test --locked -p purrdf-hnsw --lib --test determinism --test conformance \
             --test wasm_reassociated
 
+      - name: Run the SHA-1, CRC-32 and BLAKE3 Arm kernels against frozen vectors
+        # The hash crate's own path requirement: both Armv8 kernels must be
+        # detected and executed here, beside the portable path, and reproduce
+        # every frozen vector bit for bit. No other job runs them.
+        env:
+          PURRDF_REQUIRE_HASH_PATHS: portable,aarch64-sha1,aarch64-crc32
+          PURRDF_REQUIRE_BLAKE3_PATHS: portable,neon
+        run: cargo test --locked -p purrdf-hash
+
+      - name: Run the AES-round FixedHasher path on Arm
+        # The fixed-key table hasher's AES function exists only in builds whose
+        # target enables AES; this is the job that compiles and runs it on
+        # AArch64, against its own frozen vectors.
+        env:
+          RUSTFLAGS: "-C target-feature=+aes"
+        run: cargo test --locked -p purrdf-hash --test fixed_hasher
+
+      - name: Run the DEFLATE NEON kernels against the portable ones on aarch64
+        # purrdf-deflate's match copy, match-length compare and window hashing
+        # have NEON kernels that only an aarch64 runner executes: the kernel
+        # differentials and the encoder/decoder agreement cases must run on the
+        # NEON path here, beside the portable one.
+        env:
+          PURRDF_REQUIRE_DEFLATE_PATHS: portable,neon
+        run: cargo test --locked -p purrdf-deflate
+
+
+      # The CSV field scanner's explicit NEON kernel against the portable kernel and
+      # the per-byte scan at every alignment and length (the test asserts the NEON
+      # kernel is among those compared), then the reader, writer and frozen-vector
+      # replay on the kernel aarch64 dispatches to.
+      - name: Run the CSV field scanner's NEON kernel and the CSV reader and writer on aarch64
+        run: |
+          cargo test --locked -p purrdf-core --lib csv::
+          cargo test --locked -p purrdf-core --test csv_differential
+
+
   # The architectures whose float control register this build does not read. On them the
   # float environment is proven by the behavioural probe alone, so a kernel that computes
   # on x86_64, aarch64 and wasm32 must compute here too rather than refuse an environment
@@ -849,7 +870,7 @@ jobs:
         uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
-          targets: i686-unknown-linux-gnu, i586-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu
+          targets: i686-unknown-linux-gnu, i586-unknown-linux-gnu, armv7-unknown-linux-gnueabihf, riscv64gc-unknown-linux-gnu, powerpc64le-unknown-linux-gnu, s390x-unknown-linux-gnu, loongarch64-unknown-linux-gnu, x86_64-pc-windows-gnu
 
       - name: Install the i686 C library
         run: |
@@ -870,10 +891,15 @@ jobs:
               -p purrdf-core -p purrdf-sparql-eval -p purrdf-hnsw
           done
 
-      - name: Run the distance, kNN and HNSW suites on i686
+      - name: Type-check gts and cli for Windows
+        run: |
+          cargo check --locked --target x86_64-pc-windows-gnu -p purrdf-gts -p purrdf-cli
+
+      - name: Run BLAKE3, distance, kNN and HNSW suites on i686
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable
         run: |
+          PURRDF_REQUIRE_BLAKE3_PATHS=portable,sse2 cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hash --test blake3
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-core --lib distance
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
@@ -894,10 +920,11 @@ jobs:
       # thread where the guard did not take hold, and that a thread (or rayon worker)
       # with a directed rounding control is refused by name. The i586 target links
       # against the same 32-bit C library as i686.
-      - name: Run the arithmetic, distance, kNN and HNSW suites on i586 (x87)
+      - name: Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable
         run: |
+          PURRDF_REQUIRE_BLAKE3_PATHS=portable cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hash --test blake3
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-xsd --lib
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib distance
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib ir::embedding
@@ -907,6 +934,26 @@ jobs:
             --test binary_arithmetic
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hnsw --lib \
             --test float_environment_x87 --test float_environment_x87_rayon
+
+  # Type-checking the Windows path cannot verify CreateFileW access rights or
+  # timestamp resolution. Exercise file, directory, hardlink, and read-only
+  # restoration on the target operating system.
+  windows-mtime:
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+
+      - name: Restore file and directory mtimes on Windows
+        run: cargo test --locked -p purrdf-gts --test unpack_mtime
 
   # riscv64 runs apart from i686 because the distribution's multilib and riscv64
   # cross compilers cannot be installed together. Under emulation one HNSW digest
@@ -947,7 +994,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             gcc-riscv64-linux-gnu libc6-dev-riscv64-cross qemu-user
 
-      - name: Run the distance, kNN and HNSW suites on riscv64 under emulation (this part)
+      - name: Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
         env:
           PURRDF_REQUIRE_DISPATCH_PATHS: portable
           PART: ${{ matrix.part }}
@@ -970,6 +1017,7 @@ jobs:
           # shellcheck disable=SC2086
           case "$PART" in
           suites)
+            PURRDF_REQUIRE_BLAKE3_PATHS=portable cargo test --locked --target "$target" -p purrdf-hash --test blake3
             cargo test --locked --target "$target" -p purrdf-core --lib distance
             cargo test --locked --target "$target" -p purrdf-sparql-eval --lib knn
             cargo test --locked --target "$target" -p purrdf-sparql-eval \
@@ -1021,8 +1069,9 @@ jobs:
           environmentVariableName: SDE_PATH
           sdeVersion: 10.13.1
 
-      - name: Build the distance, kNN and HNSW test binaries
+      - name: Build BLAKE3, distance, kNN and HNSW test binaries
         run: |
+          cargo test --locked --no-run -p purrdf-hash --test blake3
           cargo test --locked --no-run -p purrdf-core --lib
           cargo test --locked --no-run -p purrdf-sparql-eval --lib \
             --test knn_wasm_determinism --test knn_wasm_reassociated
@@ -1032,7 +1081,9 @@ jobs:
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ env.SDE_PATH }}/sde64 -spr --
           PURRDF_REQUIRE_DISPATCH_PATHS: portable,avx2,sse2,avx2+fma,avx512f
+          PURRDF_REQUIRE_BLAKE3_PATHS: portable,sse2,ssse3,avx2,avx512
         run: |
+          cargo test --locked -p purrdf-hash --test blake3
           cargo test --locked -p purrdf-core --lib distance
           cargo test --locked -p purrdf-sparql-eval --lib knn
           cargo test --locked -p purrdf-sparql-eval \
@@ -1058,13 +1109,13 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # The test lane's `hosts` shard build, restored and never re-saved: the
+      # The test lane's `lib` shard dependency build, restored and never re-saved: the
       # module build and the emitter oracle's cargo run share most dependency units
       # with it, and no new cache entry competes for the repository's quota.
       - name: Restore the workspace test lane's dependency build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: test-hosts
+          shared-key: workspace-test
           save-if: false
 
       - name: Install uv
@@ -1083,6 +1134,27 @@ jobs:
 
       - name: LinkML emitter schema oracle
         run: make linkml-oracle
+
+  # The small vector's inline storage is uninitialised memory moved with raw
+  # pointer copies, so its tests run under Miri on every push: Stacked and Tree
+  # Borrows, strict provenance, and a 32-bit target (`make miri`).
+  miri:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          persist-credentials: false
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@29eef336d9b2848a0b548edc03f92a220660cdb8 # v1
+        with:
+          toolchain: "nightly" # keep in sync with rust-toolchain.toml
+          components: miri, rust-src
+
+      - name: Miri (SmallVec unsafe storage)
+        run: make miri
 
   # The single conformance matrix: runs the native Rust W3C
   # harnesses (RDFC-1.0, IRI, syntax codecs, SPARQL-eval subset, SHACL, shexTest)
@@ -1117,13 +1189,13 @@ jobs:
         with:
           toolchain: "nightly" # keep in sync with rust-toolchain.toml
 
-      # The build the test lane's `hosts` shard saves, restored and never re-saved:
-      # the conformance suites are that shard's test targets, so most dependency units
-      # are already compiled, and no new cache entry competes for the repository's quota.
+      # The dependency build the test lane's `lib` shard saves, restored and never re-saved:
+      # Cargo fingerprints each unit, so only matching feature/profile builds
+      # are reused, and no new cache entry competes for the repository's quota.
       - name: Restore the workspace test lane's dependency build
         uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
         with:
-          shared-key: test-hosts
+          shared-key: workspace-test
           save-if: false
 
       - name: Install uv

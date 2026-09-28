@@ -114,3 +114,7 @@ pub use topology::{
     orientation, relate, relate_pattern, topological_dimension,
 };
 pub use vocab::{CrsUnit, DEFAULT_COORDINATE_SCALE, GeoTerm, GeoVocab, GeoVocabBuilder};
+
+#[cfg(test)]
+#[path = "../../rdf-core/tests/support/term_fixture.rs"]
+mod test_terms;

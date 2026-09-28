@@ -15,8 +15,8 @@
 //! # Why the digest is hand-rolled FNV-1a
 //!
 //! The digest must be a function of the bytes and **nothing else**. `DefaultHasher` is
-//! SipHash with an unspecified per-process key, and `ahash` is seed- and version-sensitive
-//! by design; either would make the digest move for reasons that have nothing to do with
+//! SipHash with an unspecified per-process key, and the table hasher `FixedHasher` is a
+//! different function on a build with AES than on one without; either would make the digest move for reasons that have nothing to do with
 //! the graph, which is the exact false signal this harness exists to remove. FNV-1a is
 //! six lines of integer arithmetic with published constants, so a golden that moves is a
 //! serialization defect and never a hasher change.

@@ -3205,6 +3205,21 @@ fn linkml_projects_reifier_severity() {
 
 #[cfg(not(target_arch = "wasm32"))]
 mod observed {
+    fn metaschemas() -> &'static purrdf_jsonschema::Metaschemas {
+        static SET: std::sync::OnceLock<purrdf_jsonschema::Metaschemas> =
+            std::sync::OnceLock::new();
+        SET.get_or_init(|| {
+            purrdf_jsonschema::Metaschemas::new(
+                purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
+                    .iter()
+                    .map(|&(uri, text)| {
+                        let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+                        (uri, document)
+                    }),
+            )
+            .expect("the draft 2020-12 meta-schemas")
+        })
+    }
     use super::*;
     use purrdf_shapes::engine::{parse_shapes, validate_dataset_with_shapes_graph};
 
@@ -3227,15 +3242,17 @@ mod observed {
             .clone();
         let schema: Value = serde_json::from_str(&compiled.schema_json).expect("schema JSON");
         let location = "mem:///holder.schema.json";
-        let mut schemas = boon::Schemas::new();
-        let mut compiler = boon::Compiler::new();
-        compiler
+        let mut registry = purrdf_jsonschema::Registry::with_metaschemas(metaschemas());
+        registry
             .add_resource(location, schema)
             .expect("schema registers");
-        let holder = compiler
-            .compile(&format!("{location}#/$defs/Holder"), &mut schemas)
+        let holder = registry
+            .compile(&format!("{location}#/$defs/Holder"))
             .expect("schema compiles under draft 2020-12");
-        (schemas.validate(&node, holder).is_ok(), report.conforms)
+        (
+            holder.is_valid(&node).expect("schema evaluation completes"),
+            report.conforms,
+        )
     }
 
     /// `sh:singleLine true` rejects a literal whose lexical form holds a line

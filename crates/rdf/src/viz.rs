@@ -2551,10 +2551,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             nested += usize::from(budget < 7);
             let mut expected_key = String::new();
@@ -2593,7 +2593,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let value = crate::test_terms::triple_chain(LEVELS);
                 assert_eq!(term_key(&value).matches("triple(").count(), LEVELS);
                 assert_eq!(full_term_label(&value).matches("<<( ").count(), LEVELS);
                 let spec = VizSpec {

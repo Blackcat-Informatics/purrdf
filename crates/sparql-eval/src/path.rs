@@ -486,7 +486,7 @@ pub(crate) fn eval_path<D: DatasetView + Sync>(
             let _ = ctx.observe_cells(rows.len().saturating_add(1), width);
             return false;
         }
-        let mut row = smallvec::smallvec![None; width];
+        let mut row = purrdf_core::smallvec![None; width];
         if let (Some(c), Some(id)) = (s_col, s_id) {
             row[c] = Some(id);
         }
@@ -2110,7 +2110,6 @@ fn counting_power_expansions<T>(body: impl FnOnce() -> T) -> (T, u64) {
 mod tests {
     use super::*;
     use crate::governor::{GovernorState, QueryGovernors};
-    use pretty_assertions::assert_eq;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, ResourceDimension, TrippedGovernor};
     use purrdf_sparql_algebra::{Chain, Child};
     use purrdf_sparql_algebra::{NamedNode, TriplePattern};
@@ -3153,9 +3152,9 @@ mod recursion_free_tests {
 
     use super::*;
     use crate::governor::{GovernorState, QueryGovernors};
-    use crate::test_rng::splitmix64_next;
     use purrdf_core::{GraphMatch, RdfDataset, RdfDatasetBuilder, TrippedGovernor};
     use purrdf_sparql_algebra::{Chain, Child};
+    use purrdf_testkit::rng::splitmix64_next;
 
     const EX: &str = "http://example.org/";
 

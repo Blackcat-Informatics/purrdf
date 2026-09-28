@@ -3541,8 +3541,9 @@ fn memoized_term_value<D: DatasetView>(
     }
     // Inline until a term nests deeper than a quoted triple of quoted triples, so a
     // plain cell costs only its own value.
-    let mut steps: smallvec::SmallVec<[Step<D::Id>; 8]> = smallvec::smallvec![Step::Resolve(id)];
-    let mut values: smallvec::SmallVec<[TermValue; 3]> = smallvec::SmallVec::new();
+    let mut steps: purrdf_core::SmallVec<[Step<D::Id>; 8]> =
+        purrdf_core::smallvec![Step::Resolve(id)];
+    let mut values: purrdf_core::SmallVec<[TermValue; 3]> = purrdf_core::SmallVec::new();
     while let Some(step) = steps.pop() {
         match step {
             Step::Resolve(id) => match dataset.resolve(id) {
@@ -4514,7 +4515,7 @@ mod term_value_walk_tests {
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
             let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
                 .expect("a draw below the count fits")
         }
     }
@@ -4762,7 +4763,7 @@ mod syntactic_schema_tests {
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = crate::test_rng::splitmix64_next(&mut self.state);
+            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
             usize::try_from(draw % options as u64).expect("a choice fits usize")
         }
 

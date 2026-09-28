@@ -496,8 +496,8 @@ def _suite_shex_validation() -> SuiteResult:
 
 
 def _suite_sparql() -> SuiteResult:
-    # The datatest harness writes each manifest tally to stderr.  Serialise its
-    # cases so libtest progress output cannot splice through those tally lines.
+    # Each manifest case writes its tally to stderr.  Serialise the cases so the
+    # runner's progress output cannot splice through those tally lines.
     cmd = [
         "cargo",
         "test",
@@ -966,6 +966,10 @@ def _suite_entailment_rl() -> SuiteResult:
     )
 
 
+# The rows the two Python gates produce, which `--no-python` does not run.
+PYTHON_SUITES = frozenset({"rdflib LSP drop-in gate", "Python binding suite"})
+
+
 def _suite_py_rdflib_gate(build: bool) -> SuiteResult:
     """rdflib's OWN vendored tests run against the purrdf drop-in."""
     log = ""
@@ -1065,7 +1069,8 @@ def _augment(detail: str, msg: str) -> str:
 
 
 def enforce_ratchet(
-    results: list[SuiteResult], budget: dict[str, int], check_orphans: bool = True
+    results: list[SuiteResult], budget: dict[str, int], check_orphans: bool = True,
+    not_run: frozenset[str] = frozenset(),
 ) -> None:
     """Gate each suite's ledgered count against its committed budget.
 
@@ -1123,7 +1128,7 @@ def enforce_ratchet(
     # One shard of the matrix (`--shard`) produces only some of the budgeted
     # suites, so it cannot tell an orphan key from a suite another shard runs.
     # `--from-results` judges the combined rows with this check on.
-    orphans = sorted(set(budget) - {r.name for r in results}) if check_orphans else []
+    orphans = sorted(set(budget) - {r.name for r in results} - not_run) if check_orphans else []
     if orphans:
         raise SystemExit(
             "conformance-matrix: scripts/conformance-baseline.json budgets a suite "
@@ -1242,6 +1247,52 @@ def _native_registry() -> list[tuple[str, Callable[[], SuiteResult]]]:
              "--test", "syntax_conformance", "--test", "shexc_roundtrip",
              "--test", "shexj_roundtrip"],
             detail="schemas parse + negative syntax/structure",
+        )),
+        # A `_suite_cargo` row that IS a per-case measurement: the suite
+        # harness is `harness = false` with one libtest case per suite test, so
+        # the tally counts suite cases, and its `suite-inventory` case pins the
+        # file, group, case and remote counts, so the corpus cannot shrink
+        # under this number without the row going RED.
+        ("core", lambda: _suite_cargo(
+            "JSON Schema draft 2020-12 (official suite)",
+            "JSON-Schema-Test-Suite 5b0ee16",
+            ["cargo", "test", "-p", "purrdf-jsonschema", "--locked", "--test", "suite"],
+            detail=(
+                "every draft 2020-12 test file, optional/ included and optional/format/ "
+                "run with format assertion on, one case per suite test: all 1,463 "
+                "validation cases, all 874 format cases and all 4 output-format cases "
+                "pass, plus the "
+                "suite-inventory case. optional/cross-draft.json evaluates a $ref into a "
+                "draft 2019-09 document under 2019-09 rules"
+            ),
+        )),
+        ("core", lambda: _suite_cargo(
+            "JSON Schema draft 2019-09 (official suite)",
+            "JSON-Schema-Test-Suite 5b0ee16",
+            ["cargo", "test", "-p", "purrdf-jsonschema", "--locked", "--test",
+             "suite_draft2019_09"],
+            detail=(
+                "every draft 2019-09 test file, optional/ included and optional/format/ "
+                "run with format assertion on, one case per suite test: all 1,419 "
+                "validation cases, all 874 format cases and all 4 output-format cases "
+                "pass, plus the "
+                "suite-inventory case. $recursiveRef, array-form items, and "
+                "optional/cross-draft.json's $refs into 2020-12 and draft-07 documents, "
+                "each evaluated under its own draft"
+            ),
+        )),
+        ("core", lambda: _suite_cargo(
+            "JSON Schema draft-07 (official suite)",
+            "JSON-Schema-Test-Suite 5b0ee16",
+            ["cargo", "test", "-p", "purrdf-jsonschema", "--locked", "--test",
+             "suite_draft7"],
+            detail=(
+                "every draft-07 test file, optional/ included and optional/format/ run "
+                "with format assertion on, one case per suite test: all 1,047 validation "
+                "cases and all 793 format cases pass, plus the suite-inventory case; "
+                "draft-07 has no "
+                "output-format tests"
+            ),
         )),
         ("core", _suite_gts_vectors),
     ]
@@ -1599,7 +1650,7 @@ _SPECIMENS: tuple[tuple[str, Callable[[], SuiteResult], tuple[tuple[str, bool], 
             _noise("running 1 test"),
             # One manifest tally, because the property under test is "no tally
             # at all is RED". A manifest that drops out entirely is caught by
-            # the datatest harness itself — its case fails and cargo goes
+            # the conformance harness itself — its case fails and cargo goes
             # non-zero — not by counting lines here, which would need this
             # script to hold a second copy of the manifest list.
             _board(
@@ -2002,10 +2053,12 @@ def main() -> int:
         results = [
             run() for shard, run in registry if not (args.no_python and shard == "python")
         ]
+    budget = load_budget()
+    not_run = PYTHON_SUITES if args.no_python else frozenset()
 
     # Monotone-shrink ratchet: every run suite's ledgered-gap count must equal
     # its committed budget (growth and silent shrink both fail RED).
-    enforce_ratchet(results, load_budget())
+    enforce_ratchet(results, budget, not_run=not_run)
 
     text = render(results)
     print(text)

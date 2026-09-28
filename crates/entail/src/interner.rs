@@ -10,7 +10,7 @@
 //! builder soundly.
 
 use std::convert::Infallible;
-use std::hash::{Hash, Hasher};
+use std::hash::BuildHasher;
 
 use hashbrown::HashTable;
 
@@ -24,9 +24,7 @@ pub(crate) struct Interner {
 }
 
 fn hash_value(value: &TermValue) -> u64 {
-    let mut hasher = ahash::AHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
+    purrdf_core::FastHasher::default().hash_one(value)
 }
 
 impl Interner {
@@ -361,10 +359,10 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(
+            let value = crate::test_terms::term_value(
                 &mut state,
                 &mut budget,
-                purrdf_core::test_rng::TermShape::Any,
+                crate::test_terms::TermShape::Any,
             );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
@@ -389,7 +387,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let value = crate::test_terms::triple_chain(LEVELS);
                 let mut builder = RdfDatasetBuilder::new();
                 assert_eq!(intern_into(&mut builder, &value).index(), LEVELS + 2);
             })

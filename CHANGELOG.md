@@ -10,6 +10,36 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **iri:** `purrdf_iri::idna`, IDNA2008 without third-party code: RFC 5891
+  label validation over the RFC 5892 derived property, the Appendix A
+  contextual rules, the RFC 5893 Bidi rule, RFC 3492 Punycode between A-labels
+  and U-labels, and `map`, a local mapping step (RFC 5891 §5.2) that applies
+  Unicode's NFKC_Casefold to DISALLOWED code points only, leaving code points
+  IDNA2008 already permits (for example ß, ς, ZWJ and ZWNJ) and unassigned
+  ones unchanged, maps U+3002 IDEOGRAPHIC FULL STOP to `.`, leaves unmapped
+  any code point whose image would introduce a `.`, and then normalizes to
+  NFC; it is not the UTS 46 mapping. The tables are generated from the
+  Unicode 17.0.0 database vendored under `crates/iri/unicode/`, and
+  IdnaTestV2.txt passes with zero failures on the rows the committed filter
+  includes (2960 without mapping, 6202 with it).
+- **iri:** `Iri::to_uri`, the RFC 3987 §3.1 mapping of an IRI to a URI:
+  `ToASCII` of the host and percent-encoding of every other non-ASCII code
+  point. The result always re-parses under `parse_uri`.
+- **text:** `purrdf_text::unicode`, the analyzer's own Unicode layer: full
+  case folding, NFD/NFC/NFKD/NFKC and UAX 29 word boundaries, generated from
+  the vendored database. `caseless`, `unicode-normalization`,
+  `unicode-segmentation` and `tinyvec` leave the dependency graph.
+- **deflate:** `purrdf-deflate`, a native DEFLATE (RFC 1951) and gzip (RFC 1952)
+  crate whose only runtime dependency is `purrdf-hash`. `Inflater` and
+  `GzipDecoder` are push-based (`feed` input in chunks of any size; usable from a
+  wasm32 stream callback), `GzipReader` is the `Read` adapter over them, and
+  `set_limit` / `decompress_with_limit` refuse output past a caller's byte limit
+  with `Error::LimitExceeded`. `Deflater`, `GzipWriter` and `gzip::compress` encode
+  deterministically at `Level` 0–9. Match copies, match-length compares and window
+  hashing have SSE2/AVX2, NEON and wasm simd128 kernels that return exactly what
+  the portable ones do.
+
+
 - **sparql-eval:** `protocol::FailureCode`, the exhaustive set of ways an operation
   behind a SPARQL Protocol endpoint can fail. `EvalError`, `LoadError` and
   `RemoteError` convert into it, `FailureCode::from_diagnostic_code` reads an engine
@@ -1036,6 +1066,22 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   stratum to `"unavailable"` or `"membership"`, a compiled answer's planned
   resolution carries `"sharing_weights"`, and `retrieval.crossing_rank_at` computes
   a crossing rank from raw weights.
+
+### Changed
+
+- **text:** the analyzer profile is `purrdf-compatibility-caseless-uax29-v2`.
+  Case folding moves from `CaseFolding.txt` 16.0.0 to 17.0.0, level with the
+  normalization and word-break tables, and the word filter's alphanumeric
+  predicate comes from the generated tables rather than the toolchain's
+  `char` tables. `unicode_versions()` reports 17.0.0 for all four tables. The
+  fold changes on exactly the 28 code points whose `CaseFolding.txt` entries
+  differ between the two releases (Latin Extended-D letters and the Beria
+  Erfe script), so an index built under v1 fingerprints differently.
+- **text:** a letter or digit followed by `MidLetter`, `MidNumLet` or
+  `Single_Quote`, ZERO WIDTH JOINER and a pictograph now segments as UAX 29
+  rule WB6 requires, breaking before the punctuation.
+- **jsonschema:** `uri-template` admits `'` in a literal, as RFC 6570
+  verified erratum 6937 corrects the `literals` rule to.
 
 - **wasm:** an asynchronous lane beside the synchronous one. Every evaluating
   `QueryEngine` method has a Promise-returning twin: `queryAsync`, `selectAsync`,
@@ -3661,6 +3707,19 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   `RankedDeclaration` and `Scalar`. They are listed so that a consumer of an
   intermediate build can see every break. The exact-kNN fold order, the
   float-environment refusal and the MSRV change released behaviour.
+- **gts:** gzip now runs on `purrdf-deflate`, and `flate2` (with `miniz_oxide`,
+  `crc32fast`, `adler2` and `simd-adler32`) left the dependency graph. Decoding a
+  gzip transform, a `.gz` transport stream or a gzip tar stream now decodes
+  **every** member and refuses bytes after the last member that do not begin
+  another; before, only the first member was decoded and anything after it was
+  ignored. The `gzip` transform and gzip tar output are still deterministic
+  (`MTIME` 0) but their compressed bytes differ from earlier releases (the header
+  is now `XFL` 0, `OS` 255, and the encoder is a different one); the decoded bytes,
+  and so content identities over them, are unchanged.
+- **gts:** the zstd transport decoder reads frame by frame: every frame is
+  decoded, skippable frames are skipped wherever they occur (a leading one was
+  refused before), and bytes after the last frame that do not begin another are
+  refused.
 
 - **BREAKING** **sparql-eval:** `QueryOptions` has two new public fields, `remote`
   and `load`, and is now `#[non_exhaustive]`: a struct literal (with or without

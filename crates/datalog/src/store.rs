@@ -73,7 +73,7 @@
 //!   partition order, [`RelationStore::facts_sorted`] through an explicit sort — never by
 //!   mint order and never by hash-table order.
 //! - The interner holds a `hashbrown::HashTable` for O(1) borrowed-key probes. That
-//!   table is **never iterated**: it is keyed by a fixed-key `ahash` and is only ever
+//!   table is **never iterated**: it is keyed by the fixed-key `FixedHasher` and is only ever
 //!   asked "which id, if any, carries this surface". Insertion order lives in the
 //!   parallel `Vec` side arena, which is what every sweep reads.
 //! - The partition table is a `BTreeMap` keyed by `(predicate id, graph id)`. It is
@@ -104,12 +104,12 @@ use crate::id::{PartitionId, RowId, TermId};
 
 /// Fixed-key hash of a borrowed surface, for every borrowed-key probe in this crate.
 ///
-/// The key is fixed (`ahash`'s default, seeded from constants — never from ambient
+/// The key is fixed (`FixedHasher`'s compile-time keys — never ambient
 /// entropy, which does not exist on `wasm32-unknown-unknown`) and is never persisted:
 /// determinism comes from insertion order and the sorted sweeps, never from this hash.
 #[inline]
 fn surface_hash(surface: &str) -> u64 {
-    let mut hasher = ahash::AHasher::default();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     hasher.write(surface.as_bytes());
     hasher.finish()
 }
@@ -2248,8 +2248,8 @@ mod tests {
         let mut tail = Tail::default();
         let mut rows = Vec::with_capacity(len);
         for i in 0..len {
-            let s = TermId::from_index((crate::test_support::mix(state) % 24) as usize);
-            let o = TermId::from_index((crate::test_support::mix(state) % 24) as usize);
+            let s = TermId::from_index((purrdf_testkit::rng::splitmix64_next(state) % 24) as usize);
+            let o = TermId::from_index((purrdf_testkit::rng::splitmix64_next(state) % 24) as usize);
             let r = RowId::from_index(i);
             tail.push(s, o, r);
             rows.push((s, o, r));

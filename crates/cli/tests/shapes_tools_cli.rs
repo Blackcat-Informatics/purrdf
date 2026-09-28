@@ -130,7 +130,7 @@ fn expected_inference() -> String {
 /// shapes graph, the flag is a usage error, and the same rule set without it runs.
 #[test]
 fn cli_rules_shapes_graph() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(
         dir.path(),
         "graph-rules.ttl",
@@ -233,7 +233,7 @@ fn cli_rules_shapes_graph() {
 /// through the same command, its imports resolved from `--import`.
 #[test]
 fn cli_rules() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = shapes_file(dir.path(), TOOLS);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -460,7 +460,7 @@ fn cli_rules() {
 /// check never consumes. Each refusal sits beside the neighbour that passes.
 #[test]
 fn cli_rules_check() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let imported = write_file(
         dir.path(),
@@ -589,7 +589,7 @@ fn cli_rules_check() {
 /// is the expression's either way: a diagnostic changes nothing it evaluates.
 #[test]
 fn cli_node_expr_reports_the_mandatory_diagnostic() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let data = write_file(dir.path(), "data.ttl", DATA);
     let with_list = |members: &str| {
         write_file(
@@ -639,7 +639,7 @@ fn cli_node_expr_reports_the_mandatory_diagnostic() {
 /// are refused beside the valid neighbour.
 #[test]
 fn cli_node_expr() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = shapes_file(dir.path(), TOOLS);
     let data = write_file(dir.path(), "data.ttl", DATA);
 
@@ -738,7 +738,7 @@ fn cli_node_expr() {
 /// beside the spelling that runs.
 #[test]
 fn cli_node_expr_selectors() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = shapes_file(dir.path(), TOOLS);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let node_expr = |selector: &[&str]| {
@@ -832,7 +832,7 @@ fn cli_node_expr_selectors() {
 /// well-formed stays clean.
 #[test]
 fn cli_shapes_lint() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let clean = shapes_file(dir.path(), TOOLS);
     let out = run(&["shapes", "lint", &clean]);
     assert_eq!(code(&out), 0, "{}", stderr(&out));
@@ -965,7 +965,7 @@ const PERSON: &str = "<http://example.org/alice> \
 /// expression reads its scope, the lint certifies, and the product carries the shape.
 #[test]
 fn every_shapes_lane_gives_the_same_owl_imports_verdict() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(dir.path(), "importer.ttl", IMPORTER);
     let lib = write_file(dir.path(), "lib.ttl", IMPORTED);
     let data = write_file(dir.path(), "data.nt", PERSON);
@@ -1104,7 +1104,7 @@ fn the_shacl_prefix_idiom_validates_without_an_import_and_a_header_import_is_ref
                sh:targetNode ex:Invalid , ex:Valid .\n"
         )
     };
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let declared = write_file(dir.path(), "declared.ttl", &idiom(""));
     let header = write_file(dir.path(), "header.ttl", &idiom("a owl:Ontology ;"));
     let data = write_file(
@@ -1148,7 +1148,7 @@ fn the_shacl_prefix_idiom_validates_without_an_import_and_a_header_import_is_ref
 /// over the same graph reports the NATIVE verdict, so the alternative did not run.
 #[test]
 fn cli_shapes_lint_reports_superseded_builtin_validators() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = write_file(
         dir.path(),
         "alternatives.ttl",
@@ -1195,7 +1195,7 @@ fn observed_facts(refusal: &str) -> u64 {
 /// completes with the same inference graph as the default, and one fact fewer refuses.
 #[test]
 fn cli_rules_capacity_limits() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = shapes_file(dir.path(), TOOLS);
     let data = write_file(dir.path(), "data.ttl", DATA);
     let with = |flag: &str, value: &str| {
@@ -1259,7 +1259,7 @@ fn cli_rules_capacity_limits() {
 fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
     use std::fmt::Write as _;
     const EDGES: usize = 181;
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let chain_of = |edges: usize| {
         let mut chain = String::from("@prefix ex: <http://example.org/ns#> .\n");
         for index in 0..edges {
@@ -1326,7 +1326,7 @@ fn cli_rules_nonlinear_closure_needs_a_raised_join_step_limit() {
 /// no diagnostic line and no notification, and its verdict is the conforming one.
 #[test]
 fn every_run_reports_an_empty_in_list() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let shapes = |members: &str| {
         format!(
             "@prefix ex: <http://example.com/ns#> .\n\
@@ -1393,7 +1393,7 @@ fn every_run_reports_an_empty_in_list() {
 /// counter's neighbour bounded at 1,000 counters completes under the defaults.
 #[test]
 fn cli_rules_per_focus_divergence_is_refused_by_a_term_limit() {
-    let dir = tempfile::tempdir().expect("tempdir");
+    let dir = purrdf_testkit::temp_dir!().expect("tempdir");
     let counter = |bound: &str| {
         format!(
             r#"@prefix ex: <http://example.org/ns#> .

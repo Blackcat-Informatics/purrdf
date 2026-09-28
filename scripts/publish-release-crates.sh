@@ -273,9 +273,11 @@ EOF
 # procedure would advance the registry — the crates the loop "would publish"
 # appear, then the token step creates every ledger crate whose dependencies
 # now exist. The rounds must terminate, every STOP must name the first crate
-# in publish order that depends on the ledger crate it waits on (computed
-# independently here, from the metadata), and the final round must say
-# COMPLETE.
+# in publish order that depends on a ledger crate it waits on and that the
+# loop does not skip — ledger crates are skipped, so a chain of them is
+# followed to its first dependent outside the ledger (computed independently
+# here, from the metadata) — and the final round must say COMPLETE. It runs
+# for the real ledger and for a ledger -> ledger -> dependent chain.
 # ---------------------------------------------------------------------------
 
 self_test() {
@@ -287,42 +289,60 @@ self_test() {
 
   # The fixture ledger: the real one when non-empty, else one crate with
   # dependents, so the STOP arm is always exercised.
-  local -a fixture
+  local -a real_fixture
   if [[ "${#ledger[@]}" -gt 0 ]]; then
-    fixture=("${ledger[@]}")
+    real_fixture=("${ledger[@]}")
   else
-    fixture=("${crates[1]}")
+    real_fixture=("${crates[1]}")
   fi
-  local ledger_file="${tmp}/ledger.sh"
-  {
-    cat "${repo}/scripts/release-crates.sh"
-    printf '\nPURRDF_UNBOOTSTRAPPED_CRATES=(%s)\n' "${fixture[*]}"
-  } > "${ledger_file}"
 
-  local mock="${tmp}/registry"
-  mkdir -p "$mock"
+  # write_ledger <name> <crate>...: the release set with exactly these crates
+  # as its ledger; prints the file's path.
+  write_ledger() {
+    local file="${tmp}/ledger-$1.sh"
+    shift
+    {
+      cat "${repo}/scripts/release-crates.sh"
+      printf '\nPURRDF_UNBOOTSTRAPPED_CRATES=(%s)\n' "$*"
+    } > "${file}"
+    echo "${file}"
+  }
+  local ledger_file
+  ledger_file="$(write_ledger real "${real_fixture[@]}")"
+
+  # The mock registry of the interleave under test; each interleave gets its own.
+  local mock=""
   present() { printf '200\n{"version":{"crate":"%s","num":"%s"}}\n' "$1" "${VERSION}" > "${mock}/$1@${VERSION}"; }
   is_present() { [[ -f "${mock}/$1@${VERSION}" ]]; }
 
-  # first_dependent <ledger-crate>: the first release crate, in publish order,
-  # with a path dependency (any kind) on it — the crate the loop must stop at.
+  # first_dependent <ledger-crate>: the crate the loop must stop at on behalf
+  # of this ledger crate — the first release crate, in publish order, with a
+  # surviving path dependency (any kind) on it, among the crates the loop
+  # actually reaches with a decision to make. A crate already on the registry
+  # is passed over, and so is every crate of the fixture ledger: the loop skips
+  # an absent ledger crate rather than stopping at it, even when it depends on
+  # another ledger crate. The wait is not lost there, it moves down the chain:
+  # that ledger crate is a candidate of its own, and its first dependent is
+  # found when it is asked about in turn.
   first_dependent() {
-    python3 - "${metadata_json}" "$1" "${crates[@]}" <<'PY'
-import json
+    local target="$1" crate skip=""
+    for crate in "${fixture[@]}"; do skip+=" ${crate}"; done
+    for crate in "${crates[@]}"; do is_present "$crate" && skip+=" ${crate}"; done
+    workspace_path_deps "${metadata_json}" "${crates[@]}" \
+      | python3 -c '
 import sys
 
-metadata = json.load(open(sys.argv[1], encoding="utf-8"))
-target = sys.argv[2]
-order = sys.argv[3:]
-deps = {
-    p["name"]: {d["name"] for d in p["dependencies"] if d.get("path")}
-    for p in metadata["packages"]
-}
+target, skip, order = sys.argv[1], set(sys.argv[2].split()), sys.argv[3:]
+dependents = set()
+for line in sys.stdin:
+    crate, _kind, dep = line.split()
+    if dep == target:
+        dependents.add(crate)
 for crate in order:
-    if target in deps.get(crate, set()):
+    if crate in dependents and crate not in skip:
         print(crate)
         break
-PY
+' "$target" "$skip" "${crates[@]}"
   }
 
   # token_step: create every fixture crate whose path deps are all present.
@@ -343,71 +363,150 @@ PY
     echo "${created[*]:-}"
   }
 
-  echo "publish-release-crates.sh self-test (fixture ledger: ${fixture[*]}; version ${VERSION})"
-  local round=0 out status crate stop_crate expect created
-  while :; do
-    round=$((round + 1))
-    if [[ "$round" -gt 10 ]]; then
-      echo "  FAILED  the interleave did not terminate in 10 rounds"
-      failures=$((failures + 1))
-      break
-    fi
-    status=0
-    out="$(PURRDF_CRATES_IO_MOCK="${mock}" PURRDF_RELEASE_CRATES_FILE="${ledger_file}" \
-      bash "${BASH_SOURCE[0]}" "${VERSION}" --dry-run 2>&1)" || status=$?
-    if [[ "$status" -ne 0 ]]; then
-      echo "  FAILED  round ${round}: dry-run exited ${status}"
-      while IFS= read -r line; do printf '    | %s\n' "$line"; done <<<"$out"
-      failures=$((failures + 1))
-      break
-    fi
-    # Advance the mock by what the loop would have published.
-    while IFS= read -r crate; do
-      [[ -n "$crate" ]] && present "$crate"
-    done < <(sed -n 's/^would publish \([a-z0-9-]*\) .*/\1/p' <<<"$out")
-
-    if grep -q '^COMPLETE:' <<<"$out"; then
-      printf '  ok      round %s: COMPLETE — every release crate on crates.io\n' "$round"
-      break
-    fi
-    stop_crate="$(sed -n 's/^STOP: \([a-z0-9-]*\) .*/\1/p' <<<"$out")"
-    if [[ -n "$stop_crate" ]]; then
-      # The STOP must be at the first dependent of a still-absent ledger crate,
-      # every earlier non-ledger crate must have been published, and the crate
-      # itself must not have been.
-      expect=""
-      for crate in "${fixture[@]}"; do
-        if ! is_present "$crate"; then
-          expect="$(first_dependent "$crate")"
-          [[ -n "$expect" ]] && break
-        fi
-      done
-      if [[ "$stop_crate" == "$expect" ]] && ! grep -q "^would publish ${stop_crate} " <<<"$out" \
-        && grep -q "^skipping ${crate}: bootstrap pending" <<<"$out" \
-        && grep -q "gh run rerun" <<<"$out" && grep -q 'enable "Require trusted publishing"' <<<"$out"; then
-        printf '  ok      round %s: STOP at %s, waiting on %s (first dependent in publish order, computed independently)\n' "$round" "$stop_crate" "$crate"
-      else
-        printf '  FAILED  round %s: STOP at %s, expected %s (waiting on %s)\n' "$round" "$stop_crate" "$expect" "$crate"
+  # interleave <label> <ledger-crate>...: the whole interleave, from an empty
+  # registry, with exactly these crates as the ledger. Each round is a dry-run;
+  # between rounds the mock advances as the real procedure would.
+  interleave() {
+    local label="$1"
+    shift
+    local -a fixture=("$@")
+    mock="${tmp}/registry-${label}"
+    mkdir -p "$mock"
+    local fixture_ledger
+    fixture_ledger="$(write_ledger "${label}" "${fixture[@]}")"
+    echo "  -- interleave (${label}): fixture ledger ${fixture[*]}"
+    local round=0 out status crate stop_crate expect created before
+    local waits_on candidate dependent index best_index
+    local -a absent_before
+    while :; do
+      round=$((round + 1))
+      if [[ "$round" -gt 10 ]]; then
+        echo "  FAILED  ${label}: the interleave did not terminate in 10 rounds"
+        failures=$((failures + 1))
+        return
+      fi
+      # The ledger crates absent as this round starts: the loop must report
+      # each one it passes before any STOP as skipped, never stop at it.
+      absent_before=()
+      for crate in "${fixture[@]}"; do is_present "$crate" || absent_before+=("$crate"); done
+      status=0
+      out="$(PURRDF_CRATES_IO_MOCK="${mock}" PURRDF_RELEASE_CRATES_FILE="${fixture_ledger}" \
+        bash "${BASH_SOURCE[0]}" "${VERSION}" --dry-run 2>&1)" || status=$?
+      if [[ "$status" -ne 0 ]]; then
+        echo "  FAILED  ${label} round ${round}: dry-run exited ${status}"
         while IFS= read -r line; do printf '    | %s\n' "$line"; done <<<"$out"
         failures=$((failures + 1))
-        break
+        return
       fi
-    elif grep -q '^INCOMPLETE:' <<<"$out"; then
-      printf '  ok      round %s: INCOMPLETE — only dependent-free ledger crates remain\n' "$round"
-    else
-      echo "  FAILED  round ${round}: neither STOP, INCOMPLETE nor COMPLETE"
-      while IFS= read -r line; do printf '    | %s\n' "$line"; done <<<"$out"
-      failures=$((failures + 1))
-      break
-    fi
-    created="$(token_step)"
-    printf '          token step creates: %s\n' "${created:-nothing (its dependencies are not up yet)}"
-    if [[ -z "$created" ]]; then
-      echo "  FAILED  round ${round}: the token step could create nothing, so the interleave is stuck"
-      failures=$((failures + 1))
-      break
-    fi
-  done
+
+      if grep -q '^COMPLETE:' <<<"$out"; then
+        printf '  ok      %s round %s: COMPLETE — every release crate on crates.io\n' "$label" "$round"
+        return
+      fi
+      stop_crate="$(sed -n 's/^STOP: \([a-z0-9-]*\) .*/\1/p' <<<"$out")"
+      if [[ -n "$stop_crate" ]]; then
+        # The STOP must be at the earliest crate, in publish order, that is the
+        # first reachable dependent of any still-absent ledger crate — the
+        # ledger's own order says nothing about which of its crates is needed
+        # first — computed here, before the mock advances, from the metadata.
+        expect=""
+        waits_on=""
+        best_index=${#crates[@]}
+        for candidate in "${fixture[@]}"; do
+          is_present "$candidate" && continue
+          dependent="$(first_dependent "$candidate")"
+          [[ -z "$dependent" ]] && continue
+          for index in "${!crates[@]}"; do
+            if [[ "${crates[$index]}" == "$dependent" ]]; then
+              if [[ "$index" -lt "$best_index" ]]; then
+                best_index="$index"
+                expect="$dependent"
+                waits_on="$candidate"
+              fi
+              break
+            fi
+          done
+        done
+        # Every absent ledger crate ahead of the STOP was skipped, visibly.
+        local skipped_ok=true
+        for crate in "${absent_before[@]}"; do
+          before=false
+          for index in "${!crates[@]}"; do
+            [[ "$index" -ge "$best_index" ]] && break
+            [[ "${crates[$index]}" == "$crate" ]] && before=true && break
+          done
+          if [[ "$before" == "true" ]] && ! grep -q "^skipping ${crate}: bootstrap pending" <<<"$out"; then
+            skipped_ok=false
+          fi
+        done
+        if [[ -n "$expect" && "$stop_crate" == "$expect" && "$skipped_ok" == "true" ]] \
+          && ! in_list "$stop_crate" "${fixture[@]}" \
+          && ! grep -q "^would publish ${stop_crate} " <<<"$out" \
+          && grep -q "^skipping ${waits_on}: bootstrap pending" <<<"$out" \
+          && grep -q "gh run rerun" <<<"$out" && grep -q 'enable "Require trusted publishing"' <<<"$out"; then
+          printf '  ok      %s round %s: STOP at %s, waiting on %s (first dependent the loop reaches, computed independently)\n' "$label" "$round" "$stop_crate" "$waits_on"
+        else
+          printf '  FAILED  %s round %s: STOP at %s, expected %s (waiting on %s)\n' "$label" "$round" "$stop_crate" "${expect:-no stop}" "${waits_on:-nothing}"
+          while IFS= read -r line; do printf '    | %s\n' "$line"; done <<<"$out"
+          failures=$((failures + 1))
+          return
+        fi
+      elif grep -q '^INCOMPLETE:' <<<"$out"; then
+        printf '  ok      %s round %s: INCOMPLETE — only dependent-free ledger crates remain\n' "$label" "$round"
+      else
+        echo "  FAILED  ${label} round ${round}: neither STOP, INCOMPLETE nor COMPLETE"
+        while IFS= read -r line; do printf '    | %s\n' "$line"; done <<<"$out"
+        failures=$((failures + 1))
+        return
+      fi
+      # Advance the mock by what the loop would have published.
+      while IFS= read -r crate; do
+        [[ -n "$crate" ]] && present "$crate"
+      done < <(sed -n 's/^would publish \([a-z0-9-]*\) .*/\1/p' <<<"$out")
+      created="$(token_step)"
+      printf '          token step creates: %s\n' "${created:-nothing (its dependencies are not up yet)}"
+      if [[ -z "$created" ]]; then
+        echo "  FAILED  ${label} round ${round}: the token step could create nothing, so the interleave is stuck"
+        failures=$((failures + 1))
+        return
+      fi
+    done
+  }
+
+  echo "publish-release-crates.sh self-test (version ${VERSION})"
+  interleave real "${real_fixture[@]}"
+
+  # A chain of ledger crates: A, then B, the first crate in publish order that
+  # depends on A, both unbootstrapped, then a crate outside the ledger that
+  # depends on B. The loop skips B although B depends on A, and stops at the
+  # first non-ledger dependent it reaches; stopping at B, or expecting to, is
+  # the failure this arm exists for. Taken from the metadata, not hand-listed.
+  local chain
+  chain="$(workspace_path_deps "${metadata_json}" "${crates[@]}" \
+    | python3 -c '
+import sys
+
+order = sys.argv[1:]
+deps = {}
+for line in sys.stdin:
+    crate, _kind, dep = line.split()
+    deps.setdefault(crate, set()).add(dep)
+for i, a in enumerate(order):
+    b = next((c for c in order[i + 1:] if a in deps.get(c, set())), None)
+    if b is None:
+        continue
+    j = order.index(b)
+    if any(b in deps.get(c, set()) for c in order[j + 1:]):
+        print(a, b)
+        break
+' "${crates[@]}")"
+  if [[ -z "$chain" ]]; then
+    echo "  FAILED  no ledger -> ledger -> dependent chain in the release set to build the chain fixture from"
+    failures=$((failures + 1))
+  else
+    # shellcheck disable=SC2086  # two crate names, split on purpose.
+    interleave chain ${chain}
+  fi
 
   # A registry fault is a stop with a non-zero exit, never a verdict.
   local fault="${tmp}/fault"

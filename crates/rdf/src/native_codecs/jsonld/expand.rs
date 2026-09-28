@@ -1017,7 +1017,7 @@ fn expand_scalar(
             }
             JsonLdTypeMapping::Json => {
                 return Ok(Value::plain(Term::Literal(Literal {
-                    lexical: serde_json::to_string(raw)
+                    lexical: serde_json::to_string(&crate::json_value::Binary64(raw))
                         .map_err(|source| decode(format!("encode rdf:JSON value: {source}")))?,
                     datatype: Some(RDF_JSON.to_owned()),
                     language: None,
@@ -1119,7 +1119,7 @@ fn expand_value_object(
     }
     if json_keyword {
         return Ok(Literal {
-            lexical: serde_json::to_string(value)
+            lexical: serde_json::to_string(&crate::json_value::Binary64(value))
                 .map_err(|source| decode(format!("encode rdf:JSON value: {source}")))?,
             datatype,
             language: None,

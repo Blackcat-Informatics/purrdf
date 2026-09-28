@@ -12,7 +12,7 @@ use std::fs;
 use std::path::Path;
 use std::sync::Arc;
 
-use proptest::prelude::*;
+use purrdf_testkit::prop::prelude::*;
 
 use super::eval::Reexecution;
 use crate::data::ShaclData;
@@ -317,7 +317,7 @@ fn random_rule() -> impl Strategy<Value = RandomRule> {
         any::<bool>(),
         0..TARGETS.len(),
         0..CONDITIONS.len(),
-        proptest::bool::weighted(0.2),
+        prop::bool::weighted(0.2),
         0u8..3,
     )
         .prop_map(
@@ -385,23 +385,22 @@ fn document(
     ttl
 }
 
-fn property_config() -> ProptestConfig {
-    ProptestConfig {
+fn property_config() -> Config {
+    Config {
         cases: 256,
-        failure_persistence: None,
-        ..ProptestConfig::default()
+        ..Config::default()
     }
 }
 
-proptest! {
-    #![proptest_config(property_config())]
+prop_test! {
+    #![prop_config(property_config())]
 
     #[test]
     fn randomised_rule_sets_infer_the_same_under_both_reexecutions(
-        edges in proptest::collection::vec((any::<u8>(), any::<u8>(), any::<u8>()), 0..24),
-        types in proptest::collection::vec((any::<u8>(), any::<bool>()), 0..6),
+        edges in prop::collection::vec((any::<u8>(), any::<u8>(), any::<u8>()), 0..24),
+        types in prop::collection::vec((any::<u8>(), any::<bool>()), 0..6),
         subclass in any::<bool>(),
-        rules in proptest::collection::vec(random_rule(), 1..5),
+        rules in prop::collection::vec(random_rule(), 1..5),
     ) {
         let ttl = document(&edges, &types, subclass, &rules);
         let (shapes, data) = load_turtle(&ttl);

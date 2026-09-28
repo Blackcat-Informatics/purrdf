@@ -125,7 +125,7 @@ pub fn bundle_content_id(raw_digests: &[&str]) -> String {
         h.update(b"\n");
     }
     let digest = h.finalize();
-    format!("{digest:x}")
+    format!("{}", purrdf_hash::hex::Lower(&digest))
 }
 
 // ── Analysis graph output ─────────────────────────────────────────────────────

@@ -24,7 +24,7 @@ fn fixture_dir() -> std::path::PathBuf {
 #[test]
 fn path_independence() {
     let src = fixture_dir();
-    let tmp = tempfile::tempdir().expect("tempdir");
+    let tmp = purrdf_testkit::temp_dir!().expect("tempdir");
     let dst = tmp.path().join("test-slice");
     copy_dir_all(&src, &dst).expect("copy fixture");
 
@@ -234,7 +234,7 @@ fn semantic_digest_blank_nodes_are_deterministic() {
             .expect("module must carry a semantic digest")
     }
 
-    let t1 = tempfile::tempdir().unwrap();
+    let t1 = purrdf_testkit::temp_dir!().unwrap();
     let d1 = t1.path().join("bn");
     write_slice(&d1, "# comment A\n");
 
@@ -247,7 +247,7 @@ fn semantic_digest_blank_nodes_are_deterministic() {
     );
 
     // A comment-only edit → identical semantic digest (canonical RDF unchanged).
-    let t2 = tempfile::tempdir().unwrap();
+    let t2 = purrdf_testkit::temp_dir!().unwrap();
     let d2 = t2.path().join("bn");
     write_slice(&d2, "# a totally different comment\n# extra line\n");
     let c = module_semantic_digest(&d2);

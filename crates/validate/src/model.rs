@@ -410,7 +410,6 @@ pub fn to_json_pretty(log: &SarifLog) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
 
     fn exemplar() -> SarifLog {
         let mut properties = PropertyBag::new();

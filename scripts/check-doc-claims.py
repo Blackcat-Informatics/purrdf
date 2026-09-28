@@ -4706,8 +4706,11 @@ def outstanding_bootstrap_claim(crates: list[str], ledger: list[str]) -> list[st
                 f"not in the release set defined by scripts/release-crates.sh"
             )
 
-    # The anchor the tag instructions link to is GitHub's slug of that heading.
-    slug = "outstanding-bootstrap-" + "-".join(named)
+    # GitHub's slug follows the whole visible heading, including joining words
+    # such as "and". Deriving it from crate names alone missed that word and
+    # certified a dead link while the heading and ledger otherwise agreed.
+    visible_heading = heading.group(0).removeprefix("### ").replace("`", "").lower()
+    slug = re.sub(r"\s+", "-", re.sub(r"[^a-z0-9\s-]", "", visible_heading)).strip("-")
     if f"(#{slug})" not in text:
         found = re.findall(r"\(#(outstanding-bootstrap-[a-z0-9-]+)\)", text)
         problems.append(
@@ -4787,7 +4790,7 @@ def outstanding_bootstrap_claim(crates: list[str], ledger: list[str]) -> list[st
 
 
 def publishable_crate_count_claim(crates: list[str]) -> list[str]:
-    """"the N publishable crates" — the doc build's own headline, in two files.
+    """The doc build and book name the same publishable crate count.
 
     `make doc` and CI's `Doc (deny warnings)` step both run the same
     `cargo doc --workspace --no-deps --exclude …` over every member that is not
@@ -4807,6 +4810,10 @@ def publishable_crate_count_claim(crates: list[str]) -> list[str]:
         (
             _REPO / ".github" / "workflows" / "ci.yaml",
             _flow(r"Document exactly the (?P<n>\d+) publishable crates"),
+        ),
+        (
+            _REPO / "docs" / "book" / "src" / "project" / "releases.md",
+            _flow(r"(?P<n>\d+)-crate release set"),
         ),
     )
     for path, pattern in sites:

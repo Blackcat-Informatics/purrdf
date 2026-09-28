@@ -181,9 +181,9 @@ pub(crate) struct Linked<'e, I: Copy> {
     /// nothing for its slots; likewise the constant pool below. Four slots each: these
     /// are in the frame of the operator the link evaluates for, which may be live while
     /// the plan recurses beneath it.
-    slots: smallvec::SmallVec<[Option<usize>; 4]>,
+    slots: purrdf_core::SmallVec<[Option<usize>; 4]>,
     /// Each constant's term, once a row has read it.
-    consts: smallvec::SmallVec<[ConstCell<I>; 4]>,
+    consts: purrdf_core::SmallVec<[ConstCell<I>; 4]>,
     /// Each regex slot's pattern.
     regexes: Vec<RegexSlot>,
     /// Each `EXISTS`'s pattern, in the expression's pre-order.
@@ -247,7 +247,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
             })
             .collect();
         Self {
-            consts: smallvec::smallvec![ConstCell::Unread; program.consts.len()],
+            consts: purrdf_core::smallvec![ConstCell::Unread; program.consts.len()],
             slots,
             regexes,
             exists,
@@ -263,7 +263,7 @@ impl<'e, I: Copy + PartialEq> Linked<'e, I> {
         Self {
             program: Arc::clone(&self.program),
             slots: self.slots.clone(),
-            consts: smallvec::smallvec![ConstCell::Unread; self.consts.len()],
+            consts: purrdf_core::smallvec![ConstCell::Unread; self.consts.len()],
             regexes: self.regexes.clone(),
             exists: self.exists.clone(),
             stack: Vec::new(),

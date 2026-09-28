@@ -72,14 +72,10 @@ const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#di
 ///
 /// Every variant is a refusal to write text that would mean something other than
 /// the value it was handed. None of them is a policy choice.
-#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum RenderError {
     /// A blank node in an argument position is a non-distinguished variable, so
     /// it is free rather than ground and cannot be written as a constant.
-    #[error(
-        "blank node _:{label} is a non-distinguished variable in a property-function \
-         argument position, so it has no ground constant form"
-    )]
     BlankNotGround {
         /// The blank node's label, without the `_:` prefix.
         label: String,
@@ -87,10 +83,6 @@ pub(crate) enum RenderError {
 
     /// A base direction without a language tag is not expressible: the concrete
     /// syntax writes the direction as a suffix of the tag.
-    #[error(
-        "literal {lexical_form:?} carries a base direction with no language tag, \
-         which no concrete syntax can spell"
-    )]
     DirectionWithoutLanguage {
         /// The literal's lexical form.
         lexical_form: String,
@@ -98,12 +90,33 @@ pub(crate) enum RenderError {
 
     /// A language tag that is not a `LANGTAG` cannot be written after `@`
     /// without changing what the text parses as.
-    #[error("language tag {tag:?} is not a well-formed LANGTAG")]
     MalformedLanguageTag {
         /// The rejected tag.
         tag: String,
     },
 }
+
+impl std::fmt::Display for RenderError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::BlankNotGround { label } => write!(
+                f,
+                "blank node _:{label} is a non-distinguished variable in a property-function \
+         argument position, so it has no ground constant form"
+            ),
+            Self::DirectionWithoutLanguage { lexical_form } => write!(
+                f,
+                "literal {lexical_form:?} carries a base direction with no language tag, \
+         which no concrete syntax can spell"
+            ),
+            Self::MalformedLanguageTag { tag } => {
+                write!(f, "language tag {tag:?} is not a well-formed LANGTAG")
+            }
+        }
+    }
+}
+
+impl std::error::Error for RenderError {}
 
 /// Render `value` as a SPARQL constant.
 ///
@@ -1001,7 +1014,7 @@ mod term_walk_tests {
     //! The term writers, the size hint and the canonical-lexical decoder against their
     //! recursive references, and at a hundred thousand levels on a 128 KiB thread.
 
-    use purrdf_core::test_rng::TermShape;
+    use crate::test_terms::TermShape;
     use purrdf_core::{TermBox, TermValue};
 
     use super::{
@@ -1070,7 +1083,7 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = purrdf_core::test_rng::term_value(&mut state, &mut budget, TermShape::Any);
+            let value = crate::test_terms::term_value(&mut state, &mut budget, TermShape::Any);
             assert_eq!(
                 lexical_size_hint(&value),
                 reference_hint(&value),
@@ -1119,7 +1132,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = purrdf_core::test_rng::triple_chain(LEVELS);
+                let value = crate::test_terms::triple_chain(LEVELS);
                 let text = candidate_lexical(&value).expect("a chain of IRIs is spelled");
                 assert_eq!(lexical_size_hint(&value), text.len());
                 let mut written = String::new();

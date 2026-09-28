@@ -201,7 +201,7 @@ impl VarSchema {
 /// the common row lives inline with no heap allocation and spills to the heap
 /// only for wider schemas. Derefs to `&[Option<SolutionTerm>]`, so indexing,
 /// iteration, slicing, and `&[Option<SolutionTerm>]` parameters are unchanged.
-pub type Solution<I = TermId> = smallvec::SmallVec<[Option<SolutionTerm<I>>; 4]>;
+pub type Solution<I = TermId> = purrdf_core::SmallVec<[Option<SolutionTerm<I>>; 4]>;
 
 /// A multiset (bag) of [`Solution`]s over a shared [`VarSchema`].
 ///
@@ -388,7 +388,6 @@ pub fn compatible<I: ViewTermId>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use pretty_assertions::assert_eq;
     use purrdf_core::TermId;
 
     fn var(name: &str) -> Variable {

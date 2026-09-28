@@ -85,7 +85,7 @@ const SEED: u64 = 0x484e_5357_5f42_5549;
 ///
 /// The same doctrine as `purrdf_hnsw::determinism` and `purrdf_geo::determinism`: the
 /// digest must be a function of the bytes and nothing else, so it is hand-rolled rather
-/// than a `DefaultHasher` or `ahash` whose value is a property of the toolchain.
+/// than a `DefaultHasher` or `FixedHasher` whose value is a property of the build.
 const fn fnv1a_64(bytes: &[u8]) -> u64 {
     let mut hash = 0xcbf2_9ce4_8422_2325_u64;
     let mut index = 0;

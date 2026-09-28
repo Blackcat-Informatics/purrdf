@@ -148,7 +148,7 @@ impl Depth {
 /// the host-stack bounds.
 fn admit<'a>(roots: impl IntoIterator<Item = NodeRef<'a>>) -> Result<(), EvalError> {
     // The pending nodes of a shallow plan stay inline: admitting it allocates nothing.
-    let mut stack: smallvec::SmallVec<[(NodeRef<'a>, Depth); 32]> =
+    let mut stack: purrdf_core::SmallVec<[(NodeRef<'a>, Depth); 32]> =
         roots.into_iter().map(|root| (root, Depth::ROOT)).collect();
     let mut fits = 0;
     while let Some((node, depth)) = stack.pop() {
