@@ -31,8 +31,9 @@
 //! * [`shacl::validate_changes_to_sarif_string`] — the incremental twin: a
 //!   data graph plus both halves of a change, validated through the engine's
 //!   change path, returning the SARIF log beside the scope it describes.
-//! * [`entail::entail_to_ntriples_string`] — SHACL-AF `sh:rule` entailment →
-//!   canonical N-Triples.
+//! * [`entail::entail_to_ntriples`] — SHACL-AF `sh:rule` entailment →
+//!   canonical N-Triples, bounded by the same four rule-evaluation limits a rules run
+//!   takes ([`entail::entail_to_ntriples_string`] is the unbounded-by-default form).
 //! * [`shapes_tools`] — the shapes-graph tools beside validation: running SHACL or
 //!   SPARQL 1.2 RL rules ([`apply_rules_to_ntriples`]), checking a SPARQL 1.2 RL rule set
 //!   without running it ([`check_rules`]), evaluating one node expression
@@ -74,7 +75,10 @@ pub use build::{
     SarifOptions, SarifReport, SarifSources, build_diagnostics_sarif, build_report_sarif,
     build_report_sarif_with, diagnostics_to_sarif_string, report_to_sarif_string,
 };
-pub use entail::{entail_to_ntriples_string, entail_to_ntriples_string_with_shapes_graph};
+pub use entail::{
+    EntailOutcome, EntailRequest, entail_to_ntriples, entail_to_ntriples_string,
+    entail_to_ntriples_string_with_shapes_graph,
+};
 pub use model::{Level, ResultKind, SARIF_SCHEMA, SARIF_VERSION, SarifLog, to_json_pretty};
 pub use product::{
     IdentityComponentDiff, ShapesProductDiff, ShapesProductRefusal, admit_shapes_product,
@@ -145,7 +149,7 @@ pub use expr_selector::{ExprSelector, ExprSelectorError, ParsedExprSelector, Sel
 /// re-exported so a host binding names them without depending on the engine crate.
 pub use purrdf_shapes::srl::{CheckLevel, CheckedRuleSet};
 pub use shapes_tools::{
-    NodeExprRequest, RulesHost, RulesOutcome, RulesRequest, apply_rules_to_ntriples, check_rules,
-    eval_node_expr_to_terms, lint_shapes_ttl, lint_shapes_ttl_with_shapes_graph, parse_check_level,
-    parse_scope_binding,
+    NodeExprRequest, RuleLimits, RulesHost, RulesOutcome, RulesRequest, apply_rules_to_ntriples,
+    check_rules, eval_node_expr_to_terms, lint_shapes_ttl, lint_shapes_ttl_with_shapes_graph,
+    parse_check_level, parse_scope_binding,
 };

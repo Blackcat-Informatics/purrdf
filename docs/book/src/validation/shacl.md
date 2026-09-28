@@ -1070,7 +1070,10 @@ proof of every inferred triple. The proof is one block per triple: `derived S P
 O .`, then `  rule R` and one `  premise S P O .` line for each fact the rule's
 body matched. A SPARQL 1.2 RL data-block triple has `  data-block` instead.
 
-Every host takes the same four **rule-evaluation limits**:
+Every host takes the same four **rule-evaluation limits**, on both of its SHACL
+rules entry points: the rules run above and SHACL-AF entailment (Python
+`shapes.entail`, WebAssembly `shaclEntail`, C `purrdf_shacl_entail_to_ntriples`),
+which bounds its run exactly as the rules run does:
 
 - The **term-generating round limit** bounds the evaluation rounds that infer a
   term the graph did not already hold. The default is 16384 rounds. A counter
@@ -1103,7 +1106,10 @@ it: `--max-term-generating-rounds`, `--max-generated-terms`,
 `max_join_steps` keyword arguments in Python; `maxTermGeneratingRounds`,
 `maxGeneratedTerms`, `maxStoredFacts` and `maxJoinSteps` in WebAssembly; and
 the `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
-`max_join_steps` parameters in C. Whether a rule set that keeps inferring new
+`max_join_steps` parameters in C. The entailment entry point names its own
+knob: `entail(max_stored_facts=...)` in Python, `shaclEntail's maxStoredFacts` in
+WebAssembly, `purrdf_shacl_entail_to_ntriples's max_stored_facts` in C. Whether a
+rule set that keeps inferring new
 terms would stop is undecidable, so the error never calls it divergent. A
 stated limit is exact, and a limit can only refuse: a run it admits infers
 exactly what it would under any larger limit.

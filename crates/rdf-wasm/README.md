@@ -90,7 +90,8 @@ const reparsed = Dataset.parse(nq, "nquads");
   a shapes graph whose constraints read through SPARQL query text has no bounded
   footprint and falls back to validating everything;
   `shaclEntail(shapesTtl, dataNt)` materializes the SHACL-AF `sh:rule` inferences as
-  N-Triples. Beside validation, `shaclApplyRules(dataNt, shapesTtl?, srl?, …)` runs
+  N-Triples, bounded by the same four rule-evaluation limits `shaclApplyRules` takes
+  (`maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts`, `maxJoinSteps`). Beside validation, `shaclApplyRules(dataNt, shapesTtl?, srl?, …)` runs
   SHACL 1.2 rules or a SPARQL 1.2 RL rule set and returns the inference graph (and,
   on request, its proof), `shaclCheckRules(srl, srlBase?, importIris?,
   importDocuments?, level?)` checks a SPARQL 1.2 RL rule set to a level (`syntax`,

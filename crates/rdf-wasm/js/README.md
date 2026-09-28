@@ -233,7 +233,12 @@ ownership, and all limits. Complete examples are in
   product), `shaclLintShapes`, `shaclApplyRules` and `shaclEntail` take the same
   trailing `shapesGraph?`; on the two rules entry points a `sh:SPARQLRule`'s
   `$shapesGraph` is pre-bound to it, and `shaclApplyRules` throws when it is named
-  beside `srl`, which has no shapes graph.
+  beside `srl`, which has no shapes graph. After `shapesGraph?`, `shaclEntail` takes
+  `maxTermGeneratingRounds?`, `maxGeneratedTerms?`, `maxStoredFacts?` and
+  `maxJoinSteps?` (each a `bigint`): the four rule-evaluation limits
+  `shaclApplyRules` takes, with the same defaults, bounding the entailment run the
+  same way. A run past one throws naming the limit, the numbers and the argument
+  that raises it (`shaclEntail's maxStoredFacts`, …).
   `shaclValidateToSarif` takes one more, `subClassOfInShapesGraph?`: SHACL 1.2
   Core §6.3's parameter of that name. `true` reads the shapes graph's
   `rdfs:subClassOf` triples, in addition to the data graph's, wherever SHACL type

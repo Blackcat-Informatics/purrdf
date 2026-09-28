@@ -10,6 +10,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **validate, python, wasm, capi (BREAKING for C):** SHACL-AF entailment takes the four
+  rule-evaluation limits the rules run takes — the term-generating round limit, the
+  generated-term budget, the stored-fact limit and the join-step limit — routed through
+  the same `RuleOptions`, with the same defaults. Python `shapes.entail(...,
+  max_term_generating_rounds=, max_generated_terms=, max_stored_facts=,
+  max_join_steps=)`; WebAssembly four trailing `bigint` arguments on `shaclEntail`; C
+  four nullable `const uint64_t *` parameters on `purrdf_shacl_entail_to_ntriples`
+  between `import_count` and `out_buffer` (riding the unshipped 0.8.0 ABI bump); Rust
+  `EntailRequest` / `entail_to_ntriples` and `RuleLimits`. A refusal names the knob in
+  the calling host's own spelling (`entail(max_stored_facts=...)`, `shaclEntail's
+  maxStoredFacts`, `purrdf_shacl_entail_to_ntriples's max_stored_facts`); it used to
+  name `RuleOptions::with_max_*`, which no host caller can reach, and no host could
+  raise a limit an entailment run passed.
+
 - **sparql-eval, shapes (BREAKING):** a call to a SHACL-AF `sh:SPARQLFunction` whose
   `sh:select` body returns more than one solution fails, naming the count, instead of
   answering with the first row. SHACL Advanced Features: "Since all other bindings will

@@ -141,6 +141,11 @@
  * `program` and `out_nquads` — each a nullable `const uint64_t *`, NULL for the target's
  * default. Both are incompatible (a `0.7.0` host passes its import table or its
  * out-pointer into the new slots), and both ride this bump for the reason the others do.
+ * `purrdf_shacl_entail_to_ntriples` gained all four of `purrdf_shacl_apply_rules`' limits —
+ * `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+ * `max_join_steps`, each a nullable `const uint64_t *` — between `import_count` and
+ * `out_buffer`, so an entailment run is bounded exactly as a rules run is. Incompatible
+ * for the same reason, riding the same bump.
  *
  * The same unshipped bump adds `purrdf_shacl_check_rules` — the check-only SPARQL 1.2 RL
  * entry point every host exposes, with its own `PurrdfSrlCheckLevel` discriminant — for
@@ -2862,11 +2867,22 @@ int32_t purrdf_shacl_validate_changes_to_sarif(const char *shapes_ttl,
  * `owl:imports` table (see `purrdf_shacl_validate_to_sarif`). An imported document's rules
  * run.
  *
+ * `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+ * `max_join_steps` are the four rule-evaluation limits, exactly as
+ * `purrdf_shacl_apply_rules` takes them and with the same defaults: each may be NULL for
+ * the engine or target default — 16384 term-generating rounds, max(65536, 4 × N)
+ * generated terms for N distinct input terms, 4194304 stored facts and 1048576 join steps
+ * natively — or point at an exact limit. A run past one fails the call naming the limit,
+ * the numbers and the parameter that raises it
+ * (`purrdf_shacl_entail_to_ntriples's max_stored_facts`, …).
+ *
  * # Safety
  * `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
  * `shapes_base_iri` and `shapes_graph_iri` must each be null or a NUL-terminated C string;
  * when `import_count` is non-zero, `import_iris` and `import_documents` must each
- * address that many NUL-terminated C strings;
+ * address that many NUL-terminated C strings; `max_term_generating_rounds`,
+ * `max_generated_terms`, `max_stored_facts` and `max_join_steps` must each be null or
+ * readable;
  * `out_buffer` must be a writable pointer; `out_error` must be null or writable.
  */
 int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
@@ -2876,6 +2892,10 @@ int32_t purrdf_shacl_entail_to_ntriples(const char *shapes_ttl,
                                         const char *const *import_iris,
                                         const char *const *import_documents,
                                         size_t import_count,
+                                        const uint64_t *max_term_generating_rounds,
+                                        const uint64_t *max_generated_terms,
+                                        const uint64_t *max_stored_facts,
+                                        const uint64_t *max_join_steps,
                                         PurrdfBuffer **out_buffer,
                                         PurrdfError **out_error);
 

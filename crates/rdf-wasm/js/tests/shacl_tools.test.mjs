@@ -15,6 +15,7 @@ import {
   ready,
   shaclApplyRules,
   shaclCheckRules,
+  shaclEntail,
   shaclEvalNodeExpr,
   shaclLintShapes,
 } from "../index.mjs";
@@ -372,6 +373,39 @@ ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ;
   );
   assert.equal(raised.inferred.split("\n").length - 1, COPIED);
   raised.free();
+});
+
+test("wasm_shacl_entail_limits: shaclEntail takes the four rule-evaluation limits, names its own arguments, and materializes the closure when they are raised", () => {
+  const counter = `${PREFIXES}
+ex:Counter a sh:NodeShape ;
+  sh:targetSubjectsOf ex:n ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 AS ?m) }""" ] .
+`;
+  const data =
+    '<http://example.org/ns#a> <http://example.org/ns#n> "1"^^<http://www.w3.org/2001/XMLSchema#integer> .\n';
+  const entail = (rounds, terms, facts, steps) =>
+    shaclEntail(counter, data, undefined, undefined, undefined, undefined, rounds, terms, facts, steps);
+  const cases = [
+    [[1n, undefined, undefined, undefined], "shaclEntail's maxTermGeneratingRounds"],
+    [[undefined, 1n, undefined, undefined], "shaclEntail's maxGeneratedTerms"],
+    [[undefined, undefined, 1n, undefined], "shaclEntail's maxStoredFacts"],
+    [[undefined, undefined, undefined, 1n], "shaclEntail's maxJoinSteps"],
+  ];
+  for (const [limits, knob] of cases) {
+    assert.throws(
+      () => entail(...limits),
+      (error) => error.message.endsWith(knob),
+      knob,
+    );
+  }
+  const closed = entail(64n, 64n, 64n, 4096n);
+  assert.ok(
+    closed.includes(
+      '<http://example.org/ns#a> <http://example.org/ns#n> "5"^^<http://www.w3.org/2001/XMLSchema#integer> .',
+    ),
+    closed,
+  );
 });
 
 test("wasm_shacl_check_rules: shaclCheckRules checks a SPARQL 1.2 RL rule set to a level and evaluates nothing", () => {

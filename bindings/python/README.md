@@ -184,7 +184,11 @@ is pre-bound to it and `GRAPH $shapesGraph { ... }` reads the shapes graph
 an ordinary variable. A `Shapes` carries it into `prepare()` and its products.
 `shapes.apply_rules` and `shapes.entail` take the same keyword, pre-binding a
 `sh:SPARQLRule`'s `$shapesGraph`; `apply_rules` raises `ValueError` when it is
-named beside `srl`, which has no shapes graph.
+named beside `srl`, which has no shapes graph. `shapes.entail` also takes the four
+rule-evaluation limits `apply_rules` takes — `max_term_generating_rounds`,
+`max_generated_terms`, `max_stored_facts` and `max_join_steps`, with the same
+defaults — and a run past one raises `ValueError` naming the limit, the numbers
+and the keyword that raises it (`entail(max_stored_facts=...)`).
 `subclass_of_in_shapes_graph=True` on `shapes.validate` and `shapes.Shapes` is
 SHACL 1.2 Core §6.3's `subClassOfInShapesGraph`: the shapes graph's
 `rdfs:subClassOf` triples are read, in addition to the data graph's, wherever

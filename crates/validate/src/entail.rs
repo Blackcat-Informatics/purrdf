@@ -28,10 +28,93 @@
 //!
 //! [`engine::entail_graphs`]: purrdf_shapes::engine::entail_graphs
 
+use std::sync::Arc;
+
+use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine;
+use purrdf_shapes::text_ingest::parse_ntriples_to_dataset;
 use purrdf_shapes::{ShapesError, ShapesImports};
 
 use crate::ShapesImportList;
+use crate::shapes_tools::{RuleLimits, RulesHost};
+
+/// One SHACL entailment run across the host boundary: the shapes graph whose rules run,
+/// the data graph they run over, and the rule-evaluation limits bounding the run.
+#[derive(Debug, Clone, Copy)]
+pub struct EntailRequest<'a> {
+    /// The shapes graph, as Turtle.
+    pub shapes_ttl: &'a str,
+    /// The base IRI the shapes document's relative references resolve against.
+    pub shapes_base: Option<&'a str>,
+    /// The shapes-graph IRI a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to — see
+    /// [`entail_to_ntriples_string_with_shapes_graph`]. `None` leaves it an ordinary
+    /// variable.
+    pub shapes_graph: Option<&'a str>,
+    /// The data (base) graph, as N-Triples.
+    pub data_nt: &'a str,
+    /// The shapes graph's `owl:imports` table: an imported document's rules run.
+    pub imports: &'a ShapesImportList<'a>,
+    /// The term-generating round limit, or `None` for the engine default (16,384).
+    pub max_term_generating_rounds: Option<u64>,
+    /// The generated-term budget, or `None` for the engine default (`max(65,536, 4 × N)`
+    /// for `N` distinct input terms).
+    pub max_generated_terms: Option<u64>,
+    /// The stored-fact limit, or `None` for the target's default (4,194,304 natively,
+    /// 131,072 on `wasm32`).
+    pub max_stored_facts: Option<u64>,
+    /// The join-step limit, or `None` for the target's default (1,048,576).
+    pub max_join_steps: Option<u64>,
+    /// The host calling, whose names for the limits' knobs a refusal gives
+    /// ([`RulesHost::entail_limit_knobs`]).
+    pub host: RulesHost,
+}
+
+/// What a SHACL entailment run produced.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EntailOutcome {
+    /// The materialized dataset — the base graph plus every inferred triple — as canonical
+    /// N-Triples.
+    pub ntriples: String,
+}
+
+/// Entail `request.data_nt` under `request.shapes_ttl` and serialize the materialized
+/// dataset (base graph ⊎ every SHACL-AF rule inference) to canonical N-Triples, the run
+/// bounded by the request's four rule-evaluation limits.
+///
+/// The limits are the ones [`crate::apply_rules_to_ntriples`] takes, turned into the same
+/// [`purrdf_shapes::RuleOptions`] by [`RuleLimits::rule_options`]: an entailment run and a
+/// rules run of one shapes graph are bounded identically. A run past a limit fails naming
+/// the limit, the numbers and the knob that raises it in the calling host's terms
+/// ([`RulesHost::entail_limit_knobs`]); a run inside them materializes exactly what it
+/// would under any larger limits.
+///
+/// # Errors
+///
+/// Everything [`entail_to_ntriples_string_with_shapes_graph`] refuses, and
+/// [`ShapesError::Invalid`] naming the host's knob for a passed rule-evaluation limit.
+pub fn entail_to_ntriples(request: &EntailRequest<'_>) -> Result<EntailOutcome, ShapesError> {
+    let data = parse_ntriples_to_dataset(request.data_nt).map_err(|errors| errors.join("\n"))?;
+    let shapes = engine::parse_shapes_with_graph(
+        request.shapes_ttl,
+        request.shapes_base,
+        None,
+        request.shapes_graph,
+        &ShapesImports::from_turtle(request.imports)?,
+    )?;
+    let projected = engine::project_dataset(data.as_ref())?;
+    let holder = ShaclData::new(Arc::clone(&projected), projected, None);
+    let options = RuleLimits {
+        max_term_generating_rounds: request.max_term_generating_rounds,
+        max_generated_terms: request.max_generated_terms,
+        max_stored_facts: request.max_stored_facts,
+        max_join_steps: request.max_join_steps,
+    }
+    .rule_options(request.host.entail_limit_knobs());
+    let inference = purrdf_shapes::infer(&holder, &shapes, &options)?;
+    Ok(EntailOutcome {
+        ntriples: canonical_ntriples(inference.dataset())?,
+    })
+}
 
 /// Entail `data_nt` (N-Triples) under `shapes_ttl` (Turtle) and serialize the
 /// materialized dataset (base graph ⊎ every SHACL-AF rule inference) to a
@@ -121,21 +204,30 @@ pub fn entail_to_ntriples_string_with_shapes_graph(
     data_nt: &str,
     imports: &ShapesImportList<'_>,
 ) -> Result<String, ShapesError> {
-    let dataset = engine::entail_graphs_with_shapes_graph(
-        data_nt,
+    entail_to_ntriples(&EntailRequest {
         shapes_ttl,
         shapes_base,
         shapes_graph,
-        &ShapesImports::from_turtle(imports)?,
-    )?;
+        data_nt,
+        imports,
+        max_term_generating_rounds: None,
+        max_generated_terms: None,
+        max_stored_facts: None,
+        max_join_steps: None,
+        host: RulesHost::Rust,
+    })
+    .map(|outcome| outcome.ntriples)
+}
+
+/// The materialized dataset as canonical N-Triples.
+fn canonical_ntriples(dataset: &purrdf_core::RdfDataset) -> Result<String, ShapesError> {
     // The materialized dataset is wholly caller-supplied (both `data_nt` and
     // `shapes_ttl` cross the wasm/Python/C-ABI boundary), so it goes through the
     // typed, non-panicking canonicalization entry point rather than
     // `purrdf_rdf::canonical_flat_nquads` (which panics on refusal): a
     // reserved-vocabulary or budget-exhausting document must come back as an `Err`
     // value, not abort the process.
-    match purrdf_core::try_canonicalize_flat_view(dataset.as_ref(), purrdf_core::CanonHash::Sha256)
-    {
+    match purrdf_core::try_canonicalize_flat_view(dataset, purrdf_core::CanonHash::Sha256) {
         Ok(canonicalized) => Ok(canonicalized.nquads),
         Err(purrdf_core::ViewCanonError::Refused(err)) => Err(ShapesError::Invalid(format!(
             "SHACL-AF entailment: the materialized dataset was refused canonicalization: {err}"
@@ -187,6 +279,7 @@ pub const PYTHON_BINDING_GOLDEN: &str = "\
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shapes_tools::RuleLimits;
 
     const SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
         @prefix ex: <http://example.org/> .\n\
@@ -211,6 +304,95 @@ mod tests {
             "<http://example.org/alice> \
             <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> ."
         ));
+    }
+
+    /// A counter that infers `ex:n 2` … `ex:n 5` from `ex:n 1`: four term-generating
+    /// rounds, four generated terms, five stored facts, a handful of join steps.
+    const COUNTER_SHAPES: &str = r#"@prefix sh: <http://www.w3.org/ns/shacl#> .
+@prefix ex: <http://example.org/ns#> .
+ex:Counter a sh:NodeShape ;
+  sh:targetSubjectsOf ex:n ;
+  sh:rule [ a sh:SPARQLRule ; sh:construct """PREFIX ex: <http://example.org/ns#>
+CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 AS ?m) }""" ] .
+"#;
+
+    const COUNTER_DATA: &str = "<http://example.org/ns#a> <http://example.org/ns#n> \
+        \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n";
+
+    fn counter(limits: RuleLimits, host: RulesHost) -> Result<EntailOutcome, ShapesError> {
+        entail_to_ntriples(&EntailRequest {
+            shapes_ttl: COUNTER_SHAPES,
+            shapes_base: None,
+            shapes_graph: None,
+            data_nt: COUNTER_DATA,
+            imports: &[],
+            max_term_generating_rounds: limits.max_term_generating_rounds,
+            max_generated_terms: limits.max_generated_terms,
+            max_stored_facts: limits.max_stored_facts,
+            max_join_steps: limits.max_join_steps,
+            host,
+        })
+    }
+
+    /// Every one of the four limits bounds an entailment run exactly as it bounds a rules
+    /// run, and each refusal names the knob in the CALLING host's own spelling — never
+    /// `RuleOptions::with_max_*`. The same run with the limit raised materializes the whole
+    /// closure, so the refusal is the limit's, not the rule set's.
+    #[test]
+    fn entail_is_bounded_by_the_four_limits_named_in_each_hosts_terms() {
+        let one = |pick: usize| {
+            let mut limits = RuleLimits::default();
+            match pick {
+                0 => limits.max_term_generating_rounds = Some(1),
+                1 => limits.max_generated_terms = Some(1),
+                2 => limits.max_stored_facts = Some(1),
+                _ => limits.max_join_steps = Some(1),
+            }
+            limits
+        };
+        let raised = RuleLimits {
+            max_term_generating_rounds: Some(64),
+            max_generated_terms: Some(64),
+            max_stored_facts: Some(64),
+            max_join_steps: Some(4_096),
+        };
+        for host in [
+            RulesHost::Rust,
+            RulesHost::Python,
+            RulesHost::Wasm,
+            RulesHost::CAbi,
+        ] {
+            let knobs = host.entail_limit_knobs();
+            let names = [
+                knobs.rounds(),
+                knobs.generated_terms(),
+                knobs.stored_facts(),
+                knobs.join_steps(),
+            ];
+            for (pick, knob) in names.iter().enumerate() {
+                let refused = counter(one(pick), host)
+                    .expect_err("a limit of one refuses the counter")
+                    .to_string();
+                assert!(refused.ends_with(knob), "{host:?} {pick}: {refused}");
+                assert!(!refused.contains("RuleOptions::"), "{refused}");
+            }
+            let closed = counter(raised, host).expect("raised limits admit the counter");
+            assert!(
+                closed.ntriples.contains(
+                    "<http://example.org/ns#a> <http://example.org/ns#n> \
+                     \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
+                ),
+                "{}",
+                closed.ntriples
+            );
+        }
+        assert_eq!(
+            counter(RuleLimits::default(), RulesHost::Rust)
+                .expect("the defaults admit it")
+                .ntriples,
+            entail_to_ntriples_string(COUNTER_SHAPES, None, COUNTER_DATA, &[])
+                .expect("the unbounded-by-default form"),
+        );
     }
 
     #[test]

@@ -149,7 +149,10 @@ executes that example against the generated shared library and committed header.
   The same bump gives `purrdf_shacl_apply_rules` the nullable `max_stored_facts` /
   `max_join_steps` limits between `max_generated_terms` and `import_iris`, and
   `purrdf_entail_materialize_to_nquads` the same two between `program` and
-  `out_nquads`. It also adds `purrdf_shacl_check_rules` and its
+  `out_nquads`, and gives `purrdf_shacl_entail_to_ntriples` all four of
+  `purrdf_shacl_apply_rules`' limits (`max_term_generating_rounds`,
+  `max_generated_terms`, `max_stored_facts`, `max_join_steps`) between
+  `import_count` and `out_buffer`. It also adds `purrdf_shacl_check_rules` and its
   `PurrdfSrlCheckLevel` discriminant, and gives `purrdf_shacl_validate_to_sarif`,
   `purrdf_shacl_validate_changes_to_sarif`, `purrdf_shacl_lint_shapes` and
   `purrdf_shapes_product_encode` a nullable `shapes_graph_iri` immediately after
@@ -189,6 +192,11 @@ does. Each takes the shapes graph as Turtle and the data graph as N-Triples.
   the parameter. `purrdf_entail_materialize_to_nquads(document, regime, program,
   max_stored_facts, max_join_steps, out_nquads, out_report, out_error)` takes the
   same two limits for the `rdf`, `rdfs`, `owl-rl` and `d` regimes.
+  `purrdf_shacl_entail_to_ntriples(shapes_ttl, shapes_base_iri, shapes_graph_iri,
+  data_nt, import_iris, import_documents, import_count, max_term_generating_rounds,
+  max_generated_terms, max_stored_facts, max_join_steps, out_buffer, out_error)` —
+  SHACL-AF entailment, the base graph plus every inference — takes all four, with the
+  same defaults, and a refusal names `purrdf_shacl_entail_to_ntriples`' own parameter.
 - `purrdf_shacl_check_rules(srl, srl_base_iri, level, import_iris,
   import_documents, import_count, out_summary, out_error)` checks a SPARQL 1.2 RL
   rule set WITHOUT evaluating it — the grammar, the `IMPORTS` closure resolved

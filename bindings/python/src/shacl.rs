@@ -246,8 +246,7 @@ fn messages_list<'py>(
 ///
 /// Raises `ValueError` if either graph fails to parse or if rule application
 /// fails (an illegal head term, an unresolvable `sh:condition`, an unregistered
-/// `sh:ruleProcessor`, or a rule set that passes the engine's term-generating
-/// round limit or another evaluation limit, at its default).
+/// `sh:ruleProcessor`, or a rule set that passes a rule-evaluation limit).
 ///
 /// # One boundary, three bindings
 ///
@@ -266,9 +265,28 @@ fn messages_list<'py>(
 /// `apply_rules(shapes_graph=...)` takes it: a `sh:SPARQLRule`'s `$shapesGraph` is
 /// pre-bound to it. A relative one resolves against `shapes_base`; `None` leaves
 /// `$shapesGraph` an ordinary variable.
+///
+/// `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+/// `max_join_steps` are the four rule-evaluation limits, exactly as `apply_rules` takes
+/// them and with the same defaults (16384 rounds, max(65536, 4 × N) generated terms for N
+/// distinct input terms, 4194304 stored facts, 1048576 join steps). A run past one raises
+/// `ValueError` naming the limit, the numbers and the keyword argument that raises it
+/// (`entail(max_stored_facts=...)`, …).
 #[pyfunction]
-#[pyo3(signature = (shapes_ttl, data_nt, *, shapes_base=None, imports=Vec::new(), shapes_graph=None))]
+#[pyo3(signature = (
+    shapes_ttl,
+    data_nt,
+    *,
+    shapes_base=None,
+    imports=Vec::new(),
+    shapes_graph=None,
+    max_term_generating_rounds=None,
+    max_generated_terms=None,
+    max_stored_facts=None,
+    max_join_steps=None,
+))]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(clippy::too_many_arguments)] // mirrors the Python keyword surface one-to-one
 fn entail(
     py: Python<'_>,
     shapes_ttl: &str,
@@ -276,17 +294,27 @@ fn entail(
     shapes_base: Option<&str>,
     imports: Vec<(String, String)>,
     shapes_graph: Option<&str>,
+    max_term_generating_rounds: Option<u64>,
+    max_generated_terms: Option<u64>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> PyResult<String> {
     let pairs = crate::py_entail::import_list(&imports);
     // Parse + entailment + serialization run detached (GIL released).
     py.detach(|| {
-        purrdf_validate::entail_to_ntriples_string_with_shapes_graph(
+        purrdf_validate::entail_to_ntriples(&purrdf_validate::EntailRequest {
             shapes_ttl,
             shapes_base,
             shapes_graph,
             data_nt,
-            &pairs,
-        )
+            imports: &pairs,
+            max_term_generating_rounds,
+            max_generated_terms,
+            max_stored_facts,
+            max_join_steps,
+            host: purrdf_validate::RulesHost::Python,
+        })
+        .map(|outcome| outcome.ntriples)
     })
     .map_err(|error| shapes_error(py, error))
 }

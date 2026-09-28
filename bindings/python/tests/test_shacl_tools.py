@@ -164,6 +164,32 @@ def test_py_apply_rules() -> None:
         purrdf.shapes.apply_rules(_DATA)
 
 
+def test_py_entail_limits() -> None:
+    """``shapes.entail`` takes the four rule-evaluation limits ``apply_rules`` takes; each
+    refusal names ``entail``'s own keyword, and the raised run materializes the closure."""
+    for keyword in (
+        "max_term_generating_rounds",
+        "max_generated_terms",
+        "max_stored_facts",
+        "max_join_steps",
+    ):
+        with pytest.raises(ValueError) as refused:
+            purrdf.shapes.entail(_SHAPES, _DATA, **{keyword: 1})
+        assert str(refused.value).endswith(f"entail({keyword}=...)"), str(refused.value)
+        assert "RuleOptions::" not in str(refused.value)
+    closed = purrdf.shapes.entail(
+        _SHAPES,
+        _DATA,
+        max_term_generating_rounds=64,
+        max_generated_terms=64,
+        max_stored_facts=64,
+        max_join_steps=4096,
+    )
+    for line in _INFERRED.splitlines():
+        assert line in closed, closed
+    assert closed == purrdf.shapes.entail(_SHAPES, _DATA)
+
+
 def test_py_eval_node_expr() -> None:
     assert purrdf.shapes.eval_node_expr(
         _SHAPES, _DATA, "http://example.org/ns#Tag", "http://example.org/ns#a"

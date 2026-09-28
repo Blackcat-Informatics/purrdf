@@ -1849,6 +1849,10 @@ class shapes:
     # every inferred triple as a canonical N-Triples string. `shapes_graph` is the
     # shapes-graph IRI a sh:SPARQLRule's $shapesGraph is pre-bound to, as
     # apply_rules(shapes_graph=...) takes it; None leaves it an ordinary variable.
+    # `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+    # `max_join_steps` are the four rule-evaluation limits apply_rules takes, with the
+    # same defaults; a run past one raises ValueError naming the limit, the numbers
+    # and the keyword argument that raises it (`entail(max_stored_facts=...)`, ...).
     @staticmethod
     def entail(
         shapes_ttl: str,
@@ -1857,6 +1861,10 @@ class shapes:
         shapes_base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
         shapes_graph: str | None = None,
+        max_term_generating_rounds: int | None = None,
+        max_generated_terms: int | None = None,
+        max_stored_facts: int | None = None,
+        max_join_steps: int | None = None,
     ) -> str: ...
     # Run a rule set over a data graph (N-Triples) and return the INFERENCE GRAPH —
     # the inferred triples only, never the data graph: {"inferred": N-Triples 1.2 in

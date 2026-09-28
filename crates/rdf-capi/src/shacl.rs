@@ -83,9 +83,9 @@
 use std::os::raw::c_char;
 
 use purrdf_validate::{
-    ChangeScope, ConformanceDisallows, ExprSelector, LintReport, NodeExprRequest, RulesOutcome,
-    RulesRequest, SarifOptions, ShapesError, ShapesProductRefusal, ValidationOptions,
-    apply_rules_to_ntriples, check_rules, entail_to_ntriples_string_with_shapes_graph,
+    ChangeScope, ConformanceDisallows, EntailRequest, ExprSelector, LintReport, NodeExprRequest,
+    RuleLimits, RulesOutcome, RulesRequest, SarifOptions, ShapesError, ShapesProductRefusal,
+    ValidationOptions, apply_rules_to_ntriples, check_rules, entail_to_ntriples,
     eval_node_expr_to_terms, lint_shapes_ttl_with_shapes_graph, parse_scope_binding,
     validate_changes_to_sarif_string_with_shapes_graph, validate_to_sarif_string_with_shapes_graph,
 };
@@ -471,14 +471,21 @@ fn entail_to_ntriples_bytes(
     shapes_graph: Option<&str>,
     data_nt: &str,
     imports: &[(&str, &str)],
+    limits: RuleLimits,
 ) -> Result<Vec<u8>, ShapesError> {
-    Ok(entail_to_ntriples_string_with_shapes_graph(
+    Ok(entail_to_ntriples(&EntailRequest {
         shapes_ttl,
         shapes_base,
         shapes_graph,
         data_nt,
         imports,
-    )?
+        max_term_generating_rounds: limits.max_term_generating_rounds,
+        max_generated_terms: limits.max_generated_terms,
+        max_stored_facts: limits.max_stored_facts,
+        max_join_steps: limits.max_join_steps,
+        host: purrdf_validate::RulesHost::CAbi,
+    })?
+    .ntriples
     .into_bytes())
 }
 
@@ -501,11 +508,22 @@ fn entail_to_ntriples_bytes(
 /// `owl:imports` table (see `purrdf_shacl_validate_to_sarif`). An imported document's rules
 /// run.
 ///
+/// `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+/// `max_join_steps` are the four rule-evaluation limits, exactly as
+/// `purrdf_shacl_apply_rules` takes them and with the same defaults: each may be NULL for
+/// the engine or target default — 16384 term-generating rounds, max(65536, 4 × N)
+/// generated terms for N distinct input terms, 4194304 stored facts and 1048576 join steps
+/// natively — or point at an exact limit. A run past one fails the call naming the limit,
+/// the numbers and the parameter that raises it
+/// (`purrdf_shacl_entail_to_ntriples's max_stored_facts`, …).
+///
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
 /// `shapes_base_iri` and `shapes_graph_iri` must each be null or a NUL-terminated C string;
 /// when `import_count` is non-zero, `import_iris` and `import_documents` must each
-/// address that many NUL-terminated C strings;
+/// address that many NUL-terminated C strings; `max_term_generating_rounds`,
+/// `max_generated_terms`, `max_stored_facts` and `max_join_steps` must each be null or
+/// readable;
 /// `out_buffer` must be a writable pointer; `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
@@ -516,6 +534,10 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
     import_iris: *const *const c_char,
     import_documents: *const *const c_char,
     import_count: usize,
+    max_term_generating_rounds: *const u64,
+    max_generated_terms: *const u64,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
     out_buffer: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
@@ -537,8 +559,19 @@ pub unsafe extern "C" fn purrdf_shacl_entail_to_ntriples(
                 import_count,
                 "purrdf_shacl_entail_to_ntriples",
             )?;
-            let bytes = entail_to_ntriples_bytes(shapes, base, shapes_graph, data, &imports)
-                .map_err(PurrdfError::shapes)?;
+            let limits = RuleLimits {
+                // SAFETY: the caller's contract — null or readable.
+                max_term_generating_rounds: max_term_generating_rounds.as_ref().copied(),
+                // SAFETY: the caller's contract — null or readable.
+                max_generated_terms: max_generated_terms.as_ref().copied(),
+                // SAFETY: the caller's contract — null or readable.
+                max_stored_facts: max_stored_facts.as_ref().copied(),
+                // SAFETY: the caller's contract — null or readable.
+                max_join_steps: max_join_steps.as_ref().copied(),
+            };
+            let bytes =
+                entail_to_ntriples_bytes(shapes, base, shapes_graph, data, &imports, limits)
+                    .map_err(PurrdfError::shapes)?;
             *out_buffer = PurrdfBuffer::into_raw(bytes);
             Ok(PurrdfStatus::Ok)
         })
@@ -2039,8 +2072,15 @@ ex:StatusShape a sh:NodeShape ;
 
     #[test]
     fn entail_emits_materialized_ntriples() {
-        let bytes = entail_to_ntriples_bytes(RULE_SHAPES, None, None, RULE_DATA, &[])
-            .expect("entailment produced");
+        let bytes = entail_to_ntriples_bytes(
+            RULE_SHAPES,
+            None,
+            None,
+            RULE_DATA,
+            &[],
+            RuleLimits::default(),
+        )
+        .expect("entailment produced");
         let text = String::from_utf8(bytes).expect("utf8");
         assert!(text.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
@@ -2052,7 +2092,17 @@ ex:StatusShape a sh:NodeShape ;
 
     #[test]
     fn entail_malformed_shapes_is_an_error() {
-        assert!(entail_to_ntriples_bytes("@@@ not turtle", None, None, RULE_DATA, &[]).is_err());
+        assert!(
+            entail_to_ntriples_bytes(
+                "@@@ not turtle",
+                None,
+                None,
+                RULE_DATA,
+                &[],
+                RuleLimits::default()
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -2455,6 +2505,76 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         }
     }
 
+    /// `purrdf_shacl_entail_to_ntriples`' four rule-evaluation limits reach the engine
+    /// through the exported symbol, and each refusal names THIS host's parameter; the same
+    /// call with every limit raised materializes the whole closure.
+    #[test]
+    fn capi_entail_limits() {
+        const COUNTER: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+            @prefix ex: <http://example.org/ns#> .\n\
+            ex:Counter a sh:NodeShape ; sh:targetSubjectsOf ex:n ;\n\
+              sh:rule [ a sh:SPARQLRule ; sh:construct \"\"\"PREFIX ex: <http://example.org/ns#>\n\
+            CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 AS ?m) }\"\"\" ] .\n";
+        let shapes = std::ffi::CString::new(COUNTER).expect("no NUL");
+        let data = std::ffi::CString::new(
+            "<http://example.org/ns#a> <http://example.org/ns#n> \
+             \"1\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n",
+        )
+        .expect("no NUL");
+        let entail = |limits: [Option<u64>; 4]| {
+            let pointer =
+                |limit: &Option<u64>| limit.as_ref().map_or(std::ptr::null(), std::ptr::from_ref);
+            let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every pointer is a live CString, a live local, NULL, or writable.
+            unsafe {
+                let status = purrdf_shacl_entail_to_ntriples(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    pointer(&limits[0]),
+                    pointer(&limits[1]),
+                    pointer(&limits[2]),
+                    pointer(&limits[3]),
+                    &raw mut buffer,
+                    &raw mut error,
+                );
+                if status == PurrdfStatus::Ok as i32 {
+                    Ok(take_text(buffer))
+                } else {
+                    Err(take_error(error))
+                }
+            }
+        };
+        for (pick, knob) in [
+            "purrdf_shacl_entail_to_ntriples's max_term_generating_rounds",
+            "purrdf_shacl_entail_to_ntriples's max_generated_terms",
+            "purrdf_shacl_entail_to_ntriples's max_stored_facts",
+            "purrdf_shacl_entail_to_ntriples's max_join_steps",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut limits = [None; 4];
+            limits[pick] = Some(1);
+            let refused = entail(limits).expect_err("a limit of one refuses the counter");
+            assert!(refused.ends_with(knob), "{refused}");
+        }
+        let closed = entail([Some(64), Some(64), Some(64), Some(4_096)])
+            .expect("raised limits admit the counter");
+        assert!(
+            closed.contains(
+                "<http://example.org/ns#a> <http://example.org/ns#n> \
+                 \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
+            ),
+            "{closed}"
+        );
+    }
+
     /// `shapes_graph_iri` on the two rules entry points: named, a SPARQL rule's
     /// `$shapesGraph` is the IRI and `GRAPH $shapesGraph` reads the shapes graph; NULL, it
     /// is an ordinary variable. Beside `srl` it is a `ParseError`, and the rule set alone
@@ -2535,6 +2655,10 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut buffer,
                     &raw mut error,
                 );
@@ -3624,6 +3748,10 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     import_iris,
                     import_documents,
                     import_count,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut buffer,
                     &raw mut error,
                 );

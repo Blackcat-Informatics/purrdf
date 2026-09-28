@@ -1469,6 +1469,13 @@ export class ShaclImportError {
  * `shaclApplyRules` takes it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it. A
  * relative one resolves against `shapesBase`; omitted, `$shapesGraph` is an ordinary
  * variable.
+ *
+ * `maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts` and `maxJoinSteps` are
+ * the four rule-evaluation limits, exactly as `shaclApplyRules` takes them and with the
+ * same defaults: 16384 term-generating rounds, max(65536, 4 × N) generated terms for N
+ * distinct input terms, 131072 stored facts and 1048576 join steps on this target. A run
+ * past one throws naming the limit, the numbers and the argument that raises it
+ * (`shaclEntail's maxStoredFacts`, …).
  */
 export function shaclEntail(
   shapesTtl: string,
@@ -1477,6 +1484,10 @@ export function shaclEntail(
   importIris?: readonly string[],
   importDocuments?: readonly string[],
   shapesGraph?: string,
+  maxTermGeneratingRounds?: bigint,
+  maxGeneratedTerms?: bigint,
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
 ): string;
 
 /**

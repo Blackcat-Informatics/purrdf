@@ -154,6 +154,76 @@ impl RulesHost {
             ),
         }
     }
+
+    /// The host's names for the same four limits on its SHACL ENTAILMENT entry point
+    /// ([`crate::entail_to_ntriples`]): Python `shapes.entail`, WebAssembly `shaclEntail`,
+    /// C `purrdf_shacl_entail_to_ntriples`.
+    #[must_use]
+    pub fn entail_limit_knobs(self) -> LimitKnobs {
+        match self {
+            Self::Rust => LimitKnobs::new(
+                "EntailRequest::max_term_generating_rounds",
+                "EntailRequest::max_generated_terms",
+                "EntailRequest::max_stored_facts",
+                "EntailRequest::max_join_steps",
+            ),
+            Self::Python => LimitKnobs::new(
+                "entail(max_term_generating_rounds=...)",
+                "entail(max_generated_terms=...)",
+                "entail(max_stored_facts=...)",
+                "entail(max_join_steps=...)",
+            ),
+            Self::Wasm => LimitKnobs::new(
+                "shaclEntail's maxTermGeneratingRounds",
+                "shaclEntail's maxGeneratedTerms",
+                "shaclEntail's maxStoredFacts",
+                "shaclEntail's maxJoinSteps",
+            ),
+            Self::CAbi => LimitKnobs::new(
+                "purrdf_shacl_entail_to_ntriples's max_term_generating_rounds",
+                "purrdf_shacl_entail_to_ntriples's max_generated_terms",
+                "purrdf_shacl_entail_to_ntriples's max_stored_facts",
+                "purrdf_shacl_entail_to_ntriples's max_join_steps",
+            ),
+        }
+    }
+}
+
+/// The four rule-evaluation limits a host names, each `None` for the engine or target
+/// default. [`apply_rules_to_ntriples`] and [`crate::entail_to_ntriples`] both turn them into
+/// the one [`RuleOptions`] the SHACL rules engine runs under ([`Self::rule_options`]), so a
+/// rules run and an entailment run of the same shapes graph are bounded identically.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct RuleLimits {
+    /// The term-generating round limit.
+    pub max_term_generating_rounds: Option<u64>,
+    /// The generated-term budget.
+    pub max_generated_terms: Option<u64>,
+    /// The stored-fact limit.
+    pub max_stored_facts: Option<u64>,
+    /// The join-step limit.
+    pub max_join_steps: Option<u64>,
+}
+
+impl RuleLimits {
+    /// The [`RuleOptions`] these limits describe, a refusal naming `knobs`.
+    #[must_use]
+    pub fn rule_options(&self, knobs: LimitKnobs) -> RuleOptions {
+        let mut options = RuleOptions::default().with_limit_knobs(knobs);
+        if let Some(rounds) = self.max_term_generating_rounds {
+            options = options.with_max_term_generating_rounds(rounds);
+        }
+        if let Some(terms) = self.max_generated_terms {
+            options = options.with_max_generated_terms(terms);
+        }
+        if let Some(facts) = self.max_stored_facts {
+            options = options.with_max_stored_facts(facts);
+        }
+        if let Some(steps) = self.max_join_steps {
+            options = options.with_max_join_steps(steps);
+        }
+        options
+    }
 }
 
 /// What a rules run produced.
@@ -197,19 +267,13 @@ pub fn apply_rules_to_ntriples(request: &RulesRequest<'_>) -> Result<RulesOutcom
             )?;
             let projected = engine::project_dataset(data.as_ref())?;
             let holder = ShaclData::new(std::sync::Arc::clone(&projected), projected, None);
-            let mut options = RuleOptions::default().with_limit_knobs(request.host.limit_knobs());
-            if let Some(rounds) = request.max_term_generating_rounds {
-                options = options.with_max_term_generating_rounds(rounds);
+            let options = RuleLimits {
+                max_term_generating_rounds: request.max_term_generating_rounds,
+                max_generated_terms: request.max_generated_terms,
+                max_stored_facts: request.max_stored_facts,
+                max_join_steps: request.max_join_steps,
             }
-            if let Some(terms) = request.max_generated_terms {
-                options = options.with_max_generated_terms(terms);
-            }
-            if let Some(facts) = request.max_stored_facts {
-                options = options.with_max_stored_facts(facts);
-            }
-            if let Some(steps) = request.max_join_steps {
-                options = options.with_max_join_steps(steps);
-            }
+            .rule_options(request.host.limit_knobs());
             purrdf_shapes::infer(&holder, &shapes, &options)?
         }
         (None, Some(_)) if request.shapes_graph.is_some() => {

@@ -477,19 +477,27 @@ pub(crate) fn entail_to_ntriples_impl(
     import_iris: &[String],
     import_documents: &[String],
     shapes_graph: Option<&str>,
+    limits: purrdf_validate::RuleLimits,
 ) -> Result<String, ShapesError> {
     let imports = shapes_import_pairs(import_iris, import_documents)?;
-    purrdf_validate::entail_to_ntriples_string_with_shapes_graph(
+    purrdf_validate::entail_to_ntriples(&purrdf_validate::EntailRequest {
         shapes_ttl,
         shapes_base,
         shapes_graph,
         data_nt,
-        &imports,
-    )
+        imports: &imports,
+        max_term_generating_rounds: limits.max_term_generating_rounds,
+        max_generated_terms: limits.max_generated_terms,
+        max_stored_facts: limits.max_stored_facts,
+        max_join_steps: limits.max_join_steps,
+        host: purrdf_validate::RulesHost::Wasm,
+    })
+    .map(|outcome| outcome.ntriples)
 }
 
 /// `shaclEntail(shapesTtl, dataNt, shapesBase?, importIris?, importDocuments?,
-/// shapesGraph?)` → the
+/// shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?,
+/// maxJoinSteps?)` → the
 /// materialized dataset as an N-Triples string (the base graph plus every inferred
 /// triple).
 ///
@@ -511,8 +519,21 @@ pub(crate) fn entail_to_ntriples_impl(
 /// [`shacl_apply_rules`] takes it: a `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it.
 /// A relative one resolves against `shapesBase`; omitted, `$shapesGraph` is an ordinary
 /// variable.
+///
+/// `maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts` and `maxJoinSteps`
+/// (each a `bigint`) are the four rule-evaluation limits, exactly as
+/// [`shacl_apply_rules`] takes them and with the same defaults: the evaluation rounds that
+/// infer a term the graph did not hold (16384), the terms inferred beyond the input's
+/// (max(65536, 4 × N) for N distinct input terms), the facts the evaluation store may hold
+/// (131072 on this target) and the candidate solutions the rule bodies may enumerate
+/// (1048576). A run past one throws naming the limit, the numbers and the argument that
+/// raises it.
 #[wasm_bindgen(js_name = shaclEntail)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each parameter is a distinct, independently-named input at the wasm boundary"
+)]
 pub fn shacl_entail(
     shapes_ttl: &str,
     data_nt: &str,
@@ -520,6 +541,10 @@ pub fn shacl_entail(
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
     shapes_graph: Option<String>,
+    max_term_generating_rounds: Option<u64>,
+    max_generated_terms: Option<u64>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> Result<String, JsValue> {
     entail_to_ntriples_impl(
         shapes_ttl,
@@ -528,6 +553,12 @@ pub fn shacl_entail(
         import_iris.as_deref().unwrap_or_default(),
         import_documents.as_deref().unwrap_or_default(),
         shapes_graph.as_deref(),
+        purrdf_validate::RuleLimits {
+            max_term_generating_rounds,
+            max_generated_terms,
+            max_stored_facts,
+            max_join_steps,
+        },
     )
     .map_err(shapes_rejection)
 }
@@ -1634,8 +1665,16 @@ mod tests {
 
     #[test]
     fn entail_materializes_inferred_triple() {
-        let nt = entail_to_ntriples_impl(RULE_SHAPES, None, RULE_DATA, &[], &[], None)
-            .expect("entailment produced");
+        let nt = entail_to_ntriples_impl(
+            RULE_SHAPES,
+            None,
+            RULE_DATA,
+            &[],
+            &[],
+            None,
+            purrdf_validate::RuleLimits::default(),
+        )
+        .expect("entailment produced");
         assert!(nt.contains(
             "<http://example.org/alice> <http://example.org/adult> <http://example.org/yes> ."
         ));
@@ -1649,7 +1688,16 @@ mod tests {
     #[test]
     fn entail_malformed_shapes_is_an_error() {
         assert!(
-            entail_to_ntriples_impl("@@@ not turtle", None, RULE_DATA, &[], &[], None).is_err()
+            entail_to_ntriples_impl(
+                "@@@ not turtle",
+                None,
+                RULE_DATA,
+                &[],
+                &[],
+                None,
+                purrdf_validate::RuleLimits::default()
+            )
+            .is_err()
         );
     }
 
@@ -1949,6 +1997,63 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
         );
     }
 
+    /// `shaclEntail`'s four rule-evaluation limits reach the engine and each refusal names
+    /// THIS host's argument; the same run with the limits raised materializes the closure.
+    #[test]
+    fn wasm_entail_limits() {
+        let run = |limits: purrdf_validate::RuleLimits| {
+            entail_to_ntriples_impl(TOOLS_SHAPES, None, TOOLS_DATA, &[], &[], None, limits)
+        };
+        let cases = [
+            (
+                purrdf_validate::RuleLimits {
+                    max_term_generating_rounds: Some(1),
+                    ..purrdf_validate::RuleLimits::default()
+                },
+                "shaclEntail's maxTermGeneratingRounds",
+            ),
+            (
+                purrdf_validate::RuleLimits {
+                    max_generated_terms: Some(1),
+                    ..purrdf_validate::RuleLimits::default()
+                },
+                "shaclEntail's maxGeneratedTerms",
+            ),
+            (
+                purrdf_validate::RuleLimits {
+                    max_stored_facts: Some(1),
+                    ..purrdf_validate::RuleLimits::default()
+                },
+                "shaclEntail's maxStoredFacts",
+            ),
+            (
+                purrdf_validate::RuleLimits {
+                    max_join_steps: Some(1),
+                    ..purrdf_validate::RuleLimits::default()
+                },
+                "shaclEntail's maxJoinSteps",
+            ),
+        ];
+        for (limits, knob) in cases {
+            let refused = run(limits).expect_err("a limit of one").to_string();
+            assert!(refused.ends_with(knob), "{refused}");
+        }
+        let raised = run(purrdf_validate::RuleLimits {
+            max_term_generating_rounds: Some(64),
+            max_generated_terms: Some(64),
+            max_stored_facts: Some(64),
+            max_join_steps: Some(4_096),
+        })
+        .expect("raised limits admit the counter");
+        assert!(
+            raised.contains(
+                "<http://example.org/ns#a> <http://example.org/ns#n> \
+                 \"5\"^^<http://www.w3.org/2001/XMLSchema#integer> ."
+            ),
+            "{raised}"
+        );
+    }
+
     /// A shapes graph whose `sh:SPARQLRule` infers `COALESCE($shapesGraph, ex:none)` and
     /// reads the shapes graph through `GRAPH $shapesGraph`.
     const SHAPES_GRAPH_RULES: &str = r#"@prefix ex: <http://example.org/ns#> .
@@ -2002,14 +2107,23 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
             &[],
             &[],
             Some("http://example.org/shapes-graph"),
+            purrdf_validate::RuleLimits::default(),
         )
         .expect("entails");
         assert!(
             entailed.contains(named) && entailed.contains(marked),
             "{entailed}"
         );
-        let plain = entail_to_ntriples_impl(SHAPES_GRAPH_RULES, None, data, &[], &[], None)
-            .expect("entails");
+        let plain = entail_to_ntriples_impl(
+            SHAPES_GRAPH_RULES,
+            None,
+            data,
+            &[],
+            &[],
+            None,
+            purrdf_validate::RuleLimits::default(),
+        )
+        .expect("entails");
         assert!(
             plain.contains(unnamed) && !plain.contains(marked),
             "{plain}"

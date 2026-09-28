@@ -126,6 +126,11 @@ pub const PURRDF_ABI_MAJOR: u32 = 0;
 /// `program` and `out_nquads` — each a nullable `const uint64_t *`, NULL for the target's
 /// default. Both are incompatible (a `0.7.0` host passes its import table or its
 /// out-pointer into the new slots), and both ride this bump for the reason the others do.
+/// `purrdf_shacl_entail_to_ntriples` gained all four of `purrdf_shacl_apply_rules`' limits —
+/// `max_term_generating_rounds`, `max_generated_terms`, `max_stored_facts` and
+/// `max_join_steps`, each a nullable `const uint64_t *` — between `import_count` and
+/// `out_buffer`, so an entailment run is bounded exactly as a rules run is. Incompatible
+/// for the same reason, riding the same bump.
 ///
 /// The same unshipped bump adds `purrdf_shacl_check_rules` — the check-only SPARQL 1.2 RL
 /// entry point every host exposes, with its own `PurrdfSrlCheckLevel` discriminant — for
