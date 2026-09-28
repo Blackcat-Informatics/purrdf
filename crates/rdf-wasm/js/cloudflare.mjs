@@ -21,9 +21,13 @@
 // HTTP problem answers a failure is `SparqlProtocolRequest`'s. This module moves bytes
 // between those decisions and the network, builds the `Response`, and keeps the one hook
 // Rust cannot: reporting a host fault's real error under a correlation id. It imports
-// nothing but the package root.
+// the package root, and the runtime's `isPoisoned` from the shipped `pkg/purrdf_jspi.mjs`
+// (the same module instance the package root uses): once the wasm instance is poisoned
+// every call into it traps, so the one response that must still be built — the
+// sanitized `500` — is then built here, in JavaScript alone.
 
 import { Dataset, QueryEngine, SparqlProtocolRequest } from "./index.mjs";
+import { isPoisoned } from "./pkg/purrdf_jspi.mjs";
 
 // The Cache API keys requests by URL. A service answer is keyed under a fixed origin on
 // the reserved `.invalid` top-level domain (RFC 2606), which can never name a real host,
@@ -632,7 +636,16 @@ function protocolStep(step, headers, cors) {
  */
 function failureResponse(error, signal, headers, internal, correlationId) {
   const timing = serverTiming(error?.evidence?.async);
-  const found = SparqlProtocolRequest.problemFor(error, signal?.aborted === true);
+  // A poisoned instance traps on every call, `problemFor` included; so does one whose
+  // poisoning this call is the first to see. Either way the failure is this endpoint's
+  // own: the sanitized `500`, built without the instance, reporting `error` once.
+  let found;
+  try {
+    if (!isPoisoned()) found = SparqlProtocolRequest.problemFor(error, signal?.aborted === true);
+  } catch {
+    found = undefined;
+  }
+  if (found === undefined) return internalFailure(error, [...timing, ...headers], internal, correlationId);
   try {
     let id;
     if (found.internal) {
@@ -648,15 +661,26 @@ function failureResponse(error, signal, headers, internal, correlationId) {
 }
 
 /**
- * The sanitized `500` for an exception nothing classified — a bug in this adapter — or
- * for a host handler's fault whose real error was already reported under
- * `correlationId`. The exception's own words, and any `code` it happens to carry, never
- * reach the response: they go to `onInternalError` alone.
+ * The sanitized `500` for an exception nothing classified — a bug in this adapter, or
+ * a poisoned wasm instance — or for a host handler's fault whose real error was already
+ * reported under `correlationId`. The exception's own words, and any `code` it happens to
+ * carry, never reach the response: they go to `onInternalError` alone, exactly once — the
+ * report happens before the body is built, and however the body is built.
+ *
+ * Rust builds the body (`SparqlProtocolRequest.problemFor`) while the instance can serve;
+ * once it is poisoned — or if that call throws for any reason — the same document is
+ * built here without it (`poisonSafeInternalProblem`), so the endpoint still answers.
  */
 function internalFailure(error, headers, internal, correlationId) {
-  const found = SparqlProtocolRequest.problemFor(undefined, false);
+  const id = correlationId ?? reportInternalError(error, internal.onInternalError, internal.request);
+  let found;
   try {
-    const id = correlationId ?? reportInternalError(error, internal.onInternalError, internal.request);
+    if (!isPoisoned()) found = SparqlProtocolRequest.problemFor(undefined, false);
+  } catch {
+    found = undefined;
+  }
+  if (found === undefined) return poisonSafeInternalProblem(id, headers);
+  try {
     return new Response(found.body(id), {
       status: found.status,
       headers: [["Content-Type", found.contentType], ...headers],
@@ -664,6 +688,27 @@ function internalFailure(error, headers, internal, correlationId) {
   } finally {
     found.free();
   }
+}
+
+/**
+ * The sanitized `500` document `SparqlProtocolRequest.problemFor(undefined, false)` builds
+ * for correlation id `id`, built in JavaScript alone: the response of an endpoint whose
+ * wasm instance is poisoned and can no longer build anything. The detail is fixed; the
+ * one variable part is the correlation id the log line also carries.
+ */
+function poisonSafeInternalProblem(id, headers) {
+  const body = {
+    type: "about:blank",
+    title: "Internal Server Error",
+    status: 500,
+    detail: `internal error; see the Worker log for correlation id ${id}`,
+    code: "InternalError",
+    correlationId: id,
+  };
+  return new Response(JSON.stringify(body), {
+    status: 500,
+    headers: [["Content-Type", "application/problem+json"], ...headers],
+  });
 }
 
 /**
@@ -799,7 +844,8 @@ async function boundedRequestBody(request, maxRequestBytes, headers) {
  * response: no resolver reaches a named endpoint or source
  * (`native-sparql-service-unconfigured`, `native-sparql-load-no-resolver`), or — with
  * `code: "InternalError"` — a bug in a host-supplied `resolveService`/`resolveLoad`, an
- * exception no code classifies, or an unexpected exception anywhere in this adapter. An
+ * exception no code classifies, an unexpected exception anywhere in this adapter, or a
+ * poisoned wasm instance (whose `500` this module builds without calling into it). An
  * `onInternalError` that itself throws or rejects changes none of that: the response is
  * still the sanitized `500`, and the reporter's failure goes to `console.error` together
  * with the error it was handed. Never a `200` with a partial body. Every error is an RFC

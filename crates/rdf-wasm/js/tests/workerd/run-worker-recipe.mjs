@@ -30,11 +30,12 @@
 //     suspended, and a second request is answered — completely — while it is held; the
 //     upstream is released only afterwards, and the held request then completes joined;
 //   * yielding: a job run with `yieldEveryPolls: 0` gives the event loop a turn at every
-//     poll, so a request parked in the Worker before the job began, whose answer comes
-//     from an ordinary `setTimeout(…, 0)` task, is answered while the job runs and
-//     records `longDone === false`; the control runs the same count on the synchronous
-//     lane, which never turns the event loop, and the same parked request records
-//     `longDone === true`.
+//     poll, so an observer — an ordinary `setTimeout(…, 0)` task queued in the same
+//     request before the job began — runs while the job is in progress and records
+//     `longDone === false`; the control runs the same count on the synchronous lane,
+//     which never turns the event loop, and the same observer records `longDone === true`.
+//     Observer and job share one request: workerd cancels a request that awaits a
+//     promise another request's context settles.
 
 import assert from "node:assert/strict";
 import { appendFileSync, readFileSync } from "node:fs";
@@ -155,16 +156,6 @@ async function main() {
   const asked = deferred();
   const release = deferred();
   let released = false;
-  // lane -> settled when that lane's observer is parked in the Worker.
-  const observers = new Map();
-  const observerWaiting = (lane) => {
-    let entry = observers.get(lane);
-    if (entry === undefined) {
-      entry = deferred();
-      observers.set(lane, entry);
-    }
-    return entry;
-  };
   const mf = new Miniflare({
     modulesRoot: JS_ROOT,
     modules: [
@@ -200,11 +191,6 @@ async function main() {
         return new Response(remoteAnswer(), {
           headers: { "Content-Type": "application/sparql-results+json" },
         });
-      },
-      async MARK(request) {
-        const lane = new URL(request.url).searchParams.get("lane");
-        observerWaiting(lane).resolve();
-        return new Response(null, { status: 204 });
       },
     },
     outboundService(request) {
@@ -299,20 +285,16 @@ async function main() {
     assert.match(upstream.at(-1).body, /<https:\/\/example\.org\/gated>/);
 
     // Yielding, on the asynchronous lane and then its synchronous control. Each lane's
-    // observer is parked in the Worker (it reports that through MARK, awaited here) before
-    // the lane's long request is sent, so the observer is waiting when the job begins; it
-    // answers from a `setTimeout(…, 0)` task queued once the job has begun, and records
-    // whether the job was done by then. A job yielding at every poll runs thousands of
-    // turns after that task is queued, so the task runs — and the observer answers — while
-    // the job is still in progress; a synchronous run holds the isolate until it returns,
-    // so the task runs only afterwards.
+    // experiment is one request: the Worker queues its observer — a `setTimeout(…, 0)`
+    // task that records whether the job was done when it ran — before it starts the long
+    // job. A job yielding at every poll queues each yield's task behind the observer's,
+    // so the observer runs at the job's first yield, while the job is still in progress;
+    // a synchronous run holds the isolate until it returns, so the observer runs only
+    // afterwards.
     const expectedCount = String((LONG_SIZE * (LONG_SIZE - 1)) / 2);
     const experiment = async (lane) => {
-      const observing = mf.dispatchFetch(`${WORKER}/__observe?lane=${lane}`).then((response) => response.json());
-      await observerWaiting(lane).promise;
-      const long = await (await mf.dispatchFetch(`${WORKER}/__long?lane=${lane}&size=${LONG_SIZE}`)).json();
-      const observed = await observing;
-      return { long, observed };
+      const long = await (await mf.dispatchFetch(`${WORKER}/__yield?lane=${lane}&size=${LONG_SIZE}`)).json();
+      return { long, observed: long.observed };
     };
 
     const asyncLane = await experiment("async");
@@ -324,7 +306,7 @@ async function main() {
     assert.equal(asyncLane.long.n, expectedCount, "the asynchronous lane counted every pair");
     assert.ok(
       asyncLane.long.async.yields >= 2,
-      `the job yielded ${asyncLane.long.async.yields} times; the observer's task is queued before every yield but the first`,
+      `the job yielded ${asyncLane.long.async.yields} times; the observer's task is queued before its first yield`,
     );
     assert.deepEqual(asyncLane.observed, { lane: "async", longDone: false }, "the observer answered while the yielding job ran");
 

@@ -13,6 +13,8 @@
 
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 
 import {
   Dataset,
@@ -2286,4 +2288,58 @@ test("CORS: preflight, echo and Vary with cors; no CORS header and a 405 OPTIONS
     handleSparqlRequest(httpRequest({ query: q(SELECT_S) }), { ...base, cors: { origins: "https://app.example.org" } }),
   );
   assert.match(badCors.message, /cors.origins must be "\*" or an array/);
+});
+
+// A poisoned wasm instance traps on every call into it — the protocol parse and
+// `SparqlProtocolRequest.problemFor` included — so the endpoint's sanitized `500` must be
+// built without it. Poisoning is permanent for the realm, so the trap runs in a child
+// process (`fixtures/cloudflare-poison-child.mjs`).
+test("a poisoned instance still answers every request with the sanitized 500 and a correlation id", () => {
+  const child = spawnSync(
+    process.execPath,
+    [fileURLToPath(new URL("./fixtures/cloudflare-poison-child.mjs", import.meta.url))],
+    { encoding: "utf8", timeout: 120_000 },
+  );
+  assert.equal(child.status, 0, `the child exited ${child.status}: ${child.stderr}`);
+  const report = JSON.parse(child.stdout.trim());
+
+  // The valid neighbour: before the trap the same endpoint answers the same query.
+  assert.equal(report.before.settled, "responded");
+  assert.equal(report.before.status, 200);
+  assert.deepEqual(report.before.body.results.bindings, [{ s: { type: "uri", value: `${EX}a` } }]);
+  assert.equal(report.errorsBefore, 0, "a healthy request reports nothing");
+  assert.equal(report.trapped, "RuntimeError", "the armed test export trapped");
+
+  const sanitized = (answer, name, vary) => {
+    assert.equal(answer.settled, "responded", `${name}: the fetch handler answered instead of throwing`);
+    assert.equal(answer.status, 500, name);
+    assert.equal(answer.contentType, "application/problem+json", name);
+    assert.equal(answer.vary, vary, name);
+    const id = answer.body.correlationId;
+    assert.match(id, /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/, name);
+    assert.deepEqual(
+      answer.body,
+      {
+        type: "about:blank",
+        title: "Internal Server Error",
+        status: 500,
+        detail: `internal error; see the Worker log for correlation id ${id}`,
+        code: "InternalError",
+        correlationId: id,
+      },
+      name,
+    );
+    assert.equal(answer.reported, 1, `${name}: its error reached onInternalError exactly once, under its id`);
+    return id;
+  };
+  // The first request after the trap, and a second one: both answered.
+  const first = sanitized(report.first, "first", null);
+  assert.equal(report.first.reportedName, "RuntimeError", "the gate's trap is what was reported");
+  const second = sanitized(report.second, "second", null);
+  // The request in flight across the trap: its job rejects with the poison error, which
+  // is reported, and answered with the same sanitized document.
+  const inFlight = sanitized(report.inFlight, "inFlight", "Accept");
+  assert.match(report.inFlight.reportedMessage, /^the wasm instance trapped \(/);
+  assert.equal(new Set([first, second, inFlight]).size, 3, "every request has its own correlation id");
+  assert.equal(report.errorsAfter, 3, "three failed requests, three reports");
 });
