@@ -2461,6 +2461,13 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
   and the 128-container cap are removed), and its measure, boundary, location and
   relation walks run over explicit stacks.
 
+- **wasm, build:** `purrdf_wasm::interleaving` is the ledger of every `thread_local!`
+  under `crates/` the asynchronous lane can interleave, each with the reason it is safe
+  under suspension (swapped per job as one `JobAmbient`, per call, or never spanning a
+  suspension), and `scripts/check-thread-locals.py` holds the ledger and the tree equal
+  in both directions in `make check` and CI. Whether an operation must run
+  sequentially is a fact on the evaluation context, not a thread-local.
+
 - **BREAKING** **sparql-eval:** `MAX_HOPS_CAP` is removed and `PathLimits::new`
   accepts any `max_hops` a `u32` holds. The path-relation traversal keeps every piece
   of per-depth state on the heap, so the cap that stood in for a stack budget names
