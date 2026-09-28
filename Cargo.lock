@@ -934,6 +934,7 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
+ "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-testkit",

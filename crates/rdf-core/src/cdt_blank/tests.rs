@@ -12,6 +12,14 @@ use super::{
 use crate::blank_label::{LabelAlphabet, encode_blank_label};
 use crate::ir::term::BlankScope;
 
+#[test]
+fn cdt_escape_decoding_refuses_a_signed_hex_value() {
+    assert_eq!(super::decode_escape(r"\u+041", 0), ('\\', 1));
+    assert_eq!(super::decode_escape(r"\u0041", 0), ('A', 6));
+    assert_eq!(super::unescape_iri(r"\u0041").as_ref(), "A");
+    assert_ne!(super::unescape_iri(r"\u+041").as_ref(), "A");
+}
+
 const LIST: &str = purrdf_cdt::CDT_LIST;
 const MAP: &str = purrdf_cdt::CDT_MAP;
 

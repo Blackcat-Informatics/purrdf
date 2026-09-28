@@ -678,11 +678,14 @@ impl<'a> Cursor<'a> {
             .rest()
             .get(2..2 + width)
             .ok_or_else(|| format!("truncated escape at byte {}", self.position))?;
-        let code_point = u32::from_str_radix(digits, 16)
-            .map_err(|_| format!("`{digits}` is not hexadecimal at byte {}", self.position))?;
-        let resolved = char::from_u32(code_point)
-            .ok_or_else(|| format!("`{digits}` is not a Unicode scalar value"))?;
-        self.position += 2 + width;
+        let (resolved, consumed) = purrdf_iri::terminals::decode_uchar(self.rest().as_bytes())
+            .map_err(|error| match error {
+                purrdf_iri::terminals::UcharError::NotAScalar { .. } => {
+                    format!("`{digits}` is not a Unicode scalar value")
+                }
+                _ => format!("`{digits}` is not hexadecimal at byte {}", self.position),
+            })?;
+        self.position += consumed;
         Ok(resolved)
     }
 }
@@ -922,6 +925,8 @@ mod tests {
             "<< <a> <b> <c> >>",
             "\"x\"@en--upside-down",
             "\"x\"\\q",
+            "\"\\u+041\"",
+            "\"\\U+000041\"",
             // A datatype position with no IRI: empty at the end of the text, and a
             // character other than `<` where the IRI opens.
             "\"1\"^^",
@@ -938,6 +943,7 @@ mod tests {
             "_:b0",
             "\"x\"@en",
             "\"x\"",
+            "\"\\u0041\"",
             "\"1\"^^<http://www.w3.org/2001/XMLSchema#integer>",
         ] {
             assert!(decode_term(text).is_ok(), "{text:?} is one canonical term");

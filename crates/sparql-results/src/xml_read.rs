@@ -759,12 +759,16 @@ fn unescape(s: &str) -> Result<String, Error> {
             "quot" => out.push('"'),
             "apos" => out.push('\''),
             _ if entity.starts_with("#x") || entity.starts_with("#X") => {
-                let code = u32::from_str_radix(&entity[2..], 16)
-                    .map_err(|_| fmt("bad hex character reference"))?;
+                let code = purrdf_iri::terminals::parse_hex_u32(&entity.as_bytes()[2..])
+                    .ok_or_else(|| fmt("bad hex character reference"))?;
                 out.push(char::from_u32(code).ok_or_else(|| fmt("invalid character reference"))?);
             }
             _ if entity.starts_with('#') => {
-                let code = entity[1..]
+                let digits = &entity[1..];
+                if digits.is_empty() || !digits.bytes().all(|byte| byte.is_ascii_digit()) {
+                    return Err(fmt("bad character reference"));
+                }
+                let code = digits
                     .parse::<u32>()
                     .map_err(|_| fmt("bad character reference"))?;
                 out.push(char::from_u32(code).ok_or_else(|| fmt("invalid character reference"))?);
@@ -783,6 +787,14 @@ mod tests {
     use crate::xml::to_xml;
     use purrdf_core::SparqlResult;
     use purrdf_core::TermBox;
+
+    #[test]
+    fn character_references_require_unsigned_digits() {
+        for invalid in ["&#x+41;", "&#+65;", "&#x;", "&#;"] {
+            assert!(unescape(invalid).is_err(), "{invalid}");
+        }
+        assert_eq!(unescape("&#x41;&#65;").expect("unsigned references"), "AA");
+    }
 
     /// Provenance round-trip: what [`crate::xml::to_xml`] writes under a namespace,
     /// [`provenance_from_xml`] reads back — the writer no longer emits

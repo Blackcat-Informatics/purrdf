@@ -1168,6 +1168,31 @@ pub const fn hex_value(b: u8) -> Option<u8> {
     }
 }
 
+/// Decode one to eight hexadecimal digits as a `u32`, rejecting signs,
+/// non-`HEX` bytes, empty input and overflow.
+///
+/// Variable-width numeric character references use this after their `#x`
+/// marker; fixed-width RDF escapes use [`decode_uchar`] instead.
+///
+/// ```
+/// use purrdf_iri::terminals::parse_hex_u32;
+/// assert_eq!(parse_hex_u32(b"41"), Some(0x41));
+/// assert_eq!(parse_hex_u32(b"+41"), None);
+/// assert_eq!(parse_hex_u32(b""), None);
+/// assert_eq!(parse_hex_u32(b"100000000"), None);
+/// ```
+#[must_use]
+pub fn parse_hex_u32(digits: &[u8]) -> Option<u32> {
+    if digits.is_empty() {
+        return None;
+    }
+    digits.iter().try_fold(0u32, |value, &byte| {
+        value
+            .checked_mul(16)?
+            .checked_add(u32::from(hex_value(byte)?))
+    })
+}
+
 /// Why a byte sequence is not a `UCHAR` escape. See [`decode_uchar`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
 #[non_exhaustive]

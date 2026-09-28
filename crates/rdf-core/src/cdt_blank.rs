@@ -802,8 +802,7 @@ fn unescape_iri(raw: &str) -> Cow<'_, str> {
                     continue;
                 }
             };
-            let hex = raw.get(i + 2..i + 2 + width).unwrap_or("");
-            if let Some(ch) = u32::from_str_radix(hex, 16).ok().and_then(char::from_u32) {
+            if let Ok((ch, _)) = purrdf_iri::terminals::decode_uchar(&bytes[i..]) {
                 out.push(ch);
             }
             i += 2 + width;
@@ -864,13 +863,8 @@ fn decode_escape(raw: &str, at: usize) -> (char, usize) {
         Some(b'"') => ('"', 2),
         Some(b'\'') => ('\'', 2),
         Some(b'\\') => ('\\', 2),
-        Some(marker @ (b'u' | b'U')) => {
-            let width = if *marker == b'u' { 4 } else { 8 };
-            let hex = raw.get(at + 2..at + 2 + width).unwrap_or("");
-            u32::from_str_radix(hex, 16)
-                .ok()
-                .and_then(char::from_u32)
-                .map_or(('\\', 1), |ch| (ch, 2 + width))
+        Some(b'u' | b'U') => {
+            purrdf_iri::terminals::decode_uchar(&bytes[at..]).unwrap_or(('\\', 1))
         }
         _ => ('\\', 1),
     }
