@@ -97,9 +97,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   the property sh:ask"; "A SHACL engine can then determine whether a given shape applies
   to a given node by executing the ASK query with the variable this pre-bound to the
   node." The SELECT still defines the target a whole validation enumerates; every path
-  that checks given candidates — `PreparedValidator::validate_focus_nodes`,
-  `validate_focus_node_ids` and the change path — runs the ASK with `$this` pre-bound to
-  the candidate, a node the data graph does not hold included. The ASK is checked at
+  that checks given candidates — `PreparedValidator::validate_focus_nodes` and
+  `validate_focus_node_ids` (the change path over a SPARQL target validates the whole
+  graph) — runs the ASK with `$this` pre-bound to the candidate, a node the data graph
+  does not hold included, and CONFIRMS its answer against the target's own SELECT
+  results: a node the two answer differently for is refused typed,
+  `ShapesError::SparqlTargetDisagreement` (the shape, both queries, the node, both
+  answers), rather than decided by the ASK alone. Both candidate methods now return
+  `ShapesError` instead of `String`. The ASK is checked at
   load: an ASK query, meeting the pre-binding restrictions for `$this` (`SERVICE`
   included); a second `sh:ask` is refused by the built-in cardinality check.
   `Target::Sparql` gains `ask: Option<String>`; the prepared-product codec carries it,

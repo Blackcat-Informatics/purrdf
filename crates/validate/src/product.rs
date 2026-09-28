@@ -121,7 +121,8 @@ impl ShapesProductRefusal {
                 | ShapesError::ShaclJs(_)
                 | ShapesError::IllFormed(_)
                 | ShapesError::Prebinding(_)
-                | ShapesError::UnsupportedTarget(_)),
+                | ShapesError::UnsupportedTarget(_)
+                | ShapesError::SparqlTargetDisagreement(_)),
             ) => error.to_string().into(),
             Self::Admission(error) => error.message().into(),
         }

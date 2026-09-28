@@ -59,6 +59,9 @@ pub enum ShapesError {
     /// A shape declares a SHACL-AF custom target (`sh:target`) this engine cannot
     /// compute. See [`UnsupportedTargetRefusal`].
     UnsupportedTarget(UnsupportedTargetRefusal),
+    /// A `sh:SPARQLTarget`'s `sh:ask` and its `sh:select` answer two ways for one node a
+    /// candidate check asked about. See [`SparqlTargetDisagreement`].
+    SparqlTargetDisagreement(SparqlTargetDisagreement),
     /// Anything else: a document that does not parse, an unsupported or malformed SHACL
     /// construct, a failure during evaluation. The engine's own diagnostic.
     Invalid(String),
@@ -74,6 +77,7 @@ impl ShapesError {
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
+            | Self::SparqlTargetDisagreement(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -87,6 +91,7 @@ impl ShapesError {
             | Self::IllFormed(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
+            | Self::SparqlTargetDisagreement(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -100,6 +105,7 @@ impl ShapesError {
             | Self::ShaclJs(_)
             | Self::Prebinding(_)
             | Self::UnsupportedTarget(_)
+            | Self::SparqlTargetDisagreement(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -113,6 +119,21 @@ impl ShapesError {
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::Prebinding(_)
+            | Self::SparqlTargetDisagreement(_)
+            | Self::Invalid(_) => None,
+        }
+    }
+
+    /// The `sh:ask` / `sh:select` disagreement refusal, when this is one.
+    #[must_use]
+    pub const fn as_sparql_target_disagreement(&self) -> Option<&SparqlTargetDisagreement> {
+        match self {
+            Self::SparqlTargetDisagreement(refusal) => Some(refusal),
+            Self::Imports(_)
+            | Self::ShaclJs(_)
+            | Self::IllFormed(_)
+            | Self::Prebinding(_)
+            | Self::UnsupportedTarget(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -126,6 +147,7 @@ impl ShapesError {
             | Self::ShaclJs(_)
             | Self::IllFormed(_)
             | Self::UnsupportedTarget(_)
+            | Self::SparqlTargetDisagreement(_)
             | Self::Invalid(_) => None,
         }
     }
@@ -139,6 +161,7 @@ impl fmt::Display for ShapesError {
             Self::IllFormed(refusal) => refusal.fmt(f),
             Self::Prebinding(violation) => violation.fmt(f),
             Self::UnsupportedTarget(refusal) => refusal.fmt(f),
+            Self::SparqlTargetDisagreement(refusal) => refusal.fmt(f),
             Self::Invalid(message) => f.write_str(message),
         }
     }
@@ -152,6 +175,7 @@ impl std::error::Error for ShapesError {
             Self::IllFormed(refusal) => Some(refusal),
             Self::Prebinding(violation) => Some(violation),
             Self::UnsupportedTarget(refusal) => Some(refusal),
+            Self::SparqlTargetDisagreement(refusal) => Some(refusal),
             Self::Invalid(_) => None,
         }
     }
@@ -271,6 +295,103 @@ impl fmt::Display for UnsupportedTargetRefusal {
 }
 
 impl std::error::Error for UnsupportedTargetRefusal {}
+
+/// A `sh:SPARQLTarget` whose `sh:ask` and `sh:select` disagree about a node.
+///
+/// SHACL Advanced Features §3.1 gives a SPARQL-based target two queries. The SELECT
+/// defines the target: its `this` bindings are the target nodes. The optional ASK answers
+/// the same question for one node: "A SHACL engine can then determine whether a given
+/// shape applies to a given node by executing the ASK query with the variable this
+/// pre-bound to the node. If the ASK query evaluates to true then the node is in the target
+/// of the shape." Both are the author's statement of ONE target, so a candidate check — which
+/// decides a given node by the ASK rather than enumerating the SELECT — confirms the ASK's
+/// answer against the SELECT's result set for the same data graph. When they disagree the
+/// target has no single meaning, and a verdict computed from either answer would differ
+/// from a whole-graph validation of the same node; the check is refused instead, naming
+/// the shape, the target (by its two queries), the node and both answers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SparqlTargetDisagreement {
+    shape: String,
+    ask: String,
+    select: String,
+    node: String,
+    asked: bool,
+}
+
+impl SparqlTargetDisagreement {
+    pub(crate) const fn new(
+        shape: String,
+        ask: String,
+        select: String,
+        node: String,
+        asked: bool,
+    ) -> Self {
+        Self {
+            shape,
+            ask,
+            select,
+            node,
+            asked,
+        }
+    }
+
+    /// The shape that declares the target, as the engine renders a term.
+    #[must_use]
+    pub fn shape(&self) -> &str {
+        &self.shape
+    }
+
+    /// The target's `sh:ask` query text — with the PREFIX header the target's
+    /// `sh:prefixes` supply — which identifies the target among the shape's `sh:target`s.
+    #[must_use]
+    pub fn ask(&self) -> &str {
+        &self.ask
+    }
+
+    /// The target's `sh:select` query text, with the same PREFIX header.
+    #[must_use]
+    pub fn select(&self) -> &str {
+        &self.select
+    }
+
+    /// The node the two queries disagree about, as the engine renders a term.
+    #[must_use]
+    pub fn node(&self) -> &str {
+        &self.node
+    }
+
+    /// The ASK's answer with `$this` pre-bound to [`Self::node`]; the SELECT's is the
+    /// opposite.
+    #[must_use]
+    pub const fn asked(&self) -> bool {
+        self.asked
+    }
+}
+
+impl fmt::Display for SparqlTargetDisagreement {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "sparql-target-disagreement: a sh:SPARQLTarget of shape {shape} answers two ways \
+             for {node}: its sh:ask, with $this pre-bound to that node, is {asked}, and its \
+             sh:select {selects} return it. SHACL Advanced Features section 3.1 defines the \
+             target by the SELECT and lets the ASK decide a given node (\"If the ASK query \
+             evaluates to true then the node is in the target of the shape\"), so the two \
+             state one target and must agree; with them disagreeing, checking the node would \
+             not give the verdict a whole-graph validation gives it. Make the sh:ask true \
+             exactly for the nodes the sh:select returns.\n  sh:ask: {ask}\n  sh:select: \
+             {select}",
+            shape = self.shape,
+            node = self.node,
+            asked = self.asked,
+            selects = if self.asked { "does not" } else { "does" },
+            ask = self.ask.replace('\n', " "),
+            select = self.select.replace('\n', " "),
+        )
+    }
+}
+
+impl std::error::Error for SparqlTargetDisagreement {}
 
 /// A syntax-rule violation as a declaration's parser reports it, before the declaration
 /// is named: the id of the rule, when a numbered rule states it, and the diagnostic.

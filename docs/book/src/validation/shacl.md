@@ -537,10 +537,17 @@ a SELECT that cannot be turned into an equivalent ASK: "A SHACL engine can then
 determine whether a given shape applies to a given node by executing the ASK
 query with the variable this pre-bound to the node." PurRDF does exactly that
 wherever it checks given nodes instead of enumerating the target:
-`PreparedValidator::validate_focus_nodes`, its id-native twin, and every
-change-path validation. The candidate is pre-bound to `$this`, so the ASK must
-meet the pre-binding restrictions, and a node the data graph does not hold is
-answered too. A whole validation still enumerates the target with its SELECT.
+`PreparedValidator::validate_focus_nodes` and its id-native twin. (A change-path
+validation over a shapes graph with a SPARQL target has no bounded footprint, so
+it validates the whole graph.) The candidate is pre-bound to `$this`, so the ASK
+must meet the pre-binding restrictions, and a node the data graph does not hold is
+answered too. The ASK does not decide alone: its answer is confirmed against the
+target's own SELECT results for the same data graph, because the two state one
+target. A node they answer differently for is refused with
+`ShapesError::SparqlTargetDisagreement`, naming the shape, both queries, the node
+and both answers, since checking it by either answer would not give the verdict a
+whole validation gives. A whole validation still enumerates the target with its
+SELECT, and never runs the ASK.
 A second `sh:ask`, a value that is not an ASK query, or an ASK that breaks a
 pre-binding restriction is refused at load. A target without `sh:ask` checks a
 candidate by looking it up in its SELECT's results.

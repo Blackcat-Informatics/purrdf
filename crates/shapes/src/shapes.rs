@@ -187,7 +187,11 @@ pub enum Target {
     /// query evaluates to true then the node is in the target of the shape." The engine
     /// uses it wherever it checks given candidate nodes rather than enumerating the
     /// target ([`crate::engine::PreparedValidator::validate_focus_nodes`] and every
-    /// bounded or change-path validation).
+    /// bounded validation; the change path over a SPARQL target validates the whole
+    /// graph), and there it CONFIRMS the ASK's answer against
+    /// the SELECT's result set for the same data graph: the two state one target, and a
+    /// node they answer differently for is refused
+    /// ([`crate::ShapesError::SparqlTargetDisagreement`]) rather than decided by either.
     Sparql {
         /// The SPARQL SELECT query text (with any injected PREFIX header).
         select: String,

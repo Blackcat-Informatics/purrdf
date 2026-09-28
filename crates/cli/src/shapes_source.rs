@@ -228,6 +228,9 @@ pub(crate) fn shapes_error(
         ShapesError::UnsupportedTarget(refusal) => {
             return CliError::Runtime(format!("{context}: {refusal}"));
         }
+        ShapesError::SparqlTargetDisagreement(refusal) => {
+            return CliError::Runtime(format!("{context}: {refusal}"));
+        }
     };
     match error {
         ShapesImportError::Unresolved { iris } => {

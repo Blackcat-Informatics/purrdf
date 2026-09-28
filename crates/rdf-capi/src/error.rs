@@ -81,6 +81,9 @@ impl PurrdfError {
             purrdf_validate::ShapesError::UnsupportedTarget(refusal) => {
                 Self::new(PurrdfStatus::ParseError, refusal.to_string())
             }
+            purrdf_validate::ShapesError::SparqlTargetDisagreement(refusal) => {
+                Self::new(PurrdfStatus::ParseError, refusal.to_string())
+            }
         }
     }
 

@@ -506,7 +506,8 @@ fn extension_usage_reads_the_sparql_inside_a_target_node_expression() {
 /// evaluating the target's SELECT once per binding and looking the candidate up, which
 /// agrees with the derived ASK for every SELECT that meets the recommended restriction
 /// and stays correct for one that does not. (A target that declares `sh:ask` is checked
-/// by its ASK instead: `a_candidate_is_checked_against_a_sparql_target_by_its_ask`.)
+/// by its ASK, confirmed against the SELECT:
+/// `an_inconsistent_ask_and_select_are_refused_on_the_candidate_path`.)
 /// The target here selects only the FIRST subject
 /// (`ORDER BY ?this LIMIT 1`), a SELECT whose derived ASK would also accept `ex:b`;
 /// validating the candidates `ex:a` and `ex:b` checks `ex:a` alone, and the full
@@ -589,15 +590,17 @@ fn a_sparql_target_with_an_ask_validates_as_its_select_does() {
 
 /// "A SHACL engine can then determine whether a given shape applies to a given node by
 /// executing the ASK query with the variable this pre-bound to the node. If the ASK query
-/// evaluates to true then the node is in the target of the shape." The SELECT here
-/// selects only the first subject (`ORDER BY ?this LIMIT 1`, which fails the recommended
-/// restriction), and the ASK accepts exactly the nodes with value 2. Checking the
-/// candidates `ex:a` and `ex:b` runs the ASK: `ex:b` is in the target and `ex:a`, the
-/// SELECT's only answer, is not — so the SELECT is observably not what answered. The
-/// whole validation enumerates the SELECT and checks `ex:a` alone; the neighbour without
-/// `sh:ask` checks `ex:a` on both paths.
+/// evaluates to true then the node is in the target of the shape." A candidate check
+/// decides a node by the ASK, and CONFIRMS the answer against the SELECT's result set: the
+/// two state one target. Here they do not — the SELECT selects only the first subject
+/// (`ORDER BY ?this LIMIT 1`) and the ASK accepts exactly the nodes with value 2 — so the
+/// candidate check is refused with the typed disagreement, naming the node (`ex:a`, which
+/// the SELECT returns and the ASK rejects) and both queries, rather than answering by
+/// either. The whole validation, which enumerates the SELECT and never asks, is
+/// unaffected; the observing neighbour, the same SELECT without `sh:ask`, checks `ex:a`
+/// on both paths.
 #[test]
-fn a_candidate_is_checked_against_a_sparql_target_by_its_ask() {
+fn an_inconsistent_ask_and_select_are_refused_on_the_candidate_path() {
     let select = "SELECT ?this WHERE { ?this <http://example.org/ns#p> ?o } ORDER BY ?this LIMIT 1";
     let with_ask = format!(
         "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
@@ -610,8 +613,33 @@ fn a_candidate_is_checked_against_a_sparql_target_by_its_ask() {
     );
     let data_ttl = "ex:a ex:p 1 . ex:b ex:p 2 .";
     let candidates = candidates(["a", "b"]);
-    assert_eq!(bounded(&with_ask, data_ttl, &candidates), vec![ex("b")]);
+
+    let prepared = purrdf_shapes::engine::PreparedShapes::new(Arc::new(shapes(&with_ask)));
+    let validator = prepared.bind_dataset(&data(data_ttl)).expect("binds");
+    let refused = validator
+        .validate_focus_nodes(&candidates)
+        .expect_err("the ASK and the SELECT disagree about ex:a");
+    let disagreement = refused
+        .as_sparql_target_disagreement()
+        .unwrap_or_else(|| panic!("a typed disagreement, not {refused:?}"));
+    assert_eq!(disagreement.node(), "<http://example.org/ns#a>");
+    assert!(
+        !disagreement.asked(),
+        "the ASK rejects ex:a, which the SELECT returns"
+    );
+    assert!(disagreement.ask().contains("#p> 2"), "{disagreement}");
+    assert!(disagreement.select().contains("LIMIT 1"), "{disagreement}");
+    assert_eq!(disagreement.shape(), "<http://example.org/ns#S>");
+    let rendered = refused.to_string();
+    assert!(
+        rendered.starts_with("sparql-target-disagreement:")
+            && rendered.contains("<http://example.org/ns#a>"),
+        "{rendered}"
+    );
+
+    // Whole-graph validation enumerates the SELECT and is unaffected.
     assert_eq!(focus_nodes(&validate(&with_ask, data_ttl)), vec![ex("a")]);
+    // The neighbour without `sh:ask` checks `ex:a` on both paths.
     assert_eq!(bounded(&without_ask, data_ttl, &candidates), vec![ex("a")]);
     assert_eq!(
         focus_nodes(&validate(&without_ask, data_ttl)),
@@ -619,14 +647,33 @@ fn a_candidate_is_checked_against_a_sparql_target_by_its_ask() {
     );
 }
 
+/// The consistent neighbour of the refusal above: an ASK true exactly for the nodes the
+/// SELECT returns validates on the candidate path — every candidate, in the target or not,
+/// is confirmed — and agrees with the whole validation.
+#[test]
+fn a_consistent_ask_and_select_validate_on_the_candidate_path() {
+    let data_ttl = "ex:a ex:p 1 . ex:b ex:p 2 . ex:c ex:p 1 .";
+    let prepared = purrdf_shapes::engine::PreparedShapes::new(Arc::new(shapes(CONSISTENT_ASK)));
+    let validator = prepared.bind_dataset(&data(data_ttl)).expect("binds");
+    let report = validator
+        .validate_focus_nodes(&candidates(["a", "b", "c", "ghost"]))
+        .expect("a consistent pair is confirmed for every candidate");
+    assert_eq!(focus_nodes(&report), vec![ex("a"), ex("c")]);
+    assert_eq!(
+        focus_nodes(&report),
+        focus_nodes(&validate(CONSISTENT_ASK, data_ttl))
+    );
+}
+
 /// The ASK answers for the node itself, whether or not the data graph holds it: a
-/// candidate the dataset never interned is in the target when the ASK accepts it. Its
-/// neighbour, a candidate the ASK rejects, is not validated.
+/// candidate the dataset never interned is in the target when the ASK accepts it — and the
+/// SELECT, which returns the same constant, agrees. Its neighbour, a candidate both reject,
+/// is not validated.
 #[test]
 fn a_sparql_target_ask_answers_for_a_node_the_data_graph_does_not_hold() {
     let shapes_ttl = "ex:S a sh:NodeShape ; sh:nodeKind sh:Literal ;
         sh:target [ a sh:SPARQLTarget ;
-          sh:select \"SELECT ?this WHERE { ?this <http://example.org/ns#p> ?o }\" ;
+          sh:select \"SELECT ?this WHERE { BIND (<http://example.org/ns#ghost> AS ?this) }\" ;
           sh:ask \"ASK { FILTER ($this = <http://example.org/ns#ghost>) }\" ] .";
     let data_ttl = "ex:a ex:p 1 .";
     assert_eq!(

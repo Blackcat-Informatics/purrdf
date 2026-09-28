@@ -428,12 +428,28 @@ impl PreparedTargets {
                             .map_err(|error| format!("sh:target SPARQLTarget failed: {error}"))?;
                     match ask {
                         // SHACL-AF §3.1: the SELECT's results are what a whole validation
-                        // enumerates; a candidate is a target node when the ASK says so.
+                        // enumerates; a candidate is a target node when the ASK says so,
+                        // and the ASK's answer is confirmed against these same results.
                         Some(ask) => {
+                            let mut selected = AskTarget {
+                                ask: ask.clone(),
+                                select: select.clone(),
+                                shape: shape.id.clone(),
+                                selected_ids: IdSet::default(),
+                                selected_foreign: FastSet::default(),
+                            };
                             for candidate in candidates {
+                                match resolve_id(data.core_view(), &candidate) {
+                                    Some(id) => {
+                                        selected.selected_ids.insert(id);
+                                    }
+                                    None => {
+                                        selected.selected_foreign.insert(candidate.clone());
+                                    }
+                                }
                                 prepared.insert_enumerated(data.core_view(), candidate);
                             }
-                            prepared.asks.push(ask.clone());
+                            prepared.asks.push(Arc::new(selected));
                         }
                         None => {
                             for candidate in candidates {
@@ -505,10 +521,10 @@ impl PreparedTargets {
     /// to disagree; this one has three, and one test binding all of them.
     #[cfg(test)]
     fn contains(&self, data: &ShaclData, focus: &FocusNode) -> bool {
-        let asked = self
-            .asks
-            .iter()
-            .any(|ask| target_ask(data, ask, focus).expect("a target's sh:ask evaluates"));
+        let asked = self.asks.iter().any(|ask| {
+            ask.decide(data, focus)
+                .expect("a target's sh:ask evaluates and agrees with its sh:select")
+        });
         if asked {
             return true;
         }
@@ -606,6 +622,55 @@ impl PreparedTargets {
     }
 }
 
+/// A SHACL-SPARQL target that declares `sh:ask`, as a candidate check reads it: the ASK,
+/// and the target's own SELECT results for the bound data graph that the ASK's answer is
+/// confirmed against (see [`crate::SparqlTargetDisagreement`]).
+#[derive(Debug)]
+pub(crate) struct AskTarget {
+    /// The ASK query, run with `$this` pre-bound to the candidate.
+    ask: String,
+    /// The SELECT query, which the refusal names beside the ASK.
+    select: String,
+    /// The shape declaring the target.
+    shape: Term,
+    /// The SELECT's results the dataset interns.
+    selected_ids: IdSet,
+    /// The SELECT's results the dataset does not intern.
+    selected_foreign: FastSet<Term>,
+}
+
+impl AskTarget {
+    /// Whether `focus` is in the target: the ASK's answer, CONFIRMED against the SELECT's
+    /// result set. Membership in the SELECT's results is exact for the bound data graph —
+    /// it is the target the specification defines — so the confirmation is a set lookup,
+    /// paid only on a candidate check, never on a whole-graph validation.
+    ///
+    /// # Errors
+    ///
+    /// [`ShapesError::Invalid`] when the ASK fails to evaluate;
+    /// [`ShapesError::SparqlTargetDisagreement`] when the ASK and the SELECT answer two
+    /// ways for `focus`.
+    fn decide(&self, data: &ShaclData, focus: &FocusNode) -> Result<bool, ShapesError> {
+        let asked = target_ask(data, &self.ask, focus)?;
+        let selected = match focus {
+            FocusNode::Interned(id) => self.selected_ids.contains(id),
+            FocusNode::Foreign(term) => self.selected_foreign.contains(term),
+        };
+        if asked == selected {
+            return Ok(asked);
+        }
+        Err(ShapesError::SparqlTargetDisagreement(
+            crate::error::SparqlTargetDisagreement::new(
+                self.shape.to_string(),
+                self.ask.clone(),
+                self.select.clone(),
+                focus.to_term(data.core_view()).to_string(),
+                asked,
+            ),
+        ))
+    }
+}
+
 /// Whether `focus` is a target node of a SHACL-SPARQL target by its `sh:ask`: SHACL-AF
 /// §3.1, "executing the ASK query with the variable this pre-bound to the node. If the
 /// ASK query evaluates to true then the node is in the target of the shape."
@@ -657,7 +722,7 @@ pub(crate) struct TargetDispatch {
     object_predicates: FastMap<TermId, Vec<usize>>,
     /// Every SHACL-SPARQL target's `sh:ask`, with the shape declaring it: asked of each
     /// focus node, since an ASK answers for one node and inverts to no index.
-    asks: Vec<(usize, String)>,
+    asks: Vec<(usize, Arc<AskTarget>)>,
 }
 
 impl TargetDispatch {
@@ -693,7 +758,7 @@ impl TargetDispatch {
                     .push(position);
             }
             for ask in &prepared.asks {
-                dispatch.asks.push((position, ask.clone()));
+                dispatch.asks.push((position, Arc::clone(ask)));
             }
         }
         dispatch
@@ -704,18 +769,21 @@ impl TargetDispatch {
     ///
     /// # Errors
     ///
-    /// When a SHACL-SPARQL target's `sh:ask` fails to evaluate.
+    /// When a SHACL-SPARQL target's `sh:ask` fails to evaluate, or answers `focus`
+    /// differently from its own `sh:select` ([`ShapesError::SparqlTargetDisagreement`]).
     fn claimants(
         &self,
         data: &ShaclData,
         focus: &FocusNode,
         out: &mut Vec<usize>,
-    ) -> Result<(), String> {
+    ) -> Result<(), ShapesError> {
         out.clear();
         // An `sh:ask` answers for the node itself, interned or not: the query may
-        // reach a node the data graph does not hold (a constant, a BIND).
+        // reach a node the data graph does not hold (a constant, a BIND). EVERY ask of
+        // every shape is decided — not skipped once its shape is claimed — so a
+        // disagreement is never hidden behind a second target of the same shape.
         for (position, ask) in &self.asks {
-            if !out.contains(position) && target_ask(data, ask, focus)? {
+            if ask.decide(data, focus)? && !out.contains(position) {
                 out.push(*position);
             }
         }
@@ -770,13 +838,14 @@ impl TargetDispatch {
     ///
     /// # Errors
     ///
-    /// When a SHACL-SPARQL target's `sh:ask` fails to evaluate.
+    /// When a SHACL-SPARQL target's `sh:ask` fails to evaluate or disagrees with its
+    /// `sh:select` (see [`Self::claimants`]).
     fn claims(
         &self,
         data: &ShaclData,
         focus_nodes: &[FocusNode],
         shape_count: usize,
-    ) -> Result<Vec<ClaimedFocus>, String> {
+    ) -> Result<Vec<ClaimedFocus>, ShapesError> {
         // Both of these are INPUT-sized and both are sized here, because an
         // unhinted collection that fills to N reallocates about log2(N) times and
         // that is a real growth term in the focus count — small enough to have
@@ -2013,8 +2082,13 @@ impl PreparedValidator {
     ///
     /// # Errors
     ///
-    /// Returns an error when a constraint evaluation hard-fails.
-    pub fn validate_focus_nodes(&self, focus_nodes: &[Term]) -> Result<ValidationReport, String> {
+    /// Returns an error when a constraint evaluation hard-fails, and
+    /// [`ShapesError::SparqlTargetDisagreement`] when a `sh:SPARQLTarget`'s `sh:ask`
+    /// answers a candidate differently from its own `sh:select`.
+    pub fn validate_focus_nodes(
+        &self,
+        focus_nodes: &[Term],
+    ) -> Result<ValidationReport, ShapesError> {
         let focus_nodes = self.normalize_focus_nodes(focus_nodes);
         self.validate_bounded(&focus_nodes)
     }
@@ -2073,11 +2147,13 @@ impl PreparedValidator {
     /// # Errors
     ///
     /// Returns an error for an id minted against another binding, for an
-    /// out-of-range id, or when constraint evaluation hard-fails.
+    /// out-of-range id, or when constraint evaluation hard-fails, and
+    /// [`ShapesError::SparqlTargetDisagreement`] when a `sh:SPARQLTarget`'s `sh:ask`
+    /// answers a candidate differently from its own `sh:select`.
     pub fn validate_focus_node_ids(
         &self,
         focus_node_ids: &[FocusId],
-    ) -> Result<ValidationReport, String> {
+    ) -> Result<ValidationReport, ShapesError> {
         // Read once, compared per id: the comparison is one `usize` against a
         // local, with no allocation and no lookup behind it.
         let dataset = self.data.identity();
@@ -2090,12 +2166,12 @@ impl PreparedValidator {
         let mut focus_nodes = FocusSet::with_capacity(&self.data, focus_node_ids.len());
         for &focus in focus_node_ids {
             if focus.dataset != dataset {
-                return Err(format!(
+                return Err(ShapesError::Invalid(format!(
                     "focus node TermId {} was minted against a different dataset binding than the \
                      one this validator is bound to; TermIds are dataset-local, so an in-range id \
                      from another binding resolves to a different term",
                     focus.id.index()
-                ));
+                )));
             }
             // Unreachable through the public surface — an id minted by this
             // binding indexes this binding's table — and kept because the mint is
@@ -2103,11 +2179,11 @@ impl PreparedValidator {
             // right and the id wrong has to fail here rather than read past the
             // table.
             if focus.id.index() >= self.data.core_view().term_count() {
-                return Err(format!(
+                return Err(ShapesError::Invalid(format!(
                     "focus node TermId {} is outside the prepared dataset's {}-term table",
                     focus.id.index(),
                     self.data.core_view().term_count()
-                ));
+                )));
             }
             if seen.insert(focus.id) {
                 focus_nodes.push(FocusNode::Interned(focus.id));
@@ -2425,7 +2501,7 @@ impl PreparedValidator {
     ///
     /// Returns an error when the focus set belongs to another binding, when a
     /// shape cannot be planned, or when a constraint evaluation hard-fails.
-    fn validate_bounded(&self, focus_nodes: &FocusSet) -> Result<ValidationReport, String> {
+    fn validate_bounded(&self, focus_nodes: &FocusSet) -> Result<ValidationReport, ShapesError> {
         let focus_nodes = focus_nodes.nodes_of(&self.data)?;
         if focus_nodes.is_empty() {
             return Ok(finish_report(Vec::new(), &self.shapes));
@@ -2790,7 +2866,12 @@ fn change_pass(
             ChangeScope::Bounded {
                 focus_nodes: ids.len(),
             },
-            validator.validate_focus_node_ids(ids),
+            // A bounded expansion exists only for a shapes graph that reads through no
+            // query text, so no SHACL-SPARQL target (and no ASK/SELECT disagreement) can
+            // reach this call; its refusals are the binding's and the constraints'.
+            validator
+                .validate_focus_node_ids(ids)
+                .map_err(|error| error.to_string()),
         ),
         FocusExpansion::Everything { reason } => {
             (ChangeScope::Everything { reason }, validator.validate())
@@ -6416,7 +6497,9 @@ mod tests {
         }
         foreign_set.sort(&there.data);
         let refused = here.validate_bounded(&foreign_set);
-        let message = refused.expect_err("a focus set from another binding must be refused");
+        let message = refused
+            .expect_err("a focus set from another binding must be refused")
+            .to_string();
         assert!(
             message.contains("dataset-local"),
             "the refusal must say why TermIds are not portable: {message}"
@@ -6516,7 +6599,8 @@ mod tests {
         // REFUSED: minted by `there`, handed to `here`.
         let refused = here
             .validate_focus_node_ids(&there_ids)
-            .expect_err("focus ids minted by another binding must be refused");
+            .expect_err("focus ids minted by another binding must be refused")
+            .to_string();
         assert!(
             refused.contains("minted against a different dataset binding"),
             "the refusal must name the mismatch it found: {refused}"

@@ -1632,6 +1632,9 @@ fn shapes_error(py: Python<'_>, error: purrdf_validate::ShapesError) -> PyErr {
         purrdf_validate::ShapesError::UnsupportedTarget(refusal) => {
             pyo3::exceptions::PyValueError::new_err(refusal.to_string())
         }
+        purrdf_validate::ShapesError::SparqlTargetDisagreement(refusal) => {
+            pyo3::exceptions::PyValueError::new_err(refusal.to_string())
+        }
     }
 }
 

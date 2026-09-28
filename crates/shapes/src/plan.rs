@@ -2002,7 +2002,9 @@ fn pair_optional<'a, A, B>(
 /// SELECT still defines the target nodes a whole validation enumerates, held in
 /// `enumerated_ids` / `enumerated_foreign`, but a CANDIDATE is a target node exactly
 /// when its ASK, with `$this` pre-bound to the candidate, is true — so candidate
-/// membership reads `asks`, never the SELECT's results.
+/// membership reads `asks`. The ASK's answer is confirmed against that target's own
+/// SELECT results ([`crate::engine::AskTarget`]): the two state one target, and a
+/// disagreement is refused rather than decided by either.
 #[derive(Debug, Default)]
 pub(crate) struct PreparedTargets {
     pub(crate) explicit_ids: IdSet,
@@ -2015,9 +2017,10 @@ pub(crate) struct PreparedTargets {
     pub(crate) enumerated_ids: IdSet,
     /// [`Self::enumerated_ids`]' results the dataset does not intern.
     pub(crate) enumerated_foreign: FastSet<Term>,
-    /// The `sh:ask` query of every SHACL-SPARQL target that declares one, which a
-    /// candidate check runs with `$this` pre-bound to the candidate.
-    pub(crate) asks: Vec<String>,
+    /// Every SHACL-SPARQL target that declares `sh:ask`: its ASK, which a candidate check
+    /// runs with `$this` pre-bound to the candidate, paired with its own SELECT's result
+    /// set, which the ASK's answer is confirmed against.
+    pub(crate) asks: Vec<Arc<crate::engine::AskTarget>>,
 }
 
 // ── The walk ────────────────────────────────────────────────────────────────────

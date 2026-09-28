@@ -74,7 +74,7 @@ pub mod validator_alternatives;
 
 pub use error::{
     IllFormedDeclaration, IllFormedShapesGraph, PrebindingViolation, ShaclJsRefusal, ShapesError,
-    UnsupportedTargetRefusal,
+    SparqlTargetDisagreement, UnsupportedTargetRefusal,
 };
 pub use graphql::{
     GRAPHQL_DIALECT, GRAPHQL_NAME_MAP_PATH, GRAPHQL_SCHEMA_PATH, GraphqlConfig,
