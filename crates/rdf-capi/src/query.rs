@@ -7,8 +7,8 @@
 use std::os::raw::c_char;
 
 use purrdf_rs::{
-    ClosureRelations, GovernedEntailment, QueryEntailmentPlan, SparqlEngine, SparqlRequest,
-    SparqlResult, query_with_entailment_governed,
+    ClosureRelations, EntailmentClosure, GovernedEntailment, QueryEntailmentPlan, SparqlEngine,
+    SparqlRequest, SparqlResult, query_with_entailment_closure_governed,
 };
 use purrdf_sparql_eval::{
     AggregateRegistry, BudgetExhausted, GovernedOutcome, GovernedUpdateOutcome, NativeSparqlEngine,
@@ -642,12 +642,32 @@ pub unsafe extern "C" fn purrdf_query_governed(
 /// reaches the entailment-aware lane exactly as it reaches the ordinary one. Null leaves
 /// every one of the ten names an ordinary unregistered custom-aggregate IRI.
 ///
+/// `import_iris`, `import_documents`, `import_count`, `premise_iris` and
+/// `premise_iri_count` are `purrdf_entail_certain_answers`'s, and apply to `dataset`: OWL 2
+/// defines an ontology's imports closure to BE the ontology, so the closure the query runs
+/// over is materialized over the dataset merged with every N-Quads document the table
+/// supplies, and the report then states `ontology-import-resolved`. An `owl:imports` the
+/// table does not resolve, and the dataset does not already hold, fails the call naming it
+/// — never a closure of a smaller premise — and so does a table entry the closure never
+/// reaches. `import_count == 0` and `premise_iri_count == 0`, with NULL arrays, is the
+/// ordinary "imports nothing" case.
+///
+/// `max_stored_facts` and `max_join_steps` are the closure's evaluation limits, exactly as
+/// `purrdf_entail_materialize_to_nquads` takes them, for the `rdf`, `rdfs`, `owl-rl` and `d`
+/// regimes: each may be NULL for the target's default or point at an exact limit. A closure
+/// past one fails the call naming the limit, the numbers and this function's parameter
+/// (`purrdf_query_entailment_governed's max_stored_facts`, …); the query governors price the
+/// evaluation over the closure and never become a limit on it.
+///
 /// # Safety
 /// All input strings and handles must remain live for the synchronous call. Required
 /// out-pointers must be writable; any enabled cancellation handle must remain live until
 /// return. Shape-specific result pointers are required when that shape is returned.
 /// `aggregate_namespace`, if non-null, must be a NUL-terminated UTF-8 C string live for
-/// the call.
+/// the call. When `import_count` is non-zero, `import_iris` and `import_documents` must
+/// each address at least `import_count` non-null, NUL-terminated C strings; when
+/// `premise_iri_count` is non-zero, `premise_iris` must address that many.
+/// `max_stored_facts` and `max_join_steps` must each be null or readable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_query_entailment_governed(
     dataset: *const PurrdfDataset,
@@ -655,6 +675,13 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
     base_iri: *const c_char,
     regime: *const c_char,
     program: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    premise_iris: *const *const c_char,
+    premise_iri_count: usize,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
     aggregate_namespace: *const c_char,
     governors: *const PurrdfQueryGovernors,
     out_outcome: *mut i32,
@@ -695,9 +722,29 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
             let program = cstr_to_str(program)?;
             let plan = QueryEntailmentPlan::parse(regime, program)
                 .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            let imports = crate::entail::import_pairs(
+                import_iris,
+                import_documents,
+                import_count,
+                "purrdf_query_entailment_governed",
+            )?;
+            let premise_iris = crate::entail::premise_iri_list(
+                premise_iris,
+                premise_iri_count,
+                "purrdf_query_entailment_governed",
+            )?;
+            let imports = purrdf_validate::premise_import_map(&imports, &premise_iris)
+                .map_err(|message| PurrdfError::new(PurrdfStatus::ParseError, message))?;
+            let limits = purrdf_validate::MaterializeLimits {
+                // SAFETY: the caller's contract — null or readable.
+                max_stored_facts: max_stored_facts.as_ref().copied(),
+                // SAFETY: the caller's contract — null or readable.
+                max_join_steps: max_join_steps.as_ref().copied(),
+                host: purrdf_validate::RegimeHost::CAbi,
+            };
             let governors = decode_governors(governors)?;
             let aggregates = decode_aggregate_namespace(aggregate_namespace)?;
-            let outcome = query_with_entailment_governed(
+            let outcome = query_with_entailment_closure_governed(
                 &engine(),
                 PurrdfDataset::arc(dataset),
                 SparqlRequest {
@@ -705,7 +752,8 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                     base_iri,
                     substitutions: &[],
                 },
-                plan.entailment(),
+                &EntailmentClosure::new(plan.entailment(), &imports)
+                    .with_limits(limits.eval_options()),
                 QueryOptions {
                     env: &aggregate_env(aggregates.as_ref())?,
                     ..QueryOptions::EMPTY
@@ -719,6 +767,17 @@ pub unsafe extern "C" fn purrdf_query_entailment_governed(
                 purrdf_rs::ReasoningError::Query(diagnostic) => {
                     PurrdfError::from_diagnostic(PurrdfStatus::QueryError, &diagnostic)
                 }
+                // Rendered by the shared boundary, so a passed evaluation limit names THIS
+                // function's parameter rather than a Rust type the caller cannot reach.
+                purrdf_rs::ReasoningError::Entailment(error) => PurrdfError::new(
+                    PurrdfStatus::QueryError,
+                    purrdf_validate::render_entail_error_in(
+                        regime,
+                        &error,
+                        purrdf_validate::RegimeHost::CAbi,
+                        purrdf_validate::RegimeService::Query,
+                    ),
+                ),
                 other => PurrdfError::new(PurrdfStatus::QueryError, other.to_string()),
             })?;
 
@@ -1049,6 +1108,13 @@ mod tests {
                 regime.as_ptr(),
                 program.as_ptr(),
                 std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
                 &raw const governors,
                 &raw mut outcome,
                 &raw mut kind,
@@ -1090,6 +1156,180 @@ mod tests {
         }
     }
 
+    /// An importing dataset: `ex:o a owl:Ontology ; owl:imports ex:schema . ex:tom a ex:Cat .`
+    fn importing_dataset() -> *mut PurrdfDataset {
+        let mut builder = RdfDatasetBuilder::new();
+        let rdf_type = builder.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type");
+        let ontology = builder.intern_iri("http://example.org/o");
+        let owl_ontology = builder.intern_iri("http://www.w3.org/2002/07/owl#Ontology");
+        let imports = builder.intern_iri("http://www.w3.org/2002/07/owl#imports");
+        let schema = builder.intern_iri("http://example.org/schema");
+        let cat = builder.intern_iri("http://example.org/Cat");
+        let tom = builder.intern_iri("http://example.org/tom");
+        builder.push_quad(ontology, rdf_type, owl_ontology, None);
+        builder.push_quad(ontology, imports, schema, None);
+        builder.push_quad(tom, rdf_type, cat, None);
+        PurrdfDataset::into_raw(builder.freeze().expect("freeze"))
+    }
+
+    /// Run `ASK { ex:tom a ex:Animal }` under `rdfs` over `dataset` with a one-entry import
+    /// table (`count` of it passed), returning the boolean or the error's message.
+    fn ask_animal_over_imports(dataset: *mut PurrdfDataset, count: usize) -> Result<bool, String> {
+        let query = CString::new(
+            "ASK { <http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/Animal> }",
+        )
+        .expect("query");
+        let regime = CString::new("rdfs").expect("regime");
+        let program = CString::new("").expect("program");
+        let iri = CString::new("http://example.org/schema").expect("iri");
+        let schema = CString::new(
+            "<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> \
+             <http://example.org/Animal> .\n",
+        )
+        .expect("schema");
+        let iris: [*const c_char; 1] = [iri.as_ptr()];
+        let documents: [*const c_char; 1] = [schema.as_ptr()];
+        let governors = initialized_governors();
+        let mut outcome = -1;
+        let mut kind = KIND_NONE;
+        let mut boolean = 0_u8;
+        let mut evidence = MaybeUninit::uninit();
+        let mut partial = MaybeUninit::uninit();
+        let mut report = std::ptr::null_mut();
+        let mut error = std::ptr::null_mut();
+        let status = unsafe {
+            purrdf_query_entailment_governed(
+                dataset,
+                query.as_ptr(),
+                std::ptr::null(),
+                regime.as_ptr(),
+                program.as_ptr(),
+                iris.as_ptr(),
+                documents.as_ptr(),
+                count,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+                std::ptr::null(),
+                &raw const governors,
+                &raw mut outcome,
+                &raw mut kind,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                &raw mut boolean,
+                evidence.as_mut_ptr(),
+                partial.as_mut_ptr(),
+                &raw mut report,
+                &raw mut error,
+            )
+        };
+        if status != PurrdfStatus::Ok as i32 {
+            assert!(!error.is_null());
+            let message = unsafe {
+                std::ffi::CStr::from_ptr(crate::error::purrdf_error_message(error))
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            unsafe { crate::error::purrdf_error_free(error) };
+            return Err(message);
+        }
+        assert_eq!(kind, KIND_BOOLEAN);
+        unsafe { purrdf_buffer_free(report) };
+        Ok(boolean == 1)
+    }
+
+    /// The governed entailment query takes the closure's evaluation limits: one join step is
+    /// refused naming this function's parameter, and the neighbour with the limit raised
+    /// answers.
+    #[test]
+    fn governed_entailment_query_takes_the_evaluation_limits() {
+        let dataset = entailment_dataset();
+        let query = CString::new("ASK { ?s ?p ?o }").expect("query");
+        let regime = CString::new("owl-rl").expect("regime");
+        let program = CString::new("").expect("program");
+        let governors = initialized_governors();
+        let run = |steps: u64| {
+            let mut outcome = -1;
+            let mut kind = KIND_NONE;
+            let mut boolean = 0_u8;
+            let mut evidence = MaybeUninit::uninit();
+            let mut partial = MaybeUninit::uninit();
+            let mut report = std::ptr::null_mut();
+            let mut error = std::ptr::null_mut();
+            let status = unsafe {
+                purrdf_query_entailment_governed(
+                    dataset,
+                    query.as_ptr(),
+                    std::ptr::null(),
+                    regime.as_ptr(),
+                    program.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::from_ref(&steps),
+                    std::ptr::null(),
+                    &raw const governors,
+                    &raw mut outcome,
+                    &raw mut kind,
+                    std::ptr::null_mut(),
+                    std::ptr::null_mut(),
+                    &raw mut boolean,
+                    evidence.as_mut_ptr(),
+                    partial.as_mut_ptr(),
+                    &raw mut report,
+                    &raw mut error,
+                )
+            };
+            if status == PurrdfStatus::Ok as i32 {
+                unsafe { purrdf_buffer_free(report) };
+                return Ok(boolean == 1);
+            }
+            let message = unsafe {
+                std::ffi::CStr::from_ptr(crate::error::purrdf_error_message(error))
+                    .to_string_lossy()
+                    .into_owned()
+            };
+            unsafe { crate::error::purrdf_error_free(error) };
+            Err(message)
+        };
+        let refused = run(1).expect_err("one join step");
+        assert!(
+            refused.contains("evaluation exceeded the join-step limit: ")
+                && refused
+                    .ends_with("raise it with purrdf_query_entailment_governed's max_join_steps"),
+            "{refused}"
+        );
+        assert!(run(1_048_576).expect("the default, stated"));
+        unsafe { purrdf_dataset_free(dataset) };
+    }
+
+    /// The governed entailment query closes over the dataset's `owl:imports` closure: the
+    /// importing dataset is refused with no table and answers `true` — a conclusion only
+    /// the imported schema licenses — with it; a dataset that imports nothing refuses the
+    /// same table as unreached, and answers with the empty one.
+    #[test]
+    fn governed_entailment_query_resolves_the_import_table() {
+        let importing = importing_dataset();
+        let refused = ask_animal_over_imports(importing, 0).expect_err("an unresolved import");
+        assert!(refused.contains("http://example.org/schema"), "{refused}");
+        assert!(ask_animal_over_imports(importing, 1).expect("resolves"));
+        unsafe { purrdf_dataset_free(importing) };
+
+        let plain = entailment_dataset();
+        let unreached = ask_animal_over_imports(plain, 1).expect_err("an unreached entry");
+        assert!(
+            unreached.contains("http://example.org/schema"),
+            "{unreached}"
+        );
+        assert!(ask_animal_over_imports(plain, 0).expect("imports nothing"));
+        unsafe { purrdf_dataset_free(plain) };
+    }
+
     #[test]
     fn governed_entailment_query_exposes_a_closure_stop_without_report() {
         let dataset = entailment_dataset();
@@ -1113,6 +1353,13 @@ mod tests {
                 std::ptr::null(),
                 regime.as_ptr(),
                 program.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
                 std::ptr::null(),
                 &raw const governors,
                 &raw mut outcome,
@@ -1205,6 +1452,13 @@ mod tests {
                 std::ptr::null(),
                 regime.as_ptr(),
                 program.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
                 namespace.as_ptr(),
                 &raw const governors,
                 &raw mut outcome,

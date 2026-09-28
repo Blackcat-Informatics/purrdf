@@ -495,12 +495,6 @@ pub(crate) fn entail_to_ntriples_impl(
     })
 }
 
-/// The shapes graph's mandatory diagnostics as the `RULE SHAPE` lines every host renders
-/// after `diagnostic ` (see [`purrdf_validate::MandatoryDiagnostic`]).
-fn diagnostic_lines(diagnostics: &[purrdf_validate::MandatoryDiagnostic]) -> Vec<String> {
-    diagnostics.iter().map(ToString::to_string).collect()
-}
-
 /// The outcome of `shaclEntail`: the materialized dataset and the shapes graph's
 /// mandatory diagnostics.
 ///
@@ -511,8 +505,8 @@ fn diagnostic_lines(diagnostics: &[purrdf_validate::MandatoryDiagnostic]) -> Vec
 pub struct ShaclEntailment {
     /// The materialized dataset as N-Triples.
     ntriples: String,
-    /// The mandatory diagnostics, `RULE SHAPE` each.
-    diagnostics: Vec<String>,
+    /// The mandatory diagnostics.
+    diagnostics: Vec<ShaclDiagnostic>,
 }
 
 #[wasm_bindgen]
@@ -525,11 +519,11 @@ impl ShaclEntailment {
         self.ntriples.clone()
     }
 
-    /// The shapes graph's mandatory diagnostics, one `RULE SHAPE` string per shape with an
-    /// empty `sh:in` or `sh:xone` list (`in-minListLength <…>`), which every run reports.
+    /// The shapes graph's mandatory diagnostics, one `{ rule, shape }` per shape with an
+    /// empty `sh:in` or `sh:xone` list, which every run reports.
     #[wasm_bindgen(getter)]
     #[must_use]
-    pub fn diagnostics(&self) -> Vec<String> {
+    pub fn diagnostics(&self) -> Vec<ShaclDiagnostic> {
         self.diagnostics.clone()
     }
 }
@@ -538,8 +532,12 @@ impl ShaclEntailment {
 /// shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?,
 /// maxJoinSteps?)` → a `ShaclEntailment`: `ntriples`, the materialized dataset as an
 /// N-Triples string (the base graph plus every inferred triple), and `diagnostics`, the
-/// shapes graph's mandatory diagnostics (`RULE SHAPE` per shape with an empty `sh:in` or
-/// `sh:xone` list). Call `.free()` on the result.
+/// shapes graph's mandatory diagnostics (a `ShaclDiagnostic` — `rule`, `shape` — per shape
+/// with an empty `sh:in` or `sh:xone` list). Call `.free()` on the result.
+///
+/// Its parameters after `dataNt` are `shaclApplyRules`' in the same order: the shapes
+/// document's base, the import table, `shapesGraph`, then the four rule-evaluation
+/// limits.
 ///
 /// `shapesTtl` is a Turtle shapes graph; `dataNt` is an N-Triples data graph.
 /// Throws (rejects) if either graph fails to parse or if rule application fails.
@@ -602,7 +600,7 @@ pub fn shacl_entail(
     )
     .map_err(shapes_rejection)?;
     Ok(ShaclEntailment {
-        diagnostics: diagnostic_lines(&outcome.diagnostics),
+        diagnostics: diagnostic_values(&outcome.diagnostics),
         ntriples: outcome.ntriples,
     })
 }
@@ -623,8 +621,8 @@ pub struct ShaclRulesInference {
     inferred: String,
     /// The proof text, when `explain` was set.
     proof: Option<String>,
-    /// The mandatory diagnostics, `RULE SHAPE` each.
-    diagnostics: Vec<String>,
+    /// The mandatory diagnostics.
+    diagnostics: Vec<ShaclDiagnostic>,
 }
 
 #[wasm_bindgen]
@@ -646,12 +644,12 @@ impl ShaclRulesInference {
         self.proof.clone()
     }
 
-    /// The shapes graph's mandatory diagnostics, one `RULE SHAPE` string per shape with an
+    /// The shapes graph's mandatory diagnostics, one `{ rule, shape }` per shape with an
     /// empty `sh:in` or `sh:xone` list, which every run reports; empty for an `srl` rule
     /// set, which has no shapes graph.
     #[wasm_bindgen(getter)]
     #[must_use]
-    pub fn diagnostics(&self) -> Vec<String> {
+    pub fn diagnostics(&self) -> Vec<ShaclDiagnostic> {
         self.diagnostics.clone()
     }
 }
@@ -664,9 +662,13 @@ pub(crate) fn apply_rules_impl(
     purrdf_validate::apply_rules_to_ntriples(request)
 }
 
-/// `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
-/// maxTermGeneratingRounds?, importIris?, importDocuments?, maxGeneratedTerms?,
-/// maxStoredFacts?, maxJoinSteps?, shapesGraph?)` → a `ShaclRulesInference`.
+/// `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?, importIris?,
+/// importDocuments?, shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?,
+/// maxStoredFacts?, maxJoinSteps?)` → a `ShaclRulesInference`.
+///
+/// The import table, then `shapesGraph`, then the four rule-evaluation limits in the order
+/// `shaclEntail` takes them: the two SHACL rule entry points spell their shared parameters
+/// in one order, so a caller moving between them moves no argument.
 ///
 /// Runs exactly one rule source over the N-Triples data graph: the SHACL 1.2 rules of the
 /// Turtle shapes graph `shapesTtl` (its default rule set), or the SPARQL 1.2 RL rule set
@@ -715,13 +717,13 @@ pub fn shacl_apply_rules(
     shapes_base: Option<String>,
     srl_base: Option<String>,
     explain: Option<bool>,
-    max_term_generating_rounds: Option<u64>,
     import_iris: Option<Vec<String>>,
     import_documents: Option<Vec<String>>,
+    shapes_graph: Option<String>,
+    max_term_generating_rounds: Option<u64>,
     max_generated_terms: Option<u64>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
-    shapes_graph: Option<String>,
 ) -> Result<ShaclRulesInference, JsValue> {
     let imports = shapes_import_pairs(
         import_iris.as_deref().unwrap_or_default(),
@@ -745,7 +747,7 @@ pub fn shacl_apply_rules(
     })
     .map_err(shapes_rejection)?;
     Ok(ShaclRulesInference {
-        diagnostics: diagnostic_lines(&outcome.diagnostics),
+        diagnostics: diagnostic_values(&outcome.diagnostics),
         inferred: outcome.inferred_ntriples,
         proof: outcome.proof,
     })
@@ -912,7 +914,7 @@ pub(crate) fn eval_node_expr_impl(
     scope: &[String],
     import_iris: &[String],
     import_documents: &[String],
-) -> Result<Vec<String>, ShapesError> {
+) -> Result<purrdf_validate::NodeExprOutcome, ShapesError> {
     let via: Vec<&str> = expr.via.iter().map(String::as_str).collect();
     let expr = purrdf_validate::ExprSelector::from_parts(expr.expr, expr.at, &via, expr.turtle)?;
     let imports = shapes_import_pairs(import_iris, import_documents)?;
@@ -920,7 +922,7 @@ pub(crate) fn eval_node_expr_impl(
         .iter()
         .map(|binding| purrdf_validate::parse_scope_binding(binding))
         .collect::<Result<Vec<_>, _>>()?;
-    purrdf_validate::eval_node_expr_to_terms(&purrdf_validate::NodeExprRequest {
+    purrdf_validate::eval_node_expr(&purrdf_validate::NodeExprRequest {
         shapes_ttl,
         shapes_base,
         data_nt,
@@ -931,9 +933,89 @@ pub(crate) fn eval_node_expr_impl(
     })
 }
 
+/// One mandatory diagnostic of a shapes graph — a shape whose `sh:in` or `sh:xone` list is
+/// empty — as the structured value every host carries: the rule, then the shape.
+///
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug, Clone)]
+pub struct ShaclDiagnostic {
+    /// The syntax rule's id.
+    rule: String,
+    /// The shape, as an N-Triples term.
+    shape: String,
+}
+
+#[wasm_bindgen]
+impl ShaclDiagnostic {
+    /// The syntax rule's id: `in-minListLength` or `xone-minListLength` (SHACL 1.2 Core,
+    /// Appendix A).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn rule(&self) -> String {
+        self.rule.clone()
+    }
+
+    /// The shape whose list is empty, as an N-Triples term (`<iri>` or `_:label`).
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn shape(&self) -> String {
+        self.shape.clone()
+    }
+}
+
+/// The shapes graph's mandatory diagnostics as this host's structured values.
+fn diagnostic_values(diagnostics: &[purrdf_validate::MandatoryDiagnostic]) -> Vec<ShaclDiagnostic> {
+    diagnostics
+        .iter()
+        .map(|diagnostic| ShaclDiagnostic {
+            rule: diagnostic.rule.to_owned(),
+            shape: diagnostic.shape.to_string(),
+        })
+        .collect()
+}
+
+/// The outcome of `shaclEvalNodeExpr`: the expression's output nodes and the shapes graph's
+/// mandatory diagnostics.
+///
+/// Like every other wasm-bindgen class in this package, this owns wasm memory and is
+/// released with `.free()`.
+#[wasm_bindgen]
+#[derive(Debug)]
+pub struct ShaclNodeExprOutcome {
+    /// The output nodes, as N-Triples 1.2 terms.
+    outputs: Vec<String>,
+    /// The mandatory diagnostics.
+    diagnostics: Vec<ShaclDiagnostic>,
+}
+
+#[wasm_bindgen]
+impl ShaclNodeExprOutcome {
+    /// The output nodes, as N-Triples 1.2 terms in the order the expression's sequence
+    /// semantics define.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn outputs(&self) -> Vec<String> {
+        self.outputs.clone()
+    }
+
+    /// The shapes graph's mandatory diagnostics — one `{ rule, shape }` per shape of its
+    /// `owl:imports` closure with an empty `sh:in` or `sh:xone` list — which every run
+    /// reports. They change no output.
+    #[wasm_bindgen(getter)]
+    #[must_use]
+    pub fn diagnostics(&self) -> Vec<ShaclDiagnostic> {
+        self.diagnostics.clone()
+    }
+}
+
 /// `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?, importIris?,
-/// importDocuments?, exprAt?, exprVia?, exprTurtle?)` → the output nodes, as an array of
-/// N-Triples 1.2 terms in the order the expression's sequence semantics define.
+/// importDocuments?, exprAt?, exprVia?, exprTurtle?)` → a `ShaclNodeExprOutcome`:
+/// `outputs`, the output nodes as an array of N-Triples 1.2 terms in the order the
+/// expression's sequence semantics define, and `diagnostics`, the shapes graph's mandatory
+/// diagnostics (`{ rule, shape }` per shape with an empty `sh:in` or `sh:xone` list). Call
+/// `.free()` on the result.
 ///
 /// Evaluates ONE node expression of the Turtle shapes graph — SHACL 1.2 Node Expressions'
 /// `evalExpr(expr, focusGraph, focusNode, scope)` — against a focus node of the
@@ -969,7 +1051,7 @@ pub fn shacl_eval_node_expr(
     expr_at: Option<String>,
     expr_via: Option<Vec<String>>,
     expr_turtle: Option<String>,
-) -> Result<Vec<String>, JsValue> {
+) -> Result<ShaclNodeExprOutcome, JsValue> {
     eval_node_expr_impl(
         shapes_ttl,
         shapes_base.as_deref(),
@@ -985,6 +1067,10 @@ pub fn shacl_eval_node_expr(
         import_iris.as_deref().unwrap_or_default(),
         import_documents.as_deref().unwrap_or_default(),
     )
+    .map(|outcome| ShaclNodeExprOutcome {
+        diagnostics: diagnostic_values(&outcome.diagnostics),
+        outputs: outcome.outputs,
+    })
     .map_err(shapes_rejection)
 }
 
@@ -2367,7 +2453,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 &[],
                 &[],
                 &[]
-            ),
+            )
+            .map(|outcome| outcome.outputs),
             Ok(vec!["<http://example.org/ns#yes>".to_owned()])
         );
         assert_eq!(
@@ -2380,7 +2467,8 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 &["suffix=\"!\"@en".to_owned()],
                 &[],
                 &[]
-            ),
+            )
+            .map(|outcome| outcome.outputs),
             Ok(vec!["\"!\"@en".to_owned()])
         );
         let unknown = eval_node_expr_impl(
@@ -2414,6 +2502,42 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
         assert!(no_equals.contains("not NAME=TERM"), "{no_equals}");
     }
 
+    /// A node-expression evaluation reports the shapes graph's mandatory diagnostic — a
+    /// shape with an empty `sh:in` list — as a structured `{ rule, shape }`, and none for the
+    /// neighbour whose list has a member; the output is the expression's either way.
+    #[test]
+    fn wasm_eval_node_expr_reports_the_mandatory_diagnostic() {
+        let shapes = |members: &str| {
+            format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix ex: <http://example.org/ns#> .\n\
+                 ex:Listed a sh:NodeShape ; sh:in ( {members} ) .\n"
+            )
+        };
+        let eval = |shapes: &str| {
+            eval_node_expr_impl(
+                shapes,
+                None,
+                TOOLS_DATA,
+                ExprInputs::node("http://example.org/ns#Constant"),
+                "http://example.org/ns#a",
+                &[],
+                &[],
+                &[],
+            )
+            .expect("evaluates")
+        };
+        let empty = eval(&shapes(""));
+        assert_eq!(empty.outputs, ["<http://example.org/ns#Constant>"]);
+        let values = diagnostic_values(&empty.diagnostics);
+        assert_eq!(values.len(), 1);
+        assert_eq!(values[0].rule(), "in-minListLength");
+        assert_eq!(values[0].shape(), "<http://example.org/ns#Listed>");
+        let member = eval(&shapes("ex:one"));
+        assert_eq!(member.outputs, ["<http://example.org/ns#Constant>"]);
+        assert_eq!(diagnostic_values(&member.diagnostics).len(), 0);
+    }
+
     /// An anonymous expression named by a walk and inline as Turtle, each refusal beside
     /// a valid neighbour: a step reaching two values beside one reaching one, two roots
     /// beside one, and two selectors beside one.
@@ -2431,6 +2555,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 &[],
                 &[],
             )
+            .map(|outcome| outcome.outputs)
             .map_err(|error| error.to_string())
         };
         let yes = Ok(vec!["<http://example.org/ns#yes>".to_owned()]);

@@ -119,13 +119,13 @@ ex:PersonShape a sh:NodeShape ;
 `;
   const run = (on) =>
     shaclValidateToSarif(shapes, data, undefined, undefined, undefined, undefined, undefined, on);
+  const flagged = (sarif) =>
+    new Set([...sarif.matchAll(/example\.org\/(alice|bob)\b/g)].map((m) => m[1]));
   for (const off of [run(undefined), run(false)]) {
-    assert.ok(off.includes("http://example.org/bob"), off);
-    assert.ok(!off.includes("http://example.org/alice"), off);
+    assert.deepEqual(flagged(off), new Set(["bob"]), off);
   }
   const on = run(true);
-  assert.ok(on.includes("http://example.org/bob"), on);
-  assert.ok(on.includes("http://example.org/alice"), on);
+  assert.deepEqual(flagged(on), new Set(["alice", "bob"]), on);
 });
 
 // The W3C SHACL 1.2 vocabulary's declaration of the built-in sh:SPARQLExprExpression,
@@ -270,12 +270,14 @@ test("wasm_shacl_mandatory_diagnostics: every run reports an empty sh:in list, b
   assert.equal(filled.invocations, undefined, JSON.stringify(filled));
   assert.equal(filled.tool.driver.notifications, undefined);
 
-  const expected = ["in-minListLength <http://example.com/ns#TestShape>"];
+  // One structured encoding on every host: the rule, then the shape, as separate fields.
+  const expected = [{ rule: "in-minListLength", shape: "<http://example.com/ns#TestShape>" }];
+  const plain = (diagnostics) => diagnostics.map((d) => ({ rule: d.rule, shape: d.shape }));
   const rules = shaclApplyRules(IN_002_DATA, IN_002("()"));
-  assert.deepEqual(rules.diagnostics, expected);
+  assert.deepEqual(plain(rules.diagnostics), expected);
   rules.free();
   const entailed = shaclEntail(IN_002("()"), IN_002_DATA);
-  assert.deepEqual(entailed.diagnostics, expected);
+  assert.deepEqual(plain(entailed.diagnostics), expected);
   assert.ok(entailed.ntriples.includes("<http://example.com/ns#seen>"), entailed.ntriples);
   entailed.free();
   const quiet = shaclEntail(IN_002("( <http://example.com/ns#Instance> )"), IN_002_DATA);

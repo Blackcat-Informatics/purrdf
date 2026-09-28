@@ -94,9 +94,7 @@ use purrdf_datalog::cache::PlanCache;
 use purrdf_datalog::chase::{ChaseError, chase_with};
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
 use purrdf_datalog::guard::NoGuards;
-use purrdf_datalog::seminaive::{
-    Derivation, EvalError, EvalOptions, evaluate_guarded, evaluate_until,
-};
+use purrdf_datalog::seminaive::{Derivation, EvalError, EvalOptions, evaluate_guarded};
 use purrdf_datalog::stop::StopSignal;
 use purrdf_datalog::store::RelationStore;
 
@@ -1023,6 +1021,11 @@ pub(crate) struct Refuter {
     attribution: Vec<ChaseRule>,
     /// The compiled plan, kept across every run of this refuter.
     plans: PlanCache,
+    /// The evaluation limits every run of this refuter is held to — the caller's, so a
+    /// re-chase a conclusion-directed service runs is bounded by the same stored-fact and
+    /// join-step limits as the closure it answers over, and a refusal names the knob that
+    /// actually raises it.
+    options: EvalOptions,
 }
 
 /// A premise seeded ONCE, re-closed against any number of added assertions.
@@ -1085,7 +1088,14 @@ impl Refuter {
             program,
             attribution,
             plans: PlanCache::new(1),
+            options: EvalOptions::default(),
         }
+    }
+
+    /// This refuter, holding every run to `options`' evaluation limits.
+    pub(crate) const fn under(mut self, options: EvalOptions) -> Self {
+        self.options = options;
+        self
     }
 
     /// Seed `ds`'s default graph once.
@@ -1202,7 +1212,7 @@ impl Refuter {
             .map_err(EntailError::Evaluate)?;
         // The incremental re-evaluation seam names no stop signal: it re-runs one delta over
         // an already-seeded store for an explanation, not the caller's closure.
-        evaluate_until(&executable, edb, None).map_err(evaluate_error)
+        evaluate_guarded(&executable, edb, &NoGuards, &self.options, None).map_err(evaluate_error)
     }
 }
 

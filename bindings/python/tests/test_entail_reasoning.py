@@ -93,7 +93,7 @@ def _every_service(data: str = TAXONOMY) -> list[tuple[str, tuple[str, str]]]:
     missing entry a reader can see rather than an omission nobody notices.
     """
     return [
-        ("consistency", entail.consistency(data)),
+        ("consistency", entail.consistency(data, [], [])),
         ("classify", entail.classify(data)),
         ("realize", entail.realize(data)),
         ("instances", entail.instances(data, "<https://example.org/Animal>")),
@@ -184,8 +184,8 @@ def test_every_certificate_names_its_service_and_ends_with_its_gate() -> None:
 
 def test_the_dl_certificate_is_not_the_chase_report() -> None:
     """Two lanes, two completeness notions, two banners — never interchanged."""
-    _closure, report = entail.materialize_nt(TAXONOMY, entail.Regime.OWL_RL, "")
-    _answer, certificate = entail.consistency(TAXONOMY)
+    _closure, report = entail.materialize_nt(TAXONOMY, entail.Regime.OWL_RL, "", [], [])
+    _answer, certificate = entail.consistency(TAXONOMY, [], [])
     assert report.startswith("purrdf-reasoning-report 4\n")
     assert certificate.startswith("purrdf-dl-certificate 1\n")
     # The chase says `exact`/`sound-incomplete`; the tableau says
@@ -214,11 +214,11 @@ def test_every_service_is_byte_stable(name: str) -> None:
 
 def test_consistency_answers_both_ways() -> None:
     """The one service that answers for an ontology with no model."""
-    answer, certificate = entail.consistency(TAXONOMY)
+    answer, certificate = entail.consistency(TAXONOMY, [], [])
     assert answer == "consistency true\n"
     assert "\ncompleteness decided\n" in certificate
 
-    answer, certificate = entail.consistency(UNSATISFIABLE)
+    answer, certificate = entail.consistency(UNSATISFIABLE, [], [])
     assert answer == "consistency false\n"
     # A decided `false` met no boundary either: nothing here to overclaim.
     assert "\ncompleteness decided\n" in certificate
@@ -336,7 +336,7 @@ def test_a_narrowed_work_cap_is_the_second_budget_and_reports_itself() -> None:
     reach the caller. Which cap ended a run is read off `work` and `work-budget`
     being equal.
     """
-    answer, certificate = entail.consistency(TAXONOMY, 0, 1)
+    answer, certificate = entail.consistency(TAXONOMY, [], [], 0, 1)
     assert answer == "consistency unknown\n"
     assert "\ncompleteness budget-exhausted\n" in certificate
     assert "\nwork 1\n" in certificate
@@ -359,7 +359,7 @@ def test_a_narrowed_work_cap_is_the_second_budget_and_reports_itself() -> None:
     assert session_answer == "consistency unknown\n"
     assert "\nwork-budget 1\n" in session_certificate
     # 0 means the knowledge base's own cap, not a cap of zero work.
-    answer, certificate = entail.consistency(TAXONOMY, 0, 0)
+    answer, certificate = entail.consistency(TAXONOMY, [], [], 0, 0)
     assert answer == "consistency true\n"
     assert "\ncompleteness decided\n" in certificate
 
@@ -371,7 +371,7 @@ def test_the_certificate_reports_both_budgets_it_ran_under() -> None:
     inside them. A caller that sees only the first pair cannot tell a search with
     room to spare from one that is about to be stopped by the other cap.
     """
-    _answer, certificate = entail.consistency(TAXONOMY)
+    _answer, certificate = entail.consistency(TAXONOMY, [], [])
     lines = certificate.splitlines()
     fields = {line.split(" ", 1)[0] for line in lines}
     assert {"steps", "budget", "work", "work-budget"} <= fields
@@ -574,7 +574,7 @@ def test_an_underivable_conclusion_is_a_hard_error() -> None:
 def test_a_malformed_document_is_an_error_not_an_empty_answer() -> None:
     """Every service refuses a document it cannot parse."""
     for call in (
-        lambda: entail.consistency("this is not n-quads\n"),
+        lambda: entail.consistency("this is not n-quads\n", [], []),
         lambda: entail.classify("this is not n-quads\n"),
         lambda: entail.realize("this is not n-quads\n"),
         lambda: entail.profile("this is not n-quads\n"),
@@ -620,7 +620,7 @@ def test_the_session_answers_what_the_free_functions_answer() -> None:
     """
     session = entail.Reasoner(TAXONOMY)
     cat = "<https://example.org/Cat>"
-    assert session.consistency() == entail.consistency(TAXONOMY)
+    assert session.consistency() == entail.consistency(TAXONOMY, [], [])
     assert session.classify() == entail.classify(TAXONOMY)
     assert session.realize() == entail.realize(TAXONOMY)
     assert session.instances(cat) == entail.instances(TAXONOMY, cat)
@@ -756,7 +756,7 @@ def test_asking_for_a_proof_changes_no_answer(service: str, argument: str) -> No
 def test_an_answer_nobody_recorded_is_never_presented_as_verified() -> None:
     """The three availabilities are three different documents, and no two of them
     can be read as each other."""
-    answer, certificate = entail.consistency(TAXONOMY)
+    answer, certificate = entail.consistency(TAXONOMY, [], [])
     absent = "purrdf-dl-proof 1\navailability not-recorded\n"
     with pytest.raises(ValueError, match="nothing was recorded"):
         entail.check_proof(TAXONOMY, "consistency", "", answer, certificate, absent)

@@ -7,10 +7,11 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU8, Ordering};
 
-use purrdf_datalog::seminaive::BudgetReport;
+use purrdf_datalog::seminaive::{BudgetReport, EvalOptions};
+use purrdf_entail::entails::imports::imported_iris;
 use purrdf_entail::{
-    Construct, EntailError, Materialization, QNode, QTriple, ReasoningReport, Regime, RuleSet,
-    materialize_combined, materialize_combined_until,
+    Construct, EntailError, ImportMap, Materialization, QNode, QTriple, ReasoningReport, Regime,
+    RuleSet, materialize_combined_until,
 };
 use purrdf_rdf::{
     DatasetView, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, RdfTextDirection,
@@ -374,7 +375,11 @@ fn relations_over_closure(
 /// # Errors
 ///
 /// Returns [`ReasoningError::Query`] for SPARQL failures and
-/// [`ReasoningError::Entailment`] for malformed or inconsistent knowledge bases.
+/// [`ReasoningError::Entailment`] for malformed or inconsistent knowledge bases — and for a
+/// dataset whose `owl:imports` names a document it does not already hold
+/// ([`EntailError::UnresolvedImport`]): this entry point takes no import table, so such a
+/// premise is refused rather than closed without its imports.
+/// [`query_with_entailment_closure_governed`] takes the table.
 pub fn query_with_entailment<D: DatasetView>(
     engine: &NativeSparqlEngine,
     dataset: &D,
@@ -398,58 +403,33 @@ pub fn query_with_entailment<D: DatasetView>(
         QueryEntailment::OwlDirect => collect_query_bgp(prepared_query.query()),
         _ => Vec::new(),
     };
-    // Populated only when the OWL-Direct lane answered through the COMBINED APPROACH
-    // (`purrdf_entail::materialize_combined`) rather than the whole-vocabulary
+    // `surrogates` is populated only when the OWL-Direct lane answered through the COMBINED
+    // APPROACH (`purrdf_entail::materialize_combined`) rather than the whole-vocabulary
     // augmentation: the set of blank terms its restricted chase minted as existential
     // witnesses. A witness is not a certain answer for a variable whose binding the caller
     // can OBSERVE — the regime draws its answers from the scoping graph, and a minted
     // witness is not in it — so `restrict_witness_bindings` below forbids exactly those
     // bindings, at the point the binding is made rather than after the fact.
-    let mut combined_surrogates = None;
-    // ONE call, seven modes. `purrdf_entail::materialize` is total over
-    // `Materialization`, so this lane no longer splits into "the regimes that
-    // materialize" and "the two that need their own entry point".
-    let (prepared, report) = match entailment {
-        // Simple runs no fixpoint; it needs an owned closure to query over. A view is
-        // materialized once here (a degenerate path — a caller wanting no entailment
-        // queries the source directly); the reasoning lanes below seed the reasoner
-        // from the view with no such rebuild.
-        QueryEntailment::Simple => (dataset_from_view(dataset)?, simple_report()),
-        QueryEntailment::Rdf => purrdf_entail::materialize(dataset, Materialization::Rdf)?,
-        QueryEntailment::Rdfs => purrdf_entail::materialize(dataset, Materialization::Rdfs)?,
-        QueryEntailment::OwlRl => purrdf_entail::materialize(dataset, Materialization::OwlRl)?,
-        QueryEntailment::D => purrdf_entail::materialize(dataset, Materialization::D)?,
-        QueryEntailment::OwlDirect => match materialize_combined(dataset, &pattern)? {
-            // The ontology's TBox is in the certified Horn fragment: answer through the
-            // combined approach (restricted-chase witnesses for the anonymous part,
-            // filtered below) rather than the whole-vocabulary augmentation, which is
-            // silently incomplete for a query's non-distinguished variable.
-            Some(combined) => {
-                combined_surrogates = Some(combined.surrogates);
-                (combined.dataset, combined.report)
-            }
-            // Outside that fragment: the pre-existing augmentation, boundary and all — plus
-            // the ONE boundary only this call site can raise. The augmentation's own report
-            // is complete about the run IT made; what it cannot know is that the combined
-            // approach was tried first and declined, which is exactly what
-            // `Construct::NonHornTBox` says. Attaching it here is what gives that variant a
-            // producer instead of leaving it a promise three prose sites made and no code
-            // path kept.
-            None => {
-                let (closure, report) =
-                    purrdf_entail::materialize(dataset, Materialization::OwlDirect(&pattern))?;
-                (closure, report.with_boundary(Construct::NonHornTBox))
-            }
-        },
-        QueryEntailment::Rif(ruleset) => {
-            purrdf_entail::materialize(dataset, Materialization::Rif(ruleset))?
-        }
-    };
+    //
+    // The import table is EMPTY here: this entry point takes none, so a dataset that
+    // imports a document it does not already hold is refused by name rather than closed as a
+    // smaller premise. `query_with_entailment_closure_governed` is the one that takes one.
+    let imports = ImportMap::new();
+    let Closed {
+        dataset: prepared,
+        report,
+        surrogates,
+    } = close_premise(
+        dataset,
+        &EntailmentClosure::new(entailment, &imports),
+        &pattern,
+        None,
+    )?;
     // The combined approach's filtration, in the only two places a witness can escape: the
     // solution sequence (forbidden BEFORE evaluation, so the algebra above the restriction
     // sees the filtered sequence) and a constructed graph (scrubbed after, because a
     // `DESCRIBE` draws triples from the dataset rather than from a variable binding).
-    let surrogates = combined_surrogates.unwrap_or_default();
+    let surrogates = surrogates.unwrap_or_default();
     // Materialize, THEN register: a dataset-derived relation is re-derived over the closure
     // that is about to be queried, so the walk and the surrounding patterns read one
     // dataset rather than two. The re-parse is what makes the swap legal as well as
@@ -494,6 +474,205 @@ pub fn query_with_entailment<D: DatasetView>(
     let mut result = engine.query_prepared(&prepared, plan, request.substitutions, options)?;
     let _ = withhold_surrogate_triples(&mut result, &surrogates);
     Ok((result, report))
+}
+
+/// What one entailment-regime query closes its premise UNDER: the regime, and the
+/// premise's `owl:imports` table.
+///
+/// The configuration [`query_with_entailment_closure_governed`] takes. A premise that
+/// carries an `owl:imports` states that its axioms are its own PLUS those of the documents
+/// it names, so a query answered under a regime is answered over that merge; the table is
+/// where those documents arrive, resolved through [`purrdf_entail::resolve_imports`]. PurRDF
+/// fetches nothing, so the table is caller-supplied configuration and an import it does not
+/// resolve is refused by name. [`ImportMap::declare_loaded`] names the IRIs the premise
+/// itself was read under, so an import of one of them resolves in place.
+///
+/// It also carries the closure's EVALUATION LIMITS ([`Self::with_limits`]): the stored-fact
+/// and join-step limits the four rule-table regimes (`Rdf`, `Rdfs`, `OwlRl`, `D`) are
+/// materialized under, exactly as [`purrdf_entail::materialize_with`] takes them. Unstated,
+/// they are the target's defaults. A limit can only refuse — a run past one fails with
+/// [`EntailError::Evaluate`] or [`EntailError::Chase`] naming it — and never truncates a
+/// closure, so the query governors, which price evaluation over the closure, never become
+/// one.
+#[derive(Debug, Clone, Copy)]
+pub struct EntailmentClosure<'a> {
+    /// The regime the closure is materialized under.
+    entailment: QueryEntailment<'a>,
+    /// The premise's `owl:imports` table.
+    imports: &'a ImportMap,
+    /// The evaluation limits the closure is materialized under.
+    limits: EvalOptions,
+}
+
+impl<'a> EntailmentClosure<'a> {
+    /// Close under `entailment`, over the premise's imports closure as `imports` resolves it,
+    /// under the target's default evaluation limits. An empty map is the ordinary "imports
+    /// nothing" case.
+    #[must_use]
+    pub fn new(entailment: QueryEntailment<'a>, imports: &'a ImportMap) -> Self {
+        Self {
+            entailment,
+            imports,
+            limits: EvalOptions::default(),
+        }
+    }
+
+    /// The same closure, materialized under `limits`' stored-fact and join-step limits.
+    #[must_use]
+    pub const fn with_limits(mut self, limits: EvalOptions) -> Self {
+        self.limits = limits;
+        self
+    }
+
+    /// The evaluation limits the closure is materialized under.
+    #[must_use]
+    pub const fn limits(&self) -> &EvalOptions {
+        &self.limits
+    }
+
+    /// The regime the closure is materialized under.
+    #[must_use]
+    pub const fn entailment(&self) -> QueryEntailment<'a> {
+        self.entailment
+    }
+
+    /// The premise's `owl:imports` table.
+    #[must_use]
+    pub const fn imports(&self) -> &'a ImportMap {
+        self.imports
+    }
+}
+
+/// One materialized closure, ready to be queried.
+struct Closed {
+    /// The closure itself.
+    dataset: Arc<RdfDataset>,
+    /// The run that produced it.
+    report: ReasoningReport,
+    /// The existential witnesses the OWL-Direct combined approach minted, when that lane
+    /// answered; `None` for every other lane.
+    surrogates: Option<BTreeSet<String>>,
+}
+
+/// Close `dataset` under `closure`, over its `owl:imports` closure — the ONE place both query
+/// entry points materialize, so the governed and the ungoverned lane cannot resolve imports
+/// differently.
+///
+/// A dataset that imports nothing, with an empty table, is closed over the view directly.
+/// Otherwise the view becomes an owned dataset, the closure is resolved
+/// ([`purrdf_entail::resolve_imports`], which refuses an unresolved import and an unreached
+/// entry) and the merge is closed; the report — and an inconsistent run's refusal — is then
+/// restated `ontology-import-resolved`.
+fn close_premise<D: DatasetView>(
+    dataset: &D,
+    closure: &EntailmentClosure<'_>,
+    pattern: &[QTriple],
+    stop: Option<&Arc<dyn purrdf_datalog::StopSignal>>,
+) -> Result<Closed, ReasoningError> {
+    let imports = closure.imports;
+    let loaded: Vec<&str> = imports.loaded().collect();
+    if imports.is_empty() && imported_iris(dataset, &loaded).is_empty() {
+        return close_lane(dataset, closure.entailment, pattern, &closure.limits, stop);
+    }
+    let premise = dataset_from_view(dataset)?;
+    let merged = purrdf_entail::resolve_imports(&premise, imports)?;
+    let resolved = merged.is_some() || !imports.imported_iris(&premise).is_empty();
+    let run = close_lane(
+        merged.as_deref().unwrap_or(&premise),
+        closure.entailment,
+        pattern,
+        &closure.limits,
+        stop,
+    );
+    if !resolved {
+        return run;
+    }
+    match run {
+        Ok(closed) => Ok(Closed {
+            report: closed.report.with_resolved_imports(),
+            ..closed
+        }),
+        Err(ReasoningError::Entailment(error)) => {
+            Err(ReasoningError::Entailment(error.with_resolved_imports()))
+        }
+        Err(other) => Err(other),
+    }
+}
+
+/// Close `dataset` under one regime — seven modes, one call each.
+///
+/// `purrdf_entail::materialize_with` is total over `Materialization`, so this does not split
+/// into "the regimes that materialize" and "the two that need their own entry point". The
+/// OWL-Direct lane answers through the COMBINED APPROACH when the ontology's TBox is in the
+/// certified Horn fragment (restricted-chase witnesses for the anonymous part, filtered by the
+/// caller) rather than the whole-vocabulary augmentation, which is silently incomplete for a
+/// query's non-distinguished variable; outside that fragment it falls back to the augmentation
+/// and raises the ONE boundary only this call site can: [`Construct::NonHornTBox`], which says
+/// the combined approach was tried first and declined.
+fn close_lane<D: DatasetView>(
+    dataset: &D,
+    entailment: QueryEntailment<'_>,
+    pattern: &[QTriple],
+    limits: &EvalOptions,
+    stop: Option<&Arc<dyn purrdf_datalog::StopSignal>>,
+) -> Result<Closed, ReasoningError> {
+    let plain = |(dataset, report): (Arc<RdfDataset>, ReasoningReport)| Closed {
+        dataset,
+        report,
+        surrogates: None,
+    };
+    let closed = match entailment {
+        // Simple runs no fixpoint (it cannot be stopped), so it builds its owned closure
+        // directly; the reasoning lanes seed from the view with no rebuild.
+        QueryEntailment::Simple => plain((dataset_from_view(dataset)?, simple_report())),
+        QueryEntailment::Rdf => plain(purrdf_entail::materialize_with(
+            dataset,
+            Materialization::Rdf,
+            limits,
+            stop,
+        )?),
+        QueryEntailment::Rdfs => plain(purrdf_entail::materialize_with(
+            dataset,
+            Materialization::Rdfs,
+            limits,
+            stop,
+        )?),
+        QueryEntailment::OwlRl => plain(purrdf_entail::materialize_with(
+            dataset,
+            Materialization::OwlRl,
+            limits,
+            stop,
+        )?),
+        QueryEntailment::D => plain(purrdf_entail::materialize_with(
+            dataset,
+            Materialization::D,
+            limits,
+            stop,
+        )?),
+        QueryEntailment::OwlDirect => match materialize_combined_until(dataset, pattern, stop)? {
+            Some(combined) => Closed {
+                dataset: combined.dataset,
+                report: combined.report,
+                surrogates: Some(combined.surrogates),
+            },
+            None => {
+                let (closure, report) = purrdf_entail::materialize_with(
+                    dataset,
+                    Materialization::OwlDirect(pattern),
+                    limits,
+                    stop,
+                )?;
+                plain((closure, report.with_boundary(Construct::NonHornTBox)))
+            }
+        },
+        QueryEntailment::Rif(ruleset) => plain(purrdf_entail::materialize_with(
+            dataset,
+            Materialization::Rif(ruleset),
+            limits,
+            stop,
+        )?),
+    };
+    Ok(closed)
 }
 
 /// What a governed entailment-regime query produced.
@@ -663,13 +842,13 @@ impl purrdf_datalog::StopSignal for ClosureStop {
 /// carrying certified partial answers, and it arrives on
 /// [`GovernedEntailment::Answered`] beside the closure's [`ReasoningReport`].
 ///
-/// **Phase one — materializing the closure — honours the STOP SIGNAL, under the target's
-/// default evaluation limits.** The SPARQL governors price query evaluation, not a
+/// **Phase one — materializing the closure — honours the STOP SIGNAL, under the
+/// closure's own evaluation limits.** The SPARQL governors price query evaluation, not a
 /// reasoning run, so none of them is translated into a limit on the closure: the closure is
-/// computed under `purrdf-datalog`'s default stored-fact and join-step limits
-/// ([limits refuse; they never truncate](purrdf_datalog#limits-refuse-they-never-truncate)),
-/// exactly as [`query_with_entailment`] computes it. A caller that needs other limits
-/// materializes with [`purrdf_entail::materialize_with`] and queries the closure. The stop
+/// computed under `purrdf-datalog`'s stored-fact and join-step limits
+/// ([limits refuse; they never truncate](purrdf_datalog#limits-refuse-they-never-truncate)) —
+/// the target's defaults here, and the caller's through
+/// [`query_with_entailment_closure_governed`] and [`EntailmentClosure::with_limits`]. The stop
 /// signal either lets the closure finish, in which case it is bit-for-bit the closure
 /// [`query_with_entailment`] would have computed, or it ends the run with
 /// [`GovernedEntailment::ClosureStopped`] and nothing at all. See
@@ -699,7 +878,10 @@ impl purrdf_datalog::StopSignal for ClosureStop {
 /// Returns [`ReasoningError::Query`] for SPARQL failures and
 /// [`ReasoningError::Entailment`] for malformed or inconsistent knowledge bases. A tripped
 /// governor is **not** an error in either phase: it is one of the two arms of
-/// [`GovernedEntailment`].
+/// [`GovernedEntailment`]. This entry point takes no import table, so a dataset whose
+/// `owl:imports` names a document it does not already hold is refused
+/// ([`EntailError::UnresolvedImport`]) rather than closed without it;
+/// [`query_with_entailment_closure_governed`] takes the table.
 ///
 /// # `relations` is how a DATASET-DERIVED relation reaches the closure
 ///
@@ -719,6 +901,49 @@ pub fn query_with_entailment_governed<D: DatasetView>(
     relations: &ClosureRelations<'_>,
     governors: &QueryGovernors,
 ) -> Result<GovernedEntailment, ReasoningError> {
+    let imports = ImportMap::new();
+    query_with_entailment_closure_governed(
+        engine,
+        dataset,
+        request,
+        &EntailmentClosure::new(entailment, &imports),
+        options,
+        relations,
+        governors,
+    )
+}
+
+/// [`query_with_entailment_governed`] over the premise's `owl:imports` closure: the
+/// closure is materialized over the dataset MERGED with every document `closure`'s import
+/// table supplies.
+///
+/// OWL 2 defines an ontology's imports closure to BE the ontology, so a query answered under
+/// a regime over a premise that imports a document is answered over the merge — the rule
+/// [`purrdf_entail::materialize_with_imports`], [`purrdf_entail::entails`] and
+/// [`purrdf_entail::certain_answers`] apply. Resolution is
+/// [`purrdf_entail::resolve_imports`]: an `owl:imports` the table does not resolve and the
+/// dataset does not already hold refuses the call with
+/// [`EntailError::UnresolvedImport`], a table entry the closure never reaches with
+/// [`EntailError::UnreachedImport`] — never an answer over a smaller premise. When the
+/// closure was resolved the report states `ontology-import-resolved`.
+///
+/// A dataset that imports nothing, with an empty table, is closed over the view directly —
+/// a pack is never rebuilt to find that out.
+///
+/// # Errors
+///
+/// As [`query_with_entailment_governed`], plus the import refusals above (as
+/// [`ReasoningError::Entailment`]).
+pub fn query_with_entailment_closure_governed<D: DatasetView>(
+    engine: &NativeSparqlEngine,
+    dataset: &D,
+    request: SparqlRequest<'_>,
+    closure: &EntailmentClosure<'_>,
+    options: QueryOptions<'_>,
+    relations: &ClosureRelations<'_>,
+    governors: &QueryGovernors,
+) -> Result<GovernedEntailment, ReasoningError> {
+    let entailment = closure.entailment;
     // Parse first, exactly as the ungoverned lane does: an invalid query is a failure rather
     // than a budget, and it must be one before any closure work is charged for. Registry-aware
     // exactly as `query_with_entailment`'s parse is.
@@ -743,47 +968,16 @@ pub fn query_with_entailment_governed<D: DatasetView>(
         .map(|stop| Arc::clone(stop) as Arc<dyn purrdf_datalog::StopSignal>);
     let closure_stop = closure_stop.as_ref();
 
-    let mut combined_surrogates = None;
-    let materialized = match entailment {
-        // Simple runs no fixpoint (it cannot be stopped), so it builds its owned
-        // closure directly; the reasoning lanes seed from the view with no rebuild.
-        QueryEntailment::Simple => Ok((dataset_from_view(dataset)?, simple_report())),
-        QueryEntailment::Rdf => {
-            purrdf_entail::materialize_until(dataset, Materialization::Rdf, closure_stop)
-        }
-        QueryEntailment::Rdfs => {
-            purrdf_entail::materialize_until(dataset, Materialization::Rdfs, closure_stop)
-        }
-        QueryEntailment::OwlRl => {
-            purrdf_entail::materialize_until(dataset, Materialization::OwlRl, closure_stop)
-        }
-        QueryEntailment::D => {
-            purrdf_entail::materialize_until(dataset, Materialization::D, closure_stop)
-        }
-        QueryEntailment::OwlDirect => {
-            match materialize_combined_until(dataset, &pattern, closure_stop) {
-                Ok(Some(combined)) => {
-                    combined_surrogates = Some(combined.surrogates);
-                    Ok((combined.dataset, combined.report))
-                }
-                Ok(None) => purrdf_entail::materialize_until(
-                    dataset,
-                    Materialization::OwlDirect(&pattern),
-                    closure_stop,
-                )
-                .map(|(closure, report)| (closure, report.with_boundary(Construct::NonHornTBox))),
-                Err(error) => Err(error),
-            }
-        }
-        QueryEntailment::Rif(ruleset) => {
-            purrdf_entail::materialize_until(dataset, Materialization::Rif(ruleset), closure_stop)
-        }
-    };
-    let (prepared, report) = match materialized {
-        Ok(pair) => pair,
+    let materialized = close_premise(dataset, closure, &pattern, closure_stop);
+    let (prepared, report, surrogates) = match materialized {
+        Ok(Closed {
+            dataset,
+            report,
+            surrogates,
+        }) => (dataset, report, surrogates),
         // The one refusal that is an OUTCOME rather than a failure. The cause is what the
         // adapter observed when it fired, so the receipt names the caller's own signal.
-        Err(EntailError::Stopped) => {
+        Err(ReasoningError::Entailment(EntailError::Stopped)) => {
             return Ok(GovernedEntailment::ClosureStopped {
                 tripped: TrippedGovernor::Stopped {
                     cause: stop.as_ref().and_then(|stop| stop.cause()).unwrap_or(
@@ -799,14 +993,14 @@ pub fn query_with_entailment_governed<D: DatasetView>(
                 },
             });
         }
-        Err(error) => return Err(error.into()),
+        Err(error) => return Err(error),
     };
 
     // The combined approach's filtration, in the SAME two places and the same order the
     // ungoverned lane applies it: the restriction is in the algebra (so it is upstream of
     // any truncation), and the scrub is over the result (so it reaches a `DESCRIBE`'s
     // triples). See this function's documentation for why a partial answer needs both.
-    let surrogates = combined_surrogates.unwrap_or_default();
+    let surrogates = surrogates.unwrap_or_default();
     // Materialize, THEN register — the same order, and for the same reason, as the
     // ungoverned lane's. See `relations_over_closure`.
     let rebound = relations_over_closure(relations, &prepared, &surrogates)?;

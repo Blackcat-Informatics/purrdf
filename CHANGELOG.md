@@ -50,6 +50,99 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   premise states the `owl:imports` on a node that anchors nothing, saying so); it used to
   be read and silently unused. Rust gains `materialize_with_imports`.
 
+- **entail, validate, `purrdf`, cli, python, wasm, capi (BREAKING):** the entailment-regime
+  query, the OWL-Direct consistency question and the host materialization entry points
+  close over the premise's `owl:imports` closure too, through the same kernel resolver
+  and with the same refusals as `reason`. They used to answer over the premise alone —
+  `purrdf query --entailment` and `purrdf consistency` silently omitted every imported
+  axiom. Command line: `query --entailment … --import IRI=FILE` and `consistency --import
+  IRI=FILE` (`--proof`/`--check-proof` record and check over the merge). Python:
+  `entail.materialize(dataset, regime, program, imports, premise_iris, …)`,
+  `entail.materialize_nt(text, regime, program, imports, premise_iris, …)`,
+  `entail.consistency(data, imports, premise_iris, step_cap=0, work_cap=0)` (the two new
+  arguments are required and positional, as on `certain_answers`), and
+  `Store`/`MutableDataset.query_entailment_governed(..., imports=None,
+  premise_iris=None)`. WebAssembly: `entailMaterialize(document, regime, program,
+  importIris, importDocuments, premiseIris, maxStoredFacts?, maxJoinSteps?)`,
+  `entailConsistency(document, importIris, importDocuments, premiseIris, stepCap,
+  workCap)`, and `importIris`/`importDocuments`/`premiseIris` options on
+  `queryEntailmentGoverned` (the raw binding takes them after `program`). C:
+  `purrdf_entail_materialize_to_nquads`, `purrdf_entail_consistency` and
+  `purrdf_query_entailment_governed` gain `import_iris`, `import_documents`,
+  `import_count`, `premise_iris`, `premise_iri_count` (riding the unshipped 0.8.0 ABI
+  bump). Rust: `validate::regime::materialize_to_nquads_string_with` and
+  `consistency_to_string` take `imports` and `premise_iris`;
+  `ReasonerSession::open_premise` and `premise_nquads`; `premise_import_map`;
+  `purrdf::query_with_entailment_closure_governed` over an `EntailmentClosure`;
+  `purrdf_entail::resolve_imports`, `ReasoningReport::with_resolved_imports`,
+  `EntailError::with_resolved_imports`, `Reasoner::with_resolved_imports`. The Rust
+  entry points that take no table (`query_with_entailment`,
+  `query_with_entailment_governed`, `materialize_to_nquads_string`) resolve against the
+  empty one, so an importing premise is refused there rather than closed without its
+  imports. A resolved closure states `ontology-import-resolved` in the reasoning report
+  and, now, in the DL certificate.
+
+- **entail, validate, `purrdf`, cli, python, wasm, capi (BREAKING):** every entailment service
+  that evaluates a regime's rule table takes the stored-fact and join-step limits the
+  materialization path takes, and a refusal names the CALLING host's knob — never
+  `MaterializeLimits::…` or `EvalOptions::…` to a non-Rust caller. The conclusion-directed
+  services hold the premise's closure AND every re-chase of the refutation and freeze
+  mechanisms to them; the entailment-regime query holds its closure to them (the query
+  governors still price only the evaluation over the closure). Defaults are unchanged.
+  Command line: `entails --max-stored-facts N --max-join-steps N` and `query --entailment …
+  --max-stored-facts N --max-join-steps N`. Python: keyword-only `max_stored_facts=`,
+  `max_join_steps=` on `entail.certain_answers`, `graph_entails`, `verify_entailment` and
+  `Store`/`MutableDataset.query_entailment_governed`, each refusal naming that function's
+  keyword. WebAssembly: trailing `maxStoredFacts?`, `maxJoinSteps?` (`bigint`) on
+  `entailCertainAnswers`, `entailGraphEntails`, `entailVerifyEntailment`, and
+  `maxStoredFacts`/`maxJoinSteps` options on `queryEntailmentGoverned` (the raw binding
+  takes them after `premiseIris`). C: nullable `const uint64_t *max_stored_facts, const
+  uint64_t *max_join_steps` after `premise_iri_count` on `purrdf_entail_certain_answers`,
+  `purrdf_entail_graph_entails`, `purrdf_entail_verify_entailment` and
+  `purrdf_query_entailment_governed` (riding the unshipped 0.8.0 ABI bump). Rust:
+  `purrdf_entail::entails_with` / `certain_answers_with`; `certain_answers_to_string`,
+  `graph_entails_to_string` and `verify_entailment_to_string` take a `MaterializeLimits`;
+  `RegimeService`, `RegimeHost::service_knobs`, `render_entail_error_in`;
+  `EntailmentClosure::with_limits`. The OWL-Direct consistency question runs no rule-table
+  evaluation — its evaluator is the hypertableau, bounded by `step_cap`/`work_cap` on every
+  host already — so it takes no stored-fact or join-step knob that would govern nothing;
+  the term-generating round and generated-term limits govern no entailment lane either.
+
+- **capi (BREAKING for C):** `purrdf_shacl_validate_changes_to_sarif` takes the two
+  validation parameters the whole-graph `purrdf_shacl_validate_to_sarif` takes, in the same
+  places: `conformance_disallows` / `conformance_disallows_count` after `removed_nt`, and
+  `bool subclass_of_in_shapes_graph` after `import_count` (riding the unshipped 0.8.0 ABI
+  bump). A change is judged exactly as the whole graph would be; before, the change path
+  always used SHACL's default disallow set and read class membership from the data graph
+  alone.
+
+- **shapes, validate, cli, python, wasm, capi (BREAKING):** a node-expression evaluation
+  reports the shapes graph's mandatory diagnostic (an empty `sh:in` / `sh:xone` list) like
+  every other run. Command line: `purrdf node-expr` writes one `shacl diagnostic RULE
+  SHAPE` stderr line per diagnostic after `node-expr outputs N`. Python:
+  `shapes.eval_node_expr` returns `{"outputs": [...], "diagnostics": [{"rule", "shape"},
+  ...]}` instead of a list. WebAssembly: `shaclEvalNodeExpr` returns a
+  `ShaclNodeExprOutcome` (`outputs`, `diagnostics` of `ShaclDiagnostic` values with `rule`
+  and `shape`) instead of an array. C: `purrdf_shacl_eval_node_expr` gains a nullable
+  `out_diagnostics` buffer before `out_error` (riding the unshipped 0.8.0 ABI bump). Rust:
+  `free_expression::evaluate` returns a `NodeExprEvaluation` (`outputs`, `diagnostics`),
+  and `purrdf_validate::eval_node_expr` (a `NodeExprOutcome`) replaces
+  `eval_node_expr_to_terms`. The diagnostics change no output.
+
+- **wasm (BREAKING), capi:** the two SHACL rules entry points spell their shared parameters
+  in one order, and a mandatory diagnostic has one encoding on every host. WebAssembly
+  `shaclApplyRules` is now `(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
+  importIris?, importDocuments?, shapesGraph?, maxTermGeneratingRounds?,
+  maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)` — the import table, then
+  `shapesGraph`, then the four limits contiguously, exactly as `shaclEntail(shapesTtl,
+  dataNt, shapesBase?, importIris?, importDocuments?, shapesGraph?,
+  maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)` takes
+  them (it used to interleave the limits with the import table and end on
+  `shapesGraph`). `ShaclEntailment.diagnostics` and `ShaclRulesInference.diagnostics` are
+  arrays of `ShaclDiagnostic` values (`rule`, `shape`) instead of `RULE SHAPE` strings —
+  the structured form Python's `{"rule", "shape"}` dicts already carry. C keeps its
+  `diagnostic RULE SHAPE` lines, now documented as the same two fields in the same order.
+
 - **validate, python, wasm, capi (BREAKING for C):** SHACL-AF entailment takes the four
   rule-evaluation limits the rules run takes — the term-generating round limit, the
   generated-term budget, the stored-fact limit and the join-step limit — routed through

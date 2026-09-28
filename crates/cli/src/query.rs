@@ -122,10 +122,11 @@
 
 use std::sync::Arc;
 
-use purrdf::{ClosureRelations, GovernedEntailment};
+use purrdf::{ClosureRelations, EntailmentClosure, GovernedEntailment};
 use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
 use purrdf_core::{DatasetView, LossLedger, SparqlRequest, SparqlResult};
 use purrdf_entail::EntailError;
+use purrdf_entail::ImportMap;
 use purrdf_rdf::JsonLdSerializeOptions;
 use purrdf_rdf::{NativeRdfFormat, SourceFormat};
 use purrdf_sparql_eval::{
@@ -133,6 +134,7 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, QueryExplanation, QueryGovernors, QueryOptions as EngineQueryOptions,
 };
 use purrdf_sparql_results::{ProvenanceNamespace, ResultProvenance, SparqlResultsFormat};
+use purrdf_validate::regime::MaterializeLimits;
 use sha2::{Digest, Sha256};
 
 use crate::cli::{CliRegime, LedgerTarget, QueryFormat, ReportTarget};
@@ -643,7 +645,8 @@ fn entailed_query<D: DatasetView>(
     dataset: &D,
     query: &str,
     base: Option<&str>,
-    plan: &reason::EntailmentPlan,
+    regime: &str,
+    closure: &EntailmentClosure<'_>,
     governors: &QueryGovernors,
     options: EngineQueryOptions<'_>,
     relations: &ClosureRelations<'_>,
@@ -654,14 +657,8 @@ fn entailed_query<D: DatasetView>(
         base_iri: base,
         substitutions: &[],
     };
-    match purrdf::query_with_entailment_governed(
-        engine,
-        dataset,
-        request,
-        plan.query_entailment(),
-        options,
-        relations,
-        governors,
+    match purrdf::query_with_entailment_closure_governed(
+        engine, dataset, request, closure, options, relations, governors,
     ) {
         Ok(answered) => {
             // The certificate is surfaced for the run that HAPPENED. A closure the stop
@@ -679,7 +676,11 @@ fn entailed_query<D: DatasetView>(
                 EntailError::Inconsistent(run).to_string(),
             ))
         }
-        Err(purrdf::ReasoningError::Entailment(other)) => Err(other.into()),
+        Err(purrdf::ReasoningError::Entailment(other)) => Err(report::entailment_refusal(
+            regime,
+            other,
+            purrdf_validate::regime::RegimeService::Query,
+        )),
         // One query-side diagnostic is a USAGE error rather than a runtime one, and it is
         // told apart by its stable code rather than by its prose: the refusal of
         // `--path-relation` beside an `--entailment owl-direct` run whose chase minted
@@ -710,6 +711,10 @@ struct EntailedQueryOp<'a> {
     query: &'a str,
     base: Option<&'a str>,
     plan: &'a reason::EntailmentPlan,
+    /// The data's `owl:imports` table, resolved from `--import`.
+    imports: &'a ImportMap,
+    /// `--max-stored-facts` / `--max-join-steps`: the closure's evaluation limits.
+    limits: &'a MaterializeLimits,
     governors: &'a QueryGovernors,
     aggregates: Option<&'a AggregateRegistry>,
     /// The `--path-relation` specs, snapshotted over the CLOSURE the regime materializes;
@@ -750,7 +755,9 @@ impl ViewOp for EntailedQueryOp<'_> {
             view,
             self.query,
             self.base,
-            self.plan,
+            self.plan.regime_name(),
+            &EntailmentClosure::new(self.plan.query_entailment(), self.imports)
+                .with_limits(self.limits.eval_options()),
             self.governors,
             engine_options(&engine_env(self.aggregates, admitted.as_ref())?),
             &relations,
@@ -774,6 +781,12 @@ pub(crate) struct QueryOptions<'a> {
     pub(crate) entailment: Option<CliRegime>,
     /// `--rules`: the RIF-in-XML rule document `--entailment rif` runs.
     pub(crate) rules: Option<&'a std::path::Path>,
+    /// `--import IRI=FILE`: the data's `owl:imports` table for the `--entailment` closure,
+    /// in the order the operator wrote them.
+    pub(crate) imports: &'a [String],
+    /// `--max-stored-facts` / `--max-join-steps`: the `--entailment` closure's evaluation
+    /// limits, spelled for the command line.
+    pub(crate) limits: MaterializeLimits,
     /// `--results-format`: the result serialization. `None` means the flag was
     /// not named at all (distinct from naming its default, `json`) — the
     /// distinction [`refuse_unenforceable_combinations`] needs to refuse
@@ -895,6 +908,16 @@ pub(crate) fn run(
         // as a zero-copy `PackView` (no `dataset_from_view` rebuild); a text source parses
         // to an `RdfDataset`.
         let plan = reason::EntailmentPlan::resolve(regime, options.rules)?;
+        // The data's `owl:imports` table: every pair decided and every document read before
+        // the closure starts, and the data document's own IRI declared loaded, exactly as
+        // `reason` does — so the query runs over the imports closure the regime is defined
+        // over, never over the data alone.
+        let premise_imports = crate::premise_imports::PremiseImports::read(
+            options.imports,
+            None,
+            options.base,
+            &[(options.data, data_format)],
+        )?;
         // Built HERE, with the source already read and the closure not yet started, for the
         // reason `GovernedQueryOp` states: a `--deadline` is a budget for the work the flag
         // names, and reading a large file is not that work.
@@ -910,6 +933,8 @@ pub(crate) fn run(
                 query: options.query,
                 base: options.base,
                 plan: &plan,
+                imports: premise_imports.map(),
+                limits: &options.limits,
                 governors: &governors,
                 aggregates: aggregates.as_ref(),
                 relations,

@@ -101,7 +101,18 @@ test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its pr
 
   // A passed limit names the limit, the numbers and this host's own argument.
   assert.throws(
-    () => shaclApplyRules(DATA, SHAPES, undefined, undefined, undefined, false, 3n),
+    () => shaclApplyRules(
+      DATA,
+      SHAPES,
+      undefined,
+      undefined,
+      undefined,
+      false,
+      undefined,
+      undefined,
+      undefined,
+      3n,
+    ),
     (error) =>
       error.message.startsWith(
         "SHACL rules did not complete: the rules exceeded the term-generating round " +
@@ -125,6 +136,7 @@ test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its pr
         undefined,
         undefined,
         undefined,
+        undefined,
         5n,
       ),
     (error) =>
@@ -142,11 +154,23 @@ test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its pr
     undefined,
     undefined,
     undefined,
+    undefined,
     6n,
   );
   assert.equal(roomy.inferred, INFERRED);
   roomy.free();
-  const enough = shaclApplyRules(DATA, SHAPES, undefined, undefined, undefined, false, 4n);
+  const enough = shaclApplyRules(
+    DATA,
+    SHAPES,
+    undefined,
+    undefined,
+    undefined,
+    false,
+    undefined,
+    undefined,
+    undefined,
+    4n,
+  );
   assert.equal(enough.inferred, INFERRED);
   enough.free();
 
@@ -187,6 +211,7 @@ test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its pr
         undefined,
         undefined,
         undefined,
+        undefined,
         1n,
       ),
     (error) =>
@@ -211,7 +236,6 @@ test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its pr
     undefined,
     undefined,
     false,
-    undefined,
     ["http://example.org/more"],
     [imported],
   );
@@ -227,9 +251,18 @@ test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its pr
   );
   assert.throws(
     () =>
-      shaclApplyRules(DATA, undefined, lone, undefined, undefined, false, undefined, [
+      shaclApplyRules(
+        DATA,
+        undefined,
+        lone,
+        undefined,
+        undefined,
+        false,
+        [
         "http://example.org/more",
-      ], [imported]),
+      ],
+        [imported],
+      ),
     (error) =>
       error.message ===
       "the SPARQL 1.2 RL rule set's import closure never reaches <http://example.org/more>, " +
@@ -239,11 +272,11 @@ test("wasm_shacl_apply_rules: shaclApplyRules writes the inference graph, its pr
 
 test("wasm_shacl_eval_node_expr: shaclEvalNodeExpr evaluates one expression node, natively and with a scope", () => {
   assert.deepEqual(
-    shaclEvalNodeExpr(SHAPES, DATA, "http://example.org/ns#Tag", "http://example.org/ns#a"),
+    shaclEvalNodeExpr(SHAPES, DATA, "http://example.org/ns#Tag", "http://example.org/ns#a").outputs,
     ["<http://example.org/ns#yes>"],
   );
   assert.deepEqual(
-    shaclEvalNodeExpr(SHAPES, DATA, "_:suffix", "http://example.org/ns#a", ['suffix="!"@en']),
+    shaclEvalNodeExpr(SHAPES, DATA, "_:suffix", "http://example.org/ns#a", ['suffix="!"@en']).outputs,
     ['"!"@en'],
   );
   assert.throws(
@@ -264,14 +297,33 @@ test("wasm_shacl_eval_node_expr: shaclEvalNodeExpr evaluates one expression node
   );
 });
 
+test("shaclEvalNodeExpr reports the mandatory diagnostic as { rule, shape }, and none for the neighbour", () => {
+  const shapes = (members) =>
+    "@prefix sh: <http://www.w3.org/ns/shacl#> .\n" +
+    "@prefix ex: <http://example.org/ns#> .\n" +
+    `ex:Listed a sh:NodeShape ; sh:in ( ${members} ) .\n`;
+  const constant = "http://example.org/ns#Constant";
+  const empty = shaclEvalNodeExpr(shapes(""), DATA, constant, "http://example.org/ns#a");
+  assert.deepEqual(empty.outputs, [`<${constant}>`]);
+  assert.deepEqual(
+    empty.diagnostics.map((d) => ({ rule: d.rule, shape: d.shape })),
+    [{ rule: "in-minListLength", shape: "<http://example.org/ns#Listed>" }],
+  );
+  const member = shaclEvalNodeExpr(shapes("ex:one"), DATA, constant, "http://example.org/ns#a");
+  assert.deepEqual(member.outputs, [`<${constant}>`]);
+  assert.equal(member.diagnostics.length, 0);
+});
+
 test("wasm_shacl_eval_node_expr_selectors: shaclEvalNodeExpr names an anonymous expression by a walk and inline as Turtle", () => {
   const SH = "http://www.w3.org/ns/shacl#";
   const A = "http://example.org/ns#a";
   const YES = ["<http://example.org/ns#yes>"];
   const at = (node, via) =>
-    shaclEvalNodeExpr(SHAPES, DATA, undefined, A, undefined, undefined, undefined, undefined, node, via);
+    shaclEvalNodeExpr(SHAPES, DATA, undefined, A, undefined, undefined, undefined, undefined, node, via)
+      .outputs;
   const inline = (turtle) =>
-    shaclEvalNodeExpr(SHAPES, DATA, undefined, A, undefined, undefined, undefined, undefined, undefined, undefined, turtle);
+    shaclEvalNodeExpr(SHAPES, DATA, undefined, A, undefined, undefined, undefined, undefined, undefined, undefined, turtle)
+      .outputs;
   assert.deepEqual(at("http://example.org/ns#Tagger", [`${SH}rule`, `${SH}object`]), YES);
   // One value beside two.
   assert.deepEqual(
@@ -365,6 +417,7 @@ ex:S a sh:NodeShape ; sh:targetSubjectsOf ex:p ;
     undefined,
     undefined,
     false,
+    undefined,
     undefined,
     undefined,
     undefined,

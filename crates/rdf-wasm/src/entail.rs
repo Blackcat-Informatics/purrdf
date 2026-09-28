@@ -96,17 +96,28 @@ impl From<BoundaryClosure> for RegimeClosure {
 /// Returns a plain `String` error (NOT a `JsError`) so it is unit-testable on the
 /// native build — constructing a `JsError` calls a wasm-only import that panics
 /// off wasm. The `#[wasm_bindgen]` wrapper maps the `String` to a `JsError`.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the pointer-free twin of `entailMaterialize`, taking its arguments one for one"
+)]
 pub(crate) fn materialize_impl(
     document: &str,
     regime: &str,
     program: &str,
+    import_iris: &[String],
+    import_documents: &[String],
+    premise_iris: &[String],
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
 ) -> Result<RegimeClosure, String> {
+    let imports = import_pairs(import_iris, import_documents)?;
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
     materialize_to_nquads_string_with(
         regime,
         document,
         program,
+        &imports,
+        &premise_iris,
         &MaterializeLimits {
             max_stored_facts,
             max_join_steps,
@@ -116,9 +127,9 @@ pub(crate) fn materialize_impl(
     .map(RegimeClosure::from)
 }
 
-/// `entailMaterialize(document, regime, program, maxStoredFacts?, maxJoinSteps?)` → a
-/// `RegimeClosure` carrying the canonical N-Quads closure and the rendered reasoning
-/// report.
+/// `entailMaterialize(document, regime, program, importIris, importDocuments, premiseIris,
+/// maxStoredFacts?, maxJoinSteps?)` → a `RegimeClosure` carrying the canonical N-Quads
+/// closure and the rendered reasoning report.
 ///
 /// `document` is parsed as N-Quads, which accepts an N-Triples document
 /// unchanged, so a document that names a graph keeps naming it. `regime` is one
@@ -140,19 +151,45 @@ pub(crate) fn materialize_impl(
 /// exactly the closure larger limits would, and the report's `contract-hash` names the
 /// calculus under the limits in force.
 ///
+/// `importIris`, `importDocuments` and `premiseIris` are [`entail_certain_answers`]'s: OWL 2
+/// defines an ontology's imports closure to BE the ontology, so a document carrying an
+/// `owl:imports` is closed over the merge of itself and every N-Quads document the table
+/// supplies, and the report then states `ontology-import-resolved`. An import the table does
+/// not resolve, and the document does not already hold, throws by name — never a closure of
+/// a smaller ontology — and so does a table entry the closure never reaches. Empty arrays are
+/// the ordinary "imports nothing" case, and all three are required rather than defaulted.
+///
 /// Throws if `document` fails to parse, if `regime` is not one of those spellings
-/// (the message names the accepted set), if `program` is wrong for the regime, or if
-/// the run passes an evaluation limit.
+/// (the message names the accepted set), if `program` is wrong for the regime, on an
+/// import-table refusal, or if the run passes an evaluation limit.
 #[wasm_bindgen(js_name = entailMaterialize)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned arrays
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the document, the regime's program, the import table and each limit are named \
+              explicitly at the boundary, in the order every other host takes them"
+)]
 pub fn entail_materialize(
     document: &str,
     regime: &str,
     program: &str,
+    import_iris: Vec<String>,
+    import_documents: Vec<String>,
+    premise_iris: Vec<String>,
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
 ) -> Result<RegimeClosure, JsError> {
-    materialize_impl(document, regime, program, max_stored_facts, max_join_steps)
-        .map_err(|e| JsError::new(&e))
+    materialize_impl(
+        document,
+        regime,
+        program,
+        &import_iris,
+        &import_documents,
+        &premise_iris,
+        max_stored_facts,
+        max_join_steps,
+    )
+    .map_err(|e| JsError::new(&e))
 }
 
 /// The rule table `regime` is *defined by*. See [`entail_rules`].
@@ -357,13 +394,27 @@ impl From<BoundaryAnswer> for ReasoningAnswer {
 /// [`entail_consistency`].
 pub(crate) fn consistency_impl(
     document: &str,
+    import_iris: &[String],
+    import_documents: &[String],
+    premise_iris: &[String],
     step_cap: u32,
     work_cap: u32,
 ) -> Result<ReasoningAnswer, String> {
-    consistency_to_string(document, step_cap, work_cap).map(ReasoningAnswer::from)
+    let imports = import_pairs(import_iris, import_documents)?;
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    consistency_to_string(document, &imports, &premise_iris, step_cap, work_cap)
+        .map(ReasoningAnswer::from)
 }
 
-/// `entailConsistency(document, stepCap, workCap)` → is the knowledge base consistent?
+/// `entailConsistency(document, importIris, importDocuments, premiseIris, stepCap, workCap)`
+/// → is the knowledge base consistent?
+///
+/// `importIris`, `importDocuments` and `premiseIris` are [`entail_certain_answers`]'s: OWL 2
+/// defines an ontology's imports closure to BE the ontology, so consistency is decided for
+/// the ontology merged with every document the table supplies, and the certificate then
+/// names `ontology-import-resolved`. An import the table does not resolve, and the ontology
+/// does not already hold, throws by name — never a verdict over a smaller ontology — and so
+/// does a table entry the closure never reaches.
 ///
 /// `stepCap` narrows the per-decision tableau step cap; **0 means the knowledge
 /// base's own cap**, not a cap of zero steps. It can only NARROW, so it cannot be
@@ -380,14 +431,27 @@ pub(crate) fn consistency_impl(
 /// one that detects one; every other throws rather than returning the vacuous
 /// answer an ontology with no model gives.
 ///
-/// Throws if `document` fails to parse or the reverse mapping fails.
+/// Throws if `document` fails to parse, on an import-table refusal, or if the reverse
+/// mapping fails.
 #[wasm_bindgen(js_name = entailConsistency)]
+#[allow(clippy::needless_pass_by_value)] // binding ABI receives owned arrays
 pub fn entail_consistency(
     document: &str,
+    import_iris: Vec<String>,
+    import_documents: Vec<String>,
+    premise_iris: Vec<String>,
     step_cap: u32,
     work_cap: u32,
 ) -> Result<ReasoningAnswer, JsError> {
-    consistency_impl(document, step_cap, work_cap).map_err(|e| JsError::new(&e))
+    consistency_impl(
+        document,
+        &import_iris,
+        &import_documents,
+        &premise_iris,
+        step_cap,
+        work_cap,
+    )
+    .map_err(|e| JsError::new(&e))
 }
 
 /// The subsumption hierarchy over the named classes. See [`entail_classify`].
@@ -623,6 +687,32 @@ pub fn entail_explain_conclusion(
 
 // ── The conclusion-directed entailment services ─────────────────────────────────
 
+/// The caller's import table and premise IRIs as the map the entailment-aware query
+/// resolves a dataset's `owl:imports` against — the same arrays, zipped and parsed by the
+/// same shared boundary ([`purrdf_validate::premise_import_map`]) as every string service.
+pub(crate) fn entailment_import_map(
+    import_iris: &[String],
+    import_documents: &[String],
+    premise_iris: &[String],
+) -> Result<purrdf::entail::ImportMap, String> {
+    let imports = import_pairs(import_iris, import_documents)?;
+    let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
+    purrdf_validate::premise_import_map(&imports, &premise_iris)
+}
+
+/// The two optional evaluation limits every entailment entry point of this host takes, as
+/// the boundary's limits, spelled for this host.
+pub(crate) const fn wasm_limits(
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
+) -> MaterializeLimits {
+    MaterializeLimits {
+        max_stored_facts,
+        max_join_steps,
+        host: RegimeHost::Wasm,
+    }
+}
+
 /// Zip the caller's two import arrays into the boundary's ordered `(iri, document)` table.
 ///
 /// # Why TWO arrays and not one array of `[iri, document]` pairs
@@ -670,14 +760,16 @@ pub(crate) fn certain_answers_impl(
     import_iris: &[String],
     import_documents: &[String],
     premise_iris: &[String],
+    limits: &MaterializeLimits,
 ) -> Result<ReasoningAnswer, String> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
-    certain_answers_to_string(regime, document, pattern, &imports, &premise_iris)
+    certain_answers_to_string(regime, document, pattern, &imports, &premise_iris, limits)
         .map(ReasoningAnswer::from)
 }
 
-/// `entailCertainAnswers(regime, document, pattern, importIris, importDocuments, premiseIris)` → the substitutions the knowledge
+/// `entailCertainAnswers(regime, document, pattern, importIris, importDocuments, premiseIris,
+/// maxStoredFacts?, maxJoinSteps?)` → the substitutions the knowledge
 /// base ENTAILS the pattern under, as `var` and `row` lines.
 ///
 /// A certain answer is true in every model, not merely present in one closure, which is
@@ -736,6 +828,11 @@ pub(crate) fn certain_answers_impl(
 /// the table does not resolve and the premise does not hold, and on an inconsistent premise — whose refusal carries the
 /// full report.
 #[wasm_bindgen(js_name = entailCertainAnswers)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the question, the import table and each evaluation limit are named explicitly at \
+              the boundary, in the order every other host takes them"
+)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn entail_certain_answers(
     regime: &str,
@@ -744,6 +841,8 @@ pub fn entail_certain_answers(
     import_iris: Vec<String>,
     import_documents: Vec<String>,
     premise_iris: Vec<String>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> Result<ReasoningAnswer, JsError> {
     certain_answers_impl(
         regime,
@@ -752,6 +851,7 @@ pub fn entail_certain_answers(
         &import_iris,
         &import_documents,
         &premise_iris,
+        &wasm_limits(max_stored_facts, max_join_steps),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -764,14 +864,16 @@ pub(crate) fn graph_entails_impl(
     import_iris: &[String],
     import_documents: &[String],
     premise_iris: &[String],
+    limits: &MaterializeLimits,
 ) -> Result<ReasoningAnswer, String> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
-    graph_entails_to_string(regime, premise, conclusion, &imports, &premise_iris)
+    graph_entails_to_string(regime, premise, conclusion, &imports, &premise_iris, limits)
         .map(ReasoningAnswer::from)
 }
 
-/// `entailGraphEntails(regime, premise, conclusion, importIris, importDocuments, premiseIris)` → does the premise entail the
+/// `entailGraphEntails(regime, premise, conclusion, importIris, importDocuments, premiseIris,
+/// maxStoredFacts?, maxJoinSteps?)` → does the premise entail the
 /// conclusion GRAPH under the regime's rule table?
 ///
 /// NOT [`entail_entails`], which asks the OWL 2 Direct-Semantics TABLEAU about one AXIOM
@@ -796,6 +898,11 @@ pub(crate) fn graph_entails_impl(
 ///
 /// Throws as [`entail_certain_answers`].
 #[wasm_bindgen(js_name = entailGraphEntails)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the question, the import table and each evaluation limit are named explicitly at \
+              the boundary, in the order every other host takes them"
+)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn entail_graph_entails(
     regime: &str,
@@ -804,6 +911,8 @@ pub fn entail_graph_entails(
     import_iris: Vec<String>,
     import_documents: Vec<String>,
     premise_iris: Vec<String>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> Result<ReasoningAnswer, JsError> {
     graph_entails_impl(
         regime,
@@ -812,6 +921,7 @@ pub fn entail_graph_entails(
         &import_iris,
         &import_documents,
         &premise_iris,
+        &wasm_limits(max_stored_facts, max_join_steps),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -824,14 +934,16 @@ pub(crate) fn verify_entailment_impl(
     import_iris: &[String],
     import_documents: &[String],
     premise_iris: &[String],
+    limits: &MaterializeLimits,
 ) -> Result<ReasoningAnswer, String> {
     let imports = import_pairs(import_iris, import_documents)?;
     let premise_iris: Vec<&str> = premise_iris.iter().map(String::as_str).collect();
-    verify_entailment_to_string(regime, premise, conclusion, &imports, &premise_iris)
+    verify_entailment_to_string(regime, premise, conclusion, &imports, &premise_iris, limits)
         .map(ReasoningAnswer::from)
 }
 
-/// `entailVerifyEntailment(regime, premise, conclusion, importIris, importDocuments, premiseIris)` → [`entail_graph_entails`] with
+/// `entailVerifyEntailment(regime, premise, conclusion, importIris, importDocuments, premiseIris,
+/// maxStoredFacts?, maxJoinSteps?)` → [`entail_graph_entails`] with
 /// the warrant re-decided, without running a reasoner.
 ///
 /// The re-check re-derives nothing: "the closure follows from the premise" is the chase's
@@ -849,6 +961,11 @@ pub(crate) fn verify_entailment_impl(
 ///
 /// Throws as [`entail_certain_answers`].
 #[wasm_bindgen(js_name = entailVerifyEntailment)]
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the question, the import table and each evaluation limit are named explicitly at \
+              the boundary, in the order every other host takes them"
+)]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 pub fn entail_verify_entailment(
     regime: &str,
@@ -857,6 +974,8 @@ pub fn entail_verify_entailment(
     import_iris: Vec<String>,
     import_documents: Vec<String>,
     premise_iris: Vec<String>,
+    max_stored_facts: Option<u64>,
+    max_join_steps: Option<u64>,
 ) -> Result<ReasoningAnswer, JsError> {
     verify_entailment_impl(
         regime,
@@ -865,6 +984,7 @@ pub fn entail_verify_entailment(
         &import_iris,
         &import_documents,
         &premise_iris,
+        &wasm_limits(max_stored_facts, max_join_steps),
     )
     .map_err(|e| JsError::new(&e))
 }
@@ -1191,7 +1311,7 @@ mod tests {
             (
                 "consistency",
                 session.consistency().expect("decides"),
-                consistency_impl(SCHEMA, 0, 0).expect("decides"),
+                consistency_impl(SCHEMA, &[], &[], &[], 0, 0).expect("decides"),
             ),
             (
                 "classify",
@@ -1257,8 +1377,16 @@ mod tests {
         let pattern = "<http://example.org/x> \
                        <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
 
-        let answers =
-            certain_answers_impl("owl-rl", SCHEMA, pattern, &[], &[], &[]).expect("answers");
+        let answers = certain_answers_impl(
+            "owl-rl",
+            SCHEMA,
+            pattern,
+            &[],
+            &[],
+            &[],
+            &wasm_limits(None, None),
+        )
+        .expect("answers");
         assert!(
             answers
                 .answer()
@@ -1271,15 +1399,31 @@ mod tests {
             answers.answer()
         );
 
-        let decided =
-            graph_entails_impl("owl-rl", SCHEMA, conclusion, &[], &[], &[]).expect("decides");
+        let decided = graph_entails_impl(
+            "owl-rl",
+            SCHEMA,
+            conclusion,
+            &[],
+            &[],
+            &[],
+            &wasm_limits(None, None),
+        )
+        .expect("decides");
         assert_eq!(
             decided.answer(),
             "mechanism strict-table\nentailment entailed\n"
         );
 
-        let checked =
-            verify_entailment_impl("owl-rl", SCHEMA, conclusion, &[], &[], &[]).expect("decides");
+        let checked = verify_entailment_impl(
+            "owl-rl",
+            SCHEMA,
+            conclusion,
+            &[],
+            &[],
+            &[],
+            &wasm_limits(None, None),
+        )
+        .expect("decides");
         assert!(
             checked
                 .answer()
@@ -1312,8 +1456,16 @@ mod tests {
         let never = "<http://example.org/x> \
                      <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                      <http://example.org/Never> .\n";
-        let checked =
-            verify_entailment_impl("owl-rl", SCHEMA, never, &[], &[], &[]).expect("decides");
+        let checked = verify_entailment_impl(
+            "owl-rl",
+            SCHEMA,
+            never,
+            &[],
+            &[],
+            &[],
+            &wasm_limits(None, None),
+        )
+        .expect("decides");
         assert!(checked.answer().starts_with("mechanism strict-table\n"));
         assert!(checked.answer().contains("\nentailment not-entailed\n"));
         assert!(
@@ -1330,8 +1482,16 @@ mod tests {
                           <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
                           <http://example.org/B> .\n";
         for regime in ["owl-direct", "rif"] {
-            let refused = graph_entails_impl(regime, SCHEMA, conclusion, &[], &[], &[])
-                .expect_err("defined by an input this signature does not carry");
+            let refused = graph_entails_impl(
+                regime,
+                SCHEMA,
+                conclusion,
+                &[],
+                &[],
+                &[],
+                &wasm_limits(None, None),
+            )
+            .expect_err("defined by an input this signature does not carry");
             assert!(refused.contains(regime), "{refused}");
         }
     }
@@ -1358,6 +1518,7 @@ mod tests {
             &[String],
             &[String],
             &[String],
+            &MaterializeLimits,
         ) -> Result<ReasoningAnswer, String>;
         let services: [(Service, &str); 3] = [
             (graph_entails_impl, conclusion),
@@ -1365,11 +1526,27 @@ mod tests {
             (certain_answers_impl, pattern),
         ];
         for (service, question) in services {
-            let refused = service("simple", &premise, question, &[], &[], &[])
-                .expect_err("an undeclared self-import is unresolved");
+            let refused = service(
+                "simple",
+                &premise,
+                question,
+                &[],
+                &[],
+                &[],
+                &wasm_limits(None, None),
+            )
+            .expect_err("an undeclared self-import is unresolved");
             assert!(refused.contains(IRI), "{refused}");
-            let answered = service("simple", &premise, question, &[], &[], &named)
-                .expect("a declared premise IRI resolves the self-import");
+            let answered = service(
+                "simple",
+                &premise,
+                question,
+                &[],
+                &[],
+                &named,
+                &wasm_limits(None, None),
+            )
+            .expect("a declared premise IRI resolves the self-import");
             assert!(answered.answer().starts_with("mechanism strict-table\n"));
         }
     }
@@ -1402,6 +1579,7 @@ mod tests {
             &[String],
             &[String],
             &[String],
+            &MaterializeLimits,
         ) -> Result<ReasoningAnswer, String>;
         let services: [(Service, &str); 3] = [
             (graph_entails_impl, conclusion),
@@ -1409,15 +1587,160 @@ mod tests {
             (certain_answers_impl, pattern),
         ];
         for (service, question) in services {
-            let refused = service("rdfs", fact, question, &iris, &documents, &[])
-                .expect_err("an entry nothing imports is refused");
+            let refused = service(
+                "rdfs",
+                fact,
+                question,
+                &iris,
+                &documents,
+                &[],
+                &wasm_limits(None, None),
+            )
+            .expect_err("an entry nothing imports is refused");
             assert!(
                 refused.contains(&format!("<{LIB}>"))
                     && refused.contains("would be read and never used"),
                 "{refused}"
             );
-            service("rdfs", &importing, question, &iris, &documents, &[])
-                .expect("the importing premise uses the entry");
+            service(
+                "rdfs",
+                &importing,
+                question,
+                &iris,
+                &documents,
+                &[],
+                &wasm_limits(None, None),
+            )
+            .expect("the importing premise uses the entry");
+        }
+    }
+
+    /// `entailMaterialize` and `entailConsistency` take the same import table: an
+    /// unsupplied import refuses by name, the supplied one changes the answer (`x : B` joins
+    /// the closure; the imported disjointness makes the ontology inconsistent), and an entry
+    /// a premise that imports nothing never reaches is refused — while that premise with an
+    /// empty table answers.
+    #[test]
+    fn wasm_materialize_and_consistency_resolve_the_import_table() {
+        const LIB: &str = "http://example.org/lib";
+        let schema = "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> \
+            <http://example.org/B> .\n\
+            <http://example.org/A> <http://www.w3.org/2002/07/owl#disjointWith> \
+            <http://example.org/C> .\n";
+        let fact = "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+            <http://example.org/A> .\n\
+            <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+            <http://example.org/C> .\n";
+        let importing = format!(
+            "<http://example.org/o> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://www.w3.org/2002/07/owl#Ontology> .\n\
+             <http://example.org/o> <http://www.w3.org/2002/07/owl#imports> <{LIB}> .\n{fact}"
+        );
+        let derived = "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+            <http://example.org/B> .";
+        let iris = [LIB.to_owned()];
+        let documents = [schema.to_owned()];
+
+        let refused = materialize_impl(&importing, "rdfs", "", &[], &[], &[], None, None)
+            .expect_err("an unsupplied import");
+        assert!(refused.contains(&format!("<{LIB}>")), "{refused}");
+        let closed = materialize_impl(&importing, "rdfs", "", &iris, &documents, &[], None, None)
+            .expect("closes over the import");
+        assert!(closed.nquads.contains(derived), "{}", closed.nquads);
+        let unreached = materialize_impl(fact, "rdfs", "", &iris, &documents, &[], None, None)
+            .expect_err("an unreached entry");
+        assert!(
+            unreached.contains("would be read and never used"),
+            "{unreached}"
+        );
+        let plain =
+            materialize_impl(fact, "rdfs", "", &[], &[], &[], None, None).expect("imports nothing");
+        assert!(!plain.nquads.contains(derived));
+
+        let refused =
+            consistency_impl(&importing, &[], &[], &[], 0, 0).expect_err("an unsupplied import");
+        assert!(refused.contains(&format!("<{LIB}>")), "{refused}");
+        let decided = consistency_impl(&importing, &iris, &documents, &[], 0, 0)
+            .expect("decides the closure");
+        assert_eq!(decided.answer, "consistency false\n");
+        let unreached =
+            consistency_impl(fact, &iris, &documents, &[], 0, 0).expect_err("an unreached entry");
+        assert!(unreached.contains(&format!("<{LIB}>")), "{unreached}");
+        assert_eq!(
+            consistency_impl(fact, &[], &[], &[], 0, 0)
+                .expect("imports nothing")
+                .answer,
+            "consistency true\n"
+        );
+    }
+
+    /// The three conclusion-directed services take the evaluation limits on this host, and a
+    /// refusal names THIS host's argument of the function called; the neighbour with the
+    /// limit raised answers.
+    #[test]
+    fn wasm_conclusion_services_take_the_evaluation_limits() {
+        let conclusion = "<http://example.org/x> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .\n";
+        let pattern = "<http://example.org/x> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> ?c .\n";
+        let premise = "<http://example.org/A> \
+            <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .\n\
+            <http://example.org/x> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .\n";
+        type Service = fn(
+            &str,
+            &str,
+            &str,
+            &[String],
+            &[String],
+            &[String],
+            &MaterializeLimits,
+        ) -> Result<ReasoningAnswer, String>;
+        let services: [(Service, &str, &str); 3] = [
+            (certain_answers_impl, pattern, "entailCertainAnswers"),
+            (graph_entails_impl, conclusion, "entailGraphEntails"),
+            (verify_entailment_impl, conclusion, "entailVerifyEntailment"),
+        ];
+        for (service, question, name) in services {
+            let refused = service(
+                "owl-rl",
+                premise,
+                question,
+                &[],
+                &[],
+                &[],
+                &wasm_limits(None, Some(1)),
+            )
+            .expect_err("one join step");
+            assert!(
+                refused.contains("evaluation exceeded the join-step limit: ")
+                    && refused.ends_with(&format!("raise it with {name}'s maxJoinSteps")),
+                "{refused}"
+            );
+            let refused = service(
+                "owl-rl",
+                premise,
+                question,
+                &[],
+                &[],
+                &[],
+                &wasm_limits(Some(1), None),
+            )
+            .expect_err("one stored fact");
+            assert!(
+                refused.ends_with(&format!("raise it with {name}'s maxStoredFacts")),
+                "{refused}"
+            );
+            service(
+                "owl-rl",
+                premise,
+                question,
+                &[],
+                &[],
+                &[],
+                &wasm_limits(Some(4_194_304), Some(1_048_576)),
+            )
+            .expect("the native defaults, stated");
         }
     }
 
@@ -1483,7 +1806,7 @@ mod tests {
     /// verified emptiness.
     #[test]
     fn an_unasked_answer_carries_the_absent_proof_document_on_this_host() {
-        let plain = consistency_impl(TAXONOMY, 0, 0).expect("decides");
+        let plain = consistency_impl(TAXONOMY, &[], &[], &[], 0, 0).expect("decides");
         assert_eq!(
             plain.proof(),
             "purrdf-dl-proof 1\navailability not-recorded\n"
@@ -1522,7 +1845,8 @@ mod tests {
 
     #[test]
     fn materialize_infers_and_reports() {
-        let closed = materialize_impl(SCHEMA, "rdfs", "", None, None).expect("rdfs closure");
+        let closed =
+            materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], None, None).expect("rdfs closure");
         assert!(closed.nquads().contains(
             "<http://example.org/x> \
              <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> ."
@@ -1548,7 +1872,8 @@ mod tests {
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
         for error in [
-            materialize_impl(SCHEMA, "RDFS", "", None, None).expect_err("case-sensitive"),
+            materialize_impl(SCHEMA, "RDFS", "", &[], &[], &[], None, None)
+                .expect_err("case-sensitive"),
             rules_impl("rdfs-plus").expect_err("unknown"),
             implemented_rules_impl("rdfs-plus").expect_err("unknown"),
         ] {
@@ -1571,7 +1896,7 @@ mod tests {
             ("rif", RIF_PROGRAM),
             ("d", ""),
         ] {
-            let closed = materialize_impl(SCHEMA, regime, program, None, None)
+            let closed = materialize_impl(SCHEMA, regime, program, &[], &[], &[], None, None)
                 .unwrap_or_else(|error| panic!("{regime}: {error}"));
             assert!(
                 closed.report().contains(&format!("\nregime {regime}\n")),
@@ -1581,7 +1906,7 @@ mod tests {
         }
         // A rule document belongs to exactly one regime; passing one anywhere else is
         // refused rather than discarded.
-        let error = materialize_impl(SCHEMA, "rdfs", RIF_PROGRAM, None, None)
+        let error = materialize_impl(SCHEMA, "rdfs", RIF_PROGRAM, &[], &[], &[], None, None)
             .expect_err("a rule document for a rule-table regime");
         assert!(error.contains("takes no rule document"), "{error}");
     }
@@ -1590,7 +1915,7 @@ mod tests {
     /// holding exactly the store the run needs returns the default closure.
     #[test]
     fn the_evaluation_limits_name_this_hosts_arguments() {
-        let closed = materialize_impl(SCHEMA, "rdfs", "", None, None).expect("rdfs");
+        let closed = materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], None, None).expect("rdfs");
         let stored: u64 = closed
             .report
             .lines()
@@ -1598,7 +1923,9 @@ mod tests {
             .expect("a stored-facts line")
             .parse()
             .expect("a count");
-        let Err(refused) = materialize_impl(SCHEMA, "rdfs", "", Some(stored - 1), None) else {
+        let Err(refused) =
+            materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], Some(stored - 1), None)
+        else {
             panic!("one fact short must be refused");
         };
         assert!(
@@ -1606,9 +1933,11 @@ mod tests {
                 && refused.ends_with("raise it with entailMaterialize's maxStoredFacts"),
             "{refused}"
         );
-        let exact = materialize_impl(SCHEMA, "rdfs", "", Some(stored), None).expect("exact");
+        let exact =
+            materialize_impl(SCHEMA, "rdfs", "", &[], &[], &[], Some(stored), None).expect("exact");
         assert_eq!(exact.nquads, closed.nquads);
-        let Err(steps) = materialize_impl(SCHEMA, "owl-rl", "", None, Some(1)) else {
+        let Err(steps) = materialize_impl(SCHEMA, "owl-rl", "", &[], &[], &[], None, Some(1))
+        else {
             panic!("one join step must be refused");
         };
         assert!(
@@ -1619,7 +1948,19 @@ mod tests {
 
     #[test]
     fn a_malformed_document_is_an_error() {
-        assert!(materialize_impl("this is not n-quads\n", "rdfs", "", None, None).is_err());
+        assert!(
+            materialize_impl(
+                "this is not n-quads\n",
+                "rdfs",
+                "",
+                &[],
+                &[],
+                &[],
+                None,
+                None
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -1674,7 +2015,10 @@ mod tests {
     #[test]
     fn every_dl_service_reaches_this_host_with_its_certificate() {
         let services = [
-            ("consistency", consistency_impl(TAXONOMY, 0, 0)),
+            (
+                "consistency",
+                consistency_impl(TAXONOMY, &[], &[], &[], 0, 0),
+            ),
             ("classify", classify_impl(TAXONOMY, 0, 0)),
             ("realize", realize_impl(TAXONOMY, 0, 0)),
             (
@@ -1746,7 +2090,7 @@ mod tests {
     /// chase's — the distinction the whole certificate exists to make.
     #[test]
     fn the_dl_certificate_is_not_the_chase_report() {
-        let tableau = consistency_impl(TAXONOMY, 0, 0).expect("consistency");
+        let tableau = consistency_impl(TAXONOMY, &[], &[], &[], 0, 0).expect("consistency");
         assert_eq!(tableau.answer(), "consistency true\n");
         assert!(
             tableau
@@ -1754,7 +2098,8 @@ mod tests {
                 .starts_with("purrdf-dl-certificate 1\n")
         );
         assert!(tableau.certificate().contains("\ncompleteness decided\n"));
-        let chase = materialize_impl(TAXONOMY, "owl-rl", "", None, None).expect("owl-rl");
+        let chase =
+            materialize_impl(TAXONOMY, "owl-rl", "", &[], &[], &[], None, None).expect("owl-rl");
         assert!(chase.report().starts_with("purrdf-reasoning-report 4\n"));
         assert!(!chase.report().contains("completeness decided"));
     }
@@ -1791,7 +2136,7 @@ mod tests {
     /// Refusals cross this host as messages a JS caller can act on.
     #[test]
     fn dl_refusals_name_what_went_wrong() {
-        assert!(consistency_impl("this is not n-quads\n", 0, 0).is_err());
+        assert!(consistency_impl("this is not n-quads\n", &[], &[], &[], 0, 0).is_err());
         assert!(instances_impl(TAXONOMY, "not a term", 0, 0).is_err());
         let error = extract_module_impl(TAXONOMY, "", "nested").expect_err("unknown method");
         assert!(error.contains("bot, top, star"), "{error}");

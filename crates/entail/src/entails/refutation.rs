@@ -440,7 +440,7 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         )));
     }
 
-    let mut refuter = Refuter::new(regime);
+    let mut refuter = Refuter::new(regime).under(*q.options);
     let mut seeded = refuter.seed(premise)?;
     let mut clashes = Vec::with_capacity(facts.len());
     for fact in &facts {
@@ -1054,6 +1054,7 @@ mod tests {
                 closure: &closure,
                 triples: &triples,
                 pending: &pending,
+                options: &purrdf_datalog::seminaive::EvalOptions::default(),
             };
             assert!(
                 matches!(

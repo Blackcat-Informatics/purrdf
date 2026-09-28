@@ -6,7 +6,7 @@
 // The wasm-bindgen-generated classes (DataFactory/Dataset/Quad/Sink/Term,
 // RegimeClosure, ReasoningAnswer, SerializeLoss, ShaclImportError,
 // ShaclProductRefusal, ShaclEntailment, ShaclRulesInference, ShaclRulesCheck,
-// ShaclLintReport) and the free
+// ShaclLintReport, ShaclNodeExprOutcome, ShaclDiagnostic) and the free
 // functions (version, shaclValidateToSarif, shaclValidateChangesToSarif, shaclEntail,
 // shaclApplyRules, shaclCheckRules, shaclEvalNodeExpr, shaclLintShapes,
 // shaclPackProduct, shaclProductExplain,
@@ -87,6 +87,7 @@ import init, {
   shaclApplyRules,
   ShaclChangeValidation,
   shaclCheckRules,
+  ShaclDiagnostic,
   shaclEntail,
   ShaclEntailment,
   shaclEvalNodeExpr,
@@ -96,6 +97,7 @@ import init, {
   shaclPackProduct,
   shaclProductCertify,
   shaclProductExplain,
+  ShaclNodeExprOutcome,
   ShaclProductRefusal,
   shaclProductValidateToSarif,
   shaclProductValidateToSarifExpecting,
@@ -275,7 +277,31 @@ function normalizeEntailmentGovernedOptions(options) {
   return {
     ...governed,
     program: options?.program ?? undefined,
+    // The dataset's `owl:imports` table. Absent means EMPTY, which is the ordinary
+    // "imports nothing" case: a dataset that does import something is then refused by name
+    // in Rust rather than closed without its imports, so the default can never be a silent
+    // drop.
+    importIris: stringArrayOption(options?.importIris, "importIris"),
+    importDocuments: stringArrayOption(options?.importDocuments, "importDocuments"),
+    premiseIris: stringArrayOption(options?.premiseIris, "premiseIris"),
+    // The closure's evaluation limits, `bigint`s at the binding. A `number` is accepted and
+    // widened exactly; absent is this target's default.
+    maxStoredFacts: limitOption(options?.maxStoredFacts),
+    maxJoinSteps: limitOption(options?.maxJoinSteps),
   };
+}
+
+function limitOption(value) {
+  if (value == null) return undefined;
+  return typeof value === "bigint" ? value : BigInt(value);
+}
+
+function stringArrayOption(value, name) {
+  if (value == null) return [];
+  if (!Array.isArray(value)) {
+    throw new TypeError(`${name} must be an array of strings when supplied`);
+  }
+  return value;
 }
 
 function visualizationOptionsJson(options) {
@@ -763,6 +789,11 @@ export async function ready(wasmBytesOrUrl) {
           o.base,
           entailment,
           o.program,
+          o.importIris,
+          o.importDocuments,
+          o.premiseIris,
+          o.maxStoredFacts,
+          o.maxJoinSteps,
           o.aggregateNamespace,
           o.fuel,
           o.deadlineMs,
@@ -869,6 +900,7 @@ export {
   shaclApplyRules,
   ShaclChangeValidation,
   shaclCheckRules,
+  ShaclDiagnostic,
   shaclEntail,
   ShaclEntailment,
   shaclEvalNodeExpr,
@@ -878,6 +910,7 @@ export {
   shaclPackProduct,
   shaclProductCertify,
   shaclProductExplain,
+  ShaclNodeExprOutcome,
   ShaclProductRefusal,
   shaclProductValidateToSarif,
   shaclProductValidateToSarifExpecting,

@@ -563,7 +563,7 @@ pub(crate) fn run_node_expr(
             root_document.loaded.last().map(String::as_str),
         )
         .map_err(|error| CliError::Runtime(format!("{context}: {error}")))?;
-    let outputs = free_expression::evaluate(&FreeExpression {
+    let evaluated = free_expression::evaluate(&FreeExpression {
         shapes: &selected.shapes,
         prefixes: &root_document.prefixes,
         root: &selected.root,
@@ -574,12 +574,19 @@ pub(crate) fn run_node_expr(
     })
     .map_err(|error| shapes_error(error, &context, &root_document, "--shapes-base"))?;
     let mut text = String::new();
-    for term in &outputs {
+    for term in &evaluated.outputs {
         text.push_str(&term.to_string());
         text.push('\n');
     }
     sink::write_out(options.output, text.as_bytes())?;
-    eprintln!("node-expr outputs {}", outputs.len());
+    eprintln!("node-expr outputs {}", evaluated.outputs.len());
+    // The shapes graph's mandatory diagnostics, which every run reports: one `shacl
+    // diagnostic RULE SHAPE` line each, exactly as `validate` and `rules` print them. They
+    // change no output — the shapes graph is well-formed — so they go to stderr beside the
+    // count, never into the output document.
+    for diagnostic in &evaluated.diagnostics {
+        eprintln!("shacl diagnostic {diagnostic}");
+    }
     Ok(())
 }
 

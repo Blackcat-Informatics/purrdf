@@ -142,6 +142,34 @@ export interface GovernedQueryOptions
 export interface EntailmentQueryOptions extends GovernedQueryOptions {
   /** RIF-in-XML program for the `rif` regime; invalid on every fixed regime. */
   readonly program?: string | null;
+  /**
+   * The dataset's `owl:imports` table, as two PARALLEL arrays of the same length: entry `i`
+   * declares that the ontology IRI `importIris[i]` denotes the N-Quads document
+   * `importDocuments[i]`. OWL 2 defines an ontology's imports closure to BE the ontology,
+   * so the closure the query runs over is materialized over the dataset merged with every
+   * document the table supplies. An `owl:imports` the table does not resolve, and the
+   * dataset does not already hold, throws by name — never a closure of a smaller premise —
+   * and so does an entry the closure never reaches. Omitted, the table is empty.
+   */
+  readonly importIris?: readonly string[] | null;
+  /** The documents of the import table, parallel to `importIris`. */
+  readonly importDocuments?: readonly string[] | null;
+  /**
+   * The IRIs the dataset was read from; an `owl:imports` of one names the dataset itself
+   * and resolves in place. Omitted, none.
+   */
+  readonly premiseIris?: readonly string[] | null;
+  /**
+   * The closure's stored-fact limit for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, as
+   * `entailMaterialize` takes it; omitted, this target's default (131072). A closure past
+   * it throws naming `queryEntailmentGoverned's maxStoredFacts`.
+   */
+  readonly maxStoredFacts?: bigint | number | null;
+  /**
+   * The closure's join-step limit (default 1048576); a closure past it throws naming
+   * `queryEntailmentGoverned's maxJoinSteps`.
+   */
+  readonly maxJoinSteps?: bigint | number | null;
 }
 
 export interface QueryRawOptions extends QueryOptions {
@@ -927,6 +955,10 @@ export class QueryEngine {
    * purrdf's first-party statistical aggregate set for the closure query's PARSE and its
    * evaluation, so `AGG(<{NAMESPACE}NAME>, args…)` reaches the entailment-aware lane
    * exactly as it reaches the ordinary one.
+   *
+   * `options.importIris`/`importDocuments`/`premiseIris` are the dataset's `owl:imports`
+   * table: the closure is materialized over the dataset's imports closure, and an import
+   * the table does not resolve throws by name.
    */
   queryEntailmentGoverned(
     dataset: Dataset,
@@ -1077,11 +1109,21 @@ export type EntailmentRegime =
  * steps (a native build's defaults are 4194304 and 1048576). A run past either throws
  * naming the limit, the numbers and the argument that raises it; the report's
  * `contract-hash` names the calculus under the limits in force.
+ *
+ * `importIris`, `importDocuments` and `premiseIris` are `entailCertainAnswers`'s: OWL 2
+ * defines an ontology's imports closure to BE the ontology, so a document carrying an
+ * `owl:imports` is closed over the merge of itself and every N-Quads document the table
+ * supplies. An import the table does not resolve, and the document does not already hold,
+ * throws by name, and so does an entry the closure never reaches. `[]`, `[]`, `[]` is the
+ * ordinary "imports nothing" case; all three are required.
  */
 export function entailMaterialize(
   document: string,
   regime: EntailmentRegime | string,
   program: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
+  premiseIris: readonly string[],
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
 ): RegimeClosure;
@@ -1177,7 +1219,14 @@ export function entailCheckProof(
 export type ModuleExtractionMethod = "bot" | "top" | "star";
 
 /**
- * `entailConsistency(document, stepCap, workCap)` → is the knowledge base consistent?
+ * `entailConsistency(document, importIris, importDocuments, premiseIris, stepCap, workCap)`
+ * → is the knowledge base consistent?
+ *
+ * `importIris`, `importDocuments` and `premiseIris` are `entailCertainAnswers`'s: OWL 2
+ * defines an ontology's imports closure to BE the ontology, so consistency is decided for
+ * the ontology merged with every document the table supplies, and the certificate then
+ * names `ontology-import-resolved`. An import the table does not resolve throws by name —
+ * never a verdict over a smaller ontology — and so does an entry the closure never reaches.
  *
  * `stepCap` narrows the per-decision tableau step cap and `workCap` the per-decision
  * WORK cap; `0` means the knowledge base's own cap for either, not a cap of zero, and
@@ -1190,6 +1239,9 @@ export type ModuleExtractionMethod = "bot" | "top" | "star";
  */
 export function entailConsistency(
   document: string,
+  importIris: readonly string[],
+  importDocuments: readonly string[],
+  premiseIris: readonly string[],
   stepCap: number,
   workCap: number,
 ): ReasoningAnswer;
@@ -1351,6 +1403,11 @@ export function entailExplainConclusion(
  * node — one that is only a `sh:DataGraph` among them — is a premise triple. An `owl:imports` of one of them names the premise
  * itself and is resolved in place. The empty array is the ordinary case for bare text;
  * like the import arrays it is required, in the same position on every host.
+ *
+ * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
+ * answered with — the premise's closure and each re-chase a mechanism beyond the rule
+ * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
+ * A run past one throws naming `entailCertainAnswers's maxStoredFacts` or `entailCertainAnswers's maxJoinSteps`.
  */
 export function entailCertainAnswers(
   regime: EntailmentRegime | string,
@@ -1359,6 +1416,8 @@ export function entailCertainAnswers(
   importIris: readonly string[],
   importDocuments: readonly string[],
   premiseIris: readonly string[],
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -1379,6 +1438,11 @@ export function entailCertainAnswers(
  * the conclusion is a graph to match rather than an ontology to close.
  *
  * Throws as `entailCertainAnswers`.
+ *
+ * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
+ * answered with — the premise's closure and each re-chase a mechanism beyond the rule
+ * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
+ * A run past one throws naming `entailGraphEntails's maxStoredFacts` or `entailGraphEntails's maxJoinSteps`.
  */
 export function entailGraphEntails(
   regime: EntailmentRegime | string,
@@ -1387,6 +1451,8 @@ export function entailGraphEntails(
   importIris: readonly string[],
   importDocuments: readonly string[],
   premiseIris: readonly string[],
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -1402,6 +1468,11 @@ export function entailGraphEntails(
  * graph the library assembled.
  *
  * Throws as `entailCertainAnswers`.
+ *
+ * `maxStoredFacts` and `maxJoinSteps` (`bigint`s) bound every evaluation the question is
+ * answered with — the premise's closure and each re-chase a mechanism beyond the rule
+ * table runs — exactly as `entailMaterialize` takes them; omitted, this target's defaults.
+ * A run past one throws naming `entailVerifyEntailment's maxStoredFacts` or `entailVerifyEntailment's maxJoinSteps`.
  */
 export function entailVerifyEntailment(
   regime: EntailmentRegime | string,
@@ -1410,6 +1481,8 @@ export function entailVerifyEntailment(
   importIris: readonly string[],
   importDocuments: readonly string[],
   premiseIris: readonly string[],
+  maxStoredFacts?: bigint,
+  maxJoinSteps?: bigint,
 ): ReasoningAnswer;
 
 /**
@@ -1507,10 +1580,10 @@ export class ShaclEntailment {
    */
   readonly ntriples: string;
   /**
-   * The shapes graph's mandatory diagnostics: one `RULE SHAPE` string per shape with an
-   * empty `sh:in` or `sh:xone` list, which every run reports.
+   * The shapes graph's mandatory diagnostics: one `ShaclDiagnostic` (`rule`, `shape`) per
+   * shape with an empty `sh:in` or `sh:xone` list, which every run reports.
    */
-  readonly diagnostics: string[];
+  readonly diagnostics: ShaclDiagnostic[];
 }
 
 /**
@@ -1531,11 +1604,12 @@ export class ShaclRulesInference {
    */
   readonly proof?: string;
   /**
-   * The shapes graph's mandatory diagnostics: one `RULE SHAPE` string per shape with an
-   * empty `sh:in` or `sh:xone` list (`in-minListLength <…>`, `xone-minListLength <…>`),
-   * which every run reports. Empty for an `srl` rule set, which has no shapes graph.
+   * The shapes graph's mandatory diagnostics: one `ShaclDiagnostic` (`rule` —
+   * `in-minListLength` or `xone-minListLength` — and `shape`) per shape with an empty
+   * `sh:in` or `sh:xone` list, which every run reports. Empty for an `srl` rule set, which
+   * has no shapes graph.
    */
-  readonly diagnostics: string[];
+  readonly diagnostics: ShaclDiagnostic[];
 }
 
 /**
@@ -1543,6 +1617,11 @@ export class ShaclRulesInference {
  * Turtle shapes graph `shapesTtl` (its default rule set), or the SPARQL 1.2 RL rule set
  * `srl`. Naming neither or both throws. `shapesBase` / `srlBase` are the documents' base
  * IRIs.
+ *
+ * `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?, importIris?,
+ * importDocuments?, shapesGraph?, maxTermGeneratingRounds?, maxGeneratedTerms?,
+ * maxStoredFacts?, maxJoinSteps?)`: the import table, then `shapesGraph`, then the four
+ * rule-evaluation limits, in the order `shaclEntail` takes them.
  *
  * `maxTermGeneratingRounds` bounds the evaluation rounds that infer a term the graph did
  * not hold (default 16384), and `maxGeneratedTerms` the terms inferred beyond the input's
@@ -1576,13 +1655,13 @@ export function shaclApplyRules(
   shapesBase?: string,
   srlBase?: string,
   explain?: boolean,
-  maxTermGeneratingRounds?: bigint,
   importIris?: readonly string[],
   importDocuments?: readonly string[],
+  shapesGraph?: string,
+  maxTermGeneratingRounds?: bigint,
   maxGeneratedTerms?: bigint,
   maxStoredFacts?: bigint,
   maxJoinSteps?: bigint,
-  shapesGraph?: string,
 ): ShaclRulesInference;
 
 /**
@@ -1642,10 +1721,40 @@ export function shaclCheckRules(
 ): ShaclRulesCheck;
 
 /**
+ * One mandatory diagnostic of a shapes graph — a shape whose `sh:in` or `sh:xone` list is
+ * empty — as the structured value every host carries: the rule, then the shape. Like every
+ * other class in this package it owns wasm memory: call `free()`.
+ */
+export class ShaclDiagnostic {
+  free(): void;
+  /** The syntax rule's id: `in-minListLength` or `xone-minListLength`. */
+  readonly rule: string;
+  /** The shape whose list is empty, as an N-Triples term (`<iri>` or `_:label`). */
+  readonly shape: string;
+}
+
+/**
+ * The outcome of `shaclEvalNodeExpr`. Like every other class in this package it owns wasm
+ * memory: call `free()`.
+ */
+export class ShaclNodeExprOutcome {
+  free(): void;
+  /** The output nodes, as N-Triples 1.2 terms in sequence order. */
+  readonly outputs: string[];
+  /**
+   * The shapes graph's mandatory diagnostics — one per shape of its `owl:imports` closure
+   * with an empty `sh:in` or `sh:xone` list — which every run reports. They change no
+   * output.
+   */
+  readonly diagnostics: ShaclDiagnostic[];
+}
+
+/**
  * Evaluate ONE node expression of the Turtle shapes graph against a focus node of the
  * N-Triples data graph — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph,
- * focusNode, scope)` — returning its output nodes as N-Triples 1.2 terms, in the order the
- * expression's sequence semantics define.
+ * focusNode, scope)` — returning a `ShaclNodeExprOutcome`: `outputs`, its output nodes as
+ * N-Triples 1.2 terms in the order the expression's sequence semantics define, and
+ * `diagnostics`, the shapes graph's mandatory diagnostics.
  *
  * The expression is named exactly one way. `expr` is an absolute IRI or `"_:label"` for a
  * blank node the shapes document labels so. Otherwise `expr` is `undefined` and either
@@ -1671,7 +1780,7 @@ export function shaclEvalNodeExpr(
   exprAt?: string,
   exprVia?: readonly string[],
   exprTurtle?: string,
-): string[];
+): ShaclNodeExprOutcome;
 
 /**
  * The cold-certify report of a shapes graph, returned by `shaclLintShapes`. Like every

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! `--import IRI=FILE` for the entailment subcommands that take a premise's import table:
-//! `reason`, `convert --entailment` and `entails`.
+//! `reason`, `convert --entailment`, `query --entailment`, `entails` and `consistency`.
 //!
 //! OWL 2 defines an ontology's imports closure to BE the ontology, so a premise carrying an
 //! `owl:imports` is not closed over itself alone: every entailment lane closes over the
@@ -140,7 +140,10 @@ pub(crate) fn premise_iri(
 /// Refuse a command line that reads standard input twice: the premise and an `--import`
 /// document, or two `--import` documents. A process has ONE standard input, so two readers
 /// would each get part of one stream.
-fn refuse_two_stdins(premises: &[&str], pairs: &[(String, &str)]) -> Result<(), CliError> {
+pub(crate) fn refuse_two_stdins(
+    premises: &[&str],
+    pairs: &[(String, &str)],
+) -> Result<(), CliError> {
     let mut named: Vec<String> = premises
         .iter()
         .filter(|path| **path == "-")
@@ -209,6 +212,12 @@ impl PremiseImports {
             }
         }
         Ok(Self { map })
+    }
+
+    /// The resolved import table: the supplied documents, and the IRIs the premise was read
+    /// under.
+    pub(crate) const fn map(&self) -> &ImportMap {
+        &self.map
     }
 
     /// The parse legs the `--import` documents give `--base`, for

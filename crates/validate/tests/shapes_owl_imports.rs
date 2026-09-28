@@ -29,7 +29,7 @@ use purrdf_shapes::text_ingest::{parse_ntriples_to_dataset, parse_turtle_documen
 use purrdf_shapes::{ShapesError, ShapesImportError, ShapesImports};
 use purrdf_validate::{
     ExprSelector, NodeExprRequest, RulesRequest, SarifOptions, ShapesProductRefusal,
-    ValidationOptions, apply_rules_to_ntriples, entail_to_ntriples_string, eval_node_expr_to_terms,
+    ValidationOptions, apply_rules_to_ntriples, entail_to_ntriples_string, eval_node_expr,
     lint_shapes_ttl, pack_shapes_product, validate_changes_to_sarif_string,
     validate_to_sarif_string, validate_with_shapes_product,
 };
@@ -183,7 +183,7 @@ fn free_expression_and_lint_agree() {
         &request(&ShapesImports::new()).expect_err("refused"),
         "free_expression::evaluate",
     );
-    let outputs = request(&table()).expect("evaluates");
+    let outputs = request(&table()).expect("evaluates").outputs;
     assert_eq!(
         outputs.iter().map(ToString::to_string).collect::<Vec<_>>(),
         ["<http://example.org/bob>"],
@@ -275,7 +275,7 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
     );
 
     let node_expr = |imports: &[(&str, &str)]| {
-        eval_node_expr_to_terms(&NodeExprRequest {
+        eval_node_expr(&NodeExprRequest {
             shapes_ttl: IMPORTER,
             shapes_base: None,
             data_nt: DATA,
@@ -287,10 +287,10 @@ fn every_boundary_entry_point_refuses_without_the_table_and_applies_it_with() {
     };
     assert_unresolved(
         &node_expr(&[]).expect_err("node-expr refuses"),
-        "eval_node_expr_to_terms",
+        "eval_node_expr",
     );
     assert_eq!(
-        node_expr(TABLE).expect("evaluates"),
+        node_expr(TABLE).expect("evaluates").outputs,
         ["<http://example.org/bob>"]
     );
 

@@ -1,13 +1,13 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The three ways a host names the node expression [`eval_node_expr_to_terms`] evaluates
+//! The three ways a host names the node expression [`eval_node_expr`] evaluates
 //! — the node itself, a walk of predicates from a named node, and an inline Turtle
 //! expression — each beside its refusals, and each refusal beside a valid neighbour that
 //! differs from it in the one respect the refusal is about.
 
 use purrdf_validate::{
-    ExprSelector, ExprSelectorError, NodeExprRequest, ShapesError, eval_node_expr_to_terms,
+    ExprSelector, ExprSelectorError, NodeExprRequest, ShapesError, eval_node_expr,
 };
 
 /// A property shape computing its values with an anonymous expression, a node carrying two
@@ -43,7 +43,7 @@ fn eval(expr: ExprSelector<'_>) -> Result<Vec<String>, ShapesError> {
 }
 
 fn eval_scoped(expr: ExprSelector<'_>, scope: &[(&str, &str)]) -> Result<Vec<String>, ShapesError> {
-    eval_node_expr_to_terms(&NodeExprRequest {
+    eval_node_expr(&NodeExprRequest {
         shapes_ttl: SHAPES,
         shapes_base: None,
         data_nt: DATA,
@@ -52,6 +52,44 @@ fn eval_scoped(expr: ExprSelector<'_>, scope: &[(&str, &str)]) -> Result<Vec<Str
         scope,
         imports: &[],
     })
+    .map(|outcome| outcome.outputs)
+}
+
+/// A node-expression evaluation carries the shapes graph's mandatory diagnostic — a shape
+/// with an empty `sh:in` list — beside its outputs, and none for the neighbour whose list has
+/// a member. The outputs are the expression's either way.
+#[test]
+fn an_evaluation_reports_the_mandatory_diagnostic() {
+    let run = |members: &str| {
+        let shapes = format!(
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+             @prefix ex: <http://example.org/ns#> .\n\
+             ex:Listed a sh:NodeShape ; sh:in ( {members} ) .\n"
+        );
+        eval_node_expr(&NodeExprRequest {
+            shapes_ttl: &shapes,
+            shapes_base: None,
+            data_nt: DATA,
+            expr: ExprSelector::Node("http://example.org/ns#Constant"),
+            focus: "http://example.org/ns#a",
+            scope: &[],
+            imports: &[],
+        })
+        .expect("evaluates")
+    };
+    let empty = run("");
+    assert_eq!(empty.outputs, ["<http://example.org/ns#Constant>"]);
+    assert_eq!(
+        empty
+            .diagnostics
+            .iter()
+            .map(ToString::to_string)
+            .collect::<Vec<_>>(),
+        ["in-minListLength <http://example.org/ns#Listed>"]
+    );
+    let member = run("ex:one");
+    assert_eq!(member.outputs, ["<http://example.org/ns#Constant>"]);
+    assert_eq!(member.diagnostics.len(), 0, "{:?}", member.diagnostics);
 }
 
 fn message(error: &ShapesError) -> String {

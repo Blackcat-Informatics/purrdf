@@ -222,8 +222,10 @@ ownership, and all limits. Complete examples are in
   `sh:in` or `sh:xone` list is empty is a mandatory diagnostic every run reports,
   beside the verdict and never among the results: the SARIF log carries each as a
   `level: "note"` notification in `invocations[0].toolExecutionNotifications`,
-  and `ShaclEntailment.diagnostics` and `ShaclRulesInference.diagnostics` carry
-  `RULE SHAPE` strings (`in-minListLength <…>`). `shapesBase` is
+  and `ShaclEntailment.diagnostics`, `ShaclRulesInference.diagnostics` and
+  `ShaclNodeExprOutcome.diagnostics` carry `ShaclDiagnostic` values — `rule`
+  (`in-minListLength`, `xone-minListLength`) and `shape` as separate fields, the one
+  encoding every host shares. `shapesBase` is
   the base the shapes document's relative IRI references resolve against; a
   browser or Node host has no retrieval IRI of its own, so omit it and a
   relative reference throws rather than being mis-parsed (`dataNt` needs no
@@ -237,13 +239,13 @@ ownership, and all limits. Complete examples are in
   resolves against `shapesBase`, and one with no base throws.
   `shaclValidateChangesToSarif`, `shaclPackProduct` (which records it in the
   product), `shaclLintShapes`, `shaclApplyRules` and `shaclEntail` take the same
-  trailing `shapesGraph?`; on the two rules entry points a `sh:SPARQLRule`'s
-  `$shapesGraph` is pre-bound to it, and `shaclApplyRules` throws when it is named
-  beside `srl`, which has no shapes graph. After `shapesGraph?`, `shaclEntail` takes
-  `maxTermGeneratingRounds?`, `maxGeneratedTerms?`, `maxStoredFacts?` and
-  `maxJoinSteps?` (each a `bigint`): the four rule-evaluation limits
-  `shaclApplyRules` takes, with the same defaults, bounding the entailment run the
-  same way. A run past one throws naming the limit, the numbers and the argument
+  `shapesGraph?`, right after the import table; on the two rules entry points a
+  `sh:SPARQLRule`'s `$shapesGraph` is pre-bound to it, and `shaclApplyRules` throws
+  when it is named beside `srl`, which has no shapes graph. After `shapesGraph?`, both
+  rules entry points take `maxTermGeneratingRounds?`, `maxGeneratedTerms?`,
+  `maxStoredFacts?` and `maxJoinSteps?` (each a `bigint`), contiguous and in that
+  order: the four rule-evaluation limits, with the same defaults, bounding an
+  entailment run the way they bound a rules run. A run past one throws naming the limit, the numbers and the argument
   that raises it (`shaclEntail's maxStoredFacts`, …).
   `shaclValidateToSarif` takes one more, `subClassOfInShapesGraph?`: SHACL 1.2
   Core §6.3's parameter of that name. `true` reads the shapes graph's
@@ -261,12 +263,13 @@ ownership, and all limits. Complete examples are in
   back to a FULL validation, and an empty log means *the graph conforms*. Call
   `free()` when done.
 - `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?, explain?,
-  maxTermGeneratingRounds?, importIris?, importDocuments?, maxGeneratedTerms?,
-  maxStoredFacts?, maxJoinSteps?, shapesGraph?)` —
+  importIris?, importDocuments?, shapesGraph?, maxTermGeneratingRounds?,
+  maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)` —
   runs exactly one rule source, the SHACL 1.2 rules of `shapesTtl` or the SPARQL 1.2
   RL rule set `srl`, and returns a `ShaclRulesInference`: `inferred` is the
-  inference graph (the inferred triples only) as N-Triples, and `proof` is the proof
-  of every inferred triple when `explain` is set. Two limits stop a rule set that
+  inference graph (the inferred triples only) as N-Triples, `proof` is the proof
+  of every inferred triple when `explain` is set, and `diagnostics` the shapes
+  graph's mandatory diagnostics as `ShaclDiagnostic` values (`rule`, `shape`). Two limits stop a rule set that
   keeps inferring new terms. `maxTermGeneratingRounds` (a `bigint`) bounds the
   evaluation rounds that infer a term the graph did not hold (default 16384), and
   `maxGeneratedTerms` (a `bigint`) the terms inferred beyond the input's (default
@@ -299,8 +302,9 @@ ownership, and all limits. Complete examples are in
 - `shaclEvalNodeExpr(shapesTtl, dataNt, expr, focus, scope?, shapesBase?,
   importIris?, importDocuments?, exprAt?, exprVia?, exprTurtle?)` — evaluates
   one node expression of the shapes graph against a focus node, with `scope` as
-  `"NAME=TERM"` strings, and returns the output nodes as N-Triples terms in
-  sequence order. The expression is named one way: `expr` is an IRI or
+  `"NAME=TERM"` strings, and returns a `ShaclNodeExprOutcome`: `outputs`, the
+  output nodes as N-Triples terms in sequence order, and `diagnostics`, the shapes
+  graph's mandatory diagnostics as `ShaclDiagnostic` values (`rule`, `shape`). The expression is named one way: `expr` is an IRI or
   `"_:label"`; or `expr` is `undefined` and `exprAt` plus `exprVia` walk from a
   named node to an anonymous expression, each step reaching exactly one value;
   or `exprTurtle` gives the expression inline as Turtle, whose one root blank
@@ -311,7 +315,7 @@ ownership, and all limits. Complete examples are in
   every validator declared for a built-in component (superseded by the native
   implementation, never run). Returns a `ShaclLintReport` with `clean`, `findings`, `loadError` and the
   deterministic `report` text. Call `free()` when done.
-- `entailMaterialize(document, regime, program, maxStoredFacts?, maxJoinSteps?)` —
+- `entailMaterialize(document, regime, program, importIris, importDocuments, premiseIris, maxStoredFacts?, maxJoinSteps?)` —
   SPARQL entailment-**regime**
   materialization over all SEVEN regimes (`"simple"` / `"rdf"` / `"rdfs"` /
   `"owl-rl"` / `"d"` / `"owl-direct"` / `"rif"` — none is refused), returning
@@ -326,7 +330,14 @@ ownership, and all limits. Complete examples are in
   WebAssembly defaults of 131072 facts and 1048576 join steps. A run past either
   throws naming the limit and the argument; the report's contract hash names the
   calculus under the limits in force, so it differs from a native build's report
-  unless the native defaults (4194304 and 1048576) are stated.
+  unless the native defaults (4194304 and 1048576) are stated. `importIris` /
+  `importDocuments` / `premiseIris` are the document's `owl:imports` table (`[]`,
+  `[]`, `[]` imports nothing): the closure is taken over the document merged with
+  every imported N-Quads document, and an import the table does not resolve throws
+  by name rather than closing a smaller ontology. `entailConsistency(document,
+  importIris, importDocuments, premiseIris, stepCap, workCap)` and
+  `queryEntailmentGoverned`'s `importIris`/`importDocuments`/`premiseIris` options
+  take the same table.
 - `entailRules(regime)` / `entailImplementedRules(regime)` — the rule table the
   specification *defines* the regime by, and the subset this build fires. The
   difference is the measurable gap, and is exactly the report's `missing` lines.

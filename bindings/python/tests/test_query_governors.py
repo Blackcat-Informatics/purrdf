@@ -411,6 +411,55 @@ def test_mutable_dataset_carries_the_same_entailment_outcome() -> None:
     assert len(outcome.outcome.result) == 1
 
 
+_IMPORTING = (
+    f"<{EX}o> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> "
+    "<http://www.w3.org/2002/07/owl#Ontology> .\n"
+    f"<{EX}o> <http://www.w3.org/2002/07/owl#imports> <{EX}schema> .\n"
+    f"<{EX}tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <{EX}Cat> .\n"
+)
+_IMPORTED_SCHEMA = (
+    f"<{EX}Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <{EX}Animal> .\n"
+)
+
+
+@pytest.mark.parametrize("kind", [purrdf.Store, purrdf.MutableDataset])
+def test_entailment_query_closes_over_the_import_table(kind) -> None:
+    """`tom` is an Animal only through the imported schema, so the row count observes
+    whether the import took part; without the table the query is refused by name."""
+    store = kind()
+    store.load(_IMPORTING, purrdf.RdfFormat.N_TRIPLES)
+    with pytest.raises(ValueError, match="example.org/schema"):
+        store.query_entailment_governed(RDFS_QUERY, "rdfs")
+    table = [(f"{EX}schema", _IMPORTED_SCHEMA)]
+    outcome = store.query_entailment_governed(RDFS_QUERY, "rdfs", imports=table)
+    assert outcome.outcome is not None and len(outcome.outcome.result) == 1
+    assert outcome.report is not None
+    assert "\nboundary ontology-import-resolved " in outcome.report
+    # An entry a store that imports nothing never reaches is refused; that store with no
+    # table answers.
+    plain = _rdfs_store(kind)
+    with pytest.raises(ValueError, match="would be read and never used"):
+        plain.query_entailment_governed(RDFS_QUERY, "rdfs", imports=table)
+    answered = plain.query_entailment_governed(RDFS_QUERY, "rdfs", imports=[], premise_iris=[])
+    assert answered.outcome is not None and len(answered.outcome.result) == 1
+
+
+@pytest.mark.parametrize("kind", [purrdf.Store, purrdf.MutableDataset])
+def test_entailment_query_takes_the_closures_evaluation_limits(kind) -> None:
+    """A passed closure limit raises naming this method's keyword; the neighbour answers."""
+    store = _rdfs_store(kind)
+    with pytest.raises(ValueError) as refused:
+        store.query_entailment_governed(RDFS_QUERY, "owl-rl", max_join_steps=1)
+    assert "evaluation exceeded the join-step limit: " in str(refused.value)
+    assert str(refused.value).endswith(
+        "raise it with query_entailment_governed(max_join_steps=...)"
+    )
+    answered = store.query_entailment_governed(
+        RDFS_QUERY, "owl-rl", max_stored_facts=4194304, max_join_steps=1048576
+    )
+    assert answered.outcome is not None and len(answered.outcome.result) == 1
+
+
 # ── cancellation token admission and state ──────────────────────────────────────
 
 

@@ -583,6 +583,56 @@ fn cli_rules_check() {
     assert_eq!(code(&ledger), 2, "{}", stderr(&ledger));
 }
 
+/// `node-expr` reports the shapes graph's mandatory diagnostic on stderr — a `shacl
+/// diagnostic RULE SHAPE` line, as `validate` and `rules` print it — when a shape carries an
+/// empty `sh:in` list, and prints none for the neighbour whose list has a member. The output
+/// is the expression's either way: a diagnostic changes nothing it evaluates.
+#[test]
+fn cli_node_expr_reports_the_mandatory_diagnostic() {
+    let dir = tempfile::tempdir().expect("tempdir");
+    let data = write_file(dir.path(), "data.ttl", DATA);
+    let with_list = |members: &str| {
+        write_file(
+            dir.path(),
+            &format!("shapes-{}.ttl", members.len()),
+            &format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix ex: <http://example.org/ns#> .\n\
+                 ex:Listed a sh:NodeShape ; sh:in ( {members} ) .\n"
+            ),
+        )
+    };
+    let run_on = |shapes: &str| {
+        run(&[
+            "node-expr",
+            "--shapes",
+            shapes,
+            "--expr",
+            "http://example.org/ns#Constant",
+            "--focus",
+            "http://example.org/ns#a",
+            &data,
+        ])
+    };
+    let empty = run_on(&with_list(""));
+    assert_eq!(code(&empty), 0, "{}", stderr(&empty));
+    assert_eq!(stdout(&empty), "<http://example.org/ns#Constant>\n");
+    assert!(
+        stderr(&empty)
+            .contains("shacl diagnostic in-minListLength <http://example.org/ns#Listed>\n"),
+        "{}",
+        stderr(&empty)
+    );
+    let member = run_on(&with_list("ex:one"));
+    assert_eq!(code(&member), 0, "{}", stderr(&member));
+    assert_eq!(stdout(&member), "<http://example.org/ns#Constant>\n");
+    assert!(
+        !stderr(&member).contains("shacl diagnostic"),
+        "{}",
+        stderr(&member)
+    );
+}
+
 /// `node-expr` evaluates one expression node of the shapes graph: a `sh:sparqlExpr` node
 /// natively, with its `sh:prefixes`; a labelled blank node reading `--scope`; a literal
 /// focus. A label the document never wrote, and a scope binding that could never be read,

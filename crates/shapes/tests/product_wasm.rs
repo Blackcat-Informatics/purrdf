@@ -338,7 +338,8 @@ mod shacl12_subset {
                 scope: &[],
                 imports: &purrdf_shapes::ShapesImports::new(),
             })
-            .unwrap_or_else(|e| panic!("{entry}: evaluates on this target: {e}"));
+            .unwrap_or_else(|e| panic!("{entry}: evaluates on this target: {e}"))
+            .outputs;
             let expected = list(
                 dataset,
                 &one(dataset, &entry, &format!("{MF}result")).expect("mf:result"),

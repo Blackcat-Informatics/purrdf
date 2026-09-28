@@ -58,14 +58,18 @@ import purrdf
 from purrdf import entail
 
 dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
-closure, report = entail.materialize(dataset, "rdfs", "")
+closure, report = entail.materialize(dataset, "rdfs", "", [], [])
 print(closure.to_nquads())
 print(report)          # what fired, what did not, boundaries, budget, contract hash
 ```
 
 The report is the second return value and is never optional — the same
-discipline the Rust, WebAssembly, and C surfaces enforce. `entail.materialize_nt(text, regime)`
-is the text-in/text-out twin for callers holding an N-Triples/N-Quads document.
+discipline the Rust, WebAssembly, and C surfaces enforce. The two `[]` arguments are
+the dataset's `owl:imports` table — `(ontology_iri, nquads)` pairs — and the IRIs it was
+read from: a dataset that imports a document is closed over the merge, and an import the
+table does not resolve raises `ValueError` naming it. `entail.materialize_nt(text, regime,
+program, imports, premise_iris)` is the text-in/text-out twin for callers holding an
+N-Triples/N-Quads document.
 
 Coverage is measurable rather than asserted: `entail.rules(regime)` is the rule
 table the specification defines the regime by, and

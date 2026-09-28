@@ -86,9 +86,8 @@ use purrdf_validate::{
     ChangeScope, ConformanceDisallows, EntailOutcome, EntailRequest, ExprSelector, LintReport,
     NodeExprRequest, RuleLimits, RulesOutcome, RulesRequest, SarifOptions, ShapesError,
     ShapesProductRefusal, ValidationOptions, apply_rules_to_ntriples, check_rules,
-    entail_to_ntriples, eval_node_expr_to_terms, lint_shapes_ttl_with_shapes_graph,
-    parse_scope_binding, validate_changes_to_sarif_string_with_shapes_graph,
-    validate_to_sarif_string_with_shapes_graph,
+    entail_to_ntriples, eval_node_expr, lint_shapes_ttl_with_shapes_graph, parse_scope_binding,
+    validate_changes_to_sarif_string_with_shapes_graph, validate_to_sarif_string_with_shapes_graph,
 };
 
 use crate::buffer::PurrdfBuffer;
@@ -115,18 +114,7 @@ fn validate_to_sarif_bytes(
     imports: &[(&str, &str)],
     subclass_of_in_shapes_graph: bool,
 ) -> Result<Vec<u8>, ShapesError> {
-    let base_options =
-        ValidationOptions::default().with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
-    let validation = if conformance_disallows.is_empty() {
-        base_options
-    } else {
-        base_options
-            .with_conformance_disallows(ConformanceDisallows::from_iris(conformance_disallows)?)
-    };
-    let options = SarifOptions {
-        validation,
-        ..SarifOptions::default()
-    };
+    let options = sarif_options(conformance_disallows, subclass_of_in_shapes_graph)?;
     Ok(validate_to_sarif_string_with_shapes_graph(
         shapes_ttl,
         shapes_base,
@@ -136,6 +124,29 @@ fn validate_to_sarif_bytes(
         imports,
     )?
     .into_bytes())
+}
+
+/// The SARIF options both validation entry points — the whole-graph and the change path —
+/// read their two validation parameters into, so the two cannot come to mean different
+/// things by the same arguments. `conformance_disallows` is the conformance-disallow set as
+/// severity IRIs, empty being SHACL's default set; `subclass_of_in_shapes_graph` is SHACL
+/// 1.2 Core §6.3's `subClassOfInShapesGraph`.
+fn sarif_options(
+    conformance_disallows: &[&str],
+    subclass_of_in_shapes_graph: bool,
+) -> Result<SarifOptions, ShapesError> {
+    let base_options =
+        ValidationOptions::default().with_subclass_of_in_shapes_graph(subclass_of_in_shapes_graph);
+    let validation = if conformance_disallows.is_empty() {
+        base_options
+    } else {
+        base_options
+            .with_conformance_disallows(ConformanceDisallows::from_iris(conformance_disallows)?)
+    };
+    Ok(SarifOptions {
+        validation,
+        ..SarifOptions::default()
+    })
 }
 
 /// The `count` C strings at `array`, borrowed.
@@ -313,6 +324,11 @@ pub enum PurrdfShaclChangeScopeKind {
 ///
 /// The expand-then-validate sequence lives in
 /// [`validate_changes_to_sarif_string`]; this only adds the C-ABI byte framing.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the change path's three documents, the shapes document's two IRIs, the two \
+              validation parameters and the import table are each an independent input"
+)]
 fn validate_changes_to_sarif_bytes(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -320,7 +336,9 @@ fn validate_changes_to_sarif_bytes(
     data_nt: &str,
     added_nt: Option<&str>,
     removed_nt: Option<&str>,
+    conformance_disallows: &[&str],
     imports: &[(&str, &str)],
+    subclass_of_in_shapes_graph: bool,
 ) -> Result<(Vec<u8>, ChangeScope), ShapesError> {
     let (sarif, scope) = validate_changes_to_sarif_string_with_shapes_graph(
         shapes_ttl,
@@ -329,7 +347,7 @@ fn validate_changes_to_sarif_bytes(
         data_nt,
         added_nt,
         removed_nt,
-        &SarifOptions::default(),
+        &sarif_options(conformance_disallows, subclass_of_in_shapes_graph)?,
         imports,
     )?;
     Ok((sarif.into_bytes(), scope))
@@ -355,6 +373,14 @@ fn validate_changes_to_sarif_bytes(
 ///
 /// `import_iris` / `import_documents` / `import_count` are the shapes graph's
 /// `owl:imports` table (see `purrdf_shacl_validate_to_sarif`).
+///
+/// `conformance_disallows` / `conformance_disallows_count` and
+/// `subclass_of_in_shapes_graph` carry exactly the meaning they do on
+/// `purrdf_shacl_validate_to_sarif`: the severity IRIs whose results make the data
+/// non-conforming (`count == 0`, the array then possibly NULL, is SHACL's default set;
+/// a value that is not an absolute IRI is a `ParseError`), and SHACL 1.2 Core §6.3's
+/// `subClassOfInShapesGraph` (`false` is the specification's default). The report of a
+/// change is judged exactly as the report of the whole graph would be.
 ///
 /// # Read the scope before the report
 ///
@@ -385,7 +411,9 @@ fn validate_changes_to_sarif_bytes(
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
 /// `shapes_base_iri`, `shapes_graph_iri`, `added_nt` and `removed_nt` must be null or
-/// NUL-terminated C strings; when `import_count` is non-zero, `import_iris` and `import_documents` must each
+/// NUL-terminated C strings; when `conformance_disallows_count` is non-zero,
+/// `conformance_disallows` must address that many NUL-terminated C strings; when
+/// `import_count` is non-zero, `import_iris` and `import_documents` must each
 /// address that many NUL-terminated C strings; `out_buffer`, `out_scope`, `out_focus_nodes` and
 /// `out_reason` must be writable pointers; `out_error` must be null or writable.
 #[unsafe(no_mangle)]
@@ -396,9 +424,12 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
     data_nt: *const c_char,
     added_nt: *const c_char,
     removed_nt: *const c_char,
+    conformance_disallows: *const *const c_char,
+    conformance_disallows_count: usize,
     import_iris: *const *const c_char,
     import_documents: *const *const c_char,
     import_count: usize,
+    subclass_of_in_shapes_graph: bool,
     out_buffer: *mut *mut PurrdfBuffer,
     out_scope: *mut i32,
     out_focus_nodes: *mut usize,
@@ -424,6 +455,11 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
             let data = cstr_to_str(data_nt)?;
             let added = opt_cstr_to_str(added_nt)?;
             let removed = opt_cstr_to_str(removed_nt)?;
+            let disallows = cstr_array(
+                conformance_disallows,
+                conformance_disallows_count,
+                "purrdf_shacl_validate_changes_to_sarif",
+            )?;
             let imports = import_pairs(
                 import_iris,
                 import_documents,
@@ -437,7 +473,9 @@ pub unsafe extern "C" fn purrdf_shacl_validate_changes_to_sarif(
                 data,
                 added,
                 removed,
+                &disallows,
                 &imports,
+                subclass_of_in_shapes_graph,
             )
             .map_err(PurrdfError::shapes)?;
             // Written before the buffer so a caller reading the outputs in
@@ -532,6 +570,9 @@ fn diagnostic_text(diagnostics: &[purrdf_validate::MandatoryDiagnostic]) -> Stri
 /// non-NULL receives a buffer (free with `purrdf_buffer_free`) of one `diagnostic RULE
 /// SHAPE` line per shape with an empty `sh:in` or `sh:xone` list — empty when there is none
 /// — which every run reports beside its outcome.
+/// Each line is `diagnostic `, the RULE (`in-minListLength` or `xone-minListLength`), one
+/// space, then the SHAPE as an N-Triples term, then `\n` — the rule first and the shape
+/// second, the field order every host's structured value (`{rule, shape}`) carries.
 ///
 /// # Safety
 /// `shapes_ttl` and `data_nt` must be non-null, NUL-terminated C strings;
@@ -664,6 +705,9 @@ fn apply_rules_outcome(request: &RulesRequest<'_>) -> Result<RulesOutcome, Shape
 /// non-NULL receives a buffer (free with `purrdf_buffer_free`) of one `diagnostic RULE
 /// SHAPE` line per shape with an empty `sh:in` or `sh:xone` list — empty when there is
 /// none, and always for an `srl` rule set, which has no shapes graph.
+/// Each line is `diagnostic `, the RULE (`in-minListLength` or `xone-minListLength`), one
+/// space, then the SHAPE as an N-Triples term, then `\n` — the rule first and the shape
+/// second, the field order every host's structured value (`{rule, shape}`) carries.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_apply_rules(
     data_nt: *const c_char,
@@ -843,7 +887,7 @@ pub unsafe extern "C" fn purrdf_shacl_check_rules(
 
 /// Evaluate one node expression. Native-testable, pointer-free core of
 /// [`purrdf_shacl_eval_node_expr`]: `scope` holds `NAME=TERM` bindings, and the output
-/// is one N-Triples 1.2 term per line.
+/// is one N-Triples 1.2 term per line, beside the shapes graph's mandatory diagnostics.
 fn eval_node_expr_bytes(
     shapes_ttl: &str,
     shapes_base: Option<&str>,
@@ -852,12 +896,12 @@ fn eval_node_expr_bytes(
     focus: &str,
     scope: &[&str],
     imports: &[(&str, &str)],
-) -> Result<Vec<u8>, ShapesError> {
+) -> Result<(Vec<u8>, Vec<purrdf_validate::MandatoryDiagnostic>), ShapesError> {
     let bindings = scope
         .iter()
         .map(|binding| parse_scope_binding(binding))
         .collect::<Result<Vec<_>, _>>()?;
-    let terms = eval_node_expr_to_terms(&NodeExprRequest {
+    let outcome = eval_node_expr(&NodeExprRequest {
         shapes_ttl,
         shapes_base,
         data_nt,
@@ -867,11 +911,11 @@ fn eval_node_expr_bytes(
         imports,
     })?;
     let mut out = String::new();
-    for term in terms {
-        out.push_str(&term);
+    for term in &outcome.outputs {
+        out.push_str(term);
         out.push('\n');
     }
-    Ok(out.into_bytes())
+    Ok((out.into_bytes(), outcome.diagnostics))
 }
 
 /// Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of a data
@@ -902,6 +946,15 @@ fn eval_node_expr_bytes(
 /// `owl:imports` table (see `purrdf_shacl_validate_to_sarif`). An imported document's functions
 /// and shapes are in scope.
 ///
+/// `out_diagnostics` asks for the shapes graph's mandatory diagnostics, exactly as on
+/// `purrdf_shacl_apply_rules`: NULL skips them; non-NULL receives a buffer (free with
+/// `purrdf_buffer_free`) of one `diagnostic RULE SHAPE` line per shape of the shapes graph's
+/// `owl:imports` closure with an empty `sh:in` or `sh:xone` list — empty when there is none
+/// — which every run reports. They change no output.
+/// Each line is `diagnostic `, the RULE (`in-minListLength` or `xone-minListLength`), one
+/// space, then the SHAPE as an N-Triples term, then `\n` — the rule first and the shape
+/// second, the field order every host's structured value (`{rule, shape}`) carries.
+///
 /// # Safety
 /// `shapes_ttl`, `data_nt` and `focus` must be non-null NUL-terminated C strings;
 /// `shapes_base_iri`, `expr`, `expr_at` and `expr_turtle` must each be null or a
@@ -909,7 +962,8 @@ fn eval_node_expr_bytes(
 /// that many NUL-terminated C strings; when `scope_count` is
 /// non-zero, `scope` must address that many NUL-terminated C strings; when `import_count` is non-zero, `import_iris` and `import_documents` must each
 /// address that many NUL-terminated C strings;
-/// `out_terms` must be writable; `out_error` must be null or writable.
+/// `out_terms` must be writable; `out_diagnostics` and `out_error` must each be null or
+/// writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
     shapes_ttl: *const c_char,
@@ -927,6 +981,7 @@ pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
     import_documents: *const *const c_char,
     import_count: usize,
     out_terms: *mut *mut PurrdfBuffer,
+    out_diagnostics: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
 ) -> i32 {
     unsafe {
@@ -952,7 +1007,7 @@ pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
                 import_count,
                 "purrdf_shacl_eval_node_expr",
             )?;
-            let bytes = eval_node_expr_bytes(
+            let (bytes, diagnostics) = eval_node_expr_bytes(
                 cstr_to_str(shapes_ttl)?,
                 opt_cstr_to_str(shapes_base_iri)?,
                 cstr_to_str(data_nt)?,
@@ -962,6 +1017,10 @@ pub unsafe extern "C" fn purrdf_shacl_eval_node_expr(
                 &imports,
             )
             .map_err(PurrdfError::shapes)?;
+            if !out_diagnostics.is_null() {
+                *out_diagnostics =
+                    PurrdfBuffer::into_raw(diagnostic_text(&diagnostics).into_bytes());
+            }
             *out_terms = PurrdfBuffer::into_raw(bytes);
             Ok(PurrdfStatus::Ok)
         })
@@ -1925,6 +1984,131 @@ ex:StatusShape a sh:NodeShape ;
     /// The row that breaks it, and the row that un-breaks it again.
     const BAD_AGE: &str = "<http://example.org/alice> <http://example.org/age> \"nope\" .\n";
 
+    /// Run the change path through the POINTER surface with a disallow set and the
+    /// subclass parameter, returning the SARIF log as JSON, or the error's status.
+    fn changes_through_pointers(
+        shapes: &str,
+        data: &str,
+        added: &str,
+        disallows: &[&str],
+        subclass_of_in_shapes_graph: bool,
+    ) -> Result<serde_json::Value, i32> {
+        use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
+        let shapes = std::ffi::CString::new(shapes).expect("no interior NUL");
+        let data = std::ffi::CString::new(data).expect("no interior NUL");
+        let added = std::ffi::CString::new(added).expect("no interior NUL");
+        let levels: Vec<std::ffi::CString> = disallows
+            .iter()
+            .map(|level| std::ffi::CString::new(*level).expect("no interior NUL"))
+            .collect();
+        let level_ptrs: Vec<*const c_char> = levels.iter().map(|level| level.as_ptr()).collect();
+        let mut buffer: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut reason: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut scope: i32 = -1;
+        let mut focus_nodes: usize = usize::MAX;
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        // SAFETY: every C string and the level array outlive the call; the out-pointers are
+        // writable locals, and a written buffer or error is freed below.
+        unsafe {
+            let status = purrdf_shacl_validate_changes_to_sarif(
+                shapes.as_ptr(),
+                std::ptr::null(),
+                std::ptr::null(),
+                data.as_ptr(),
+                added.as_ptr(),
+                std::ptr::null(),
+                if level_ptrs.is_empty() {
+                    std::ptr::null()
+                } else {
+                    level_ptrs.as_ptr()
+                },
+                level_ptrs.len(),
+                std::ptr::null(),
+                std::ptr::null(),
+                0,
+                subclass_of_in_shapes_graph,
+                &raw mut buffer,
+                &raw mut scope,
+                &raw mut focus_nodes,
+                &raw mut reason,
+                &raw mut error,
+            );
+            if status != PurrdfStatus::Ok as i32 {
+                assert!(buffer.is_null() && !error.is_null());
+                purrdf_error_free(error);
+                return Err(status);
+            }
+            let mut ptr: *const u8 = std::ptr::null();
+            let mut len = 0usize;
+            assert_eq!(
+                purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len),
+                PurrdfStatus::Ok as i32
+            );
+            let log = serde_json::from_slice(std::slice::from_raw_parts(ptr, len)).expect("json");
+            purrdf_buffer_free(buffer);
+            if !reason.is_null() {
+                purrdf_buffer_free(reason);
+            }
+            Ok(log)
+        }
+    }
+
+    /// The change path judges a change exactly as the whole-graph path judges the graph:
+    /// the conformance-disallow set and `subClassOfInShapesGraph` both reach it.
+    ///
+    /// A Warning-graded violation the change introduces makes the report non-conforming
+    /// under the default set and conforming under `sh:Violation` alone; a non-IRI level is
+    /// refused. A class target the changed node reaches only through the shapes graph's
+    /// `rdfs:subClassOf` fires with the parameter and not without it, while the control — a
+    /// direct instance of the target class — fires both ways.
+    #[test]
+    fn a_change_takes_the_disallow_set_and_the_subclass_parameter() {
+        const WARNING_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+            @prefix ex: <http://example.org/> .\n\
+            @prefix xsd: <http://www.w3.org/2001/XMLSchema#> .\n\
+            ex:PersonShape a sh:NodeShape ;\n\
+              sh:targetClass ex:Person ;\n\
+              sh:property [ sh:path ex:age ; sh:datatype xsd:integer ; \
+                sh:severity sh:Warning ] .\n";
+        let conforms =
+            |log: &serde_json::Value| log["runs"][0]["properties"]["shaclConforms"].clone();
+        let default = changes_through_pointers(WARNING_SHAPES, CHANGE_BASE, BAD_AGE, &[], false)
+            .expect("the default set");
+        assert_eq!(conforms(&default), false, "{default}");
+        let relaxed = changes_through_pointers(
+            WARNING_SHAPES,
+            CHANGE_BASE,
+            BAD_AGE,
+            &["http://www.w3.org/ns/shacl#Violation"],
+            false,
+        )
+        .expect("sh:Violation alone");
+        assert_eq!(conforms(&relaxed), true, "{relaxed}");
+        assert_eq!(
+            changes_through_pointers(WARNING_SHAPES, CHANGE_BASE, BAD_AGE, &["not an iri"], false)
+                .expect_err("a level that is not an IRI"),
+            PurrdfStatus::ParseError as i32
+        );
+
+        const SUBCLASS_SHAPES: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+            @prefix rdfs: <http://www.w3.org/2000/01/rdf-schema#> .\n\
+            @prefix ex: <http://example.org/> .\n\
+            ex:Student rdfs:subClassOf ex:Person .\n\
+            ex:PersonShape a sh:NodeShape ; sh:targetClass ex:Person ;\n\
+              sh:property [ sh:path ex:name ; sh:minCount 1 ] .\n";
+        const ADDED: &str = "<http://example.org/alice> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Student> .\n\
+            <http://example.org/bob> \
+            <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Person> .\n";
+        let focus = |log: &serde_json::Value| log.to_string();
+        let off = changes_through_pointers(SUBCLASS_SHAPES, "", ADDED, &[], false).expect("off");
+        assert!(focus(&off).contains("http://example.org/bob"), "{off}");
+        assert!(!focus(&off).contains("http://example.org/alice"), "{off}");
+        let on = changes_through_pointers(SUBCLASS_SHAPES, "", ADDED, &[], true).expect("on");
+        assert!(focus(&on).contains("http://example.org/bob"), "{on}");
+        assert!(focus(&on).contains("http://example.org/alice"), "{on}");
+    }
+
     #[test]
     fn a_change_is_validated_against_the_graph_it_joins() {
         let (bytes, scope) = validate_changes_to_sarif_bytes(
@@ -1935,6 +2119,8 @@ ex:StatusShape a sh:NodeShape ;
             Some(BAD_AGE),
             None,
             &[],
+            &[],
+            false,
         )
         .expect("the change validates");
         assert_eq!(scope, ChangeScope::Bounded { focus_nodes: 1 });
@@ -1944,9 +2130,18 @@ ex:StatusShape a sh:NodeShape ;
         // The retract half is a real half: taking the bad row back out of the
         // merged graph restores conformance, through the same one call.
         let merged = format!("{CHANGE_BASE}{BAD_AGE}");
-        let (bytes, scope) =
-            validate_changes_to_sarif_bytes(SHAPES, None, None, &merged, None, Some(BAD_AGE), &[])
-                .expect("the retraction validates");
+        let (bytes, scope) = validate_changes_to_sarif_bytes(
+            SHAPES,
+            None,
+            None,
+            &merged,
+            None,
+            Some(BAD_AGE),
+            &[],
+            &[],
+            false,
+        )
+        .expect("the retraction validates");
         assert_eq!(scope, ChangeScope::Bounded { focus_nodes: 1 });
         let text = String::from_utf8(bytes).expect("utf8");
         assert!(!text.contains("\"level\": \"error\""), "{text}");
@@ -1992,8 +2187,11 @@ ex:StatusShape a sh:NodeShape ;
                 added.as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
+                0,
+                std::ptr::null(),
                 std::ptr::null(),
                 0,
+                false,
                 &raw mut buffer,
                 &raw mut scope,
                 &raw mut focus_nodes,
@@ -2035,8 +2233,11 @@ ex:StatusShape a sh:NodeShape ;
                 added.as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
+                0,
+                std::ptr::null(),
                 std::ptr::null(),
                 0,
+                false,
                 &raw mut buffer,
                 &raw mut scope,
                 &raw mut focus_nodes,
@@ -2073,8 +2274,11 @@ ex:StatusShape a sh:NodeShape ;
                 malformed.as_ptr(),
                 std::ptr::null(),
                 std::ptr::null(),
+                0,
+                std::ptr::null(),
                 std::ptr::null(),
                 0,
+                false,
                 &raw mut buffer,
                 &raw mut scope,
                 &raw mut focus_nodes,
@@ -3222,8 +3426,11 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     data.as_ptr(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    0,
+                    std::ptr::null(),
                     std::ptr::null(),
                     0,
+                    false,
                     &raw mut buffer,
                     &raw mut scope,
                     &raw mut focus_nodes,
@@ -3478,6 +3685,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     0,
                     &raw mut terms,
+                    std::ptr::null_mut(),
                     &raw mut error,
                 );
                 if status == PurrdfStatus::Ok as i32 {
@@ -3526,12 +3734,92 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 std::ptr::null(),
                 0,
                 &raw mut terms,
+                std::ptr::null_mut(),
                 &raw mut error,
             )
         };
         assert_eq!(status, PurrdfStatus::NullPointer as i32);
         // SAFETY: the failed call wrote the error.
         unsafe { purrdf_error_free(error) };
+    }
+
+    /// A node-expression evaluation writes the shapes graph's mandatory diagnostic to
+    /// `out_diagnostics` — one `diagnostic RULE SHAPE` line per shape with an empty `sh:in`
+    /// list, the rule first and the shape second, as every host orders the two — and an
+    /// empty buffer for the neighbour whose list has a member. The terms are the
+    /// expression's either way.
+    #[test]
+    fn capi_eval_node_expr_reports_the_mandatory_diagnostic() {
+        use std::ffi::CString;
+
+        use crate::buffer::{purrdf_buffer_data, purrdf_buffer_free};
+
+        unsafe fn text(buffer: *mut PurrdfBuffer) -> String {
+            let mut ptr: *const u8 = std::ptr::null();
+            let mut len = 0usize;
+            // SAFETY: the caller's contract — a live buffer, freed here after the copy.
+            unsafe {
+                assert_eq!(
+                    purrdf_buffer_data(buffer, &raw mut ptr, &raw mut len),
+                    PurrdfStatus::Ok as i32
+                );
+                let owned = std::str::from_utf8(std::slice::from_raw_parts(ptr, len))
+                    .expect("utf8")
+                    .to_owned();
+                purrdf_buffer_free(buffer);
+                owned
+            }
+        }
+        let run = |members: &str| -> (String, String) {
+            let shapes = CString::new(format!(
+                "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
+                 @prefix ex: <http://example.org/ns#> .\n\
+                 ex:Listed a sh:NodeShape ; sh:in ( {members} ) .\n"
+            ))
+            .expect("no NUL");
+            let data =
+                CString::new("<http://example.org/ns#a> <http://example.org/ns#n> \"1\" .\n")
+                    .expect("no NUL");
+            let expr = CString::new("http://example.org/ns#Constant").expect("no NUL");
+            let focus = CString::new("http://example.org/ns#a").expect("no NUL");
+            let mut terms: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut diagnostics: *mut PurrdfBuffer = std::ptr::null_mut();
+            let mut error: *mut PurrdfError = std::ptr::null_mut();
+            // SAFETY: every C string outlives the call; the arrays are empty (NULL, 0); the
+            // out-pointers are writable locals, and both buffers are read and freed below.
+            unsafe {
+                let status = purrdf_shacl_eval_node_expr(
+                    shapes.as_ptr(),
+                    std::ptr::null(),
+                    data.as_ptr(),
+                    expr.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    focus.as_ptr(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    &raw mut terms,
+                    &raw mut diagnostics,
+                    &raw mut error,
+                );
+                assert_eq!(status, PurrdfStatus::Ok as i32);
+                (text(terms), text(diagnostics))
+            }
+        };
+        let (terms, diagnostics) = run("");
+        assert_eq!(terms, "<http://example.org/ns#Constant>\n");
+        assert_eq!(
+            diagnostics,
+            "diagnostic in-minListLength <http://example.org/ns#Listed>\n"
+        );
+        let (terms, diagnostics) = run("ex:one");
+        assert_eq!(terms, "<http://example.org/ns#Constant>\n");
+        assert_eq!(diagnostics, "");
     }
 
     /// The expression selectors across the boundary: an anonymous expression named by a
@@ -3584,6 +3872,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     std::ptr::null(),
                     0,
                     &raw mut terms,
+                    std::ptr::null_mut(),
                     &raw mut error,
                 );
                 if status == PurrdfStatus::Ok as i32 {
@@ -3669,6 +3958,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                 std::ptr::null(),
                 0,
                 &raw mut terms,
+                std::ptr::null_mut(),
                 &raw mut error,
             )
         };
@@ -3883,9 +4173,12 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     c"".as_ptr(),
                     data.as_ptr(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    0,
                     import_iris,
                     import_documents,
                     import_count,
+                    false,
                     &raw mut buffer,
                     &raw mut scope_kind,
                     &raw mut focus_nodes,
@@ -3971,6 +4264,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
                     import_documents,
                     import_count,
                     &raw mut buffer,
+                    std::ptr::null_mut(),
                     &raw mut error,
                 );
                 if supplied {

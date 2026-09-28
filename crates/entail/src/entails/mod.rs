@@ -189,7 +189,8 @@ use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermValue};
 use crate::interner::intern_into;
 use crate::owl_dl::query::QTriple;
 use crate::report::{InconsistentRun, ReasoningReport};
-use crate::{EntailError, Materialization, Regime, materialize};
+use crate::{EntailError, Materialization, Regime, materialize_with};
+use purrdf_datalog::seminaive::EvalOptions;
 
 pub mod answers;
 pub mod certificate;
@@ -334,6 +335,8 @@ pub(crate) struct Question<'a> {
     pub(crate) triples: &'a [Triple],
     /// The indices no earlier lane has discharged yet.
     pub(crate) pending: &'a BTreeSet<usize>,
+    /// The caller's evaluation limits, which every re-chase a lane runs is held to.
+    pub(crate) options: &'a EvalOptions,
 }
 
 /// What one mechanism READS of a question, with nothing decided either way.
@@ -483,6 +486,7 @@ fn prepare(
     premise: &RdfDataset,
     regime: Regime,
     imports: &ImportMap,
+    options: &EvalOptions,
 ) -> Result<Prepared, EntailError> {
     let plan = plan_for(regime)?;
     let merged = imports::resolve(premise, imports)?;
@@ -492,13 +496,14 @@ fn prepare(
     // boundary is restated exactly as it is after a merge.
     let Some(merged) = merged else {
         let resolved_in_place = !imports.imported_iris(premise).is_empty();
-        let (closure, report) = materialize(premise, plan).map_err(|error| {
-            if resolved_in_place {
-                resolved_imports_error(error)
-            } else {
-                error
-            }
-        })?;
+        let (closure, report) =
+            materialize_with(premise, plan, options, None).map_err(|error| {
+                if resolved_in_place {
+                    resolved_imports_error(error)
+                } else {
+                    error
+                }
+            })?;
         return Ok(Prepared {
             merged: None,
             closure: Closure::of(default_graph_triples(&closure)),
@@ -509,7 +514,8 @@ fn prepare(
             },
         });
     };
-    let (closure, report) = materialize(&merged, plan).map_err(resolved_imports_error)?;
+    let (closure, report) =
+        materialize_with(&merged, plan, options, None).map_err(resolved_imports_error)?;
     Ok(Prepared {
         merged: Some(merged),
         closure: Closure::of(default_graph_triples(&closure)),
@@ -633,7 +639,29 @@ pub fn certain_answers(
     regime: Regime,
     imports: &ImportMap,
 ) -> Result<CertainAnswers, EntailError> {
-    let prepared = prepare(premise, regime, imports)?;
+    certain_answers_with(premise, bgp, regime, imports, &EvalOptions::default())
+}
+
+/// [`certain_answers`] under the caller's evaluation limits.
+///
+/// Every evaluation the service runs — the closure it answers over, and each re-chase a
+/// mechanism beyond the rule table runs — is held to `options`' stored-fact and join-step
+/// limits, exactly as [`materialize_with`](crate::materialize_with) holds a closure. A run
+/// past one is refused ([`EntailError::Evaluate`], [`EntailError::Chase`]) naming the limit
+/// and the numbers; a run inside them answers exactly as larger limits would, and the
+/// report's contract hash names the calculus under `options`.
+///
+/// # Errors
+///
+/// As [`certain_answers`].
+pub fn certain_answers_with(
+    premise: &RdfDataset,
+    bgp: &[QTriple],
+    regime: Regime,
+    imports: &ImportMap,
+    options: &EvalOptions,
+) -> Result<CertainAnswers, EntailError> {
+    let prepared = prepare(premise, regime, imports, options)?;
     let pats = bgp_patterns(bgp);
     let names = projected_vars(&pats);
     // NOTHING TO PROJECT: this is `entails`'s question, so it is `entails`'s fold that answers
@@ -657,6 +685,7 @@ pub fn certain_answers(
             regime,
             closure,
             &report,
+            options,
         )?;
         return Ok(verdict_answers(regime, &outcome, report));
     }
@@ -701,6 +730,7 @@ pub fn certain_answers(
             question,
             regime,
             &prepared.closure,
+            options,
         ));
     }
     let vars: Vec<VarKey> = names.iter().cloned().map(VarKey::Projected).collect();
@@ -767,6 +797,7 @@ fn unreachable_lanes(
     question: &AsGraph,
     regime: Regime,
     closure: &Closure,
+    options: &EvalOptions,
 ) -> Vec<UndecidedReason> {
     // Every triple is outstanding: nothing on this path discharged anything, so every lane is
     // asked about the whole question.
@@ -778,6 +809,7 @@ fn unreachable_lanes(
         closure,
         triples: &question.triples,
         pending: &pending,
+        options,
     };
     let mut limits = Vec::new();
     for lane in MECHANISMS {
@@ -946,6 +978,7 @@ fn decide(
     regime: Regime,
     closure: Closure,
     report: &ReasoningReport,
+    options: &EvalOptions,
 ) -> Result<EntailmentOutcome, EntailError> {
     let pats: Vec<PatTriple> = conclusion_patterns(conclusion);
     Ok(match homomorphism::find_one(pats, &closure)? {
@@ -958,7 +991,7 @@ fn decide(
         // They run HERE and not earlier because each is strictly more expensive — a full
         // re-chase per negative fact or per frozen implication — and because the premise's
         // consistency, which every soundness argument requires, is what `prepare` established.
-        Err(_) => fold(premise, conclusion, regime, closure, report)?,
+        Err(_) => fold(premise, conclusion, regime, closure, report, options)?,
     })
 }
 
@@ -1038,6 +1071,28 @@ pub fn entails(
     regime: Regime,
     imports: &ImportMap,
 ) -> Result<EntailmentCertificate, EntailError> {
+    entails_with(
+        premise,
+        conclusion,
+        regime,
+        imports,
+        &EvalOptions::default(),
+    )
+}
+
+/// [`entails()`] under the caller's evaluation limits — see [`certain_answers_with`], whose
+/// limits these are.
+///
+/// # Errors
+///
+/// As [`entails()`].
+pub fn entails_with(
+    premise: &RdfDataset,
+    conclusion: &RdfDataset,
+    regime: Regime,
+    imports: &ImportMap,
+    options: &EvalOptions,
+) -> Result<EntailmentCertificate, EntailError> {
     // Destructured rather than held whole: the closure MOVES into a homomorphism warrant
     // inside `decide` while the report moves into the certificate at the end, and two fields
     // of one binding cannot be handed to two owners through a method call.
@@ -1045,13 +1100,14 @@ pub fn entails(
         merged,
         closure,
         report,
-    } = prepare(premise, regime, imports)?;
+    } = prepare(premise, regime, imports, options)?;
     let outcome = decide(
         merged.as_deref().unwrap_or(premise),
         conclusion,
         regime,
         closure,
         &report,
+        options,
     )?;
     Ok(EntailmentCertificate::new(outcome, report))
 }
@@ -1072,6 +1128,7 @@ fn fold(
     regime: Regime,
     closure: Closure,
     report: &ReasoningReport,
+    options: &EvalOptions,
 ) -> Result<EntailmentOutcome, EntailError> {
     let triples = default_graph_triples(conclusion);
     let mut pending: BTreeSet<usize> = (0..triples.len()).collect();
@@ -1086,6 +1143,7 @@ fn fold(
             closure: &closure,
             triples: &triples,
             pending: &pending,
+            options,
         };
         match (lane.attempt)(&question)? {
             Attempt::Entailed(established) => {

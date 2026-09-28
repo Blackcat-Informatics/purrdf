@@ -125,6 +125,11 @@ impl EntailmentPlan {
     /// The mapping is total over the seven regimes, exactly as [`Self::materialization`] is:
     /// there is no regime the query lane serves that the document lane does not, or the
     /// reverse.
+    /// The regime's cross-host spelling, which a refusal opens with.
+    pub(crate) fn regime_name(&self) -> &'static str {
+        purrdf_validate::regime::regime_name(self.regime)
+    }
+
     pub(crate) fn query_entailment(&self) -> QueryEntailment<'_> {
         match self.regime {
             Regime::Simple => QueryEntailment::Simple,

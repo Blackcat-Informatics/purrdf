@@ -818,6 +818,10 @@ class Store:
         entailment: str,
         *,
         program: str = ...,
+        imports: Sequence[tuple[str, str]] | None = ...,
+        premise_iris: Sequence[str] | None = ...,
+        max_stored_facts: int | None = ...,
+        max_join_steps: int | None = ...,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
         property_fn_namespaces: list[str] | None = ...,
@@ -1017,6 +1021,10 @@ class MutableDataset:
         entailment: str,
         *,
         program: str = ...,
+        imports: Sequence[tuple[str, str]] | None = ...,
+        premise_iris: Sequence[str] | None = ...,
+        max_stored_facts: int | None = ...,
+        max_join_steps: int | None = ...,
         substitutions: dict[Variable, _Term] | None = ...,
         extension_namespaces: list[str] | None = ...,
         property_fn_namespaces: list[str] | None = ...,
@@ -1939,8 +1947,10 @@ class shapes:
         level: str | None = None,
     ) -> dict[str, builtins.object]: ...
     # Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of
-    # a data graph (N-Triples), returning its output nodes as N-Triples 1.2 terms in
-    # sequence order. The expression is named exactly one way: `expr` is an absolute
+    # a data graph (N-Triples), returning {"outputs": its output nodes as N-Triples 1.2
+    # terms in sequence order, "diagnostics": the shapes graph's mandatory diagnostics,
+    # one {"rule", "shape"} per shape with an empty sh:in / sh:xone list, which every
+    # run reports}. The expression is named exactly one way: `expr` is an absolute
     # IRI or "_:label" (a blank node the shapes document labels so); or `expr` is None
     # and `expr_at` names a node and `expr_via` the predicate IRIs a walk from it
     # follows, each step reaching exactly one value (an anonymous `[ ... ]`
@@ -1964,7 +1974,7 @@ class shapes:
         scope: Mapping[str, str] | None = None,
         shapes_base: str | None = None,
         imports: Sequence[tuple[str, str]] = ...,
-    ) -> list[str]: ...
+    ) -> dict[str, builtins.object]: ...
     # Certify a shapes graph (Turtle), COLD: {"clean", "findings", "load_error",
     # "shacl_shacl" (each shacl-shacl.ttl result, with "superseded" naming the
     # SHACL 1.2 Core rule that makes a flagged graph well-formed, else None, and
@@ -2039,6 +2049,13 @@ class entail:
     # document `rif` entails under and must be `""` for every other regime,
     # because a caller who passed rules to `rdfs` believes they ran.
     #
+    # `imports` is the dataset's `owl:imports` table — `(ontology_iri, nquads)`
+    # pairs — and `premise_iris` the IRIs it was read from, exactly as
+    # `certain_answers` takes them: the closure is taken over the dataset merged
+    # with every imported document, an import the table does not resolve raises
+    # ValueError naming it, and so does an entry the closure never reaches.
+    # `[]`, `[]` imports nothing; both are required.
+    #
     # `max_stored_facts` bounds the facts each evaluation store may hold (default
     # 4194304) and `max_join_steps` the candidate solutions the rules may enumerate
     # (default 1048576), for the RDF, RDFS, OWL_RL and D regimes. A run past
@@ -2050,6 +2067,8 @@ class entail:
         dataset: RdfDataset,
         regime: RegimeLike,
         program: str,
+        imports: Sequence[tuple[str, str]],
+        premise_iris: Sequence[str],
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
@@ -2062,6 +2081,8 @@ class entail:
         data: str,
         regime: RegimeLike,
         program: str,
+        imports: Sequence[tuple[str, str]],
+        premise_iris: Sequence[str],
         *,
         max_stored_facts: int | None = None,
         max_join_steps: int | None = None,
@@ -2119,10 +2140,17 @@ class entail:
 
     # Does the knowledge base have a model at all? The answer is one line,
     # `consistency true|false|unknown`. The only DL service that answers for an
-    # unsatisfiable ontology, because it is the one that detects one.
+    # unsatisfiable ontology, because it is the one that detects one. `imports`
+    # and `premise_iris` are `certain_answers`'s: consistency is decided for the
+    # ontology merged with its imports closure, and an import the table does not
+    # resolve raises ValueError rather than being decided over less.
     @staticmethod
     def consistency(
-        data: str, step_cap: int = ..., work_cap: int = ...
+        data: str,
+        imports: Sequence[tuple[str, str]],
+        premise_iris: Sequence[str],
+        step_cap: int = ...,
+        work_cap: int = ...,
     ) -> tuple[str, str]: ...
     # The entailed subsumption hierarchy over the named classes: `equivalent`,
     # `subclass` (the full transitive closure), `direct` (its reduction) and
@@ -2276,6 +2304,9 @@ class entail:
         pattern: str,
         imports: Sequence[tuple[str, str]],
         premise_iris: Sequence[str],
+        *,
+        max_stored_facts: int | None = None,
+        max_join_steps: int | None = None,
     ) -> tuple[str, str]: ...
     # Does `premise` entail the conclusion GRAPH under the regime's rule table?
     # NOT `entails`, which asks the OWL 2 Direct-Semantics TABLEAU about one
@@ -2293,6 +2324,9 @@ class entail:
         conclusion: str,
         imports: Sequence[tuple[str, str]],
         premise_iris: Sequence[str],
+        *,
+        max_stored_facts: int | None = None,
+        max_join_steps: int | None = None,
     ) -> tuple[str, str]: ...
     # `graph_entails` with the warrant RE-DECIDED, without running a reasoner.
     # Adds `warrant present|absent` and `verified true|false|not-applicable`;
@@ -2308,6 +2342,9 @@ class entail:
         conclusion: str,
         imports: Sequence[tuple[str, str]],
         premise_iris: Sequence[str],
+        *,
+        max_stored_facts: int | None = None,
+        max_join_steps: int | None = None,
     ) -> tuple[str, str]: ...
 
     # ── The session ──────────────────────────────────────────────────────────

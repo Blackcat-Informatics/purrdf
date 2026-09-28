@@ -148,7 +148,7 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 host,
             };
             let short = limits(Some(stored as u64 - 1), None);
-            let refused = materialize_to_nquads_string_with(regime, DATA, "", &short)
+            let refused = materialize_to_nquads_string_with(regime, DATA, "", &[], &[], &short)
                 .expect_err("one fact short");
             assert!(
                 refused.starts_with(&format!(
@@ -159,13 +159,19 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
                 "{regime} {host:?}: {refused}"
             );
             let exact = limits(Some(stored as u64), None);
-            let closed = materialize_to_nquads_string_with(regime, DATA, "", &exact)
+            let closed = materialize_to_nquads_string_with(regime, DATA, "", &[], &[], &exact)
                 .expect("exactly the store it needs");
             assert_eq!(closed.nquads(), unlimited.nquads(), "{regime} {host:?}");
 
-            let refused =
-                materialize_to_nquads_string_with(regime, DATA, "", &limits(None, Some(1)))
-                    .expect_err("one join step");
+            let refused = materialize_to_nquads_string_with(
+                regime,
+                DATA,
+                "",
+                &[],
+                &[],
+                &limits(None, Some(1)),
+            )
+            .expect_err("one join step");
             assert!(
                 refused.contains("evaluation exceeded the join-step limit: ")
                     && refused.ends_with(&format!("raise it with {join_steps}")),
@@ -181,7 +187,7 @@ fn a_materialization_refusal_names_the_hosts_knob_and_the_neighbour_completes() 
 #[test]
 fn the_limits_in_force_reach_the_reports_contract_hash() {
     let hash = |limits: &MaterializeLimits| {
-        materialize_to_nquads_string_with("owl-rl", DATA, "", limits)
+        materialize_to_nquads_string_with("owl-rl", DATA, "", &[], &[], limits)
             .expect("closes")
             .report()
             .lines()
@@ -201,4 +207,124 @@ fn the_limits_in_force_reach_the_reports_contract_hash() {
         ..MaterializeLimits::default()
     });
     assert_ne!(default, raised);
+}
+
+/// Every conclusion-directed service takes the same two limits, and a refusal names the knob
+/// of the entry point the CALLER called — on every host, never another function's argument
+/// and never a Rust type to a non-Rust caller. The neighbour, the same question with the
+/// limit raised to what the run needs, answers.
+#[test]
+fn a_conclusion_directed_refusal_names_the_services_knob_and_the_neighbour_answers() {
+    use purrdf_validate::{
+        RegimeService, certain_answers_to_string, graph_entails_to_string,
+        verify_entailment_to_string,
+    };
+    type Service = fn(
+        &str,
+        &str,
+        &str,
+        &purrdf_validate::ImportList<'_>,
+        &[&str],
+        &MaterializeLimits,
+    ) -> Result<purrdf_validate::regime::ReasoningAnswer, String>;
+    let conclusion = "<http://example.org/s0> <http://example.org/p> <http://example.org/o0> .\n";
+    let pattern = "?s <http://example.org/p> ?o .\n";
+    let services: [(Service, RegimeService, &str); 3] = [
+        (
+            certain_answers_to_string,
+            RegimeService::CertainAnswers,
+            pattern,
+        ),
+        (
+            graph_entails_to_string,
+            RegimeService::GraphEntails,
+            conclusion,
+        ),
+        (
+            verify_entailment_to_string,
+            RegimeService::VerifyEntailment,
+            conclusion,
+        ),
+    ];
+    let hosts = [
+        RegimeHost::Rust,
+        RegimeHost::Python,
+        RegimeHost::Wasm,
+        RegimeHost::CAbi,
+        RegimeHost::Cli,
+    ];
+    for (service, which, question) in services {
+        let unlimited = service(
+            "owl-rl",
+            DATA,
+            question,
+            &[],
+            &[],
+            &MaterializeLimits::default(),
+        )
+        .expect("the default");
+        let stored: u64 = unlimited
+            .certificate()
+            .lines()
+            .find_map(|line| line.strip_prefix("budget stored-facts "))
+            .expect("a stored-facts line")
+            .parse()
+            .expect("a count");
+        for host in hosts {
+            let (stored_facts, join_steps) = host.service_knobs(which);
+            let limits = |facts: Option<u64>, steps: Option<u64>| MaterializeLimits {
+                max_stored_facts: facts,
+                max_join_steps: steps,
+                host,
+            };
+            let refused = service(
+                "owl-rl",
+                DATA,
+                question,
+                &[],
+                &[],
+                &limits(Some(stored - 1), None),
+            )
+            .expect_err("one fact short");
+            assert!(
+                refused.contains("evaluation exceeded the stored-fact limit: ")
+                    && refused.contains(&format!("{} permitted (the caller's limit)", stored - 1))
+                    && refused.ends_with(&format!("raise it with {stored_facts}")),
+                "{which:?} {host:?}: {refused}"
+            );
+            let answered = service(
+                "owl-rl",
+                DATA,
+                question,
+                &[],
+                &[],
+                &limits(Some(stored), None),
+            )
+            .expect("exactly the store it needs");
+            assert_eq!(answered.answer(), unlimited.answer(), "{which:?} {host:?}");
+            let refused = service("owl-rl", DATA, question, &[], &[], &limits(None, Some(1)))
+                .expect_err("one join step");
+            assert!(
+                refused.contains("evaluation exceeded the join-step limit: ")
+                    && refused.ends_with(&format!("raise it with {join_steps}")),
+                "{which:?} {host:?}: {refused}"
+            );
+        }
+    }
+    // The spellings a non-Rust caller reads are its own entry point's, never the Rust type.
+    for (host, expected) in [
+        (RegimeHost::Python, "graph_entails(max_stored_facts=...)"),
+        (RegimeHost::Wasm, "entailGraphEntails's maxStoredFacts"),
+        (
+            RegimeHost::CAbi,
+            "purrdf_entail_graph_entails's max_stored_facts",
+        ),
+        (RegimeHost::Cli, "--max-stored-facts"),
+    ] {
+        let (stored_facts, _) = host.service_knobs(RegimeService::GraphEntails);
+        assert_eq!(stored_facts, expected);
+        assert!(
+            !stored_facts.contains("MaterializeLimits") && !stored_facts.contains("EvalOptions")
+        );
+    }
 }

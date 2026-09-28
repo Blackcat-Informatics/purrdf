@@ -1080,8 +1080,8 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
         "bindings/python/src/py_entail.rs",
         lambda text: _swap(
             text,
-            "#[pyo3(signature = (regime, data, pattern, imports, premise_iris))]",
-            "#[pyo3(signature = (regime, data, pattern, imports))]",
+            "#[pyo3(signature = (regime, data, pattern, imports, premise_iris, *, max_stored_facts=None, max_join_steps=None))]",
+            "#[pyo3(signature = (regime, data, pattern, imports, *, max_stored_facts=None, max_join_steps=None))]",
         ),
     ),
     (
@@ -1118,7 +1118,12 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
     (
         "the wasm binding loses a parameter",
         "crates/rdf-wasm/src/entail.rs",
-        lambda text: _swap(text, "    import_documents: Vec<String>,\n", ""),
+        lambda text: _swap_after(
+            text,
+            f"#[wasm_bindgen(js_name = {_names('wasm')})]\n",
+            "    import_documents: Vec<String>,\n",
+            "",
+        ),
     ),
     (
         "the name is dropped from the `import init, { … }` list",
@@ -1142,7 +1147,12 @@ _MUTATIONS: tuple[tuple[str, str, Callable[[str], str]], ...] = (
     (
         "the `.d.ts` declaration loses a parameter",
         "crates/rdf-wasm/js/index.d.ts",
-        lambda text: _swap(text, "  importDocuments: readonly string[],\n", ""),
+        lambda text: _swap_after(
+            text,
+            f"export function {_names('wasm')}(",
+            "  importDocuments: readonly string[],\n",
+            "",
+        ),
     ),
     # ── the C ABI, and the header cbindgen writes ──
     (

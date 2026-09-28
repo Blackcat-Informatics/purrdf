@@ -781,3 +781,120 @@ fn witness_triples_are_in_the_closure_the_scrub_runs_over() {
         "the closure must state `a1 r <witness>` for the scrub to have work to do"
     );
 }
+
+// ── The closure is taken over the premise's `owl:imports` closure ──────────────────
+
+const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
+const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
+
+/// `ex:o a owl:Ontology ; owl:imports ex:schema . ex:tom a ex:Cat .` — the schema that makes
+/// `tom` an `Animal` lives only in the imported document.
+fn importing_premise() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let ty = b.intern_iri(RDF_TYPE);
+    let ontology = b.intern_iri(&format!("{NS}o"));
+    let owl_ontology = b.intern_iri(OWL_ONTOLOGY);
+    let imports = b.intern_iri(OWL_IMPORTS);
+    let schema = b.intern_iri(&format!("{NS}schema"));
+    let tom = b.intern_iri(&format!("{NS}tom"));
+    let cat = b.intern_iri(&format!("{NS}Cat"));
+    b.push_quad(ontology, ty, owl_ontology, None);
+    b.push_quad(ontology, imports, schema, None);
+    b.push_quad(tom, ty, cat, None);
+    b.freeze().expect("the fixture freezes")
+}
+
+/// `ex:Cat rdfs:subClassOf ex:Animal .`
+fn imported_schema() -> Arc<RdfDataset> {
+    let mut b = RdfDatasetBuilder::new();
+    let subclass = b.intern_iri(RDFS_SUBCLASS);
+    let cat = b.intern_iri(&format!("{NS}Cat"));
+    let animal = b.intern_iri(&format!("{NS}Animal"));
+    b.push_quad(cat, subclass, animal, None);
+    b.freeze().expect("the fixture freezes")
+}
+
+/// Run [`DERIVED_ANIMALS`] over `dataset`'s imports closure as `imports` resolves it.
+fn over_imports(
+    dataset: &Arc<RdfDataset>,
+    imports: &purrdf::entail::ImportMap,
+) -> Result<GovernedEntailment, purrdf::ReasoningError> {
+    purrdf::query_with_entailment_closure_governed(
+        &NativeSparqlEngine::new(),
+        dataset,
+        SparqlRequest {
+            query: DERIVED_ANIMALS,
+            base_iri: None,
+            substitutions: &[],
+        },
+        &purrdf::EntailmentClosure::new(QueryEntailment::Rdfs, imports),
+        QueryOptions::EMPTY,
+        &ClosureRelations::NONE,
+        &QueryGovernors::UNBOUNDED,
+    )
+}
+
+/// A QUERY UNDER A REGIME IS ANSWERED OVER THE IMPORTS CLOSURE, or refused.
+///
+/// The oracle observes the import: `tom` is an `Animal` only through the imported schema,
+/// so the row set differs between the importing answer and any answer over the premise
+/// alone — and the entry point that takes no table refuses rather than giving the latter.
+#[test]
+fn an_entailment_query_closes_over_the_import_table() {
+    let premise = importing_premise();
+    let tom = TermValue::iri(format!("{NS}tom"));
+
+    let refused = query_with_entailment_governed_(
+        &premise,
+        DERIVED_ANIMALS,
+        QueryEntailment::Rdfs,
+        &QueryGovernors::UNBOUNDED,
+    )
+    .expect_err("an unresolved import is refused");
+    assert!(
+        matches!(
+            &refused,
+            purrdf::ReasoningError::Entailment(purrdf::entail::EntailError::UnresolvedImport(iri))
+                if *iri == format!("{NS}schema")
+        ),
+        "{refused:?}"
+    );
+
+    let mut imports = purrdf::entail::ImportMap::new();
+    imports.insert(format!("{NS}schema"), imported_schema());
+    let GovernedEntailment::Answered {
+        outcome: GovernedOutcome::Complete { result, .. },
+        report,
+    } = over_imports(&premise, &imports).expect("resolves")
+    else {
+        panic!("an unbounded run completes");
+    };
+    assert_eq!(bindings(&result), vec![tom]);
+    assert!(
+        report
+            .boundaries()
+            .iter()
+            .any(|boundary| boundary.construct()
+                == purrdf::entail::Construct::ResolvedOntologyImport),
+        "the report states the closure was resolved"
+    );
+
+    // An entry the closure never reaches is refused; the valid neighbour — the hierarchy,
+    // which imports nothing, with an empty table — answers as it always did.
+    let unreached = over_imports(&hierarchy(), &imports).expect_err("an unreached entry");
+    assert!(
+        matches!(
+            &unreached,
+            purrdf::ReasoningError::Entailment(purrdf::entail::EntailError::UnreachedImport { .. })
+        ),
+        "{unreached:?}"
+    );
+    let GovernedEntailment::Answered {
+        outcome: GovernedOutcome::Complete { result, .. },
+        ..
+    } = over_imports(&hierarchy(), &purrdf::entail::ImportMap::new()).expect("imports nothing")
+    else {
+        panic!("an unbounded run completes");
+    };
+    assert_eq!(bindings(&result).len(), 3);
+}

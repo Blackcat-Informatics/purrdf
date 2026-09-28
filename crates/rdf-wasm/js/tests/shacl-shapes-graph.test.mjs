@@ -157,10 +157,6 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
       false,
       undefined,
       undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
       shapesGraph,
     );
     const inferred = out.inferred;
@@ -192,10 +188,6 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
       undefined,
       undefined,
       false,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
       undefined,
       undefined,
       shapesGraph,

@@ -1482,7 +1482,13 @@ impl ReasoningReport {
     /// order and the boundary list is sorted by it, so swapping one for the other cannot
     /// move a neighbour, an added one is sorted into place, and two identical runs still
     /// render byte-identically.
-    pub(crate) fn with_resolved_imports(mut self) -> Self {
+    ///
+    /// Public so a caller that resolved a premise's imports with
+    /// [`resolve_imports`](crate::resolve_imports) and then closed the result through a lane
+    /// of its own can say so. It must be called ONLY on a run whose imports that function
+    /// resolved — merged, or found already in the premise.
+    #[must_use]
+    pub fn with_resolved_imports(mut self) -> Self {
         for boundary in &mut self.boundaries {
             if boundary.construct() == Construct::UnresolvedOntologyImport {
                 *boundary = Boundary::of(Construct::ResolvedOntologyImport);

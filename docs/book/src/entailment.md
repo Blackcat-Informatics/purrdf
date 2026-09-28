@@ -48,8 +48,8 @@ everywhere.
 | --- | --- | --- | --- |
 | Rust | `materialize(&ds, Materialization::Rdfs)` | `rules(Regime::Rdfs)` | `implemented(Regime::Rdfs)` |
 | CLI | `purrdf reason --regime rdfs`, `purrdf convert --entailment rdfs`, `purrdf query --entailment rdfs` (and `purrdf entails` asks the [conclusion-directed question](#asking-a-question-instead-the-conclusion-directed-services)) | — | — |
-| Python | `purrdf.entail.materialize(dataset, "rdfs", "")`, `purrdf.entail.materialize_nt(text, "rdfs", "")` | `purrdf.entail.rules("rdfs")` | `purrdf.entail.implemented_rules("rdfs")` |
-| JavaScript / WebAssembly | `entailMaterialize(doc, "rdfs", "")` | `entailRules("rdfs")` | `entailImplementedRules("rdfs")` |
+| Python | `purrdf.entail.materialize(dataset, "rdfs", "", imports, premise_iris)`, `purrdf.entail.materialize_nt(text, "rdfs", "", imports, premise_iris)` | `purrdf.entail.rules("rdfs")` | `purrdf.entail.implemented_rules("rdfs")` |
+| JavaScript / WebAssembly | `entailMaterialize(doc, "rdfs", "", iris, docs, premiseIris)` | `entailRules("rdfs")` | `entailImplementedRules("rdfs")` |
 | C | `purrdf_entail_materialize_to_nquads(...)` | `purrdf_entail_rules(...)` | `purrdf_entail_implemented_rules(...)` |
 
 Every host materializes every regime; none refuses one. What two regimes need is an
@@ -118,9 +118,24 @@ the question rather than of any host:
   import is a refusal naming the document, never a silently truncated premise, and
   a table entry the premise's closure never reaches is refused too — it would be
   read and never used — on every host, as SHACL validation refuses an unused
-  shapes-graph entry. The command line's `reason` and `convert --entailment` take
-  the same `--import IRI=FILE` pairs and close the merged premise under the same
-  rule (Rust: `materialize_with_imports`).
+  shapes-graph entry. Every other entailment service takes the same table and
+  applies the same rule: materialization (CLI `reason`, `convert --entailment`;
+  Python `materialize`/`materialize_nt`; WebAssembly `entailMaterialize`; C
+  `purrdf_entail_materialize_to_nquads`; Rust `materialize_with_imports`), the
+  entailment-regime query (CLI `query --entailment … --import IRI=FILE`; Python
+  `Store.query_entailment_governed(..., imports=…, premise_iris=…)`; WebAssembly
+  `queryEntailmentGoverned`'s `importIris`/`importDocuments`/`premiseIris` options;
+  C `purrdf_query_entailment_governed`'s `import_iris`/`import_documents`/
+  `import_count`; Rust `query_with_entailment_closure_governed`), and the OWL-Direct
+  consistency question (CLI `consistency --import IRI=FILE`; Python
+  `consistency(data, imports, premise_iris)`; WebAssembly `entailConsistency(doc,
+  iris, docs, premiseIris, …)`; C `purrdf_entail_consistency`). Each closes or decides
+  the merged premise, states `ontology-import-resolved` in its report or
+  certificate, and refuses an unresolved import or an unreached entry exactly as
+  `reason` does. The Rust entry points that take no table
+  (`query_with_entailment`, `query_with_entailment_governed`) resolve against the
+  empty one, so a premise that imports a document it does not hold is refused there
+  too, never closed without it.
   The `owl:imports` read are the same ones SHACL validation reads: on the premise's
   own IRI, on an `owl:Ontology` header, on a `sh:ShapesGraph` (`sh:RulesGraph` and
   subclasses included), or on a node naming one of those as its `owl:versionIRI`.
@@ -239,6 +254,28 @@ convert --entailment`, `max_stored_facts=` and `max_join_steps=` on Python's
 limit, the numbers and that host's knob; a run inside the limits returns the
 same closure any larger limits would, and its report's contract hash names the
 calculus under the limits in force.
+
+Every other service that evaluates a regime's rule table takes the same two
+limits, and names the knob of the entry point the caller called — never a Rust
+type to a caller who cannot reach one. The conclusion-directed services hold the
+premise's closure and every re-chase of the refutation and freeze mechanisms to
+them: `entails_with` and `certain_answers_with` in Rust (a `MaterializeLimits` on
+the string boundary), `--max-stored-facts` and `--max-join-steps` on `purrdf
+entails`, keyword-only `max_stored_facts=` and `max_join_steps=` on Python's
+`certain_answers`, `graph_entails` and `verify_entailment`, trailing
+`maxStoredFacts` and `maxJoinSteps` on `entailCertainAnswers`,
+`entailGraphEntails` and `entailVerifyEntailment`, and `max_stored_facts` and
+`max_join_steps` after `premise_iri_count` on the three C entry points. The
+entailment-regime query holds its closure to them: `EntailmentClosure::with_limits`
+in Rust, `--max-stored-facts` and `--max-join-steps` beside `purrdf query
+--entailment`, `max_stored_facts=` and `max_join_steps=` on
+`Store.query_entailment_governed`, the `maxStoredFacts` and `maxJoinSteps` options
+of `queryEntailmentGoverned`, and the two parameters of
+`purrdf_query_entailment_governed`; the query governors still price only the
+evaluation over the closure. The OWL-Direct consistency question runs no rule
+table: its evaluator is the hypertableau, bounded by `step_cap` and `work_cap` on
+every host, so it takes no stored-fact or join-step knob that would govern
+nothing.
 
 ## Every run says what it did
 

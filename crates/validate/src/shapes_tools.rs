@@ -4,7 +4,7 @@
 //! The string-in / string-out boundary of the shapes-graph TOOLS the Python, WASM and
 //! C-ABI hosts expose beside validation: running rules ([`apply_rules_to_ntriples`]),
 //! checking a SPARQL 1.2 RL rule set without running it ([`check_rules`]), evaluating one
-//! node expression ([`eval_node_expr_to_terms`]) and certifying a shapes graph
+//! node expression ([`eval_node_expr`]) and certifying a shapes graph
 //! ([`lint_shapes_ttl`]).
 //!
 //! Each is one function here so the three bindings share one implementation, exactly as
@@ -401,9 +401,21 @@ pub struct NodeExprRequest<'a> {
     pub imports: &'a ShapesImportList<'a>,
 }
 
-/// Evaluate one node expression and return its output nodes as N-Triples 1.2 terms, in
-/// the order the expression's sequence semantics define. See
-/// [`free_expression::evaluate`], and [`ExprSelector`] for how the expression is named.
+/// What one node-expression evaluation produced across the host boundary: the output nodes
+/// as N-Triples 1.2 terms, in the order the expression's sequence semantics define, and the
+/// shapes graph's mandatory diagnostics, which every run reports (an empty `sh:in` or
+/// `sh:xone` list — see [`lint::MandatoryDiagnostic`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeExprOutcome {
+    /// The output nodes, as N-Triples 1.2 terms.
+    pub outputs: Vec<String>,
+    /// The shapes graph's mandatory diagnostics, ordered by rule id and then shape.
+    pub diagnostics: Vec<lint::MandatoryDiagnostic>,
+}
+
+/// Evaluate one node expression: its output nodes as N-Triples 1.2 terms, in the order the
+/// expression's sequence semantics define, beside the shapes graph's mandatory diagnostics.
+/// See [`free_expression::evaluate`], and [`ExprSelector`] for how the expression is named.
 ///
 /// # Errors
 ///
@@ -413,7 +425,7 @@ pub struct NodeExprRequest<'a> {
 /// [`crate::ExprSelectorError`] text: a walk step reaching no value or several, an inline
 /// expression without exactly one root), and anything else [`free_expression::evaluate`]
 /// refuses.
-pub fn eval_node_expr_to_terms(request: &NodeExprRequest<'_>) -> Result<Vec<String>, ShapesError> {
+pub fn eval_node_expr(request: &NodeExprRequest<'_>) -> Result<NodeExprOutcome, ShapesError> {
     let imports = ShapesImports::from_turtle(request.imports)?;
     let shapes = parse_turtle_document(request.shapes_ttl, request.shapes_base)
         .map_err(|errors| errors.join("\n"))?;
@@ -444,7 +456,10 @@ pub fn eval_node_expr_to_terms(request: &NodeExprRequest<'_>) -> Result<Vec<Stri
         scope: &scope,
         imports: &imports,
     })?;
-    Ok(outputs.iter().map(ToString::to_string).collect())
+    Ok(NodeExprOutcome {
+        outputs: outputs.outputs.iter().map(ToString::to_string).collect(),
+        diagnostics: outputs.diagnostics,
+    })
 }
 
 /// Split one `NAME=TERM` scope binding at its first `=` — the spelling the CLI's

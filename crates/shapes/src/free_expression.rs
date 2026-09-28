@@ -49,8 +49,24 @@ pub struct FreeExpression<'a> {
     pub imports: &'a ShapesImports,
 }
 
+/// What one node-expression evaluation produced: the expression's output nodes, and the
+/// shapes graph's mandatory diagnostics.
+///
+/// The diagnostics are the ones every run reports (see [`crate::lint::MandatoryDiagnostic`]):
+/// one per shape of the shapes graph's whole `owl:imports` closure with an empty `sh:in` or
+/// `sh:xone` list. They change no output — the shapes graph is well-formed — and they travel
+/// beside the outputs because an evaluation is a run of the shapes graph like any other.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NodeExprEvaluation {
+    /// The output nodes, in the order the expression's sequence semantics define.
+    pub outputs: Vec<Term>,
+    /// The shapes graph's mandatory diagnostics, ordered by rule id and then canonically by
+    /// shape.
+    pub diagnostics: Vec<crate::lint::MandatoryDiagnostic>,
+}
+
 /// Evaluate `request`: the output nodes of its expression, in the order the expression's
-/// sequence semantics define.
+/// sequence semantics define, beside the shapes graph's mandatory diagnostics.
 ///
 /// # Errors
 ///
@@ -60,7 +76,7 @@ pub struct FreeExpression<'a> {
 /// searched, so the binding could never be read; two bindings of one name, of which only
 /// one could ever be read; anything the shapes parser refuses — an incomplete `owl:imports`
 /// closure as [`ShapesError::Imports`] — and any evaluation error.
-pub fn evaluate(request: &FreeExpression<'_>) -> Result<Vec<Term>, ShapesError> {
+pub fn evaluate(request: &FreeExpression<'_>) -> Result<NodeExprEvaluation, ShapesError> {
     let mut names: Vec<&str> = Vec::with_capacity(request.scope.len());
     for (name, _) in request.scope {
         if name == "focusNode" {
@@ -120,7 +136,7 @@ pub fn evaluate(request: &FreeExpression<'_>) -> Result<Vec<Term>, ShapesError> 
         crate::sparql::enter_function_scope(crate::sparql::bind_in_current_env(&shapes.functions)?);
     let _aggregate_scope = crate::sparql::enter_aggregate_scope(Arc::clone(&shapes.aggregates));
     let mut guard = RecursionGuard::new();
-    eval_bound(
+    let outputs = eval_bound(
         &data,
         request.focus,
         &expr,
@@ -128,7 +144,11 @@ pub fn evaluate(request: &FreeExpression<'_>) -> Result<Vec<Term>, ShapesError> 
         request.scope,
         Scope::EMPTY,
     )
-    .map_err(ShapesError::Invalid)
+    .map_err(ShapesError::Invalid)?;
+    Ok(NodeExprEvaluation {
+        outputs,
+        diagnostics: shapes.mandatory_diagnostics().to_vec(),
+    })
 }
 
 /// Push `bindings` onto `scope`, first binding outermost, and evaluate.

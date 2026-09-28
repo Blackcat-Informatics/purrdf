@@ -504,8 +504,14 @@ fn check_rules(
 
 /// Evaluate ONE node expression of a shapes graph (Turtle) against a focus node of a data
 /// graph (N-Triples) — SHACL 1.2 Node Expressions' `evalExpr(expr, focusGraph, focusNode,
-/// scope)` — returning its output nodes as N-Triples 1.2 terms, in the order the
-/// expression's sequence semantics define.
+/// scope)` — returning a dict:
+///
+/// - `"outputs"` — the output nodes as N-Triples 1.2 terms, in the order the expression's
+///   sequence semantics define;
+/// - `"diagnostics"` — the shapes graph's mandatory diagnostics, one dict per shape of its
+///   `owl:imports` closure with an empty `sh:in` or `sh:xone` list: `"rule"`
+///   (`in-minListLength` / `xone-minListLength`) and `"shape"` (an N-Triples term). Every
+///   run reports them; they change no output.
 ///
 /// The expression is named exactly one way. `expr` is the expression node: an absolute
 /// IRI, or `"_:label"` for a blank node the shapes document labels so. Otherwise `expr` is
@@ -538,7 +544,7 @@ fn eval_node_expr(
     scope: Option<std::collections::BTreeMap<String, String>>,
     shapes_base: Option<&str>,
     imports: Vec<(String, String)>,
-) -> PyResult<Vec<String>> {
+) -> PyResult<Py<PyAny>> {
     let via: Vec<&str> = expr_via.iter().map(String::as_str).collect();
     let expr = purrdf_validate::ExprSelector::from_parts(expr, expr_at, &via, expr_turtle)
         .map_err(|error| shapes_error(py, error.into()))?;
@@ -548,18 +554,23 @@ fn eval_node_expr(
         .iter()
         .map(|(name, term)| (name.as_str(), term.as_str()))
         .collect();
-    py.detach(|| {
-        purrdf_validate::eval_node_expr_to_terms(&purrdf_validate::NodeExprRequest {
-            shapes_ttl,
-            shapes_base,
-            data_nt,
-            expr,
-            focus,
-            scope: &bindings,
-            imports: &pairs,
+    let outcome = py
+        .detach(|| {
+            purrdf_validate::eval_node_expr(&purrdf_validate::NodeExprRequest {
+                shapes_ttl,
+                shapes_base,
+                data_nt,
+                expr,
+                focus,
+                scope: &bindings,
+                imports: &pairs,
+            })
         })
-    })
-    .map_err(|error| shapes_error(py, error))
+        .map_err(|error| shapes_error(py, error))?;
+    let out = PyDict::new(py);
+    out.set_item("outputs", outcome.outputs)?;
+    out.set_item("diagnostics", diagnostics_list(py, &outcome.diagnostics)?)?;
+    Ok(out.into_any().unbind())
 }
 
 /// Certify a shapes graph (Turtle), COLD: the loader's verdict, every result of validating

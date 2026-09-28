@@ -1080,7 +1080,13 @@ body matched. A SPARQL 1.2 RL data-block triple has `  data-block` instead.
 Every host takes the same four **rule-evaluation limits**, on both of its SHACL
 rules entry points: the rules run above and SHACL-AF entailment (Python
 `shapes.entail`, WebAssembly `shaclEntail`, C `purrdf_shacl_entail_to_ntriples`),
-which bounds its run exactly as the rules run does:
+which bounds its run exactly as the rules run does. In WebAssembly both entry
+points take them contiguously and in this order, after the import table and
+`shapesGraph`: `shaclApplyRules(dataNt, shapesTtl?, srl?, shapesBase?, srlBase?,
+explain?, importIris?, importDocuments?, shapesGraph?, maxTermGeneratingRounds?,
+maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)` and `shaclEntail(shapesTtl,
+dataNt, shapesBase?, importIris?, importDocuments?, shapesGraph?,
+maxTermGeneratingRounds?, maxGeneratedTerms?, maxStoredFacts?, maxJoinSteps?)`.
 
 - The **term-generating round limit** bounds the evaluation rounds that infer a
   term the graph did not already hold. The default is 16384 rounds. A counter
@@ -1193,7 +1199,14 @@ against a focus node of a data graph, as SHACL 1.2 Node Expressions'
 shapes parser itself, so custom functions, shape references and `sh:prefixes`
 bind as they do inside a shape. Scope variables are bound by name and read by
 `shnex:var`. The output nodes come back as N-Triples terms in the order the
-expression's sequence semantics define.
+expression's sequence semantics define, beside the shapes graph's mandatory
+diagnostics, which an evaluation reports like every other run (see
+[the report is a dataset](#the-report-is-a-dataset)): `purrdf node-expr` writes a `shacl
+diagnostic RULE SHAPE` line to stderr after its `node-expr outputs N` line,
+Python's `eval_node_expr` returns `{"outputs", "diagnostics"}`, WebAssembly's
+`shaclEvalNodeExpr` returns a `ShaclNodeExprOutcome` with `outputs` and
+`diagnostics`, and C's `purrdf_shacl_eval_node_expr` writes `diagnostic RULE
+SHAPE` lines to a non-NULL `out_diagnostics`.
 
 Every host names the expression in one of three ways:
 
@@ -1360,12 +1373,16 @@ action", SARIF 2.1.0 §3.58.6), whose `descriptor` names the rule in
 `tool.driver.notifications`. The command line writes `shacl diagnostic RULE
 SHAPE` to stderr after the verdict lines. Python's `validate` dict and
 `ValidationReport` object have a `diagnostics` list of `{"rule", "shape"}`
-dicts. A rules or entailment run reports the same diagnostics: `purrdf rules`
-writes the same stderr line, Python's `apply_rules` and `entail` dicts carry
-`"diagnostics"`, WebAssembly's `ShaclRulesInference` and `ShaclEntailment` have a
-`diagnostics` array of `RULE SHAPE` strings, and C's `purrdf_shacl_apply_rules` and
-`purrdf_shacl_entail_to_ntriples` write `diagnostic RULE SHAPE` lines to a
-non-NULL `out_diagnostics`.
+dicts. A rules, entailment or node-expression run reports the same diagnostics:
+`purrdf rules` and `purrdf node-expr` write the same stderr line, Python's
+`apply_rules`, `entail` and `eval_node_expr` dicts carry `"diagnostics"`,
+WebAssembly's `ShaclRulesInference`, `ShaclEntailment` and `ShaclNodeExprOutcome`
+have a `diagnostics` array of `ShaclDiagnostic` values (`rule`, `shape`), and C's
+`purrdf_shacl_apply_rules`, `purrdf_shacl_entail_to_ntriples` and
+`purrdf_shacl_eval_node_expr` write `diagnostic RULE SHAPE` lines to a non-NULL
+`out_diagnostics`. The encoding is one across hosts: the rule and the shape are
+separate fields — dict keys in Python, getters in WebAssembly — and C's line
+carries the same two fields in the same order, the rule first.
 
 ## SARIF output
 

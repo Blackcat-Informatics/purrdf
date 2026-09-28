@@ -217,7 +217,7 @@ const entailed: EntailmentQueryOutcome = engine.queryEntailmentGoverned(
   matched,
   "SELECT ?s WHERE { ?s ?p ?o }",
   "rdfs",
-  { fuel: 100_000, program: null },
+  { fuel: 100_000, program: null, importIris: [], importDocuments: [], premiseIris: [] },
 );
 const entailmentPhase: "answered" | "closure-stopped" = entailed.phase;
 const ledger: string = engine.explainQuery(matched, "SELECT ?s WHERE { ?s ?p ?o }");

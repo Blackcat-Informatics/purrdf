@@ -381,11 +381,12 @@ pub(crate) enum Command {
         /// Materialize an entailment regime's closure in memory before querying
         /// (the query then runs over the closure, not the raw view). Combines with
         /// every governor flag: the ceilings bound the QUERY over the closure, and
-        /// `--deadline` additionally bounds computing the closure itself — a numeric
-        /// ceiling cannot, because a caller-settable budget on a reasoning run would
-        /// make the closure itself depend on the caller. A deadline that expires while
-        /// the closure is still being computed prints the governor report, writes no
-        /// rows, and exits 3.
+        /// `--deadline` additionally bounds computing the closure itself. The query
+        /// governors never become limits on the reasoning run; `--max-stored-facts` and
+        /// `--max-join-steps` are its limits, and like every evaluation limit they can
+        /// only refuse, never truncate a closure. A deadline that expires while the
+        /// closure is still being computed prints the governor report, writes no rows,
+        /// and exits 3.
         #[arg(long, value_enum, value_name = "REGIME")]
         entailment: Option<CliRegime>,
         /// RIF-in-XML rule document for `rif`; required by that regime and
@@ -397,6 +398,32 @@ pub(crate) enum Command {
         #[allow(clippy::option_option)]
         #[arg(long, value_name = "PATH", num_args = 0..=1, require_equals = true)]
         report: Option<Option<PathBuf>>,
+        /// An `owl:imports` the data declares, resolved to a local document:
+        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+        /// imports closure to BE the ontology, so the `--entailment` closure the query
+        /// runs over is materialized over the data merged with every imported document.
+        /// PurRDF fetches nothing: an `owl:imports` no pair resolves, that does not name
+        /// the data document itself (its `file://` retrieval IRI or `--base`), and whose
+        /// ontology the data does not already hold, is refused by name (exit 1), and a
+        /// pair the closure never reaches is refused as unused (exit 2). The data's
+        /// imports are the `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+        /// other is a data triple. The IRI half must be ABSOLUTE; each document's format
+        /// is inferred from its extension.
+        #[arg(long = "import", value_name = "IRI=FILE", requires = "entailment")]
+        imports: Vec<String>,
+        /// Permit exactly `N` facts in each evaluation store the `--entailment` closure is
+        /// computed in, for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the
+        /// run (exit 1) naming the limit and the numbers. Omitted, the limit is 4194304
+        /// facts. The limit can only refuse: a run it admits answers over exactly the
+        /// closure a larger limit would.
+        #[arg(long = "max-stored-facts", value_name = "N", requires = "entailment")]
+        max_stored_facts: Option<u64>,
+        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+        /// while the `--entailment` closure is computed, for the `rdf`, `rdfs`, `owl-rl` and
+        /// `d` regimes; one more fails the run (exit 1). Omitted, the limit is 1048576 steps.
+        #[arg(long = "max-join-steps", value_name = "N", requires = "entailment")]
+        max_join_steps: Option<u64>,
         /// Result serialization: a SPARQL-results format (json/xml/csv/tsv) for
         /// SELECT/ASK, or an RDF syntax (turtle/trig/…) for CONSTRUCT/DESCRIBE.
         /// Defaults to `json` when omitted. `None` here (the flag genuinely
@@ -672,6 +699,18 @@ pub(crate) enum Command {
         /// attributed to the premise's data.
         #[arg(long = "import", value_name = "IRI=FILE")]
         imports: Vec<String>,
+        /// Permit exactly `N` facts in each evaluation store the question is answered with —
+        /// the premise's closure and every re-chase a mechanism beyond the rule table runs —
+        /// for the `rdf`, `rdfs`, `owl-rl` and `d` regimes; one more fails the run (exit 1)
+        /// naming the limit and the numbers. Omitted, the limit is 4194304 facts. The limit
+        /// can only refuse: a run it admits answers exactly as a larger limit would.
+        #[arg(long = "max-stored-facts", value_name = "N")]
+        max_stored_facts: Option<u64>,
+        /// Permit exactly `N` join steps — candidate solutions the rule bodies enumerate —
+        /// in each of those evaluations; one more fails the run (exit 1). Omitted, the limit
+        /// is 1048576 steps.
+        #[arg(long = "max-join-steps", value_name = "N")]
+        max_join_steps: Option<u64>,
         /// Surface the reasoning certificate: bare writes it to stderr,
         /// `--report=PATH` writes it to PATH.
         #[allow(clippy::option_option)]
@@ -766,7 +805,23 @@ pub(crate) enum Command {
         /// to `work-budget` in its certificate.
         #[arg(long, value_name = "N", default_value_t = 0)]
         work_cap: u32,
-        /// Input format override; inferred from the input extension when omitted.
+        /// An `owl:imports` the ontology declares, resolved to a local document:
+        /// repeatable, `IRI=FILE`, followed transitively. OWL 2 defines an ontology's
+        /// imports closure to BE the ontology, so consistency is decided for the ontology
+        /// merged with every imported document, and the certificate names
+        /// `ontology-import-resolved`. PurRDF fetches nothing: an `owl:imports` no pair
+        /// resolves, that does not name the input document itself (its `file://` retrieval
+        /// IRI or `--base`), and whose ontology the input does not already hold, is refused
+        /// by name (exit 1) rather than decided over a smaller ontology, and a pair the
+        /// closure never reaches is refused as unused (exit 2). The input's imports are the
+        /// `owl:imports` on its own IRI, on an `owl:Ontology` header, on a
+        /// `sh:ShapesGraph`, or on a node naming one of those as its `owl:versionIRI`; any
+        /// other is an ontology triple. The IRI half must be ABSOLUTE. `--proof` records,
+        /// and `--check-proof` checks, a proof over that merged ontology.
+        #[arg(long = "import", value_name = "IRI=FILE")]
+        imports: Vec<String>,
+        /// Input format override (the input and every `--import` document); inferred from
+        /// each path's extension when omitted.
         #[arg(long, value_enum)]
         from: Option<CliRdfFormat>,
         /// Base IRI for resolving relative IRIs while parsing the input. A PARSE
@@ -1433,7 +1488,10 @@ pub(crate) enum Command {
     /// a walk step reaching no value or several, and an inline expression that is not
     /// Turtle or has no single root. **2** for a usage error, including a selector term
     /// that is not one. The output count is always written to stderr as `node-expr
-    /// outputs N`.
+    /// outputs N`, followed by one `shacl diagnostic RULE SHAPE` line per shape of the
+    /// shapes graph's `owl:imports` closure with an empty `sh:in` or `sh:xone` list — the
+    /// mandatory diagnostic every run reports, exactly as `validate` and `rules` print it.
+    /// A diagnostic changes no output and no exit code.
     #[command(group(
         clap::ArgGroup::new("expression")
             .required(true)

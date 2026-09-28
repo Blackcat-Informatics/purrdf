@@ -167,7 +167,12 @@ pub fn rif_resolver(
 /// pair of ontologies of the closure that are two versions of one series or of which one
 /// declares `owl:incompatibleWith` the other (OWL 2 §3.4); [`EntailError::Build`] if the
 /// merged dataset cannot be frozen.
-pub(crate) fn resolve(
+///
+/// Public as [`crate::resolve_imports`] for a caller that closes a premise through a lane
+/// this crate does not own the whole of — the query orchestrator's combined approach, or the
+/// OWL-Direct reasoner a consistency question opens — so every entailment surface resolves
+/// through this one function rather than re-deriving the refusals.
+pub fn resolve(
     premise: &RdfDataset,
     map: &ImportMap,
 ) -> Result<Option<Arc<RdfDataset>>, EntailError> {

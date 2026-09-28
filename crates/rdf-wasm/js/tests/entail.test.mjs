@@ -86,7 +86,7 @@ test("an answer nobody recorded is never presented as verified ON WASM", () => {
   entailCheckAbsentProof();
   // …and a caller reaching the boundary directly sees the same three states. An
   // ordinary answer records nothing and SAYS so.
-  const plain = entailConsistency(SCHEMA, 0, 0);
+  const plain = entailConsistency(SCHEMA, [], [], [], 0, 0);
   assert.equal(plain.proof, "purrdf-dl-proof 1\navailability not-recorded\n");
   assert.throws(
     () =>
@@ -170,6 +170,9 @@ test("an inconsistent input is refused WITH its certificate ON WASM", () => {
         ].join("\n"),
         "owl-rl",
         "",
+        [],
+        [],
+        [],
       ),
     /inconsistency-premise <http:\/\/example\.org\/A>/,
   );
@@ -226,6 +229,9 @@ test("every golden case is byte-identical across the wasm/JS boundary", async ()
       vector.input,
       vector.regime,
       vector.program ?? "",
+      [],
+      [],
+      [],
       NATIVE_MAX_STORED_FACTS,
       NATIVE_MAX_JOIN_STEPS,
     );
@@ -235,7 +241,7 @@ test("every golden case is byte-identical across the wasm/JS boundary", async ()
 });
 
 test("entailMaterialize's evaluation limits refuse naming this host's arguments", () => {
-  const closed = entailMaterialize(SCHEMA, "rdfs", "");
+  const closed = entailMaterialize(SCHEMA, "rdfs", "", [], [], []);
   const stored = BigInt(
     closed.report
       .split("\n")
@@ -243,24 +249,85 @@ test("entailMaterialize's evaluation limits refuse naming this host's arguments"
       .slice("budget stored-facts ".length),
   );
   assert.throws(
-    () => entailMaterialize(SCHEMA, "rdfs", "", stored - 1n),
+    () => entailMaterialize(SCHEMA, "rdfs", "", [], [], [], stored - 1n),
     (error) =>
       error.message.includes("evaluation exceeded the stored-fact limit: ") &&
       error.message.includes(`${stored - 1n} permitted (the caller's limit)`) &&
       error.message.endsWith("raise it with entailMaterialize's maxStoredFacts"),
   );
-  const exact = entailMaterialize(SCHEMA, "rdfs", "", stored);
+  const exact = entailMaterialize(SCHEMA, "rdfs", "", [], [], [], stored);
   assert.equal(exact.nquads, closed.nquads);
   assert.throws(
-    () => entailMaterialize(SCHEMA, "owl-rl", "", undefined, 1n),
+    () => entailMaterialize(SCHEMA, "owl-rl", "", [], [], [], undefined, 1n),
     (error) =>
       error.message.includes("evaluation exceeded the join-step limit: ") &&
       error.message.endsWith("raise it with entailMaterialize's maxJoinSteps"),
   );
 });
 
+// A premise whose schema lives in an IMPORTED document: `x : B` and the inconsistency
+// are reachable only through the import, so each answer observes whether it took part.
+const IMPORT_LIB = "http://example.org/lib";
+const IMPORTED_LIB = [
+  "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/B> .",
+  "<http://example.org/A> <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/C> .",
+  "",
+].join("\n");
+const IMPORTED_FACTS = [
+  "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/A> .",
+  "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .",
+  "",
+].join("\n");
+const IMPORTING_PREMISE = [
+  "<http://example.org/o> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Ontology> .",
+  `<http://example.org/o> <http://www.w3.org/2002/07/owl#imports> <${IMPORT_LIB}> .`,
+  IMPORTED_FACTS,
+].join("\n");
+const DERIVED_B =
+  "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/B> .";
+
+test("entailMaterialize and entailConsistency close over the import table", () => {
+  const iris = [IMPORT_LIB];
+  const documents = [IMPORTED_LIB];
+  assert.throws(() => entailMaterialize(IMPORTING_PREMISE, "rdfs", "", [], [], []), /example\.org\/lib/);
+  const closed = entailMaterialize(IMPORTING_PREMISE, "rdfs", "", iris, documents, []);
+  assert.ok(closed.nquads.includes(DERIVED_B), closed.nquads);
+  assert.ok(closed.report.includes("\nboundary ontology-import-resolved "), closed.report);
+  assert.throws(
+    () => entailMaterialize(IMPORTED_FACTS, "rdfs", "", iris, documents, []),
+    /would be read and never used/,
+  );
+  assert.ok(!entailMaterialize(IMPORTED_FACTS, "rdfs", "", [], [], []).nquads.includes(DERIVED_B));
+
+  assert.throws(() => entailConsistency(IMPORTING_PREMISE, [], [], [], 0, 0), /example\.org\/lib/);
+  const decided = entailConsistency(IMPORTING_PREMISE, iris, documents, [], 0, 0);
+  assert.equal(decided.answer, "consistency false\n");
+  assert.ok(decided.certificate.includes("\nboundary ontology-import-resolved "));
+  assert.throws(() => entailConsistency(IMPORTED_FACTS, iris, documents, [], 0, 0), /example\.org\/lib/);
+  assert.equal(entailConsistency(IMPORTED_FACTS, [], [], [], 0, 0).answer, "consistency true\n");
+});
+
+test("the conclusion-directed services take the evaluation limits, naming this host's argument", () => {
+  const conclusion =
+    "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .\n";
+  for (const [service, name] of [
+    [entailGraphEntails, "entailGraphEntails"],
+    [entailVerifyEntailment, "entailVerifyEntailment"],
+    [entailCertainAnswers, "entailCertainAnswers"],
+  ]) {
+    assert.throws(
+      () => service("owl-rl", SCHEMA, conclusion, [], [], [], undefined, 1n),
+      (error) =>
+        error.message.includes("evaluation exceeded the join-step limit: ") &&
+        error.message.endsWith(`raise it with ${name}'s maxJoinSteps`),
+    );
+    const answered = service("owl-rl", SCHEMA, conclusion, [], [], [], 4194304n, 1048576n);
+    assert.match(answered.answer, /^mechanism /);
+  }
+});
+
 test("entailMaterialize closes under rdfs and always returns a report", () => {
-  const closed = entailMaterialize(SCHEMA, "rdfs", "");
+  const closed = entailMaterialize(SCHEMA, "rdfs", "", [], [], []);
   assert.match(
     closed.nquads,
     /<http:\/\/example\.org\/x> <http:\/\/www\.w3\.org\/1999\/02\/22-rdf-syntax-ns#type> <http:\/\/example\.org\/C> \./,
@@ -281,7 +348,7 @@ test("entailMaterialize closes under rdfs and always returns a report", () => {
 });
 
 test("entailMaterialize under simple is the identity closure", () => {
-  const closed = entailMaterialize(SCHEMA, "simple", "");
+  const closed = entailMaterialize(SCHEMA, "simple", "", [], [], []);
   assert.ok(
     !closed.nquads.includes(
       "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/C> .",
@@ -291,18 +358,18 @@ test("entailMaterialize under simple is the identity closure", () => {
 });
 
 test("entailMaterialize is byte-stable across repeated calls", () => {
-  const first = entailMaterialize(SCHEMA, "owl-rl", "");
+  const first = entailMaterialize(SCHEMA, "owl-rl", "", [], [], []);
   for (let i = 0; i < 5; i += 1) {
-    const again = entailMaterialize(SCHEMA, "owl-rl", "");
+    const again = entailMaterialize(SCHEMA, "owl-rl", "", [], [], []);
     assert.equal(again.nquads, first.nquads);
     assert.equal(again.report, first.report);
   }
 });
 
 test("entailMaterialize rejects an unknown regime, naming the accepted set", () => {
-  assert.throws(() => entailMaterialize(SCHEMA, "rdfs-plus", ""), /accepted: simple, rdf, rdfs/);
+  assert.throws(() => entailMaterialize(SCHEMA, "rdfs-plus", "", [], [], []), /accepted: simple, rdf, rdfs/);
   // The spellings are case-sensitive, exactly as the CLI writes them.
-  assert.throws(() => entailMaterialize(SCHEMA, "RDFS", ""), /accepted:/);
+  assert.throws(() => entailMaterialize(SCHEMA, "RDFS", "", [], [], []), /accepted:/);
 });
 
 // A normative RIF-in-XML rule document: `?x a ex:A` => `?x a ex:B`. `rif` is the
@@ -323,7 +390,7 @@ test("entailMaterialize materializes every regime spelling", () => {
     ["rif", RIF_PROGRAM],
     ["d", ""],
   ]) {
-    const closed = entailMaterialize(SCHEMA, regime, program);
+    const closed = entailMaterialize(SCHEMA, regime, program, [], [], []);
     assert.match(closed.report, /^purrdf-reasoning-report 4\n/);
     assert.ok(closed.report.includes(`\nregime ${regime}\n`), regime);
     assert.ok(closed.report.includes("\nwithheld-surrogates "), regime);
@@ -333,13 +400,13 @@ test("entailMaterialize materializes every regime spelling", () => {
 
 test("a rule document belongs to rif alone and is refused elsewhere", () => {
   assert.throws(
-    () => entailMaterialize(SCHEMA, "rdfs", RIF_PROGRAM),
+    () => entailMaterialize(SCHEMA, "rdfs", RIF_PROGRAM, [], [], []),
     /takes no rule document/,
   );
 });
 
 test("entailMaterialize rejects a malformed document (never a silent empty closure)", () => {
-  assert.throws(() => entailMaterialize("this is not n-quads\n", "rdfs"));
+  assert.throws(() => entailMaterialize("this is not n-quads\n", "rdfs", "", [], [], []));
 });
 
 // ── A reserved-vocabulary closure is refused as a value, never a process abort ──
@@ -363,13 +430,13 @@ const NEIGHBOURING_ORDINARY_PREDICATE =
 
 test("entailMaterialize throws on a reserved-vocabulary closure, naming it", () => {
   assert.throws(
-    () => entailMaterialize(RESERVED_PREDICATE_PLAIN_OBJECT, "simple", ""),
+    () => entailMaterialize(RESERVED_PREDICATE_PLAIN_OBJECT, "simple", "", [], [], []),
     /urn:purrdf:rdfc:reifies/,
   );
 });
 
 test("entailMaterialize still closes an ordinary document neighbouring the reserved one", () => {
-  const closed = entailMaterialize(NEIGHBOURING_ORDINARY_PREDICATE, "simple", "");
+  const closed = entailMaterialize(NEIGHBOURING_ORDINARY_PREDICATE, "simple", "", [], [], []);
   assert.ok(closed.nquads.includes("urn:purrdf:other:annotation"), closed.nquads);
 });
 
@@ -392,7 +459,7 @@ test("the rule inventories are the specification tables, and the gap is measurab
   }
 
   // …and the difference is exactly what the report's `missing` lines name.
-  const missing = entailMaterialize(SCHEMA, "rdfs", "")
+  const missing = entailMaterialize(SCHEMA, "rdfs", "", [], [], [])
     .report.split("\n")
     .filter((line) => line.startsWith("missing "))
     .map((line) => line.slice("missing ".length));
@@ -436,7 +503,7 @@ test("entailExtensions names what this build adds beyond the specification table
 
   // And the report's `extension` line names the same rules the inventory does,
   // so the two disclosures cannot drift apart.
-  const reported = entailMaterialize(SCHEMA, "owl-rl", "")
+  const reported = entailMaterialize(SCHEMA, "owl-rl", "", [], [], [])
     .report.split("\n")
     .filter((line) => line.startsWith("extension "))
     .map((line) => line.slice("extension ".length));
@@ -466,7 +533,7 @@ const CHAIN_AXIOM =
   "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/C> .\n";
 
 test("entailConsistency decides consistency ON WASM, with its certificate", () => {
-  const decided = entailConsistency(TAXONOMY, 0, 0);
+  const decided = entailConsistency(TAXONOMY, [], [], [], 0, 0);
   assert.equal(decided.answer, "consistency true\n");
   // Never optional. `completeness decided` is reported only because the boundary
   // list beside it is, in fact, empty — the DL certificate's own honesty gate.

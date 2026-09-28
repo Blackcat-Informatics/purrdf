@@ -149,6 +149,7 @@ static int run_vector_case(const char *regime, Slice input, Slice program,
     /* NULL limits: this native library's defaults, which are the limits the
      * artifact is written under. */
     if (purrdf_entail_materialize_to_nquads(input_s, regime, program_s, NULL, NULL,
+                                            0, NULL, 0, NULL, NULL,
                                             &nquads, &rendered,
                                             &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "golden case (%s) did not materialize: %s\n", regime,
@@ -357,7 +358,8 @@ static int check_vendored_imports(const char *premise_path,
     size_t len = 0;
 
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, import_iris,
-                                    import_documents, 1, NULL, 0, &answer, &certificate,
+                                    import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                    &certificate,
                                     &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "graph_entails refused the vendored case: %s\n",
                 error == NULL ? "(no error)" : purrdf_error_message(error));
@@ -381,7 +383,8 @@ static int check_vendored_imports(const char *premise_path,
     /* The pattern-shaped entry point answers the same question the same way: a
      * conclusion graph is the relation with no columns, so a `yes` is one bare row. */
     if (purrdf_entail_certain_answers("owl-rl", premise, conclusion, import_iris,
-                                      import_documents, 1, NULL, 0, &answer, &certificate,
+                                      import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                      &certificate,
                                       &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "certain_answers refused the vendored case\n");
         goto done;
@@ -398,7 +401,8 @@ static int check_vendored_imports(const char *premise_path,
     certificate = NULL;
 
     if (purrdf_entail_verify_entailment("owl-rl", premise, conclusion, import_iris,
-                                        import_documents, 1, NULL, 0, &answer, &certificate,
+                                        import_documents, 1, NULL, 0, NULL, NULL, &answer,
+                                        &certificate,
                                         &error) != PURRDF_STATUS_OK) {
         fprintf(stderr, "verify_entailment refused the vendored case\n");
         goto done;
@@ -417,7 +421,7 @@ static int check_vendored_imports(const char *premise_path,
      * for THIS premise that is a refusal NAMING the document, never an answer
      * computed from a premise missing the axioms it told the caller about. */
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 0, NULL, 0,
-                                    &answer, &certificate,
+                                    NULL, NULL, &answer, &certificate,
                                     &error) != PURRDF_STATUS_PARSE_ERROR) {
         fprintf(stderr, "an unsupplied import was not refused\n");
         goto done;
@@ -439,7 +443,7 @@ static int check_vendored_imports(const char *premise_path,
     /* A NULL array with a NON-ZERO count is a caller error, refused before any
      * dereference rather than segfaulting. */
     if (purrdf_entail_graph_entails("owl-rl", premise, conclusion, NULL, NULL, 1, NULL, 0,
-                                    &answer, &certificate,
+                                    NULL, NULL, &answer, &certificate,
                                     &error) != PURRDF_STATUS_NULL_POINTER) {
         fprintf(stderr, "a null import array with a non-zero count was not refused\n");
         goto done;
@@ -1001,7 +1005,8 @@ int main(int argc, char **argv) {
     PurrdfPartialCertificate entailment_partial;
     PurrdfBuffer *entailment_report = NULL;
     rc = purrdf_query_entailment_governed(
-        dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", NULL, &governors,
+        dataset, "ASK { ?s ?p ?o }", NULL, "simple", "", NULL, NULL, 0, NULL,
+        0, NULL, NULL, NULL, &governors,
         &entailment_outcome, &entailment_kind, NULL, NULL,
         &entailment_boolean, &entailment_evidence, &entailment_partial,
         &entailment_report, &error);
@@ -1056,7 +1061,8 @@ int main(int argc, char **argv) {
         "PREFIX ex: <http://example.org/> "
         "SELECT (AGG(<https://example.org/agg#MEDIAN>, ?w) AS ?m) "
         "WHERE { ?s a ex:Animal . ?s ex:weight ?w }",
-        NULL, "rdfs", "", "https://example.org/agg#", &governors,
+        NULL, "rdfs", "", NULL, NULL, 0, NULL, 0, NULL, NULL, "https://example.org/agg#",
+        &governors,
         &entailed_median_outcome, &entailed_median_kind,
         &entailed_median_rows, NULL, NULL, &entailed_median_evidence,
         &entailed_median_partial, &entailed_median_report, &error);
@@ -1198,7 +1204,8 @@ int main(int argc, char **argv) {
     const uint8_t *cbytes = NULL;
     size_t clen = 0;
 
-    rc = purrdf_entail_consistency(taxonomy, 0, 0, &answer, &certificate, &error);
+    rc = purrdf_entail_consistency(taxonomy, NULL, NULL, 0, NULL, 0, 0, 0, &answer,
+                                   &certificate, &error);
     CHECK(rc == PURRDF_STATUS_OK && answer != NULL && certificate != NULL,
           "entail_consistency");
     purrdf_buffer_data(answer, &abytes, &alen);

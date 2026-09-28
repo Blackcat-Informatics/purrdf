@@ -64,8 +64,8 @@ use std::time::Duration;
 
 use purrdf::ir::MutableDataset;
 use purrdf::{
-    ClosureRelations, GovernedEntailment, JsonLdSerializeOptions, QueryEntailmentPlan,
-    SerializeGraph, query_with_entailment_governed, serialize_dataset,
+    ClosureRelations, EntailmentClosure, GovernedEntailment, JsonLdSerializeOptions,
+    QueryEntailmentPlan, SerializeGraph, query_with_entailment_closure_governed, serialize_dataset,
 };
 use purrdf_core::named_graph::{distinct_graph_names, named_graph_refusal};
 use purrdf_core::{SparqlEngine, SparqlRequest, SparqlResult};
@@ -1187,10 +1187,27 @@ impl QueryEngine {
     /// default) leaves every one of the ten names an ordinary unregistered custom-aggregate
     /// IRI.
     ///
+    /// `import_iris`, `import_documents` and `premise_iris` are `entailCertainAnswers`'s, and
+    /// apply to `dataset`: OWL 2 defines an ontology's imports closure to BE the ontology, so
+    /// the closure the query runs over is materialized over the dataset merged with every
+    /// N-Quads document the table supplies, and the report then states
+    /// `ontology-import-resolved`. An `owl:imports` the table does not resolve, and the
+    /// dataset does not already hold, throws by name — never a closure of a smaller premise —
+    /// and so does a table entry the closure never reaches. Empty arrays are the ordinary
+    /// "imports nothing" case, and all three are required rather than defaulted.
+    ///
+    /// `max_stored_facts` and `max_join_steps` (each a `bigint`, or `undefined` for this
+    /// target's default of 131072 facts and 1048576 join steps) are the closure's evaluation
+    /// limits for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, exactly as `entailMaterialize`
+    /// takes them. A closure past one throws naming the limit, the numbers and this method's
+    /// argument (`queryEntailmentGoverned's maxStoredFacts`, …); the governors price the
+    /// evaluation over the closure and never become a limit on it.
+    ///
     /// # Errors
     ///
-    /// An invalid regime/program, query parse/evaluation failure, entailment failure, or
-    /// malformed ceiling. A governor trip is returned in [`EntailmentQueryOutcome`].
+    /// An invalid regime/program, an import-table refusal, query parse/evaluation failure,
+    /// entailment failure, or malformed ceiling. A governor trip is returned in
+    /// [`EntailmentQueryOutcome`].
     #[wasm_bindgen(js_name = queryEntailmentGoverned)]
     #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
     #[allow(
@@ -1204,6 +1221,11 @@ impl QueryEngine {
         base: Option<String>,
         regime: &str,
         program: Option<String>,
+        import_iris: Vec<String>,
+        import_documents: Vec<String>,
+        premise_iris: Vec<String>,
+        max_stored_facts: Option<u64>,
+        max_join_steps: Option<u64>,
         aggregate_namespace: Option<String>,
         fuel: Option<i64>,
         deadline_ms: Option<i64>,
@@ -1215,6 +1237,9 @@ impl QueryEngine {
     ) -> Result<EntailmentQueryOutcome, JsError> {
         let plan = QueryEntailmentPlan::parse(regime, program.as_deref().unwrap_or(""))
             .map_err(|error| JsError::new(&error))?;
+        let imports =
+            crate::entail::entailment_import_map(&import_iris, &import_documents, &premise_iris)
+                .map_err(|error| JsError::new(&error))?;
         let args = GovernorArgs {
             fuel: decode_ceiling("fuel", fuel)?,
             deadline_ms: decode_ceiling("deadlineMs", deadline_ms)?,
@@ -1226,11 +1251,13 @@ impl QueryEngine {
         let governors = args.engage(cancel.as_ref());
         let frozen = dataset.inner.freeze().map_err(|e| diag_to_err(&e))?;
         let aggregates = build_aggregates(aggregate_namespace);
-        let outcome = query_with_entailment_governed(
+        let outcome = query_with_entailment_closure_governed(
             &self.inner,
             &frozen,
             sparql_request(sparql, base.as_deref()),
-            plan.entailment(),
+            &EntailmentClosure::new(plan.entailment(), &imports).with_limits(
+                crate::entail::wasm_limits(max_stored_facts, max_join_steps).eval_options(),
+            ),
             QueryOptions {
                 env: &aggregate_env(aggregates.as_ref())?,
                 ..QueryOptions::EMPTY
@@ -1240,7 +1267,19 @@ impl QueryEngine {
             &ClosureRelations::NONE,
             &governors,
         )
-        .map_err(|error| JsError::new(&error.to_string()))?;
+        .map_err(|error| match error {
+            // Rendered by the shared boundary, so a passed evaluation limit names this
+            // method's argument rather than a Rust type a JavaScript caller cannot reach.
+            purrdf::ReasoningError::Entailment(error) => {
+                JsError::new(&purrdf_validate::render_entail_error_in(
+                    regime,
+                    &error,
+                    purrdf_validate::RegimeHost::Wasm,
+                    purrdf_validate::RegimeService::Query,
+                ))
+            }
+            other => JsError::new(&other.to_string()),
+        })?;
         entailment_query_outcome_from_native(outcome)
     }
 

@@ -86,7 +86,7 @@ def test_every_entry_point_applies_a_supplied_import() -> None:
 
     assert INFERRED in _ENTRY_POINTS["entail"](TABLE)["ntriples"]
     assert _ENTRY_POINTS["apply_rules"](TABLE)["inferred"].strip() == INFERRED
-    assert _ENTRY_POINTS["eval_node_expr"](TABLE) == ["<http://example.org/bob>"]
+    assert _ENTRY_POINTS["eval_node_expr"](TABLE)["outputs"] == ["<http://example.org/bob>"]
     assert _ENTRY_POINTS["lint_shapes"](TABLE)["clean"] is True
 
     shapes = _ENTRY_POINTS["Shapes"](TABLE)

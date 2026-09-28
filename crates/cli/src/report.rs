@@ -51,7 +51,8 @@ use purrdf_entail::{
 };
 use purrdf_rdf::SourceFormat;
 use purrdf_validate::regime::{
-    MaterializeLimits, regime_name, render_entail_error_for, render_reasoning_report,
+    MaterializeLimits, RegimeHost, RegimeService, regime_name, render_entail_error_for,
+    render_entail_error_in, render_reasoning_report,
 };
 use std::fmt::Write as _;
 use std::sync::Arc;
@@ -176,18 +177,52 @@ fn reported(
             &error,
             limits.host,
         ))),
-        Err(EntailError::UnresolvedImport(iri)) => Err(CliError::Runtime(format!(
+        Err(error) => Err(import_refusal(error)),
+    }
+}
+
+/// The CLI's rendering of an entailment refusal from `service`: a passed evaluation limit
+/// names the command line's own flag (`--max-stored-facts`, `--max-join-steps`) through the
+/// shared boundary renderer, and every other refusal is [`import_refusal`]'s.
+pub(crate) fn entailment_refusal(
+    regime: &str,
+    error: EntailError,
+    service: RegimeService,
+) -> CliError {
+    match error {
+        error @ (EntailError::Evaluate(
+            purrdf::datalog::seminaive::EvalError::BudgetExhausted { .. },
+        )
+        | EntailError::Chase(purrdf::datalog::chase::ChaseError::BudgetExhausted {
+            ..
+        })) => CliError::Runtime(render_entail_error_in(
+            regime,
+            &error,
+            RegimeHost::Cli,
+            service,
+        )),
+        other => import_refusal(other),
+    }
+}
+
+/// The CLI's rendering of an entailment refusal that names no knob and carries no report:
+/// an import no `--import` pair resolves (exit 1, naming the pair that resolves it), a pair
+/// the premise's closure never reaches (a usage error, exit 2), and every other variant as
+/// its own diagnostic. Every entailment subcommand renders these through this one function.
+pub(crate) fn import_refusal(error: EntailError) -> CliError {
+    match error {
+        EntailError::UnresolvedImport(iri) => CliError::Runtime(format!(
             "unresolved-import: the premise owl:imports <{iri}>, which no --import pair \
              resolves and the premise does not contain. PurRDF fetches nothing the operator \
              did not name, and closing over the premise without an imported ontology would \
              close a different, smaller ontology than the one named. Pass `--import \
              {iri}=FILE` to fold it in, or merge the imported ontology into the premise. If \
              the premise IS <{iri}>, read it under that IRI with `--base {iri}`"
-        ))),
-        Err(EntailError::UnreachedImport { iris, unanchored }) => {
-            Err(unreached_import_refusal(&iris, &unanchored))
+        )),
+        EntailError::UnreachedImport { iris, unanchored } => {
+            unreached_import_refusal(&iris, &unanchored)
         }
-        Err(other) => Err(other.into()),
+        other => other.into(),
     }
 }
 

@@ -193,20 +193,43 @@ def test_py_entail_limits() -> None:
 def test_py_eval_node_expr() -> None:
     assert purrdf.shapes.eval_node_expr(
         _SHAPES, _DATA, "http://example.org/ns#Tag", "http://example.org/ns#a"
-    ) == ["<http://example.org/ns#yes>"]
+    )["outputs"] == ["<http://example.org/ns#yes>"]
     assert purrdf.shapes.eval_node_expr(
         _SHAPES,
         _DATA,
         "_:suffix",
         f'"-3"^^{_INTEGER}',
         scope={"suffix": '"!"@en'},
-    ) == ['"!"@en']
+    )["outputs"] == ['"!"@en']
     with pytest.raises(ValueError, match="mentions no blank node _:nosuch"):
         purrdf.shapes.eval_node_expr(_SHAPES, _DATA, "_:nosuch", "http://example.org/ns#a")
     with pytest.raises(ValueError, match="can never be read"):
         purrdf.shapes.eval_node_expr(
             _SHAPES, _DATA, "_:suffix", "http://example.org/ns#a", scope={"focusNode": '"!"'}
         )
+
+
+def test_py_eval_node_expr_reports_the_mandatory_diagnostic() -> None:
+    """A shape with an empty sh:in list is reported as {"rule", "shape"}; the neighbour whose
+    list has a member reports none. The outputs are the expression's either way."""
+
+    def shapes(members: str) -> str:
+        return (
+            "@prefix sh: <http://www.w3.org/ns/shacl#> .\n"
+            "@prefix ex: <http://example.org/ns#> .\n"
+            f"ex:Listed a sh:NodeShape ; sh:in ( {members} ) .\n"
+        )
+
+    focus = "http://example.org/ns#a"
+    constant = "http://example.org/ns#Constant"
+    empty = purrdf.shapes.eval_node_expr(shapes(""), _DATA, constant, focus)
+    assert empty["outputs"] == [f"<{constant}>"]
+    assert empty["diagnostics"] == [
+        {"rule": "in-minListLength", "shape": "<http://example.org/ns#Listed>"}
+    ]
+    member = purrdf.shapes.eval_node_expr(shapes("ex:one"), _DATA, constant, focus)
+    assert member["outputs"] == [f"<{constant}>"]
+    assert member["diagnostics"] == []
 
 
 _SH = "http://www.w3.org/ns/shacl#"
@@ -226,7 +249,7 @@ def test_py_eval_node_expr_selectors() -> None:
             focus,
             expr_at="http://example.org/ns#Tagger",
             expr_via=[_SH + "rule", _SH + "object"],
-        )
+        )["outputs"]
         == yes
     )
     assert (
@@ -236,7 +259,7 @@ def test_py_eval_node_expr_selectors() -> None:
             None,
             focus,
             expr_turtle='[ sh:sparqlExpr "ex:yes" ; sh:prefixes ex:Prefixes ] .',
-        )
+        )["outputs"]
         == yes
     )
     # One value beside two.
@@ -247,7 +270,7 @@ def test_py_eval_node_expr_selectors() -> None:
         focus,
         expr_at=_SH + "SPARQLExprExpression",
         expr_via=["http://www.w3.org/2000/01/rdf-schema#isDefinedBy"],
-    ) == [f"<{_SH}>"]
+    )["outputs"] == [f"<{_SH}>"]
     with pytest.raises(ValueError, match="reaches 2 values"):
         purrdf.shapes.eval_node_expr(
             _SHAPES,

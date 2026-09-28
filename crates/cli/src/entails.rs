@@ -115,7 +115,7 @@
 
 use purrdf_rdf::{JsonLdSerializeOptions, SourceFormat};
 use purrdf_validate::regime::{
-    ReasoningAnswer, certain_answers_to_string, graph_entails_to_string,
+    MaterializeLimits, ReasoningAnswer, certain_answers_to_string, graph_entails_to_string,
     verify_entailment_to_string,
 };
 
@@ -182,6 +182,9 @@ pub(crate) struct EntailsOptions<'a> {
     pub(crate) verify: bool,
     /// `--import IRI=FILE`, in the order the operator wrote them.
     pub(crate) imports: &'a [String],
+    /// `--max-stored-facts` / `--max-join-steps`: the evaluation limits the question is
+    /// answered under, spelled for the command line.
+    pub(crate) limits: MaterializeLimits,
     /// `--from`: the input-format override for every RDF document this command reads.
     pub(crate) from: Option<CliRdfFormat>,
     /// `--base`: the base IRI relative IRIs in those documents resolve against.
@@ -238,13 +241,27 @@ pub(crate) fn run(
             } else {
                 graph_entails_to_string
             };
-            decide(regime, &premise, &conclusion, &table, &premise_iris)
-                .map_err(CliError::Runtime)?
+            decide(
+                regime,
+                &premise,
+                &conclusion,
+                &table,
+                &premise_iris,
+                &options.limits,
+            )
+            .map_err(CliError::Runtime)?
         }
         Question::Pattern { path } => {
             let pattern = read_verbatim(path, "--pattern")?;
-            certain_answers_to_string(regime, &premise, &pattern, &table, &premise_iris)
-                .map_err(CliError::Runtime)?
+            certain_answers_to_string(
+                regime,
+                &premise,
+                &pattern,
+                &table,
+                &premise_iris,
+                &options.limits,
+            )
+            .map_err(CliError::Runtime)?
         }
     };
 
@@ -351,7 +368,7 @@ fn refuse_two_stdins(options: &EntailsOptions<'_>, question: Question<'_>) -> Re
 ///
 /// Cold: it runs only when a pair was given, over the N-Quads already read for the
 /// boundary.
-fn refuse_unreached_pairs(
+pub(crate) fn refuse_unreached_pairs(
     premise: &str,
     imports: &[(String, String)],
     premise_iris: &[&str],

@@ -143,13 +143,14 @@ pub(crate) mod vocab;
 
 pub use calculus::calculus_program;
 pub use combined::{CombinedMaterialization, materialize_combined, materialize_combined_until};
+pub use entails::imports::resolve as resolve_imports;
 pub use entails::{
     Binding, CertainAnswers, CompositeWarrant, ComprehensionWarrant, DataRangeWarrant,
     EntailmentCertificate, EntailmentMechanism, EntailmentOutcome, EntailmentWarrant,
     FREEZE_BUDGET, FreezeWarrant, FrozenInstance, FrozenOutcome, Generalization,
     HomomorphismWarrant, ImportMap, MATCH_BUDGET, MissReason, NegativeFact, REFUTATION_BUDGET,
     ReflexivityWarrant, Refutation, RefutationWarrant, UndecidedReason, VarKey, certain_answers,
-    entails, rif_resolver, verify,
+    certain_answers_with, entails, entails_with, rif_resolver, verify,
 };
 pub use explain::{
     BackwardCheck, ChaseProof, ExplainError, Justification, explain_conclusion, justify,
@@ -496,6 +497,19 @@ pub enum EntailError {
     /// parsed at a wasm/Python/C-ABI boundary — so this comes back as a value rather than
     /// the panic [`purrdf_core::canonicalize`] would raise for the same refusal.
     Canonicalization(purrdf_core::CanonError),
+}
+
+impl EntailError {
+    /// This error, with any report it carries restated for a run whose `owl:imports` were
+    /// resolved by [`resolve_imports`] — the error-side twin of
+    /// [`ReasoningReport::with_resolved_imports`], and under the same precondition.
+    ///
+    /// Only [`EntailError::Inconsistent`] carries a report; every other variant is returned
+    /// unchanged.
+    #[must_use]
+    pub fn with_resolved_imports(self) -> Self {
+        entails::resolved_imports_error(self)
+    }
 }
 
 impl std::fmt::Display for EntailError {

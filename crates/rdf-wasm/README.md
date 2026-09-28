@@ -93,8 +93,9 @@ const reparsed = Dataset.parse(nq, "nquads");
   bounded by the same four rule-evaluation limits `shaclApplyRules` takes
   (`maxTermGeneratingRounds`, `maxGeneratedTerms`, `maxStoredFacts`, `maxJoinSteps`),
   and returns a `ShaclEntailment` (`ntriples`, and `diagnostics`: the shapes graph's
-  mandatory diagnostics, one `RULE SHAPE` string per empty `sh:in` / `sh:xone`
-  list, which every run reports — `ShaclRulesInference` carries the same array, and
+  mandatory diagnostics, one `ShaclDiagnostic` — `rule`, `shape` — per empty `sh:in` /
+  `sh:xone` list, which every run reports — `ShaclRulesInference` and
+  `shaclEvalNodeExpr`'s `ShaclNodeExprOutcome` carry the same array, and
   a validation's SARIF log carries them as note-level
   `invocations[0].toolExecutionNotifications`). Beside validation, `shaclApplyRules(dataNt, shapesTtl?, srl?, …)` runs
   SHACL 1.2 rules or a SPARQL 1.2 RL rule set and returns the inference graph (and,
@@ -106,8 +107,10 @@ const reparsed = Dataset.parse(nq, "nquads");
   (`exprAt` / `exprVia`), or inline as Turtle (`exprTurtle`), and
   `shaclLintShapes(shapesTtl)` certifies a shapes graph against the W3C
   `shacl-shacl.ttl` and reports every function call's binding.
-- **Entailment regimes** — `entailMaterialize(document, regime, program)` closes an N-Quads
-  (or N-Triples) document under any of the SEVEN SPARQL entailment regimes
+- **Entailment regimes** — `entailMaterialize(document, regime, program, importIris,
+  importDocuments, premiseIris)` closes an N-Quads (or N-Triples) document — together with
+  its `owl:imports` closure, supplied by the caller — under any of the SEVEN SPARQL
+  entailment regimes
   (`simple` / `rdf` / `rdfs` / `owl-rl` / `d` / `owl-direct` / `rif`; none is
   refused for being the regime it is) and returns both the canonical N-Quads closure and a
   byte-stable reasoning report; `entailRules(regime)` /

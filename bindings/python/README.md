@@ -230,9 +230,11 @@ shapes.apply_rules(my_data, my_shapes, max_stored_facts=8_000_000)
 shapes.check_rules(counting_rules)["summary"]
 
 # Evaluate one node expression of a shapes graph against a focus node. The
-# expression is an IRI or "_:label"; the scope binds shnex:var names.
+# expression is an IRI or "_:label"; the scope binds shnex:var names. The result is
+# {"outputs": [...], "diagnostics": [{"rule", "shape"}, ...]}: the output nodes, and
+# the shapes graph's mandatory diagnostics (an empty sh:in / sh:xone list).
 shapes.eval_node_expr(my_shapes, my_data, "http://example.org/Tag",
-                      "http://example.org/a", scope={"suffix": '"!"'})
+                      "http://example.org/a", scope={"suffix": '"!"'})["outputs"]
 
 # Certify a shapes graph: the loader's verdict, the W3C shacl-shacl.ttl results,
 # which implementation every function call binds to, and the validators a
@@ -273,14 +275,23 @@ import purrdf
 from purrdf import entail
 
 dataset = purrdf.RdfDataset(my_turtle, purrdf.RdfFormat.TURTLE)
-closure, report = entail.materialize(dataset, "rdfs", "")
+closure, report = entail.materialize(dataset, "rdfs", "", [], [])
 print(closure.to_nquads())
 print(report)
 ```
 
+The fourth and fifth arguments are the dataset's `owl:imports` table — a list of
+`(ontology_iri, nquads_document)` pairs — and the IRIs the dataset was read from, spelled
+exactly as `entail.certain_answers` spells them. OWL 2 defines an ontology's imports
+closure to BE the ontology, so a dataset that imports a document is closed over the merge;
+an import the table does not resolve raises `ValueError` naming it, and so does an entry
+the closure never reaches. `[]`, `[]` imports nothing. `entail.consistency(data, imports,
+premise_iris)` and `Store.query_entailment_governed(..., imports=…, premise_iris=…)` take
+the same table.
+
 For callers holding a document rather than a parsed dataset,
-`entail.materialize_nt(text, regime, program)` takes N-Triples/N-Quads and returns
-`(canonical_nquads, report)`. Both accept the regime as a plain string (`"simple"`,
+`entail.materialize_nt(text, regime, program, imports, premise_iris)` takes
+N-Triples/N-Quads and returns `(canonical_nquads, report)`. Both accept the regime as a plain string (`"simple"`,
 `"rdf"`, `"rdfs"`, `"owl-rl"`, `"owl-direct"`, `"rif"`, `"d"`) or as
 `entail.Regime.RDFS`.
 
@@ -291,7 +302,7 @@ rather than being silently discarded. `"rif"` is the exception: it entails under
 RIF-in-XML document:
 
 ```python
-closure, report = entail.materialize(dataset, "rif", my_rif_xml)
+closure, report = entail.materialize(dataset, "rif", my_rif_xml, [], [])
 ```
 
 `"owl-direct"` takes no program either, and that is a statement rather than an
@@ -375,7 +386,7 @@ being able to not ask for it:
 
 | Service | Call | Answer |
 | --- | --- | --- |
-| Consistency | `entail.consistency(data)` | `consistency true` / `false` / `unknown` — `unknown` means the tableau reached its step cap, and is never collapsed to `false` |
+| Consistency | `entail.consistency(data, imports, premise_iris)` | `consistency true` / `false` / `unknown` — `unknown` means the tableau reached its step cap, and is never collapsed to `false` |
 | Classification | `entail.classify(data)` | `equivalent`, `subclass` (transitively closed), `direct` (its reduction) and `unsatisfiable` lines |
 | Realization | `entail.realize(data)` | `type` lines for the named individuals, then the most specific `direct-type` lines |
 | Instance retrieval | `entail.instances(data, class_)` | `instance <term>` lines; `class_` is ONE N-Triples term, angle brackets included |
@@ -526,7 +537,7 @@ ontology = (
     " <https://example.org/Cat> .\n"
 )
 
-answer, certificate = entail.consistency(ontology)
+answer, certificate = entail.consistency(ontology, [], [])
 assert answer.strip() == "consistency true"
 assert certificate.startswith("purrdf-dl-certificate 1")
 assert "completeness decided" in certificate

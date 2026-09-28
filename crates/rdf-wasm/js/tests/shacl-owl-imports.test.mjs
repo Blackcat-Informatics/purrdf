@@ -64,17 +64,7 @@ const ENTRY_POINTS = {
     shaclValidateChangesToSarif(IMPORTER, "", PERSON, undefined, undefined, iris, documents),
   shaclEntail: (iris, documents) => shaclEntail(IMPORTER, PERSON, undefined, iris, documents),
   shaclApplyRules: (iris, documents) =>
-    shaclApplyRules(
-      PERSON,
-      IMPORTER,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      undefined,
-      iris,
-      documents,
-    ),
+    shaclApplyRules(PERSON, IMPORTER, undefined, undefined, undefined, undefined, iris, documents),
   shaclEvalNodeExpr: (iris, documents) =>
     shaclEvalNodeExpr(
       IMPORTER,
@@ -124,7 +114,7 @@ test("wasm_shacl_import_supplied: every entry point applies a supplied import", 
   assert.equal(rules.inferred.trim(), INFERRED);
   rules.free();
 
-  assert.deepEqual(ENTRY_POINTS.shaclEvalNodeExpr(iris, documents), ["<http://example.org/bob>"]);
+  assert.deepEqual(ENTRY_POINTS.shaclEvalNodeExpr(iris, documents).outputs, ["<http://example.org/bob>"]);
 
   const lint = ENTRY_POINTS.shaclLintShapes(iris, documents);
   assert.equal(lint.clean, true, lint.report);

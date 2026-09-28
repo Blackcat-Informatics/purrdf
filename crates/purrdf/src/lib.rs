@@ -135,8 +135,9 @@ pub mod profile;
 pub use profile::{OntologyProfile, ReifierVocab};
 pub mod reasoning;
 pub use reasoning::{
-    ClosureRelations, GovernedEntailment, QueryEntailment, QueryEntailmentPlan, ReasoningError,
-    RelationRebuilder, query_with_entailment, query_with_entailment_governed,
+    ClosureRelations, EntailmentClosure, GovernedEntailment, QueryEntailment, QueryEntailmentPlan,
+    ReasoningError, RelationRebuilder, query_with_entailment,
+    query_with_entailment_closure_governed, query_with_entailment_governed,
 };
 
 /// Bidirectional, byte-deterministic five-table Parquet codec.

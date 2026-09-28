@@ -763,6 +763,7 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
         closure,
         triples,
         pending,
+        options,
     } = *q;
     // WHITELIST, not blacklist: the four other regimes fall out. `Simple`, `RDF` and `RDFS`
     // state no rule that could derive a frozen head from an OWL axiom, and `D` states no
@@ -827,7 +828,7 @@ pub(crate) fn attempt(q: &Question<'_>) -> Result<Attempt, EntailError> {
 
     let held = default_graph_triples(premise);
     let mut fresh = FreshBlanks::avoiding(&[premise, conclusion]);
-    let mut refuter = Refuter::new(regime);
+    let mut refuter = Refuter::new(regime).under(*options);
     let mut seeded = refuter.seed(premise)?;
     let mut generalizations = Vec::with_capacity(reading.axioms.len());
     for (axiom, typings) in reading.axioms.iter().zip(typings_per_axiom) {

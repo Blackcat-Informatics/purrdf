@@ -79,6 +79,8 @@ fn materialize_to_nquads_bytes(
     document: &str,
     regime: &str,
     program: &str,
+    imports: &[(&str, &str)],
+    premise_iris: &[&str],
     max_stored_facts: Option<u64>,
     max_join_steps: Option<u64>,
 ) -> Result<(Vec<u8>, Vec<u8>), String> {
@@ -87,8 +89,15 @@ fn materialize_to_nquads_bytes(
         max_join_steps,
         host: RegimeHost::CAbi,
     };
-    let (nquads, report) =
-        materialize_to_nquads_string_with(regime, document, program, &limits)?.into_parts();
+    let (nquads, report) = materialize_to_nquads_string_with(
+        regime,
+        document,
+        program,
+        imports,
+        premise_iris,
+        &limits,
+    )?
+    .into_parts();
     Ok((nquads.into_bytes(), report.into_bytes()))
 }
 
@@ -127,17 +136,35 @@ fn materialize_to_nquads_bytes(
 /// them returns exactly the closure larger limits would, and the report's
 /// `contract-hash` names the calculus under the limits in force.
 ///
+/// `import_iris`, `import_documents`, `import_count`, `premise_iris` and
+/// `premise_iri_count` are `purrdf_entail_certain_answers`'s: OWL 2 defines an ontology's
+/// imports closure to BE the ontology, so a document carrying an `owl:imports` is closed
+/// over the merge of itself and every document the closure names, and the report then
+/// states `ontology-import-resolved`. An import the table does not resolve, and the
+/// document does not already hold, is an error naming it — never a closure of a smaller
+/// ontology — and so is a table entry the closure never reaches. `import_count == 0` and
+/// `premise_iri_count == 0`, with NULL arrays, is the ordinary "imports nothing" case.
+///
 /// On any error neither out-param is written, so there is nothing to free.
 ///
 /// # Safety
-/// `document`, `regime` and `program` must be non-null, NUL-terminated C strings;
-/// `max_stored_facts` and `max_join_steps` must each be null or readable; `out_nquads` and
-/// `out_report` must be writable pointers; `out_error` must be null or writable.
+/// `document`, `regime` and `program` must be non-null, NUL-terminated C strings; when
+/// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
+/// least `import_count` readable, non-null, NUL-terminated C strings; when
+/// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
+/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// readable; `out_nquads` and `out_report` must be writable pointers; `out_error` must be
+/// null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
     document: *const c_char,
     regime: *const c_char,
     program: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    premise_iris: *const *const c_char,
+    premise_iri_count: usize,
     max_stored_facts: *const u64,
     max_join_steps: *const u64,
     out_nquads: *mut *mut PurrdfBuffer,
@@ -165,10 +192,23 @@ pub unsafe extern "C" fn purrdf_entail_materialize_to_nquads(
             let document = cstr_to_str(document)?;
             let regime = cstr_to_str(regime)?;
             let program = cstr_to_str(program)?;
+            let imports = import_pairs(
+                import_iris,
+                import_documents,
+                import_count,
+                "purrdf_entail_materialize_to_nquads",
+            )?;
+            let premise_iris = premise_iri_list(
+                premise_iris,
+                premise_iri_count,
+                "purrdf_entail_materialize_to_nquads",
+            )?;
             let (nquads, report) = materialize_to_nquads_bytes(
                 document,
                 regime,
                 program,
+                &imports,
+                &premise_iris,
                 // SAFETY: the caller's contract — null or readable.
                 max_stored_facts.as_ref().copied(),
                 // SAFETY: the caller's contract — null or readable.
@@ -383,13 +423,28 @@ fn null_argument(entry: &str) -> PurrdfError {
 /// it is the one that detects one; every other refuses rather than returning the
 /// vacuous answer an ontology with no model gives.
 ///
+/// `import_iris`, `import_documents`, `import_count`, `premise_iris` and
+/// `premise_iri_count` are `purrdf_entail_certain_answers`'s: OWL 2 defines an ontology's
+/// imports closure to BE the ontology, so consistency is decided for the ontology merged
+/// with every document the closure names, and the certificate then names
+/// `ontology-import-resolved`. An import the table does not resolve, and the ontology does
+/// not already hold, is an error naming it — never a verdict over a smaller ontology — and
+/// so is a table entry the closure never reaches.
+///
 /// # Safety
-/// `document` must be a non-null, NUL-terminated C string; `out_answer` and
-/// `out_certificate` must be writable pointers; `out_error` must be null or
-/// writable.
+/// `document` must be a non-null, NUL-terminated C string; when `import_count` is non-zero,
+/// `import_iris` and `import_documents` must each address at least `import_count` readable,
+/// non-null, NUL-terminated C strings; when `premise_iri_count` is non-zero, `premise_iris`
+/// must address that many non-null, NUL-terminated C strings; `out_answer` and
+/// `out_certificate` must be writable pointers; `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_entail_consistency(
     document: *const c_char,
+    import_iris: *const *const c_char,
+    import_documents: *const *const c_char,
+    import_count: usize,
+    premise_iris: *const *const c_char,
+    premise_iri_count: usize,
     step_cap: u32,
     work_cap: u32,
     out_answer: *mut *mut PurrdfBuffer,
@@ -404,8 +459,16 @@ pub unsafe extern "C" fn purrdf_entail_consistency(
                 return Err(null_argument("purrdf_entail_consistency"));
             }
             let document = cstr_to_str(document)?;
+            let imports = import_pairs(
+                import_iris,
+                import_documents,
+                import_count,
+                "purrdf_entail_consistency",
+            )?;
+            let premise_iris =
+                premise_iri_list(premise_iris, premise_iri_count, "purrdf_entail_consistency")?;
             store_answer(
-                consistency_to_string(document, step_cap, work_cap),
+                consistency_to_string(document, &imports, &premise_iris, step_cap, work_cap),
                 out_answer,
                 out_certificate,
             )
@@ -782,6 +845,21 @@ pub unsafe extern "C" fn purrdf_entail_explain_conclusion(
 // would compile, link and ship — and never appear in the committed header, which is the
 // definition of a dark capability on this host.
 
+/// The two nullable evaluation-limit pointers every entailment entry point takes, as the
+/// boundary's limits, spelled for this host.
+///
+/// # Safety
+/// `max_stored_facts` and `max_join_steps` must each be null or readable.
+unsafe fn c_limits(max_stored_facts: *const u64, max_join_steps: *const u64) -> MaterializeLimits {
+    MaterializeLimits {
+        // SAFETY: the caller's contract — null or readable.
+        max_stored_facts: unsafe { max_stored_facts.as_ref() }.copied(),
+        // SAFETY: the caller's contract — null or readable.
+        max_join_steps: unsafe { max_join_steps.as_ref() }.copied(),
+        host: RegimeHost::CAbi,
+    }
+}
+
 /// Read the caller's `owl:imports` table out of two parallel C arrays — the one reader
 /// every entry point of this ABI that takes an import table shares, the reasoning
 /// services here and the shapes-graph entry points alike.
@@ -840,7 +918,7 @@ pub(crate) unsafe fn import_pairs<'a>(
 /// When `count` is non-zero, `premise_iris` must address at least `count` readable
 /// `*const c_char`, every one of which is null (refused here) or a NUL-terminated C
 /// string that outlives the returned borrows.
-unsafe fn premise_iri_list<'a>(
+pub(crate) unsafe fn premise_iri_list<'a>(
     premise_iris: *const *const c_char,
     count: usize,
     entry: &str,
@@ -926,12 +1004,21 @@ unsafe fn premise_iri_list<'a>(
 /// the ordinary case for a host handed bare text; like the import table it is required, in
 /// the same position on every host.
 ///
+/// `max_stored_facts` and `max_join_steps` bound every evaluation the question is
+/// answered with — the premise's closure and each re-chase a mechanism beyond the rule
+/// table runs — for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, exactly as
+/// `purrdf_entail_materialize_to_nquads` takes them: each may be NULL for the target's
+/// default (4194304 facts, 1048576 join steps natively) or point at an exact limit. A run
+/// past one fails the call naming the limit, the numbers and this function's parameter
+/// (`purrdf_entail_certain_answers's max_stored_facts`, …); a run inside them answers exactly as larger limits would.
+///
 /// # Safety
 /// `regime`, `document` and `pattern` must be non-null, NUL-terminated C strings; when
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `out_answer` and `out_certificate` must be writable pointers;
+/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// readable; `out_answer` and `out_certificate` must be writable pointers;
 /// `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_entail_certain_answers(
@@ -943,6 +1030,8 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
     import_count: usize,
     premise_iris: *const *const c_char,
     premise_iri_count: usize,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -975,7 +1064,14 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
                 "purrdf_entail_certain_answers",
             )?;
             store_answer(
-                certain_answers_to_string(regime, document, pattern, &imports, &premise_iris),
+                certain_answers_to_string(
+                    regime,
+                    document,
+                    pattern,
+                    &imports,
+                    &premise_iris,
+                    &c_limits(max_stored_facts, max_join_steps),
+                ),
                 out_answer,
                 out_certificate,
             )
@@ -1013,12 +1109,21 @@ pub unsafe extern "C" fn purrdf_entail_certain_answers(
 /// match rather than an ontology to close, so an `owl:imports` in it names nothing this
 /// service resolves.
 ///
+/// `max_stored_facts` and `max_join_steps` bound every evaluation the question is
+/// answered with — the premise's closure and each re-chase a mechanism beyond the rule
+/// table runs — for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, exactly as
+/// `purrdf_entail_materialize_to_nquads` takes them: each may be NULL for the target's
+/// default (4194304 facts, 1048576 join steps natively) or point at an exact limit. A run
+/// past one fails the call naming the limit, the numbers and this function's parameter
+/// (`purrdf_entail_graph_entails's max_stored_facts`, …); a run inside them answers exactly as larger limits would.
+///
 /// # Safety
 /// `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings; when
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `out_answer` and `out_certificate` must be writable pointers;
+/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// readable; `out_answer` and `out_certificate` must be writable pointers;
 /// `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_entail_graph_entails(
@@ -1030,6 +1135,8 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
     import_count: usize,
     premise_iris: *const *const c_char,
     premise_iri_count: usize,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -1060,7 +1167,14 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
                 "purrdf_entail_graph_entails",
             )?;
             store_answer(
-                graph_entails_to_string(regime, premise, conclusion, &imports, &premise_iris),
+                graph_entails_to_string(
+                    regime,
+                    premise,
+                    conclusion,
+                    &imports,
+                    &premise_iris,
+                    &c_limits(max_stored_facts, max_join_steps),
+                ),
                 out_answer,
                 out_certificate,
             )
@@ -1089,12 +1203,21 @@ pub unsafe extern "C" fn purrdf_entail_graph_entails(
 /// document is a stronger check than one only re-decidable against a graph the library
 /// assembled.
 ///
+/// `max_stored_facts` and `max_join_steps` bound every evaluation the question is
+/// answered with — the premise's closure and each re-chase a mechanism beyond the rule
+/// table runs — for the `rdf`, `rdfs`, `owl-rl` and `d` regimes, exactly as
+/// `purrdf_entail_materialize_to_nquads` takes them: each may be NULL for the target's
+/// default (4194304 facts, 1048576 join steps natively) or point at an exact limit. A run
+/// past one fails the call naming the limit, the numbers and this function's parameter
+/// (`purrdf_entail_verify_entailment's max_stored_facts`, …); a run inside them answers exactly as larger limits would.
+///
 /// # Safety
 /// `regime`, `premise` and `conclusion` must be non-null, NUL-terminated C strings; when
 /// `import_count` is non-zero, `import_iris` and `import_documents` must each address at
 /// least `import_count` readable, non-null, NUL-terminated C strings; when
 /// `premise_iri_count` is non-zero, `premise_iris` must address that many non-null,
-/// NUL-terminated C strings; `out_answer` and `out_certificate` must be writable pointers;
+/// NUL-terminated C strings; `max_stored_facts` and `max_join_steps` must each be null or
+/// readable; `out_answer` and `out_certificate` must be writable pointers;
 /// `out_error` must be null or writable.
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn purrdf_entail_verify_entailment(
@@ -1106,6 +1229,8 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
     import_count: usize,
     premise_iris: *const *const c_char,
     premise_iri_count: usize,
+    max_stored_facts: *const u64,
+    max_join_steps: *const u64,
     out_answer: *mut *mut PurrdfBuffer,
     out_certificate: *mut *mut PurrdfBuffer,
     out_error: *mut *mut PurrdfError,
@@ -1136,7 +1261,14 @@ pub unsafe extern "C" fn purrdf_entail_verify_entailment(
                 "purrdf_entail_verify_entailment",
             )?;
             store_answer(
-                verify_entailment_to_string(regime, premise, conclusion, &imports, &premise_iris),
+                verify_entailment_to_string(
+                    regime,
+                    premise,
+                    conclusion,
+                    &imports,
+                    &premise_iris,
+                    &c_limits(max_stored_facts, max_join_steps),
+                ),
                 out_answer,
                 out_certificate,
             )
@@ -1909,7 +2041,8 @@ mod tests {
     #[test]
     fn materialize_emits_closure_and_report() {
         let (nquads, report) =
-            materialize_to_nquads_bytes(SCHEMA, "rdfs", "", None, None).expect("rdfs closure");
+            materialize_to_nquads_bytes(SCHEMA, "rdfs", "", &[], &[], None, None)
+                .expect("rdfs closure");
         let nquads = String::from_utf8(nquads).expect("utf8");
         let report = String::from_utf8(report).expect("utf8");
         assert!(nquads.contains(
@@ -1931,7 +2064,7 @@ mod tests {
     #[test]
     fn an_unknown_regime_names_the_accepted_set() {
         for error in [
-            materialize_to_nquads_bytes(SCHEMA, "RDFS", "", None, None)
+            materialize_to_nquads_bytes(SCHEMA, "RDFS", "", &[], &[], None, None)
                 .expect_err("case-sensitive"),
             rules_bytes("rdfs-plus").expect_err("unknown"),
             implemented_rules_bytes("rdfs-plus").expect_err("unknown"),
@@ -1955,14 +2088,15 @@ mod tests {
             ("rif", RIF_PROGRAM),
             ("d", ""),
         ] {
-            let (_, report) = materialize_to_nquads_bytes(SCHEMA, regime, program, None, None)
-                .unwrap_or_else(|error| panic!("{regime}: {error}"));
+            let (_, report) =
+                materialize_to_nquads_bytes(SCHEMA, regime, program, &[], &[], None, None)
+                    .unwrap_or_else(|error| panic!("{regime}: {error}"));
             let report = String::from_utf8(report).expect("utf8");
             assert!(report.contains(&format!("\nregime {regime}\n")), "{report}");
         }
         // A rule document belongs to exactly one regime; passing one anywhere else is
         // refused rather than discarded.
-        let error = materialize_to_nquads_bytes(SCHEMA, "rdfs", RIF_PROGRAM, None, None)
+        let error = materialize_to_nquads_bytes(SCHEMA, "rdfs", RIF_PROGRAM, &[], &[], None, None)
             .expect_err("a rule document for a rule-table regime");
         assert!(error.contains("takes no rule document"), "{error}");
     }
@@ -1970,7 +2104,8 @@ mod tests {
     #[test]
     fn a_malformed_document_is_an_error() {
         assert!(
-            materialize_to_nquads_bytes("this is not n-quads\n", "rdfs", "", None, None).is_err()
+            materialize_to_nquads_bytes("this is not n-quads\n", "rdfs", "", &[], &[], None, None)
+                .is_err()
         );
     }
 
@@ -2035,6 +2170,11 @@ mod tests {
                     program.as_ptr(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut nquads,
                     &raw mut report,
                     &raw mut error,
@@ -2074,6 +2214,11 @@ mod tests {
                     document.as_ptr(),
                     regime.as_ptr(),
                     program.as_ptr(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
                     facts_ptr,
                     steps_ptr,
                     &raw mut nquads,
@@ -2162,6 +2307,11 @@ mod tests {
                     program.as_ptr(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut nquads,
                     &raw mut report,
                     &raw mut error,
@@ -2190,6 +2340,11 @@ mod tests {
                     std::ptr::null(),
                     std::ptr::null(),
                     std::ptr::null(),
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
                     std::ptr::null(),
                     std::ptr::null(),
                     &raw mut nquads,
@@ -2277,7 +2432,21 @@ mod tests {
             vec![
                 (
                     "consistency",
-                    pair(|a, c, e| purrdf_entail_consistency(document.as_ptr(), 0, 0, a, c, e)),
+                    pair(|a, c, e| {
+                        purrdf_entail_consistency(
+                            document.as_ptr(),
+                            std::ptr::null(),
+                            std::ptr::null(),
+                            0,
+                            std::ptr::null(),
+                            0,
+                            0,
+                            0,
+                            a,
+                            c,
+                            e,
+                        )
+                    }),
                 ),
                 (
                     "classify",
@@ -2418,6 +2587,8 @@ mod tests {
                             0,
                             std::ptr::null(),
                             0,
+                            std::ptr::null(),
+                            std::ptr::null(),
                             a,
                             c,
                             e,
@@ -2436,6 +2607,8 @@ mod tests {
                             0,
                             std::ptr::null(),
                             0,
+                            std::ptr::null(),
+                            std::ptr::null(),
                             a,
                             c,
                             e,
@@ -2454,6 +2627,8 @@ mod tests {
                             0,
                             std::ptr::null(),
                             0,
+                            std::ptr::null(),
+                            std::ptr::null(),
                             a,
                             c,
                             e,
@@ -2518,6 +2693,8 @@ mod tests {
                         0,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
+                        std::ptr::null(),
                         &raw mut answer,
                         &raw mut certificate,
                         std::ptr::null_mut(),
@@ -2534,6 +2711,8 @@ mod tests {
                         0,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
+                        std::ptr::null(),
                         &raw mut answer,
                         &raw mut certificate,
                         std::ptr::null_mut(),
@@ -2550,6 +2729,8 @@ mod tests {
                         0,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
+                        std::ptr::null(),
                         &raw mut answer,
                         &raw mut certificate,
                         std::ptr::null_mut(),
@@ -2597,6 +2778,8 @@ mod tests {
                         1,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
+                        std::ptr::null(),
                         a,
                         c,
                         std::ptr::null_mut(),
@@ -2613,6 +2796,8 @@ mod tests {
                         1,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
+                        std::ptr::null(),
                         a,
                         c,
                         std::ptr::null_mut(),
@@ -2629,6 +2814,8 @@ mod tests {
                         1,
                         std::ptr::null(),
                         0,
+                        std::ptr::null(),
+                        std::ptr::null(),
                         a,
                         c,
                         std::ptr::null_mut(),
@@ -2655,6 +2842,8 @@ mod tests {
                 1,
                 std::ptr::null(),
                 0,
+                std::ptr::null(),
+                std::ptr::null(),
                 &raw mut answer,
                 &raw mut certificate,
                 std::ptr::null_mut(),
@@ -2678,6 +2867,8 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     a,
                     c,
                     e,
@@ -2751,7 +2942,19 @@ mod tests {
         unsafe {
             let (a, c) = (&raw mut answer, &raw mut certificate);
             for status in [
-                purrdf_entail_consistency(null, 0, 0, a, c, std::ptr::null_mut()),
+                purrdf_entail_consistency(
+                    null,
+                    std::ptr::null(),
+                    std::ptr::null(),
+                    0,
+                    std::ptr::null(),
+                    0,
+                    0,
+                    0,
+                    a,
+                    c,
+                    std::ptr::null_mut(),
+                ),
                 purrdf_entail_classify(null, 0, 0, a, c, std::ptr::null_mut()),
                 purrdf_entail_realize(null, 0, 0, a, c, std::ptr::null_mut()),
                 purrdf_entail_instances(null, null, 0, 0, a, c, std::ptr::null_mut()),
@@ -2881,6 +3084,8 @@ mod tests {
                     1,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     a,
                     c,
                     e,
@@ -2908,6 +3113,8 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut answer_ptr,
                     &raw mut certificate_ptr,
                     &raw mut error,
@@ -2950,6 +3157,8 @@ mod tests {
                     1,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut answer_ptr,
                     &raw mut certificate_ptr,
                     &raw mut error,
@@ -3001,6 +3210,8 @@ mod tests {
             usize,
             *const *const c_char,
             usize,
+            *const u64,
+            *const u64,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfBuffer,
             *mut *mut PurrdfError,
@@ -3026,6 +3237,8 @@ mod tests {
                     0,
                     std::ptr::null(),
                     0,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut answer,
                     &raw mut certificate,
                     &raw mut error,
@@ -3054,6 +3267,8 @@ mod tests {
                         0,
                         named.as_ptr(),
                         1,
+                        std::ptr::null(),
+                        std::ptr::null(),
                         a,
                         c,
                         e,
@@ -3074,6 +3289,8 @@ mod tests {
                     0,
                     std::ptr::null(),
                     1,
+                    std::ptr::null(),
+                    std::ptr::null(),
                     &raw mut answer,
                     &raw mut certificate,
                     &raw mut error,
@@ -3082,6 +3299,217 @@ mod tests {
             assert_eq!(status, PurrdfStatus::NullPointer as i32);
             // SAFETY: the failed call wrote the error.
             unsafe { crate::error::purrdf_error_free(error) };
+        }
+    }
+
+    /// Run a two-buffer entry point, returning both buffers or the error's message.
+    ///
+    /// # Safety
+    /// `call` must be a sound call of an entry point writing the three out-pointers.
+    unsafe fn attempt(
+        call: impl FnOnce(*mut *mut PurrdfBuffer, *mut *mut PurrdfBuffer, *mut *mut PurrdfError) -> i32,
+    ) -> Result<(String, String), String> {
+        let mut first: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut second: *mut PurrdfBuffer = std::ptr::null_mut();
+        let mut error: *mut PurrdfError = std::ptr::null_mut();
+        // SAFETY: the out-pointers address live, writable locals; a handed-out buffer is
+        // freed by `take` and an error by `purrdf_error_free`.
+        unsafe {
+            if call(&raw mut first, &raw mut second, &raw mut error) == PurrdfStatus::Ok as i32 {
+                assert!(error.is_null());
+                return Ok((take(first), take(second)));
+            }
+            assert!(first.is_null() && second.is_null() && !error.is_null());
+            let message = std::ffi::CStr::from_ptr(crate::error::purrdf_error_message(error))
+                .to_str()
+                .expect("the boundary emits UTF-8")
+                .to_owned();
+            crate::error::purrdf_error_free(error);
+            Err(message)
+        }
+    }
+
+    /// MATERIALIZATION AND CONSISTENCY take the import table through the pointer surface.
+    ///
+    /// Each is driven three ways: the importing premise with no table (refused naming the
+    /// document), with the table (the imported axiom changes the answer — `tom : Animal`
+    /// joins the closure, and the imported disjointness makes the ontology inconsistent),
+    /// and a premise that imports nothing beside the same table (refused as unreached). The
+    /// valid neighbour — that premise with an empty table — answers.
+    #[test]
+    fn materialize_and_consistency_resolve_the_import_table() {
+        const PREMISE: &str = "<http://example.org/o> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://www.w3.org/2002/07/owl#Ontology> .\n\
+<http://example.org/o> <http://www.w3.org/2002/07/owl#imports> <http://example.org/schema> .\n\
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n\
+<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Dog> .\n";
+        const PLAIN: &str = "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Cat> .\n";
+        const SCHEMA: &str = "<http://example.org/Cat> <http://www.w3.org/2000/01/rdf-schema#subClassOf> <http://example.org/Animal> .\n\
+<http://example.org/Cat> <http://www.w3.org/2002/07/owl#disjointWith> <http://example.org/Dog> .\n";
+        const ANIMAL: &str = "<http://example.org/tom> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> <http://example.org/Animal> .";
+        let premise = CString::new(PREMISE).expect("no interior NUL");
+        let plain = CString::new(PLAIN).expect("no interior NUL");
+        let schema = CString::new(SCHEMA).expect("no interior NUL");
+        let iri = CString::new("http://example.org/schema").expect("no interior NUL");
+        let regime = CString::new("rdfs").expect("no interior NUL");
+        let program = CString::new("").expect("no interior NUL");
+        let iris: [*const c_char; 1] = [iri.as_ptr()];
+        let documents: [*const c_char; 1] = [schema.as_ptr()];
+
+        let materialize = |document: &CString, count: usize| {
+            // SAFETY: every C string and both one-element arrays outlive the call.
+            unsafe {
+                attempt(|n, r, e| {
+                    purrdf_entail_materialize_to_nquads(
+                        document.as_ptr(),
+                        regime.as_ptr(),
+                        program.as_ptr(),
+                        iris.as_ptr(),
+                        documents.as_ptr(),
+                        count,
+                        std::ptr::null(),
+                        0,
+                        std::ptr::null(),
+                        std::ptr::null(),
+                        n,
+                        r,
+                        e,
+                    )
+                })
+            }
+        };
+        let consistency = |document: &CString, count: usize| {
+            // SAFETY: as above.
+            unsafe {
+                attempt(|a, c, e| {
+                    purrdf_entail_consistency(
+                        document.as_ptr(),
+                        iris.as_ptr(),
+                        documents.as_ptr(),
+                        count,
+                        std::ptr::null(),
+                        0,
+                        0,
+                        0,
+                        a,
+                        c,
+                        e,
+                    )
+                })
+            }
+        };
+
+        let refused = materialize(&premise, 0).expect_err("an unsupplied import");
+        assert!(refused.contains("<http://example.org/schema>"), "{refused}");
+        let (closure, report) = materialize(&premise, 1).expect("closes over the import");
+        assert!(closure.contains(ANIMAL), "{closure}");
+        assert!(
+            report.contains("\nboundary ontology-import-resolved "),
+            "{report}"
+        );
+        let unreached = materialize(&plain, 1).expect_err("an unreached entry");
+        assert!(
+            unreached.contains("<http://example.org/schema>"),
+            "{unreached}"
+        );
+        let (closure, _) = materialize(&plain, 0).expect("imports nothing");
+        assert!(!closure.contains(ANIMAL), "{closure}");
+
+        let refused = consistency(&premise, 0).expect_err("an unsupplied import");
+        assert!(refused.contains("<http://example.org/schema>"), "{refused}");
+        let (answer, certificate) = consistency(&premise, 1).expect("decides the closure");
+        assert_eq!(answer, "consistency false\n");
+        assert!(
+            certificate.contains("\nboundary ontology-import-resolved "),
+            "{certificate}"
+        );
+        let unreached = consistency(&plain, 1).expect_err("an unreached entry");
+        assert!(
+            unreached.contains("<http://example.org/schema>"),
+            "{unreached}"
+        );
+        let (answer, _) = consistency(&plain, 0).expect("imports nothing");
+        assert_eq!(answer, "consistency true\n");
+    }
+
+    /// The three conclusion-directed entry points take the evaluation limits, and a refusal
+    /// names THIS function's parameter; the neighbour with the limit raised answers.
+    #[test]
+    fn conclusion_services_take_the_evaluation_limits() {
+        let regime = CString::new("owl-rl").expect("no interior NUL");
+        let premise = CString::new(
+            "<http://example.org/A> <http://www.w3.org/2000/01/rdf-schema#subClassOf> \
+             <http://example.org/B> .\n\
+             <http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/A> .\n",
+        )
+        .expect("no interior NUL");
+        let conclusion = CString::new(
+            "<http://example.org/x> <http://www.w3.org/1999/02/22-rdf-syntax-ns#type> \
+             <http://example.org/B> .\n",
+        )
+        .expect("no interior NUL");
+        let one: u64 = 1;
+        let plenty: u64 = 1_048_576;
+        type Entry = unsafe extern "C" fn(
+            *const c_char,
+            *const c_char,
+            *const c_char,
+            *const *const c_char,
+            *const *const c_char,
+            usize,
+            *const *const c_char,
+            usize,
+            *const u64,
+            *const u64,
+            *mut *mut PurrdfBuffer,
+            *mut *mut PurrdfBuffer,
+            *mut *mut PurrdfError,
+        ) -> i32;
+        let entries: [(Entry, &str); 3] = [
+            (
+                purrdf_entail_certain_answers,
+                "purrdf_entail_certain_answers",
+            ),
+            (purrdf_entail_graph_entails, "purrdf_entail_graph_entails"),
+            (
+                purrdf_entail_verify_entailment,
+                "purrdf_entail_verify_entailment",
+            ),
+        ];
+        for (entry, name) in entries {
+            let run = |steps: &u64| {
+                // SAFETY: every C string and the limit outlive the call; the tables are empty.
+                unsafe {
+                    attempt(|a, c, e| {
+                        entry(
+                            regime.as_ptr(),
+                            premise.as_ptr(),
+                            conclusion.as_ptr(),
+                            std::ptr::null(),
+                            std::ptr::null(),
+                            0,
+                            std::ptr::null(),
+                            0,
+                            std::ptr::null(),
+                            std::ptr::from_ref(steps),
+                            a,
+                            c,
+                            e,
+                        )
+                    })
+                }
+            };
+            let refused = run(&one).expect_err("one join step");
+            assert!(
+                refused.contains("evaluation exceeded the join-step limit: ")
+                    && refused.ends_with(&format!("raise it with {name}'s max_join_steps")),
+                "{name}: {refused}"
+            );
+            let (answer, _) = run(&plenty).expect("the default, stated");
+            assert!(
+                answer.starts_with("mechanism strict-table\n"),
+                "{name}: {answer}"
+            );
         }
     }
 }

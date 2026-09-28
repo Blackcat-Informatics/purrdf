@@ -219,7 +219,7 @@ fn eval(root: &str, focus: &str, scope: &[(&str, &str)]) -> Result<Vec<String>, 
         scope: &scope,
         imports: &purrdf_shapes::ShapesImports::new(),
     })
-    .map(|terms| terms.iter().map(ToString::to_string).collect())
+    .map(|evaluated| evaluated.outputs.iter().map(ToString::to_string).collect())
     .map_err(String::from)
 }
 
