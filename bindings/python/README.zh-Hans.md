@@ -167,7 +167,8 @@ print(report["conforms"])
 ```
 
 SHACL 1.2 Core、SPARQL 扩展与节点表达式，以及经由 `shapes.entail(...)` 的 SHACL 规则
-蕴涵。可复用的已解析形状可通过 `shapes.Shapes(shapes_ttl).validate_nt(data_nt)` 使用。每个结果
+蕴涵，后者返回 `{"ntriples", "diagnostics"}`。`sh:in` 或 `sh:xone` 列表为空的形状是一条每次运行都会报告的强制诊断，与判定并列，却绝不混入结果之中：`shapes.validate` 的字典、`ValidationReport.diagnostics`，以及 `apply_rules` 与 `entail` 的字典都携带一个由 `{"rule", "shape"}` 字典组成的 `diagnostics` 列表，`to_sarif()` 则把每条诊断作为一个 note 级别的 `toolExecutionNotifications` 条目携带。
+可复用的已解析形状可通过 `shapes.Shapes(shapes_ttl).validate_nt(data_nt)` 使用。每个结果
 字典都携带 `messages`：每条 `sh:resultMessage` 各为一个字典，含 `text`，存在时还含
 `language`、`direction` 与 `datatype`。`shapes.validate(...,
 conformance_disallows=[...])` 设定哪些严重级别 IRI 会使报告判定为不符合（默认为
@@ -179,7 +180,8 @@ IRI，与 `purrdf validate --shapes-graph` 相同：`$shapesGraph` 预绑定到�
 已将其移除）。省略时，`$shapesGraph` 是一个普通变量。`Shapes` 会把它带入 `prepare()`
 及其产物。`shapes.apply_rules` 与 `shapes.entail` 接受同一个关键字参数，用它预绑定
 `sh:SPARQLRule` 的 `$shapesGraph`；若与 `srl` 一同指名它，`apply_rules` 会抛出
-`ValueError`，因为 `srl` 没有形状图。`shapes.validate` 与 `shapes.Shapes` 上的
+`ValueError`，因为 `srl` 没有形状图。`shapes.entail` 还接受 `apply_rules` 所接受的四个规则求值上限——`max_term_generating_rounds`、`max_generated_terms`、`max_stored_facts` 与 `max_join_steps`，默认值相同——越过其中任一上限的运行会抛出 `ValueError`，点名该上限、相关数值以及用于提高它的关键字参数（`entail(max_stored_facts=...)`）。
+`shapes.validate` 与 `shapes.Shapes` 上的
 `subclass_of_in_shapes_graph=True`
 就是 SHACL 1.2 Core §6.3 的 `subClassOfInShapesGraph`：在 SHACL 类型判定类成员资格的
 每一处（`sh:targetClass`、隐式类目标、`sh:class`、`sh:rootClass`、`shnex:instancesOf`），
