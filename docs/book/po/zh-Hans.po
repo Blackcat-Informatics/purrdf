@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-27T19:39:34-06:00\n"
+"POT-Creation-Date: 2026-09-28T00:10:20-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -43,7 +43,7 @@ msgstr "Rust"
 #: src/SUMMARY.md:13 src/concepts/projections.md:451
 #: src/concepts/base-iris.md:55 src/concepts/jsonld.md:74
 #: src/validation/shacl.md:296 src/validation/shacl.md:395
-#: src/validation/shacl.md:430 src/validation/shacl.md:1203
+#: src/validation/shacl.md:430 src/validation/shacl.md:1222
 #: src/entailment.md:51 src/entailment.md:96
 msgid "Python"
 msgstr "Python"
@@ -935,7 +935,7 @@ msgstr ""
 "原生验证引擎以顶层子模块的形式公开，与 Rust 的 `purrdf` 门面 crate（umbrella "
 "crate）保持同构——绝不直接经由内部的 `purrdf_native` 扩展模块："
 
-#: src/getting-started/python.md:37 src/validation/shacl.md:1279
+#: src/getting-started/python.md:37 src/validation/shacl.md:1298
 msgid "\"conforms\""
 msgstr "\"conforms\""
 
@@ -3470,7 +3470,7 @@ msgstr "各接口的名称遵循同一个 profile/config/archive 契约："
 
 #: src/concepts/projections.md:447 src/validation/shacl.md:292
 #: src/validation/shacl.md:392 src/validation/shacl.md:427
-#: src/validation/shacl.md:1200 src/entailment.md:47 src/entailment.md:92
+#: src/validation/shacl.md:1219 src/entailment.md:47 src/entailment.md:92
 msgid "Host"
 msgstr "宿主"
 
@@ -3509,7 +3509,7 @@ msgstr "`lift_archive`"
 #: src/concepts/projections.md:450 src/concepts/jsonld.md:62
 #: src/validation/shacl.md:295 src/validation/shacl.md:394
 #: src/validation/shacl.md:429 src/validation/shacl.md:1065
-#: src/validation/shacl.md:1202 src/entailment.md:50 src/entailment.md:95
+#: src/validation/shacl.md:1221 src/entailment.md:50 src/entailment.md:95
 msgid "CLI"
 msgstr "CLI"
 
@@ -4181,7 +4181,7 @@ msgstr ""
 "blob/main/docs/COLUMNAR.md)。"
 
 #: src/concepts/codecs.md:196 src/concepts/base-iris.md:258
-#: src/sparql/querying.md:1929 src/validation/shacl.md:1383
+#: src/sparql/querying.md:1929 src/validation/shacl.md:1402
 #: src/validation/shex.md:64 src/entailment.md:326
 msgid "Conformance"
 msgstr "一致性"
@@ -4441,7 +4441,7 @@ msgstr "传入基准，或文档自身必须携带基准"
 
 #: src/concepts/base-iris.md:53 src/validation/shacl.md:297
 #: src/validation/shacl.md:396 src/validation/shacl.md:431
-#: src/validation/shacl.md:1065 src/validation/shacl.md:1204
+#: src/validation/shacl.md:1065 src/validation/shacl.md:1223
 msgid "WebAssembly"
 msgstr "WebAssembly"
 
@@ -4451,7 +4451,7 @@ msgid "as above"
 msgstr "同上"
 
 #: src/concepts/base-iris.md:54 src/validation/shacl.md:298
-#: src/validation/shacl.md:1065 src/validation/shacl.md:1205
+#: src/validation/shacl.md:1065 src/validation/shacl.md:1224
 msgid "C ABI"
 msgstr "C ABI"
 
@@ -11591,7 +11591,7 @@ msgstr ""
 msgid "\"https://example.org/more\""
 msgstr "\"https://example.org/more\""
 
-#: src/validation/shacl.md:344 src/validation/shacl.md:1137
+#: src/validation/shacl.md:344 src/validation/shacl.md:1156
 msgid "\"inferred\""
 msgstr "\"inferred\""
 
@@ -13326,18 +13326,20 @@ msgstr ""
 #: src/validation/shacl.md:1100
 msgid ""
 "The **join-step limit** bounds the candidate solutions the rule bodies "
-"enumerate. The default is 1,048,576 on every host. It is the limit that "
-"refuses a rule minting a new term every round promptly, and it bounds a rule "
-"body that enumerates far more candidates than it infers triples. A rule set "
+"enumerate. The default is 1,048,576 on every host. It bounds a rule body "
+"that enumerates far more candidates than it infers triples: a body's "
+"candidates for one round are held before the limit is checked, so a much "
+"larger default would let a Cartesian body exhaust memory first. A rule set "
 "that needs more work — the non-linear transitive closure of a thousand-node "
 "chain enumerates over 67 million candidates — states a larger limit."
 msgstr ""
-"**连接步数上限**限制规则体所枚举的候选解。默认值在每个宿主上都是 1,048,576。"
-"正是这一上限会及时拒绝一条每轮都生成新项的规则，它也约束那些枚举的候选远多于"
-"其推出三元组的规则体。需要更多工作量的规则集——千节点链的非线性传递闭包要枚举"
-"超过 6700 万个候选——需声明更大的上限。"
+"**连接步数上限**限制规则体所枚举的候选解。默认值在每个宿主上都是 1,0"
+"48,576。它约束那些枚举的候选远多于其推出三元组的规则体：一个规则体在某"
+"一轮的候选会在检查上限之前就被全部持有，因此大得多的默认值会让笛卡尔积式的规"
+"则体先耗尽内存。需要更多工作量的规则集——千节点链的非线性传递闭包要枚举超过"
+" 6700 万个候选——需声明更大的上限。"
 
-#: src/validation/shacl.md:1107
+#: src/validation/shacl.md:1108
 msgid ""
 "A run past any limit is refused. The error names the limit, the numbers, the "
 "knob that raises it and, for the two term limits, the rules that inferred a "
@@ -13371,7 +13373,43 @@ msgstr ""
 "误信息从不称其为发散。声明的上限是精确的，而且上限只能拒绝：它所允许的运行，"
 "推出的内容与在任何更大上限下完全相同。"
 
-#: src/validation/shacl.md:1124
+#: src/validation/shacl.md:1125
+msgid ""
+"A shape rule (a rule linked to a shape, run once per focus node) is re-run "
+"each iteration only for the focus nodes whose answer can have changed: the "
+"new ones, and those a triple added in the previous iteration is about, as "
+"the rule's triple patterns and paths read it. A triple the rule reads a join "
+"step away from `$this` re-runs it for every focus node, and a rule whose "
+"answer is not repeatable — one that mints blank nodes, calls `RAND()`, "
+"`NOW()`, `UUID()`, `STRUUID()` or a function PurRDF does not read, or picks "
+"solutions with `LIMIT`, `OFFSET`, `SAMPLE`, `GROUP_CONCAT` or `FOLD` — runs "
+"for every focus node every iteration, as the specification reads. The graph "
+"the rules read is extended by what each iteration added rather than rebuilt. "
+"The inferred triples, their blank-node labels and their proofs are the same "
+"as running every focus node every iteration. What changes is the cost: a "
+"shape rule that mints a new focus node every iteration pays for one run per "
+"iteration, not one per focus node so far, so a rule that never stops is "
+"refused within a few seconds by a term limit — the round limit when its new "
+"terms stay short, the fixed 16 MiB term-arena ceiling when each is longer "
+"than the last — and never by the join-step limit."
+msgstr ""
+"形状规则（即关联到某个形状、对每个焦点节点各运行一次的规则）在每次迭代中只会"
+"针对答案可能已改变的焦点节点重新运行：新出现的焦点节点，以及——按规则的三元"
+"组模式与路径的读取方式——上一次迭代新增的某条三元组所涉及的焦点节点。若规则"
+"读取的某条三元组与 `$this` 相隔一个连接步，则会针对每个焦点节点重新"
+"运行该规则；而答案不可重复的规则——即生成空节点、调用 `RAND()`、`"
+"NOW()`、`UUID()`、`STRUUID()` 或 PurRDF 无"
+"法解读的函数，或以 `LIMIT`、`OFFSET`、`SAMPLE`、`G"
+"ROUP_CONCAT` 或 `FOLD` 挑选解的规则——会按规范的规定，"
+"在每次迭代中针对每个焦点节点运行。规则所读取的图会以每次迭代新增的内容进行扩"
+"展，而不是重新构建。推出的三元组、它们的空节点标签及其证明，都与每次迭代运行"
+"全部焦点节点时完全相同。改变的是代价：一条每次迭代生成一个新焦点节点的形状规"
+"则，每次迭代只需付出一次运行的代价，而不是按迄今为止的焦点节点数各运行一次，"
+"因此一条永不停止的规则会在几秒内被某个项上限拒绝——新项保持较短时为轮数上限"
+"，每个新项都比上一个更长时为固定的 16 MiB 项存储区上限——而绝不会被"
+"连接步数上限拒绝。"
+
+#: src/validation/shacl.md:1143
 msgid ""
 "A global SPARQL rule whose query is a conjunctive pattern (triple patterns, "
 "`FILTER` and `BIND`, with no `OPTIONAL`, `UNION`, `MINUS`, sub-query or "
@@ -13389,23 +13427,23 @@ msgstr ""
 "模板三元组中，且模板不得含有空节点。否则，该规则仍像以前一样，作为作用于整个"
 "图的生产者运行。"
 
-#: src/validation/shacl.md:1137
+#: src/validation/shacl.md:1156
 msgid "# the inference graph, N-Triples\n"
 msgstr "# 推理图，N-Triples\n"
 
-#: src/validation/shacl.md:1138
+#: src/validation/shacl.md:1157
 msgid "\"proof\""
 msgstr "\"proof\""
 
-#: src/validation/shacl.md:1138
+#: src/validation/shacl.md:1157
 msgid "# the proof text\n"
 msgstr "# 证明文本\n"
 
-#: src/validation/shacl.md:1139
+#: src/validation/shacl.md:1158
 msgid "# SPARQL 1.2 RL\n"
 msgstr "# SPARQL 1.2 RL\n"
 
-#: src/validation/shacl.md:1142
+#: src/validation/shacl.md:1161
 msgid ""
 "**Checking a SPARQL 1.2 RL rule set.** A rule set can be checked without "
 "being run. The check applies the static checks up to a level, and each level "
@@ -13438,7 +13476,7 @@ msgstr ""
 "stratification」都是有效的，因此以 `syntax` 级别评分。其中十五个在完整检查中"
 "失败，由后面的阶段拒绝。"
 
-#: src/validation/shacl.md:1159
+#: src/validation/shacl.md:1178
 msgid ""
 "The `syntax` stage also holds a rule set to where it announces its version. "
 "SPARQL 1.2 RL §7.1 says \"The version announcement SHOULD be made early in "
@@ -13454,15 +13492,15 @@ msgstr ""
 "`syntax` 阶段被拒绝，并点名该句。规则集可以不宣告任何版本；在较早的 "
 "`VERSION` 之后出现的后续 `VERSION`，对文档中其后的部分而言仍是一条指令。"
 
-#: src/validation/shacl.md:1167
+#: src/validation/shacl.md:1186
 msgid "# every static check\n"
 msgstr "# 全部静态检查\n"
 
-#: src/validation/shacl.md:1168
+#: src/validation/shacl.md:1187
 msgid "# the grammar alone\n"
 msgstr "# 仅检查语法\n"
 
-#: src/validation/shacl.md:1171
+#: src/validation/shacl.md:1190
 msgid ""
 "**Node expressions.** One node expression of a shapes graph is evaluated "
 "against a focus node of a data graph, as SHACL 1.2 Node Expressions' "
@@ -13478,11 +13516,11 @@ msgstr ""
 "在形状内部相同。作用域变量按名称绑定，并由 `shnex:var` 读取。输出节点以 N-"
 "Triples 项的形式返回，顺序由表达式的序列语义决定。"
 
-#: src/validation/shacl.md:1179
+#: src/validation/shacl.md:1198
 msgid "Every host names the expression in one of three ways:"
 msgstr "每个宿主都以下列三种方式之一指名表达式："
 
-#: src/validation/shacl.md:1181
+#: src/validation/shacl.md:1200
 msgid ""
 "**The node itself**: an IRI, or `_:label` for a blank node the shapes "
 "document labels. An IRI that is the subject of no triple is a constant "
@@ -13491,7 +13529,7 @@ msgstr ""
 "**节点本身**：一个 IRI，或以 `_:label` 表示形状文档所标注的空节点。不作为任何"
 "三元组主语的 IRI 是常量表达式，求值结果为其自身。"
 
-#: src/validation/shacl.md:1184
+#: src/validation/shacl.md:1203
 msgid ""
 "**A walk from a named node**: a start node and one or more predicates, "
 "followed in order. Each step must reach exactly one value; a step that "
@@ -13511,7 +13549,7 @@ msgstr ""
 "后 `sht:nodeExpr`。该套件全部 143 个节点表达式测试都以这种方式经由 `purrdf "
 "node-expr` 运行。"
 
-#: src/validation/shacl.md:1193
+#: src/validation/shacl.md:1212
 msgid ""
 "**Inline Turtle**: a Turtle document read under the shapes document's "
 "prefixes and base, where its own directives take precedence. It is merged "
@@ -13526,113 +13564,113 @@ msgstr ""
 "与形状文档的空节点保持分离。表达式是该文档唯一的根：作为某个三元组的主语、且"
 "不作为任何三元组宾语的那个空节点。没有根或有多个根的文档会被拒绝。"
 
-#: src/validation/shacl.md:1200
+#: src/validation/shacl.md:1219
 msgid "Node"
 msgstr "节点"
 
-#: src/validation/shacl.md:1200
+#: src/validation/shacl.md:1219
 msgid "Walk"
 msgstr "游走"
 
-#: src/validation/shacl.md:1200
+#: src/validation/shacl.md:1219
 msgid "Inline Turtle"
 msgstr "内联 Turtle"
 
-#: src/validation/shacl.md:1202
+#: src/validation/shacl.md:1221
 msgid "`--expr`"
 msgstr "`--expr`"
 
-#: src/validation/shacl.md:1202
+#: src/validation/shacl.md:1221
 msgid "`--expr-at NODE --expr-via PREDICATE…`"
 msgstr "`--expr-at NODE --expr-via PREDICATE…`"
 
-#: src/validation/shacl.md:1202
+#: src/validation/shacl.md:1221
 msgid "`--expr-turtle`, `--expr-turtle-file`"
 msgstr "`--expr-turtle`, `--expr-turtle-file`"
 
-#: src/validation/shacl.md:1203 src/validation/shacl.md:1204
-#: src/validation/shacl.md:1205
+#: src/validation/shacl.md:1222 src/validation/shacl.md:1223
+#: src/validation/shacl.md:1224
 msgid "`expr`"
 msgstr "`expr`"
 
-#: src/validation/shacl.md:1203
+#: src/validation/shacl.md:1222
 msgid "`expr_at=`, `expr_via=[…]`"
 msgstr "`expr_at=`, `expr_via=[…]`"
 
-#: src/validation/shacl.md:1203
+#: src/validation/shacl.md:1222
 msgid "`expr_turtle=`"
 msgstr "`expr_turtle=`"
 
-#: src/validation/shacl.md:1204
+#: src/validation/shacl.md:1223
 msgid "`exprAt`, `exprVia`"
 msgstr "`exprAt`, `exprVia`"
 
-#: src/validation/shacl.md:1204
+#: src/validation/shacl.md:1223
 msgid "`exprTurtle`"
 msgstr "`exprTurtle`"
 
-#: src/validation/shacl.md:1205
+#: src/validation/shacl.md:1224
 msgid "`expr_at`, `expr_via`, `expr_via_count`"
 msgstr "`expr_at`, `expr_via`, `expr_via_count`"
 
-#: src/validation/shacl.md:1205
+#: src/validation/shacl.md:1224
 msgid "`expr_turtle`"
 msgstr "`expr_turtle`"
 
-#: src/validation/shacl.md:1206
+#: src/validation/shacl.md:1225
 msgid "Rust (`purrdf_validate`)"
 msgstr "Rust（`purrdf_validate`）"
 
-#: src/validation/shacl.md:1206
+#: src/validation/shacl.md:1225
 msgid "`ExprSelector::Node`"
 msgstr "`ExprSelector::Node`"
 
-#: src/validation/shacl.md:1206
+#: src/validation/shacl.md:1225
 msgid "`ExprSelector::At`"
 msgstr "`ExprSelector::At`"
 
-#: src/validation/shacl.md:1206
+#: src/validation/shacl.md:1225
 msgid "`ExprSelector::Turtle`"
 msgstr "`ExprSelector::Turtle`"
 
-#: src/validation/shacl.md:1208
+#: src/validation/shacl.md:1227
 msgid "Naming none of the three, or more than one, is refused."
 msgstr "三者一个都不指名，或指名多于一个，都会被拒绝。"
 
-#: src/validation/shacl.md:1211
+#: src/validation/shacl.md:1230
 msgid "\"_:suffix\""
 msgstr "\"_:suffix\""
 
-#: src/validation/shacl.md:1212 src/validation/shacl.md:1213
-#: src/validation/shacl.md:1216
+#: src/validation/shacl.md:1231 src/validation/shacl.md:1232
+#: src/validation/shacl.md:1235
 msgid "\"http://example.org/a\""
 msgstr "\"http://example.org/a\""
 
-#: src/validation/shacl.md:1212
+#: src/validation/shacl.md:1231
 msgid "\"suffix\""
 msgstr "\"suffix\""
 
-#: src/validation/shacl.md:1212
+#: src/validation/shacl.md:1231
 msgid "'\"!\"'"
 msgstr "'\"!\"'"
 
-#: src/validation/shacl.md:1214
+#: src/validation/shacl.md:1233
 msgid "\"http://example.org/Label\""
 msgstr "\"http://example.org/Label\""
 
-#: src/validation/shacl.md:1215
+#: src/validation/shacl.md:1234
 msgid "\"http://www.w3.org/ns/shacl#values\""
 msgstr "\"http://www.w3.org/ns/shacl#values\""
 
-#: src/validation/shacl.md:1217
+#: src/validation/shacl.md:1236
 msgid "\"[ sh:path ex:name ] .\""
 msgstr "\"[ sh:path ex:name ] .\""
 
-#: src/validation/shacl.md:1221
+#: src/validation/shacl.md:1240
 msgid "'[ sh:path ex:name ] .'"
 msgstr "'[ sh:path ex:name ] .'"
 
-#: src/validation/shacl.md:1225
+#: src/validation/shacl.md:1244
 msgid ""
 "**Certifying a shapes graph.** Loading a shapes graph is the hot path: it "
 "refuses the first construct it cannot evaluate faithfully, and does not pay "
@@ -13643,11 +13681,11 @@ msgstr ""
 "不为依据 W3C `shacl-shacl.ttl` 验证该图付出代价。lint 按需付出这一代价一次，"
 "并报告七个部分："
 
-#: src/validation/shacl.md:1230
+#: src/validation/shacl.md:1249
 msgid "`load`: the loader's verdict, accepted or the refusal it raised."
 msgstr "`load`：加载器的裁决，即接受，或它抛出的拒绝。"
 
-#: src/validation/shacl.md:1231
+#: src/validation/shacl.md:1250
 msgid ""
 "`shacl-shacl`: every result of validating the shapes graph against the "
 "vendored `shacl-shacl.ttl`. That file predates some SHACL 1.2 Core "
@@ -13662,7 +13700,7 @@ msgstr ""
 "`sh:targetNode`）。若某条结果所指出的构造在 SHACL 1.2 Core 中是良构的，该结果"
 "会被标记为 `superseded`，不算作问题，但仅在加载器接受了该图时如此。"
 
-#: src/validation/shacl.md:1237
+#: src/validation/shacl.md:1256
 msgid ""
 "`functions`: which implementation every node-expression function call binds "
 "to — `native`, `custom`, `sparql-registered` or `host-extension`. For a "
@@ -13674,7 +13712,7 @@ msgstr ""
 "状图，即使图中声明了 `sh:SPARQLExprExpression`，`sh:sparqlExpr` 调用仍绑定为 "
 "`native`。"
 
-#: src/validation/shacl.md:1241
+#: src/validation/shacl.md:1260
 msgid ""
 "`validators`: every validator the shapes graph declares for a built-in "
 "constraint component, which the native implementation supersedes and never "
@@ -13683,7 +13721,7 @@ msgstr ""
 "`validators`：形状图为内置约束组件声明的每个验证器，这些验证器被原生实现取"
 "代，从不运行。这些行从不算作问题。"
 
-#: src/validation/shacl.md:1244
+#: src/validation/shacl.md:1263
 msgid ""
 "`unexecuted`: every query that violates a pre-binding restriction and that "
 "nothing runs: a validator of a built-in component, a validator no use of its "
@@ -13697,7 +13735,7 @@ msgstr ""
 "何形状实例化的 `sh:SPARQLTargetType`。加载会接受它们；它们在这里各计为一个问"
 "题。违反语法规则的声明从不列在这里，因为它会使加载失败。"
 
-#: src/validation/shacl.md:1250
+#: src/validation/shacl.md:1269
 msgid ""
 "`diagnostics`: every mandatory diagnostic, one `diagnostic RULE SHAPE` line "
 "per shape whose `sh:in` or `sh:xone` list is empty. `RULE` is the syntax "
@@ -13716,7 +13754,7 @@ msgstr ""
 "`shacl-shacl.ttl` 会就同一个空列表发出警告；该结果列出时标记为 `diagnosed "
 "RULE`，不会被重复计数。"
 
-#: src/validation/shacl.md:1258
+#: src/validation/shacl.md:1277
 msgid ""
 "`unanchored-imports`: every `owl:imports` triple of the closure that is not "
 "an import, because its subject is no anchor of its document (see "
@@ -13733,7 +13771,7 @@ msgstr ""
 "`sh:Info` 严重级别，报告使用了 `owl:imports` 却不带 `owl:Ontology` 类型的 "
 "`sh:DataGraph`。"
 
-#: src/validation/shacl.md:1266
+#: src/validation/shacl.md:1285
 msgid ""
 "A report is clean when the loader accepted the graph, every `shacl-shacl` "
 "result is superseded (an `sh:Info` result counts like any other), no "
@@ -13749,27 +13787,27 @@ msgstr ""
 "文本；[CLI 参考](https://github.com/Blackcat-Informatics/purrdf/blob/main/"
 "crates/cli/README.md#shapes-lint)给出了示例。"
 
-#: src/validation/shacl.md:1273 src/validation/shapes-products.md:795
+#: src/validation/shacl.md:1292 src/validation/shapes-products.md:795
 msgid "From Python"
 msgstr "从 Python 调用"
 
-#: src/validation/shacl.md:1278
+#: src/validation/shacl.md:1297
 msgid "\"...\""
 msgstr "\"...\""
 
-#: src/validation/shacl.md:1279
+#: src/validation/shacl.md:1298
 msgid "# True / False\n"
 msgstr "# True / False\n"
 
-#: src/validation/shacl.md:1280
+#: src/validation/shacl.md:1299
 msgid "\"results\""
 msgstr "\"results\""
 
-#: src/validation/shacl.md:1280
+#: src/validation/shacl.md:1299
 msgid "# list of violation dicts\n"
 msgstr "# 违规字典列表\n"
 
-#: src/validation/shacl.md:1283
+#: src/validation/shacl.md:1302
 msgid ""
 "Each result dict keeps the stable keys `focus`, `path`, `value`, `severity`, "
 "`component`, `source_shape`, and `messages` (every `sh:resultMessage`, each "
@@ -13784,11 +13822,11 @@ msgstr ""
 "SPARQL 结果注解的结果还带有 `annotations`：一个元组列表，每个元组由一个属性 "
 "IRI 与一个采用 N-Triples 语法的值组成。"
 
-#: src/validation/shacl.md:1289
+#: src/validation/shacl.md:1308
 msgid "The report is a dataset"
 msgstr "报告是一个数据集"
 
-#: src/validation/shacl.md:1291
+#: src/validation/shacl.md:1310
 msgid ""
 "`ValidationReport::to_dataset()` materializes the W3C validation report — "
 "the `sh:ValidationReport` node and its `sh:ValidationResult`s — as a frozen "
@@ -13806,7 +13844,7 @@ msgstr ""
 "以任意语法渲染报告就是 `serialize_dataset(&report.to_dataset(), …)`，这正是 "
 "`purrdf validate --format` 所做的。"
 
-#: src/validation/shacl.md:1299
+#: src/validation/shacl.md:1318
 msgid ""
 "A report carries blank nodes from two graphs: a focus node, a value and an "
 "annotation value come from the data graph, and a source shape from the "
@@ -13837,7 +13875,7 @@ msgstr ""
 "的 `results` 保留原始标签。报告所*生成*的空节点（报告节点、每条结果各一个、复"
 "杂 `sh:path` 的内部节点）与这两个标签空间都不相同。"
 
-#: src/validation/shacl.md:1315
+#: src/validation/shacl.md:1334
 msgid ""
 "Every report a validation produces also states `sh:shapesGraphWellFormed`. "
 "SHACL 1.2 Core §6.7.1.4 says a processor that checks the shapes graph "
@@ -13870,7 +13908,7 @@ msgstr ""
 "点名该规则 id 的问题。`ValidationReport::shapes_graph_well_formed` 携带该值，"
 "SARIF 运行则以 `properties.shaclShapesGraphWellFormed` 携带它。"
 
-#: src/validation/shacl.md:1330
+#: src/validation/shacl.md:1349
 msgid ""
 "Every run reports the same diagnostics, not only the lint. A validation "
 "report carries them in `ValidationReport::diagnostics` — one "
@@ -13913,11 +13951,11 @@ msgstr ""
 "的 `purrdf_shacl_apply_rules` 与 `purrdf_shacl_entail_to_ntriples` 则把 "
 "`diagnostic RULE SHAPE` 行写入非 NULL 的 `out_diagnostics`。"
 
-#: src/validation/shacl.md:1351
+#: src/validation/shacl.md:1370
 msgid "SARIF output"
 msgstr "SARIF 输出"
 
-#: src/validation/shacl.md:1353
+#: src/validation/shacl.md:1372
 msgid ""
 "Validation reports stay structured in the engine; the SARIF 2.1.0 boundary "
 "is the separate [`purrdf-validate`](https://docs.rs/purrdf-validate) crate "
@@ -13930,7 +13968,7 @@ msgstr ""
 "析器诊断——渲染为可追溯到源位置、逐字节确定性的 SARIF 日志，供编辑器、CI 与代"
 "码扫描仪表板使用："
 
-#: src/validation/shacl.md:1362
+#: src/validation/shacl.md:1381
 msgid ""
 "r#\"\n"
 "    @prefix sh:  <http://www.w3.org/ns/shacl#> .\n"
@@ -13950,7 +13988,7 @@ msgstr ""
 "      sh:property [ sh:path ex:age ; sh:datatype xsd:integer ] .\n"
 "\"#"
 
-#: src/validation/shacl.md:1370
+#: src/validation/shacl.md:1389
 msgid ""
 "r#\"<http://example.org/alice> <http://www.w3.org/1999/02/22-rdf-syntax-"
 "ns#type> <http://example.org/Person> .\n"
@@ -13962,15 +14000,15 @@ msgstr ""
 "<http://example.org/alice> <http://example.org/age> \"nope\" .\n"
 "\"#"
 
-#: src/validation/shacl.md:1375
+#: src/validation/shacl.md:1394
 msgid "\"sarif produced\""
 msgstr "\"sarif produced\""
 
-#: src/validation/shacl.md:1376
+#: src/validation/shacl.md:1395
 msgid "\"\\\"version\\\": \\\"2.1.0\\\"\""
 msgstr "\"\\\"version\\\": \\\"2.1.0\\\"\""
 
-#: src/validation/shacl.md:1379
+#: src/validation/shacl.md:1398
 msgid ""
 "Lower-level entry points (`build_report_sarif`, `build_diagnostics_sarif`) "
 "build a `SarifLog` value instead of a string, so a host can merge runs "
@@ -13979,7 +14017,7 @@ msgstr ""
 "更底层的入口点（`build_report_sarif`、`build_diagnostics_sarif`）构建的是 "
 "`SarifLog` 值而非字符串，因此宿主可以在序列化之前合并多个 run。"
 
-#: src/validation/shacl.md:1385
+#: src/validation/shacl.md:1404
 msgid ""
 "The validator is gated by the vendored W3C SHACL 1.0 `data-shapes` suite, "
 "the vendored W3C SHACL 1.2 suite, a vendored DASH SHACL-AF/rules corpus, and "
@@ -18520,31 +18558,47 @@ msgstr ""
 
 #: src/datalog.md:82
 msgid ""
-"The join-step default is the same on every target, for two measured reasons. "
-"It is the limit that refuses a divergent rule promptly when the rule adds "
-"one new term per round but re-derives every earlier one — a SHACL SPARQL "
-"rule minting a longer IRI for each focus node every round is refused in "
-"about nine seconds at 1,048,576 join steps, and was still running after 590 "
-"seconds at 268,435,456 — and a body's candidate solutions for a round are "
-"materialised before the limit is checked, so a much larger default would let "
-"a Cartesian body allocate gigabytes before being refused. A larger default "
-"would trade that refusal time and memory for reach, and reach is the "
-"caller's to buy: the non-linear transitive closure of a thousand-node chain "
-"enumerates over 67 million candidates and completes when the caller raises "
-"the limit (`--max-join-steps` on the command line), while the linear closure "
-"of the same chain fits the default."
+"The join-step default is the same on every target, for a measured reason: a "
+"body's candidate solutions for a round are materialised before the limit is "
+"checked. A body joining two unrelated atoms over 20,000 nodes (400 million "
+"candidates) is refused at the default in about two seconds, holding under "
+"half a gigabyte; at 268,435,456 join steps it had allocated about 20 GB, "
+"still enumerating, when it was stopped at a 24 GB address-space cap. A "
+"larger default would let a Cartesian body exhaust memory before it could be "
+"refused. Reach is the caller's to buy: the non-linear transitive closure of "
+"a thousand-node chain enumerates over 67 million candidates and completes "
+"when the caller raises the limit (`--max-join-steps` on the command line), "
+"while the linear closure of the same chain fits the default."
 msgstr ""
-"连接步数的默认值在每个目标平台上都相同，原因有二，均经过测量。其一，正是这一"
-"上限会及时拒绝这样一条发散规则：它每轮新增一个项，却又重新推导此前的每一个项"
-"——一条每轮为每个焦点节点生成更长 IRI 的 SHACL SPARQL 规则，在 1,048,576 个连"
-"接步下约九秒即被拒绝，而在 268,435,456 个连接步下运行了 590 秒仍未结束。其"
-"二，一个规则体在某一轮的候选解会在检查上限之前就被物化，因此大得多的默认值会"
-"让笛卡尔积式的规则体在被拒绝前分配数 GB 内存。更大的默认值会以拒绝所需的时间"
-"和内存换取可达范围，而可达范围应由调用方自行购买：千节点链的非线性传递闭包要"
-"枚举超过 6700 万个候选，在调用方提高上限（命令行上为 `--max-join-steps`）后即"
-"可完成，而同一条链的线性闭包在默认值内即可容纳。"
+"连接步数的默认值在每个目标平台上都相同，这出于一个经过测量的原因：一个规则体"
+"在某一轮的候选解会在检查上限之前就被物化。一个在 20,000 个节点上连接"
+"两个互不相关原子的规则体（4 亿个候选）在默认值下约两秒即被拒绝，占用内存不"
+"到半 GB；而在 268,435,456 个连接步下，它已分配约 20 GB"
+" 内存且仍在枚举，直到在 24 GB 的地址空间上限处被终止。更大的默认值会"
+"让笛卡尔积式的规则体在能够被拒绝之前就耗尽内存。可达范围应由调用方自行购买："
+"千节点链的非线性传递闭包要枚举超过 6700 万个候选，在调用方提高上限（命"
+"令行上为 `--max-join-steps`）后即可完成，而同一条链的线性"
+"闭包在默认值内即可容纳。"
 
-#: src/datalog.md:96
+#: src/datalog.md:94
+msgid ""
+"The join-step limit is not what stops a divergent rule. A SHACL shape rule "
+"minting a new focus node every round is re-executed only for the focus nodes "
+"whose inputs changed, not for every earlier one, so it is refused by the "
+"term limits below within a few seconds, whatever the join-step limit: by the "
+"term-generating round limit when its new terms are of bounded length, and by "
+"the term-arena ceiling when each is longer than the last (a rule minting an "
+"IRI one character longer every round reaches 16 MiB of term surfaces after "
+"about 5,800 rounds)."
+msgstr ""
+"阻止发散规则的并不是连接步数上限。一条每轮生成一个新焦点节点的 SHACL "
+"形状规则，只会针对输入发生变化的焦点节点重新执行，而不是针对此前的每一个焦点"
+"节点，因此无论连接步数上限是多少，它都会在几秒内被下文的项上限拒绝：当其新项"
+"长度有界时，由生成新项的轮数上限拒绝；当每个新项都比上一个更长时，由项存储区"
+"上限拒绝（一条每轮生成的 IRI 都比上一轮长一个字符的规则，约 5,800"
+" 轮后驻留项的词法形式即达到 16 MiB）。"
+
+#: src/datalog.md:103
 msgid ""
 "A limit can only refuse. A run inside its limits returns the program's least "
 "model, the same model under every limit that admits it; a run past one "
@@ -18563,13 +18617,13 @@ msgstr ""
 "决于求值器的计划，因此针对某个版本收得过紧的上限，可能会在下一个版本中拒绝；"
 "留有余量的上限则不会改变一个已完成的答案。"
 
-#: src/datalog.md:106
+#: src/datalog.md:113
 msgid ""
 "There is deliberately no wall-clock budget: it would break both `wasm32` and "
 "reproducibility."
 msgstr "这里刻意没有挂钟时间预算：它会同时破坏 `wasm32` 兼容性与可复现性。"
 
-#: src/datalog.md:109
+#: src/datalog.md:116
 msgid ""
 "Passing a limit is a **total** refusal, not a truncation. There is no "
 "partial fixpoint to hand back with a note attached, and a truncated closure "
