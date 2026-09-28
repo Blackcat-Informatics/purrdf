@@ -16,7 +16,9 @@
 //! Normalization is idempotent: `n.normalize() == n.normalize().normalize()`.
 
 use crate::parse::{Iri, parse};
+use crate::percent::is_unreserved;
 use crate::resolve::remove_dot_segments;
+use crate::terminals::hex_value;
 
 impl Iri {
     /// Produce a syntax-normalized copy (RFC-3986 §6.2.2). The result is itself
@@ -92,9 +94,11 @@ fn pct_normalize(s: &str) -> String {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
             let hi = bytes[i + 1];
             let lo = bytes[i + 2];
-            if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
-                let decoded = (hex_val(hi) << 4) | hex_val(lo);
-                if is_unreserved_byte(decoded) {
+            // The shared `HEX` digit and `unreserved` predicates: a triplet
+            // that is not two `HEX` digits is left as it is, exactly as before.
+            if let (Some(high), Some(low)) = (hex_value(hi), hex_value(lo)) {
+                let decoded = (high << 4) | low;
+                if is_unreserved(decoded) {
                     out.push(decoded as char);
                 } else {
                     out.push('%');
@@ -111,19 +115,6 @@ fn pct_normalize(s: &str) -> String {
         i += ch_len;
     }
     out
-}
-
-fn hex_val(b: u8) -> u8 {
-    match b {
-        b'0'..=b'9' => b - b'0',
-        b'a'..=b'f' => b - b'a' + 10,
-        b'A'..=b'F' => b - b'A' + 10,
-        _ => unreachable!("guarded by is_ascii_hexdigit"),
-    }
-}
-
-fn is_unreserved_byte(b: u8) -> bool {
-    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
 }
 
 /// Byte length of the UTF-8 sequence whose leading byte is `b`.

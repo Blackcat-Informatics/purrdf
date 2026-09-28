@@ -395,3 +395,71 @@ impl BuildHasher for FixedState {
 
 /// The name of the path this build's [`FixedHasher`] runs.
 pub(crate) const SELECTED_NAME: &str = Selected::NAME;
+
+/// A `HashMap` bucketed by [`FixedHasher`]: `FixedMap::default()` or
+/// `FixedMap::with_hasher(FixedState::new())` makes one, since `HashMap::new`
+/// exists only for the standard library's random state.
+pub type FixedMap<K, V> = std::collections::HashMap<K, V, FixedState>;
+
+/// A `HashSet` bucketed by [`FixedHasher`]; made like [`FixedMap`].
+pub type FixedSet<T> = std::collections::HashSet<T, FixedState>;
+
+/// The fixed-key hash of one value: the number a [`FixedMap`] buckets it
+/// by, and the one spelling of `FixedState::new().hash_one(value)`.
+///
+/// A property of the build, like every [`FixedHasher`] output: never
+/// persist it, send it anywhere or use it as an identity.
+#[must_use]
+#[inline]
+pub fn hash_one<T: core::hash::Hash + ?Sized>(value: &T) -> u64 {
+    FixedState::new().hash_one(value)
+}
+
+#[cfg(test)]
+mod tests {
+    use core::hash::{BuildHasher, Hash, Hasher};
+
+    use super::{FixedHasher, FixedMap, FixedSet, FixedState, hash_one};
+
+    #[test]
+    fn hash_one_is_the_state_and_the_hasher_spelled_once() {
+        for value in [
+            "",
+            "http://example.org/s",
+            "a longer string past thirty-two bytes",
+        ] {
+            let mut hasher = FixedHasher::default();
+            value.hash(&mut hasher);
+            assert_eq!(hash_one(value), hasher.finish(), "{value:?}");
+            assert_eq!(hash_one(value), FixedState::new().hash_one(value));
+        }
+        assert_eq!(hash_one(&7u32), FixedState::new().hash_one(7u32));
+        assert_eq!(
+            hash_one(&[1u8, 2, 3][..]),
+            FixedState::new().hash_one([1u8, 2, 3].as_slice())
+        );
+        assert_ne!(hash_one(&7u32), hash_one(&8u32));
+    }
+
+    #[test]
+    fn fixed_map_and_set_bucket_like_hash_one() {
+        let mut map = FixedMap::default();
+        map.insert("http://example.org/p", 1u32);
+        map.insert("http://example.org/q", 2);
+        assert_eq!(map["http://example.org/p"], 1);
+        assert_eq!(
+            map.hasher().hash_one("http://example.org/p"),
+            hash_one("http://example.org/p")
+        );
+        let mut with = FixedMap::with_hasher(FixedState::new());
+        with.insert(3u64, ());
+        assert!(with.contains_key(&3));
+
+        let mut set = FixedSet::default();
+        assert!(set.insert("x"));
+        assert!(!set.insert("x"));
+        assert_eq!(set.len(), 1);
+        let cloned: FixedSet<&str> = set.clone();
+        assert_eq!(cloned, set);
+    }
+}

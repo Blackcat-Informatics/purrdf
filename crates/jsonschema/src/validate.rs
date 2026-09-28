@@ -498,7 +498,8 @@ impl<'s> Evaluator<'s> {
     }
 
     /// Follow a reference to `target`, refusing to re-enter a subschema at an
-    /// instance location it is already evaluating.
+    /// instance location it is already evaluating, and refusing a chain of
+    /// references deeper than [`crate::MAX_NESTING_DEPTH`].
     fn follow(
         &mut self,
         target: NodeId,
@@ -508,6 +509,14 @@ impl<'s> Evaluator<'s> {
         children: &mut Vec<OutputUnit>,
     ) -> Verdict {
         let key = (target, address(instance));
+        if self.following.len() >= crate::MAX_NESTING_DEPTH {
+            return Err(format!(
+                "reference depth exceeds {}: {} is entered through a chain of references \
+                 longer than any schema needs",
+                crate::MAX_NESTING_DEPTH,
+                self.schema.nodes[target].location
+            ));
+        }
         if self.following.contains(&key) {
             return Err(format!(
                 "reference cycle: {} is re-entered at the same instance location without \

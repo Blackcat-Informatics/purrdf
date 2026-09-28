@@ -6,7 +6,8 @@
 //! * [`golden`] — checked-in golden files compared byte for byte, CRLF and
 //!   trailing whitespace included, rewritten from the produced output when
 //!   `PURRDF_REGENERATE_GOLDEN=1`. Call it through [`assert_golden!`], which
-//!   resolves `tests/golden/` against the *calling* crate.
+//!   resolves `tests/golden/` against the *calling* crate, or
+//!   [`assert_golden_bytes!`] when the output is bytes rather than text.
 //! * [`TempDir`] and [`NamedTempFile`] — scratch space under the cargo target
 //!   directory, including when that directory is placed under `/tmp`. Integration tests and
 //!   benches create them through [`temp_dir!`] and [`temp_file!`], which read
@@ -14,6 +15,10 @@
 //!   where cargo does not set that variable, use [`TempDir::for_unit_test`] and
 //!   [`NamedTempFile::for_unit_test`]. None of these exist on
 //!   `wasm32-unknown-unknown`, which has no file system.
+//! * [`paths`] — the workspace root above the calling crate, through
+//!   [`workspace_root!`], and a sorted sweep of every file of one extension
+//!   under a directory, for the hygiene tests that read the whole tree. Also
+//!   absent on `wasm32-unknown-unknown`.
 //! * [`vectors`] — frozen differential vectors: a line format whose header
 //!   carries a SHA-256 of its own body, a recorder that writes it, and a replay
 //!   that names the first record an implementation disagrees with.
@@ -30,7 +35,10 @@
 //!   test data, for every test and example that registers them with
 //!   `purrdf-jsonschema` (which carries none).
 //! * [`rng`] — the one deterministic SplitMix64 / xoshiro256** stream every
-//!   crate's fixed-seed tests draw from, including [`prop`] itself.
+//!   crate's fixed-seed tests draw from, including [`prop`] itself, and the
+//!   Fisher–Yates, xorshift64 and MMIX-LCG forms fixtures were frozen on.
+//! * [`env_flag`] — the one rule by which a switch is read from the
+//!   environment: set to exactly `1`.
 //!
 //! The crate depends on no `purrdf-*` crate, and must not: every crate in the
 //! workspace may take it as a dev-dependency, so a first-party edge from here
@@ -48,6 +56,8 @@ pub mod harness;
 #[allow(unsafe_code, reason = "the expansion of `#[wasm_bindgen]` imports")]
 mod host;
 pub mod jsonschema_metaschemas;
+#[cfg(not(target_arch = "wasm32"))]
+pub mod paths;
 pub mod prop;
 pub mod rng;
 #[cfg(not(target_arch = "wasm32"))]
@@ -56,6 +66,19 @@ pub mod vectors;
 
 #[cfg(not(target_arch = "wasm32"))]
 pub use temp::{NamedTempFile, TempDir};
+
+/// Whether the environment variable `name` is set to exactly `1`.
+///
+/// The one truthiness rule this crate reads a switch by —
+/// `PURRDF_REGENERATE_GOLDEN`, through [`golden::Mode::from_env`] — stated
+/// once so that every `PURRDF_UPDATE_*` and `PURRDF_RECORD_*` switch a crate's
+/// tests read can adopt it, and a reader never has to ask whether `0`, `true`,
+/// `yes` or an empty value switches anything: none of them do. `1` switches;
+/// `1` with whitespace around it, `01`, any other value, a value that is not
+/// Unicode, and absence do not.
+pub fn env_flag(name: &str) -> bool {
+    std::env::var_os(name).is_some_and(|value| value == "1")
+}
 
 /// Write a `harness = false` target's `main` over plain functions.
 ///
@@ -151,5 +174,40 @@ macro_rules! assert_golden {
             $name,
             $actual,
         )
+    };
+}
+
+/// Compare the bytes `actual` against the calling crate's
+/// `tests/golden/<name>`, or rewrite that file when
+/// `PURRDF_REGENERATE_GOLDEN=1`: [`assert_golden!`] for output that is bytes
+/// rather than text.
+///
+/// `CARGO_MANIFEST_DIR` is read where the macro is expanded, so the golden
+/// directory is the calling crate's. See [`golden`] for the comparison rules.
+#[macro_export]
+macro_rules! assert_golden_bytes {
+    ($name:expr, $actual:expr $(,)?) => {
+        $crate::golden::assert_golden_bytes_in(
+            ::std::path::Path::new(::core::env!("CARGO_MANIFEST_DIR")),
+            $name,
+            $actual,
+        )
+    };
+}
+
+/// The workspace root above the calling crate: the nearest ancestor of its
+/// manifest directory whose `Cargo.toml` declares a workspace.
+///
+/// `CARGO_MANIFEST_DIR` is read where the macro is expanded, so the walk
+/// starts at the calling crate, and the result is that directory's ancestor
+/// as written — never canonicalized. Evaluates to `std::path::PathBuf`; see
+/// [`paths::workspace_root_from`] for the rules.
+#[cfg(not(target_arch = "wasm32"))]
+#[macro_export]
+macro_rules! workspace_root {
+    () => {
+        $crate::paths::workspace_root_from(::std::path::Path::new(::core::env!(
+            "CARGO_MANIFEST_DIR"
+        )))
     };
 }

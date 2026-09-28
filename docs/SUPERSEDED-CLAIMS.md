@@ -801,3 +801,43 @@ nothing reaches stays inert, and a SHACL-JS construct a shape reaches stays refu
 `declared_shacl_js_no_shape_reaches_is_inert_and_ordinary_constraints_fire` and
 `every_shacl_js_construct_a_shape_reaches_is_a_typed_refusal`
 (`crates/shapes/tests/shapes_graph_wellformedness.rs`).
+
+### The slice catalog's flat quad stream is the twin of the RDF crate's
+
+**Was stated in** `crates/slice/src/rdf_query.rs`, on `Dataset::flat_quads`:
+
+> the oxigraph-free twin of `purrdf::oxigraph::flat_rdf_quads_from_dataset`
+
+**Why it was believed.** The two flatteners were written to the same recipe — base
+quads, then the re-materialized `rdf:reifies` rows, then the annotation rows — and
+the slice copy predated the graph slot on `RdfReifier` and `RdfAnnotation`. Once the
+RDF crate's flattener started carrying that slot, the slice copy, still building its
+rows with `RdfQuad::new`, silently put every graph-scoped reification into the default
+graph before canonicalizing, and the sentence kept saying the two agreed.
+
+**What changed.** There is one flattening law, `purrdf_rdf::flat_rdf_quads_from_dataset`,
+whose own documentation names this exact failure, and the slice catalog calls it. A
+reifier declared inside `GRAPH g { … }` keeps `g` in `canonical_nquads_flat`, which
+changes that digest for such documents.
+
+**The rule now.** No crate rebuilds a reifier or annotation row with `RdfQuad::new`;
+`scripts/check-shared-helpers.py` refuses the shape outside the RDF crate. Pinned by
+`canonical_flat_form_keeps_a_reifier_in_its_named_graph` (`crates/slice/src/rdf_query.rs`).
+
+### The BLAKE3 content-id type gives the kernel no BLAKE3 dependency
+
+**Was stated in** `crates/rdf-core/src/content_id.rs`, on `Blake3ContentId`:
+
+> it never hashes bytes and `purrdf-core` gains no `blake3` dependency from it
+
+**Why it was believed.** The type was decode-only so that the kernel could name a GTS
+content id without depending on a hashing crate; at the time the only BLAKE3 in the
+tree was a third-party dependency the kernel deliberately did not take.
+
+**What changed.** BLAKE3 is first-party (`purrdf-hash`, a zero-dependency leaf) and the
+kernel depends on it for its fixed-key table hasher. The type is still decode-only,
+but the second half of the sentence was false the day that edge appeared.
+
+**The rule now.** `Blake3ContentId` mints nothing; a content id is computed where the
+bytes are hashed and arrives at the kernel as hex or as its 32 raw bytes. The doc says
+exactly that and no longer speaks of dependencies.

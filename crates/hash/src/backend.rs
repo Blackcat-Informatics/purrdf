@@ -14,6 +14,11 @@
 //! [`FixedHasher`](crate::fixed::FixedHasher), every other build runs
 //! [`PortableFixedHasher`]'s. Both are named here so tests and the bench can
 //! run the portable function on an AES build too.
+//!
+//! [`Backend`] is what every path enum has in common, so one generic loop
+//! can walk the paths of any algorithm.
+
+use core::fmt;
 
 use crate::arch::{self, Crc32Update, HexEncode, Sha1Blocks};
 use crate::crc32::{self, Crc32};
@@ -252,3 +257,155 @@ pub const FIXED_HASHER_PATH: &str = crate::fixed::SELECTED_NAME;
 
 /// Execution paths of the native unkeyed BLAKE3-256 implementation.
 pub use crate::blake3::Backend as Blake3Backend;
+
+/// What every execution-path enum in this crate offers: the paths in
+/// preference order, a name, run-time availability and the selected path.
+///
+/// Each enum's inherent items are the same functions; this trait exists so a
+/// test or bench can be generic over the algorithm.
+///
+/// ```
+/// use purrdf_hash::backend::{Backend, Crc32Backend, HexBackend, Sha1Backend};
+///
+/// fn available<B: Backend>() -> Vec<&'static str> {
+///     B::ALL.iter().copied().filter(|path| path.is_available()).map(B::name).collect()
+/// }
+/// assert!(available::<Sha1Backend>().contains(&"portable"));
+/// assert!(available::<Crc32Backend>().contains(&"portable"));
+/// assert!(available::<HexBackend>().contains(&HexBackend::selected().name()));
+/// ```
+pub trait Backend: Copy + Eq + fmt::Debug + 'static {
+    /// Every path, in the enum's preference order; the last is always
+    /// available.
+    const ALL: &'static [Self];
+
+    /// The path's name.
+    fn name(self) -> &'static str;
+
+    /// Whether this processor and build can run the path.
+    fn is_available(self) -> bool;
+
+    /// The path the algorithm's public API runs on this processor.
+    fn selected() -> Self;
+}
+
+impl Backend for Sha1Backend {
+    const ALL: &'static [Self] = &Self::ALL;
+
+    fn name(self) -> &'static str {
+        Self::name(self)
+    }
+
+    fn is_available(self) -> bool {
+        Self::is_available(self)
+    }
+
+    fn selected() -> Self {
+        Self::selected()
+    }
+}
+
+impl Backend for Crc32Backend {
+    const ALL: &'static [Self] = &Self::ALL;
+
+    fn name(self) -> &'static str {
+        Self::name(self)
+    }
+
+    fn is_available(self) -> bool {
+        Self::is_available(self)
+    }
+
+    fn selected() -> Self {
+        Self::selected()
+    }
+}
+
+impl Backend for HexBackend {
+    const ALL: &'static [Self] = &Self::ALL;
+
+    fn name(self) -> &'static str {
+        Self::name(self)
+    }
+
+    fn is_available(self) -> bool {
+        Self::is_available(self)
+    }
+
+    fn selected() -> Self {
+        Self::selected()
+    }
+}
+
+impl Backend for Blake3Backend {
+    const ALL: &'static [Self] = &Self::ALL;
+
+    /// Named like the other enums' paths: the architecture, then the
+    /// instruction set.
+    fn name(self) -> &'static str {
+        match self {
+            Self::Portable => "portable",
+            Self::Sse2 => "x86-sse2",
+            Self::Ssse3 => "x86-ssse3",
+            Self::Avx2 => "x86-avx2",
+            Self::Avx512 => "x86-avx512",
+            Self::Neon => "aarch64-neon",
+            Self::Wasm128 => "wasm32-simd128",
+        }
+    }
+
+    fn is_available(self) -> bool {
+        Self::is_available(self)
+    }
+
+    fn selected() -> Self {
+        Self::selected()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{Backend, Blake3Backend, Crc32Backend, HexBackend, Sha1Backend};
+
+    /// The trait is the inherent surface: same list, same availability,
+    /// same selection, and the portable path is always last and available.
+    fn agrees<B: Backend>(inherent_all: &[B], inherent_selected: B) {
+        assert_eq!(B::ALL, inherent_all);
+        assert_eq!(B::selected(), inherent_selected);
+        let last = *B::ALL.last().expect("at least one path");
+        assert_eq!(last.name(), "portable");
+        assert!(last.is_available());
+        assert!(B::selected().is_available());
+        assert!(B::ALL.contains(&B::selected()));
+        let mut names: Vec<&str> = B::ALL.iter().map(|path| path.name()).collect();
+        names.sort_unstable();
+        names.dedup();
+        assert_eq!(names.len(), B::ALL.len(), "names are distinct");
+    }
+
+    #[test]
+    fn every_path_enum_implements_the_trait_as_its_inherent_items() {
+        agrees(&Sha1Backend::ALL, Sha1Backend::selected());
+        agrees(&Crc32Backend::ALL, Crc32Backend::selected());
+        agrees(&HexBackend::ALL, HexBackend::selected());
+        agrees(&Blake3Backend::ALL, Blake3Backend::selected());
+        for path in Sha1Backend::ALL {
+            assert_eq!(Backend::name(path), path.name());
+            assert_eq!(Backend::is_available(path), path.is_available());
+        }
+        for path in Crc32Backend::ALL {
+            assert_eq!(Backend::name(path), path.name());
+            assert_eq!(Backend::is_available(path), path.is_available());
+        }
+        for path in HexBackend::ALL {
+            assert_eq!(Backend::name(path), path.name());
+            assert_eq!(Backend::is_available(path), path.is_available());
+        }
+        for path in Blake3Backend::ALL {
+            assert_eq!(Backend::is_available(path), path.is_available());
+        }
+        assert_eq!(Backend::name(Blake3Backend::Portable), "portable");
+        assert_eq!(Backend::name(Blake3Backend::Avx512), "x86-avx512");
+        assert_eq!(Backend::name(Blake3Backend::Wasm128), "wasm32-simd128");
+    }
+}

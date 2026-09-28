@@ -49,10 +49,10 @@ pub(super) fn emit(ast: &Ast) -> Result<String, PatternError> {
 }
 
 fn write_ast(ast: &Ast, out: &mut String, depth: usize) -> Result<(), PatternError> {
-    if depth > 250 {
+    if depth > crate::MAX_NESTING_DEPTH {
         return Err(PatternError::Resource {
             offset: 0,
-            message: "emission depth exceeds 250".to_owned(),
+            message: format!("emission depth exceeds {}", crate::MAX_NESTING_DEPTH),
         });
     }
     match ast {

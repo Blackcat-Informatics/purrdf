@@ -80,15 +80,24 @@ pub fn seed_for(name: &str) -> u64 {
     SplitMix64::new(hash).next_u64()
 }
 
-/// Parse a seed as `PURRDF_PROP_SEED` spells it: decimal, or hexadecimal
-/// after `0x`.
+/// Parse a seed as `PURRDF_PROP_SEED` spells it: decimal digits, or
+/// hexadecimal digits (either case) after `0x` or `0X`, and nothing else —
+/// no sign, no whitespace, no digit separator, no other prefix. A value that
+/// does not fit `u64` is refused. The strictness is deliberate: a seed is
+/// copied out of a failure report to reproduce a run, and a reader that
+/// accepted ` 0x1234` or `+42` would also accept a mangled paste and run
+/// something else without saying so.
 pub fn parse_seed(text: &str) -> Result<u64, String> {
-    let text = text.trim();
-    let parsed = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
-        Some(hex) => u64::from_str_radix(hex, 16),
-        None => text.parse::<u64>(),
+    let (digits, radix) = match text.strip_prefix("0x").or_else(|| text.strip_prefix("0X")) {
+        Some(hex) => (hex, 16),
+        None => (text, 10),
     };
-    parsed.map_err(|error| format!("`{text}` is not a seed (decimal, or hex after 0x): {error}"))
+    if digits.is_empty() || !digits.chars().all(|character| character.is_digit(radix)) {
+        return Err(format!(
+            "{text:?} is not a seed: decimal digits, or hex digits after 0x, and nothing else"
+        ));
+    }
+    u64::from_str_radix(digits, radix).map_err(|error| format!("{text:?} is not a seed: {error}"))
 }
 
 fn seed_from_env(name: &str) -> u64 {

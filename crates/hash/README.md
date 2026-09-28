@@ -29,6 +29,19 @@ allocates nothing, and builds for `wasm32-unknown-unknown`.
 | `sha1` | SHA-1 | FIPS 180-4 | 20 bytes |
 | `sha3` | SHA3-224 / 256 / 384 / 512, Keccak-f[1600] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
 | `crc32` | CRC-32/ISO-HDLC | reflected `0xEDB88320`, init and xorout `0xFFFFFFFF` | `u32` |
+| `fixed` | the fixed-key table hasher | this crate (folded multiplies; AES rounds on AES builds) | `u64` |
+| `fnv` | FNV-1a, 64-bit | Fowler–Noll–Vo | `u64` |
+| `mix` | SplitMix64 finalizer and counter streams | Steele, Lea and Flood | `u64` |
+
+Around the algorithms, the shared spellings every consumer of a digest needs,
+so no crate carries its own copy:
+
+| Module or type | What it is |
+|---|---|
+| `hex` | lowercase base16: `Lower` (`Display`, no allocation), `lower` (`String`), `encode_into` (caller's buffer); strict decoders `decode`, `decode_into`, `decode_32` and the nibble `hex_value` |
+| `Digest32` | a 32-byte digest whose `Display`, `Debug`, `to_hex` and `from_hex` are that text form; `From<blake3::Hash>` |
+| `frame` | `frame_le` / `frame_le_into` / `Framed`: a field's length as eight little-endian bytes, then the bytes, into a `Vec<u8>` or straight into any hasher |
+| `fixed::FixedMap`, `fixed::FixedSet`, `fixed::hash_one` | the fixed-key tables and the fixed-key hash of one value |
 
 ## Usage
 
@@ -54,6 +67,27 @@ assert_eq!(sha1.finalize(), Sha1::digest(b"abc"));
 
 Every hasher also implements the object-safe `Digest` trait, so an algorithm
 chosen at run time can be driven through `&mut dyn Digest`.
+
+```rust
+use purrdf_hash::blake3::RecordHasher;
+use purrdf_hash::frame::Framed;
+use purrdf_hash::hex;
+use purrdf_hash::Digest32;
+
+// Frame two fields straight into a hasher: no split of the same bytes
+// hashes alike, because each field carries its length first.
+let mut identity = Framed(RecordHasher::new());
+identity.field(b"http://example.org/s").field(b"http://example.org/p");
+let digest = Digest32::from(identity.finish().finalize());
+
+// One canonical text form, and a strict parser for it.
+assert_eq!(digest.to_hex().len(), 64);
+assert_eq!(Digest32::from_hex(&digest.to_string()), Ok(digest));
+assert!(hex::decode("+00").is_err());
+```
+
+The frame prefix is eight bytes, little-endian, always: published digests
+are computed over framed fields, so no other width or byte order exists.
 
 ## Execution paths
 

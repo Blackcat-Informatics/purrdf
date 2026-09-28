@@ -284,6 +284,14 @@ impl Hash {
         &self.0
     }
 }
+/// The 64 lowercase base16 digits of the digest, through
+/// [`hex::Lower`](crate::hex::Lower).
+impl core::fmt::Display for Hash {
+    #[inline]
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        core::fmt::Display::fmt(&crate::hex::Lower(&self.0), f)
+    }
+}
 
 /// Streaming BLAKE3 optimized for file, codec and index streams. Its 16 KiB
 /// buffer batches tiny writes across SIMD lanes. Reuse it with `reset` when
@@ -745,6 +753,18 @@ fn narrow_output<const CAPACITY: usize>(data: &[u8], counter: u64, backend: Back
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn hash_displays_as_lowercase_base16() {
+        // The BLAKE3 specification's published digest of the empty message.
+        assert_eq!(
+            hash(b"").to_string(),
+            "af1349b9f5f9a1a6a0404dea36dcc9499bcb25c9adc112b7cc9a93cae41f3262"
+        );
+        let digest = hash(b"abc");
+        assert_eq!(digest.to_string(), crate::hex::lower(digest.as_bytes()));
+        assert_eq!(format!("{digest:.8}"), digest.to_string()[..8]);
+    }
 
     #[test]
     fn writer_rejects_length_overflow_without_mutation() {

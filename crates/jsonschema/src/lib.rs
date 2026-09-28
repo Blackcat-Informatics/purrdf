@@ -124,6 +124,17 @@
 )]
 #![forbid(unsafe_code)]
 
+/// The deepest nesting any recursive walk in this crate follows before it refuses.
+///
+/// Three walks share it so one untrusted document cannot exhaust the stack through
+/// any of them: the ECMA-262 pattern parser (groups within groups), the pattern
+/// emitter that walks the parsed tree, and the evaluator's `$ref` follower (a
+/// chain of references each entered at the same instance). Parsing bounds none of
+/// those by itself: a flat schema with `n` `$defs` that reference each other in a
+/// chain is `n` levels deep to the follower while being one level deep to the JSON
+/// reader. Exceeding the limit is a typed refusal, never a stack overflow.
+pub(crate) const MAX_NESTING_DEPTH: usize = 250;
+
 mod compile;
 mod content;
 mod dialect;

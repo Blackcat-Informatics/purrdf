@@ -544,10 +544,10 @@ impl Parser {
     }
 
     fn group_body(&mut self, start: usize) -> Result<Ast, PatternError> {
-        if self.depth >= 250 {
+        if self.depth >= crate::MAX_NESTING_DEPTH {
             return Err(PatternError::Resource {
                 offset: start,
-                message: "group nesting exceeds 250".to_owned(),
+                message: format!("group nesting exceeds {}", crate::MAX_NESTING_DEPTH),
             });
         }
         self.depth += 1;

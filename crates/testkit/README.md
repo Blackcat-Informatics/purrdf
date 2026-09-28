@@ -18,6 +18,17 @@ first-party edge from here would close a cycle through that member.
   compares `text` with the calling crate's `tests/golden/dir/name.txt` byte for
   byte, CRLF and trailing whitespace included. `PURRDF_REGENERATE_GOLDEN=1`
   rewrites the file from the produced text instead; the diff is the review.
+  `assert_golden_bytes!("dir/name.bin", &bytes)` is the same for output that
+  is bytes rather than text, and a difference is reported at its first offset.
+  The switch is read by `purrdf_testkit::env_flag`, the one rule for a switch
+  in the environment: set to exactly `1`, and nothing else counts.
+* **Workspace paths** — `purrdf_testkit::workspace_root!()` is the nearest
+  ancestor of the calling crate's manifest directory whose `Cargo.toml`
+  declares a workspace, as spelled and never canonicalized;
+  `paths::collect_files(&root, "rs")` and `paths::collect_rs(&root)` sweep a
+  tree in sorted order, skipping `target`, `.git`, `node_modules` and
+  `.worktrees` at every depth, and refusing an unreadable root rather than
+  answering with an empty sweep.
 * **Temporary paths under `target/`** — `temp_dir!()` and `temp_file!()` in
   integration tests and benches (they read `CARGO_TARGET_TMPDIR` at the call
   site), `TempDir::for_unit_test()` and `NamedTempFile::for_unit_test()` in a
@@ -46,6 +57,14 @@ first-party edge from here would close a cycle through that member.
   clock and entropy source throwing on wasm32, for answers that must be a
   function of their inputs alone; `harness::print_line` prints a line that
   reaches the console on both targets.
+* **Deterministic streams** — `purrdf_testkit::rng`: the SplitMix64 step
+  every fixed-seed test draws from (with `SplitMix64::below`, the modulo draw
+  the per-crate wrappers made), the xoshiro256** generator behind `prop`, the
+  signed-unit coordinate draws with their zero substitutes, the Fisher–Yates
+  `permute` the determinism tests shuffle with, the xorshift64 byte stream the
+  frozen hash vectors were recorded from, and Knuth's MMIX `Lcg` with both of
+  the high-bit selections fixtures use — each pinned by known answers so a
+  frozen expectation cannot move.
 * **Property-based testing** — `purrdf_testkit::prop` and `prop_test!`.
   Strategies (ranges, `any::<T>()`, `prop::collection::{vec, btree_set,
   btree_map}`, `prop::option::of`, `prop::sample::select`, `prop_oneof!`,

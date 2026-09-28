@@ -126,6 +126,7 @@ use core::cmp::Ordering;
 use core::fmt;
 use core::hash::{Hash, Hasher};
 use core::str::FromStr;
+use std::borrow::Cow;
 
 /// The closed `grandfathered` set of RFC 5646 §2.2.8, in the order the RFC
 /// presents it: the seventeen `irregular` tags, then the nine `regular` ones.
@@ -1948,6 +1949,48 @@ pub fn canonical_case_with(tag: &str, profile: Profile) -> Result<String, Langua
     Ok(parse_with(tag, profile)?.canonical_case())
 }
 
+/// `tag` folded to the spelling under which two language tags are the same
+/// tag: ASCII lowercase, borrowing `tag` unchanged when it is already so.
+///
+/// RFC 5646 §2.1.1: "At all times, language tags and their subtags,
+/// including private use and extensions, are to be treated as case
+/// insensitive" — so `en-US`, `EN-us` and `en-us` are one tag, and this fold
+/// is the identity that decides it: two tags are equal iff their folds are
+/// byte-equal. It is also the RDF 1.2 Concepts §3.3 value space of a
+/// language tag, which is lowercase, so a store that interns tags by their
+/// fold interns one term per tag. A well-formed tag is ASCII, so ASCII
+/// lowercasing is the whole fold; a byte outside ASCII is not a tag byte and
+/// is left as it is, and no well-formedness judgement is made here — the
+/// fold of a malformed string is a malformed string.
+///
+/// This is NOT [`canonical_case`]: that is the §2.1.1 *presentation*
+/// convention (`zh-Hant-CN`), which is a different spelling of the same tag
+/// and folds to the same identity.
+///
+/// # Examples
+///
+/// ```rust
+/// use std::borrow::Cow;
+///
+/// use purrdf_iri::langtag::{canonical_case, identity_fold};
+///
+/// assert_eq!(identity_fold("en-US"), "en-us");
+/// assert_eq!(identity_fold("ZH-Hant-CN"), "zh-hant-cn");
+/// // Already folded: borrowed, not copied.
+/// assert!(matches!(identity_fold("en-us"), Cow::Borrowed(_)));
+/// // The presentation spelling and the wire spelling share one identity.
+/// assert_eq!(identity_fold(&canonical_case("EN-us")?), identity_fold("en-US"));
+/// # Ok::<(), purrdf_iri::langtag::LanguageTagError>(())
+/// ```
+#[must_use]
+pub fn identity_fold(tag: &str) -> Cow<'_, str> {
+    if tag.bytes().any(|b| b.is_ascii_uppercase()) {
+        Cow::Owned(tag.to_ascii_lowercase())
+    } else {
+        Cow::Borrowed(tag)
+    }
+}
+
 /// Parses `tag` against `Language-Tag = langtag / privateuse / grandfathered`.
 ///
 /// The three alternatives are tried in the order below, and the `langtag` body
@@ -2584,9 +2627,61 @@ fn is_private_use_subtag(text: &str, profile: Profile) -> bool {
 mod tests {
     use super::{
         Extension, GRANDFATHERED, LanguageTagBuf, LanguageTagError, Profile, TagForm,
-        canonical_case, canonical_case_with, is_well_formed, is_well_formed_with, parse,
-        parse_with,
+        canonical_case, canonical_case_with, identity_fold, is_well_formed, is_well_formed_with,
+        parse, parse_with,
     };
+    use std::borrow::Cow;
+
+    #[test]
+    fn identity_fold_is_ascii_lowercase_and_borrows_when_already_folded() {
+        for (input, folded) in [
+            ("", ""),
+            ("en", "en"),
+            ("EN", "en"),
+            ("en-US", "en-us"),
+            ("EN-us", "en-us"),
+            ("zh-Hant-CN", "zh-hant-cn"),
+            ("ZH-HANT-CN", "zh-hant-cn"),
+            ("i-Enochian", "i-enochian"),
+            ("X-PURRDF-ENGLISH", "x-purrdf-english"),
+            ("de-CH-1901-x-PhoneBk", "de-ch-1901-x-phonebk"),
+            ("ar-a-AAA-b-BBB", "ar-a-aaa-b-bbb"),
+        ] {
+            assert_eq!(identity_fold(input), folded, "{input:?}");
+            // Idempotent, and a fixed point once folded.
+            assert_eq!(identity_fold(folded), folded, "{folded:?}");
+        }
+        assert!(matches!(identity_fold("en-us"), Cow::Borrowed("en-us")));
+        assert!(matches!(identity_fold(""), Cow::Borrowed("")));
+        assert!(matches!(identity_fold("en-US"), Cow::Owned(_)));
+        // Only ASCII case is folded: a non-ASCII byte is not a tag byte and
+        // is left alone, so the fold never re-encodes anything.
+        assert_eq!(identity_fold("x-ÄÖ"), "x-ÄÖ");
+        assert!(matches!(identity_fold("x-ÄÖ"), Cow::Borrowed(_)));
+        assert_eq!(
+            identity_fold("EN-\u{212A}"),
+            "en-\u{212A}",
+            "KELVIN SIGN is not K"
+        );
+        // One identity across every case spelling of one tag, including the
+        // §2.1.1 presentation form.
+        let spellings = ["en-us", "EN-US", "En-Us", "en-US"];
+        for spelling in spellings {
+            assert_eq!(identity_fold(spelling), identity_fold(spellings[0]));
+            assert_eq!(
+                identity_fold(&canonical_case(spelling).expect("well-formed")),
+                identity_fold(spelling)
+            );
+        }
+        // The fold never changes the well-formedness verdict.
+        for tag in ["en-US", "de-419-DE", "zh-cmn-Hans-CN", "x-a", "EN--us"] {
+            assert_eq!(
+                is_well_formed(&identity_fold(tag)),
+                is_well_formed(tag),
+                "{tag:?}"
+            );
+        }
+    }
 
     #[test]
     fn langtag_sections_are_reported_as_slices_of_the_input() {

@@ -645,6 +645,43 @@ fn a_reference_cycle_that_consumes_nothing_fails_instead_of_recursing() {
     assert!(!consuming.is_valid(&json!([[1]])).expect("evaluation"));
 }
 
+/// A schema whose `$defs` chain `n` references in a row: `d0` refers to `d1`,
+/// … `d(n-1)` requires an integer. One JSON level deep to the reader, `n` levels
+/// deep to the reference follower.
+fn reference_chain(links: usize) -> Value {
+    let mut defs = serde_json::Map::new();
+    for i in 0..links {
+        let body = if i + 1 == links {
+            json!({"type": "integer"})
+        } else {
+            json!({"$ref": format!("#/$defs/d{}", i + 1)})
+        };
+        defs.insert(format!("d{i}"), body);
+    }
+    json!({"$ref": "#/$defs/d0", "$defs": Value::Object(defs)})
+}
+
+#[test]
+fn a_reference_chain_past_the_nesting_limit_fails_typed_and_a_shorter_one_validates() {
+    let deep = compile(reference_chain(400)).expect("a long chain compiles");
+    let output = deep
+        .evaluate(&json!(1))
+        .expect("evaluation, not a stack overflow");
+    assert!(!output.is_valid());
+    assert!(output.errors().any(|unit| {
+        unit.error
+            .as_deref()
+            .is_some_and(|error| error.contains("reference depth exceeds"))
+    }));
+    let shallow = compile(reference_chain(200)).expect("a shorter chain compiles");
+    assert!(shallow.is_valid(&json!(1)).expect("evaluation"));
+    assert!(
+        !shallow
+            .is_valid(&json!("not an integer"))
+            .expect("evaluation")
+    );
+}
+
 #[test]
 fn the_three_output_formats_project_one_evaluation() {
     let schema = compile(json!({

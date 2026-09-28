@@ -695,14 +695,59 @@ fn the_default_seed_is_a_function_of_the_name() {
     assert_ne!(first, samples(&any::<u64>(), "other", 16));
 }
 
+/// A seed is decimal digits, or hex digits after `0x`/`0X`, and nothing else.
+/// Every refusal has a valid neighbour beside it: `+5` is refused and `5`
+/// accepted, ` 0xff` refused and `0xff` accepted, `0x+ff` refused and `0xff`
+/// accepted, one past `u64::MAX` refused and `u64::MAX` accepted.
 #[test]
 fn seeds_parse_in_decimal_and_hex_and_refuse_anything_else() {
-    assert_eq!(parse_seed("42"), Ok(42));
-    assert_eq!(parse_seed("0x2a"), Ok(42));
-    assert_eq!(parse_seed(" 0X2A "), Ok(42));
-    assert!(parse_seed("forty-two").is_err());
-    assert!(parse_seed("0x").is_err());
-    assert!(parse_seed("-1").is_err());
+    for (text, seed) in [
+        ("0", 0),
+        ("5", 5),
+        ("42", 42),
+        ("007", 7),
+        ("0x2a", 42),
+        ("0X2A", 42),
+        ("0xff", 255),
+        ("0XFF", 255),
+        ("0xFf", 255),
+        ("0x0", 0),
+        ("0x00ff", 255),
+        ("18446744073709551615", u64::MAX),
+        ("0xffffffffffffffff", u64::MAX),
+    ] {
+        assert_eq!(parse_seed(text), Ok(seed), "{text:?}");
+    }
+    for text in [
+        "",
+        "+5",
+        "-1",
+        "+0x2a",
+        " 5",
+        "5 ",
+        "5\n",
+        "\t0xff",
+        " 0X2A ",
+        "0x",
+        "0X",
+        "0x+ff",
+        "0x-ff",
+        "0x ff",
+        "0x2a ",
+        "1_000",
+        "0x_ff",
+        "1e3",
+        "0b101",
+        "0o17",
+        "0xg",
+        "forty-two",
+        "\u{663}",
+        "18446744073709551616",
+        "0x10000000000000000",
+    ] {
+        let error = parse_seed(text).expect_err(text);
+        assert!(error.contains("is not a seed"), "{text:?}: {error}");
+    }
 }
 
 /// Run by [`the_seed_variable_overrides_the_default_seed`] as a child process:

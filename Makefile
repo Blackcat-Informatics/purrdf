@@ -459,7 +459,7 @@ build-profile-hygiene: ## Prove the gate really compiles at opt-level 3 with deb
 	python3 scripts/check-build-profiles.py --self-test
 	python3 scripts/check-build-profiles.py
 
-rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core, zero-dep leaves.
+rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core, zero-dep leaves (iri, xsd, events, hash).
 	@tree=$$(cargo tree --color never -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
 	if echo "$$tree" | grep -Eq '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; then \
 		echo "FAIL: purrdf-core pulls an oxigraph-family or PyO3 crate as a NORMAL dependency"; \

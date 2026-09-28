@@ -106,6 +106,8 @@ pub use crate::scan::{
     find_first_trivia, find_first_xml_special,
 };
 
+use core::fmt;
+
 /// An inclusive Unicode scalar-value range `[lo, hi]`, the unit every
 /// production below is transcribed into.
 ///
@@ -1116,6 +1118,324 @@ terminal! {
     ];
 }
 
+terminal! {
+    /// `HEX ::= [0-9] | [A-F] | [a-f]` — the hexadecimal digit of `UCHAR`
+    /// and `PERCENT` (Turtle 1.2 §6.5 `HEX`; SPARQL 1.2 §19.8 `HEX`;
+    /// N-Triples 1.2 spells it identically), and RFC 5234 `HEXDIG` read
+    /// case-insensitively as ABNF strings are — the same twenty-two scalars.
+    ///
+    /// Byte-shaped: every member is ASCII. [`hex_value`] answers the digit's
+    /// value over the same set.
+    table HEX_RANGES;
+    pub const fn is_hex(u8);
+    ranges_fn: hex_ranges;
+    ranges: [
+        (0x30, 0x39), // [0-9]
+        (0x41, 0x46), // [A-F]
+        (0x61, 0x66), // [a-f]
+    ];
+    cardinality: 22;
+}
+
+/// The value of a `HEX` digit (`HEX ::= [0-9] | [A-F] | [a-f]`, Turtle 1.2
+/// §6.5 / SPARQL 1.2 §19.8; the set [`is_hex`] tests), or `None` for any
+/// other byte.
+///
+/// Both cases are `HEX`, so `b'a'` and `b'A'` are both `Some(10)`. Nothing
+/// else is: a `+`, a space or a non-ASCII byte is `None`, which is what keeps
+/// a decoder built on this strict where `u32::from_str_radix` — which admits
+/// a leading `+` — would not be.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::terminals::hex_value;
+///
+/// assert_eq!(hex_value(b'7'), Some(7));
+/// assert_eq!(hex_value(b'a'), Some(10));
+/// assert_eq!(hex_value(b'F'), Some(15));
+/// assert_eq!(hex_value(b'g'), None);
+/// assert_eq!(hex_value(b'+'), None);
+/// ```
+#[inline]
+#[must_use]
+pub const fn hex_value(b: u8) -> Option<u8> {
+    match b {
+        b'0'..=b'9' => Some(b - b'0'),
+        b'A'..=b'F' => Some(b - b'A' + 10),
+        b'a'..=b'f' => Some(b - b'a' + 10),
+        _ => None,
+    }
+}
+
+/// Why a byte sequence is not a `UCHAR` escape. See [`decode_uchar`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[non_exhaustive]
+pub enum UcharError {
+    /// The bytes do not begin with `\u` or `\U`.
+    NotAnEscape,
+    /// A digit position holds a byte outside `HEX`, or the input ends before
+    /// the production's digit count is reached. Carries the byte offset of
+    /// that position, counted from the backslash.
+    BadHex {
+        /// Byte offset, from the backslash, of the missing or non-`HEX` byte.
+        at: usize,
+    },
+    /// The digits name a code point that is not a Unicode scalar value: a
+    /// UTF-16 surrogate (U+D800–U+DFFF) or a value above U+10FFFF.
+    NotAScalar {
+        /// The code point the digits spelled.
+        value: u32,
+    },
+}
+
+impl UcharError {
+    /// The human-readable reason, as a `&'static str`; [`fmt::Display`]
+    /// renders this together with the variant's payload.
+    #[must_use]
+    pub const fn message(self) -> &'static str {
+        match self {
+            Self::NotAnEscape => "not a `\\u` or `\\U` escape",
+            Self::BadHex { .. } => "`\\u` takes four and `\\U` eight hexadecimal digits",
+            Self::NotAScalar { .. } => {
+                "escape names a surrogate or a code point above U+10FFFF, not a Unicode scalar"
+            }
+        }
+    }
+}
+
+impl fmt::Display for UcharError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match *self {
+            Self::NotAnEscape => f.write_str(self.message()),
+            Self::BadHex { at } => write!(f, "{} (at byte {at} of the escape)", self.message()),
+            Self::NotAScalar { value } => write!(f, "{} (U+{value:04X})", self.message()),
+        }
+    }
+}
+
+impl core::error::Error for UcharError {}
+
+/// Decode the `UCHAR` escape at the start of `bytes`: the scalar it names
+/// and the number of bytes it occupies (6 for `\uXXXX`, 10 for
+/// `\UXXXXXXXX`).
+///
+/// ```text
+/// UCHAR ::= '\u' HEX HEX HEX HEX | '\U' HEX HEX HEX HEX HEX HEX HEX HEX
+/// ```
+///
+/// Turtle 1.2 §6.5 and N-Triples/N-Quads 1.2 spell the production
+/// identically, TriG and ShExC import it, and SPARQL 1.2 §19.2 applies the
+/// same two forms as its codepoint-escape pre-processing — so this is the
+/// one decoder every scanner reads it with. Bytes after the escape are not
+/// examined: the caller advances by the returned count and continues, so a
+/// fifth `HEX` byte after `\u` is content that follows the escape.
+///
+/// Strict in every direction the production is:
+///
+/// * exactly four digits after `\u` and exactly eight after `\U`; a missing
+///   one is [`UcharError::BadHex`] at its position;
+/// * `HEX` only, either case — a sign, a space or `0x` is
+///   [`UcharError::BadHex`], which is why the digits go through
+///   [`hex_value`] and never `u32::from_str_radix` (that admits a leading
+///   `+`);
+/// * a Unicode scalar value only — `\uD800` (a surrogate) and `\U00110000`
+///   (above U+10FFFF) are [`UcharError::NotAScalar`], never U+FFFD, because
+///   a scanner that resolves them names a different node than one that
+///   refuses them.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::terminals::{UcharError, decode_uchar};
+///
+/// assert_eq!(decode_uchar(b"\\u0041 rest"), Ok(('A', 6)));
+/// assert_eq!(decode_uchar(b"\\U0001F600"), Ok(('\u{1F600}', 10)));
+/// // Either case of `HEX` names the same scalar.
+/// assert_eq!(decode_uchar(b"\\u00e9"), decode_uchar(b"\\u00E9"));
+/// assert_eq!(decode_uchar(b"\\u004"), Err(UcharError::BadHex { at: 5 }));
+/// assert_eq!(decode_uchar(b"\\u+041"), Err(UcharError::BadHex { at: 2 }));
+/// assert_eq!(decode_uchar(b"\\uD800"), Err(UcharError::NotAScalar { value: 0xD800 }));
+/// assert_eq!(decode_uchar(b"\\n"), Err(UcharError::NotAnEscape));
+/// ```
+pub fn decode_uchar(bytes: &[u8]) -> Result<(char, usize), UcharError> {
+    let width = match bytes {
+        [b'\\', b'u', ..] => 4,
+        [b'\\', b'U', ..] => 8,
+        _ => return Err(UcharError::NotAnEscape),
+    };
+    let mut value = 0_u32;
+    for at in 2..2 + width {
+        let Some(digit) = bytes.get(at).copied().and_then(hex_value) else {
+            return Err(UcharError::BadHex { at });
+        };
+        value = (value << 4) | u32::from(digit);
+    }
+    // `char::from_u32` is the scalar-value test itself: it refuses both
+    // U+D800–U+DFFF and everything above U+10FFFF, which is exactly the pair
+    // `\U` can spell and Unicode does not name.
+    match char::from_u32(value) {
+        Some(scalar) => Ok((scalar, 2 + width)),
+        None => Err(UcharError::NotAScalar { value }),
+    }
+}
+
+/// The scalar an `ECHAR` escape stands for, given the byte after its
+/// backslash, or `None` when that byte is not an `ECHAR` member.
+///
+/// ```text
+/// ECHAR ::= '\' [tbnrf"'\]
+/// ```
+///
+/// Turtle 1.2 §6.5 `ECHAR`; N-Triples 1.2 and SPARQL 1.2 §19.8 spell the
+/// same eight members. The values are the ones the specifications' string
+/// escape tables assign: `t` CHARACTER TABULATION, `b` BACKSPACE, `n` LINE
+/// FEED, `r` CARRIAGE RETURN, `f` FORM FEED, and `"`, `'` and `\` standing
+/// for themselves. The backslash has already been consumed when a scanner
+/// asks this; a `\` followed by any other byte is not an `ECHAR` and — unless
+/// the byte is `u` or `U`, which open a [`UCHAR`](decode_uchar) — is a syntax
+/// error, never the byte itself: `"\a"` is malformed, not `a`.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::terminals::echar_value;
+///
+/// assert_eq!(echar_value(b'n'), Some('\n'));
+/// assert_eq!(echar_value(b'"'), Some('"'));
+/// assert_eq!(echar_value(b'\\'), Some('\\'));
+/// assert_eq!(echar_value(b'a'), None);
+/// assert_eq!(echar_value(b'u'), None); // a UCHAR opener, not an ECHAR
+/// ```
+#[inline]
+#[must_use]
+pub const fn echar_value(b: u8) -> Option<char> {
+    match b {
+        b't' => Some('\t'),
+        b'b' => Some('\u{8}'),
+        b'n' => Some('\n'),
+        b'r' => Some('\r'),
+        b'f' => Some('\u{C}'),
+        b'"' => Some('"'),
+        b'\'' => Some('\''),
+        b'\\' => Some('\\'),
+        _ => None,
+    }
+}
+
+/// `NCNameStartChar ::= NameStartChar - ':'` — *Namespaces in XML 1.0*
+/// (Third Edition) §3, the class that opens an `NCName`: every XML prefix
+/// and local name, and `xsd:NCName`, `xsd:ID`, `xsd:IDREF` and `xsd:ENTITY`.
+///
+/// [`is_xml_name_start_char`] with the colon subtracted — the subtraction
+/// the namespaces specification exists to make, so that `ns:local` is two
+/// `NCName`s and never one `Name`. It is spelled as that subtraction rather
+/// than as a third table so that it cannot drift from the `Name` class it is
+/// defined against.
+///
+/// The set coincides with [`is_pn_chars_u`] (`PN_CHARS_BASE | '_'`), and the
+/// coincidence is pinned by a test rather than assumed by a call: two
+/// productions in two specifications that name the same scalars today are
+/// not one production.
+#[inline]
+#[must_use]
+pub const fn is_ncname_start_char(c: char) -> bool {
+    is_xml_name_start_char(c) && c != ':'
+}
+
+/// `NCNameChar ::= NameChar - ':'` — *Namespaces in XML 1.0* (Third
+/// Edition) §3, every scalar after the first of an `NCName`.
+///
+/// [`is_xml_name_char`] with the colon subtracted. Wider than
+/// [`is_ncname_start_char`] by `'-'`, `'.'`, `[0-9]`, U+00B7 MIDDLE DOT, the
+/// combining marks `[#x300-#x36F]` and the two ties `[#x203F-#x2040]`; the
+/// `'.'` is what keeps this from being [`is_pn_chars`] — see
+/// [`is_xml_name_char`] for why an `NCName` and a Turtle local name are not
+/// the same language.
+#[inline]
+#[must_use]
+pub const fn is_ncname_char(c: char) -> bool {
+    is_xml_name_char(c) && c != ':'
+}
+
+/// The offset of the first byte at or after `at` that is not `WS`, or
+/// `bytes.len()` when the rest is all `WS`.
+///
+/// `WS ::= #x20 | #x9 | #xD | #xA` (Turtle 1.2 §6.5; SPARQL 1.2 §19.8) —
+/// the four-member terminal, skipped through [`find_first_trivia`] so a
+/// scanner moves over inter-token whitespace at chunk speed and never
+/// through [`u8::is_ascii_whitespace`] (which admits FORM FEED) or a
+/// Unicode property (which admits NO-BREAK SPACE); see [`is_ws`] for why
+/// neither is this production. Every member is ASCII, so the result is
+/// always a char boundary of a `str`'s bytes. An `at` past the end is
+/// returned unchanged.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::terminals::skip_ws;
+///
+/// assert_eq!(skip_ws(b"  \t\r\n?s", 0), 5);
+/// assert_eq!(skip_ws(b"a  b", 1), 3);
+/// assert_eq!(skip_ws(b"   ", 0), 3);
+/// // NO-BREAK SPACE is not `WS`: the skip stops at its lead byte.
+/// assert_eq!(skip_ws(" \u{A0}".as_bytes(), 0), 1);
+/// ```
+#[must_use]
+pub fn skip_ws(bytes: &[u8], at: usize) -> usize {
+    match bytes.get(at..) {
+        Some(rest) => at + find_first_trivia(rest).unwrap_or(rest.len()),
+        None => at,
+    }
+}
+
+/// `s` without its leading run of `WS` — the terminal-exact replacement for
+/// [`str::trim_start`], whose class is the Unicode `White_Space` property.
+///
+/// `WS ::= #x20 | #x9 | #xD | #xA` (Turtle 1.2 §6.5; SPARQL 1.2 §19.8).
+/// `str::trim_start` removes U+00A0 NO-BREAK SPACE, U+000B, U+000C, U+2028
+/// and the rest of the twenty-six-member property, so a line the grammar has
+/// no reading for would be silently re-shaped into one that parses. The scan
+/// is byte-wise and exact over UTF-8: every member is ASCII and no byte of a
+/// multi-byte sequence is below `0x80`, so it can neither miss a member nor
+/// alias one, and the cut is always a char boundary.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::terminals::{trim_ws, trim_ws_end, trim_ws_start};
+///
+/// assert_eq!(trim_ws_start(" \t\r\nx "), "x ");
+/// assert_eq!(trim_ws_end(" x\n"), " x");
+/// assert_eq!(trim_ws(" \tx y\r\n"), "x y");
+/// // NO-BREAK SPACE and FORM FEED are content, not `WS`.
+/// assert_eq!(trim_ws(" \u{A0}x\u{C} "), "\u{A0}x\u{C}");
+/// assert_eq!(" \u{A0}x\u{C} ".trim(), "x");
+/// ```
+#[must_use]
+pub fn trim_ws_start(s: &str) -> &str {
+    &s[skip_ws(s.as_bytes(), 0)..]
+}
+
+/// `s` without its trailing run of `WS` — the terminal-exact replacement
+/// for [`str::trim_end`]; see [`trim_ws_start`] for the production and why
+/// the byte-wise scan is exact.
+#[must_use]
+pub fn trim_ws_end(s: &str) -> &str {
+    let end = s
+        .bytes()
+        .rposition(|b| !is_ws(b))
+        .map_or(0, |last| last + 1);
+    &s[..end]
+}
+
+/// `s` without its leading and trailing runs of `WS` — the terminal-exact
+/// replacement for [`str::trim`]; see [`trim_ws_start`].
+#[must_use]
+pub fn trim_ws(s: &str) -> &str {
+    trim_ws_end(trim_ws_start(s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
@@ -1129,6 +1449,10 @@ mod tests {
         pn_local_start_ranges, ranges_sorted_disjoint, unicode_white_space_ranges,
         varname_continue_ranges, varname_start_ranges, ws_ranges, xml_char_ranges,
         xml_name_char_ranges, xml_name_start_char_ranges,
+    };
+    use super::{
+        UcharError, decode_uchar, echar_value, hex_ranges, hex_value, is_hex, is_ncname_char,
+        is_ncname_start_char, skip_ws, trim_ws, trim_ws_end, trim_ws_start,
     };
 
     /// Every Unicode scalar value, in order.
@@ -1879,5 +2203,265 @@ mod tests {
         const { assert!(!is_xml_name_start_char('.')) }
         const { assert!(is_xml_name_char('.')) }
         const { assert!(!is_xml_name_char('\u{AA}')) }
+        const { assert!(is_ncname_start_char('_')) }
+        const { assert!(!is_ncname_start_char(':')) }
+        const { assert!(is_ncname_char('.')) }
+        const { assert!(!is_ncname_char(':')) }
+        const { assert!(is_hex(b'f')) }
+        const { assert!(matches!(hex_value(b'F'), Some(15))) }
+        const { assert!(hex_value(b'g').is_none()) }
+        const { assert!(matches!(echar_value(b'n'), Some('\n'))) }
+        const { assert!(echar_value(b'a').is_none()) }
+    }
+
+    #[test]
+    fn hex_is_exactly_the_twenty_two_digits_in_both_cases() {
+        for b in 0..=u8::MAX {
+            let expected = b.is_ascii_hexdigit();
+            assert_eq!(is_hex(b), expected, "{b:#04X}");
+            assert_eq!(hex_value(b).is_some(), expected, "{b:#04X}");
+            if let Some(value) = hex_value(b) {
+                assert_eq!(
+                    u32::from(value),
+                    char::from(b).to_digit(16).expect("a hex digit"),
+                    "{b:#04X}"
+                );
+            }
+        }
+        assert_eq!(hex_ranges(), &[(0x30, 0x39), (0x41, 0x46), (0x61, 0x66)]);
+        assert_eq!(hex_value(b'0'), Some(0));
+        assert_eq!(hex_value(b'9'), Some(9));
+        assert_eq!(hex_value(b'a'), Some(10));
+        assert_eq!(hex_value(b'A'), Some(10));
+        assert_eq!(hex_value(b'f'), Some(15));
+        assert_eq!(hex_value(b'F'), Some(15));
+        // The refused neighbour on each side of every run, beside a member.
+        for (refused, accepted) in [
+            (b'/', b'0'),
+            (b':', b'9'),
+            (b'@', b'A'),
+            (b'G', b'F'),
+            (b'`', b'a'),
+            (b'g', b'f'),
+            (b'+', b'0'),
+            (b'-', b'0'),
+            (b' ', b'0'),
+            (0xC3, b'a'),
+        ] {
+            assert_eq!(hex_value(refused), None, "{refused:#04X}");
+            assert!(hex_value(accepted).is_some(), "{accepted:#04X}");
+        }
+    }
+
+    #[test]
+    fn decode_uchar_pins_both_forms_and_the_bytes_consumed() {
+        assert_eq!(decode_uchar(b"\\u0041"), Ok(('A', 6)));
+        assert_eq!(decode_uchar(b"\\u0041rest"), Ok(('A', 6)));
+        assert_eq!(decode_uchar(b"\\u00e9"), Ok(('\u{E9}', 6)));
+        assert_eq!(decode_uchar(b"\\u00E9"), Ok(('\u{E9}', 6)));
+        assert_eq!(decode_uchar(b"\\u00E9"), Ok(('\u{E9}', 6)));
+        assert_eq!(decode_uchar(b"\\U0001F600"), Ok(('\u{1F600}', 10)));
+        assert_eq!(decode_uchar(b"\\U00000041"), Ok(('A', 10)));
+        assert_eq!(decode_uchar(b"\\u0000"), Ok(('\0', 6)));
+        assert_eq!(decode_uchar(b"\\uFFFD"), Ok(('\u{FFFD}', 6)));
+        assert_eq!(decode_uchar(b"\\uFFFF"), Ok(('\u{FFFF}', 6)));
+        assert_eq!(decode_uchar(b"\\uD7FF"), Ok(('\u{D7FF}', 6)));
+        assert_eq!(decode_uchar(b"\\uE000"), Ok(('\u{E000}', 6)));
+        assert_eq!(decode_uchar(b"\\U0010FFFF"), Ok(('\u{10FFFF}', 10)));
+        // A fifth digit after `\u` is content that follows the escape, and
+        // so is a ninth after `\U`.
+        assert_eq!(decode_uchar(b"\\u00411"), Ok(('A', 6)));
+        assert_eq!(decode_uchar(b"\\U000000411"), Ok(('A', 10)));
+    }
+
+    #[test]
+    fn decode_uchar_refusals_each_have_an_accepted_neighbour() {
+        let cases: &[(&[u8], UcharError, &[u8])] = &[
+            (b"", UcharError::NotAnEscape, b"\\u0041"),
+            (b"\\", UcharError::NotAnEscape, b"\\u0041"),
+            (b"\\x41", UcharError::NotAnEscape, b"\\u0041"),
+            (b"u0041", UcharError::NotAnEscape, b"\\u0041"),
+            (b"\\n", UcharError::NotAnEscape, b"\\u000A"),
+            (b"\\u", UcharError::BadHex { at: 2 }, b"\\u0041"),
+            (b"\\u0", UcharError::BadHex { at: 3 }, b"\\u0041"),
+            (b"\\u004", UcharError::BadHex { at: 5 }, b"\\u0041"),
+            (b"\\U0001F60", UcharError::BadHex { at: 9 }, b"\\U0001F600"),
+            (b"\\U0041", UcharError::BadHex { at: 6 }, b"\\U00000041"),
+            (b"\\u+041", UcharError::BadHex { at: 2 }, b"\\u0041"),
+            (b"\\u-041", UcharError::BadHex { at: 2 }, b"\\u0041"),
+            (b"\\u 041", UcharError::BadHex { at: 2 }, b"\\u0041"),
+            (b"\\u004G", UcharError::BadHex { at: 5 }, b"\\u004F"),
+            (b"\\u0x41", UcharError::BadHex { at: 3 }, b"\\u0041"),
+            (b"\\u00\xC3\xA9", UcharError::BadHex { at: 4 }, b"\\u00E9"),
+            (
+                b"\\uD800",
+                UcharError::NotAScalar { value: 0xD800 },
+                b"\\uD7FF",
+            ),
+            (
+                b"\\uDFFF",
+                UcharError::NotAScalar { value: 0xDFFF },
+                b"\\uE000",
+            ),
+            (
+                b"\\U0000D800",
+                UcharError::NotAScalar { value: 0xD800 },
+                b"\\U0000D7FF",
+            ),
+            (
+                b"\\U00110000",
+                UcharError::NotAScalar { value: 0x0011_0000 },
+                b"\\U0010FFFF",
+            ),
+            (
+                b"\\UFFFFFFFF",
+                UcharError::NotAScalar { value: 0xFFFF_FFFF },
+                b"\\U0010FFFF",
+            ),
+        ];
+        for &(refused, error, accepted) in cases {
+            assert_eq!(decode_uchar(refused), Err(error), "{refused:?}");
+            assert!(decode_uchar(accepted).is_ok(), "{accepted:?}");
+        }
+        assert_eq!(
+            UcharError::NotAnEscape.to_string(),
+            "not a `\\u` or `\\U` escape"
+        );
+        assert_eq!(
+            UcharError::BadHex { at: 5 }.to_string(),
+            "`\\u` takes four and `\\U` eight hexadecimal digits (at byte 5 of the escape)"
+        );
+        assert_eq!(
+            UcharError::NotAScalar { value: 0xD800 }.to_string(),
+            "escape names a surrogate or a code point above U+10FFFF, not a Unicode scalar \
+             (U+D800)"
+        );
+    }
+
+    #[test]
+    fn echar_is_exactly_the_eight_members() {
+        let members: [(u8, char); 8] = [
+            (b't', '\t'),
+            (b'b', '\u{8}'),
+            (b'n', '\n'),
+            (b'r', '\r'),
+            (b'f', '\u{C}'),
+            (b'"', '"'),
+            (b'\'', '\''),
+            (b'\\', '\\'),
+        ];
+        for b in 0..=u8::MAX {
+            let expected = members.iter().find(|&&(m, _)| m == b).map(|&(_, c)| c);
+            assert_eq!(echar_value(b), expected, "{b:#04X}");
+        }
+        assert_eq!(
+            (0..=u8::MAX).filter(|&b| echar_value(b).is_some()).count(),
+            8
+        );
+        // Refused neighbours beside members: `a`, `v`, `0` and `e` are not
+        // escapes, and `u`/`U` open a UCHAR rather than an ECHAR.
+        for (refused, accepted) in [
+            (b'a', b'b'),
+            (b'v', b'f'),
+            (b'0', b'n'),
+            (b'e', b'f'),
+            (b'u', b't'),
+            (b'U', b'r'),
+            (b'/', b'\\'),
+            (b'`', b'\''),
+            (b'N', b'n'),
+        ] {
+            assert_eq!(echar_value(refused), None, "{refused:#04X}");
+            assert!(echar_value(accepted).is_some(), "{accepted:#04X}");
+        }
+    }
+
+    #[test]
+    fn ncname_is_the_xml_name_class_minus_the_colon_on_every_scalar() {
+        for c in all_scalars() {
+            assert_eq!(
+                is_ncname_start_char(c),
+                xml_name_start_char_oracle(c) && c != ':',
+                "{c:?}"
+            );
+            assert_eq!(
+                is_ncname_char(c),
+                xml_name_char_oracle(c) && c != ':',
+                "{c:?}"
+            );
+            // The coincidences with the Turtle classes, pinned rather than
+            // assumed: NCNameStartChar is PN_CHARS_U, and NCNameChar is
+            // PN_CHARS plus the '.'.
+            assert_eq!(is_ncname_start_char(c), is_pn_chars_u(c), "{c:?}");
+            assert_eq!(is_ncname_char(c), is_pn_chars(c) || c == '.', "{c:?}");
+        }
+        assert!(is_xml_name_start_char(':') && !is_ncname_start_char(':'));
+        assert!(is_xml_name_char(':') && !is_ncname_char(':'));
+        // The colon's neighbours in the code chart are unchanged by the
+        // subtraction, and the two positions still differ where they should.
+        assert!(!is_ncname_start_char('9') && is_ncname_char('9'));
+        assert!(!is_ncname_start_char(';') && !is_ncname_char(';'));
+        assert!(is_ncname_start_char('_') && is_ncname_start_char('A'));
+        assert!(is_ncname_char('.') && !is_ncname_start_char('.'));
+        assert!(is_ncname_char('-') && !is_ncname_start_char('-'));
+        assert!(is_ncname_start_char('\u{65E5}') && is_ncname_char('\u{65E5}'));
+    }
+
+    #[test]
+    fn skip_ws_and_trim_ws_move_over_exactly_the_four_ws_bytes() {
+        assert_eq!(skip_ws(b"", 0), 0);
+        assert_eq!(skip_ws(b"a", 0), 0);
+        assert_eq!(skip_ws(b" \t\r\na", 0), 4);
+        assert_eq!(skip_ws(b" \t\r\n", 0), 4);
+        assert_eq!(skip_ws(b"a  b", 1), 3);
+        assert_eq!(skip_ws(b"a  b", 4), 4);
+        assert_eq!(skip_ws(b"ab", 9), 9, "past the end is returned unchanged");
+        // A run longer than one scan chunk, to exercise the chunked path.
+        let long = format!("{}x", " ".repeat(40));
+        assert_eq!(skip_ws(long.as_bytes(), 0), 40);
+        assert_eq!(skip_ws(long.as_bytes(), 17), 40);
+        // FORM FEED, VERTICAL TAB, NO-BREAK SPACE and LINE SEPARATOR are
+        // not `WS`; the skip stops at each.
+        assert_eq!(skip_ws(b" \x0Ca", 0), 1);
+        assert_eq!(skip_ws(b" \x0Ba", 0), 1);
+        assert_eq!(skip_ws(" \u{A0}a".as_bytes(), 0), 1);
+        assert_eq!(skip_ws(" \u{2028}a".as_bytes(), 0), 1);
+
+        assert_eq!(trim_ws(""), "");
+        assert_eq!(trim_ws("   "), "");
+        assert_eq!(trim_ws("\t\r\n "), "");
+        assert_eq!(trim_ws("a"), "a");
+        assert_eq!(trim_ws(" \t\r\na b\n\r\t "), "a b");
+        assert_eq!(trim_ws_start(" \ta "), "a ");
+        assert_eq!(trim_ws_start("a "), "a ");
+        assert_eq!(trim_ws_end(" \ta "), " \ta");
+        assert_eq!(trim_ws_end(" a"), " a");
+        assert_eq!(trim_ws("\u{A0}a\u{A0}"), "\u{A0}a\u{A0}");
+        assert_eq!(trim_ws(" \u{A0}a\u{A0} "), "\u{A0}a\u{A0}");
+        assert_eq!(trim_ws("\x0Ca\x0B"), "\x0Ca\x0B");
+        assert_eq!(trim_ws(" \u{3000}日本\u{3000} "), "\u{3000}日本\u{3000}");
+        assert_eq!(trim_ws(" 日本 "), "日本");
+        // On every scalar: trimmed away iff it is `WS`, which is exactly
+        // where `str::trim` (the Unicode property) is a different function.
+        let mut text = String::new();
+        for c in all_scalars() {
+            text.clear();
+            text.push(c);
+            text.push('x');
+            text.push(c);
+            let trimmed = trim_ws(&text);
+            if is_ws_char(c) {
+                assert_eq!(trimmed, "x", "{c:?}");
+            } else {
+                assert_eq!(trimmed, text, "{c:?}");
+            }
+            // `str::trim` agrees exactly where the scalar is not in the
+            // `White_Space` property, or is one of the four `WS` members.
+            assert_eq!(
+                trimmed == text.trim(),
+                !c.is_whitespace() || is_ws_char(c),
+                "{c:?}"
+            );
+        }
     }
 }
