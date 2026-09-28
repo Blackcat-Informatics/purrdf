@@ -265,6 +265,7 @@ pub(crate) fn eval_filter<D: DatasetView + Sync>(
         // context. Dropping it would make a governed receipt depend on whether the row
         // landed on a worker — see `EvalCtx::absorb_worker_witnesses`.
         let (rows, harvests) = crate::parallel::par_chunk_try_map_init(
+            ctx.sequential_operation_required(),
             &seq.rows,
             || (ctx.fork_for_worker(), checkpoint),
             |worker, acc, row| {
@@ -359,6 +360,7 @@ pub(crate) fn eval_extend<D: DatasetView + Sync>(
         // property function through an embedded `EXISTS`, and the worker's attestation
         // must reach the parent's receipt.
         let (minted, harvests) = crate::parallel::par_chunk_try_map_init(
+            ctx.sequential_operation_required(),
             &seq.rows,
             || (ctx.fork_for_worker(), checkpoint),
             |worker, acc, in_row| {
@@ -1045,88 +1047,243 @@ fn is_literal(v: &TermValue) -> bool {
 /// assumption it still drives the correlation decision, and do not double-trust it
 /// against `analyze_pattern`'s output — the two are allowed to differ.
 pub(crate) fn expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
-    match expr {
-        Expression::Variable(v) | Expression::Bound(v) => {
-            out.insert(v.clone());
-        }
-        Expression::NamedNode(_) | Expression::Literal(_) => {}
-        Expression::Or(operands) | Expression::And(operands) => {
-            for operand in operands {
-                expr_vars(operand, out);
+    collect_vars(vec![VarNode::Expression(expr)], out);
+}
+
+/// One node [`collect_vars`] has still to read: a pattern, beside the endpoint variable
+/// whose `SERVICE` clauses contribute nothing to the walk it is part of, or an
+/// expression, whose `EXISTS` bodies are walked whole.
+enum VarNode<'a> {
+    Pattern(&'a GraphPattern, Option<&'a Variable>),
+    Expression(&'a Expression),
+}
+
+/// Add every variable the nodes in `pending`, and everything beneath them, mention to
+/// `out` — the one walk beneath [`expr_vars`] and [`pattern_vars_outside`].
+///
+/// The list holds the nodes still to be read, so a query of any depth is read without a
+/// machine-stack frame per level. `out` is a set, so the order the nodes come off the
+/// list in leaves no trace in it. A pattern node counts one `VarWalked` operation in a
+/// test build, whether or not it contributes anything.
+fn collect_vars(mut pending: Vec<VarNode<'_>>, out: &mut DetHashSet<Variable>) {
+    use purrdf_sparql_algebra::NamedNodePattern;
+
+    while let Some(node) = pending.pop() {
+        match node {
+            VarNode::Expression(expr) => match expr {
+                Expression::Variable(v) | Expression::Bound(v) => {
+                    out.insert(v.clone());
+                }
+                Expression::NamedNode(_) | Expression::Literal(_) => {}
+                Expression::Or(operands) | Expression::And(operands) => {
+                    pending.extend(operands.iter().map(VarNode::Expression));
+                }
+                Expression::Arithmetic(first, steps) => {
+                    pending.push(VarNode::Expression(first));
+                    pending.extend(
+                        steps
+                            .iter()
+                            .map(|(_, operand)| VarNode::Expression(operand)),
+                    );
+                }
+                Expression::Equal(a, b)
+                | Expression::SameTerm(a, b)
+                | Expression::Greater(a, b)
+                | Expression::GreaterOrEqual(a, b)
+                | Expression::Less(a, b)
+                | Expression::LessOrEqual(a, b) => {
+                    pending.push(VarNode::Expression(a));
+                    pending.push(VarNode::Expression(b));
+                }
+                Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+                    pending.push(VarNode::Expression(a));
+                }
+                Expression::If(c, t, e) => {
+                    pending.push(VarNode::Expression(c));
+                    pending.push(VarNode::Expression(t));
+                    pending.push(VarNode::Expression(e));
+                }
+                Expression::In(needle, haystack) => {
+                    pending.push(VarNode::Expression(needle));
+                    pending.extend(haystack.iter().map(VarNode::Expression));
+                }
+                Expression::Coalesce(items) => {
+                    pending.extend(items.iter().map(VarNode::Expression));
+                }
+                Expression::FunctionCall(_, args) => {
+                    pending.extend(args.iter().map(VarNode::Expression));
+                }
+                // Nested EXISTS: widened to `pattern_all_vars` (see [`expr_vars`]'s doc,
+                // "Relationship to `analyze_pattern`'s `free_vars`" section). VESTIGIAL
+                // for correlation detection — `PreparedExists::build` walks
+                // `analyze_pattern` independently for that decision, never this walk's
+                // output. Its live purpose is column preservation: the result feeds
+                // `wrap_with_expr_term_only_values` (via [`expr_vars`]'s callers in
+                // `substitute_pattern_impl`), so a correlation reaching the nested inner
+                // ONLY through a triple/leaf position (never that inner's own expression
+                // positions) still gets joined in as a one-row `VALUES` table rather than
+                // silently dropped from the substituted subtree. The body is walked with
+                // no endpoint excluded, whatever the walk it is reached from excludes.
+                Expression::Exists(inner_pat) => {
+                    pending.push(VarNode::Pattern(inner_pat, None));
+                }
+            },
+            VarNode::Pattern(pattern, endpoint) => {
+                #[cfg(test)]
+                crate::op_count::bump(crate::op_count::Op::VarWalked);
+
+                match pattern {
+                    GraphPattern::Bgp { patterns } => {
+                        for tp in patterns {
+                            term_pattern_vars(&tp.subject, out);
+                            if let NamedNodePattern::Variable(v) = &tp.predicate {
+                                out.insert(v.clone());
+                            }
+                            term_pattern_vars(&tp.object, out);
+                        }
+                    }
+                    GraphPattern::Path {
+                        subject, object, ..
+                    } => {
+                        term_pattern_vars(subject, out);
+                        term_pattern_vars(object, out);
+                    }
+                    GraphPattern::Values { variables, .. } => {
+                        out.extend(variables.iter().cloned());
+                    }
+                    GraphPattern::PropertyFunction(call) => {
+                        for term in call.subject_args.iter().chain(&call.object_args) {
+                            term_pattern_vars(term, out);
+                        }
+                    }
+                    GraphPattern::Graph { name, inner } => {
+                        if let NamedNodePattern::Variable(v) = name {
+                            out.insert(v.clone());
+                        }
+                        pending.push(VarNode::Pattern(inner, endpoint));
+                    }
+                    // A `SERVICE` clause on the excluded endpoint contributes nothing:
+                    // neither its name nor its body is read.
+                    GraphPattern::Service { name, inner, .. } => {
+                        let excluded =
+                            matches!(name, NamedNodePattern::Variable(v) if endpoint == Some(v));
+                        if !excluded {
+                            if let NamedNodePattern::Variable(v) = name {
+                                out.insert(v.clone());
+                            }
+                            pending.push(VarNode::Pattern(inner, endpoint));
+                        }
+                    }
+                    GraphPattern::Join { left, right }
+                    | GraphPattern::Minus { left, right }
+                    | GraphPattern::Lateral { left, right } => {
+                        pending.push(VarNode::Pattern(left, endpoint));
+                        pending.push(VarNode::Pattern(right, endpoint));
+                    }
+                    GraphPattern::Union { arms } => {
+                        pending.extend(arms.iter().map(|arm| VarNode::Pattern(arm, endpoint)));
+                    }
+                    GraphPattern::LeftJoin {
+                        left,
+                        right,
+                        expression,
+                    } => {
+                        if let Some(e) = expression {
+                            pending.push(VarNode::Expression(e));
+                        }
+                        pending.push(VarNode::Pattern(left, endpoint));
+                        pending.push(VarNode::Pattern(right, endpoint));
+                    }
+                    GraphPattern::Filter { expr, inner } => {
+                        pending.push(VarNode::Expression(expr));
+                        pending.push(VarNode::Pattern(inner, endpoint));
+                    }
+                    GraphPattern::Extend {
+                        inner,
+                        variable,
+                        expression,
+                    } => {
+                        out.insert(variable.clone());
+                        pending.push(VarNode::Expression(expression));
+                        pending.push(VarNode::Pattern(inner, endpoint));
+                    }
+                    GraphPattern::Unfold {
+                        inner,
+                        expression,
+                        element,
+                        companion,
+                    } => {
+                        out.insert(element.clone());
+                        if let Some(companion) = companion {
+                            out.insert(companion.clone());
+                        }
+                        pending.push(VarNode::Expression(expression));
+                        pending.push(VarNode::Pattern(inner, endpoint));
+                    }
+                    GraphPattern::OrderBy { inner, expression } => {
+                        for oe in expression {
+                            match oe {
+                                purrdf_sparql_algebra::OrderExpression::Asc(e)
+                                | purrdf_sparql_algebra::OrderExpression::Desc(e) => {
+                                    pending.push(VarNode::Expression(e));
+                                }
+                            }
+                        }
+                        pending.push(VarNode::Pattern(inner, endpoint));
+                    }
+                    GraphPattern::Group {
+                        inner,
+                        variables,
+                        aggregates,
+                    } => {
+                        out.extend(variables.iter().cloned());
+                        for (v, agg) in aggregates {
+                            out.insert(v.clone());
+                            for arg in agg
+                                .args()
+                                .iter()
+                                .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+                            {
+                                pending.push(VarNode::Expression(arg));
+                            }
+                        }
+                        pending.push(VarNode::Pattern(inner, endpoint));
+                    }
+                    GraphPattern::Distinct { inner }
+                    | GraphPattern::Reduced { inner }
+                    | GraphPattern::Slice { inner, .. } => {
+                        pending.push(VarNode::Pattern(inner, endpoint));
+                    }
+                    GraphPattern::Project { inner, variables } => {
+                        out.extend(variables.iter().cloned());
+                        pending.push(VarNode::Pattern(inner, endpoint));
+                    }
+                }
             }
-        }
-        Expression::Arithmetic(first, steps) => {
-            expr_vars(first, out);
-            for (_, operand) in steps {
-                expr_vars(operand, out);
-            }
-        }
-        Expression::Equal(a, b)
-        | Expression::SameTerm(a, b)
-        | Expression::Greater(a, b)
-        | Expression::GreaterOrEqual(a, b)
-        | Expression::Less(a, b)
-        | Expression::LessOrEqual(a, b) => {
-            expr_vars(a, out);
-            expr_vars(b, out);
-        }
-        Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
-            expr_vars(a, out);
-        }
-        Expression::If(c, t, e) => {
-            expr_vars(c, out);
-            expr_vars(t, out);
-            expr_vars(e, out);
-        }
-        Expression::In(needle, haystack) => {
-            expr_vars(needle, out);
-            for h in haystack {
-                expr_vars(h, out);
-            }
-        }
-        Expression::Coalesce(items) => {
-            for item in items {
-                expr_vars(item, out);
-            }
-        }
-        Expression::FunctionCall(_, args) => {
-            for a in args {
-                expr_vars(a, out);
-            }
-        }
-        // Nested EXISTS: widened to `pattern_all_vars` (this function's doc,
-        // "Relationship to `analyze_pattern`'s `free_vars`" section). VESTIGIAL for
-        // correlation detection — `PreparedExists::build` walks `analyze_pattern`
-        // independently for that decision, never this function's output. Its live
-        // purpose is column preservation: the result feeds
-        // `wrap_with_expr_term_only_values` (via this function's callers in
-        // `substitute_pattern_impl`), so a correlation reaching the nested inner
-        // ONLY through a triple/leaf position (never that inner's own expression
-        // positions) still gets joined in as a one-row `VALUES` table rather than
-        // silently dropped from the substituted subtree.
-        Expression::Exists(inner_pat) => {
-            pattern_all_vars(inner_pat, out);
         }
     }
 }
 
-/// Collect the variables a term pattern mentions, descending into a quoted triple's
-/// own component positions.
+/// Collect the variables a term pattern mentions, its quoted triples' own component
+/// positions included, over a work list of the positions still to be read.
 fn term_pattern_vars(term: &purrdf_sparql_algebra::TermPattern, out: &mut DetHashSet<Variable>) {
     use purrdf_sparql_algebra::{NamedNodePattern, TermPattern};
 
-    match term {
-        TermPattern::Variable(variable) => {
-            out.insert(variable.clone());
-        }
-        TermPattern::Triple(triple) => {
-            term_pattern_vars(&triple.subject, out);
-            if let NamedNodePattern::Variable(variable) = &triple.predicate {
+    let mut pending = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::Variable(variable) => {
                 out.insert(variable.clone());
             }
-            term_pattern_vars(&triple.object, out);
+            TermPattern::Triple(triple) => {
+                if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                    out.insert(variable.clone());
+                }
+                pending.push(&triple.object);
+                pending.push(&triple.subject);
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
-        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
     }
 }
 
@@ -1173,133 +1330,7 @@ pub(crate) fn pattern_vars_outside(
     endpoint: Option<&Variable>,
     out: &mut DetHashSet<Variable>,
 ) {
-    use purrdf_sparql_algebra::NamedNodePattern;
-
-    #[cfg(test)]
-    crate::op_count::bump(crate::op_count::Op::VarWalked);
-
-    match pattern {
-        GraphPattern::Bgp { patterns } => {
-            for tp in patterns {
-                term_pattern_vars(&tp.subject, out);
-                if let NamedNodePattern::Variable(v) = &tp.predicate {
-                    out.insert(v.clone());
-                }
-                term_pattern_vars(&tp.object, out);
-            }
-        }
-        GraphPattern::Path {
-            subject, object, ..
-        } => {
-            term_pattern_vars(subject, out);
-            term_pattern_vars(object, out);
-        }
-        GraphPattern::Values { variables, .. } => {
-            out.extend(variables.iter().cloned());
-        }
-        GraphPattern::PropertyFunction(call) => {
-            for term in call.subject_args.iter().chain(&call.object_args) {
-                term_pattern_vars(term, out);
-            }
-        }
-        GraphPattern::Graph { name, inner } => {
-            if let NamedNodePattern::Variable(v) = name {
-                out.insert(v.clone());
-            }
-            pattern_vars_outside(inner, endpoint, out);
-        }
-        GraphPattern::Service { name, inner, .. } => {
-            if let NamedNodePattern::Variable(v) = name {
-                if endpoint == Some(v) {
-                    return;
-                }
-                out.insert(v.clone());
-            }
-            pattern_vars_outside(inner, endpoint, out);
-        }
-        GraphPattern::Join { left, right }
-        | GraphPattern::Minus { left, right }
-        | GraphPattern::Lateral { left, right } => {
-            pattern_vars_outside(left, endpoint, out);
-            pattern_vars_outside(right, endpoint, out);
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                pattern_vars_outside(arm, endpoint, out);
-            }
-        }
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => {
-            if let Some(e) = expression {
-                expr_vars(e, out);
-            }
-            pattern_vars_outside(left, endpoint, out);
-            pattern_vars_outside(right, endpoint, out);
-        }
-        GraphPattern::Filter { expr, inner } => {
-            expr_vars(expr, out);
-            pattern_vars_outside(inner, endpoint, out);
-        }
-        GraphPattern::Extend {
-            inner,
-            variable,
-            expression,
-        } => {
-            out.insert(variable.clone());
-            expr_vars(expression, out);
-            pattern_vars_outside(inner, endpoint, out);
-        }
-        GraphPattern::Unfold {
-            inner,
-            expression,
-            element,
-            companion,
-        } => {
-            out.insert(element.clone());
-            if let Some(companion) = companion {
-                out.insert(companion.clone());
-            }
-            expr_vars(expression, out);
-            pattern_vars_outside(inner, endpoint, out);
-        }
-        GraphPattern::OrderBy { inner, expression } => {
-            for oe in expression {
-                match oe {
-                    purrdf_sparql_algebra::OrderExpression::Asc(e)
-                    | purrdf_sparql_algebra::OrderExpression::Desc(e) => expr_vars(e, out),
-                }
-            }
-            pattern_vars_outside(inner, endpoint, out);
-        }
-        GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } => {
-            out.extend(variables.iter().cloned());
-            for (v, agg) in aggregates {
-                out.insert(v.clone());
-                for arg in agg
-                    .args()
-                    .iter()
-                    .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
-                {
-                    expr_vars(arg, out);
-                }
-            }
-            pattern_vars_outside(inner, endpoint, out);
-        }
-        GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => pattern_vars_outside(inner, endpoint, out),
-        GraphPattern::Project { inner, variables } => {
-            out.extend(variables.iter().cloned());
-            pattern_vars_outside(inner, endpoint, out);
-        }
-    }
+    collect_vars(vec![VarNode::Pattern(pattern, endpoint)], out);
 }
 
 /// Which of the two `EXISTS` evaluation strategies [`force_exists_strategy_for_test`]
@@ -2388,34 +2419,50 @@ impl<'a> Deferral<'a> {
 
     /// Add the variables of `expr` to `out`: [`expr_vars`], except that a body this walk
     /// defers contributes its site's variable set by reference instead of being walked.
+    ///
+    /// The expression is read over a work list of the nodes still to be read, so one of
+    /// any depth is read without a machine-stack frame per level. The sites of the
+    /// deferred bodies are pushed in the order the bodies stand in the expression, first
+    /// to last: a node's parts are pushed reversed, so they come off the list in the
+    /// order the shallow visitor yields them.
     fn expr_vars(&self, expr: &Expression, out: &mut FreeVars) {
-        match expr {
-            Expression::Exists(body) => match self.deferred_site(body) {
-                Some((site, _)) => out.sites.push(Arc::clone(site)),
-                None => expr_vars(expr, &mut out.direct),
-            },
-            Expression::Variable(_)
-            | Expression::Bound(_)
-            | Expression::NamedNode(_)
-            | Expression::Literal(_) => expr_vars(expr, &mut out.direct),
-            _ => {
-                crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
-                    match part {
-                        crate::governor::soundness::ExpressionPart::Sub(sub) => {
-                            self.expr_vars(sub, out);
+        use crate::governor::soundness::{ExpressionPart, visit_expression_parts};
+
+        /// One node still to be read: an expression, or an `EXISTS` body.
+        enum Node<'a> {
+            Expression(&'a Expression),
+            Body(&'a GraphPattern),
+        }
+
+        let mut pending = vec![Node::Expression(expr)];
+        while let Some(node) = pending.pop() {
+            match node {
+                Node::Body(body) => self.expr_vars_of_body(body, out),
+                Node::Expression(Expression::Exists(body)) => self.expr_vars_of_body(body, out),
+                Node::Expression(
+                    atom @ (Expression::Variable(_)
+                    | Expression::Bound(_)
+                    | Expression::NamedNode(_)
+                    | Expression::Literal(_)),
+                ) => expr_vars(atom, &mut out.direct),
+                Node::Expression(expr) => {
+                    let first = pending.len();
+                    visit_expression_parts(expr, &mut |part| {
+                        match part {
+                            ExpressionPart::Sub(sub) => pending.push(Node::Expression(sub)),
+                            ExpressionPart::Exists(body) => pending.push(Node::Body(body)),
+                            ExpressionPart::Call(_) => {}
                         }
-                        crate::governor::soundness::ExpressionPart::Exists(body) => {
-                            self.expr_vars_of_body(body, out);
-                        }
-                        crate::governor::soundness::ExpressionPart::Call(_) => {}
-                    }
-                    false
-                });
+                        false
+                    });
+                    pending[first..].reverse();
+                }
             }
         }
     }
 
-    /// [`Self::expr_vars`] for an `EXISTS` body met inside a larger expression.
+    /// [`Self::expr_vars`] for an `EXISTS` body: the site's variables by reference when
+    /// this walk defers the body, and otherwise every variable the body mentions.
     fn expr_vars_of_body(&self, body: &GraphPattern, out: &mut FreeVars) {
         match self.deferred_site(body) {
             Some((site, _)) => out.sites.push(Arc::clone(site)),
@@ -3669,74 +3716,102 @@ fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebr
         BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode,
     };
 
-    Some(match value {
-        TermValue::Iri(iri) => GroundTerm::NamedNode(NamedNode::new_unchecked(iri)),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => {
-            let lit = if let Some(lang) = language {
-                // The algebra's `BaseDirection` and the IR's `RdfTextDirection` are
-                // the same two-value RDF 1.2 base-direction enum in two crates;
-                // `crate::convert::map_direction` maps the OTHER way (algebra → IR,
-                // for a query-authored literal reaching the dataset lookup key), so
-                // this direction gets the mirrored match inline.
-                let dir = direction.map(|d| match d {
-                    RdfTextDirection::Ltr => BaseDirection::Ltr,
-                    RdfTextDirection::Rtl => BaseDirection::Rtl,
-                });
-                Literal::new_lang(lexical_form, lang, dir)
-            } else {
-                Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
-            };
-            GroundTerm::Literal(lit)
-        }
-        // The algebra's blank-node slot carries a scope-qualified spelling (the
-        // same single-slot convention `GroundTerm::BlankNode`'s own doc and
-        // `crate::convert::ground_term_to_value` use), so a blank bound by an
-        // earlier evaluation round-trips to that SAME node through the `VALUES`
-        // join rather than to a fresh, unrelated one.
-        TermValue::Blank { label, scope } => {
-            GroundTerm::BlankNode(BlankNode::new(scope.qualify_label(label).into_owned()))
-        }
-        TermValue::Triple { s, p, o } => {
-            let subject = ground_term_from_term_value(s)?;
-            // A quoted triple's predicate MUST be an IRI (RDF 1.2 C0 positional
-            // constraint). For PurRDF's own data this is enforced once, structurally,
-            // at `RdfDatasetBuilder::freeze` (`crates/rdf-core/src/ir/validate.rs`,
-            // `require_iri_predicate`, reached for every interned triple term via
-            // `validate_triple_terms`) — every `TermId` this evaluator resolves out
-            // of a purrdf-built `RdfDataset` already cleared that gate, so this arm
-            // is unreachable in practice for `RdfDataset`.
-            //
-            // That gate, however, sits on `RdfDatasetBuilder::freeze`, NOT on the
-            // `DatasetView` trait (`crates/rdf-core/src/dataset_view.rs`) this
-            // function is generic over. `DatasetView` is public and UNSEALED: a
-            // third-party implementation can hand back a `TermRef` for a triple's
-            // predicate id that resolves to anything at all, with no freeze-time
-            // validation ever run. `value_of`/`term_id_to_value` (`crate::scratch`)
-            // copy exactly what such a view's `resolve` returns into this
-            // `TermValue`, so a malformed quoted triple from a foreign dataset
-            // reaches here as real, unvalidated input on a LATERAL/EXISTS
-            // substitution path. Because the invariant is NOT enforced at a boundary
-            // every `DatasetView` implementor is forced through, a `debug_assert!`
-            // here would panic on exactly that foreign input in every debug/test
-            // build — the same crash this arm exists to remove. So: a total `None`,
-            // no assertion, not `unreachable!`.
-            let TermValue::Iri(p_iri) = p.as_ref() else {
-                return None;
-            };
-            let predicate = NamedNode::new_unchecked(p_iri);
-            let object = ground_term_from_term_value(o)?;
-            GroundTerm::Triple(Child::new(GroundTriple {
-                subject,
-                predicate,
-                object,
-            }))
-        }
-    })
+    /// One step of the build: convert a value, or assemble a quoted triple under its
+    /// predicate IRI from the two ground terms built last — its object, then its
+    /// subject.
+    enum Step<'a> {
+        Convert(&'a TermValue),
+        Assemble(&'a str),
+    }
+
+    // The ground terms built so far, innermost first; a quoted triple's components are
+    // converted before it is assembled, so a value of any depth is built without a
+    // machine-stack frame per level.
+    let mut built: Vec<GroundTerm> = Vec::new();
+    let mut pending = vec![Step::Convert(value)];
+    while let Some(step) = pending.pop() {
+        let term = match step {
+            Step::Convert(TermValue::Iri(iri)) => {
+                GroundTerm::NamedNode(NamedNode::new_unchecked(iri))
+            }
+            Step::Convert(TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            }) => {
+                let lit = if let Some(lang) = language {
+                    // The algebra's `BaseDirection` and the IR's `RdfTextDirection` are
+                    // the same two-value RDF 1.2 base-direction enum in two crates;
+                    // `crate::convert::map_direction` maps the OTHER way (algebra → IR,
+                    // for a query-authored literal reaching the dataset lookup key), so
+                    // this direction gets the mirrored match inline.
+                    let dir = direction.map(|d| match d {
+                        RdfTextDirection::Ltr => BaseDirection::Ltr,
+                        RdfTextDirection::Rtl => BaseDirection::Rtl,
+                    });
+                    Literal::new_lang(lexical_form, lang, dir)
+                } else {
+                    Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
+                };
+                GroundTerm::Literal(lit)
+            }
+            // The algebra's blank-node slot carries a scope-qualified spelling (the
+            // same single-slot convention `GroundTerm::BlankNode`'s own doc and
+            // `crate::convert::ground_term_to_value` use), so a blank bound by an
+            // earlier evaluation round-trips to that SAME node through the `VALUES`
+            // join rather than to a fresh, unrelated one.
+            Step::Convert(TermValue::Blank { label, scope }) => {
+                GroundTerm::BlankNode(BlankNode::new(scope.qualify_label(label).into_owned()))
+            }
+            Step::Convert(TermValue::Triple { s, p, o }) => {
+                // A quoted triple's predicate MUST be an IRI (RDF 1.2 C0 positional
+                // constraint). For PurRDF's own data this is enforced once, structurally,
+                // at `RdfDatasetBuilder::freeze` (`crates/rdf-core/src/ir/validate.rs`,
+                // `require_iri_predicate`, reached for every interned triple term via
+                // `validate_triple_terms`) — every `TermId` this evaluator resolves out
+                // of a purrdf-built `RdfDataset` already cleared that gate, so this arm
+                // is unreachable in practice for `RdfDataset`.
+                //
+                // That gate, however, sits on `RdfDatasetBuilder::freeze`, NOT on the
+                // `DatasetView` trait (`crates/rdf-core/src/dataset_view.rs`) this
+                // function is generic over. `DatasetView` is public and UNSEALED: a
+                // third-party implementation can hand back a `TermRef` for a triple's
+                // predicate id that resolves to anything at all, with no freeze-time
+                // validation ever run. `value_of`/`term_id_to_value` (`crate::scratch`)
+                // copy exactly what such a view's `resolve` returns into this
+                // `TermValue`, so a malformed quoted triple from a foreign dataset
+                // reaches here as real, unvalidated input on a LATERAL/EXISTS
+                // substitution path. Because the invariant is NOT enforced at a boundary
+                // every `DatasetView` implementor is forced through, a `debug_assert!`
+                // here would panic on exactly that foreign input in every debug/test
+                // build — the same crash this arm exists to remove. So: a total `None`,
+                // no assertion, not `unreachable!`.
+                let TermValue::Iri(p_iri) = p.as_ref() else {
+                    return None;
+                };
+                pending.push(Step::Assemble(p_iri.as_str()));
+                pending.push(Step::Convert(o));
+                pending.push(Step::Convert(s));
+                continue;
+            }
+            Step::Assemble(p_iri) => {
+                let object = built
+                    .pop()
+                    .expect("a quoted triple's object is built before the triple is assembled");
+                let subject = built
+                    .pop()
+                    .expect("a quoted triple's subject is built before the triple is assembled");
+                GroundTerm::Triple(Child::new(GroundTriple {
+                    subject,
+                    predicate: NamedNode::new_unchecked(p_iri),
+                    object,
+                }))
+            }
+        };
+        built.push(term);
+    }
+    built.pop()
 }
 
 /// Dispatch a built-in (or custom) function call.
@@ -10685,5 +10760,928 @@ mod tests {
             .expect("one or more steps"),
         );
         assert!(!run(&neighbour).expect("no hard error"));
+    }
+}
+
+/// The variable, ground-term and deferral walks against recursive readings of the same
+/// input, over generated shapes, and at a depth no recursive reading could reach on a
+/// small stack.
+#[cfg(test)]
+mod walk_tests {
+    use std::sync::Arc;
+
+    use purrdf_core::{BlankScope, RdfTextDirection, TermBox, TermValue};
+    use purrdf_sparql_algebra::{
+        AggregateExpression, AggregateFunction, BaseDirection, BlankNode, Chain, Child, Expression,
+        Function, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
+        OrderExpression, PropertyFunctionCall, TermPattern, TriplePattern, Variable,
+    };
+
+    use super::{
+        Deferral, FreeVars, expr_vars, ground_term_from_term_value, pattern_all_vars,
+        pattern_vars_outside, term_pattern_vars,
+    };
+    use crate::DetHashSet;
+
+    const EX: &str = "http://example.org/";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    // ── The recursive references ───────────────────────────────────────────────────
+
+    fn reference_expr_vars(expr: &Expression, out: &mut DetHashSet<Variable>) {
+        match expr {
+            Expression::Variable(v) | Expression::Bound(v) => {
+                out.insert(v.clone());
+            }
+            Expression::NamedNode(_) | Expression::Literal(_) => {}
+            Expression::Or(operands) | Expression::And(operands) => {
+                for operand in operands {
+                    reference_expr_vars(operand, out);
+                }
+            }
+            Expression::Arithmetic(first, steps) => {
+                reference_expr_vars(first, out);
+                for (_, operand) in steps {
+                    reference_expr_vars(operand, out);
+                }
+            }
+            Expression::Equal(a, b)
+            | Expression::SameTerm(a, b)
+            | Expression::Greater(a, b)
+            | Expression::GreaterOrEqual(a, b)
+            | Expression::Less(a, b)
+            | Expression::LessOrEqual(a, b) => {
+                reference_expr_vars(a, out);
+                reference_expr_vars(b, out);
+            }
+            Expression::UnaryPlus(a) | Expression::UnaryMinus(a) | Expression::Not(a) => {
+                reference_expr_vars(a, out);
+            }
+            Expression::If(c, t, e) => {
+                reference_expr_vars(c, out);
+                reference_expr_vars(t, out);
+                reference_expr_vars(e, out);
+            }
+            Expression::In(needle, haystack) => {
+                reference_expr_vars(needle, out);
+                for h in haystack {
+                    reference_expr_vars(h, out);
+                }
+            }
+            Expression::Coalesce(items) => {
+                for item in items {
+                    reference_expr_vars(item, out);
+                }
+            }
+            Expression::FunctionCall(_, args) => {
+                for a in args {
+                    reference_expr_vars(a, out);
+                }
+            }
+            Expression::Exists(inner_pat) => {
+                reference_pattern_vars_outside(inner_pat, None, out);
+            }
+        }
+    }
+
+    fn reference_term_pattern_vars(term: &TermPattern, out: &mut DetHashSet<Variable>) {
+        match term {
+            TermPattern::Variable(variable) => {
+                out.insert(variable.clone());
+            }
+            TermPattern::Triple(triple) => {
+                reference_term_pattern_vars(&triple.subject, out);
+                if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                    out.insert(variable.clone());
+                }
+                reference_term_pattern_vars(&triple.object, out);
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+        }
+    }
+
+    fn reference_pattern_vars_outside(
+        pattern: &GraphPattern,
+        endpoint: Option<&Variable>,
+        out: &mut DetHashSet<Variable>,
+    ) {
+        crate::op_count::bump(crate::op_count::Op::VarWalked);
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                for tp in patterns {
+                    reference_term_pattern_vars(&tp.subject, out);
+                    if let NamedNodePattern::Variable(v) = &tp.predicate {
+                        out.insert(v.clone());
+                    }
+                    reference_term_pattern_vars(&tp.object, out);
+                }
+            }
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                reference_term_pattern_vars(subject, out);
+                reference_term_pattern_vars(object, out);
+            }
+            GraphPattern::Values { variables, .. } => {
+                out.extend(variables.iter().cloned());
+            }
+            GraphPattern::PropertyFunction(call) => {
+                for term in call.subject_args.iter().chain(&call.object_args) {
+                    reference_term_pattern_vars(term, out);
+                }
+            }
+            GraphPattern::Graph { name, inner } => {
+                if let NamedNodePattern::Variable(v) = name {
+                    out.insert(v.clone());
+                }
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::Service { name, inner, .. } => {
+                if let NamedNodePattern::Variable(v) = name {
+                    if endpoint == Some(v) {
+                        return;
+                    }
+                    out.insert(v.clone());
+                }
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::Join { left, right }
+            | GraphPattern::Minus { left, right }
+            | GraphPattern::Lateral { left, right } => {
+                reference_pattern_vars_outside(left, endpoint, out);
+                reference_pattern_vars_outside(right, endpoint, out);
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms {
+                    reference_pattern_vars_outside(arm, endpoint, out);
+                }
+            }
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } => {
+                if let Some(e) = expression {
+                    reference_expr_vars(e, out);
+                }
+                reference_pattern_vars_outside(left, endpoint, out);
+                reference_pattern_vars_outside(right, endpoint, out);
+            }
+            GraphPattern::Filter { expr, inner } => {
+                reference_expr_vars(expr, out);
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::Extend {
+                inner,
+                variable,
+                expression,
+            } => {
+                out.insert(variable.clone());
+                reference_expr_vars(expression, out);
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::Unfold {
+                inner,
+                expression,
+                element,
+                companion,
+            } => {
+                out.insert(element.clone());
+                if let Some(companion) = companion {
+                    out.insert(companion.clone());
+                }
+                reference_expr_vars(expression, out);
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::OrderBy { inner, expression } => {
+                for oe in expression {
+                    match oe {
+                        OrderExpression::Asc(e) | OrderExpression::Desc(e) => {
+                            reference_expr_vars(e, out);
+                        }
+                    }
+                }
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => {
+                out.extend(variables.iter().cloned());
+                for (v, agg) in aggregates {
+                    out.insert(v.clone());
+                    for arg in agg
+                        .args()
+                        .iter()
+                        .chain(agg.order_by().iter().map(crate::modifier::order_sort_key))
+                    {
+                        reference_expr_vars(arg, out);
+                    }
+                }
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => {
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+            GraphPattern::Project { inner, variables } => {
+                out.extend(variables.iter().cloned());
+                reference_pattern_vars_outside(inner, endpoint, out);
+            }
+        }
+    }
+
+    fn reference_ground_term(value: &TermValue) -> Option<GroundTerm> {
+        Some(match value {
+            TermValue::Iri(iri) => GroundTerm::NamedNode(NamedNode::new_unchecked(iri)),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                let lit = if let Some(lang) = language {
+                    let dir = direction.map(|d| match d {
+                        RdfTextDirection::Ltr => BaseDirection::Ltr,
+                        RdfTextDirection::Rtl => BaseDirection::Rtl,
+                    });
+                    Literal::new_lang(lexical_form, lang, dir)
+                } else {
+                    Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
+                };
+                GroundTerm::Literal(lit)
+            }
+            TermValue::Blank { label, scope } => {
+                GroundTerm::BlankNode(BlankNode::new(scope.qualify_label(label).into_owned()))
+            }
+            TermValue::Triple { s, p, o } => {
+                let subject = reference_ground_term(s)?;
+                let TermValue::Iri(p_iri) = p.as_ref() else {
+                    return None;
+                };
+                let predicate = NamedNode::new_unchecked(p_iri);
+                let object = reference_ground_term(o)?;
+                GroundTerm::Triple(Child::new(GroundTriple {
+                    subject,
+                    predicate,
+                    object,
+                }))
+            }
+        })
+    }
+
+    impl Deferral<'_> {
+        fn reference_expr_vars(&self, expr: &Expression, out: &mut FreeVars) {
+            match expr {
+                Expression::Exists(body) => match self.deferred_site(body) {
+                    Some((site, _)) => out.sites.push(Arc::clone(site)),
+                    None => reference_expr_vars(expr, &mut out.direct),
+                },
+                Expression::Variable(_)
+                | Expression::Bound(_)
+                | Expression::NamedNode(_)
+                | Expression::Literal(_) => reference_expr_vars(expr, &mut out.direct),
+                _ => {
+                    crate::governor::soundness::visit_expression_parts(expr, &mut |part| {
+                        match part {
+                            crate::governor::soundness::ExpressionPart::Sub(sub) => {
+                                self.reference_expr_vars(sub, out);
+                            }
+                            crate::governor::soundness::ExpressionPart::Exists(body) => {
+                                self.reference_expr_vars_of_body(body, out);
+                            }
+                            crate::governor::soundness::ExpressionPart::Call(_) => {}
+                        }
+                        false
+                    });
+                }
+            }
+        }
+
+        fn reference_expr_vars_of_body(&self, body: &GraphPattern, out: &mut FreeVars) {
+            match self.deferred_site(body) {
+                Some((site, _)) => out.sites.push(Arc::clone(site)),
+                None => reference_pattern_vars_outside(body, None, &mut out.direct),
+            }
+        }
+    }
+
+    // ── A deterministic shape generator ────────────────────────────────────────────
+
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 48,
+            }
+        }
+
+        fn choose(&mut self, options: usize) -> usize {
+            let bound = u64::try_from(options).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+
+        /// Whether one more compound node fits the budget.
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(n: usize) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}p{n}"))
+    }
+
+    /// One of six variables, or the endpoint variable a `SERVICE` clause is excluded on.
+    fn var(choices: &mut Choices) -> Variable {
+        match choices.choose(7) {
+            6 => Variable::new("ep"),
+            n => Variable::new(format!("v{n}")),
+        }
+    }
+
+    fn term_pattern(choices: &mut Choices) -> TermPattern {
+        if !choices.spend() {
+            return TermPattern::Variable(var(choices));
+        }
+        match choices.choose(6) {
+            0 => TermPattern::NamedNode(iri(choices.choose(4))),
+            1 => TermPattern::Literal(Literal::new_simple("x")),
+            2 => TermPattern::BlankNode(BlankNode::new("b")),
+            3 | 4 => TermPattern::Variable(var(choices)),
+            _ => TermPattern::Triple(Child::new(triple_pattern(choices))),
+        }
+    }
+
+    fn predicate(choices: &mut Choices) -> NamedNodePattern {
+        if choices.choose(3) == 0 {
+            NamedNodePattern::Variable(var(choices))
+        } else {
+            NamedNodePattern::NamedNode(iri(choices.choose(4)))
+        }
+    }
+
+    fn triple_pattern(choices: &mut Choices) -> TriplePattern {
+        TriplePattern {
+            subject: term_pattern(choices),
+            predicate: predicate(choices),
+            object: term_pattern(choices),
+        }
+    }
+
+    fn two(
+        choices: &mut Choices,
+        mut make: impl FnMut(&mut Choices) -> Expression,
+    ) -> Chain<Expression> {
+        Chain::try_from(vec![make(choices), make(choices)]).expect("two operands")
+    }
+
+    fn expression(choices: &mut Choices) -> Expression {
+        if !choices.spend() {
+            return match choices.choose(3) {
+                0 => Expression::Literal(Literal::new_simple("k")),
+                1 => Expression::Bound(var(choices)),
+                _ => Expression::Variable(var(choices)),
+            };
+        }
+        match choices.choose(14) {
+            0 => Expression::Variable(var(choices)),
+            1 => Expression::NamedNode(iri(1)),
+            2 => Expression::Or(two(choices, expression)),
+            3 => Expression::And(two(choices, expression)),
+            4 => Expression::Equal(
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+            ),
+            5 => Expression::Less(
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+            ),
+            6 => Expression::Arithmetic(
+                Child::new(expression(choices)),
+                vec![(
+                    purrdf_sparql_algebra::ArithmeticOperator::Add,
+                    expression(choices),
+                )]
+                .try_into()
+                .expect("one step"),
+            ),
+            7 => Expression::Not(Child::new(expression(choices))),
+            8 => Expression::If(
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+            ),
+            9 => Expression::In(
+                Child::new(expression(choices)),
+                vec![expression(choices), expression(choices)].into(),
+            ),
+            10 => Expression::Coalesce(vec![expression(choices), expression(choices)].into()),
+            11 => Expression::FunctionCall(Function::Str, vec![expression(choices)].into()),
+            12 => Expression::FunctionCall(Function::Lang, vec![expression(choices)].into()),
+            _ => Expression::Exists(Child::new(pattern(choices))),
+        }
+    }
+
+    fn bgp(choices: &mut Choices) -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: (0..choices.choose(3))
+                .map(|_| triple_pattern(choices))
+                .collect(),
+        }
+    }
+
+    fn aggregate(choices: &mut Choices) -> AggregateExpression {
+        if choices.choose(2) == 0 {
+            AggregateExpression::new(
+                AggregateFunction::Sum,
+                vec![expression(choices)],
+                Vec::new(),
+                Vec::new(),
+                false,
+            )
+            .expect("a one-argument SUM")
+        } else {
+            AggregateExpression::new(
+                AggregateFunction::Fold,
+                vec![expression(choices)],
+                Vec::new(),
+                vec![OrderExpression::Desc(expression(choices))],
+                false,
+            )
+            .expect("a FOLD with a sort key")
+        }
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return bgp(choices);
+        }
+        match choices.choose(20) {
+            0 => bgp(choices),
+            1 => GraphPattern::Path {
+                subject: term_pattern(choices),
+                path: purrdf_sparql_algebra::PropertyPathExpression::NamedNode(iri(2)),
+                object: term_pattern(choices),
+            },
+            2 => GraphPattern::Values {
+                variables: vec![var(choices), var(choices)],
+                bindings: Vec::new(),
+            },
+            3 => GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: format!("{EX}rel"),
+                subject_args: vec![term_pattern(choices)],
+                object_args: vec![term_pattern(choices), term_pattern(choices)],
+            }),
+            4 => GraphPattern::Graph {
+                name: predicate(choices),
+                inner: Child::new(pattern(choices)),
+            },
+            5 | 6 => GraphPattern::Service {
+                name: if choices.choose(2) == 0 {
+                    NamedNodePattern::Variable(Variable::new("ep"))
+                } else {
+                    predicate(choices)
+                },
+                inner: Child::new(pattern(choices)),
+                silent: false,
+            },
+            7 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            8 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            10 => GraphPattern::Union {
+                arms: Chain::try_from(vec![pattern(choices), pattern(choices)]).expect("two arms"),
+            },
+            11 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: (choices.choose(2) == 0).then(|| expression(choices)),
+            },
+            12 => GraphPattern::Filter {
+                expr: expression(choices),
+                inner: Child::new(pattern(choices)),
+            },
+            13 => GraphPattern::Extend {
+                inner: Child::new(pattern(choices)),
+                variable: var(choices),
+                expression: expression(choices),
+            },
+            14 => GraphPattern::Unfold {
+                inner: Child::new(pattern(choices)),
+                expression: expression(choices),
+                element: var(choices),
+                companion: (choices.choose(2) == 0).then(|| var(choices)),
+            },
+            15 => GraphPattern::OrderBy {
+                inner: Child::new(pattern(choices)),
+                expression: vec![
+                    OrderExpression::Asc(expression(choices)),
+                    OrderExpression::Desc(expression(choices)),
+                ],
+            },
+            16 => GraphPattern::Group {
+                inner: Child::new(pattern(choices)),
+                variables: vec![var(choices)],
+                aggregates: vec![(var(choices), aggregate(choices))],
+            },
+            17 => GraphPattern::Distinct {
+                inner: Child::new(pattern(choices)),
+            },
+            18 => GraphPattern::Slice {
+                inner: Child::new(pattern(choices)),
+                start: 1,
+                length: None,
+            },
+            _ => GraphPattern::Project {
+                inner: Child::new(pattern(choices)),
+                variables: vec![var(choices)],
+            },
+        }
+    }
+
+    /// A generated term value: an IRI, a literal of each kind, a blank node in a
+    /// scope, or a quoted triple — whose predicate is a literal one time in eight, the
+    /// one shape with no ground form.
+    fn term_value(choices: &mut Choices) -> TermValue {
+        if !choices.spend() {
+            return TermValue::iri(format!("{EX}leaf"));
+        }
+        match choices.choose(8) {
+            0 => TermValue::iri(format!("{EX}i{}", choices.choose(3))),
+            1 => TermValue::Literal {
+                lexical_form: "12".to_owned(),
+                datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                language: None,
+                direction: None,
+            },
+            2 => TermValue::Literal {
+                lexical_form: "hello".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                language: Some("en".to_owned()),
+                direction: None,
+            },
+            3 => TermValue::Literal {
+                lexical_form: "שלום".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString".to_owned(),
+                language: Some("he".to_owned()),
+                direction: Some(if choices.choose(2) == 0 {
+                    RdfTextDirection::Rtl
+                } else {
+                    RdfTextDirection::Ltr
+                }),
+            },
+            4 => TermValue::Blank {
+                label: format!("b{}", choices.choose(2)),
+                scope: if choices.choose(2) == 0 {
+                    BlankScope::DEFAULT
+                } else {
+                    BlankScope(1)
+                },
+            },
+            _ => {
+                let s = term_value(choices);
+                let p = if choices.choose(8) == 0 {
+                    TermValue::Literal {
+                        lexical_form: "not an IRI".to_owned(),
+                        datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+                        language: None,
+                        direction: None,
+                    }
+                } else {
+                    TermValue::iri(format!("{EX}q{}", choices.choose(3)))
+                };
+                let o = term_value(choices);
+                TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                }
+            }
+        }
+    }
+
+    fn sorted(vars: &DetHashSet<Variable>) -> Vec<String> {
+        let mut names: Vec<String> = vars.iter().map(|v| v.as_str().to_owned()).collect();
+        names.sort();
+        names
+    }
+
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    fn a_triple(choices: &mut Choices) -> TriplePattern {
+        TriplePattern {
+            subject: TermPattern::Variable(var(choices)),
+            predicate: NamedNodePattern::NamedNode(iri(0)),
+            object: TermPattern::Variable(var(choices)),
+        }
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// The work-list walks report exactly the variables the recursion reports, and
+    /// count exactly as many pattern nodes, with and without an endpoint excluded.
+    #[test]
+    fn the_variable_walks_agree_with_their_recursive_references() {
+        let endpoint = Variable::new("ep");
+        let mut excluded_something = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let shape = pattern(&mut choices);
+            let expr = expression(&mut choices);
+            let term = term_pattern(&mut choices);
+
+            for exclude in [None, Some(&endpoint)] {
+                crate::op_count::reset();
+                let mut ours = DetHashSet::default();
+                pattern_vars_outside(&shape, exclude, &mut ours);
+                let our_count = crate::op_count::read().var_walked;
+                crate::op_count::reset();
+                let mut expected = DetHashSet::default();
+                reference_pattern_vars_outside(&shape, exclude, &mut expected);
+                let expected_count = crate::op_count::read().var_walked;
+                assert_eq!(sorted(&ours), sorted(&expected), "seed {seed}: {shape:?}");
+                assert_eq!(our_count, expected_count, "seed {seed}: nodes walked");
+            }
+            let mut all = DetHashSet::default();
+            pattern_all_vars(&shape, &mut all);
+            let mut outside = DetHashSet::default();
+            pattern_vars_outside(&shape, Some(&endpoint), &mut outside);
+            excluded_something += usize::from(sorted(&all) != sorted(&outside));
+
+            let mut ours = DetHashSet::default();
+            expr_vars(&expr, &mut ours);
+            let mut expected = DetHashSet::default();
+            reference_expr_vars(&expr, &mut expected);
+            assert_eq!(sorted(&ours), sorted(&expected), "seed {seed}: {expr:?}");
+
+            let mut ours = DetHashSet::default();
+            term_pattern_vars(&term, &mut ours);
+            let mut expected = DetHashSet::default();
+            reference_term_pattern_vars(&term, &mut expected);
+            assert_eq!(sorted(&ours), sorted(&expected), "seed {seed}: {term:?}");
+        }
+        assert!(
+            excluded_something > 20,
+            "the generator produces shapes where the excluded endpoint matters \
+             ({excluded_something} of 400)"
+        );
+    }
+
+    /// A variable named only at the bottom of a hundred thousand nested `FILTER EXISTS`
+    /// bodies, and one at the bottom of a hundred thousand negations, are reported on a
+    /// 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_pattern_and_expression_are_read_on_a_128_kib_thread() {
+        let (pattern_vars, expr_vars_found, term_vars) = on_small_stack(|| {
+            let mut shape = GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("deep")),
+                    predicate: NamedNodePattern::NamedNode(iri(0)),
+                    object: TermPattern::NamedNode(iri(1)),
+                }],
+            };
+            for _ in 0..DEPTH {
+                shape = GraphPattern::Filter {
+                    expr: Expression::Exists(Child::new(shape)),
+                    inner: Child::new(GraphPattern::Bgp {
+                        patterns: Vec::new(),
+                    }),
+                };
+            }
+            let mut expr = Expression::Variable(Variable::new("negated"));
+            for _ in 0..DEPTH {
+                expr = Expression::Not(Child::new(expr));
+            }
+            let mut term = TermPattern::Variable(Variable::new("quoted"));
+            for _ in 0..DEPTH {
+                term = TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::NamedNode(iri(0)),
+                    predicate: NamedNodePattern::NamedNode(iri(1)),
+                    object: term,
+                }));
+            }
+            let mut pattern_vars = DetHashSet::default();
+            pattern_all_vars(&shape, &mut pattern_vars);
+            let mut expr_vars_found = DetHashSet::default();
+            expr_vars(&expr, &mut expr_vars_found);
+            let mut term_vars = DetHashSet::default();
+            term_pattern_vars(&term, &mut term_vars);
+            (
+                sorted(&pattern_vars),
+                sorted(&expr_vars_found),
+                sorted(&term_vars),
+            )
+        });
+        assert_eq!(pattern_vars, vec!["deep"]);
+        assert_eq!(expr_vars_found, vec!["negated"]);
+        assert_eq!(term_vars, vec!["quoted"]);
+    }
+
+    /// The work-list build produces exactly the ground term the recursion produces,
+    /// and no ground term in exactly the same cases.
+    #[test]
+    fn ground_terms_agree_with_the_recursive_reference() {
+        let mut with_ground = 0;
+        let mut without = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let value = term_value(&mut choices);
+            let ours = ground_term_from_term_value(&value);
+            let expected = reference_ground_term(&value);
+            assert_eq!(ours, expected, "seed {seed}: {value:?}");
+            match ours {
+                Some(_) => with_ground += 1,
+                None => without += 1,
+            }
+        }
+        assert!(
+            with_ground > 200 && without > 20,
+            "the generator produces values with and without a ground form \
+             ({with_ground} with, {without} without)"
+        );
+    }
+
+    /// A quoted triple a hundred thousand levels deep is converted on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_quoted_triple_is_converted_on_a_128_kib_thread() {
+        let depth = on_small_stack(|| {
+            let mut value = TermValue::iri(format!("{EX}bottom"));
+            for _ in 0..DEPTH {
+                value = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri(format!("{EX}s"))),
+                    p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+                    o: TermBox::new(value),
+                };
+            }
+            let ground = ground_term_from_term_value(&value).expect("every predicate is an IRI");
+            let mut depth = 0;
+            let mut at = &ground;
+            while let GroundTerm::Triple(triple) = at {
+                depth += 1;
+                at = &triple.object;
+            }
+            assert_eq!(
+                *at,
+                GroundTerm::NamedNode(NamedNode::new_unchecked(format!("{EX}bottom")))
+            );
+            depth
+        });
+        assert_eq!(depth, DEPTH);
+    }
+
+    /// Every `EXISTS` body under `expr`, in the order the shallow visitor meets them.
+    fn exists_bodies(expr: &Expression) -> Vec<&GraphPattern> {
+        use crate::governor::soundness::{ExpressionPart, visit_expression_parts};
+        let mut bodies = Vec::new();
+        let mut pending = vec![expr];
+        while let Some(expr) = pending.pop() {
+            if let Expression::Exists(body) = expr {
+                bodies.push(&**body);
+                continue;
+            }
+            let first = pending.len();
+            visit_expression_parts(expr, &mut |part| {
+                match part {
+                    ExpressionPart::Sub(sub) => pending.push(sub),
+                    ExpressionPart::Exists(body) => bodies.push(body),
+                    ExpressionPart::Call(_) => {}
+                }
+                false
+            });
+            pending[first..].reverse();
+        }
+        bodies
+    }
+
+    fn site_for(body: &GraphPattern) -> Arc<crate::deferred_exists::ExistsSite> {
+        let mut vars = DetHashSet::default();
+        pattern_all_vars(body, &mut vars);
+        Arc::new(crate::deferred_exists::ExistsSite {
+            prepared: Arc::new(crate::eval::PreparedExists::build(body)),
+            vars,
+            parallel_unsafe: false,
+            service_uses: Vec::new(),
+            plan_map: Arc::default(),
+        })
+    }
+
+    fn site_ids(free: &FreeVars) -> Vec<usize> {
+        free.sites
+            .iter()
+            .map(|site| Arc::as_ptr(site) as usize)
+            .collect()
+    }
+
+    /// The deferral walk pushes the same sites in the same order, and reports the same
+    /// direct variables, as the recursion — deferring nothing, and deferring every other
+    /// body of the expression.
+    #[test]
+    fn the_deferral_walk_agrees_with_its_recursive_reference() {
+        let mut deferred_bodies = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let expr = expression(&mut choices);
+
+            let eager = Deferral::eager();
+            let mut ours = FreeVars::default();
+            eager.expr_vars(&expr, &mut ours);
+            let mut expected = FreeVars::default();
+            eager.reference_expr_vars(&expr, &mut expected);
+            assert!(ours.sites.is_empty() && expected.sites.is_empty());
+            assert_eq!(
+                sorted(&ours.direct),
+                sorted(&expected.direct),
+                "seed {seed}: {expr:?}"
+            );
+
+            let mut sites = crate::deferred_exists::NestedSites::default();
+            for body in exists_bodies(&expr).into_iter().step_by(2) {
+                sites.insert(std::ptr::from_ref(body) as usize, site_for(body));
+            }
+            let deferring = Deferral::new(None, &sites);
+            let mut ours = FreeVars::default();
+            deferring.expr_vars(&expr, &mut ours);
+            let mut expected = FreeVars::default();
+            deferring.reference_expr_vars(&expr, &mut expected);
+            assert_eq!(
+                site_ids(&ours),
+                site_ids(&expected),
+                "seed {seed}: {expr:?}"
+            );
+            assert_eq!(
+                sorted(&ours.direct),
+                sorted(&expected.direct),
+                "seed {seed}: {expr:?}"
+            );
+            deferred_bodies += ours.sites.len();
+        }
+        assert!(
+            deferred_bodies > 40,
+            "the generator produces expressions with deferred bodies ({deferred_bodies})"
+        );
+    }
+
+    /// A deferred body at the bottom of a hundred thousand negations, and the variables
+    /// of an undeferred one there, are reported on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_expression_is_read_by_the_deferral_walk_on_a_128_kib_thread() {
+        let (deferred, direct) = on_small_stack(|| {
+            let mut choices = Choices::new(7);
+            let body = GraphPattern::Bgp {
+                patterns: vec![a_triple(&mut choices)],
+            };
+            let mut vars = DetHashSet::default();
+            pattern_all_vars(&body, &mut vars);
+            let mut expr = Expression::Exists(Child::new(body));
+            for _ in 0..DEPTH {
+                expr = Expression::Not(Child::new(expr));
+            }
+            let mut sites = crate::deferred_exists::NestedSites::default();
+            let bodies = exists_bodies(&expr);
+            assert_eq!(bodies.len(), 1);
+            sites.insert(std::ptr::from_ref(bodies[0]) as usize, site_for(bodies[0]));
+
+            let deferring = Deferral::new(None, &sites);
+            let mut deferred = FreeVars::default();
+            deferring.expr_vars(&expr, &mut deferred);
+            let eager = Deferral::eager();
+            let mut direct = FreeVars::default();
+            eager.expr_vars(&expr, &mut direct);
+            (
+                (deferred.sites.len(), sorted(&deferred.direct)),
+                (direct.sites.len(), sorted(&direct.direct), sorted(&vars)),
+            )
+        });
+        assert_eq!(deferred, (1, Vec::new()));
+        assert_eq!(direct.0, 0);
+        assert_eq!(direct.1, direct.2);
     }
 }

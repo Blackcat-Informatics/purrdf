@@ -69,7 +69,7 @@ pub(crate) fn eval_join<D: DatasetView + Sync>(
     // the right operand is evaluated first, the left over its endpoint list, and the
     // join then runs left against right as always, so the output is the one the
     // left-bound order gives. See `crate::service_endpoints::binds_left_endpoints`.
-    if crate::service_endpoints::binds_left_endpoints(left, right, ctx)? {
+    if crate::service_endpoints::binds_left_endpoints(left, right, ctx) {
         let Some(r) = lift.absorb(1, eval_evaluated(right, ctx)?) else {
             return Ok(lift.withheld());
         };
@@ -185,7 +185,7 @@ pub(crate) fn eval_substituted<D: DatasetView + Sync>(
         let mut guard = ctx.enter_substituted_exists(None, None);
         return eval_evaluated(&substituted, &mut guard);
     }
-    let sites = crate::deferred_exists::nested_sites(pattern, source, ctx)?;
+    let sites = crate::deferred_exists::nested_sites(pattern, source, ctx);
     let enclosing_placeholders = ctx.deferred_exists.clone();
     let mut deferral = crate::expr::Deferral::new(enclosing_placeholders.as_deref(), &sites);
     // `pattern` is a real PLAN node exactly when it (or, for a `LATERAL` nested inside
@@ -456,7 +456,7 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
 ) -> Result<Evaluated<D::Id>, EvalError> {
     let mut lift = Lift::at(node);
     if arms.len() < 2
-        || crate::parallel::sequential_operation_required()
+        || ctx.sequential_operation_required()
         // A governed `UNION` evaluates its arms in source order on one thread: every arm
         // charges the same shared `GovernorState`, so forking them makes the budget — and
         // with it the trip point and the certified rows — a lottery. See
@@ -535,8 +535,11 @@ pub(crate) fn eval_union<D: DatasetView + Sync>(
     // with every arm, on this thread (see `crate::parallel::is_unscoped_refusal`).
     if results.iter().any(crate::parallel::is_unscoped_refusal) {
         drop(results);
-        let _sequential = crate::parallel::force_sequential_operation();
-        return eval_union(node, arms, ctx);
+        let previous = ctx.options.force_sequential;
+        ctx.options.force_sequential = true;
+        let redone = eval_union(node, arms, ctx);
+        ctx.options.force_sequential = previous;
+        return redone;
     }
     // Errors reduce in source order, as the binary chain's `left?, right?` did at every
     // level: the first arm's error is the union's.
@@ -872,7 +875,7 @@ fn hash_join<D: DatasetView + Sync>(
         }
         rows
     } else {
-        crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
+        crate::parallel::par_chunk_map(ctx.sequential_operation_required(), &l.rows, |acc, lrow| {
             match bound_key(lrow, &shared, KeySide::Left) {
                 // Probe is fully bound on shared columns: hit the matching bucket
                 // (exact key ⇒ compatible) plus any wild build rows it is compatible
@@ -1180,6 +1183,7 @@ fn left_outer_join_filtered<D: DatasetView + Sync>(
         // reach a property function through an embedded `EXISTS`, and a worker's
         // attestation must not die with the worker.
         let (rows, witnesses) = crate::parallel::par_chunk_try_map_init(
+            ctx.sequential_operation_required(),
             &l.rows,
             || ctx.fork_for_worker(),
             |child, acc, lrow| {
@@ -1346,7 +1350,7 @@ fn left_outer_join<D: DatasetView + Sync>(
         }
         rows
     } else {
-        crate::parallel::par_chunk_map(&l.rows, |acc, lrow| {
+        crate::parallel::par_chunk_map(ctx.sequential_operation_required(), &l.rows, |acc, lrow| {
             let before = acc.len();
             match bound_key(lrow, &shared, KeySide::Left) {
                 Some(key) => {
@@ -1476,7 +1480,7 @@ pub(crate) fn eval_minus<D: DatasetView + Sync>(
         return Ok(lift.finish(l));
     }
 
-    let rows = crate::parallel::par_retain(&l.rows, |lrow| {
+    let rows = crate::parallel::par_retain(ctx.sequential_operation_required(), &l.rows, |lrow| {
         // Keep the left row unless some right row removes it.
         !r.rows.iter().any(|rrow| {
             compatible(lrow, rrow, &shared)
@@ -2458,16 +2462,16 @@ mod tests {
         // `a_governed_union_reports_one_outcome_however_it_is_scheduled`.)
         //
         // What this test pins is therefore the *parallel gate's* irrelevance to a governed
-        // result: driving `force_parallel_for_test` and `force_sequential_operation`
-        // against each other, over a whole ladder of budgets, must not move a single row.
+        // result: driving `force_parallel_for_test` to each of its two answers, over a
+        // whole ladder of budgets, must not move a single row.
         // The one-worker pool keeps the poll-counting signal comparable across the two
         // runs; the DISCARD rule that the fork used to need is pinned directly on
         // `union_branch_order` at the bottom of this test, where it does not depend on
         // winning a race to be exercised.
         //
-        // `force_parallel_for_test` governs the chunked row loops rather than the UNION
-        // fork — the fork's own gate is `force_sequential_operation` — so both are driven
-        // here, each on the thread that will read it.
+        // `force_parallel_for_test(false)` reaches the evaluation context's own decision
+        // (`EvalCtx::sequential_operation_required`), so it holds the chunked row loops
+        // and the UNION fork alike; each run installs it on the thread that will read it.
         {
             let ds = wide_graph();
             let governors = crate::QueryGovernors::UNBOUNDED.with_fuel(64);
@@ -2516,7 +2520,7 @@ mod tests {
         // construct.
         for budget in 1..=60_u64 {
             let sequential = {
-                let _sequential = crate::parallel::force_sequential_operation();
+                let _sequential = crate::parallel::force_parallel_for_test(false);
                 let evaluated = run_under_budget(&ds, &plan, budget);
                 observe(&ds, &evaluated)
             };

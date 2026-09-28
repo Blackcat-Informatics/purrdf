@@ -79,6 +79,9 @@ use wasm_bindgen::prelude::*;
 //   * `async_query` — the asynchronous operation runtime: every evaluating `query`
 //                 and SHACL surface as a job that suspends on host-resolved SERVICE /
 //                 LOAD effects and yields to the event loop, through JSPI
+//   * `interleaving` — the ledger of every `thread_local!` in the workspace and why
+//                 each is safe while a job is suspended; `scripts/check-thread-locals.py`
+//                 keeps it equal to the source
 //   * `protocol` — the SPARQL 1.1 Protocol request surface (`SparqlProtocolRequest`):
 //                 an HTTP request read into an operation, its dataset parameters
 //                 applied, its response format negotiated, and a failure's HTTP problem
@@ -90,6 +93,7 @@ mod convert;
 mod dataset;
 pub mod entail;
 mod factory;
+pub mod interleaving;
 mod jsonld;
 mod operation;
 mod panic_poison;

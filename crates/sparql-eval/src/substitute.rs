@@ -29,9 +29,9 @@
 use purrdf_core::{DatasetView, RdfDiagnostic, RdfTextDirection, TermRef, TermValue};
 use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
-    AggregateExpression, BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm,
-    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, PropertyFunctionCall,
-    Query, TermPattern, TriplePattern, Variable,
+    AggregateExpression, AggregateParts, BaseDirection, BlankNode, Expression, GraphPattern,
+    GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression,
+    PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
 
 /// The pre-binding list, in whichever of the two shapes the caller has.
@@ -206,18 +206,20 @@ pub(crate) fn apply_substitutions(
         // here would be a walk with no rewrite in it.
         return Ok(query);
     }
-    stack_walk(|| apply_probes(query, probes))
+    Ok(apply_probes(query, probes))
 }
 
-/// Run a pre-binding rewrite inside a [`crate::stack::walk`] scope, reporting a refusal
-/// as the diagnostic every other evaluation failure is reported as.
-fn stack_walk(rewrite: impl FnOnce() -> Query) -> Result<Query, RdfDiagnostic> {
-    crate::stack::walk(rewrite).map_err(|e| {
-        RdfDiagnostic::error(
-            crate::engine::eval_diagnostic_code(&e, "native-sparql-query-eval"),
-            e.to_string(),
-        )
-    })
+/// The pattern that stands in a slot while the subtree the slot held is out being
+/// rewritten: the empty group, which holds nothing and costs no allocation.
+fn hole() -> GraphPattern {
+    GraphPattern::Bgp {
+        patterns: Vec::new(),
+    }
+}
+
+/// Take the pattern in `slot` out, leaving [`hole`] in its place.
+fn take_child(slot: &mut GraphPattern) -> GraphPattern {
+    std::mem::replace(slot, hole())
 }
 
 /// How many distinct pre-binding names one worker keeps interned.
@@ -444,7 +446,7 @@ pub(crate) fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
 /// unchanged schema and a restricted row set, and "restrict the leaf" and "restrict
 /// the subtree" coincide.
 ///
-/// The recursion therefore descends only the operators for which restricting an
+/// The walk therefore descends only the operators for which restricting an
 /// operand restricts the node's output the same way:
 ///
 /// * `Join`, `Union`, `Graph`, `Filter`, `Extend` — both/inner operands;
@@ -455,8 +457,8 @@ pub(crate) fn has_repeated_variable(probes: &[(Variable, GroundTerm)]) -> bool {
 ///   only output rows carrying `var = d`, which the seed join drops — removing it
 ///   first changes nothing else. A call that IS the right operand (the shape the parser
 ///   gives every call following another atom) is written into in place, so the
-///   evaluator keeps driving it per left row; any other right operand is recursed into
-///   by this same rule;
+///   evaluator keeps driving it per left row; any other right operand is entered by
+///   this same rule;
 /// * a sub-`SELECT`, for the variables its projection carries — each is the same
 ///   variable inside, and its rows' bindings of it pass out unchanged — and `DISTINCT`,
 ///   `REDUCED` and `ORDER BY`, which keep, drop or reorder whole rows;
@@ -500,7 +502,7 @@ fn push_probe_constants(core: &mut GraphPattern, probes: &[(Variable, GroundTerm
     push_probes(core, probes, true);
 }
 
-/// [`push_probe_constants`]'s recursion.
+/// [`push_probe_constants`]'s walk.
 ///
 /// `at_core_root` is true only for the node the single-row seed will be joined
 /// directly onto. A leaf THERE needs no restoring `VALUES` of its own: the seed is
@@ -509,41 +511,145 @@ fn push_probe_constants(core: &mut GraphPattern, probes: &[(Variable, GroundTerm
 /// $this <p> ?v . FILTER(...) }` lowers to `Project(Filter(Bgp))` and
 /// `map_core_pattern` descends both wrappers — so the hot path pays for no extra
 /// algebra node at all.
+///
+/// The walk keeps its own frames: a node whose operand is being rewritten is held,
+/// with that operand taken out of it, until the operand comes back, so a query of
+/// any depth is rewritten without a machine-stack frame per level. Operands are
+/// entered in source order, and every rewrite of a node happens once its operands
+/// are back in it.
 fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at_core_root: bool) {
-    // The pre-binding rewrite walks the whole query, and a user-defined function applies
-    // it to its body wherever the call is evaluated, possibly deep: every level may
-    // refuse, inside the `crate::stack::walk` scope `apply_substitutions` and
-    // `apply_shacl_prebinding` open, which discards the half-rewritten query.
-    if crate::stack::walk_is_low("pre-binding rewrite") {
-        return;
+    let mut open: Vec<PushFrame<'_>> = Vec::new();
+    let mut next = (take_child(pattern), ProbeList::Whole(probes), at_core_root);
+    loop {
+        let (node, probes, at_core_root) = next;
+        let mut finished = match enter_push(node, probes, at_core_root, &mut open) {
+            Step::Descend(child) => {
+                next = child;
+                continue;
+            }
+            Step::Finished(node) => node,
+        };
+        loop {
+            let Some(frame) = open.pop() else {
+                *pattern = finished;
+                return;
+            };
+            match resume_push(frame, finished, &mut open) {
+                Step::Descend(child) => {
+                    next = child;
+                    break;
+                }
+                Step::Finished(node) => finished = node,
+            }
+        }
     }
-    match pattern {
+}
+
+/// The pre-binding list a [`push_probes`] node is rewritten with: the whole list, or
+/// the part of it an `Extend`, a projection or a `GROUP BY` lets through to its
+/// operand, shared by every node beneath.
+#[derive(Clone)]
+enum ProbeList<'p> {
+    /// Every pre-binding.
+    Whole(&'p [(Variable, GroundTerm)]),
+    /// The pre-bindings a node above lets through.
+    Narrowed(std::rc::Rc<[(Variable, GroundTerm)]>),
+}
+
+impl ProbeList<'_> {
+    /// The list's entries.
+    fn as_slice(&self) -> &[(Variable, GroundTerm)] {
+        match self {
+            Self::Whole(probes) => probes,
+            Self::Narrowed(probes) => probes,
+        }
+    }
+
+    /// The list `keep` admits of this one: this list when it admits every entry, `None`
+    /// when it admits none, and otherwise a narrowed list.
+    fn narrowed(&self, keep: impl Fn(&Variable) -> bool) -> Option<Self> {
+        let probes = self.as_slice();
+        if probes.iter().all(|(var, _)| keep(var)) {
+            return Some(self.clone());
+        }
+        let kept: Vec<(Variable, GroundTerm)> = probes
+            .iter()
+            .filter(|(var, _)| keep(var))
+            .cloned()
+            .collect();
+        (!kept.is_empty()).then(|| Self::Narrowed(kept.into()))
+    }
+}
+
+/// What entering or resuming a node of the pushdown walk leads to.
+enum Step<D, F> {
+    /// An operand of the node, taken out of it, to enter next.
+    Descend(D),
+    /// The node, rewritten in full.
+    Finished(F),
+}
+
+/// A node of the pushdown walk whose operand is out being rewritten.
+struct PushFrame<'p> {
+    node: GraphPattern,
+    probes: ProbeList<'p>,
+    at_core_root: bool,
+    /// Which operand is out.
+    stage: PushStage,
+}
+
+/// Which operand of a [`PushFrame`]'s node is out.
+#[derive(Clone, Copy)]
+enum PushStage {
+    /// The left operand of a `Join`, a `LeftJoin`, a `Minus` or a `Lateral`.
+    Left,
+    /// The right operand of a `Join` or a `Lateral`.
+    Right,
+    /// The `UNION` arm at this index.
+    Arm(usize),
+    /// The single operand of a wrapper.
+    Inner,
+}
+
+/// The operand `pattern` hands to `push_probes`' walk, and its probe list.
+type PushDescent<'p> = (GraphPattern, ProbeList<'p>, bool);
+
+/// Enter `node`: rewrite it in place when it is a leaf, or take its first operand out
+/// and hold the node open until the operand comes back.
+fn enter_push<'p>(
+    mut node: GraphPattern,
+    probes: ProbeList<'p>,
+    at_core_root: bool,
+    open: &mut Vec<PushFrame<'p>>,
+) -> Step<PushDescent<'p>, GraphPattern> {
+    // The operand taken out of the node, which operand it is, and the probes it is
+    // rewritten with — or `None` once the node is rewritten in full.
+    let descent: Option<(GraphPattern, PushStage, ProbeList<'p>)> = match &mut node {
         GraphPattern::Bgp { patterns } => {
             let mut probed = Vec::new();
             for triple in patterns.iter_mut() {
-                probe_triple_pattern(triple, probes, &mut probed);
+                probe_triple_pattern(triple, probes.as_slice(), &mut probed);
             }
-            restore_probed_bindings(pattern, &probed, probes, at_core_root);
+            restore_probed_bindings(&mut node, &probed, probes.as_slice(), at_core_root);
+            None
         }
         GraphPattern::Path {
             subject, object, ..
         } => {
             let mut probed = Vec::new();
-            probe_term_pattern(subject, probes, &mut probed);
-            probe_term_pattern(object, probes, &mut probed);
-            restore_probed_bindings(pattern, &probed, probes, at_core_root);
+            probe_term_pattern(subject, probes.as_slice(), &mut probed);
+            probe_term_pattern(object, probes.as_slice(), &mut probed);
+            restore_probed_bindings(&mut node, &probed, probes.as_slice(), at_core_root);
+            None
         }
-        GraphPattern::Join { left, right } => {
-            push_probes(left, probes, false);
-            push_probes(right, probes, false);
+        GraphPattern::Join { left, .. } => {
+            Some((take_child(left), PushStage::Left, probes.clone()))
         }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                push_probes(arm, probes, false);
-            }
-        }
+        GraphPattern::Union { arms } => arms
+            .first_mut()
+            .map(|first| (take_child(first), PushStage::Arm(0), probes.clone())),
         GraphPattern::Graph { inner, .. } | GraphPattern::Filter { inner, .. } => {
-            push_probes(inner, probes, false);
+            Some((take_child(inner), PushStage::Inner, probes.clone()))
         }
         // A relation call is a leaf like the two above, and it is the leaf where
         // the difference between an index probe and a scan is largest. Left alone, the
@@ -559,45 +665,28 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
         // invocation when its bound positions are a SUBSET of the invocation's,
         // and this rewrite only adds to that set.
         GraphPattern::PropertyFunction(call) => {
-            let mut probed = Vec::new();
-            for argument in call
-                .subject_args
-                .iter_mut()
-                .chain(call.object_args.iter_mut())
-            {
-                probe_term_pattern(argument, probes, &mut probed);
-            }
+            let probed = probe_call_arguments(call, probes.as_slice());
             // A value the pattern cannot carry — a blank node — is driven into the
             // call instead; see [`drive_call_arguments`].
-            drive_call_arguments(pattern, probes, Unwritable::InPattern);
-            restore_probed_bindings(pattern, &probed, probes, at_core_root);
+            drive_call_arguments(&mut node, probes.as_slice(), Unwritable::InPattern);
+            restore_probed_bindings(&mut node, &probed, probes.as_slice(), at_core_root);
+            None
         }
+        // `variable` is this node's own binding, so it is not bound in `inner` and
+        // there is nothing there to narrow. Narrowing the candidate set is only ever
+        // needed for an ill-formed query the parser would reject, and costs one
+        // allocation on a branch no well-formed query takes.
         GraphPattern::Extend {
             inner, variable, ..
-        } => {
-            // `variable` is this node's own binding, so it is not bound in `inner`
-            // and there is nothing there to narrow. Narrowing the candidate set is
-            // only ever needed for an ill-formed query the parser would reject, and
-            // costs one allocation on a branch no well-formed query takes.
-            let narrowed: Vec<(Variable, GroundTerm)>;
-            let inner_probes = if probes.iter().any(|(var, _)| var == &*variable) {
-                narrowed = probes
-                    .iter()
-                    .filter(|(var, _)| var != &*variable)
-                    .cloned()
-                    .collect();
-                &narrowed
-            } else {
-                probes
-            };
-            push_probes(inner, inner_probes, false);
-        }
+        } => probes
+            .narrowed(|var| var != &*variable)
+            .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
         // Left operand only — see [`push_probe_constants`]'s soundness note. The
-        // right arms are not merely left unrecursed: they are never reached through
+        // right arms are not merely left unentered: they are never reached through
         // this match at all, which is what makes the boundary a property of the
         // shape of this function rather than of remembering to stop.
         GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. } => {
-            push_probes(left, probes, false);
+            Some((take_child(left), PushStage::Left, probes.clone()))
         }
         // A `Lateral` whose right operand is a property-function call is how the
         // parser writes every call that follows another atom in its group, and the
@@ -620,28 +709,10 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
         // A value the pattern cannot carry — a blank node — reaches the call through
         // that same per-row drive: the left operand is joined with a one-row `VALUES`
         // binding it, so every left row hands the call its term as a bound argument.
-        // See [`drive_call_arguments`].
-        GraphPattern::Lateral { left, right } => {
-            push_probes(left, probes, false);
-            let Some(call) = lateral_call_mut(right) else {
-                // Any other right operand is re-evaluated once per left row and
-                // inner-joined with it, and every operator this recursion enters
-                // keeps a restricted row's variable in its output — so restricting a
-                // leaf inside it restricts the node exactly as restricting a leaf
-                // inside a `Join`'s operand does. See [`push_probe_constants`].
-                push_probes(right, probes, false);
-                return;
-            };
-            let mut probed = Vec::new();
-            for argument in call
-                .subject_args
-                .iter_mut()
-                .chain(call.object_args.iter_mut())
-            {
-                probe_term_pattern(argument, probes, &mut probed);
-            }
-            drive_call_arguments(pattern, probes, Unwritable::InPattern);
-            restore_probed_bindings(pattern, &probed, probes, at_core_root);
+        // See [`drive_call_arguments`]. The left operand is rewritten first; the call
+        // is written into, driven and restored once it is back ([`resume_push`]).
+        GraphPattern::Lateral { left, .. } => {
+            Some((take_child(left), PushStage::Left, probes.clone()))
         }
         // A sub-`SELECT` projecting the variable passes each of its rows' binding of it
         // out unchanged, so restricting its inner rows restricts its output the same
@@ -650,46 +721,132 @@ fn push_probes(pattern: &mut GraphPattern, probes: &[(Variable, GroundTerm)], at
         // rows, so a row they would have passed with the variable bound to another term
         // is simply absent. A slice is not entered, and a `GROUP BY` only for its keys —
         // see [`push_probe_constants`].
-        GraphPattern::Project { inner, variables } => {
-            if probes.iter().all(|(var, _)| variables.contains(var)) {
-                push_probes(inner, probes, false);
-            } else {
-                let projected: Vec<(Variable, GroundTerm)> = probes
-                    .iter()
-                    .filter(|(var, _)| variables.contains(var))
-                    .cloned()
-                    .collect();
-                if !projected.is_empty() {
-                    push_probes(inner, &projected, false);
-                }
-            }
-        }
+        GraphPattern::Project { inner, variables } => probes
+            .narrowed(|var| variables.contains(var))
+            .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
         GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
-        | GraphPattern::OrderBy { inner, .. } => push_probes(inner, probes, false),
+        | GraphPattern::OrderBy { inner, .. } => {
+            Some((take_child(inner), PushStage::Inner, probes.clone()))
+        }
         // A `GROUP BY` is entered for the pre-bound variables that are its keys, and
         // for no other — see [`group_key_carries`] and [`push_probe_constants`].
         GraphPattern::Group {
             inner, variables, ..
-        } => {
-            if probes
-                .iter()
-                .all(|(var, _)| group_key_carries(variables, var))
-            {
-                push_probes(inner, probes, false);
-            } else {
-                let keyed: Vec<(Variable, GroundTerm)> = probes
-                    .iter()
-                    .filter(|(var, _)| group_key_carries(variables, var))
-                    .cloned()
-                    .collect();
-                if !keyed.is_empty() {
-                    push_probes(inner, &keyed, false);
+        } => probes
+            .narrowed(|var| group_key_carries(variables, var))
+            .map(|child_probes| (take_child(inner), PushStage::Inner, child_probes)),
+        GraphPattern::Values { .. }
+        | GraphPattern::Service { .. }
+        | GraphPattern::Slice { .. }
+        | GraphPattern::Unfold { .. } => None,
+    };
+    match descent {
+        Some((child, stage, child_probes)) => {
+            open.push(PushFrame {
+                node,
+                probes,
+                at_core_root,
+                stage,
+            });
+            Step::Descend((child, child_probes, false))
+        }
+        None => Step::Finished(node),
+    }
+}
+
+/// Put the rewritten `operand` back into `frame`'s node, and go on: enter the node's
+/// next operand, or finish the node.
+fn resume_push<'p>(
+    mut frame: PushFrame<'p>,
+    operand: GraphPattern,
+    open: &mut Vec<PushFrame<'p>>,
+) -> Step<PushDescent<'p>, GraphPattern> {
+    let probes = frame.probes.as_slice();
+    let next = match (&mut frame.node, frame.stage) {
+        (GraphPattern::Join { left, right }, PushStage::Left) => {
+            **left = operand;
+            Some((take_child(right), PushStage::Right))
+        }
+        (GraphPattern::Join { right, .. }, PushStage::Right) => {
+            **right = operand;
+            None
+        }
+        (GraphPattern::Union { arms }, PushStage::Arm(index)) => {
+            arms[index] = operand;
+            arms.get_mut(index + 1)
+                .map(|arm| (take_child(arm), PushStage::Arm(index + 1)))
+        }
+        (
+            GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. },
+            PushStage::Left,
+        ) => {
+            **left = operand;
+            None
+        }
+        (GraphPattern::Lateral { left, right }, PushStage::Left) => {
+            **left = operand;
+            match lateral_call_mut(right) {
+                // Any other right operand is re-evaluated once per left row and
+                // inner-joined with it, and every operator this walk enters keeps a
+                // restricted row's variable in its output — so restricting a leaf
+                // inside it restricts the node exactly as restricting a leaf inside a
+                // `Join`'s operand does. See [`push_probe_constants`].
+                None => Some((take_child(right), PushStage::Right)),
+                Some(call) => {
+                    let probed = probe_call_arguments(call, probes);
+                    drive_call_arguments(&mut frame.node, probes, Unwritable::InPattern);
+                    restore_probed_bindings(&mut frame.node, &probed, probes, frame.at_core_root);
+                    None
                 }
             }
         }
-        _ => {}
+        (GraphPattern::Lateral { right, .. }, PushStage::Right) => {
+            **right = operand;
+            None
+        }
+        (
+            GraphPattern::Graph { inner, .. }
+            | GraphPattern::Filter { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Group { inner, .. },
+            PushStage::Inner,
+        ) => {
+            **inner = operand;
+            None
+        }
+        _ => unreachable!("a pushdown frame is opened only at the operand it holds out"),
+    };
+    match next {
+        Some((child, stage)) => {
+            frame.stage = stage;
+            let child_probes = frame.probes.clone();
+            open.push(frame);
+            Step::Descend((child, child_probes, false))
+        }
+        None => Step::Finished(frame.node),
     }
+}
+
+/// Write the pre-bound constants into `call`'s arguments, returning the indices of the
+/// probes written.
+fn probe_call_arguments(
+    call: &mut PropertyFunctionCall,
+    probes: &[(Variable, GroundTerm)],
+) -> Vec<usize> {
+    let mut probed = Vec::new();
+    for argument in call
+        .subject_args
+        .iter_mut()
+        .chain(call.object_args.iter_mut())
+    {
+        probe_term_pattern(argument, probes, &mut probed);
+    }
+    probed
 }
 
 /// Whether the pushdown enters a `GROUP BY` whose keys are `keys` for the pre-bound
@@ -724,7 +881,7 @@ pub(crate) fn group_key_carries(keys: &[Variable], variable: &Variable) -> bool 
 
 /// The property-function call a `Lateral`'s right operand IS, when it is one — the
 /// right operand the pushdown writes a pre-bound value into IN PLACE, rather than by
-/// recursing into it.
+/// entering it.
 ///
 /// This is the single definition of that position. [`push_probes`] writes into it and
 /// wraps the whole `Lateral` in the restoring `VALUES`, [`drive_call_arguments`] and
@@ -732,7 +889,7 @@ pub(crate) fn group_key_carries(keys: &[Variable], variable: &Variable) -> bool 
 /// with that row in hand, and the prepare-time planner (`crate::property_fn_plan`'s
 /// `collect_chain`) makes a call a member of the enclosing chain exactly when the plan
 /// it produces puts the call here. Any other right operand is one [`push_probes`]
-/// recurses into by its ordinary rule, and the planner hands it the same promise
+/// enters by its ordinary rule, and the planner hands it the same promise
 /// (`crate::property_fn_plan`'s `Planner`); the planner's drift guard holds the
 /// two to the same reach, shape by shape.
 pub(crate) const fn lateral_call(right: &GraphPattern) -> Option<&PropertyFunctionCall> {
@@ -789,13 +946,16 @@ fn driven_arguments(
     rule: Unwritable,
     already: Option<&GraphPattern>,
 ) -> Vec<usize> {
-    fn visit(
-        term: &TermPattern,
-        probes: &[(Variable, GroundTerm)],
-        rule: Unwritable,
-        already: Option<&GraphPattern>,
-        driven: &mut Vec<usize>,
-    ) {
+    let mut driven = Vec::new();
+    // The argument positions, over a work list: each argument in written order, and
+    // within a quoted-triple argument its subject's positions before its object's.
+    let mut pending: Vec<&TermPattern> = call
+        .subject_args
+        .iter()
+        .chain(call.object_args.iter())
+        .rev()
+        .collect();
+    while let Some(term) = pending.pop() {
         match term {
             TermPattern::Variable(var) => {
                 if let Some(index) = probes.iter().position(|(candidate, _)| candidate == var)
@@ -807,15 +967,11 @@ fn driven_arguments(
                 }
             }
             TermPattern::Triple(triple) => {
-                visit(&triple.subject, probes, rule, already, driven);
-                visit(&triple.object, probes, rule, already, driven);
+                pending.push(&triple.object);
+                pending.push(&triple.subject);
             }
             TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
-    }
-    let mut driven = Vec::new();
-    for argument in call.subject_args.iter().chain(call.object_args.iter()) {
-        visit(argument, probes, rule, already, &mut driven);
     }
     driven
 }
@@ -1026,31 +1182,48 @@ fn plant_scoped_driver(call: &mut GraphPattern, seed: GraphPattern, kept: Vec<Va
 /// every variable is kept: the collision check then refuses the rebinding loudly,
 /// rather than a variable the call binds being hidden from the rest of the body.
 fn undriven_variables(call: &PropertyFunctionCall, seed: &GraphPattern) -> Vec<Variable> {
-    fn keep(var: &Variable, driven: &[Variable], kept: &mut Vec<Variable>) {
-        if !driven.contains(var) && !kept.contains(var) {
-            kept.push(var.clone());
-        }
-    }
-    fn visit(term: &TermPattern, driven: &[Variable], kept: &mut Vec<Variable>) {
-        match term {
-            TermPattern::Variable(var) => keep(var, driven, kept),
-            TermPattern::Triple(triple) => {
-                visit(&triple.subject, driven, kept);
-                if let NamedNodePattern::Variable(var) = &triple.predicate {
-                    keep(var, driven, kept);
-                }
-                visit(&triple.object, driven, kept);
-            }
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
-        }
+    /// A position still to read: a term, or the predicate of a quoted triple whose
+    /// subject has been read and whose object is next.
+    enum Position<'a> {
+        Term(&'a TermPattern),
+        Predicate(&'a NamedNodePattern),
     }
     let driven: &[Variable] = match seed {
         GraphPattern::Values { variables, .. } => variables,
         _ => &[],
     };
-    let mut kept = Vec::new();
-    for argument in call.subject_args.iter().chain(call.object_args.iter()) {
-        visit(argument, driven, &mut kept);
+    let mut kept: Vec<Variable> = Vec::new();
+    let mut keep = |var: &Variable| {
+        if !driven.contains(var) && !kept.contains(var) {
+            kept.push(var.clone());
+        }
+    };
+    // The positions, over a work list, in first-mention order: each argument in
+    // written order, and within a quoted-triple argument its subject's positions, then
+    // its predicate, then its object's.
+    let mut pending: Vec<Position<'_>> = call
+        .subject_args
+        .iter()
+        .chain(call.object_args.iter())
+        .rev()
+        .map(Position::Term)
+        .collect();
+    while let Some(position) = pending.pop() {
+        match position {
+            Position::Term(TermPattern::Variable(var))
+            | Position::Predicate(NamedNodePattern::Variable(var)) => {
+                keep(var);
+            }
+            Position::Term(TermPattern::Triple(triple)) => {
+                pending.push(Position::Term(&triple.object));
+                pending.push(Position::Predicate(&triple.predicate));
+                pending.push(Position::Term(&triple.subject));
+            }
+            Position::Term(
+                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_),
+            )
+            | Position::Predicate(NamedNodePattern::NamedNode(_)) => {}
+        }
     }
     kept
 }
@@ -1125,34 +1298,41 @@ fn probe_triple_pattern(
     probe_term_pattern(&mut triple.object, probes, probed);
 }
 
-/// Replace one term position with its pre-bound constant, recursing into a quoted
-/// triple's own positions. A position that is not a candidate variable is returned
-/// unchanged.
+/// Replace one term position with its pre-bound constant, entering a quoted triple's
+/// own positions — its subject's, then its object's — over a work list. A position
+/// that is not a candidate variable is left unchanged.
 fn probe_term_pattern(
     term: &mut TermPattern,
     probes: &[(Variable, GroundTerm)],
     probed: &mut Vec<usize>,
 ) {
-    match term {
-        TermPattern::Variable(var) => {
-            // Both early exits leave `probed` alone as well as the term. Recording an
-            // index here without writing the constant would emit a restoring `VALUES`
-            // for a column the leaf never consumed; for a blank-node pre-binding that
-            // is the difference between the injection-only `VALUES` path and matching
-            // every term in the graph.
-            let Some(index) = probes.iter().position(|(candidate, _)| candidate == var) else {
-                return;
-            };
-            let Some(constant) = term_pattern_from_ground(&probes[index].1) else {
-                return;
-            };
-            if !probed.contains(&index) {
-                probed.push(index);
+    let mut pending: Vec<&mut TermPattern> = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::Variable(var) => {
+                // Both early exits leave `probed` alone as well as the term. Recording an
+                // index here without writing the constant would emit a restoring `VALUES`
+                // for a column the leaf never consumed; for a blank-node pre-binding that
+                // is the difference between the injection-only `VALUES` path and matching
+                // every term in the graph.
+                let Some(index) = probes.iter().position(|(candidate, _)| candidate == var) else {
+                    continue;
+                };
+                let Some(constant) = term_pattern_from_ground(&probes[index].1) else {
+                    continue;
+                };
+                if !probed.contains(&index) {
+                    probed.push(index);
+                }
+                *term = constant;
             }
-            *term = constant;
+            TermPattern::Triple(triple) => {
+                let triple: &mut TriplePattern = triple;
+                pending.push(&mut triple.object);
+                pending.push(&mut triple.subject);
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
-        TermPattern::Triple(triple) => probe_triple_pattern(triple, probes, probed),
-        _ => {}
     }
 }
 
@@ -1191,9 +1371,9 @@ fn probe_term_pattern(
 ///   component by component: an RDF 1.2 quoted triple has no constant
 ///   [`Expression`] form to become (the algebra's expression constants are an IRI and
 ///   a literal, and nothing else), so in every evaluated position it rides the
-///   `VALUES` seed instead. Its pattern form is built recursively, which is why a
-///   nested [`Self::SeedOnly`] anywhere inside it takes the WHOLE triple out of the
-///   pushdown rather than only that one position.
+///   `VALUES` seed instead. Its pattern form is built component by component, which
+///   is why a nested [`Self::SeedOnly`] anywhere inside it takes the WHOLE triple out
+///   of the pushdown rather than only that one position.
 /// * [`Self::SeedOnly`] — a blank node, and this is the load-bearing rule of the
 ///   whole classification. **A blank node is bound only through `VALUES` rows and is
 ///   never written into a pattern.** A blank node written into a query pattern is a
@@ -1252,17 +1432,56 @@ impl<'a> Pushability<'a> {
 /// [`push_probe_constants`], "What is not pushed", and [`Pushability`]'s own note on
 /// why the pushed set and the seed set differ. A [`Pushability::QuotedTriple`] is
 /// admitted here and nowhere else, and only if every one of its own positions is
-/// admitted too — which is what the `?`s below propagate.
+/// admitted too: the first refused position refuses the whole term.
+///
+/// A quoted triple is built from the bottom up over a frame per open triple — its
+/// subject first, then its object — so a term of any depth is spelled without a
+/// machine-stack frame per level.
 pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPattern> {
-    match Pushability::of(ground) {
-        Pushability::Iri(node) => Some(TermPattern::NamedNode(node.clone())),
-        Pushability::Literal(literal) => Some(TermPattern::Literal(literal.clone())),
-        Pushability::QuotedTriple(triple) => Some(TermPattern::Triple(Child::new(TriplePattern {
-            subject: term_pattern_from_ground(&triple.subject)?,
-            predicate: NamedNodePattern::NamedNode(triple.predicate.clone()),
-            object: term_pattern_from_ground(&triple.object)?,
-        }))),
-        Pushability::SeedOnly => None,
+    /// A quoted triple whose spelling is under way: its subject's spelling once that
+    /// is built, with its object's the position being built.
+    struct OpenTriple<'a> {
+        triple: &'a GroundTriple,
+        subject: Option<TermPattern>,
+    }
+    let mut open: Vec<OpenTriple<'_>> = Vec::new();
+    let mut next = ground;
+    loop {
+        let mut built = match Pushability::of(next) {
+            Pushability::Iri(node) => TermPattern::NamedNode(node.clone()),
+            Pushability::Literal(literal) => TermPattern::Literal(literal.clone()),
+            Pushability::QuotedTriple(triple) => {
+                open.push(OpenTriple {
+                    triple,
+                    subject: None,
+                });
+                next = &triple.subject;
+                continue;
+            }
+            Pushability::SeedOnly => return None,
+        };
+        // Hand the spelling up: it is the open triple's subject, whose object is next,
+        // or its object, which completes the triple's own spelling.
+        loop {
+            let Some(mut top) = open.pop() else {
+                return Some(built);
+            };
+            match top.subject.take() {
+                None => {
+                    top.subject = Some(built);
+                    next = &top.triple.object;
+                    open.push(top);
+                    break;
+                }
+                Some(subject) => {
+                    built = TermPattern::Triple(Child::new(TriplePattern {
+                        subject,
+                        predicate: NamedNodePattern::NamedNode(top.triple.predicate.clone()),
+                        object: built,
+                    }));
+                }
+            }
+        }
     }
 }
 
@@ -1276,7 +1495,7 @@ pub(crate) fn term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPatter
 /// * replaces `Expression::Variable(v)` with the constant IRI/literal,
 /// * replaces `Expression::Bound(v)` with the `true` boolean literal,
 ///
-/// recursing into nested graph patterns (`EXISTS`, `GRAPH`, sub-queries, etc.).
+/// entering nested graph patterns (`EXISTS`, `GRAPH`, sub-queries, etc.).
 /// Blank-node and quoted-triple values have no expression form. An expression above the
 /// core whose rows still carry the seed's column reads the value from the row; every
 /// other expression that reads one — beneath the core, or above a `GROUP BY` or a
@@ -1298,7 +1517,7 @@ pub(crate) fn apply_shacl_prebinding(
         // of the algebra to change nothing in it.
         return Ok(query);
     }
-    stack_walk(|| apply_shacl_probes(query, probes))
+    Ok(apply_shacl_probes(query, probes))
 }
 
 /// [`apply_shacl_prebinding`]'s rewrite, over probes that are already grounded and
@@ -1421,17 +1640,202 @@ fn map_patterns_in_query(query: &mut Query, f: impl FnOnce(&mut GraphPattern)) {
     }
 }
 
-/// Recursively substitute pre-bound variables into a [`GraphPattern`], returning which
-/// pre-bound values its output rows carry from the `VALUES` seed ([`SeedColumns`]).
+/// Substitute pre-bound variables into a [`GraphPattern`] and everything beneath it,
+/// returning which pre-bound values its output rows carry from the `VALUES` seed
+/// ([`SeedColumns`]).
+///
+/// The walk keeps its own frames: a node whose operand — a child pattern, or the body
+/// of an `EXISTS` in one of its own expressions — is being substituted is held, with
+/// that operand taken out of it, until the operand comes back, so a query of any depth
+/// is rewritten without a machine-stack frame per level. Operands are entered in the
+/// order the node's arms below name them, and what a node does once its operands are
+/// back — the drivers it plants, the columns it reports — happens over the node with
+/// every operand in it.
 fn substitute_in_graph_pattern(
     pattern: &mut GraphPattern,
     expr_subs: &ExprSubs,
     scope: WalkScope,
 ) -> SeedColumns {
-    // See `push_probes`: the same query, walked again.
-    if crate::stack::walk_is_low("pre-binding rewrite") {
-        return SeedColumns::at_core(scope, expr_subs.0.len());
+    let mut open: Vec<SubstituteFrame> = Vec::new();
+    let mut next = (take_child(pattern), scope);
+    loop {
+        let (node, scope) = next;
+        let mut finished = match enter_substitution(node, scope, expr_subs, &mut open) {
+            Step::Descend(child) => {
+                next = child;
+                continue;
+            }
+            Step::Finished(finished) => finished,
+        };
+        loop {
+            let Some(frame) = open.pop() else {
+                *pattern = finished.0;
+                return finished.1;
+            };
+            match resume_substitution(frame, finished, expr_subs, &mut open) {
+                Step::Descend(child) => {
+                    next = child;
+                    break;
+                }
+                Step::Finished(node) => finished = node,
+            }
+        }
     }
+}
+
+/// A node of the substitution walk whose operand is out being substituted.
+struct SubstituteFrame {
+    node: GraphPattern,
+    scope: WalkScope,
+    /// Which operand is out.
+    stage: SubstituteStage,
+    /// What the node's inner pattern carries, once it is back.
+    operand: SeedColumns,
+    /// A `GROUP BY`'s aggregates, taken apart while their expressions are substituted.
+    aggregates: Vec<(Variable, AggregateParts)>,
+    /// The `EXISTS` bodies of the node's own expressions still to substitute, last
+    /// first.
+    pending_bodies: Vec<GraphPattern>,
+    /// The substituted bodies, in the order the expressions hold them.
+    done_bodies: Vec<GraphPattern>,
+}
+
+/// Which operand of a [`SubstituteFrame`]'s node is out.
+#[derive(Clone, Copy)]
+enum SubstituteStage {
+    /// The left operand of a `Join`, a `Minus`, a `Lateral` or a `LeftJoin`.
+    Left,
+    /// The right operand of one of those.
+    Right,
+    /// The `UNION` arm at this index.
+    Arm(usize),
+    /// The single operand of a wrapper.
+    Inner,
+    /// An `EXISTS` body of one of the node's own expressions.
+    Body,
+}
+
+impl SubstituteFrame {
+    fn new(node: GraphPattern, scope: WalkScope, stage: SubstituteStage) -> Self {
+        Self {
+            node,
+            scope,
+            stage,
+            operand: SeedColumns(0),
+            aggregates: Vec::new(),
+            pending_bodies: Vec::new(),
+            done_bodies: Vec::new(),
+        }
+    }
+
+    /// Substitute in the node's own expressions, taking their `EXISTS` bodies out; the
+    /// first body to substitute, or `None` when the expressions hold none.
+    fn substitute_own_expressions(&mut self, expr_subs: &ExprSubs) -> Option<GraphPattern> {
+        let mut bodies = Vec::new();
+        substitute_in_expressions(
+            own_expressions(&mut self.node, &mut self.aggregates),
+            expr_subs,
+            &mut bodies,
+        );
+        bodies.reverse();
+        self.pending_bodies = bodies;
+        self.pending_bodies.pop()
+    }
+
+    /// Put the substituted bodies back into the node's own expressions, and a `GROUP
+    /// BY`'s aggregates back together.
+    fn replace_own_bodies(&mut self) {
+        let bodies = std::mem::take(&mut self.done_bodies);
+        replace_exists_bodies(
+            own_expressions(&mut self.node, &mut self.aggregates),
+            bodies,
+        );
+        if let GraphPattern::Group { aggregates, .. } = &mut self.node {
+            // Collecting back into the same element type reuses the buffer, so the
+            // take and the collect together allocate nothing.
+            *aggregates = std::mem::take(&mut self.aggregates)
+                .into_iter()
+                .map(|(var, (function, args, scalarvals, order_by, distinct))| {
+                    // Substitution rewrites each argument in place and never changes
+                    // the argument COUNT, and rewriting a sort key never removes one,
+                    // so this can never turn a valid aggregate into an invalid one.
+                    let rebuilt =
+                        AggregateExpression::new(function, args, scalarvals, order_by, distinct)
+                            .expect("substitution preserves argument count, so arity stays valid");
+                    (var, rebuilt)
+                })
+                .collect();
+        }
+    }
+}
+
+/// The expressions `node` itself evaluates, in the order the substitution walk reads
+/// them: its `FILTER`, `BIND` or `UNFOLD` expression, its `OPTIONAL` condition, its
+/// sort keys, or — for a `GROUP BY`, whose aggregates are held apart in `aggregates`
+/// while the walk is inside them — each aggregate's arguments and then its own `FOLD`
+/// sort keys, aggregate by aggregate.
+fn own_expressions<'n>(
+    node: &'n mut GraphPattern,
+    aggregates: &'n mut [(Variable, AggregateParts)],
+) -> Vec<&'n mut Expression> {
+    match node {
+        GraphPattern::Extend { expression, .. }
+        | GraphPattern::Unfold { expression, .. }
+        | GraphPattern::Filter {
+            expr: expression, ..
+        }
+        | GraphPattern::LeftJoin {
+            expression: Some(expression),
+            ..
+        } => vec![expression],
+        GraphPattern::OrderBy { expression, .. } => {
+            expression.iter_mut().map(order_sort_key_mut).collect()
+        }
+        GraphPattern::Group { .. } => aggregates
+            .iter_mut()
+            .flat_map(|(_, (_, args, _, order_by, _))| {
+                args.iter_mut()
+                    .chain(order_by.iter_mut().map(order_sort_key_mut))
+            })
+            .collect(),
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::Values { .. }
+        | GraphPattern::Join { .. }
+        | GraphPattern::Minus { .. }
+        | GraphPattern::Union { .. }
+        | GraphPattern::Lateral { .. }
+        | GraphPattern::LeftJoin {
+            expression: None, ..
+        }
+        | GraphPattern::Graph { .. }
+        | GraphPattern::Service { .. }
+        | GraphPattern::Project { .. }
+        | GraphPattern::Distinct { .. }
+        | GraphPattern::Reduced { .. }
+        | GraphPattern::Slice { .. }
+        | GraphPattern::PropertyFunction(_) => Vec::new(),
+    }
+}
+
+/// The sort key under an `ORDER BY` direction, for rewriting in place.
+fn order_sort_key_mut(order: &mut OrderExpression) -> &mut Expression {
+    match order {
+        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => expr,
+    }
+}
+
+/// The operand `pattern` hands to the substitution walk, and the scope it is in.
+type SubstituteDescent = (GraphPattern, WalkScope);
+
+/// Enter `node`: substitute in it when it is a leaf, or take its first operand out and
+/// hold the node open until the operand comes back.
+fn enter_substitution(
+    mut node: GraphPattern,
+    scope: WalkScope,
+    expr_subs: &ExprSubs,
+    open: &mut Vec<SubstituteFrame>,
+) -> Step<SubstituteDescent, (GraphPattern, SeedColumns)> {
     // A node that is not a solution-modifier wrapper hands its children the scope
     // beneath the seed; a wrapper hands its inner pattern its own.
     let beneath = scope.beneath();
@@ -1440,113 +1844,56 @@ fn substitute_in_graph_pattern(
     let core = SeedColumns::at_core(scope, expr_subs.0.len());
     // Wildcard-free on purpose: a `GraphPattern` variant added later must fail to
     // compile here rather than silently pass through unsubstituted.
-    let (reads_expressions, carried) = match pattern {
+    let (child, stage, child_scope) = match &mut node {
         // A leaf's term positions are matched against the graph, not evaluated, and
         // `apply_substitutions`' pushdown has already written the pre-bound constants
         // into the ones that can carry them. A `Values` block's cells are data for the
         // same reason.
         GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {
-            (false, core)
+            return Step::Finished((node, core));
         }
         // BOTH arms, unlike the pushdown. Replacing a variable with a constant
         // EXPRESSION removes no column from any schema, so the divergence that stops
         // the pushdown at an `OPTIONAL`'s or a `MINUS`'s right arm does not arise here.
         // See `crate::enf`'s "The SHACL pre-binding fork".
-        GraphPattern::Join { left, right } | GraphPattern::Minus { left, right } => {
-            substitute_in_graph_pattern(left, expr_subs, beneath);
-            substitute_in_graph_pattern(right, expr_subs, beneath);
-            (false, core)
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                substitute_in_graph_pattern(arm, expr_subs, beneath);
-            }
-            (false, core)
-        }
-        // A call that is a `Lateral`'s right operand is substituted in place and never
-        // walked as a stand-alone call: that position is what hands it its left rows,
-        // and the drive below keeps it there.
         //
-        // Inside an `EXISTS` body the driver cannot join the left operand: that would
-        // put the driven variable into the rows the body joins with the row being
-        // filtered, which may already bind it. The call is driven in a scope of its own
-        // instead — see [`plant_scoped_driver`] — and stays the `Lateral`'s right
-        // operand, now correlated with each left row through the ordinary per-row path.
-        GraphPattern::Lateral { left, right } => {
-            substitute_in_graph_pattern(left, expr_subs, beneath);
-            if let Some(call) = lateral_call_mut(right) {
-                match beneath {
-                    WalkScope::Descent | WalkScope::Group => {
-                        if let Some(seed) = bind_call_arguments(call, &expr_subs.0, Some(left)) {
-                            plant_left_driver(left, seed);
-                        }
-                    }
-                    WalkScope::ExistsBody => {
-                        if let Some(seed) = bind_call_arguments(call, &expr_subs.0, None) {
-                            let kept = undriven_variables(call, &seed);
-                            plant_scoped_driver(right, seed, kept);
-                        }
-                    }
-                }
-            } else {
-                substitute_in_graph_pattern(right, expr_subs, beneath);
+        // A `Lateral`'s left operand is entered first; what happens to a call on its
+        // right waits until the left is back ([`resume_substitution`]).
+        GraphPattern::Join { left, .. }
+        | GraphPattern::Minus { left, .. }
+        | GraphPattern::Lateral { left, .. }
+        | GraphPattern::LeftJoin { left, .. } => (take_child(left), SubstituteStage::Left, beneath),
+        GraphPattern::Union { arms } => match arms.first_mut() {
+            Some(first) => (take_child(first), SubstituteStage::Arm(0), beneath),
+            None => return Step::Finished((node, core)),
+        },
+        // The expression first, then the inner pattern, in its own scope.
+        GraphPattern::Filter { .. } => {
+            let mut frame = SubstituteFrame::new(node, scope, SubstituteStage::Body);
+            if let Some(body) = frame.substitute_own_expressions(expr_subs) {
+                open.push(frame);
+                return Step::Descend((body, WalkScope::ExistsBody));
             }
-            (false, core)
-        }
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => {
-            substitute_in_graph_pattern(left, expr_subs, beneath);
-            substitute_in_graph_pattern(right, expr_subs, beneath);
-            if let Some(expression) = expression {
-                substitute_in_expression(expression, expr_subs);
-            }
-            (expression.is_some(), core)
-        }
-        GraphPattern::Filter { expr, inner } => {
-            substitute_in_expression(expr, expr_subs);
-            (true, substitute_in_graph_pattern(inner, expr_subs, scope))
+            return descend_into_inner(frame, open);
         }
         GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
             substitute_in_named_node_pattern(name, expr_subs);
-            substitute_in_graph_pattern(inner, expr_subs, beneath);
-            (false, core)
+            (take_child(inner), SubstituteStage::Inner, beneath)
         }
-        // The operand and the expression are substituted; the target bindings
-        // (`Extend`'s `variable`, `Unfold`'s `element`/`companion`) are this node's
-        // OWN and are carried through untouched.
-        GraphPattern::Extend {
-            inner, expression, ..
-        }
-        | GraphPattern::Unfold {
-            inner, expression, ..
-        } => {
-            let carried = substitute_in_graph_pattern(inner, expr_subs, scope);
-            substitute_in_expression(expression, expr_subs);
-            (true, carried)
-        }
-        GraphPattern::OrderBy { inner, expression } => {
-            let carried = substitute_in_graph_pattern(inner, expr_subs, scope);
-            for order in expression.iter_mut() {
-                substitute_in_order_expression(order, expr_subs);
-            }
-            (true, carried)
-        }
-        // No `Project`-boundary narrowing: a SHACL pre-binding must reach an
-        // UNPROJECTED scope inside a nested sub-`SELECT`, which is divergence 1 in
-        // `crate::enf`'s module doc. What the projection does narrow is which seed
-        // columns its rows carry out.
-        GraphPattern::Project { inner, variables } => {
-            let carried = substitute_in_graph_pattern(inner, expr_subs, scope);
-            (false, carried.kept(expr_subs, variables))
-        }
-        GraphPattern::Distinct { inner }
+        // The operand first, in the node's own scope; the node's expressions, sort keys
+        // or aggregates once it is back. The target bindings (`Extend`'s `variable`,
+        // `Unfold`'s `element`/`companion`) are the node's OWN and are carried through
+        // untouched. A `Project` boundary narrows nothing: a SHACL pre-binding must
+        // reach an UNPROJECTED scope inside a nested sub-`SELECT`, which is divergence
+        // 1 in `crate::enf`'s module doc.
+        GraphPattern::Extend { inner, .. }
+        | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner }
         | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. } => {
-            (false, substitute_in_graph_pattern(inner, expr_subs, scope))
-        }
+        | GraphPattern::Slice { inner, .. }
+        | GraphPattern::Group { inner, .. } => (take_child(inner), SubstituteStage::Inner, scope),
         // A property function's arguments are INVOCATION INPUTS, evaluated per row like
         // a function call's arguments rather than matched against the graph like a BGP
         // term — so they are substituted here, on the same rule and for the same reason
@@ -1563,43 +1910,249 @@ fn substitute_in_graph_pattern(
             if let Some(seed) = bind_call_arguments(call, &expr_subs.0, None) {
                 match beneath {
                     WalkScope::Descent | WalkScope::Group => {
-                        plant_stand_alone_driver(pattern, seed);
+                        plant_stand_alone_driver(&mut node, seed);
                     }
                     WalkScope::ExistsBody => {
                         let kept = undriven_variables(call, &seed);
-                        plant_scoped_driver(pattern, seed, kept);
+                        plant_scoped_driver(&mut node, seed, kept);
                     }
                 }
             }
-            (false, core)
-        }
-        // A group's row carries a seed column only as a grouping key.
-        GraphPattern::Group {
-            inner,
-            variables,
-            aggregates,
-        } => {
-            let operand = substitute_in_graph_pattern(inner, expr_subs, scope);
-            let carried = operand.kept(expr_subs, variables);
-            // `AggregateExpression` is rebuilt through its consuming `into_parts`, so
-            // the entries are taken by value and collected back. `Vec::into_iter().
-            // collect()` into the same element type reuses the buffer, so the take and
-            // the collect together allocate nothing.
-            let taken = std::mem::take(aggregates);
-            *aggregates = taken
-                .into_iter()
-                .map(|(var, agg)| (var, substitute_in_aggregate(agg, expr_subs)))
-                .collect();
-            drive_expression_reads(pattern, expr_subs, scope, operand);
-            return carried;
+            return Step::Finished((node, core));
         }
     };
-    if reads_expressions {
-        // Every expression-bearing node but a `GROUP BY` passes its operand's rows
-        // through, so its operand carries what the node carries.
-        drive_expression_reads(pattern, expr_subs, scope, carried);
+    open.push(SubstituteFrame::new(node, scope, stage));
+    Step::Descend((child, child_scope))
+}
+
+/// Take `frame`'s inner pattern out and enter it in the node's own scope.
+fn descend_into_inner(
+    mut frame: SubstituteFrame,
+    open: &mut Vec<SubstituteFrame>,
+) -> Step<SubstituteDescent, (GraphPattern, SeedColumns)> {
+    let child = match &mut frame.node {
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. }
+        | GraphPattern::Group { inner, .. } => take_child(inner),
+        _ => unreachable!("only a wrapper's inner pattern is entered in the node's own scope"),
+    };
+    frame.stage = SubstituteStage::Inner;
+    let scope = frame.scope;
+    open.push(frame);
+    Step::Descend((child, scope))
+}
+
+/// Put the substituted `operand` back into `frame`'s node, and go on: enter the node's
+/// next operand, or finish the node and report what it carries.
+fn resume_substitution(
+    mut frame: SubstituteFrame,
+    operand: (GraphPattern, SeedColumns),
+    expr_subs: &ExprSubs,
+    open: &mut Vec<SubstituteFrame>,
+) -> Step<SubstituteDescent, (GraphPattern, SeedColumns)> {
+    let (operand, columns) = operand;
+    let scope = frame.scope;
+    let beneath = scope.beneath();
+    let core = SeedColumns::at_core(scope, expr_subs.0.len());
+    /// What a node does once an operand is back.
+    enum Then {
+        /// Enter another operand.
+        Descend(GraphPattern, SubstituteStage, WalkScope),
+        /// Substitute in the node's own expressions, then finish.
+        Expressions,
+        /// Finish, reporting these columns.
+        Finish(SeedColumns),
     }
-    carried
+    let then = match (&mut frame.node, frame.stage) {
+        (
+            GraphPattern::Join { left, right }
+            | GraphPattern::Minus { left, right }
+            | GraphPattern::LeftJoin { left, right, .. },
+            SubstituteStage::Left,
+        ) => {
+            **left = operand;
+            Then::Descend(take_child(right), SubstituteStage::Right, beneath)
+        }
+        (
+            GraphPattern::Join { right, .. } | GraphPattern::Minus { right, .. },
+            SubstituteStage::Right,
+        ) => {
+            **right = operand;
+            Then::Finish(core)
+        }
+        (GraphPattern::Union { arms }, SubstituteStage::Arm(index)) => {
+            arms[index] = operand;
+            match arms.get_mut(index + 1) {
+                Some(arm) => {
+                    Then::Descend(take_child(arm), SubstituteStage::Arm(index + 1), beneath)
+                }
+                None => Then::Finish(core),
+            }
+        }
+        // A call that is a `Lateral`'s right operand is substituted in place and never
+        // walked as a stand-alone call: that position is what hands it its left rows,
+        // and the drive below keeps it there.
+        //
+        // Inside an `EXISTS` body the driver cannot join the left operand: that would
+        // put the driven variable into the rows the body joins with the row being
+        // filtered, which may already bind it. The call is driven in a scope of its own
+        // instead — see [`plant_scoped_driver`] — and stays the `Lateral`'s right
+        // operand, now correlated with each left row through the ordinary per-row path.
+        (GraphPattern::Lateral { left, right }, SubstituteStage::Left) => {
+            **left = operand;
+            match lateral_call_mut(right) {
+                None => Then::Descend(take_child(right), SubstituteStage::Right, beneath),
+                Some(call) => {
+                    match beneath {
+                        WalkScope::Descent | WalkScope::Group => {
+                            if let Some(seed) = bind_call_arguments(call, &expr_subs.0, Some(left))
+                            {
+                                plant_left_driver(left, seed);
+                            }
+                        }
+                        WalkScope::ExistsBody => {
+                            if let Some(seed) = bind_call_arguments(call, &expr_subs.0, None) {
+                                let kept = undriven_variables(call, &seed);
+                                plant_scoped_driver(right, seed, kept);
+                            }
+                        }
+                    }
+                    Then::Finish(core)
+                }
+            }
+        }
+        (GraphPattern::Lateral { right, .. }, SubstituteStage::Right) => {
+            **right = operand;
+            Then::Finish(core)
+        }
+        // The condition is substituted once both operands are back; the node passes
+        // the seed's own columns through.
+        (GraphPattern::LeftJoin { right, .. }, SubstituteStage::Right) => {
+            **right = operand;
+            frame.operand = core;
+            Then::Expressions
+        }
+        (GraphPattern::Filter { inner, .. }, SubstituteStage::Inner) => {
+            **inner = operand;
+            // The expression was substituted before the operand was entered, so the
+            // node passes its operand's rows through and drives what they lack.
+            drive_expression_reads(&mut frame.node, expr_subs, scope, columns);
+            Then::Finish(columns)
+        }
+        (
+            GraphPattern::Graph { inner, .. } | GraphPattern::Service { inner, .. },
+            SubstituteStage::Inner,
+        ) => {
+            **inner = operand;
+            Then::Finish(core)
+        }
+        (
+            GraphPattern::Extend { inner, .. }
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::OrderBy { inner, .. },
+            SubstituteStage::Inner,
+        ) => {
+            **inner = operand;
+            frame.operand = columns;
+            Then::Expressions
+        }
+        // What the projection does narrow is which seed columns its rows carry out.
+        (GraphPattern::Project { inner, variables }, SubstituteStage::Inner) => {
+            **inner = operand;
+            Then::Finish(columns.kept(expr_subs, variables))
+        }
+        (
+            GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. },
+            SubstituteStage::Inner,
+        ) => {
+            **inner = operand;
+            Then::Finish(columns)
+        }
+        // A group's row carries a seed column only as a grouping key. Its aggregates
+        // are taken apart through the consuming `into_parts` and held on the frame
+        // while their expressions are substituted; the node's own expressions are
+        // read from there.
+        (
+            GraphPattern::Group {
+                inner, aggregates, ..
+            },
+            SubstituteStage::Inner,
+        ) => {
+            **inner = operand;
+            frame.operand = columns;
+            frame.aggregates = std::mem::take(aggregates)
+                .into_iter()
+                .map(|(var, aggregate)| (var, aggregate.into_parts()))
+                .collect();
+            Then::Expressions
+        }
+        (_, SubstituteStage::Body) => {
+            frame.done_bodies.push(operand);
+            match frame.pending_bodies.pop() {
+                Some(body) => Then::Descend(body, SubstituteStage::Body, WalkScope::ExistsBody),
+                None => {
+                    frame.replace_own_bodies();
+                    if matches!(frame.node, GraphPattern::Filter { .. }) {
+                        return descend_into_inner(frame, open);
+                    }
+                    Then::Finish(finish_own_expressions(&mut frame, expr_subs))
+                }
+            }
+        }
+        _ => unreachable!("a substitution frame is opened only at the operand it holds out"),
+    };
+    match then {
+        Then::Descend(child, stage, child_scope) => {
+            frame.stage = stage;
+            open.push(frame);
+            Step::Descend((child, child_scope))
+        }
+        Then::Expressions => match frame.substitute_own_expressions(expr_subs) {
+            Some(body) => {
+                frame.stage = SubstituteStage::Body;
+                open.push(frame);
+                Step::Descend((body, WalkScope::ExistsBody))
+            }
+            None => {
+                frame.replace_own_bodies();
+                let carried = finish_own_expressions(&mut frame, expr_subs);
+                Step::Finished((frame.node, carried))
+            }
+        },
+        Then::Finish(carried) => Step::Finished((frame.node, carried)),
+    }
+}
+
+/// Finish a node whose own expressions have been substituted and whose operand is back:
+/// drive the values its expressions read that its rows do not carry, and report what
+/// the node carries.
+fn finish_own_expressions(frame: &mut SubstituteFrame, expr_subs: &ExprSubs) -> SeedColumns {
+    let operand = frame.operand;
+    match &frame.node {
+        // An `OPTIONAL` without a condition reads nothing; every other
+        // expression-bearing node but a `GROUP BY` passes its operand's rows through,
+        // so its operand carries what the node carries.
+        GraphPattern::LeftJoin {
+            expression: None, ..
+        } => operand,
+        GraphPattern::Group { variables, .. } => {
+            let carried = operand.kept(expr_subs, variables);
+            drive_expression_reads(&mut frame.node, expr_subs, frame.scope, operand);
+            carried
+        }
+        _ => {
+            drive_expression_reads(&mut frame.node, expr_subs, frame.scope, operand);
+            operand
+        }
+    }
 }
 
 /// Which pre-bound values a node's output rows carry from the `VALUES` seed — a bit per
@@ -1805,17 +2358,16 @@ struct Reads {
 /// own expressions are the body's nodes' business — the walk drives them there — so
 /// only the variables the body NAMES count here, as reads of the rows it is matched
 /// against.
+///
+/// The reads are recorded in the order the expression names them, each position
+/// before the ones it holds, over a work list rather than the machine stack.
 fn note_reads(expr: &Expression, expr_subs: &ExprSubs, reads: &mut Reads) {
-    // See `push_probes`.
-    if crate::stack::walk_is_low("pre-binding rewrite") {
-        return;
-    }
     fn note(list: &mut Vec<usize>, index: usize) {
         if !list.contains(&index) {
             list.push(index);
         }
     }
-    match expr {
+    for_each_expression([expr], |expr| match expr {
         Expression::Variable(var) => {
             if let Some(index) = expr_subs
                 .0
@@ -1834,77 +2386,88 @@ fn note_reads(expr: &Expression, expr_subs: &ExprSubs, reads: &mut Reads) {
                 }
             }
         }
-        Expression::NamedNode(_) | Expression::Literal(_) | Expression::Bound(_) => {}
-        Expression::Or(operands) | Expression::And(operands) => {
-            for operand in operands {
-                note_reads(operand, expr_subs, reads);
-            }
-        }
-        Expression::Arithmetic(first, steps) => {
-            note_reads(first, expr_subs, reads);
-            for (_, operand) in steps {
-                note_reads(operand, expr_subs, reads);
-            }
-        }
-        Expression::Equal(left, right)
-        | Expression::SameTerm(left, right)
-        | Expression::Greater(left, right)
-        | Expression::GreaterOrEqual(left, right)
-        | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right) => {
-            note_reads(left, expr_subs, reads);
-            note_reads(right, expr_subs, reads);
-        }
-        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            note_reads(inner, expr_subs, reads);
-        }
-        Expression::In(target, list) => {
-            note_reads(target, expr_subs, reads);
-            for item in list {
-                note_reads(item, expr_subs, reads);
-            }
-        }
-        Expression::If(cond, then_expr, else_expr) => {
-            note_reads(cond, expr_subs, reads);
-            note_reads(then_expr, expr_subs, reads);
-            note_reads(else_expr, expr_subs, reads);
-        }
-        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
-            for item in list {
-                note_reads(item, expr_subs, reads);
-            }
-        }
-    }
+        Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Bound(_)
+        | Expression::Or(_)
+        | Expression::And(_)
+        | Expression::Arithmetic(..)
+        | Expression::Equal(..)
+        | Expression::SameTerm(..)
+        | Expression::Greater(..)
+        | Expression::GreaterOrEqual(..)
+        | Expression::Less(..)
+        | Expression::LessOrEqual(..)
+        | Expression::UnaryPlus(_)
+        | Expression::UnaryMinus(_)
+        | Expression::Not(_)
+        | Expression::In(..)
+        | Expression::If(..)
+        | Expression::Coalesce(_)
+        | Expression::FunctionCall(..) => {}
+    });
 }
 
 /// Rename every plain read of a `renames` source in `expr` to its stand-in. An `EXISTS`
 /// body is not entered: a variable there is matched against rows, not read as a value,
 /// and the body's own expressions were already driven by the walk.
 fn rename_reads(expr: &mut Expression, renames: &[(Variable, Variable)]) {
-    // See `push_probes`.
-    if crate::stack::walk_is_low("pre-binding rewrite") {
-        return;
-    }
-    match expr {
-        Expression::Variable(var) => {
-            if let Some((_, to)) = renames.iter().find(|(from, _)| from == var) {
-                *var = to.clone();
-            }
+    for_each_expression_mut([expr], |expr| {
+        if let Expression::Variable(var) = expr
+            && let Some((_, to)) = renames.iter().find(|(from, _)| from == var)
+        {
+            *var = to.clone();
         }
-        Expression::Exists(_)
+    });
+}
+
+/// Call `visit` on each of `roots` and every expression beneath it, each before the
+/// expressions it holds and those in source order, over a work list rather than the
+/// machine stack. An `EXISTS` body is a pattern, not an expression, so the walk does not
+/// enter it.
+fn for_each_expression<'e>(
+    roots: impl IntoIterator<Item = &'e Expression>,
+    mut visit: impl FnMut(&'e Expression),
+) {
+    let mut pending: Vec<&'e Expression> = roots.into_iter().collect();
+    pending.reverse();
+    while let Some(expr) = pending.pop() {
+        visit(expr);
+        push_operands(expr, &mut pending);
+    }
+}
+
+/// [`for_each_expression`], with each expression handed over for rewriting. `visit`
+/// sees each expression before the walk reads what it holds, so an expression it
+/// replaces is walked as replaced.
+fn for_each_expression_mut<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    mut visit: impl FnMut(&mut Expression),
+) {
+    let mut pending: Vec<&'e mut Expression> = roots.into_iter().collect();
+    pending.reverse();
+    while let Some(expr) = pending.pop() {
+        visit(expr);
+        push_operands_mut(expr, &mut pending);
+    }
+}
+
+/// Push the expressions `expr` holds onto `pending`, last first, so the work list pops
+/// them in source order. Wildcard-free: an expression variant added later must say
+/// here what it holds.
+fn push_operands<'e>(expr: &'e Expression, pending: &mut Vec<&'e Expression>) {
+    match expr {
+        Expression::Variable(_)
+        | Expression::Bound(_)
         | Expression::NamedNode(_)
         | Expression::Literal(_)
-        | Expression::Bound(_) => {}
+        | Expression::Exists(_) => {}
         Expression::Or(operands) | Expression::And(operands) => {
-            for operand in operands.iter_mut() {
-                rename_reads(operand, renames);
-            }
+            pending.extend(operands.iter().rev());
         }
         Expression::Arithmetic(first, steps) => {
-            rename_reads(first, renames);
-            for (_, operand) in steps.iter_mut() {
-                rename_reads(operand, renames);
-            }
+            pending.extend(steps.iter().rev().map(|(_, operand)| operand));
+            pending.push(first);
         }
         Expression::Equal(left, right)
         | Expression::SameTerm(left, right)
@@ -1912,27 +2475,65 @@ fn rename_reads(expr: &mut Expression, renames: &[(Variable, Variable)]) {
         | Expression::GreaterOrEqual(left, right)
         | Expression::Less(left, right)
         | Expression::LessOrEqual(left, right) => {
-            rename_reads(left, renames);
-            rename_reads(right, renames);
+            pending.push(right);
+            pending.push(left);
         }
         Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            rename_reads(inner, renames);
+            pending.push(inner);
         }
         Expression::In(target, list) => {
-            rename_reads(target, renames);
-            for item in list.iter_mut() {
-                rename_reads(item, renames);
-            }
+            pending.extend(list.iter().rev());
+            pending.push(target);
         }
         Expression::If(cond, then_expr, else_expr) => {
-            rename_reads(cond, renames);
-            rename_reads(then_expr, renames);
-            rename_reads(else_expr, renames);
+            pending.push(else_expr);
+            pending.push(then_expr);
+            pending.push(cond);
         }
         Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
-            for item in list.iter_mut() {
-                rename_reads(item, renames);
-            }
+            pending.extend(list.iter().rev());
+        }
+    }
+}
+
+/// [`push_operands`], for rewriting.
+fn push_operands_mut<'e>(expr: &'e mut Expression, pending: &mut Vec<&'e mut Expression>) {
+    match expr {
+        Expression::Variable(_)
+        | Expression::Bound(_)
+        | Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Exists(_) => {}
+        Expression::Or(operands) | Expression::And(operands) => {
+            pending.extend(operands.iter_mut().rev());
+        }
+        Expression::Arithmetic(first, steps) => {
+            pending.extend(steps.iter_mut().rev().map(|(_, operand)| operand));
+            pending.push(first);
+        }
+        Expression::Equal(left, right)
+        | Expression::SameTerm(left, right)
+        | Expression::Greater(left, right)
+        | Expression::GreaterOrEqual(left, right)
+        | Expression::Less(left, right)
+        | Expression::LessOrEqual(left, right) => {
+            pending.push(right);
+            pending.push(left);
+        }
+        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
+            pending.push(inner);
+        }
+        Expression::In(target, list) => {
+            pending.extend(list.iter_mut().rev());
+            pending.push(target);
+        }
+        Expression::If(cond, then_expr, else_expr) => {
+            pending.push(else_expr);
+            pending.push(then_expr);
+            pending.push(cond);
+        }
+        Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+            pending.extend(list.iter_mut().rev());
         }
     }
 }
@@ -2089,28 +2690,34 @@ fn carried_columns(
 /// names, at any depth, is either written or driven. The predicate is not entered:
 /// it names a predicate, which only an IRI can, and neither rule writes there.
 fn substitute_in_term_pattern(term: &mut TermPattern, values: &[(Variable, GroundTerm)]) {
-    let var = match term {
-        TermPattern::Variable(var) => var,
-        TermPattern::Triple(triple) => {
-            substitute_in_term_pattern(&mut triple.subject, values);
-            substitute_in_term_pattern(&mut triple.object, values);
-            return;
-        }
-        TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
-            return;
-        }
-    };
-    let Some((_, ground)) = values.iter().find(|(candidate, _)| candidate == var) else {
-        return;
-    };
-    // Wildcard-free over [`Pushability`], so a new class of value cannot slip through
-    // this position on the strength of a catch-all written for the old ones.
-    let replacement = match Pushability::of(ground) {
-        Pushability::Iri(node) => TermPattern::NamedNode(node.clone()),
-        Pushability::Literal(literal) => TermPattern::Literal(literal.clone()),
-        Pushability::QuotedTriple(_) | Pushability::SeedOnly => return,
-    };
-    *term = replacement;
+    // The positions, over a work list: the term, and within a quoted triple its
+    // subject's positions before its object's.
+    let mut pending: Vec<&mut TermPattern> = vec![term];
+    while let Some(term) = pending.pop() {
+        let var = match term {
+            TermPattern::Variable(var) => var,
+            TermPattern::Triple(triple) => {
+                let triple: &mut TriplePattern = triple;
+                pending.push(&mut triple.object);
+                pending.push(&mut triple.subject);
+                continue;
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+                continue;
+            }
+        };
+        let Some((_, ground)) = values.iter().find(|(candidate, _)| candidate == var) else {
+            continue;
+        };
+        // Wildcard-free over [`Pushability`], so a new class of value cannot slip through
+        // this position on the strength of a catch-all written for the old ones.
+        let replacement = match Pushability::of(ground) {
+            Pushability::Iri(node) => TermPattern::NamedNode(node.clone()),
+            Pushability::Literal(literal) => TermPattern::Literal(literal.clone()),
+            Pushability::QuotedTriple(_) | Pushability::SeedOnly => continue,
+        };
+        *term = replacement;
+    }
 }
 
 /// Replace a pre-bound variable in a `GRAPH`/`SERVICE` name with its IRI constant.
@@ -2129,14 +2736,18 @@ fn substitute_in_named_node_pattern(pattern: &mut NamedNodePattern, expr_subs: &
     *pattern = NamedNodePattern::NamedNode(node);
 }
 
-/// Recursively substitute pre-bound variables into an [`Expression`].
-fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
-    // See `push_probes`.
-    if crate::stack::walk_is_low("pre-binding rewrite") {
-        return;
-    }
+/// Substitute pre-bound variables into `roots`, in order, each expression before the
+/// ones it holds: a pre-bound variable with an expression form becomes that constant,
+/// and a `BOUND` of any pre-bound variable becomes `true`. Every `EXISTS` body met is
+/// taken out into `bodies`, in the order met, for the caller to substitute in the
+/// body's own scope and put back with [`replace_exists_bodies`].
+fn substitute_in_expressions<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    expr_subs: &ExprSubs,
+    bodies: &mut Vec<GraphPattern>,
+) {
     // Wildcard-free on purpose, for the same reason the graph-pattern walk is.
-    match expr {
+    for_each_expression_mut(roots, |expr| match expr {
         Expression::Variable(var) => {
             // Resolved before the assignment so `var`'s borrow of `*expr` has ended.
             // `expression_from_ground` is the [`Pushability`] consumer for this
@@ -2156,86 +2767,58 @@ fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
                 *expr = true_literal();
             }
         }
-        Expression::NamedNode(_) | Expression::Literal(_) => {}
-        Expression::Or(operands) | Expression::And(operands) => {
-            for operand in operands.iter_mut() {
-                substitute_in_expression(operand, expr_subs);
-            }
-        }
-        Expression::Arithmetic(first, steps) => {
-            substitute_in_expression(first, expr_subs);
-            for (_, operand) in steps.iter_mut() {
-                substitute_in_expression(operand, expr_subs);
-            }
-        }
-        Expression::Equal(left, right)
-        | Expression::SameTerm(left, right)
-        | Expression::Greater(left, right)
-        | Expression::GreaterOrEqual(left, right)
-        | Expression::Less(left, right)
-        | Expression::LessOrEqual(left, right) => {
-            substitute_in_expression(left, expr_subs);
-            substitute_in_expression(right, expr_subs);
-        }
-        Expression::UnaryPlus(inner) | Expression::UnaryMinus(inner) | Expression::Not(inner) => {
-            substitute_in_expression(inner, expr_subs);
-        }
-        Expression::In(target, list) => {
-            substitute_in_expression(target, expr_subs);
-            for item in list.iter_mut() {
-                substitute_in_expression(item, expr_subs);
-            }
-        }
-        Expression::If(cond, then_expr, else_expr) => {
-            substitute_in_expression(cond, expr_subs);
-            substitute_in_expression(then_expr, expr_subs);
-            substitute_in_expression(else_expr, expr_subs);
-        }
-        Expression::Coalesce(list) => {
-            for item in list.iter_mut() {
-                substitute_in_expression(item, expr_subs);
-            }
-        }
-        Expression::FunctionCall(_, args) => {
-            for arg in args.iter_mut() {
-                substitute_in_expression(arg, expr_subs);
-            }
-        }
-        // Back into graph-pattern territory: the two walks convert together.
-        // Everything below is an `EXISTS` body, however deeply it is nested there.
-        Expression::Exists(inner) => {
-            substitute_in_graph_pattern(inner, expr_subs, WalkScope::ExistsBody);
-        }
-    }
+        // Back into graph-pattern territory: the body is substituted by the pattern
+        // walk, in the `EXISTS` scope, however deeply the `EXISTS` is nested here.
+        Expression::Exists(inner) => bodies.push(take_child(inner)),
+        Expression::NamedNode(_)
+        | Expression::Literal(_)
+        | Expression::Or(_)
+        | Expression::And(_)
+        | Expression::Arithmetic(..)
+        | Expression::Equal(..)
+        | Expression::SameTerm(..)
+        | Expression::Greater(..)
+        | Expression::GreaterOrEqual(..)
+        | Expression::Less(..)
+        | Expression::LessOrEqual(..)
+        | Expression::UnaryPlus(_)
+        | Expression::UnaryMinus(_)
+        | Expression::Not(_)
+        | Expression::In(..)
+        | Expression::If(..)
+        | Expression::Coalesce(_)
+        | Expression::FunctionCall(..) => {}
+    });
 }
 
-/// Substitute inside an [`OrderExpression`] sort key.
-fn substitute_in_order_expression(order: &mut OrderExpression, expr_subs: &ExprSubs) {
-    match order {
-        OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => {
-            substitute_in_expression(expr, expr_subs);
+/// Put `bodies` back into the `EXISTS` positions of `roots`, in the order
+/// [`substitute_in_expressions`] took them out: the substitution leaves every `EXISTS`
+/// where it was, so the same walk meets the same positions in the same order.
+fn replace_exists_bodies<'e>(
+    roots: impl IntoIterator<Item = &'e mut Expression>,
+    bodies: Vec<GraphPattern>,
+) {
+    let mut bodies = bodies.into_iter();
+    for_each_expression_mut(roots, |expr| {
+        if let Expression::Exists(inner) = expr {
+            **inner = bodies
+                .next()
+                .expect("every EXISTS position had its body taken out");
         }
-    }
+    });
+    let left_over = bodies.next();
+    debug_assert!(left_over.is_none(), "every body taken out goes back");
 }
 
-/// Substitute inside a [`GROUP BY`][`AggregateExpression`] aggregate.
-fn substitute_in_aggregate(agg: AggregateExpression, expr_subs: &ExprSubs) -> AggregateExpression {
-    let (function, mut args, scalarvals, mut order_by, distinct) = agg.into_parts();
-    for arg in &mut args {
-        substitute_in_expression(arg, expr_subs);
+/// Substitute pre-bound variables into one [`Expression`], `EXISTS` bodies included.
+#[cfg(test)]
+fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
+    let mut bodies = Vec::new();
+    substitute_in_expressions([&mut *expr], expr_subs, &mut bodies);
+    for body in &mut bodies {
+        substitute_in_graph_pattern(body, expr_subs, WalkScope::ExistsBody);
     }
-    // A `FOLD`'s own sort keys are per-row expressions over the SAME solutions
-    // its arguments read, so a substitution that rewrites `?x` in the argument
-    // must rewrite it in the sort key too — leaving them alone would order the
-    // fold by a variable the substituted query no longer binds.
-    for order in &mut order_by {
-        substitute_in_order_expression(order, expr_subs);
-    }
-    // `substitute_in_expression` rewrites each argument in place and never
-    // changes the argument COUNT, and rewriting a sort key never removes one,
-    // so this can never turn a valid `agg` into an invalid one.
-    AggregateExpression::new(function, args, scalarvals, order_by, distinct)
-        .expect("substitution preserves argument count, so arity stays valid")
+    replace_exists_bodies([expr], bodies);
 }
 
 /// The SPARQL `true` boolean literal (`"true"^^xsd:boolean`).
@@ -2247,44 +2830,42 @@ fn true_literal() -> Expression {
 }
 
 /// Convert a dataset-independent [`TermValue`] to the algebra's [`GroundTerm`].
+///
+/// A quoted triple is built from the bottom up over a frame per open triple — its
+/// subject, then its predicate, then its object ([`ground_term_over`]) — so a term of
+/// any depth is converted without a machine-stack frame per level, and the first
+/// component that cannot be converted is the error reported.
+///
+/// # Errors
+///
+/// An IRI a [`NamedNode`] would refuse, a language tag this profile does not lex, or a
+/// quoted triple whose predicate is not an IRI.
 fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic> {
-    match value {
-        TermValue::Iri(iri) => Ok(GroundTerm::NamedNode(node(iri)?)),
-        // The algebra's `BlankNode` has ONE string slot, so a `(label, scope)`
-        // pair is carried in it the way every other single-slot blank surface
-        // carries one: as the scope-qualified rendering. `ground_term_to_value`
-        // decodes it back, so an injected blank focus node still denotes the
-        // dataset node it was resolved from rather than a fresh, unrelated one.
-        TermValue::Blank { label, scope } => Ok(GroundTerm::BlankNode(BlankNode::new(
-            scope.qualify_label(label).into_owned(),
-        ))),
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => Ok(GroundTerm::Literal(literal_from_value(
-            lexical_form,
-            datatype,
-            language.as_deref(),
-            *direction,
-        )?)),
-        TermValue::Triple { s, p, o } => {
-            let subject = ground_term_from_value(s)?;
-            let GroundTerm::NamedNode(predicate) = ground_term_from_value(p)? else {
-                return Err(RdfDiagnostic::error(
-                    "native-sparql-subst-triple-predicate",
-                    "a quoted-triple predicate must be an IRI".to_owned(),
-                ));
-            };
-            let object = ground_term_from_value(o)?;
-            Ok(GroundTerm::Triple(Child::new(GroundTriple {
-                subject,
-                predicate,
-                object,
-            })))
-        }
-    }
+    ground_term_over(value, |value| {
+        Ok(match value {
+            TermValue::Iri(iri) => GroundComponent::Term(GroundTerm::NamedNode(node(iri)?)),
+            // The algebra's `BlankNode` has ONE string slot, so a `(label, scope)`
+            // pair is carried in it the way every other single-slot blank surface
+            // carries one: as the scope-qualified rendering. `ground_term_to_value`
+            // decodes it back, so an injected blank focus node still denotes the
+            // dataset node it was resolved from rather than a fresh, unrelated one.
+            TermValue::Blank { label, scope } => GroundComponent::Term(GroundTerm::BlankNode(
+                BlankNode::new(scope.qualify_label(label).into_owned()),
+            )),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => GroundComponent::Term(GroundTerm::Literal(literal_from_value(
+                lexical_form,
+                datatype,
+                language.as_deref(),
+                *direction,
+            )?)),
+            TermValue::Triple { s, p, o } => GroundComponent::Triple([&**s, &**p, &**o]),
+        })
+    })
 }
 
 /// Convert a dataset's own term id straight to the algebra's [`GroundTerm`],
@@ -2305,7 +2886,8 @@ fn ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic
 /// It is a strictly narrower door, not a looser one: every component still goes
 /// through the same [`node`] and [`lang`] admission the value door uses, so a
 /// dataset holding a term the algebra would refuse is refused here identically
-/// rather than admitted because it came from "inside".
+/// rather than admitted because it came from "inside". A quoted triple is built the
+/// way [`ground_term_from_value`] builds one ([`ground_term_over`]).
 ///
 /// # Errors
 ///
@@ -2316,46 +2898,129 @@ pub(crate) fn ground_term_from_id<D: DatasetView>(
     dataset: &D,
     id: D::Id,
 ) -> Result<GroundTerm, RdfDiagnostic> {
-    match dataset.resolve(id) {
-        TermRef::Iri(iri) => Ok(GroundTerm::NamedNode(node(iri)?)),
-        // Qualified exactly as `ground_term_from_value` qualifies a `TermValue::Blank`,
-        // because the two doors must produce the same algebra term for the same
-        // dataset node — the algebra's `BlankNode` has one string slot, and the
-        // scope-qualified rendering is how every single-slot blank surface carries a
-        // `(label, scope)` pair.
-        TermRef::Blank { label, scope } => Ok(GroundTerm::BlankNode(BlankNode::new(
-            scope.qualify_label(label).into_owned(),
-        ))),
-        TermRef::Literal {
-            lexical,
-            datatype,
-            language,
-            direction,
-        } => {
-            let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
-                return Err(RdfDiagnostic::error(
-                    "native-sparql-subst-literal-datatype",
-                    "a literal's datatype must be an IRI".to_owned(),
-                ));
+    ground_term_over(id, |id| {
+        Ok(match dataset.resolve(id) {
+            TermRef::Iri(iri) => GroundComponent::Term(GroundTerm::NamedNode(node(iri)?)),
+            // Qualified exactly as `ground_term_from_value` qualifies a `TermValue::Blank`,
+            // because the two doors must produce the same algebra term for the same
+            // dataset node — the algebra's `BlankNode` has one string slot, and the
+            // scope-qualified rendering is how every single-slot blank surface carries a
+            // `(label, scope)` pair.
+            TermRef::Blank { label, scope } => GroundComponent::Term(GroundTerm::BlankNode(
+                BlankNode::new(scope.qualify_label(label).into_owned()),
+            )),
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                    return Err(RdfDiagnostic::error(
+                        "native-sparql-subst-literal-datatype",
+                        "a literal's datatype must be an IRI".to_owned(),
+                    ));
+                };
+                GroundComponent::Term(GroundTerm::Literal(literal_from_value(
+                    lexical, datatype, language, direction,
+                )?))
+            }
+            TermRef::Triple { s, p, o } => GroundComponent::Triple([s, p, o]),
+        })
+    })
+}
+
+/// What one component of a term converts to: a ground term, or a quoted triple's
+/// three components, each still to convert.
+enum GroundComponent<C> {
+    Term(GroundTerm),
+    Triple([C; 3]),
+}
+
+/// A quoted triple being converted: the components not yet entered, and what has come
+/// back so far.
+struct OpenGroundTriple<C> {
+    predicate: C,
+    object: C,
+    stage: GroundTripleStage,
+}
+
+/// How far a quoted triple's conversion has come.
+enum GroundTripleStage {
+    /// The subject is being converted.
+    Subject,
+    /// The predicate is being converted.
+    Predicate { subject: GroundTerm },
+    /// The object is being converted.
+    Object {
+        subject: GroundTerm,
+        predicate: NamedNode,
+    },
+}
+
+/// Convert the term named by `root` to a [`GroundTerm`], where `convert` converts one
+/// component: a leaf to its term, a quoted triple to its components. A quoted triple is
+/// built from the bottom up over a frame per open triple — subject, then predicate, then
+/// object — so a term of any depth is converted without a machine-stack frame per
+/// level. The first component `convert` refuses is the error reported, and a converted
+/// predicate that is not an IRI is refused when it comes back, before its object is
+/// entered.
+fn ground_term_over<C: Copy>(
+    root: C,
+    mut convert: impl FnMut(C) -> Result<GroundComponent<C>, RdfDiagnostic>,
+) -> Result<GroundTerm, RdfDiagnostic> {
+    let mut open: Vec<OpenGroundTriple<C>> = Vec::new();
+    let mut next = root;
+    loop {
+        let mut built = match convert(next)? {
+            GroundComponent::Term(term) => term,
+            GroundComponent::Triple([subject, predicate, object]) => {
+                open.push(OpenGroundTriple {
+                    predicate,
+                    object,
+                    stage: GroundTripleStage::Subject,
+                });
+                next = subject;
+                continue;
+            }
+        };
+        // Hand the converted component up: it is the open triple's subject or
+        // predicate, whose next component is entered, or its object, which closes the
+        // triple.
+        loop {
+            let Some(top) = open.pop() else {
+                return Ok(built);
             };
-            Ok(GroundTerm::Literal(literal_from_value(
-                lexical, datatype, language, direction,
-            )?))
-        }
-        TermRef::Triple { s, p, o } => {
-            let subject = ground_term_from_id(dataset, s)?;
-            let GroundTerm::NamedNode(predicate) = ground_term_from_id(dataset, p)? else {
-                return Err(RdfDiagnostic::error(
-                    "native-sparql-subst-triple-predicate",
-                    "a quoted-triple predicate must be an IRI".to_owned(),
-                ));
+            let stage = match top.stage {
+                GroundTripleStage::Subject => {
+                    next = top.predicate;
+                    GroundTripleStage::Predicate { subject: built }
+                }
+                GroundTripleStage::Predicate { subject } => {
+                    let GroundTerm::NamedNode(predicate) = built else {
+                        return Err(RdfDiagnostic::error(
+                            "native-sparql-subst-triple-predicate",
+                            "a quoted-triple predicate must be an IRI".to_owned(),
+                        ));
+                    };
+                    next = top.object;
+                    GroundTripleStage::Object { subject, predicate }
+                }
+                GroundTripleStage::Object { subject, predicate } => {
+                    built = GroundTerm::Triple(Child::new(GroundTriple {
+                        subject,
+                        predicate,
+                        object: built,
+                    }));
+                    continue;
+                }
             };
-            let object = ground_term_from_id(dataset, o)?;
-            Ok(GroundTerm::Triple(Child::new(GroundTriple {
-                subject,
-                predicate,
-                object,
-            })))
+            open.push(OpenGroundTriple {
+                predicate: top.predicate,
+                object: top.object,
+                stage,
+            });
+            break;
         }
     }
 }
@@ -2775,5 +3440,1875 @@ mod tests {
                 }),
             }
         );
+    }
+}
+
+/// The work-list walks against recursive readings of the same rewrites, over generated
+/// shapes, and at depths no recursive reading could reach on a small stack.
+///
+/// Every function converted from recursion has a `reference_*` twin here holding the
+/// recursive form, and each twin calls the twins of the converted functions beneath it,
+/// so a test compares whole recursive rewrites against whole work-list rewrites.
+#[cfg(test)]
+mod walk_tests {
+    use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfLiteral, TermBox};
+    use purrdf_sparql_algebra::{
+        AggregateFunction, ArithmeticOperator, Chain, Function, NonEmpty, PropertyPathExpression,
+    };
+
+    use super::*;
+
+    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    const SMALL_STACK: usize = 128 * 1024;
+    const DEEP: usize = 100_000;
+
+    // ── The recursive references ───────────────────────────────────────────────────
+
+    fn reference_term_pattern_from_ground(ground: &GroundTerm) -> Option<TermPattern> {
+        match Pushability::of(ground) {
+            Pushability::Iri(node) => Some(TermPattern::NamedNode(node.clone())),
+            Pushability::Literal(literal) => Some(TermPattern::Literal(literal.clone())),
+            Pushability::QuotedTriple(triple) => {
+                Some(TermPattern::Triple(Child::new(TriplePattern {
+                    subject: reference_term_pattern_from_ground(&triple.subject)?,
+                    predicate: NamedNodePattern::NamedNode(triple.predicate.clone()),
+                    object: reference_term_pattern_from_ground(&triple.object)?,
+                })))
+            }
+            Pushability::SeedOnly => None,
+        }
+    }
+
+    fn reference_ground_term_from_value(value: &TermValue) -> Result<GroundTerm, RdfDiagnostic> {
+        match value {
+            TermValue::Iri(iri) => Ok(GroundTerm::NamedNode(node(iri)?)),
+            TermValue::Blank { label, scope } => Ok(GroundTerm::BlankNode(BlankNode::new(
+                scope.qualify_label(label).into_owned(),
+            ))),
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => Ok(GroundTerm::Literal(literal_from_value(
+                lexical_form,
+                datatype,
+                language.as_deref(),
+                *direction,
+            )?)),
+            TermValue::Triple { s, p, o } => {
+                let subject = reference_ground_term_from_value(s)?;
+                let GroundTerm::NamedNode(predicate) = reference_ground_term_from_value(p)? else {
+                    return Err(RdfDiagnostic::error(
+                        "native-sparql-subst-triple-predicate",
+                        "a quoted-triple predicate must be an IRI".to_owned(),
+                    ));
+                };
+                let object = reference_ground_term_from_value(o)?;
+                Ok(GroundTerm::Triple(Child::new(GroundTriple {
+                    subject,
+                    predicate,
+                    object,
+                })))
+            }
+        }
+    }
+
+    fn reference_ground_term_from_id<D: DatasetView>(
+        dataset: &D,
+        id: D::Id,
+    ) -> Result<GroundTerm, RdfDiagnostic> {
+        match dataset.resolve(id) {
+            TermRef::Iri(iri) => Ok(GroundTerm::NamedNode(node(iri)?)),
+            TermRef::Blank { label, scope } => Ok(GroundTerm::BlankNode(BlankNode::new(
+                scope.qualify_label(label).into_owned(),
+            ))),
+            TermRef::Literal {
+                lexical,
+                datatype,
+                language,
+                direction,
+            } => {
+                let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
+                    return Err(RdfDiagnostic::error(
+                        "native-sparql-subst-literal-datatype",
+                        "a literal's datatype must be an IRI".to_owned(),
+                    ));
+                };
+                Ok(GroundTerm::Literal(literal_from_value(
+                    lexical, datatype, language, direction,
+                )?))
+            }
+            TermRef::Triple { s, p, o } => {
+                let subject = reference_ground_term_from_id(dataset, s)?;
+                let GroundTerm::NamedNode(predicate) = reference_ground_term_from_id(dataset, p)?
+                else {
+                    return Err(RdfDiagnostic::error(
+                        "native-sparql-subst-triple-predicate",
+                        "a quoted-triple predicate must be an IRI".to_owned(),
+                    ));
+                };
+                let object = reference_ground_term_from_id(dataset, o)?;
+                Ok(GroundTerm::Triple(Child::new(GroundTriple {
+                    subject,
+                    predicate,
+                    object,
+                })))
+            }
+        }
+    }
+
+    fn reference_substitute_in_term_pattern(
+        term: &mut TermPattern,
+        values: &[(Variable, GroundTerm)],
+    ) {
+        let var = match term {
+            TermPattern::Variable(var) => var,
+            TermPattern::Triple(triple) => {
+                reference_substitute_in_term_pattern(&mut triple.subject, values);
+                reference_substitute_in_term_pattern(&mut triple.object, values);
+                return;
+            }
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+                return;
+            }
+        };
+        let Some((_, ground)) = values.iter().find(|(candidate, _)| candidate == var) else {
+            return;
+        };
+        let replacement = match Pushability::of(ground) {
+            Pushability::Iri(node) => TermPattern::NamedNode(node.clone()),
+            Pushability::Literal(literal) => TermPattern::Literal(literal.clone()),
+            Pushability::QuotedTriple(_) | Pushability::SeedOnly => return,
+        };
+        *term = replacement;
+    }
+
+    fn reference_probe_triple_pattern(
+        triple: &mut TriplePattern,
+        probes: &[(Variable, GroundTerm)],
+        probed: &mut Vec<usize>,
+    ) {
+        reference_probe_term_pattern(&mut triple.subject, probes, probed);
+        reference_probe_term_pattern(&mut triple.object, probes, probed);
+    }
+
+    fn reference_probe_term_pattern(
+        term: &mut TermPattern,
+        probes: &[(Variable, GroundTerm)],
+        probed: &mut Vec<usize>,
+    ) {
+        match term {
+            TermPattern::Variable(var) => {
+                let Some(index) = probes.iter().position(|(candidate, _)| candidate == var) else {
+                    return;
+                };
+                let Some(constant) = reference_term_pattern_from_ground(&probes[index].1) else {
+                    return;
+                };
+                if !probed.contains(&index) {
+                    probed.push(index);
+                }
+                *term = constant;
+            }
+            TermPattern::Triple(triple) => reference_probe_triple_pattern(triple, probes, probed),
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+        }
+    }
+
+    fn reference_driven_arguments(
+        call: &PropertyFunctionCall,
+        probes: &[(Variable, GroundTerm)],
+        rule: Unwritable,
+        already: Option<&GraphPattern>,
+    ) -> Vec<usize> {
+        fn visit(
+            term: &TermPattern,
+            probes: &[(Variable, GroundTerm)],
+            rule: Unwritable,
+            already: Option<&GraphPattern>,
+            driven: &mut Vec<usize>,
+        ) {
+            match term {
+                TermPattern::Variable(var) => {
+                    if let Some(index) = probes.iter().position(|(candidate, _)| candidate == var)
+                        && rule.holds(&probes[index].1)
+                        && !driven.contains(&index)
+                        && !already.is_some_and(|left| drives(left, var))
+                    {
+                        driven.push(index);
+                    }
+                }
+                TermPattern::Triple(triple) => {
+                    visit(&triple.subject, probes, rule, already, driven);
+                    visit(&triple.object, probes, rule, already, driven);
+                }
+                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+                }
+            }
+        }
+        let mut driven = Vec::new();
+        for argument in call.subject_args.iter().chain(call.object_args.iter()) {
+            visit(argument, probes, rule, already, &mut driven);
+        }
+        driven
+    }
+
+    fn reference_undriven_variables(
+        call: &PropertyFunctionCall,
+        seed: &GraphPattern,
+    ) -> Vec<Variable> {
+        fn keep(var: &Variable, driven: &[Variable], kept: &mut Vec<Variable>) {
+            if !driven.contains(var) && !kept.contains(var) {
+                kept.push(var.clone());
+            }
+        }
+        fn visit(term: &TermPattern, driven: &[Variable], kept: &mut Vec<Variable>) {
+            match term {
+                TermPattern::Variable(var) => keep(var, driven, kept),
+                TermPattern::Triple(triple) => {
+                    visit(&triple.subject, driven, kept);
+                    if let NamedNodePattern::Variable(var) = &triple.predicate {
+                        keep(var, driven, kept);
+                    }
+                    visit(&triple.object, driven, kept);
+                }
+                TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {
+                }
+            }
+        }
+        let driven: &[Variable] = match seed {
+            GraphPattern::Values { variables, .. } => variables,
+            _ => &[],
+        };
+        let mut kept = Vec::new();
+        for argument in call.subject_args.iter().chain(call.object_args.iter()) {
+            visit(argument, driven, &mut kept);
+        }
+        kept
+    }
+
+    fn reference_call_driver(
+        call: &PropertyFunctionCall,
+        values: &[(Variable, GroundTerm)],
+        rule: Unwritable,
+        already: Option<&GraphPattern>,
+    ) -> Option<GraphPattern> {
+        let driven = reference_driven_arguments(call, values, rule, already);
+        (!driven.is_empty()).then(|| seed_row(&driven, values))
+    }
+
+    fn reference_drive_call_arguments(
+        pattern: &mut GraphPattern,
+        probes: &[(Variable, GroundTerm)],
+        rule: Unwritable,
+    ) {
+        match pattern {
+            GraphPattern::PropertyFunction(call) => {
+                if let Some(seed) = reference_call_driver(call, probes, rule, None) {
+                    plant_stand_alone_driver(pattern, seed);
+                }
+            }
+            GraphPattern::Lateral { left, right } => {
+                let Some(call) = lateral_call(right) else {
+                    return;
+                };
+                if let Some(seed) = reference_call_driver(call, probes, rule, Some(left)) {
+                    plant_left_driver(left, seed);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn reference_bind_call_arguments(
+        call: &mut PropertyFunctionCall,
+        values: &[(Variable, GroundTerm)],
+        already: Option<&GraphPattern>,
+    ) -> Option<GraphPattern> {
+        for term in call
+            .subject_args
+            .iter_mut()
+            .chain(call.object_args.iter_mut())
+        {
+            reference_substitute_in_term_pattern(term, values);
+        }
+        reference_call_driver(call, values, Unwritable::InArgument, already)
+    }
+
+    fn reference_push_probes(
+        pattern: &mut GraphPattern,
+        probes: &[(Variable, GroundTerm)],
+        at_core_root: bool,
+    ) {
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                let mut probed = Vec::new();
+                for triple in patterns.iter_mut() {
+                    reference_probe_triple_pattern(triple, probes, &mut probed);
+                }
+                restore_probed_bindings(pattern, &probed, probes, at_core_root);
+            }
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                let mut probed = Vec::new();
+                reference_probe_term_pattern(subject, probes, &mut probed);
+                reference_probe_term_pattern(object, probes, &mut probed);
+                restore_probed_bindings(pattern, &probed, probes, at_core_root);
+            }
+            GraphPattern::Join { left, right } => {
+                reference_push_probes(left, probes, false);
+                reference_push_probes(right, probes, false);
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms {
+                    reference_push_probes(arm, probes, false);
+                }
+            }
+            GraphPattern::Graph { inner, .. } | GraphPattern::Filter { inner, .. } => {
+                reference_push_probes(inner, probes, false);
+            }
+            GraphPattern::PropertyFunction(call) => {
+                let mut probed = Vec::new();
+                for argument in call
+                    .subject_args
+                    .iter_mut()
+                    .chain(call.object_args.iter_mut())
+                {
+                    reference_probe_term_pattern(argument, probes, &mut probed);
+                }
+                reference_drive_call_arguments(pattern, probes, Unwritable::InPattern);
+                restore_probed_bindings(pattern, &probed, probes, at_core_root);
+            }
+            GraphPattern::Extend {
+                inner, variable, ..
+            } => {
+                let narrowed: Vec<(Variable, GroundTerm)>;
+                let inner_probes = if probes.iter().any(|(var, _)| var == &*variable) {
+                    narrowed = probes
+                        .iter()
+                        .filter(|(var, _)| var != &*variable)
+                        .cloned()
+                        .collect();
+                    &narrowed
+                } else {
+                    probes
+                };
+                reference_push_probes(inner, inner_probes, false);
+            }
+            GraphPattern::LeftJoin { left, .. } | GraphPattern::Minus { left, .. } => {
+                reference_push_probes(left, probes, false);
+            }
+            GraphPattern::Lateral { left, right } => {
+                reference_push_probes(left, probes, false);
+                let Some(call) = lateral_call_mut(right) else {
+                    reference_push_probes(right, probes, false);
+                    return;
+                };
+                let mut probed = Vec::new();
+                for argument in call
+                    .subject_args
+                    .iter_mut()
+                    .chain(call.object_args.iter_mut())
+                {
+                    reference_probe_term_pattern(argument, probes, &mut probed);
+                }
+                reference_drive_call_arguments(pattern, probes, Unwritable::InPattern);
+                restore_probed_bindings(pattern, &probed, probes, at_core_root);
+            }
+            GraphPattern::Project { inner, variables } => {
+                if probes.iter().all(|(var, _)| variables.contains(var)) {
+                    reference_push_probes(inner, probes, false);
+                } else {
+                    let projected: Vec<(Variable, GroundTerm)> = probes
+                        .iter()
+                        .filter(|(var, _)| variables.contains(var))
+                        .cloned()
+                        .collect();
+                    if !projected.is_empty() {
+                        reference_push_probes(inner, &projected, false);
+                    }
+                }
+            }
+            GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::OrderBy { inner, .. } => reference_push_probes(inner, probes, false),
+            GraphPattern::Group {
+                inner, variables, ..
+            } => {
+                if probes
+                    .iter()
+                    .all(|(var, _)| group_key_carries(variables, var))
+                {
+                    reference_push_probes(inner, probes, false);
+                } else {
+                    let keyed: Vec<(Variable, GroundTerm)> = probes
+                        .iter()
+                        .filter(|(var, _)| group_key_carries(variables, var))
+                        .cloned()
+                        .collect();
+                    if !keyed.is_empty() {
+                        reference_push_probes(inner, &keyed, false);
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn reference_substitute_in_graph_pattern(
+        pattern: &mut GraphPattern,
+        expr_subs: &ExprSubs,
+        scope: WalkScope,
+    ) -> SeedColumns {
+        let beneath = scope.beneath();
+        let core = SeedColumns::at_core(scope, expr_subs.0.len());
+        let (reads_expressions, carried) = match pattern {
+            GraphPattern::Bgp { .. } | GraphPattern::Path { .. } | GraphPattern::Values { .. } => {
+                (false, core)
+            }
+            GraphPattern::Join { left, right } | GraphPattern::Minus { left, right } => {
+                reference_substitute_in_graph_pattern(left, expr_subs, beneath);
+                reference_substitute_in_graph_pattern(right, expr_subs, beneath);
+                (false, core)
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms {
+                    reference_substitute_in_graph_pattern(arm, expr_subs, beneath);
+                }
+                (false, core)
+            }
+            GraphPattern::Lateral { left, right } => {
+                reference_substitute_in_graph_pattern(left, expr_subs, beneath);
+                if let Some(call) = lateral_call_mut(right) {
+                    match beneath {
+                        WalkScope::Descent | WalkScope::Group => {
+                            if let Some(seed) =
+                                reference_bind_call_arguments(call, &expr_subs.0, Some(left))
+                            {
+                                plant_left_driver(left, seed);
+                            }
+                        }
+                        WalkScope::ExistsBody => {
+                            if let Some(seed) =
+                                reference_bind_call_arguments(call, &expr_subs.0, None)
+                            {
+                                let kept = reference_undriven_variables(call, &seed);
+                                plant_scoped_driver(right, seed, kept);
+                            }
+                        }
+                    }
+                } else {
+                    reference_substitute_in_graph_pattern(right, expr_subs, beneath);
+                }
+                (false, core)
+            }
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } => {
+                reference_substitute_in_graph_pattern(left, expr_subs, beneath);
+                reference_substitute_in_graph_pattern(right, expr_subs, beneath);
+                if let Some(expression) = expression {
+                    reference_substitute_in_expression(expression, expr_subs);
+                }
+                (expression.is_some(), core)
+            }
+            GraphPattern::Filter { expr, inner } => {
+                reference_substitute_in_expression(expr, expr_subs);
+                (
+                    true,
+                    reference_substitute_in_graph_pattern(inner, expr_subs, scope),
+                )
+            }
+            GraphPattern::Graph { name, inner } | GraphPattern::Service { name, inner, .. } => {
+                substitute_in_named_node_pattern(name, expr_subs);
+                reference_substitute_in_graph_pattern(inner, expr_subs, beneath);
+                (false, core)
+            }
+            GraphPattern::Extend {
+                inner, expression, ..
+            }
+            | GraphPattern::Unfold {
+                inner, expression, ..
+            } => {
+                let carried = reference_substitute_in_graph_pattern(inner, expr_subs, scope);
+                reference_substitute_in_expression(expression, expr_subs);
+                (true, carried)
+            }
+            GraphPattern::OrderBy { inner, expression } => {
+                let carried = reference_substitute_in_graph_pattern(inner, expr_subs, scope);
+                for order in expression.iter_mut() {
+                    reference_substitute_in_order_expression(order, expr_subs);
+                }
+                (true, carried)
+            }
+            GraphPattern::Project { inner, variables } => {
+                let carried = reference_substitute_in_graph_pattern(inner, expr_subs, scope);
+                (false, carried.kept(expr_subs, variables))
+            }
+            GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. } => (
+                false,
+                reference_substitute_in_graph_pattern(inner, expr_subs, scope),
+            ),
+            GraphPattern::PropertyFunction(call) => {
+                if let Some(seed) = reference_bind_call_arguments(call, &expr_subs.0, None) {
+                    match beneath {
+                        WalkScope::Descent | WalkScope::Group => {
+                            plant_stand_alone_driver(pattern, seed);
+                        }
+                        WalkScope::ExistsBody => {
+                            let kept = reference_undriven_variables(call, &seed);
+                            plant_scoped_driver(pattern, seed, kept);
+                        }
+                    }
+                }
+                (false, core)
+            }
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => {
+                let operand = reference_substitute_in_graph_pattern(inner, expr_subs, scope);
+                let carried = operand.kept(expr_subs, variables);
+                let taken = std::mem::take(aggregates);
+                *aggregates = taken
+                    .into_iter()
+                    .map(|(var, agg)| (var, reference_substitute_in_aggregate(agg, expr_subs)))
+                    .collect();
+                reference_drive_expression_reads(pattern, expr_subs, scope, operand);
+                return carried;
+            }
+        };
+        if reads_expressions {
+            reference_drive_expression_reads(pattern, expr_subs, scope, carried);
+        }
+        carried
+    }
+
+    fn reference_drive_expression_reads(
+        node: &mut GraphPattern,
+        expr_subs: &ExprSubs,
+        scope: WalkScope,
+        operand: SeedColumns,
+    ) {
+        if scope == WalkScope::Descent && (0..expr_subs.0.len()).all(|index| operand.carries(index))
+        {
+            return;
+        }
+        let mut reads = Reads::default();
+        for_each_node_expression(node, &mut |expr| {
+            reference_note_reads(expr, expr_subs, &mut reads);
+        });
+        if reads.plain.is_empty() && reads.in_exists.is_empty() {
+            return;
+        }
+        if scope == WalkScope::Descent {
+            reads.plain.retain(|&index| !operand.carries(index));
+            reads.in_exists.retain(|&index| !operand.carries(index));
+        } else if !reads.in_exists.is_empty() {
+            let exposed = operand_schema(node);
+            reads
+                .in_exists
+                .retain(|&index| !exposed.contains(&expr_subs.0[index].0));
+        }
+        if reads.plain.is_empty() && reads.in_exists.is_empty() {
+            return;
+        }
+        let hides_operand = matches!(node, GraphPattern::Group { .. });
+        let carried = (!hides_operand).then(|| carried_columns(node, expr_subs, &reads, scope));
+
+        let renames: Vec<(Variable, Variable)> = reads
+            .plain
+            .iter()
+            .map(|&index| {
+                let var = &expr_subs.0[index].0;
+                (var.clone(), stand_in(var))
+            })
+            .collect();
+        if !renames.is_empty() {
+            for_each_node_expression_mut(node, &mut |expr| reference_rename_reads(expr, &renames));
+        }
+        let mut variables = Vec::with_capacity(renames.len() + reads.in_exists.len());
+        let mut row = Vec::with_capacity(variables.capacity());
+        for (&index, (_, stand_in)) in reads.plain.iter().zip(renames) {
+            variables.push(stand_in);
+            row.push(Some(expr_subs.0[index].1.clone()));
+        }
+        for &index in &reads.in_exists {
+            variables.push(expr_subs.0[index].0.clone());
+            row.push(Some(expr_subs.0[index].1.clone()));
+        }
+        let seed = GraphPattern::Values {
+            variables,
+            bindings: vec![row],
+        };
+        match node {
+            GraphPattern::Extend { inner, .. }
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Filter { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Group { inner, .. }
+            | GraphPattern::LeftJoin { left: inner, .. } => plant_left_driver(inner, seed),
+            _ => return,
+        }
+        if let Some(variables) = carried {
+            purrdf_sparql_algebra::substitute::take_and_replace(node, |node| {
+                GraphPattern::Project {
+                    inner: Child::new(node),
+                    variables,
+                }
+            });
+        }
+    }
+
+    fn reference_note_reads(expr: &Expression, expr_subs: &ExprSubs, reads: &mut Reads) {
+        fn note(list: &mut Vec<usize>, index: usize) {
+            if !list.contains(&index) {
+                list.push(index);
+            }
+        }
+        match expr {
+            Expression::Variable(var) => {
+                if let Some(index) = expr_subs
+                    .0
+                    .iter()
+                    .position(|(candidate, _)| candidate == var)
+                {
+                    note(&mut reads.plain, index);
+                }
+            }
+            Expression::Exists(body) => {
+                let mut named = crate::DetHashSet::default();
+                crate::expr::pattern_all_vars(body, &mut named);
+                for (index, (var, _)) in expr_subs.0.iter().enumerate() {
+                    if named.contains(var) {
+                        note(&mut reads.in_exists, index);
+                    }
+                }
+            }
+            Expression::NamedNode(_) | Expression::Literal(_) | Expression::Bound(_) => {}
+            Expression::Or(operands) | Expression::And(operands) => {
+                for operand in operands {
+                    reference_note_reads(operand, expr_subs, reads);
+                }
+            }
+            Expression::Arithmetic(first, steps) => {
+                reference_note_reads(first, expr_subs, reads);
+                for (_, operand) in steps {
+                    reference_note_reads(operand, expr_subs, reads);
+                }
+            }
+            Expression::Equal(left, right)
+            | Expression::SameTerm(left, right)
+            | Expression::Greater(left, right)
+            | Expression::GreaterOrEqual(left, right)
+            | Expression::Less(left, right)
+            | Expression::LessOrEqual(left, right) => {
+                reference_note_reads(left, expr_subs, reads);
+                reference_note_reads(right, expr_subs, reads);
+            }
+            Expression::UnaryPlus(inner)
+            | Expression::UnaryMinus(inner)
+            | Expression::Not(inner) => {
+                reference_note_reads(inner, expr_subs, reads);
+            }
+            Expression::In(target, list) => {
+                reference_note_reads(target, expr_subs, reads);
+                for item in list {
+                    reference_note_reads(item, expr_subs, reads);
+                }
+            }
+            Expression::If(cond, then_expr, else_expr) => {
+                reference_note_reads(cond, expr_subs, reads);
+                reference_note_reads(then_expr, expr_subs, reads);
+                reference_note_reads(else_expr, expr_subs, reads);
+            }
+            Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+                for item in list {
+                    reference_note_reads(item, expr_subs, reads);
+                }
+            }
+        }
+    }
+
+    fn reference_rename_reads(expr: &mut Expression, renames: &[(Variable, Variable)]) {
+        match expr {
+            Expression::Variable(var) => {
+                if let Some((_, to)) = renames.iter().find(|(from, _)| from == var) {
+                    *var = to.clone();
+                }
+            }
+            Expression::Exists(_)
+            | Expression::NamedNode(_)
+            | Expression::Literal(_)
+            | Expression::Bound(_) => {}
+            Expression::Or(operands) | Expression::And(operands) => {
+                for operand in operands.iter_mut() {
+                    reference_rename_reads(operand, renames);
+                }
+            }
+            Expression::Arithmetic(first, steps) => {
+                reference_rename_reads(first, renames);
+                for (_, operand) in steps.iter_mut() {
+                    reference_rename_reads(operand, renames);
+                }
+            }
+            Expression::Equal(left, right)
+            | Expression::SameTerm(left, right)
+            | Expression::Greater(left, right)
+            | Expression::GreaterOrEqual(left, right)
+            | Expression::Less(left, right)
+            | Expression::LessOrEqual(left, right) => {
+                reference_rename_reads(left, renames);
+                reference_rename_reads(right, renames);
+            }
+            Expression::UnaryPlus(inner)
+            | Expression::UnaryMinus(inner)
+            | Expression::Not(inner) => {
+                reference_rename_reads(inner, renames);
+            }
+            Expression::In(target, list) => {
+                reference_rename_reads(target, renames);
+                for item in list.iter_mut() {
+                    reference_rename_reads(item, renames);
+                }
+            }
+            Expression::If(cond, then_expr, else_expr) => {
+                reference_rename_reads(cond, renames);
+                reference_rename_reads(then_expr, renames);
+                reference_rename_reads(else_expr, renames);
+            }
+            Expression::Coalesce(list) | Expression::FunctionCall(_, list) => {
+                for item in list.iter_mut() {
+                    reference_rename_reads(item, renames);
+                }
+            }
+        }
+    }
+
+    fn reference_substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
+        match expr {
+            Expression::Variable(var) => {
+                let replacement = expr_subs.get(var.as_str()).and_then(expression_from_ground);
+                if let Some(subst) = replacement {
+                    *expr = subst;
+                }
+            }
+            Expression::Bound(var) => {
+                if expr_subs.contains_key(var.as_str()) {
+                    *expr = true_literal();
+                }
+            }
+            Expression::NamedNode(_) | Expression::Literal(_) => {}
+            Expression::Or(operands) | Expression::And(operands) => {
+                for operand in operands.iter_mut() {
+                    reference_substitute_in_expression(operand, expr_subs);
+                }
+            }
+            Expression::Arithmetic(first, steps) => {
+                reference_substitute_in_expression(first, expr_subs);
+                for (_, operand) in steps.iter_mut() {
+                    reference_substitute_in_expression(operand, expr_subs);
+                }
+            }
+            Expression::Equal(left, right)
+            | Expression::SameTerm(left, right)
+            | Expression::Greater(left, right)
+            | Expression::GreaterOrEqual(left, right)
+            | Expression::Less(left, right)
+            | Expression::LessOrEqual(left, right) => {
+                reference_substitute_in_expression(left, expr_subs);
+                reference_substitute_in_expression(right, expr_subs);
+            }
+            Expression::UnaryPlus(inner)
+            | Expression::UnaryMinus(inner)
+            | Expression::Not(inner) => {
+                reference_substitute_in_expression(inner, expr_subs);
+            }
+            Expression::In(target, list) => {
+                reference_substitute_in_expression(target, expr_subs);
+                for item in list.iter_mut() {
+                    reference_substitute_in_expression(item, expr_subs);
+                }
+            }
+            Expression::If(cond, then_expr, else_expr) => {
+                reference_substitute_in_expression(cond, expr_subs);
+                reference_substitute_in_expression(then_expr, expr_subs);
+                reference_substitute_in_expression(else_expr, expr_subs);
+            }
+            Expression::Coalesce(list) => {
+                for item in list.iter_mut() {
+                    reference_substitute_in_expression(item, expr_subs);
+                }
+            }
+            Expression::FunctionCall(_, args) => {
+                for arg in args.iter_mut() {
+                    reference_substitute_in_expression(arg, expr_subs);
+                }
+            }
+            Expression::Exists(inner) => {
+                reference_substitute_in_graph_pattern(inner, expr_subs, WalkScope::ExistsBody);
+            }
+        }
+    }
+
+    fn reference_substitute_in_order_expression(order: &mut OrderExpression, expr_subs: &ExprSubs) {
+        match order {
+            OrderExpression::Asc(expr) | OrderExpression::Desc(expr) => {
+                reference_substitute_in_expression(expr, expr_subs);
+            }
+        }
+    }
+
+    fn reference_substitute_in_aggregate(
+        agg: AggregateExpression,
+        expr_subs: &ExprSubs,
+    ) -> AggregateExpression {
+        let (function, mut args, scalarvals, mut order_by, distinct) = agg.into_parts();
+        for arg in &mut args {
+            reference_substitute_in_expression(arg, expr_subs);
+        }
+        for order in &mut order_by {
+            reference_substitute_in_order_expression(order, expr_subs);
+        }
+        AggregateExpression::new(function, args, scalarvals, order_by, distinct)
+            .expect("substitution preserves argument count, so arity stays valid")
+    }
+
+    // ── A deterministic shape generator ────────────────────────────────────────────
+
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        fn new(seed: u64, budget: usize) -> Self {
+            Self {
+                state: seed,
+                budget,
+            }
+        }
+
+        fn choose(&mut self, options: usize) -> usize {
+            let draw = crate::test_rng::splitmix64_next(&mut self.state);
+            usize::try_from(draw % options as u64).expect("a choice fits usize")
+        }
+
+        fn coin(&mut self) -> bool {
+            self.choose(2) == 0
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    const VARIABLE_POOL: [&str; 6] = ["this", "value", "x", "y", "o", "p"];
+
+    fn iri(n: usize) -> NamedNode {
+        NamedNode::new_unchecked(format!("http://example.org/i{n}"))
+    }
+
+    fn variable(choices: &mut Choices) -> Variable {
+        Variable::new(VARIABLE_POOL[choices.choose(VARIABLE_POOL.len())])
+    }
+
+    fn literal(choices: &mut Choices) -> Literal {
+        match choices.choose(4) {
+            0 => Literal::new_simple(format!("v{}", choices.choose(4))),
+            1 => Literal::new_typed("42", NamedNode::new_unchecked(XSD_INTEGER)),
+            2 => Literal::new_lang("hi", "en", None),
+            _ => Literal::new_lang("hi", "en", Some(BaseDirection::Rtl)),
+        }
+    }
+
+    /// A ground term: an IRI, a literal, a blank node, or a quoted triple over the same.
+    fn ground(choices: &mut Choices) -> GroundTerm {
+        if !choices.spend() {
+            return GroundTerm::NamedNode(iri(choices.choose(4)));
+        }
+        match choices.choose(6) {
+            0 => GroundTerm::NamedNode(iri(choices.choose(4))),
+            1 => GroundTerm::Literal(literal(choices)),
+            2 => GroundTerm::BlankNode(BlankNode::new(format!("b{}", choices.choose(3)))),
+            _ => GroundTerm::Triple(Child::new(GroundTriple {
+                subject: ground(choices),
+                predicate: iri(choices.choose(4)),
+                object: ground(choices),
+            })),
+        }
+    }
+
+    /// A term value: every leaf kind, valid and malformed, and quoted triples whose
+    /// predicate is usually but not always an IRI.
+    fn term_value(choices: &mut Choices) -> TermValue {
+        if !choices.spend() {
+            return TermValue::Iri(format!("http://example.org/i{}", choices.choose(4)));
+        }
+        match choices.choose(9) {
+            0 => TermValue::Iri(format!("http://example.org/i{}", choices.choose(4))),
+            1 => TermValue::Iri("not an iri".to_owned()),
+            2 => TermValue::Blank {
+                label: format!("b{}", choices.choose(3)),
+                scope: BlankScope(u32::try_from(choices.choose(2)).expect("fits")),
+            },
+            3 => TermValue::Literal {
+                lexical_form: "42".to_owned(),
+                datatype: XSD_INTEGER.to_owned(),
+                language: None,
+                direction: None,
+            },
+            4 => TermValue::Literal {
+                lexical_form: "hi".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                language: Some("en".to_owned()),
+                direction: choices.coin().then_some(RdfTextDirection::Ltr),
+            },
+            5 => TermValue::Literal {
+                lexical_form: "hi".to_owned(),
+                datatype: "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString".to_owned(),
+                language: Some("1bad".to_owned()),
+                direction: None,
+            },
+            _ => {
+                let s = term_value(choices);
+                let p = if choices.choose(5) == 0 {
+                    term_value(choices)
+                } else {
+                    TermValue::Iri(format!("http://example.org/p{}", choices.choose(3)))
+                };
+                let o = term_value(choices);
+                TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                }
+            }
+        }
+    }
+
+    /// A term pattern: a variable from the pool, a constant, or a quoted triple over the
+    /// same with an IRI or variable predicate.
+    fn term_pattern(choices: &mut Choices) -> TermPattern {
+        if !choices.spend() {
+            return TermPattern::Variable(variable(choices));
+        }
+        match choices.choose(7) {
+            0 | 1 => TermPattern::Variable(variable(choices)),
+            2 => TermPattern::NamedNode(iri(choices.choose(4))),
+            3 => TermPattern::BlankNode(BlankNode::new(format!("b{}", choices.choose(3)))),
+            4 => TermPattern::Literal(literal(choices)),
+            _ => TermPattern::Triple(Child::new(TriplePattern {
+                subject: term_pattern(choices),
+                predicate: if choices.coin() {
+                    NamedNodePattern::Variable(variable(choices))
+                } else {
+                    NamedNodePattern::NamedNode(iri(choices.choose(4)))
+                },
+                object: term_pattern(choices),
+            })),
+        }
+    }
+
+    fn call(choices: &mut Choices) -> PropertyFunctionCall {
+        PropertyFunctionCall {
+            iri: format!("http://example.org/rel{}", choices.choose(2)),
+            subject_args: (0..choices.choose(3))
+                .map(|_| term_pattern(choices))
+                .collect(),
+            object_args: (0..=choices.choose(2))
+                .map(|_| term_pattern(choices))
+                .collect(),
+        }
+    }
+
+    fn probes(choices: &mut Choices) -> Vec<(Variable, GroundTerm)> {
+        (0..=choices.choose(3))
+            .map(|_| (variable(choices), ground(choices)))
+            .collect()
+    }
+
+    fn triple_pattern(choices: &mut Choices) -> TriplePattern {
+        TriplePattern {
+            subject: term_pattern(choices),
+            predicate: if choices.choose(3) == 0 {
+                NamedNodePattern::Variable(variable(choices))
+            } else {
+                NamedNodePattern::NamedNode(iri(choices.choose(4)))
+            },
+            object: term_pattern(choices),
+        }
+    }
+
+    fn expression(choices: &mut Choices) -> Expression {
+        if !choices.spend() {
+            return match choices.choose(3) {
+                0 => Expression::Variable(variable(choices)),
+                1 => Expression::Bound(variable(choices)),
+                _ => Expression::Literal(literal(choices)),
+            };
+        }
+        match choices.choose(14) {
+            0 => Expression::Variable(variable(choices)),
+            1 => Expression::Bound(variable(choices)),
+            2 => Expression::NamedNode(iri(choices.choose(4))),
+            3 => Expression::Or(Chain::new(expression(choices), expression(choices), [])),
+            4 => Expression::And(Chain::new(expression(choices), expression(choices), [])),
+            5 => Expression::Arithmetic(
+                Child::new(expression(choices)),
+                NonEmpty::from_parts(
+                    (ArithmeticOperator::Add, expression(choices)),
+                    (0..choices.choose(2))
+                        .map(|_| (ArithmeticOperator::Multiply, expression(choices))),
+                ),
+            ),
+            6 => Expression::Equal(
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+            ),
+            7 => Expression::Less(
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+            ),
+            8 => Expression::Not(Child::new(expression(choices))),
+            9 => Expression::In(
+                Child::new(expression(choices)),
+                (0..=choices.choose(2))
+                    .map(|_| expression(choices))
+                    .collect(),
+            ),
+            10 => Expression::If(
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+            ),
+            11 => Expression::Coalesce(
+                (0..=choices.choose(2))
+                    .map(|_| expression(choices))
+                    .collect(),
+            ),
+            12 => Expression::FunctionCall(Function::Str, vec![expression(choices)].into()),
+            _ => Expression::Exists(Child::new(pattern(choices))),
+        }
+    }
+
+    fn order_key(choices: &mut Choices) -> OrderExpression {
+        if choices.coin() {
+            OrderExpression::Asc(expression(choices))
+        } else {
+            OrderExpression::Desc(expression(choices))
+        }
+    }
+
+    fn aggregate(choices: &mut Choices) -> AggregateExpression {
+        let (function, order_by) = match choices.choose(3) {
+            0 => (AggregateFunction::Count, Vec::new()),
+            1 => (AggregateFunction::Sum, Vec::new()),
+            _ => (
+                AggregateFunction::Fold,
+                (0..choices.choose(2)).map(|_| order_key(choices)).collect(),
+            ),
+        };
+        AggregateExpression::new(
+            function,
+            vec![expression(choices)],
+            Vec::new(),
+            order_by,
+            choices.coin(),
+        )
+        .expect("one argument is admitted by every function generated")
+    }
+
+    fn bgp(choices: &mut Choices) -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: (0..=choices.choose(2))
+                .map(|_| triple_pattern(choices))
+                .collect(),
+        }
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return bgp(choices);
+        }
+        match choices.choose(20) {
+            0 => bgp(choices),
+            1 => GraphPattern::Path {
+                subject: term_pattern(choices),
+                path: PropertyPathExpression::NamedNode(iri(choices.choose(4))),
+                object: term_pattern(choices),
+            },
+            2 => {
+                let variables: Vec<Variable> =
+                    (0..=choices.choose(2)).map(|_| variable(choices)).collect();
+                let bindings = (0..=choices.choose(2))
+                    .map(|_| {
+                        variables
+                            .iter()
+                            .map(|_| choices.coin().then(|| ground(choices)))
+                            .collect()
+                    })
+                    .collect();
+                GraphPattern::Values {
+                    variables,
+                    bindings,
+                }
+            }
+            3 => GraphPattern::PropertyFunction(call(choices)),
+            4 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            5 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            6 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(if choices.coin() {
+                    GraphPattern::PropertyFunction(call(choices))
+                } else {
+                    pattern(choices)
+                }),
+            },
+            7 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: choices.coin().then(|| expression(choices)),
+            },
+            8 => GraphPattern::Filter {
+                expr: expression(choices),
+                inner: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::Union {
+                arms: Chain::new(pattern(choices), pattern(choices), []),
+            },
+            10 => GraphPattern::Graph {
+                name: if choices.coin() {
+                    NamedNodePattern::Variable(variable(choices))
+                } else {
+                    NamedNodePattern::NamedNode(iri(choices.choose(4)))
+                },
+                inner: Child::new(pattern(choices)),
+            },
+            11 => GraphPattern::Service {
+                name: if choices.coin() {
+                    NamedNodePattern::Variable(variable(choices))
+                } else {
+                    NamedNodePattern::NamedNode(iri(choices.choose(4)))
+                },
+                inner: Child::new(pattern(choices)),
+                silent: choices.coin(),
+            },
+            12 => GraphPattern::Extend {
+                inner: Child::new(pattern(choices)),
+                variable: variable(choices),
+                expression: expression(choices),
+            },
+            13 => GraphPattern::Unfold {
+                inner: Child::new(pattern(choices)),
+                expression: expression(choices),
+                element: variable(choices),
+                companion: choices.coin().then(|| variable(choices)),
+            },
+            14 => GraphPattern::OrderBy {
+                inner: Child::new(pattern(choices)),
+                expression: (0..=choices.choose(2))
+                    .map(|_| order_key(choices))
+                    .collect(),
+            },
+            15 => GraphPattern::Project {
+                inner: Child::new(pattern(choices)),
+                variables: (0..=choices.choose(2)).map(|_| variable(choices)).collect(),
+            },
+            16 => GraphPattern::Distinct {
+                inner: Child::new(pattern(choices)),
+            },
+            17 => GraphPattern::Reduced {
+                inner: Child::new(pattern(choices)),
+            },
+            18 => GraphPattern::Slice {
+                inner: Child::new(pattern(choices)),
+                start: choices.choose(2),
+                length: choices.coin().then_some(1),
+            },
+            _ => GraphPattern::Group {
+                inner: Child::new(pattern(choices)),
+                variables: (0..choices.choose(3)).map(|_| variable(choices)).collect(),
+                aggregates: (0..choices.choose(3))
+                    .map(|_| (variable(choices), aggregate(choices)))
+                    .collect(),
+            },
+        }
+    }
+
+    fn scope(choices: &mut Choices) -> WalkScope {
+        match choices.choose(3) {
+            0 => WalkScope::Descent,
+            1 => WalkScope::Group,
+            _ => WalkScope::ExistsBody,
+        }
+    }
+
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    fn stringify<T>(result: Result<T, RdfDiagnostic>) -> Result<T, String> {
+        result.map_err(|diagnostic| diagnostic.to_string())
+    }
+
+    // ── Terms ──────────────────────────────────────────────────────────────────────
+
+    #[test]
+    fn term_pattern_from_ground_agrees_with_its_recursive_reference() {
+        let (mut spelled, mut refused) = (0, 0);
+        for seed in 0..600_u64 {
+            let mut choices = Choices::new(seed, 12);
+            let ground = ground(&mut choices);
+            let ours = term_pattern_from_ground(&ground);
+            assert_eq!(
+                ours,
+                reference_term_pattern_from_ground(&ground),
+                "seed {seed}"
+            );
+            match ours {
+                Some(_) => spelled += 1,
+                None => refused += 1,
+            }
+        }
+        assert!(
+            spelled > 100 && refused > 100,
+            "{spelled} spelled, {refused} refused"
+        );
+    }
+
+    #[test]
+    fn ground_term_from_value_agrees_with_its_recursive_reference() {
+        let (mut converted, mut refused) = (0, 0);
+        for seed in 0..600_u64 {
+            let mut choices = Choices::new(seed, 12);
+            let value = term_value(&mut choices);
+            let ours = stringify(ground_term_from_value(&value));
+            assert_eq!(
+                ours,
+                stringify(reference_ground_term_from_value(&value)),
+                "seed {seed}"
+            );
+            match ours {
+                Ok(_) => converted += 1,
+                Err(_) => refused += 1,
+            }
+        }
+        assert!(
+            converted > 100 && refused > 100,
+            "{converted} converted, {refused} refused"
+        );
+    }
+
+    /// The id door over a dataset holding every kind of term, quoted triples nested
+    /// as deep as a dataset holds them.
+    #[test]
+    fn ground_term_from_id_agrees_with_its_recursive_reference() {
+        let mut builder = RdfDatasetBuilder::new();
+        let mut ids = Vec::new();
+        let p = builder.intern_iri("http://example.org/p");
+        ids.push(p);
+        ids.push(builder.intern_blank("b", BlankScope::DEFAULT));
+        ids.push(builder.intern_blank("b", BlankScope(1)));
+        ids.push(builder.intern_literal(RdfLiteral::simple("plain")));
+        ids.push(builder.intern_literal(RdfLiteral::typed("42", XSD_INTEGER)));
+        ids.push(builder.intern_literal(RdfLiteral::language_tagged("hi", "en")));
+        let mut nested = builder.intern_iri("http://example.org/leaf");
+        ids.push(nested);
+        for level in 0..8 {
+            let subject = builder.intern_iri(&format!("http://example.org/s{level}"));
+            nested = if level % 2 == 0 {
+                builder.intern_triple(subject, p, nested)
+            } else {
+                builder.intern_triple(nested, p, subject)
+            };
+            ids.push(nested);
+        }
+        let graph_subject = builder.intern_iri("http://example.org/g");
+        builder.push_quad(graph_subject, p, nested, None);
+        let dataset = builder.freeze().expect("a valid dataset");
+        for id in ids {
+            assert_eq!(
+                stringify(ground_term_from_id(dataset.as_ref(), id)),
+                stringify(reference_ground_term_from_id(dataset.as_ref(), id)),
+                "{id:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn substitute_in_term_pattern_agrees_with_its_recursive_reference() {
+        let mut rewritten = 0;
+        for seed in 0..600_u64 {
+            let mut choices = Choices::new(seed, 10);
+            let term = term_pattern(&mut choices);
+            let values = probes(&mut choices);
+            let mut ours = term.clone();
+            substitute_in_term_pattern(&mut ours, &values);
+            let mut expected = term.clone();
+            reference_substitute_in_term_pattern(&mut expected, &values);
+            assert_eq!(ours, expected, "seed {seed}: {term:?} with {values:?}");
+            rewritten += usize::from(ours != term);
+        }
+        assert!(rewritten > 100, "{rewritten} terms rewritten");
+    }
+
+    #[test]
+    fn probe_term_pattern_agrees_with_its_recursive_reference() {
+        let mut probed_any = 0;
+        for seed in 0..600_u64 {
+            let mut choices = Choices::new(seed, 10);
+            let term = term_pattern(&mut choices);
+            let values = probes(&mut choices);
+            let mut ours = term.clone();
+            let mut ours_probed = Vec::new();
+            probe_term_pattern(&mut ours, &values, &mut ours_probed);
+            let mut expected = term.clone();
+            let mut expected_probed = Vec::new();
+            reference_probe_term_pattern(&mut expected, &values, &mut expected_probed);
+            assert_eq!(ours, expected, "seed {seed}: {term:?} with {values:?}");
+            assert_eq!(
+                ours_probed, expected_probed,
+                "seed {seed}: the probed indices, in order"
+            );
+            probed_any += usize::from(!ours_probed.is_empty());
+        }
+        assert!(probed_any > 100, "{probed_any} terms probed");
+    }
+
+    #[test]
+    fn driven_arguments_agrees_with_its_recursive_reference() {
+        let mut driven_any = 0;
+        for seed in 0..600_u64 {
+            let mut choices = Choices::new(seed, 10);
+            let call = call(&mut choices);
+            let values = probes(&mut choices);
+            let rule = if choices.coin() {
+                Unwritable::InPattern
+            } else {
+                Unwritable::InArgument
+            };
+            let already = choices.coin().then(|| {
+                let driven: Vec<usize> = (0..values.len()).filter(|_| choices.coin()).collect();
+                seed_row(&driven, &values)
+            });
+            let ours = driven_arguments(&call, &values, rule, already.as_ref());
+            assert_eq!(
+                ours,
+                reference_driven_arguments(&call, &values, rule, already.as_ref()),
+                "seed {seed}: {call:?} with {values:?} under {rule:?}"
+            );
+            driven_any += usize::from(!ours.is_empty());
+        }
+        assert!(driven_any > 50, "{driven_any} calls driven");
+    }
+
+    #[test]
+    fn undriven_variables_agrees_with_its_recursive_reference() {
+        let mut kept_any = 0;
+        for seed in 0..600_u64 {
+            let mut choices = Choices::new(seed, 10);
+            let call = call(&mut choices);
+            let values = probes(&mut choices);
+            let driven: Vec<usize> = (0..values.len()).filter(|_| choices.coin()).collect();
+            let seed_pattern = if choices.choose(4) == 0 {
+                hole()
+            } else {
+                seed_row(&driven, &values)
+            };
+            let ours = undriven_variables(&call, &seed_pattern);
+            assert_eq!(
+                ours,
+                reference_undriven_variables(&call, &seed_pattern),
+                "seed {seed}: {call:?} with {seed_pattern:?}"
+            );
+            kept_any += usize::from(!ours.is_empty());
+        }
+        assert!(kept_any > 100, "{kept_any} calls keep a variable");
+    }
+
+    /// A ground quoted triple `DEEP` levels deep, nested in the object position; `leaf`
+    /// is what sits at the bottom.
+    fn deep_ground(leaf: GroundTerm) -> GroundTerm {
+        let mut term = leaf;
+        for _ in 0..DEEP {
+            term = GroundTerm::Triple(Child::new(GroundTriple {
+                subject: GroundTerm::NamedNode(iri(0)),
+                predicate: iri(1),
+                object: term,
+            }));
+        }
+        term
+    }
+
+    /// A quoted-triple term pattern `DEEP` levels deep with `leaf` at the bottom of the
+    /// object chain.
+    fn deep_term_pattern(leaf: TermPattern) -> TermPattern {
+        let mut term = leaf;
+        for _ in 0..DEEP {
+            term = TermPattern::Triple(Child::new(TriplePattern {
+                subject: TermPattern::NamedNode(iri(0)),
+                predicate: NamedNodePattern::NamedNode(iri(1)),
+                object: term,
+            }));
+        }
+        term
+    }
+
+    /// How many quoted triples `term` nests, down its object chain, and the term at the
+    /// bottom.
+    fn unwind_term_pattern(term: &TermPattern) -> (usize, &TermPattern) {
+        let mut depth = 0;
+        let mut term = term;
+        while let TermPattern::Triple(triple) = term {
+            depth += 1;
+            term = &triple.object;
+        }
+        (depth, term)
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_ground_term_is_spelled_on_a_128_kib_thread() {
+        let (spelled, refused) = on_small_stack(|| {
+            let spelled = term_pattern_from_ground(&deep_ground(GroundTerm::Literal(
+                Literal::new_simple("bottom"),
+            )));
+            let refused = term_pattern_from_ground(&deep_ground(GroundTerm::BlankNode(
+                BlankNode::new("bottom"),
+            )));
+            (spelled, refused)
+        });
+        let spelled = spelled.expect("every position is admitted");
+        let (depth, bottom) = unwind_term_pattern(&spelled);
+        assert_eq!(depth, DEEP);
+        assert_eq!(bottom, &TermPattern::Literal(Literal::new_simple("bottom")));
+        assert!(
+            refused.is_none(),
+            "a blank node at the bottom refuses the whole term"
+        );
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_term_value_is_converted_on_a_128_kib_thread() {
+        fn deep_value(leaf: TermValue, predicate_at_bottom: TermValue) -> TermValue {
+            let mut value = leaf;
+            let mut predicate = predicate_at_bottom;
+            for _ in 0..DEEP {
+                value = TermValue::Triple {
+                    s: TermBox::new(TermValue::Iri("http://example.org/s".to_owned())),
+                    p: TermBox::new(predicate),
+                    o: TermBox::new(value),
+                };
+                predicate = TermValue::Iri("http://example.org/p".to_owned());
+            }
+            value
+        }
+        let (converted, refused) = on_small_stack(|| {
+            let converted = ground_term_from_value(&deep_value(
+                TermValue::Iri("http://example.org/bottom".to_owned()),
+                TermValue::Iri("http://example.org/p".to_owned()),
+            ));
+            let refused = ground_term_from_value(&deep_value(
+                TermValue::Iri("http://example.org/bottom".to_owned()),
+                TermValue::Literal {
+                    lexical_form: "not a predicate".to_owned(),
+                    datatype: XSD_STRING.to_owned(),
+                    language: None,
+                    direction: None,
+                },
+            ));
+            (stringify(converted), stringify(refused))
+        });
+        let converted = converted.expect("every component converts");
+        let mut depth = 0;
+        let mut term = &converted;
+        while let GroundTerm::Triple(triple) = term {
+            depth += 1;
+            term = &triple.object;
+        }
+        assert_eq!(depth, DEEP);
+        assert_eq!(
+            term,
+            &GroundTerm::NamedNode(NamedNode::new_unchecked("http://example.org/bottom"))
+        );
+        let refused = refused.expect_err("a literal predicate at the bottom refuses the term");
+        assert!(
+            refused.contains("a quoted-triple predicate must be an IRI"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_argument_is_written_probed_and_driven_on_a_128_kib_thread() {
+        let this = Variable::new("this");
+        let blank = GroundTerm::BlankNode(BlankNode::new("b"));
+        let written = GroundTerm::NamedNode(iri(7));
+        let (substituted, probed, driven, kept) = on_small_stack(move || {
+            let mut argument = deep_term_pattern(TermPattern::Variable(this.clone()));
+            substitute_in_term_pattern(&mut argument, &[(this.clone(), written.clone())]);
+            let substituted = unwind_term_pattern(&argument).1.clone();
+
+            let mut probed_term = deep_term_pattern(TermPattern::Variable(this.clone()));
+            let mut probed = Vec::new();
+            probe_term_pattern(&mut probed_term, &[(this.clone(), written)], &mut probed);
+
+            let call = PropertyFunctionCall {
+                iri: "http://example.org/rel".to_owned(),
+                subject_args: vec![deep_term_pattern(TermPattern::Variable(this.clone()))],
+                object_args: vec![TermPattern::Variable(Variable::new("out"))],
+            };
+            let driven =
+                driven_arguments(&call, &[(this.clone(), blank)], Unwritable::InPattern, None);
+            let kept = undriven_variables(
+                &call,
+                &GraphPattern::Values {
+                    variables: vec![this],
+                    bindings: vec![vec![None]],
+                },
+            );
+            (substituted, probed, driven, kept)
+        });
+        assert_eq!(substituted, TermPattern::NamedNode(iri(7)));
+        assert_eq!(probed, vec![0]);
+        assert_eq!(driven, vec![0]);
+        assert_eq!(kept, vec![Variable::new("out")]);
+    }
+
+    // ── The rewrites ───────────────────────────────────────────────────────────────
+
+    #[test]
+    fn push_probes_agrees_with_its_recursive_reference_on_generated_shapes() {
+        let mut rewritten = 0;
+        for seed in 0..500_u64 {
+            let mut choices = Choices::new(seed, 40);
+            let shape = pattern(&mut choices);
+            let values = probes(&mut choices);
+            let at_core_root = choices.coin();
+            let mut ours = shape.clone();
+            push_probes(&mut ours, &values, at_core_root);
+            let mut expected = shape.clone();
+            reference_push_probes(&mut expected, &values, at_core_root);
+            assert_eq!(ours, expected, "seed {seed}: {shape:?} with {values:?}");
+            rewritten += usize::from(ours != shape);
+        }
+        assert!(rewritten > 150, "{rewritten} shapes rewritten");
+    }
+
+    #[test]
+    fn substitute_in_graph_pattern_agrees_with_its_recursive_reference_on_generated_shapes() {
+        let mut rewritten = 0;
+        for seed in 0..500_u64 {
+            let mut choices = Choices::new(seed, 40);
+            let shape = pattern(&mut choices);
+            let subs = ExprSubs(probes(&mut choices));
+            let scope = scope(&mut choices);
+            let mut ours = shape.clone();
+            let ours_columns = substitute_in_graph_pattern(&mut ours, &subs, scope);
+            let mut expected = shape.clone();
+            let expected_columns =
+                reference_substitute_in_graph_pattern(&mut expected, &subs, scope);
+            assert_eq!(
+                ours, expected,
+                "seed {seed}: {shape:?} with {:?} in {scope:?}",
+                subs.0
+            );
+            assert_eq!(
+                ours_columns, expected_columns,
+                "seed {seed}: the carried columns"
+            );
+            rewritten += usize::from(ours != shape);
+        }
+        assert!(rewritten > 150, "{rewritten} shapes rewritten");
+    }
+
+    #[test]
+    fn substitute_in_expression_agrees_with_its_recursive_reference_on_generated_shapes() {
+        let mut rewritten = 0;
+        for seed in 0..500_u64 {
+            let mut choices = Choices::new(seed, 40);
+            let shape = expression(&mut choices);
+            let subs = ExprSubs(probes(&mut choices));
+            let mut ours = shape.clone();
+            substitute_in_expression(&mut ours, &subs);
+            let mut expected = shape.clone();
+            reference_substitute_in_expression(&mut expected, &subs);
+            assert_eq!(ours, expected, "seed {seed}: {shape:?} with {:?}", subs.0);
+            rewritten += usize::from(ours != shape);
+        }
+        assert!(rewritten > 150, "{rewritten} expressions rewritten");
+    }
+
+    #[test]
+    fn note_reads_and_rename_reads_agree_with_their_recursive_references() {
+        let (mut noted, mut renamed) = (0, 0);
+        for seed in 0..500_u64 {
+            let mut choices = Choices::new(seed, 40);
+            let shape = expression(&mut choices);
+            let subs = ExprSubs(probes(&mut choices));
+            let mut ours = Reads::default();
+            note_reads(&shape, &subs, &mut ours);
+            let mut expected = Reads::default();
+            reference_note_reads(&shape, &subs, &mut expected);
+            assert_eq!(
+                ours.plain, expected.plain,
+                "seed {seed}: the plain reads, in order"
+            );
+            assert_eq!(
+                ours.in_exists, expected.in_exists,
+                "seed {seed}: the EXISTS reads, in order"
+            );
+            noted += usize::from(!ours.plain.is_empty() || !ours.in_exists.is_empty());
+
+            let renames: Vec<(Variable, Variable)> = subs
+                .0
+                .iter()
+                .map(|(var, _)| (var.clone(), stand_in(var)))
+                .collect();
+            let mut ours_renamed = shape.clone();
+            rename_reads(&mut ours_renamed, &renames);
+            let mut expected_renamed = shape.clone();
+            reference_rename_reads(&mut expected_renamed, &renames);
+            assert_eq!(ours_renamed, expected_renamed, "seed {seed}: {shape:?}");
+            renamed += usize::from(ours_renamed != shape);
+        }
+        assert!(
+            noted > 150 && renamed > 150,
+            "{noted} noted, {renamed} renamed"
+        );
+    }
+
+    /// `DEEP` joins, each with a triple pattern naming `?this` on its left, ending in a
+    /// property-function call naming `?this`.
+    fn deep_join_chain(this: &Variable) -> GraphPattern {
+        let mut chain = GraphPattern::PropertyFunction(PropertyFunctionCall {
+            iri: "http://example.org/rel".to_owned(),
+            subject_args: vec![TermPattern::Variable(this.clone())],
+            object_args: vec![TermPattern::Variable(Variable::new("out"))],
+        });
+        for _ in 0..DEEP {
+            chain = GraphPattern::Join {
+                left: Child::new(GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::Variable(this.clone()),
+                        predicate: NamedNodePattern::NamedNode(iri(1)),
+                        object: TermPattern::Variable(Variable::new("o")),
+                    }],
+                }),
+                right: Child::new(chain),
+            };
+        }
+        chain
+    }
+
+    /// The pattern at the bottom of a chain of joins' right operands, and how many joins
+    /// were passed on the way down.
+    fn unwind_joins(pattern: &GraphPattern) -> (usize, &GraphPattern) {
+        let mut depth = 0;
+        let mut node = pattern;
+        while let GraphPattern::Join { right, .. } = node {
+            depth += 1;
+            node = right;
+        }
+        (depth, node)
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_pattern_is_pushed_into_on_a_128_kib_thread() {
+        let this = Variable::new("this");
+        let value = GroundTerm::NamedNode(iri(7));
+        let restored = GraphPattern::Values {
+            variables: vec![this.clone()],
+            bindings: vec![vec![Some(value.clone())]],
+        };
+        let rewritten = on_small_stack(move || {
+            let mut chain = deep_join_chain(&this);
+            push_probes(&mut chain, &[(this, value)], true);
+            chain
+        });
+        // Every join's left operand is the probed triple pattern, restored by its own
+        // one-row `VALUES`; the call at the bottom is written into and restored too.
+        let GraphPattern::Join { left, .. } = &rewritten else {
+            panic!("the root stays a join");
+        };
+        assert_eq!(
+            **left,
+            GraphPattern::Join {
+                left: Child::new(GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::NamedNode(iri(7)),
+                        predicate: NamedNodePattern::NamedNode(iri(1)),
+                        object: TermPattern::Variable(Variable::new("o")),
+                    }],
+                }),
+                right: Child::new(restored.clone()),
+            }
+        );
+        let (depth, bottom) = unwind_joins(&rewritten);
+        assert_eq!(
+            depth,
+            DEEP + 1,
+            "the bottom call is restored by a join of its own"
+        );
+        assert_eq!(bottom, &restored);
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_pattern_is_substituted_on_a_128_kib_thread() {
+        let this = Variable::new("this");
+        let blank = GroundTerm::BlankNode(BlankNode::new("b"));
+        let (rewritten, columns) = on_small_stack({
+            let this = this.clone();
+            let blank = blank.clone();
+            move || {
+                let mut chain = deep_join_chain(&this);
+                let subs = ExprSubs(vec![(this, blank)]);
+                let columns = substitute_in_graph_pattern(&mut chain, &subs, WalkScope::Group);
+                (chain, columns)
+            }
+        });
+        assert_eq!(columns, SeedColumns(0));
+        let (depth, bottom) = unwind_joins(&rewritten);
+        assert_eq!(depth, DEEP);
+        // The call at the bottom is driven where it is: `Lateral(VALUES, call)`.
+        assert_eq!(
+            bottom,
+            &GraphPattern::Lateral {
+                left: Child::new(GraphPattern::Values {
+                    variables: vec![this.clone()],
+                    bindings: vec![vec![Some(blank)]],
+                }),
+                right: Child::new(GraphPattern::PropertyFunction(PropertyFunctionCall {
+                    iri: "http://example.org/rel".to_owned(),
+                    subject_args: vec![TermPattern::Variable(this)],
+                    object_args: vec![TermPattern::Variable(Variable::new("out"))],
+                })),
+            }
+        );
+    }
+
+    #[test]
+    fn a_hundred_thousand_level_expression_is_substituted_noted_and_renamed_on_a_128_kib_thread() {
+        let this = Variable::new("this");
+        let (substituted, reads, renamed) = on_small_stack({
+            let this = this.clone();
+            move || {
+                let mut deep = Expression::Variable(this.clone());
+                for _ in 0..DEEP {
+                    deep = Expression::Not(Child::new(deep));
+                }
+                let subs = ExprSubs(vec![(this.clone(), GroundTerm::NamedNode(iri(7)))]);
+                let mut substituted = deep.clone();
+                substitute_in_expression(&mut substituted, &subs);
+                let mut reads = Reads::default();
+                note_reads(&deep, &subs, &mut reads);
+                let mut renamed = deep;
+                rename_reads(&mut renamed, &[(this.clone(), stand_in(&this))]);
+                (substituted, reads.plain, renamed)
+            }
+        });
+        fn bottom(expr: &Expression) -> (usize, &Expression) {
+            let mut depth = 0;
+            let mut expr = expr;
+            while let Expression::Not(inner) = expr {
+                depth += 1;
+                expr = inner;
+            }
+            (depth, expr)
+        }
+        assert_eq!(bottom(&substituted), (DEEP, &Expression::NamedNode(iri(7))));
+        assert_eq!(reads, vec![0]);
+        assert_eq!(
+            bottom(&renamed),
+            (DEEP, &Expression::Variable(stand_in(&this)))
+        );
+    }
+
+    /// A `FILTER EXISTS` body nested inside another, `levels` deep, ending in a triple
+    /// pattern naming `?this`: every level takes the body out, substitutes it in the
+    /// `EXISTS` scope and puts it back, on a stack no recursion through those levels
+    /// fits in.
+    #[test]
+    fn two_thousand_nested_exists_bodies_are_substituted_on_a_128_kib_thread() {
+        let this = Variable::new("this");
+        let rewritten = on_small_stack({
+            let this = this.clone();
+            move || {
+                let mut body = GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::Variable(this.clone()),
+                        predicate: NamedNodePattern::NamedNode(iri(1)),
+                        object: TermPattern::Variable(Variable::new("o")),
+                    }],
+                };
+                for _ in 0..2_000 {
+                    body = GraphPattern::Filter {
+                        expr: Expression::Exists(Child::new(body)),
+                        inner: Child::new(GraphPattern::Bgp {
+                            patterns: Vec::new(),
+                        }),
+                    };
+                }
+                let subs = ExprSubs(vec![(this, GroundTerm::NamedNode(iri(7)))]);
+                substitute_in_graph_pattern(&mut body, &subs, WalkScope::Group);
+                body
+            }
+        });
+        // Beneath the seed, every `FILTER` reads `?this` through its `EXISTS` body, so
+        // each is driven with the value under a projection onto the variables it names.
+        let mut levels = 0;
+        let mut node = &rewritten;
+        loop {
+            match node {
+                GraphPattern::Project { inner, variables } => {
+                    assert_eq!(variables, &vec![Variable::new("o"), this.clone()]);
+                    node = inner;
+                }
+                GraphPattern::Filter { expr, inner } => {
+                    assert_eq!(
+                        **inner,
+                        GraphPattern::Join {
+                            left: Child::new(GraphPattern::Values {
+                                variables: vec![this.clone()],
+                                bindings: vec![vec![Some(GroundTerm::NamedNode(iri(7)))]],
+                            }),
+                            right: Child::new(GraphPattern::Bgp {
+                                patterns: Vec::new()
+                            }),
+                        }
+                    );
+                    let Expression::Exists(body) = expr else {
+                        panic!("the filter keeps its EXISTS");
+                    };
+                    levels += 1;
+                    node = body;
+                }
+                GraphPattern::Bgp { .. } => break,
+                other => panic!("an unexpected node in the chain: {other:?}"),
+            }
+        }
+        assert_eq!(levels, 2_000);
     }
 }

@@ -980,11 +980,13 @@ impl NativeSparqlEngine {
     {
         preflight_fallible_view(dataset)?;
         let evaluation = {
-            let _sequential = crate::parallel::force_sequential_operation();
             (|| {
                 substitutions.parameters.check(prepared, options)?;
                 let ctx = self.eval_ctx(dataset);
                 let mut ctx = apply_query_options(ctx, options)?;
+                // A fallible lazy view's page request order and exact budget boundary are
+                // observable evidence, so no fork of this evaluation may race requests.
+                ctx.options.force_sequential = true;
                 let outcome = match options.prebinding {
                     ShaclPrebinding::Applied => evaluate_with_shacl_prebinding(
                         prepared,
@@ -1103,7 +1105,14 @@ impl NativeSparqlEngine {
             &admitted.parameters,
         )?;
         let state = Arc::new(GovernorState::new(governors));
-        self.query_governed_prepared_in_state(dataset, &prepared, &admitted, options, &state)
+        self.query_governed_prepared_in_state(
+            dataset,
+            &prepared,
+            &admitted,
+            options,
+            &state,
+            Sequencing::Free,
+        )
     }
 
     /// [`Self::query_governed`] over any operationally infallible [`DatasetView`] backend,
@@ -1138,6 +1147,7 @@ impl NativeSparqlEngine {
             &AdmittedSubstitutions::prepared(substitutions),
             options,
             &state,
+            Sequencing::Free,
         )
     }
 
@@ -1252,6 +1262,7 @@ impl NativeSparqlEngine {
         substitutions: &AdmittedSubstitutions<'_>,
         options: QueryOptions<'d>,
         state: &Arc<GovernorState>,
+        sequencing: Sequencing,
     ) -> Result<GovernedOutcome, RdfDiagnostic> {
         substitutions.parameters.check(prepared, options)?;
         // `prepared.relations` is the registry fingerprint computed once at prepare and
@@ -1268,6 +1279,7 @@ impl NativeSparqlEngine {
             return refused.map(GovernedOutcome::BudgetExhausted);
         }
         let mut ctx = self.governed_ctx(dataset, state, options)?;
+        ctx.options.force_sequential |= sequencing == Sequencing::Sequential;
         let evaluated = match options.prebinding {
             ShaclPrebinding::Applied => evaluate_governed_with_shacl_prebinding(
                 prepared,
@@ -1394,7 +1406,14 @@ impl NativeSparqlEngine {
             options.env,
             &admitted.parameters,
         )?;
-        self.query_governed_prepared_in_state(dataset, &prepared, &admitted, options, state)
+        self.query_governed_prepared_in_state(
+            dataset,
+            &prepared,
+            &admitted,
+            options,
+            state,
+            Sequencing::Free,
+        )
     }
 
     /// Execute a prepared plan under a caller-owned multi-query operation budget.
@@ -1422,6 +1441,7 @@ impl NativeSparqlEngine {
             &AdmittedSubstitutions::prepared(substitutions),
             options,
             state,
+            Sequencing::Free,
         )
     }
 
@@ -1484,10 +1504,14 @@ impl NativeSparqlEngine {
                 return finish_governed_fallible_query(dataset, &state, Err(diagnostic));
             }
         };
-        let evaluation = {
-            let _sequential = crate::parallel::force_sequential_operation();
-            self.query_governed_prepared_in_state(dataset, &prepared, &admitted, options, &state)
-        };
+        let evaluation = self.query_governed_prepared_in_state(
+            dataset,
+            &prepared,
+            &admitted,
+            options,
+            &state,
+            Sequencing::Sequential,
+        );
         finish_governed_fallible_query(dataset, &state, evaluation)
     }
 
@@ -3774,6 +3798,21 @@ fn relation_identity(
 ///
 /// Returns [`RdfDiagnostic`] when `options.bnode_mint_prefix` is not a legal
 /// `BLANK_NODE_LABEL` prefix.
+/// Whether an evaluation entry holds every fork site on its sequential implementation.
+///
+/// The fallible lazy-view entries evaluate sequentially: the view's page request order
+/// and exact budget boundary are observable evidence, so no fork of that evaluation may
+/// race requests. The decision is written into the evaluation context
+/// (`EvalOptions::force_sequential`), never into per-thread state, so an evaluation
+/// suspended on a thread and another run on it in the meantime never read each other's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Sequencing {
+    /// Fork sites decide by size, as every infallible entry does.
+    Free,
+    /// Every fork site runs its sequential implementation.
+    Sequential,
+}
+
 pub(crate) fn apply_query_options<'d, D: DatasetView + Sync>(
     mut ctx: EvalCtx<'d, D>,
     options: QueryOptions<'d>,

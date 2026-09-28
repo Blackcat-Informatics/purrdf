@@ -65,7 +65,6 @@ use purrdf_core::DatasetView;
 use purrdf_sparql_algebra::{Expression, GraphPattern, NamedNodePattern, Variable};
 
 use crate::DetHashSet;
-use crate::error::EvalError;
 use crate::eval::{EvalCtx, PreparedExists};
 use crate::expr::{SubstitutionRow, SubstitutionSource, SubstitutionSourceMap};
 use crate::governor::soundness::{ExpressionPart, PatternPart};
@@ -333,25 +332,21 @@ pub(crate) fn is_placeholder(pattern: &GraphPattern) -> bool {
 /// the first substitution of `pattern` and kept where `source` says, so a later outer row
 /// reads them without taking a lock (a preparation's own) or with a shared read lock (a
 /// plan node's).
-///
-/// # Errors
-///
-/// [`EvalError::StackExhausted`] when preparing a site ran out of stack.
 pub(crate) fn nested_sites<'a, D: DatasetView + Sync>(
     pattern: &GraphPattern,
     source: CorrelatedSource<'a>,
     ctx: &mut EvalCtx<'_, D>,
-) -> Result<SitesRef<'a>, EvalError> {
+) -> SitesRef<'a> {
     let root = std::ptr::from_ref(pattern) as usize;
     match source.sites {
         SiteSlot::Prepared(slot) => {
             if let Some(kept) = slot.get() {
-                return Ok(SitesRef::Kept(kept));
+                return SitesRef::Kept(kept);
             }
-            let sites = Arc::new(prepare_sites(pattern, source, ctx)?);
+            let sites = Arc::new(prepare_sites(pattern, source, ctx));
             // Another worker may have kept its own first; both are the same sites.
             let kept = slot.get_or_init(|| sites);
-            Ok(SitesRef::Kept(kept))
+            SitesRef::Kept(kept)
         }
         SiteSlot::Plan => {
             let plan_sites = Arc::clone(ctx.plan_exists_sites.get_or_insert_with(Arc::default));
@@ -362,9 +357,9 @@ pub(crate) fn nested_sites<'a, D: DatasetView + Sync>(
                 .get(&root)
                 .cloned();
             if let Some(kept) = kept {
-                return Ok(SitesRef::Owned(kept));
+                return SitesRef::Owned(kept);
             }
-            let sites = Arc::new(prepare_sites(pattern, source, ctx)?);
+            let sites = Arc::new(prepare_sites(pattern, source, ctx));
             let kept = Arc::clone(
                 plan_sites
                     .by_root
@@ -373,11 +368,9 @@ pub(crate) fn nested_sites<'a, D: DatasetView + Sync>(
                     .entry(root)
                     .or_insert(sites),
             );
-            Ok(SitesRef::Owned(kept))
+            SitesRef::Owned(kept)
         }
-        SiteSlot::Transient => Ok(SitesRef::Owned(Arc::new(prepare_sites(
-            pattern, source, ctx,
-        )?))),
+        SiteSlot::Transient => SitesRef::Owned(Arc::new(prepare_sites(pattern, source, ctx))),
     }
 }
 
@@ -386,13 +379,13 @@ fn prepare_sites<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     source: CorrelatedSource<'_>,
     ctx: &EvalCtx<'_, D>,
-) -> Result<NestedSites, EvalError> {
+) -> NestedSites {
     let mut sites = NestedSites::default();
     for body in exists_bodies(pattern, ctx.deferred_exists.as_deref()) {
-        let site = build_site(body, source, ctx)?;
+        let site = build_site(body, source, ctx);
         sites.insert(std::ptr::from_ref(body) as usize, Arc::new(site));
     }
-    Ok(sites)
+    sites
 }
 
 /// The `EXISTS` bodies [`nested_sites`] prepares, in no particular order. A worklist
@@ -446,13 +439,10 @@ fn build_site<D: DatasetView + Sync>(
     body: &GraphPattern,
     source: CorrelatedSource<'_>,
     ctx: &EvalCtx<'_, D>,
-) -> Result<ExistsSite, EvalError> {
+) -> ExistsSite {
     let prepared = Arc::new(PreparedExists::build(body));
-    let vars = crate::stack::walk(|| {
-        let mut vars = DetHashSet::default();
-        crate::expr::pattern_all_vars(body, &mut vars);
-        vars
-    })?;
+    let mut vars = DetHashSet::default();
+    crate::expr::pattern_all_vars(body, &mut vars);
     let parallel_unsafe = !crate::parallel::is_parallel_safe_pattern(body, ctx.safety_registries());
     let service_uses = match &ctx.endpoint_scan {
         crate::service_endpoints::EndpointScan::Absent => Vec::new(),
@@ -467,13 +457,13 @@ fn build_site<D: DatasetView + Sync>(
         }
         _ => Arc::new(SubstitutionSourceMap::default()),
     };
-    Ok(ExistsSite {
+    ExistsSite {
         prepared,
         vars,
         parallel_unsafe,
         service_uses,
         plan_map,
-    })
+    }
 }
 
 /// `map`, each entry's source carried one hop further through `outer` when `outer` maps it.

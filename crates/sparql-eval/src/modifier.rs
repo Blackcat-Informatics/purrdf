@@ -412,34 +412,81 @@ pub(crate) fn eval_graph<D: DatasetView + Sync>(
 /// Whether a particular spelling of those could still be proven row-free is a question
 /// this predicate declines to answer — it reports only what it can prove, and an
 /// unproven path is simply evaluated.
+///
+/// The answer is a fold over the path's tree: a leaf answers for itself, `Sequence`
+/// needs an edge when ANY element does, `Alternative` when EVERY element does, and the
+/// unary operators pass their operand's answer through (`Range` only when it forbids
+/// zero repetitions). The fold runs over a work list of the nodes still to answer and a
+/// stack of the answers already given — each combinator's answer is computed once all
+/// of its elements' are on the stack — so a path of any depth is answered without a
+/// machine-stack frame per level. Nothing here has an effect, so answering every
+/// element (rather than stopping at the first decisive one) changes no answer.
 fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
-    // Out of stack for the walk (see `crate::stack`): "not proven" is the conservative
-    // answer — every combinator below is monotone in it — and the evaluation that then
-    // runs refuses at its own next check.
-    if crate::stack::is_low() {
-        return false;
+    /// One step of the fold.
+    enum Step<'a> {
+        /// Answer for this node, or schedule its elements and the combinator over them.
+        Answer(&'a PropertyPathExpression),
+        /// Replace the top `count` answers by whether ANY of them is `true`.
+        Any(usize),
+        /// Replace the top `count` answers by whether ALL of them are `true`.
+        All(usize),
     }
-    match path {
-        // One hop over a named predicate, over ANY predicate, or over any predicate
-        // outside a named set: each reads exactly one row.
-        PropertyPathExpression::NamedNode(_)
-        | PropertyPathExpression::NegatedPropertySet(_)
-        | PropertyPathExpression::Wildcard { .. } => true,
-        // Direction and "at least once" both preserve the sub-path's own answer.
-        PropertyPathExpression::Reverse(inner) | PropertyPathExpression::OneOrMore(inner) => {
-            path_needs_an_edge(inner)
+    let mut steps = vec![Step::Answer(path)];
+    let mut answers: Vec<bool> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Answer(path) => match path {
+                // One hop over a named predicate, over ANY predicate, or over any
+                // predicate outside a named set: each reads exactly one row.
+                PropertyPathExpression::NamedNode(_)
+                | PropertyPathExpression::NegatedPropertySet(_)
+                | PropertyPathExpression::Wildcard { .. } => answers.push(true),
+                // Direction and "at least once" both preserve the sub-path's own answer.
+                PropertyPathExpression::Reverse(inner)
+                | PropertyPathExpression::OneOrMore(inner) => steps.push(Step::Answer(inner)),
+                // A sequence traverses EVERY element, so one edge-requiring element
+                // suffices.
+                PropertyPathExpression::Sequence(elements) => {
+                    steps.push(Step::Any(elements.len()));
+                    steps.extend(elements.iter().rev().map(Step::Answer));
+                }
+                // An alternative traverses ANY one element, so every element must
+                // require an edge (an alternative of none relates nothing, so it needs
+                // one vacuously).
+                PropertyPathExpression::Alternative(elements) => {
+                    steps.push(Step::All(elements.len()));
+                    steps.extend(elements.iter().rev().map(Step::Answer));
+                }
+                // A bounded repetition needs an edge only when it forbids zero
+                // repetitions.
+                PropertyPathExpression::Range { inner, min, max: _ } => {
+                    if *min >= 1 {
+                        steps.push(Step::Answer(inner));
+                    } else {
+                        answers.push(false);
+                    }
+                }
+                PropertyPathExpression::ZeroOrMore(_) | PropertyPathExpression::ZeroOrOne(_) => {
+                    answers.push(false);
+                }
+            },
+            Step::Any(count) => {
+                let first = answers.len() - count;
+                let any = answers[first..].iter().any(|needs| *needs);
+                answers.truncate(first);
+                answers.push(any);
+            }
+            Step::All(count) => {
+                let first = answers.len() - count;
+                let all = answers[first..].iter().all(|needs| *needs);
+                answers.truncate(first);
+                answers.push(all);
+            }
         }
-        // A sequence traverses EVERY element, so one edge-requiring element suffices.
-        PropertyPathExpression::Sequence(elements) => elements.iter().any(path_needs_an_edge),
-        // An alternative traverses ANY one element, so every element must require an
-        // edge (an alternative of none relates nothing, so it needs one vacuously).
-        PropertyPathExpression::Alternative(elements) => elements.iter().all(path_needs_an_edge),
-        // A bounded repetition needs an edge only when it forbids zero repetitions.
-        PropertyPathExpression::Range { inner, min, max: _ } => {
-            *min >= 1 && path_needs_an_edge(inner)
-        }
-        PropertyPathExpression::ZeroOrMore(_) | PropertyPathExpression::ZeroOrOne(_) => false,
     }
+    answers
+        .pop()
+        .expect("the root's answer is the last one computed")
 }
 
 /// Whether `pattern` provably yields ZERO solutions when the active graph holds no
@@ -478,78 +525,116 @@ fn path_needs_an_edge(path: &PropertyPathExpression) -> bool {
 ///   reads another endpoint entirely;
 /// * `Values` carries its rows inline and `PropertyFunction` invokes a registered
 ///   relation, neither of which touches the active graph's rows at all.
+///
+/// The answer is a fold over the pattern's tree, run as [`path_needs_an_edge`]'s is:
+/// over a work list of the nodes still to answer and a stack of the answers already
+/// given, a `Join`'s answer computed once both operands' are on the stack, a `Union`'s
+/// once every arm's is, so a pattern of any depth is answered without a machine-stack
+/// frame per level. The match is exhaustive, so a new algebra node cannot silently
+/// inherit a proof.
 fn yields_nothing_without_rows_in_the_active_graph(pattern: &GraphPattern) -> bool {
-    // See `path_needs_an_edge`: out of stack, "not proven" is the conservative answer.
-    if crate::stack::is_low() {
-        return false;
+    /// One step of the fold.
+    enum Step<'a> {
+        /// Answer for this node, or schedule its operands and the combinator over them.
+        Answer(&'a GraphPattern),
+        /// Replace the top two answers by whether EITHER is `true`.
+        Either,
+        /// Replace the top `count` answers by whether ALL of them are `true`.
+        All(usize),
     }
-    match pattern {
-        GraphPattern::Bgp { patterns } => !patterns.is_empty(),
-        GraphPattern::Path {
-            subject: _,
-            path,
-            object: _,
-        } => path_needs_an_edge(path),
-        GraphPattern::Join { left, right } => {
-            yields_nothing_without_rows_in_the_active_graph(left)
-                || yields_nothing_without_rows_in_the_active_graph(right)
+    let mut steps = vec![Step::Answer(pattern)];
+    let mut answers: Vec<bool> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Answer(pattern) => match pattern {
+                GraphPattern::Bgp { patterns } => answers.push(!patterns.is_empty()),
+                GraphPattern::Path {
+                    subject: _,
+                    path,
+                    object: _,
+                } => answers.push(path_needs_an_edge(path)),
+                GraphPattern::Join { left, right } => {
+                    steps.push(Step::Either);
+                    steps.push(Step::Answer(right));
+                    steps.push(Step::Answer(left));
+                }
+                GraphPattern::Union { arms } => {
+                    steps.push(Step::All(arms.len()));
+                    steps.extend(arms.iter().rev().map(Step::Answer));
+                }
+                GraphPattern::LeftJoin {
+                    left,
+                    right: _,
+                    expression: _,
+                }
+                | GraphPattern::Lateral { left, right: _ }
+                | GraphPattern::Minus { left, right: _ } => steps.push(Step::Answer(left)),
+                GraphPattern::Filter { expr: _, inner }
+                | GraphPattern::Extend {
+                    inner,
+                    variable: _,
+                    expression: _,
+                }
+                | GraphPattern::Unfold {
+                    inner,
+                    expression: _,
+                    element: _,
+                    companion: _,
+                }
+                | GraphPattern::Project {
+                    inner,
+                    variables: _,
+                }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::OrderBy {
+                    inner,
+                    expression: _,
+                }
+                | GraphPattern::Slice {
+                    inner,
+                    start: _,
+                    length: _,
+                } => steps.push(Step::Answer(inner)),
+                GraphPattern::Group {
+                    inner,
+                    variables,
+                    aggregates: _,
+                } => {
+                    if variables.is_empty() {
+                        answers.push(false);
+                    } else {
+                        steps.push(Step::Answer(inner));
+                    }
+                }
+                GraphPattern::Values {
+                    variables: _,
+                    bindings,
+                } => answers.push(bindings.is_empty()),
+                GraphPattern::Graph { name: _, inner: _ }
+                | GraphPattern::Service {
+                    name: _,
+                    inner: _,
+                    silent: _,
+                }
+                | GraphPattern::PropertyFunction(_) => answers.push(false),
+            },
+            Step::Either => {
+                let right = answers.pop().expect("the right operand's answer");
+                let left = answers.pop().expect("the left operand's answer");
+                answers.push(left || right);
+            }
+            Step::All(count) => {
+                let first = answers.len() - count;
+                let all = answers[first..].iter().all(|proven| *proven);
+                answers.truncate(first);
+                answers.push(all);
+            }
         }
-        GraphPattern::Union { arms } => arms
-            .iter()
-            .all(yields_nothing_without_rows_in_the_active_graph),
-        GraphPattern::LeftJoin {
-            left,
-            right: _,
-            expression: _,
-        }
-        | GraphPattern::Lateral { left, right: _ }
-        | GraphPattern::Minus { left, right: _ } => {
-            yields_nothing_without_rows_in_the_active_graph(left)
-        }
-        GraphPattern::Filter { expr: _, inner }
-        | GraphPattern::Extend {
-            inner,
-            variable: _,
-            expression: _,
-        }
-        | GraphPattern::Unfold {
-            inner,
-            expression: _,
-            element: _,
-            companion: _,
-        }
-        | GraphPattern::Project {
-            inner,
-            variables: _,
-        }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::OrderBy {
-            inner,
-            expression: _,
-        }
-        | GraphPattern::Slice {
-            inner,
-            start: _,
-            length: _,
-        } => yields_nothing_without_rows_in_the_active_graph(inner),
-        GraphPattern::Group {
-            inner,
-            variables,
-            aggregates: _,
-        } => !variables.is_empty() && yields_nothing_without_rows_in_the_active_graph(inner),
-        GraphPattern::Values {
-            variables: _,
-            bindings,
-        } => bindings.is_empty(),
-        GraphPattern::Graph { name: _, inner: _ }
-        | GraphPattern::Service {
-            name: _,
-            inner: _,
-            silent: _,
-        }
-        | GraphPattern::PropertyFunction(_) => false,
     }
+    answers
+        .pop()
+        .expect("the root's answer is the last one computed")
 }
 
 /// Whether `dataset` holds NO row of any kind in named graph `g` — no base quad, no
@@ -1240,17 +1325,24 @@ pub enum ValueAggregate {
 /// # Errors
 ///
 /// Any [`EvalError`] the accumulator raises while folding.
+///
+/// A value fold runs outside any evaluation, so no evaluation's sequential decision
+/// applies to it: it forks by the bag's size alone, and the answer is the same either way.
 pub fn fold_values(
     aggregate: ValueAggregate,
     values: &[TermValue],
 ) -> Result<Option<TermValue>, EvalError> {
     match aggregate {
-        ValueAggregate::Count => fold_builtin(values, CountAccumulator::default, acc_step_one),
-        ValueAggregate::Sum => fold_numeric(values, NumericAggregate::Sum),
-        ValueAggregate::Avg => fold_numeric(values, NumericAggregate::Avg),
-        ValueAggregate::Min => fold_builtin(values, MinAccumulator::default, acc_step_one),
-        ValueAggregate::Max => fold_builtin(values, MaxAccumulator::default, acc_step_one),
-        ValueAggregate::Sample => fold_builtin(values, SampleAccumulator::default, acc_step_one),
+        ValueAggregate::Count => {
+            fold_builtin(false, values, CountAccumulator::default, acc_step_one)
+        }
+        ValueAggregate::Sum => fold_numeric(false, values, NumericAggregate::Sum),
+        ValueAggregate::Avg => fold_numeric(false, values, NumericAggregate::Avg),
+        ValueAggregate::Min => fold_builtin(false, values, MinAccumulator::default, acc_step_one),
+        ValueAggregate::Max => fold_builtin(false, values, MaxAccumulator::default, acc_step_one),
+        ValueAggregate::Sample => {
+            fold_builtin(false, values, SampleAccumulator::default, acc_step_one)
+        }
     }
 }
 
@@ -1350,6 +1442,7 @@ pub(crate) fn eval_group<D: DatasetView + Sync>(
         // expression can reach a property function through an embedded `EXISTS`, and
         // the per-group worker's attestation must reach the parent's receipt.
         let (minted, witnesses) = crate::parallel::par_chunk_try_map_init(
+            ctx.sequential_operation_required(),
             &groups,
             || ctx.fork_for_worker(),
             |child, acc, (_, key, idxs)| {
@@ -1521,6 +1614,7 @@ fn eval_aggregate<D: DatasetView + Sync>(
             survivors += 1;
         }
         let value = fold_builtin(
+            ctx.sequential_operation_required(),
             &vec![(); survivors],
             CountAccumulator::default,
             |acc, ()| acc.step(&[]),
@@ -1607,20 +1701,38 @@ fn eval_aggregate<D: DatasetView + Sync>(
     // phase 1 above) and is therefore always safe to chunk regardless of any
     // volatility concern: nothing here can reach `RAND`/`BNODE`/an `EXISTS`
     // re-entry, because nothing here evaluates an expression.
+    let sequential = ctx.sequential_operation_required();
     let value = match agg.function() {
-        AggregateFunction::Count => {
-            fold_builtin(&survivors, CountAccumulator::default, acc_step_one)?
-        }
-        AggregateFunction::Sum => fold_numeric(&survivors, NumericAggregate::Sum)?,
-        AggregateFunction::Avg => fold_numeric(&survivors, NumericAggregate::Avg)?,
-        AggregateFunction::Min => fold_builtin(&survivors, MinAccumulator::default, acc_step_one)?,
-        AggregateFunction::Max => fold_builtin(&survivors, MaxAccumulator::default, acc_step_one)?,
-        AggregateFunction::Sample => {
-            fold_builtin(&survivors, SampleAccumulator::default, acc_step_one)?
-        }
+        AggregateFunction::Count => fold_builtin(
+            sequential,
+            &survivors,
+            CountAccumulator::default,
+            acc_step_one,
+        )?,
+        AggregateFunction::Sum => fold_numeric(sequential, &survivors, NumericAggregate::Sum)?,
+        AggregateFunction::Avg => fold_numeric(sequential, &survivors, NumericAggregate::Avg)?,
+        AggregateFunction::Min => fold_builtin(
+            sequential,
+            &survivors,
+            MinAccumulator::default,
+            acc_step_one,
+        )?,
+        AggregateFunction::Max => fold_builtin(
+            sequential,
+            &survivors,
+            MaxAccumulator::default,
+            acc_step_one,
+        )?,
+        AggregateFunction::Sample => fold_builtin(
+            sequential,
+            &survivors,
+            SampleAccumulator::default,
+            acc_step_one,
+        )?,
         AggregateFunction::GroupConcat => {
             let sep = agg.separator().unwrap_or(" ").to_owned();
             fold_builtin(
+                sequential,
                 &survivors,
                 || GroupConcatAccumulator::new(sep.clone()),
                 acc_step_one,
@@ -1698,11 +1810,13 @@ fn acc_step_one<A: crate::agg_fn::AggregateAccumulator>(
 /// downcast machinery `crate::agg_fn`'s own doc comments describe for that
 /// case, at a strictly narrower and provably-safe use.
 pub(crate) fn fold_builtin<A: crate::agg_fn::AggregateAccumulator, T: Sync>(
+    sequential: bool,
     survivors: &[T],
     init: impl Fn() -> A + Sync,
     step: impl Fn(&mut A, &T) -> Result<(), EvalError> + Sync,
 ) -> Result<Option<TermValue>, EvalError> {
     let fold = crate::parallel::par_chunk_reduce_init(
+        sequential,
         survivors,
         || Ok(init()),
         step,
@@ -1835,11 +1949,9 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     // [`crate::parallel::aggregate_chunk_size_for`]'s doc comment — so this charge,
     // unlike an earlier increment's, cannot vary with the host's thread count.
     let stable = crate::agg_fn::volatility_contained(custom.as_ref(), iri)? == Volatility::Stable;
-    let chunk_count = if stable {
-        crate::parallel::planned_aggregate_chunk_count(survivors.len())
-    } else {
-        1
-    };
+    // A `Volatile` aggregate folds on one accumulator whatever the evaluation decided.
+    let sequential = ctx.sequential_operation_required() || !stable;
+    let chunk_count = crate::parallel::planned_aggregate_chunk_count(sequential, survivors.len());
     if chunk_count > 1 {
         let extra = state_bound.saturating_mul(u64::try_from(chunk_count - 1).unwrap_or(u64::MAX));
         if let Err(tripped) = ctx.charge_amount(purrdf_core::ResourceDimension::ScratchBytes, extra)
@@ -1861,14 +1973,13 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
         .iter()
         .map(|(name, literal)| (name.clone(), literal_to_value(literal)))
         .collect();
-    let force_sequential = (!stable).then(crate::parallel::force_sequential_operation);
     let accumulator = crate::parallel::par_chunk_reduce_init(
+        sequential,
         &survivors,
         || crate::agg_fn::init_contained(custom.as_ref(), iri, &scalarvals),
         |accumulator, tuple| crate::agg_fn::step_contained(accumulator.as_mut(), iri, tuple),
         |accumulator, other| crate::agg_fn::combine_contained(accumulator.as_mut(), iri, other),
     )?;
-    drop(force_sequential);
 
     let value = crate::agg_fn::finish_contained(accumulator, iri)?;
     // THE custom-aggregate seam. `AggregateAccumulator::finish` returns an
@@ -2612,11 +2723,13 @@ enum NumericAggregate {
 /// group onto the chain — its operands parsed in parallel, its additions
 /// replayed one by one in source order.
 fn fold_numeric(
+    sequential: bool,
     values: &[TermValue],
     aggregate: NumericAggregate,
 ) -> Result<Option<TermValue>, EvalError> {
-    let fold = if crate::parallel::should_parallelize(values.len()) {
+    let fold = if crate::parallel::should_parallelize(sequential, values.len()) {
         crate::parallel::par_chunk_reduce_init(
+            sequential,
             values,
             || Ok(NumericSummary::default()),
             |summary, value| {
@@ -4282,7 +4395,7 @@ mod tests {
         let expected = (ROWS - 2).to_string();
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold(&ds, AggregateFunction::Sum)
         };
         assert_eq!(sequential.as_deref(), Some(expected.as_str()));
@@ -4467,7 +4580,7 @@ mod tests {
         let ds = numeric_fold_dataset(&borrowed);
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold(&ds, AggregateFunction::Sum)
         };
         assert_eq!(sequential.as_deref(), Some("P2000D"));
@@ -4510,7 +4623,7 @@ mod tests {
         ]);
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold_term(&ds, AggregateFunction::Sum)
         };
         assert_eq!(
@@ -4576,7 +4689,7 @@ mod tests {
         let ds = numeric_fold_dataset(&borrowed);
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold_term(&ds, AggregateFunction::Sum)
         };
         let chunked = {
@@ -4608,7 +4721,7 @@ mod tests {
         ]);
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold(&ds, AggregateFunction::Sum)
         };
         assert_eq!(
@@ -4655,7 +4768,7 @@ mod tests {
         ]);
 
         let sequential = {
-            let _guard = crate::parallel::force_sequential_operation();
+            let _guard = crate::parallel::force_parallel_for_test(false);
             eval_numeric_fold(&unrepresentable_mean, AggregateFunction::Avg)
         };
         assert_eq!(
@@ -5600,7 +5713,7 @@ mod tests {
         ] {
             let run = || eval_numeric_fold(&ds, function.clone());
             let sequential = {
-                let _guard = crate::parallel::force_sequential_operation();
+                let _guard = crate::parallel::force_parallel_for_test(false);
                 run()
             };
             for threads in [1_usize, 2, 8, 32] {
@@ -6199,7 +6312,7 @@ mod numeric_chain_tests {
 
     /// The sequential chain's answer: every fork gate held shut.
     fn sequential(aggregate: ValueAggregate, values: &[TermValue]) -> Option<TermValue> {
-        let _guard = crate::parallel::force_sequential_operation();
+        let _guard = crate::parallel::force_parallel_for_test(false);
         fold_values(aggregate, values).expect("fold")
     }
 
@@ -6284,7 +6397,7 @@ mod numeric_chain_tests {
     fn a_large_group_containing_the_witness_sums_to_the_chain_value() {
         const ROWS: usize = 2048;
         const { assert!(ROWS > crate::parallel::PARALLEL_MIN_ROWS) };
-        let chunk = crate::parallel::planned_aggregate_chunk_count(ROWS);
+        let chunk = crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         let chunk_size = ROWS / chunk;
         let mut group = vec![lit("0.0e0", XDBL); ROWS];
         let [a, b, c, d] = witness();
@@ -6314,7 +6427,7 @@ mod numeric_chain_tests {
     #[test]
     fn a_decimal_overflow_the_chain_hits_is_hit_in_parallel_too() {
         const ROWS: usize = 2048;
-        let chunk_size = ROWS / crate::parallel::planned_aggregate_chunk_count(ROWS);
+        let chunk_size = ROWS / crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         let big = "100000000000000000000000000000000000000";
         let mut group = vec![lit("0", XDEC); ROWS];
         group[chunk_size - 1] = lit(big, XDEC);
@@ -6347,7 +6460,7 @@ mod numeric_chain_tests {
     #[test]
     fn exact_tiers_merge_in_parallel_and_only_unprovable_rows_replay() {
         const ROWS: usize = 4096;
-        let chunks = crate::parallel::planned_aggregate_chunk_count(ROWS);
+        let chunks = crate::parallel::planned_aggregate_chunk_count(false, ROWS);
         assert!(chunks > 1);
 
         let integers: Vec<TermValue> = (0..ROWS)
@@ -6679,5 +6792,308 @@ mod sort_key_walk_tests {
             assert_eq!(total_order(&key_shorter, &key_a), Ordering::Less);
             drop((key_a, key_b, key_again, key_shorter));
         });
+    }
+}
+
+/// The two `GRAPH` emptiness proofs against recursive readings of the same paths and
+/// patterns, over generated shapes, and at a depth no recursive reading could reach on a
+/// small stack.
+#[cfg(test)]
+mod emptiness_proof_tests {
+    use purrdf_sparql_algebra::{
+        Chain, Child, Expression, GraphPattern, NamedNode, NamedNodePattern, NegatedPathElement,
+        PropertyFunctionCall, PropertyPathExpression as P, TermPattern, TriplePattern, Variable,
+    };
+
+    use super::{path_needs_an_edge, yields_nothing_without_rows_in_the_active_graph};
+
+    // ── The recursive references ───────────────────────────────────────────────────
+
+    fn reference_path(path: &P) -> bool {
+        match path {
+            P::NamedNode(_) | P::NegatedPropertySet(_) | P::Wildcard { .. } => true,
+            P::Reverse(inner) | P::OneOrMore(inner) => reference_path(inner),
+            P::Sequence(elements) => elements.iter().any(reference_path),
+            P::Alternative(elements) => elements.iter().all(reference_path),
+            P::Range { inner, min, max: _ } => *min >= 1 && reference_path(inner),
+            P::ZeroOrMore(_) | P::ZeroOrOne(_) => false,
+        }
+    }
+
+    fn reference_pattern(pattern: &GraphPattern) -> bool {
+        match pattern {
+            GraphPattern::Bgp { patterns } => !patterns.is_empty(),
+            GraphPattern::Path { path, .. } => reference_path(path),
+            GraphPattern::Join { left, right } => {
+                reference_pattern(left) || reference_pattern(right)
+            }
+            GraphPattern::Union { arms } => arms.iter().all(reference_pattern),
+            GraphPattern::LeftJoin { left, .. }
+            | GraphPattern::Lateral { left, .. }
+            | GraphPattern::Minus { left, .. } => reference_pattern(left),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Slice { inner, .. } => reference_pattern(inner),
+            GraphPattern::Group {
+                inner, variables, ..
+            } => !variables.is_empty() && reference_pattern(inner),
+            GraphPattern::Values { bindings, .. } => bindings.is_empty(),
+            GraphPattern::Graph { .. }
+            | GraphPattern::Service { .. }
+            | GraphPattern::PropertyFunction(_) => false,
+        }
+    }
+
+    // ── A deterministic shape generator ────────────────────────────────────────────
+
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 30,
+            }
+        }
+
+        fn choose(&mut self, options: usize) -> usize {
+            let draw = crate::test_rng::splitmix64_next(&mut self.state);
+            usize::try_from(draw % options as u64).expect("a choice fits usize")
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("http://example.org/{local}"))
+    }
+
+    fn var(name: &str) -> TermPattern {
+        TermPattern::Variable(Variable::new(name))
+    }
+
+    fn path(choices: &mut Choices) -> P {
+        if !choices.spend() {
+            return P::NamedNode(iri("p"));
+        }
+        match choices.choose(11) {
+            0 => P::NamedNode(iri("p")),
+            1 => P::Reverse(Child::new(path(choices))),
+            2 => P::OneOrMore(Child::new(path(choices))),
+            3 => P::ZeroOrMore(Child::new(path(choices))),
+            4 => P::ZeroOrOne(Child::new(path(choices))),
+            5 => P::Sequence(Chain::try_from(vec![path(choices), path(choices)]).expect("two")),
+            6 => P::Alternative(
+                Chain::try_from(vec![path(choices), path(choices), path(choices)]).expect("three"),
+            ),
+            7 => P::NegatedPropertySet(vec![NegatedPathElement {
+                predicate: iri("q"),
+                inverse: choices.choose(2) == 0,
+            }]),
+            8 => P::Wildcard {
+                namespace: (choices.choose(2) == 0).then(|| iri("")),
+            },
+            _ => P::Range {
+                inner: Child::new(path(choices)),
+                min: u32::from(choices.choose(2) != 0),
+                max: Some(3),
+            },
+        }
+    }
+
+    fn bgp(choices: &mut Choices) -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: (0..choices.choose(3))
+                .map(|_| TriplePattern {
+                    subject: var("s"),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: var("o"),
+                })
+                .collect(),
+        }
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return bgp(choices);
+        }
+        let expression = Expression::Variable(Variable::new("v"));
+        match choices.choose(20) {
+            0 | 1 => bgp(choices),
+            2 | 3 => GraphPattern::Path {
+                subject: var("s"),
+                path: path(choices),
+                object: var("o"),
+            },
+            4 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            5 => GraphPattern::Union {
+                arms: Chain::try_from(vec![pattern(choices), pattern(choices)]).expect("two"),
+            },
+            6 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: None,
+            },
+            7 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            8 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::Filter {
+                expr: expression,
+                inner: Child::new(pattern(choices)),
+            },
+            10 => GraphPattern::Extend {
+                inner: Child::new(pattern(choices)),
+                variable: Variable::new("x"),
+                expression,
+            },
+            11 => GraphPattern::Unfold {
+                inner: Child::new(pattern(choices)),
+                expression,
+                element: Variable::new("e"),
+                companion: None,
+            },
+            12 => GraphPattern::Project {
+                inner: Child::new(pattern(choices)),
+                variables: vec![Variable::new("s")],
+            },
+            13 => GraphPattern::Distinct {
+                inner: Child::new(pattern(choices)),
+            },
+            14 => GraphPattern::Slice {
+                inner: Child::new(pattern(choices)),
+                start: 0,
+                length: Some(1),
+            },
+            15 => GraphPattern::Group {
+                inner: Child::new(pattern(choices)),
+                variables: (0..choices.choose(2)).map(|_| Variable::new("s")).collect(),
+                aggregates: Vec::new(),
+            },
+            16 => GraphPattern::Values {
+                variables: vec![Variable::new("s")],
+                bindings: (0..choices.choose(2)).map(|_| vec![None]).collect(),
+            },
+            17 => GraphPattern::Graph {
+                name: NamedNodePattern::Variable(Variable::new("g")),
+                inner: Child::new(pattern(choices)),
+            },
+            18 => GraphPattern::Service {
+                name: NamedNodePattern::NamedNode(iri("endpoint")),
+                inner: Child::new(pattern(choices)),
+                silent: false,
+            },
+            _ => GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: "http://example.org/rel".to_owned(),
+                subject_args: vec![var("s")],
+                object_args: vec![var("o")],
+            }),
+        }
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// Both proofs answer exactly what their recursive references answer, for every
+    /// generated path and pattern — and the generator produces both answers of each.
+    #[test]
+    fn the_proofs_agree_with_their_recursive_references_on_generated_shapes() {
+        let mut edge_needing = 0;
+        let mut proven_empty = 0;
+        for seed in 0..500_u64 {
+            let mut choices = Choices::new(seed);
+            let path = path(&mut choices);
+            let needs = path_needs_an_edge(&path);
+            assert_eq!(needs, reference_path(&path), "seed {seed}: {path:?}");
+            edge_needing += usize::from(needs);
+
+            let mut choices = Choices::new(seed.wrapping_mul(7919));
+            let pattern = pattern(&mut choices);
+            let proven = yields_nothing_without_rows_in_the_active_graph(&pattern);
+            assert_eq!(
+                proven,
+                reference_pattern(&pattern),
+                "seed {seed}: {pattern:?}"
+            );
+            proven_empty += usize::from(proven);
+        }
+        assert!(
+            edge_needing > 25 && edge_needing < 475,
+            "the generator produces paths that do and do not need an edge ({edge_needing} of 500)"
+        );
+        assert!(
+            proven_empty > 25 && proven_empty < 475,
+            "the generator produces patterns proven and not proven empty ({proven_empty} of 500)"
+        );
+    }
+
+    /// A hop under a hundred thousand reversals, a zero-length match under as many, a
+    /// pattern under a hundred thousand `DISTINCT`s and a join spine of that height are
+    /// each proven — or left unproven — on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_shape_is_proven_on_a_128_kib_thread() {
+        const DEPTH: usize = 100_000;
+        let answers = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let mut hop = P::NamedNode(iri("p"));
+                let mut zero = P::ZeroOrMore(Child::new(P::NamedNode(iri("p"))));
+                for _ in 0..DEPTH {
+                    hop = P::Reverse(Child::new(hop));
+                    zero = P::OneOrMore(Child::new(zero));
+                }
+                let mut distinct = GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: var("s"),
+                        predicate: NamedNodePattern::NamedNode(iri("p")),
+                        object: var("o"),
+                    }],
+                };
+                let mut spine = GraphPattern::Values {
+                    variables: vec![Variable::new("s")],
+                    bindings: vec![vec![None]],
+                };
+                for _ in 0..DEPTH {
+                    distinct = GraphPattern::Distinct {
+                        inner: Child::new(distinct),
+                    };
+                    spine = GraphPattern::Join {
+                        left: Child::new(spine),
+                        right: Child::new(GraphPattern::Bgp {
+                            patterns: Vec::new(),
+                        }),
+                    };
+                }
+                [
+                    path_needs_an_edge(&hop),
+                    path_needs_an_edge(&zero),
+                    yields_nothing_without_rows_in_the_active_graph(&distinct),
+                    yields_nothing_without_rows_in_the_active_graph(&spine),
+                ]
+            })
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned");
+        assert_eq!(answers, [true, false, true, false]);
     }
 }

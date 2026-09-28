@@ -165,7 +165,7 @@ fn finish<I: purrdf_core::ViewTermId>(
 // ---------------------------------------------------------------------------
 
 /// One argument position's compiled form.
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum Arg {
     /// A constant written at the call site: the same value on every row.
     Constant(TermValue),
@@ -175,6 +175,35 @@ enum Arg {
     /// A quoted triple carrying at least one variable/blank: matched structurally,
     /// exactly as a `Bgp` matches a quoted-triple position that binds.
     Triple(Box<[Self; 3]>),
+}
+
+/// Dropping an argument releases its quoted-triple components over a work list: each
+/// nested triple's components are taken out of it (a leaf slot left in each place) before
+/// it is dropped, so an argument of any depth is released without a machine-stack frame
+/// per level. A triple whose components are all leaves returns at once, so the emptied
+/// triples the loop drops cost nothing, and the one work list is the only allocation.
+impl Drop for Arg {
+    fn drop(&mut self) {
+        let Self::Triple(parts) = self else {
+            return;
+        };
+        if !parts.iter().any(|part| matches!(part, Self::Triple(_))) {
+            return;
+        }
+        let mut pending: Vec<Self> = parts
+            .iter_mut()
+            .map(|part| std::mem::replace(part, Self::Slot(0)))
+            .collect();
+        while let Some(mut part) = pending.pop() {
+            if let Self::Triple(inner) = &mut part {
+                pending.extend(
+                    inner
+                        .iter_mut()
+                        .map(|component| std::mem::replace(component, Self::Slot(0))),
+                );
+            }
+        }
+    }
 }
 
 /// The per-node compilation of a call: what each flattened position is, which slots
@@ -314,20 +343,17 @@ fn unobserved_positions(
     slot_cols: &[Option<usize>],
     slot_seed: &[Option<usize>],
 ) -> Vec<bool> {
-    fn count(arg: &Arg, occurrences: &mut [usize]) {
+    // Every position of every argument, quoted-triple components included, over a
+    // work list: an occurrence count is the same whatever order the positions are
+    // counted in.
+    let mut occurrences = vec![0_usize; slot_cols.len()];
+    let mut pending: Vec<&Arg> = args.iter().collect();
+    while let Some(arg) = pending.pop() {
         match arg {
             Arg::Constant(_) => {}
             Arg::Slot(slot) => occurrences[*slot] += 1,
-            Arg::Triple(parts) => {
-                for part in &**parts {
-                    count(part, occurrences);
-                }
-            }
+            Arg::Triple(parts) => pending.extend(parts.iter()),
         }
-    }
-    let mut occurrences = vec![0_usize; slot_cols.len()];
-    for arg in args {
-        count(arg, &mut occurrences);
     }
     args.iter()
         .map(|arg| match arg {
@@ -340,6 +366,12 @@ fn unobserved_positions(
 }
 
 /// Compile one argument position, registering any variable/blank it introduces.
+///
+/// Slots are registered in position order: a quoted triple that binds registers its
+/// predicate, then every position of its subject, then every position of its object,
+/// each subject or object whole before the next. The positions still to be compiled
+/// are kept on a work list, so a term of any depth is compiled without a machine-stack
+/// frame per level, and the first position that fails to convert is the error.
 fn compile_arg(
     term: &TermPattern,
     slots: &mut DetHashMap<Variable, usize>,
@@ -348,59 +380,87 @@ fn compile_arg(
     slot_seed: &mut Vec<Option<usize>>,
     input: &VarSchema,
 ) -> Result<Arg, EvalError> {
-    match term {
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) => Ok(Arg::Constant(
-            crate::convert::ground_term_pattern_to_value(term, "a property-function call")?,
-        )),
-        TermPattern::Variable(variable) => Ok(Arg::Slot(slot_for(
-            variable.clone(),
-            true,
-            slots,
-            schema,
-            slot_cols,
-            slot_seed,
-            input,
-        ))),
-        // A blank node is a non-distinguished variable. It gets a slot (so its
-        // occurrences must agree) under the same NUL-prefixed synthetic name
-        // `crate::bgp` uses, and no output column (so it is projected away).
-        TermPattern::BlankNode(blank) => Ok(Arg::Slot(slot_for(
-            crate::bgp::blank_var(blank.as_str()),
-            false,
-            slots,
-            schema,
-            slot_cols,
-            slot_seed,
-            input,
-        ))),
-        TermPattern::Triple(triple) => {
-            if triple_is_ground(triple) {
-                return Ok(Arg::Constant(
-                    crate::convert::ground_triple_pattern_to_value(
+    /// One step of the compilation: compile a position, or assemble a quoted triple
+    /// whose predicate is already compiled from the two arguments compiled last — its
+    /// object, then its subject.
+    enum Step<'a> {
+        Compile(&'a TermPattern),
+        Assemble(Arg),
+    }
+
+    let mut built: Vec<Arg> = Vec::new();
+    let mut pending = vec![Step::Compile(term)];
+    while let Some(step) = pending.pop() {
+        let arg = match step {
+            Step::Compile(term @ (TermPattern::NamedNode(_) | TermPattern::Literal(_))) => {
+                Arg::Constant(crate::convert::ground_term_pattern_to_value(
+                    term,
+                    "a property-function call",
+                )?)
+            }
+            Step::Compile(TermPattern::Variable(variable)) => Arg::Slot(slot_for(
+                variable.clone(),
+                true,
+                slots,
+                schema,
+                slot_cols,
+                slot_seed,
+                input,
+            )),
+            // A blank node is a non-distinguished variable. It gets a slot (so its
+            // occurrences must agree) under the same NUL-prefixed synthetic name
+            // `crate::bgp` uses, and no output column (so it is projected away).
+            Step::Compile(TermPattern::BlankNode(blank)) => Arg::Slot(slot_for(
+                crate::bgp::blank_var(blank.as_str()),
+                false,
+                slots,
+                schema,
+                slot_cols,
+                slot_seed,
+                input,
+            )),
+            Step::Compile(TermPattern::Triple(triple)) => {
+                if triple_is_ground(triple) {
+                    Arg::Constant(crate::convert::ground_triple_pattern_to_value(
                         triple,
                         "a property-function call",
-                    )?,
-                ));
-            }
-            let predicate = match &triple.predicate {
-                NamedNodePattern::NamedNode(node) => {
-                    Arg::Constant(crate::convert::named_node_to_value(node))
+                    )?)
+                } else {
+                    let predicate = match &triple.predicate {
+                        NamedNodePattern::NamedNode(node) => {
+                            Arg::Constant(crate::convert::named_node_to_value(node))
+                        }
+                        NamedNodePattern::Variable(variable) => Arg::Slot(slot_for(
+                            variable.clone(),
+                            true,
+                            slots,
+                            schema,
+                            slot_cols,
+                            slot_seed,
+                            input,
+                        )),
+                    };
+                    pending.push(Step::Assemble(predicate));
+                    pending.push(Step::Compile(&triple.object));
+                    pending.push(Step::Compile(&triple.subject));
+                    continue;
                 }
-                NamedNodePattern::Variable(variable) => Arg::Slot(slot_for(
-                    variable.clone(),
-                    true,
-                    slots,
-                    schema,
-                    slot_cols,
-                    slot_seed,
-                    input,
-                )),
-            };
-            let subject = compile_arg(&triple.subject, slots, schema, slot_cols, slot_seed, input)?;
-            let object = compile_arg(&triple.object, slots, schema, slot_cols, slot_seed, input)?;
-            Ok(Arg::Triple(Box::new([subject, predicate, object])))
-        }
+            }
+            Step::Assemble(predicate) => {
+                let object = built
+                    .pop()
+                    .expect("a quoted triple's object is compiled before the triple is assembled");
+                let subject = built
+                    .pop()
+                    .expect("a quoted triple's subject is compiled before the triple is assembled");
+                Arg::Triple(Box::new([subject, predicate, object]))
+            }
+        };
+        built.push(arg);
     }
+    Ok(built
+        .pop()
+        .expect("the position compiles to exactly one argument"))
 }
 
 /// The slot of `variable`, registering it (and its output column, when it is a real
@@ -424,18 +484,24 @@ fn slot_for(
     slot
 }
 
-/// Whether a quoted-triple pattern is variable-free (and so a plain constant).
+/// Whether a quoted-triple pattern is variable-free (and so a plain constant): no
+/// position of it, at any nesting depth, is a variable or a blank node, and every
+/// predicate is an IRI. The nested triples still to be read are kept on a work list.
 fn triple_is_ground(triple: &TriplePattern) -> bool {
-    fn term_is_ground(term: &TermPattern) -> bool {
-        match term {
-            TermPattern::NamedNode(_) | TermPattern::Literal(_) => true,
-            TermPattern::Variable(_) | TermPattern::BlankNode(_) => false,
-            TermPattern::Triple(triple) => triple_is_ground(triple),
+    let mut pending = vec![triple];
+    while let Some(triple) = pending.pop() {
+        if !matches!(triple.predicate, NamedNodePattern::NamedNode(_)) {
+            return false;
+        }
+        for term in [&triple.subject, &triple.object] {
+            match term {
+                TermPattern::NamedNode(_) | TermPattern::Literal(_) => {}
+                TermPattern::Variable(_) | TermPattern::BlankNode(_) => return false,
+                TermPattern::Triple(inner) => pending.push(inner),
+            }
         }
     }
-    term_is_ground(&triple.subject)
-        && matches!(triple.predicate, NamedNodePattern::NamedNode(_))
-        && term_is_ground(&triple.object)
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -777,24 +843,53 @@ fn unbound_slot_internal(iri: &str) -> EvalError {
 
 /// The value of one argument position for this invocation, or `None` when the position
 /// is free.
+///
+/// A quoted-triple argument is bound only when every component is: a partly-bound
+/// triple term denotes no single value, so the position is free and the relation is
+/// asked to produce one (which `unify_term` then matches structurally). The components
+/// are built before the triple over a work list, so a term of any depth is built
+/// without a machine-stack frame per level.
 fn arg_value(arg: &Arg, seed: &[Option<TermValue>]) -> Option<TermValue> {
-    match arg {
-        Arg::Constant(value) => Some(value.clone()),
-        Arg::Slot(slot) => seed[*slot].clone(),
-        // A quoted-triple argument is bound only when every component is: a partly-bound
-        // triple term denotes no single value, so the position is free and the relation
-        // is asked to produce one (which `unify_term` then matches structurally).
-        Arg::Triple(parts) => {
-            let s = arg_value(&parts[0], seed)?;
-            let p = arg_value(&parts[1], seed)?;
-            let o = arg_value(&parts[2], seed)?;
-            Some(TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
-            })
-        }
+    /// One step of the build: value a position, or assemble a quoted triple from the
+    /// three values built last — its object, its predicate, then its subject.
+    enum Step<'a> {
+        Value(&'a Arg),
+        Assemble,
     }
+
+    let mut built: Vec<TermValue> = Vec::new();
+    let mut pending = vec![Step::Value(arg)];
+    while let Some(step) = pending.pop() {
+        let value = match step {
+            Step::Value(Arg::Constant(value)) => value.clone(),
+            Step::Value(Arg::Slot(slot)) => seed[*slot].clone()?,
+            Step::Value(Arg::Triple(parts)) => {
+                pending.push(Step::Assemble);
+                pending.push(Step::Value(&parts[2]));
+                pending.push(Step::Value(&parts[1]));
+                pending.push(Step::Value(&parts[0]));
+                continue;
+            }
+            Step::Assemble => {
+                let o = built
+                    .pop()
+                    .expect("a quoted triple's object is valued before the triple is assembled");
+                let p = built
+                    .pop()
+                    .expect("a quoted triple's predicate is valued before the triple is assembled");
+                let s = built
+                    .pop()
+                    .expect("a quoted triple's subject is valued before the triple is assembled");
+                TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                }
+            }
+        };
+        built.push(value);
+    }
+    built.pop()
 }
 
 /// Match one emitted row against the call's argument positions, binding free slots and
@@ -809,26 +904,41 @@ fn unify_row(args: &[Arg], emitted: &[TermValue], values: &mut [Option<TermValue
         .all(|(arg, value)| unify_term(arg, value, values))
 }
 
-/// [`unify_row`] for one position (recursing through quoted triples).
+/// [`unify_row`] for one position, through quoted triples.
+///
+/// A quoted triple's components are matched subject, predicate, object, each whole
+/// before the next, and the first disagreement ends the match: every slot bound before
+/// it stays written, and none after it is touched. The positions still to be matched
+/// are kept on a work list, so a term of any depth is matched without a machine-stack
+/// frame per level.
 fn unify_term(arg: &Arg, value: &TermValue, values: &mut [Option<TermValue>]) -> bool {
-    match arg {
-        Arg::Constant(constant) => constant == value,
-        Arg::Slot(slot) => match &values[*slot] {
-            Some(existing) => existing == value,
-            None => {
-                values[*slot] = Some(value.clone());
-                true
+    let mut pending = vec![(arg, value)];
+    while let Some((arg, value)) = pending.pop() {
+        match arg {
+            Arg::Constant(constant) => {
+                if constant != value {
+                    return false;
+                }
             }
-        },
-        Arg::Triple(parts) => match value {
-            TermValue::Triple { s, p, o } => {
-                unify_term(&parts[0], s, values)
-                    && unify_term(&parts[1], p, values)
-                    && unify_term(&parts[2], o, values)
-            }
-            _ => false,
-        },
+            Arg::Slot(slot) => match &values[*slot] {
+                Some(existing) => {
+                    if existing != value {
+                        return false;
+                    }
+                }
+                None => values[*slot] = Some(value.clone()),
+            },
+            Arg::Triple(parts) => match value {
+                TermValue::Triple { s, p, o } => {
+                    pending.push((&parts[2], o));
+                    pending.push((&parts[1], p));
+                    pending.push((&parts[0], s));
+                }
+                _ => return false,
+            },
+        }
     }
+    true
 }
 
 // ---------------------------------------------------------------------------
@@ -1873,6 +1983,15 @@ impl<'q> ShapeWalk<'q> {
 
     /// Walk `pattern`: its variables' sources, and the one call it is with the
     /// operators above it — or the refusal naming the outermost node in the way.
+    ///
+    /// The walk keeps its own stack of frames — the nodes still to be entered and the
+    /// nodes whose operands are being walked — and a stack of the operands' results, so
+    /// a pattern of any depth is walked without a machine-stack frame per level. A
+    /// node's operands are walked left to right, each whole before the next, and every
+    /// call is met, every variable minted and every dropped column recorded in that
+    /// order; a node's own state (the context and frame a sub-`SELECT` opens, the
+    /// `GRAPH` around an operand, the atoms a `LATERAL`'s left operand adds) is set
+    /// when the node is entered and put back when its operands are done.
     #[allow(
         clippy::too_many_lines,
         reason = "one arm per algebra node, each the node's own rule; split, the rules \
@@ -1882,6 +2001,28 @@ impl<'q> ShapeWalk<'q> {
         &mut self,
         pattern: &'q GraphPattern,
     ) -> (Vec<Provenance<'q>>, Result<OneCall<'q>, String>) {
+        let mut frames: Vec<WalkFrame<'q>> = vec![WalkFrame::Enter(pattern)];
+        let mut results: Vec<Walked<'q>> = Vec::new();
+        while let Some(frame) = frames.pop() {
+            match frame {
+                WalkFrame::Enter(pattern) => self.enter(pattern, &mut frames, &mut results),
+                WalkFrame::Resume(resume) => self.resume(resume, &mut frames, &mut results),
+            }
+        }
+        results
+            .pop()
+            .expect("the root node is walked to exactly one result")
+    }
+
+    /// Enter `pattern`: a leaf is answered at once; a node with operands sets its own
+    /// state, pushes the frame that finishes it and then its operands, the first
+    /// operand on top.
+    fn enter(
+        &mut self,
+        pattern: &'q GraphPattern,
+        frames: &mut Vec<WalkFrame<'q>>,
+        results: &mut Vec<Walked<'q>>,
+    ) {
         match pattern {
             GraphPattern::PropertyFunction(call) => {
                 let index = self.calls.len();
@@ -1900,13 +2041,13 @@ impl<'q> ShapeWalk<'q> {
                         lost: None,
                     })
                     .collect();
-                (
+                results.push((
                     columns,
                     Ok(OneCall {
                         call,
                         operators: Vec::new(),
                     }),
-                )
+                ));
             }
             GraphPattern::Project { inner, variables } => {
                 // A sub-`SELECT` is its own scope: the frames around it inject into it
@@ -1950,7 +2091,149 @@ impl<'q> ShapeWalk<'q> {
                     }
                 }
                 let outer_frame = std::mem::take(&mut self.frame);
-                let (below, read) = self.walk(inner);
+                frames.push(WalkFrame::Resume(Resume::Project {
+                    pattern,
+                    variables,
+                    outer,
+                    outer_frame,
+                    outer_graphs,
+                }));
+                frames.push(WalkFrame::Enter(inner));
+            }
+            GraphPattern::Slice { inner, start, .. } => {
+                frames.push(WalkFrame::Resume(Resume::Slice {
+                    pattern,
+                    start: *start,
+                }));
+                frames.push(WalkFrame::Enter(inner));
+            }
+            GraphPattern::Filter { inner, expr } => {
+                frames.push(WalkFrame::Resume(Resume::Filter { pattern, expr }));
+                frames.push(WalkFrame::Enter(inner));
+            }
+            GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+                frames.push(WalkFrame::Resume(Resume::Named { pattern }));
+                frames.push(WalkFrame::Enter(inner));
+            }
+            GraphPattern::OrderBy { inner, .. } => {
+                frames.push(WalkFrame::Resume(Resume::OrderBy));
+                frames.push(WalkFrame::Enter(inner));
+            }
+            GraphPattern::Extend {
+                inner,
+                variable,
+                expression,
+            } => {
+                frames.push(WalkFrame::Resume(Resume::Extend {
+                    pattern,
+                    variable,
+                    expression,
+                }));
+                frames.push(WalkFrame::Enter(inner));
+            }
+            GraphPattern::Join { left, right } => {
+                frames.push(WalkFrame::Resume(Resume::Join { pattern, left }));
+                frames.push(WalkFrame::Enter(right));
+                frames.push(WalkFrame::Enter(left));
+            }
+            GraphPattern::Lateral { left, right } => {
+                frames.push(WalkFrame::Resume(Resume::LateralLeft {
+                    pattern,
+                    left,
+                    right,
+                }));
+                frames.push(WalkFrame::Enter(left));
+            }
+            GraphPattern::LeftJoin { left, right, .. } => {
+                frames.push(WalkFrame::Resume(Resume::LeftJoin));
+                frames.push(WalkFrame::Enter(right));
+                frames.push(WalkFrame::Enter(left));
+            }
+            GraphPattern::Minus { left, right } => {
+                frames.push(WalkFrame::Resume(Resume::Minus));
+                frames.push(WalkFrame::Enter(right));
+                frames.push(WalkFrame::Enter(left));
+            }
+            GraphPattern::Union { arms } => {
+                frames.push(WalkFrame::Resume(Resume::Union { arms: arms.len() }));
+                frames.extend(arms.iter().rev().map(WalkFrame::Enter));
+            }
+            GraphPattern::Graph { name, inner } => {
+                self.graphs.push(name.clone());
+                frames.push(WalkFrame::Resume(Resume::Graph { name }));
+                frames.push(WalkFrame::Enter(inner));
+            }
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => {
+                frames.push(WalkFrame::Resume(Resume::Group {
+                    variables,
+                    aggregates,
+                }));
+                frames.push(WalkFrame::Enter(inner));
+            }
+            GraphPattern::Unfold {
+                inner,
+                element,
+                companion,
+                ..
+            } => {
+                frames.push(WalkFrame::Resume(Resume::Unfold {
+                    element,
+                    companion: companion.as_ref(),
+                }));
+                frames.push(WalkFrame::Enter(inner));
+            }
+            // Nodes no call beneath can be a source through: data, inline values, and a
+            // remote service whose answer this engine does not produce. Their
+            // variables are bound, by something that is not a call.
+            GraphPattern::Bgp { .. }
+            | GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::Service { .. } => {
+                let always = matches!(
+                    pattern,
+                    GraphPattern::Bgp { .. } | GraphPattern::Path { .. }
+                );
+                let columns = crate::eval::syntactic_schema(pattern)
+                    .vars()
+                    .iter()
+                    .map(|variable| Provenance {
+                        name: variable.clone(),
+                        always,
+                        sources: Vec::new(),
+                        lost: None,
+                    })
+                    .collect();
+                results.push((
+                    columns,
+                    Err(not_one_call(&format!("a {} node", node_kind(pattern)))),
+                ));
+            }
+        }
+    }
+
+    /// Finish a node whose operands are walked, their results the last on `results`
+    /// (the right operand's on top of the left's): put the node's state back and push
+    /// its own result — or, for a `LATERAL` whose left operand is done, add that
+    /// operand's atoms and push the frames that walk the right one.
+    fn resume(
+        &mut self,
+        resume: Resume<'q>,
+        frames: &mut Vec<WalkFrame<'q>>,
+        results: &mut Vec<Walked<'q>>,
+    ) {
+        let walked = match resume {
+            Resume::Project {
+                pattern,
+                variables,
+                outer,
+                outer_frame,
+                outer_graphs,
+            } => {
+                let (below, read) = pop_result(results);
                 self.context = outer;
                 self.frame = outer_frame;
                 self.graphs = outer_graphs;
@@ -1961,40 +2244,40 @@ impl<'q> ShapeWalk<'q> {
                     .collect();
                 (columns, extended(read, pattern))
             }
-            GraphPattern::Slice { inner, start, .. } => {
-                let (columns, read) = self.walk(inner);
-                let read = if *start == 0 {
+            Resume::Slice { pattern, start } => {
+                let (columns, read) = pop_result(results);
+                let read = if start == 0 {
                     extended(read, pattern)
                 } else {
                     Err(not_one_call("an OFFSET"))
                 };
                 (columns, read)
             }
-            GraphPattern::Filter { inner, expr } => {
-                let (columns, read) = self.walk(inner);
+            Resume::Filter { pattern, expr } => {
+                let (columns, read) = pop_result(results);
                 let read = match filter_reads_row_by_row(expr) {
                     Ok(()) => extended(read, pattern),
                     Err(why) => Err(not_one_call(&format!("a FILTER whose predicate {why}"))),
                 };
                 (columns, read)
             }
-            GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
-                let (columns, _) = self.walk(inner);
+            Resume::Named { pattern } => {
+                let (columns, _) = pop_result(results);
                 (
                     columns,
                     Err(not_one_call(&format!("a {} node", node_kind(pattern)))),
                 )
             }
-            GraphPattern::OrderBy { inner, .. } => {
-                let (columns, _) = self.walk(inner);
+            Resume::OrderBy => {
+                let (columns, _) = pop_result(results);
                 (columns, Err(not_one_call("an OrderBy node")))
             }
-            GraphPattern::Extend {
-                inner,
+            Resume::Extend {
+                pattern,
                 variable,
                 expression,
             } => {
-                let (mut columns, read) = self.walk(inner);
+                let (mut columns, read) = pop_result(results);
                 // The evaluator writes the expression's value into the variable's
                 // column, overwriting whatever the operand bound there, and leaves it
                 // unbound where the expression errors. So the column this node answers
@@ -2029,37 +2312,55 @@ impl<'q> ShapeWalk<'q> {
                 }
                 (columns, read)
             }
-            GraphPattern::Join { left, right } => {
-                let (left_columns, _) = self.walk(left);
-                let (right_columns, right_read) = self.walk(right);
+            Resume::Join { pattern, left } => {
+                let (right_columns, right_read) = pop_result(results);
+                let (left_columns, _) = pop_result(results);
                 let read = join_read(pattern, left, right_read);
                 (conjunction(left_columns, right_columns), read)
             }
-            GraphPattern::Lateral { left, right } => {
-                let (left_columns, _) = self.walk(left);
+            Resume::LateralLeft {
+                pattern,
+                left,
+                right,
+            } => {
                 // The right operand is evaluated once per row of the left, with that
                 // row in hand: the left is one frame, driving every call beneath the
-                // right and injected into every frame there.
+                // right and injected into every frame there. The left's result stays
+                // on the stack for the frame that finishes the node.
                 let depth = self.context.atoms.len();
                 lateral_atoms(left, self.frame, &self.graphs, &mut self.context.atoms);
                 self.frame += 1;
-                let (right_columns, right_read) = self.walk(right);
+                frames.push(WalkFrame::Resume(Resume::LateralRight {
+                    pattern,
+                    left,
+                    depth,
+                }));
+                frames.push(WalkFrame::Enter(right));
+                return;
+            }
+            Resume::LateralRight {
+                pattern,
+                left,
+                depth,
+            } => {
                 self.frame -= 1;
                 self.context.atoms.truncate(depth);
+                let (right_columns, right_read) = pop_result(results);
+                let (left_columns, _) = pop_result(results);
                 let read = join_read(pattern, left, right_read);
                 (conjunction(left_columns, right_columns), read)
             }
-            GraphPattern::LeftJoin { left, right, .. } => {
-                let (left_columns, _) = self.walk(left);
-                let (right_columns, _) = self.walk(right);
+            Resume::LeftJoin => {
+                let (right_columns, _) = pop_result(results);
+                let (left_columns, _) = pop_result(results);
                 (
                     optional(left_columns, right_columns),
                     Err(not_one_call("a LeftJoin node")),
                 )
             }
-            GraphPattern::Minus { left, right } => {
-                let (mut left_columns, _) = self.walk(left);
-                let (right_columns, _) = self.walk(right);
+            Resume::Minus => {
+                let (right_columns, _) = pop_result(results);
+                let (mut left_columns, _) = pop_result(results);
                 const MINUS: &str =
                     "a MINUS, whose subtracted side's values never reach the answer";
                 for right in right_columns
@@ -2081,10 +2382,10 @@ impl<'q> ShapeWalk<'q> {
             }
             // The pairwise merge, folded over the arms in order — the merge the
             // left-nested binary chain applied, the first arm's columns as they are.
-            GraphPattern::Union { arms } => {
+            Resume::Union { arms } => {
+                let first = results.len() - arms;
                 let mut columns: Option<Vec<Provenance<'q>>> = None;
-                for arm in arms {
-                    let (arm_columns, _) = self.walk(arm);
+                for (arm_columns, _) in results.drain(first..) {
                     columns = Some(match columns {
                         None => arm_columns,
                         Some(before) => union(before, arm_columns),
@@ -2095,9 +2396,8 @@ impl<'q> ShapeWalk<'q> {
                     Err(not_one_call("a Union node")),
                 )
             }
-            GraphPattern::Graph { name, inner } => {
-                self.graphs.push(name.clone());
-                let (mut columns, _) = self.walk(inner);
+            Resume::Graph { name } => {
+                let (mut columns, _) = pop_result(results);
                 self.graphs.pop();
                 if let NamedNodePattern::Variable(variable) = name {
                     const GRAPH: &str = "a GRAPH, which binds it to the name of a graph";
@@ -2119,12 +2419,11 @@ impl<'q> ShapeWalk<'q> {
                 }
                 (columns, Err(not_one_call("a Graph node")))
             }
-            GraphPattern::Group {
-                inner,
+            Resume::Group {
                 variables,
                 aggregates,
             } => {
-                let (below, _) = self.walk(inner);
+                let (below, _) = pop_result(results);
                 let mut columns: Vec<Provenance<'q>> = variables
                     .iter()
                     .filter_map(|variable| below.iter().find(|column| column.name == *variable))
@@ -2143,13 +2442,8 @@ impl<'q> ShapeWalk<'q> {
                 }
                 (columns, Err(not_one_call("a Group node")))
             }
-            GraphPattern::Unfold {
-                inner,
-                element,
-                companion,
-                ..
-            } => {
-                let (mut columns, _) = self.walk(inner);
+            Resume::Unfold { element, companion } => {
+                let (mut columns, _) = pop_result(results);
                 for variable in std::iter::once(element).chain(companion) {
                     bind_column(
                         &mut columns,
@@ -2163,34 +2457,91 @@ impl<'q> ShapeWalk<'q> {
                 }
                 (columns, Err(not_one_call("an Unfold node")))
             }
-            // Nodes no call beneath can be a source through: data, inline values, and a
-            // remote service whose answer this engine does not produce. Their
-            // variables are bound, by something that is not a call.
-            GraphPattern::Bgp { .. }
-            | GraphPattern::Path { .. }
-            | GraphPattern::Values { .. }
-            | GraphPattern::Service { .. } => {
-                let always = matches!(
-                    pattern,
-                    GraphPattern::Bgp { .. } | GraphPattern::Path { .. }
-                );
-                let columns = crate::eval::syntactic_schema(pattern)
-                    .vars()
-                    .iter()
-                    .map(|variable| Provenance {
-                        name: variable.clone(),
-                        always,
-                        sources: Vec::new(),
-                        lost: None,
-                    })
-                    .collect();
-                (
-                    columns,
-                    Err(not_one_call(&format!("a {} node", node_kind(pattern)))),
-                )
-            }
-        }
+        };
+        results.push(walked);
     }
+}
+
+/// What the walk of one node yields: its variables' sources, and the one call it is
+/// with the operators above it, or the refusal.
+type Walked<'q> = (Vec<Provenance<'q>>, Result<OneCall<'q>, String>);
+
+/// One frame of [`ShapeWalk::walk`]'s stack: a node still to be entered, or a node
+/// whose operands are being walked.
+enum WalkFrame<'q> {
+    Enter(&'q GraphPattern),
+    Resume(Resume<'q>),
+}
+
+/// A node whose operands are being walked, with what finishing it needs: the state to
+/// put back, and the node's own rule's inputs.
+enum Resume<'q> {
+    Project {
+        pattern: &'q GraphPattern,
+        variables: &'q [Variable],
+        outer: CallContext<'q>,
+        outer_frame: usize,
+        outer_graphs: Vec<NamedNodePattern>,
+    },
+    Slice {
+        pattern: &'q GraphPattern,
+        start: usize,
+    },
+    Filter {
+        pattern: &'q GraphPattern,
+        expr: &'q Expression,
+    },
+    /// A `DISTINCT` or `REDUCED`, refused under its own variant name.
+    Named {
+        pattern: &'q GraphPattern,
+    },
+    OrderBy,
+    Extend {
+        pattern: &'q GraphPattern,
+        variable: &'q Variable,
+        expression: &'q Expression,
+    },
+    Join {
+        pattern: &'q GraphPattern,
+        left: &'q GraphPattern,
+    },
+    /// A `LATERAL` whose left operand is being walked.
+    LateralLeft {
+        pattern: &'q GraphPattern,
+        left: &'q GraphPattern,
+        right: &'q GraphPattern,
+    },
+    /// A `LATERAL` whose right operand is being walked, with the number of context
+    /// atoms there were before the left operand's were added.
+    LateralRight {
+        pattern: &'q GraphPattern,
+        left: &'q GraphPattern,
+        depth: usize,
+    },
+    LeftJoin,
+    Minus,
+    /// A `UNION`, with the number of arms whose results are on the stack.
+    Union {
+        arms: usize,
+    },
+    Graph {
+        name: &'q NamedNodePattern,
+    },
+    Group {
+        variables: &'q [Variable],
+        aggregates: &'q [(Variable, purrdf_sparql_algebra::AggregateExpression)],
+    },
+    Unfold {
+        element: &'q Variable,
+        companion: Option<&'q Variable>,
+    },
+}
+
+/// The result of the operand walked last.
+fn pop_result<'q>(results: &mut Vec<Walked<'q>>) -> Walked<'q> {
+    results
+        .pop()
+        .expect("every operand is walked before the node above it is finished")
 }
 
 /// Why a column bound by an expression keeps no source, in a refusal's words.
@@ -2216,35 +2567,49 @@ fn bind_column<'q>(columns: &mut Vec<Provenance<'q>>, column: Provenance<'q>) {
 /// its right operand is evaluated with its left's rows in hand, so cutting the two
 /// apart would read the right operand as a relation of its own, which it is not —
 /// see [`ColumnSource::driving_pattern`].
+///
+/// The spine is read over a work list of the nodes still to be cut, so a spine of any
+/// depth is read without a machine-stack frame per level; the atoms are pushed in
+/// evaluation order, a driven call after every atom of the left operand that drives it.
 fn lateral_atoms<'q>(
     pattern: &'q GraphPattern,
     frame: usize,
     graphs: &[NamedNodePattern],
     context: &mut Vec<ContextAtom<'q>>,
 ) {
-    match pattern {
-        GraphPattern::Join { left, right } => {
-            lateral_atoms(left, frame, graphs, context);
-            lateral_atoms(right, frame, graphs, context);
-        }
-        GraphPattern::Lateral { left, right }
-            if matches!(**right, GraphPattern::PropertyFunction(_)) =>
-        {
-            lateral_atoms(left, frame, graphs, context);
-            context.push(ContextAtom {
-                pattern: right,
+    /// One node still to be cut, or a driven call to push once its left operand is.
+    enum Step<'q> {
+        Cut(&'q GraphPattern),
+        DrivenCall(&'q GraphPattern),
+    }
+
+    let mut pending = vec![Step::Cut(pattern)];
+    while let Some(step) = pending.pop() {
+        match step {
+            Step::Cut(GraphPattern::Join { left, right }) => {
+                pending.push(Step::Cut(right));
+                pending.push(Step::Cut(left));
+            }
+            Step::Cut(GraphPattern::Lateral { left, right })
+                if matches!(**right, GraphPattern::PropertyFunction(_)) =>
+            {
+                pending.push(Step::DrivenCall(right));
+                pending.push(Step::Cut(left));
+            }
+            Step::Cut(GraphPattern::Bgp { patterns }) if patterns.is_empty() => {}
+            Step::Cut(atom) => context.push(ContextAtom {
+                pattern: atom,
+                graphs: graphs.to_vec(),
+                frame,
+                call: false,
+            }),
+            Step::DrivenCall(call) => context.push(ContextAtom {
+                pattern: call,
                 graphs: graphs.to_vec(),
                 frame,
                 call: true,
-            });
+            }),
         }
-        GraphPattern::Bgp { patterns } if patterns.is_empty() => {}
-        atom => context.push(ContextAtom {
-            pattern: atom,
-            graphs: graphs.to_vec(),
-            frame,
-            call: false,
-        }),
     }
 }
 
@@ -2451,24 +2816,46 @@ fn union<'q>(left: Vec<Provenance<'q>>, right: Vec<Provenance<'q>>) -> Vec<Prove
 /// the dataset, and able to reach a relation whose attestation the read would have to
 /// settle), no custom function (resolved against a function registry the read is not
 /// handed), and no builtin that draws on per-query state.
+///
+/// The refusal names the first thing in the way in the order the expression is read:
+/// each node's parts in the order the shallow visitor yields them (a call's function
+/// before its arguments), every part read whole before the part after it. The parts
+/// still to be read are kept on a work list, pushed reversed so they come off in that
+/// order, and a predicate of any depth is read without a machine-stack frame per level.
 fn filter_reads_row_by_row(expr: &Expression) -> Result<(), &'static str> {
     use crate::governor::soundness::{ExpressionPart, visit_expression_parts};
-    let mut refused: Result<(), &'static str> = Ok(());
-    visit_expression_parts(expr, &mut |part| {
-        refused = match part {
-            ExpressionPart::Sub(sub) => filter_reads_row_by_row(sub),
-            ExpressionPart::Exists(_) => Err("embeds EXISTS"),
-            ExpressionPart::Call(Function::Custom(_)) => Err("calls a custom function"),
-            ExpressionPart::Call(function)
-                if crate::parallel::function_is_builtin_stateful(function) =>
-            {
-                Err("calls a builtin that draws per-query state")
+
+    /// One part still to be read.
+    enum Part<'a> {
+        Expression(&'a Expression),
+        Call(&'a Function),
+        Exists,
+    }
+
+    let mut pending = vec![Part::Expression(expr)];
+    while let Some(part) = pending.pop() {
+        match part {
+            Part::Expression(expr) => {
+                let first = pending.len();
+                visit_expression_parts(expr, &mut |part| {
+                    pending.push(match part {
+                        ExpressionPart::Sub(sub) => Part::Expression(sub),
+                        ExpressionPart::Exists(_) => Part::Exists,
+                        ExpressionPart::Call(function) => Part::Call(function),
+                    });
+                    false
+                });
+                pending[first..].reverse();
             }
-            ExpressionPart::Call(_) => Ok(()),
-        };
-        refused.is_err()
-    });
-    refused
+            Part::Exists => return Err("embeds EXISTS"),
+            Part::Call(Function::Custom(_)) => return Err("calls a custom function"),
+            Part::Call(function) if crate::parallel::function_is_builtin_stateful(function) => {
+                return Err("calls a builtin that draws per-query state");
+            }
+            Part::Call(_) => {}
+        }
+    }
+    Ok(())
 }
 
 /// The variant name of `pattern`, for a refusal that names the node in the way.
@@ -2484,6 +2871,11 @@ fn node_kind(pattern: &GraphPattern) -> String {
 /// first-seen order — the variables inside a quoted-triple argument included, because
 /// the compiled call gives each of them a slot and a column exactly as it gives a
 /// top-level variable (see `compile_arg`). A blank node binds no column and is skipped.
+///
+/// First-seen order is the order of the positions: a quoted triple's predicate, then
+/// every position of its subject, then every position of its object. The positions are
+/// kept on a work list, so a term of any depth is read without a machine-stack frame
+/// per level.
 fn call_variables<'q>(
     term: &'q TermPattern,
     visible: &mut Vec<(&'q Variable, Option<&'q Variable>)>,
@@ -2493,16 +2885,19 @@ fn call_variables<'q>(
             visible.push((variable, Some(variable)));
         }
     }
-    match term {
-        TermPattern::Variable(variable) => record(variable, visible),
-        TermPattern::Triple(triple) => {
-            if let NamedNodePattern::Variable(variable) = &triple.predicate {
-                record(variable, visible);
+    let mut pending = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            TermPattern::Variable(variable) => record(variable, visible),
+            TermPattern::Triple(triple) => {
+                if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                    record(variable, visible);
+                }
+                pending.push(&triple.object);
+                pending.push(&triple.subject);
             }
-            call_variables(&triple.subject, visible);
-            call_variables(&triple.object, visible);
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {}
         }
-        TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {}
     }
 }
 
@@ -4864,5 +5259,1300 @@ mod tests {
                     if triple.subject == TermPattern::Variable(Variable::new("g")))),
             "{renamed:#?}"
         );
+    }
+}
+
+/// The argument walks, the read-shape walk and the spine, predicate and call-variable
+/// walks against recursive readings of the same input, over generated shapes, and at
+/// a depth no recursive reading could reach on a small stack.
+#[cfg(test)]
+mod walk_tests {
+    use purrdf_core::{TermBox, TermValue};
+    use purrdf_sparql_algebra::{
+        BlankNode, Chain, Child, Expression, Function, GraphPattern, Literal, NamedNode,
+        NamedNodePattern, OrderExpression, PropertyFunctionCall, PropertyPathExpression,
+        TermPattern, TriplePattern, Variable,
+    };
+
+    use super::{
+        Arg, COMPUTED, CallContext, Enclosing, OneCall, Provenance, ShapeWalk, arg_value,
+        bind_column, call_variables, compile_arg, conjunction, extended, filter_reads_row_by_row,
+        join_read, lateral_atoms, node_kind, not_one_call, optional, slot_for, triple_is_ground,
+        unify_term, union, unobserved_positions,
+    };
+    use crate::DetHashMap;
+    use crate::error::EvalError;
+    use crate::solution::VarSchema;
+
+    const EX: &str = "http://example.org/";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    // ── The recursive references ───────────────────────────────────────────────────
+
+    fn reference_compile_arg(
+        term: &TermPattern,
+        slots: &mut DetHashMap<Variable, usize>,
+        schema: &mut VarSchema,
+        slot_cols: &mut Vec<Option<usize>>,
+        slot_seed: &mut Vec<Option<usize>>,
+        input: &VarSchema,
+    ) -> Result<Arg, EvalError> {
+        match term {
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) => Ok(Arg::Constant(
+                crate::convert::ground_term_pattern_to_value(term, "a property-function call")?,
+            )),
+            TermPattern::Variable(variable) => Ok(Arg::Slot(slot_for(
+                variable.clone(),
+                true,
+                slots,
+                schema,
+                slot_cols,
+                slot_seed,
+                input,
+            ))),
+            TermPattern::BlankNode(blank) => Ok(Arg::Slot(slot_for(
+                crate::bgp::blank_var(blank.as_str()),
+                false,
+                slots,
+                schema,
+                slot_cols,
+                slot_seed,
+                input,
+            ))),
+            TermPattern::Triple(triple) => {
+                if reference_triple_is_ground(triple) {
+                    return Ok(Arg::Constant(
+                        crate::convert::ground_triple_pattern_to_value(
+                            triple,
+                            "a property-function call",
+                        )?,
+                    ));
+                }
+                let predicate = match &triple.predicate {
+                    NamedNodePattern::NamedNode(node) => {
+                        Arg::Constant(crate::convert::named_node_to_value(node))
+                    }
+                    NamedNodePattern::Variable(variable) => Arg::Slot(slot_for(
+                        variable.clone(),
+                        true,
+                        slots,
+                        schema,
+                        slot_cols,
+                        slot_seed,
+                        input,
+                    )),
+                };
+                let subject = reference_compile_arg(
+                    &triple.subject,
+                    slots,
+                    schema,
+                    slot_cols,
+                    slot_seed,
+                    input,
+                )?;
+                let object = reference_compile_arg(
+                    &triple.object,
+                    slots,
+                    schema,
+                    slot_cols,
+                    slot_seed,
+                    input,
+                )?;
+                Ok(Arg::Triple(Box::new([subject, predicate, object])))
+            }
+        }
+    }
+
+    fn reference_triple_is_ground(triple: &TriplePattern) -> bool {
+        fn term_is_ground(term: &TermPattern) -> bool {
+            match term {
+                TermPattern::NamedNode(_) | TermPattern::Literal(_) => true,
+                TermPattern::Variable(_) | TermPattern::BlankNode(_) => false,
+                TermPattern::Triple(triple) => reference_triple_is_ground(triple),
+            }
+        }
+        term_is_ground(&triple.subject)
+            && matches!(triple.predicate, NamedNodePattern::NamedNode(_))
+            && term_is_ground(&triple.object)
+    }
+
+    fn reference_unobserved_positions(
+        args: &[Arg],
+        slot_cols: &[Option<usize>],
+        slot_seed: &[Option<usize>],
+    ) -> Vec<bool> {
+        fn count(arg: &Arg, occurrences: &mut [usize]) {
+            match arg {
+                Arg::Constant(_) => {}
+                Arg::Slot(slot) => occurrences[*slot] += 1,
+                Arg::Triple(parts) => {
+                    for part in &**parts {
+                        count(part, occurrences);
+                    }
+                }
+            }
+        }
+        let mut occurrences = vec![0_usize; slot_cols.len()];
+        for arg in args {
+            count(arg, &mut occurrences);
+        }
+        args.iter()
+            .map(|arg| match arg {
+                Arg::Slot(slot) => {
+                    slot_cols[*slot].is_none()
+                        && slot_seed[*slot].is_none()
+                        && occurrences[*slot] == 1
+                }
+                Arg::Constant(_) | Arg::Triple(_) => false,
+            })
+            .collect()
+    }
+
+    fn reference_arg_value(arg: &Arg, seed: &[Option<TermValue>]) -> Option<TermValue> {
+        match arg {
+            Arg::Constant(value) => Some(value.clone()),
+            Arg::Slot(slot) => seed[*slot].clone(),
+            Arg::Triple(parts) => {
+                let s = reference_arg_value(&parts[0], seed)?;
+                let p = reference_arg_value(&parts[1], seed)?;
+                let o = reference_arg_value(&parts[2], seed)?;
+                Some(TermValue::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+            }
+        }
+    }
+
+    fn reference_unify_term(
+        arg: &Arg,
+        value: &TermValue,
+        values: &mut [Option<TermValue>],
+    ) -> bool {
+        match arg {
+            Arg::Constant(constant) => constant == value,
+            Arg::Slot(slot) => match &values[*slot] {
+                Some(existing) => existing == value,
+                None => {
+                    values[*slot] = Some(value.clone());
+                    true
+                }
+            },
+            Arg::Triple(parts) => match value {
+                TermValue::Triple { s, p, o } => {
+                    reference_unify_term(&parts[0], s, values)
+                        && reference_unify_term(&parts[1], p, values)
+                        && reference_unify_term(&parts[2], o, values)
+                }
+                _ => false,
+            },
+        }
+    }
+
+    fn reference_lateral_atoms<'q>(
+        pattern: &'q GraphPattern,
+        frame: usize,
+        graphs: &[NamedNodePattern],
+        context: &mut Vec<super::ContextAtom<'q>>,
+    ) {
+        match pattern {
+            GraphPattern::Join { left, right } => {
+                reference_lateral_atoms(left, frame, graphs, context);
+                reference_lateral_atoms(right, frame, graphs, context);
+            }
+            GraphPattern::Lateral { left, right }
+                if matches!(**right, GraphPattern::PropertyFunction(_)) =>
+            {
+                reference_lateral_atoms(left, frame, graphs, context);
+                context.push(super::ContextAtom {
+                    pattern: right,
+                    graphs: graphs.to_vec(),
+                    frame,
+                    call: true,
+                });
+            }
+            GraphPattern::Bgp { patterns } if patterns.is_empty() => {}
+            atom => context.push(super::ContextAtom {
+                pattern: atom,
+                graphs: graphs.to_vec(),
+                frame,
+                call: false,
+            }),
+        }
+    }
+
+    fn reference_filter_reads_row_by_row(expr: &Expression) -> Result<(), &'static str> {
+        use crate::governor::soundness::{ExpressionPart, visit_expression_parts};
+        let mut refused: Result<(), &'static str> = Ok(());
+        visit_expression_parts(expr, &mut |part| {
+            refused = match part {
+                ExpressionPart::Sub(sub) => reference_filter_reads_row_by_row(sub),
+                ExpressionPart::Exists(_) => Err("embeds EXISTS"),
+                ExpressionPart::Call(Function::Custom(_)) => Err("calls a custom function"),
+                ExpressionPart::Call(function)
+                    if crate::parallel::function_is_builtin_stateful(function) =>
+                {
+                    Err("calls a builtin that draws per-query state")
+                }
+                ExpressionPart::Call(_) => Ok(()),
+            };
+            refused.is_err()
+        });
+        refused
+    }
+
+    fn reference_call_variables<'q>(
+        term: &'q TermPattern,
+        visible: &mut Vec<(&'q Variable, Option<&'q Variable>)>,
+    ) {
+        fn record<'q>(
+            variable: &'q Variable,
+            visible: &mut Vec<(&'q Variable, Option<&'q Variable>)>,
+        ) {
+            if !visible.iter().any(|(name, _)| *name == variable) {
+                visible.push((variable, Some(variable)));
+            }
+        }
+        match term {
+            TermPattern::Variable(variable) => record(variable, visible),
+            TermPattern::Triple(triple) => {
+                if let NamedNodePattern::Variable(variable) = &triple.predicate {
+                    record(variable, visible);
+                }
+                reference_call_variables(&triple.subject, visible);
+                reference_call_variables(&triple.object, visible);
+            }
+            TermPattern::NamedNode(_) | TermPattern::Literal(_) | TermPattern::BlankNode(_) => {}
+        }
+    }
+
+    impl<'q> ShapeWalk<'q> {
+        fn reference_walk(
+            &mut self,
+            pattern: &'q GraphPattern,
+        ) -> (Vec<Provenance<'q>>, Result<OneCall<'q>, String>) {
+            match pattern {
+                GraphPattern::PropertyFunction(call) => {
+                    let index = self.calls.len();
+                    self.calls.push(call);
+                    self.contexts.push(self.context.clone());
+                    let mut visible = Vec::new();
+                    for term in call.subject_args.iter().chain(&call.object_args) {
+                        call_variables(term, &mut visible);
+                    }
+                    let columns = visible
+                        .into_iter()
+                        .map(|(variable, _)| Provenance {
+                            name: variable.clone(),
+                            always: true,
+                            sources: vec![vec![(index, variable)]],
+                            lost: None,
+                        })
+                        .collect();
+                    (
+                        columns,
+                        Ok(OneCall {
+                            call,
+                            operators: Vec::new(),
+                        }),
+                    )
+                }
+                GraphPattern::Project { inner, variables } => {
+                    let mut carried: Vec<Variable> = Vec::new();
+                    for name in self
+                        .context
+                        .bound()
+                        .into_iter()
+                        .chain(self.context.carried().iter().cloned())
+                    {
+                        if variables.contains(&name) && !carried.contains(&name) {
+                            carried.push(name);
+                        }
+                    }
+                    let enclosing = (!carried.is_empty()).then(|| {
+                        Box::new(Enclosing {
+                            context: self.context.clone(),
+                            carried,
+                        })
+                    });
+                    let outer = std::mem::replace(
+                        &mut self.context,
+                        CallContext {
+                            atoms: Vec::new(),
+                            enclosing,
+                        },
+                    );
+                    let outer_graphs = self.graphs.clone();
+                    for at in 0..self.graphs.len() {
+                        if let NamedNodePattern::Variable(name) = &self.graphs[at]
+                            && !variables.contains(name)
+                        {
+                            let name = name.clone();
+                            let renamed = self.fresh(&name);
+                            self.graphs[at] = NamedNodePattern::Variable(renamed);
+                        }
+                    }
+                    let outer_frame = std::mem::take(&mut self.frame);
+                    let (below, read) = self.reference_walk(inner);
+                    self.context = outer;
+                    self.frame = outer_frame;
+                    self.graphs = outer_graphs;
+                    let columns = variables
+                        .iter()
+                        .filter_map(|variable| below.iter().find(|column| column.name == *variable))
+                        .cloned()
+                        .collect();
+                    (columns, extended(read, pattern))
+                }
+                GraphPattern::Slice { inner, start, .. } => {
+                    let (columns, read) = self.reference_walk(inner);
+                    let read = if *start == 0 {
+                        extended(read, pattern)
+                    } else {
+                        Err(not_one_call("an OFFSET"))
+                    };
+                    (columns, read)
+                }
+                GraphPattern::Filter { inner, expr } => {
+                    let (columns, read) = self.reference_walk(inner);
+                    let read = match filter_reads_row_by_row(expr) {
+                        Ok(()) => extended(read, pattern),
+                        Err(why) => Err(not_one_call(&format!("a FILTER whose predicate {why}"))),
+                    };
+                    (columns, read)
+                }
+                GraphPattern::Distinct { inner } | GraphPattern::Reduced { inner } => {
+                    let (columns, _) = self.reference_walk(inner);
+                    (
+                        columns,
+                        Err(not_one_call(&format!("a {} node", node_kind(pattern)))),
+                    )
+                }
+                GraphPattern::OrderBy { inner, .. } => {
+                    let (columns, _) = self.reference_walk(inner);
+                    (columns, Err(not_one_call("an OrderBy node")))
+                }
+                GraphPattern::Extend {
+                    inner,
+                    variable,
+                    expression,
+                } => {
+                    let (mut columns, read) = self.reference_walk(inner);
+                    let (column, read) = match expression {
+                        Expression::Variable(source) => (
+                            columns
+                                .iter()
+                                .find(|column| column.name == *source)
+                                .map(|column| Provenance {
+                                    name: variable.clone(),
+                                    ..column.clone()
+                                }),
+                            extended(read, pattern),
+                        ),
+                        _ => (
+                            Some(Provenance {
+                                name: variable.clone(),
+                                always: false,
+                                sources: Vec::new(),
+                                lost: Some(COMPUTED.to_owned()),
+                            }),
+                            Err(not_one_call("a computed BIND")),
+                        ),
+                    };
+                    match column {
+                        Some(column) => bind_column(&mut columns, column),
+                        None => columns.retain(|column| column.name != *variable),
+                    }
+                    (columns, read)
+                }
+                GraphPattern::Join { left, right } => {
+                    let (left_columns, _) = self.reference_walk(left);
+                    let (right_columns, right_read) = self.reference_walk(right);
+                    let read = join_read(pattern, left, right_read);
+                    (conjunction(left_columns, right_columns), read)
+                }
+                GraphPattern::Lateral { left, right } => {
+                    let (left_columns, _) = self.reference_walk(left);
+                    let depth = self.context.atoms.len();
+                    lateral_atoms(left, self.frame, &self.graphs, &mut self.context.atoms);
+                    self.frame += 1;
+                    let (right_columns, right_read) = self.reference_walk(right);
+                    self.frame -= 1;
+                    self.context.atoms.truncate(depth);
+                    let read = join_read(pattern, left, right_read);
+                    (conjunction(left_columns, right_columns), read)
+                }
+                GraphPattern::LeftJoin { left, right, .. } => {
+                    let (left_columns, _) = self.reference_walk(left);
+                    let (right_columns, _) = self.reference_walk(right);
+                    (
+                        optional(left_columns, right_columns),
+                        Err(not_one_call("a LeftJoin node")),
+                    )
+                }
+                GraphPattern::Minus { left, right } => {
+                    let (mut left_columns, _) = self.reference_walk(left);
+                    let (right_columns, _) = self.reference_walk(right);
+                    const MINUS: &str =
+                        "a MINUS, whose subtracted side's values never reach the answer";
+                    for right in right_columns
+                        .iter()
+                        .filter(|column| !column.sources.is_empty())
+                    {
+                        match left_columns
+                            .iter_mut()
+                            .find(|column| column.name == right.name)
+                        {
+                            Some(left) if left.sources.is_empty() => {
+                                left.lost.get_or_insert_with(|| MINUS.to_owned());
+                            }
+                            Some(_) => {}
+                            None => self.dropped.push((right.name.clone(), MINUS.to_owned())),
+                        }
+                    }
+                    (left_columns, Err(not_one_call("a Minus node")))
+                }
+                GraphPattern::Union { arms } => {
+                    let mut columns: Option<Vec<Provenance<'q>>> = None;
+                    for arm in arms {
+                        let (arm_columns, _) = self.reference_walk(arm);
+                        columns = Some(match columns {
+                            None => arm_columns,
+                            Some(before) => union(before, arm_columns),
+                        });
+                    }
+                    (
+                        columns.unwrap_or_default(),
+                        Err(not_one_call("a Union node")),
+                    )
+                }
+                GraphPattern::Graph { name, inner } => {
+                    self.graphs.push(name.clone());
+                    let (mut columns, _) = self.reference_walk(inner);
+                    self.graphs.pop();
+                    if let NamedNodePattern::Variable(variable) = name {
+                        const GRAPH: &str = "a GRAPH, which binds it to the name of a graph";
+                        match columns.iter_mut().find(|column| column.name == *variable) {
+                            Some(column) => {
+                                if column.sources.is_empty() {
+                                    column.lost.get_or_insert_with(|| GRAPH.to_owned());
+                                }
+                            }
+                            None => columns.push(Provenance {
+                                name: variable.clone(),
+                                always: true,
+                                sources: Vec::new(),
+                                lost: Some(GRAPH.to_owned()),
+                            }),
+                        }
+                    }
+                    (columns, Err(not_one_call("a Graph node")))
+                }
+                GraphPattern::Group {
+                    inner,
+                    variables,
+                    aggregates,
+                } => {
+                    let (below, _) = self.reference_walk(inner);
+                    let mut columns: Vec<Provenance<'q>> = variables
+                        .iter()
+                        .filter_map(|variable| below.iter().find(|column| column.name == *variable))
+                        .cloned()
+                        .collect();
+                    for (variable, _) in aggregates {
+                        bind_column(
+                            &mut columns,
+                            Provenance {
+                                name: variable.clone(),
+                                always: false,
+                                sources: Vec::new(),
+                                lost: Some("an aggregate".to_owned()),
+                            },
+                        );
+                    }
+                    (columns, Err(not_one_call("a Group node")))
+                }
+                GraphPattern::Unfold {
+                    inner,
+                    element,
+                    companion,
+                    ..
+                } => {
+                    let (mut columns, _) = self.reference_walk(inner);
+                    for variable in std::iter::once(element).chain(companion) {
+                        bind_column(
+                            &mut columns,
+                            Provenance {
+                                name: variable.clone(),
+                                always: false,
+                                sources: Vec::new(),
+                                lost: Some("an UNFOLD".to_owned()),
+                            },
+                        );
+                    }
+                    (columns, Err(not_one_call("an Unfold node")))
+                }
+                GraphPattern::Bgp { .. }
+                | GraphPattern::Path { .. }
+                | GraphPattern::Values { .. }
+                | GraphPattern::Service { .. } => {
+                    let always = matches!(
+                        pattern,
+                        GraphPattern::Bgp { .. } | GraphPattern::Path { .. }
+                    );
+                    let columns = crate::eval::syntactic_schema(pattern)
+                        .vars()
+                        .iter()
+                        .map(|variable| Provenance {
+                            name: variable.clone(),
+                            always,
+                            sources: Vec::new(),
+                            lost: None,
+                        })
+                        .collect();
+                    (
+                        columns,
+                        Err(not_one_call(&format!("a {} node", node_kind(pattern)))),
+                    )
+                }
+            }
+        }
+    }
+
+    // ── A deterministic shape generator ────────────────────────────────────────────
+
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 40,
+            }
+        }
+
+        fn choose(&mut self, options: usize) -> usize {
+            let bound = u64::try_from(options).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+
+        /// Whether one more compound node fits the budget.
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(n: usize) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}p{n}"))
+    }
+
+    fn var(choices: &mut Choices) -> Variable {
+        Variable::new(format!("v{}", choices.choose(4)))
+    }
+
+    fn term_pattern(choices: &mut Choices) -> TermPattern {
+        if !choices.spend() {
+            return TermPattern::Variable(var(choices));
+        }
+        match choices.choose(7) {
+            0 => TermPattern::NamedNode(iri(choices.choose(3))),
+            1 => TermPattern::Literal(Literal::new_simple("x")),
+            2 => TermPattern::BlankNode(BlankNode::new(format!("b{}", choices.choose(2)))),
+            3 | 4 => TermPattern::Variable(var(choices)),
+            _ => TermPattern::Triple(Child::new(TriplePattern {
+                subject: term_pattern(choices),
+                predicate: if choices.choose(3) == 0 {
+                    NamedNodePattern::Variable(var(choices))
+                } else {
+                    NamedNodePattern::NamedNode(iri(choices.choose(3)))
+                },
+                object: term_pattern(choices),
+            })),
+        }
+    }
+
+    /// A ground quoted triple, nested to the budget.
+    fn ground_triple(choices: &mut Choices) -> TriplePattern {
+        let leaf = |choices: &mut Choices| {
+            if choices.spend() && choices.choose(3) == 0 {
+                TermPattern::Triple(Child::new(ground_triple(choices)))
+            } else {
+                TermPattern::NamedNode(iri(choices.choose(3)))
+            }
+        };
+        TriplePattern {
+            subject: leaf(choices),
+            predicate: NamedNodePattern::NamedNode(iri(choices.choose(3))),
+            object: leaf(choices),
+        }
+    }
+
+    fn input_schema(choices: &mut Choices) -> VarSchema {
+        let mut schema = VarSchema::new();
+        for n in 0..4 {
+            if choices.choose(2) == 0 {
+                schema.push(Variable::new(format!("v{n}")));
+            }
+        }
+        schema
+    }
+
+    /// A value of the pool, or a triple built from pool values, shaped like `arg` one
+    /// time in two so structural matches and mismatches both occur.
+    fn value_like(arg: &Arg, choices: &mut Choices) -> TermValue {
+        let leaf = |choices: &mut Choices| TermValue::iri(format!("{EX}p{}", choices.choose(3)));
+        match arg {
+            Arg::Triple(parts) if choices.choose(2) == 0 => TermValue::Triple {
+                s: TermBox::new(value_like(&parts[0], choices)),
+                p: TermBox::new(value_like(&parts[1], choices)),
+                o: TermBox::new(value_like(&parts[2], choices)),
+            },
+            Arg::Constant(value) if choices.choose(2) == 0 => value.clone(),
+            _ => leaf(choices),
+        }
+    }
+
+    fn expression(choices: &mut Choices) -> Expression {
+        if !choices.spend() {
+            return Expression::Variable(var(choices));
+        }
+        match choices.choose(8) {
+            0 => Expression::Literal(Literal::new_simple("k")),
+            1 => Expression::Not(Child::new(expression(choices))),
+            2 => Expression::Or(
+                Chain::try_from(vec![expression(choices), expression(choices)]).expect("two"),
+            ),
+            3 => Expression::FunctionCall(Function::Str, vec![expression(choices)].into()),
+            4 => Expression::FunctionCall(Function::Rand, Vec::new().into()),
+            5 => {
+                Expression::FunctionCall(Function::Custom(iri(9)), vec![expression(choices)].into())
+            }
+            6 => Expression::Exists(Child::new(GraphPattern::Bgp {
+                patterns: Vec::new(),
+            })),
+            _ => Expression::If(
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+            ),
+        }
+    }
+
+    fn call(choices: &mut Choices) -> GraphPattern {
+        GraphPattern::PropertyFunction(PropertyFunctionCall {
+            iri: format!("{EX}rel{}", choices.choose(2)),
+            subject_args: vec![term_pattern(choices)],
+            object_args: vec![term_pattern(choices), term_pattern(choices)],
+        })
+    }
+
+    fn triple(choices: &mut Choices) -> TriplePattern {
+        TriplePattern {
+            subject: TermPattern::Variable(var(choices)),
+            predicate: NamedNodePattern::NamedNode(iri(choices.choose(3))),
+            object: TermPattern::Variable(var(choices)),
+        }
+    }
+
+    fn empty() -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: Vec::new(),
+        }
+    }
+
+    fn graph_name(choices: &mut Choices) -> NamedNodePattern {
+        if choices.choose(2) == 0 {
+            NamedNodePattern::Variable(var(choices))
+        } else {
+            NamedNodePattern::NamedNode(iri(choices.choose(3)))
+        }
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return match choices.choose(3) {
+                0 => call(choices),
+                1 => empty(),
+                _ => GraphPattern::Bgp {
+                    patterns: vec![triple(choices)],
+                },
+            };
+        }
+        match choices.choose(21) {
+            0 => call(choices),
+            1 => GraphPattern::Bgp {
+                patterns: vec![triple(choices)],
+            },
+            2 => GraphPattern::Path {
+                subject: TermPattern::Variable(var(choices)),
+                path: PropertyPathExpression::NamedNode(iri(1)),
+                object: TermPattern::Variable(var(choices)),
+            },
+            3 => GraphPattern::Values {
+                variables: vec![var(choices)],
+                bindings: Vec::new(),
+            },
+            4 => GraphPattern::Service {
+                name: graph_name(choices),
+                inner: Child::new(pattern(choices)),
+                silent: false,
+            },
+            5 => GraphPattern::Project {
+                inner: Child::new(pattern(choices)),
+                variables: vec![var(choices), var(choices)],
+            },
+            6 => GraphPattern::Slice {
+                inner: Child::new(pattern(choices)),
+                start: choices.choose(2),
+                length: Some(3),
+            },
+            7 => GraphPattern::Filter {
+                expr: expression(choices),
+                inner: Child::new(pattern(choices)),
+            },
+            8 => GraphPattern::Distinct {
+                inner: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::Reduced {
+                inner: Child::new(pattern(choices)),
+            },
+            10 => GraphPattern::OrderBy {
+                inner: Child::new(pattern(choices)),
+                expression: vec![OrderExpression::Asc(expression(choices))],
+            },
+            11 => GraphPattern::Extend {
+                inner: Child::new(pattern(choices)),
+                variable: var(choices),
+                expression: if choices.choose(2) == 0 {
+                    Expression::Variable(var(choices))
+                } else {
+                    expression(choices)
+                },
+            },
+            12 => GraphPattern::Join {
+                left: Child::new(if choices.choose(3) == 0 {
+                    empty()
+                } else {
+                    pattern(choices)
+                }),
+                right: Child::new(pattern(choices)),
+            },
+            13 | 14 => GraphPattern::Lateral {
+                left: Child::new(if choices.choose(3) == 0 {
+                    empty()
+                } else {
+                    pattern(choices)
+                }),
+                right: Child::new(if choices.choose(2) == 0 {
+                    call(choices)
+                } else {
+                    pattern(choices)
+                }),
+            },
+            15 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: None,
+            },
+            16 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            17 => GraphPattern::Union {
+                arms: Chain::try_from(vec![pattern(choices), pattern(choices)]).expect("two arms"),
+            },
+            18 => GraphPattern::Graph {
+                name: graph_name(choices),
+                inner: Child::new(pattern(choices)),
+            },
+            19 => GraphPattern::Group {
+                inner: Child::new(pattern(choices)),
+                variables: vec![var(choices)],
+                aggregates: vec![(
+                    var(choices),
+                    purrdf_sparql_algebra::AggregateExpression::new(
+                        purrdf_sparql_algebra::AggregateFunction::Count,
+                        Vec::new(),
+                        Vec::new(),
+                        Vec::new(),
+                        false,
+                    )
+                    .expect("COUNT(*)"),
+                )],
+            },
+            _ => GraphPattern::Unfold {
+                inner: Child::new(pattern(choices)),
+                expression: expression(choices),
+                element: var(choices),
+                companion: (choices.choose(2) == 0).then(|| var(choices)),
+            },
+        }
+    }
+
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    /// A quoted-triple pattern `depth` levels deep with `bottom` in its innermost
+    /// object position, every other position an IRI.
+    fn deep_term(depth: usize, bottom: TermPattern) -> TermPattern {
+        let mut term = bottom;
+        for _ in 0..depth {
+            term = TermPattern::Triple(Child::new(TriplePattern {
+                subject: TermPattern::NamedNode(iri(0)),
+                predicate: NamedNodePattern::NamedNode(iri(1)),
+                object: term,
+            }));
+        }
+        term
+    }
+
+    /// How many quoted-triple levels `arg` nests through its object positions.
+    fn arg_depth(arg: &Arg) -> usize {
+        let mut depth = 0;
+        let mut at = arg;
+        while let Arg::Triple(parts) = at {
+            depth += 1;
+            at = &parts[2];
+        }
+        depth
+    }
+
+    /// A compilation's state, for comparing two compilations.
+    struct Compiled {
+        args: Result<Vec<Arg>, String>,
+        slots: Vec<(Variable, usize)>,
+        schema: VarSchema,
+        slot_cols: Vec<Option<usize>>,
+        slot_seed: Vec<Option<usize>>,
+    }
+
+    fn compile_with(
+        terms: &[TermPattern],
+        input: &VarSchema,
+        compile: impl Fn(
+            &TermPattern,
+            &mut DetHashMap<Variable, usize>,
+            &mut VarSchema,
+            &mut Vec<Option<usize>>,
+            &mut Vec<Option<usize>>,
+            &VarSchema,
+        ) -> Result<Arg, EvalError>,
+    ) -> Compiled {
+        let mut slots = DetHashMap::default();
+        let mut schema = input.clone();
+        let mut slot_cols = Vec::new();
+        let mut slot_seed = Vec::new();
+        let args = terms
+            .iter()
+            .map(|term| {
+                compile(
+                    term,
+                    &mut slots,
+                    &mut schema,
+                    &mut slot_cols,
+                    &mut slot_seed,
+                    input,
+                )
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(|error| error.to_string());
+        let mut slots: Vec<(Variable, usize)> = slots.into_iter().collect();
+        slots.sort_by_key(|(_, slot)| *slot);
+        Compiled {
+            args,
+            slots,
+            schema,
+            slot_cols,
+            slot_seed,
+        }
+    }
+
+    // ── The argument walks ─────────────────────────────────────────────────────────
+
+    /// Compiling registers the same slots in the same order, builds the same
+    /// arguments, and fails on the same position, as the recursion; and the
+    /// groundness test, the occurrence count, the value and the unification agree on
+    /// every compiled argument.
+    #[test]
+    fn the_argument_walks_agree_with_their_recursive_references() {
+        let mut nested = 0;
+        let mut mismatches = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let input = input_schema(&mut choices);
+            let terms: Vec<TermPattern> = (0..=choices.choose(3))
+                .map(|_| term_pattern(&mut choices))
+                .collect();
+            let ground = ground_triple(&mut choices);
+            assert_eq!(
+                triple_is_ground(&ground),
+                reference_triple_is_ground(&ground),
+                "seed {seed}: {ground:?}"
+            );
+            for term in &terms {
+                if let TermPattern::Triple(triple) = term {
+                    assert_eq!(
+                        triple_is_ground(triple),
+                        reference_triple_is_ground(triple),
+                        "seed {seed}: {triple:?}"
+                    );
+                }
+                let mut ours = Vec::new();
+                call_variables(term, &mut ours);
+                let mut expected = Vec::new();
+                reference_call_variables(term, &mut expected);
+                assert_eq!(ours, expected, "seed {seed}: {term:?}");
+            }
+
+            let ours = compile_with(&terms, &input, compile_arg);
+            let expected = compile_with(&terms, &input, reference_compile_arg);
+            assert_eq!(ours.args, expected.args, "seed {seed}: {terms:?}");
+            assert_eq!(ours.slots, expected.slots, "seed {seed}");
+            assert_eq!(ours.schema, expected.schema, "seed {seed}");
+            assert_eq!(ours.slot_cols, expected.slot_cols, "seed {seed}");
+            assert_eq!(ours.slot_seed, expected.slot_seed, "seed {seed}");
+            let Ok(args) = ours.args else {
+                continue;
+            };
+            nested += usize::from(args.iter().any(|arg| matches!(arg, Arg::Triple(_))));
+
+            assert_eq!(
+                unobserved_positions(&args, &ours.slot_cols, &ours.slot_seed),
+                reference_unobserved_positions(&args, &ours.slot_cols, &ours.slot_seed),
+                "seed {seed}"
+            );
+
+            let seed_values: Vec<Option<TermValue>> = (0..ours.slot_cols.len())
+                .map(|slot| {
+                    (choices.choose(2) == 0).then(|| TermValue::iri(format!("{EX}seed{slot}")))
+                })
+                .collect();
+            for arg in &args {
+                assert_eq!(
+                    arg_value(arg, &seed_values),
+                    reference_arg_value(arg, &seed_values),
+                    "seed {seed}: {arg:?}"
+                );
+                let value = value_like(arg, &mut choices);
+                let mut ours_values = seed_values.clone();
+                let mut expected_values = seed_values.clone();
+                let agreed = unify_term(arg, &value, &mut ours_values);
+                assert_eq!(
+                    agreed,
+                    reference_unify_term(arg, &value, &mut expected_values),
+                    "seed {seed}: {arg:?} against {value:?}"
+                );
+                assert_eq!(
+                    ours_values, expected_values,
+                    "seed {seed}: the slots written"
+                );
+                mismatches += usize::from(!agreed);
+            }
+        }
+        assert!(
+            nested > 60 && mismatches > 60,
+            "the generator produces nested arguments ({nested}) and failed unifications \
+             ({mismatches})"
+        );
+    }
+
+    /// A quoted-triple argument a hundred thousand levels deep is compiled, valued,
+    /// unified, counted and released on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_argument_is_compiled_and_matched_on_a_128_kib_thread() {
+        let (depth, ground, value_depth, unified, unobserved) = on_small_stack(|| {
+            let input = VarSchema::new();
+            let term = deep_term(DEPTH, TermPattern::Variable(Variable::new("x")));
+            let TermPattern::Triple(triple) = &term else {
+                unreachable!("the deep term is a triple")
+            };
+            let ground = triple_is_ground(triple);
+            let compiled = compile_with(std::slice::from_ref(&term), &input, compile_arg);
+            let args = compiled.args.expect("a variable at the bottom compiles");
+            let depth = arg_depth(&args[0]);
+            let mut seed = vec![Some(TermValue::iri(format!("{EX}x")))];
+            let value = arg_value(&args[0], &seed).expect("every slot is seeded");
+            let mut value_depth = 0;
+            let mut at = &value;
+            while let TermValue::Triple { o, .. } = at {
+                value_depth += 1;
+                at = o;
+            }
+            seed[0] = None;
+            let unified = unify_term(&args[0], &value, &mut seed)
+                && seed[0] == Some(TermValue::iri(format!("{EX}x")));
+            let unobserved = unobserved_positions(&args, &compiled.slot_cols, &compiled.slot_seed);
+            (depth, ground, value_depth, unified, unobserved)
+        });
+        assert_eq!(depth, DEPTH);
+        assert!(
+            !ground,
+            "a variable at the bottom makes the deep term non-ground"
+        );
+        assert_eq!(value_depth, DEPTH);
+        assert!(unified);
+        assert_eq!(unobserved, vec![false]);
+    }
+
+    /// The deep ground term is ground, and an equally deep one with a blank node at the
+    /// bottom is not.
+    #[test]
+    fn a_hundred_thousand_level_ground_term_is_recognised_on_a_128_kib_thread() {
+        let (ground, blank) = on_small_stack(|| {
+            let ground = deep_term(DEPTH, TermPattern::NamedNode(iri(2)));
+            let blank = deep_term(DEPTH, TermPattern::BlankNode(BlankNode::new("b")));
+            let as_triple = |term: &TermPattern| match term {
+                TermPattern::Triple(triple) => triple_is_ground(triple),
+                _ => unreachable!("the deep terms are triples"),
+            };
+            (as_triple(&ground), as_triple(&blank))
+        });
+        assert!(ground);
+        assert!(!blank);
+    }
+
+    /// A call variable at the bottom of a hundred thousand quoted-triple levels is
+    /// recorded, after the predicate variables above it, on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_argument_s_variables_are_recorded_on_a_128_kib_thread() {
+        let names = on_small_stack(|| {
+            let mut term = TermPattern::Variable(Variable::new("bottom"));
+            for level in 0..DEPTH {
+                term = TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::NamedNode(iri(0)),
+                    predicate: if level == DEPTH - 1 {
+                        NamedNodePattern::Variable(Variable::new("top"))
+                    } else {
+                        NamedNodePattern::NamedNode(iri(1))
+                    },
+                    object: term,
+                }));
+            }
+            let mut visible = Vec::new();
+            call_variables(&term, &mut visible);
+            visible
+                .iter()
+                .map(|(name, _)| name.as_str().to_owned())
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(names, vec!["top", "bottom"]);
+    }
+
+    // ── The spine, predicate and read-shape walks ──────────────────────────────────
+
+    fn atoms_key(
+        atoms: &[super::ContextAtom<'_>],
+    ) -> Vec<(usize, Vec<NamedNodePattern>, usize, bool)> {
+        atoms
+            .iter()
+            .map(|atom| {
+                (
+                    std::ptr::from_ref(atom.pattern) as usize,
+                    atom.graphs.clone(),
+                    atom.frame,
+                    atom.call,
+                )
+            })
+            .collect()
+    }
+
+    /// The spine is cut into the same atoms in the same order, and a predicate is
+    /// refused for the same first reason, as by the recursion.
+    #[test]
+    fn the_spine_and_predicate_walks_agree_with_their_recursive_references() {
+        let mut refused = 0;
+        let mut driven = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let shape = pattern(&mut choices);
+            let graphs = vec![graph_name(&mut choices)];
+            let frame = choices.choose(3);
+            let mut ours = Vec::new();
+            lateral_atoms(&shape, frame, &graphs, &mut ours);
+            let mut expected = Vec::new();
+            reference_lateral_atoms(&shape, frame, &graphs, &mut expected);
+            assert_eq!(
+                atoms_key(&ours),
+                atoms_key(&expected),
+                "seed {seed}: {shape:?}"
+            );
+            driven += usize::from(ours.iter().any(|atom| atom.call));
+
+            let predicate = expression(&mut choices);
+            let verdict = filter_reads_row_by_row(&predicate);
+            assert_eq!(
+                verdict,
+                reference_filter_reads_row_by_row(&predicate),
+                "seed {seed}: {predicate:?}"
+            );
+            refused += usize::from(verdict.is_err());
+        }
+        assert!(
+            refused > 60 && refused < 340 && driven > 20,
+            "the generator produces admitted and refused predicates ({refused} refused of \
+             400) and driven calls ({driven})"
+        );
+    }
+
+    /// A join spine a hundred thousand levels deep is cut into its atoms, and a
+    /// predicate a hundred thousand negations deep is judged, on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_spine_and_predicate_are_read_on_a_128_kib_thread() {
+        let (atoms, embedded, admitted) = on_small_stack(|| {
+            let mut spine = GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(iri(0)),
+                    object: TermPattern::Variable(Variable::new("o")),
+                }],
+            };
+            for _ in 0..DEPTH {
+                spine = GraphPattern::Join {
+                    left: Child::new(spine),
+                    right: Child::new(GraphPattern::Values {
+                        variables: vec![Variable::new("v")],
+                        bindings: Vec::new(),
+                    }),
+                };
+            }
+            let mut atoms = Vec::new();
+            lateral_atoms(&spine, 0, &[], &mut atoms);
+
+            let mut embedded = Expression::Exists(Child::new(empty()));
+            let mut admitted = Expression::Variable(Variable::new("x"));
+            for _ in 0..DEPTH {
+                embedded = Expression::Not(Child::new(embedded));
+                admitted = Expression::Not(Child::new(admitted));
+            }
+            (
+                atoms.len(),
+                filter_reads_row_by_row(&embedded),
+                filter_reads_row_by_row(&admitted),
+            )
+        });
+        assert_eq!(atoms, DEPTH + 1);
+        assert_eq!(embedded, Err("embeds EXISTS"));
+        assert_eq!(admitted, Ok(()));
+    }
+
+    /// What a read-shape walk left, in a comparable form: the columns, the read, the
+    /// calls met, their contexts, the dropped columns and the names taken.
+    fn walk_key(
+        walk: &ShapeWalk<'_>,
+        (columns, read): &(Vec<Provenance<'_>>, Result<OneCall<'_>, String>),
+    ) -> String {
+        let read = read.as_ref().map(|read| {
+            (
+                std::ptr::from_ref(read.call) as usize,
+                read.operators
+                    .iter()
+                    .map(|operator| std::ptr::from_ref(*operator) as usize)
+                    .collect::<Vec<_>>(),
+            )
+        });
+        let calls: Vec<usize> = walk
+            .calls
+            .iter()
+            .map(|call| std::ptr::from_ref(*call) as usize)
+            .collect();
+        let mut taken: Vec<&str> = walk.taken.iter().map(Variable::as_str).collect();
+        taken.sort_unstable();
+        format!(
+            "{columns:?} {read:?} {calls:?} {:?} {:?} {taken:?} {} {} {:?}",
+            walk.contexts,
+            walk.dropped,
+            walk.frame,
+            walk.context.atoms.len(),
+            walk.graphs
+        )
+    }
+
+    /// The frame machine leaves exactly what the recursion leaves: the same columns and
+    /// read, the same calls in the same order, the same contexts, the same dropped
+    /// columns and the same minted names.
+    #[test]
+    fn the_read_shape_walk_agrees_with_its_recursive_reference() {
+        let mut reads = 0;
+        let mut minted = 0;
+        for seed in 0..600_u64 {
+            let mut choices = Choices::new(seed);
+            let shape = pattern(&mut choices);
+            let mut ours = ShapeWalk::over(&shape);
+            let our_result = ours.walk(&shape);
+            let mut expected = ShapeWalk::over(&shape);
+            let expected_result = expected.reference_walk(&shape);
+            assert_eq!(
+                walk_key(&ours, &our_result),
+                walk_key(&expected, &expected_result),
+                "seed {seed}: {shape:?}"
+            );
+            reads += usize::from(our_result.1.is_ok());
+            let mut written = crate::DetHashSet::default();
+            crate::expr::pattern_all_vars(&shape, &mut written);
+            minted += ours.taken.len() - written.len();
+        }
+        assert!(
+            reads > 20 && minted > 10,
+            "the generator produces readable shapes ({reads} of 600) and renamed GRAPH \
+             variables ({minted})"
+        );
+    }
+
+    /// A call under a hundred thousand `FILTER`s is read on demand through every one of
+    /// them, on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_read_shape_is_walked_on_a_128_kib_thread() {
+        let (columns, operators, calls) = on_small_stack(|| {
+            let call = GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: format!("{EX}rel"),
+                subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+                object_args: vec![TermPattern::Variable(Variable::new("o"))],
+            });
+            let mut shape = GraphPattern::Lateral {
+                left: Child::new(empty()),
+                right: Child::new(call),
+            };
+            for _ in 0..DEPTH {
+                shape = GraphPattern::Filter {
+                    expr: Expression::Literal(Literal::new_simple("true")),
+                    inner: Child::new(shape),
+                };
+            }
+            let mut walk = ShapeWalk::over(&shape);
+            let (columns, read) = walk.walk(&shape);
+            let read = read.expect("every FILTER reads row by row");
+            (
+                columns
+                    .iter()
+                    .map(|column| {
+                        (
+                            column.name.as_str().to_owned(),
+                            column.sources.clone().len(),
+                        )
+                    })
+                    .collect::<Vec<_>>(),
+                read.operators.len(),
+                walk.calls.len(),
+            )
+        });
+        assert_eq!(columns, vec![("s".to_owned(), 1), ("o".to_owned(), 1)]);
+        assert_eq!(operators, DEPTH);
+        assert_eq!(calls, 1);
     }
 }

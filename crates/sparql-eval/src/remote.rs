@@ -447,7 +447,7 @@ pub trait ServiceResolver {
 /// itself added a moment earlier, for its own optimization purposes, and safe to remove
 /// again for the same reason it was safe to add.
 ///
-/// # Recursion
+/// # The walk
 ///
 /// Exhaustive over [`GraphPattern`], so an injected `Values` node is found no differently
 /// wherever Values-Insertion placed it — wrapped around a leaf at any depth, inside a
@@ -455,24 +455,93 @@ pub trait ServiceResolver {
 /// or `LATERAL`, and so on. [`GroundTerm::Triple`] nests, so a cell is inspected
 /// transitively: a ground quoted triple containing a blank node ANYWHERE in its
 /// subject/object tree is stripped exactly like a bare blank-node cell.
+///
+/// The copy is built over an explicit stack of frames, one per node whose sanitized
+/// children are still being collected, so a body nested to any depth is rebuilt on
+/// constant machine stack: a node is entered before its children, its children are
+/// entered left to right, and the node is rebuilt from their sanitized copies once the
+/// last of them is done.
 fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
-    // A copy of the whole forwarded body: see `pattern_reaches_lateral`. The placeholder
-    // is discarded by [`eval_service`]'s `crate::stack::walk` scope.
-    if crate::stack::walk_is_low("SERVICE body") {
-        return GraphPattern::Bgp {
-            patterns: Vec::new(),
-        };
+    /// A node entered and not yet rebuilt: the sanitized copies of its children so far.
+    struct Frame<'a> {
+        node: &'a GraphPattern,
+        children: Vec<GraphPattern>,
     }
-    // A test build counts the pattern nodes the copies of this node's own expressions,
-    // sort keys and aggregates build. Its child patterns are rebuilt by this walk rather
-    // than copied, and are not counted.
-    #[cfg(test)]
-    purrdf_sparql_algebra::NodeRef::Pattern(pattern).for_each_child(|child| {
-        if !matches!(child, purrdf_sparql_algebra::NodeRef::Pattern(_)) {
-            crate::op_count::count_copied(child);
+    let mut frames: Vec<Frame<'_>> = Vec::new();
+    let mut entering = Some(pattern);
+    loop {
+        if let Some(node) = entering.take() {
+            // A test build counts the pattern nodes the copies of this node's own
+            // expressions, sort keys and aggregates build. Its child patterns are
+            // rebuilt by this walk rather than copied, and are not counted.
+            #[cfg(test)]
+            purrdf_sparql_algebra::NodeRef::Pattern(node).for_each_child(|child| {
+                if !matches!(child, purrdf_sparql_algebra::NodeRef::Pattern(_)) {
+                    crate::op_count::count_copied(child);
+                }
+            });
+            frames.push(Frame {
+                node,
+                children: Vec::new(),
+            });
         }
-    });
-    match pattern {
+        let frame = frames
+            .last_mut()
+            .expect("a frame is open until the root is rebuilt");
+        if let Some(child) = nth_child_pattern(frame.node, frame.children.len()) {
+            entering = Some(child);
+            continue;
+        }
+        let Frame { node, children } = frames.pop().expect("the frame is open");
+        let rebuilt = rebuild_sanitized(node, children);
+        match frames.last_mut() {
+            None => return rebuilt,
+            Some(parent) => parent.children.push(rebuilt),
+        }
+    }
+}
+
+/// The `index`th child pattern of `node`, in the order [`sanitize_forwarded_body`]
+/// rebuilds them: left before right, a union's arms in order.
+fn nth_child_pattern(node: &GraphPattern, index: usize) -> Option<&GraphPattern> {
+    match node {
+        GraphPattern::Bgp { .. }
+        | GraphPattern::Path { .. }
+        | GraphPattern::PropertyFunction(_)
+        | GraphPattern::Values { .. } => None,
+        GraphPattern::Join { left, right }
+        | GraphPattern::LeftJoin { left, right, .. }
+        | GraphPattern::Lateral { left, right }
+        | GraphPattern::Minus { left, right } => match index {
+            0 => Some(left),
+            1 => Some(right),
+            _ => None,
+        },
+        GraphPattern::Union { arms } => arms.get(index),
+        GraphPattern::Filter { inner, .. }
+        | GraphPattern::Graph { inner, .. }
+        | GraphPattern::Extend { inner, .. }
+        | GraphPattern::Unfold { inner, .. }
+        | GraphPattern::Service { inner, .. }
+        | GraphPattern::OrderBy { inner, .. }
+        | GraphPattern::Project { inner, .. }
+        | GraphPattern::Distinct { inner }
+        | GraphPattern::Reduced { inner }
+        | GraphPattern::Slice { inner, .. }
+        | GraphPattern::Group { inner, .. } => (index == 0).then_some(inner),
+    }
+}
+
+/// `node`, rebuilt from `children` — the sanitized copies of its child patterns, in
+/// [`nth_child_pattern`]'s order — for [`sanitize_forwarded_body`].
+fn rebuild_sanitized(node: &GraphPattern, children: Vec<GraphPattern>) -> GraphPattern {
+    let mut children = children.into_iter();
+    let mut next = || {
+        children
+            .next()
+            .expect("every child pattern is sanitized before its parent is rebuilt")
+    };
+    match node {
         // Leaves with no child pattern and no `Values` cells to inspect.
         GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
             patterns: patterns.clone(),
@@ -500,100 +569,89 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
         }
         // The one node kind whose child, once sanitized, may need collapsing out of the
         // tree — see `join_dropping_empty_values`.
-        GraphPattern::Join { left, right } => {
-            let left = sanitize_forwarded_body(left);
-            let right = sanitize_forwarded_body(right);
+        GraphPattern::Join { .. } => {
+            let left = next();
+            let right = next();
             join_dropping_empty_values(left, right)
         }
-        // Every other node kind is a plain structural recursion: it carries no `Values`
-        // cells of its own, and the wrapper Values-Insertion may have added around it sits
-        // as one of ITS children, reached through the `Join` arm above.
-        GraphPattern::LeftJoin {
-            left,
-            right,
-            expression,
-        } => GraphPattern::LeftJoin {
-            left: Child::new(sanitize_forwarded_body(left)),
-            right: Child::new(sanitize_forwarded_body(right)),
+        // Every other node kind is rebuilt around its sanitized children as written: it
+        // carries no `Values` cells of its own, and the wrapper Values-Insertion may
+        // have added around it sits as one of ITS children, reached through the `Join`
+        // arm above.
+        GraphPattern::LeftJoin { expression, .. } => GraphPattern::LeftJoin {
+            left: Child::new(next()),
+            right: Child::new(next()),
             expression: expression.clone(),
         },
-        GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
-            left: Child::new(sanitize_forwarded_body(left)),
-            right: Child::new(sanitize_forwarded_body(right)),
+        GraphPattern::Lateral { .. } => GraphPattern::Lateral {
+            left: Child::new(next()),
+            right: Child::new(next()),
         },
-        GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
+        GraphPattern::Filter { expr, .. } => GraphPattern::Filter {
             expr: expr.clone(),
-            inner: Child::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(next()),
         },
         GraphPattern::Union { arms } => GraphPattern::Union {
-            arms: arms.map_ref(sanitize_forwarded_body),
+            arms: arms.map_ref(|_| next()),
         },
-        GraphPattern::Graph { name, inner } => GraphPattern::Graph {
+        GraphPattern::Graph { name, .. } => GraphPattern::Graph {
             name: name.clone(),
-            inner: Child::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(next()),
         },
         GraphPattern::Extend {
-            inner,
             variable,
             expression,
+            ..
         } => GraphPattern::Extend {
-            inner: Child::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(next()),
             variable: variable.clone(),
             expression: expression.clone(),
         },
         GraphPattern::Unfold {
-            inner,
             expression,
             element,
             companion,
+            ..
         } => GraphPattern::Unfold {
-            inner: Child::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(next()),
             expression: expression.clone(),
             element: element.clone(),
             companion: companion.clone(),
         },
-        GraphPattern::Minus { left, right } => GraphPattern::Minus {
-            left: Child::new(sanitize_forwarded_body(left)),
-            right: Child::new(sanitize_forwarded_body(right)),
+        GraphPattern::Minus { .. } => GraphPattern::Minus {
+            left: Child::new(next()),
+            right: Child::new(next()),
         },
-        GraphPattern::Service {
-            name,
-            inner,
-            silent,
-        } => GraphPattern::Service {
+        GraphPattern::Service { name, silent, .. } => GraphPattern::Service {
             name: name.clone(),
-            inner: Child::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(next()),
             silent: *silent,
         },
-        GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
-            inner: Child::new(sanitize_forwarded_body(inner)),
+        GraphPattern::OrderBy { expression, .. } => GraphPattern::OrderBy {
+            inner: Child::new(next()),
             expression: expression.clone(),
         },
-        GraphPattern::Project { inner, variables } => GraphPattern::Project {
-            inner: Child::new(sanitize_forwarded_body(inner)),
+        GraphPattern::Project { variables, .. } => GraphPattern::Project {
+            inner: Child::new(next()),
             variables: variables.clone(),
         },
-        GraphPattern::Distinct { inner } => GraphPattern::Distinct {
-            inner: Child::new(sanitize_forwarded_body(inner)),
+        GraphPattern::Distinct { .. } => GraphPattern::Distinct {
+            inner: Child::new(next()),
         },
-        GraphPattern::Reduced { inner } => GraphPattern::Reduced {
-            inner: Child::new(sanitize_forwarded_body(inner)),
+        GraphPattern::Reduced { .. } => GraphPattern::Reduced {
+            inner: Child::new(next()),
         },
-        GraphPattern::Slice {
-            inner,
-            start,
-            length,
-        } => GraphPattern::Slice {
-            inner: Child::new(sanitize_forwarded_body(inner)),
+        GraphPattern::Slice { start, length, .. } => GraphPattern::Slice {
+            inner: Child::new(next()),
             start: *start,
             length: *length,
         },
         GraphPattern::Group {
-            inner,
             variables,
             aggregates,
+            ..
         } => GraphPattern::Group {
-            inner: Child::new(sanitize_forwarded_body(inner)),
+            inner: Child::new(next()),
             variables: variables.clone(),
             aggregates: aggregates.clone(),
         },
@@ -602,15 +660,18 @@ fn sanitize_forwarded_body(pattern: &GraphPattern) -> GraphPattern {
 
 /// Whether `term` is a blank node, or a ground RDF 1.2 quoted triple that transitively
 /// contains one anywhere in its subject/object tree — [`GroundTriple::predicate`] is
-/// always an IRI, so only the two recursive positions need inspecting.
+/// always an IRI, so only the two nested positions are inspected, subject before
+/// object, over a work list that ends at the first blank node found.
 fn ground_term_has_blank_node(term: &GroundTerm) -> bool {
-    match term {
-        GroundTerm::NamedNode(_) | GroundTerm::Literal(_) => false,
-        GroundTerm::BlankNode(_) => true,
-        GroundTerm::Triple(t) => {
-            ground_term_has_blank_node(&t.subject) || ground_term_has_blank_node(&t.object)
+    let mut pending = vec![term];
+    while let Some(term) = pending.pop() {
+        match term {
+            GroundTerm::NamedNode(_) | GroundTerm::Literal(_) => {}
+            GroundTerm::BlankNode(_) => return true,
+            GroundTerm::Triple(t) => pending.extend([&t.object, &t.subject]),
         }
     }
+    false
 }
 
 /// Remove every column of a `Values` block whose cell, in ANY row, is a blank node or a
@@ -948,12 +1009,10 @@ pub(crate) fn invoke_service<D: DatasetView + Sync>(
     // into `inner`, BEFORE serialization — see [`sanitize_forwarded_body`]'s doc for why
     // dropping it (never refusing, never emitting the illegal `_:` cell) is the sound,
     // maximal-utility fix. Local evaluation never runs this: it walks `inner` fresh, not
-    // the sanitized copy.
-    // Copying and serializing the body both walk all of it; see `sanitize_forwarded_body`.
-    let query_text = crate::stack::walk(|| {
-        let sanitized = sanitize_forwarded_body(inner);
-        purrdf_sparql_algebra::pattern_to_select_query(&sanitized)
-    })?;
+    // the sanitized copy. The copy and the serialization each run over a work list, so
+    // a body nested to any depth is forwarded on constant machine stack.
+    let sanitized = sanitize_forwarded_body(inner);
+    let query_text = purrdf_sparql_algebra::pattern_to_select_query(&sanitized);
     // The signal travels WITH the call: while the evaluator is blocked inside it, nothing
     // else is in a position to poll.
     let stop = ctx.stop_signal().map(Arc::clone);
@@ -2948,5 +3007,484 @@ mod tests {
             right: Child::new(triple_block()),
         };
         assert_eq!(sanitize_forwarded_body(&beside), beside);
+    }
+}
+
+/// The forwarded-body sanitizer and the blank-node scan over ground terms, checked
+/// against recursive references over generated bodies — the same copy, node for node,
+/// and the same count of copied nodes — and on a body a hundred thousand levels deep,
+/// on a thread with a 128 KiB stack.
+#[cfg(test)]
+mod body_walk_tests {
+    use purrdf_sparql_algebra::{
+        BlankNode, Chain, Child, Expression, GraphPattern, GroundTerm, GroundTriple, Literal,
+        NamedNode, NamedNodePattern, PropertyFunctionCall, PropertyPathExpression, TermPattern,
+        TriplePattern, Variable,
+    };
+
+    use super::{
+        ground_term_has_blank_node, join_dropping_empty_values, sanitize_forwarded_body,
+        strip_blank_columns,
+    };
+
+    const EX: &str = "http://example.org/";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    /// A deterministic choice sequence with a nesting budget.
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 30,
+            }
+        }
+
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    // ── The recursive references ───────────────────────────────────────────────────
+
+    fn reference_sanitize(pattern: &GraphPattern) -> GraphPattern {
+        purrdf_sparql_algebra::NodeRef::Pattern(pattern).for_each_child(|child| {
+            if !matches!(child, purrdf_sparql_algebra::NodeRef::Pattern(_)) {
+                crate::op_count::count_copied(child);
+            }
+        });
+        match pattern {
+            GraphPattern::Bgp { patterns } => GraphPattern::Bgp {
+                patterns: patterns.clone(),
+            },
+            GraphPattern::Path {
+                subject,
+                path,
+                object,
+            } => GraphPattern::Path {
+                subject: subject.clone(),
+                path: path.clone(),
+                object: object.clone(),
+            },
+            GraphPattern::PropertyFunction(call) => GraphPattern::PropertyFunction(call.clone()),
+            GraphPattern::Values {
+                variables,
+                bindings,
+            } => {
+                let (variables, bindings) = strip_blank_columns(variables, bindings);
+                GraphPattern::Values {
+                    variables,
+                    bindings,
+                }
+            }
+            GraphPattern::Join { left, right } => {
+                let left = reference_sanitize(left);
+                let right = reference_sanitize(right);
+                join_dropping_empty_values(left, right)
+            }
+            GraphPattern::LeftJoin {
+                left,
+                right,
+                expression,
+            } => GraphPattern::LeftJoin {
+                left: Child::new(reference_sanitize(left)),
+                right: Child::new(reference_sanitize(right)),
+                expression: expression.clone(),
+            },
+            GraphPattern::Lateral { left, right } => GraphPattern::Lateral {
+                left: Child::new(reference_sanitize(left)),
+                right: Child::new(reference_sanitize(right)),
+            },
+            GraphPattern::Filter { expr, inner } => GraphPattern::Filter {
+                expr: expr.clone(),
+                inner: Child::new(reference_sanitize(inner)),
+            },
+            GraphPattern::Union { arms } => GraphPattern::Union {
+                arms: arms.map_ref(reference_sanitize),
+            },
+            GraphPattern::Graph { name, inner } => GraphPattern::Graph {
+                name: name.clone(),
+                inner: Child::new(reference_sanitize(inner)),
+            },
+            GraphPattern::Extend {
+                inner,
+                variable,
+                expression,
+            } => GraphPattern::Extend {
+                inner: Child::new(reference_sanitize(inner)),
+                variable: variable.clone(),
+                expression: expression.clone(),
+            },
+            GraphPattern::Unfold {
+                inner,
+                expression,
+                element,
+                companion,
+            } => GraphPattern::Unfold {
+                inner: Child::new(reference_sanitize(inner)),
+                expression: expression.clone(),
+                element: element.clone(),
+                companion: companion.clone(),
+            },
+            GraphPattern::Minus { left, right } => GraphPattern::Minus {
+                left: Child::new(reference_sanitize(left)),
+                right: Child::new(reference_sanitize(right)),
+            },
+            GraphPattern::Service {
+                name,
+                inner,
+                silent,
+            } => GraphPattern::Service {
+                name: name.clone(),
+                inner: Child::new(reference_sanitize(inner)),
+                silent: *silent,
+            },
+            GraphPattern::OrderBy { inner, expression } => GraphPattern::OrderBy {
+                inner: Child::new(reference_sanitize(inner)),
+                expression: expression.clone(),
+            },
+            GraphPattern::Project { inner, variables } => GraphPattern::Project {
+                inner: Child::new(reference_sanitize(inner)),
+                variables: variables.clone(),
+            },
+            GraphPattern::Distinct { inner } => GraphPattern::Distinct {
+                inner: Child::new(reference_sanitize(inner)),
+            },
+            GraphPattern::Reduced { inner } => GraphPattern::Reduced {
+                inner: Child::new(reference_sanitize(inner)),
+            },
+            GraphPattern::Slice {
+                inner,
+                start,
+                length,
+            } => GraphPattern::Slice {
+                inner: Child::new(reference_sanitize(inner)),
+                start: *start,
+                length: *length,
+            },
+            GraphPattern::Group {
+                inner,
+                variables,
+                aggregates,
+            } => GraphPattern::Group {
+                inner: Child::new(reference_sanitize(inner)),
+                variables: variables.clone(),
+                aggregates: aggregates.clone(),
+            },
+        }
+    }
+
+    fn reference_has_blank_node(term: &GroundTerm) -> bool {
+        match term {
+            GroundTerm::NamedNode(_) | GroundTerm::Literal(_) => false,
+            GroundTerm::BlankNode(_) => true,
+            GroundTerm::Triple(t) => {
+                reference_has_blank_node(&t.subject) || reference_has_blank_node(&t.object)
+            }
+        }
+    }
+
+    // ── Generators ─────────────────────────────────────────────────────────────────
+
+    /// A ground term: an IRI, a literal, a blank node, or a quoted triple whose
+    /// positions are ground terms again.
+    fn ground(choices: &mut Choices) -> GroundTerm {
+        if !choices.spend() {
+            return GroundTerm::NamedNode(iri("x"));
+        }
+        match choices.choose(6) {
+            0 | 1 => GroundTerm::NamedNode(iri(["x", "y"][choices.choose(2)])),
+            2 => GroundTerm::Literal(Literal::new_simple("lit")),
+            3 => GroundTerm::BlankNode(BlankNode::new(format!("b{}", choices.choose(2)))),
+            _ => GroundTerm::Triple(Child::new(GroundTriple {
+                subject: ground(choices),
+                predicate: iri("embeds"),
+                object: ground(choices),
+            })),
+        }
+    }
+
+    /// A `VALUES` block of one or two columns and one or two rows, its cells ground
+    /// terms or `UNDEF`.
+    fn values(choices: &mut Choices) -> GraphPattern {
+        let columns = 1 + choices.choose(2);
+        let rows = 1 + choices.choose(2);
+        let variables: Vec<Variable> = ["t", "k"][..columns]
+            .iter()
+            .map(|name| Variable::new(*name))
+            .collect();
+        let bindings = (0..rows)
+            .map(|_| {
+                (0..columns)
+                    .map(|_| (choices.choose(4) != 0).then(|| ground(choices)))
+                    .collect()
+            })
+            .collect();
+        GraphPattern::Values {
+            variables,
+            bindings,
+        }
+    }
+
+    fn bgp(choices: &mut Choices) -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: (0..=choices.choose(2))
+                .map(|_| TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: TermPattern::Variable(Variable::new(["o", "t"][choices.choose(2)])),
+                })
+                .collect(),
+        }
+    }
+
+    /// An expression that may or may not mention the block variables `?t`/`?k` — the
+    /// distinction that decides whether a block sinks beneath a filter.
+    fn expression(choices: &mut Choices) -> Expression {
+        if !choices.spend() {
+            return Expression::Variable(Variable::new("o"));
+        }
+        match choices.choose(5) {
+            0 => Expression::Variable(Variable::new(["o", "t", "k"][choices.choose(3)])),
+            1 => Expression::Bound(Variable::new(["o", "t"][choices.choose(2)])),
+            2 => Expression::Not(Child::new(expression(choices))),
+            3 => Expression::Exists(Child::new(pattern(choices))),
+            _ => Expression::Literal(Literal::new_simple("c")),
+        }
+    }
+
+    /// A chain of one to three filters over `inner`.
+    fn filtered(choices: &mut Choices, inner: GraphPattern) -> GraphPattern {
+        let mut pattern = inner;
+        for _ in 0..=choices.choose(3) {
+            pattern = GraphPattern::Filter {
+                expr: expression(choices),
+                inner: Child::new(pattern),
+            };
+        }
+        pattern
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return if choices.choose(2) == 0 {
+                bgp(choices)
+            } else {
+                values(choices)
+            };
+        }
+        match choices.choose(16) {
+            0 => bgp(choices),
+            1 => values(choices),
+            2 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            // The shape Values Insertion builds beside a filtered pattern.
+            3 => {
+                let inner = pattern(choices);
+                GraphPattern::Join {
+                    left: Child::new(filtered(choices, inner)),
+                    right: Child::new(values(choices)),
+                }
+            }
+            4 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: (choices.choose(2) == 0).then(|| expression(choices)),
+            },
+            5 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            6 => {
+                let inner = pattern(choices);
+                filtered(choices, inner)
+            }
+            7 => GraphPattern::Union {
+                arms: Chain::new(
+                    pattern(choices),
+                    pattern(choices),
+                    (0..choices.choose(2)).map(|_| pattern(choices)),
+                ),
+            },
+            8 => GraphPattern::Graph {
+                name: NamedNodePattern::NamedNode(iri("g")),
+                inner: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::Extend {
+                inner: Child::new(pattern(choices)),
+                variable: Variable::new("e"),
+                expression: expression(choices),
+            },
+            10 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            11 => GraphPattern::Service {
+                name: NamedNodePattern::NamedNode(iri("endpoint")),
+                inner: Child::new(pattern(choices)),
+                silent: choices.choose(2) == 0,
+            },
+            12 => GraphPattern::Project {
+                inner: Child::new(pattern(choices)),
+                variables: vec![Variable::new("s")],
+            },
+            13 => GraphPattern::Slice {
+                inner: Child::new(GraphPattern::Distinct {
+                    inner: Child::new(pattern(choices)),
+                }),
+                start: 1,
+                length: Some(2),
+            },
+            14 => GraphPattern::Path {
+                subject: TermPattern::Variable(Variable::new("s")),
+                path: PropertyPathExpression::NamedNode(iri("p")),
+                object: TermPattern::Variable(Variable::new("o")),
+            },
+            _ => GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: format!("{EX}rel"),
+                subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+                object_args: vec![],
+            }),
+        }
+    }
+
+    /// `Join(Bgp, Values { ?bn → _:bn })` — a block sanitizing collapses out — under
+    /// `depth` alternating `GRAPH` and `FILTER` wrappers.
+    fn deep_body(depth: usize, bottom: GraphPattern) -> GraphPattern {
+        let mut body = bottom;
+        for level in 0..depth {
+            body = if level % 2 == 0 {
+                GraphPattern::Graph {
+                    name: NamedNodePattern::NamedNode(iri("g")),
+                    inner: Child::new(body),
+                }
+            } else {
+                GraphPattern::Filter {
+                    expr: Expression::Bound(Variable::new("o")),
+                    inner: Child::new(body),
+                }
+            };
+        }
+        body
+    }
+
+    fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(body)
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned")
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// The sanitized copy of every generated body is the copy the recursive reference
+    /// builds, and building it counts the same copied nodes.
+    #[test]
+    fn the_sanitizer_agrees_with_its_reference_on_generated_bodies() {
+        let mut changed = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let body = pattern(&mut choices);
+            crate::op_count::reset();
+            let ours = sanitize_forwarded_body(&body);
+            let our_counts = crate::op_count::read();
+            crate::op_count::reset();
+            let theirs = reference_sanitize(&body);
+            let their_counts = crate::op_count::read();
+            assert_eq!(ours, theirs, "seed {seed}: {body:?}");
+            assert_eq!(our_counts, their_counts, "seed {seed}: {body:?}");
+            changed += usize::from(ours != body);
+        }
+        assert!(
+            changed > 40 && changed < 360,
+            "the generator produces bodies the sanitizer changes and leaves alone \
+             ({changed} of 400 changed)"
+        );
+    }
+
+    /// The blank-node scan answers as its recursive reference does for every generated
+    /// ground term.
+    #[test]
+    fn the_blank_node_scan_agrees_with_its_reference_on_generated_terms() {
+        let mut with_blank = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let term = ground(&mut choices);
+            let ours = ground_term_has_blank_node(&term);
+            assert_eq!(
+                ours,
+                reference_has_blank_node(&term),
+                "seed {seed}: {term:?}"
+            );
+            with_blank += usize::from(ours);
+        }
+        assert!(
+            with_blank > 40 && with_blank < 360,
+            "the generator produces terms with and without blank nodes ({with_blank} of 400)"
+        );
+    }
+
+    /// A body a hundred thousand wrappers deep is sanitized on a 128 KiB stack: the
+    /// injected block at its bottom collapses out and every wrapper is rebuilt; and a
+    /// ground quoted triple as deep is scanned for the blank node at its bottom.
+    #[test]
+    fn a_hundred_thousand_level_body_is_sanitized_on_a_128_kib_stack() {
+        on_small_stack(|| {
+            let leaf = GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: TermPattern::Variable(Variable::new("bn")),
+                }],
+            };
+            let injected = GraphPattern::Join {
+                left: Child::new(leaf.clone()),
+                right: Child::new(GraphPattern::Values {
+                    variables: vec![Variable::new("bn")],
+                    bindings: vec![vec![Some(GroundTerm::BlankNode(BlankNode::new("bn")))]],
+                }),
+            };
+            let body = deep_body(DEPTH, injected);
+            let sanitized = sanitize_forwarded_body(&body);
+            assert_eq!(sanitized, deep_body(DEPTH, leaf));
+
+            let mut with_blank = GroundTerm::BlankNode(BlankNode::new("deep"));
+            let mut without = GroundTerm::NamedNode(iri("deep"));
+            for _ in 0..DEPTH {
+                for term in [&mut with_blank, &mut without] {
+                    let inner = std::mem::replace(term, GroundTerm::NamedNode(iri("x")));
+                    *term = GroundTerm::Triple(Child::new(GroundTriple {
+                        subject: GroundTerm::NamedNode(iri("x")),
+                        predicate: iri("embeds"),
+                        object: inner,
+                    }));
+                }
+            }
+            assert!(ground_term_has_blank_node(&with_blank));
+            assert!(!ground_term_has_blank_node(&without));
+        });
     }
 }

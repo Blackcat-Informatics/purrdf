@@ -1003,21 +1003,17 @@ pub(crate) fn eval_minus_partition<D: DatasetView + Sync>(
 /// the order it had, so no endpoint outside it is asked. When no enclosing operator and nothing on the right binds the variable, the
 /// clause is refused where it is evaluated, as before — the order changes nothing then —
 /// so this is decided on the patterns alone.
-///
-/// # Errors
-///
-/// [`EvalError::StackExhausted`] from the analysis walk.
 pub(crate) fn binds_left_endpoints<D: DatasetView + Sync>(
     left: &GraphPattern,
     right: &GraphPattern,
     ctx: &EvalCtx<'_, D>,
-) -> Result<bool, EvalError> {
+) -> bool {
     let EndpointScan::Present(index) = &ctx.endpoint_scan else {
-        return Ok(false);
+        return false;
     };
     let served = served_in(left, index, ctx);
     if served.is_empty() || !served_in(right, index, ctx).is_empty() {
-        return Ok(false);
+        return false;
     }
     if served.iter().any(|variable| {
         matches!(
@@ -1025,13 +1021,11 @@ pub(crate) fn binds_left_endpoints<D: DatasetView + Sync>(
             Some(EndpointBinding::Endpoints(_))
         )
     }) {
-        return Ok(false);
+        return false;
     }
-    crate::stack::walk(|| {
-        let mut mentioned = crate::DetHashSet::default();
-        crate::expr::pattern_all_vars(right, &mut mentioned);
-        served.iter().any(|variable| mentioned.contains(variable))
-    })
+    let mut mentioned = crate::DetHashSet::default();
+    crate::expr::pattern_all_vars(right, &mut mentioned);
+    served.iter().any(|variable| mentioned.contains(variable))
 }
 
 /// Refuse a `LATERAL` whose right operand holds a variable-endpoint `SERVICE ?v` that
@@ -1061,8 +1055,7 @@ pub(crate) fn binds_left_endpoints<D: DatasetView + Sync>(
 /// [`EvalError::Unsupported`] naming the value when a left solution binds `?v` to a term
 /// that is not an IRI and the clause is not `SILENT` ([`non_iri_endpoint`]), and when
 /// one leaves it unbound and no enclosing operator lists its endpoints
-/// ([`unbound_endpoint`]), `SILENT` or not; [`EvalError::StackExhausted`] from the
-/// analysis walk.
+/// ([`unbound_endpoint`]), `SILENT` or not.
 pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
     left: &SolutionSeq<D::Id>,
     right: &GraphPattern,
@@ -1073,13 +1066,11 @@ pub(crate) fn admit_lateral_endpoints<D: DatasetView + Sync>(
     }
     let mut uses: Vec<(Variable, bool)> = Vec::new();
     lateral_endpoint_uses(right, &mut uses);
-    crate::stack::walk(|| {
-        uses.retain(|(variable, _)| {
-            let mut outside = crate::DetHashSet::default();
-            crate::expr::pattern_vars_outside(right, Some(variable), &mut outside);
-            !outside.contains(variable)
-        });
-    })?;
+    uses.retain(|(variable, _)| {
+        let mut outside = crate::DetHashSet::default();
+        crate::expr::pattern_vars_outside(right, Some(variable), &mut outside);
+        !outside.contains(variable)
+    });
     for (variable, silent) in uses {
         let column = left.schema.index_of(&variable);
         let mut unbound = 0_usize;

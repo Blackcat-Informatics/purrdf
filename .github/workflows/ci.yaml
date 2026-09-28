@@ -90,6 +90,12 @@ jobs:
       - name: Check no terminal predicate is re-derived outside its owning surface
         run: python3 scripts/check-terminal-predicates.py
 
+      - name: Check the thread-local ledger gate can still fail
+        run: python3 scripts/check-thread-locals.py --self-test
+
+      - name: Check every thread-local is in the interleaving ledger with its reason
+        run: python3 scripts/check-thread-locals.py
+
       - name: Check the tracked-path gate can still fail
         run: python3 scripts/check-tracked-paths.py --self-test
 

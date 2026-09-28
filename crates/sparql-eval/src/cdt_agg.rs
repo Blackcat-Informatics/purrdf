@@ -427,6 +427,7 @@ pub(crate) fn eval_fold<D: DatasetView + Sync>(
 
     // Phase 2: the shared built-in tail, over this module's accumulator.
     let value = fold_builtin(
+        ctx.sequential_operation_required(),
         &survivors,
         || FoldAccumulator::new(target),
         FoldAccumulator::push,

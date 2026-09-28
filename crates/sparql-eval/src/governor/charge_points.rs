@@ -29,7 +29,7 @@ use crate::error::EvalError;
 use crate::eval::{EvalCtx, MAX_UDF_DEPTH, eval_evaluated};
 use crate::governor::lift::Evaluated;
 use crate::governor::{ChargePoint, GovernorState, QueryGovernors, StopSignal};
-use crate::parallel::{force_parallel_for_test, force_sequential_operation};
+use crate::parallel::force_parallel_for_test;
 use crate::user_fn::{Arity, Volatility};
 
 /// The namespace every fixture in this module uses.
@@ -123,8 +123,8 @@ fn chain_pattern() -> GraphPattern {
 
 #[test]
 fn ac3_effective_budget_is_invariant_under_worker_count() {
-    // The sequential guard is deliberately NOT engaged: no `force_parallel_for_test`,
-    // no `force_sequential_operation`, and an input of 1500 rows, which is above
+    // The sequential guard is deliberately NOT engaged: no `force_parallel_for_test` in
+    // either direction, and an input of 1500 rows, which is above
     // `PARALLEL_MIN_ROWS`. The row loop therefore really runs on rayon, and each pool
     // below really splits it into a different number of differently-sized chunks —
     // `chunk_size_for` is `len / (threads * 4)`, so one thread gives chunks of 375 and
@@ -184,7 +184,7 @@ fn ac3_forced_parallel_equals_forced_sequential_under_governors() {
         run(&pattern, &dataset, &governors)
     };
     let sequential = {
-        let _guard = force_sequential_operation();
+        let _guard = force_parallel_for_test(false);
         run(&pattern, &dataset, &governors)
     };
     // And the plain gate too, which for this input size chooses parallel on its own.
@@ -1184,7 +1184,7 @@ fn a_property_function_call_trips_at_the_same_point_parallel_and_sequential() {
         run_with_relations(&pattern, &dataset, &registry, &governors).0
     };
     let sequential = {
-        let _guard = force_sequential_operation();
+        let _guard = force_parallel_for_test(false);
         run_with_relations(&pattern, &dataset, &registry, &governors).0
     };
 
@@ -1729,7 +1729,7 @@ fn within_group_chunked_fold_charges_identically_forced_parallel_vs_sequential()
         run_with_aggregates(&pattern, &dataset, None, &QueryGovernors::METERED)
     };
     let (sequential_run, sequential_ledger) = {
-        let _guard = force_sequential_operation();
+        let _guard = force_parallel_for_test(false);
         run_with_aggregates(&pattern, &dataset, None, &QueryGovernors::METERED)
     };
 
@@ -1958,7 +1958,7 @@ fn within_group_chunk_plan_and_governed_outcome_are_invariant_under_worker_count
         .expect("the partial counter's answer is an integer");
     assert_eq!(
         chunk_count,
-        crate::parallel::planned_aggregate_chunk_count(usize::try_from(ROWS).unwrap()),
+        crate::parallel::planned_aggregate_chunk_count(false, usize::try_from(ROWS).unwrap()),
         "the answer must match the production chunk planner exactly"
     );
     assert!(

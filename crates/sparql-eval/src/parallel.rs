@@ -193,36 +193,6 @@ fn aggregate_chunk_size_for(len: usize) -> usize {
     (len / (AGGREGATE_CHUNK_REFERENCE_THREADS * 4).max(1)).max(PARALLEL_MIN_CHUNK_ITEMS)
 }
 
-std::thread_local! {
-    /// Production operation-scope override used by fallible lazy views. Their page
-    /// request order and exact budget boundary are observable evidence, so no
-    /// evaluator fork may race requests while this flag is set.
-    static FORCE_SEQUENTIAL_OPERATION: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
-}
-
-/// Force every evaluator fork gate to remain sequential on the current thread until
-/// the returned guard is dropped. Nested scopes restore the previous value.
-#[must_use]
-pub(crate) fn force_sequential_operation() -> SequentialOperationGuard {
-    let previous = FORCE_SEQUENTIAL_OPERATION.with(|cell| cell.replace(true));
-    SequentialOperationGuard { previous }
-}
-
-/// Whether the current operation requires sequential evaluation on this thread: a caller
-/// forced it ([`force_sequential_operation`]), or the evaluation holds triple terms
-/// deeper than the stack margin covers.
-///
-/// Those terms are covered only on the thread that measured them: the running
-/// evaluation kept stack for walks over them ([`crate::stack::admit_term`], the request's
-/// own reserve), and a fork-join worker — which clones the scratch interner holding them
-/// and walks them on a stack of its own — has kept none. So an evaluation with anything
-/// reserved stays on its thread. A worker that builds such a term itself is refused
-/// ([`crate::stack::UNSCOPED_TRIPLE_TERM`]), and the fork-join primitives run their work
-/// sequentially on the evaluating thread instead ([`is_unscoped_refusal`]).
-pub(crate) fn sequential_operation_required() -> bool {
-    FORCE_SEQUENTIAL_OPERATION.with(std::cell::Cell::get) || purrdf_stack::reserved() > 0
-}
-
 /// Whether `result` is a worker's refusal of a triple term deeper than a thread with no
 /// evaluation scope can hold: work the fork-join primitives redo sequentially, on the
 /// evaluating thread, where the term is measured and kept like any other.
@@ -232,17 +202,6 @@ pub(crate) fn is_unscoped_refusal<T>(result: &Result<T, EvalError>) -> bool {
         Err(EvalError::StackExhausted { construct })
             if *construct == crate::stack::UNSCOPED_TRIPLE_TERM
     )
-}
-
-/// RAII restoration for [`force_sequential_operation`].
-pub(crate) struct SequentialOperationGuard {
-    previous: bool,
-}
-
-impl Drop for SequentialOperationGuard {
-    fn drop(&mut self) {
-        FORCE_SEQUENTIAL_OPERATION.with(|cell| cell.set(self.previous));
-    }
 }
 
 #[cfg(test)]
@@ -256,11 +215,21 @@ std::thread_local! {
 
 /// Force [`should_parallelize`] to always return `force` for the current thread
 /// until the returned guard is dropped (restores the prior override). Test-only.
+///
+/// `false` also holds every evaluation on the thread sequential through
+/// `EvalCtx::sequential_operation_required`, the `UNION` fork included, so one guard
+/// drives the whole evaluation onto its sequential implementation.
 #[cfg(test)]
 #[must_use]
 pub(crate) fn force_parallel_for_test(force: bool) -> ForceParallelGuard {
     let previous = FORCE_PARALLEL.with(|cell| cell.replace(Some(force)));
     ForceParallelGuard { previous }
+}
+
+/// The override [`force_parallel_for_test`] installed on the current thread, if any.
+#[cfg(test)]
+pub(crate) fn forced_parallel_for_test() -> Option<bool> {
+    FORCE_PARALLEL.with(std::cell::Cell::get)
 }
 
 /// RAII guard restoring the prior [`FORCE_PARALLEL`] override on drop.
@@ -314,6 +283,8 @@ impl Drop for ForceChunkSizeGuard {
 /// The exact number of chunks a [`par_chunk_reduce_init`] call over `len` items will
 /// actually create: `1` when [`should_parallelize`] declines (the sequential fallback —
 /// `init` runs exactly once), else `len.div_ceil(aggregate_chunk_size_for(len))`.
+/// `sequential` is the evaluation's own decision
+/// (`EvalCtx::sequential_operation_required`), the same value the fold is handed.
 ///
 /// Exposed so a caller that must METER a per-chunk cost BEFORE folding — a custom
 /// aggregate's declared per-accumulator [`crate::agg_fn::CustomAggregate::state_bound`],
@@ -326,8 +297,8 @@ impl Drop for ForceChunkSizeGuard {
 /// a fixed, host-independent plan lives, and this function must never drift onto
 /// [`chunk_size_for`]'s live-thread-count formula, which every OTHER fork-join primitive
 /// still correctly uses.
-pub(crate) fn planned_aggregate_chunk_count(len: usize) -> usize {
-    if !should_parallelize(len) {
+pub(crate) fn planned_aggregate_chunk_count(sequential: bool, len: usize) -> usize {
+    if !should_parallelize(sequential, len) {
         return 1;
     }
     len.div_ceil(aggregate_chunk_size_for(len))
@@ -336,8 +307,15 @@ pub(crate) fn planned_aggregate_chunk_count(len: usize) -> usize {
 /// Whether a batch of `work_items` (rows, groups, branches) should run in
 /// parallel rather than sequentially. Small inputs stay sequential because
 /// rayon thread hand-off cost would dominate the actual work.
-pub(crate) fn should_parallelize(work_items: usize) -> bool {
-    if sequential_operation_required() {
+///
+/// `sequential` is the running evaluation's own decision
+/// (`EvalCtx::sequential_operation_required`: the evaluation was opened sequential, or it
+/// holds triple terms only its own thread keeps stack for), and it outranks every other
+/// gate here, the test override included. It is a field of the evaluation context rather
+/// than per-thread state, so an evaluation suspended on a thread and another run on it
+/// in the meantime never read each other's decision.
+pub(crate) fn should_parallelize(sequential: bool, work_items: usize) -> bool {
+    if sequential {
         return false;
     }
     #[cfg(test)]
@@ -441,23 +419,34 @@ pub(crate) fn is_parallel_safe_with(
 /// no meter to be exact about), a governed expression that cannot re-enter keeps full
 /// parallelism (it charges nothing from a worker), and the narrow remainder runs
 /// sequentially — where the charge order is the row order by construction.
+///
+/// The walk keeps its own work list of the expression parts still to read, popped in
+/// the order a depth-first reading yields them, and stops at the first `EXISTS` it
+/// meets; an expression of any depth is classified without a machine-stack frame per
+/// level.
 pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
-    // Out of stack for the walk (see `crate::stack`): answer "re-enters", the
-    // conservative side — the row loop then runs sequentially, which is always correct,
-    // and the evaluation that follows refuses at its own next check.
-    if crate::stack::is_low() {
-        return true;
+    let mut pending = vec![ExpressionPart::Sub(expr)];
+    while let Some(part) = pending.pop() {
+        match part {
+            ExpressionPart::Sub(expr) => push_expression_parts(expr, &mut pending),
+            ExpressionPart::Call(_) => {}
+            ExpressionPart::Exists(_) => return true,
+        }
     }
-    let mut found = false;
+    false
+}
+
+/// Push every part of `expr` onto `pending` so that they pop in the order
+/// [`visit_expression_parts`] yields them: a call's function before its arguments, an
+/// operator's operands left to right.
+fn push_expression_parts<'a>(expr: &'a Expression, pending: &mut Vec<ExpressionPart<'a>>) {
+    let first = pending.len();
     visit_expression_parts(expr, &mut |part| {
-        found |= match part {
-            ExpressionPart::Sub(sub) => expression_re_enters_evaluation(sub),
-            ExpressionPart::Call(_) => false,
-            ExpressionPart::Exists(_) => true,
-        };
-        found
+        pending.push(part);
+        // `false` keeps the visit going; every part is collected.
+        false
     });
-    found
+    pending[first..].reverse();
 }
 
 /// Whether evaluating `expr` for one row can charge a governor at all.
@@ -472,25 +461,26 @@ pub(crate) fn expression_re_enters_evaluation(expr: &Expression) -> bool {
 /// that charges nothing can be admitted row by row, immediately before its own work,
 /// without moving any charge relative to any other; one that charges keeps every
 /// admission ahead of the work, so its own charges still follow them.
+///
+/// The walk is [`expression_re_enters_evaluation`]'s: a work list of the parts still to
+/// read, popped in depth-first order, stopping at the first part that charges.
 pub(crate) fn expression_may_charge(expr: &Expression, functions: &UserFunctionRegistry) -> bool {
-    // Out of stack for the walk: answer "charges", the side that keeps today's order.
-    if crate::stack::is_low() {
-        return true;
-    }
-    let mut found = false;
-    visit_expression_parts(expr, &mut |part| {
-        found |= match part {
-            ExpressionPart::Sub(sub) => expression_may_charge(sub, functions),
+    let mut pending = vec![ExpressionPart::Sub(expr)];
+    while let Some(part) = pending.pop() {
+        match part {
+            ExpressionPart::Sub(expr) => push_expression_parts(expr, &mut pending),
             ExpressionPart::Call(Function::Custom(iri)) => {
-                functions.resolve(iri.as_str()).is_some()
+                if functions.resolve(iri.as_str()).is_some()
                     || functions.resolve_expr(iri.as_str()).is_some()
+                {
+                    return true;
+                }
             }
-            ExpressionPart::Call(_) => false,
-            ExpressionPart::Exists(_) => true,
-        };
-        found
-    });
-    found
+            ExpressionPart::Call(_) => {}
+            ExpressionPart::Exists(_) => return true,
+        }
+    }
+    false
 }
 
 /// Whether `pattern` (recursively) is safe to evaluate under the fork-join
@@ -519,36 +509,100 @@ pub(crate) fn is_parallel_safe_pattern_with(
 /// [`is_parallel_safe`].
 ///
 /// The structural decomposition is [`crate::governor::soundness`]'s, not this
-/// module's: the recursion below only decides what to *do* at each part. That
-/// module owns the single exhaustive, wildcard-free match over [`Expression`],
-/// so a new expression variant is one compile error there rather than a silent
-/// omission here (which would classify an unsafe builtin SAFE and let it run
-/// under fork-join). The short-circuit is preserved exactly — the visitor stops
-/// the moment this closure returns `true` — so the answer is identical to the
-/// `||` chain this replaces, including for expressions whose later arms would
-/// have been skipped.
+/// module's: the walk ([`reaches_unsafe_builtin`]) only decides what to *do* at
+/// each part. That module owns the single exhaustive, wildcard-free match over
+/// [`Expression`], so a new expression variant is one compile error there rather
+/// than a silent omission here (which would classify an unsafe builtin SAFE and
+/// let it run under fork-join). The walk stops at the first unsafe part it
+/// reaches, in the order a depth-first reading yields them, so the answer is
+/// identical to the `||` chain over the same parts, including for expressions
+/// whose later arms are never read.
 fn expr_reaches_unsafe_builtin(
     expr: &Expression,
     registries: SafetyRegistries<'_>,
     verdict: ExistsVerdict<'_>,
 ) -> bool {
-    // Out of stack for the walk (see `crate::stack`): answer "unsafe", the conservative
-    // side — a sequential fallback is always correct, and the evaluation that follows
-    // refuses at its own next check.
-    if crate::stack::is_low() {
-        return true;
+    reaches_unsafe_builtin(Reach::Expression(expr), registries, verdict)
+}
+
+/// One item of [`reaches_unsafe_builtin`]'s work list: a node still to decompose, or a
+/// part whose verdict is read when it pops.
+enum Reach<'a> {
+    /// An expression whose parts are still to be read.
+    Expression(&'a Expression),
+    /// A pattern whose parts are still to be read — or, for a property-function node,
+    /// whose callee decides it.
+    Pattern(&'a GraphPattern),
+    /// The function a call names.
+    Call(&'a Function),
+    /// An `EXISTS` body, offered to the verdict before it is entered.
+    Exists(&'a GraphPattern),
+}
+
+/// The walk behind [`expr_reaches_unsafe_builtin`] and [`pattern_reaches_unsafe_builtin`]:
+/// `true` iff anything reachable from `root` is an unsafe builtin.
+///
+/// The work list holds the parts still to be read, pushed so that they pop in the order
+/// [`visit_expression_parts`] and [`visit_pattern_parts`] yield them — a call's function
+/// before its arguments, a node's children before its attached expressions, each part's
+/// whole subtree before the next part. A part is judged when it pops: a function by
+/// [`function_is_unsafe`], an `EXISTS` body by `verdict` (a `Some` decides it without
+/// entering it; `None` enters it as a pattern), a property-function node by
+/// [`property_function_is_unsafe`] — it is a leaf for the shared decomposition, with
+/// neither a child pattern nor an attached expression, so the visitor yields nothing for
+/// it and it is decided here instead of classified safe by omission. The first unsafe
+/// part ends the walk, so a tree of any depth is classified without a machine-stack frame
+/// per level, reading exactly the parts a depth-first `||` chain reads.
+fn reaches_unsafe_builtin(
+    root: Reach<'_>,
+    registries: SafetyRegistries<'_>,
+    verdict: ExistsVerdict<'_>,
+) -> bool {
+    let mut pending = vec![root];
+    while let Some(item) = pending.pop() {
+        match item {
+            Reach::Expression(expr) => {
+                let first = pending.len();
+                visit_expression_parts(expr, &mut |part| {
+                    pending.push(match part {
+                        ExpressionPart::Sub(sub) => Reach::Expression(sub),
+                        ExpressionPart::Call(f) => Reach::Call(f),
+                        ExpressionPart::Exists(body) => Reach::Exists(body),
+                    });
+                    // `false` keeps the visit going; every part is collected.
+                    false
+                });
+                pending[first..].reverse();
+            }
+            Reach::Pattern(GraphPattern::PropertyFunction(call)) => {
+                if property_function_is_unsafe(&call.iri, registries.relations) {
+                    return true;
+                }
+            }
+            Reach::Pattern(pattern) => {
+                let first = pending.len();
+                visit_pattern_parts(pattern, &mut |part| {
+                    pending.push(match part {
+                        PatternPart::Child(child, _edge) => Reach::Pattern(child),
+                        PatternPart::Expression(expr) => Reach::Expression(expr),
+                    });
+                    false
+                });
+                pending[first..].reverse();
+            }
+            Reach::Call(f) => {
+                if function_is_unsafe(f, registries.functions) {
+                    return true;
+                }
+            }
+            Reach::Exists(body) => match verdict(body) {
+                Some(true) => return true,
+                Some(false) => {}
+                None => pending.push(Reach::Pattern(body)),
+            },
+        }
     }
-    let mut found = false;
-    visit_expression_parts(expr, &mut |part| {
-        found |= match part {
-            ExpressionPart::Sub(sub) => expr_reaches_unsafe_builtin(sub, registries, verdict),
-            ExpressionPart::Call(f) => function_is_unsafe(f, registries.functions),
-            ExpressionPart::Exists(pattern) => verdict(pattern)
-                .unwrap_or_else(|| pattern_reaches_unsafe_builtin(pattern, registries, verdict)),
-        };
-        found
-    });
-    found
+    false
 }
 
 /// Whether `f` is one of the engine's OWN stateful-mint builtins — the
@@ -743,34 +797,16 @@ fn function_is_unsafe(f: &Function, registry: &UserFunctionRegistry) -> bool {
 /// truncation would propagate through it. Sharing the *decomposition* is the
 /// point — a new algebra variant must be one compile error, not three
 /// independent edits of which only two get found.
+///
+/// A property-function node is a leaf for that decomposition and its callee is host
+/// Rust — exactly the case this gate exists for — so [`reaches_unsafe_builtin`] decides
+/// it by [`property_function_is_unsafe`] wherever it is reached, this root included.
 fn pattern_reaches_unsafe_builtin(
     pattern: &GraphPattern,
     registries: SafetyRegistries<'_>,
     verdict: ExistsVerdict<'_>,
 ) -> bool {
-    // A property-function node is a LEAF for the shared decomposition — it has neither
-    // a child pattern nor an attached expression — so the visitor yields nothing for
-    // it and the walk below would classify it safe by omission. Its callee is host
-    // Rust, which is exactly the case this gate exists for, so it is decided here,
-    // before the walk.
-    if let GraphPattern::PropertyFunction(call) = pattern {
-        return property_function_is_unsafe(&call.iri, registries.relations);
-    }
-    // See `expr_reaches_unsafe_builtin`: out of stack, "unsafe" is the conservative side.
-    if crate::stack::is_low() {
-        return true;
-    }
-    let mut found = false;
-    visit_pattern_parts(pattern, &mut |part| {
-        found |= match part {
-            PatternPart::Child(child, _edge) => {
-                pattern_reaches_unsafe_builtin(child, registries, verdict)
-            }
-            PatternPart::Expression(expr) => expr_reaches_unsafe_builtin(expr, registries, verdict),
-        };
-        found
-    });
-    found
+    reaches_unsafe_builtin(Reach::Pattern(pattern), registries, verdict)
 }
 
 /// Whether a property-function call on `iri` is unsafe to evaluate from a forked
@@ -841,12 +877,16 @@ pub(crate) fn aggregate_is_unsafe(iri: &str, aggregates: &AggregateRegistry) -> 
 /// accumulator, and the chunk accumulators are concatenated strictly in chunk
 /// (hence source) order — so the result is byte-identical to the sequential
 /// pass regardless of chunk geometry or worker scheduling.
-pub(crate) fn par_chunk_map<T, R>(items: &[T], push: impl Fn(&mut Vec<R>, &T) + Sync) -> Vec<R>
+pub(crate) fn par_chunk_map<T, R>(
+    sequential: bool,
+    items: &[T],
+    push: impl Fn(&mut Vec<R>, &T) + Sync,
+) -> Vec<R>
 where
     T: Sync,
     R: Send,
 {
-    if !should_parallelize(items.len()) {
+    if !should_parallelize(sequential, items.len()) {
         let mut out = Vec::new();
         for item in items {
             push(&mut out, item);
@@ -1063,6 +1103,7 @@ pub(crate) fn cell_bounded_chunk_map_metered<T, R>(
 /// dedicated compact record rather than a full per-item resource vector — see
 /// [`ItemCharge`] for both halves of that reasoning.
 pub(crate) fn par_chunk_map_metered<T, R>(
+    sequential: bool,
     items: &[T],
     metered: bool,
     push: impl Fn(&mut RowSink<'_, R>, &mut u64, &T) + Sync,
@@ -1093,7 +1134,7 @@ where
         (out, ledger)
     }
 
-    if !should_parallelize(items.len()) {
+    if !should_parallelize(sequential, items.len()) {
         return run_chunk(items, metered, &push);
     }
 
@@ -1181,6 +1222,7 @@ where
 /// a path whose per-focus-node allocation count is pinned exactly by the shapes
 /// crate's test suite, which is how it was found.
 pub(crate) fn par_chunk_try_map_init<T, S, R, H>(
+    sequential: bool,
     items: &[T],
     init: impl Fn() -> S + Sync,
     push: impl Fn(&mut S, &mut Vec<R>, &T) -> Result<(), EvalError> + Sync,
@@ -1191,7 +1233,7 @@ where
     R: Send,
     H: Send,
 {
-    let sequential = || {
+    let run_sequentially = || {
         let mut state = init();
         let mut out = Vec::new();
         for item in items {
@@ -1200,8 +1242,8 @@ where
         let harvested = harvest(&mut state);
         Ok((out, smallvec::smallvec![harvested]))
     };
-    if !should_parallelize(items.len()) {
-        return sequential();
+    if !should_parallelize(sequential, items.len()) {
+        return run_sequentially();
     }
 
     use rayon::prelude::*;
@@ -1219,10 +1261,14 @@ where
             Ok((acc, harvested))
         })
         .collect();
+    // A worker built a triple term deeper than a thread with no evaluation scope holds:
+    // the whole batch is redone here, on the evaluating thread, where the term is
+    // measured and kept like any other. A fork nested inside the redo decides for
+    // itself, and a worker of its own that builds such a term is refused and redone the
+    // same way.
     if per_chunk.iter().any(is_unscoped_refusal) {
         drop(per_chunk);
-        let _sequential = force_sequential_operation();
-        return sequential();
+        return run_sequentially();
     }
 
     let mut out = Vec::with_capacity(
@@ -1302,6 +1348,7 @@ where
 /// former's doc comment for why this one primitive needs a chunk plan that is a pure
 /// function of `items.len()` rather than of the live host's thread count.
 pub(crate) fn par_chunk_reduce_init<T, S>(
+    sequential: bool,
     items: &[T],
     init: impl Fn() -> Result<S, EvalError> + Sync,
     step: impl Fn(&mut S, &T) -> Result<(), EvalError> + Sync,
@@ -1311,15 +1358,15 @@ where
     T: Sync,
     S: Send,
 {
-    let sequential = || {
+    let run_sequentially = || {
         let mut state = init()?;
         for item in items {
             step(&mut state, item)?;
         }
         Ok(state)
     };
-    if !should_parallelize(items.len()) {
-        return sequential();
+    if !should_parallelize(sequential, items.len()) {
+        return run_sequentially();
     }
 
     use rayon::prelude::*;
@@ -1335,10 +1382,14 @@ where
             Ok(state)
         })
         .collect();
+    // A worker built a triple term deeper than a thread with no evaluation scope holds:
+    // the whole batch is redone here, on the evaluating thread, where the term is
+    // measured and kept like any other. A fork nested inside the redo decides for
+    // itself, and a worker of its own that builds such a term is refused and redone the
+    // same way.
     if per_chunk.iter().any(is_unscoped_refusal) {
         drop(per_chunk);
-        let _sequential = force_sequential_operation();
-        return sequential();
+        return run_sequentially();
     }
 
     // Reduce strictly in chunk-index order: the first `Err` **by chunk index**
@@ -1362,12 +1413,12 @@ where
 /// source order exactly like the sequential path (never `par_sort`/
 /// `par_bridge`). Used by `MINUS`, whose predicate is a pure read-only
 /// compatibility check.
-pub(crate) fn par_retain<T, F>(items: &[T], keep: F) -> Vec<T>
+pub(crate) fn par_retain<T, F>(sequential: bool, items: &[T], keep: F) -> Vec<T>
 where
     T: Clone + Sync + Send,
     F: Fn(&T) -> bool + Sync + Send,
 {
-    if !should_parallelize(items.len()) {
+    if !should_parallelize(sequential, items.len()) {
         return items.iter().filter(|item| keep(item)).cloned().collect();
     }
 
@@ -1454,7 +1505,7 @@ pub(crate) fn reintern_portable_row<D: DatasetView>(
             //
             // Nor can it refuse the value's depth: a worker holds no triple term deeper
             // than the margin covers (it refuses one, and the primitive reruns the work
-            // on the evaluating thread — see `sequential_operation_required`), so the
+            // on the evaluating thread — see `EvalCtx::sequential_operation_required`), so the
             // value is within what every thread covers, and admitting it changes
             // nothing.
             Some(PortableTerm::Fresh(value)) => {
@@ -1540,47 +1591,62 @@ mod tests {
 
     #[test]
     fn should_parallelize_boundary() {
-        assert!(!should_parallelize(PARALLEL_MIN_ROWS));
-        assert!(should_parallelize(PARALLEL_MIN_ROWS + 1));
+        assert!(!should_parallelize(false, PARALLEL_MIN_ROWS));
+        assert!(should_parallelize(false, PARALLEL_MIN_ROWS + 1));
     }
 
     #[test]
     fn should_parallelize_force_seam() {
         {
             let _guard = force_parallel_for_test(true);
-            assert!(should_parallelize(0));
+            assert!(should_parallelize(false, 0));
         }
         {
             let _guard = force_parallel_for_test(false);
-            assert!(!should_parallelize(usize::MAX));
+            assert!(!should_parallelize(false, usize::MAX));
         }
         // Guard dropped: back to the real threshold.
-        assert!(!should_parallelize(1));
+        assert!(!should_parallelize(false, 1));
     }
 
+    /// The evaluation's own sequential decision outranks the test override: an operation
+    /// that must stay sequential (a fallible lazy view) stays sequential however the
+    /// thread is driven.
     #[test]
-    fn fallible_operation_scope_overrides_forced_parallelism() {
-        assert!(!sequential_operation_required());
+    fn a_sequential_evaluation_overrides_forced_parallelism() {
         let _parallel = force_parallel_for_test(true);
-        assert!(should_parallelize(0), "test seam forces parallel first");
-        {
-            let _sequential = force_sequential_operation();
-            assert!(sequential_operation_required());
-            assert!(
-                !should_parallelize(usize::MAX),
-                "operation completeness takes precedence over every fork gate"
-            );
-            let _nested = force_sequential_operation();
-            assert!(
-                sequential_operation_required(),
-                "nested scope remains active"
-            );
-        }
-        assert!(!sequential_operation_required());
         assert!(
-            should_parallelize(0),
-            "dropping the operation guard restores the prior test override"
+            should_parallelize(false, 0),
+            "test seam forces parallel first"
         );
+        assert!(
+            !should_parallelize(true, usize::MAX),
+            "operation completeness takes precedence over every fork gate"
+        );
+        assert!(
+            should_parallelize(false, 0),
+            "another evaluation on the same thread keeps the test override"
+        );
+    }
+
+    /// `force_parallel_for_test(false)` reaches the evaluation context's decision, so one
+    /// guard drives a whole evaluation — the `UNION` fork included — onto its sequential
+    /// implementation.
+    #[test]
+    fn forcing_sequential_for_test_reaches_the_evaluation_context() {
+        let ds = RdfDatasetBuilder::new()
+            .freeze()
+            .expect("an empty dataset freezes");
+        let ctx = crate::eval::EvalCtx::new(&ds);
+        assert!(!ctx.sequential_operation_required());
+        {
+            let _guard = force_parallel_for_test(false);
+            assert!(ctx.sequential_operation_required());
+        }
+        assert!(!ctx.sequential_operation_required());
+        let mut forced = crate::eval::EvalCtx::new(&ds);
+        forced.options.force_sequential = true;
+        assert!(forced.sequential_operation_required());
     }
 
     // ---- is_parallel_safe ----------------------------------------------------
@@ -2137,7 +2203,7 @@ mod tests {
         let _parallel_guard = force_parallel_for_test(true);
         let _chunk_guard = force_chunk_size_for_test(1000);
         let items: Vec<usize> = (0..64).collect();
-        let result = par_chunk_map(&items, |acc, &item| {
+        let result = par_chunk_map(false, &items, |acc, &item| {
             if item % 7 != 0 {
                 std::thread::yield_now();
             }
@@ -2154,7 +2220,7 @@ mod tests {
         let _parallel_guard = force_parallel_for_test(true);
         let _chunk_guard = force_chunk_size_for_test(7);
         let items: Vec<usize> = (0..100).collect();
-        let result = par_chunk_map(&items, |acc, &item| {
+        let result = par_chunk_map(false, &items, |acc, &item| {
             if item % 3 == 0 {
                 std::thread::yield_now();
             }
@@ -2171,12 +2237,12 @@ mod tests {
 
         let sequential = {
             let _guard = force_parallel_for_test(false);
-            par_chunk_map(&items, push)
+            par_chunk_map(false, &items, push)
         };
         let parallel = {
             let _parallel_guard = force_parallel_for_test(true);
             let _chunk_guard = force_chunk_size_for_test(9);
-            par_chunk_map(&items, push)
+            par_chunk_map(false, &items, push)
         };
         assert_eq!(sequential, parallel);
     }
@@ -2190,6 +2256,7 @@ mod tests {
         let init_calls = std::sync::atomic::AtomicUsize::new(0);
         let items: Vec<usize> = (0..64).collect();
         let result = par_chunk_try_map_init(
+            false,
             &items,
             || {
                 init_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2233,6 +2300,7 @@ mod tests {
         let init_calls = std::sync::atomic::AtomicUsize::new(0);
         let items: Vec<usize> = (0..100).collect();
         let result = par_chunk_try_map_init(
+            false,
             &items,
             || {
                 init_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2277,6 +2345,7 @@ mod tests {
         let init_calls = std::sync::atomic::AtomicUsize::new(0);
         let items: Vec<usize> = (0..64).collect();
         let result = par_chunk_try_map_init(
+            false,
             &items,
             || {
                 init_calls.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -2320,6 +2389,7 @@ mod tests {
         let items: Vec<usize> = (0..40).collect();
         let result: Result<(Vec<Solution>, smallvec::SmallVec<[(); 1]>), EvalError> =
             par_chunk_try_map_init(
+                false,
                 &items,
                 || (),
                 |(), _acc, &i| {
@@ -2344,7 +2414,7 @@ mod tests {
     fn par_retain_preserves_order_forced_parallel() {
         let _guard = force_parallel_for_test(true);
         let items: Vec<usize> = (0..64).collect();
-        let kept = par_retain(&items, |&i| i % 3 == 0);
+        let kept = par_retain(false, &items, |&i| i % 3 == 0);
         let expected: Vec<usize> = (0..64).filter(|i| i % 3 == 0).collect();
         assert_eq!(kept, expected);
     }
@@ -2353,7 +2423,7 @@ mod tests {
     fn par_retain_preserves_order_forced_sequential() {
         let _guard = force_parallel_for_test(false);
         let items: Vec<usize> = (0..64).collect();
-        let kept = par_retain(&items, |&i| i % 3 == 0);
+        let kept = par_retain(false, &items, |&i| i % 3 == 0);
         let expected: Vec<usize> = (0..64).filter(|i| i % 3 == 0).collect();
         assert_eq!(kept, expected);
     }
@@ -2442,6 +2512,489 @@ mod tests {
         assert_eq!(
             reinterned_a[0], reinterned_b[0],
             "two workers minting the same fresh value must reintern to the same parent id"
+        );
+    }
+}
+
+/// The work-list walks against recursive readings of the same expressions and patterns,
+/// over generated shapes and every registry and verdict configuration, and at a depth no
+/// recursive reading could reach on a small stack.
+#[cfg(test)]
+mod walk_tests {
+    use purrdf_sparql_algebra::{
+        Chain, Child, Expression, Function, GraphPattern, Literal, NamedNode, NamedNodePattern,
+        PropertyFunctionCall, TermPattern, TriplePattern, Variable,
+    };
+
+    use super::{
+        ExistsVerdict, ExpressionPart, PatternPart, SafetyRegistries, expr_reaches_unsafe_builtin,
+        expression_may_charge, expression_re_enters_evaluation, function_is_unsafe,
+        pattern_reaches_unsafe_builtin, property_function_is_unsafe, visit_expression_parts,
+        visit_pattern_parts,
+    };
+    use crate::agg_fn::AggregateRegistry;
+    use crate::property_fn::PropertyFunctionRegistry;
+    use crate::user_fn::{UserFunctionRegistry, Volatility};
+
+    // ── The recursive references ───────────────────────────────────────────────────
+
+    fn reference_re_enters(expr: &Expression) -> bool {
+        let mut found = false;
+        visit_expression_parts(expr, &mut |part| {
+            found |= match part {
+                ExpressionPart::Sub(sub) => reference_re_enters(sub),
+                ExpressionPart::Call(_) => false,
+                ExpressionPart::Exists(_) => true,
+            };
+            found
+        });
+        found
+    }
+
+    fn reference_may_charge(expr: &Expression, functions: &UserFunctionRegistry) -> bool {
+        let mut found = false;
+        visit_expression_parts(expr, &mut |part| {
+            found |= match part {
+                ExpressionPart::Sub(sub) => reference_may_charge(sub, functions),
+                ExpressionPart::Call(Function::Custom(iri)) => {
+                    functions.resolve(iri.as_str()).is_some()
+                        || functions.resolve_expr(iri.as_str()).is_some()
+                }
+                ExpressionPart::Call(_) => false,
+                ExpressionPart::Exists(_) => true,
+            };
+            found
+        });
+        found
+    }
+
+    fn reference_expr_reaches(
+        expr: &Expression,
+        registries: SafetyRegistries<'_>,
+        verdict: ExistsVerdict<'_>,
+    ) -> bool {
+        let mut found = false;
+        visit_expression_parts(expr, &mut |part| {
+            found |= match part {
+                ExpressionPart::Sub(sub) => reference_expr_reaches(sub, registries, verdict),
+                ExpressionPart::Call(f) => function_is_unsafe(f, registries.functions),
+                ExpressionPart::Exists(pattern) => verdict(pattern)
+                    .unwrap_or_else(|| reference_pattern_reaches(pattern, registries, verdict)),
+            };
+            found
+        });
+        found
+    }
+
+    fn reference_pattern_reaches(
+        pattern: &GraphPattern,
+        registries: SafetyRegistries<'_>,
+        verdict: ExistsVerdict<'_>,
+    ) -> bool {
+        if let GraphPattern::PropertyFunction(call) = pattern {
+            return property_function_is_unsafe(&call.iri, registries.relations);
+        }
+        let mut found = false;
+        visit_pattern_parts(pattern, &mut |part| {
+            found |= match part {
+                PatternPart::Child(child, _edge) => {
+                    reference_pattern_reaches(child, registries, verdict)
+                }
+                PatternPart::Expression(expr) => reference_expr_reaches(expr, registries, verdict),
+            };
+            found
+        });
+        found
+    }
+
+    // ── The registries and verdicts ────────────────────────────────────────────────
+
+    const NATIVE_STABLE: &str = "http://example.org/fn#stable";
+    const NATIVE_VOLATILE: &str = "http://example.org/fn#volatile";
+    const SPARQL_BODIED: &str = "http://example.org/fn#bodied";
+    const UNKNOWN_FUNCTION: &str = "http://example.org/fn#unknown";
+    const RELATION_STABLE: &str = "http://example.org/rel#stable";
+    const RELATION_VOLATILE: &str = "http://example.org/rel#volatile";
+    const RELATION_UNKNOWN: &str = "http://example.org/rel#unknown";
+
+    fn native_body() -> crate::user_fn::NativeFnBody {
+        std::sync::Arc::new(|_args: &[&purrdf_core::TermValue]| {
+            Ok(Some(purrdf_core::TermValue::typed_literal(
+                "1",
+                "http://www.w3.org/2001/XMLSchema#integer",
+            )))
+        })
+    }
+
+    fn functions() -> UserFunctionRegistry {
+        let mut registry = UserFunctionRegistry::new();
+        registry.register_native(
+            NATIVE_STABLE,
+            crate::user_fn::Arity::Exact(0),
+            Volatility::Stable,
+            native_body(),
+        );
+        registry.register_native(
+            NATIVE_VOLATILE,
+            crate::user_fn::Arity::Exact(0),
+            Volatility::Volatile,
+            native_body(),
+        );
+        registry.insert(
+            SPARQL_BODIED,
+            crate::user_fn::UserFunction {
+                params: Vec::new(),
+                required: 0,
+                body: std::sync::Arc::from("SELECT (1 AS ?result) WHERE {}"),
+                kind: crate::user_fn::UserFnBody::Select,
+                return_constraint: crate::user_fn::TypeConstraint::default(),
+            },
+        );
+        registry
+    }
+
+    /// A relation whose declared volatility is `volatility`, with no rows.
+    #[derive(Debug)]
+    struct DeclaredRelation {
+        volatility: Volatility,
+        modes: [purrdf_core::binding_pattern::BindingPattern; 1],
+    }
+
+    impl crate::property_fn::PropertyFunction for DeclaredRelation {
+        fn volatility(&self) -> Volatility {
+            self.volatility
+        }
+
+        fn arity(&self) -> crate::property_fn::PfArity {
+            crate::property_fn::PfArity::new(1, 1)
+        }
+
+        fn modes(&self) -> &[purrdf_core::binding_pattern::BindingPattern] {
+            &self.modes
+        }
+
+        fn rows_per_invocation(&self, _mode: purrdf_core::binding_pattern::BindingPattern) -> u64 {
+            0
+        }
+
+        fn open(
+            &self,
+            _args: &crate::property_fn::PfArgs<'_>,
+            _ceiling: Option<u64>,
+        ) -> Result<Box<dyn crate::property_fn::PfCursor>, crate::error::EvalError> {
+            Err(crate::error::EvalError::function(
+                "not invoked by the safety gate",
+            ))
+        }
+    }
+
+    fn relations() -> PropertyFunctionRegistry {
+        let mut registry = PropertyFunctionRegistry::new();
+        for (iri, volatility) in [
+            (RELATION_STABLE, Volatility::Stable),
+            (RELATION_VOLATILE, Volatility::Volatile),
+        ] {
+            registry.register(
+                iri,
+                std::sync::Arc::new(DeclaredRelation {
+                    volatility,
+                    modes: [crate::property_fn::PfArity::new(1, 1).all_free_mode()],
+                }),
+            );
+        }
+        registry
+    }
+
+    /// No table configured.
+    const NONE: SafetyRegistries<'static> = SafetyRegistries {
+        functions: &UserFunctionRegistry::EMPTY,
+        relations: &PropertyFunctionRegistry::EMPTY,
+        aggregates: &AggregateRegistry::EMPTY,
+    };
+
+    /// Both tables configured.
+    fn configured<'a>(
+        functions: &'a UserFunctionRegistry,
+        relations: &'a PropertyFunctionRegistry,
+    ) -> SafetyRegistries<'a> {
+        SafetyRegistries {
+            functions,
+            relations,
+            aggregates: NONE.aggregates,
+        }
+    }
+
+    /// A verdict that decides a `Bgp` body safe and a `Union` body unsafe without
+    /// entering either, and enters everything else.
+    fn deciding_verdict(body: &GraphPattern) -> Option<bool> {
+        match body {
+            GraphPattern::Bgp { .. } => Some(false),
+            GraphPattern::Union { .. } => Some(true),
+            _ => None,
+        }
+    }
+
+    // ── A deterministic shape generator ────────────────────────────────────────────
+
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 30,
+            }
+        }
+
+        fn choose(&mut self, options: usize) -> usize {
+            let draw = crate::test_rng::splitmix64_next(&mut self.state);
+            usize::try_from(draw % options as u64).expect("a choice fits usize")
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn call(function: Function, args: Vec<Expression>) -> Expression {
+        Expression::FunctionCall(function, args.into())
+    }
+
+    fn custom(iri: &str) -> Function {
+        Function::Custom(NamedNode::new_unchecked(iri))
+    }
+
+    fn function(choices: &mut Choices) -> Function {
+        match choices.choose(10) {
+            0..=2 => Function::Str,
+            3 => Function::Regex,
+            4 => Function::Rand,
+            5 => Function::BNode,
+            6 => custom(NATIVE_STABLE),
+            7 => custom(NATIVE_VOLATILE),
+            8 => custom(SPARQL_BODIED),
+            _ => custom(UNKNOWN_FUNCTION),
+        }
+    }
+
+    fn expression(choices: &mut Choices) -> Expression {
+        if !choices.spend() {
+            return Expression::Variable(Variable::new("v"));
+        }
+        match choices.choose(8) {
+            0 => Expression::Literal(Literal::new_simple("x")),
+            1 => Expression::Not(Child::new(expression(choices))),
+            2 => Expression::And(
+                Chain::try_from(vec![expression(choices), expression(choices)]).expect("two"),
+            ),
+            3 => Expression::If(
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+                Child::new(expression(choices)),
+            ),
+            4 | 5 => {
+                let function = function(choices);
+                let args = (0..choices.choose(3))
+                    .map(|_| expression(choices))
+                    .collect();
+                call(function, args)
+            }
+            _ => Expression::Exists(Child::new(pattern(choices))),
+        }
+    }
+
+    fn bgp() -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: vec![TriplePattern {
+                subject: TermPattern::Variable(Variable::new("s")),
+                predicate: NamedNodePattern::NamedNode(NamedNode::new_unchecked(
+                    "http://example.org/p",
+                )),
+                object: TermPattern::Variable(Variable::new("o")),
+            }],
+        }
+    }
+
+    fn relation_call(iri: &str) -> GraphPattern {
+        GraphPattern::PropertyFunction(PropertyFunctionCall {
+            iri: iri.to_owned(),
+            subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+            object_args: vec![TermPattern::Variable(Variable::new("o"))],
+        })
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return bgp();
+        }
+        match choices.choose(14) {
+            0..=4 => bgp(),
+            5 => relation_call(RELATION_STABLE),
+            6 => relation_call(RELATION_VOLATILE),
+            7 => relation_call(RELATION_UNKNOWN),
+            8 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: (choices.choose(2) == 0).then(|| expression(choices)),
+            },
+            10 => GraphPattern::Filter {
+                expr: expression(choices),
+                inner: Child::new(pattern(choices)),
+            },
+            11 => GraphPattern::Union {
+                arms: Chain::try_from(vec![pattern(choices), pattern(choices)]).expect("two"),
+            },
+            12 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            _ => GraphPattern::Extend {
+                inner: Child::new(pattern(choices)),
+                variable: Variable::new("x"),
+                expression: expression(choices),
+            },
+        }
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// Every walk answers exactly what its recursive reference answers, for every
+    /// generated expression and pattern, under both registry configurations and both
+    /// verdicts — and the generator produces both answers of each.
+    #[test]
+    fn the_walks_agree_with_their_recursive_references_on_generated_shapes() {
+        let functions = functions();
+        let relations = relations();
+        let registries = [NONE, configured(&functions, &relations)];
+        let verdicts: [ExistsVerdict<'_>; 2] = [&|_| None, &deciding_verdict];
+        let mut unsafe_expressions = 0;
+        let mut unsafe_patterns = 0;
+        let mut re_entering = 0;
+        let mut charging = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let expr = expression(&mut choices);
+            let mut choices = Choices::new(seed.wrapping_mul(7919));
+            let pattern = pattern(&mut choices);
+
+            let re_enters = expression_re_enters_evaluation(&expr);
+            assert_eq!(
+                re_enters,
+                reference_re_enters(&expr),
+                "seed {seed}: {expr:?}"
+            );
+            re_entering += usize::from(re_enters);
+
+            let charges = expression_may_charge(&expr, &functions);
+            assert_eq!(
+                charges,
+                reference_may_charge(&expr, &functions),
+                "seed {seed}: {expr:?}"
+            );
+            assert_eq!(
+                expression_may_charge(&expr, &UserFunctionRegistry::EMPTY),
+                reference_may_charge(&expr, &UserFunctionRegistry::EMPTY),
+                "seed {seed}: {expr:?}"
+            );
+            charging += usize::from(charges);
+
+            for registries in registries {
+                for verdict in verdicts {
+                    let reaches = expr_reaches_unsafe_builtin(&expr, registries, verdict);
+                    assert_eq!(
+                        reaches,
+                        reference_expr_reaches(&expr, registries, verdict),
+                        "seed {seed}: {expr:?}"
+                    );
+                    unsafe_expressions += usize::from(reaches);
+                    let reaches = pattern_reaches_unsafe_builtin(&pattern, registries, verdict);
+                    assert_eq!(
+                        reaches,
+                        reference_pattern_reaches(&pattern, registries, verdict),
+                        "seed {seed}: {pattern:?}"
+                    );
+                    unsafe_patterns += usize::from(reaches);
+                }
+            }
+        }
+        for (name, count, total) in [
+            ("unsafe expressions", unsafe_expressions, 1600),
+            ("unsafe patterns", unsafe_patterns, 1600),
+            ("re-entering expressions", re_entering, 400),
+            ("charging expressions", charging, 400),
+        ] {
+            assert!(
+                count > total / 50 && count < total - total / 50,
+                "the generator produces both answers for {name} ({count} of {total})"
+            );
+        }
+    }
+
+    /// A stateful builtin under a hundred thousand negations, an `EXISTS` under as many,
+    /// and a relation call under a hundred thousand filters are each classified on a
+    /// 128 KiB stack — and their harmless neighbours are classified safe on it too.
+    #[test]
+    fn a_hundred_thousand_level_shape_is_classified_on_a_128_kib_thread() {
+        const DEPTH: usize = 100_000;
+        fn negated(mut expr: Expression) -> Expression {
+            for _ in 0..DEPTH {
+                expr = Expression::Not(Child::new(expr));
+            }
+            expr
+        }
+        fn filtered(mut pattern: GraphPattern) -> GraphPattern {
+            for _ in 0..DEPTH {
+                pattern = GraphPattern::Filter {
+                    expr: Expression::Variable(Variable::new("v")),
+                    inner: Child::new(pattern),
+                };
+            }
+            pattern
+        }
+        let answers = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let functions = functions();
+                let relations = relations();
+                let registries = configured(&functions, &relations);
+                let minting = negated(call(Function::Rand, Vec::new()));
+                let pure = negated(call(
+                    Function::Str,
+                    vec![Expression::Variable(Variable::new("v"))],
+                ));
+                let probing = negated(Expression::Exists(Child::new(bgp())));
+                let bodied = negated(call(custom(SPARQL_BODIED), Vec::new()));
+                let unknown_relation = filtered(relation_call(RELATION_UNKNOWN));
+                let stable_relation = filtered(relation_call(RELATION_STABLE));
+                [
+                    expr_reaches_unsafe_builtin(&minting, registries, &|_| None),
+                    expr_reaches_unsafe_builtin(&pure, registries, &|_| None),
+                    expression_re_enters_evaluation(&probing),
+                    expression_re_enters_evaluation(&pure),
+                    expression_may_charge(&bodied, &functions),
+                    expression_may_charge(&pure, &functions),
+                    pattern_reaches_unsafe_builtin(&unknown_relation, registries, &|_| None),
+                    pattern_reaches_unsafe_builtin(&stable_relation, registries, &|_| None),
+                    expr_reaches_unsafe_builtin(&probing, registries, &deciding_verdict),
+                ]
+            })
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned");
+        assert_eq!(
+            answers,
+            [true, false, true, false, true, false, true, false, false]
         );
     }
 }

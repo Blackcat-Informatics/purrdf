@@ -40,16 +40,14 @@ impl NativeSparqlEngine {
                 evidence: GovernedEvidence::new(evidence, state.evidence()),
             });
         }
-        let evaluation = {
-            let _sequential = crate::parallel::force_sequential_operation();
-            self.query_governed_prepared_in_state(
-                dataset,
-                prepared,
-                &AdmittedSubstitutions::prepared(substitutions),
-                options,
-                state,
-            )
-        };
+        let evaluation = self.query_governed_prepared_in_state(
+            dataset,
+            prepared,
+            &AdmittedSubstitutions::prepared(substitutions),
+            options,
+            state,
+            super::Sequencing::Sequential,
+        );
         finish_governed_fallible_query(dataset, state, evaluation)
     }
 

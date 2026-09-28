@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test test-shard doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test test-shard doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite cnschema-probe benchmark-acquire lubm watdiv
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -101,6 +101,8 @@ check: node-prerequisite ## The full local gate: fmt, clippy, build, tests, hygi
 	python3 scripts/check-python-binding-tests.py
 	python3 scripts/check-terminal-predicates.py --self-test
 	python3 scripts/check-terminal-predicates.py
+	python3 scripts/check-thread-locals.py --self-test
+	python3 scripts/check-thread-locals.py
 	python3 scripts/check-licenses.py --self-test
 	python3 scripts/check-licenses.py
 	python3 scripts/check-banned-deps.py --self-test
@@ -399,6 +401,10 @@ python-binding-hygiene: ## Prove no Rust test module hides in the PyO3 extension
 terminal-hygiene: ## Prove no scanner decides a token boundary with a Unicode property.
 	python3 scripts/check-terminal-predicates.py --self-test
 	python3 scripts/check-terminal-predicates.py
+
+thread-local-hygiene: ## Prove every thread_local! in crates/ is in the wasm interleaving ledger with its reason, and nothing stale is.
+	python3 scripts/check-thread-locals.py --self-test
+	python3 scripts/check-thread-locals.py
 
 build-profile-hygiene: ## Prove the gate really compiles at opt-level 3 with debug-assertions and overflow-checks on.
 	python3 scripts/check-build-profiles.py --self-test

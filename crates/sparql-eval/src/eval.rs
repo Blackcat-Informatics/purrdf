@@ -1584,6 +1584,34 @@ impl<'d, D: DatasetView + Sync> EvalCtx<'d, D> {
         !self.governors_are_engaged()
     }
 
+    /// Whether every fork site of this evaluation runs its sequential implementation:
+    /// the evaluation was opened sequential ([`EvalOptions::force_sequential`] — set by
+    /// the fallible lazy-view entries, whose page request order and exact budget boundary
+    /// are observable evidence no fork may race, and by the measurement seams), or it
+    /// holds triple terms deeper than the stack margin covers.
+    ///
+    /// Those terms are covered only on the thread that measured them: the running
+    /// evaluation kept stack for walks over them ([`crate::stack::admit_term`], the
+    /// request's own reserve), and a fork-join worker — which clones the scratch interner
+    /// holding them and walks them on a stack of its own — has kept none. So an evaluation
+    /// with anything reserved stays on its thread. A worker that builds such a term itself
+    /// is refused ([`crate::stack::UNSCOPED_TRIPLE_TERM`]), and the fork-join primitives
+    /// run their work sequentially on the evaluating thread instead
+    /// ([`crate::parallel::is_unscoped_refusal`]).
+    ///
+    /// The decision is a field of this context, copied into every worker fork, so one
+    /// evaluation's answer never reaches another evaluation interleaved on the same
+    /// thread. A test build lets [`crate::parallel::force_parallel_for_test`] drive it:
+    /// `Some(false)` there holds the whole evaluation — the `UNION` fork included — on
+    /// one thread.
+    pub(crate) fn sequential_operation_required(&self) -> bool {
+        #[cfg(test)]
+        if crate::parallel::forced_parallel_for_test() == Some(false) {
+            return true;
+        }
+        self.options.force_sequential || purrdf_stack::reserved() > 0
+    }
+
     /// The live governor accounting state, if this execution is governed at all.
     ///
     /// `None` is the ungoverned execution every non-governor entry point takes: every
@@ -2806,139 +2834,241 @@ fn eval_node<D: DatasetView + Sync>(
 /// to discover its schema would spend a budget that has already tripped or trigger side
 /// effects in a branch known not to match. The match is exhaustive so a new algebra node
 /// cannot silently inherit an empty schema.
+///
+/// The schema is a fold over the node's tree — a leaf's columns are its own term
+/// positions, a binary operator's the ordered union of its left operand's then its
+/// right's, a `Union`'s the ordered union of its arms' in arm order, a row-shaping
+/// operator's its inner pattern's with its own targets appended — run over a work list
+/// of the nodes still to derive and a stack of the schemas already derived, each
+/// operator's built once its operands' are on the stack. So a node of any depth is
+/// derived without a machine-stack frame per level, and the columns come out in the
+/// same order a recursive reading pushes them: an operand's whole schema before the
+/// next operand's, a node's own targets after its inner's columns. The term positions
+/// of a triple pattern are read the same way, subject then predicate then object,
+/// through a quoted triple's positions at any depth.
 pub(crate) fn syntactic_schema(pattern: &GraphPattern) -> Arc<VarSchema> {
-    fn push_term(term: &TermPattern, schema: &mut VarSchema) {
-        match term {
-            TermPattern::Variable(variable) => {
-                schema.push(variable.clone());
+    /// One term position still to read for its variables.
+    enum Position<'a> {
+        Term(&'a TermPattern),
+        Predicate(&'a NamedNodePattern),
+    }
+
+    /// Push the variables of the positions on `pending` onto `schema`, in the order the
+    /// positions pop: a quoted triple's subject, then its predicate, then its object.
+    fn push_positions(pending: &mut Vec<Position<'_>>, schema: &mut VarSchema) {
+        while let Some(position) = pending.pop() {
+            match position {
+                Position::Term(TermPattern::Variable(variable)) => {
+                    schema.push(variable.clone());
+                }
+                Position::Term(TermPattern::Triple(triple)) => {
+                    pending.push(Position::Term(&triple.object));
+                    pending.push(Position::Predicate(&triple.predicate));
+                    pending.push(Position::Term(&triple.subject));
+                }
+                Position::Term(
+                    TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_),
+                ) => {}
+                Position::Predicate(NamedNodePattern::Variable(variable)) => {
+                    schema.push(variable.clone());
+                }
+                Position::Predicate(NamedNodePattern::NamedNode(_)) => {}
             }
-            TermPattern::Triple(triple) => push_triple(triple, schema),
-            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
         }
+    }
+
+    fn push_term(term: &TermPattern, schema: &mut VarSchema) {
+        push_positions(&mut vec![Position::Term(term)], schema);
     }
 
     fn push_triple(triple: &TriplePattern, schema: &mut VarSchema) {
-        push_term(&triple.subject, schema);
-        if let NamedNodePattern::Variable(variable) = &triple.predicate {
-            schema.push(variable.clone());
-        }
-        push_term(&triple.object, schema);
+        push_positions(
+            &mut vec![
+                Position::Term(&triple.object),
+                Position::Predicate(&triple.predicate),
+                Position::Term(&triple.subject),
+            ],
+            schema,
+        );
     }
 
-    fn derive(pattern: &GraphPattern) -> VarSchema {
-        match pattern {
-            GraphPattern::Bgp { patterns } => {
-                let mut schema = VarSchema::new();
-                for pattern in patterns {
-                    push_triple(pattern, &mut schema);
+    /// What a row-shaping operator appends to its inner pattern's columns.
+    enum Append<'a> {
+        /// A `GRAPH` name, when it is a variable.
+        GraphName(&'a NamedNodePattern),
+        /// A `BIND` target.
+        Variable(&'a Variable),
+        /// An `UNFOLD`'s element target, then its companion when there is one.
+        Unfold(&'a Variable, Option<&'a Variable>),
+    }
+
+    /// One step of the fold.
+    enum Step<'a> {
+        /// Derive this node's schema, or schedule its operands and the operator over
+        /// them.
+        Derive(&'a GraphPattern),
+        /// Replace the schema on top of the stack by that schema with `append` added.
+        Shape(Append<'a>),
+        /// Replace the top two schemas (the right operand's on top) by the left's union
+        /// with the right's.
+        Union,
+        /// Replace the top `count` schemas (the first arm's deepest) by the ordered union
+        /// of all of them, starting from no columns.
+        UnionArms(usize),
+    }
+
+    let mut steps = vec![Step::Derive(pattern)];
+    let mut schemas: Vec<VarSchema> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Derive(pattern) => match pattern {
+                GraphPattern::Bgp { patterns } => {
+                    let mut schema = VarSchema::new();
+                    for pattern in patterns {
+                        push_triple(pattern, &mut schema);
+                    }
+                    schemas.push(schema);
                 }
-                schema
-            }
-            GraphPattern::Path {
-                subject,
-                path: _,
-                object,
-            } => {
-                let mut schema = VarSchema::new();
-                push_term(subject, &mut schema);
-                push_term(object, &mut schema);
-                schema
-            }
-            GraphPattern::Join { left, right }
-            | GraphPattern::LeftJoin {
-                left,
-                right,
-                expression: _,
-            }
-            | GraphPattern::Lateral { left, right } => derive(left).union(&derive(right)),
-            GraphPattern::Union { arms } => arms
-                .iter()
-                .fold(VarSchema::new(), |schema, arm| schema.union(&derive(arm))),
-            GraphPattern::Minus { left, right: _ } => derive(left),
-            GraphPattern::Filter { expr: _, inner }
-            | GraphPattern::OrderBy {
-                inner,
-                expression: _,
-            }
-            | GraphPattern::Distinct { inner }
-            | GraphPattern::Reduced { inner }
-            | GraphPattern::Slice {
-                inner,
-                start: _,
-                length: _,
-            } => derive(inner),
-            GraphPattern::Graph { name, inner } => {
-                let mut schema = derive(inner);
-                if let NamedNodePattern::Variable(variable) = name {
-                    schema.push(variable.clone());
+                GraphPattern::Path {
+                    subject,
+                    path: _,
+                    object,
+                } => {
+                    let mut schema = VarSchema::new();
+                    push_term(subject, &mut schema);
+                    push_term(object, &mut schema);
+                    schemas.push(schema);
                 }
-                schema
-            }
-            GraphPattern::Service {
-                name: _,
-                inner,
-                silent: _,
-            } => derive(inner),
-            GraphPattern::Extend {
-                inner,
-                variable,
-                expression: _,
-            } => {
-                let mut schema = derive(inner);
-                schema.push(variable.clone());
-                schema
-            }
-            // `UNFOLD`'s columns are its inner pattern's plus its own one or two
-            // targets, in declaration order — the same rule `Extend` follows for
-            // its single target.
-            GraphPattern::Unfold {
-                inner,
-                expression: _,
-                element,
-                companion,
-            } => {
-                let mut schema = derive(inner);
-                schema.push(element.clone());
-                if let Some(companion) = companion {
-                    schema.push(companion.clone());
+                GraphPattern::Join { left, right }
+                | GraphPattern::LeftJoin {
+                    left,
+                    right,
+                    expression: _,
                 }
-                schema
-            }
-            GraphPattern::Values {
-                variables,
-                bindings: _,
-            }
-            | GraphPattern::Project {
-                inner: _,
-                variables,
-            } => VarSchema::from_vars(variables.iter().cloned()),
-            GraphPattern::Group {
-                inner: _,
-                variables,
-                aggregates,
-            } => {
-                let mut schema = VarSchema::from_vars(variables.iter().cloned());
-                for (variable, _) in aggregates {
-                    schema.push(variable.clone());
+                | GraphPattern::Lateral { left, right } => {
+                    steps.push(Step::Union);
+                    steps.push(Step::Derive(right));
+                    steps.push(Step::Derive(left));
                 }
-                schema
-            }
-            // Every argument variable of a property function is in scope in the
-            // enclosing group (the arguments are simultaneously the call's inputs and
-            // its bindings), so the node's columns are exactly those variables — in
-            // flattened first-seen order, subject side then object side, which is the
-            // order the dispatch fills them in.
-            GraphPattern::PropertyFunction(call) => {
-                let mut schema = VarSchema::new();
-                for term in call.subject_args.iter().chain(&call.object_args) {
-                    push_term(term, &mut schema);
+                GraphPattern::Union { arms } => {
+                    steps.push(Step::UnionArms(arms.len()));
+                    steps.extend(arms.iter().rev().map(Step::Derive));
                 }
-                schema
+                GraphPattern::Minus { left, right: _ } => steps.push(Step::Derive(left)),
+                GraphPattern::Filter { expr: _, inner }
+                | GraphPattern::OrderBy {
+                    inner,
+                    expression: _,
+                }
+                | GraphPattern::Distinct { inner }
+                | GraphPattern::Reduced { inner }
+                | GraphPattern::Slice {
+                    inner,
+                    start: _,
+                    length: _,
+                }
+                | GraphPattern::Service {
+                    name: _,
+                    inner,
+                    silent: _,
+                } => steps.push(Step::Derive(inner)),
+                GraphPattern::Graph { name, inner } => {
+                    steps.push(Step::Shape(Append::GraphName(name)));
+                    steps.push(Step::Derive(inner));
+                }
+                GraphPattern::Extend {
+                    inner,
+                    variable,
+                    expression: _,
+                } => {
+                    steps.push(Step::Shape(Append::Variable(variable)));
+                    steps.push(Step::Derive(inner));
+                }
+                // `UNFOLD`'s columns are its inner pattern's plus its own one or two
+                // targets, in declaration order — the same rule `Extend` follows for
+                // its single target.
+                GraphPattern::Unfold {
+                    inner,
+                    expression: _,
+                    element,
+                    companion,
+                } => {
+                    steps.push(Step::Shape(Append::Unfold(element, companion.as_ref())));
+                    steps.push(Step::Derive(inner));
+                }
+                GraphPattern::Values {
+                    variables,
+                    bindings: _,
+                }
+                | GraphPattern::Project {
+                    inner: _,
+                    variables,
+                } => schemas.push(VarSchema::from_vars(variables.iter().cloned())),
+                GraphPattern::Group {
+                    inner: _,
+                    variables,
+                    aggregates,
+                } => {
+                    let mut schema = VarSchema::from_vars(variables.iter().cloned());
+                    for (variable, _) in aggregates {
+                        schema.push(variable.clone());
+                    }
+                    schemas.push(schema);
+                }
+                // Every argument variable of a property function is in scope in the
+                // enclosing group (the arguments are simultaneously the call's inputs and
+                // its bindings), so the node's columns are exactly those variables — in
+                // flattened first-seen order, subject side then object side, which is the
+                // order the dispatch fills them in.
+                GraphPattern::PropertyFunction(call) => {
+                    let mut schema = VarSchema::new();
+                    for term in call.subject_args.iter().chain(&call.object_args) {
+                        push_term(term, &mut schema);
+                    }
+                    schemas.push(schema);
+                }
+            },
+            Step::Shape(append) => {
+                let schema = schemas
+                    .last_mut()
+                    .expect("the inner pattern's schema is derived before its operator's");
+                match append {
+                    Append::GraphName(name) => {
+                        if let NamedNodePattern::Variable(variable) = name {
+                            schema.push(variable.clone());
+                        }
+                    }
+                    Append::Variable(variable) => {
+                        schema.push(variable.clone());
+                    }
+                    Append::Unfold(element, companion) => {
+                        schema.push(element.clone());
+                        if let Some(companion) = companion {
+                            schema.push(companion.clone());
+                        }
+                    }
+                }
+            }
+            Step::Union => {
+                let right = schemas.pop().expect("the right operand's schema");
+                let left = schemas.pop().expect("the left operand's schema");
+                schemas.push(left.union(&right));
+            }
+            Step::UnionArms(count) => {
+                let first = schemas.len() - count;
+                let union = schemas
+                    .drain(first..)
+                    .fold(VarSchema::new(), |schema, arm| schema.union(&arm));
+                schemas.push(union);
             }
         }
     }
 
-    Arc::new(derive(pattern))
+    Arc::new(
+        schemas
+            .pop()
+            .expect("the root's schema is the last one derived"),
+    )
 }
 
 /// Evaluate a graph pattern to a multiset of solutions, requiring completion.
@@ -3240,13 +3370,9 @@ pub(crate) fn evaluate_query_evaluated<D: DatasetView + Sync>(
     query: &Query,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
-    // Criterion and differential tests can hold the operation on the sequential branch;
-    // production keeps the ordered parallel fold. The guard is operation-scoped so every
-    // recursive fork gate sees the same decision.
-    let _sequential = ctx
-        .options
-        .force_sequential
-        .then(crate::parallel::force_sequential_operation);
+    // Criterion and differential tests can hold the operation on the sequential branch
+    // (`EvalOptions::force_sequential`, read by every fork gate through
+    // `EvalCtx::sequential_operation_required`); production keeps the ordered parallel fold.
     let _terms = prepare_query_context(query, ctx)?;
     match query {
         // A parsed `SELECT` ends in a projection, which already names only the
@@ -4651,5 +4777,392 @@ mod term_value_walk_tests {
             assert_eq!(memo_walk, memo_ref);
         }
         assert_eq!(memo_walk.len(), 2, "one memo entry per literal datatype");
+    }
+}
+
+/// The syntactic schema against a recursive reading of the same algebra, over generated
+/// shapes, and at a depth no recursive reading could reach on a small stack.
+#[cfg(test)]
+mod syntactic_schema_tests {
+    use purrdf_sparql_algebra::{
+        AggregateExpression, AggregateFunction, Chain, Child, Expression, GraphPattern, NamedNode,
+        NamedNodePattern, PropertyFunctionCall, PropertyPathExpression, TermPattern, TriplePattern,
+        Variable,
+    };
+
+    use super::syntactic_schema;
+    use crate::solution::VarSchema;
+
+    // ── The recursive reference ────────────────────────────────────────────────────
+
+    fn reference_term(term: &TermPattern, schema: &mut VarSchema) {
+        match term {
+            TermPattern::Variable(variable) => {
+                schema.push(variable.clone());
+            }
+            TermPattern::Triple(triple) => reference_triple(triple, schema),
+            TermPattern::NamedNode(_) | TermPattern::BlankNode(_) | TermPattern::Literal(_) => {}
+        }
+    }
+
+    fn reference_triple(triple: &TriplePattern, schema: &mut VarSchema) {
+        reference_term(&triple.subject, schema);
+        if let NamedNodePattern::Variable(variable) = &triple.predicate {
+            schema.push(variable.clone());
+        }
+        reference_term(&triple.object, schema);
+    }
+
+    fn reference(pattern: &GraphPattern) -> VarSchema {
+        match pattern {
+            GraphPattern::Bgp { patterns } => {
+                let mut schema = VarSchema::new();
+                for pattern in patterns {
+                    reference_triple(pattern, &mut schema);
+                }
+                schema
+            }
+            GraphPattern::Path {
+                subject, object, ..
+            } => {
+                let mut schema = VarSchema::new();
+                reference_term(subject, &mut schema);
+                reference_term(object, &mut schema);
+                schema
+            }
+            GraphPattern::Join { left, right }
+            | GraphPattern::LeftJoin { left, right, .. }
+            | GraphPattern::Lateral { left, right } => reference(left).union(&reference(right)),
+            GraphPattern::Union { arms } => arms.iter().fold(VarSchema::new(), |schema, arm| {
+                schema.union(&reference(arm))
+            }),
+            GraphPattern::Minus { left, .. } => reference(left),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::Service { inner, .. } => reference(inner),
+            GraphPattern::Graph { name, inner } => {
+                let mut schema = reference(inner);
+                if let NamedNodePattern::Variable(variable) = name {
+                    schema.push(variable.clone());
+                }
+                schema
+            }
+            GraphPattern::Extend {
+                inner, variable, ..
+            } => {
+                let mut schema = reference(inner);
+                schema.push(variable.clone());
+                schema
+            }
+            GraphPattern::Unfold {
+                inner,
+                element,
+                companion,
+                ..
+            } => {
+                let mut schema = reference(inner);
+                schema.push(element.clone());
+                if let Some(companion) = companion {
+                    schema.push(companion.clone());
+                }
+                schema
+            }
+            GraphPattern::Values { variables, .. } | GraphPattern::Project { variables, .. } => {
+                VarSchema::from_vars(variables.iter().cloned())
+            }
+            GraphPattern::Group {
+                variables,
+                aggregates,
+                ..
+            } => {
+                let mut schema = VarSchema::from_vars(variables.iter().cloned());
+                for (variable, _) in aggregates {
+                    schema.push(variable.clone());
+                }
+                schema
+            }
+            GraphPattern::PropertyFunction(call) => {
+                let mut schema = VarSchema::new();
+                for term in call.subject_args.iter().chain(&call.object_args) {
+                    reference_term(term, &mut schema);
+                }
+                schema
+            }
+        }
+    }
+
+    // ── A deterministic shape generator ────────────────────────────────────────────
+
+    const NAMES: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
+
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 30,
+            }
+        }
+
+        fn choose(&mut self, options: usize) -> usize {
+            let draw = crate::test_rng::splitmix64_next(&mut self.state);
+            usize::try_from(draw % options as u64).expect("a choice fits usize")
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+
+        fn variable(&mut self) -> Variable {
+            Variable::new(NAMES[self.choose(NAMES.len())])
+        }
+
+        fn variables(&mut self) -> Vec<Variable> {
+            (0..self.choose(4)).map(|_| self.variable()).collect()
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("http://example.org/{local}"))
+    }
+
+    fn predicate(choices: &mut Choices) -> NamedNodePattern {
+        if choices.choose(3) == 0 {
+            NamedNodePattern::Variable(choices.variable())
+        } else {
+            NamedNodePattern::NamedNode(iri("p"))
+        }
+    }
+
+    fn term(choices: &mut Choices) -> TermPattern {
+        match choices.choose(if choices.budget > 0 { 4 } else { 3 }) {
+            0 => TermPattern::NamedNode(iri("n")),
+            1 | 2 => TermPattern::Variable(choices.variable()),
+            _ => {
+                choices.budget -= 1;
+                TermPattern::Triple(Child::new(triple(choices)))
+            }
+        }
+    }
+
+    fn triple(choices: &mut Choices) -> TriplePattern {
+        TriplePattern {
+            subject: term(choices),
+            predicate: predicate(choices),
+            object: term(choices),
+        }
+    }
+
+    fn aggregate(choices: &mut Choices) -> (Variable, AggregateExpression) {
+        (
+            choices.variable(),
+            AggregateExpression::new(
+                AggregateFunction::Count,
+                Vec::new(),
+                Vec::new(),
+                Vec::new(),
+                false,
+            )
+            .expect("a bare COUNT is a well-formed aggregate"),
+        )
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return GraphPattern::Bgp {
+                patterns: vec![triple(choices)],
+            };
+        }
+        let expression = Expression::Variable(Variable::new("v"));
+        match choices.choose(20) {
+            0 | 1 => GraphPattern::Bgp {
+                patterns: (0..choices.choose(3)).map(|_| triple(choices)).collect(),
+            },
+            2 => GraphPattern::Path {
+                subject: term(choices),
+                path: PropertyPathExpression::NamedNode(iri("p")),
+                object: term(choices),
+            },
+            3 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            4 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: None,
+            },
+            5 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            6 => GraphPattern::Union {
+                arms: Chain::try_from(
+                    (0..2 + choices.choose(2))
+                        .map(|_| pattern(choices))
+                        .collect::<Vec<_>>(),
+                )
+                .expect("at least two arms"),
+            },
+            7 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            8 => GraphPattern::Filter {
+                expr: expression,
+                inner: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::OrderBy {
+                inner: Child::new(pattern(choices)),
+                expression: Vec::new(),
+            },
+            10 => GraphPattern::Distinct {
+                inner: Child::new(pattern(choices)),
+            },
+            11 => GraphPattern::Reduced {
+                inner: Child::new(pattern(choices)),
+            },
+            12 => GraphPattern::Slice {
+                inner: Child::new(pattern(choices)),
+                start: 0,
+                length: None,
+            },
+            13 => GraphPattern::Graph {
+                name: predicate(choices),
+                inner: Child::new(pattern(choices)),
+            },
+            14 => GraphPattern::Service {
+                name: NamedNodePattern::NamedNode(iri("endpoint")),
+                inner: Child::new(pattern(choices)),
+                silent: false,
+            },
+            15 => GraphPattern::Extend {
+                inner: Child::new(pattern(choices)),
+                variable: choices.variable(),
+                expression,
+            },
+            16 => GraphPattern::Unfold {
+                inner: Child::new(pattern(choices)),
+                expression,
+                element: choices.variable(),
+                companion: (choices.choose(2) == 0).then(|| choices.variable()),
+            },
+            17 => GraphPattern::Values {
+                variables: choices.variables(),
+                bindings: Vec::new(),
+            },
+            18 => GraphPattern::Project {
+                inner: Child::new(pattern(choices)),
+                variables: choices.variables(),
+            },
+            19 => GraphPattern::Group {
+                inner: Child::new(pattern(choices)),
+                variables: choices.variables(),
+                aggregates: (0..choices.choose(3)).map(|_| aggregate(choices)).collect(),
+            },
+            _ => GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: "http://example.org/rel".to_owned(),
+                subject_args: (0..choices.choose(3)).map(|_| term(choices)).collect(),
+                object_args: (0..choices.choose(3)).map(|_| term(choices)).collect(),
+            }),
+        }
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// The fold derives exactly the schema the recursion derives — the same columns in
+    /// the same order — for every generated shape.
+    #[test]
+    fn the_fold_agrees_with_its_recursive_reference_on_generated_shapes() {
+        let mut widths = std::collections::BTreeSet::new();
+        for seed in 0..500_u64 {
+            let mut choices = Choices::new(seed);
+            let shape = pattern(&mut choices);
+            let ours = syntactic_schema(&shape);
+            let expected = reference(&shape);
+            assert_eq!(*ours, expected, "seed {seed}: {shape:?}");
+            assert_eq!(ours.vars(), expected.vars(), "seed {seed}: {shape:?}");
+            widths.insert(ours.len());
+        }
+        assert!(
+            widths.len() > 3,
+            "the generator produces schemas of several widths ({widths:?})"
+        );
+    }
+
+    /// A pattern under a hundred thousand `DISTINCT`s, a join spine of that height with
+    /// a fresh column at every level, and a quoted triple nested a hundred thousand deep
+    /// each derive their schema on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_shape_is_derived_on_a_128_kib_thread() {
+        const DEPTH: usize = 100_000;
+        let (shallow, wide, quoted) = std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let leaf = || GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::Variable(Variable::new("s")),
+                        predicate: NamedNodePattern::NamedNode(iri("p")),
+                        object: TermPattern::Variable(Variable::new("o")),
+                    }],
+                };
+                let mut distinct = leaf();
+                let mut spine = leaf();
+                let mut term = TermPattern::Variable(Variable::new("deep"));
+                for level in 0..DEPTH {
+                    distinct = GraphPattern::Distinct {
+                        inner: Child::new(distinct),
+                    };
+                    spine = GraphPattern::Join {
+                        left: Child::new(spine),
+                        right: Child::new(GraphPattern::Extend {
+                            inner: Child::new(leaf()),
+                            variable: Variable::new(format!("x{level}")),
+                            expression: Expression::Variable(Variable::new("s")),
+                        }),
+                    };
+                    term = TermPattern::Triple(Child::new(TriplePattern {
+                        subject: TermPattern::NamedNode(iri("n")),
+                        predicate: NamedNodePattern::NamedNode(iri("p")),
+                        object: term,
+                    }));
+                }
+                let quoted = GraphPattern::Bgp {
+                    patterns: vec![TriplePattern {
+                        subject: TermPattern::Variable(Variable::new("s")),
+                        predicate: NamedNodePattern::Variable(Variable::new("p")),
+                        object: term,
+                    }],
+                };
+                (
+                    syntactic_schema(&distinct).vars().to_vec(),
+                    syntactic_schema(&spine).len(),
+                    syntactic_schema(&quoted).vars().to_vec(),
+                )
+            })
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned");
+        assert_eq!(shallow, [Variable::new("s"), Variable::new("o")]);
+        assert_eq!(wide, 2 + DEPTH);
+        assert_eq!(
+            quoted,
+            [
+                Variable::new("s"),
+                Variable::new("p"),
+                Variable::new("deep")
+            ]
+        );
     }
 }

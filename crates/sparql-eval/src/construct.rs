@@ -795,7 +795,8 @@ impl MintTracker {
     }
 }
 
-/// Recursively collect every blank-node label inside an owned term value.
+/// Collect every blank-node label inside an owned term value, over a work list of its
+/// nested positions.
 ///
 /// A label already present in `out` is left alone rather than re-inserted: a
 /// `BTreeSet<String>` insert of an already-present key still requires the
@@ -847,7 +848,7 @@ fn collect_value_blank_labels(value: &TermValue, out: &mut BTreeSet<String>) {
 /// decides whether a blank was minted or data-carried. A
 /// [`TermPattern::BlankNode`] position holds a label the mint produced; every
 /// other position's blanks (however deeply nested in a bound triple term) came
-/// from the data. Nested quoted-triple templates recurse position-by-position.
+/// from the data. Nested quoted-triple templates are walked position by position.
 ///
 /// A no-op pass-through when `tracker.enabled` is `false` — see the field's doc
 /// comment for why that is sound, not just fast, for a blank-free template.
@@ -1041,47 +1042,44 @@ fn is_reifies(tp: &TriplePattern) -> bool {
     matches!(&tp.predicate, NamedNodePattern::NamedNode(n) if n.as_str() == RDF_REIFIES)
 }
 
-/// Recursively collect every triple pattern in the `WHERE` algebra tree (every BGP
-/// conjunct, descending through every algebra operator). Order is a stable pre-order
-/// traversal so the dropped set is deterministic.
+/// Collect every triple pattern in the `WHERE` algebra tree (every BGP conjunct,
+/// descending through every algebra operator). Order is a stable pre-order traversal
+/// — a node's conjuncts before those of its children, left before right, a union's
+/// arms in order — so the dropped set is deterministic. The walk keeps its own work
+/// list, so a tree of any depth costs no more machine stack.
 fn collect_where_triples<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
-    match pattern {
-        GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
-        // A property function's argument vectors are argument positions, not triple
-        // patterns: the call matches no triple in the graph, so it contributes nothing
-        // to the reifier-dropping analysis that reads this set.
-        GraphPattern::Path { .. }
-        | GraphPattern::Values { .. }
-        | GraphPattern::Service { .. }
-        | GraphPattern::PropertyFunction(_) => {}
-        GraphPattern::Join { left, right }
-        | GraphPattern::Lateral { left, right }
-        | GraphPattern::Minus { left, right } => {
-            collect_where_triples(left, out);
-            collect_where_triples(right, out);
-        }
-        GraphPattern::Union { arms } => {
-            for arm in arms {
-                collect_where_triples(arm, out);
+    let mut pending = vec![pattern];
+    while let Some(pattern) = pending.pop() {
+        match pattern {
+            GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
+            // A property function's argument vectors are argument positions, not triple
+            // patterns: the call matches no triple in the graph, so it contributes
+            // nothing to the reifier-dropping analysis that reads this set.
+            GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::Service { .. }
+            | GraphPattern::PropertyFunction(_) => {}
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Minus { left, right }
+            | GraphPattern::LeftJoin { left, right, .. } => {
+                pending.extend([&**right, &**left]);
             }
+            GraphPattern::Union { arms } => pending.extend(arms.iter().rev()),
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            // `UNFOLD` matches no triple in the graph either — it expands a value
+            // already in the solution — so it contributes nothing of its own and is
+            // simply transparent to the walk.
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::Group { inner, .. } => pending.push(inner),
         }
-        GraphPattern::LeftJoin { left, right, .. } => {
-            collect_where_triples(left, out);
-            collect_where_triples(right, out);
-        }
-        GraphPattern::Filter { inner, .. }
-        | GraphPattern::Graph { inner, .. }
-        | GraphPattern::Extend { inner, .. }
-        // `UNFOLD` matches no triple in the graph either — it expands a value
-        // already in the solution — so it contributes nothing of its own and is
-        // simply transparent to the walk.
-        | GraphPattern::Unfold { inner, .. }
-        | GraphPattern::OrderBy { inner, .. }
-        | GraphPattern::Project { inner, .. }
-        | GraphPattern::Distinct { inner }
-        | GraphPattern::Reduced { inner }
-        | GraphPattern::Slice { inner, .. }
-        | GraphPattern::Group { inner, .. } => collect_where_triples(inner, out),
     }
 }
 
@@ -2982,5 +2980,230 @@ mod term_walk_tests {
             assert_eq!(levels, DEPTH);
             assert!(matches!(innermost, TermValue::Blank { label, .. } if label == "d"));
         });
+    }
+}
+
+/// The `WHERE` triple-pattern collection checked against a recursive reference over
+/// generated algebra — the same conjuncts, the same nodes, in the same pre-order — and
+/// over a pattern a hundred thousand operators deep on a thread with a 128 KiB stack.
+#[cfg(test)]
+mod where_walk_tests {
+    use purrdf_sparql_algebra::{
+        Chain, Child, Expression, GraphPattern, NamedNode, NamedNodePattern, PropertyFunctionCall,
+        TermPattern, TriplePattern, Variable,
+    };
+
+    use super::collect_where_triples;
+
+    const EX: &str = "http://example.org/";
+    const DEPTH: usize = 100_000;
+    const SMALL_STACK: usize = 128 * 1024;
+
+    struct Choices {
+        state: u64,
+        budget: usize,
+    }
+
+    impl Choices {
+        const fn new(seed: u64) -> Self {
+            Self {
+                state: seed,
+                budget: 30,
+            }
+        }
+
+        fn choose(&mut self, n: usize) -> usize {
+            let bound = u64::try_from(n).expect("a choice count fits");
+            usize::try_from(crate::test_rng::splitmix64_next(&mut self.state) % bound)
+                .expect("a draw below the count fits")
+        }
+
+        fn spend(&mut self) -> bool {
+            if self.budget == 0 {
+                return false;
+            }
+            self.budget -= 1;
+            true
+        }
+    }
+
+    fn iri(local: &str) -> NamedNode {
+        NamedNode::new_unchecked(format!("{EX}{local}"))
+    }
+
+    // ── The recursive reference ────────────────────────────────────────────────────
+
+    fn reference_collect<'a>(pattern: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
+        match pattern {
+            GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
+            GraphPattern::Path { .. }
+            | GraphPattern::Values { .. }
+            | GraphPattern::Service { .. }
+            | GraphPattern::PropertyFunction(_) => {}
+            GraphPattern::Join { left, right }
+            | GraphPattern::Lateral { left, right }
+            | GraphPattern::Minus { left, right } => {
+                reference_collect(left, out);
+                reference_collect(right, out);
+            }
+            GraphPattern::Union { arms } => {
+                for arm in arms {
+                    reference_collect(arm, out);
+                }
+            }
+            GraphPattern::LeftJoin { left, right, .. } => {
+                reference_collect(left, out);
+                reference_collect(right, out);
+            }
+            GraphPattern::Filter { inner, .. }
+            | GraphPattern::Graph { inner, .. }
+            | GraphPattern::Extend { inner, .. }
+            | GraphPattern::Unfold { inner, .. }
+            | GraphPattern::OrderBy { inner, .. }
+            | GraphPattern::Project { inner, .. }
+            | GraphPattern::Distinct { inner }
+            | GraphPattern::Reduced { inner }
+            | GraphPattern::Slice { inner, .. }
+            | GraphPattern::Group { inner, .. } => reference_collect(inner, out),
+        }
+    }
+
+    // ── Generators ─────────────────────────────────────────────────────────────────
+
+    /// A triple pattern whose subject names `n`, so two conjuncts are told apart.
+    fn triple(n: usize) -> TriplePattern {
+        TriplePattern {
+            subject: TermPattern::Variable(Variable::new(format!("s{n}"))),
+            predicate: NamedNodePattern::NamedNode(iri("p")),
+            object: TermPattern::Variable(Variable::new("o")),
+        }
+    }
+
+    fn bgp(choices: &mut Choices) -> GraphPattern {
+        GraphPattern::Bgp {
+            patterns: (0..choices.choose(3))
+                .map(|_| triple(choices.choose(5)))
+                .collect(),
+        }
+    }
+
+    fn pattern(choices: &mut Choices) -> GraphPattern {
+        if !choices.spend() {
+            return bgp(choices);
+        }
+        match choices.choose(12) {
+            0 | 1 => bgp(choices),
+            2 => GraphPattern::Join {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            3 => GraphPattern::LeftJoin {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+                expression: None,
+            },
+            4 => GraphPattern::Lateral {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            5 => GraphPattern::Minus {
+                left: Child::new(pattern(choices)),
+                right: Child::new(pattern(choices)),
+            },
+            6 => GraphPattern::Union {
+                arms: Chain::new(
+                    pattern(choices),
+                    pattern(choices),
+                    (0..choices.choose(2)).map(|_| pattern(choices)),
+                ),
+            },
+            7 => GraphPattern::Filter {
+                expr: Expression::Exists(Child::new(pattern(choices))),
+                inner: Child::new(pattern(choices)),
+            },
+            8 => GraphPattern::Graph {
+                name: NamedNodePattern::NamedNode(iri("g")),
+                inner: Child::new(pattern(choices)),
+            },
+            9 => GraphPattern::Project {
+                inner: Child::new(GraphPattern::Distinct {
+                    inner: Child::new(pattern(choices)),
+                }),
+                variables: vec![Variable::new("o")],
+            },
+            10 => GraphPattern::Service {
+                name: NamedNodePattern::NamedNode(iri("endpoint")),
+                inner: Child::new(pattern(choices)),
+                silent: false,
+            },
+            _ => GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: format!("{EX}rel"),
+                subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+                object_args: vec![],
+            }),
+        }
+    }
+
+    /// The nodes `collected` names, by address, so two collections are compared on
+    /// WHICH conjuncts they found and not only on equal-looking ones.
+    fn addresses(collected: &[&TriplePattern]) -> Vec<usize> {
+        collected
+            .iter()
+            .map(|triple| std::ptr::from_ref(*triple) as usize)
+            .collect()
+    }
+
+    // ── The tests ──────────────────────────────────────────────────────────────────
+
+    /// The work list finds the conjuncts the recursion finds, the same nodes in the
+    /// same order, for every generated pattern.
+    #[test]
+    fn the_collection_agrees_with_its_reference_on_generated_patterns() {
+        let mut nonempty = 0;
+        for seed in 0..400_u64 {
+            let mut choices = Choices::new(seed);
+            let shape = pattern(&mut choices);
+            let mut ours = Vec::new();
+            collect_where_triples(&shape, &mut ours);
+            let mut expected = Vec::new();
+            reference_collect(&shape, &mut expected);
+            assert_eq!(ours, expected, "seed {seed}: {shape:?}");
+            assert_eq!(addresses(&ours), addresses(&expected), "seed {seed}");
+            nonempty += usize::from(ours.len() > 1);
+        }
+        assert!(
+            nonempty > 100,
+            "the generator produces patterns with several conjuncts ({nonempty} of 400)"
+        );
+    }
+
+    /// A hundred thousand joins, each holding one conjunct on its left, are collected
+    /// in pre-order — outermost first — on a 128 KiB stack.
+    #[test]
+    fn a_hundred_thousand_level_pattern_is_collected_on_a_128_kib_stack() {
+        std::thread::Builder::new()
+            .stack_size(SMALL_STACK)
+            .spawn(|| {
+                let mut shape = GraphPattern::Bgp {
+                    patterns: vec![triple(0)],
+                };
+                for level in 1..=DEPTH {
+                    shape = GraphPattern::Join {
+                        left: Child::new(GraphPattern::Bgp {
+                            patterns: vec![triple(level)],
+                        }),
+                        right: Child::new(shape),
+                    };
+                }
+                let mut collected = Vec::new();
+                collect_where_triples(&shape, &mut collected);
+                assert_eq!(collected.len(), DEPTH + 1);
+                assert_eq!(collected[0], &triple(DEPTH));
+                assert_eq!(collected[1], &triple(DEPTH - 1));
+                assert_eq!(collected[DEPTH], &triple(0));
+            })
+            .expect("spawn")
+            .join()
+            .expect("the 128 KiB thread returned");
     }
 }
