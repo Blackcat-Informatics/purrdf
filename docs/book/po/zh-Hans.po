@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-28T04:13:56-06:00\n"
+"POT-Creation-Date: 2026-09-28T05:31:31-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -1529,8 +1529,9 @@ msgid ""
 "      signal,\n"
 "    });\n"
 "  } catch (error) {\n"
-"    // A network error is a transport failure; a throw would report a "
-"handler bug (a fault).\n"
+"    // A network error is the endpoint's failure; a throw would be reported "
+"as this\n"
+"    // handler's own fault instead.\n"
 "    return { kind: \"transport\", message: String(error) };\n"
 "  }\n"
 "}\n"
@@ -1577,7 +1578,8 @@ msgstr ""
 "      signal,\n"
 "    });\n"
 "  } catch (error) {\n"
-"    // 网络错误是传输失败；抛出异常则会报告处理函数的缺陷（故障）。\n"
+"    // 网络错误是端点的失败；抛出异常则会被报告为\n"
+"    // 此处理函数自身的故障。\n"
 "    return { kind: \"transport\", message: String(error) };\n"
 "  }\n"
 "}\n"
@@ -1600,7 +1602,7 @@ msgstr ""
 "for (const row of rows) console.log(row.s.value, row.x.value);\n"
 "```"
 
-#: src/getting-started/javascript.md:212
+#: src/getting-started/javascript.md:213
 msgid ""
 "A `ServiceCatalog` passed as `catalog` authorizes every request — every "
 "`SERVICE`, every `LOAD` source and every location a `LOAD` is redirected to "
@@ -1626,7 +1628,7 @@ msgstr ""
 "败，而 `LOAD SILENT` 会在失败时成功返回、不加载任何内容。本包抛出的每个错误都"
 "以 `error.code` 携带其稳定代码。"
 
-#: src/getting-started/javascript.md:224
+#: src/getting-started/javascript.md:225
 msgid ""
 "In a browser, the remote endpoint's CORS policy governs whether `fetch` can "
 "read its answer: an endpoint that does not allow the page's origin surfaces "
@@ -1638,7 +1640,7 @@ msgstr ""
 "源的端点会表现为网络错误，上面的处理函数把它报告为传输失败。若某个端点可能不"
 "可达、且其结果行可有可无，请写 `SERVICE SILENT`。"
 
-#: src/getting-started/javascript.md:229
+#: src/getting-started/javascript.md:230
 msgid ""
 "A variable endpoint, `SERVICE ?e { … }`, answers every row with the `?e` of "
 "the endpoint that produced it. `?e` must be bound in every solution that "
@@ -1696,11 +1698,11 @@ msgstr ""
 "`SILENT` 吸收。错误消息会给出改写方式：在该子句之前绑定 `?e`，例如 `?s "
 "ex:endpoint ?e . SERVICE ?e { … }`。"
 
-#: src/getting-started/javascript.md:261
+#: src/getting-started/javascript.md:262
 msgid "Yielding, cancellation and concurrency"
 msgstr "让出、取消与并发"
 
-#: src/getting-started/javascript.md:263
+#: src/getting-started/javascript.md:264
 msgid ""
 "A job gives the event loop one turn every `yieldEveryPolls` governor polls "
 "(65 536 by default; `0` yields at every poll). Every turn is one "
@@ -1715,7 +1717,7 @@ msgstr ""
 "值阶段会让出：冻结数据集与序列化结果都会一次运行到底，`evidence.async` 报告每"
 "个阶段的耗时。"
 
-#: src/getting-started/javascript.md:269
+#: src/getting-started/javascript.md:270
 msgid ""
 "`signal: AbortSignal` cancels a job at its next yield or host effect. On the "
 "governed twins, `deadlineMs` includes the time spent waiting for the "
@@ -1726,7 +1728,7 @@ msgstr ""
 "governor 管控的孪生方法上，`deadlineMs` 包含等待处理函数的时间；一次 "
 "governor 触发——包括截止时间与取消——是一个结果，而不是一次 Promise 拒绝。"
 
-#: src/getting-started/javascript.md:273
+#: src/getting-started/javascript.md:274
 msgid ""
 "A query reads its own snapshot. One asynchronous update of a dataset may be "
 "in flight at a time: another begun meanwhile is refused with `native-sparql-"
@@ -1739,7 +1741,7 @@ msgstr ""
 "只有在其运行期间数据集未被修改时，更新才会应用。"
 "`configureAsync({ maxConcurrentJobs })` 限定同时在途的作业数（默认 16）。"
 
-#: src/getting-started/javascript.md:278
+#: src/getting-started/javascript.md:279
 msgid ""
 "Each job evaluates on its own stack region, exactly as large as the module's "
 "own shadow stack — the stack the synchronous lane runs on; no option sizes "
@@ -1752,7 +1754,7 @@ msgstr ""
 "作业用到了多深；对该区域而言嵌套过深的请求，对同步通道也同样过深：两者都以同"
 "一个带类型的栈拒绝错误失败，措辞一字不差。"
 
-#: src/getting-started/javascript.md:283
+#: src/getting-started/javascript.md:284
 msgid ""
 "A region is the size of the shadow stack only. V8 gives a job's own call "
 "stack the same size as the synchronous lane's (984 KiB by default, set for "
@@ -1768,7 +1770,7 @@ msgstr ""
 "sparql-host-stack-exhausted`，两条通道都会在求值之前拒绝：请减少请求的嵌套深"
 "度。解析把请求的嵌套保存在线性内存中，不消耗这两种栈。"
 
-#: src/getting-started/javascript.md:290
+#: src/getting-started/javascript.md:291
 msgid ""
 "A job whose frames overwrite the canary word at its region's base fails with "
 "a fault naming the region. A trap, a Rust panic or a JavaScript exception "
@@ -1786,11 +1788,11 @@ msgstr ""
 "（`free()`、`[Symbol.dispose]()`）什么也不做。只有全新的 JavaScript realm（新"
 "的页面、Worker isolate 或进程）才能再次加载本包。"
 
-#: src/getting-started/javascript.md:298
+#: src/getting-started/javascript.md:299
 msgid "Cloudflare Workers"
 msgstr "Cloudflare Workers"
 
-#: src/getting-started/javascript.md:300
+#: src/getting-started/javascript.md:301
 msgid ""
 "`@blackcatinformatics/purrdf/cloudflare` provides "
 "`createFetchServiceResolver`, `createFetchLoadResolver` and "
@@ -1858,7 +1860,7 @@ msgstr ""
 "`LOAD` 解析器把重定向交回作业，由作业在每一跳之前按目录重新为该位置鉴权，最多"
 "五跳。一个完整的 Worker："
 
-#: src/getting-started/javascript.md:338
+#: src/getting-started/javascript.md:339
 msgid ""
 "```js worker-recipe\n"
 "import wasm from \"@blackcatinformatics/purrdf/purrdf_wasm_bg.wasm\";\n"
@@ -1940,7 +1942,7 @@ msgstr ""
 "};\n"
 "```"
 
-#: src/getting-started/javascript.md:374
+#: src/getting-started/javascript.md:375
 msgid ""
 "Workers limits how many subrequests one invocation may make, and "
 "`maxRemoteRequests` is the exact control for it: every `SERVICE` request and "
@@ -1973,7 +1975,7 @@ msgstr ""
 "在 CPU 密集的工作中触发；异步通道则在每一次让出和每一次宿主请求时检查截止时"
 "间。"
 
-#: src/getting-started/javascript.md:391
+#: src/getting-started/javascript.md:392
 msgid ""
 "The package [README](https://github.com/Blackcat-Informatics/purrdf/tree/"
 "main/crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
@@ -1983,11 +1985,11 @@ msgstr ""
 "crates/rdf-wasm/js#asynchronous-queries-federation-and-the-cloudflare-"
 "adapter) 是这些约定的完整参考。"
 
-#: src/getting-started/javascript.md:395
+#: src/getting-started/javascript.md:396
 msgid "Scope and current limitations"
 msgstr "范围与当前限制"
 
-#: src/getting-started/javascript.md:397
+#: src/getting-started/javascript.md:398
 msgid ""
 "**In-memory only.** SPARQL queries run over the in-memory dataset. The "
 "synchronous methods install no `SERVICE` or `LOAD` source, so there a remote "
@@ -1999,7 +2001,7 @@ msgstr ""
 "或 `LOAD` 来源，因此在那里，远程 `SERVICE` 或 `LOAD` 会显式失败，除非写了 "
 "`SILENT`；异步孪生方法只能经由宿主传入的处理函数到达远程端点。"
 
-#: src/getting-started/javascript.md:402
+#: src/getting-started/javascript.md:403
 msgid ""
 "**Triple terms per format.** `serialize` is the writer-native lane: an "
 "object-position quoted-triple term and the RDF 1.2 statement layer survive "
@@ -2017,11 +2019,11 @@ msgstr ""
 "因此把携带三元组项的数据集序列化为二者之一时会**抛出异常**，而不是静默丢弃这"
 "一层。单图目标格式（Turtle、N-Triples、RDF/XML）只输出默认图。"
 
-#: src/getting-started/javascript.md:411
+#: src/getting-started/javascript.md:412
 msgid "Building from source"
 msgstr "从源码构建"
 
-#: src/getting-started/javascript.md:413
+#: src/getting-started/javascript.md:414
 msgid ""
 "The Rust cdylib lives in [`crates/rdf-wasm`](https://github.com/Blackcat-"
 "Informatics/purrdf/tree/main/crates/rdf-wasm); the published ESM package is "
@@ -2030,15 +2032,15 @@ msgstr ""
 "Rust cdylib 位于 [`crates/rdf-wasm`](https://github.com/Blackcat-Informatics/"
 "purrdf/tree/main/crates/rdf-wasm)；发布的 ESM 包由它生成："
 
-#: src/getting-started/javascript.md:418
+#: src/getting-started/javascript.md:419
 msgid "# release wasm + wasm-bindgen ESM bindings → js/pkg/\n"
 msgstr "# 发布版 wasm + wasm-bindgen ESM 绑定 → js/pkg/\n"
 
-#: src/getting-started/javascript.md:419
+#: src/getting-started/javascript.md:420
 msgid "# the above + TypeScript, Node, and packed-tarball gates\n"
 msgstr "# 上述内容 + TypeScript、Node 与打包 tarball 门禁\n"
 
-#: src/getting-started/javascript.md:422
+#: src/getting-started/javascript.md:423
 msgid ""
 "This requires the `wasm32-unknown-unknown` Rust target and a `wasm-bindgen-"
 "cli` pinned to the crate's `wasm-bindgen` version."
