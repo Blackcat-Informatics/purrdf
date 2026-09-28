@@ -118,6 +118,36 @@ Design pillars:
 - **Hard-fail** — an out-of-scope algebra node or unimplemented builtin is a
   typed `EvalError::Unsupported`, never a partial or wrong answer.
 
+## How it evaluates
+
+- **A plan arena per evaluation.** Every entry builds a dense tree over the
+  query's algebra whose node ids are the governor ledger's own ordinals, so
+  charge receipts, `LIMIT` pushdown ceilings, `EXISTS` sites and the `SERVICE`
+  endpoint index are indexed tables rather than maps keyed by node address.
+- **Expressions compiled once, run per row.** Each `FILTER`, `BIND`, `OPTIONAL`
+  condition, `ORDER BY` key, aggregate argument and `UNFOLD` expression is
+  compiled into a flat program stored on its plan site. An operator call links
+  the program's variables to solution columns, its constants to a pool and its
+  constant regular expressions once; each row then runs the program on an
+  explicit value stack. Kleene `&&`/`||`, `IF`/`COALESCE`/`IN` laziness, `BNODE`
+  memoization and the order of every charge are the SPARQL evaluation order.
+- **No walk recurses over its input's depth.** Nested triple terms, property
+  paths (compiled into a flat path program with reach caches indexed by
+  program op), algebra analyses and rewrites, CONSTRUCT templates and
+  substitution all run over explicit work lists, so how deeply a request or a
+  term nests is bounded by memory and by the governors, not by the thread's
+  stack.
+- **One per-row checkpoint.** `FILTER`, `BIND`, `UNFOLD` and aggregate loops pass
+  every row through the same checkpoint: a latched trip is observed first, and a
+  loop that forks across threads forks only the rows the remaining fuel admits
+  and commits them in source order, so it trips on the row the sequential loop
+  would and spends the same fuel.
+
+The mechanisms are measured, not asserted: `benches/expr_vm.rs`,
+`pattern_dispatch.rs`, `deep_nesting.rs`, `governed_eval.rs` and
+`query_eval.rs` report the expression, dispatch, nesting and governed-loop costs
+(report-only).
+
 The engine is gated by the W3C SPARQL 1.1 and 1.2 conformance suites (run
 through the workspace harness), carries zero oxigraph-family dependencies, and
 builds for `wasm32-unknown-unknown`.
