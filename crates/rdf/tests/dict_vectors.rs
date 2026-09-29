@@ -28,11 +28,11 @@
 use purrdf_core::FastMap;
 use std::path::{Path, PathBuf};
 
-use ciborium::value::Value;
 use purrdf_gts::compact::{DEFAULT_DICT_NAME, DictPlan, DictStrategy};
 use purrdf_gts::model::Graph;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{iter_items, map_get};
+use purrdf_lex::cbor::Value;
 use purrdf_rdf::gts_certify::{compact_and_certify, refold_digest, verify_compaction};
 use purrdf_rdf::gts_dict_vectors::{
     MULTI_DICT_NAMES, TIMESTAMP, VECTOR_ZSTD_LEVEL, authorship_key, expected_fold_json,

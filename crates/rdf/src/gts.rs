@@ -149,9 +149,9 @@ pub fn flattened_dataset_from_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ciborium::value::Value;
     use purrdf_gts::model::{Graph, Term, TermKind};
     use purrdf_gts::writer::Writer;
+    use purrdf_lex::cbor::Value;
 
     fn private_lang_named_graph() -> Graph {
         let mut graph = Graph::default();

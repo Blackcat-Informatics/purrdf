@@ -121,7 +121,6 @@ purrdf-xsd = { path = "crates/xsd", version = "2.0.2" }
 proc-macro2 = { version = "1", features = ["span-locations"] }
 syn = { version = "2", features = ["full", "visit"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
-ciborium = "0.2"
 # Argument parsing for the `purrdf` CLI (native-only binary crate `crates/cli`).
 # `derive` supplies the `Parser`/`Subcommand`/`ValueEnum` macros the CLI models
 # its command tree with. Not a library dependency, so the wasm gate (which

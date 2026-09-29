@@ -34,13 +34,14 @@
 //! seen — is an `Err`, never a silent skip. Only the merely out-of-order case
 //! resolves.
 
+use crate::gts_core::metadata_value_from_cbor;
 use crate::gts_import_blobs::BlobCollector;
-use ciborium::value::Value;
 use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_gts::model::{Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
 use purrdf_gts::reader::{BlobPayload, BlobRefusal, FrameContext};
 use purrdf_gts::segment_decode::{ResolvedSink, SegmentResolver};
 use purrdf_hash::hex;
+use purrdf_lex::cbor::Value;
 
 use crate::{
     BlankScope, GtsBundle, RdfDatasetBuilder, RdfDiagnostic, RdfEnvelope, RdfLiteral, RdfLocation,
@@ -434,38 +435,6 @@ impl ResolvedSink for SinkImporter<'_> {
                 None => location,
             }
         }))
-    }
-}
-
-/// Convert a CBOR [`Value`] into the crate's [`RdfMetadataValue`].
-fn metadata_value_from_cbor(value: &Value) -> RdfMetadataValue {
-    match value {
-        Value::Integer(integer) => RdfMetadataValue::Integer(i128::from(*integer)),
-        Value::Bytes(bytes) => RdfMetadataValue::Bytes(bytes.clone()),
-        Value::Float(value) => RdfMetadataValue::Float(*value),
-        Value::Text(value) => RdfMetadataValue::Text(value.clone()),
-        Value::Bool(value) => RdfMetadataValue::Bool(*value),
-        Value::Null => RdfMetadataValue::Null,
-        Value::Tag(tag, value) => RdfMetadataValue::Tagged {
-            tag: *tag,
-            value: Box::new(metadata_value_from_cbor(value)),
-        },
-        Value::Array(values) => {
-            RdfMetadataValue::Array(values.iter().map(metadata_value_from_cbor).collect())
-        }
-        Value::Map(entries) => RdfMetadataValue::Map(
-            entries
-                .iter()
-                .map(|(key, value)| {
-                    let key = match key {
-                        Value::Text(text) => text.clone(),
-                        other => format!("{other:?}"),
-                    };
-                    (key, metadata_value_from_cbor(value))
-                })
-                .collect(),
-        ),
-        other => RdfMetadataValue::Opaque(format!("{other:?}")),
     }
 }
 

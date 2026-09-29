@@ -29,8 +29,8 @@
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
-use ciborium::value::{Integer, Value};
 use purrdf_ed25519::{SigningKey, VerifyingKey};
+use purrdf_lex::cbor::{Integer, Value};
 use sha2::{Digest, Sha256};
 
 use purrdf_gts::compact::{self, CompactionParams, DictPlan};
@@ -365,7 +365,7 @@ fn try_effective_digest(g: &Graph) -> Result<String, CertifyError> {
 /// A term-id resolved to its own `value` string, or `None` when the id is
 /// out of range or the resolved term carries no value.
 ///
-/// `ciborium::Value` is not `Hash`/`Eq` — term values are always plain
+/// A CBOR [`Value`] is not `Hash`/`Eq` — term values are always plain
 /// strings (`Term::value: Option<String>`), so resolving straight to
 /// `String` lets [`term_suppressed_values`]/[`quad_suppressed_targets`] use
 /// ordinary hash sets instead of a CBOR-aware comparator.
@@ -920,12 +920,13 @@ impl CompactionCertificate {
     /// Decode the form written by [`Self::to_canonical_cbor`].
     ///
     /// # Errors
-    /// Returns [`CertifyError::Cbor`] when `bytes` is not valid CBOR, is not a
-    /// map, or is missing/misshapes a required field.
+    /// Returns [`CertifyError::Cbor`] when `bytes` is not exactly one
+    /// well-formed CBOR item (trailing bytes included), is not a map, or is
+    /// missing/misshapes a required field.
     pub fn from_canonical_cbor(bytes: &[u8]) -> Result<Self, CertifyError> {
-        let value: Value = ciborium::de::from_reader(bytes)
+        let value = purrdf_lex::cbor::decode(bytes, purrdf_lex::cbor::Limits::DEFAULT)
             .map_err(|err| CertifyError::Cbor(format!("cannot parse certificate CBOR: {err}")))?;
-        let Value::Map(entries) = value else {
+        let Ok(entries) = value.into_map() else {
             return Err(CertifyError::Cbor(
                 "certificate CBOR root must be a map".to_string(),
             ));

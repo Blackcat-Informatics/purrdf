@@ -13,10 +13,10 @@
 //! (GTS metadata, suppressions) is passed in explicitly as an [`RdfLookaside`]
 //! (C0.6: it lives in the bundle envelope, not the hot graph).
 
-use ciborium::value::Value;
 use purrdf_gts::codec::CodecError;
 use purrdf_gts::model::{Graph, Suppression, Term, TermKind};
 use purrdf_gts::writer::Writer;
+use purrdf_lex::cbor::Value;
 
 use crate::ir::RdfDataset;
 use crate::{
@@ -358,9 +358,9 @@ fn metadata_value_to_cbor(value: &RdfMetadataValue) -> Value {
     match value {
         RdfMetadataValue::Null => Value::Null,
         RdfMetadataValue::Bool(b) => Value::Bool(*b),
-        RdfMetadataValue::Integer(i) => match ciborium::value::Integer::try_from(*i) {
+        RdfMetadataValue::Integer(i) => match purrdf_lex::cbor::Integer::try_from(*i) {
             Ok(integer) => Value::Integer(integer),
-            Err(_) => Value::Integer(ciborium::value::Integer::from(if *i < 0 {
+            Err(_) => Value::Integer(purrdf_lex::cbor::Integer::from(if *i < 0 {
                 i64::MIN
             } else {
                 i64::MAX

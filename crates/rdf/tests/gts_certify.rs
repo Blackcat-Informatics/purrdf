@@ -7,7 +7,6 @@
 
 use purrdf_core::FastMap;
 
-use ciborium::value::Value;
 use purrdf_ed25519::SigningKey;
 use purrdf_gts::compact::{DictPlan, DictStrategy, detached_signature_proof};
 use purrdf_gts::mmr;
@@ -16,6 +15,7 @@ use purrdf_gts::reader::read;
 use purrdf_gts::stream;
 use purrdf_gts::wire;
 use purrdf_gts::writer::{Writer, term_to_wire};
+use purrdf_lex::cbor::Value;
 use purrdf_rdf::CanonError;
 use purrdf_rdf::gts_certify::{
     CertifyError, CompactionCertificate, compact_and_certify, compose, effective_digest,
@@ -782,6 +782,33 @@ fn certificate_canonical_cbor_round_trips_and_is_deterministic() {
         round_tripped, cert,
         "from_canonical_cbor(to_canonical_cbor(cert)) must be identity"
     );
+}
+
+#[test]
+fn certificate_cbor_with_trailing_bytes_is_refused_and_the_exact_item_is_accepted() {
+    let source = source_with_content(1, "author", 4, None);
+    let (_pack, cert) = compact_and_certify(
+        &source,
+        DictPlan::undicted(),
+        TIMESTAMP,
+        false,
+        (fixed_key(7), "pack".to_string()),
+    )
+    .expect("compact_and_certify succeeds");
+    let exact = cert.to_canonical_cbor();
+
+    let mut trailing = exact.clone();
+    trailing.push(0x00);
+    let refused = CompactionCertificate::from_canonical_cbor(&trailing)
+        .expect_err("a byte after the certificate item is not the canonical form");
+    assert!(
+        matches!(refused, CertifyError::Cbor(ref message) if message.contains("cannot parse certificate CBOR")),
+        "trailing bytes are a CBOR parse refusal: {refused:?}"
+    );
+
+    let accepted = CompactionCertificate::from_canonical_cbor(&exact)
+        .expect("the exact item, with nothing after it, parses");
+    assert_eq!(accepted, cert);
 }
 
 // ---------------------------------------------------------------------------

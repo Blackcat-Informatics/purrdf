@@ -207,7 +207,7 @@ pub fn multi_dict_pack() -> Vec<u8> {
     w.add_frame_with_options(
         "meta",
         FrameOptions {
-            payload: Some(ciborium::value::Value::Map(vec![(
+            payload: Some(purrdf_lex::cbor::Value::Map(vec![(
                 "vector".into(),
                 "33-multi-dict".into(),
             )])),
@@ -348,8 +348,8 @@ fn blobs_json(graph: &Graph) -> Json {
             .iter()
             .find(|(candidate, _)| candidate == digest)
             .and_then(|(_, metadata)| match metadata {
-                ciborium::value::Value::Map(entries) => match map_get(entries, "mt") {
-                    Some(ciborium::value::Value::Text(value)) => Some(value.clone()),
+                purrdf_lex::cbor::Value::Map(entries) => match map_get(entries, "mt") {
+                    Some(purrdf_lex::cbor::Value::Text(value)) => Some(value.clone()),
                     _ => None,
                 },
                 _ => None,

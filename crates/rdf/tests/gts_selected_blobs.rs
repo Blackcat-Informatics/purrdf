@@ -3,11 +3,11 @@
 
 //! Native import with bounded selected payloads: product-independent carrier contracts.
 
-use ciborium::Value;
 use purrdf_gts::model::{Term, TermKind};
 use purrdf_gts::reader::FrameContext;
 use purrdf_gts::wire::digest_str;
 use purrdf_gts::writer::Writer;
+use purrdf_lex::cbor::Value;
 use purrdf_rdf::{
     DEFAULT_MAX_METADATA_BYTES, GtsBlobLimits, GtsBlobSelector, import_gts_events,
     import_gts_events_with_blobs,
@@ -431,9 +431,9 @@ fn container_with_header_magic(magic: &str) -> Vec<u8> {
     // diagnostic that would mask the very admission this test is probing.
     let authored = Writer::new("generic").into_bytes();
 
-    let mut cursor = std::io::Cursor::new(&authored[..]);
-    let item: Value = ciborium::de::from_reader(&mut cursor).expect("header item");
-    let header_len = usize::try_from(cursor.position()).expect("header fits in usize");
+    let (item, header_len) =
+        purrdf_lex::cbor::decode_prefix(&authored, purrdf_lex::cbor::Limits::DEFAULT)
+            .expect("header item");
     let tag = match &item {
         Value::Tag(tag, _) => Some(*tag),
         _ => None,
@@ -458,8 +458,7 @@ fn container_with_header_magic(magic: &str) -> Vec<u8> {
         Some(tag) => Value::Tag(tag, Box::new(rebuilt)),
         None => rebuilt,
     };
-    let mut out = Vec::new();
-    ciborium::ser::into_writer(&rebuilt, &mut out).expect("re-encode header");
+    let mut out = purrdf_lex::cbor::encode(&rebuilt);
     out.extend_from_slice(&authored[header_len..]);
     out
 }
