@@ -24,7 +24,8 @@
 //! Output is available as the `flag`, `basic` and `detailed` formats. The
 //! crate is checked against the official JSON-Schema-Test-Suite for all three
 //! drafts, `optional/` and `optional/format/` included, with no case ignored.
-//! It depends on `serde_json`, `regex`, `purrdf-iri` and `purrdf-hash` only, runs on
+//! Schemas and instances are [`purrdf_lex::json::Value`]s. The crate depends on
+//! `regex` and the PurRDF foundation crates only, runs on
 //! `wasm32-unknown-unknown`, and needs no network.
 //!
 //! # Meta-schemas are the caller's
@@ -41,42 +42,43 @@
 //!
 //! ```
 //! use purrdf_jsonschema::{Metaschemas, OutputFormat, Registry, SchemaError};
-//! use serde_json::{Value, json};
+//! use purrdf_lex::json::{self, Value};
 //!
 //! # fn draft_2020_12() -> Vec<(&'static str, Value)> {
 //! #     purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
 //! #         .iter()
-//! #         .map(|&(uri, text)| (uri, serde_json::from_str(text).unwrap()))
+//! #         .map(|&(uri, text)| (uri, json::read(text).unwrap()))
 //! #         .collect()
 //! # }
 //! // The nine published draft 2020-12 meta-schema documents, as
 //! // `(URI, document)` pairs, from wherever the application keeps them.
 //! let metaschemas = Metaschemas::new(draft_2020_12())?;
+//! let doc = |text: &str| json::read(text).expect("JSON");
 //!
 //! let mut registry = Registry::with_metaschemas(&metaschemas);
 //! registry.add_resource(
 //!     "https://example.org/person.json",
-//!     json!({
+//!     doc(r#"{
 //!         "$schema": "https://json-schema.org/draft/2020-12/schema",
 //!         "type": "object",
 //!         "properties": {"name": {"type": "string"}},
 //!         "required": ["name"],
 //!         "unevaluatedProperties": false
-//!     }),
+//!     }"#),
 //! )?;
 //! let schema = registry.compile("https://example.org/person.json")?;
 //!
-//! assert!(schema.is_valid(&json!({"name": "Ada"})).expect("evaluation"));
-//! assert!(!schema.is_valid(&json!({"name": "Ada", "age": 36})).expect("evaluation"));
+//! assert!(schema.is_valid(&doc(r#"{"name": "Ada"}"#)).expect("evaluation"));
+//! assert!(!schema.is_valid(&doc(r#"{"name": "Ada", "age": 36}"#)).expect("evaluation"));
 //!
-//! let output = schema.evaluate(&json!({"age": 36})).expect("evaluation");
+//! let output = schema.evaluate(&doc(r#"{"age": 36}"#)).expect("evaluation");
 //! let basic = output.to_json(OutputFormat::Basic);
 //! assert_eq!(basic["valid"], false);
 //! assert!(basic["errors"].as_array().is_some_and(|errors| !errors.is_empty()));
 //!
 //! // Without the meta-schemas, the document cannot be checked:
 //! let mut bare = Registry::new();
-//! bare.add_resource("https://example.org/s.json", json!({"type": "string"}))?;
+//! bare.add_resource("https://example.org/s.json", doc(r#"{"type": "string"}"#))?;
 //! assert!(matches!(
 //!     bare.compile("https://example.org/s.json"),
 //!     Err(SchemaError::MissingMetaschema { .. })
@@ -96,8 +98,14 @@
 //!   `$schema` is read in the registry's default dialect (2020-12 unless
 //!   [`Registry::set_default_dialect`] says otherwise). A 2019-09
 //!   `$recursiveRef` other than `"#"` is refused.
-//! * **Numbers are exact.** `1` and `1.0` are equal and both integers;
-//!   `multipleOf` divides in decimal, so `0.0075` is a multiple of `0.0001`.
+//! * **Numbers are exact.** A number is read from the lexeme the document
+//!   wrote ([`purrdf_xsd::json_number`]): `1` and `1.0` are equal and both
+//!   integers; `multipleOf` divides in decimal, so `0.0075` is a multiple of
+//!   `0.0001`.
+//! * **Member names are unique in a schema.** A registered document in which
+//!   an object repeats a member name is refused with
+//!   [`SchemaError::InvalidKeyword`] naming the object; RFC 8259 §4 leaves a
+//!   repeat's meaning open, and reading one occurrence would drop the other.
 //! * **Patterns are ECMA-262** with the `u` flag. [`ecma`] uses `regex` for
 //!   regular patterns and a bounded explicit-stack matcher for lookaround,
 //!   backreferences and scoped modifiers. Unicode properties use vendored
@@ -173,7 +181,7 @@ impl Schema {
     pub fn from_document(
         metaschemas: &Metaschemas,
         uri: &str,
-        document: serde_json::Value,
+        document: purrdf_lex::json::Value,
     ) -> Result<Self, SchemaError> {
         let mut registry = Registry::with_metaschemas(metaschemas);
         registry.add_resource(uri, document)?;

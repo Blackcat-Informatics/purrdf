@@ -21,8 +21,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use purrdf_jsonschema::{Dialect, Metaschemas, Registry, SchemaError};
+use purrdf_lex::json::{self, Value};
 use purrdf_testkit::vectors::{VectorFile, decode_str};
-use serde_json::Value;
 
 const VECTORS: &str = include_str!("boon_differential_vectors.txt");
 const SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/suite");
@@ -68,7 +68,7 @@ fn json_files(root: &Path) -> Vec<PathBuf> {
 fn metaschemas() -> Metaschemas {
     Metaschemas::new(
         purrdf_testkit::jsonschema_metaschemas::all()
-            .map(|(uri, text)| (uri, serde_json::from_str::<Value>(text).expect("JSON"))),
+            .map(|(uri, text)| (uri, json::read(text).expect("JSON"))),
     )
     .expect("the vendored meta-schemas form a set")
 }
@@ -90,8 +90,8 @@ fn suite_registry(metaschemas: &Metaschemas) -> Registry {
         {
             continue;
         }
-        let document: Value =
-            serde_json::from_str(&fs::read_to_string(&path).expect("remote")).expect("remote JSON");
+        let document =
+            json::read(&fs::read_to_string(&path).expect("remote")).expect("remote JSON");
         let dialect = DRAFT_REMOTES
             .iter()
             .find(|(draft, _)| name.starts_with(&format!("{draft}/")))
@@ -136,8 +136,8 @@ fn every_boon_verdict_is_reproduced_or_named() {
         let [source, uri, schema, instance, boon] = fields.as_slice() else {
             panic!("line {}: a record has five fields", record.line);
         };
-        let schema: Value = serde_json::from_str(schema).expect("schema JSON");
-        let instance: Value = serde_json::from_str(instance).expect("instance JSON");
+        let schema = json::read(schema).expect("schema JSON");
+        let instance = json::read(instance).expect("instance JSON");
         let base = if source.starts_with("suite:") {
             &suite
         } else {

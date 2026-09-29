@@ -29,8 +29,9 @@ path = "src/lib.rs"
 name = "purrdf_sparql_results"
 
 [dependencies]
-# The hex digit reader behind the JSON `\uXXXX` escape.
-purrdf-hash = { workspace = true }
+# The workspace's one JSON reader (the SRJ readers' grammar, tree and pull
+# reader) and its string escape law (the SRJ writer's spelling).
+purrdf-lex = { workspace = true }
 purrdf-core = { workspace = true }
 # The IRI/URI value space: validates a caller-supplied `ProvenanceNamespace`
 # namespace IRI as an absolute RFC-3987 IRI (see `model::ProvenanceNamespace::new`).

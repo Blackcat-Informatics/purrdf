@@ -7,7 +7,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::{Arc, Mutex, PoisonError};
 
-use serde_json::Value;
+use purrdf_lex::json::Value;
 
 use crate::compile;
 use crate::dialect::Dialect;
@@ -33,15 +33,18 @@ use crate::schema::Schema;
 ///
 /// ```
 /// use purrdf_jsonschema::{Metaschemas, Schema, SchemaError};
-/// use serde_json::json;
+/// use purrdf_lex::json;
 ///
 /// // A deliberately small custom dialect built on draft-07, which is
 /// // self-describing and so needs nothing else.
-/// let meta = json!({
-///     "$schema": "http://json-schema.org/draft-07/schema#",
-///     "$id": "https://example.org/meta",
-///     "properties": {"type": {"enum": ["string", "number"]}}
-/// });
+/// let meta = json::read(
+///     r#"{
+///         "$schema": "http://json-schema.org/draft-07/schema#",
+///         "$id": "https://example.org/meta",
+///         "properties": {"type": {"enum": ["string", "number"]}}
+///     }"#,
+/// )
+/// .expect("JSON");
 /// // Without the draft-07 meta-schema itself the set is incomplete:
 /// let missing = Metaschemas::new([("https://example.org/meta", meta)]);
 /// assert!(matches!(
@@ -178,7 +181,7 @@ mod tests {
         Metaschemas::new(
             purrdf_testkit::jsonschema_metaschemas::DRAFT_2020_12
                 .iter()
-                .map(|&(uri, text)| (uri, serde_json::from_str::<Value>(text).expect("JSON"))),
+                .map(|&(uri, text)| (uri, purrdf_lex::json::read(text).expect("JSON"))),
         )
         .expect("the draft 2020-12 meta-schemas")
     }

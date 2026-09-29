@@ -81,6 +81,7 @@ use crate::geom::{
     Rings,
 };
 use crate::json::{self, JsonValue};
+use purrdf_lex::json::Number;
 
 // ---------------------------------------------------------------------------
 // Reading
@@ -293,7 +294,7 @@ fn read_node(value: &JsonValue) -> Result<Node<'_>, GeoError> {
     if !matches!(value, JsonValue::Object(_)) {
         return Err(GeoError::literal(format!(
             "a geo:geoJSONLiteral is an RFC 7946 Geometry object, but this is {}",
-            value.kind_name()
+            json::kind_name(value)
         )));
     }
     let type_name = read_type(value)?;
@@ -331,7 +332,7 @@ fn read_node(value: &JsonValue) -> Result<Node<'_>, GeoError> {
 /// The `type` member, which every Geometry object has exactly one of and which is
 /// always a string.
 fn read_type(object: &JsonValue) -> Result<&str, GeoError> {
-    match object.count("type") {
+    match json::count(object, "type") {
         0 => Err(GeoError::literal(
             "a GeoJSON Geometry object has a `type` member naming its geometry type; this object \
              has none",
@@ -340,7 +341,7 @@ fn read_type(object: &JsonValue) -> Result<&str, GeoError> {
             Some(JsonValue::String(name)) => Ok(name.as_str()),
             Some(other) => Err(GeoError::literal(format!(
                 "the `type` member of a GeoJSON Geometry object is a string, but this one is {}",
-                other.kind_name()
+                json::kind_name(other)
             ))),
             // Unreachable: `count` just said there is one.
             None => Err(GeoError::literal("a GeoJSON Geometry object has no `type`")),
@@ -364,7 +365,7 @@ fn decisive_member<'a>(
     name: &str,
     type_name: &str,
 ) -> Result<&'a JsonValue, GeoError> {
-    match object.count(name) {
+    match json::count(object, name) {
         0 => Err(GeoError::literal(format!(
             "a GeoJSON {type_name} has a `{name}` member; this one has none, and RFC 7946 defines \
              the geometry entirely by it"
@@ -399,7 +400,7 @@ fn reject_foreign_shape_member(
     type_name: &str,
     right: &str,
 ) -> Result<(), GeoError> {
-    if object.count(wrong) == 0 {
+    if json::count(object, wrong) == 0 {
         return Ok(());
     }
     Err(GeoError::literal(format!(
@@ -587,14 +588,15 @@ fn read_position(value: &JsonValue, dim: &mut Option<CoordDim>) -> Result<Coord,
 
 /// One ordinate, decided exactly from the JSON number's own text.
 fn read_ordinate(value: &JsonValue) -> Result<Rat, GeoError> {
-    let JsonValue::Number(lexeme) = value else {
+    let JsonValue::Number(number) = value else {
         return Err(GeoError::literal(format!(
             "an ordinate of a GeoJSON position is a number, but this one is {}",
-            value.kind_name()
+            json::kind_name(value)
         )));
     };
     // `Rat::parse_decimal` reads the digits, never an `f64`; it refuses only an
     // exponent so large that the power of ten could not be built.
+    let lexeme = number.lexeme();
     Rat::parse_decimal(lexeme).ok_or_else(|| {
         GeoError::literal(format!(
             "the ordinate `{lexeme}` is a valid JSON number but its exponent is past the exact \
@@ -608,7 +610,7 @@ fn expect_array<'a>(value: &'a JsonValue, what: &str) -> Result<&'a [JsonValue],
         JsonValue::Array(items) => Ok(items.as_slice()),
         other => Err(GeoError::literal(format!(
             "{what} is a JSON array in RFC 7946, but this is {}",
-            other.kind_name()
+            json::kind_name(other)
         ))),
     }
 }
@@ -716,7 +718,7 @@ fn type_member(geometry: &Geometry) -> (String, JsonValue) {
 /// The object for a collection whose members' objects are `members`, in written
 /// order.
 fn collection_value(geometry: &Geometry, members: Vec<JsonValue>) -> JsonValue {
-    JsonValue::Object(vec![
+    JsonValue::object([
         type_member(geometry),
         ("geometries".to_owned(), JsonValue::Array(members)),
     ])
@@ -763,7 +765,7 @@ fn body_value(geometry: &Geometry, scale: u32) -> Result<JsonValue, GeoError> {
             unreachable!("a collection's object is assembled from its members' objects")
         }
     };
-    Ok(JsonValue::Object(vec![
+    Ok(JsonValue::object([
         type_member(geometry),
         ("coordinates".to_owned(), coordinates),
     ]))
@@ -787,12 +789,21 @@ fn sequence_value(coords: &CoordSeq, scale: u32) -> JsonValue {
     )
 }
 
+/// One ordinate as a JSON number: its exact decimal rendering at `scale`, which
+/// is always `-? digits [ "." digits ]` with no leading zero before another digit.
+fn ordinate_value(ordinate: &Rat, scale: u32) -> JsonValue {
+    JsonValue::Number(
+        Number::from_lexeme(ordinate.to_decimal_string(scale))
+            .expect("a decimal rendering is an RFC 8259 number"),
+    )
+}
+
 fn position_value(coord: &Coord, scale: u32) -> JsonValue {
     let mut ordinates = Vec::with_capacity(3);
-    ordinates.push(JsonValue::Number(coord.x().to_decimal_string(scale)));
-    ordinates.push(JsonValue::Number(coord.y().to_decimal_string(scale)));
+    ordinates.push(ordinate_value(coord.x(), scale));
+    ordinates.push(ordinate_value(coord.y(), scale));
     if let Some(z) = coord.z() {
-        ordinates.push(JsonValue::Number(z.to_decimal_string(scale)));
+        ordinates.push(ordinate_value(z, scale));
     }
     // A measure is unreachable here: `write_bare` refuses an M dimension before
     // any position is written, and `Geometry::new` guarantees every coordinate

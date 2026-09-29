@@ -7,7 +7,7 @@
 //! This is the workspace's one reading of RFC 3339. [`parse`] reads a
 //! `date-time` and answers the instant as Unix seconds and nanoseconds in UTC;
 //! [`parse_date`] and [`parse_time`] read the two halves on their own (JSON
-//! Schema's `date` and `time` formats); [`format`] writes the one canonical UTC
+//! Schema's `date` and `time` formats); [`format()`] writes the one canonical UTC
 //! spelling, `YYYY-MM-DDTHH:MM:SS[.f]Z`.
 //!
 //! What the readers accept:

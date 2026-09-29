@@ -1,18 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! RFC 6901 JSON Pointers, resolved against a `serde_json` document.
+//! RFC 6901 JSON Pointers as schema and instance locations.
 //!
 //! A pointer is kept in its escaped string form (`""` or `/a/b~1c`) wherever it
 //! is a location, so appending a token is string concatenation and two
 //! locations compare as strings. Tokens are escaped exactly once, on the way in,
 //! by [`purrdf_iri::json_pointer`]; a location travels in a URI fragment
-//! percent-encoded by [`purrdf_iri::percent`] with its `FRAGMENT` set.
-
-use purrdf_iri::json_pointer;
-use serde_json::Value;
+//! percent-encoded by [`purrdf_iri::percent`] with its `FRAGMENT` set, and
+//! resolved against a document by [`purrdf_lex::json::Value::pointer`].
 
 pub(crate) use json_pointer::{escape_token, tokens};
+use purrdf_iri::json_pointer;
 
 /// Append one unescaped token to an escaped pointer.
 pub(crate) fn push_token(pointer: &str, token: &str) -> String {
@@ -22,30 +21,10 @@ pub(crate) fn push_token(pointer: &str, token: &str) -> String {
     out
 }
 
-/// Resolve unescaped tokens against `root` (RFC 6901 §4). An array index is
-/// `0` or a digit string without a leading zero, inside the array's bounds.
-pub(crate) fn lookup<'v, T: AsRef<str>>(root: &'v Value, tokens: &[T]) -> Option<&'v Value> {
-    let mut current = root;
-    for token in tokens {
-        let token = token.as_ref();
-        current = match current {
-            Value::Object(map) => map.get(token)?,
-            Value::Array(items) => items.get(json_pointer::array_index(token)?)?,
-            _ => return None,
-        };
-    }
-    Some(current)
-}
-
-/// Resolve an escaped pointer against `root`.
-pub(crate) fn lookup_str<'v>(root: &'v Value, pointer: &str) -> Option<&'v Value> {
-    lookup(root, &tokens(pointer)?)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+    use purrdf_lex::json::{self, Value};
 
     #[test]
     fn tokens_round_trip_through_escaping() {
@@ -59,10 +38,10 @@ mod tests {
 
     #[test]
     fn lookup_refuses_leading_zero_indices_and_accepts_their_neighbour() {
-        let doc = json!({"a": [10, 20]});
-        assert_eq!(lookup_str(&doc, "/a/01"), None);
-        assert_eq!(lookup_str(&doc, "/a/1"), Some(&json!(20)));
-        assert_eq!(lookup_str(&doc, "/a/2"), None);
+        let doc = json::read(r#"{"a": [10, 20]}"#).expect("JSON");
+        assert_eq!(doc.pointer("/a/01"), None);
+        assert_eq!(doc.pointer("/a/1"), Some(&Value::from(20_u8)));
+        assert_eq!(doc.pointer("/a/2"), None);
     }
 
     #[test]

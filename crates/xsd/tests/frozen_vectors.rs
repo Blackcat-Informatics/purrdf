@@ -149,7 +149,7 @@ fn from_binary_matches_the_frozen_expansions() {
     .unwrap_or_else(|mismatch| panic!("{mismatch}"));
 }
 
-/// Every ordered pair of the frozen JSON number lexemes.
+/// Every ordered pair of the frozen JSON number lexemes: order and divisibility.
 #[test]
 fn json_number_order_matches_the_frozen_pairs() {
     let file = vectors(include_str!("vectors/json_number_vectors.txt"));
@@ -161,6 +161,17 @@ fn json_number_order_matches_the_frozen_pairs() {
             None => panic!("line {}: a JSON number was refused", record.line),
         };
         assert_eq!(order, record.fields[2], "line {}", record.line);
+        let number = |text| {
+            json_number::JsonNumber::parse(text)
+                .unwrap_or_else(|| panic!("line {}: a JSON number was refused", record.line))
+        };
+        let multiple = number(record.fields[0]).is_multiple_of(&number(record.fields[1]));
+        assert_eq!(
+            if multiple { "1" } else { "0" },
+            record.fields[3],
+            "line {}",
+            record.line
+        );
     }
 }
 

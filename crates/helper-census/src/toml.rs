@@ -34,19 +34,17 @@ pub(crate) enum Value {
 
 impl Value {
     /// The value as JSON, for the engine's cross-check against `tomllib`.
-    pub(crate) fn to_json(&self) -> serde_json::Value {
+    pub(crate) fn to_json(&self) -> purrdf_lex::json::Value {
+        use purrdf_lex::json::Value as Json;
         match self {
-            Self::Str(text) => serde_json::Value::String(text.clone()),
-            Self::Bool(flag) => serde_json::Value::Bool(*flag),
-            Self::Int(number) => serde_json::Value::from(*number),
-            Self::Array(items) => {
-                serde_json::Value::Array(items.iter().map(Self::to_json).collect())
-            }
-            Self::Table(entries) => serde_json::Value::Object(
+            Self::Str(text) => Json::from(text),
+            Self::Bool(flag) => Json::from(*flag),
+            Self::Int(number) => Json::from(*number),
+            Self::Array(items) => items.iter().map(Self::to_json).collect(),
+            Self::Table(entries) => Json::object(
                 entries
                     .iter()
-                    .map(|(key, value)| (key.clone(), value.to_json()))
-                    .collect(),
+                    .map(|(key, value)| (key.as_str(), value.to_json())),
             ),
         }
     }

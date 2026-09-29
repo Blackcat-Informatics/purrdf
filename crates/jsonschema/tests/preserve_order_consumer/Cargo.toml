@@ -7,11 +7,11 @@ version = "0.0.0"
 edition = "2024"
 publish = false
 
-# This is an external consumer: its feature unification must be independent
+# This is an external consumer: its dependency resolution must be independent
 # of the PurRDF workspace lockfile and published dependency graph.
 [workspace]
 
 [dev-dependencies]
 purrdf-jsonschema = { path = "../.." }
 purrdf-testkit = { path = "../../../testkit" }
-serde_json = { version = "1", features = ["preserve_order", "arbitrary_precision"] }
+purrdf-lex = { path = "../../../lex" }

@@ -32,7 +32,7 @@
 //!   full as a decimal ([`BigInt::from_binary`], over [`BigInt::mul_pow2`] and
 //!   [`BigInt::mul_pow5`]);
 //! * JSON numbers whose digits or exponent no machine word holds
-//!   ([`crate::json_number::cmp`]), and JSON Schema's `multipleOf` over them
+//!   ([`crate::json_number::JsonNumber`]), and JSON Schema's `multipleOf` over them
 //!   ([`BigInt::from_digits`], [`BigInt::mul`], [`BigInt::rem`]).
 //!
 //! It is still not a general-purpose bignum: there is no quotient of two

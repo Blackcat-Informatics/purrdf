@@ -33,7 +33,7 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only leaf over three dependencies: the JSON value model, the regex engine
+# rlib-only leaf: the JSON value model, the regex engine
 # the ECMA-262 `pattern` translation targets, and the workspace's one RFC 3986
 # reference resolver. No threads, no filesystem, no clock: wasm32-clean.
 crate-type = ["rlib"]
@@ -41,9 +41,6 @@ path = "src/lib.rs"
 name = "purrdf_jsonschema"
 
 [dependencies]
-# Schemas and instances are `serde_json::Value`s; numbers are read exactly from
-# the workspace's `float_roundtrip` parse.
-serde_json = { workspace = true }
 # The engine every translated ECMA-262 `pattern` runs on.
 regex = { workspace = true }
 # `$id`/`$ref`/`$dynamicRef` resolution: the workspace's single RFC 3986 §5
@@ -52,10 +49,13 @@ purrdf-iri = { workspace = true }
 # The fixed-key hasher that buckets `uniqueItems` candidates.
 purrdf-hash = { workspace = true }
 # The RFC 3339 grammar behind the `date-time`, `date` and `time` formats, and
-# the arbitrary-precision integer exact `multipleOf` computes on.
+# the exact value of a JSON number that equality, ordering and `multipleOf`
+# compute on.
 purrdf-xsd = { workspace = true }
-# The ECMA-262 `WhiteSpace` and `LineTerminator` terminals `\s` and `.` are
-# spelled with, and the Unicode version the property tables assert.
+# Schemas and instances are `purrdf_lex::json::Value`s, whose numbers keep the
+# lexeme the document wrote; the ECMA-262 `WhiteSpace` and `LineTerminator`
+# terminals `\s` and `.` are spelled with; and the Unicode version the property
+# tables assert.
 purrdf-lex = { workspace = true }
 
 [dev-dependencies]
