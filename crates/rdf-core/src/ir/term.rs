@@ -1410,7 +1410,10 @@ mod conversion_tests {
             RdfTerm::Literal(lit) => TermValue::Literal {
                 lexical_form: lit.lexical_form.clone(),
                 datatype: lit.datatype_iri().to_owned(),
-                language: lit.language.as_deref().map(purrdf_iri::langtag::identity_fold),
+                language: lit
+                    .language
+                    .as_deref()
+                    .map(purrdf_iri::langtag::identity_fold),
                 direction: lit.direction,
             },
         }

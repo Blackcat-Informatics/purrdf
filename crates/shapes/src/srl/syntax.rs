@@ -1638,11 +1638,9 @@ impl Lit {
     /// As a SPARQL expression constant.
     fn algebra(self) -> purrdf_sparql_algebra::Literal {
         match (self.language, self.datatype) {
-            (Some((language, direction)), _) => purrdf_sparql_algebra::Literal::new_lang(
-                self.lexical,
-                language,
-                direction,
-            ),
+            (Some((language, direction)), _) => {
+                purrdf_sparql_algebra::Literal::new_lang(self.lexical, language, direction)
+            }
             (None, Some(datatype)) if datatype == xsd::STRING => {
                 purrdf_sparql_algebra::Literal::new_simple(self.lexical)
             }

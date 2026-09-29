@@ -1006,7 +1006,7 @@ entry_points = [
     "purrdf_core::DatasetView",
     "purrdf_core::TermLookupError",
 ]
-spec = "RDF 1.2 Concepts section 3.1 (a triple term's predicate is an IRI); the IR identity contract: a literal's datatype expanded and its language tag lowercased, blank-node scope part of identity, an owned blank label carrying its scope in the injective envelope BlankScope::qualify_label writes"
+spec = "RDF 1.2 Concepts section 3.1 (a triple term's predicate is an IRI); the IR identity contract: a literal's datatype expanded and its language tag folded by purrdf_iri::langtag::identity_fold (ASCII lowercase, per BCP 47 case-insensitivity), blank-node scope part of identity, an owned blank label carrying its scope in the injective envelope BlankScope::qualify_label writes"
 vectors = []
 bench = []
 sites = []
