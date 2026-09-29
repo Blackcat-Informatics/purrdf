@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Digest throughput at 64 B, 1 KiB and 1 MiB, per algorithm and per path the
-//! host can run, and base16 encoding throughput per path, plus `hex::Lower`
-//! rendering a 32-byte digest. Report-only; not a gate.
+//! host can run; base16 at 8 B to 4 KiB per encoding path
+//! and through every public entry point (the length switch included), and the
+//! 64-digit content-address readers. Report-only; not a gate.
 
 #![allow(missing_docs)] // a bench target is not public API
 
@@ -11,7 +12,10 @@ use std::hint::black_box;
 
 use purrdf_hash::Backend as _;
 use purrdf_hash::backend::{Crc32Backend, HexBackend, Sha1Backend};
-use purrdf_hash::hex::Lower;
+use purrdf_hash::hex::{
+    Lower, decode, decode_32, decode_32_canonical, decode_canonical, encode, encode_into,
+    encode_to_slice, encode_upper_to_slice,
+};
 use purrdf_hash::md5::Md5;
 use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
@@ -61,30 +65,81 @@ fn digests(c: &mut Bench) {
     }
 }
 
+/// The length classes base16 is selected over: 8 bytes, a 16-, 20- and
+/// 32-byte digest (32 is the length switch), one past it, 64 bytes and a
+/// 4 KiB blob.
+const HEX_SIZES: [usize; 7] = [8, 16, 20, 32, 33, 64, 4096];
+
 fn hex(c: &mut Bench) {
     let mut group = c.benchmark_group("hex");
-    for backend in HexBackend::all_available() {
-        for (len, label) in [(32, "32B"), (1024, "1KiB"), (1 << 20, "1MiB")] {
-            let data = input(len);
-            let mut out = vec![0u8; 2 * len];
-            group.throughput(Throughput::Bytes(len as u64));
-            group.bench_with_input(BenchmarkId::new(backend.name(), label), &data, |b, data| {
-                b.iter(|| backend.encode(black_box(data), black_box(&mut out)));
-            });
+    for len in HEX_SIZES {
+        let data = input(len);
+        let mut out = vec![0u8; 2 * len];
+        group.throughput(Throughput::Bytes(len as u64));
+        // Each path on its own, at every length class.
+        for backend in HexBackend::all_available() {
+            group.bench_with_input(
+                BenchmarkId::new(format!("path-{}", backend.name()), len),
+                &data,
+                |b, data| b.iter(|| backend.encode(black_box(data), black_box(&mut out))),
+            );
         }
-    }
-    // The call-site shape: a digest written into a reserved `String`.
-    let digest = input(32);
-    let mut text = String::with_capacity(128);
-    group.throughput(Throughput::Bytes(32));
-    group.bench_function("lower-display/32B", |b| {
-        b.iter(|| {
-            use std::fmt::Write as _;
-            text.clear();
-            let _ = write!(text, "{}", Lower(black_box(&digest)));
-            text.len()
+        // The public entry points, through the length switch.
+        group.bench_with_input(
+            BenchmarkId::new("encode_to_slice", len),
+            &data,
+            |b, data| {
+                b.iter(|| encode_to_slice(black_box(data), black_box(&mut out)).map(str::len));
+            },
+        );
+        group.bench_with_input(
+            BenchmarkId::new("encode_upper_to_slice", len),
+            &data,
+            |b, data| {
+                b.iter(|| {
+                    encode_upper_to_slice(black_box(data), black_box(&mut out)).map(str::len)
+                });
+            },
+        );
+        group.bench_with_input(BenchmarkId::new("encode", len), &data, |b, data| {
+            b.iter(|| encode(black_box(data)));
         });
+        let mut text = String::with_capacity(2 * len);
+        group.bench_with_input(BenchmarkId::new("encode_into", len), &data, |b, data| {
+            b.iter(|| {
+                text.clear();
+                encode_into(black_box(data), &mut text);
+                text.len()
+            });
+        });
+        group.bench_with_input(BenchmarkId::new("lower-display", len), &data, |b, data| {
+            b.iter(|| {
+                use std::fmt::Write as _;
+                text.clear();
+                let _ = write!(text, "{}", Lower(black_box(data)));
+                text.len()
+            });
+        });
+        let digits = encode(&data);
+        group.bench_with_input(BenchmarkId::new("decode", len), &digits, |b, digits| {
+            b.iter(|| decode(black_box(digits)).map(|bytes| bytes.len()));
+        });
+        group.bench_with_input(
+            BenchmarkId::new("decode_canonical", len),
+            &digits,
+            |b, digits| {
+                b.iter(|| decode_canonical(black_box(digits)).map(|bytes| bytes.len()));
+            },
+        );
+    }
+    // The content-address readers: exactly 64 digits.
+    let digits = encode(&input(32));
+    let upper = digits.to_ascii_uppercase();
+    group.throughput(Throughput::Bytes(32));
+    group.bench_function("decode_32_canonical/32", |b| {
+        b.iter(|| decode_32_canonical(black_box(&digits)));
     });
+    group.bench_function("decode_32/32", |b| b.iter(|| decode_32(black_box(&upper))));
     group.finish();
 }
 

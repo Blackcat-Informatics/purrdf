@@ -9,13 +9,14 @@
 
 use ciborium::value::Value;
 use purrdf_hash::Domain;
+use purrdf_hash::hex::Lower;
 use purrdf_iri::json_escape::{JsonEscapes, push_string};
 
 pub use crate::model::ByteRange;
 use crate::model::{Diagnostic, StreamableInfo};
 use crate::reader::read_file_segments;
 use crate::wire::{
-    blake3_256, canonical, content_id, header_id, hex, iter_items, map_get, unwrap_header,
+    blake3_256, canonical, content_id, header_id, iter_items, map_get, unwrap_header,
 };
 
 /// Byte range, identity, and chain-validation state for one frame.
@@ -359,7 +360,7 @@ fn json_string(text: &str) -> String {
 }
 
 fn json_hex(bytes: &[u8]) -> String {
-    json_string(&hex(bytes))
+    format!("\"{}\"", Lower(bytes))
 }
 
 fn json_optional_hex(value: Option<&[u8]>) -> String {
@@ -617,7 +618,7 @@ pub fn resume_after<'a>(data: &'a [u8], frame_id: &[u8]) -> Result<&'a [u8], Str
             }
         }
     }
-    Err(format!("frame {} not found", hex(frame_id)))
+    Err(format!("frame {} not found", Lower(frame_id)))
 }
 
 /// Outcome category for a two-file replication [`diff`].
@@ -990,29 +991,6 @@ pub fn diff_json(result: &DiffResult) -> String {
             .as_deref()
             .map_or_else(|| "null".to_string(), json_string)
     )
-}
-
-#[cfg(test)]
-mod hex_differential {
-    use super::{json_hex, json_optional_hex};
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    const ENCODINGS: &str =
-        include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
-
-    #[test]
-    fn json_hex_matches_the_frozen_encodings() {
-        let file = VectorFile::parse(ENCODINGS).expect("hex vectors");
-        for r in file.records() {
-            let len: usize = r.fields[0].parse().unwrap();
-            let first: u8 = r.fields[1].parse().unwrap();
-            let input: Vec<u8> = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-            let lower = decode_str(r.fields[2]).unwrap();
-            assert_eq!(json_hex(&input), format!("\"{lower}\""));
-            assert_eq!(json_optional_hex(Some(&input)), format!("\"{lower}\""));
-        }
-        assert_eq!(json_optional_hex(None), "null");
-    }
 }
 
 #[cfg(test)]

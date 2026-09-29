@@ -14,7 +14,6 @@
 //! succeed. Fixtures are `example.org` throughout.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::fmt::Write as _;
 use std::future::Future;
 use std::sync::atomic::{AtomicU64, Ordering as AtomicOrdering};
 use std::sync::{Arc, OnceLock};
@@ -598,13 +597,7 @@ fn candidates_are_the_canonical_lexical_and_not_an_opaque_blob() {
     );
 
     // The negative, stated exactly: not the hex of the value's canonical bytes.
-    let hexed = TermValue::iri(ex("alpha/entity0"))
-        .to_canonical_bytes()
-        .iter()
-        .fold(String::new(), |mut out, byte| {
-            let _ = write!(out, "{byte:02x}");
-            out
-        });
+    let hexed = purrdf_hash::hex::encode(&TermValue::iri(ex("alpha/entity0")).to_canonical_bytes());
     assert_ne!(alpha[0], hexed, "a candidate is not a hex blob");
 }
 

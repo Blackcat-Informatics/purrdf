@@ -239,8 +239,10 @@ impl ReifierIndex {
     }
 }
 
-/// Crockford Base32 alphabet (the ULID rendering alphabet).
-const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/// Crockford Base32 alphabet (the ULID rendering alphabet): the ten decimal
+/// digits, then the letters without I, L, O and U.
+const CROCKFORD: &[u8; 32] = b"0123456789\
+ABCDEFGHJKMNPQRSTVWXYZ";
 /// A rendered ULID is 26 Crockford Base32 digits.
 const ULID_LEN: usize = 26;
 
@@ -281,9 +283,6 @@ fn is_literal_direction(direction: &str) -> bool {
     matches!(direction, "ltr" | "rtl")
 }
 
-/// Uppercase hex-nibble lookup table for `push_uchar_00`.
-const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
-
 /// The bytes that can begin a scalar a literal lexical form escapes, as a class
 /// table: `"`, `\`, the C0 controls, DEL, and `0xC2`, the UTF-8 lead byte of
 /// U+0080-U+00BF, the block that holds the C1 controls. Every other byte belongs
@@ -318,9 +317,11 @@ fn find_first_literal_escape(bytes: &[u8]) -> Option<usize> {
 #[inline]
 fn push_uchar_00<W: TextOut + ?Sized>(out: &mut W, v: u32) {
     debug_assert!(v <= 0xFF);
+    let mut digits = [0u8; 2];
     out.push_str("\\u00");
-    out.push(HEX_UPPER[((v >> 4) & 0xF) as usize] as char);
-    out.push(HEX_UPPER[(v & 0xF) as usize] as char);
+    out.push_str(
+        purrdf_hash::hex::encode_upper_to_slice(&[v as u8], &mut digits).unwrap_or_default(),
+    );
 }
 
 /// Escape an IRI body for an N-Triples / Turtle / TriG `<…>` `IRIREF`.
@@ -956,21 +957,6 @@ pub(crate) fn write_trig<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
     }
 
     close_graph(out, &mut open_graph);
-}
-
-#[cfg(test)]
-mod hex_differential {
-    use super::push_uchar_00;
-    use crate::hex_differential::upper_pairs;
-
-    #[test]
-    fn uchar_00_matches_the_frozen_pairs() {
-        for (byte, pair) in upper_pairs().into_iter().enumerate() {
-            let mut out = String::new();
-            push_uchar_00(&mut out, byte as u32);
-            assert_eq!(out, format!("\\u00{pair}"));
-        }
-    }
 }
 
 #[cfg(test)]

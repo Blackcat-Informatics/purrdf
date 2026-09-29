@@ -56,9 +56,6 @@ use alloc::vec::Vec;
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm};
 use crate::value::{CdtContents, CdtValue};
 
-/// Uppercase hex digits, for the `\u00XX` escape forms.
-const HEX_UPPER: [u8; 16] = *b"0123456789ABCDEF";
-
 /// One step of the iterative renderer.
 enum Job<'a> {
     /// Render a term (which may open a nested composite).
@@ -330,61 +327,16 @@ fn is_iri_forbidden(ch: char) -> bool {
 /// wide branch is what keeps the function total over `char`.
 fn push_uchar<S: Sink>(out: &mut S, ch: char) {
     let value = ch as u32;
-    if value <= 0xFFFF {
-        out.put_str("\\u");
-        push_hex(out, value, 4);
+    let bytes = value.to_be_bytes();
+    let (escape, digits) = if value <= 0xFFFF {
+        ("\\u", &bytes[2..])
     } else {
-        out.put_str("\\U");
-        push_hex(out, value, 8);
-    }
-}
-
-fn push_hex<S: Sink>(out: &mut S, value: u32, digits: u32) {
-    for shift in (0..digits).rev() {
-        let nibble = (value >> (shift * 4)) & 0xF;
-        out.put_char(HEX_UPPER[nibble as usize] as char);
-    }
-}
-
-#[cfg(test)]
-mod hex_frozen_differential {
-    use alloc::string::String;
-    use alloc::vec::Vec;
-
-    use super::push_hex;
-
-    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
-
-    /// Every frozen record: its input bytes, lowercase and uppercase digits.
-    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
-        let file =
-            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
-        file.records()
-            .iter()
-            .map(|record| {
-                let len: usize = record.fields[0].parse().expect("a decimal length");
-                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
-                    .expect("lowercase digits");
-                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
-                    .expect("uppercase digits");
-                (input, lower, upper)
-            })
-            .collect()
-    }
-
-    #[test]
-    fn escape_digits_match_the_frozen_vectors() {
-        for (input, _, upper) in frozen_encodings() {
-            let (value, digits) = match input[..] {
-                [a, b] => (u32::from(u16::from_be_bytes([a, b])), 4),
-                [a, b, c, d] => (u32::from_be_bytes([a, b, c, d]), 8),
-                _ => continue,
-            };
-            let mut out = String::new();
-            push_hex(&mut out, value, digits);
-            assert_eq!(out, upper);
-        }
+        ("\\U", &bytes[..])
+    };
+    out.put_str(escape);
+    let mut buffer = [0u8; 8];
+    // Eight bytes hold the rendering of at most four.
+    if let Ok(text) = purrdf_hash::hex::encode_upper_to_slice(digits, &mut buffer) {
+        out.put_str(text);
     }
 }

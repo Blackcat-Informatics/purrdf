@@ -748,8 +748,8 @@ fn one_artifact_under_one_binding_attests_one_generation() {
     );
     assert!(
         left.generation()
-            .chars()
-            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+            .bytes()
+            .all(|b| purrdf_hash::hex::nibble_canonical(b).is_some()),
         "rendered in lowercase hex, like every other digest this workspace ships: {}",
         left.generation()
     );

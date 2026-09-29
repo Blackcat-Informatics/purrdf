@@ -13,7 +13,7 @@
 //! |---|---|
 //! | `tests/digest_differential.rs` | MD5, SHA-1, SHA-3 and CRC-32 over every path the host runs |
 //! | `tests/blake3.rs` | BLAKE3 streaming boundaries and random lengths, on every backend |
-//! | `tests/hex.rs` | RFC 4648 base16 vectors, every encoding path against the portable one |
+//! | `tests/hex.rs` | the frozen base16 encoding and digit tables through every entry point and encoding path, RFC 4648 vectors, reader refusals, `Digest32` |
 //! | `tests/fixed_hasher.rs` | the table hasher's frozen self-vectors and its statistical quality |
 //! | `benches/hasher.rs` | the table hasher's latency per key class |
 //!

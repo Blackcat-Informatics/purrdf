@@ -75,7 +75,6 @@ use super::certificate::{DlCertificate, DlCompleteness, Verdict};
 use super::classify::ClassHierarchy;
 use super::module::ModuleMethod;
 use super::realize::Realization;
-use crate::digest_hex::hex;
 use crate::owl_dl::graph::Assumptions;
 use crate::owl_dl::proof::{
     CheckReport, DlProof, DlProofContext, DlProofError, MAX_NESTING, ProofAnswer, Reader,
@@ -831,8 +830,8 @@ impl ServiceProof {
             .map_err(DlProofError::Canonicalization)?;
         if expected != self.input {
             return Err(DlProofError::InputMismatch {
-                expected: hex(expected),
-                stated: hex(self.input),
+                expected: purrdf_hash::hex::encode(&expected),
+                stated: purrdf_hash::hex::encode(&self.input),
             });
         }
         if self.question != *question || self.service != question.service() {
@@ -1340,7 +1339,7 @@ impl ServiceProof {
     /// [`Self::digest`] as 64 lowercase hex characters.
     #[must_use]
     pub fn digest_hex(&self) -> String {
-        hex(self.digest())
+        purrdf_hash::hex::encode(&self.digest())
     }
 
     /// Rebuild a service proof from [`Self::encode`]d bytes.
@@ -1572,10 +1571,6 @@ pub(crate) fn receipt_of(
 }
 
 // ── Byte plumbing ───────────────────────────────────────────────────────────────
-//
-// The hex renderer used to live here too, as its own `char::from_digit` loop; it is now
-// `crate::digest_hex::hex`, the one first-party renderer this crate's three digest-bearing
-// proof modules share (see that module's doc comment for why).
 
 /// Append a length-prefixed byte string.
 fn frame(out: &mut Vec<u8>, bytes: &[u8]) {

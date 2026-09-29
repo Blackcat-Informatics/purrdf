@@ -318,9 +318,9 @@ impl Parser<'_> {
         for _ in 0..4 {
             let digit = self
                 .peek()
-                .and_then(|byte| char::from(byte).to_digit(16))
+                .and_then(purrdf_hash::hex::nibble)
                 .ok_or_else(|| self.syntax("four hexadecimal digits"))?;
-            result = result * 16 + digit;
+            result = result * 16 + u32::from(digit);
             self.at += 1;
         }
         Ok(result)
@@ -366,12 +366,12 @@ fn unescape(raw: &str, at: usize) -> Result<Cow<'_, str>, JsonError> {
             'r' => output.push('\r'),
             't' => output.push('\t'),
             'u' => {
-                let high = decode_hex(&mut chars, at)?;
+                let high = read_code_unit(&mut chars, at)?;
                 let codepoint = if (0xD800..0xDC00).contains(&high) {
                     if chars.next() != Some('\\') || chars.next() != Some('u') {
                         return Err(JsonError::LoneSurrogate { at });
                     }
-                    let low = decode_hex(&mut chars, at)?;
+                    let low = read_code_unit(&mut chars, at)?;
                     if !(0xDC00..0xE000).contains(&low) {
                         return Err(JsonError::LoneSurrogate { at });
                     }
@@ -392,17 +392,19 @@ fn unescape(raw: &str, at: usize) -> Result<Cow<'_, str>, JsonError> {
     Ok(Cow::Owned(output))
 }
 
-fn decode_hex(chars: &mut core::str::Chars<'_>, at: usize) -> Result<u32, JsonError> {
+/// The four hex digits of a `\uXXXX` escape as one UTF-16 code unit.
+fn read_code_unit(chars: &mut core::str::Chars<'_>, at: usize) -> Result<u32, JsonError> {
     let mut result = 0;
     for _ in 0..4 {
         let digit = chars
             .next()
-            .and_then(|character| character.to_digit(16))
+            .and_then(|character| u8::try_from(character).ok())
+            .and_then(purrdf_hash::hex::nibble)
             .ok_or(JsonError::Syntax {
                 at,
                 expected: "four hexadecimal digits",
             })?;
-        result = result * 16 + digit;
+        result = result * 16 + u32::from(digit);
     }
     Ok(result)
 }
@@ -497,92 +499,5 @@ mod tests {
             }
         }
         assert!(ok > 0 && refused > 0, "{ok} {refused}");
-    }
-}
-
-#[cfg(test)]
-mod hex_frozen_differential {
-    use super::{Parser, decode_hex};
-    use crate::Bounds;
-
-    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
-
-    /// Every frozen record: its input bytes, lowercase and uppercase digits.
-    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
-        let file =
-            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
-        file.records()
-            .iter()
-            .map(|record| {
-                let len: usize = record.fields[0].parse().expect("a decimal length");
-                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
-                    .expect("lowercase digits");
-                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
-                    .expect("uppercase digits");
-                (input, lower, upper)
-            })
-            .collect()
-    }
-
-    const HEX_DIGIT_VECTORS: &str =
-        include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt");
-
-    /// A byte with its frozen any-case, lowercase and uppercase digit values.
-    type DigitRecord = (u8, Option<u8>, Option<u8>, Option<u8>);
-
-    /// Every byte's digit record.
-    fn frozen_digits() -> Vec<DigitRecord> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(HEX_DIGIT_VECTORS)
-            .expect("hex_digit_vectors.txt");
-        file.records()
-            .iter()
-            .map(|record| {
-                let value = |field: &str| field.parse::<u8>().ok();
-                let byte: u8 = record.fields[0].parse().expect("a decimal byte");
-                (
-                    byte,
-                    value(record.fields[1]),
-                    value(record.fields[2]),
-                    value(record.fields[3]),
-                )
-            })
-            .collect()
-    }
-
-    fn hex4(text: &str) -> Option<u32> {
-        let mut parser = Parser {
-            text,
-            bytes: text.as_bytes(),
-            at: 0,
-            values: Vec::new(),
-            bounds: Bounds::standard(),
-            pointer_bytes: 0,
-        };
-        parser.hex4().ok()
-    }
-
-    #[test]
-    fn unicode_escape_digits_match_the_frozen_vectors() {
-        for (byte, any, _, _) in frozen_digits() {
-            let text = format!("004{}", char::from(byte));
-            let expected = any.map(|v| 0x40 + u32::from(v));
-            assert_eq!(hex4(&text), expected, "{byte:#04x}");
-            assert_eq!(
-                decode_hex(&mut text.chars(), 0).ok(),
-                expected,
-                "{byte:#04x}"
-            );
-        }
-        for (input, lower, upper) in frozen_encodings() {
-            if let [high, low] = input[..] {
-                let value = u32::from(u16::from_be_bytes([high, low]));
-                for text in [&lower, &upper] {
-                    assert_eq!(hex4(text), Some(value));
-                    assert_eq!(decode_hex(&mut text.chars(), 0).ok(), Some(value));
-                }
-            }
-        }
     }
 }

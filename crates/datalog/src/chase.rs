@@ -527,18 +527,6 @@ const WITNESS_LABEL_BYTES: usize = 16;
 /// BLAKE3 digest this crate computes over a different kind of value.
 const WITNESS_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog restricted chase witness v1");
 
-/// Lowercase hex digits, for rendering a witness label without a formatter.
-///
-/// Deliberately NOT [`crate::resolve_fol::hex_lower`], this crate's other hex renderer:
-/// [`witness_surface`] runs once per invented witness inside the chase's fixpoint loop
-/// (every round, every firing that needs a fresh existential), so it is a hot path in a way
-/// a contract hash or a derivation id — computed once per result, not once per fact — is
-/// not. A lookup-table index avoids `hex_lower`'s per-byte `write!` formatting machinery on
-/// that path; consolidating the two would trade a measurable amount of per-firing work for
-/// uniformity alone, which this repository's performance discipline does not accept without
-/// a bench showing it is free.
-const HEX_DIGITS: [u8; 16] = *b"0123456789abcdef";
-
 /// The address a Skolem witness is minted against: the SKOLEM FUNCTION APPLICATION that
 /// produced it.
 ///
@@ -606,10 +594,7 @@ fn witness_surface(address: &WitnessAddress) -> String {
 
     let mut surface = format!("_:{WITNESS_SCOPE}.");
     surface.push(WITNESS_LABEL_PREFIX);
-    for &byte in &digest.as_bytes()[..WITNESS_LABEL_BYTES] {
-        surface.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
-        surface.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
-    }
+    purrdf_hash::hex::encode_into(&digest.as_bytes()[..WITNESS_LABEL_BYTES], &mut surface);
     surface
 }
 
@@ -2500,43 +2485,5 @@ mod tests {
             wildcard,
             format!("[s=?, p={}, o=*, g=(default graph)]", iri(P))
         );
-    }
-}
-
-#[cfg(test)]
-mod hex_frozen_differential {
-    use super::HEX_DIGITS;
-
-    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
-
-    /// Every frozen record: its input bytes, lowercase and uppercase digits.
-    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
-        let file =
-            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
-        file.records()
-            .iter()
-            .map(|record| {
-                let len: usize = record.fields[0].parse().expect("a decimal length");
-                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
-                    .expect("lowercase digits");
-                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
-                    .expect("uppercase digits");
-                (input, lower, upper)
-            })
-            .collect()
-    }
-
-    #[test]
-    fn witness_label_digit_table_matches_the_frozen_vectors() {
-        for (input, lower, _) in frozen_encodings() {
-            let mut rendered = String::new();
-            for &byte in &input {
-                rendered.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
-                rendered.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
-            }
-            assert_eq!(rendered, lower, "{input:?}");
-        }
     }
 }

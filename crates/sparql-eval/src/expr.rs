@@ -3965,35 +3965,35 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         Function::Md5 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::md5::Md5::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha1 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::sha1::Sha1::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha256 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha384 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha512 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = sha2::Sha512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
@@ -4004,28 +4004,28 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         Function::Sha3_224 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::sha3::Sha3_224::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_256 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::sha3::Sha3_256::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_384 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::sha3::Sha3_384::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
         Function::Sha3_512 => match string_arg_ref(vals, 0) {
             Some((s, _)) => {
                 let digest = purrdf_hash::sha3::Sha3_512::digest(s.as_bytes());
-                Ok(Some(string_term(ctx, &purrdf_core::hex::lower(&digest))))
+                Ok(Some(string_term(ctx, &purrdf_hash::hex::encode(&digest))))
             }
             None => Ok(None),
         },
@@ -5252,16 +5252,7 @@ fn encode_for_uri(s: &str) -> String {
             }
             b => {
                 out.push('%');
-                out.push(
-                    char::from_digit(u32::from(b >> 4), 16)
-                        .unwrap()
-                        .to_ascii_uppercase(),
-                );
-                out.push(
-                    char::from_digit(u32::from(b & 0xf), 16)
-                        .unwrap()
-                        .to_ascii_uppercase(),
-                );
+                purrdf_hash::hex::encode_upper_into(&[*b], &mut out);
             }
         }
     }
@@ -5381,11 +5372,11 @@ fn make_uuid<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> (String, [u8; 1
     // Set variant bits (RFC 4122 §4.1.1): top 2 bits of octet 8 = 10.
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     // One rendering pass for all 16 bytes, then slice the 32-character result at
-    // the RFC 4122 group boundaries. `hex::lower` emits exactly two characters
+    // the RFC 4122 group boundaries. `hex::encode` emits exactly two characters
     // per byte, so byte *b* occupies characters `2b..2b+2` and every group
     // boundary is a character index: 8, 12, 16, 20. Every character is ASCII, so
     // the byte slices are also character slices.
-    let hex = purrdf_core::hex::lower(&bytes);
+    let hex = purrdf_hash::hex::encode(&bytes);
     let uuid = format!(
         "{}-{}-{}-{}-{}",
         &hex[0..8],
@@ -7626,25 +7617,18 @@ mod tests {
                 32,
                 "draw {draw} must carry 32 hex characters"
             );
-            assert!(
-                stripped
-                    .chars()
-                    .all(|ch| ch.is_ascii_digit() || ('a'..='f').contains(&ch)),
-                "draw {draw} must be lowercase hex outside its hyphens"
-            );
+            let decoded = purrdf_hash::hex::decode_canonical(&stripped).unwrap_or_else(|err| {
+                panic!("draw {draw} must be lowercase hex outside its hyphens: {err}")
+            });
             assert_eq!(&stripped[12..13], "4", "draw {draw} must carry version 4");
             assert!(
                 matches!(&stripped[16..17], "8" | "9" | "a" | "b"),
                 "draw {draw} must carry the RFC 4122 variant nibble"
             );
-            for (index, byte) in bytes.iter().enumerate() {
-                let pair = &stripped[index * 2..index * 2 + 2];
-                assert_eq!(
-                    u8::from_str_radix(pair, 16).expect("a hex pair parses"),
-                    *byte,
-                    "draw {draw} pair {index} must render byte {byte:#04x}"
-                );
-            }
+            assert_eq!(
+                decoded, bytes,
+                "draw {draw} must render each byte as its own pair"
+            );
         }
     }
 
@@ -11670,60 +11654,5 @@ mod rdf_equal_tests {
             .expect("spawn")
             .join()
             .expect("the 128 KiB thread returned");
-    }
-}
-
-#[cfg(test)]
-mod hex_frozen_differential {
-    use super::encode_for_uri;
-
-    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
-
-    /// Every frozen record: its input bytes, lowercase and uppercase digits.
-    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
-        let file =
-            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
-        file.records()
-            .iter()
-            .map(|record| {
-                let len: usize = record.fields[0].parse().expect("a decimal length");
-                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
-                    .expect("lowercase digits");
-                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
-                    .expect("uppercase digits");
-                (input, lower, upper)
-            })
-            .collect()
-    }
-
-    /// The uppercase digits of each single byte, from the length-1 records.
-    fn upper_of_byte() -> Vec<String> {
-        let mut table = vec![String::new(); 256];
-        for (input, _, upper) in frozen_encodings() {
-            if let [byte] = input[..] {
-                table[usize::from(byte)] = upper;
-            }
-        }
-        table
-    }
-
-    #[test]
-    fn percent_triplets_match_the_frozen_vectors() {
-        let upper = upper_of_byte();
-        for code in 0..=0xff_u32 {
-            let text = char::from_u32(code).expect("a Latin-1 scalar").to_string();
-            let encoded = encode_for_uri(&text);
-            if encoded == text {
-                continue;
-            }
-            let mut expected = String::new();
-            for b in text.bytes() {
-                expected.push('%');
-                expected.push_str(&upper[usize::from(b)]);
-            }
-            assert_eq!(encoded, expected, "{code:#04x}");
-        }
     }
 }

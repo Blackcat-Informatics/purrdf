@@ -123,7 +123,7 @@ impl Choices {
     /// Replay a hexadecimal choice sequence, as printed by a failing property.
     /// ASCII whitespace between digits is ignored.
     pub fn from_hex(hex: &str) -> Result<Self, HexError> {
-        Ok(Self::from_bytes(&decode_hex(hex)?))
+        Ok(Self::from_bytes(&choice_bytes(hex)?))
     }
 
     pub(crate) fn replay_values(values: Vec<u64>, rejects_left: u32) -> Self {
@@ -274,7 +274,7 @@ impl Choices {
     /// The record as lowercase hexadecimal, the form a failing property
     /// prints and [`Choices::from_hex`] reads.
     pub fn to_hex(&self) -> String {
-        encode_hex(&self.to_bytes())
+        purrdf_hash::hex::encode(&self.to_bytes())
     }
 }
 
@@ -291,50 +291,28 @@ const fn reduce(raw: u64, max: u64) -> u64 {
     }
 }
 
-pub(crate) fn encode_hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
-    }
-    out
-}
-
-fn decode_hex(hex: &str) -> Result<Vec<u8>, HexError> {
-    let digits: Vec<u8> = hex
-        .bytes()
-        .filter(|byte| !byte.is_ascii_whitespace())
+/// The choice sequence `hex` spells, ASCII whitespace between digits ignored,
+/// read by [`purrdf_hash::hex::decode`] and refused in this module's words.
+fn choice_bytes(hex: &str) -> Result<Vec<u8>, HexError> {
+    let digits: String = hex
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
         .collect();
-    if !digits.len().is_multiple_of(2) {
-        return Err(HexError(format!(
+    purrdf_hash::hex::decode(&digits).map_err(|error| match error {
+        purrdf_hash::hex::HexError::InvalidDigit { byte, .. } => HexError(format!(
+            "`{}` is not a hexadecimal digit",
+            char::from(byte).escape_default()
+        )),
+        _ => HexError(format!(
             "a choice sequence has an even number of hex digits, not {}",
             digits.len()
-        )));
-    }
-    let (pairs, _) = digits.as_chunks::<2>();
-    pairs
-        .iter()
-        .map(|pair| {
-            let nibble = |digit: u8| {
-                char::from(digit)
-                    .to_digit(16)
-                    .map(|value| value as u8)
-                    .ok_or_else(|| {
-                        HexError(format!(
-                            "`{}` is not a hexadecimal digit",
-                            char::from(digit).escape_default()
-                        ))
-                    })
-            };
-            Ok((nibble(pair[0])? << 4) | nibble(pair[1])?)
-        })
-        .collect()
+        )),
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Choices, byte_width, decode_hex, encode_hex};
+    use super::{Choices, byte_width, choice_bytes};
 
     #[test]
     fn byte_width_is_the_fewest_bytes_holding_the_bound() {
@@ -347,12 +325,11 @@ mod tests {
 
     #[test]
     fn hex_round_trips_and_refuses_what_is_not_hex() {
-        assert_eq!(encode_hex(&[0x00, 0xab, 0x7f]), "00ab7f");
-        assert_eq!(decode_hex("00ab7f"), Ok(vec![0x00, 0xab, 0x7f]));
-        assert_eq!(decode_hex("00 AB\n7f"), Ok(vec![0x00, 0xab, 0x7f]));
-        assert!(decode_hex("0").is_err());
-        assert!(decode_hex("0g").is_err());
-        assert_eq!(decode_hex(""), Ok(Vec::new()));
+        assert_eq!(choice_bytes("00ab7f"), Ok(vec![0x00, 0xab, 0x7f]));
+        assert_eq!(choice_bytes("00 AB\n7f"), Ok(vec![0x00, 0xab, 0x7f]));
+        assert!(choice_bytes("0").is_err());
+        assert!(choice_bytes("0g").is_err());
+        assert_eq!(choice_bytes(""), Ok(Vec::new()));
     }
 
     #[test]
@@ -372,52 +349,4 @@ mod tests {
         // Exhausted replays answer 0.
         assert_eq!(replay.draw(1_000), Ok(0));
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
-mod hex_frozen_vectors {
-
-
-    use crate::vectors::{VectorFile, decode_str};
-
-    /// Every frozen record: input bytes, lowercase and uppercase renderings.
-    fn records() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(include_str!("../../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().expect("length");
-                let first: u8 = r.fields[1].parse().expect("first");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
-            })
-            .collect()
-    }
-
-    /// Every byte with its any-case, lowercase and uppercase digit values.
-    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
-        let file = VectorFile::parse(include_str!("../../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
-        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
-        file.records()
-            .iter()
-            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
-            .collect()
-    }
-
-    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
-    fn pairs() -> Vec<(String, String)> {
-        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
-    }
-
-
-    #[test]
-    fn choice_hex_replays_the_frozen_vectors() {
-        for (input, lower, upper) in records() {
-            assert_eq!(super::encode_hex(&input), lower);
-            assert_eq!(super::decode_hex(&lower), Ok(input.clone()));
-            assert_eq!(super::decode_hex(&upper), Ok(input));
-        }
-    }
-
 }

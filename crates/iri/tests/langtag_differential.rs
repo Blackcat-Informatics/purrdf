@@ -258,8 +258,9 @@ fn encode(input: &str) -> String {
         match character {
             '\\' => encoded.push_str("\\\\"),
             ' ' => encoded.push_str("\\x20"),
-            control if control.is_control() && u32::from(control) < 0x80 => {
-                let _ = write!(encoded, "\\x{:02x}", u32::from(control));
+            control if control.is_control() && control.is_ascii() => {
+                encoded.push_str("\\x");
+                purrdf_hash::hex::encode_into(&[control as u8], &mut encoded);
             }
             other => encoded.push(other),
         }
@@ -286,8 +287,8 @@ fn decode(encoded: &str) -> String {
                 let high = characters.next().expect("\\x escape has two hex digits");
                 let low = characters.next().expect("\\x escape has two hex digits");
                 let digits: String = [high, low].into_iter().collect();
-                let byte = u8::from_str_radix(&digits, 16).expect("\\x escape is hexadecimal");
-                decoded.push(char::from(byte));
+                let byte = purrdf_hash::hex::decode(&digits).expect("\\x escape is hexadecimal");
+                decoded.push(char::from(byte[0]));
             }
             other => panic!("unknown escape \\{other:?} in fixture field {encoded:?}"),
         }
@@ -446,27 +447,5 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
 
     for (slot, value) in state.iter_mut().zip(work) {
         *slot = slot.wrapping_add(value);
-    }
-}
-
-/// The fixture escapes against the frozen base16 table.
-#[test]
-fn fixture_escapes_replay_the_frozen_hex_vectors() {
-    let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(
-        "../../hash-conformance/tests/vectors/hex_vectors.txt"
-    ))
-    .expect("frozen hex vectors");
-    for record in file.records().iter().filter(|r| r.fields[0] == "1") {
-        let byte: u8 = record.fields[1].parse().expect("byte");
-        let lower = purrdf_testkit::vectors::decode_str(record.fields[2]).expect("lower");
-        let upper = purrdf_testkit::vectors::decode_str(record.fields[3]).expect("upper");
-        if byte < 0x80 {
-            let c = char::from(byte);
-            if c.is_control() {
-                assert_eq!(encode(&c.to_string()), format!("\\x{lower}"));
-            }
-            assert_eq!(decode(&format!("\\x{lower}")), c.to_string());
-            assert_eq!(decode(&format!("\\x{upper}")), c.to_string());
-        }
     }
 }

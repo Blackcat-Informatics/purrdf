@@ -143,18 +143,8 @@ const HEX_BLOCK_BYTES: usize = 8_192;
 
 /// Render `value` as lowercase hexadecimal — two characters per byte, zero
 /// padded, leading zero bytes preserved — handing the rendered characters to
-/// `emit` one fixed stack block at a time.
-///
-/// This is the single transcription of the nibble-table encoder for the LPG
-/// carriers, and it sits beside [`hex_decode`], the inverse it must agree with.
-/// It is deliberately NOT `purrdf_core::hex::lower`: that renders into an
-/// owned [`String`], and both call sites here are byte sinks on a per-item
-/// projection path (a streaming artifact writer and a bounded `Vec<u8>`), so
-/// routing them through it would add one heap allocation *and* one copy per
-/// rendered value for output they never keep as a `String`. `purrdf-core`'s hex
-/// module names exactly this case — an allocation-free renderer writing into a
-/// fixed inline buffer — as the call-site class that correctly does something
-/// else.
+/// `emit` one fixed stack block at a time, so a byte sink receives the text
+/// without an owned `String` in between.
 ///
 /// Blocking rather than emitting per byte keeps the sink call count proportional
 /// to the payload size divided by [`HEX_BLOCK_BYTES`], not to the byte count.
@@ -162,16 +152,13 @@ pub(super) fn render_hex_blocks(
     value: &[u8],
     mut emit: impl FnMut(&[u8]) -> Result<(), ProjectionError>,
 ) -> Result<(), ProjectionError> {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
     let mut block = [0u8; HEX_BLOCK_BYTES];
     // Two output characters per source byte, so a block holds half its size in
-    // source bytes and `source.len() * 2` can never exceed `block.len()`.
+    // source bytes and the rendering always fits.
     for source in value.chunks(HEX_BLOCK_BYTES / 2) {
-        for (index, byte) in source.iter().copied().enumerate() {
-            block[index * 2] = DIGITS[usize::from(byte >> 4)];
-            block[index * 2 + 1] = DIGITS[usize::from(byte & 0x0f)];
-        }
-        emit(&block[..source.len() * 2])?;
+        let rendered = purrdf_hash::hex::encode_to_slice(source, &mut block)
+            .map_err(|error| ProjectionError::limit(error.to_string()))?;
+        emit(rendered.as_bytes())?;
     }
     Ok(())
 }
@@ -264,55 +251,13 @@ pub(super) fn hex_decode(
     description: &str,
     path: &str,
 ) -> Result<Vec<u8>, ProjectionError> {
-    if !value.len().is_multiple_of(2) {
-        return Err(ProjectionError::syntax(format!(
-            "{description} lowercase-hex payload has odd length"
-        ))
-        .at_path(path));
-    }
-    let mut bytes = Vec::with_capacity(value.len() / 2);
-    for pair in value.as_bytes().as_chunks::<2>().0 {
-        let high = hex_nibble(pair[0]).ok_or_else(|| {
-            ProjectionError::syntax(format!("{description} contains a non-lowercase-hex digit"))
-                .at_path(path)
-        })?;
-        let low = hex_nibble(pair[1]).ok_or_else(|| {
-            ProjectionError::syntax(format!("{description} contains a non-lowercase-hex digit"))
-                .at_path(path)
-        })?;
-        bytes.push((high << 4) | low);
-    }
-    Ok(bytes)
-}
-
-const fn hex_nibble(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        _ => None,
-    }
-}
-
-#[cfg(test)]
-mod hex_differential {
-    use super::{hex_decode, hex_nibble, render_hex_blocks};
-    use crate::hex_differential::{digits, encodings};
-
-    #[test]
-    fn hex_blocks_and_decode_match_the_frozen_tables() {
-        for (input, lower, upper) in encodings() {
-            let mut out = Vec::new();
-            render_hex_blocks(&input, |block| {
-                out.extend_from_slice(block);
-                Ok(())
-            })
-            .unwrap();
-            assert_eq!(out, lower.as_bytes());
-            assert_eq!(hex_decode(&lower, "d", "p").unwrap(), input);
-            assert_eq!(hex_decode(&upper, "d", "p").is_ok(), upper == lower);
-        }
-        for (byte, (_, canonical)) in digits().into_iter().enumerate() {
-            assert_eq!(hex_nibble(byte as u8), canonical, "{byte:#04x}");
-        }
-    }
+    purrdf_hash::hex::decode_canonical(value).map_err(|error| {
+        let reason = match error {
+            purrdf_hash::hex::HexError::OddLength { .. } => {
+                format!("{description} lowercase-hex payload has odd length")
+            }
+            _ => format!("{description} contains a non-lowercase-hex digit"),
+        };
+        ProjectionError::syntax(reason).at_path(path)
+    })
 }

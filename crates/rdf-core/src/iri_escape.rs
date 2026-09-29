@@ -163,18 +163,18 @@ pub fn find_first_candidate(bytes: &[u8]) -> Option<usize> {
     CANDIDATES.find_first(bytes)
 }
 
-/// Upper-case hex digits, for the `\u00XX` spelling.
-const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
-
 /// Append the `UCHAR` of `ch`, a scalar [`is_iriref_escape_required`] answers
 /// `true` for and hence at most U+009F: `\u00XX` in upper-case hex, the bytes
 /// `write!(out, "\\u{:04X}", ch as u32)` produces.
 fn push_uchar<W: TextOut + ?Sized>(ch: char, out: &mut W) {
     let v = u32::from(ch);
     debug_assert!(v <= 0x9F, "only scalars up to U+009F are escaped");
+    let mut digits = [0u8; 2];
     out.push_str("\\u00");
-    out.push(char::from(HEX_UPPER[((v >> 4) & 0xF) as usize]));
-    out.push(char::from(HEX_UPPER[(v & 0xF) as usize]));
+    out.push_str(
+        purrdf_hash::hex::encode_upper_to_slice(&[v as u8], &mut digits)
+            .expect("one byte renders in two digits"),
+    );
 }
 
 /// Append `iri[at..]` escaped, copying each run between two escapes whole.
@@ -455,25 +455,5 @@ mod tests {
         const { assert!(is_iriref_escape_required('\\')) }
         const { assert!(is_iriref_escape_required('\u{7F}')) }
         const { assert!(!is_iriref_escape_required('\u{A0}')) }
-    }
-}
-
-#[cfg(test)]
-mod hex_differential {
-    use super::push_uchar;
-
-    /// The `\u00XX` UCHAR against the uppercase field of every one-byte record
-    /// up to U+009F.
-    #[test]
-    fn uchar_matches_the_frozen_table() {
-        for (input, _, upper) in crate::hex_frozen_vectors::encodings() {
-            if let [byte] = input[..]
-                && byte <= 0x9f
-            {
-                let mut out = String::new();
-                push_uchar(char::from(byte), &mut out);
-                assert_eq!(out, format!("\\u00{upper}"));
-            }
-        }
     }
 }

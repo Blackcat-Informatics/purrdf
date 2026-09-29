@@ -170,7 +170,7 @@ const ROWS: u64 = 10_000;
 
 /// A 64-character lowercase-hex generation, the width the shipped text producer's
 /// index fingerprint renders to.
-const GENERATION: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
+const GENERATION: &str = "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c4b5a69788796a5b4c3d2e1f0";
 
 /// How a fixture cursor attests the generation it already knows.
 #[derive(Clone, Copy)]

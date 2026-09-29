@@ -159,7 +159,6 @@ impl Iri {
 /// RFC 3987 §3.1 step 2 over one component: every non-ASCII code point becomes
 /// the upper-case `%HH` escapes of its UTF-8 octets.
 fn percent_encode_non_ascii(component: &str, out: &mut String) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     for c in component.chars() {
         if c.is_ascii() {
             out.push(c);
@@ -168,8 +167,7 @@ fn percent_encode_non_ascii(component: &str, out: &mut String) {
         let mut utf8 = [0_u8; 4];
         for &octet in c.encode_utf8(&mut utf8).as_bytes() {
             out.push('%');
-            out.push(char::from(HEX[usize::from(octet >> 4)]));
-            out.push(char::from(HEX[usize::from(octet & 0x0F)]));
+            purrdf_hash::hex::encode_upper_into(&[octet], out);
         }
     }
 }
@@ -1138,7 +1136,7 @@ mod tests {
             assert_eq!(
                 cls & UNRESERVED != 0,
                 c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'),
-                "UNRESERVED mismatch at 0x{b:02X}"
+                "UNRESERVED mismatch at {b:#04X}"
             );
             assert_eq!(
                 cls & SUB_DELIMS != 0,
@@ -1146,77 +1144,21 @@ mod tests {
                     c,
                     '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
                 ),
-                "SUB_DELIMS mismatch at 0x{b:02X}"
+                "SUB_DELIMS mismatch at {b:#04X}"
             );
-            assert_eq!(cls & COLON != 0, c == ':', "COLON mismatch at 0x{b:02X}");
-            assert_eq!(cls & AT != 0, c == '@', "AT mismatch at 0x{b:02X}");
-            assert_eq!(cls & SLASH != 0, c == '/', "SLASH mismatch at 0x{b:02X}");
+            assert_eq!(cls & COLON != 0, c == ':', "COLON mismatch at {b:#04X}");
+            assert_eq!(cls & AT != 0, c == '@', "AT mismatch at {b:#04X}");
+            assert_eq!(cls & SLASH != 0, c == '/', "SLASH mismatch at {b:#04X}");
             assert_eq!(
                 cls & QUESTION != 0,
                 c == '?',
-                "QUESTION mismatch at 0x{b:02X}"
+                "QUESTION mismatch at {b:#04X}"
             );
             assert_eq!(
                 cls & SCHEME_TAIL != 0,
                 c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'),
-                "SCHEME_TAIL mismatch at 0x{b:02X}"
+                "SCHEME_TAIL mismatch at {b:#04X}"
             );
         }
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
-mod hex_frozen_vectors {
-
-
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    /// Every frozen record: input bytes, lowercase and uppercase renderings.
-    fn records() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().expect("length");
-                let first: u8 = r.fields[1].parse().expect("first");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
-            })
-            .collect()
-    }
-
-    /// Every byte with its any-case, lowercase and uppercase digit values.
-    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
-        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
-        file.records()
-            .iter()
-            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
-            .collect()
-    }
-
-    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
-    fn pairs() -> Vec<(String, String)> {
-        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
-    }
-
-
-    #[test]
-    fn percent_encoding_replays_the_frozen_vectors() {
-        let table = pairs();
-        let chars: Vec<char> = (0x80u32..=0x10ffff).step_by(97).filter_map(char::from_u32).collect();
-        for c in chars {
-            let mut expected = String::new();
-            let mut utf8 = [0u8; 4];
-            for &octet in c.encode_utf8(&mut utf8).as_bytes() {
-                expected.push('%');
-                expected.push_str(&table[usize::from(octet)].1);
-            }
-            let mut out = String::new();
-            super::percent_encode_non_ascii(&format!("a{c}"), &mut out);
-            assert_eq!(out, format!("a{expected}"));
-        }
-    }
-
 }

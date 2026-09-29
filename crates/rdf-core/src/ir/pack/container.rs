@@ -331,8 +331,8 @@ impl std::fmt::Display for PackError {
                 write!(
                     f,
                     "pack-container: canonical-identity digest mismatch: header claims {}, recomputed {}",
-                    crate::hex::lower(expected),
-                    crate::hex::lower(computed)
+                    purrdf_hash::hex::Lower(expected),
+                    purrdf_hash::hex::Lower(computed)
                 )
             }
             Self::ViewNotReady { checkpoint, cause } => write!(

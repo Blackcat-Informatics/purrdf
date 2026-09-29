@@ -28,6 +28,7 @@
 
 use std::fmt;
 
+use purrdf_hash::hex::Lower;
 use sha2::{Digest, Sha256};
 
 use super::identity::Identity;
@@ -159,8 +160,8 @@ impl fmt::Display for ArtifactError {
             Self::ContainerDigestMismatch { expected, computed } => write!(
                 f,
                 "artifact: container digest mismatch: trailer claims {}, recomputed {}",
-                hex32(expected),
-                hex32(computed)
+                Lower(expected),
+                Lower(computed)
             ),
             Self::TrailerMismatch => write!(f, "artifact: trailer does not describe this buffer"),
             Self::DuplicateSection { kind } => {
@@ -178,18 +179,6 @@ impl fmt::Display for ArtifactError {
 }
 
 impl std::error::Error for ArtifactError {}
-
-/// Lowercase-hex a 32-byte digest for [`ArtifactError`]'s `Display`. A local
-/// helper rather than a shared utility: this module owes nothing to any layer
-/// above it, and a digest renderer is four lines.
-fn hex32(digest: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
 
 // ---------------------------------------------------------------------------
 // Small byte-header write/read helpers (explicit LE, no pointer casts).
@@ -1246,18 +1235,5 @@ mod tests {
         assert_eq!(align_up(8).expect("aligns"), 8);
         assert_eq!(align_up(9).expect("aligns"), 16);
         assert!(align_up(usize::MAX).is_err());
-    }
-}
-
-#[cfg(test)]
-mod hex_differential {
-    /// `hex32` against the frozen table.
-    #[test]
-    fn hex32_matches_the_frozen_table() {
-        for (input, lower, _) in crate::hex_frozen_vectors::encodings() {
-            if let Ok(digest) = <[u8; 32]>::try_from(input.as_slice()) {
-                assert_eq!(super::hex32(&digest), lower);
-            }
-        }
     }
 }

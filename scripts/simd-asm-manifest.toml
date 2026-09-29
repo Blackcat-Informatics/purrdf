@@ -1718,15 +1718,15 @@ summary = "`Interner::intern`, the fixed-key ahash term interner"
   forbid_relaxed = true
 
 [[site]]
-id = "core.content-id-hex"
-summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_hex_32_lower` / `decode_hex_32`): sixteen-byte compare lanes, a vertical rejection accumulator folded once, then the nibble pack"
+id = "hash.hex-decode"
+summary = "`hex::decode_32_canonical` and `hex::decode_32` (behind `Digest32::from_hex`, `Blake3ContentId::from_hex` and `ContentDigest::from_hex`): sixteen-byte compare lanes, a vertical rejection accumulator folded once, then the nibble pack"
 
   # Sixteen-byte lanes: unsigned range compares as `pminub` + `pcmpeqb`, the rejection fold by `pmovmskb`. Measured v83.
   [[site.measure]]
-  label = "content-id sse2"
+  label = "canonical sse2"
   configs = ["x86_64"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32_canonical"
   min_vector_ops = 41
   require_mnemonics = ["pcmpeqb", "pminub", "pmovmskb"]
   max_fma = 0
@@ -1734,10 +1734,10 @@ summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_he
 
   # The same shape, VEX-encoded. Measured v60.
   [[site.measure]]
-  label = "content-id avx2"
+  label = "canonical avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32_canonical"
   min_vector_ops = 30
   require_mnemonics = ["vpcmpeqb", "vpminub", "vpmovmskb"]
   max_fma = 0
@@ -1745,10 +1745,10 @@ summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_he
 
   # With AVX-512 in the build the unsigned compares are native and write mask registers. Measured v28.
   [[site.measure]]
-  label = "content-id avx512 masks"
+  label = "canonical avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32_canonical"
   min_vector_ops = 14
   require_mnemonics = ["vpcmpltub", "vpcmpnleub"]
   max_fma = 0
@@ -1756,10 +1756,10 @@ summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_he
 
   # NEON unsigned byte compares; `addp` folds the rejection lanes. Measured v58 (aarch64), v58 (aarch64-neoverse-v1).
   [[site.measure]]
-  label = "content-id neon"
+  label = "canonical neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32_canonical"
   min_vector_ops = 29
   require_mnemonics = ["cmhi", "cmhs"]
   max_fma = 0
@@ -1767,20 +1767,20 @@ summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_he
 
   # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
   [[site.measure]]
-  label = "content-id scalar"
+  label = "canonical scalar"
   configs = ["wasm32"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32_canonical"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
   # Packed unsigned byte compares. Measured v58.
   [[site.measure]]
-  label = "content-id simd128"
+  label = "canonical simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_id::Blake3ContentId>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32_canonical"
   min_vector_ops = 29
   require_mnemonics = ["i8x16.lt_u", "i8x16.gt_u"]
   max_fma = 0
@@ -1788,10 +1788,10 @@ summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_he
 
   # Sixteen-byte lanes: unsigned range compares as `pminub` + `pcmpeqb`, the rejection fold by `pmovmskb`. Measured v87.
   [[site.measure]]
-  label = "content-store sse2"
+  label = "either-case sse2"
   configs = ["x86_64"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32"
   min_vector_ops = 43
   require_mnemonics = ["pcmpeqb", "pminub", "pmovmskb"]
   max_fma = 0
@@ -1799,10 +1799,10 @@ summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_he
 
   # The same shape, VEX-encoded. Measured v64.
   [[site.measure]]
-  label = "content-store avx2"
+  label = "either-case avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32"
   min_vector_ops = 32
   require_mnemonics = ["vpcmpeqb", "vpminub", "vpmovmskb"]
   max_fma = 0
@@ -1810,10 +1810,10 @@ summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_he
 
   # With AVX-512 in the build the unsigned compares are native and write mask registers. Measured v32.
   [[site.measure]]
-  label = "content-store avx512 masks"
+  label = "either-case avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32"
   min_vector_ops = 16
   require_mnemonics = ["vpcmpltub", "vpcmpnleub"]
   max_fma = 0
@@ -1821,10 +1821,10 @@ summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_he
 
   # NEON unsigned byte compares; `addp` folds the rejection lanes. Measured v62 (aarch64), v62 (aarch64-neoverse-v1).
   [[site.measure]]
-  label = "content-store neon"
+  label = "either-case neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32"
   min_vector_ops = 31
   require_mnemonics = ["cmhi", "cmhs"]
   max_fma = 0
@@ -1832,35 +1832,35 @@ summary = "`Blake3ContentId::from_hex` and `ContentDigest::from_hex` (`decode_he
 
   # Baseline wasm32 has no vector instructions: the lane loop is straight-line scalar code, same result. Measured v0.
   [[site.measure]]
-  label = "content-store scalar"
+  label = "either-case scalar"
   configs = ["wasm32"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
   # Packed unsigned byte compares. Measured v61.
   [[site.measure]]
-  label = "content-store simd128"
+  label = "either-case simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "<purrdf_core::content_store::ContentDigest>::from_hex"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::decode_32"
   min_vector_ops = 30
   require_mnemonics = ["i8x16.lt_u", "i8x16.gt_u"]
   max_fma = 0
   forbid_relaxed = true
 
 [[site]]
-id = "core.hex-lower"
-summary = "`hex::lower`, lowercase hex encoding: each nibble mapped to its digit by a compare-selected addend, written into a buffer sized up front"
+id = "hash.hex-lower"
+summary = "`hex::encode_portable`, the compare-select base16 loop behind every entry point up to `hex::SHORT_MAX` bytes: each nibble mapped to its digit by a compare-selected addend, written into a buffer sized up front"
 
   # Packed byte compares select the letter addend; `punpcklbw` interleaves the two digits of each byte. Measured v36.
   [[site.measure]]
   label = "sse2"
   configs = ["x86_64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::hex::lower"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::encode_portable"
   min_vector_ops = 18
   require_mnemonics = ["pcmpgtb", "paddb", "punpcklbw"]
   max_fma = 0
@@ -1870,8 +1870,8 @@ summary = "`hex::lower`, lowercase hex encoding: each nibble mapped to its digit
   [[site.measure]]
   label = "avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::hex::lower"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::encode_portable"
   min_vector_ops = 13
   require_mnemonics = ["vpcmpgtb", "vpaddb"]
   max_fma = 0
@@ -1881,8 +1881,8 @@ summary = "`hex::lower`, lowercase hex encoding: each nibble mapped to its digit
   [[site.measure]]
   label = "avx512"
   configs = ["x86_64-v4"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::hex::lower"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::encode_portable"
   min_vector_ops = 12
   require_mnemonics = ["vpcmpgtb", "vpaddb"]
   max_fma = 0
@@ -1892,8 +1892,8 @@ summary = "`hex::lower`, lowercase hex encoding: each nibble mapped to its digit
   [[site.measure]]
   label = "neon"
   configs = ["aarch64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::hex::lower"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::encode_portable"
   min_vector_ops = 13
   require_mnemonics = ["cmhi", "add"]
   max_fma = 0
@@ -1903,8 +1903,8 @@ summary = "`hex::lower`, lowercase hex encoding: each nibble mapped to its digit
   [[site.measure]]
   label = "sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::hex::lower"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::encode_portable"
   min_vector_ops = 11
   require_mnemonics = ["cmphi", "cmhi"]
   max_fma = 0
@@ -1914,8 +1914,8 @@ summary = "`hex::lower`, lowercase hex encoding: each nibble mapped to its digit
   [[site.measure]]
   label = "scalar"
   configs = ["wasm32"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::hex::lower"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::encode_portable"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -1924,8 +1924,8 @@ summary = "`hex::lower`, lowercase hex encoding: each nibble mapped to its digit
   [[site.measure]]
   label = "simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::hex::lower"
+  crate = "purrdf_hash"
+  symbol = "purrdf_hash::hex::encode_portable"
   min_vector_ops = 6
   require_mnemonics = ["i8x16.gt_u", "i8x16.add"]
   max_fma = 0

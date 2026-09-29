@@ -138,7 +138,6 @@ use purrdf_core::RdfDataset;
 use purrdf_datalog::clause::HeadForm;
 
 use crate::EntailError;
-use crate::digest_hex::hex;
 use crate::owl_dl::Kb;
 use crate::owl_dl::clause::{BodyAtom, ClauseSet, DlClause, HeadAtom, derive};
 use crate::owl_dl::concept::{Decomp, Role};
@@ -2560,8 +2559,8 @@ impl std::fmt::Debug for DlProofContext {
     /// binds rather than by what it holds.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DlProofContext")
-            .field("input", &hex(self.input))
-            .field("contract", &hex(self.contract))
+            .field("input", &purrdf_hash::hex::encode(&self.input))
+            .field("contract", &purrdf_hash::hex::encode(&self.contract))
             .field("clauses", &self.clauses.count())
             .finish_non_exhaustive()
     }
@@ -2824,14 +2823,14 @@ impl DlProof {
     pub fn bound_to(&self, ctx: &DlProofContext) -> Result<(), DlProofError> {
         if ctx.input != self.input {
             return Err(DlProofError::InputMismatch {
-                expected: hex(ctx.input),
-                stated: hex(self.input),
+                expected: purrdf_hash::hex::encode(&ctx.input),
+                stated: purrdf_hash::hex::encode(&self.input),
             });
         }
         if ctx.contract != self.contract {
             return Err(DlProofError::ContractMismatch {
-                expected: hex(ctx.contract),
-                stated: hex(self.contract),
+                expected: purrdf_hash::hex::encode(&ctx.contract),
+                stated: purrdf_hash::hex::encode(&self.contract),
             });
         }
         if self.trust_base != TrustBaseEntry::ALL {
@@ -3669,7 +3668,7 @@ impl DlProof {
     /// [`Self::digest`] as 64 lowercase hex characters.
     #[must_use]
     pub fn digest_hex(&self) -> String {
-        hex(self.digest())
+        purrdf_hash::hex::encode(&self.digest())
     }
 
     /// Rebuild a proof from [`Self::encode`]d bytes.
@@ -4928,10 +4927,6 @@ fn head_atom_hash(hasher: &mut purrdf_hash::blake3::RecordHasher, atom: &HeadAto
 }
 
 // ── Byte plumbing ───────────────────────────────────────────────────────────────
-//
-// The hex renderer used to live here too, as its own `char::from_digit` loop; it is now
-// `crate::digest_hex::hex`, the one first-party renderer this crate's three digest-bearing
-// proof modules share (see that module's doc comment for why).
 
 /// A [`DlProofError::Malformed`] carrying `detail`.
 pub(crate) fn malformed(detail: &str) -> DlProofError {

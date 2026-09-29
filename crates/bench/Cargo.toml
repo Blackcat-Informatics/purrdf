@@ -28,3 +28,5 @@ path = "src/main.rs"
 purrdf-rdf = { workspace = true }
 # Test-only: parse the --manifest JSON contract in the CLI integration tests.
 serde_json = { workspace = true }
+# Test-only: the base16 reader and writer the percent-escape checks spell octets with.
+purrdf-hash = { workspace = true }

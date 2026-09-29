@@ -33,10 +33,14 @@
 #                  (`0xcbf2_9ce4_8422_2325` is its decimal spelling too).
 #   fingerprints = helper-census ids: `body:<hex>` (a structural body shape),
 #                  `shim:<hex>` (a forwarder shape), `table:hex-lower` or
-#                  `table:hex-upper` (a hex-digit table), or a census rule over
-#                  every first-party file, tests and benches included
-#                  (`rule:std-default-hasher`: a std HashMap/HashSet left on
-#                  its random default hasher), or a rule another gate computes
+#                  `table:hex-upper` (a hex-digit table in shipping code), or a
+#                  census rule over every first-party file, tests and benches
+#                  included (`rule:std-default-hasher`: a std HashMap/HashSet
+#                  left on its random default hasher; `rule:hex-format-loop`: a
+#                  `{:02x}`/`{:02X}` format inside a loop or closure;
+#                  `rule:hex-pair-radix`: `u8::from_str_radix(_, 16)`;
+#                  `rule:hex-table`: a hex-digit table, exempt inside the home
+#                  package), or a rule another gate computes
 #                  over shipping code (from scripts/check-hash-domains.py:
 #                  `rule:raw-hash-domain`, a domain-shaped literal handed to a
 #                  hasher without a purrdf_hash::Domain; `rule:shared-hash-domain`,
@@ -193,14 +197,6 @@ detector = "undomained-digest"
 criterion = "a"
 anchor = "purrdf_core::artifact::identity::Identity::refresh"
 reason = "An artifact identity digest is its own kind, compared only with another identity digest, and is sealed into every artifact header; a domain would break every artifact already written."
-
-[[job.variant]]
-symbol = "purrdf_rdf::gts_compose::SnapshotBuilder::snapshot_content_id"
-file = "crates/rdf/src/gts_compose.rs"
-detector = "undomained-digest"
-criterion = "a"
-anchor = "purrdf_rdf::gts_compose::SnapshotBuilder::snapshot_content_id"
-reason = "A snapshot content id is its own kind, compared only with another snapshot content id, and is recorded against the GTS archives it attests; a domain would break every recorded id for an existing archive."
 
 [[job]]
 id = "blake3"
@@ -409,21 +405,36 @@ fingerprints = []
 names = []
 
 [[job]]
-id = "lowercase-hex"
-summary = "Lowercase base16 rendering of byte strings"
-home = "purrdf_hash::hex::Lower"
-entry_points = ["purrdf_core::hex::lower"]
-spec = "RFC 4648 section 8 (base16), lowercase alphabet"
-vectors = []
+id = "hex"
+summary = "Base16: rendering bytes in either case, reading either-case and canonical-lowercase text, the single hex digit, and the 32-byte digest value"
+home = "purrdf_hash::hex::encode"
+entry_points = [
+    "purrdf_hash::hex::Lower",
+    "purrdf_hash::hex::Upper",
+    "purrdf_hash::hex::encode_into",
+    "purrdf_hash::hex::encode_to_slice",
+    "purrdf_hash::hex::decode",
+    "purrdf_hash::hex::decode_canonical",
+    "purrdf_hash::hex::decode_32",
+    "purrdf_hash::hex::decode_32_canonical",
+    "purrdf_hash::hex::nibble",
+    "purrdf_hash::hex::nibble_canonical",
+    "purrdf_hash::hex::Digest32",
+]
+spec = "RFC 4648 section 8 (base16); the xsd:hexBinary lexical space of XML Schema 1.1 Part 2 section 3.3.15, read in either case; the canonical lowercase form of a content address"
+vectors = [
+    "crates/hash-conformance/tests/vectors/hex_vectors.txt",
+    "crates/hash-conformance/tests/vectors/hex_digit_vectors.txt",
+]
 bench = ["purrdf-hash-conformance:digests"]
-sites = ["hash.hex-encode"]
+sites = ["hash.hex-encode", "hash.hex-lower", "hash.hex-decode"]
 replaces_external = ["hex"]
-enforced = false
+enforced = true
 
 [job.forbidden]
 constants = []
-fingerprints = ["table:hex-lower"]
-names = []
+fingerprints = ["rule:hex-table", "rule:hex-format-loop", "rule:hex-pair-radix"]
+names = ['^(hex_value|hex_val|hex_digit|hex_nibble|lower_hex_value|unhex|encode_hex|decode_hex)$']
 
 [[job]]
 id = "json-schema-validation"

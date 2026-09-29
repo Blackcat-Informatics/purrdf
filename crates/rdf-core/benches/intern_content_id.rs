@@ -42,6 +42,9 @@ use purrdf_testkit::bench::{BatchSize, Bench, bench_group, bench_main, black_box
 /// Number of IRIs interned per measured iteration.
 const N: u32 = 10_000;
 
+/// The content-id recognition prefix the scheme-active groups configure.
+const SCHEME: &str = "blake3:";
+
 /// Build the ordinary (non-content-id) IRI set once: `http://example.org/r/{i}`
 /// for `i` in `0..N`. Distinct per `i` so every intern is a genuine new-entry
 /// insert, not a dedup hit.
@@ -62,7 +65,7 @@ fn content_id_iris() -> Vec<String> {
             debug_assert_eq!(octet.len(), 8);
             let hex64 = octet.repeat(8);
             debug_assert_eq!(hex64.len(), 64);
-            format!("blake3:{hex64}")
+            format!("{SCHEME}{hex64}")
         })
         .collect()
 }
@@ -98,7 +101,7 @@ fn bench_ordinary_scheme_active(c: &mut Bench) {
         b.iter_batched(
             || iris.clone(),
             |iris| {
-                let scheme = ContentIdScheme::new("blake3:").expect("valid scheme prefix");
+                let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme prefix");
                 let mut builder = RdfDatasetBuilder::with_content_addressing(scheme, None);
                 for iri in &iris {
                     black_box(builder.intern_iri(black_box(iri)));
@@ -121,7 +124,7 @@ fn bench_content_ids_scheme_active(c: &mut Bench) {
         b.iter_batched(
             || iris.clone(),
             |iris| {
-                let scheme = ContentIdScheme::new("blake3:").expect("valid scheme prefix");
+                let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme prefix");
                 let mut builder = RdfDatasetBuilder::with_content_addressing(scheme, None);
                 for iri in &iris {
                     black_box(builder.intern_iri(black_box(iri)));

@@ -92,8 +92,10 @@ fn pct_normalize(s: &str) -> String {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
             let hi = bytes[i + 1];
             let lo = bytes[i + 2];
-            if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
-                let decoded = (hex_val(hi) << 4) | hex_val(lo);
+            if let (Some(high), Some(low)) =
+                (purrdf_hash::hex::nibble(hi), purrdf_hash::hex::nibble(lo))
+            {
+                let decoded = (high << 4) | low;
                 if is_unreserved_byte(decoded) {
                     out.push(decoded as char);
                 } else {
@@ -113,15 +115,6 @@ fn pct_normalize(s: &str) -> String {
     out
 }
 
-fn hex_val(b: u8) -> u8 {
-    match b {
-        b'0'..=b'9' => b - b'0',
-        b'a'..=b'f' => b - b'a' + 10,
-        b'A'..=b'F' => b - b'A' + 10,
-        _ => unreachable!("guarded by is_ascii_hexdigit"),
-    }
-}
-
 fn is_unreserved_byte(b: u8) -> bool {
     b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
 }
@@ -137,52 +130,4 @@ fn utf8_len(b: u8) -> usize {
     } else {
         4
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
-mod hex_frozen_vectors {
-
-
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    /// Every frozen record: input bytes, lowercase and uppercase renderings.
-    fn records() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().expect("length");
-                let first: u8 = r.fields[1].parse().expect("first");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
-            })
-            .collect()
-    }
-
-    /// Every byte with its any-case, lowercase and uppercase digit values.
-    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
-        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
-        file.records()
-            .iter()
-            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
-            .collect()
-    }
-
-    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
-    fn pairs() -> Vec<(String, String)> {
-        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
-    }
-
-
-    #[test]
-    fn percent_digit_replays_the_frozen_vectors() {
-        for (byte, any, _, _) in digits() {
-            if let Some(value) = any {
-                assert_eq!(super::hex_val(byte), value, "{byte}");
-            }
-        }
-    }
-
 }

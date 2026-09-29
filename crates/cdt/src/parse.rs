@@ -821,18 +821,13 @@ impl<'a> Scanner<'a> {
         };
         let mut value: u32 = 0;
         for byte in hex.bytes() {
-            let nibble = match byte {
-                b'0'..=b'9' => u32::from(byte - b'0'),
-                b'a'..=b'f' => u32::from(byte - b'a') + 10,
-                b'A'..=b'F' => u32::from(byte - b'A') + 10,
-                _ => {
-                    return Err(CdtError::BadEscape {
-                        offset: start,
-                        reason: "a \\u escape takes hexadecimal digits only",
-                    });
-                }
+            let Some(nibble) = purrdf_hash::hex::nibble(byte) else {
+                return Err(CdtError::BadEscape {
+                    offset: start,
+                    reason: "a \\u escape takes hexadecimal digits only",
+                });
             };
-            value = value * 16 + nibble;
+            value = value * 16 + u32::from(nibble);
         }
         let Some(ch) = char::from_u32(value) else {
             return Err(CdtError::BadEscape {
@@ -1054,85 +1049,3 @@ fn finish_map(mut entries: Vec<(usize, CdtEntry)>) -> Result<CdtValue, CdtError>
 // transcription now lives in `purrdf_iri::terminals`, with the W3C production
 // quoted at each predicate and its ranges proved sorted and disjoint at compile
 // time; `parse_blank_node_label` reaches it directly.
-
-#[cfg(test)]
-mod hex_frozen_differential {
-    use alloc::format;
-    use alloc::string::String;
-    use alloc::vec::Vec;
-
-    use super::Scanner;
-
-    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
-
-    /// Every frozen record: its input bytes, lowercase and uppercase digits.
-    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
-        let file =
-            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
-        file.records()
-            .iter()
-            .map(|record| {
-                let len: usize = record.fields[0].parse().expect("a decimal length");
-                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
-                    .expect("lowercase digits");
-                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
-                    .expect("uppercase digits");
-                (input, lower, upper)
-            })
-            .collect()
-    }
-
-    const HEX_DIGIT_VECTORS: &str =
-        include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt");
-
-    /// A byte with its frozen any-case, lowercase and uppercase digit values.
-    type DigitRecord = (u8, Option<u8>, Option<u8>, Option<u8>);
-
-    /// Every byte's digit record.
-    fn frozen_digits() -> Vec<DigitRecord> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(HEX_DIGIT_VECTORS)
-            .expect("hex_digit_vectors.txt");
-        file.records()
-            .iter()
-            .map(|record| {
-                let value = |field: &str| field.parse::<u8>().ok();
-                let byte: u8 = record.fields[0].parse().expect("a decimal byte");
-                (
-                    byte,
-                    value(record.fields[1]),
-                    value(record.fields[2]),
-                    value(record.fields[3]),
-                )
-            })
-            .collect()
-    }
-
-    fn uchar(text: &str) -> Option<char> {
-        Scanner::new(text).parse_uchar().ok()
-    }
-
-    #[test]
-    fn unicode_escape_digits_match_the_frozen_vectors() {
-        for (byte, any, _, _) in frozen_digits() {
-            let text = format!("\\u004{}", char::from(byte));
-            let expected = any.and_then(|v| char::from_u32(0x40 + u32::from(v)));
-            assert_eq!(uchar(&text), expected, "{byte:#04x}");
-        }
-        for (input, lower, upper) in frozen_encodings() {
-            let (text, value) = match input[..] {
-                [a, b] => ("\\u", u32::from(u16::from_be_bytes([a, b]))),
-                [a, b, c, d] => ("\\U", u32::from_be_bytes([a, b, c, d])),
-                _ => continue,
-            };
-            for digits in [&lower, &upper] {
-                assert_eq!(
-                    uchar(&format!("{text}{digits}")),
-                    char::from_u32(value),
-                    "{digits}"
-                );
-            }
-        }
-    }
-}

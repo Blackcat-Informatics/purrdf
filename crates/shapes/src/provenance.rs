@@ -310,10 +310,7 @@ impl fmt::Display for ValidatorProvenance {
                     ProductRestore::Admitted => "restored-admitted ",
                     ProductRestore::Rebuilt => "restored-rebuilt ",
                 })?;
-                for byte in identity.digest() {
-                    write!(f, "{byte:02x}")?;
-                }
-                Ok(())
+                fmt::Display::fmt(&purrdf_hash::hex::Lower(identity.digest()), f)
             }
         }
     }

@@ -1758,15 +1758,13 @@ fn mint_tag(focus: Option<&Term>, execution: u64) -> String {
 fn focus_tag(focus: &Term) -> String {
     let rendered = focus.to_string();
     let mut tag = String::with_capacity(rendered.len() * 3 + 2);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     tag.push('f');
     for byte in rendered.bytes() {
         if byte.is_ascii_alphanumeric() {
             tag.push(char::from(byte));
         } else {
             tag.push('-');
-            tag.push(char::from(HEX[usize::from(byte >> 4)]));
-            tag.push(char::from(HEX[usize::from(byte & 0x0f)]));
+            purrdf_hash::hex::encode_into(&[byte], &mut tag);
         }
     }
     tag.push('_');
@@ -4074,58 +4072,4 @@ mod term_walk_tests {
         }
         assert!(carrying > 0, "some generated term carries a blank node");
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
-mod hex_frozen_vectors {
-
-
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    /// Every frozen record: input bytes, lowercase and uppercase renderings.
-    fn records() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().expect("length");
-                let first: u8 = r.fields[1].parse().expect("first");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
-            })
-            .collect()
-    }
-
-    /// Every byte with its any-case, lowercase and uppercase digit values.
-    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
-        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
-        file.records()
-            .iter()
-            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
-            .collect()
-    }
-
-    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
-    fn pairs() -> Vec<(String, String)> {
-        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
-    }
-
-
-    #[test]
-    fn focus_tag_replays_the_frozen_vectors() {
-        let table = pairs();
-        let text: String = (0x20u8..0x7f).map(char::from).chain(['é', '中', '\u{1F600}']).collect();
-        for term in [crate::term::Term::NamedNode(crate::term::NamedNode::new_unchecked(text.clone())), crate::term::Term::blank("b-1_x")] {
-            let rendered = term.to_string();
-            let mut expected = String::from("f");
-            for byte in rendered.bytes() {
-                if byte.is_ascii_alphanumeric() { expected.push(char::from(byte)); } else { expected.push('-'); expected.push_str(&table[usize::from(byte)].0); }
-            }
-            expected.push('_');
-            assert_eq!(super::focus_tag(&term), expected);
-        }
-    }
-
 }

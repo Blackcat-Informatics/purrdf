@@ -13,14 +13,7 @@ use std::path::{Path, PathBuf};
 use ciborium::value::Value;
 
 use crate::model::{Graph, Quad, Term, TermKind};
-// This crate's one lowercase-hex renderer, shared with `compact`, `openpgp`,
-// `reader` and the rest of the container. It is deliberately NOT
-// `purrdf_core::hex::lower` (the renderer the IR-side crates share): the GTS
-// container engine depends on the foundation crates (`purrdf-events`,
-// `purrdf-iri`, `purrdf-xsd`, `purrdf-hash`, `purrdf-deflate`) and never on the
-// IR kernel, and inverting that layering to save four lines would make every GTS
-// consumer pull `purrdf-core` in.
-use crate::wire::hex;
+use crate::wire::digest_label;
 use crate::writer::{Writer, WriterOptions, digest_string};
 
 const FILES_NS: &str = "https://w3id.org/gts/files#";
@@ -542,10 +535,7 @@ fn copy_counted_and_hash<R: Read, W: Write>(
             format!("blob source changed size: expected {expected_size}, read {written}"),
         ));
     }
-    Ok((
-        format!("blake3:{}", hex(digest.finalize().as_bytes())),
-        written,
-    ))
+    Ok((digest_label(digest.finalize().as_bytes()), written))
 }
 
 fn write_blob_preimage<R: Read, W: Write>(
@@ -1475,7 +1465,7 @@ fn suppressed_blob_digests(graph: &Graph) -> FastSet<String> {
                     } else if key == "digest" {
                         digest = Some(match v {
                             Value::Text(t) => t.clone(),
-                            Value::Bytes(b) => format!("blake3:{}", hex(b)),
+                            Value::Bytes(b) => digest_label(b),
                             _ => continue,
                         });
                     }

@@ -414,7 +414,8 @@ pub fn encode_str(text: &str) -> String {
         match character {
             '\\' => encoded.push_str("\\\\"),
             ascii if ascii.is_ascii() && escaped_in_text(ascii as u8) => {
-                let _ = write!(encoded, "\\x{:02x}", ascii as u8);
+                encoded.push_str("\\x");
+                purrdf_hash::hex::encode_into(&[ascii as u8], &mut encoded);
             }
             other => encoded.push(other),
         }
@@ -433,7 +434,8 @@ pub fn encode_bytes(bytes: &[u8]) -> String {
         match byte {
             b'\\' => encoded.push_str("\\\\"),
             byte if escaped_in_text(byte) || byte >= 0x80 => {
-                let _ = write!(encoded, "\\x{byte:02x}");
+                encoded.push_str("\\x");
+                purrdf_hash::hex::encode_into(&[byte], &mut encoded);
             }
             byte => encoded.push(char::from(byte)),
         }
@@ -506,9 +508,9 @@ fn decode(field: &str, encoding: Encoding) -> Result<Vec<u8>, VectorError> {
                 let digits = bytes
                     .get(index + 2..index + 4)
                     .ok_or_else(|| malformed("`\\x` needs two hex digits"))?;
-                let high = hex_value(digits[0])
+                let high = purrdf_hash::hex::nibble_canonical(digits[0])
                     .ok_or_else(|| malformed("`\\x` needs lowercase hex digits"))?;
-                let low = hex_value(digits[1])
+                let low = purrdf_hash::hex::nibble_canonical(digits[1])
                     .ok_or_else(|| malformed("`\\x` needs lowercase hex digits"))?;
                 let value = (high << 4) | low;
                 if value >= 0x80 && encoding == Encoding::Text {
@@ -531,84 +533,7 @@ fn decode(field: &str, encoding: Encoding) -> Result<Vec<u8>, VectorError> {
     Ok(decoded)
 }
 
-const fn hex_value(digit: u8) -> Option<u8> {
-    match digit {
-        b'0'..=b'9' => Some(digit - b'0'),
-        b'a'..=b'f' => Some(digit - b'a' + 10),
-        _ => None,
-    }
-}
-
 /// The lowercase hex SHA-256 of `data`.
 pub fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data)
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
-mod hex_frozen_vectors {
-
-
-    use crate::vectors::{VectorFile, decode_str};
-
-    /// Every frozen record: input bytes, lowercase and uppercase renderings.
-    fn records() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().expect("length");
-                let first: u8 = r.fields[1].parse().expect("first");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
-            })
-            .collect()
-    }
-
-    /// Every byte with its any-case, lowercase and uppercase digit values.
-    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
-        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
-        file.records()
-            .iter()
-            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
-            .collect()
-    }
-
-    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
-    fn pairs() -> Vec<(String, String)> {
-        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
-    }
-
-
-    #[test]
-    fn field_escapes_replay_the_frozen_vectors() {
-        let table = pairs();
-        for (byte, _, lower, _) in digits() {
-            assert_eq!(super::hex_value(byte), lower, "{byte}");
-        }
-        for byte in 0..=255u8 {
-            let encoded = super::encode_bytes(&[byte]);
-            if encoded.starts_with("\\x") {
-                assert_eq!(encoded, format!("\\x{}", table[usize::from(byte)].0));
-            }
-            if byte < 0x80 {
-                let text = super::encode_str(&char::from(byte).to_string());
-                if text.starts_with("\\x") {
-                    assert_eq!(text, format!("\\x{}", table[usize::from(byte)].0));
-                }
-            }
-        }
-        for data in [&b""[..], b"abc", &[0xff; 100]] {
-            use sha2::Digest as _;
-            let expected: String = sha2::Sha256::digest(data).iter().map(|&b| table[usize::from(b)].0.clone()).collect();
-            assert_eq!(super::sha256_hex(data), expected);
-        }
-    }
-
+    purrdf_hash::hex::encode(&Sha256::digest(data))
 }

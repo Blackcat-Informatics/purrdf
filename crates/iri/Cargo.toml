@@ -21,8 +21,8 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only foundation whose one runtime dependency is the zero-dependency
-# lexical layer `purrdf-lex` (layers.toml). It must stay wasm-clean and must not
+# rlib-only foundation whose runtime dependencies are the lexical layer
+# `purrdf-lex` and the zero-dependency root `purrdf-hash` (layers.toml). It must stay wasm-clean and must not
 # pull any oxigraph-family crate (it replaces `oxiri`). It does NOT depend on
 # `purrdf-core` — the dependency points the other way.
 crate-type = ["rlib"]
@@ -33,15 +33,15 @@ name = "purrdf_iri"
 # The grammar terminals, the byte-class scanners and the JSON string escaper,
 # re-exported as `purrdf_iri::{terminals, scan, json_escape}`.
 purrdf-lex = { workspace = true }
+# The base16 digit reader and uppercase writer behind percent-encoding, and the
+# fixed-key table hasher test-side maps use.
+purrdf-hash = { workspace = true }
 
 [dev-dependencies]
 # Round-trip / idempotency property tests (parse -> serialize, normalize twice)
 # on the shared property harness. Path-only and unpublished, so it is stripped
 # from the packaged manifest.
 purrdf-testkit = { workspace = true }
-# The fixed-key table hasher for test-side maps. Dev-only: it is no runtime
-# dependency of this crate.
-purrdf-hash = { workspace = true }
 
 [[bench]]
 name = "parse"

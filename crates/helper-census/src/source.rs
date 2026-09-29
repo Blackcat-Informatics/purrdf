@@ -245,9 +245,12 @@ impl Workspace {
                 continue;
             };
             match syn::parse_file(&source) {
-                Ok(parsed) => self
-                    .rule_hits
-                    .extend(crate::rules::std_default_hasher(package, &path, &parsed)),
+                Ok(parsed) => {
+                    self.rule_hits
+                        .extend(crate::rules::std_default_hasher(package, &path, &parsed));
+                    self.rule_hits
+                        .extend(crate::rules::hex_rules(package, &path, &parsed));
+                }
                 Err(error) => self.errors.push(format!("{path}: {error}")),
             }
         }

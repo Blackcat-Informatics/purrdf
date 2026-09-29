@@ -204,12 +204,9 @@ fn render_value(value: &[u8]) -> String {
     match std::str::from_utf8(value) {
         Ok(text) if !text.chars().any(char::is_control) => format!("\"{text}\""),
         _ => {
-            use std::fmt::Write as _;
             let mut hex = String::with_capacity(value.len() * 2 + 2);
             hex.push_str("0x");
-            for byte in value {
-                let _ = write!(hex, "{byte:02x}");
-            }
+            purrdf_hash::hex::encode_into(value, &mut hex);
             hex
         }
     }
@@ -647,23 +644,5 @@ mod tests {
         );
         assert_eq!(render_value(&[0x00, 0xff]), "0x00ff");
         assert_eq!(render_value(b""), "\"\"");
-    }
-}
-
-#[cfg(test)]
-mod hex_differential {
-    /// A value that is not printable text renders as `0x` and its lowercase
-    /// digits, against the frozen table.
-    #[test]
-    fn binary_values_match_the_frozen_table() {
-        for (input, lower, _) in crate::hex_frozen_vectors::encodings() {
-            let rendered = super::render_value(&input);
-            match std::str::from_utf8(&input) {
-                Ok(text) if !text.chars().any(char::is_control) => {
-                    assert_eq!(rendered, format!("\"{text}\""));
-                }
-                _ => assert_eq!(rendered, format!("0x{lower}")),
-            }
-        }
     }
 }

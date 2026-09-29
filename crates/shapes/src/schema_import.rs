@@ -428,15 +428,11 @@ fn fnv1a(bytes: &[u8]) -> u64 {
 /// This uses no shared counter, so adding a property does not renumber existing
 /// nested node shapes.
 fn property_shape_id(source: &Term, path: &str) -> Term {
-    use std::fmt::Write as _;
-
     let source = source.to_string();
     let mut label = String::from("schema-property");
     for part in [source.as_str(), path] {
         label.push('-');
-        for byte in part.bytes() {
-            write!(label, "{byte:02x}").expect("writing to a String cannot fail");
-        }
+        purrdf_hash::hex::encode_into(part.as_bytes(), &mut label);
     }
     Term::blank(label)
 }
@@ -4320,54 +4316,4 @@ mod tests {
             imported.losses.render_json()
         );
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
-mod hex_frozen_vectors {
-
-
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    /// Every frozen record: input bytes, lowercase and uppercase renderings.
-    fn records() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().expect("length");
-                let first: u8 = r.fields[1].parse().expect("first");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
-            })
-            .collect()
-    }
-
-    /// Every byte with its any-case, lowercase and uppercase digit values.
-    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
-        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
-        file.records()
-            .iter()
-            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
-            .collect()
-    }
-
-    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
-    fn pairs() -> Vec<(String, String)> {
-        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
-    }
-
-
-    #[test]
-    fn property_shape_label_replays_the_frozen_vectors() {
-        let source = crate::term::Term::blank("s");
-        let source_hex: String = source.to_string().bytes().map(|b| pairs()[usize::from(b)].0.clone()).collect();
-        for (input, lower, _) in records().iter().filter(|(i, _, _)| i.iter().all(u8::is_ascii)) {
-            let path = std::str::from_utf8(input).expect("ASCII");
-            let expected = format!("schema-property-{source_hex}-{lower}");
-            assert_eq!(super::property_shape_id(&source, path), crate::term::Term::blank(expected));
-        }
-    }
-
 }

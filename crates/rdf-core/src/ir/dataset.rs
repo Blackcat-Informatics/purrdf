@@ -3564,12 +3564,10 @@ mod tests {
 
         const DERIVED_FROM: &str = "http://example.org/wasDerivedFrom";
 
-        /// Renders through [`crate::hex::lower`] — the same renderer
-        /// `Blake3ContentId::to_hex` uses and the inverse of what
-        /// `Blake3ContentId::from_hex` decodes — rather than a test-local copy
-        /// of the byte loop.
+        /// The content-id IRI of the digest `[byte; 32]` under `scheme_prefix`,
+        /// spelt as `Blake3ContentId` renders and reads it.
         fn hex_iri(scheme_prefix: &str, byte: u8) -> String {
-            format!("{scheme_prefix}{}", crate::hex::lower(&[byte; 32]))
+            format!("{scheme_prefix}{}", Blake3ContentId::from_raw([byte; 32]))
         }
 
         /// `content_id`/`content_ids`/`derivation_predicate` round-trip through
@@ -3595,10 +3593,8 @@ mod tests {
 
             let ds = b.freeze().expect("valid dataset");
 
-            let expected1 =
-                Blake3ContentId::from_hex(&crate::hex::lower(&[0xAA; 32])).expect("valid hex");
-            let expected2 =
-                Blake3ContentId::from_hex(&crate::hex::lower(&[0xBB; 32])).expect("valid hex");
+            let expected1 = Blake3ContentId::from_raw([0xAA; 32]);
+            let expected2 = Blake3ContentId::from_raw([0xBB; 32]);
             assert_eq!(ds.content_id(ca1), Some(expected1));
             assert_eq!(ds.content_id(ca2), Some(expected2));
             assert_eq!(
@@ -3698,8 +3694,7 @@ mod tests {
                 last_ordinary = Some(ordinary);
                 let ca_iri = hex_iri("blake3:", n);
                 let ca_id = b.intern_iri(&ca_iri);
-                let digest =
-                    Blake3ContentId::from_hex(&crate::hex::lower(&[n; 32])).expect("valid hex");
+                let digest = Blake3ContentId::from_raw([n; 32]);
                 expected.push((ca_id, digest));
             }
             let s = last_ordinary.expect("at least one ordinary term interned");

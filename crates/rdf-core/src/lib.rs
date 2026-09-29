@@ -35,8 +35,6 @@
 
 // Blank-node label syntax shared by parser and serializer egress contracts.
 pub mod blank_label;
-#[cfg(test)]
-mod hex_frozen_vectors;
 pub mod cdt_blank;
 // The ONE transcription of which scalars an `IRIREF` writer must escape — the
 // egress mirror of the ingress production in `purrdf_iri::terminals`.
@@ -99,11 +97,6 @@ pub mod governor;
 // FastMap/FastSet/IdSet lookup-table aliases (determinism comes from id-sorting,
 // never hash order).
 pub mod hash;
-// The workspace's one one-shot lowercase-hex renderer (`&[u8]` -> `String`).
-// `pub` because its consumers are other crates — `purrdf-rdf`'s GTS bridges and
-// `purrdf-datalog`'s proof keys — not `purrdf-core` internals. Pure
-// `core`/`alloc`, dependency-free and wasm-clean.
-pub mod hex;
 // The one graph-role classifier: which nodes declare an OWL 2 ontology header, a SHACL
 // shapes graph or a SHACL data graph. The import rule and SHACL-SPARQL's implicit prefixes
 // both select from it.

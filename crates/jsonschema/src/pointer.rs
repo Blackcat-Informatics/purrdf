@@ -110,8 +110,8 @@ pub(crate) fn percent_decode(text: &str) -> Option<String> {
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' {
-            let high = hex_value(*bytes.get(index + 1)?)?;
-            let low = hex_value(*bytes.get(index + 2)?)?;
+            let high = purrdf_hash::hex::nibble(*bytes.get(index + 1)?)?;
+            let low = purrdf_hash::hex::nibble(*bytes.get(index + 2)?)?;
             out.push(high << 4 | low);
             index += 3;
         } else {
@@ -122,20 +122,10 @@ pub(crate) fn percent_decode(text: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-const fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
 /// Write an escaped pointer as a URI fragment body: every byte outside RFC
 /// 3986's `fragment` set (`pchar / "/" / "?"`) is percent-encoded, so the
 /// absolute keyword location is a well-formed URI.
 pub(crate) fn fragment_encode(pointer: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(pointer.len());
     for &byte in pointer.as_bytes() {
         let allowed = byte.is_ascii_alphanumeric()
@@ -164,8 +154,7 @@ pub(crate) fn fragment_encode(pointer: &str) -> String {
             out.push(char::from(byte));
         } else {
             out.push('%');
-            out.push(char::from(HEX[usize::from(byte >> 4)]));
-            out.push(char::from(HEX[usize::from(byte & 0x0f)]));
+            purrdf_hash::hex::encode_upper_into(&[byte], &mut out);
         }
     }
     out
@@ -204,63 +193,4 @@ mod tests {
         assert_eq!(fragment_encode("/a b/%/é"), "/a%20b/%25/%C3%A9");
         assert_eq!(fragment_encode("/properties/~0a~1b"), "/properties/~0a~1b");
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
-mod hex_frozen_vectors {
-
-
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    /// Every frozen record: input bytes, lowercase and uppercase renderings.
-    fn records() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().expect("length");
-                let first: u8 = r.fields[1].parse().expect("first");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
-            })
-            .collect()
-    }
-
-    /// Every byte with its any-case, lowercase and uppercase digit values.
-    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
-        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
-        file.records()
-            .iter()
-            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
-            .collect()
-    }
-
-    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
-    fn pairs() -> Vec<(String, String)> {
-        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
-    }
-
-
-    #[test]
-    fn pointer_hex_replays_the_frozen_vectors() {
-        for (byte, any, _, _) in digits() {
-            assert_eq!(super::hex_value(byte), any, "{byte}");
-        }
-        let table = pairs();
-        for byte in 0u8..0x80 {
-            let text = char::from(byte).to_string();
-            let encoded = super::fragment_encode(&text);
-            if encoded != text {
-                assert_eq!(encoded, format!("%{}", table[usize::from(byte)].1));
-            }
-        }
-        for c in ['é', '中', '\u{1F600}'] {
-            let mut utf8 = [0u8; 4];
-            let expected: String = c.encode_utf8(&mut utf8).bytes().map(|b| format!("%{}", table[usize::from(b)].1)).collect();
-            assert_eq!(super::fragment_encode(&c.to_string()), expected);
-        }
-    }
-
 }

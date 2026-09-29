@@ -19,6 +19,7 @@
 
 use purrdf_hash::backend::{Crc32Backend, Sha1Backend};
 use purrdf_hash::dispatch::{assert_required_available, host_advertises};
+use purrdf_hash::hex::encode;
 use purrdf_hash::md5::Md5;
 use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
 use purrdf_hash::{Backend, Digest};
@@ -34,14 +35,6 @@ fn input(length: usize, seed: u64) -> Vec<u8> {
     }
     bytes.truncate(length);
     bytes
-}
-
-fn hex(bytes: &[u8]) -> String {
-    use std::fmt::Write as _;
-    bytes.iter().fold(String::new(), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
 }
 
 /// Replays `text`, answering each record with `digest` of its input. `digest`
@@ -77,7 +70,7 @@ fn one_shot_and_streamed(
         one_shot,
         "streamed with a split at {split}"
     );
-    hex(one_shot)
+    encode(one_shot)
 }
 
 fn md5_vectors_are_reproduced() {
@@ -226,20 +219,7 @@ fn required_sha1_and_crc32_paths_are_available_and_selected() {
     }
 }
 
-/// The helper renders every frozen base16 record as its lowercase field.
-fn hex_helper_matches_the_frozen_base16_vectors() {
-    let file = VectorFile::parse(include_str!("vectors/hex_vectors.txt")).expect("hex_vectors.txt");
-    for record in file.records() {
-        let len: usize = record.fields[0].parse().expect("a decimal length");
-        let first: u8 = record.fields[1].parse().expect("a decimal first byte");
-        let input: Vec<u8> = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-        let lower = purrdf_testkit::vectors::decode_str(record.fields[2]).expect("digits");
-        assert_eq!(hex(&input), lower);
-    }
-}
-
 purrdf_testkit::harness_main!(
-    hex_helper_matches_the_frozen_base16_vectors,
     md5_vectors_are_reproduced,
     required_sha1_and_crc32_paths_are_available_and_selected,
     sha1_vectors_are_reproduced_on_every_path,

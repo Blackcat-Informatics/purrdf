@@ -361,15 +361,8 @@ impl<'a> CanonicalBytes<'a> {
 
     #[inline]
     fn queue_control_escape(&mut self, byte: u8) {
-        self.pending_escape = [
-            b'\\',
-            b'u',
-            b'0',
-            b'0',
-            hex_digit(u32::from(byte) >> 4),
-            hex_digit(u32::from(byte) & 0x0f),
-            0,
-        ];
+        self.pending_escape = [b'\\', b'u', b'0', b'0', 0, 0, 0];
+        write_upper_hex(&[byte], &mut self.pending_escape[4..6]);
         self.pending_len = 6;
         self.pending_pos = 0;
     }
@@ -378,15 +371,9 @@ impl<'a> CanonicalBytes<'a> {
     /// body's encoding of a character that is not an ASCII letter or digit.
     #[inline]
     fn queue_envelope_escape(&mut self, scalar: u32) {
-        self.pending_escape = [
-            b'_',
-            hex_digit(scalar >> 20),
-            hex_digit((scalar >> 16) & 0xf),
-            hex_digit((scalar >> 12) & 0xf),
-            hex_digit((scalar >> 8) & 0xf),
-            hex_digit((scalar >> 4) & 0xf),
-            hex_digit(scalar & 0xf),
-        ];
+        self.pending_escape = [b'_', 0, 0, 0, 0, 0, 0];
+        // A scalar value is at most `0x10FFFF`: its low three bytes are all of it.
+        write_upper_hex(&scalar.to_be_bytes()[1..], &mut self.pending_escape[1..7]);
         self.pending_len = 7;
         self.pending_pos = 0;
     }
@@ -536,11 +523,12 @@ impl<'a> CanonicalBytes<'a> {
     }
 }
 
-/// One uppercase hex digit of `nibble`'s low four bits.
+/// Writes the uppercase hex digits of `bytes` into `out`, which is exactly
+/// twice as long.
 #[inline]
-fn hex_digit(nibble: u32) -> u8 {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    HEX[(nibble & 0xf) as usize]
+fn write_upper_hex(bytes: &[u8], out: &mut [u8]) {
+    purrdf_hash::hex::encode_upper_to_slice(bytes, out)
+        .expect("every escape slot is sized to two digits per byte");
 }
 
 impl Iterator for CanonicalBytes<'_> {
@@ -1702,51 +1690,4 @@ pub(crate) mod term_walk_tests {
             .join()
             .expect("no walk overflowed the thread's stack");
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
-mod hex_frozen_vectors {
-
-
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    /// Every frozen record: input bytes, lowercase and uppercase renderings.
-    fn records() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().expect("length");
-                let first: u8 = r.fields[1].parse().expect("first");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
-            })
-            .collect()
-    }
-
-    /// Every byte with its any-case, lowercase and uppercase digit values.
-    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
-        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
-        file.records()
-            .iter()
-            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
-            .collect()
-    }
-
-    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
-    fn pairs() -> Vec<(String, String)> {
-        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
-    }
-
-
-    #[test]
-    fn uppercase_digit_replays_the_frozen_vectors() {
-        for (byte, (_, upper)) in (0..=255u8).zip(pairs()) {
-            let got = [super::hex_digit(u32::from(byte) >> 4), super::hex_digit(u32::from(byte) & 0x0f)];
-            assert_eq!(got, upper.as_bytes(), "{byte}");
-        }
-    }
-
 }

@@ -68,6 +68,8 @@ use std::fmt::Write as _;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use purrdf_hash::hex::nibble_canonical;
+
 use crate::RdfLiteral;
 
 use super::builder::RdfDatasetBuilder;
@@ -237,7 +239,12 @@ fn encode_blank(label: &str, scope: BlankScope) -> String {
         if byte.is_ascii_alphanumeric() {
             out.push(char::from(byte));
         } else {
-            let _ = write!(out, "-{byte:02x}");
+            out.push('-');
+            let mut digits = [0u8; 2];
+            out.push_str(
+                purrdf_hash::hex::encode_to_slice(&[byte], &mut digits)
+                    .expect("one byte renders in two digits"),
+            );
         }
     }
     out
@@ -275,7 +282,7 @@ fn decode_blank(encoded: &str) -> Result<(String, BlankScope), &'static str> {
                 let (Some(&hi), Some(&lo)) = (bytes.get(i + 1), bytes.get(i + 2)) else {
                     return Err("a '-' escape is not followed by two hex digits");
                 };
-                let (Some(hi), Some(lo)) = (lower_hex_value(hi), lower_hex_value(lo)) else {
+                let (Some(hi), Some(lo)) = (nibble_canonical(hi), nibble_canonical(lo)) else {
                     return Err("a '-' escape carries a non-lowercase-hex digit");
                 };
                 let byte = hi * 16 + lo;
@@ -295,16 +302,6 @@ fn decode_blank(encoded: &str) -> Result<(String, BlankScope), &'static str> {
     let label = String::from_utf8(label_bytes)
         .map_err(|_| "the escaped label bytes are not valid UTF-8")?;
     Ok((label, BlankScope(scope)))
-}
-
-/// The value of a lowercase hex digit (`[0-9a-f]`), or `None` — uppercase is
-/// rejected so every byte has exactly one escape spelling (canonicality).
-const fn lower_hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        _ => None,
-    }
 }
 
 /// How a whole-dataset rewrite maps the two leaf term kinds a rewrite may
@@ -1458,30 +1455,6 @@ mod term_walk_tests {
                 reference_blanks(&ds, id, &mut blanks);
             }
             assert_eq!(existing_blanks(&ds), blanks, "seed {seed}");
-        }
-    }
-}
-
-#[cfg(test)]
-mod hex_differential {
-    use super::{encode_blank, lower_hex_value};
-    use crate::ir::term::BlankScope;
-
-    /// The `-xx` escape of every non-alphanumeric ASCII byte, and the escape's
-    /// digit reader, against the frozen tables.
-    #[test]
-    fn escape_and_digit_reader_match_the_frozen_tables() {
-        for (input, lower, _) in crate::hex_frozen_vectors::encodings() {
-            if let [byte] = input[..]
-                && byte.is_ascii()
-                && !byte.is_ascii_alphanumeric()
-            {
-                let label = char::from(byte).to_string();
-                assert_eq!(encode_blank(&label, BlankScope::DEFAULT), format!("s0--{lower}"));
-            }
-        }
-        for (byte, _, canonical, _) in crate::hex_frozen_vectors::digits() {
-            assert_eq!(lower_hex_value(byte), canonical, "byte {byte}");
         }
     }
 }

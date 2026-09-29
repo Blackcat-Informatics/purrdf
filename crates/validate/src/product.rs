@@ -34,6 +34,7 @@
 use std::sync::Arc;
 
 use purrdf_core::RdfDataset;
+use purrdf_hash::hex::Lower;
 use purrdf_shapes::engine::{self, PreparedShapes};
 use purrdf_shapes::model::BoxRoleVocab;
 use purrdf_shapes::product::{
@@ -465,23 +466,14 @@ pub fn admit_shapes_product_expecting(
 /// A prescriptive message naming the fix when `text` is not 64 hexadecimal digits.
 pub fn parse_identity_digest(text: &str) -> Result<[u8; 32], String> {
     let trimmed = text.trim();
-    if trimmed.len() != 64 || !trimmed.bytes().all(|byte| byte.is_ascii_hexdigit()) {
-        return Err(format!(
+    purrdf_hash::hex::decode_32(trimmed).ok_or_else(|| {
+        format!(
             "an expected product identity is the 64 hexadecimal digits of the product's input \
              binding, and `{trimmed}` is not that; read the value off the product you mean — \
              `purrdf shacl explain` prints it on its `identity-digest` line — and pass it \
              unchanged"
-        ));
-    }
-
-    let mut digest = [0u8; 32];
-    for (slot, pair) in digest.iter_mut().zip(trimmed.as_bytes().as_chunks::<2>().0) {
-        let text = std::str::from_utf8(pair)
-            .expect("two ASCII hexadecimal digits are valid UTF-8 by the check above");
-        *slot = u8::from_str_radix(text, 16)
-            .expect("two ASCII hexadecimal digits parse as a byte by the check above");
-    }
-    Ok(digest)
+        )
+    })
 }
 
 /// **The forward-compatibility path.** Open `product` and re-derive the preparation
@@ -593,9 +585,9 @@ pub fn explain_shapes_product(product: &[u8]) -> Result<String, ShapesProductErr
 
     let mut out = String::new();
     let _ = writeln!(out, "format-version {}", view.format_version());
-    let _ = writeln!(out, "stage-id {}", hex(view.stage_id()));
+    let _ = writeln!(out, "stage-id {}", Lower(view.stage_id()));
     let _ = writeln!(out, "stage-known {}", view.stage_id() == &STAGE_ID);
-    let _ = writeln!(out, "identity-digest {}", hex(identity.digest()));
+    let _ = writeln!(out, "identity-digest {}", Lower(identity.digest()));
     let _ = writeln!(out, "identity-components {}", identity.components().len());
     for component in identity.components() {
         let _ = writeln!(
@@ -931,16 +923,6 @@ fn validate_prepared(
 // Rendering helpers
 // ---------------------------------------------------------------------------
 
-/// Lowercase-hex a 32-byte digest.
-fn hex(digest: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
-
 /// Render an identity component's value: quoted when it is printable UTF-8,
 /// `0x`-prefixed lowercase hex otherwise. See [`explain_shapes_product`].
 fn render_component(value: &[u8]) -> String {
@@ -949,12 +931,9 @@ fn render_component(value: &[u8]) -> String {
             format!("\"{text}\"")
         }
         _ => {
-            use std::fmt::Write as _;
             let mut out = String::with_capacity(value.len() * 2 + 2);
             out.push_str("0x");
-            for byte in value {
-                let _ = write!(out, "{byte:02x}");
-            }
+            purrdf_hash::hex::encode_into(value, &mut out);
             out
         }
     }
@@ -1681,58 +1660,4 @@ mod tests {
             parse_identity_digest(&format!("  {rendered}\n")).expect("a padded selector parses");
         assert_eq!(direct, padded);
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
-mod hex_frozen_vectors {
-
-
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    /// Every frozen record: input bytes, lowercase and uppercase renderings.
-    fn records() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().expect("length");
-                let first: u8 = r.fields[1].parse().expect("first");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
-            })
-            .collect()
-    }
-
-    /// Every byte with its any-case, lowercase and uppercase digit values.
-    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
-        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
-        file.records()
-            .iter()
-            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
-            .collect()
-    }
-
-    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
-    fn pairs() -> Vec<(String, String)> {
-        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
-    }
-
-
-    #[test]
-    fn digest_hex_codecs_replay_the_frozen_vectors() {
-        for (input, lower, upper) in records() {
-            if input.len() == 32 {
-                let digest: [u8; 32] = input.as_slice().try_into().expect("32 bytes");
-                assert_eq!(super::hex(&digest), lower);
-                assert_eq!(super::parse_identity_digest(&lower), Ok(digest));
-                assert_eq!(super::parse_identity_digest(&upper), Ok(digest));
-            }
-            if std::str::from_utf8(&input).is_err() || input.is_empty() || std::str::from_utf8(&input).is_ok_and(|t| t.chars().any(char::is_control)) {
-                assert_eq!(super::render_component(&input), format!("0x{lower}"));
-            }
-        }
-    }
-
 }

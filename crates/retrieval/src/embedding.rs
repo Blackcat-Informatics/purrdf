@@ -63,8 +63,6 @@
 //! and the producer that reads it, and accepting a spelling the writer never
 //! emits would admit text that came from somewhere else.
 
-use core::fmt::Write as _;
-
 /// The number of hexadecimal digits one component is written as: a binary32 bit
 /// pattern is 32 bits, which is exactly eight.
 const COMPONENT_DIGITS: usize = 8;
@@ -128,10 +126,9 @@ pub fn encode_embedding(embedding: &[f32]) -> String {
         if index > 0 {
             out.push(SEPARATOR);
         }
-        // Reading the bit pattern is not arithmetic on the float, and formatting
-        // an integer as hex is not arithmetic at all.
-        write!(out, "{:0COMPONENT_DIGITS$X}", component.to_bits())
-            .expect("writing to a String cannot fail");
+        // Reading the bit pattern is not arithmetic on the float, and writing
+        // its big-endian bytes as hex is not arithmetic at all.
+        purrdf_hash::hex::encode_upper_into(&component.to_bits().to_be_bytes(), &mut out);
     }
     out
 }
@@ -158,21 +155,30 @@ pub fn decode_embedding(lexical: &str) -> Result<Vec<f32>, EmbeddingError> {
             index,
             token: token.to_owned(),
         };
-        if token.len() != COMPONENT_DIGITS || !token.bytes().all(is_canonical_hex_digit) {
+        if token.len() != COMPONENT_DIGITS {
             return Err(malformed());
         }
-        let bits = u32::from_str_radix(token, 16).map_err(|_| malformed())?;
+        let bits = token
+            .bytes()
+            .try_fold(0_u32, |bits, byte| {
+                canonical_digit(byte).map(|digit| (bits << 4) | u32::from(digit))
+            })
+            .ok_or_else(malformed)?;
         embedding.push(f32::from_bits(bits));
     }
     Ok(embedding)
 }
 
-/// Whether `byte` is one of the sixteen digits this form writes.
+/// The value of `byte` as one of the sixteen digits this form writes.
 ///
-/// Upper case only: `from_str_radix` would accept `a` as well, and accepting it
-/// here would make two lexicals name one embedding.
-const fn is_canonical_hex_digit(byte: u8) -> bool {
-    byte.is_ascii_digit() || matches!(byte, b'A'..=b'F')
+/// Upper case only: a lowercase letter is a hex digit elsewhere, and accepting
+/// it here would make two lexicals name one embedding.
+fn canonical_digit(byte: u8) -> Option<u8> {
+    if byte.is_ascii_lowercase() {
+        None
+    } else {
+        purrdf_hash::hex::nibble(byte)
+    }
 }
 
 #[cfg(test)]
@@ -255,78 +261,5 @@ mod tests {
         // The neighbouring valid case: length is not what is being refused.
         let long: Vec<f32> = (0..512_i16).map(f32::from).collect();
         assert_eq!(decode_embedding(&encode_embedding(&long)), Ok(long));
-    }
-}
-
-#[cfg(test)]
-mod hex_frozen_differential {
-    use super::{decode_embedding, encode_embedding};
-
-    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
-
-    /// Every frozen record: its input bytes, lowercase and uppercase digits.
-    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
-        let file =
-            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
-        file.records()
-            .iter()
-            .map(|record| {
-                let len: usize = record.fields[0].parse().expect("a decimal length");
-                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
-                    .expect("lowercase digits");
-                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
-                    .expect("uppercase digits");
-                (input, lower, upper)
-            })
-            .collect()
-    }
-
-    const HEX_DIGIT_VECTORS: &str =
-        include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt");
-
-    /// A byte with its frozen any-case, lowercase and uppercase digit values.
-    type DigitRecord = (u8, Option<u8>, Option<u8>, Option<u8>);
-
-    /// Every byte's digit record.
-    fn frozen_digits() -> Vec<DigitRecord> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(HEX_DIGIT_VECTORS)
-            .expect("hex_digit_vectors.txt");
-        file.records()
-            .iter()
-            .map(|record| {
-                let value = |field: &str| field.parse::<u8>().ok();
-                let byte: u8 = record.fields[0].parse().expect("a decimal byte");
-                (
-                    byte,
-                    value(record.fields[1]),
-                    value(record.fields[2]),
-                    value(record.fields[3]),
-                )
-            })
-            .collect()
-    }
-
-    #[test]
-    fn embedding_components_read_and_write_as_the_frozen_vectors() {
-        for (input, lower, upper) in frozen_encodings() {
-            let Ok(bytes) = <[u8; 4]>::try_from(input.as_slice()) else {
-                continue;
-            };
-            let bits = u32::from_be_bytes(bytes);
-            assert_eq!(encode_embedding(&[f32::from_bits(bits)]), upper);
-            let read = decode_embedding(&upper).expect("the uppercase form is canonical");
-            assert_eq!(
-                read.iter().map(|c| c.to_bits()).collect::<Vec<_>>(),
-                vec![bits]
-            );
-            assert_eq!(decode_embedding(&lower).is_ok(), lower == upper, "{lower}");
-        }
-        for (byte, _, _, upper) in frozen_digits() {
-            let token = format!("0000000{}", char::from(byte));
-            let read = decode_embedding(&token).ok().map(|c| c[0].to_bits());
-            assert_eq!(read, upper.map(u32::from), "{byte:#04x}");
-        }
     }
 }

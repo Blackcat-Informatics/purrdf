@@ -35,8 +35,6 @@
 // below need no path edits.
 // ---------------------------------------------------------------------------
 pub mod gts_write;
-#[cfg(test)]
-mod hex_differential;
 pub use purrdf_core::{
     backend, blank_label, bundle, content_store, dataset_view, diagnostic, fno, ir, lookaside,
     loss, model, provenance, sssom, store, turtle, turtle_render,

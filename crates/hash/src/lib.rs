@@ -18,8 +18,11 @@
 //! domain the workspace hashes under is a registered `Domain` constant, unique
 //! and prefix-free across the workspace, and never renamed once published.
 //!
-//! [`hex::Lower`] renders any byte string, a digest included, as lowercase
-//! base16 (RFC 4648 §8) through `Display`, without allocating.
+//! [`hex`] is the workspace's base16 (RFC 4648 §8) codec: [`hex::Lower`] and
+//! [`hex::Upper`] render any byte string through `Display` without
+//! allocating, [`hex::decode`] and its canonical-lowercase siblings read it
+//! back with a typed error, [`hex::nibble`] reads one digit, and
+//! [`hex::Digest32`] is the 32-byte value every content identity wraps.
 //!
 //! Every hasher has a one-shot associated function (`Md5::digest(data)`) and a
 //! streaming form (`new`, `update`, `finalize`); both give the same answer for
@@ -35,8 +38,10 @@
 //! the portable code runs. Every path computes the same bytes. MD5 is a single
 //! serial dependency chain and SHA-3's Keccak-f\[1600\] needs 64-bit lane
 //! rotates most vector units lack, so both are portable scalar code. Base16
-//! encoding runs on SSSE3 when detected, on NEON, or on wasm `simd128` when
-//! the build enables it.
+//! encoding is a compare-select loop the compiler packs on every vector
+//! target; inputs longer than a digest run SSSE3 `pshufb` on x86-64 below
+//! AVX-512BW, NEON `tbl` on AArch64, and wasm `i8x16.swizzle` when the build
+//! enables `simd128`.
 //!
 //! The table hasher [`fixed::FixedHasher`] is the exception to run-time
 //! selection. It uses an AES accumulator when the *build's target* enables
@@ -47,10 +52,12 @@
 //!
 //! # Scope
 //!
-//! Pure integer arithmetic over caller-supplied bytes: no allocation, no
-//! threads, no filesystem, no clock and no entropy (the table hasher's keys
-//! are compile-time constants), so the crate builds for
-//! `wasm32-unknown-unknown`. The one exception is test-harness support, never
+//! Pure integer arithmetic over caller-supplied bytes: no threads, no
+//! filesystem, no clock and no entropy (the table hasher's keys are
+//! compile-time constants), so the crate builds for `wasm32-unknown-unknown`.
+//! Hashing never allocates; the base16 functions that return an owned
+//! `String` or `Vec<u8>` ([`hex::encode`], [`hex::decode`], …) allocate that
+//! value and nothing else. The one exception is test-harness support, never
 //! reached by a hashing path: [`dispatch`]'s requirement check reads the
 //! `PURRDF_REQUIRE_SIMD_PATHS` environment variable and Linux
 //! `/proc/cpuinfo`.

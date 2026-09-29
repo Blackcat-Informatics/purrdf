@@ -2024,24 +2024,16 @@ fn parse_proof_service(name: &str) -> Result<Service, String> {
     }
 }
 
-/// Parse lowercase hex back to bytes, refusing an odd length or a non-hex digit.
-fn unhex(text: &str) -> Result<Vec<u8>, String> {
-    if !text.len().is_multiple_of(2) {
-        return Err("a proof body line has an odd number of hex digits".to_owned());
-    }
-    let mut out = Vec::with_capacity(text.len() / 2);
-    for pair in text.as_bytes().as_chunks::<2>().0 {
-        let digit = |byte: u8| match byte {
-            b'0'..=b'9' => Ok(byte - b'0'),
-            b'a'..=b'f' => Ok(byte - b'a' + 10),
-            other => Err(format!(
-                "a proof body carries {:?}, which is not a lowercase hex digit",
-                char::from(other)
-            )),
-        };
-        out.push(digit(pair[0])? << 4 | digit(pair[1])?);
-    }
-    Ok(out)
+/// A proof body line's bytes: its canonical lowercase hex read by
+/// [`purrdf_hash::hex::decode_canonical`], refused in this grammar's words.
+fn proof_body_bytes(text: &str) -> Result<Vec<u8>, String> {
+    purrdf_hash::hex::decode_canonical(text).map_err(|error| match error {
+        purrdf_hash::hex::HexError::InvalidDigit { byte, .. } => format!(
+            "a proof body carries {:?}, which is not a lowercase hex digit",
+            char::from(byte)
+        ),
+        _ => "a proof body line has an odd number of hex digits".to_owned(),
+    })
 }
 
 /// Render a [`ServiceProof`] to the boundary's byte-stable textual form.
@@ -2105,7 +2097,7 @@ pub fn render_dl_proof(proof: &ServiceProof) -> String {
     out.push('\n');
     let _ = writeln!(out, "service {}", proof_service_name(proof.service()));
     out.push_str("availability recorded\n");
-    let _ = writeln!(out, "input {}", purrdf_core::hex::lower(&proof.input()));
+    let _ = writeln!(out, "input {}", purrdf_hash::hex::encode(&proof.input()));
     let _ = writeln!(out, "digest {}", proof.digest_hex());
     let _ = writeln!(
         out,
@@ -2137,7 +2129,7 @@ pub fn render_dl_proof(proof: &ServiceProof) -> String {
     }
     let _ = writeln!(out, "bytes {}", bytes.len());
     for chunk in bytes.chunks(PROOF_BODY_BYTES_PER_LINE) {
-        let _ = writeln!(out, "body {}", purrdf_core::hex::lower(chunk));
+        let _ = writeln!(out, "body {}", purrdf_hash::hex::encode(chunk));
     }
     out
 }
@@ -2182,7 +2174,7 @@ pub fn decode_dl_proof(document: &str) -> Result<ServiceProof, String> {
     let mut bytes = Vec::new();
     for line in lines {
         if let Some(hex) = line.strip_prefix("body ") {
-            bytes.extend_from_slice(&unhex(hex)?);
+            bytes.extend_from_slice(&proof_body_bytes(hex)?);
         }
     }
     if bytes.is_empty() {
@@ -4691,7 +4683,7 @@ pub fn check_dl_proof(
     let _ = writeln!(out, "service {}", proof_service_name(term.service()));
     out.push_str("availability recorded\n");
     let _ = writeln!(out, "digest {}", term.digest_hex());
-    let _ = writeln!(out, "input {}", purrdf_core::hex::lower(&term.input()));
+    let _ = writeln!(out, "input {}", purrdf_hash::hex::encode(&term.input()));
     let _ = writeln!(out, "runs {}", replay.runs());
     let _ = writeln!(out, "replayed {}", replay.replayed());
     let _ = writeln!(out, "claims {}", replay.claims());
@@ -8831,53 +8823,4 @@ mod term_walk_tests {
             .join()
             .expect("the rendering did not overflow the thread's stack");
     }
-}
-
-#[cfg(test)]
-#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
-mod hex_frozen_vectors {
-
-
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    /// Every frozen record: input bytes, lowercase and uppercase renderings.
-    fn records() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().expect("length");
-                let first: u8 = r.fields[1].parse().expect("first");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
-            })
-            .collect()
-    }
-
-    /// Every byte with its any-case, lowercase and uppercase digit values.
-    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
-        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
-        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
-        file.records()
-            .iter()
-            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
-            .collect()
-    }
-
-    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
-    fn pairs() -> Vec<(String, String)> {
-        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
-    }
-
-
-    #[test]
-    fn proof_body_hex_replays_the_frozen_vectors() {
-        for (input, lower, upper) in records() {
-            assert_eq!(super::unhex(&lower), Ok(input.clone()));
-            if upper != lower {
-                assert!(super::unhex(&upper).is_err());
-            }
-        }
-    }
-
 }

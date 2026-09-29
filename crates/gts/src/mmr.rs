@@ -8,10 +8,11 @@
 
 use ciborium::value::Value;
 use purrdf_hash::Domain;
+use purrdf_hash::hex::Lower;
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
 
 use crate::wire::{
-    MAGIC, VERSION, blake3_256, canonical, content_id, header_id, hex, iter_items, map_get,
+    MAGIC, VERSION, blake3_256, canonical, content_id, header_id, iter_items, map_get,
     unwrap_header,
 };
 
@@ -420,8 +421,8 @@ impl Proof {
         );
         let _ = writeln!(out, "  \"count\": {},", self.count);
         let _ = writeln!(out, "  \"leaf_index\": {},", self.leaf_index);
-        let _ = writeln!(out, "  \"frame_id\": \"{}\",", hex(&self.frame_id));
-        let _ = writeln!(out, "  \"root\": \"{}\",", hex(&self.root));
+        let _ = writeln!(out, "  \"frame_id\": \"{}\",", Lower(&self.frame_id));
+        let _ = writeln!(out, "  \"root\": \"{}\",", Lower(&self.root));
         let _ = writeln!(out, "  \"peak_index\": {},", self.peak_index);
         out.push_str("  \"peaks\": [\n");
         for (index, peak) in self.peaks.iter().enumerate() {
@@ -429,7 +430,7 @@ impl Proof {
                 out,
                 "    {{\"height\": {}, \"hash\": \"{}\"}}{}",
                 peak.height,
-                hex(&peak.hash),
+                Lower(&peak.hash),
                 if index + 1 == self.peaks.len() {
                     ""
                 } else {
@@ -449,7 +450,7 @@ impl Proof {
                 "    {{\"side\": \"{}\", \"parent_height\": {}, \"hash\": \"{}\"}}{}",
                 side,
                 step.parent_height,
-                hex(&step.hash),
+                Lower(&step.hash),
                 if index + 1 == self.path.len() {
                     ""
                 } else {
@@ -652,13 +653,9 @@ impl<'a> JsonParser<'a> {
                 .copied()
                 .ok_or_else(|| "short unicode escape".to_string())?;
             self.pos += 1;
-            value = (value << 4)
-                | match byte {
-                    b'0'..=b'9' => u32::from(byte - b'0'),
-                    b'a'..=b'f' => u32::from(byte - b'a' + 10),
-                    b'A'..=b'F' => u32::from(byte - b'A' + 10),
-                    _ => return Err(format!("invalid unicode escape at byte {start}")),
-                };
+            let digit = purrdf_hash::hex::nibble(byte)
+                .ok_or_else(|| format!("invalid unicode escape at byte {start}"))?;
+            value = (value << 4) | u32::from(digit);
         }
         Ok(value)
     }
@@ -769,24 +766,17 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
     })
 }
 
-/// Parse a raw 32-byte hex id, accepting an optional `blake3:` prefix.
+/// Parse a raw 32-byte hex id, accepting an optional `blake3:` prefix and
+/// digits of either case ([`purrdf_hash::hex::decode_32`]).
 pub fn parse_hex_32(input: &str) -> Result<Vec<u8>, String> {
     let trimmed = input.trim();
     let raw = trimmed.strip_prefix("blake3:").unwrap_or(trimmed);
     if raw.len() != 64 {
         return Err("expected a 32-byte hex value".to_string());
     }
-    let mut out = Vec::with_capacity(32);
-    for chunk in raw.as_bytes().as_chunks::<2>().0 {
-        let hi = (chunk[0] as char)
-            .to_digit(16)
-            .ok_or_else(|| "hex value contains a non-hex character".to_string())?;
-        let lo = (chunk[1] as char)
-            .to_digit(16)
-            .ok_or_else(|| "hex value contains a non-hex character".to_string())?;
-        out.push(((hi << 4) | lo) as u8);
-    }
-    Ok(out)
+    purrdf_hash::hex::decode_32(raw)
+        .map(Vec::from)
+        .ok_or_else(|| "hex value contains a non-hex character".to_string())
 }
 
 fn as_i128(v: &Value) -> Option<i128> {
@@ -913,95 +903,7 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
             item_index += 1;
         }
     }
-    candidate.ok_or_else(|| format!("no valid index mmr covers frame {}", hex(target_frame_id)))
-}
-
-#[cfg(test)]
-mod hex_differential {
-    use super::*;
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    const ENCODINGS: &str =
-        include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
-    const DIGITS: &str = include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt");
-
-    fn encodings() -> Vec<(Vec<u8>, String, String)> {
-        let file = VectorFile::parse(ENCODINGS).expect("hex vectors");
-        file.records()
-            .iter()
-            .map(|r| {
-                let len: usize = r.fields[0].parse().unwrap();
-                let first: u8 = r.fields[1].parse().unwrap();
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                (input, decode_str(r.fields[2]).unwrap(), decode_str(r.fields[3]).unwrap())
-            })
-            .collect()
-    }
-
-    fn any_case_digits() -> Vec<Option<u32>> {
-        let file = VectorFile::parse(DIGITS).expect("digit vectors");
-        file.records().iter().map(|r| r.fields[1].parse().ok()).collect()
-    }
-
-    #[test]
-    fn wire_hex_matches_the_frozen_encodings() {
-        for (input, lower, _) in encodings() {
-            assert_eq!(hex(&input), lower, "{input:?}");
-        }
-    }
-
-    #[test]
-    fn parse_hex_32_matches_the_frozen_encodings() {
-        for (input, lower, upper) in encodings() {
-            if input.len() != 32 {
-                if !lower.is_empty() {
-                    assert!(parse_hex_32(&lower).is_err());
-                }
-                continue;
-            }
-            assert_eq!(parse_hex_32(&lower).as_deref(), Ok(&input[..]));
-            assert_eq!(parse_hex_32(&upper).as_deref(), Ok(&input[..]));
-            assert_eq!(parse_hex_32(&format!("blake3:{lower}")).as_deref(), Ok(&input[..]));
-        }
-        let digits = any_case_digits();
-        let base = "0".repeat(64);
-        for byte in 0..0x80u8 {
-            let mut text = base.clone().into_bytes();
-            text[63] = byte;
-            let text = String::from_utf8(text).unwrap();
-            let expected = digits[usize::from(byte)].is_some() && !byte.is_ascii_whitespace();
-            assert_eq!(parse_hex_32(&text).is_ok(), expected, "{byte:#04x}");
-            if let (Ok(bytes), Some(value)) = (parse_hex_32(&text), digits[usize::from(byte)]) {
-                assert_eq!(u32::from(bytes[31]), value);
-            }
-        }
-    }
-
-    #[test]
-    fn json_unicode_escape_digits_match_the_frozen_digit_table() {
-        let digits = any_case_digits();
-        let probes = (0u32..0x800)
-            .chain((0x800..=0xFFFF).step_by(0x1000))
-            .chain((0x10000..=0x10_FFFF).step_by(0x40000))
-            .filter_map(char::from_u32);
-        for probe in probes {
-            if probe == '"' || probe == '\\' {
-                continue;
-            }
-            let text = format!("\"\\u004{probe}\"");
-            let first = probe.to_string().as_bytes()[0];
-            let parsed = JsonParser::new(&text).parse();
-            match digits[usize::from(first)] {
-                Some(value) if probe.is_ascii() => match parsed {
-                    Ok(Json::String(s)) => {
-                        assert_eq!(s, char::from_u32(0x40 + value).unwrap().to_string());
-                    }
-                    other => panic!("{probe:?}: {other:?}"),
-                },
-                _ => assert!(parsed.is_err(), "{probe:?}"),
-            }
-        }
-    }
+    candidate.ok_or_else(|| format!("no valid index mmr covers frame {}", Lower(target_frame_id)))
 }
 
 #[cfg(test)]

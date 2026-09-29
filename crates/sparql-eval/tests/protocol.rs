@@ -9,7 +9,6 @@
 //! executed, and every restricted answer is compared against the unrestricted answer of
 //! the same request without the parameter — which the fixture makes different.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -47,7 +46,8 @@ fn enc(text: &str) -> String {
         if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
             out.push(char::from(byte));
         } else {
-            write!(out, "%{byte:02X}").expect("writing to a String cannot fail");
+            out.push('%');
+            purrdf_hash::hex::encode_upper_into(&[byte], &mut out);
         }
     }
     out
@@ -1267,59 +1267,4 @@ fn a_ceiling_trip_is_a_422_and_a_stop_is_a_503() {
     assert_eq!(deadline, FailureCode::Deadline);
     assert_eq!(problem_for(cancelled).status, 503);
     assert_eq!(problem_for(deadline).status, 503);
-}
-
-#[cfg(test)]
-mod hex_frozen_differential {
-    use super::enc;
-
-    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
-
-    /// Every frozen record: its input bytes, lowercase and uppercase digits.
-    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
-        let file =
-            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
-        file.records()
-            .iter()
-            .map(|record| {
-                let len: usize = record.fields[0].parse().expect("a decimal length");
-                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
-                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
-                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
-                    .expect("lowercase digits");
-                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
-                    .expect("uppercase digits");
-                (input, lower, upper)
-            })
-            .collect()
-    }
-
-    /// The uppercase digits of each single byte, from the length-1 records.
-    fn upper_of_byte() -> Vec<String> {
-        let mut table = vec![String::new(); 256];
-        for (input, _, upper) in frozen_encodings() {
-            if let [byte] = input[..] {
-                table[usize::from(byte)] = upper;
-            }
-        }
-        table
-    }
-
-    #[test]
-    fn percent_triplets_match_the_frozen_vectors() {
-        let upper = upper_of_byte();
-        for code in 0..=0xff_u32 {
-            let text = char::from_u32(code).expect("a Latin-1 scalar").to_string();
-            let encoded = enc(&text);
-            if encoded == text {
-                continue;
-            }
-            let mut expected = String::new();
-            for b in text.bytes() {
-                expected.push('%');
-                expected.push_str(&upper[usize::from(b)]);
-            }
-            assert_eq!(encoded, expected, "{code:#04x}");
-        }
-    }
 }

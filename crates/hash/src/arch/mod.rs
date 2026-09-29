@@ -20,14 +20,57 @@
 //! The other exception is the fixed hasher's AES `Block`, which exists only
 //! in builds whose target enables `aes` at compile time: such a build has one
 //! hash function, never a run-time choice between two.
+//!
+//! The one `unsafe` here that is not a kernel is [`encode_text`]: the base16
+//! digits the crate's encoder has just written are handed out as `str`
+//! without re-validating them as UTF-8, which cost more than the encoding
+//! itself on long inputs (the `hex` group of the `purrdf-hash-conformance`
+//! `digests` bench).
+
+/// Writes the base16 rendering of `input` into `output` through
+/// [`crate::hex`]'s length switch, uppercase when `UPPER`, and returns it as
+/// text.
+///
+/// # Panics
+///
+/// When `output` is not exactly twice as long as `input`: every byte of it
+/// must be written for the text to be what this returns.
+#[inline]
+pub(crate) fn encode_text<'o, const UPPER: bool>(input: &[u8], output: &'o mut [u8]) -> &'o str {
+    assert_eq!(
+        output.len(),
+        2 * input.len(),
+        "a base16 rendering is two digits per input byte"
+    );
+    crate::hex::encode_bytes::<UPPER>(input, output);
+    debug_assert!(output.is_ascii());
+    // SAFETY: `encode_bytes` writes every byte of `output` (checked above to
+    // be exactly two per input byte), and every path it runs writes only
+    // digits of the two sixteen-digit base16 alphabets: the compare-select
+    // loop computes `n + b'0'` plus 0, 39 or 7 for a nibble `n < 16`, and the
+    // SSSE3, NEON and `simd128` kernels look each nibble, masked to `0..16`,
+    // up in a sixteen-byte alphabet table. Those bytes are ASCII, and ASCII is
+    // UTF-8.
+    unsafe { core::str::from_utf8_unchecked(output) }
+}
+
+/// The base16 rendering of `input` as an owned `String`: [`encode_text`]
+/// into a buffer of exactly the right length.
+pub(crate) fn encode_string<const UPPER: bool>(input: &[u8]) -> String {
+    let mut digits = vec![0u8; 2 * input.len()];
+    let _ = encode_text::<UPPER>(input, &mut digits);
+    // SAFETY: `encode_text` wrote every byte of `digits` as an ASCII base16
+    // digit (see its SAFETY comment), so the buffer is UTF-8.
+    unsafe { String::from_utf8_unchecked(digits) }
+}
 
 /// Processes a run of whole 64-byte SHA-1 blocks.
 pub(crate) type Sha1Blocks = fn(&mut [u32; 5], &[u8]);
 /// Advances a raw (un-complemented) CRC-32 register over any bytes.
 pub(crate) type Crc32Update = fn(u32, &[u8]) -> u32;
-/// Writes the lowercase base16 encoding of the first slice into the second,
-/// which is exactly twice as long.
-pub(crate) type HexEncode = fn(&[u8], &mut [u8]);
+/// Writes the base16 encoding of the first slice into the second, which is
+/// exactly twice as long: uppercase when the flag is set, lowercase otherwise.
+pub(crate) type HexEncode = fn(&[u8], &mut [u8], bool);
 
 #[cfg(target_arch = "x86_64")]
 mod x86_64;

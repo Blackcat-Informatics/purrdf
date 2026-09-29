@@ -195,19 +195,6 @@ fn pattern_cells(
     cells
 }
 
-/// The 64 lowercase hexadecimal digits of a 32-byte digest.
-///
-/// An independent transcription of the rendering under test: the provenance's
-/// `Display` must agree with a spelling written here from the raw bytes, rather
-/// than with a second call to itself.
-fn hex(digest: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    digest.iter().fold(String::new(), |mut out, byte| {
-        let _ = write!(out, "{byte:02x}");
-        out
-    })
-}
-
 // ── Property 1: bounded caches are LAZY after a restore ──────────────────────────
 
 /// A restore must hand back a preparation whose regex caches are cold, and a
@@ -588,7 +575,7 @@ fn an_admitted_preparation_names_the_product_it_came_from() {
     );
 
     let rendered = restored.provenance().to_string();
-    let expected_digest = hex(&declared);
+    let expected_digest = purrdf_hash::hex::encode(&declared);
     assert_eq!(rendered, format!("restored-admitted {expected_digest}"));
 }
 
@@ -616,7 +603,7 @@ fn a_rebuilt_preparation_names_the_product_and_its_seam() {
     assert_eq!(*restore, ProductRestore::Rebuilt);
     assert_eq!(identity.digest(), &declared);
 
-    let expected_digest = hex(&declared);
+    let expected_digest = purrdf_hash::hex::encode(&declared);
     assert_eq!(
         rebuilt.provenance().to_string(),
         format!("restored-rebuilt {expected_digest}")
@@ -657,19 +644,4 @@ fn provenance_survives_cloning_and_binding() {
     .bind_shared_dataset(dataset(DATA_TWO_VIOLATIONS))
     .expect("the data graph binds");
     assert_eq!(parsed.provenance(), &ValidatorProvenance::Parsed);
-}
-
-/// The digest helper against the frozen base16 table.
-#[test]
-fn digest_hex_helper_replays_the_frozen_vectors() {
-    let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(
-        "../../hash-conformance/tests/vectors/hex_vectors.txt"
-    ))
-    .expect("frozen hex vectors");
-    for record in file.records().iter().filter(|r| r.fields[0] == "32") {
-        let first: u8 = record.fields[1].parse().expect("first");
-        let digest: [u8; 32] = std::array::from_fn(|i| first.wrapping_add(i as u8));
-        let lower = purrdf_testkit::vectors::decode_str(record.fields[2]).expect("lower");
-        assert_eq!(hex(&digest), lower);
-    }
 }

@@ -34,10 +34,10 @@ use purrdf_rdf::{
 /// configuration, spelled under `example.org` per the test-fixture rule).
 const DERIVED_FROM: &str = "http://example.org/wasDerivedFrom";
 
-/// A `blake3:`-scheme content-id IRI whose 64-hex tail is the two-hex-digit
-/// `pair` repeated 32× (e.g. `"aa"` → `blake3:aaaa…aa`, 64 hex chars).
-fn blake3_iri(pair: &str) -> String {
-    format!("blake3:{}", pair.repeat(32))
+/// A `blake3:`-scheme content-id IRI whose 32 digest bytes are all `byte`
+/// (e.g. `0xaa` → `blake3:aaaa…aa`, 64 hex chars).
+fn blake3_iri(byte: u8) -> String {
+    purrdf_gts::wire::digest_label(&[byte; 32])
 }
 
 /// The `TermId`s of the two content-addressed IRIs, captured at build time so the
@@ -57,8 +57,8 @@ struct CaIds {
 /// - an ordinary `example.org` quad, and
 /// - a derivation annotation `(ca_subject, wasDerivedFrom, ca_object)`.
 fn populate(builder: &mut RdfDatasetBuilder) -> CaIds {
-    let ca_subject = builder.intern_iri(&blake3_iri("aa"));
-    let ca_object = builder.intern_iri(&blake3_iri("bb"));
+    let ca_subject = builder.intern_iri(&blake3_iri(0xaa));
+    let ca_object = builder.intern_iri(&blake3_iri(0xbb));
     let plain_subject = builder.intern_iri("http://example.org/thing");
     let predicate = builder.intern_iri("http://example.org/p");
     let derived_from = builder.intern_iri(DERIVED_FROM);

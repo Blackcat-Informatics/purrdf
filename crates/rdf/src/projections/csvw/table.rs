@@ -402,8 +402,8 @@ fn percent_encode(value: &str) -> String {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'~') {
             output.push(char::from(byte));
         } else {
-            use std::fmt::Write as _;
-            let _ = write!(output, "%{byte:02X}");
+            output.push('%');
+            purrdf_hash::hex::encode_upper_into(&[byte], &mut output);
         }
     }
     output
@@ -1564,14 +1564,6 @@ fn key_tuple(row: &CsvwRow, indices: &[usize]) -> Option<Vec<String>> {
             (!cell.is_null).then(|| cell.string_value.clone())
         })
         .collect()
-}
-
-#[cfg(test)]
-mod hex_differential {
-    #[test]
-    fn percent_escapes_match_the_frozen_pairs() {
-        crate::hex_differential::assert_percent_escapes(super::percent_encode);
-    }
 }
 
 #[cfg(test)]
