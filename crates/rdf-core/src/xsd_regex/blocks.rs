@@ -22,6 +22,18 @@
 //!
 //! <https://www.w3.org/TR/xmlschema11-2/#cces-blockesc>
 
+/// The Unicode version this block table is pinned to, read from the header of
+/// the vendored `Blocks.txt`: the version of the Unicode tables embedded in the
+/// locked `regex-syntax`, which the `regex` engine every translated pattern runs
+/// on matches with, so a block escape and the engine's own classes agree at
+/// every boundary code point. It is the one Unicode table in the workspace not
+/// generated at `purrdf_lex::unicode::UNICODE_VERSION`; `scripts/check-generated.sh`
+/// holds the pin and fails when `regex-syntax` moves without it.
+#[must_use]
+pub const fn unicode_version() -> (u8, u8, u8) {
+    (16, 0, 0)
+}
+
 pub(crate) const UNICODE_BLOCKS: &[(&str, u32, u32)] = &[
     ("IsBasicLatin", 0x0000_0000, 0x0000_007F),
     ("IsLatin-1Supplement", 0x0000_0080, 0x0000_00FF),

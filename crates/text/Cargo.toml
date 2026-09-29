@@ -39,6 +39,13 @@ purrdf-sparql-eval.workspace = true
 # Fixed-output-length hashing for the index fingerprint. Deterministic and
 # keyless, so the same index yields the same digest on every target.
 purrdf-hash.workspace = true
+# `wide::mul_div`, the exact `a × b / c` past `u128` the fixed-point product
+# and quotient take. A wasm32-clean leaf already under `purrdf-core`.
+purrdf-xsd.workspace = true
+# The Unicode normalization pipeline and its stages, which the analysis form
+# composes with this crate's case fold, and the two-stage table lookup the fold
+# and word-break tables are read through.
+purrdf-lex.workspace = true
 
 [dev-dependencies]
 # Solution-sequence shapes for the ranked-row tests.

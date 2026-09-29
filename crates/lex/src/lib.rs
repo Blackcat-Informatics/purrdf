@@ -22,8 +22,9 @@
 //!
 //! * **Grammar terminals** — [`terminals`], the exact Turtle/SPARQL character
 //!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`), the
-//!   XML 1.0 `Char`, `NameStartChar` and `NameChar` classes, and the Unicode
-//!   `White_Space` property, each a range table proved sorted and disjoint at
+//!   XML 1.0 `Char`, `NameStartChar` and `NameChar` classes, the Unicode
+//!   `White_Space` property, and the ECMA-262 `LineTerminator` and `\s`
+//!   classes, each a range table proved sorted and disjoint at
 //!   compile time and answered below U+0100 by one class-table load. A
 //!   scanner's character class decides token BOUNDARIES under maximal munch,
 //!   so an approximation misparses documents rather than merely widening the
@@ -57,6 +58,13 @@
 //! * **Percent-encoding** — [`percent`], the RFC 3986 encoder over the sets
 //!   the specifications define, the strict and form-urlencoded decoders, and
 //!   RFC 3986 §6.2.2 normalization.
+//! * **Unicode normalization** — [`unicode`], the workspace's one
+//!   normalization pipeline: NFC, NFD, NFKC and NFKD (UAX 15), the NFC
+//!   verdict, the canonical combining class, and the streaming stages a caller
+//!   composes with its own (the full-text analyzer's case fold), over tables
+//!   generated from the vendored Unicode Character Database at
+//!   [`unicode::UNICODE_VERSION`], the one version every Unicode table in the
+//!   workspace is generated from.
 //!
 //! # Examples
 //!
@@ -88,3 +96,5 @@ pub mod json_pointer;
 pub mod percent;
 pub mod scan;
 pub mod terminals;
+pub mod unicode;
+mod unicode_tables;

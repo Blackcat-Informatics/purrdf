@@ -37,6 +37,7 @@
 
 use crate::numeric::Decimal;
 use crate::value::XsdValue;
+use crate::wide::{gcd, wide_mul};
 
 pub use crate::datatype::OWL_RATIONAL;
 
@@ -75,15 +76,6 @@ impl std::fmt::Display for RationalError {
 }
 
 impl std::error::Error for RationalError {}
-
-const fn gcd(mut a: u128, mut b: u128) -> u128 {
-    while b != 0 {
-        let t = a % b;
-        a = b;
-        b = t;
-    }
-    a
-}
 
 impl Rational {
     /// Construct from a numerator and a non-zero denominator, reducing.
@@ -249,21 +241,6 @@ impl Ord for Rational {
             magnitude.reverse()
         }
     }
-}
-
-/// `a × b` as `(high, low)` 128-bit halves — exact 256-bit magnitude compare.
-fn wide_mul(a: u128, b: u128) -> (u128, u128) {
-    const MASK: u128 = (1u128 << 64) - 1;
-    let (a_hi, a_lo) = (a >> 64, a & MASK);
-    let (b_hi, b_lo) = (b >> 64, b & MASK);
-    let ll = a_lo * b_lo;
-    let lh = a_lo * b_hi;
-    let hl = a_hi * b_lo;
-    let hh = a_hi * b_hi;
-    let mid = (ll >> 64) + (lh & MASK) + (hl & MASK);
-    let low = (ll & MASK) | (mid << 64);
-    let high = hh + (lh >> 64) + (hl >> 64) + (mid >> 64);
-    (high, low)
 }
 
 #[cfg(test)]

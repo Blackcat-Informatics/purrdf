@@ -6680,7 +6680,7 @@ summary = "schema compilation and instance validation: `regex` matching and `ser
 
 [[site]]
 id = "text.unicode-ascii-lower"
-summary = "the analyzer's ASCII-bypass driver over the `Fold` stage (measured in `unicode::case_fold`): `push_ascii_lowercase`'s bulk `[u8]::make_ascii_lowercase` over the held-back ASCII run, which LLVM compiles to a packed range-clamp-and-add on every SIMD-capable target measured here, not the SWAR prefix scan (`unicode::prefix_len`) that bounds the run, which stays scalar throughout"
+summary = "the ASCII-bypass driver `purrdf_lex::unicode::drive` over the analyzer's `Fold` stage (measured in `purrdf_text::unicode::case_fold`, where the inlined lex stages are instantiated): `purrdf_lex::unicode`'s `push_ascii_lowercase` bulk `[u8]::make_ascii_lowercase` over the held-back ASCII run, which LLVM compiles to a packed range-clamp-and-add on every SIMD-capable target measured here, not the SWAR prefix scan (`purrdf_lex::unicode::prefix_len`) that bounds the run, which stays scalar throughout"
 
   # Measured v30 (`pcmpeqb`x6, `pminub`x4, `pmaxub`x2, `paddb`x6, `pand`x4, `pandn`x2,
   # `por`x6).
@@ -6753,15 +6753,15 @@ summary = "the analyzer's ASCII-bypass driver over the `Fold` stage (measured in
   forbid_relaxed = true
 
 [[site]]
-id = "gts.rfc3339-lexical"
-summary = "RFC 3339 `date-time` parse and format for the files and tar profiles' `modified` stamps: `parse` is a byte-at-a-time scanner with no vector form on any target measured here; `format`'s decimal rendering of the civil-calendar fields is compiled to a packed multiply-and-shift by LLVM on every SIMD-capable target measured here"
+id = "xsd.rfc3339-lexical"
+summary = "RFC 3339 `date-time` parse and format (the GTS files and tar profiles' `modified` stamps, JSON Schema's `date-time`/`date`/`time` formats): `parse` is a byte-at-a-time scanner with no vector form on any target measured here; `format`'s decimal rendering of the civil-calendar fields is compiled to a packed multiply-and-shift by LLVM on every SIMD-capable target measured here"
 
   # `parse` measured v0 on all seven configurations.
   [[site.measure]]
   label = "parse"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_gts"
-  symbol = "purrdf_gts::rfc3339::parse"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::rfc3339::parse"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -6770,8 +6770,8 @@ summary = "RFC 3339 `date-time` parse and format for the files and tar profiles'
   [[site.measure]]
   label = "format x86_64"
   configs = ["x86_64"]
-  crate = "purrdf_gts"
-  symbol = "purrdf_gts::rfc3339::format"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::rfc3339::format"
   min_vector_ops = 10
   require_mnemonics = ["pmuludq"]
   max_fma = 0
@@ -6781,8 +6781,8 @@ summary = "RFC 3339 `date-time` parse and format for the files and tar profiles'
   [[site.measure]]
   label = "format x86_64-v3"
   configs = ["x86_64-v3"]
-  crate = "purrdf_gts"
-  symbol = "purrdf_gts::rfc3339::format"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::rfc3339::format"
   min_vector_ops = 6
   require_mnemonics = ["vpmuludq"]
   max_fma = 0
@@ -6792,8 +6792,8 @@ summary = "RFC 3339 `date-time` parse and format for the files and tar profiles'
   [[site.measure]]
   label = "format x86_64-v4"
   configs = ["x86_64-v4"]
-  crate = "purrdf_gts"
-  symbol = "purrdf_gts::rfc3339::format"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::rfc3339::format"
   min_vector_ops = 4
   require_mnemonics = ["vpmuludq"]
   max_fma = 0
@@ -6804,8 +6804,8 @@ summary = "RFC 3339 `date-time` parse and format for the files and tar profiles'
   [[site.measure]]
   label = "format aarch64"
   configs = ["aarch64"]
-  crate = "purrdf_gts"
-  symbol = "purrdf_gts::rfc3339::format"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::rfc3339::format"
   min_vector_ops = 7
   require_mnemonics = ["umull"]
   max_fma = 0
@@ -6818,8 +6818,8 @@ summary = "RFC 3339 `date-time` parse and format for the files and tar profiles'
   [[site.measure]]
   label = "format sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_gts"
-  symbol = "purrdf_gts::rfc3339::format"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::rfc3339::format"
   min_vector_ops = 7
   require_mnemonics = ["mul .s", "mls .2s"]
   max_fma = 0
@@ -6830,8 +6830,8 @@ summary = "RFC 3339 `date-time` parse and format for the files and tar profiles'
   [[site.measure]]
   label = "format portable"
   configs = ["wasm32", "wasm32-simd128"]
-  crate = "purrdf_gts"
-  symbol = "purrdf_gts::rfc3339::format"
+  crate = "purrdf_xsd"
+  symbol = "purrdf_xsd::rfc3339::format"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

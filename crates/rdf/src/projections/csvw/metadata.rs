@@ -2403,7 +2403,7 @@ fn validate_datatype_format(
     let local = base.strip_prefix(config.vocabulary().xsd_namespace());
     match (local, format) {
         (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern)))
-            if numeric_datatype_name(local) =>
+            if XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric) =>
         {
             if valid_numeric_pattern(&pattern) {
                 Some(CsvwDatatypeFormat::Pattern(pattern))
@@ -2413,7 +2413,7 @@ fn validate_datatype_format(
             }
         }
         (Some(local), Some(CsvwDatatypeFormat::Numeric(mut numeric)))
-            if numeric_datatype_name(local) =>
+            if XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric) =>
         {
             if numeric
                 .pattern
@@ -2463,28 +2463,6 @@ fn valid_numeric_pattern(pattern: &str) -> bool {
                 '#' | '0' | '.' | ',' | ';' | '%' | '‰' | 'E' | '-' | '+'
             )
         })
-}
-
-fn numeric_datatype_name(local: &str) -> bool {
-    matches!(
-        local,
-        "integer"
-            | "long"
-            | "int"
-            | "short"
-            | "byte"
-            | "unsignedLong"
-            | "unsignedInt"
-            | "unsignedShort"
-            | "unsignedByte"
-            | "nonNegativeInteger"
-            | "positiveInteger"
-            | "nonPositiveInteger"
-            | "negativeInteger"
-            | "decimal"
-            | "float"
-            | "double"
-    )
 }
 
 fn temporal_datatype_name(local: &str) -> bool {

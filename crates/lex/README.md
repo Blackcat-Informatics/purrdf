@@ -13,7 +13,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-lex.svg)](https://crates.io/crates/purrdf-lex)
 [![docs.rs](https://docs.rs/purrdf-lex/badge.svg)](https://docs.rs/purrdf-lex)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
+[![License](https://img.shields.io/badge/license-(MIT%20OR%20Apache--2.0%20OR%20MulanPSL--2.0)%20AND%20Unicode--3.0-blue.svg)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md)
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 `purrdf-lex` is the lexical layer every grammar in the PurRDF toolkit shares:
@@ -31,13 +31,14 @@ Unicode normalisation.
 
 | Module | What it holds | Specification |
 |---|---|---|
-| `terminals` | The exact character classes `WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`, `IRIREF`'s forbidden set, XML `Char`, `NameStartChar`, `NameChar` and Unicode `White_Space`, each a range table proved sorted and disjoint at compile time | SPARQL 1.2 Query §19.8, RDF 1.2 Turtle §6.5, XML 1.0 (Fifth Edition) §2.2–2.3, RFC 8259 §7 |
+| `terminals` | The exact character classes `WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`, `IRIREF`'s forbidden set, XML `Char`, `NameStartChar`, `NameChar`, Unicode `White_Space`, and ECMA-262 `LineTerminator` and `\s`, each a range table proved sorted and disjoint at compile time | SPARQL 1.2 Query §19.8, RDF 1.2 Turtle §6.5, XML 1.0 (Fifth Edition) §2.2–2.3, RFC 8259 §7, ECMA-262 §12.2–12.3 and §22.2.2.9 |
 | `scan` | Chunked byte-class scanners over those tables (`find_first_trivia`, `find_first_iri_body_special`, `find_first_json_string_special`, `find_first_xml_special`) and `ByteClass`, the same kernel over a caller's own class | — |
 | `terminals` (escapes and `WS`) | `decode_uchar`, `echar_value`, `expand_uchars` and `decode_char_ref`, strict decoders of `UCHAR`, `ECHAR` and the XML `CharRef`; `skip_ws` and `trim_ws`, the four-scalar `WS` skip and trim; `is_ncname`; `in_ranges`, the one range-table search | RDF 1.2 Turtle §6.5, SPARQL 1.2 §19.8, XML 1.0 §4.1 `[66]`, Namespaces in XML 1.0 §3 |
 | `scan` (needles) | `find_byte` and `find_byte2`, the first occurrence of a byte known only at run time | — |
 | `json_escape` | The one JSON string-body escaper every PurRDF JSON writer shares, in the four spellings those writers pin (`JsonEscapes`), and the one decoder every reader shares (`unescape`, `decode_escape`, `decode_u_escape`), which refuses an unpaired surrogate | RFC 8259 §7 |
 | `json_pointer` | Reference-token escaping and unescaping, pointer parsing, the array-index token | RFC 6901 |
 | `percent` | `encode` over the specification-defined sets (`UNRESERVED`, `REG_NAME`, `PATH`, `FRAGMENT`, `URI_TEMPLATE_RESERVED`, `NON_ASCII`, …), strict `decode`, `decode_form`, `normalize` | RFC 3986 §2, §3, §6.2.2; RFC 3987 §3.1; RFC 6570 §3.2.3 |
+| `unicode` | The workspace's one normalization pipeline: `nfc`, `nfd`, `nfkc`, `nfkd`, `is_nfc` and `ccc`, and the streaming stages (`Decompose`, `Compose`, `drive`) a caller composes with its own stage, over tables generated from the vendored Unicode Character Database at `UNICODE_VERSION`, the version every Unicode table in the workspace is generated from | UAX 15; Unicode core specification §3.11–3.12 |
 
 ## Why a scanner may not approximate
 
@@ -112,3 +113,8 @@ Licensed under any one of the following, at your option:
 - [MIT license](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MIT)
 - [Apache License, Version 2.0](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-APACHE)
 - [Mulan Permissive Software License, Version 2 (MulanPSL-2.0)](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSE-MULAN)
+
+The normalization tables in `src/unicode_tables.rs` are generated from the
+Unicode Character Database and ship Unicode, Inc. data under the
+[Unicode License v3](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSES/Unicode-3.0.txt)
+in addition; see [LICENSING.md](https://github.com/Blackcat-Informatics/purrdf/blob/main/LICENSING.md).

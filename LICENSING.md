@@ -114,7 +114,7 @@ whole repository:
 
 ## Unicode data compiled into published crates
 
-Four published crates compile tables generated from the Unicode Character
+Five published crates compile tables generated from the Unicode Character
 Database, and so ship Unicode, Inc. data under the
 [Unicode License v3](./LICENSES/Unicode-3.0.txt) (`Unicode-3.0`) alongside
 Blackcat Informatics® code. Their package metadata declares the combined
@@ -129,11 +129,12 @@ terms apply in addition, to the data.
 
 | Crate | Generated file | Generator | Source data |
 |---|---|---|---|
-| `purrdf-iri` | `crates/iri/src/idna_tables.rs` | `cargo run -p purrdf-iri --example gen_idna_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
-| `purrdf-core` | `crates/rdf-core/src/xsd_regex/blocks.rs` | `cargo run -p purrdf-core --example gen_unicode_blocks` | `crates/rdf-core/vendor/unicode/Blocks.txt` (Unicode 16.0.0) |
-| `purrdf-text` | `crates/text/src/unicode_tables.rs` | `cargo run -p purrdf-text --example gen_unicode_text_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
-| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/property_tables.rs` | `cargo run -p purrdf-jsonschema --example gen_ecma_property_tables` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
-| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | `python3 crates/jsonschema/examples/gen_ecma_unicode_ranges.py` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-lex` | `crates/lex/src/unicode_tables.rs` | `cargo run -p purrdf-lex --example gen_unicode_tables -- normalization` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-iri` | `crates/iri/src/idna_tables.rs` | `cargo run -p purrdf-lex --example gen_unicode_tables -- idna` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-core` | `crates/rdf-core/src/xsd_regex/blocks.rs` | `cargo run -p purrdf-core --example gen_unicode_blocks` | `crates/rdf-core/vendor/unicode/Blocks.txt` (Unicode 16.0.0, pinned to the locked `regex-syntax`) |
+| `purrdf-text` | `crates/text/src/unicode_tables.rs` | `cargo run -p purrdf-lex --example gen_unicode_tables -- text` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/property_tables.rs` | `cargo run -p purrdf-lex --example gen_unicode_tables -- ecma-properties` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
+| `purrdf-jsonschema` | `crates/jsonschema/src/ecma/unicode_ranges.rs` | `cargo run -p purrdf-lex --example gen_unicode_tables -- ecma-ranges` | Unicode 17.0.0 database, `crates/iri/unicode/17.0.0/` |
 
 Each generated file carries the SPDX header
 

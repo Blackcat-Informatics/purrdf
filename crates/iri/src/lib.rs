@@ -61,9 +61,10 @@
 //! * **IDNA2008** — [`idna`], host names under RFC 5891 over the RFC 5892
 //!   derived property, the RFC 5892 Appendix A contextual rules and the
 //!   RFC 5893 Bidi rule, with RFC 3492 Punycode between A-labels and U-labels
-//!   and a local mapping step (NFKC_Casefold, then NFC). Every Unicode table is
+//!   and a local mapping step (NFKC_Casefold, then NFC). Its tables are
 //!   generated from the Unicode 17.0.0 database vendored under
-//!   `crates/iri/unicode/`. [`Iri::to_uri`] applies it as RFC 3987 §3.1
+//!   `crates/iri/unicode/`, and it normalizes through `purrdf_lex::unicode`,
+//!   the workspace's one normalization pipeline. [`Iri::to_uri`] applies it as RFC 3987 §3.1
 //!   describes; [`parse`] never does, because RFC 3987 compares IRIs code point
 //!   by code point.
 //! * **JSON string escape law** — [`json_escape`], the one RFC 8259 §7 string

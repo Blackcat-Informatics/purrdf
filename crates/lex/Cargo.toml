@@ -3,15 +3,15 @@
 
 [package]
 name = "purrdf-lex"
-description = "Native lexical foundations for PurRDF's grammars, over the zero-dependency purrdf-hash root: the exact Turtle/SPARQL/XML character-class terminals and escape decoders, chunked byte-class scanners and needle searches that lower to packed compares, the RFC 8259 JSON string escaper and decoder, RFC 6901 JSON Pointer tokens, and RFC 3986 percent-encoding"
+description = "Native lexical foundations for PurRDF's grammars, over the zero-dependency purrdf-hash root: the exact Turtle/SPARQL/XML/ECMA-262 character-class terminals and escape decoders, chunked byte-class scanners and needle searches that lower to packed compares, the RFC 8259 JSON string escaper and decoder, RFC 6901 JSON Pointer tokens, RFC 3986 percent-encoding, and Unicode normalization (NFC, NFD, NFKC, NFKD) as streaming stages"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
-license.workspace = true
+license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
 homepage.workspace = true
 documentation = "https://docs.rs/purrdf-lex"
 rust-version.workspace = true
-keywords = ["lexer", "grammar", "simd", "json", "rdf"]
+keywords = ["lexer", "grammar", "unicode", "normalization", "rdf"]
 categories = ["parser-implementations", "encoding", "text-processing"]
 
 [package.metadata.docs.rs]

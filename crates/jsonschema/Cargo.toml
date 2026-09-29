@@ -51,6 +51,12 @@ regex = { workspace = true }
 purrdf-iri = { workspace = true }
 # The fixed-key hasher that buckets `uniqueItems` candidates.
 purrdf-hash = { workspace = true }
+# The RFC 3339 grammar behind the `date-time`, `date` and `time` formats, and
+# the arbitrary-precision integer exact `multipleOf` computes on.
+purrdf-xsd = { workspace = true }
+# The ECMA-262 `WhiteSpace` and `LineTerminator` terminals `\s` and `.` are
+# spelled with, and the Unicode version the property tables assert.
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
 # The `harness = false` suite runner and the frozen differential vectors.

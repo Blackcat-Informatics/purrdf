@@ -129,6 +129,7 @@ mod replace;
 mod scan;
 mod xflag;
 
+pub use blocks::unicode_version as block_escape_unicode_version;
 pub use ecma_emit::{Ecma262Error, ecma_262_rust_compatible, from_ecma_262, to_ecma_262};
 pub use error::{ReplacementError, XsdRegexError};
 

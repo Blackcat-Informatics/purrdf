@@ -51,7 +51,6 @@ use crate::convert::literal_to_value;
 use crate::engine::ShaclPrebinding;
 use crate::error::EvalError;
 use crate::expr::xsd_of;
-use crate::modifier::is_numeric_xsd;
 use crate::property_fn::{NOT_RANKED_CANONICAL, PfArity, PropertyFunctionRegistry};
 use crate::registry_id::append_framed_part;
 
@@ -1933,7 +1932,7 @@ fn validate_scalarvals(
 
 /// Whether `value`'s datatype matches `kind` — the per-literal check
 /// [`validate_scalarvals`] applies to each supplied scalarval. Goes through the
-/// SAME [`purrdf_xsd`] numeric-tower classification (`xsd_of` + `is_numeric_xsd`)
+/// SAME [`purrdf_xsd`] numeric-tower classification (`xsd_of` + `XsdValue::is_numeric`)
 /// the evaluator itself uses to classify a runtime `TermValue`, rather than a
 /// hand-rolled datatype-IRI string comparison, so a numeric scalarval's
 /// admission rule can never drift from what the numeric tower actually accepts
@@ -1942,7 +1941,7 @@ fn scalarval_value_matches_kind(value: &Literal, kind: ScalarvalKind) -> bool {
     match kind {
         ScalarvalKind::Numeric => xsd_of(&literal_to_value(value))
             .as_ref()
-            .is_some_and(is_numeric_xsd),
+            .is_some_and(purrdf_xsd::XsdValue::is_numeric),
         ScalarvalKind::String => {
             value.language().is_none()
                 && value.datatype().as_str() == purrdf_sparql_algebra::ast::XSD_STRING

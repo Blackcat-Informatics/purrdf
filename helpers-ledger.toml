@@ -784,3 +784,198 @@ enforced = true
 constants = []
 fingerprints = ["rule:div-ceil-by-hand"]
 names = []
+
+[[job]]
+id = "wide-arith"
+summary = "Exact u128 arithmetic past u128: the 256-bit product, the wide division, the fused a × b / c, and the greatest common divisor"
+home = "purrdf_xsd::wide::mul_div"
+entry_points = ["purrdf_xsd::wide::wide_mul", "purrdf_xsd::wide::div_wide", "purrdf_xsd::wide::gcd"]
+spec = "schoolbook multiplication over 64-bit halves, restoring binary long division, and Euclid's algorithm, over u128"
+vectors = [
+    "crates/xsd/tests/vectors/wide_vectors.txt",
+    "crates/xsd/tests/vectors/gcd_vectors.txt",
+]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(wide_mul|mul_wide|div_wide|mul_div|gcd_u128|u128_gcd)$']
+
+[[job]]
+id = "bigint"
+summary = "The arbitrary-precision integer: exact products, remainders, powers of two and five, digit-string parsing, and dyadic rationals written out as decimals"
+home = "purrdf_xsd::bigint::BigInt"
+entry_points = [
+    "purrdf_xsd::BigInt",
+    "purrdf_xsd::bigint::BigInt::from_digits",
+    "purrdf_xsd::bigint::BigInt::from_binary",
+    "purrdf_xsd::bigint::BigInt::mul_small",
+    "purrdf_xsd::bigint::BigInt::mul_pow5",
+    "purrdf_xsd::bigint::BigInt::mul",
+    "purrdf_xsd::bigint::BigInt::rem",
+    "purrdf_xsd::json_number::cmp",
+]
+spec = "exact integer arithmetic in sign-magnitude base 10^9; RFC 8259 section 6 numbers compared by value"
+vectors = [
+    "crates/xsd/tests/vectors/binary_decimal_vectors.txt",
+    "crates/xsd/tests/vectors/json_number_vectors.txt",
+]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(mul_small|mul_pow5|mul_by_small|from_binary|from_digits|div_two|is_multiple_of|pow10|cmp_exact)$']
+
+[[job.variant]]
+symbol = "purrdf_xsd::numeric::Decimal::cmp_exact"
+file = "crates/xsd/src/numeric.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_xsd::numeric::Decimal"
+reason = "The xsd:decimal value space this crate models is an i128 mantissa at a scale of at most 18 digits, which XSD 1.1 permits a processor to bound; a literal past it is refused, so its comparison is fixed-width integer arithmetic, not a big integer."
+
+[[job.variant]]
+symbol = "purrdf_jsonschema::number::Decimal::is_multiple_of"
+file = "crates/jsonschema/src/number.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_jsonschema::number::Decimal"
+reason = "JSON Schema compares and divides numbers whose exponent no machine word holds; the decimal keeps its exponent in a word until it overflows and computes on BigInt only then, so 1e999999999999999999999 is never expanded into digits."
+
+[[job.variant]]
+symbol = "purrdf_shapes::json_schema::numeric_order::Decimal::from_binary"
+file = "crates/shapes/src/json_schema/numeric_order.rs"
+detector = "forbidden"
+criterion = "b"
+anchor = "purrdf_shapes::json_schema::numeric_order::Decimal"
+reason = "The numeric-order patterns are written digit by digit, so a range bound is kept as its integer and fraction digit strings; the dyadic expansion itself is BigInt::from_binary, which this converts to those strings."
+
+[[job.variant]]
+symbol = "purrdf_geo::exact::Int::pow10"
+file = "crates/geo/src/exact.rs"
+detector = "forbidden"
+criterion = "c"
+anchor = "purrdf_geo::exact::Int"
+reason = "The geometry kernel's integers are binary 64-bit limbs with an inline small-vector, whose adds, multiplies and shifts are the pinned site geo.exact-limbs; base-10^9 limbs would put a division by 10^9 into every carry of the predicates' inner loops."
+
+[[job]]
+id = "calendar"
+summary = "The proleptic Gregorian calendar: leap years, month lengths, and day numbers to and from civil dates"
+home = "purrdf_xsd::temporal::days_from_civil"
+entry_points = [
+    "purrdf_xsd::temporal::civil_from_days",
+    "purrdf_xsd::temporal::days_in_month",
+    "purrdf_xsd::temporal::is_leap",
+    "purrdf_xsd::days_from_civil",
+]
+spec = "XSD 1.1 Part 2 Appendix D.3 (the proleptic Gregorian calendar); H. Hinnant's days_from_civil and civil_from_days"
+vectors = ["crates/xsd/tests/vectors/calendar_vectors.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(days_from_civil|civil_from_days|civil_from_day_number|days_in_month|is_leap|is_leap_year|day_number)$']
+
+[[job]]
+id = "rfc3339"
+summary = "RFC 3339 internet date and time: the date-time, full-date and full-time readers and the canonical UTC writer"
+home = "purrdf_xsd::rfc3339::parse"
+entry_points = [
+    "purrdf_xsd::rfc3339::parse_date",
+    "purrdf_xsd::rfc3339::parse_time",
+    "purrdf_xsd::rfc3339::format",
+    "purrdf_xsd::rfc3339::Separator",
+    "purrdf_xsd::rfc3339::LeapSecond",
+]
+spec = "RFC 3339 sections 5.6 to 5.8 and Appendix D; the separator (T or t, or also a space) and the leap-second day (month end, or any day) are the parameters the citing grammars differ on"
+vectors = ["crates/xsd/tests/vectors/rfc3339_vectors.txt"]
+bench = ["purrdf-gts:rfc3339"]
+sites = ["xsd.rfc3339-lexical"]
+replaces_external = ["time"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(full_date|full_time|date_time|parse_datetime|parse_rfc3339|format_rfc3339)$']
+
+[[job.variant]]
+symbol = "purrdf_xsd::temporal::parse_datetime"
+file = "crates/xsd/src/temporal.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_xsd::temporal::parse_datetime"
+reason = "xsd:dateTime is not RFC 3339: its year may be negative or wider than four digits, its timezone is optional and bounded at 14:00, and it has no leap second; it shares the calendar with RFC 3339 and nothing else."
+
+[[job]]
+id = "numeric-predicate"
+summary = "Whether a datatype or value is numeric or an integer, and the xsd:integer and xsd:decimal lexical spaces"
+home = "purrdf_xsd::XsdDatatype::is_numeric"
+entry_points = [
+    "purrdf_xsd::XsdDatatype::is_integer_family",
+    "purrdf_xsd::XsdValue::is_numeric",
+    "purrdf_xsd::numeric::is_integer_lexical",
+    "purrdf_xsd::numeric::is_decimal_lexical",
+]
+spec = "SPARQL 1.1 section 17.1 (numeric); XSD 1.1 Part 2 sections 3.3.3.1 and 3.4.13.1 (the decimal and integer lexical spaces)"
+vectors = ["crates/xsd/tests/vectors/numeric_predicate_vectors.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(is_numeric_xsd|is_numeric_datatype|numeric_datatype|numeric_datatype_name|is_integer_datatype|is_integer_lexical|is_decimal_lexical)$']
+
+[[job]]
+id = "unicode-normalization"
+summary = "Unicode normalization: NFC, NFD, NFKC and NFKD, the NFC verdict and the canonical combining class, as streaming stages over the one generated table set, at the one Unicode version every Unicode table is generated from"
+home = "purrdf_lex::unicode::nfc"
+entry_points = [
+    "purrdf_lex::unicode::nfd",
+    "purrdf_lex::unicode::nfkc",
+    "purrdf_lex::unicode::nfkd",
+    "purrdf_lex::unicode::is_nfc",
+    "purrdf_lex::unicode::ccc",
+    "purrdf_lex::unicode::Decompose",
+    "purrdf_lex::unicode::Compose",
+    "purrdf_lex::unicode::drive",
+    "purrdf_lex::unicode::UNICODE_VERSION",
+    "purrdf_text::unicode::nfc",
+]
+spec = "UAX 15 (Unicode Normalization Forms) and the Unicode core specification sections 3.11 and 3.12, over the Unicode Character Database named by purrdf_lex::unicode::UNICODE_VERSION"
+vectors = [
+    "crates/lex/tests/vectors/unicode_normalization_vectors.txt",
+    "crates/lex/tests/vectors/normalization_differential_vectors.txt",
+]
+bench = ["purrdf-text:analysis"]
+sites = []
+replaces_external = ["unicode-normalization"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(nfc|nfd|nfkc|nfkd|is_nfc|is_nfd|is_nfkc|is_nfkd|to_nfc|to_nfd|ccc|combining_class|canonical_combining_class|compose_pair|unicode_version)$']
+
+[[job.variant]]
+symbol = "purrdf_core::xsd_regex::blocks::unicode_version"
+file = "crates/rdf-core/src/xsd_regex/blocks.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_core::xsd_regex::blocks::unicode_version"
+reason = "The XSD block-escape table must agree with the Unicode tables of the regex engine every translated pattern runs on, so it is pinned to the version the locked regex-syntax embeds rather than to purrdf_lex::unicode::UNICODE_VERSION; scripts/check-generated.sh fails when regex-syntax moves without it."

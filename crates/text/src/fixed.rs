@@ -38,6 +38,8 @@
 //! wrapped or saturated value. A wrapped score is a wrong ranking presented as a
 //! right one, which is precisely the failure this crate exists to rule out.
 
+use purrdf_xsd::wide::mul_div;
+
 use crate::error::TextError;
 
 /// How many base-10 fractional digits a [`Fixed`] carries.
@@ -338,80 +340,10 @@ fn binade(raw: u128) -> i32 {
     if below { candidate - 1 } else { candidate }
 }
 
-/// `a × b / c`, truncated, over the full `u128` range — `None` if `c` is zero or
-/// the quotient does not fit a `u128`.
-///
-/// The fast path is one multiplication and one division, taken whenever the
-/// product fits. The slow path exists because the products this crate forms are
-/// routinely larger than their quotients: scaling by `10^12` before dividing
-/// overflows a `u128` for any operand above about `3.4 × 10^26`, while the
-/// answer is perfectly representable. Reporting that as an overflow would make
-/// the arithmetic's range depend on the order the operations were written in.
-fn mul_div(a: u128, b: u128, c: u128) -> Option<u128> {
-    if c == 0 {
-        return None;
-    }
-    if let Some(product) = a.checked_mul(b) {
-        return Some(product / c);
-    }
-    let (high, low) = wide_mul(a, b);
-    // The quotient is at least `high · 2^128 / c`, so it exceeds a `u128` unless
-    // the high half is itself below the divisor.
-    if high >= c {
-        return None;
-    }
-    Some(div_wide(high, low, c))
-}
-
-/// The full 256-bit product of two `u128`s, as `(high, low)`.
-fn wide_mul(a: u128, b: u128) -> (u128, u128) {
-    const HALF: u32 = 64;
-    let mask = u128::from(u64::MAX);
-
-    let (a_high, a_low) = (a >> HALF, a & mask);
-    let (b_high, b_low) = (b >> HALF, b & mask);
-
-    let low_low = a_low * b_low;
-    let low_high = a_low * b_high;
-    let high_low = a_high * b_low;
-    let high_high = a_high * b_high;
-
-    let middle = (low_low >> HALF) + (low_high & mask) + (high_low & mask);
-    let low = (low_low & mask) | (middle << HALF);
-    let high = high_high + (low_high >> HALF) + (high_low >> HALF) + (middle >> HALF);
-    (high, low)
-}
-
-/// `(high · 2^128 + low) / divisor`, requiring `high < divisor` so the quotient
-/// fits a `u128`.
-///
-/// Restoring long division, one bit at a time. The running remainder is always
-/// below `divisor`, so doubling it stays below `2 · divisor`; that can exceed a
-/// `u128` by exactly one bit, which is why the carry is tracked separately
-/// rather than left to overflow.
-fn div_wide(high: u128, low: u128, divisor: u128) -> u128 {
-    debug_assert!(high < divisor, "the quotient must fit a u128");
-    let mut remainder = high;
-    let mut quotient: u128 = 0;
-    for bit in (0..128_u32).rev() {
-        let carry = remainder >> 127;
-        remainder = (remainder << 1) | ((low >> bit) & 1);
-        quotient <<= 1;
-        if carry == 1 || remainder >= divisor {
-            // When `carry` is set the true remainder is `2^128 + remainder`, and
-            // the wrapping subtraction computes exactly that value minus the
-            // divisor — which is back below the divisor, so the invariant holds.
-            remainder = remainder.wrapping_sub(divisor);
-            quotient |= 1;
-        }
-    }
-    quotient
-}
-
 #[cfg(test)]
 mod tests {
 
-    use super::{Fixed, SCALE, SCALE_DIGITS, binade, mul_div};
+    use super::{Fixed, SCALE, SCALE_DIGITS, binade};
     use crate::error::TextError;
 
     #[test]
@@ -449,23 +381,6 @@ mod tests {
         assert_eq!(binade((SCALE / 2).unsigned_abs()), -1);
         // the smallest representable positive value, 10^-12
         assert_eq!(binade(1), -40);
-    }
-
-    /// `mul_div` must agree with the direct computation wherever the direct one
-    /// is available, and must keep answering past the point where it is not.
-    #[test]
-    fn mul_div_matches_the_direct_route_and_outlives_it() {
-        assert_eq!(mul_div(7, 6, 3), Some(14));
-        assert_eq!(mul_div(1, 1, 0), None, "a zero divisor has no quotient");
-
-        // Past the fast path: the product needs 256 bits, the quotient 128.
-        let big = u128::MAX / 2;
-        assert!(big.checked_mul(4).is_none(), "the fast path must be closed");
-        assert_eq!(mul_div(big, 4, 4), Some(big));
-        assert_eq!(mul_div(big, 4, 2), Some(big * 2));
-
-        // A quotient that genuinely does not fit is refused rather than wrapped.
-        assert_eq!(mul_div(u128::MAX, u128::MAX, 1), None);
     }
 
     #[test]

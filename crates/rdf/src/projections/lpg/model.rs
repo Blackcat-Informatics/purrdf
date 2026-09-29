@@ -11,7 +11,9 @@ use super::super::{
 };
 
 const LPG_SCHEMA_VERSION: u32 = 1;
-use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_NS as XSD};
+use purrdf_xsd::XsdDatatype;
+use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT};
+use purrdf_xsd::numeric::{is_decimal_lexical, is_integer_lexical};
 
 /// Mandatory policy and resource boundary for the canonical LPG mapping.
 ///
@@ -1059,7 +1061,7 @@ pub(super) fn property_atom(term: &ProjectionTerm) -> Result<LpgPropertyAtom, Pr
                 value: lexical.clone(),
             },
         },
-        datatype if is_integer_datatype(datatype) => {
+        datatype if XsdDatatype::from_iri(datatype).is_some_and(XsdDatatype::is_integer_family) => {
             if is_integer_lexical(lexical) {
                 lexical.parse::<i64>().map_or_else(
                     |_| LpgPropertyAtom::Decimal {
@@ -1096,54 +1098,6 @@ pub(super) fn property_atom(term: &ProjectionTerm) -> Result<LpgPropertyAtom, Pr
             value: lexical.clone(),
         },
     })
-}
-
-fn is_integer_datatype(datatype: &str) -> bool {
-    matches!(
-        datatype.strip_prefix(XSD),
-        Some(
-            "integer"
-                | "long"
-                | "int"
-                | "short"
-                | "byte"
-                | "nonNegativeInteger"
-                | "positiveInteger"
-                | "unsignedLong"
-                | "unsignedInt"
-                | "unsignedShort"
-                | "unsignedByte"
-                | "nonPositiveInteger"
-                | "negativeInteger"
-        )
-    )
-}
-
-fn is_integer_lexical(lexical: &str) -> bool {
-    let digits = lexical
-        .strip_prefix(['+', '-'])
-        .unwrap_or(lexical)
-        .as_bytes();
-    !digits.is_empty() && digits.iter().all(u8::is_ascii_digit)
-}
-
-fn is_decimal_lexical(lexical: &str) -> bool {
-    let unsigned = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
-    let mut pieces = unsigned.split('.');
-    let before = pieces.next().unwrap_or_default();
-    let after = pieces.next();
-    if pieces.next().is_some() {
-        return false;
-    }
-    let before_valid = before.bytes().all(|byte| byte.is_ascii_digit());
-    match after {
-        None => !before.is_empty() && before_valid,
-        Some(after) => {
-            before_valid
-                && after.bytes().all(|byte| byte.is_ascii_digit())
-                && (!before.is_empty() || !after.is_empty())
-        }
-    }
 }
 
 fn parse_float(lexical: &str) -> Option<f64> {
@@ -1299,6 +1253,7 @@ pub(super) fn collect_node_terms(term: &ProjectionTerm, nodes: &mut BTreeSet<Pro
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn limits() -> ProjectionLimits {
         ProjectionLimits::new(32, 1_000_000, 4_000_000, 5_000_000, 16).expect("limits")

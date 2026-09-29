@@ -3,7 +3,7 @@
 
 //! `purrdf_text::unicode` replayed against the frozen differential vectors.
 //!
-//! The three vector files hold answers recorded from the implementations this
+//! The two vector files hold answers recorded from the implementations this
 //! layer replaced (answers only; see the headers of the files). Each
 //! disagreement a replay admits is enumerated here, with the reason it is the
 //! frozen answer, not this layer, that departs from the Unicode Standard:
@@ -12,7 +12,6 @@
 //!   is 17.0.0, so they differ exactly on the code points whose `C`/`F`
 //!   entries differ between the two vendored files — a set computed here from
 //!   the files, not restated;
-//! * normalization: no disagreement;
 //! * word segmentation: the records listed in [`WORD_DISAGREEMENTS`], each
 //!   decided by the `UAX #29` rule it names;
 //! * the analysis form recorded beside each word list: no disagreement.
@@ -110,47 +109,6 @@ fn the_case_fold_replays_except_where_17_0_0_folds_differently() {
     );
     // The 17.0.0 additions: Latin Extended-D and Beria Erfe capitals.
     assert_eq!(levelled.len(), 28, "{levelled:X?}");
-}
-
-#[test]
-fn the_normalization_forms_replay_exactly() {
-    let text = read("tests/normalization_differential_vectors.txt");
-    let file = VectorFile::parse(&text).expect("a valid frozen vector file");
-    let replayed = file
-        .replay(1, |fields| {
-            let c = char::from_u32(hex(fields[0])).expect("a scalar value");
-            let x = c.to_string();
-            [
-                unicode::nfd(&x),
-                unicode::nfc(&x),
-                unicode::nfkd(&x),
-                unicode::nfkc(&x),
-            ]
-            .iter()
-            .map(|form| encode_str(form))
-            .collect()
-        })
-        .unwrap_or_else(|mismatch| panic!("{mismatch}"));
-    assert_eq!(replayed, 17_086);
-
-    // Every scalar the file does not list is its own form under all four.
-    let listed: BTreeSet<u32> = file.records().iter().map(|r| hex(r.fields[0])).collect();
-    for point in 0..=0x10_FFFF_u32 {
-        let Some(c) = char::from_u32(point) else {
-            continue;
-        };
-        if listed.contains(&point) {
-            continue;
-        }
-        let x = c.to_string();
-        assert!(
-            unicode::nfd(&x) == x
-                && unicode::nfc(&x) == x
-                && unicode::nfkd(&x) == x
-                && unicode::nfkc(&x) == x,
-            "U+{point:04X} is unlisted, so it must be its own form under all four"
-        );
-    }
 }
 
 /// Word-vector records whose frozen word list contradicts `UAX #29`, as
