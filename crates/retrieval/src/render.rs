@@ -422,15 +422,17 @@ impl<'a> Cursor<'a> {
         self.position >= self.text.len()
     }
 
-    /// Advance past ASCII whitespace.
+    /// Advance past `WS ::= #x20 | #x9 | #xD | #xA`.
     ///
-    /// ASCII only, deliberately. The lexicals this scanner reads are the ones
-    /// [`candidate_lexical`] writes, whose separators are all ASCII, so treating
-    /// a Unicode space as a separator would accept a spelling this layer never
-    /// emits and cannot round-trip.
+    /// Exactly those four, deliberately. The lexicals this scanner reads are the
+    /// ones [`candidate_lexical`] writes, whose separators are single spaces, and
+    /// the N-Triples term grammar they follow separates tokens by `WS`; FORM FEED
+    /// (which `is_ascii_whitespace` admits) and every Unicode space are spellings
+    /// this layer never emits and cannot round-trip, so they are refused rather
+    /// than skipped.
     fn skip_whitespace(&mut self) {
         while let Some(ch) = self.rest().chars().next() {
-            if ch.is_ascii_whitespace() {
+            if purrdf_core::terminals::is_ws_char(ch) {
                 self.position += ch.len_utf8();
             } else {
                 break;
@@ -507,7 +509,7 @@ impl<'a> Cursor<'a> {
             return self.iri().map(TermValue::Iri);
         }
         if self.eat("_:") {
-            return Ok(TermValue::blank(self.blank_label()));
+            return self.blank_label().map(TermValue::blank);
         }
         if self.rest().starts_with('"') {
             return self.literal();
@@ -550,17 +552,29 @@ impl<'a> Cursor<'a> {
         }
     }
 
-    /// Read a blank-node label: everything up to whitespace or a closing
-    /// delimiter.
-    fn blank_label(&mut self) -> String {
+    /// Read a blank-node label: everything up to `WS` or a closing delimiter.
+    ///
+    /// The label is read back verbatim, because the writer spells a blank node's
+    /// label as it is; but no control character is ever part of one (the
+    /// N-Triples `BLANK_NODE_LABEL` admits none), so one that is not `WS` — FORM
+    /// FEED, VERTICAL TAB — is refused rather than absorbed into the label or
+    /// taken as a separator.
+    fn blank_label(&mut self) -> Result<String, String> {
         let start = self.position;
         while let Some(ch) = self.rest().chars().next() {
-            if ch.is_ascii_whitespace() || ch == ')' || ch == '>' {
+            if purrdf_core::terminals::is_ws_char(ch) || ch == ')' || ch == '>' {
                 break;
+            }
+            if ch.is_ascii_control() {
+                return Err(format!(
+                    "control character U+{:04X} in a blank-node label at byte {}",
+                    u32::from(ch),
+                    self.position
+                ));
             }
             self.position += ch.len_utf8();
         }
-        self.text[start..self.position].to_owned()
+        Ok(self.text[start..self.position].to_owned())
     }
 
     /// Decode `"…"` with its optional tag, direction or datatype.
@@ -752,6 +766,34 @@ mod tests {
 
     fn rendered(value: &TermValue) -> String {
         sparql_term(value).expect("the fixture value renders")
+    }
+
+    #[test]
+    fn form_feed_does_not_separate_terms() {
+        for text in [
+            "<urn:ex:a>\u{c}",
+            "\u{c}<urn:ex:a>",
+            "<<(\u{c}<urn:ex:s> <urn:ex:p> <urn:ex:o> )>>",
+            "<<( <urn:ex:s>\u{c}<urn:ex:p> <urn:ex:o> )>>",
+            "_:b0\u{c}",
+            "<<( _:b0\u{c}<urn:ex:p> <urn:ex:o> )>>",
+            "<urn:ex:a>\u{b}",
+            "<urn:ex:a>\u{a0}",
+        ] {
+            assert!(decode_term(text).is_err(), "{text:?}");
+        }
+    }
+
+    #[test]
+    fn space_tab_carriage_return_and_line_feed_still_separate_terms() {
+        for separator in [" ", "\t", "\r", "\n", " \t\r\n"] {
+            let text = format!(
+                "{separator}<<({separator}_:b0{separator}<urn:ex:p>{separator}<urn:ex:o>{separator})>>{separator}"
+            );
+            assert!(decode_term(&text).is_ok(), "{text:?}");
+            let blank = format!("_:b0{separator}");
+            assert_eq!(decode_term(&blank), Ok(TermValue::blank("b0")), "{blank:?}");
+        }
     }
 
     #[test]
