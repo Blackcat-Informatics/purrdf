@@ -37,6 +37,8 @@
 
 use std::fmt::Write as _;
 
+use purrdf_xsd::datatype::XSD_NS;
+
 use super::numeric_order::{Decimal, Facet, Rel, Threshold, WS, frac_part, order_body};
 
 /// The three temporal datatypes a range bound compares.
@@ -117,7 +119,7 @@ impl Bound {
     /// not one of the datatype (the validator then compares it with nothing).
     pub(super) fn parse(kind: Kind, lexical: &str) -> Option<Self> {
         let lexical = lexical.trim_matches(['\t', '\n', '\r', ' ']);
-        let iri = format!("http://www.w3.org/2001/XMLSchema#{}", kind.local());
+        let iri = format!("{XSD_NS}{}", kind.local());
         purrdf_xsd::parse_by_iri(lexical, &iri).ok()??;
         let (body, zone) = split_zone(lexical);
         let (days, time) = match kind {
@@ -735,7 +737,7 @@ pub(super) fn order_pattern(facet: Facet, bound: &Bound) -> String {
 mod tests {
     use super::*;
 
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn compiled(patterns: &[String]) -> Vec<regex::Regex> {
         patterns

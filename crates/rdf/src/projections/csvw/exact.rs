@@ -20,7 +20,7 @@ use super::super::{
 };
 use super::CsvwConfig;
 
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 const METADATA_PATH: &str = "csvw-metadata.json";
 const TERMS_PATH: &str = "terms.csv";
 const QUADS_PATH: &str = "quads.csv";

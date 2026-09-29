@@ -176,6 +176,22 @@ pub(crate) fn matches(job: &Job, workspace: &Workspace, home_package: &str) -> V
             });
         }
     }
+    if job
+        .forbidden
+        .fingerprints
+        .iter()
+        .any(|id| id == crate::rules::VOCABULARY_LITERAL)
+    {
+        found.extend(vocabulary_matches(job, workspace, &variants));
+    }
+    if job
+        .forbidden
+        .fingerprints
+        .iter()
+        .any(|id| id == crate::rules::HOME_LITERAL)
+    {
+        found.extend(home_literal_matches(job, workspace, &variants));
+    }
     for hit in &workspace.rule_hits {
         if job.forbidden.fingerprints.iter().any(|id| id == hit.rule) {
             found.push(Match {
@@ -187,6 +203,150 @@ pub(crate) fn matches(job: &Job, workspace: &Workspace, home_package: &str) -> V
                 in_home: false,
                 variant: variants.contains(&hit.symbol),
             });
+        }
+    }
+    found
+}
+
+/// The vocabulary modules of a job: its home and entry points, resolved.
+fn vocabulary_modules(job: &Job, workspace: &Workspace) -> Vec<String> {
+    let mut modules: Vec<String> = std::iter::once(&job.home)
+        .chain(&job.entry_points)
+        .filter_map(|path| workspace.resolve(path))
+        .collect();
+    modules.sort();
+    modules.dedup();
+    modules
+}
+
+fn under(symbol: &str, modules: &[String]) -> bool {
+    modules.iter().any(|module| {
+        symbol
+            .strip_prefix(module.as_str())
+            .is_some_and(|rest| rest.starts_with("::"))
+    })
+}
+
+/// Every `rule:vocabulary-literal` match: a string literal outside the job's
+/// vocabulary modules that equals or starts with a namespace those modules
+/// declare. A job whose modules declare no namespace is itself a match, so
+/// the rule can never pass by reading nothing.
+fn vocabulary_matches(job: &Job, workspace: &Workspace, variants: &BTreeSet<String>) -> Vec<Match> {
+    let modules = vocabulary_modules(job, workspace);
+    let mut namespaces: Vec<String> = workspace
+        .units
+        .iter()
+        .filter(|unit| {
+            unit.kind == UnitKind::Constant
+                && crate::rules::is_namespace_name(&unit.name)
+                && under(&unit.symbol, &modules)
+        })
+        .filter_map(|unit| match unit.strings.as_slice() {
+            [(namespace, _)] if !namespace.is_empty() => Some(namespace.clone()),
+            _ => None,
+        })
+        .collect();
+    namespaces.sort();
+    namespaces.dedup();
+    if namespaces.is_empty() {
+        return vec![Match {
+            symbol: job.home.clone(),
+            package: String::new(),
+            file: String::new(),
+            line: 0,
+            reasons: vec![format!(
+                "{}: the modules {} declare no namespace constant (`NS` or `*_NS`)",
+                crate::rules::VOCABULARY_LITERAL,
+                if modules.is_empty() {
+                    "(none resolve)".to_owned()
+                } else {
+                    modules.join(", ")
+                }
+            )],
+            in_home: false,
+            variant: false,
+        }];
+    }
+    let mut found = Vec::new();
+    for unit in &workspace.units {
+        if under(&unit.symbol, &modules) {
+            continue;
+        }
+        for (literal, line) in &unit.strings {
+            if let Some(namespace) = crate::rules::vocabulary_namespace(literal, &namespaces) {
+                found.push(Match {
+                    symbol: unit.symbol.clone(),
+                    package: unit.package.clone(),
+                    file: unit.file.clone(),
+                    line: *line,
+                    reasons: vec![format!(
+                        "{}: \"{literal}\" spells out a term of <{namespace}>",
+                        crate::rules::VOCABULARY_LITERAL
+                    )],
+                    in_home: false,
+                    variant: variants.contains(&unit.symbol),
+                });
+            }
+        }
+    }
+    found
+}
+
+/// Every `rule:home-literal` match: a string literal outside the job's home
+/// item equal to one the home item's bodies hold. A home that holds no literal
+/// is itself a match, so the rule can never pass by reading nothing.
+fn home_literal_matches(
+    job: &Job,
+    workspace: &Workspace,
+    variants: &BTreeSet<String>,
+) -> Vec<Match> {
+    let home = workspace.resolve(&job.home).into_iter().collect::<Vec<_>>();
+    let is_home = |symbol: &str| home.iter().any(|home| symbol == home) || under(symbol, &home);
+    let mut tokens: Vec<&str> = workspace
+        .units
+        .iter()
+        .filter(|unit| is_home(&unit.symbol))
+        .flat_map(|unit| unit.strings.iter().map(|(text, _)| text.as_str()))
+        .filter(|text| !text.is_empty())
+        .collect();
+    tokens.sort_unstable();
+    tokens.dedup();
+    if tokens.is_empty() {
+        return vec![Match {
+            symbol: job.home.clone(),
+            package: String::new(),
+            file: String::new(),
+            line: 0,
+            reasons: vec![format!(
+                "{}: the home `{}` holds no string literal",
+                crate::rules::HOME_LITERAL,
+                job.home
+            )],
+            in_home: false,
+            variant: false,
+        }];
+    }
+    let mut found = Vec::new();
+    for unit in &workspace.units {
+        if is_home(&unit.symbol) {
+            continue;
+        }
+        for (literal, line) in &unit.strings {
+            if tokens.binary_search(&literal.as_str()).is_ok() {
+                found.push(Match {
+                    symbol: unit.symbol.clone(),
+                    package: unit.package.clone(),
+                    file: unit.file.clone(),
+                    line: *line,
+                    reasons: vec![format!(
+                        "{}: \"{literal}\" is a token `{}` spells",
+                        crate::rules::HOME_LITERAL,
+                        job.home
+                    )],
+                    in_home: false,
+                    variant: variants.contains(&unit.symbol),
+                });
+            }
         }
     }
     found

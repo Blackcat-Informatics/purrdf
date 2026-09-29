@@ -8,8 +8,7 @@ use std::cmp::Ordering;
 use pyo3::prelude::*;
 use pyo3::types::PyBytes;
 
-const XSD_NORMALIZED_STRING: &str = "http://www.w3.org/2001/XMLSchema#normalizedString";
-const XSD_TOKEN: &str = "http://www.w3.org/2001/XMLSchema#token";
+use purrdf_core::datatype::{XSD_NORMALIZED_STRING, XSD_TOKEN};
 
 /// Compare two XSD lexical values by value space.
 ///

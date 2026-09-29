@@ -2110,7 +2110,7 @@ mod tests {
     use crate::shapes::{Constraint, Path};
     use serde_json::json;
 
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn config() -> SchemaImportConfig {
         let namespaces = Namespaces::new(

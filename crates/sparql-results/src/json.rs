@@ -59,7 +59,7 @@ use purrdf_iri::json_escape::{JsonEscapes, escape_body};
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
 /// BARE — no `"datatype"` member — per the SPARQL 1.2 Query Results JSON
 /// Format spec's own encoding table (see the module docs).
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_core::datatype::XSD_STRING;
 
 /// Serialize a [`SparqlResult`] to SPARQL Results JSON, appending the additive
 /// provenance extension — keyed under `namespace.prefix` — when `provenance` is

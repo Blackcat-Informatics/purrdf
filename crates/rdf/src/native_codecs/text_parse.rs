@@ -47,19 +47,19 @@ use super::span::{NoSpans, SpanCollector};
 use crate::nesting::{MAX_PARSE_NESTING_DEPTH, nesting_too_deep};
 use crate::{RdfDiagnostic, RdfLocation};
 
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::NS as RDF_NS;
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_DECIMAL;
+use purrdf_xsd::datatype::XSD_DOUBLE;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 fn err(detail: impl Into<String>) -> RdfDiagnostic {
     RdfDiagnostic::error("native-codec-parse", detail.into())

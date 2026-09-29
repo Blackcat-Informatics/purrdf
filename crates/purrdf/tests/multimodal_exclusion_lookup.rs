@@ -71,8 +71,8 @@ const VECTOR_STRATUM: &str = "https://example.org/stratum/vector";
 /// The one block both producers declare. Sharing it is what removes the planner's merge
 /// argument and leaves finality as the only thing that can end the read.
 const SHARED_BLOCK: &str = "https://example.org/domain/shared";
-/// The datatype the depth argument is written under — the host's, never invented here.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+// The datatype the depth argument is written under — the host's, never invented here.
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// The needle the text producer is asked for.
 const NEEDLE: &str = "alpha beta";

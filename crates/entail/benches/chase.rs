@@ -28,8 +28,8 @@ use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder};
 use purrdf_entail::{Materialization, materialize};
 
-const SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUBCLASSOF;
 
 /// The fixture namespace. `example.org` per the project rule: a bench mints no
 /// vocabulary of its own, and a reserved-for-documentation authority is the only

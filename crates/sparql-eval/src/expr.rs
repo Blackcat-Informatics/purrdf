@@ -55,11 +55,11 @@ use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_INTEGER;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Evaluate an expression over a solution, compiling and linking it for this one call.
 /// See the [module docs](self) for the `Ok(Some)` / `Ok(None)` / `Err` contract. The
@@ -3876,7 +3876,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 Some(off_min) => Ok(Some(typed_term(
                     ctx,
                     &format_daytime_duration(off_min),
-                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
                 ))),
                 None => Ok(None), // SPARQL §17.4.5.7: no timezone → error
             },
@@ -3884,7 +3884,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 Some(off_min) => Ok(Some(typed_term(
                     ctx,
                     &format_daytime_duration(off_min),
-                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
                 ))),
                 None => Ok(None),
             },
@@ -3892,7 +3892,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 Some(off_min) => Ok(Some(typed_term(
                     ctx,
                     &format_daytime_duration(off_min),
-                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
                 ))),
                 None => Ok(None),
             },
@@ -5439,7 +5439,7 @@ mod tests {
         }
     }
 
-    const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
     #[test]
     fn numeric_comparison_uses_value_space() {
@@ -5506,8 +5506,8 @@ mod tests {
         // treats NaN as unordered (`f64`/`f32` `partial_cmp`, correctly, for
         // `<`/`>`/`ORDER BY`). Regression guard for the gap `sparql_value_eq`
         // closes: this used to evaluate to a type error (unbound), not `true`.
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-        const XFLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
+        use purrdf_xsd::datatype::XSD_FLOAT as XFLOAT;
         let ds = empty_ds();
         let eq = Expression::Equal(
             Child::new(typed_lit("NaN", XDOUBLE)),
@@ -6034,7 +6034,7 @@ mod tests {
         assert_eq!(lex(&ds, &expr), Some("fallback".to_owned()));
     }
 
-    const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+    use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
 
     // ---- arithmetic: positive tests ----------------------------------------
 
@@ -6278,8 +6278,8 @@ mod tests {
     /// `=` is total).
     fn temporal_graph() -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
-        const XDATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
-        const XDURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+        use purrdf_xsd::datatype::XSD_DATE_TIME as XDATETIME;
+        use purrdf_xsd::datatype::XSD_DURATION as XDURATION;
         let mut b = RdfDatasetBuilder::new();
         let start = b.intern_iri("http://ex/start");
         let end = b.intern_iri("http://ex/end");
@@ -6690,7 +6690,7 @@ mod tests {
 
     // ---- hash functions -------------------------------------------------
 
-    const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+    use purrdf_xsd::datatype::XSD_DATE_TIME as XSD_DATETIME;
 
     #[test]
     fn md5_abc() {
@@ -6987,10 +6987,10 @@ mod tests {
     // Functions and Operators §9.6); see `Function::Adjust` and
     // `adjust_timezone_arg` for the full source trail.
 
-    const XSD_DATE: &str = "http://www.w3.org/2001/XMLSchema#date";
-    const XSD_TIME: &str = "http://www.w3.org/2001/XMLSchema#time";
-    const XSD_DAYTIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
-    const XSD_YEARMONTH_DURATION: &str = "http://www.w3.org/2001/XMLSchema#yearMonthDuration";
+    use purrdf_xsd::datatype::XSD_DATE;
+    use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION as XSD_DAYTIME_DURATION;
+    use purrdf_xsd::datatype::XSD_TIME;
+    use purrdf_xsd::datatype::XSD_YEAR_MONTH_DURATION as XSD_YEARMONTH_DURATION;
 
     fn adjust(value: Expression, timezone: Expression) -> Expression {
         Expression::FunctionCall(Function::Adjust, vec![value, timezone].into())
@@ -7131,7 +7131,7 @@ mod tests {
 
     // ---- SEP-0002 date/time/duration arithmetic, wired through `+ - * /` --
 
-    const XSD_DURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+    use purrdf_xsd::datatype::XSD_DURATION;
 
     #[test]
     fn datetime_plus_year_month_duration_clamps_to_month_end() {
@@ -7271,7 +7271,7 @@ mod tests {
     #[test]
     fn duration_times_a_double_factor_is_a_type_error() {
         let ds = empty_ds();
-        const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE;
         // The exact-tier rule: an inexact binary factor cannot scale an exact
         // duration without silent rounding, so this is a type error, not a
         // coerced multiplication.
@@ -8830,7 +8830,7 @@ mod tests {
         use purrdf_core::RdfLiteral;
         use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
 
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         let mut b = RdfDatasetBuilder::new();
         let val = b.intern_iri("http://ex/val");
@@ -9895,7 +9895,7 @@ mod tests {
     /// The data the strictness samples read: the one-member `rdf:List` headed by
     /// `<https://example.org/list>`, holding `"a"`.
     fn list_ds() -> Arc<RdfDataset> {
-        const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+        use purrdf_iri::vocab::rdf::NS as RDF;
         let mut builder = RdfDatasetBuilder::new();
         let head = builder.intern_iri("https://example.org/list");
         let first = builder.intern_iri(&format!("{RDF}first"));
@@ -9925,7 +9925,7 @@ mod tests {
     #[allow(clippy::too_many_lines)] // one table row per built-in, kept together
     fn strictness_samples(function: &Function) -> Vec<Vec<Expression>> {
         use purrdf_cdt::CdtFn;
-        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        use purrdf_xsd::datatype::XSD_NS as XSD;
         let int = |n: &str| typed_lit(n, &format!("{XSD}integer"));
         let date_time = || typed_lit("2020-01-02T03:04:05Z", &format!("{XSD}dateTime"));
         let cdt = |kind: CdtFn, args: Vec<Expression>| {
@@ -10259,7 +10259,7 @@ mod tests {
     /// effective boolean value and compared.
     #[test]
     fn a_constant_s_effective_boolean_value_is_the_evaluator_s() {
-        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        use purrdf_xsd::datatype::XSD_NS as XSD;
         let ds = empty_ds();
         let literals = [
             Literal::new_simple(""),
@@ -10284,7 +10284,7 @@ mod tests {
 
     // ---- n-ary chains are the left fold of their binary operator ---------------
 
-    const XBOOL: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_xsd::datatype::XSD_BOOLEAN as XBOOL;
 
     /// A `true`, `false` or type-error operand, by its three-valued value.
     fn truth(value: Option<bool>) -> Expression {
@@ -10404,9 +10404,9 @@ mod tests {
     /// doubles on both sides of a rounding tie, `NaN`, zero (for division), and a
     /// string, which is a type error.
     fn arithmetic_operand(index: usize) -> Expression {
-        const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-        const XFLT: &str = "http://www.w3.org/2001/XMLSchema#float";
-        const XDBL: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDBL;
+        use purrdf_xsd::datatype::XSD_FLOAT as XFLT;
         match index % 11 {
             0 => typed_lit("7", XINT),
             1 => typed_lit("-3", XINT),

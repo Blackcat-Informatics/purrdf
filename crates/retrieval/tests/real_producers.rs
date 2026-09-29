@@ -70,8 +70,8 @@ const KNN_PF: &str = "https://example.org/pf/neighbours";
 const TEXT_STRATUM: &str = "https://example.org/stratum/lexical";
 /// The stratum this host ranks nearest-neighbour rows within.
 const KNN_STRATUM: &str = "https://example.org/stratum/neighbour";
-/// The datatype this host renders a neighbour count with.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+// The datatype this host renders a neighbour count with.
+use purrdf_core::datatype::XSD_INTEGER;
 /// The reciprocal-rank smoothing constant this host fuses under.
 const K: u32 = 60;
 /// The row bound this host asks for. Fused enumeration is top-k by

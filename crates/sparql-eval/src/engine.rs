@@ -7218,7 +7218,7 @@ mod tests {
 
     // ── exotic aggregation ────────────────────────────────────────────────────
 
-    const XSD_INT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER as XSD_INT;
 
     /// A dataset for grouping/aggregation:
     /// `:r1 :a 1 ; :b 2`, `:r2 :a 1 ; :b 2`, `:r3 :a 2 ; :b 3`.

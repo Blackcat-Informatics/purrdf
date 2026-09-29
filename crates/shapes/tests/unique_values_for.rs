@@ -39,8 +39,8 @@ const PREFIXES: &str = "
 ";
 
 const EX: &str = "http://example.org/ns#";
-const UNIQUE: &str = "http://www.w3.org/ns/shacl#UniqueValuesForConstraintComponent";
-const NODE: &str = "http://www.w3.org/ns/shacl#NodeConstraintComponent";
+use purrdf_iri::vocab::sh::NODE_CONSTRAINT_COMPONENT as NODE;
+use purrdf_iri::vocab::sh::UNIQUE_VALUES_FOR_CONSTRAINT_COMPONENT as UNIQUE;
 
 fn load(shapes_ttl: &str) -> Result<Shapes, String> {
     parse_shapes(&format!("{PREFIXES}{shapes_ttl}"), None).map_err(String::from)

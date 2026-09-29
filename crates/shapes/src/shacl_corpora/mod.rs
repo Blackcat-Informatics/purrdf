@@ -170,9 +170,7 @@ mod sht {
     pub(crate) const FAILURE: &str = "http://www.w3.org/ns/shacl-test#Failure";
 }
 
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::rdf::{FIRST as RDF_FIRST, NIL as RDF_NIL, REST as RDF_REST};
 
 // ── The discovered case models ────────────────────────────────────────────────
 
@@ -633,9 +631,9 @@ fn expected_result_messages(g: &RdfDataset, report_node: &Term) -> Vec<(Tuple, B
 /// Whether `predicate` is a result-annotation property on an expected result:
 /// neither `rdf:type` nor a term of the SHACL or SHACL node-expression namespace.
 pub fn is_annotation_property(predicate: &str) -> bool {
-    predicate != "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
-        && !predicate.starts_with("http://www.w3.org/ns/shacl#")
-        && !predicate.starts_with("http://www.w3.org/ns/shacl-node-expr#")
+    predicate != rdf::TYPE
+        && !predicate.starts_with(sh::NS)
+        && !predicate.starts_with(crate::model::shnex::NS)
 }
 
 /// Every expected result carrying result annotations, with its `(property,

@@ -512,8 +512,7 @@ fn binding_value(obj: &[(String, Json)]) -> Result<&str, Error> {
 fn resolve_datatype(datatype: Option<&str>, has_lang: bool, has_dir: bool) -> String {
     match datatype {
         Some(dt) => dt.to_owned(),
-        None if has_lang && has_dir => RDF_DIR_LANGSTRING.to_owned(),
-        None if has_lang => RDF_LANGSTRING.to_owned(),
+        None if has_lang => language_datatype_iri(has_dir).to_owned(),
         None => XSD_STRING.to_owned(),
     }
 }
@@ -1190,6 +1189,9 @@ mod tests {
     use crate::json::to_json;
     use purrdf_core::SparqlResult;
     use purrdf_core::TermBox;
+    use purrdf_core::vocab::rdf::{
+        DIR_LANG_STRING as RDF_DIR_LANGSTRING, LANG_STRING as RDF_LANGSTRING,
+    };
 
     fn parse_string_at(input: &[u8]) -> Result<(String, usize), Error> {
         let mut parser = JsonParser::new(input);

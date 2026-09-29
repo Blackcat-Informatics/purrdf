@@ -19,7 +19,7 @@
 use crate::model::{Message, ReportingDescriptor};
 
 /// The SHACL vocabulary namespace.
-const SHACL_NS: &str = "http://www.w3.org/ns/shacl#";
+use purrdf_iri::vocab::sh::NS as SHACL_NS;
 
 /// The W3C SHACL Recommendation base URL (spec anchors hang off it).
 const SHACL_SPEC: &str = "https://www.w3.org/TR/shacl/";

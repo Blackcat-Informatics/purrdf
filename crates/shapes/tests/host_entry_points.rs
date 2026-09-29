@@ -84,7 +84,7 @@ CONSTRUCT { $this ex:n ?m } WHERE { $this ex:n ?k . FILTER(?k < 5) BIND(?k + 1 A
 /// The data graph: one `ex:Item` whose counter starts at 1.
 const DATA: &str = "@prefix ex: <http://example.org/ns#> .\nex:a a ex:Item ; ex:n 1 .\n";
 
-const SPARQL_EXPR_EXPRESSION: &str = "http://www.w3.org/ns/shacl#SPARQLExprExpression";
+use purrdf_iri::vocab::sh::SPARQL_EXPR_EXPRESSION;
 
 fn document(body: &str) -> TurtleDocument {
     parse_turtle_document(&format!("{PREFIXES}{SPARQL_EXPR_DECLARATION}{body}"), None)

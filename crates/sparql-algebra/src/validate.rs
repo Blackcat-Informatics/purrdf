@@ -209,11 +209,7 @@ fn literal(value: &Literal) -> Result<()> {
     iri(value.datatype().as_str())?;
     match value.language() {
         Some(_) => {
-            let expected = if value.direction().is_some() {
-                crate::ast::RDF_DIR_LANG_STRING
-            } else {
-                crate::ast::RDF_LANG_STRING
-            };
+            let expected = purrdf_iri::vocab::language_datatype_iri(value.direction().is_some());
             if value.datatype().as_str() != expected {
                 return Err(invalid(
                     "literal datatype disagrees with its language and direction",

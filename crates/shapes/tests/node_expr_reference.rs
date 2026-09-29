@@ -72,10 +72,10 @@ const CASES: u32 = 2048;
 const SEED: u64 = 0x7368_6163_6c31_3221;
 
 const EX: &str = "http://example.org/ns#";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUB_CLASS_OF;
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 const PREFIXES: &str = r"
 @prefix ex:     <http://example.org/ns#> .

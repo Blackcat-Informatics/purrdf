@@ -62,6 +62,8 @@ pub(crate) fn is_fingerprint_id(id: &str) -> bool {
                 rest == "hex-lower" || rest == "hex-upper"
             } else if kind == "rule" {
                 id == crate::rules::STD_DEFAULT_HASHER
+                    || id == crate::rules::VOCABULARY_LITERAL
+                    || id == crate::rules::HOME_LITERAL
                     || crate::rules::DELEGATED_RULES.contains(&id)
             } else {
                 rest.len() == 16
@@ -339,6 +341,29 @@ pub(crate) fn integer_constants(stream: &TokenStream, out: &mut BTreeSet<u128>) 
     }
 }
 
+/// Every string literal in `stream` with its 1-based line inside the stream,
+/// decoded: a `"…"` or raw string, or a byte string whose bytes are UTF-8.
+pub(crate) fn string_literals(stream: &TokenStream, out: &mut Vec<(String, usize)>) {
+    for token in stream.clone() {
+        match token {
+            TokenTree::Group(group) => string_literals(&group.stream(), out),
+            TokenTree::Literal(literal) => {
+                let line = literal.span().start().line;
+                match syn::Lit::new(literal) {
+                    syn::Lit::Str(text) => out.push((text.value(), line)),
+                    syn::Lit::ByteStr(bytes) => {
+                        if let Ok(text) = String::from_utf8(bytes.value()) {
+                            out.push((text, line));
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
 /// The hex-digit tables in `stream`: a string or byte-string literal spelling
 /// the sixteen digits in order, or a bracketed array of the sixteen digit
 /// characters or bytes in order.
@@ -418,7 +443,10 @@ mod tests {
 
     use proc_macro2::TokenStream;
 
-    use super::{HEX_LOWER, HEX_UPPER, body_print, hex_tables, integer_value, structural_form};
+    use super::{
+        HEX_LOWER, HEX_UPPER, body_print, hex_tables, integer_value, string_literals,
+        structural_form,
+    };
 
     fn tokens(source: &str) -> TokenStream {
         TokenStream::from_str(source).expect("test source lexes")
@@ -438,6 +466,8 @@ mod tests {
         assert!(super::is_fingerprint_id("rule:std-default-hasher"));
         assert!(super::is_fingerprint_id("rule:raw-hash-domain"));
         assert!(super::is_fingerprint_id("rule:shared-hash-domain"));
+        assert!(super::is_fingerprint_id("rule:vocabulary-literal"));
+        assert!(super::is_fingerprint_id("rule:home-literal"));
         assert!(!super::is_fingerprint_id("rule:raw-hash-domains"));
         assert!(!super::is_fingerprint_id("rule:"));
     }
@@ -535,5 +565,22 @@ mod tests {
         let on_self = body_print(&tokens("self.inner.write(text, Mode::Iri, 16)"), &params);
         assert_eq!(on_self.shim, None);
         assert_eq!(body_print(&tokens(LOOP_A), &params).shim, None);
+    }
+
+    #[test]
+    fn string_literals_are_decoded_in_every_spelling_with_their_line() {
+        let mut found = Vec::new();
+        string_literals(
+            &tokens("f(\"a\\u{62}\");\nlet x = r#\"q\"#;\n[b\"bytes\", b\"\\xff\"]; 'c'; 7"),
+            &mut found,
+        );
+        assert_eq!(
+            found,
+            vec![
+                ("ab".to_owned(), 1),
+                ("q".to_owned(), 2),
+                ("bytes".to_owned(), 3)
+            ]
+        );
     }
 }

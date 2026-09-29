@@ -57,9 +57,9 @@ use shacl_corpora::{file_iri, first_party_box_role_vocab, first_party_cases, w3c
 /// The W3C shapes graph for shapes graphs.
 const SHACL_SHACL: &str = include_str!("../spec/shacl-shacl.ttl");
 
-const SH: &str = "http://www.w3.org/ns/shacl#";
-const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_iri::vocab::rdf::NS as RDF;
+use purrdf_iri::vocab::sh::NS as SH;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 // ── The ledgers ───────────────────────────────────────────────────────────────
 

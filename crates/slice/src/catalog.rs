@@ -22,7 +22,7 @@ use crate::vocab::SliceVocab;
 // Only W3C/DCMI terms are hardcoded; every slice-framework term (`Slice`,
 // `sliceTier`, `sliceDependsOn`, …) comes from the caller's [`SliceVocab`].
 
-const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+use purrdf_iri::vocab::rdfs::LABEL as RDFS_LABEL;
 const DCTERMS_TITLE: &str = "http://purl.org/dc/terms/title";
 const DCTERMS_CREATOR: &str = "http://purl.org/dc/terms/creator";
 const DCTERMS_IDENTIFIER: &str = "http://purl.org/dc/terms/identifier";

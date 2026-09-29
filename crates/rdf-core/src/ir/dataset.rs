@@ -48,7 +48,7 @@ use super::term_walk::fold_term;
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
 /// layer (`reifier rdf:reifies <<( s p o )>>`). Used to expose the reifier side-table
 /// as virtual triples in [`RdfDataset::reifier_quads`].
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// Lazy successor→predecessors reverse index for
 /// [`RdfDataset::predecessors`]: each successor `TermId` maps to its

@@ -20,8 +20,8 @@ use std::sync::Arc;
 use purrdf_core::{PackBuilder, PackView, RdfDataset, RdfDatasetBuilder, dataset_from_view};
 use purrdf_entail::{Materialization, materialize};
 
-const RDFS_SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF;
 
 /// A dataset that exercises every table the seeding path carries: base quads in the
 /// default graph and in a named graph, a reifier over a triple-term, an annotation

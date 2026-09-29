@@ -29,7 +29,7 @@ use purrdf_sparql_eval::{
     PropertyFunctionRegistry, RankArithmetic, TermKind,
 };
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 const PREDICATE: &str = "https://example.org/pf#nearest";
 const STRATUM: &str = "https://example.org/stratum/vector";
 

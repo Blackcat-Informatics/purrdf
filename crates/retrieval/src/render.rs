@@ -593,14 +593,9 @@ impl<'a> Cursor<'a> {
         }
         if self.eat("@") {
             let (language, direction) = self.language_tag()?;
-            let datatype = if direction.is_some() {
-                RDF_DIR_LANG_STRING
-            } else {
-                RDF_LANG_STRING
-            };
             return Ok(TermValue::Literal {
                 lexical_form,
-                datatype: datatype.to_owned(),
+                datatype: purrdf_core::vocab::language_datatype_iri(direction.is_some()).to_owned(),
                 language: Some(language),
                 direction,
             });

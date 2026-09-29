@@ -85,19 +85,19 @@ use purrdf_entail::reasoner::Reasoner;
 /// its own, and a reserved-for-documentation authority is the only one it may put in a term.
 const EX: &str = "http://example.org/";
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const RDFS_SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
-const OWL_EQUIVALENTCLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
-const OWL_INVERSEOF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
-const OWL_INTERSECTIONOF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
-const OWL_ONPROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-const OWL_ALLVALUESFROM: &str = "http://www.w3.org/2002/07/owl#allValuesFrom";
-const OWL_CARDINALITY: &str = "http://www.w3.org/2002/07/owl#cardinality";
-const XSD_NON_NEGATIVE_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
+use purrdf_iri::vocab::owl::ALL_VALUES_FROM as OWL_ALLVALUESFROM;
+use purrdf_iri::vocab::owl::CARDINALITY as OWL_CARDINALITY;
+use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENTCLASS;
+use purrdf_iri::vocab::owl::INTERSECTION_OF as OWL_INTERSECTIONOF;
+use purrdf_iri::vocab::owl::INVERSE_OF as OWL_INVERSEOF;
+use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ONPROPERTY;
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::RANGE as RDFS_RANGE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF;
+use purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER;
 
 /// Which way each block states its restrictions, and whose individual it is asserted of.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

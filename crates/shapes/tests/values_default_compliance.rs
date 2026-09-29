@@ -102,9 +102,9 @@ fn ex(local: &str) -> String {
     format!("<http://example.org/ns#{local}>")
 }
 
-const SH_DATATYPE: &str = "http://www.w3.org/ns/shacl#DatatypeConstraintComponent";
-const SH_MAX_COUNT: &str = "http://www.w3.org/ns/shacl#MaxCountConstraintComponent";
-const SH_MIN_COUNT: &str = "http://www.w3.org/ns/shacl#MinCountConstraintComponent";
+use purrdf_iri::vocab::sh::DATATYPE_CONSTRAINT_COMPONENT as SH_DATATYPE;
+use purrdf_iri::vocab::sh::MAX_COUNT_CONSTRAINT_COMPONENT as SH_MAX_COUNT;
+use purrdf_iri::vocab::sh::MIN_COUNT_CONSTRAINT_COMPONENT as SH_MIN_COUNT;
 
 // ── sh:values (validation) ────────────────────────────────────────────────────
 

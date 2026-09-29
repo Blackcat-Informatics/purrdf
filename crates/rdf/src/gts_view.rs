@@ -21,15 +21,6 @@ pub const DEFAULT_SCOPE: &str = "";
 /// Sentinel scope name selecting every quad regardless of graph.
 pub const ALL_SCOPE: &str = "__all__";
 
-const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-#[cfg(test)]
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-
 /// The consumer-ontology language vocabulary the fold view scans to build its
 /// internal→BCP-47 retag map (mirrors the `StatementMetadataVocab` pattern in
 /// the JSON-LD codec).
@@ -1068,7 +1059,7 @@ mod tests {
     use purrdf_gts::writer::Writer;
 
     const EX: &str = "https://example.org/";
-    const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+    use purrdf_iri::vocab::rdfs::LABEL as RDFS_LABEL;
 
     fn iri(value: &str) -> Term {
         Term {

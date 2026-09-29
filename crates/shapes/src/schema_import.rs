@@ -32,9 +32,6 @@ const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema"
 /// A property schema split into its per-value schema, `minItems`, `maxItems`,
 /// and the `sh:hasValue` constants an array form states under `contains`.
 type CardinalitySplit = (Value, Option<u64>, Option<u64>, Vec<Value>);
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 const JSON_SCHEMA_SOURCE: &str = "json-schema";
 const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
@@ -1802,15 +1799,9 @@ impl ImportContext<'_> {
         else {
             return Ok(false);
         };
-        let first = self
-            .config
-            .namespaces
-            .compact_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#first");
-        let rest = self
-            .config
-            .namespaces
-            .compact_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#rest");
-        let nil = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+        let first = self.config.namespaces.compact_iri(RDF_FIRST);
+        let rest = self.config.namespaces.compact_iri(RDF_REST);
+        let nil = RDF_NIL;
         let nil_form = serde_json::json!({
             "type": "object",
             "properties": {
@@ -3593,7 +3584,7 @@ mod tests {
     use super::*;
     use serde_json::json;
 
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn config() -> SchemaImportConfig {
         let namespaces = Namespaces::new(

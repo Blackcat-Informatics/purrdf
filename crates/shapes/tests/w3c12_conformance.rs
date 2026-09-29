@@ -87,7 +87,7 @@ use shacl_corpora::{Expected, Multiset, Tuple, W3cCase, file_iri, parse_turtle_f
 // ── Xfail ledger ──────────────────────────────────────────────────────────────
 
 /// `rdf:reifies`.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// Entries the engine currently fails, with the reason: `(test id, reason)`,
 /// where the id is the entry's IRI relative to `vectors/shacl12/tests` (see
@@ -1670,7 +1670,7 @@ fn the_grader_grades_sh_detail_where_it_is_stated() {
 fn validator_001_passes_in_both_suites_with_no_import_supplied() {
     const ID: &str = "sparql/component/validator-001";
     const DASH: &str = "http://datashapes.org/dash";
-    const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
+    use purrdf_iri::vocab::owl::IMPORTS as OWL_IMPORTS;
 
     let suite12 = shacl12_cases();
     let Body::Validate(tc12) = &suite12

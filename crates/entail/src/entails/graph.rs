@@ -159,11 +159,7 @@ mod tests {
     ) -> TermValue {
         TermValue::Literal {
             lexical_form: lexical_form.to_owned(),
-            datatype: if direction.is_some() {
-                crate::vocab::RDF_DIRLANGSTRING.to_owned()
-            } else {
-                crate::vocab::RDF_LANGSTRING.to_owned()
-            },
+            datatype: purrdf_iri::vocab::language_datatype_iri(direction.is_some()).to_owned(),
             language: Some(language.to_owned()),
             direction,
         }

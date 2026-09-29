@@ -58,9 +58,9 @@ use crate::lists::{
     DATATYPED_RELATION, QUOTED_RELATION, SURROGATE_D_RELATION, SURROGATE_T_RELATION,
 };
 use crate::vocab::{
-    RDF_DIRLANGSTRING, RDF_LANGSTRING, RDF_PROPERTY, RDF_TYPE, RDFS_CLASS,
-    RDFS_CONTAINERMEMBERSHIPPROPERTY, RDFS_DATATYPE, RDFS_DOMAIN, RDFS_LITERAL, RDFS_MEMBER,
-    RDFS_PROPOSITION, RDFS_RANGE, RDFS_RESOURCE, RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF, XSD_STRING,
+    RDF_PROPERTY, RDF_TYPE, RDFS_CLASS, RDFS_CONTAINERMEMBERSHIPPROPERTY, RDFS_DATATYPE,
+    RDFS_DOMAIN, RDFS_LITERAL, RDFS_MEMBER, RDFS_PROPOSITION, RDFS_RANGE, RDFS_RESOURCE,
+    RDFS_SUBCLASSOF, RDFS_SUBPROPERTYOF,
 };
 
 /// `rdfD2`: `T(?s, ?p, ?o)` ⇒ `?p rdf:type rdf:Property`.
@@ -82,7 +82,7 @@ pub(super) fn predicate_property() -> Vec<DlClause> {
 /// `rdf:JSON` are exactly the ones an interpretation MAY decline to recognize, and this
 /// chase declines; a wider `D` is what
 /// [`Construct::DatatypeValueSpace`](crate::Construct::DatatypeValueSpace) reports.
-const RECOGNIZED_DATATYPES: [&str; 3] = [RDF_LANGSTRING, RDF_DIRLANGSTRING, XSD_STRING];
+use crate::surrogates::RECOGNIZED_DATATYPES;
 
 /// `rdfs1`: any IRI `aaa` in `D` ⇒ `aaa rdf:type rdfs:Datatype`.
 ///

@@ -23,7 +23,7 @@ const PREFIXES: &str = "
     @prefix xsd:  <http://www.w3.org/2001/XMLSchema#> .
 ";
 
-const SH: &str = "http://www.w3.org/ns/shacl#";
+use purrdf_iri::vocab::sh::NS as SH;
 const SHACL: &str = "https://www.w3.org/TR/shacl/";
 const SHACL12_CORE: &str = "https://www.w3.org/TR/shacl12-core/";
 

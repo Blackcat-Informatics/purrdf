@@ -1476,14 +1476,6 @@ fn objects_of(data: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
     .collect()
 }
 
-/// `sh:JSTarget`, a SHACL JavaScript Extensions target. Not a SHACL 1.2 term, so it
-/// has no `model::sh` constant.
-const SH_JS_TARGET: &str = "http://www.w3.org/ns/shacl#JSTarget";
-/// `sh:JSTargetType`, the SHACL JavaScript Extensions class of target types.
-const SH_JS_TARGET_TYPE: &str = "http://www.w3.org/ns/shacl#JSTargetType";
-/// `sh:JSFunction`, the SHACL JavaScript Extensions class of functions.
-pub(crate) const SH_JS_FUNCTION: &str = "http://www.w3.org/ns/shacl#JSFunction";
-
 /// Record a SHACL-JS refusal in `slot` unless one is already recorded.
 pub(crate) fn record_shacl_js(
     slot: &std::cell::RefCell<Option<crate::error::ShaclJsRefusal>>,
@@ -1873,7 +1865,7 @@ impl<'s> Parser<'s> {
     /// parsed.
     fn refuse_javascript_calls(&self, shapes: &Shapes) -> Result<(), String> {
         let javascript: std::collections::BTreeSet<String> = self
-            .quads_with(None, Some(rdf::TYPE), Some(SH_JS_FUNCTION))
+            .quads_with(None, Some(rdf::TYPE), Some(sh::JS_FUNCTION))
             .into_iter()
             .filter_map(|(subject, _, _)| match subject {
                 Term::NamedNode(iri) => Some(iri.as_str().to_owned()),
@@ -1889,7 +1881,7 @@ impl<'s> Parser<'s> {
         };
         Err(self.refuse_shacl_js(
             &Term::NamedNode(NamedNode::from(function.as_str())),
-            SH_JS_FUNCTION,
+            sh::JS_FUNCTION,
             format!(
                 "the SPARQL of {site} calls <{function}>, a sh:JSFunction: {}; the shapes \
                  graph is refused rather than failing when the call is evaluated",
@@ -2493,14 +2485,14 @@ impl<'s> Parser<'s> {
             // A SHACL-JS target — a `sh:JSTarget`, or an instance of a declared
             // `sh:JSTargetType` — is a target this engine cannot compute: its focus
             // nodes are the output of JavaScript. Declared and unused, both are inert.
-            let javascript_target = if self.has_type(&t_node, SH_JS_TARGET) {
-                Some(SH_JS_TARGET)
+            let javascript_target = if self.has_type(&t_node, sh::JS_TARGET) {
+                Some(sh::JS_TARGET)
             } else if self
                 .objects_of(&t_node, rdf::TYPE)
                 .iter()
-                .any(|class| self.has_type(class, SH_JS_TARGET_TYPE))
+                .any(|class| self.has_type(class, sh::JS_TARGET_TYPE))
             {
-                Some(SH_JS_TARGET_TYPE)
+                Some(sh::JS_TARGET_TYPE)
             } else {
                 None
             };

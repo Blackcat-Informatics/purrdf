@@ -781,14 +781,14 @@ mod tests {
         b.intern_iri(full)
     }
 
-    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-    const OWL_OBJECTPROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
-    const OWL_FUNCTIONALPROPERTY: &str = "http://www.w3.org/2002/07/owl#FunctionalProperty";
-    const OWL_HASKEY: &str = "http://www.w3.org/2002/07/owl#hasKey";
-    const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-    const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-    const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+    use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+    use purrdf_iri::vocab::owl::FUNCTIONAL_PROPERTY as OWL_FUNCTIONALPROPERTY;
+    use purrdf_iri::vocab::owl::HAS_KEY as OWL_HASKEY;
+    use purrdf_iri::vocab::owl::OBJECT_PROPERTY as OWL_OBJECTPROPERTY;
+    use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+    use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+    use purrdf_iri::vocab::rdf::REST as RDF_REST;
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
     #[derive(Debug)]
     struct StopAtPoll {

@@ -327,7 +327,7 @@ fn bench_build(c: &mut Bench) {
 /// node costs, and what one carrying blank nodes costs.
 fn bench_literal_intern(c: &mut Bench) {
     const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
-    const XSD_INT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER as XSD_INT;
 
     // Distinct lexical forms per iteration so the interner's dedup does not turn
     // the measurement into a hash hit.

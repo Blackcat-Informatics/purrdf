@@ -87,7 +87,7 @@ use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for, read_varint,
 /// tuple stores it directly (`RdfDataset::reifier_quads` looks it up by value).
 /// [`PackDict::encode`]'s side-table closure fold-in (below) mirrors that same
 /// condition so [`super::side::SideTables`] can mint a unified id for it.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// The unified term-identity space this module mints: a plain, 1-based `u64` (id `0`
 /// is never assigned). A pure type alias, not a newtype — the outer `PackView` seam

@@ -1996,8 +1996,8 @@ mod tests {
     //     branch contributes.
     // These two shapes have DIFFERENT correct results; the tests encode the split.
 
-    const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XBOOL: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_xsd::datatype::XSD_BOOLEAN as XBOOL;
+    use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
     /// `ex:x :v 5`, `ex:y :v 7`, `ex:x :flag true` — only x carries the flag.
     fn union_filter_branch_ds() -> Arc<RdfDataset> {
@@ -2151,7 +2151,7 @@ mod tests {
         let a = b.intern_iri("http://ex/a");
         let bb = b.intern_iri("http://ex/b");
         let c = b.intern_iri("http://ex/c");
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         let ten = b.intern_literal(purrdf_core::RdfLiteral {
             lexical_form: "10".to_owned(),
             datatype: Some(XINT.to_owned()),

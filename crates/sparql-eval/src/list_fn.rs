@@ -36,9 +36,9 @@ use crate::eval::EvalCtx;
 use crate::expr::xsd_of;
 use crate::scratch::{SolutionTerm, term_id_to_value};
 
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
 
 /// Evaluate a PurRDF `rdf:List` extension function.
 ///
@@ -297,8 +297,8 @@ fn bool_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, b: bool) -> Soluti
     typed_term(ctx, if b { "true" } else { "false" }, XSD_BOOLEAN)
 }
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// Walk an `rdf:List` from `head`, returning its member values in order.
 ///
@@ -712,8 +712,8 @@ mod tests {
         // NOT SPARQL value-space: "1"^^xsd:decimal is numerically equal but a
         // distinct term, so it does not match.
         use purrdf_core::RdfLiteral;
-        const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-        const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        use purrdf_xsd::datatype::XSD_DECIMAL;
+        use purrdf_xsd::datatype::XSD_INTEGER;
         let mut b = RdfDatasetBuilder::new();
         let first = b.intern_iri(super::RDF_FIRST);
         let rest = b.intern_iri(super::RDF_REST);

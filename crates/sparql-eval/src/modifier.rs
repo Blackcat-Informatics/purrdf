@@ -111,9 +111,9 @@ use purrdf_xsd::{
     BigInt, XsdDatatype, XsdValue, numeric_add, numeric_div, parse_by_iri, value_total_cmp,
 };
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+use purrdf_xsd::datatype::XSD_DECIMAL;
+use purrdf_xsd::datatype::XSD_INTEGER;
+use purrdf_xsd::datatype::XSD_STRING;
 
 use crate::agg_fn::AggregateAccumulator as _;
 use crate::convert::{ground_term_to_value, literal_to_value, named_node_to_value};
@@ -3546,7 +3546,7 @@ mod tests {
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral};
     use purrdf_sparql_algebra::{NamedNode, NamedNodePattern, TermPattern, TriplePattern};
 
-    const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
     fn ages() -> Arc<RdfDataset> {
         // :a :age 30 ; :b :age 17 ; :c :age 30  (duplicate age 30)
@@ -3917,7 +3917,7 @@ mod tests {
     fn sum_with_decimal() {
         // Dataset: {1^^xsd:integer, 0.5^^xsd:decimal} → SUM = 1.5 (decimal).
         use purrdf_core::{RdfDatasetBuilder, RdfLiteral};
-        const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
         let mut b = RdfDatasetBuilder::new();
         let p = b.intern_iri("http://ex/v");
         for (s, lex, dt) in [("a", "1", XINT), ("b", "0.5", XDEC)] {
@@ -4321,7 +4321,7 @@ mod tests {
     /// above in this module).
     #[test]
     fn avg_double_overflow_is_ieee_infinity_not_poisoned_or_exact() {
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         let huge = format!("{:e}", f64::MAX);
         let ds = numeric_fold_dataset(&[("a", &huge, XDOUBLE), ("b", &huge, XDOUBLE)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
@@ -4333,7 +4333,7 @@ mod tests {
     /// (which only ever fires for the pure-integer `NumericFold::Int` case).
     #[test]
     fn avg_double_nan_propagates() {
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         let ds = numeric_fold_dataset(&[("a", "NaN", XDOUBLE), ("b", "5.0", XDOUBLE)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Avg);
         assert_eq!(result.as_deref(), Some("NaN"));
@@ -4349,7 +4349,7 @@ mod tests {
     /// below `f64::MAX ≈ 1.8e308`).
     #[test]
     fn sum_overflow_then_double_promotes_without_poisoning() {
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         let max = i128::MAX.to_string();
         let ds =
             numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT), ("c", "0.0", XDOUBLE)]);
@@ -4373,7 +4373,7 @@ mod tests {
     /// very first `i128` overflow), just for a different proximate reason.
     #[test]
     fn sum_overflow_then_decimal_poisons_on_decimals_own_bound() {
-        const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+        use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
         let max = i128::MAX.to_string();
         let ds = numeric_fold_dataset(&[("a", &max, XINT), ("b", &max, XINT), ("c", "0.5", XDEC)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
@@ -4389,7 +4389,7 @@ mod tests {
     /// tower now is. Mirrors `f64::MAX + f64::MAX == f64::INFINITY`.
     #[test]
     fn sum_double_overflow_is_ieee_infinity_not_poisoned_or_exact() {
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         let huge = format!("{:e}", f64::MAX);
         let ds = numeric_fold_dataset(&[("a", &huge, XDOUBLE), ("b", &huge, XDOUBLE)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
@@ -4401,7 +4401,7 @@ mod tests {
     /// `xsd:double` lexical form is `"NaN"`, never unbound.
     #[test]
     fn sum_double_nan_propagates() {
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
         let ds = numeric_fold_dataset(&[("a", "NaN", XDOUBLE), ("b", "5.0", XDOUBLE)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
         assert_eq!(result.as_deref(), Some("NaN"));
@@ -4414,7 +4414,7 @@ mod tests {
     /// way.
     #[test]
     fn sum_mixed_integer_and_float_promotes_to_float_as_before() {
-        const XFLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
+        use purrdf_xsd::datatype::XSD_FLOAT as XFLOAT;
         let ds = numeric_fold_dataset(&[("a", "40", XINT), ("b", "2.5", XFLOAT)]);
         let result = eval_numeric_fold(&ds, AggregateFunction::Sum);
         assert_eq!(result.as_deref(), Some("4.25E1"));
@@ -4477,9 +4477,9 @@ mod tests {
     // `SUM`/`AVG` over `xsd:duration` — PurRDF extension (`NumericFold::Dur`)
     // -----------------------------------------------------------------------
 
-    const XSD_YEAR_MONTH_DURATION: &str = "http://www.w3.org/2001/XMLSchema#yearMonthDuration";
-    const XSD_DAY_TIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
-    const XSD_DURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+    use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION;
+    use purrdf_xsd::datatype::XSD_DURATION;
+    use purrdf_xsd::datatype::XSD_YEAR_MONTH_DURATION;
 
     /// [`eval_numeric_fold`]'s underlying twin: returns the result's lexical form
     /// AND its datatype IRI, or `None` if unbound — [`eval_numeric_fold`] is a
@@ -5078,7 +5078,7 @@ mod tests {
     fn group_aggregate_forced_parallel_and_sequential_agree() {
         use purrdf_core::RdfLiteral;
 
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const GROUPS: i64 = 220;
         const ROWS: i64 = 260;
 
@@ -5199,7 +5199,7 @@ mod tests {
     #[test]
     fn within_group_chunked_fold_forced_parallel_and_sequential_agree() {
         use purrdf_core::RdfLiteral;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const ROWS: i64 = 3000;
 
         let mut b = RdfDatasetBuilder::new();
@@ -5294,7 +5294,7 @@ mod tests {
     #[test]
     fn within_group_distinct_dedup_survives_chunking_keeping_input_order_first_occurrence() {
         use purrdf_core::RdfLiteral;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const ROWS: i64 = 3000;
 
         let mut b = RdfDatasetBuilder::new();
@@ -6002,7 +6002,7 @@ mod tests {
     /// determinism pin below shares with [`stat_agg_first_chunked_fold_forced_parallel_and_sequential_agree`].
     fn stat_agg_integer_sequence_dataset(rows: i64) -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         let mut b = RdfDatasetBuilder::new();
         let val_pred = b.intern_iri("http://ex/val");
@@ -6098,7 +6098,7 @@ mod tests {
     /// does not depend on sub-day duration canonicalization.
     fn stat_agg_dt_duration_sequence_dataset(rows: i64) -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
-        const XSD_DAY_TIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
+        use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION;
 
         let mut b = RdfDatasetBuilder::new();
         let val_pred = b.intern_iri("http://ex/val");
@@ -6183,7 +6183,7 @@ mod tests {
         use purrdf_core::RdfLiteral;
         const ROWS: i64 = 3000;
         const REPEATED_UP_TO: i64 = 1000;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const NS: &str = "http://example.org/agg/";
 
         let mut b = RdfDatasetBuilder::new();
@@ -6229,7 +6229,7 @@ mod tests {
         use purrdf_core::RdfLiteral;
         const KNOWN: [i64; 8] = [2, 4, 4, 4, 5, 5, 7, 9];
         const REPEATS: i64 = 400;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const NS: &str = "http://example.org/agg/";
 
         let mut b = RdfDatasetBuilder::new();
@@ -6286,7 +6286,7 @@ mod tests {
     #[test]
     fn stat_agg_topk_chunked_fold_forced_parallel_and_sequential_agree() {
         const ROWS: i64 = 3000;
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
         const NS: &str = "http://example.org/agg/";
 
         let ds = stat_agg_integer_sequence_dataset(ROWS);
@@ -6350,12 +6350,12 @@ mod numeric_chain_tests {
     use super::*;
     use purrdf_testkit::rng::splitmix64_next;
 
-    const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-    const XDBL: &str = "http://www.w3.org/2001/XMLSchema#double";
-    const XFLT: &str = "http://www.w3.org/2001/XMLSchema#float";
-    const XDTD: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
-    const XSTR: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION as XDTD;
+    use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
+    use purrdf_xsd::datatype::XSD_DOUBLE as XDBL;
+    use purrdf_xsd::datatype::XSD_FLOAT as XFLT;
+    use purrdf_xsd::datatype::XSD_INTEGER as XINT;
+    use purrdf_xsd::datatype::XSD_STRING as XSTR;
 
     fn lit(lexical: &str, datatype: &str) -> TermValue {
         TermValue::Literal {
@@ -6698,8 +6698,8 @@ mod sort_key_walk_tests {
     use std::cmp::Ordering;
 
     const EX: &str = "http://example.org/";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    use purrdf_xsd::datatype::XSD_STRING;
     const DEPTH: usize = 100_000;
     const SMALL_STACK: usize = 128 * 1024;
 

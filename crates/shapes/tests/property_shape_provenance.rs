@@ -182,7 +182,7 @@ fn reifier_constraint_sources_use_the_property_declaration() {
 /// from its source shape and JSON Pointer, including required-only properties.
 #[test]
 fn imported_properties_have_distinct_deterministic_source_identities() {
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    use purrdf_xsd::datatype::XSD_NS as XSD;
     let config = SchemaImportConfig::new(
         Namespaces::new("ex", &[("ex".to_owned(), "http://example.org/".to_owned())])
             .expect("namespace configuration"),

@@ -57,16 +57,13 @@ use crate::score::{
     Constraint, PartitionFilter, Scored, ScoringWork, distinct_terms, score_located, select_counted,
 };
 
-/// The datatype of a plain string literal.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// The datatype `?score` is emitted as.
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-/// The datatype `?rank`, `?matched` and `?position` are emitted as.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-/// The datatype of a language-tagged string.
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-/// The datatype of a directional language-tagged string.
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+// `?score` is emitted as `xsd:decimal`; `?rank`, `?matched` and `?position` as
+// `xsd:integer`. A searchable literal is an `xsd:string`, an `rdf:langString` or
+// an `rdf:dirLangString`.
+use purrdf_core::datatype::{XSD_DECIMAL, XSD_INTEGER, XSD_STRING};
+use purrdf_core::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, LANG_STRING as RDF_LANG_STRING,
+};
 
 /// [`TextSearchRelation`]'s `?doc` position.
 const SEARCH_DOC: usize = 0;

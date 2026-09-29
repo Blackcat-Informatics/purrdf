@@ -3074,7 +3074,7 @@ mod tests {
     use purrdf_testkit::prop::prelude::*;
     use serde_json::json;
 
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn compiled(schema: &Value) -> CompiledSchema {
         CompiledSchema {

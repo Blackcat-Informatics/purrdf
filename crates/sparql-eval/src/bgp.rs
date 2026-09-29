@@ -54,7 +54,7 @@ use std::sync::Arc;
 /// layer. A triple pattern whose predicate is bound to this IRI (and whose object is a
 /// quoted-triple pattern) draws candidates from the dataset's reifier side-table via
 /// [`RdfDataset::reifier_quads`], which is invisible to the `quads` table.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// The `NUL`-prefixed marker that distinguishes a synthetic blank-node slot
 /// variable from a real, projectable SPARQL variable.

@@ -67,9 +67,9 @@ use crate::vocab::{
 /// and is read as an ordinary class, property or individual. Splitting on the namespace is
 /// what makes "unrecognized" a decidable question rather than a guess.
 pub(crate) const RESERVED_NAMESPACES: [&str; 3] = [
-    "http://www.w3.org/1999/02/22-rdf-syntax-ns#",
-    "http://www.w3.org/2000/01/rdf-schema#",
-    "http://www.w3.org/2002/07/owl#",
+    purrdf_iri::vocab::rdf::NS,
+    purrdf_iri::vocab::rdfs::NS,
+    purrdf_iri::vocab::owl::NS,
 ];
 
 /// Whether `iri` sits in one of the [`RESERVED_NAMESPACES`].
@@ -665,7 +665,7 @@ mod tests {
     /// A fixture property.
     const EX_P: &str = "http://example.org/p";
     /// `xsd:boolean`, the datatype `owl:hasSelf`'s value carries.
-    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_xsd::datatype::XSD_BOOLEAN;
 
     /// A small builder wrapper that keeps the fixture construction readable.
     struct Fixture {

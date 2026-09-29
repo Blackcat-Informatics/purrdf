@@ -784,7 +784,7 @@ fn query_is_top_level_ordered(query_text: &str, options: &ParserOptions) -> bool
 
 /// The RIF vocabulary predicate a `qt:data` graph uses to reference the `.rif`
 /// document(s) whose rules govern the case.
-const RIF_USED_WITH_PROFILE: &str = "http://www.w3.org/2007/rif#usedWithProfile";
+use purrdf_iri::vocab::rif::USED_WITH_PROFILE as RIF_USED_WITH_PROFILE;
 
 /// Build the combined RIF [`RuleSet`](purrdf_entail::RuleSet) for a `Rif`-regime
 /// case by scanning `dataset` for `?doc rif:usedWithProfile ?profile` triples,

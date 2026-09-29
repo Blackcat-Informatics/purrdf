@@ -262,7 +262,7 @@ fn attach_diagnostics(run: &mut Run, diagnostics: &[MandatoryDiagnostic]) {
                          have at least one member\"",
                         diagnostic
                             .parameter()
-                            .replace("http://www.w3.org/ns/shacl#", "sh:")
+                            .replace(purrdf_iri::vocab::sh::NS, "sh:")
                     ))),
                     full_description: None,
                     help: None,
@@ -720,7 +720,7 @@ fn shacl_messages(messages: &[Literal]) -> serde_json::Value {
 }
 
 /// `xsd:string`.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_core::datatype::XSD_STRING;
 
 /// Synthesize an actionable message from a result's structured parts — never a
 /// bare IRI dump. Example:

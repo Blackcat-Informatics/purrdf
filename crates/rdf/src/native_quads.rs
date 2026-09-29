@@ -14,7 +14,7 @@ use std::sync::Arc;
 use crate::native_codecs::parse::{FoldNode, FoldRow, fold_statement_layer};
 use crate::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm};
 
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// Freeze several independently-parsed native [`RdfQuad`] streams into ONE validated
 /// [`RdfDataset`], folding the RDF 1.2 statement layer, with blank nodes
@@ -378,8 +378,8 @@ ex:g {
         );
     }
 
-    const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
-    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    use purrdf_iri::vocab::owl::RESTRICTION as OWL_RESTRICTION;
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
     /// Parse a Turtle string and flatten it to the source-faithful owned quad stream.
     fn turtle_quads(ttl: &str) -> Vec<RdfQuad> {

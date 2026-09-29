@@ -19,13 +19,13 @@ use purrdf_core::{
 
 use super::super::{ProjectionError, ProjectionLimits, ProjectionTerm};
 
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 use super::model::{
     LpgAnnotation, LpgConfig, LpgEdge, LpgGraph, LpgGraphContext, LpgLabel, LpgNode, LpgProperty,
     LpgRdfQuad, LpgReifier, annotation_identifier, collect_node_terms, edge_identifier,
     node_identifier, property_atom, reifier_identifier, statement_identifier,
 };
 use super::stream::{IgnoreProgress, LpgProgressObserver, LpgProjectionReport, MappingProgress};
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// Result of RDF→LPG projection.
 #[derive(Debug, Clone)]

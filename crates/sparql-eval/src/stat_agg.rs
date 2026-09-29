@@ -326,8 +326,8 @@ const FIRST: &str = "FIRST";
 const LAST: &str = "LAST";
 const TOPK: &str = "TOPK";
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+use purrdf_xsd::datatype::XSD_DOUBLE;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// `PERCENTILE`'s named scalarval: `AGG(<{NS}PERCENTILE>, ?v; P=0.95)`.
 const PERCENTILE_P: &str = "P";

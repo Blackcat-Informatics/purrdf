@@ -33,8 +33,8 @@ use crate::{
 };
 
 /// The `rdf:reifies` predicate IRI (RDF 1.2 statement layer).
-pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+pub use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+use purrdf_xsd::datatype::XSD_STRING;
 /// Payloads larger than this select `zstd-rsyncable` over `zstd`.
 pub const DEFAULT_RSYNCABLE_THRESHOLD: usize = 65536;
 /// zstd compression level for the committed `dist` bundle's frames (purrdf-gts 0.9.11

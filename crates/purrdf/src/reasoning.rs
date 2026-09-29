@@ -1905,8 +1905,8 @@ mod tests {
 
     use super::*;
 
-    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const RDFS_SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS;
 
     /// A caller can walk from the wrapper to the failure it wraps.
     ///
@@ -2351,10 +2351,10 @@ mod tests {
     // ── The combined approach: a non-distinguished variable, answered correctly ────────
 
     const COMBINED_NS: &str = "https://example.org/combined#";
-    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-    const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
-    const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-    const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
+    use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+    use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ON_PROPERTY;
+    use purrdf_iri::vocab::owl::RESTRICTION as OWL_RESTRICTION;
+    use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOME_VALUES_FROM;
 
     /// `A ⊑ ∃r.B`, `a : A` — the classic shape a query-independent, whole-vocabulary
     /// augmentation cannot answer correctly for a non-distinguished variable, because no
@@ -2496,8 +2496,8 @@ mod tests {
 
     // ── Filtration: the witness never reaches the caller, and no answer is lost ────────
 
-    const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
-    const RDFS_SUBPROPERTY: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
+    use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENT_CLASS;
+    use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTY;
 
     /// The `some_values_from_ontology` plus ASSERTED data a witness has nothing to do with:
     /// `c : B` and `a s c`. Without it every query in the corpus below would answer nothing

@@ -368,7 +368,7 @@ fn measure_min<T>(mut operation: impl FnMut() -> T) -> (T, Measurement) {
 const NS: &str = "http://example.org/purrdf/sparql-path#";
 
 /// `rdf:type`, spelled out because the fixture is built id-natively.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Mirrors `PARALLEL_MIN_FOCUS_NODES` in `crates/shapes/src/parallel.rs`.
 ///

@@ -61,10 +61,7 @@ use alloc::vec::Vec;
 
 use purrdf_iri::langtag;
 
-use crate::datatype::{
-    CdtDatatype, RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE,
-    XSD_INTEGER,
-};
+use crate::datatype::{CdtDatatype, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER};
 use crate::error::CdtError;
 use crate::limits::{MAX_ELEMENTS, MAX_LEXICAL_BYTES, list_extent, map_extent};
 use crate::render::canonical_key_lexical;
@@ -671,11 +668,7 @@ impl<'a> Scanner<'a> {
         let lexical = self.parse_string()?;
         if self.peek() == Some(b'@') {
             let (language, direction) = self.parse_langtag()?;
-            let datatype = if direction.is_some() {
-                RDF_DIR_LANG_STRING
-            } else {
-                RDF_LANG_STRING
-            };
+            let datatype = purrdf_iri::vocab::language_datatype_iri(direction.is_some());
             return Ok(CdtLiteral {
                 lexical,
                 datatype: datatype.to_string(),

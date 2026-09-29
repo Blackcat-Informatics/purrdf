@@ -2890,7 +2890,7 @@ fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
 fn true_literal() -> Expression {
     Expression::Literal(Literal::new_typed(
         "true",
-        NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
+        NamedNode::new_unchecked(purrdf_xsd::datatype::XSD_BOOLEAN),
     ))
 }
 
@@ -3159,7 +3159,7 @@ mod tests {
     use purrdf_sparql_algebra::Child;
 
     /// `http://www.w3.org/2001/XMLSchema#string`, for a plain literal fixture.
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_STRING;
 
     /// The five ground values the classification distinguishes, as `(label, term)`.
     ///
@@ -3523,8 +3523,8 @@ mod walk_tests {
 
     use super::*;
 
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    use purrdf_xsd::datatype::XSD_STRING;
     const SMALL_STACK: usize = 128 * 1024;
     const DEEP: usize = 100_000;
 

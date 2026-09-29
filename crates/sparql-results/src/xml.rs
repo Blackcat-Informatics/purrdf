@@ -85,11 +85,11 @@ use std::ops::ControlFlow;
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
 /// bare (no `datatype` attribute), matching the JSON/Turtle abbreviation.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_core::datatype::XSD_STRING;
 
 /// The ITS (Internationalization Tag Set) namespace IRI the SPARQL 1.2 Query
 /// Results specification uses for the `dir` attribute — see the module docs.
-const ITS_NS: &str = "http://www.w3.org/2005/11/its";
+use purrdf_core::vocab::its::NS as ITS_NS;
 
 /// Whether `result` carries at least one directional literal anywhere in its
 /// bound terms (recursing into triple-term components). Determines whether

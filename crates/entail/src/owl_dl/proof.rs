@@ -5506,12 +5506,12 @@ mod tests {
     const EX_D: &str = "http://example.org/D";
     /// A fixture property.
     const EX_P: &str = "http://example.org/p";
-    /// `rdf:type`.
-    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
     /// `owl:disjointWith`.
-    const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
+    use purrdf_iri::vocab::owl::DISJOINT_WITH as OWL_DISJOINT_WITH;
+    /// `rdf:type`.
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
     /// `rdfs:subClassOf`.
-    const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS_OF;
 
     /// A tiny triple sink over the frozen IR.
     struct Fixture {

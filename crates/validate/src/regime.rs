@@ -1450,21 +1450,21 @@ pub const AXIOM_KINDS: [&str; 8] = [
     "SubObjectPropertyOf",
 ];
 
+/// `owl:differentFrom` — the mapping's individual-difference predicate.
+use purrdf_iri::vocab::owl::DIFFERENT_FROM as OWL_DIFFERENT_FROM;
+/// `owl:disjointWith` — the mapping's class-disjointness predicate.
+use purrdf_iri::vocab::owl::DISJOINT_WITH as OWL_DISJOINT_WITH;
+/// `owl:equivalentClass` — the mapping's class-equivalence predicate.
+use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENT_CLASS;
+/// `owl:sameAs` — the mapping's individual-identity predicate.
+use purrdf_iri::vocab::owl::SAME_AS as OWL_SAME_AS;
 /// `rdf:type` — the OWL 2 RDF mapping's class-assertion predicate, and the
 /// scaffold predicate [`parse_one_term`] parses a bare term through.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 /// `rdfs:subClassOf` — the mapping's sub-class predicate.
-const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS_OF;
 /// `rdfs:subPropertyOf` — the mapping's sub-property predicate.
-const RDFS_SUBPROPERTY_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
-/// `owl:equivalentClass` — the mapping's class-equivalence predicate.
-const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
-/// `owl:disjointWith` — the mapping's class-disjointness predicate.
-const OWL_DISJOINT_WITH: &str = "http://www.w3.org/2002/07/owl#disjointWith";
-/// `owl:sameAs` — the mapping's individual-identity predicate.
-const OWL_SAME_AS: &str = "http://www.w3.org/2002/07/owl#sameAs";
-/// `owl:differentFrom` — the mapping's individual-difference predicate.
-const OWL_DIFFERENT_FROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
+use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTY_OF;
 
 /// One reasoning service's answer and the certificate of the run that produced it.
 ///

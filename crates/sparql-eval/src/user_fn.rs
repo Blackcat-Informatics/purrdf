@@ -1277,7 +1277,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     let result: Option<TermValue> = match (func.kind, outcome) {
         (UserFnBody::Ask, Outcome::Boolean(value)) => Some(TermValue::typed_literal(
             if value { "true" } else { "false" },
-            "http://www.w3.org/2001/XMLSchema#boolean",
+            purrdf_xsd::datatype::XSD_BOOLEAN,
         )),
         (UserFnBody::Select, Outcome::Solutions(seq)) => {
             let (variables, rows) = materialize_solutions(&seq, &child);
@@ -1532,9 +1532,9 @@ mod tests {
 
     const EX_NATIVE_EVEN: &str = "http://example.org/ns#nativeEven";
 
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_xsd::datatype::XSD_BOOLEAN;
+    use purrdf_xsd::datatype::XSD_DOUBLE;
+    use purrdf_xsd::datatype::XSD_INTEGER;
 
     /// A native closure that adds one to its sole integer-literal argument.
     ///
@@ -3237,7 +3237,7 @@ mod content_fingerprint_tests {
     const EX_OTHER: &str = "http://example.org/ns#other";
     const EX_NATIVE: &str = "http://example.org/ns#native";
     const EX_EXPR: &str = "http://example.org/ns#expr";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER;
 
     /// A fixture body, stored the way a real declaration stores one: as text.
     /// Parsing happens at bind time, against the environment in force — there is

@@ -3830,7 +3830,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
     fn capi_eval_node_expr_selectors() {
         use std::ffi::CString;
 
-        const SH: &str = "http://www.w3.org/ns/shacl#";
+        use purrdf_core::vocab::sh::NS as SH;
         let shapes = CString::new(TOOLS_SHAPES).expect("no NUL");
         let data = CString::new(TOOLS_DATA).expect("no NUL");
         let focus = CString::new("http://example.org/ns#a").expect("no NUL");

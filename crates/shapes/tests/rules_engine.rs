@@ -36,7 +36,7 @@ const PREFIXES: &str = r"
 ";
 
 const EX: &str = "http://example.org/ns#";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 fn iri(local: &str) -> Term {
     Term::NamedNode(NamedNode::from(format!("{EX}{local}").as_str()))

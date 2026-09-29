@@ -31,11 +31,11 @@ struct Import {
     profile: Option<String>,
 }
 
+/// The XML Schema datatype namespace RIF typed-literal consts reference.
+use purrdf_core::datatype::XSD_NS;
 /// The RIF namespace every RIF-XML element and the `iri`/`local` const types live
 /// in.
-const RIF_NS: &str = "http://www.w3.org/2007/rif#";
-/// The XML Schema datatype namespace RIF typed-literal consts reference.
-const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_iri::vocab::rif::NS as RIF_NS;
 
 /// Load a `.rif` document at `rif_path`, plus every RDF graph it `Import`s
 /// (resolved to local fixtures beside it), into one combined [`RuleSet`].

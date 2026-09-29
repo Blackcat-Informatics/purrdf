@@ -74,18 +74,18 @@
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::TermValue;
 
-/// `rdf:type`.
-pub const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-/// `rdfs:subClassOf`.
-pub const RDFS_SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
 /// `owl:Ontology`.
-pub const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
-/// `sh:ShapesGraph`.
-pub const SH_SHAPES_GRAPH: &str = "http://www.w3.org/ns/shacl#ShapesGraph";
-/// `sh:RulesGraph`, a subclass of `sh:ShapesGraph`.
-pub const SH_RULES_GRAPH: &str = "http://www.w3.org/ns/shacl#RulesGraph";
+pub use purrdf_iri::vocab::owl::ONTOLOGY as OWL_ONTOLOGY;
+/// `rdf:type`.
+pub use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+/// `rdfs:subClassOf`.
+pub use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUB_CLASS_OF;
 /// `sh:DataGraph`.
-pub const SH_DATA_GRAPH: &str = "http://www.w3.org/ns/shacl#DataGraph";
+pub use purrdf_iri::vocab::sh::DATA_GRAPH as SH_DATA_GRAPH;
+/// `sh:RulesGraph`, a subclass of `sh:ShapesGraph`.
+pub use purrdf_iri::vocab::sh::RULES_GRAPH as SH_RULES_GRAPH;
+/// `sh:ShapesGraph`.
+pub use purrdf_iri::vocab::sh::SHAPES_GRAPH as SH_SHAPES_GRAPH;
 
 /// The set of graph roles one node declares. See the [module documentation](self).
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Hash, PartialOrd, Ord)]

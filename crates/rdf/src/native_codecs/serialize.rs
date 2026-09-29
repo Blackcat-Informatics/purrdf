@@ -91,7 +91,7 @@ const fn blank_label_alphabet(format: NativeRdfFormat) -> LabelAlphabet {
 /// The `xsd:string` datatype IRI: a literal of this datatype with no language is a
 /// plain literal and is emitted WITHOUT an explicit `^^<…>`, so it round-trips back to
 /// the same plain form (matching the purrdf-gts native projection).
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Serialize a frozen [`RdfDataset`](crate::RdfDataset) to RDF text of `media_type`, honoring the
 /// [`SerializeGraph`] selection. Returns the serialized bytes.

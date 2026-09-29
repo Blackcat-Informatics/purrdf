@@ -111,35 +111,34 @@ use purrdf_entail::{Materialization, materialize};
 // the same reason `oracle.rs` spells its own out: an oracle that read the engine's own
 // constants would agree with the engine by construction.
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const RDFS_SUBCLASSOF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-const RDFS_SUBPROPERTYOF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
-const RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
-const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
-const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-const OWL_OBJECTPROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
-const OWL_SYMMETRICPROPERTY: &str = "http://www.w3.org/2002/07/owl#SymmetricProperty";
-const OWL_TRANSITIVEPROPERTY: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
-const OWL_FUNCTIONALPROPERTY: &str = "http://www.w3.org/2002/07/owl#FunctionalProperty";
-const OWL_INVERSEFUNCTIONALPROPERTY: &str =
-    "http://www.w3.org/2002/07/owl#InverseFunctionalProperty";
-const OWL_INVERSEOF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
-const OWL_EQUIVALENTCLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
-const OWL_EQUIVALENTPROPERTY: &str = "http://www.w3.org/2002/07/owl#equivalentProperty";
-const OWL_PROPERTYCHAINAXIOM: &str = "http://www.w3.org/2002/07/owl#propertyChainAxiom";
-const OWL_HASKEY: &str = "http://www.w3.org/2002/07/owl#hasKey";
-const OWL_ONPROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-const OWL_SOMEVALUESFROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
-const OWL_ALLVALUESFROM: &str = "http://www.w3.org/2002/07/owl#allValuesFrom";
-const OWL_HASVALUE: &str = "http://www.w3.org/2002/07/owl#hasValue";
-const OWL_INTERSECTIONOF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
-const OWL_UNIONOF: &str = "http://www.w3.org/2002/07/owl#unionOf";
-const OWL_DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_iri::vocab::owl::ALL_VALUES_FROM as OWL_ALLVALUESFROM;
+use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+use purrdf_iri::vocab::owl::DIFFERENT_FROM as OWL_DIFFERENTFROM;
+use purrdf_iri::vocab::owl::EQUIVALENT_CLASS as OWL_EQUIVALENTCLASS;
+use purrdf_iri::vocab::owl::EQUIVALENT_PROPERTY as OWL_EQUIVALENTPROPERTY;
+use purrdf_iri::vocab::owl::FUNCTIONAL_PROPERTY as OWL_FUNCTIONALPROPERTY;
+use purrdf_iri::vocab::owl::HAS_KEY as OWL_HASKEY;
+use purrdf_iri::vocab::owl::HAS_VALUE as OWL_HASVALUE;
+use purrdf_iri::vocab::owl::INTERSECTION_OF as OWL_INTERSECTIONOF;
+use purrdf_iri::vocab::owl::INVERSE_FUNCTIONAL_PROPERTY as OWL_INVERSEFUNCTIONALPROPERTY;
+use purrdf_iri::vocab::owl::INVERSE_OF as OWL_INVERSEOF;
+use purrdf_iri::vocab::owl::OBJECT_PROPERTY as OWL_OBJECTPROPERTY;
+use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ONPROPERTY;
+use purrdf_iri::vocab::owl::PROPERTY_CHAIN_AXIOM as OWL_PROPERTYCHAINAXIOM;
+use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOMEVALUESFROM;
+use purrdf_iri::vocab::owl::SYMMETRIC_PROPERTY as OWL_SYMMETRICPROPERTY;
+use purrdf_iri::vocab::owl::TRANSITIVE_PROPERTY as OWL_TRANSITIVEPROPERTY;
+use purrdf_iri::vocab::owl::UNION_OF as OWL_UNIONOF;
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::DOMAIN as RDFS_DOMAIN;
+use purrdf_iri::vocab::rdfs::RANGE as RDFS_RANGE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF;
+use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTYOF;
+use purrdf_xsd::datatype::XSD_INTEGER;
+use purrdf_xsd::datatype::XSD_STRING;
 
 // ── Fixture corpus ──────────────────────────────────────────────────────────────
 

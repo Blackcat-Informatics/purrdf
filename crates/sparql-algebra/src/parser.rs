@@ -52,15 +52,10 @@ use crate::lexer::{Spanned, Token, tokenize};
 use crate::tree::Child;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, IriError, LineIndex, langtag};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_iri::vocab::rdf::{
+    FIRST as RDF_FIRST, NIL as RDF_NIL, REIFIES as RDF_REIFIES, REST as RDF_REST, TYPE as RDF_TYPE,
+};
+use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER};
 
 /// Parse-time configuration for the SPARQL front-end.
 ///

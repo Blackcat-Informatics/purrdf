@@ -34,7 +34,7 @@ use purrdf_sparql_eval::{
 
 use purrdf_core::DistanceMetric;
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// A deterministic fixture matrix.
 fn matrix(rows: usize, dims: usize, seed: u64) -> VectorMatrix {

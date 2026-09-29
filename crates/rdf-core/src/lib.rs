@@ -245,6 +245,10 @@ pub use provenance::{
 /// same productions as the EGRESS contract, and the two are checked against
 /// each other.
 pub use purrdf_iri::terminals;
+/// The W3C vocabulary terms every crate above the kernel names, one module per
+/// namespace, re-exported so a crate that reaches the kernel reaches the one
+/// spelling of each term without a second dependency edge.
+pub use purrdf_iri::vocab;
 /// The IRI law this kernel interns under, and the typed failure its mutation
 /// surfaces return.
 ///
@@ -261,6 +265,9 @@ pub use purrdf_iri::terminals;
 /// [`purrdf_iri::parse`] under a name that stays unambiguous in this crate's flat
 /// root.
 pub use purrdf_iri::{BaseIri, Iri, IriError, parse as parse_iri};
+/// The XSD datatype and constraining-facet IRIs, re-exported for the same reason
+/// as [`vocab`].
+pub use purrdf_xsd::datatype;
 pub use small::{IdVec, SmallVec};
 pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomColumnLayout, SssomColumnLayoutError, SssomCommentError,

@@ -84,10 +84,10 @@ impl RdfCodec for RdfXmlCodec {
     }
 }
 
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
-const ITS_NS: &str = "http://www.w3.org/2005/11/its";
-const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_iri::vocab::its::NS as ITS_NS;
+use purrdf_iri::vocab::rdf::NS as RDF_NS;
+use purrdf_iri::vocab::xml::NS as XML_NS;
+use purrdf_xsd::datatype::XSD_NS;
 
 const RDF_DESCRIPTION: &str = "Description";
 const RDF_ABOUT: &str = "about";

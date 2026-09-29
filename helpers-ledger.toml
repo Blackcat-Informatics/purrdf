@@ -40,8 +40,15 @@
 #                  over shipping code (from scripts/check-hash-domains.py:
 #                  `rule:raw-hash-domain`, a domain-shaped literal handed to a
 #                  hasher without a purrdf_hash::Domain; `rule:shared-hash-domain`,
-#                  one domain opening hashers in two functions of its file). A
-#                  body or shim fingerprint must still match some unit.
+#                  one domain opening hashers in two functions of its file), or
+#                  a literal rule over shipping code (`rule:vocabulary-literal`:
+#                  a string literal equal to or starting with a namespace
+#                  constant — a `NS` or `*_NS` const — declared under the job's
+#                  home and entry-point modules, outside those modules, an
+#                  embedded Turtle/SPARQL document excepted; `rule:home-literal`:
+#                  a string literal equal to one the home item's own bodies
+#                  spell, outside the home item). A body or shim fingerprint
+#                  must still match some unit.
 #   names        = regular expressions over function names.
 #
 # [[job.variant]] — a sanctioned second implementation; each is re-checked on

@@ -129,7 +129,7 @@ fn arbitrary_json() -> impl Strategy<Value = Value> {
 }
 
 fn schema_import_config() -> SchemaImportConfig {
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    use purrdf_xsd::datatype::XSD_NS as XSD;
     let namespaces = Namespaces::new(
         "ex",
         &[("ex".to_owned(), "https://example.org/".to_owned())],

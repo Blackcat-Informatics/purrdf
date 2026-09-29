@@ -379,7 +379,7 @@ fn validate_controlled_token(value: &str, field: &str) -> Result<(), ProjectionE
     Ok(())
 }
 
-const XML_NAMESPACE: &str = "http://www.w3.org/XML/1998/namespace";
+use purrdf_iri::vocab::xml::NS as XML_NAMESPACE;
 
 fn parse_datacite(
     bytes: &[u8],

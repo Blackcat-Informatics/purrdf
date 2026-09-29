@@ -25,9 +25,6 @@ use crate::error::PurrdfError;
 use crate::handles::PurrdfDataset;
 use crate::status::PurrdfStatus;
 
-/// The IRI of `xsd:string`, the default datatype for a literal with no language.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-
 /// The kind tag of a [`PurrdfTermView`].
 ///
 /// These are the canonical discriminant values for the `int32_t kind` field of

@@ -153,6 +153,7 @@ mod normalize;
 mod parse;
 pub mod pos;
 mod resolve;
+pub mod vocab;
 
 /// The lexical foundations this crate scans with, re-exported so the paths
 /// `purrdf_iri::terminals`, `purrdf_iri::scan` and `purrdf_iri::json_escape`

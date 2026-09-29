@@ -29,9 +29,9 @@ use crate::expr as helpers;
 use crate::scratch::SolutionTerm;
 use crate::solution::VarSchema;
 
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_xsd::datatype::XSD_NS as XSD;
+use purrdf_xsd::datatype::XSD_STRING;
 const EX: &str = "http://example.org/";
 
 type Ctx<'d> = EvalCtx<'d, Arc<RdfDataset>>;

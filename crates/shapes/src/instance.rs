@@ -65,11 +65,8 @@ use crate::json_schema::Namespaces;
 use crate::model::rdf;
 use crate::term::{Term, term_id_to_native};
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::rdf::{LANG_STRING as RDF_LANG_STRING, NIL as RDF_NIL};
+use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_INTEGER, XSD_STRING};
 
 /// Project the default graph of `dataset` into a JSON-LD `@graph` document.
 ///

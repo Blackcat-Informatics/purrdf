@@ -1392,8 +1392,7 @@ impl RdfDatasetBuilder {
     /// triple)` in two distinct graphs is two bindings.
     pub fn push_reifier_in_graph(&mut self, reifier: TermId, triple: TermId, g: Option<TermId>) {
         if self.reifies_predicate.is_none() {
-            self.reifies_predicate =
-                Some(self.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies"));
+            self.reifies_predicate = Some(self.intern_iri(purrdf_iri::vocab::rdf::REIFIES));
         }
         let binding = (reifier, triple, g);
         store_once(&mut self.reifiers, &mut self.reifier_index, binding);

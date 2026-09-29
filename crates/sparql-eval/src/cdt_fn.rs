@@ -80,8 +80,8 @@ use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::scratch::SolutionTerm;
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// Evaluate a SEP-0009 composite-datatype function call.
 ///

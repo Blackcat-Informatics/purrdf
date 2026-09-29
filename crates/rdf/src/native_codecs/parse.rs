@@ -37,7 +37,7 @@ use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, ScopedBase};
 
 /// The `rdf:reifies` predicate IRI: a triple-term object under this predicate is the
 /// RDF 1.2 reifier binding the statement layer folds out of the base quad table.
-pub(crate) const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+pub(crate) use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// A subject/object node presented to [`fold_statement_layer`], already interned into
 /// the builder.

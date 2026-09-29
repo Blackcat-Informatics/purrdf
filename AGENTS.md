@@ -60,7 +60,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
 | `purrdf-hash` | The zero-dependency root |
 | `purrdf-lex` (`crates/lex`) | Native, zero-dependency lexical foundations shared by every grammar: the exact Turtle/SPARQL/XML terminal classes (`terminals`), the chunked byte-class scanners and `ByteClass` kernel that lower to packed compares on SSE2/AVX2/AVX-512, NEON and wasm simd128 (`scan`), and the RFC 8259 JSON string escaper every JSON writer shares (`json_escape`); its scope is the workspace's lexical layer — byte-class scanning, terminals, term syntax, literal/IRI escaping, percent encoding, JSON strings and pointers, a JSON reader/writer, an XML reader and Unicode normalisation |
-| `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags, IDNA2008); sole runtime dependency is `purrdf-lex`, whose `terminals`, `scan` and `json_escape` it re-exports |
+| `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags and their RDF 1.2 identity fold, IDNA2008) and `vocab`, the W3C vocabulary terms (one module per W3C namespace; XSD datatype IRIs live in `purrdf_xsd::datatype`); sole runtime dependency is `purrdf-lex`, whose `terminals`, `scan` and `json_escape` it re-exports |
 | `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
 | `purrdf-deflate` | Leaf over `purrdf-hash` alone |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
@@ -156,7 +156,10 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   exercised without its vocabulary hard-errors or stays inactive. Never
   hardcode a `blackcatinformatics.ca` namespace in library code (the GMEOW
   ontology is a *consumer*; the dependency arrow never points from purrdf to
-  it). Test fixtures use `example.org`.
+  it). Test fixtures use `example.org`. W3C Recommendation terms are the one
+  built-in vocabulary: name them through `purrdf_iri::vocab` (and XSD through
+  `purrdf_xsd::datatype`), never as string literals — the helper census
+  (`w3c-vocab`) refuses a literal that spells a term or namespace of either.
 * **Generated artifacts** under `generated/` are projections — never hand-edit;
   regenerate via `make metadata` (`scripts/check-generated.sh` gates drift).
 * **Dependency versions live in one place**: `[workspace.dependencies]` in the

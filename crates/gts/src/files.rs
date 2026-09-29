@@ -45,9 +45,8 @@ const FILES_XATTR_VALUE: &str = "https://w3id.org/gts/files#xattrValue";
 const FILES_PAX_RECORD: &str = "https://w3id.org/gts/files#paxRecord";
 const FILES_PAX_KEY: &str = "https://w3id.org/gts/files#paxKey";
 const FILES_PAX_VALUE: &str = "https://w3id.org/gts/files#paxValue";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_xsd::datatype::{XSD_DATE_TIME as XSD_DATETIME, XSD_INTEGER};
 const STREAM_CHUNK_SIZE: usize = 128 * 1024;
 
 type InlineBlobMap<'a> = BTreeMap<String, (&'a [u8], Option<&'a str>)>;

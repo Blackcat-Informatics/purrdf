@@ -35,7 +35,7 @@ const DATA: &str = "<http://example.org/ns#a> <http://example.org/ns#name> \"Ada
 <http://example.org/ns#b> <http://example.org/ns#age> \"12\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n\
 <http://example.org/ns#c> <http://example.org/ns#age> \"40\"^^<http://www.w3.org/2001/XMLSchema#integer> .\n";
 
-const SH_VALUES: &str = "http://www.w3.org/ns/shacl#values";
+use purrdf_iri::vocab::sh::VALUES as SH_VALUES;
 const COMPUTES: &str = "http://example.org/ns#computes";
 
 fn eval(expr: ExprSelector<'_>) -> Result<Vec<String>, ShapesError> {

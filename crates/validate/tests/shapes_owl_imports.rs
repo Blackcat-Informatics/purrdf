@@ -64,7 +64,7 @@ const INFERRED: &str =
     "<http://example.org/alice> <http://example.org/checked> <http://example.org/yes> .";
 
 /// The constraint component only the imported shape can report.
-const MIN_COUNT: &str = "http://www.w3.org/ns/shacl#MinCountConstraintComponent";
+use purrdf_iri::vocab::sh::MIN_COUNT_CONSTRAINT_COMPONENT as MIN_COUNT;
 
 /// The table that supplies the imported document.
 const TABLE: &[(&str, &str)] = &[(LIB, LIB_DOCUMENT)];
@@ -521,9 +521,9 @@ const NO_IMPORTS_SHAPE: &str = "@prefix sh: <http://www.w3.org/ns/shacl#> .\n\
 /// imported shape fires on [`DATA`].
 #[test]
 fn a_document_validated_as_data_enacts_no_import_and_loaded_as_shapes_it_does() {
-    const SH_SHAPES_GRAPH: &str = "http://www.w3.org/ns/shacl#ShapesGraph";
-    const SH_DATA_GRAPH: &str = "http://www.w3.org/ns/shacl#DataGraph";
-    const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
+    use purrdf_iri::vocab::owl::ONTOLOGY as OWL_ONTOLOGY;
+    use purrdf_iri::vocab::sh::DATA_GRAPH as SH_DATA_GRAPH;
+    use purrdf_iri::vocab::sh::SHAPES_GRAPH as SH_SHAPES_GRAPH;
     const MAX_COUNT: &str = "MaxCountConstraintComponent";
     let options = SarifOptions::default();
     for class in [SH_SHAPES_GRAPH, SH_DATA_GRAPH, OWL_ONTOLOGY] {

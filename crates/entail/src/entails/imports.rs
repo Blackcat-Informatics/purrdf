@@ -298,7 +298,7 @@ mod tests {
     #[test]
     fn materialize_with_imports_closes_over_the_merge_and_refuses_what_it_cannot_use() {
         const LIB: &str = "http://example.org/lib";
-        const SUB: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+        use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUB;
         let triple = |b: &mut RdfDatasetBuilder, s: &str, p: &str, o: &str| {
             let (s, p, o) = (b.intern_iri(s), b.intern_iri(p), b.intern_iri(o));
             b.push_quad(s, p, o, None);
@@ -557,8 +557,8 @@ mod tests {
         use crate::report::Construct;
         use crate::{Materialization, Regime, entails, materialize};
 
-        const SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-        const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+        use purrdf_iri::vocab::rdf::TYPE;
+        use purrdf_iri::vocab::rdfs::SUB_CLASS_OF;
 
         /// `ex:tom a ex:Cat`, plus `ex:o a owl:Ontology ; owl:imports ex:schema` when
         /// `imports` is set.
@@ -746,9 +746,9 @@ mod tests {
     // those files carry, so this crate needs no parser to test the rule.
 
     /// The ontology IRI `shnex.ttl` imports and `shacl.ttl` declares.
-    const SH: &str = "http://www.w3.org/ns/shacl#";
+    use purrdf_iri::vocab::sh::NS as SH;
     /// The ontology IRI `shnex.ttl` declares.
-    const SHNEX: &str = "http://www.w3.org/ns/shacl-node-expr#";
+    use purrdf_iri::vocab::shnex::NS as SHNEX;
 
     /// A dataset of the given IRI triples.
     fn triples(rows: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
@@ -906,7 +906,7 @@ mod tests {
         use crate::report::Construct;
         use crate::{Regime, entails};
 
-        const SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+        use purrdf_iri::vocab::rdfs::SUB_CLASS_OF;
         let premise = triples(&[
             ("http://example.org/o", RDF_TYPE, OWL_ONTOLOGY),
             (
@@ -947,7 +947,7 @@ mod tests {
 
     // ── Which `owl:imports` is an import ────────────────────────────────────────────
 
-    const SUB_CLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF;
     const TOM: &str = "http://example.org/tom";
     const CAT: &str = "http://example.org/Cat";
     const ANIMAL: &str = "http://example.org/Animal";
@@ -1125,9 +1125,9 @@ mod tests {
 
     // ── The graph roles SHACL names are the same anchors here ───────────────────────
 
-    const SH_SHAPES_GRAPH: &str = "http://www.w3.org/ns/shacl#ShapesGraph";
-    const SH_RULES_GRAPH: &str = "http://www.w3.org/ns/shacl#RulesGraph";
-    const SH_DATA_GRAPH: &str = "http://www.w3.org/ns/shacl#DataGraph";
+    use purrdf_iri::vocab::sh::DATA_GRAPH as SH_DATA_GRAPH;
+    use purrdf_iri::vocab::sh::RULES_GRAPH as SH_RULES_GRAPH;
+    use purrdf_iri::vocab::sh::SHAPES_GRAPH as SH_SHAPES_GRAPH;
     const MODULE: &str = "http://example.org/Module";
 
     /// A premise node that is a SHACL instance of `sh:ShapesGraph` — typed it, typed

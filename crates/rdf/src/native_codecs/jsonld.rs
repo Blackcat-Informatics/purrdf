@@ -49,15 +49,16 @@ use super::text_parse::LineParseMode;
 use crate::{DatasetView, RdfDataset, RdfDiagnostic, RdfQuad, RdfTerm, SerializeGraph};
 
 // Literal datatype sentinels (read off the carrier's first-class literal fields).
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_JSON: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#JSON";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_iri::vocab::language_datatype_iri;
+use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::JSON as RDF_JSON;
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+use purrdf_xsd::datatype::XSD_STRING;
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 /// Schema reference for the YAML-LD language-server header when the output is
 /// consumed from the bundled `purrdf.gts` snapshot. The schema is shipped as
 /// `schemas-archive/purrdf.schema.json`, so a bare member name resolves inside the
@@ -126,7 +127,7 @@ fn usize_to_u64(value: usize) -> u64 {
 }
 
 /// RDF 1.2 reifier predicate.
-pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+pub use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// The CALLER-SUPPLIED statement-metadata reification vocabulary the
 /// JSON-LD-star downcast emits.
@@ -199,10 +200,9 @@ fn datatype_iri<'a>(g: &'a SerGraph, term: &'a SerTerm) -> Cow<'a, str> {
         None if term.kind != SerTermKind::Literal => Cow::Borrowed(""),
         // A language-tagged literal: `rdf:dirLangString` when a base direction is also
         // carried, else `rdf:langString` (the carrier's first-class representation).
-        None if term.lang.is_some() && term.direction.is_some() => {
-            Cow::Borrowed(RDF_DIR_LANG_STRING)
+        None if term.lang.is_some() => {
+            Cow::Borrowed(language_datatype_iri(term.direction.is_some()))
         }
-        None if term.lang.is_some() => Cow::Borrowed(RDF_LANG_STRING),
         // A plain literal (no language) is `xsd:string`.
         None => Cow::Borrowed(XSD_STRING),
     }

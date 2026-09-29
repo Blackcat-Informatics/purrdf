@@ -38,7 +38,7 @@ use purrdf_sparql_eval::{
 /// Test fixtures use `example.org`; PurRDF mints no vocabulary IRIs.
 const EX: &str = "http://example.org/";
 const ENDPOINT: &str = "http://example.org/sparql";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// The refusal of a `SERVICE` in a SHACL-SPARQL query.
 const SERVICE_REFUSAL: &str = "a federated query (SERVICE) is not allowed";

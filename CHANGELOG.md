@@ -10,6 +10,38 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **iri:** `purrdf_iri::vocab`, the W3C vocabulary terms the workspace names,
+  one module per namespace (`rdf`, `rdfs`, `owl`, `sh`, `shnex`, `sparql`,
+  `sd`, `xpath`, `skos`, `prov`, `rif`, `its`, `xml`, `dcat`, `org`, `oa`,
+  `odrl`, `time`, `sosa`, `ssn`, `ma`, `activitystreams`, `did`, `cred`), each
+  with its namespace as `NS` and one constant per term. Every namespace is a
+  W3C Recommendation's; nothing outside a W3C namespace is a constant here.
+  `vocab::language_datatype_iri(has_direction)` gives the RDF 1.2 datatype of
+  a language-tagged string (`rdf:dirLangString` with a base direction,
+  `rdf:langString` without). The shapes crate's public `sh`, `shnex`,
+  `sparql_ns`, `rdf`, `rdfs` and `xsd` modules re-export these constants under
+  their existing names.
+- **iri:** `langtag::identity_fold` and `langtag::is_identity_folded`, the
+  RDF 1.2 value-space fold of a language tag (ASCII lowercase, equal to
+  Unicode lowercase on every well-formed tag). Every place the workspace folds
+  or compares a language tag by case now uses them.
+- **xsd:** `datatype::{XSD_ANY_URI, XSD_NORMALIZED_STRING, XSD_TOKEN,
+  XSD_LANGUAGE, XSD_NAME, XSD_NCNAME, XSD_NMTOKEN, XSD_DATE_TIME_STAMP}`, the
+  fourteen constraining facets of XML Schema 1.1 Part 2 §4.3 (`XSD_LENGTH`
+  through `XSD_EXPLICIT_TIMEZONE`), and `OWL_REAL`/`OWL_RATIONAL`, the two
+  datatypes the OWL 2 datatype map adds. `rational::OWL_RATIONAL` re-exports
+  the latter.
+- **core:** `purrdf_core::vocab`, `purrdf_core::datatype` and
+  `purrdf_core::langtag` re-export the three homes above, so every crate that
+  reaches the kernel names each term, and folds each tag, the one way.
+- **gates:** the helper census gains two literal rules. `rule:vocabulary-literal`
+  (ledger job `w3c-vocab`, enforced) refuses a string literal in shipping code
+  that equals or starts with a namespace declared in `purrdf_iri::vocab` or
+  `purrdf_xsd::datatype` outside those modules, reading the namespaces from
+  their `NS`/`*_NS` constants; a multi-line literal holding a Turtle or SPARQL
+  keyword is an embedded document and exempt. `rule:home-literal` (job
+  `text-direction`) refuses the `ltr`/`rtl` tokens outside
+  `purrdf_cdt::TextDirection`, the one base-direction type.
 - **lex:** `purrdf-lex`, a new published, zero-dependency, wasm32-clean crate
   holding the lexical foundations every grammar in the workspace shares: the
   exact Turtle/SPARQL/XML terminal classes (`purrdf_lex::terminals`), the

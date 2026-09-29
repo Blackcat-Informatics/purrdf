@@ -21,14 +21,13 @@ use crate::error::Error;
 use crate::json_read::ParsedSolutions;
 use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+use purrdf_core::datatype::XSD_STRING;
 /// The ITS (Internationalization Tag Set) namespace IRI the SPARQL 1.2 Query
 /// Results specification uses for the base-direction attribute — see
 /// [`crate::xml`]'s module docs for the spec quote. Matched by namespace URI,
 /// not by the literal `its:` prefix spelling — see [`Element::attr_ns`].
-const ITS_NS: &str = "http://www.w3.org/2005/11/its";
+use purrdf_core::vocab::its::NS as ITS_NS;
+use purrdf_core::vocab::language_datatype_iri;
 
 /// Parse a SPARQL Results XML `SELECT` document into [`ParsedSolutions`].
 ///
@@ -783,6 +782,9 @@ mod tests {
     use crate::xml::to_xml;
     use purrdf_core::SparqlResult;
     use purrdf_core::TermBox;
+    use purrdf_core::vocab::rdf::{
+        DIR_LANG_STRING as RDF_DIR_LANGSTRING, LANG_STRING as RDF_LANGSTRING,
+    };
 
     /// Provenance round-trip: what [`crate::xml::to_xml`] writes under a namespace,
     /// [`provenance_from_xml`] reads back — the writer no longer emits

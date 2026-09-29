@@ -312,7 +312,7 @@ const SOLUTION_SCOPE: BlankScope = BlankScope(2);
 
 /// `xsd:integer` — the datatype of the ordinal literal pinning row position in
 /// the ordered-comparison encoding.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_core::datatype::XSD_INTEGER;
 
 /// Encode a whole solution set as canonical RDFC-1.0 N-Quads.
 ///

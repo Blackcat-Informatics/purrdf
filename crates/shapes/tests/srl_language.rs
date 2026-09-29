@@ -15,7 +15,7 @@ use purrdf_shapes::srl::{self, InferOptions, SrlError};
 use purrdf_shapes::term::{Literal, NamedNode, Term};
 
 const EX: &str = "http://example.org/";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 fn iri(local: &str) -> Term {
     Term::NamedNode(NamedNode::from(format!("{EX}{local}").as_str()))

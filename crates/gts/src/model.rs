@@ -720,12 +720,11 @@ impl Graph {
                 .and_then(|term| term.value.as_deref())
                 .unwrap_or(XSD_STRING);
         }
-        if t.lang.is_some()
-            && matches!(t.direction.as_deref(), Some(direction) if is_literal_direction(direction))
-        {
-            RDF_DIR_LANG_STRING
-        } else if t.lang.is_some() {
-            RDF_LANG_STRING
+        if t.lang.is_some() {
+            purrdf_iri::vocab::language_datatype_iri(matches!(
+                t.direction.as_deref(),
+                Some(direction) if is_literal_direction(direction)
+            ))
         } else {
             XSD_STRING
         }

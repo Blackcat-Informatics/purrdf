@@ -69,8 +69,8 @@ impl RdfCodec for HexTuplesCodec {
     }
 }
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_xsd::datatype::XSD_STRING;
 /// HexTuples datatype sentinel for an IRI object.
 const GLOBAL_ID: &str = "globalId";
 /// HexTuples datatype sentinel for a blank-node object.
