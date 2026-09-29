@@ -23,7 +23,7 @@ use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
 use crate::{
-    BlankScope, RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple, TermBox, TermValue,
+    BlankScope, QuadValues, RdfLiteral, RdfQuad, RdfTerm, RdfTextDirection, RdfTriple, TermValue,
 };
 
 // ── Term model ──────────────────────────────────────────────────────────────────
@@ -662,63 +662,57 @@ pub(super) fn extract_term_value(obj: &Bound<'_, PyAny>) -> PyResult<TermValue> 
     Ok(rdf_term_to_value(&extract_term(obj)?))
 }
 
-/// Convert a native owned [`RdfTerm`] into the `MutableDataset` [`TermValue`] model
-/// under the default blank scope.
+/// Convert a native owned [`RdfTerm`] into the `MutableDataset` [`TermValue`] model:
+/// [`TermValue::from_rdf_term`], which decodes a surfaced `purrdfesc{n}_{body}` scope
+/// envelope back into its `(label, scope)` pair, so a blank node round-tripped through
+/// Python matches the stored node.
 pub(super) fn rdf_term_to_value(term: &RdfTerm) -> TermValue {
-    rdf_term_to_value_scoped(term, BlankScope::DEFAULT)
+    TermValue::from_rdf_term(term)
 }
 
-/// [`rdf_term_to_value`], tagging every blank node with `scope` (the per-load
-/// isolation scope).
-pub(super) fn rdf_term_to_value_scoped(term: &RdfTerm, scope: BlankScope) -> TermValue {
-    match term {
-        RdfTerm::Iri(iri) => TermValue::Iri(iri.clone()),
-        RdfTerm::BlankNode(label) => blank_value_scoped(label, scope),
-        RdfTerm::Literal(lit) => TermValue::Literal {
-            lexical_form: lit.lexical_form.clone(),
-            datatype: literal_datatype_iri(lit).to_owned(),
-            language: lit.language.as_deref().map(identity_fold),
-            direction: lit.direction,
-        },
-        RdfTerm::Triple(t) => TermValue::Triple {
-            s: TermBox::new(rdf_term_to_value_scoped(&t.subject, scope)),
-            p: TermBox::new(TermValue::Iri(t.predicate.clone())),
-            o: TermBox::new(rdf_term_to_value_scoped(&t.object, scope)),
-        },
+/// Convert a native owned [`RdfQuad`] into [`QuadValues`], tagging every blank node
+/// with `scope` (the per-load isolation scope) through
+/// [`TermValue::from_rdf_term_in_scope`].
+pub(super) fn rdf_quad_to_values_scoped(quad: &RdfQuad, scope: BlankScope) -> QuadValues {
+    QuadValues {
+        s: TermValue::from_rdf_term_in_scope(&quad.subject, scope),
+        p: TermValue::Iri(quad.predicate.clone()),
+        o: TermValue::from_rdf_term_in_scope(&quad.object, scope),
+        g: quad
+            .graph_name
+            .as_ref()
+            .map(|g| TermValue::from_rdf_term_in_scope(g, scope)),
     }
 }
 
-/// Build the `TermValue::Blank` for a surfaced blank-node `label`.
+/// Convert a native owned [`RdfQuad`] into the `MutableDataset` [`QuadValues`] model
+/// under the default blank scope.
+pub(super) fn rdf_quad_to_values(quad: &RdfQuad) -> QuadValues {
+    rdf_quad_to_values_scoped(quad, BlankScope::DEFAULT)
+}
+
+/// Convert a stored [`QuadValues`] back into the native owned [`RdfQuad`] model through
+/// [`TermValue::to_rdf_term`]: a scoped blank label is qualified, so a per-load scope
+/// is reflected in the surfaced label.
 ///
-/// Under a non-default `scope` (the per-load isolation path), the bare label is
-/// tagged with that scope verbatim. Under the DEFAULT scope (a blank node arriving
-/// FROM Python — `add`/`remove`/`contains`/a substitution/pattern), the label may
-/// already be the `purrdfesc{n}_{body}` scope envelope [`BlankScope::qualify_label`]
-/// emitted on the way OUT; decode it back to its `(label, scope)` so a
-/// round-tripped blank matches the stored node (the inverse of `qualify_label`).
-fn blank_value_scoped(label: &str, scope: BlankScope) -> TermValue {
-    if scope == BlankScope::DEFAULT {
-        blank_value_from_external_label(label)
-    } else {
-        TermValue::Blank {
-            label: label.to_owned(),
-            scope,
-        }
-    }
-}
-
-/// Decode a surfaced blank label through [`BlankScope::unqualify_label`], the
-/// EXACT inverse of the [`BlankScope::qualify_label`] rendering this surface
-/// emits: a `purrdfesc{n}_{body}` scope envelope is unwrapped back into its
-/// `(label, scope)` pair, so a label round-tripped through Python matches the
-/// stored node. A label Python authored itself is not an envelope, so it decodes
-/// to itself at the default scope, byte for byte, whatever dots it carries.
-fn blank_value_from_external_label(label: &str) -> TermValue {
-    let (label, scope) = BlankScope::unqualify_label(label);
-    TermValue::Blank {
-        label: label.into_owned(),
-        scope,
-    }
+/// # Panics
+///
+/// On a quad no dataset stores: a predicate that is not an IRI, or a triple term
+/// whose predicate is not one. Every stored quad came in as an [`RdfQuad`], whose
+/// predicates are IRIs by construction.
+pub(super) fn values_to_rdf_quad(values: &QuadValues) -> RdfQuad {
+    let owned = |value: &TermValue| {
+        value
+            .to_rdf_term()
+            .expect("a stored term has an owned form")
+    };
+    let predicate = values
+        .p
+        .as_iri()
+        .expect("a stored quad's predicate is an IRI");
+    let mut quad = RdfQuad::new(owned(&values.s), predicate, owned(&values.o));
+    quad.graph_name = values.g.as_ref().map(owned);
+    quad
 }
 
 /// Coerce a Python term to an RDF 1.2 subject. RDF 1.2 (unlike the obsolete

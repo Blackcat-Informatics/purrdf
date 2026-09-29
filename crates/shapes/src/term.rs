@@ -783,48 +783,12 @@ impl Term {
     }
 
     /// Convert this native term into the owned [`RdfTerm`](purrdf::RdfTerm) model — used when
-    /// building a report dataset for serialization.
-    ///
-    /// A quoted triple is converted bottom-up over `Self::fold_nested`'s work list.
+    /// building a report dataset for serialization: its [`TermValue`] lifted by
+    /// [`TermValue::into_rdf_term`].
     pub fn to_rdf_term(&self) -> ::purrdf::RdfTerm {
-        use purrdf::{RdfLiteral, RdfTerm, RdfTriple};
-        let converted = self.fold_nested(
-            &mut (),
-            |(), term| {
-                Ok::<_, Infallible>(match term {
-                    Self::NamedNode(n) => RdfTerm::iri(n.0.clone()),
-                    Self::BlankNode(b) => RdfTerm::blank_node(b.clone()),
-                    Self::Literal(l) => {
-                        // The owned model carries `datatype: None` for a plain
-                        // `xsd:string` and for a language-tagged literal (the tag
-                        // implies rdf:langString); an explicit datatype otherwise —
-                        // matching how the codec round-trips.
-                        let datatype = if l.language.is_some() || l.datatype == XSD_STRING {
-                            None
-                        } else {
-                            Some(l.datatype.clone())
-                        };
-                        RdfTerm::Literal(RdfLiteral {
-                            lexical_form: l.lexical.clone(),
-                            datatype,
-                            language: l.language.clone(),
-                            direction: l.direction,
-                        })
-                    }
-                    Self::Triple(_) => unreachable!("a quoted triple is folded from its parts"),
-                })
-            },
-            |(), predicate| Ok(RdfTerm::iri(predicate.0.clone())),
-            |(), subject, predicate, object| {
-                let RdfTerm::Iri(predicate) = predicate else {
-                    unreachable!("a quoted triple's predicate folds to an IRI")
-                };
-                Ok(RdfTerm::triple(RdfTriple::new(subject, predicate, object)))
-            },
-        );
-        match converted {
-            Ok(term) => term,
-        }
+        self.to_term_value()
+            .into_rdf_term()
+            .expect("a native quoted triple's predicate is a named node")
     }
 
     /// Convert this native term into a dataset-independent [`TermValue`] — the SPARQL

@@ -1275,10 +1275,7 @@ pub(crate) fn eval_user_function<D: DatasetView + Sync>(
     };
 
     let result: Option<TermValue> = match (func.kind, outcome) {
-        (UserFnBody::Ask, Outcome::Boolean(value)) => Some(TermValue::typed_literal(
-            if value { "true" } else { "false" },
-            purrdf_xsd::datatype::XSD_BOOLEAN,
-        )),
+        (UserFnBody::Ask, Outcome::Boolean(value)) => Some(TermValue::boolean(value)),
         (UserFnBody::Select, Outcome::Solutions(seq)) => {
             let (variables, rows) = materialize_solutions(&seq, &child);
             // A SHACL-AF function SELECT body yields a single result variable; a

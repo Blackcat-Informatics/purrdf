@@ -662,7 +662,7 @@ fn dispatch(
         GeofFunction::Relation(relation) => {
             let (a, b) = geometry_pair(vocab, args)?;
             let matrix = relate(a.geometry(), b.geometry());
-            Ok(bool_term(relation.holds(
+            Ok(TermValue::boolean(relation.holds(
                 &matrix,
                 topological_dimension(a.geometry()),
                 topological_dimension(b.geometry()),
@@ -672,22 +672,26 @@ fn dispatch(
             let (a, b) = geometry_pair(vocab, args)?;
             let slots = parse_relate_pattern(string_arg(args[2])?)?;
             let matrix = relate(a.geometry(), b.geometry());
-            Ok(bool_term(matrix_matches(&matrix, &slots)))
+            Ok(TermValue::boolean(matrix_matches(&matrix, &slots)))
         }
 
         GeofFunction::Dimension => {
             let literal = geometry_arg(vocab, args[0])?;
-            Ok(integer_term(i64::from(topological_dimension(
+            Ok(TermValue::integer(i64::from(topological_dimension(
                 literal.geometry(),
             ))))
         }
         GeofFunction::CoordinateDimension => {
             let literal = geometry_arg(vocab, args[0])?;
-            Ok(count_term(literal.geometry().dim().ordinates()))
+            Ok(TermValue::integer(
+                literal.geometry().dim().ordinates() as u64
+            ))
         }
         GeofFunction::SpatialDimension => {
             let literal = geometry_arg(vocab, args[0])?;
-            Ok(count_term(spatial_dimension(literal.geometry().dim())))
+            Ok(TermValue::integer(
+                spatial_dimension(literal.geometry().dim()) as u64,
+            ))
         }
         GeofFunction::GeometryType => {
             let literal = geometry_arg(vocab, args[0])?;
@@ -697,19 +701,19 @@ fn dispatch(
         }
         GeofFunction::IsEmpty => {
             let literal = geometry_arg(vocab, args[0])?;
-            Ok(bool_term(literal.geometry().is_empty()))
+            Ok(TermValue::boolean(literal.geometry().is_empty()))
         }
         GeofFunction::IsSimple => {
             let literal = geometry_arg(vocab, args[0])?;
-            Ok(bool_term(measure::is_simple(literal.geometry())))
+            Ok(TermValue::boolean(measure::is_simple(literal.geometry())))
         }
         GeofFunction::Is3D => {
             let literal = geometry_arg(vocab, args[0])?;
-            Ok(bool_term(literal.geometry().dim().has_z()))
+            Ok(TermValue::boolean(literal.geometry().dim().has_z()))
         }
         GeofFunction::IsMeasured => {
             let literal = geometry_arg(vocab, args[0])?;
-            Ok(bool_term(literal.geometry().dim().has_m()))
+            Ok(TermValue::boolean(literal.geometry().dim().has_m()))
         }
         GeofFunction::GetSrid => {
             let literal = geometry_arg(vocab, args[0])?;
@@ -717,7 +721,9 @@ fn dispatch(
         }
         GeofFunction::NumGeometries => {
             let literal = geometry_arg(vocab, args[0])?;
-            Ok(count_term(measure::num_geometries(literal.geometry())))
+            Ok(TermValue::integer(
+                measure::num_geometries(literal.geometry()) as u64,
+            ))
         }
         GeofFunction::GeometryN => {
             let literal = geometry_arg(vocab, args[0])?;
@@ -1030,29 +1036,6 @@ fn is_any_uri(datatype: &str) -> bool {
     datatype.strip_prefix(XSD_NS) == Some("anyURI")
 }
 
-/// An `xsd:boolean` result.
-fn bool_term(value: bool) -> TermValue {
-    TermValue::typed_literal(
-        if value { "true" } else { "false" },
-        XsdDatatype::Boolean.iri(),
-    )
-}
-
-/// An `xsd:integer` result from a signed value (`geof:dimension` answers `-1` for
-/// an empty geometry, which is the standard's own convention).
-fn integer_term(value: i64) -> TermValue {
-    TermValue::typed_literal(value.to_string(), XsdDatatype::Integer.iri())
-}
-
-/// An `xsd:integer` result from a count.
-///
-/// Separate from [`integer_term`] so a `usize` reaches the lexical form as its own
-/// decimal text: `xsd:integer` is unbounded, so there is no width to cast to and
-/// no truncation to reason about.
-fn count_term(value: usize) -> TermValue {
-    TermValue::typed_literal(value.to_string(), XsdDatatype::Integer.iri())
-}
-
 /// An `xsd:double` result.
 ///
 /// This is the crate's single float boundary: [`Rat::to_f64`] computes the
@@ -1322,7 +1305,7 @@ mod tests {
     }
 
     fn integer(value: i64) -> TermValue {
-        TermValue::typed_literal(value.to_string(), XSD_INTEGER)
+        TermValue::integer(value)
     }
 
     /// Invoke a registered function **through the registry**.

@@ -86,7 +86,7 @@ mod cdt_unfold;
 mod clock;
 mod construct;
 mod contain;
-mod convert;
+pub mod convert;
 mod dataset_spec;
 mod deferred_exists;
 mod describe_query;

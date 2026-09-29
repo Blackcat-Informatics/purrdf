@@ -751,14 +751,15 @@ pub(super) fn parse_document(bytes: &[u8]) -> Result<Value, RdfDiagnostic> {
 }
 
 fn validate_absolute_iri(iri: &str, description: &str) -> Result<(), RdfDiagnostic> {
-    let parsed = purrdf_iri::parse(iri)
-        .map_err(|source| context_error(format!("invalid {description} `{iri}`: {source}")))?;
-    if !parsed.has_scheme() {
-        return Err(context_error(format!(
+    match purrdf_iri::BaseIri::parse(iri) {
+        Ok(_) => Ok(()),
+        Err(purrdf_iri::IriError::NonAbsoluteBase(_)) => Err(context_error(format!(
             "{description} must be absolute: `{iri}`"
-        )));
+        ))),
+        Err(source) => Err(context_error(format!(
+            "invalid {description} `{iri}`: {source}"
+        ))),
     }
-    Ok(())
 }
 
 fn context_error(message: impl Into<String>) -> RdfDiagnostic {

@@ -691,14 +691,15 @@ fn required_string<'a>(object: &'a Map<String, Value>, key: &str) -> Result<&'a 
 }
 
 fn validate_absolute_iri(label: &str, value: &str) -> Result<(), LinkmlError> {
-    let iri = purrdf_iri::parse(value)
-        .map_err(|error| LinkmlError::new(format!("{label} {value:?} is invalid: {error}")))?;
-    if !iri.has_scheme() {
-        return Err(LinkmlError::new(format!(
+    match purrdf_iri::BaseIri::parse(value) {
+        Ok(_) => Ok(()),
+        Err(purrdf_iri::IriError::NonAbsoluteBase(_)) => Err(LinkmlError::new(format!(
             "{label} {value:?} must be absolute"
-        )));
+        ))),
+        Err(error) => Err(LinkmlError::new(format!(
+            "{label} {value:?} is invalid: {error}"
+        ))),
     }
-    Ok(())
 }
 
 fn validate_identifier(label: &str, value: &str) -> Result<(), LinkmlError> {

@@ -105,14 +105,14 @@ impl Manifest {
     }
 
     fn iri(&self, id: TermId) -> Option<String> {
-        match self.ds.term_value(id) {
+        match self.ds.term_value(id).unwrap() {
             TermValue::Iri(iri) => Some(iri),
             _ => None,
         }
     }
 
     fn lexical(&self, id: TermId) -> Option<String> {
-        match self.ds.term_value(id) {
+        match self.ds.term_value(id).unwrap() {
             TermValue::Literal { lexical_form, .. } => Some(lexical_form),
             _ => None,
         }
@@ -205,16 +205,16 @@ fn read_entry(m: &Manifest, id: TermId) -> Entry {
         .object(action, &format!("{SHT}data"))
         .and_then(|o| m.iri(o))
         .expect("sht:data");
-    let shape = m
-        .object(action, &format!("{SHT}shape"))
-        .map(|o| match m.ds.term_value(o) {
-            TermValue::Iri(iri) => iri,
-            TermValue::Blank { label, .. } => format!("_:{label}"),
-            other => panic!("{name}: unsupported sht:shape term {other:?}"),
-        });
+    let shape =
+        m.object(action, &format!("{SHT}shape"))
+            .map(|o| match m.ds.term_value(o).unwrap() {
+                TermValue::Iri(iri) => iri,
+                TermValue::Blank { label, .. } => format!("_:{label}"),
+                other => panic!("{name}: unsupported sht:shape term {other:?}"),
+            });
     let focus = m
         .object(action, &format!("{SHT}focus"))
-        .map(|o| m.ds.term_value(o));
+        .map(|o| m.ds.term_value(o).unwrap());
     let map_url = m
         .object(action, &format!("{SHT}map"))
         .and_then(|o| m.iri(o));

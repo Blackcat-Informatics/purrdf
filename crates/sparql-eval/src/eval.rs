@@ -21,7 +21,6 @@
 //! indexed read surface through `DatasetView` (the inherent `quads_for_pattern`
 //! override, P4b).
 
-use purrdf_core::TermBox;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -3496,108 +3495,15 @@ pub(crate) fn materialize_solutions<D: DatasetView + Sync>(
         .iter()
         .map(|v| v.as_str().to_owned())
         .collect();
-    // Literal datatype IRIs repeat massively across a result (a handful of XSD
-    // types over tens of thousands of cells), so each datatype id is resolved
-    // once per call and cloned from a small memo instead of re-resolved per cell.
-    let mut datatype_memo: DetHashMap<D::Id, String> = DetHashMap::default();
     let mut rows = Vec::with_capacity(seq.rows.len());
     for row in &seq.rows {
         let mut out = Vec::with_capacity(row.len());
         for cell in row {
-            out.push(cell.map(|t| memoized_value_of(ctx, t, &mut datatype_memo)));
+            out.push(cell.map(|t| ctx.scratch.value_of(ctx.dataset, t)));
         }
         rows.push(out);
     }
     (variables, rows)
-}
-
-/// [`ScratchInterner::value_of`], with repeated literal datatype-IRI resolutions
-/// served from `datatype_memo` (egress-only; identical output values).
-fn memoized_value_of<D: DatasetView + Sync>(
-    ctx: &EvalCtx<'_, D>,
-    term: SolutionTerm<D::Id>,
-    datatype_memo: &mut DetHashMap<D::Id, String>,
-) -> TermValue {
-    match term {
-        SolutionTerm::Existing(id) => memoized_term_value(ctx.dataset, id, datatype_memo),
-        SolutionTerm::Computed(_) => ctx.scratch.value_of(ctx.dataset, term),
-    }
-}
-
-/// `scratch::term_id_to_value`, with the literal datatype id → IRI string
-/// resolution memoized across cells.
-///
-/// A triple term is assembled bottom-up over a work list: its components are resolved
-/// subject, predicate, object — each fully before the next, so the memo is written in
-/// that order — and the triple is built once all three exist. A term of any nesting
-/// costs no more machine stack.
-fn memoized_term_value<D: DatasetView>(
-    dataset: &D,
-    id: D::Id,
-    datatype_memo: &mut DetHashMap<D::Id, String>,
-) -> TermValue {
-    enum Step<I> {
-        Resolve(I),
-        Assemble,
-    }
-    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
-    // plain cell costs only its own value.
-    let mut steps: purrdf_core::SmallVec<[Step<D::Id>; 8]> =
-        purrdf_core::smallvec![Step::Resolve(id)];
-    let mut values: purrdf_core::SmallVec<[TermValue; 3]> = purrdf_core::SmallVec::new();
-    while let Some(step) = steps.pop() {
-        match step {
-            Step::Resolve(id) => match dataset.resolve(id) {
-                purrdf_core::TermRef::Iri(iri) => values.push(TermValue::Iri(iri.to_owned())),
-                purrdf_core::TermRef::Blank { label, scope } => values.push(TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                }),
-                purrdf_core::TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let datatype = datatype_memo
-                        .entry(datatype)
-                        .or_insert_with(|| match dataset.resolve(datatype) {
-                            purrdf_core::TermRef::Iri(iri) => iri.to_owned(),
-                            // A literal's datatype is always an interned IRI (C0.1).
-                            other => {
-                                unreachable!("literal datatype must be an IRI, got {other:?}")
-                            }
-                        })
-                        .clone();
-                    values.push(TermValue::Literal {
-                        lexical_form: lexical.to_owned(),
-                        datatype,
-                        language: language.map(str::to_owned),
-                        direction,
-                    });
-                }
-                purrdf_core::TermRef::Triple { s, p, o } => steps.extend([
-                    Step::Assemble,
-                    Step::Resolve(o),
-                    Step::Resolve(p),
-                    Step::Resolve(s),
-                ]),
-            },
-            Step::Assemble => {
-                let o = values.pop().expect("a triple term's object is resolved");
-                let p = values.pop().expect("a triple term's predicate is resolved");
-                let s = values.pop().expect("a triple term's subject is resolved");
-                values.push(TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                });
-            }
-        }
-    }
-    values
-        .pop()
-        .expect("the root term's value is the last one assembled")
 }
 
 #[cfg(test)]
@@ -4480,155 +4386,6 @@ mod tests {
             eval(&plan, &mut governed).is_err(),
             "a truncation reaching the completion-only entry point must be refused"
         );
-    }
-}
-
-#[cfg(test)]
-mod term_value_walk_tests {
-    //! The memoized id-to-value resolution, checked against a recursive reference over
-    //! generated triple-term shapes: the same value and the same datatype memo after
-    //! each. There is no deep case: a dataset's triple terms nest a bounded number of
-    //! levels, so the deepest term it can hand back is far shallower than the generated
-    //! shapes already cover.
-
-    use super::memoized_term_value;
-    use crate::DetHashMap;
-    use purrdf_core::{
-        BlankScope, RdfDataset, RdfDatasetBuilder, TermBox, TermFactory as _, TermId, TermRef,
-        TermValue,
-    };
-    use std::sync::Arc;
-
-    const EX: &str = "http://example.org/";
-    use purrdf_xsd::datatype::XSD_INTEGER;
-    use purrdf_xsd::datatype::XSD_STRING;
-
-    /// A deterministic choice sequence.
-    struct Choices {
-        state: u64,
-    }
-
-    impl Choices {
-        const fn new(seed: u64) -> Self {
-            Self { state: seed }
-        }
-
-        /// One choice below `n`.
-        fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
-        }
-    }
-
-    fn typed(lexical: &str, datatype: &str) -> TermValue {
-        TermValue::Literal {
-            lexical_form: lexical.to_owned(),
-            datatype: datatype.to_owned(),
-            language: None,
-            direction: None,
-        }
-    }
-
-    /// A generated value a dataset admits, with triple terms nested through the object
-    /// while `budget` lasts.
-    fn admissible(choices: &mut Choices, budget: &mut usize) -> TermValue {
-        match choices.choose(if *budget > 0 { 5 } else { 4 }) {
-            0 => TermValue::Iri(format!("{EX}i{}", choices.choose(3))),
-            1 => TermValue::Blank {
-                label: ["a", "bb"][choices.choose(2)].to_owned(),
-                scope: BlankScope::DEFAULT,
-            },
-            2 => typed(["x", "y"][choices.choose(2)], XSD_STRING),
-            3 => typed(["1", "2"][choices.choose(2)], XSD_INTEGER),
-            _ => {
-                *budget -= 1;
-                TermValue::Triple {
-                    s: TermBox::new(TermValue::Iri(format!("{EX}s"))),
-                    p: TermBox::new(TermValue::Iri(format!("{EX}p"))),
-                    o: TermBox::new(admissible(choices, budget)),
-                }
-            }
-        }
-    }
-
-    /// The recursive reference for [`memoized_term_value`].
-    fn reference(
-        dataset: &RdfDataset,
-        id: TermId,
-        memo: &mut DetHashMap<TermId, String>,
-    ) -> TermValue {
-        match dataset.resolve(id) {
-            TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-            TermRef::Blank { label, scope } => TermValue::Blank {
-                label: label.to_owned(),
-                scope,
-            },
-            TermRef::Literal {
-                lexical,
-                datatype,
-                language,
-                direction,
-            } => {
-                let datatype = memo
-                    .entry(datatype)
-                    .or_insert_with(|| {
-                        let TermRef::Iri(iri) = dataset.resolve(datatype) else {
-                            panic!("a literal's datatype is an IRI");
-                        };
-                        iri.to_owned()
-                    })
-                    .clone();
-                TermValue::Literal {
-                    lexical_form: lexical.to_owned(),
-                    datatype,
-                    language: language.map(str::to_owned),
-                    direction,
-                }
-            }
-            TermRef::Triple { s, p, o } => TermValue::Triple {
-                s: TermBox::new(reference(dataset, s, memo)),
-                p: TermBox::new(reference(dataset, p, memo)),
-                o: TermBox::new(reference(dataset, o, memo)),
-            },
-        }
-    }
-
-    /// A dataset holding `values`, each as the object of a `:s :p` quad, and their ids.
-    fn dataset_of(values: &[TermValue]) -> (Arc<RdfDataset>, Vec<TermId>) {
-        let mut builder = RdfDatasetBuilder::new();
-        let s = builder.intern_iri(&format!("{EX}s"));
-        let p = builder.intern_iri(&format!("{EX}p"));
-        let ids: Vec<TermId> = values
-            .iter()
-            .map(|value| {
-                let id = builder.intern_value(value);
-                builder.push_quad(s, p, id, None);
-                id
-            })
-            .collect();
-        (builder.freeze().expect("the generated values freeze"), ids)
-    }
-
-    #[test]
-    fn the_memoized_resolution_agrees_with_the_recursive_reference() {
-        let mut choices = Choices::new(13);
-        let values: Vec<TermValue> = (0..200)
-            .map(|_| {
-                let mut budget = 6;
-                admissible(&mut choices, &mut budget)
-            })
-            .collect();
-        let (dataset, ids) = dataset_of(&values);
-        let mut memo_walk = DetHashMap::default();
-        let mut memo_ref = DetHashMap::default();
-        for (value, id) in values.iter().zip(ids) {
-            let walked = memoized_term_value(&*dataset, id, &mut memo_walk);
-            assert_eq!(walked, reference(&dataset, id, &mut memo_ref));
-            assert_eq!(walked, *value);
-            assert_eq!(memo_walk, memo_ref);
-        }
-        assert_eq!(memo_walk.len(), 2, "one memo entry per literal datatype");
     }
 }
 

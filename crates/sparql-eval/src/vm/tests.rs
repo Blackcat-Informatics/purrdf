@@ -64,25 +64,25 @@ impl Walker {
             Expression::Variable(v) => Ok(schema.index_of(v).and_then(|c| row[c])),
             Expression::Bound(v) => {
                 let bound = schema.index_of(v).and_then(|c| row[c]).is_some();
-                Ok(Some(helpers::bool_term(ctx, bound)))
+                Ok(Some(helpers::intern_boolean(ctx, bound)))
             }
             Expression::Or(operands) => {
                 let mut value = Some(false);
                 for operand in operands {
                     value = helpers::kleene_or(value, self.ebv(operand, row, schema, ctx)?);
                 }
-                Ok(value.map(|b| helpers::bool_term(ctx, b)))
+                Ok(value.map(|b| helpers::intern_boolean(ctx, b)))
             }
             Expression::And(operands) => {
                 let mut value = Some(true);
                 for operand in operands {
                     value = helpers::kleene_and(value, self.ebv(operand, row, schema, ctx)?);
                 }
-                Ok(value.map(|b| helpers::bool_term(ctx, b)))
+                Ok(value.map(|b| helpers::intern_boolean(ctx, b)))
             }
             Expression::Not(a) => {
                 let v = self.ebv(a, row, schema, ctx)?;
-                Ok(v.map(|b| helpers::bool_term(ctx, !b)))
+                Ok(v.map(|b| helpers::intern_boolean(ctx, !b)))
             }
             Expression::Equal(a, b) => {
                 let ta = self.term(a, row, schema, ctx)?;
@@ -120,7 +120,7 @@ impl Walker {
                 let ta = self.term(a, row, schema, ctx)?;
                 let tb = self.term(b, row, schema, ctx)?;
                 Ok(match (ta, tb) {
-                    (Some(x), Some(y)) => Some(helpers::bool_term(ctx, x == y)),
+                    (Some(x), Some(y)) => Some(helpers::intern_boolean(ctx, x == y)),
                     _ => None,
                 })
             }
@@ -147,7 +147,7 @@ impl Walker {
                     match self.term(item, row, schema, ctx)? {
                         Some(candidate) => match helpers::in_candidate(ctx, target, &tv, candidate)
                         {
-                            Some(true) => return Ok(Some(helpers::bool_term(ctx, true))),
+                            Some(true) => return Ok(Some(helpers::intern_boolean(ctx, true))),
                             Some(false) => {}
                             None => saw_error = true,
                         },
@@ -157,12 +157,12 @@ impl Walker {
                 Ok(if saw_error {
                     None
                 } else {
-                    Some(helpers::bool_term(ctx, false))
+                    Some(helpers::intern_boolean(ctx, false))
                 })
             }
             Expression::Exists(pattern) => {
                 let found = helpers::exists(pattern, row, schema, ctx)?;
-                Ok(Some(helpers::bool_term(ctx, found)))
+                Ok(Some(helpers::intern_boolean(ctx, found)))
             }
             Expression::Arithmetic(first, steps) => {
                 let mut value = self.term(first, row, schema, ctx)?;
@@ -249,7 +249,7 @@ impl Walker {
                     Function::StrStarts => h.starts_with(n.as_str()),
                     _ => h.ends_with(n.as_str()),
                 };
-                return Ok(Some(helpers::bool_term(ctx, holds)));
+                return Ok(Some(helpers::intern_boolean(ctx, holds)));
             }
             Function::Regex => {
                 let text = self.string_arg(args.first(), row, schema, ctx)?;
@@ -260,7 +260,7 @@ impl Walker {
                 };
                 let flags = flags.map_or_default(|(f, _)| f);
                 return Ok(helpers::cached_regex(ctx, &pattern, &flags)
-                    .map(|re| helpers::bool_term(ctx, re.as_regex().is_match(&text))));
+                    .map(|re| helpers::intern_boolean(ctx, re.as_regex().is_match(&text))));
             }
             Function::LangMatches => {
                 let (Some((tag, _)), Some((range, _))) = (
@@ -269,7 +269,7 @@ impl Walker {
                 ) else {
                     return Ok(None);
                 };
-                return Ok(Some(helpers::bool_term(
+                return Ok(Some(helpers::intern_boolean(
                     ctx,
                     helpers::lang_matches(&tag, &range),
                 )));

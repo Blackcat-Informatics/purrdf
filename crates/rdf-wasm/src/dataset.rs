@@ -80,7 +80,7 @@ use purrdf::viz::{
 };
 
 use crate::codec::{resolve_format, resolve_media_type};
-use crate::convert::{quad_to_quad_values, quad_values_to_quad, rdf_term_to_term_value};
+use crate::convert::{quad_to_quad_values, quad_values_to_quad};
 use crate::jsonld::{CompiledJsonLdContext, context_options, decode_options};
 use crate::term::{Quad, Term, TermInner};
 
@@ -95,7 +95,7 @@ fn pattern_value(term: Option<&Term>) -> Result<Option<TermValue>, JsError> {
         Some(t) if matches!(t.inner, TermInner::Variable(_)) => Ok(None),
         Some(t) => {
             let rdf = t.to_rdf_term().map_err(|e| JsError::new(&e))?;
-            Ok(Some(rdf_term_to_term_value(&rdf)))
+            Ok(Some(TermValue::from_rdf_term(&rdf)))
         }
     }
 }
@@ -743,7 +743,7 @@ impl Dataset {
         // (`Any`), like an omitted argument — never resolved as a named graph.
         let named_graph = match &graph {
             Some(t) if !matches!(t.inner, TermInner::DefaultGraph | TermInner::Variable(_)) => {
-                Some(rdf_term_to_term_value(
+                Some(TermValue::from_rdf_term(
                     &t.to_rdf_term().map_err(|e| JsError::new(&e))?,
                 ))
             }
@@ -1394,7 +1394,7 @@ mod tests {
     /// CROSS-PATH regression (the adversarial case): a directional literal PARSED
     /// from text (the engine interns its `rdf:dirLangString` datatype and direction)
     /// must be found by a `has` whose query literal is built via the SAME path a
-    /// `DataFactory` literal would take — `rdf_term_to_term_value` →
+    /// `DataFactory` literal would take — `TermValue::from_rdf_term` →
     /// `canonicalize_literal`. The whole point of `canonicalize_literal` is byte
     /// identity with how the engine stores/interns the literal after a parse: if the
     /// canonical datatype diverges from what the engine interned, this `has` MISSES.

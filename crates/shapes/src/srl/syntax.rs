@@ -54,9 +54,7 @@ use ::purrdf::RdfTextDirection;
 use purrdf_core::FastMap;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, LineIndex, langtag};
 use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize};
-use purrdf_sparql_algebra::{
-    Args, ArithmeticOperator, BaseDirection, Child, Expression, Function, Variable,
-};
+use purrdf_sparql_algebra::{Args, ArithmeticOperator, Child, Expression, Function, Variable};
 
 use super::ir::{Element, ElementRule, PatternTerm, TriplePattern};
 use crate::model::{rdf, xsd};
@@ -1643,10 +1641,7 @@ impl Lit {
             (Some((language, direction)), _) => purrdf_sparql_algebra::Literal::new_lang(
                 self.lexical,
                 language,
-                direction.map(|d| match d {
-                    RdfTextDirection::Ltr => BaseDirection::Ltr,
-                    RdfTextDirection::Rtl => BaseDirection::Rtl,
-                }),
+                direction,
             ),
             (None, Some(datatype)) if datatype == xsd::STRING => {
                 purrdf_sparql_algebra::Literal::new_simple(self.lexical)

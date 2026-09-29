@@ -1531,7 +1531,7 @@ fn build_node(
         if predicate_iri == RDF_TYPE {
             node.types.push(term_id(object_term)?);
         } else {
-            let key = absolute_iri(predicate_iri);
+            let key = predicate_iri.to_owned();
             let value = build_value_object(graph, subject, p, o, g, object_term, indexes)?;
             node.properties.entry(key).or_default().push(value);
         }
@@ -1604,7 +1604,7 @@ fn build_nested_triple_node(
 
     Ok(CarrierTerm::Triple(Box::new(CarrierTriple {
         subject: Box::new(subject),
-        predicate: absolute_iri(p_iri),
+        predicate: p_iri.to_owned(),
         object: Box::new(object),
     })))
 }
@@ -1688,7 +1688,7 @@ fn build_annotation_node(
             let v_term = &graph.terms[v];
             let value = CarrierValue::plain(simple_term_value(graph, indexes.bindings, v_term)?);
             node.properties
-                .entry(absolute_iri(p_iri))
+                .entry(p_iri.to_owned())
                 .or_default()
                 .push(value);
         }
@@ -1712,7 +1712,7 @@ fn build_orphan_reifier_node(
 ) -> Result<CarrierNode, RdfDiagnostic> {
     let mut node = build_annotation_node(graph, reifier_id, g, indexes)?;
     node.properties
-        .entry(absolute_iri(RDF_REIFIES))
+        .entry(RDF_REIFIES.to_owned())
         .or_default()
         .push(CarrierValue::plain(build_nested_triple_node(
             graph,
@@ -1744,7 +1744,7 @@ fn term_id(term: &SerTerm) -> Result<String, RdfDiagnostic> {
         SerTermKind::Iri => Ok(term
             .value
             .as_deref()
-            .map_or_else(|| "_:missing-iri".to_string(), absolute_iri)),
+            .map_or_else(|| "_:missing-iri".to_string(), str::to_owned)),
         SerTermKind::Bnode => Ok(format!(
             "_:{}",
             term.value.as_deref().unwrap_or("missing-bnode")
@@ -1779,11 +1779,6 @@ fn term_sort_key(graph: &SerGraph, bindings: &ReifierBindings, term: &SerTerm) -
             None => "triple:none".to_string(),
         },
     }
-}
-
-/// Preserve a source IRI verbatim at the vocabulary-free serialization boundary.
-fn absolute_iri(iri: &str) -> String {
-    iri.to_string()
 }
 
 /// The base IRI in force in `scope`, as the `Option<&str>` the JSON-LD active context

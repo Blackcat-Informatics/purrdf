@@ -33,7 +33,7 @@ use purrdf_xsd::XsdValue;
 use crate::DetHashSet;
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
-use crate::expr::xsd_of;
+use crate::expr::{intern_boolean, intern_integer, xsd_of};
 use crate::scratch::{SolutionTerm, term_id_to_value};
 
 use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
@@ -73,7 +73,7 @@ fn list_length<D: DatasetView + Sync>(
         return Ok(None);
     };
     match walk(ctx, head)? {
-        Some(members) => Ok(Some(integer_term(ctx, members.len() as i64))),
+        Some(members) => Ok(Some(intern_integer(ctx, members.len() as i64))),
         None => Ok(None),
     }
 }
@@ -115,7 +115,7 @@ fn list_index_of<D: DatasetView + Sync>(
         return Ok(None);
     };
     match members.iter().position(|m| m == value) {
-        Some(pos) => Ok(Some(integer_term(ctx, pos as i64))),
+        Some(pos) => Ok(Some(intern_integer(ctx, pos as i64))),
         None => Ok(None),
     }
 }
@@ -132,7 +132,10 @@ fn list_contains<D: DatasetView + Sync>(
     let Some(members) = walk(ctx, head)? else {
         return Ok(None);
     };
-    Ok(Some(bool_term(ctx, members.iter().any(|m| m == value))))
+    Ok(Some(intern_boolean(
+        ctx,
+        members.iter().any(|m| m == value),
+    )))
 }
 
 /// `listSlice(list, start, end)` → a fresh `rdf:List` of the members in the
@@ -273,32 +276,6 @@ fn intern<D: DatasetView + Sync>(
 ) -> Option<SolutionTerm<D::Id>> {
     ctx.scratch.intern_checked(ctx.dataset, value)
 }
-
-/// Intern a typed (no-language) literal. Infallible: there is no tag to judge.
-fn typed_term<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    lexical: &str,
-    datatype: &str,
-) -> SolutionTerm<D::Id> {
-    ctx.scratch
-        .intern_datatyped(ctx.dataset, lexical.to_owned(), datatype.to_owned())
-}
-
-/// Intern an `xsd:integer` literal.
-fn integer_term<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    value: i64,
-) -> SolutionTerm<D::Id> {
-    typed_term(ctx, &value.to_string(), XSD_INTEGER)
-}
-
-/// Intern an `xsd:boolean` literal.
-fn bool_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, b: bool) -> SolutionTerm<D::Id> {
-    typed_term(ctx, if b { "true" } else { "false" }, XSD_BOOLEAN)
-}
-
-use purrdf_xsd::datatype::XSD_BOOLEAN;
-use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// Walk an `rdf:List` from `head`, returning its member values in order.
 ///

@@ -81,7 +81,7 @@ use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermValue}
 use purrdf_datalog::StopSignal;
 
 use crate::EntailError;
-use crate::engine::{copy_into, resolve_value};
+use crate::engine::copy_into;
 use crate::interner::{Interner, intern_into};
 use crate::owl_dl::concept::{Concept, Role};
 use crate::owl_dl::data::DataRangeTable;
@@ -309,7 +309,7 @@ pub fn materialize_dl_reported_until<D: DatasetView>(
     // preserves blank-node scopes so an augmentation naming one of the input's blank nodes
     // lands on the SAME term — `push_dataset` would have re-scoped the input and split them.
     let mut b = RdfDatasetBuilder::new();
-    copy_into(&mut b, ds);
+    copy_into(&mut b, ds)?;
     let mut fresh = Fresh::new();
 
     // ONE consequence-based saturation over the whole clause set, shared by the
@@ -358,9 +358,18 @@ pub(crate) fn build_data_index<D: DatasetView>(ds: &D, interner: &mut Interner) 
         if q.g.is_some() {
             continue;
         }
-        let s = interner.intern(resolve_value(ds, q.s));
-        let p = interner.intern(resolve_value(ds, q.p));
-        let o = interner.intern(resolve_value(ds, q.o));
+        let s = interner.intern(
+            ds.term_value(q.s)
+                .expect("an id the view minted resolves to a value"),
+        );
+        let p = interner.intern(
+            ds.term_value(q.p)
+                .expect("an id the view minted resolves to a value"),
+        );
+        let o = interner.intern(
+            ds.term_value(q.o)
+                .expect("an id the view minted resolves to a value"),
+        );
         index_insert(&mut index, s, p, o);
     }
     index

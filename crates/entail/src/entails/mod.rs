@@ -546,6 +546,7 @@ pub(crate) fn resolved_imports_error(error: EntailError) -> EntailError {
         | EntailError::Evaluate(_)
         | EntailError::Chase(_)
         | EntailError::MalformedList(_)
+        | EntailError::ForeignTerm(_)
         | EntailError::UnsupportedRegime(_)
         | EntailError::UnresolvedImport(_)
         | EntailError::UnreachedImport { .. }

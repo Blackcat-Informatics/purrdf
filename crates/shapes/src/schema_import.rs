@@ -399,14 +399,15 @@ impl<'a> ImportContext<'a> {
 }
 
 fn validate_absolute_iri(label: &str, value: &str) -> Result<(), SchemaImportError> {
-    let iri = purrdf_iri::parse(value)
-        .map_err(|error| SchemaImportError::new(format!("{label} is not a valid IRI: {error}")))?;
-    if !iri.has_scheme() {
-        return Err(SchemaImportError::new(format!(
+    match purrdf_iri::BaseIri::parse(value) {
+        Ok(_) => Ok(()),
+        Err(purrdf_iri::IriError::NonAbsoluteBase(_)) => Err(SchemaImportError::new(format!(
             "{label} must be an absolute IRI"
-        )));
+        ))),
+        Err(error) => Err(SchemaImportError::new(format!(
+            "{label} is not a valid IRI: {error}"
+        ))),
     }
-    Ok(())
 }
 
 fn definition_path(key: &str) -> String {

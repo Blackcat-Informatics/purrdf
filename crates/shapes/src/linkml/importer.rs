@@ -2045,15 +2045,15 @@ fn document_prefixes(root: &Map<String, Value>) -> Result<BTreeMap<String, Strin
 }
 
 fn validate_absolute(value: &str, path: &str) -> Result<String, LinkmlError> {
-    let iri = purrdf_iri::parse(value).map_err(|error| {
-        LinkmlError::new(format!("{path} forms invalid IRI {value:?}: {error}"))
-    })?;
-    if !iri.has_scheme() {
-        return Err(LinkmlError::new(format!(
+    match purrdf_iri::BaseIri::parse(value) {
+        Ok(_) => Ok(value.to_owned()),
+        Err(purrdf_iri::IriError::NonAbsoluteBase(_)) => Err(LinkmlError::new(format!(
             "{path} forms relative IRI {value:?}"
-        )));
+        ))),
+        Err(error) => Err(LinkmlError::new(format!(
+            "{path} forms invalid IRI {value:?}: {error}"
+        ))),
     }
-    Ok(value.to_owned())
 }
 
 fn required_string<'a>(

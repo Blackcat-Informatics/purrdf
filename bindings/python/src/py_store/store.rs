@@ -18,7 +18,7 @@ use super::env::extension_env;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use purrdf_core::ir::{MutableDataset, QuadValues};
+use purrdf_core::ir::MutableDataset;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyCapsule, PyDict};
@@ -35,15 +35,15 @@ use super::query::{
     materialize_results, materialize_update_outcome, registry_over, run_governed,
 };
 use super::term::{
-    PyQuad, PyVariable, extract_graph_name, extract_term, rdf_term_to_value,
-    rdf_term_to_value_scoped,
+    PyQuad, PyVariable, extract_graph_name, extract_term, rdf_quad_to_values,
+    rdf_quad_to_values_scoped, rdf_term_to_value, values_to_rdf_quad,
 };
 use crate::py_jsonld::{PyCompiledJsonLdContext, options_from_inputs};
 use crate::py_store::iri_value_error;
 use crate::{
     BlankScope, ClosureRelations, DatasetMut, EntailmentClosure, GraphMatchValue,
-    QueryEntailmentPlan, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfQuad, RdfTerm, RdfTriple,
-    SerializeGraph, SerializeOptions, SparqlRequest, StatementLayer, TermValue,
+    QueryEntailmentPlan, RdfDataset, RdfDatasetBuilder, RdfQuad, RdfTerm, SerializeGraph,
+    SerializeOptions, SparqlRequest, StatementLayer, TermValue,
     query_with_entailment_closure_governed, serialize_dataset_with,
 };
 
@@ -1299,10 +1299,6 @@ impl PyQuadIter {
     }
 }
 
-// ── conversion helpers (native owned model ⇄ MutableDataset value model) ──────────
-
-use purrdf_core::datatype::XSD_STRING;
-
 fn empty_mutable() -> PyResult<MutableDataset> {
     let base = RdfDatasetBuilder::new()
         .freeze()
@@ -1329,83 +1325,4 @@ fn collect_substitutions(
         out.push((name, rdf_term_to_value(&extract_term(&value)?)));
     }
     Ok(out)
-}
-
-/// Convert a native owned [`RdfQuad`] into the `MutableDataset` [`QuadValues`] model
-/// under the default blank scope.
-fn rdf_quad_to_values(quad: &RdfQuad) -> QuadValues {
-    rdf_quad_to_values_scoped(quad, BlankScope::DEFAULT)
-}
-
-/// Convert a native owned [`RdfQuad`] into [`QuadValues`], tagging every blank node
-/// with `scope` (the per-load isolation scope).
-fn rdf_quad_to_values_scoped(quad: &RdfQuad, scope: BlankScope) -> QuadValues {
-    QuadValues {
-        s: rdf_term_to_value_scoped(&quad.subject, scope),
-        p: TermValue::Iri(quad.predicate.clone()),
-        o: rdf_term_to_value_scoped(&quad.object, scope),
-        g: quad
-            .graph_name
-            .as_ref()
-            .map(|g| rdf_term_to_value_scoped(g, scope)),
-    }
-}
-
-/// Convert a [`QuadValues`] back into the native owned [`RdfQuad`] model. Blank labels
-/// are scope-qualified so a per-load scope is reflected in the surfaced label
-/// (per-load scoped blanks).
-fn values_to_rdf_quad(values: &QuadValues) -> RdfQuad {
-    let mut quad = RdfQuad::new(
-        value_to_rdf_term(&values.s),
-        predicate_iri(&values.p),
-        value_to_rdf_term(&values.o),
-    );
-    quad.graph_name = values.g.as_ref().map(value_to_rdf_term);
-    quad
-}
-
-fn predicate_iri(value: &TermValue) -> String {
-    match value {
-        TermValue::Iri(iri) => iri.clone(),
-        other => value_to_rdf_term(other).to_string(),
-    }
-}
-
-fn value_to_rdf_term(value: &TermValue) -> RdfTerm {
-    match value {
-        TermValue::Iri(iri) => RdfTerm::Iri(iri.clone()),
-        TermValue::Blank { label, scope } => {
-            RdfTerm::BlankNode(scope.qualify_label(label).into_owned())
-        }
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => RdfTerm::Literal(RdfLiteral {
-            datatype: collapse_synthetic_datatype(datatype, language.as_ref(), *direction),
-            lexical_form: lexical_form.clone(),
-            language: language.clone(),
-            direction: *direction,
-        }),
-        TermValue::Triple { s, p, o } => RdfTerm::triple(RdfTriple::new(
-            value_to_rdf_term(s),
-            predicate_iri(p),
-            value_to_rdf_term(o),
-        )),
-    }
-}
-
-/// Leave the owned model's plain and language-tagged datatypes implicit,
-/// preserving base direction when determining the expanded datatype.
-fn collapse_synthetic_datatype(
-    datatype: &str,
-    language: Option<&String>,
-    direction: Option<purrdf_core::model::RdfTextDirection>,
-) -> Option<String> {
-    if language.is_some() {
-        return (datatype != RdfLiteral::language_datatype_iri(direction))
-            .then(|| datatype.to_owned());
-    }
-    (datatype != XSD_STRING).then(|| datatype.to_owned())
 }

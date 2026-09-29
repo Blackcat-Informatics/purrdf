@@ -11,15 +11,13 @@
 //! all consume these helpers so term syntax has exactly one source of truth.
 
 use crate::error::Error;
-use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
+use purrdf_core::{RdfTerm, TermValue, emit_term};
 
-/// The IRI of `xsd:string`, the implicit datatype of a plain (untyped,
-/// non-language) literal. The egress model always populates `datatype`, so a
-/// plain literal arrives as a literal carrying this IRI; the owned model and
-/// Turtle/N-Triples abbreviate it to a bare `"lex"` form.
-use purrdf_core::datatype::XSD_STRING;
-
-/// Bridge an egress [`TermValue`] into the owned [`RdfTerm`] model.
+/// Bridge an egress [`TermValue`] into the owned [`RdfTerm`] model, through
+/// [`TermValue::to_rdf_term`]: a scoped blank node's `(label, scope)` pair is encoded
+/// into the owned model's single string slot, which the kernel emitter re-targets into
+/// `BLANK_NODE_LABEL` when it writes the `_:` token, so the CSV/TSV cell carries
+/// exactly what the JSON/XML writers encode directly.
 ///
 /// # Errors
 ///
@@ -27,71 +25,10 @@ use purrdf_core::datatype::XSD_STRING;
 /// [`Error::MalformedTerm`] when a triple term at any nesting depth carries a
 /// predicate that is not an IRI — that is malformed RDF, so it is rejected rather
 /// than laundered into a fabricated IRI string.
-///
-/// A triple term is bridged bottom-up over [`TermValue::try_fold`]'s work list.
-// The shared TermValue → owned-model bridge every result-document writer
-// lexicalizes through, so term syntax has exactly one source of truth.
 pub(crate) fn term_value_to_rdf_term(value: &TermValue) -> Result<RdfTerm, Error> {
-    value.try_fold(
-        |leaf| {
-            Ok(match leaf {
-                TermValue::Iri(s) => RdfTerm::iri(s.clone()),
-                // The owned model has ONE string slot for a blank node, so the
-                // `(label, scope)` pair is encoded into it under the unconstrained
-                // owned alphabet. The kernel emitter RE-TARGETS that spelling into
-                // `BLANK_NODE_LABEL` when it writes the `_:` token, so the CSV/TSV
-                // cell carries exactly what the JSON/XML writers encode directly.
-                TermValue::Blank { label, scope } => {
-                    RdfTerm::blank_node(scope.qualify_label(label).into_owned())
-                }
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    if language.is_some() {
-                        RdfTerm::literal(RdfLiteral {
-                            lexical_form: lexical_form.clone(),
-                            datatype: None,
-                            language: language.clone(),
-                            direction: *direction,
-                        })
-                    } else if datatype == XSD_STRING {
-                        RdfTerm::literal(RdfLiteral {
-                            lexical_form: lexical_form.clone(),
-                            datatype: None,
-                            language: None,
-                            direction: None,
-                        })
-                    } else {
-                        RdfTerm::literal(RdfLiteral {
-                            lexical_form: lexical_form.clone(),
-                            datatype: Some(datatype.clone()),
-                            language: None,
-                            direction: *direction,
-                        })
-                    }
-                }
-                TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-            })
-        },
-        |subject, predicate, object| {
-            // RDF predicates must be IRIs; a non-IRI predicate has no valid
-            // lexicalization → hard-fail rather than fabricate one.
-            let RdfTerm::Iri(predicate) = predicate else {
-                return Err(Error::MalformedTerm(
-                    "triple-term predicate is not an IRI".to_string(),
-                ));
-            };
-            Ok(RdfTerm::triple(RdfTriple {
-                subject,
-                predicate,
-                object,
-                location: None,
-            }))
-        },
-    )
+    value
+        .to_rdf_term()
+        .map_err(|_| Error::MalformedTerm("triple-term predicate is not an IRI".to_string()))
 }
 
 /// The N-Triples / TSV token for a result cell: the kernel `emit_term` over the
@@ -226,7 +163,7 @@ mod tests {
             s: TermBox::new(TermValue::Iri("http://example.org/s".to_string())),
             p: TermBox::new(TermValue::Literal {
                 lexical_form: "not-a-predicate".to_string(),
-                datatype: XSD_STRING.to_string(),
+                datatype: "http://www.w3.org/2001/XMLSchema#string".to_string(),
                 language: None,
                 direction: None,
             }),

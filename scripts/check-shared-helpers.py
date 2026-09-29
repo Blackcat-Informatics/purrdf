@@ -1143,6 +1143,96 @@ def mismatch_rule_fixture_cases() -> list[tuple[str, bool]]:
     ]
 
 
+# A seeded workspace for the term jobs, whose forbidden names are read from the real
+# ledger rows so the fixture drives the very patterns the gate enforces. Every line
+# marked for a job must be reported against it and nothing else may be: the shim and
+# home names that stand beside the copies, a longer name that merely begins with a
+# forbidden one, the same names inside the home crate, and the names in test code.
+TERM_JOBS = {"term-conversion": "// TERM-CONVERSION", "term-constructor": "// TERM-CONSTRUCTOR"}
+
+TERM_FIXTURE_FILES = {
+    "crates/core/Cargo.toml": '[package]\nname = "fixture-core"\n',
+    "crates/core/src/lib.rs": (
+        "/// The one term value.\npub struct TermValue;\n"
+        "/// The one view resolution, in its home.\npub fn owned_value() {}\n"
+        "/// A constructor name inside the home is the home's.\npub fn integer_term() {}\n"
+    ),
+    "crates/user/Cargo.toml": '[package]\nname = "fixture-user"\n',
+    "crates/user/src/lib.rs": (
+        "pub fn rdf_term_to_term_value() {} // TERM-CONVERSION\n"
+        "pub fn collapse_synthetic_datatype() {} // TERM-CONVERSION\n"
+        "fn memoized_term_value() {} // TERM-CONVERSION\n"
+        "fn owned_value() {} // TERM-CONVERSION\n"
+        "pub fn integer_term() {} // TERM-CONSTRUCTOR\n"
+        "fn bool_term() {} // TERM-CONSTRUCTOR\n"
+        "fn count_term() {} // TERM-CONSTRUCTOR\n"
+        "pub fn term_id_to_value() {}\n"
+        "pub fn intern_integer() {}\n"
+        "pub fn intern_boolean() {}\n"
+        "pub fn integer_terms() {}\n"
+        "pub fn owned_values() {}\n"
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        "    fn integer_term() {}\n"
+        "    fn rdf_term_to_term_value() {}\n"
+        "}\n"
+    ),
+    "crates/user/tests/it.rs": "fn bool_term() {}\nfn owned_value() {}\n#[test]\nfn pins() { bool_term(); owned_value(); }\n",
+}
+
+
+def term_fixture_ledger() -> str:
+    """The two term jobs, homed in the fixture crate, with the real ledger's names."""
+    with LEDGER_PATH.open("rb") as handle:
+        jobs = {job["id"]: job for job in tomllib.load(handle)["job"]}
+    rows = []
+    for job_id in TERM_JOBS:
+        names = ", ".join(f"'{name}'" for name in jobs[job_id]["forbidden"]["names"])
+        rows.append(
+            f'[[job]]\nid = "{job_id}"\nsummary = "s"\nhome = "fixture_core::TermValue"\n'
+            'entry_points = []\nspec = "s"\nvectors = []\nbench = []\nsites = []\n'
+            "replaces_external = []\nenforced = true\n\n[job.forbidden]\nconstants = []\n"
+            f"fingerprints = []\nnames = [{names}]\n"
+        )
+    return "\n".join(rows)
+
+
+def term_rule_fixture_cases() -> list[tuple[str, bool]]:
+    """Run the census over the seeded term workspace and compare each job's hits with
+    the lines marked for it."""
+    with tempfile.TemporaryDirectory(prefix="helper-census-term-fixture-") as directory:
+        root = Path(directory)
+        expected: dict[str, set[tuple[str, int]]] = {job: set() for job in TERM_JOBS}
+        for relative, text in TERM_FIXTURE_FILES.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            for number, line in enumerate(text.splitlines(), start=1):
+                for job, marker in TERM_JOBS.items():
+                    if line.endswith(marker):
+                        expected[job].add((relative, number))
+        try:
+            (root / "helpers-ledger.toml").write_text(term_fixture_ledger(), encoding="utf-8")
+            index = json.loads(run_census("--index", root=root))
+        except (OSError, tomllib.TOMLDecodeError, KeyError, CensusError, json.JSONDecodeError) as exc:
+            return [(f"the census runs over the seeded term workspace ({exc})", False)]
+    cases: list[tuple[str, bool]] = []
+    for job, lines in expected.items():
+        found = index["jobs"][job]
+        copies = {(match["file"], match["line"]) for match in found["matches"] if not match["in_home"]}
+        home = {(match["file"], match["line"]) for match in found["matches"] if match["in_home"]}
+        cases.append((f"every seeded {job} copy in shipping code is reported", lines <= copies))
+        cases.append(
+            (
+                f"the {job} neighbours (shims, longer names, test code) are not reported",
+                copies <= lines,
+            )
+        )
+        cases.append((f"each {job} hit is a copy of the enforced job", found["copies"] == len(lines)))
+        cases.append((f"the {job} names inside the home crate are the home's", all(f.startswith("crates/core/") for f, _ in home)))
+    return cases
+
+
 def fixture_ledger() -> dict:
     return {
         "job": [
@@ -1404,6 +1494,7 @@ def self_test() -> int:
     cases.extend(layout_rule_fixture_cases())
     cases.extend(unicode_fixture_cases())
     cases.extend(mismatch_rule_fixture_cases())
+    cases.extend(term_rule_fixture_cases())
 
     failed = 0
     for name, held in cases:

@@ -770,7 +770,7 @@ fn repeated_snapshots_release_their_deltas_and_keep_nested_payloads_borrowed() {
     .unwrap();
     assert_eq!(composite.stats().work.copied_text_bytes, 0);
     let literal_id = source
-        .term_id_by_value(&source.term_value(literal))
+        .term_id_by_value(&source.term_value(literal).unwrap())
         .unwrap();
     let TermRef::Literal {
         lexical: native, ..

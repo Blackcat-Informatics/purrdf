@@ -15,19 +15,18 @@
 //! writers), so goldens are stable. Reads support JSON and XML (the two formats
 //! the native crate can parse); CSV/TSV reads stay deferred on the Python side.
 
-use purrdf_core::langtag::identity_fold;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
 
 use super::query::term_value_to_rdf;
-use super::term::{extract_term, term_to_py};
+use super::term::{extract_term, rdf_term_to_value, term_to_py};
 use crate::sparql::{
     ParsedSolutions, ProvenanceNamespace, ResultProvenance, SparqlResultsFormat, from_json,
     from_json_boolean, from_xml, from_xml_boolean, provenance_from_json, provenance_from_xml,
     serialize as serialize_results,
 };
-use crate::{BlankScope, RdfDatasetBuilder, RdfTerm, SparqlResult, TermBox, TermValue};
+use crate::{RdfDatasetBuilder, SparqlResult, TermValue};
 
 /// Map the short format id (`json`/`xml`/`csv`/`tsv`) to the crate's format enum.
 fn parse_format(name: &str) -> PyResult<SparqlResultsFormat> {
@@ -39,30 +38,6 @@ fn parse_format(name: &str) -> PyResult<SparqlResultsFormat> {
         other => Err(PyValueError::new_err(format!(
             "unknown SPARQL results format `{other}` (expected json/xml/csv/tsv)"
         ))),
-    }
-}
-
-/// Lower an owned [`RdfTerm`] (a compat-term round-tripped through the native
-/// term model) into the [`TermValue`] the result model carries. Blank-node labels
-/// are kept verbatim (DEFAULT scope) so serialized output is stable.
-fn rdf_term_to_value(term: &RdfTerm) -> TermValue {
-    match term {
-        RdfTerm::Iri(iri) => TermValue::Iri(iri.clone()),
-        RdfTerm::BlankNode(label) => TermValue::Blank {
-            label: label.clone(),
-            scope: BlankScope::DEFAULT,
-        },
-        RdfTerm::Literal(lit) => TermValue::Literal {
-            lexical_form: lit.lexical_form.clone(),
-            datatype: lit.datatype_iri().to_owned(),
-            language: lit.language.as_deref().map(identity_fold),
-            direction: lit.direction,
-        },
-        RdfTerm::Triple(t) => TermValue::Triple {
-            s: TermBox::new(rdf_term_to_value(&t.subject)),
-            p: TermBox::new(TermValue::Iri(t.predicate.clone())),
-            o: TermBox::new(rdf_term_to_value(&t.object)),
-        },
     }
 }
 
@@ -268,7 +243,7 @@ fn build_select_py<'py>(py: Python<'py>, sol: &ParsedSolutions) -> PyResult<Boun
             match cell {
                 None => py_row.append(py.None())?,
                 Some(value) => {
-                    let term = term_value_to_rdf(value.clone());
+                    let term = term_value_to_rdf(value.clone())?;
                     py_row.append(term_to_py(py, &term)?)?;
                 }
             }

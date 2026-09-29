@@ -385,22 +385,20 @@ pub(crate) unsafe fn view_to_value(view: &PurrdfTermView) -> Result<TermValue, P
                     PurrdfDirection::Ltr => Some(RdfTextDirection::Ltr),
                     PurrdfDirection::Rtl => Some(RdfTextDirection::Rtl),
                 };
-                let datatype_in = view.datatype.as_str()?;
-                let datatype = if language.is_some() {
-                    RdfLiteral::language_datatype_iri(direction).to_owned()
-                } else if !datatype_in.is_empty() {
-                    datatype_in.to_owned()
-                } else {
-                    XSD_STRING.to_owned()
-                };
-                RdfLiteral::validate_components(&datatype, language.as_deref(), direction)
-                    .map_err(|message| PurrdfError::new(PurrdfStatus::InvalidArgument, message))?;
-                Ok(TermValue::Literal {
+                let datatype = view.datatype.as_str()?;
+                let literal = RdfLiteral {
                     lexical_form: lexical.to_owned(),
-                    datatype,
+                    datatype: (!datatype.is_empty()).then(|| datatype.to_owned()),
                     language,
                     direction,
-                })
+                };
+                RdfLiteral::validate_components(
+                    literal.datatype_iri(),
+                    literal.language.as_deref(),
+                    direction,
+                )
+                .map_err(|message| PurrdfError::new(PurrdfStatus::InvalidArgument, message))?;
+                Ok(TermValue::from_rdf_term(&RdfTerm::Literal(literal)))
             }
             PurrdfTermKind::Triple => Err(PurrdfError::new(
                 PurrdfStatus::InvalidArgument,
@@ -411,28 +409,16 @@ pub(crate) unsafe fn view_to_value(view: &PurrdfTermView) -> Result<TermValue, P
 }
 
 /// Build an owned [`RdfTerm`] from an input view (non-triple), for N-Triples
-/// rendering when the view carries no dataset id.
+/// rendering when the view carries no dataset id: the view's value lifted by
+/// [`TermValue::into_rdf_term`], so a scoped blank node keeps its scope.
 unsafe fn view_to_rdf_term(view: &PurrdfTermView) -> Result<RdfTerm, PurrdfError> {
     unsafe {
-        match view_to_value(view)? {
-            TermValue::Iri(iri) => Ok(RdfTerm::iri(iri)),
-            TermValue::Blank { label, .. } => Ok(RdfTerm::blank_node(label)),
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => Ok(RdfTerm::literal(RdfLiteral {
-                lexical_form,
-                datatype: Some(datatype),
-                language,
-                direction,
-            })),
-            TermValue::Triple { .. } => Err(PurrdfError::new(
+        view_to_value(view)?.into_rdf_term().map_err(|_| {
+            PurrdfError::new(
                 PurrdfStatus::InvalidArgument,
                 "cannot render a quoted-triple term without a dataset id",
-            )),
-        }
+            )
+        })
     }
 }
 

@@ -16,12 +16,13 @@ use purrdf_entail::{
 };
 use purrdf_rdf::{
     DatasetView, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, SparqlRequest,
-    SparqlResult, TermValue, dataset_from_view,
+    SparqlResult, dataset_from_view,
 };
 use purrdf_sparql_algebra::{
-    BlankNode, Expression, GraphPattern, GroundTerm, Literal, NamedNodePattern, OrderExpression,
+    BlankNode, Expression, GraphPattern, GroundTerm, NamedNodePattern, OrderExpression,
     PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
+use purrdf_sparql_eval::convert;
 use purrdf_sparql_eval::{
     BudgetExhausted, EvalError, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
     PropertyFunctionRegistry, QueryGovernors, QueryOptions, StopCause, StopSignal, TrippedGovernor,
@@ -401,7 +402,7 @@ pub fn query_with_entailment<D: DatasetView>(
     // `collect_query_bgp` is bound outside the match because the OWL-Direct plan BORROWS
     // it; it is computed for that mode alone.
     let pattern = match entailment {
-        QueryEntailment::OwlDirect => collect_query_bgp(prepared_query.query()),
+        QueryEntailment::OwlDirect => query_bgp(prepared_query.query()),
         _ => Vec::new(),
     };
     // `surrogates` is populated only when the OWL-Direct lane answered through the COMBINED
@@ -951,7 +952,7 @@ pub fn query_with_entailment_closure_governed<D: DatasetView>(
     let prepared_query =
         engine.prepare_query_with_options(request.query, request.base_iri, options)?;
     let pattern = match entailment {
-        QueryEntailment::OwlDirect => collect_query_bgp(prepared_query.query()),
+        QueryEntailment::OwlDirect => query_bgp(prepared_query.query()),
         _ => Vec::new(),
     };
     // The execution's stop signal, wearing the reasoner's trait. Built once and shared by
@@ -1812,7 +1813,15 @@ fn simple_report() -> ReasoningReport {
     )
 }
 
-fn collect_query_bgp(query: &Query) -> Vec<QTriple> {
+/// Every basic-graph-pattern triple of `query`, in written order, as the [`QTriple`]s the
+/// OWL 2 Direct-Semantics reasoner augments a dataset for.
+///
+/// The walk descends through every join, filter, graph, optional, union and modifier
+/// wrapper; a property path, an inline `VALUES` and a property-function call hold no
+/// triple pattern and contribute nothing. A triple whose subject or object is an RDF 1.2
+/// triple term is skipped, since a triple term never scaffolds a class expression.
+#[must_use]
+pub fn query_bgp(query: &Query) -> Vec<QTriple> {
     let pattern = match query {
         Query::Select { pattern, .. }
         | Query::Construct { pattern, .. }
@@ -1866,32 +1875,24 @@ fn collect_bgp(pattern: &GraphPattern, output: &mut Vec<QTriple>) {
     }
 }
 
+/// A subject or object pattern as a [`QNode`]: a variable, or the ground term's value
+/// under the evaluator's own query-text conversion. `None` for an RDF 1.2 triple term,
+/// which never scaffolds a class expression.
 fn term_to_qnode(term: &TermPattern) -> Option<QNode> {
-    Some(match term {
-        TermPattern::Variable(variable) => QNode::Var(variable.as_str().to_owned()),
-        TermPattern::NamedNode(node) => QNode::Term(TermValue::iri(node.as_str())),
-        TermPattern::BlankNode(node) => QNode::Term(TermValue::blank(node.as_str())),
-        TermPattern::Literal(literal) => QNode::Term(literal_to_term_value(literal)),
-        TermPattern::Triple(_) => return None,
-    })
-}
-
-fn named_node_pattern_to_qnode(pattern: &NamedNodePattern) -> QNode {
-    match pattern {
-        NamedNodePattern::NamedNode(node) => QNode::Term(TermValue::iri(node.as_str())),
-        NamedNodePattern::Variable(variable) => QNode::Var(variable.as_str().to_owned()),
+    match term {
+        TermPattern::Variable(variable) => Some(QNode::Var(variable.as_str().to_owned())),
+        TermPattern::Triple(_) => None,
+        ground => convert::ground_term_pattern_to_value(ground, "a basic graph pattern")
+            .ok()
+            .map(QNode::Term),
     }
 }
 
-fn literal_to_term_value(literal: &Literal) -> TermValue {
-    match literal.language() {
-        Some(language) => TermValue::Literal {
-            lexical_form: literal.value().to_owned(),
-            datatype: literal.datatype().as_str().to_owned(),
-            language: Some(purrdf_iri::langtag::identity_fold(language)),
-            direction: literal.direction(),
-        },
-        None => TermValue::typed_literal(literal.value(), literal.datatype().as_str()),
+/// A predicate pattern as a [`QNode`].
+fn named_node_pattern_to_qnode(pattern: &NamedNodePattern) -> QNode {
+    match pattern {
+        NamedNodePattern::NamedNode(node) => QNode::Term(convert::named_node_to_value(node)),
+        NamedNodePattern::Variable(variable) => QNode::Var(variable.as_str().to_owned()),
     }
 }
 
@@ -2023,7 +2024,7 @@ mod tests {
 
         // The call scaffolds nothing for the query-directed OWL-Direct augmentation:
         // only the one triple actually written in the query is there.
-        let bgp = collect_query_bgp(&query);
+        let bgp = query_bgp(&query);
         assert_eq!(bgp.len(), 1, "{bgp:?}");
 
         // Witness restriction wraps the data leaf and leaves the call alone.
@@ -2548,7 +2549,7 @@ mod tests {
     fn augmentation_only(ds: &Arc<RdfDataset>, query: &str) -> SparqlResult {
         let engine = NativeSparqlEngine::new();
         let prepared = engine.prepare_query(query, None).expect("parse");
-        let pattern = collect_query_bgp(prepared.query());
+        let pattern = query_bgp(prepared.query());
         let (closure, _) =
             purrdf_entail::materialize(ds, Materialization::OwlDirect(&pattern)).expect("augment");
         engine

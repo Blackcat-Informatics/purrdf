@@ -70,14 +70,11 @@
 //! their labels. The crate's test suite pins this with an adversarial test
 //! rather than leaving it implied.
 
-use purrdf_core::TermBox;
 use purrdf_hash::Domain;
 use purrdf_hash::frame::frame_le;
 use std::cmp::Ordering;
 
-use purrdf_core::{
-    DatasetView, FastMap, GraphMatch, RdfTextDirection, TermRef, TermValue, fold_term,
-};
+use purrdf_core::{DatasetView, FastMap, GraphMatch, RdfTextDirection, TermValue};
 
 use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
 use crate::error::TextError;
@@ -1470,53 +1467,18 @@ fn resolve_graph<D: DatasetView>(
     })
 }
 
-/// Resolve a dataset-local id to its dataset-independent [`TermValue`], through a
-/// literal's datatype and a triple term's `(s, p, o)`.
+/// Resolve a dataset-local id to its dataset-independent [`TermValue`] through
+/// [`DatasetView::term_value`], which follows a literal's datatype and a triple term's
+/// `(s, p, o)` to any depth.
 ///
-/// A triple term is assembled bottom-up over [`fold_term`]'s work list: its
-/// subject, predicate and object are resolved in that order, each fully before the
-/// next. That is why a subject may be a triple term, nested to any depth, without
-/// any special case here.
+/// # Errors
+///
+/// [`TextError`] naming the inconsistency when the view hands back an id that is not
+/// its own — a literal whose datatype does not resolve to an IRI.
 fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, TextError> {
-    fold_term(
-        dataset,
-        id,
-        |_, term| {
-            Ok(match term {
-                TermRef::Iri(iri) => TermValue::iri(iri),
-                TermRef::Blank { label, scope } => TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                },
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let TermRef::Iri(datatype) = dataset.resolve(datatype) else {
-                        return Err(TextError::data(
-                            "a literal's datatype did not resolve to an IRI".to_owned(),
-                        ));
-                    };
-                    TermValue::Literal {
-                        lexical_form: lexical.to_owned(),
-                        datatype: datatype.to_owned(),
-                        language: language.map(str::to_owned),
-                        direction,
-                    }
-                }
-                TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-            })
-        },
-        |_, s, p, o| {
-            Ok(TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
-            })
-        },
-    )
+    dataset
+        .term_value(id)
+        .map_err(|error| TextError::data(error.to_string()))
 }
 
 // ---------------------------------------------------------------------------

@@ -101,7 +101,9 @@ fn literal_term_value(node: &str) -> Result<TermValue, String> {
     let (Some(quad), None) = (quads.next(), quads.next()) else {
         return Err(format!("invalid literal node `{node}`"));
     };
-    Ok(dataset.term_value(quad.o))
+    dataset
+        .term_value(quad.o)
+        .map_err(|e| format!("invalid literal node `{node}`: {e}"))
 }
 
 /// Decode a shape-map shape string: the literal `"START"` selects the schema's

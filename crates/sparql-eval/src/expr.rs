@@ -58,7 +58,6 @@ use crate::solution::{Solution, SolutionSeq, VarSchema};
 use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
 use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 use purrdf_xsd::datatype::XSD_BOOLEAN;
-use purrdf_xsd::datatype::XSD_INTEGER;
 use purrdf_xsd::datatype::XSD_STRING;
 
 /// Evaluate an expression over a solution, compiling and linking it for this one call.
@@ -367,7 +366,7 @@ pub(crate) fn value_of<D: DatasetView + Sync>(
 /// intern probe once, not N times. The cache is exact — interning is
 /// deterministic for the context's pinned dataset and dedup-by-value scratch, so
 /// the cached term is the same `SolutionTerm` a fresh intern would produce.
-pub(crate) fn bool_term<D: DatasetView + Sync>(
+pub(crate) fn intern_boolean<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     b: bool,
 ) -> SolutionTerm<D::Id> {
@@ -375,7 +374,7 @@ pub(crate) fn bool_term<D: DatasetView + Sync>(
     if let Some(term) = ctx.cached_bool_terms[slot] {
         return term;
     }
-    let term = typed_term(ctx, if b { "true" } else { "false" }, XSD_BOOLEAN);
+    let term = ctx.scratch.intern(ctx.dataset, TermValue::boolean(b));
     ctx.cached_bool_terms[slot] = Some(term);
     term
 }
@@ -388,12 +387,12 @@ fn string_term<D: DatasetView + Sync>(
     typed_term(ctx, lexical, XSD_STRING)
 }
 
-/// Intern an `xsd:integer` literal.
-fn integer_term<D: DatasetView + Sync>(
+/// Intern the `xsd:integer` literal [`TermValue::integer`] spells for `value`.
+pub(crate) fn intern_integer<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
-    value: i64,
+    value: impl Into<i128>,
 ) -> SolutionTerm<D::Id> {
-    typed_term(ctx, &value.to_string(), XSD_INTEGER)
+    ctx.scratch.intern(ctx.dataset, TermValue::integer(value))
 }
 
 /// Build a typed (no-language) literal value.
@@ -578,7 +577,7 @@ fn cdt_compare<D: DatasetView + Sync>(
 ) -> Option<SolutionTerm<D::Id>> {
     let av = value_of(ctx, ta);
     let bv = value_of(ctx, tb);
-    crate::cdt_fn::compare(relation, &av, &bv).map(|answer| bool_term(ctx, answer))
+    crate::cdt_fn::compare(relation, &av, &bv).map(|answer| intern_boolean(ctx, answer))
 }
 
 /// A comparison over two evaluated operands: compare in the XSD value space, and test
@@ -605,7 +604,7 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
     }
     // sameTerm short-circuit: identical terms are equal regardless of value space.
     if ta == tb {
-        return Some(bool_term(ctx, keep(Ordering::Equal)));
+        return Some(intern_boolean(ctx, keep(Ordering::Equal)));
     }
     // Value-space comparison over borrowed term views (no owned TermValue
     // clones). Distinct non-value terms (IRIs/blanks) or incomparable value
@@ -618,7 +617,7 @@ pub(crate) fn compare_terms<D: DatasetView + Sync>(
         (Some(ax), Some(bx)) => value_cmp(&ax, &bx),
         _ => None,
     };
-    ord.map(|ord| bool_term(ctx, keep(ord)))
+    ord.map(|ord| intern_boolean(ctx, keep(ord)))
 }
 
 /// `a = b` over two evaluated operands, under SPARQL RDF-term equality (SPARQL 1.2 §17.4.2.2
@@ -655,7 +654,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     }
     // sameTerm short-circuit: identical terms are equal regardless of value space.
     if ta == tb {
-        return Some(bool_term(ctx, true));
+        return Some(intern_boolean(ctx, true));
     }
     // Distinct `SolutionTerm`s are distinct RDF terms BY CONSTRUCTION: the dataset
     // builder interns terms by value (one id per value, table kept as-is at
@@ -670,7 +669,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
     if term_is_triple(ctx, ta) && term_is_triple(ctx, tb) {
         let av = value_of(ctx, ta);
         let bv = value_of(ctx, tb);
-        return rdf_equal(&av, &bv).map(|eq| bool_term(ctx, eq));
+        return rdf_equal(&av, &bv).map(|eq| intern_boolean(ctx, eq));
     }
     let ax = xsd_of_term(ctx, ta);
     let bx = xsd_of_term(ctx, tb);
@@ -686,7 +685,7 @@ pub(crate) fn equal_terms<D: DatasetView + Sync>(
             }
         }
     };
-    eq.map(|eq| bool_term(ctx, eq))
+    eq.map(|eq| intern_boolean(ctx, eq))
 }
 
 /// One `expr IN (list)` candidate against the evaluated needle `target` (whose value is
@@ -3683,24 +3682,24 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match function {
         // ---- type tests (total: never a type error) -----------------------
-        Function::IsIri | Function::IsUri => Ok(Some(bool_term(
+        Function::IsIri | Function::IsUri => Ok(Some(intern_boolean(
             ctx,
             matches!(vals.first(), Some(Some(TermValue::Iri(_)))),
         ))),
-        Function::IsBlank => Ok(Some(bool_term(
+        Function::IsBlank => Ok(Some(intern_boolean(
             ctx,
             matches!(vals.first(), Some(Some(TermValue::Blank { .. }))),
         ))),
-        Function::IsLiteral => Ok(Some(bool_term(
+        Function::IsLiteral => Ok(Some(intern_boolean(
             ctx,
             matches!(vals.first(), Some(Some(TermValue::Literal { .. }))),
         ))),
         Function::IsNumeric => {
             let numeric =
                 matches!(arg(vals, 0), Some(v) if xsd_of(v).is_some_and(|xv| xv.is_numeric()));
-            Ok(Some(bool_term(ctx, numeric)))
+            Ok(Some(intern_boolean(ctx, numeric)))
         }
-        Function::IsTriple => Ok(Some(bool_term(
+        Function::IsTriple => Ok(Some(intern_boolean(
             ctx,
             matches!(vals.first(), Some(Some(TermValue::Triple { .. }))),
         ))),
@@ -3733,16 +3732,16 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         Function::HasLang => match arg(vals, 0) {
             None => Ok(None),
             Some(TermValue::Literal { language, .. }) => {
-                Ok(Some(bool_term(ctx, language.is_some())))
+                Ok(Some(intern_boolean(ctx, language.is_some())))
             }
-            Some(_) => Ok(Some(bool_term(ctx, false))),
+            Some(_) => Ok(Some(intern_boolean(ctx, false))),
         },
         Function::HasLangDir => match arg(vals, 0) {
             None => Ok(None),
             Some(TermValue::Literal { direction, .. }) => {
-                Ok(Some(bool_term(ctx, direction.is_some())))
+                Ok(Some(intern_boolean(ctx, direction.is_some())))
             }
-            Some(_) => Ok(Some(bool_term(ctx, false))),
+            Some(_) => Ok(Some(intern_boolean(ctx, false))),
         },
         Function::Datatype => match arg(vals, 0) {
             Some(TermValue::Literal { datatype, .. }) => Ok(Some(iri_term(ctx, datatype.clone()))),
@@ -3751,7 +3750,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- string functions ---------------------------------------------
         Function::StrLen => match string_arg(vals, 0) {
-            Some((s, _)) => Ok(Some(integer_term(ctx, s.chars().count() as i64))),
+            Some((s, _)) => Ok(Some(intern_integer(ctx, s.chars().count() as i64))),
             None => Ok(None),
         },
         Function::UCase => map_string(ctx, vals, str::to_uppercase),
@@ -3834,28 +3833,28 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- Date/time component extraction --------------------------------
         Function::Year => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, dt.year()))),
-            Some(XsdValue::Date(d)) => Ok(Some(integer_term(ctx, d.year()))),
+            Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, dt.year()))),
+            Some(XsdValue::Date(d)) => Ok(Some(intern_integer(ctx, d.year()))),
             _ => Ok(None),
         },
         Function::Month => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.month())))),
-            Some(XsdValue::Date(d)) => Ok(Some(integer_term(ctx, i64::from(d.month())))),
+            Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.month())))),
+            Some(XsdValue::Date(d)) => Ok(Some(intern_integer(ctx, i64::from(d.month())))),
             _ => Ok(None),
         },
         Function::Day => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.day())))),
-            Some(XsdValue::Date(d)) => Ok(Some(integer_term(ctx, i64::from(d.day())))),
+            Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.day())))),
+            Some(XsdValue::Date(d)) => Ok(Some(intern_integer(ctx, i64::from(d.day())))),
             _ => Ok(None),
         },
         Function::Hours => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.hour())))),
-            Some(XsdValue::Time(t)) => Ok(Some(integer_term(ctx, i64::from(t.hour())))),
+            Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.hour())))),
+            Some(XsdValue::Time(t)) => Ok(Some(intern_integer(ctx, i64::from(t.hour())))),
             _ => Ok(None),
         },
         Function::Minutes => match arg(vals, 0).and_then(xsd_of) {
-            Some(XsdValue::DateTime(dt)) => Ok(Some(integer_term(ctx, i64::from(dt.minute())))),
-            Some(XsdValue::Time(t)) => Ok(Some(integer_term(ctx, i64::from(t.minute())))),
+            Some(XsdValue::DateTime(dt)) => Ok(Some(intern_integer(ctx, i64::from(dt.minute())))),
+            Some(XsdValue::Time(t)) => Ok(Some(intern_integer(ctx, i64::from(t.minute())))),
             _ => Ok(None),
         },
         Function::Seconds => match arg(vals, 0).and_then(xsd_of) {
@@ -4399,7 +4398,7 @@ fn eval_held_in<D: DatasetView + Sync>(
         ctx.dataset.term_id_by_value(reifier_val),
         ctx.dataset.term_id_by_value(standpoint_val),
     ) else {
-        return Ok(Some(bool_term(ctx, false)));
+        return Ok(Some(intern_boolean(ctx, false)));
     };
 
     let according_to_id = ctx
@@ -4434,7 +4433,7 @@ fn eval_held_in<D: DatasetView + Sync>(
             })
     });
 
-    Ok(Some(bool_term(ctx, held)))
+    Ok(Some(intern_boolean(ctx, held)))
 }
 
 /// The value at argument index `i`, if it was bound (not unbound/error).

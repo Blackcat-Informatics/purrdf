@@ -50,7 +50,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::{RdfDataset, TermValue};
 
-use super::term_key;
 use crate::interner::Interner;
 use crate::owl_dl::constructs::{Support, is_reserved, support_of};
 use crate::owl_dl::parser::{TripleIndex, Vocab};
@@ -243,12 +242,7 @@ pub fn profile(ds: &RdfDataset) -> ProfileCertificate {
     scan.axioms(&interner, &v, extra.chain, &index, &mut violations);
     scan.description_logic(&interner, &v, &extra, &index, &mut violations);
     violations.sort_by(|a, b| {
-        (a.profile, term_key(&a.term), term_key(&a.subject), a.reason).cmp(&(
-            b.profile,
-            term_key(&b.term),
-            term_key(&b.subject),
-            b.reason,
-        ))
+        (a.profile, &a.term, &a.subject, a.reason).cmp(&(b.profile, &b.term, &b.subject, b.reason))
     });
     violations.dedup();
     ProfileCertificate { violations }

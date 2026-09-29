@@ -996,3 +996,41 @@ detector = "forbidden"
 criterion = "a"
 anchor = "purrdf_core::xsd_regex::blocks::unicode_version"
 reason = "The XSD block-escape table must agree with the Unicode tables of the regex engine every translated pattern runs on, so it is pinned to the version the locked regex-syntax embeds rather than to purrdf_lex::unicode::UNICODE_VERSION; scripts/check-generated.sh fails when regex-syntax moves without it."
+
+[[job]]
+id = "term-conversion"
+summary = "Converting a term between the dataset-independent TermValue, the owned RdfTerm model and a view's ids: one lift, one lowering and one id-to-value resolution, blank-node scope kept"
+home = "purrdf_core::TermValue"
+entry_points = [
+    "purrdf_core::NonIriPredicate",
+    "purrdf_core::DatasetView",
+    "purrdf_core::TermLookupError",
+]
+spec = "RDF 1.2 Concepts section 3.1 (a triple term's predicate is an IRI); the IR identity contract: a literal's datatype expanded and its language tag lowercased, blank-node scope part of identity, an owned blank label carrying its scope in the injective envelope BlankScope::qualify_label writes"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(rdf_term_to_term_value|value_to_rdf_term|rdf_term_to_value_scoped|collapse_synthetic_datatype|term_value_predicate|memoized_term_value|memoized_value_of|literal_to_term_value|blank_value_from_external_label|blank_value_scoped|leaf_rdf_term|triple_rdf_term|owned_value)$']
+
+[[job]]
+id = "term-constructor"
+summary = "The computed xsd:integer and xsd:boolean literal values a function, a relation or an aggregate answers with"
+home = "purrdf_core::TermValue"
+entry_points = []
+spec = "XSD 1.1 Part 2 sections 3.3.2.2 (the boolean canonical representation) and 3.4.13.2 (the integer canonical representation)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(integer_term|bool_term|boolean_term|integer_literal|count_term|index_term)$']

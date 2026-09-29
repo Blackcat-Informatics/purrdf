@@ -85,15 +85,12 @@
 //! [`surface_of`] order — a total order over term VALUES, not over interned ids — so the
 //! emission sequence is a function of the dataset's content alone.
 
-use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use purrdf_core::{
-    DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermRef, TermValue, fold_term,
-};
+use purrdf_core::{DatasetView, RdfDataset, RdfDatasetBuilder, TermId, TermValue};
 use purrdf_datalog::cache::PlanCache;
 use purrdf_datalog::chase::{ChaseError, chase_with};
 use purrdf_datalog::clause::{ClauseTerm, DlClause, HeadForm};
@@ -133,67 +130,10 @@ pub(crate) fn literal_surface(lexical: &str, datatype: &str) -> String {
     surface_of(&TermValue::typed_literal(lexical, datatype))
 }
 
-/// Resolve a [`DatasetView`] id to its dataset-INDEPENDENT [`TermValue`], through a
-/// literal's datatype and a triple term's `(s, p, o)` components.
-///
-/// This is the view-generic replacement for `RdfDataset::term_value`: the seeding layer
-/// reasons over id-agnostic [`TermValue`]s, so it reads a view's terms through this one
-/// bridge whatever backend minted the id. Byte-identical to `RdfDataset::term_value` for the
-/// production view — the blank label is scope-qualified by the value model, the literal
-/// datatype is expanded to its IRI, and triple terms are carried by value (C0.1/C0.2/C0.3).
-///
-/// A triple term is assembled bottom-up over [`fold_term`]'s work list: its subject,
-/// predicate and object are resolved in that order, each fully before the next.
-pub(crate) fn resolve_value<D: DatasetView>(ds: &D, id: D::Id) -> TermValue {
-    let value = fold_term(
-        ds,
-        id,
-        |_, term| {
-            Ok::<_, Infallible>(match term {
-                TermRef::Iri(iri) => TermValue::iri(iri),
-                TermRef::Blank { label, scope } => TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                },
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let datatype = match ds.resolve(datatype) {
-                        TermRef::Iri(dt) => dt.to_owned(),
-                        other => unreachable!(
-                            "a literal's datatype always resolves to an IRI, got {other:?}"
-                        ),
-                    };
-                    TermValue::Literal {
-                        lexical_form: lexical.to_owned(),
-                        datatype,
-                        language: language.map(str::to_owned),
-                        direction,
-                    }
-                }
-                TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-            })
-        },
-        |_, s, p, o| {
-            Ok(TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
-            })
-        },
-    );
-    match value {
-        Ok(value) => value,
-    }
-}
-
 /// A faithful copy of `ds` (the identity closure for `Simple`).
 pub(crate) fn copy_of<D: DatasetView>(ds: &D) -> Result<Arc<RdfDataset>, EntailError> {
     let mut b = RdfDatasetBuilder::new();
-    copy_into(&mut b, ds);
+    copy_into(&mut b, ds)?;
     b.freeze().map_err(|e| EntailError::Build(e.to_string()))
 }
 
@@ -220,37 +160,50 @@ pub(crate) fn copy_of<D: DatasetView>(ds: &D) -> Result<Arc<RdfDataset>, EntailE
 /// The reifier and annotation SIDE TABLES ride along, because a closure that silently
 /// dropped them would delete every reifier in a caller's data the moment they asked for
 /// entailment, and no assertion about the quads would notice.
-pub(crate) fn copy_into<D: DatasetView>(b: &mut RdfDatasetBuilder, ds: &D) {
+pub(crate) fn copy_into<D: DatasetView>(
+    b: &mut RdfDatasetBuilder,
+    ds: &D,
+) -> Result<(), EntailError> {
     for quad in ds.quads() {
-        let s = intern_into(b, &resolve_value(ds, quad.s));
-        let p = intern_into(b, &resolve_value(ds, quad.p));
-        let o = intern_into(b, &resolve_value(ds, quad.o));
-        let g = quad.g.map(|g| intern_into(b, &resolve_value(ds, g)));
+        let s = intern_into(b, &ds.term_value(quad.s)?);
+        let p = intern_into(b, &ds.term_value(quad.p)?);
+        let o = intern_into(b, &ds.term_value(quad.o)?);
+        let g = quad
+            .g
+            .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+            .transpose()?;
         b.push_quad(s, p, o, g);
     }
     // Each reifier row projects as `(s = reifier, p = rdf:reifies, o = triple-term, g)`, so
     // the reifier is the quad's subject and the reified triple term its object.
     for quad in ds.reifier_quads() {
-        let reifier = intern_into(b, &resolve_value(ds, quad.s));
-        let triple = intern_into(b, &resolve_value(ds, quad.o));
-        let graph = quad.g.map(|g| intern_into(b, &resolve_value(ds, g)));
+        let reifier = intern_into(b, &ds.term_value(quad.s)?);
+        let triple = intern_into(b, &ds.term_value(quad.o)?);
+        let graph = quad
+            .g
+            .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+            .transpose()?;
         b.push_reifier_in_graph(reifier, triple, graph);
     }
     // Each annotation row projects as `(s = reifier, p = predicate, o = object, g)`.
     for quad in ds.annotation_quads() {
-        let reifier = intern_into(b, &resolve_value(ds, quad.s));
-        let predicate = intern_into(b, &resolve_value(ds, quad.p));
-        let object = intern_into(b, &resolve_value(ds, quad.o));
-        let graph = quad.g.map(|g| intern_into(b, &resolve_value(ds, g)));
+        let reifier = intern_into(b, &ds.term_value(quad.s)?);
+        let predicate = intern_into(b, &ds.term_value(quad.p)?);
+        let object = intern_into(b, &ds.term_value(quad.o)?);
+        let graph = quad
+            .g
+            .map(|g| ds.term_value(g).map(|g| intern_into(b, &g)))
+            .transpose()?;
         b.push_annotation_in_graph(reifier, predicate, object, graph);
     }
     // A named graph a dataset DECLARES but puts no quad in is part of its content, and a
     // closure that dropped the declaration would answer a different question about which
     // graphs exist.
     for graph in ds.named_graphs() {
-        let graph = intern_into(b, &resolve_value(ds, graph));
+        let graph = intern_into(b, &ds.term_value(graph)?);
         b.declare_named_graph(graph);
     }
+    Ok(())
 }
 
 /// Every term id `ds` holds, in EVERY position [`copy_into`] writes.
@@ -356,7 +309,7 @@ pub(crate) fn close<D: DatasetView>(
     let mut named: BTreeMap<String, TermValue> = BTreeMap::new();
     for quad in ds.quads() {
         if let Some(graph) = quad.g {
-            let value = resolve_value(ds, graph);
+            let value = ds.term_value(graph)?;
             named.entry(surface_of(&value)).or_insert(value);
         }
     }
@@ -389,7 +342,7 @@ pub(crate) fn close<D: DatasetView>(
     }
 
     let mut b = RdfDatasetBuilder::new();
-    copy_into(&mut b, ds);
+    copy_into(&mut b, ds)?;
     // What the DEFAULT graph draws on its own. A named-graph run re-derives every one of
     // these — the default graph is in its seed — and restating them inside the named graph
     // would put a conclusion in a graph that did not produce it.
@@ -717,7 +670,7 @@ pub(crate) fn seed<D: DatasetView>(
         // a cross-graph join impossible rather than merely unobserved.
         let in_seed = match (quad.g, graph) {
             (None, _) => true,
-            (Some(g), Some(target)) => resolve_value(ds, g) == *target,
+            (Some(g), Some(target)) => ds.term_value(g)? == *target,
             (Some(_), None) => false,
         };
         if !in_seed {
@@ -727,9 +680,9 @@ pub(crate) fn seed<D: DatasetView>(
         // datatype/surrogate observers below read the very same value. Resolving again
         // per observer would re-walk the view and re-allocate the term for every quad on
         // the seeding hot path.
-        let s_val = resolve_value(ds, quad.s);
-        let p_val = resolve_value(ds, quad.p);
-        let o_val = resolve_value(ds, quad.o);
+        let s_val = ds.term_value(quad.s)?;
+        let p_val = ds.term_value(quad.p)?;
+        let o_val = ds.term_value(quad.o)?;
         let subject = terms.record(&s_val);
         let predicate = terms.record(&p_val);
         let object = terms.record(&o_val);
@@ -2211,7 +2164,7 @@ mod term_walk_tests {
     use purrdf_core::backend::TermFactory as _;
     use purrdf_core::{RdfDataset, RdfDatasetBuilder, TermBox, TermId, TermRef, TermValue};
 
-    use super::{resolve_value, surface_of, write_iri_escaped};
+    use super::{surface_of, write_iri_escaped};
 
     fn reference_value(ds: &RdfDataset, id: TermId) -> TermValue {
         match ds.resolve(id) {
@@ -2265,7 +2218,7 @@ mod term_walk_tests {
             let ds = builder.freeze().expect("a generated term freezes");
             let object = ds.quads().next().expect("one quad").o;
             assert_eq!(
-                resolve_value(&*ds, object),
+                purrdf_core::DatasetView::term_value(&*ds, object).unwrap(),
                 reference_value(&ds, object),
                 "seed {seed}"
             );
