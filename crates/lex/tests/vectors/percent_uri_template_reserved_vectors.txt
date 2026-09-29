@@ -1,0 +1,563 @@
+# Percent-encoding, set `uri-template-reserved` (frozen).
+#
+# Keeps RFC 6570 reserved expansion's allowed set (unreserved, reserved, and %); every other byte is %XX, uppercase. Recorded from the CSVW URI-template reserved expansion.
+#
+# Inputs: every ASCII scalar alone and between two letters, escape-relevant non-ASCII
+# scalars, reserved-character and underscore/dot edge cases, and a seeded random corpus;
+# `plane` records cover every scalar value of a plane, each encoded on its own, as the
+# SHA-256 of the per-scalar answers each followed by a line feed.
+#
+# Fields: `text` and the input, then the encoded text; or `plane`, the plane, and the digest.
+# vector-count: 551
+# body-sha256: ffd6770bb0fefb07f5aa2555fa3f54d232b55dfd3e20849768948bdbe725f2e9
+text	\x00	%00
+text	a\x00b	a%00b
+text	\x01	%01
+text	a\x01b	a%01b
+text	\x02	%02
+text	a\x02b	a%02b
+text	\x03	%03
+text	a\x03b	a%03b
+text	\x04	%04
+text	a\x04b	a%04b
+text	\x05	%05
+text	a\x05b	a%05b
+text	\x06	%06
+text	a\x06b	a%06b
+text	\x07	%07
+text	a\x07b	a%07b
+text	\x08	%08
+text	a\x08b	a%08b
+text	\x09	%09
+text	a\x09b	a%09b
+text	\x0a	%0A
+text	a\x0ab	a%0Ab
+text	\x0b	%0B
+text	a\x0bb	a%0Bb
+text	\x0c	%0C
+text	a\x0cb	a%0Cb
+text	\x0d	%0D
+text	a\x0db	a%0Db
+text	\x0e	%0E
+text	a\x0eb	a%0Eb
+text	\x0f	%0F
+text	a\x0fb	a%0Fb
+text	\x10	%10
+text	a\x10b	a%10b
+text	\x11	%11
+text	a\x11b	a%11b
+text	\x12	%12
+text	a\x12b	a%12b
+text	\x13	%13
+text	a\x13b	a%13b
+text	\x14	%14
+text	a\x14b	a%14b
+text	\x15	%15
+text	a\x15b	a%15b
+text	\x16	%16
+text	a\x16b	a%16b
+text	\x17	%17
+text	a\x17b	a%17b
+text	\x18	%18
+text	a\x18b	a%18b
+text	\x19	%19
+text	a\x19b	a%19b
+text	\x1a	%1A
+text	a\x1ab	a%1Ab
+text	\x1b	%1B
+text	a\x1bb	a%1Bb
+text	\x1c	%1C
+text	a\x1cb	a%1Cb
+text	\x1d	%1D
+text	a\x1db	a%1Db
+text	\x1e	%1E
+text	a\x1eb	a%1Eb
+text	\x1f	%1F
+text	a\x1fb	a%1Fb
+text	\x20	%20
+text	a\x20b	a%20b
+text	!	!
+text	a!b	a!b
+text	"	%22
+text	a"b	a%22b
+text	\x23	\x23
+text	a\x23b	a\x23b
+text	$	$
+text	a$b	a$b
+text	%	%
+text	a%b	a%b
+text	&	&
+text	a&b	a&b
+text	'	'
+text	a'b	a'b
+text	(	(
+text	a(b	a(b
+text	)	)
+text	a)b	a)b
+text	*	*
+text	a*b	a*b
+text	+	+
+text	a+b	a+b
+text	,	,
+text	a,b	a,b
+text	-	-
+text	a-b	a-b
+text	.	.
+text	a.b	a.b
+text	/	/
+text	a/b	a/b
+text	0	0
+text	a0b	a0b
+text	1	1
+text	a1b	a1b
+text	2	2
+text	a2b	a2b
+text	3	3
+text	a3b	a3b
+text	4	4
+text	a4b	a4b
+text	5	5
+text	a5b	a5b
+text	6	6
+text	a6b	a6b
+text	7	7
+text	a7b	a7b
+text	8	8
+text	a8b	a8b
+text	9	9
+text	a9b	a9b
+text	:	:
+text	a:b	a:b
+text	;	;
+text	a;b	a;b
+text	<	%3C
+text	a<b	a%3Cb
+text	=	=
+text	a=b	a=b
+text	>	%3E
+text	a>b	a%3Eb
+text	?	?
+text	a?b	a?b
+text	@	@
+text	a@b	a@b
+text	A	A
+text	aAb	aAb
+text	B	B
+text	aBb	aBb
+text	C	C
+text	aCb	aCb
+text	D	D
+text	aDb	aDb
+text	E	E
+text	aEb	aEb
+text	F	F
+text	aFb	aFb
+text	G	G
+text	aGb	aGb
+text	H	H
+text	aHb	aHb
+text	I	I
+text	aIb	aIb
+text	J	J
+text	aJb	aJb
+text	K	K
+text	aKb	aKb
+text	L	L
+text	aLb	aLb
+text	M	M
+text	aMb	aMb
+text	N	N
+text	aNb	aNb
+text	O	O
+text	aOb	aOb
+text	P	P
+text	aPb	aPb
+text	Q	Q
+text	aQb	aQb
+text	R	R
+text	aRb	aRb
+text	S	S
+text	aSb	aSb
+text	T	T
+text	aTb	aTb
+text	U	U
+text	aUb	aUb
+text	V	V
+text	aVb	aVb
+text	W	W
+text	aWb	aWb
+text	X	X
+text	aXb	aXb
+text	Y	Y
+text	aYb	aYb
+text	Z	Z
+text	aZb	aZb
+text	[	[
+text	a[b	a[b
+text	\\	%5C
+text	a\\b	a%5Cb
+text	]	]
+text	a]b	a]b
+text	^	%5E
+text	a^b	a%5Eb
+text	_	_
+text	a_b	a_b
+text	`	%60
+text	a`b	a%60b
+text	a	a
+text	aab	aab
+text	b	b
+text	abb	abb
+text	c	c
+text	acb	acb
+text	d	d
+text	adb	adb
+text	e	e
+text	aeb	aeb
+text	f	f
+text	afb	afb
+text	g	g
+text	agb	agb
+text	h	h
+text	ahb	ahb
+text	i	i
+text	aib	aib
+text	j	j
+text	ajb	ajb
+text	k	k
+text	akb	akb
+text	l	l
+text	alb	alb
+text	m	m
+text	amb	amb
+text	n	n
+text	anb	anb
+text	o	o
+text	aob	aob
+text	p	p
+text	apb	apb
+text	q	q
+text	aqb	aqb
+text	r	r
+text	arb	arb
+text	s	s
+text	asb	asb
+text	t	t
+text	atb	atb
+text	u	u
+text	aub	aub
+text	v	v
+text	avb	avb
+text	w	w
+text	awb	awb
+text	x	x
+text	axb	axb
+text	y	y
+text	ayb	ayb
+text	z	z
+text	azb	azb
+text	{	%7B
+text	a{b	a%7Bb
+text	|	%7C
+text	a|b	a%7Cb
+text	}	%7D
+text	a}b	a%7Db
+text	~	~
+text	a~b	a~b
+text	\x7f	%7F
+text	a\x7fb	a%7Fb
+text		%C2%80
+text	xy	x%C2%80y
+text		%C2%85
+text	xy	x%C2%85y
+text	 	%C2%A0
+text	x y	x%C2%A0y
+text	é	%C3%A9
+text	xéy	x%C3%A9y
+text	ÿ	%C3%BF
+text	xÿy	x%C3%BFy
+text	Ā	%C4%80
+text	xĀy	x%C4%80y
+text	 	%E2%80%A8
+text	x y	x%E2%80%A8y
+text	 	%E2%80%A9
+text	x y	x%E2%80%A9y
+text	﻿	%EF%BB%BF
+text	x﻿y	x%EF%BB%BFy
+text	�	%EF%BF%BD
+text	x�y	x%EF%BF%BDy
+text	￿	%EF%BF%BF
+text	x￿y	x%EF%BF%BFy
+text	𐀀	%F0%90%80%80
+text	x𐀀y	x%F0%90%80%80y
+text	🐱	%F0%9F%90%B1
+text	x🐱y	x%F0%9F%90%B1y
+text	􏿿	%F4%8F%BF%BF
+text	x􏿿y	x%F4%8F%BF%BFy
+text	\0	\0
+text	plain	plain
+text	_leading	_leading
+text	__x	__x
+text	-dash	-dash
+text	.a	.a
+text	a.	a.
+text	a..b	a..b
+text	100%	100%
+text	%41	%41
+text	a/b?c\x23d	a/b?c\x23d
+text	a:b@c	a:b@c
+text	[::1]	[::1]
+text	café\x20🐱	caf%C3%A9%20%F0%9F%90%B1
+text	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy	xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+text	éééééééééééééééééééé	%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9%C3%A9
+text	🐱%(é	%F0%9F%90%B1%(%C3%A9
+text	\x7f>:🐱?*%é\x00\x00 ]]	%7F%3E:%F0%9F%90%B1?*%%C3%A9%00%00%E2%80%A8]]
+text	🐱/*9? ,;$🐱\x7f+9\x23	%F0%9F%90%B1/*9?%E2%80%A8,;$%F0%9F%90%B1%7F+9\x23
+text	\x00 9(~[@?	%00%E2%80%A89(~[@?
+text	+]_0\x20**!	+]_0%20**!
+text	)"a9,}<)=_}/+]_é	)%22a9,%7D%3C)=_%7D/+]_%C3%A9
+text	@?;!?"9	@?;!?%229
+text	:>)(`]	:%3E)(%60]
+text	Z&}\x7f`"_\x00)_+\x23(_)$;/\x23{!	Z&%7D%7F%60%22_%00)_+\x23(_)$;/\x23%7B!
+text	)`\x23=	)%60\x23=
+text	_🐱+,^!a@^	_%F0%9F%90%B1+,%5E!a@%5E
+text	=};^`}/}/>{]<\x00\x20;*	=%7D;%5E%60%7D/%7D/%3E%7B]%3C%00%20;*
+text	`) ,*,&\x00?[[?9\x00^Z}\x00@0,'	%60)%E2%80%A8,*,&%00?[[?9%00%5EZ%7D%00@0,'
+text	~~~+:0\x00$^|é{}{(,🐱~([[/	~~~+:0%00$%5E%7C%C3%A9%7B%7D%7B(,%F0%9F%90%B1~([[/
+text	\x23`<@	\x23%60%3C@
+text	]@'.["`_%* >*	]@'.[%22%60_%*%E2%80%A8%3E*
+text	🐱/[=\x20`\x20<*%+{a~*9+$$	%F0%9F%90%B1/[=%20%60%20%3C*%+%7Ba~*9+$$
+text	:!:0\x20\x00](Z@";:-<!*=|@\x00	:!:0%20%00](Z@%22;:-%3C!*=%7C@%00
+text	`":)\x00a!; )=:_*?`% a\x7f=0	%60%22:)%00a!;%E2%80%A8)=:_*?%60%%E2%80%A8a%7F=0
+text	 !:&\x7f:	%E2%80%A8!:&%7F:
+text	{`">\x20~!]a+>,Z_\x20(&\x23"\x20<\x7f	%7B%60%22%3E%20~!]a+%3E,Z_%20(&\x23%22%20%3C%7F
+text	'^é 	'%5E%C3%A9%E2%80%A8
+text	.é.9|	.%C3%A9.9%7C
+text	@"-=aa@:	@%22-=aa@:
+text	).	).
+text	%_\x00<é>\x239\x7f+:9Z=[?	%_%00%3C%C3%A9%3E\x239%7F+:9Z=[?
+text	+?">\x23)0`:a"🐱@"\\&=a\x23.:!\x23	+?%22%3E\x23)0%60:a%22%F0%9F%90%B1@%22%5C&=a\x23.:!\x23
+text	{_🐱;	%7B_%F0%9F%90%B1;
+text	*:= @,<+/a@!&a[$&\x00	*:=%E2%80%A8@,%3C+/a@!&a[$&%00
+text	 ~Z{)}]^+= \\*[\x23>0)\x23<^Z	%E2%80%A8~Z%7B)%7D]%5E+=%E2%80%A8%5C*[\x23%3E0)\x23%3C%5EZ
+text	%?+🐱\x20é$"-%'%\\é\\	%?+%F0%9F%90%B1%20%C3%A9$%22-%'%%5C%C3%A9%5C
+text	.&(	.&(
+text	\x7f<\\🐱\\***@	%7F%3C%5C%F0%9F%90%B1%5C***@
+text	<]\\[\x00$-{aa,^%<`[..Z-`\x7f}	%3C]%5C[%00$-%7Baa,%5E%%3C%60[..Z-%60%7F%7D
+text	é🐱<*{%aa%`a0\x7f-`:,[	%C3%A9%F0%9F%90%B1%3C*%7B%aa%%60a0%7F-%60:,[
+text	| 	%7C%E2%80%A8
+text	{@@$[\x00:Z{,}?[	%7B@@$[%00:Z%7B,%7D?[
+text	`0-^é:*\x00Z!	%600-%5E%C3%A9:*%00Z!
+text	%]"\\?|\x20>\x20).Z	%]%22%5C?%7C%20%3E%20).Z
+text	\\=<^~~:*[[)%%`\x7f))~>	%5C=%3C%5E~~:*[[)%%%60%7F))~%3E
+text	@0;'^ é}_	@0;'%5E%E2%80%A8%C3%A9%7D_
+text	\\[;$$<🐱,/\x7f-&/@ }{	%5C[;$$%3C%F0%9F%90%B1,/%7F-&/@%E2%80%A8%7D%7B
+text	0é;%|@\x009?]	0%C3%A9;%%7C@%009?]
+text	\x7f$("\x23<$+$"Z	%7F$(%22\x23%3C$+$%22Z
+text	`{$Z<\x23]&|0/(@	%60%7B$Z%3C\x23]&%7C0/(@
+text	é'!>`\\: _{.|Z(|%0	%C3%A9'!%3E%60%5C:%E2%80%A8_%7B.%7CZ(%7C%0
+text	[Z)@]\x7f	[Z)@]%7F
+text	">!🐱||-?"	%22%3E!%F0%9F%90%B1%7C%7C-?%22
+text	&%_\x00é=)\x23=_ %= {~.)"	&%_%00%C3%A9=)\x23=_%E2%80%A8%=%E2%80%A8%7B~.)%22
+text	,=&!\x00*$$Z@	,=&!%00*$$Z@
+text	+&	+&
+text	 :%}9&?:?'0^$\x23'}\x7f!|]\x00	%E2%80%A8:%%7D9&?:?'0%5E$\x23'%7D%7F!%7C]%00
+text	\x239*\x00a~~+?/:_'|;`/(	\x239*%00a~~+?/:_'%7C;%60/(
+text	\x7f\x7f@\x00>	%7F%7F@%00%3E
+text	/!$&!)$<?.=;>&\x23{	/!$&!)$%3C?.=;%3E&\x23%7B
+text	^é9Z;%.]=)\x00-	%5E%C3%A99Z;%.]=)%00-
+text	><>(a	%3E%3C%3E(a
+text	🐱(é][~}=<"_\x20)~;<(:	%F0%9F%90%B1(%C3%A9][~%7D=%3C%22_%20)~;%3C(:
+text	*=),\x00=\x7f.?_'$a;!<	*=),%00=%7F.?_'$a;!%3C
+text	"*_,><]é"$🐱	%22*_,%3E%3C]%C3%A9%22$%F0%9F%90%B1
+text	\x20@? \x23"\x7f\x23<	%20@?%E2%80%A8\x23%22%7F\x23%3C
+text	=?/~\x7f0/\x7f0}	=?/~%7F0/%7F0%7D
+text	^🐱{]é/>+?{\x7f\x23*:*	%5E%F0%9F%90%B1%7B]%C3%A9/%3E+?%7B%7F\x23*:*
+text	)>^\x20	)%3E%5E%20
+text	\x00\x00\x00é+'^|`|?=	%00%00%00%C3%A9+'%5E%7C%60%7C?=
+text	, 🐱!"90\x23_!a`?9 \x00^é\x23^?	,%E2%80%A8%F0%9F%90%B1!%2290\x23_!a%60?9%E2%80%A8%00%5E%C3%A9\x23%5E?
+text	~🐱=,	~%F0%9F%90%B1=,
+text	~9"_ 🐱}`%9)9!">\x20;<$=	~9%22_%E2%80%A8%F0%9F%90%B1%7D%60%9)9!%22%3E%20;%3C$=
+text	Z>a{'_!(?[+}é&;'%" ^\\🐱\\	Z%3Ea%7B'_!(?[+%7D%C3%A9&;'%%22%E2%80%A8%5E%5C%F0%9F%90%B1%5C
+text	@:~?+(	@:~?+(
+text	é_<a^}{*;^+_|<$_$]	%C3%A9_%3Ca%5E%7D%7B*;%5E+_%7C%3C$_$]
+text	.\x23/*>é\x7f9\\;+'éZ	.\x23/*%3E%C3%A9%7F9%5C;+'%C3%A9Z
+text	.(`%].~\\{	.(%60%].~%5C%7B
+text	\x20:~)<_a\\|]%^}]\x00*&_\x20*	%20:~)%3C_a%5C%7C]%%5E%7D]%00*&_%20*
+text	]]\x23|0!&🐱Z\x7f&,\\-}\\'*_	]]\x23%7C0!&%F0%9F%90%B1Z%7F&,%5C-%7D%5C'*_
+text	\x23';	\x23';
+text	?~"{\x20a\x20-_!🐱?"|\x7f\x00^^00'	?~%22%7B%20a%20-_!%F0%9F%90%B1?%22%7C%7F%00%5E%5E00'
+text	?🐱.!Za.+|$	?%F0%9F%90%B1.!Za.+%7C$
+text	/)\x00>..|}9+<+\x7f{;	/)%00%3E..%7C%7D9+%3C+%7F%7B;
+text	"_0-%?-=&;+)?\\,:+_	%22_0-%?-=&;+)?%5C,:+_
+text	|é}-\x23\x23>':🐱^@"}\x23`\x00🐱=	%7C%C3%A9%7D-\x23\x23%3E':%F0%9F%90%B1%5E@%22%7D\x23%60%00%F0%9F%90%B1=
+text	:*"\\aa')éZ+>\x20_@{	:*%22%5Caa')%C3%A9Z+%3E%20_@%7B
+text	a'9@}^/$(\x23	a'9@%7D%5E/$(\x23
+text	/$~]	/$~]
+text	 ;&a\x20	%E2%80%A8;&a%20
+text	),\x009\x00🐱@_{a(=_\x7f[} ~@	),%009%00%F0%9F%90%B1@_%7Ba(=_%7F[%7D%E2%80%A8~@
+text	~\x23é	~\x23%C3%A9
+text	9=<"@	9=%3C%22@
+text	:Z-9\\&$:}_)_"`"`&	:Z-9%5C&$:%7D_)_%22%60%22%60&
+text	`>[[!^}9\x20}}$-\\_,+	%60%3E[[!%5E%7D9%20%7D%7D$-%5C_,+
+text	Z.9a,&a <(🐱 !+~🐱,<\\	Z.9a,&a%E2%80%A8%3C(%F0%9F%90%B1%E2%80%A8!+~%F0%9F%90%B1,%3C%5C
+text	{+\x23)!.[\x00(=*"/0	%7B+\x23)!.[%00(=*%22/0
+text	🐱-Z\x7f%=,&*.0")]Z9 )	%F0%9F%90%B1-Z%7F%=,&*.0%22)]Z9%E2%80%A8)
+text	).+0~*\x23}(,:~~|{\x23=+^%a~`	).+0~*\x23%7D(,:~~%7C%7B\x23=+%5E%a~%60
+text	?;9;~;<)\x20\x20, ^é(\x00\x00!\x20	?;9;~;%3C)%20%20,%E2%80%A8%5E%C3%A9(%00%00!%20
+text	🐱>/Z\x7f$'<,Z?\\. 0/,	%F0%9F%90%B1%3E/Z%7F$'%3C,Z?%5C.%E2%80%A80/,
+text	,{@@	,%7B@@
+text	\x23^'>\x00<}=\\\x20?:[ ?<}(@_+	\x23%5E'%3E%00%3C%7D=%5C%20?:[%E2%80%A8?%3C%7D(@_+
+text	:é_>`+9\\>@!;?Z=]é	:%C3%A9_%3E%60+9%5C%3E@!;?Z=]%C3%A9
+text	%\x7f!\\/>{Z\x00-\x209_	%%7F!%5C/%3E%7BZ%00-%209_
+text	a`\x00\\;(\x7f}(\x00/.a\x7f$(;$(%\\(	a%60%00%5C;(%7F%7D(%00/.a%7F$(;$(%%5C(
+text	_|	_%7C
+text	_>.	_%3E.
+text	\x20|)Z\x00{=/];	%20%7C)Z%00%7B=/];
+text	[|^	[%7C%5E
+text	{:^	%7B:%5E
+text	'[	'[
+text	\\`\x23'\\	%5C%60\x23'%5C
+text	+🐱🐱+\x23$9],?'`\\~?=@é{$	+%F0%9F%90%B1%F0%9F%90%B1+\x23$9],?'%60%5C~?=@%C3%A9%7B$
+text	!]~'(`é~a^]~;?\\+|é`	!]~'(%60%C3%A9~a%5E]~;?%5C+%7C%C3%A9%60
+text	||]\x20=🐱&Za>	%7C%7C]%20=%F0%9F%90%B1&Za%3E
+text	%\\\x7f"%|;\x7f🐱'{`0'>&	%%5C%7F%22%%7C;%7F%F0%9F%90%B1'%7B%600'%3E&
+text	\x7fZ	%7FZ
+text	_>Z%)\x20\x7f,&-0	_%3EZ%)%20%7F,&-0
+text	🐱é}_🐱._*\x7fZ\x00	%F0%9F%90%B1%C3%A9%7D_%F0%9F%90%B1._*%7FZ%00
+text	^[]\x23	%5E[]\x23
+text	 (9@~\\.%\x20@;	%E2%80%A8(9@~%5C.%%20@;
+text	;:\x00{-(-:Z\x00+~	;:%00%7B-(-:Z%00+~
+text	`]	%60]
+text	^ ,	%5E%E2%80%A8,
+text	|a\x23\\($🐱/`"{<@\\0a;🐱-?)	%7Ca\x23%5C($%F0%9F%90%B1/%60%22%7B%3C@%5C0a;%F0%9F%90%B1-?)
+text	\x23🐱}&.\x00\x23 =_</é$0=[__@}@	\x23%F0%9F%90%B1%7D&.%00\x23%E2%80%A8=_%3C/%C3%A9$0=[__@%7D@
+text	<; ^=	%3C;%E2%80%A8%5E=
+text	<|0\x20!{🐱^$a	%3C%7C0%20!%7B%F0%9F%90%B1%5E$a
+text	;`[a,\x23!a0🐱]{	;%60[a,\x23!a0%F0%9F%90%B1]%7B
+text	."é& %\\	.%22%C3%A9&%E2%80%A8%%5C
+text	Z-)0^*Z`0$?{]_-=}	Z-)0%5E*Z%600$?%7B]_-=%7D
+text	&.)`:$'(_/;*.;	&.)%60:$'(_/;*.;
+text	/a*]Za\x7f{\x7f	/a*]Za%7F%7B%7F
+text	=?:9;}~.*~0_	=?:9;%7D~.*~0_
+text	@\\=?*a$|(\x20. 	@%5C=?*a$%7C(%20.%E2%80%A8
+text	🐱\x23\x23(|)é'/@<(!0 ,	%F0%9F%90%B1\x23\x23(%7C)%C3%A9'/@%3C(!0%E2%80%A8,
+text	|Z%@{	%7CZ%@%7B
+text	]\x20\\,/\x20!:;+! 	]%20%5C,/%20!:;+!%E2%80%A8
+text	?;]	?;]
+text	`,;*&_<"	%60,;*&_%3C%22
+text	{'	%7B'
+text	a'-90}[,\x00	a'-90%7D[,%00
+text	'"%.??=é%?)%]\x23\\<	'%22%.??=%C3%A9%?)%]\x23%5C%3C
+text	&|}0@%!'$ 🐱\x20\\!>?	&%7C%7D0@%!'$%E2%80%A8%F0%9F%90%B1%20%5C!%3E?
+text	é🐱?	%C3%A9%F0%9F%90%B1?
+text	,.é+>	,.%C3%A9+%3E
+text	:%a-::0=a]=?]!_:🐱{9!:,	:%a-::0=a]=?]!_:%F0%9F%90%B1%7B9!:,
+text	$`|[*&Z/)*:|.é` ;_é\x239?%	$%60%7C[*&Z/)*:%7C.%C3%A9%60%E2%80%A8;_%C3%A9\x239?%
+text	Z+[0\x23|}\x239:🐱~ :="%"	Z+[0\x23%7C%7D\x239:%F0%9F%90%B1~%E2%80%A8:=%22%%22
+text	(%!é,~'|@(	(%!%C3%A9,~'%7C@(
+text	|\x20,:9?@-<, |`*<🐱_@~,|\x23}	%7C%20,:9?@-%3C,%E2%80%A8%7C%60*%3C%F0%9F%90%B1_@~,%7C\x23%7D
+text	.-\x20=[&]0🐱]\x7f\x20🐱Z+	.-%20=[&]0%F0%9F%90%B1]%7F%20%F0%9F%90%B1Z+
+text	9+🐱(<._!=\\)0^🐱<\\=9\\	9+%F0%9F%90%B1(%3C._!=%5C)0%5E%F0%9F%90%B1%3C%5C=9%5C
+text	\x7f(:- é-:"[	%7F(:-%E2%80%A8%C3%A9-:%22[
+text	%|{%\\'.\x00-~|a|^{{	%%7C%7B%%5C'.%00-~%7Ca%7C%5E%7B%7B
+text	|:`9'"\x7f>\x23@;,/0*	%7C:%609'%22%7F%3E\x23@;,/0*
+text	{%\\@🐱>~,"{"\\@\\,@$):?\x009]	%7B%%5C@%F0%9F%90%B1%3E~,%22%7B%22%5C@%5C,@$):?%009]
+text	\x20$\x00+ 	%20$%00+%E2%80%A8
+text	é0	%C3%A90
+text	-^0\\_"éZ;;\x00-]^~	-%5E0%5C_%22%C3%A9Z;;%00-]%5E~
+text	!0!!\x00!é.[	!0!!%00!%C3%A9.[
+text	\x20>-?^/\x20|}$a`^	%20%3E-?%5E/%20%7C%7D$a%60%5E
+text	?!90]	?!90]
+text	}/*%"\x23Z"\x20.@^ `\x20-<\x7f-	%7D/*%%22\x23Z%22%20.@%5E%E2%80%A8%60%20-%3C%7F-
+text	[\x20\x20🐱??\x00-[?]\x20	[%20%20%F0%9F%90%B1??%00-[?]%20
+text	\x20;!{(^;)	%20;!%7B(%5E;)
+text	<*;[|!&]|	%3C*;[%7C!&]%7C
+text	~\x23;</é"é^*;/.!\\0"? \\_:=	~\x23;%3C/%C3%A9%22%C3%A9%5E*;/.!%5C0%22?%E2%80%A8%5C_:=
+text	!<{=	!%3C%7B=
+text	99'<]]0}\x00éé\x20\x7f	99'%3C]]0%7D%00%C3%A9%C3%A9%20%7F
+text	é}@:.\\\x23Z;@?!	%C3%A9%7D@:.%5C\x23Z;@?!
+text	<"\x20,,)\x239%/?&\x7f[`'$\x23!~$ 	%3C%22%20,,)\x239%/?&%7F[%60'$\x23!~$%E2%80%A8
+text	}a	%7Da
+text	^@	%5E@
+text	&)\x23{*%_:$\x23?é,.9:\x20é\x20	&)\x23%7B*%_:$\x23?%C3%A9,.9:%20%C3%A9%20
+text	?<`(?\x00"!\x00é	?%3C%60(?%00%22!%00%C3%A9
+text	})@\x7f?\x7f/;((%]^:	%7D)@%7F?%7F/;((%]%5E:
+text	,'=\x20&[,^]é~🐱\\/|'é\x23	,'=%20&[,%5E]%C3%A9~%F0%9F%90%B1%5C/%7C'%C3%A9\x23
+text	:@🐱	:@%F0%9F%90%B1
+text	@\x00"?:<$\x20|!=-,/\x20^	@%00%22?:%3C$%20%7C!=-,/%20%5E
+text	:<'\x23	:%3C'\x23
+text	?>{'!)((<||=<Z	?%3E%7B'!)((%3C%7C%7C=%3CZ
+text	++aéZ`":]]&@^=<\x23\x20/}='	++a%C3%A9Z%60%22:]]&@%5E=%3C\x23%20/%7D='
+text	}@=	%7D@=
+text	~*><]\x00	~*%3E%3C]%00
+text	\x20;+	%20;+
+text	{.;!	%7B.;!
+text	\\?🐱	%5C?%F0%9F%90%B1
+text	.\x00\x23,=	.%00\x23,=
+text	{é$!	%7B%C3%A9$!
+text	"*/\x23>>;~{	%22*/\x23%3E%3E;~%7B
+text	0/;:é(=aa^^(*&}\x00!{0@\x20	0/;:%C3%A9(=aa%5E%5E(*&%7D%00!%7B0@%20
+text	"\\\x00;(	%22%5C%00;(
+text	&\x00$aé%=&_\x7f=\x00(&&(🐱\x20	&%00$a%C3%A9%=&_%7F=%00(&&(%F0%9F%90%B1%20
+text	0)>=>"é9	0)%3E=%3E%22%C3%A99
+text	&\x23,<0\x23\\|\\\x00%?é%-?@\x00<\\?>	&\x23,%3C0\x23%5C%7C%5C%00%?%C3%A9%-?@%00%3C%5C?%3E
+text	++\\=*[0]|(\x23]Z🐱.& &@	++%5C=*[0]%7C(\x23]Z%F0%9F%90%B1.&%E2%80%A8&@
+text	,🐱'=0\x23\x23é(	,%F0%9F%90%B1'=0\x23\x23%C3%A9(
+text	|\x20`\x00~\x23";a!?~	%7C%20%60%00~\x23%22;a!?~
+text	:!+>9%(	:!+%3E9%(
+text	\\={	%5C=%7B
+text	^].[{).(a%$\x239_' 	%5E].[%7B).(a%$\x239_'%E2%80%A8
+text	[Z_é/;?	[Z_%C3%A9/;?
+text	)\x23]"+\x20 }@	)\x23]%22+%20%E2%80%A8%7D@
+text	Z~🐱]>+}"-= \x00=-:)^] =	Z~%F0%9F%90%B1]%3E+%7D%22-=%E2%80%A8%00=-:)%5E]%E2%80%A8=
+text	)\x20;{'🐱 %-@[|$%{\x00;+	)%20;%7B'%F0%9F%90%B1%E2%80%A8%-@[%7C$%%7B%00;+
+text	_~$`Z=0(^-	_~$%60Z=0(%5E-
+text	\x20,09;]{🐱$@`	%20,09;]%7B%F0%9F%90%B1$@%60
+text	%"0;9&\x7fé _*	%%220;9&%7F%C3%A9%E2%80%A8_*
+text	a9Z=\x7f|é$\x23=`%\\"$;9+&/["	a9Z=%7F%7C%C3%A9$\x23=%60%%5C%22$;9+&/[%22
+text	a|	a%7C
+text	🐱é_'\x7fé	%F0%9F%90%B1%C3%A9_'%7F%C3%A9
+text	-)<^@	-)%3C%5E@
+text	"['{{-|{> ;\\^\x00<|	%22['%7B%7B-%7C%7B%3E%E2%80%A8;%5C%5E%00%3C%7C
+text	$,9[&!]0]^!$	$,9[&!]0]%5E!$
+text	(%.}+9{:[(	(%.%7D+9%7B:[(
+text	+.^\\'(~_	+.%5E%5C'(~_
+text	0\x23!_?!%|	0\x23!_?!%%7C
+text	.\x23\\)}	.\x23%5C)%7D
+text	%\\~)[\x7f]\x23	%%5C~)[%7F]\x23
+text	}é,Z.\x00{:@[_:?;9{<[|'\x20>	%7D%C3%A9,Z.%00%7B:@[_:?;9%7B%3C[%7C'%20%3E
+text	é!!\x20`({)= |\x20]	%C3%A9!!%20%60(%7B)=%E2%80%A8%7C%20]
+text	9[ ,\\:=}\\_	9[%E2%80%A8,%5C:=%7D%5C_
+text	9<,!)._},9} $\x00*é}]"@|$"	9%3C,!)._%7D,9%7D%E2%80%A8$%00*%C3%A9%7D]%22@%7C$%22
+text	++-ZZ|\\^-~.>\x23<'$\\</?)	++-ZZ%7C%5C%5E-~.%3E\x23%3C'$%5C%3C/?)
+text	{+a>`%🐱[!>:\\$+}:'Z\x23	%7B+a%3E%60%%F0%9F%90%B1[!%3E:%5C$+%7D:'Z\x23
+text	(+?={{{a;\x7fZ*\\.a=<Z*/	(+?=%7B%7B%7Ba;%7FZ*%5C.a=%3CZ*/
+text	-.-0 "@!\x7f🐱\x7f>(~*[Z'(`	-.-0%E2%80%A8%22@!%7F%F0%9F%90%B1%7F%3E(~*[Z'(%60
+text	0-~.\x20[\x20\x20a"'+)a)Z_' \\9=|	0-~.%20[%20%20a%22'+)a)Z_'%E2%80%A8%5C9=%7C
+text	🐱🐱	%F0%9F%90%B1%F0%9F%90%B1
+text	-|🐱0>%<9+@	-%7C%F0%9F%90%B10%3E%%3C9+@
+text	-? }-('/\x7f	-?%E2%80%A8%7D-('/%7F
+text	|!a?@,-Z,"{🐱%	%7C!a?@,-Z,%22%7B%F0%9F%90%B1%
+text	,/%<}"% ~\x20 -|-a<+."^\x7f.	,/%%3C%7D%22%%E2%80%A8~%20%E2%80%A8-%7C-a%3C+.%22%5E%7F.
+text	-$0&Z>\x20 '🐱{0+|$&`>:|&<<	-$0&Z%3E%20%E2%80%A8'%F0%9F%90%B1%7B0+%7C$&%60%3E:%7C&%3C%3C
+text	;'}",>\x7f0+Z/	;'%7D%22,%3E%7F0+Z/
+text	*=é ]|,@	*=%C3%A9%E2%80%A8]%7C,@
+text	'\x20🐱_:,\x00+	'%20%F0%9F%90%B1_:,%00+
+plane	0	8b9212e8dae814485a181e8984ce6db9408cc6f10befb6f3fcbcd3f5a9ffc285
+plane	1	26ab982d13e0b83e3f36985ab47be2ec066e5cb7268380c714a11cf6851c8592
+plane	2	cc143a4aea73e45cb01262ec88e362296264bd4775db4d6ed60c3b7d1c715f3e
+plane	3	ed0640a1bffa061588f1957a89f6e5989123311503c2fdfc03c24bd602325261
+plane	4	f9d851028b440ce6267a0627554cef4f22c274fc67775936ee67ae5d8c56b2f5
+plane	5	e78e107d59260805812cc3aa9429e47c5494602eb89cdc7a53747b7ac18350f0
+plane	6	04ca40bf4a68d422ca750de3b21441b9e01f74650b31cc8cb12b86e56930988d
+plane	7	952491584c09bb2a0e3f65ec4cd127659e2c13e96ca510768b396b1354bcf54e
+plane	8	a37ceddd3f7eb2e49628d0433ed1e8d5e25885d91af88deb8cfdce1806ffefcf
+plane	9	69a8e353cd1a3f2dc200154c893ac0d26f8bd1c87ffa0b3ceea5e430dcd26c1e
+plane	A	7f108dd8bb4b6528163dcbcb4df36dd453b1570fe7fd2dedc235c7730bc56edd
+plane	B	fa661a206f287c302f9003e8b4ab37f6ebe0d1fe6f66be6488c0aadd45eb2237
+plane	C	659a629eb310a9b286561b3a7ca61411fe60af5a567e0fe44125646462ff1287
+plane	D	f9711f8ccbd77be37052650958012a0f7cee9d29650c63caa7f0f4ec3c151e25
+plane	E	20538381f4d6ea1de6458d43336312be48924a89de7732eb15e5482672410e5c
+plane	F	28ed1ec4e1b8d6eccbaf0673e4dfdda4deb482decffd4c8259efa4be8d29782a
+plane	10	1dbcfc9cc878eb1081d184b9186523881a16437aad357c1381e5bf7d6ad1c0bd

@@ -501,3 +501,120 @@ mod tests {
         assert!(ok > 0 && refused > 0, "{ok} {refused}");
     }
 }
+
+/// The frozen JSON string-body decoding vectors, replayed against the member-name unescaper.
+#[cfg(test)]
+mod json_string_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
+
+    const STRINGS: &str = include_str!("../../lex/tests/vectors/json_string_vectors.txt");
+    const UNITS: &str = include_str!("../../lex/tests/vectors/json_unit_vectors.txt");
+
+    /// `body` (the text between the quotes) decoded, or `None` when refused.
+    fn decode(body: &str) -> Option<String> {
+        super::unescape(body, 0)
+            .ok()
+            .map(std::borrow::Cow::into_owned)
+    }
+
+    fn answer(body: &str) -> String {
+        decode(body).map_or_else(|| "-".to_owned(), |text| encode_str(&format!("={text}")))
+    }
+
+    /// Whether this copy is known to answer `body` differently from `expected`.
+    fn skipped(body: &str, expected: &str) -> bool {
+        let _ = (body, expected);
+        false
+    }
+
+    #[test]
+    fn string_bodies_replay_the_frozen_vectors() {
+        let file = VectorFile::parse(STRINGS).expect("json_string_vectors.txt");
+        let mut replayed = 0;
+        for record in file.records() {
+            let body = decode_str(record.fields[0]).expect("an encoded body");
+            let expected = decode_str(record.fields[1]).expect("an encoded answer");
+            if skipped(&body, &expected) {
+                continue;
+            }
+            assert_eq!(answer(&body), record.fields[1], "{body:?}");
+            replayed += 1;
+        }
+        assert!(replayed > 1000, "{replayed}");
+    }
+
+    #[test]
+    fn every_unit_and_pair_replays_the_frozen_digests() {
+        let file = VectorFile::parse(UNITS).expect("json_unit_vectors.txt");
+        for record in file.records() {
+            let upper = record.fields[1] == "upper";
+            let unit = |u: u32| {
+                if upper {
+                    format!("\\u{u:04X}")
+                } else {
+                    format!("\\u{u:04x}")
+                }
+            };
+            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
+            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
+            let answers = (first..=last).map(|value| {
+                if record.fields[0] == "unit" {
+                    answer(&unit(value))
+                } else {
+                    let offset = value - 0x1_0000;
+                    answer(&format!(
+                        "{}{}",
+                        unit(0xD800 + (offset >> 10)),
+                        unit(0xDC00 + (offset & 0x3FF))
+                    ))
+                }
+            });
+            assert_eq!(
+                answer_digest(answers),
+                record.fields[4],
+                "{:?}",
+                record.fields
+            );
+        }
+    }
+}
+
+/// The frozen JSON Pointer vectors, replayed against the value-path writer.
+#[cfg(test)]
+mod json_pointer_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
+
+    const POINTERS: &str = include_str!("../../lex/tests/vectors/json_pointer_vectors.txt");
+
+    fn escape(token: &str) -> String {
+        let mut path = String::new();
+        super::push_token(&mut path, token);
+        path.split_off(1)
+    }
+
+    #[test]
+    fn pointers_replay_the_frozen_vectors() {
+        let file = VectorFile::parse(POINTERS).expect("json_pointer_vectors.txt");
+        let mut replayed = 0;
+        for record in file.records() {
+            let fields = &record.fields;
+            match fields[0] {
+                "escape" => {
+                    let token = decode_str(fields[1]).expect("a token");
+                    assert_eq!(encode_str(&escape(&token)), fields[2], "{token:?}");
+                    replayed += 1;
+                }
+                "plane" => {
+                    let plane = u32::from_str_radix(fields[1], 16).expect("hex");
+                    let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
+                        .filter_map(char::from_u32)
+                        .map(|c| encode_str(&escape(&format!("{c}~{c}/"))));
+                    assert_eq!(answer_digest(answers), fields[2], "plane {plane:X}");
+                    replayed += 1;
+                }
+                _ => {}
+            }
+        }
+        assert!(replayed > 100, "{replayed}");
+    }
+}

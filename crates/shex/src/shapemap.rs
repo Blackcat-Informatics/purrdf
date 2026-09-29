@@ -1290,3 +1290,63 @@ mod term_walk_tests {
             .expect("the parser did not overflow the thread's stack");
     }
 }
+
+/// The frozen UCHAR/ECHAR decoding vectors, replayed against the ShapeMap literal escape reader.
+#[cfg(test)]
+mod escape_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, decode_str};
+
+    const ESCAPES: &str = include_str!("../../lex/tests/vectors/escape_vectors.txt");
+
+    fn show(decoded: Option<(char, usize)>) -> String {
+        decoded.map_or_else(
+            || "-".to_owned(),
+            |(c, n)| format!("{:04X}/{n}", u32::from(c)),
+        )
+    }
+
+    fn string(input: &str) -> String {
+        show({
+            let mut parser = super::MapParser {
+                chars: input.chars().collect(),
+                pos: 1,
+                base: purrdf_iri::BaseScope::empty(),
+            };
+            let decoded = if input.starts_with('\\') {
+                parser.parse_escape().ok()
+            } else {
+                None
+            };
+            decoded.map(|c| {
+                (
+                    c,
+                    parser.chars[..parser.pos]
+                        .iter()
+                        .map(|c| c.len_utf8())
+                        .sum(),
+                )
+            })
+        })
+    }
+
+    /// Whether this copy is known to answer `input` differently from the vectors.
+    fn skipped(input: &str) -> bool {
+        let _ = input;
+        false
+    }
+
+    #[test]
+    fn escapes_replay_the_frozen_vectors() {
+        let file = VectorFile::parse(ESCAPES).expect("escape_vectors.txt");
+        let mut replayed = 0;
+        for record in file.records() {
+            let input = decode_str(record.fields[0]).expect("an encoded input");
+            if skipped(&input) {
+                continue;
+            }
+            assert_eq!(string(&input), record.fields[2], "string escape {input:?}");
+            replayed += 1;
+        }
+        assert!(replayed > 1000, "{replayed}");
+    }
+}

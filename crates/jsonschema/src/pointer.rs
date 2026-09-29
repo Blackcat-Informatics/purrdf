@@ -194,3 +194,136 @@ mod tests {
         assert_eq!(fragment_encode("/properties/~0a~1b"), "/properties/~0a~1b");
     }
 }
+
+/// The frozen JSON Pointer vectors, replayed against the JSON Schema pointer module.
+#[cfg(test)]
+mod json_pointer_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
+
+    const POINTERS: &str = include_str!("../../lex/tests/vectors/json_pointer_vectors.txt");
+
+    fn escape(token: &str) -> String {
+        super::escape_token(token)
+    }
+
+    fn tokens(pointer: &str) -> Option<Vec<String>> {
+        super::tokens(pointer)
+    }
+
+    #[test]
+    fn pointers_replay_the_frozen_vectors() {
+        let file = VectorFile::parse(POINTERS).expect("json_pointer_vectors.txt");
+        let mut replayed = 0;
+        for record in file.records() {
+            let fields = &record.fields;
+            match fields[0] {
+                "escape" => {
+                    let token = decode_str(fields[1]).expect("a token");
+                    assert_eq!(encode_str(&escape(&token)), fields[2], "{token:?}");
+                    replayed += 1;
+                }
+                "plane" => {
+                    let plane = u32::from_str_radix(fields[1], 16).expect("hex");
+                    let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
+                        .filter_map(char::from_u32)
+                        .map(|c| encode_str(&escape(&format!("{c}~{c}/"))));
+                    assert_eq!(answer_digest(answers), fields[2], "plane {plane:X}");
+                    replayed += 1;
+                }
+                "parse" => {
+                    let pointer = decode_str(fields[1]).expect("a pointer");
+                    let expected: Option<Vec<String>> = (fields[2] != "-").then(|| {
+                        fields[3..]
+                            .iter()
+                            .map(|token| decode_str(token).expect("a token"))
+                            .collect()
+                    });
+                    assert_eq!(tokens(&pointer), expected, "{pointer:?}");
+                    replayed += 1;
+                }
+                _ => {}
+            }
+        }
+        assert!(replayed > 100, "{replayed}");
+    }
+}
+
+/// The frozen percent-encoding vectors, replayed against the keyword-location fragment codec.
+#[cfg(test)]
+mod percent_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
+
+    /// Replay one vector file: `run` answers an input (`None` for a refusal),
+    /// `encode` says whether answers are encoded text rather than `=`-prefixed
+    /// decodings, and `skipped` names inputs this copy is known to answer differently.
+    fn replay(
+        vectors: &str,
+        encode: bool,
+        run: impl Fn(&str) -> Option<String>,
+        skipped: impl Fn(&str) -> bool,
+        plane_skipped: impl Fn(u32) -> bool,
+    ) {
+        let answer = |input: &str| match run(input) {
+            Some(value) if encode => encode_str(&value),
+            Some(value) => encode_str(&format!("={value}")),
+            None => "-".to_owned(),
+        };
+        let file = VectorFile::parse(vectors).expect("a percent vector file");
+        let mut replayed = 0;
+        for record in file.records() {
+            if record.fields[0] == "plane" {
+                let plane = u32::from_str_radix(record.fields[1], 16).expect("hex");
+                if plane_skipped(plane) {
+                    continue;
+                }
+                let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
+                    .filter_map(char::from_u32)
+                    .filter(|c| !skipped(&c.to_string()))
+                    .map(|c| answer(&c.to_string()));
+                assert_eq!(answer_digest(answers), record.fields[2], "plane {plane:X}");
+            } else {
+                let input = decode_str(record.fields[1]).expect("an encoded input");
+                if skipped(&input) {
+                    continue;
+                }
+                assert_eq!(answer(&input), record.fields[2], "{input:?}");
+            }
+            replayed += 1;
+        }
+        assert!(replayed > 400, "{replayed}");
+    }
+
+    #[test]
+    fn fragment_replays_the_frozen_vectors() {
+        replay(
+            include_str!("../../lex/tests/vectors/percent_fragment_vectors.txt"),
+            true,
+            |input| Some(super::fragment_encode(input)),
+            |input| {
+                let _ = input;
+                false
+            },
+            |plane| {
+                let _ = plane;
+                false
+            },
+        );
+    }
+
+    #[test]
+    fn decode_replays_the_frozen_vectors() {
+        replay(
+            include_str!("../../lex/tests/vectors/percent_decode_vectors.txt"),
+            false,
+            super::percent_decode,
+            |input| {
+                let _ = input;
+                false
+            },
+            |plane| {
+                let _ = plane;
+                false
+            },
+        );
+    }
+}

@@ -1346,3 +1346,41 @@ x-value: .nan
         assert_eq!(reparsed.into_value(), value);
     }
 }
+
+/// The frozen JSON Pointer vectors, replayed against the LinkML projection's definition pointers.
+#[cfg(test)]
+mod json_pointer_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
+
+    const POINTERS: &str = include_str!("../../lex/tests/vectors/json_pointer_vectors.txt");
+
+    fn escape(token: &str) -> String {
+        super::pointer_escape(token).into_owned()
+    }
+
+    #[test]
+    fn pointers_replay_the_frozen_vectors() {
+        let file = VectorFile::parse(POINTERS).expect("json_pointer_vectors.txt");
+        let mut replayed = 0;
+        for record in file.records() {
+            let fields = &record.fields;
+            match fields[0] {
+                "escape" => {
+                    let token = decode_str(fields[1]).expect("a token");
+                    assert_eq!(encode_str(&escape(&token)), fields[2], "{token:?}");
+                    replayed += 1;
+                }
+                "plane" => {
+                    let plane = u32::from_str_radix(fields[1], 16).expect("hex");
+                    let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
+                        .filter_map(char::from_u32)
+                        .map(|c| encode_str(&escape(&format!("{c}~{c}/"))));
+                    assert_eq!(answer_digest(answers), fields[2], "plane {plane:X}");
+                    replayed += 1;
+                }
+                _ => {}
+            }
+        }
+        assert!(replayed > 100, "{replayed}");
+    }
+}

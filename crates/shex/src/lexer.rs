@@ -1192,3 +1192,91 @@ mod tests {
         }
     }
 }
+
+/// The frozen UCHAR/ECHAR decoding vectors, replayed against the ShExC UCHAR decoder and string-literal escapes.
+#[cfg(test)]
+mod escape_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str};
+
+    const ESCAPES: &str = include_str!("../../lex/tests/vectors/escape_vectors.txt");
+    const SCALARS: &str = include_str!("../../lex/tests/vectors/uchar_scalar_vectors.txt");
+
+    /// The escape at the start of `input`, read by the string-literal scanner: the
+    /// literal's first scalar and the input bytes the escape spanned.
+    fn literal(input: &str) -> Option<(char, usize)> {
+        let text = format!("\"{input}\"");
+        let tokens = super::tokenize(&text).ok()?;
+        let [only] = tokens.as_slice() else {
+            return None;
+        };
+        let super::Token::StringLit(value) = &only.token else {
+            return None;
+        };
+        let first = value.chars().next()?;
+        Some((first, input.len() - (value.len() - first.len_utf8())))
+    }
+
+    fn show(decoded: Option<(char, usize)>) -> String {
+        decoded.map_or_else(
+            || "-".to_owned(),
+            |(c, n)| format!("{:04X}/{n}", u32::from(c)),
+        )
+    }
+
+    fn uchar(input: &str) -> String {
+        show({
+            let chars: Vec<char> = input.chars().collect();
+            super::decode_uchar(|k| chars.get(k).copied()).ok()
+        })
+    }
+
+    fn string(input: &str) -> String {
+        show(literal(input))
+    }
+
+    /// Whether this copy is known to answer `input` differently from the vectors.
+    fn skipped(input: &str) -> bool {
+        let _ = input;
+        false
+    }
+
+    #[test]
+    fn escapes_replay_the_frozen_vectors() {
+        let file = VectorFile::parse(ESCAPES).expect("escape_vectors.txt");
+        let mut replayed = 0;
+        for record in file.records() {
+            let input = decode_str(record.fields[0]).expect("an encoded input");
+            if skipped(&input) {
+                continue;
+            }
+            assert_eq!(uchar(&input), record.fields[1], "UCHAR {input:?}");
+            assert_eq!(string(&input), record.fields[2], "string escape {input:?}");
+            replayed += 1;
+        }
+        assert!(replayed > 1000, "{replayed}");
+    }
+
+    #[test]
+    fn every_scalar_replays_the_frozen_digests() {
+        let file = VectorFile::parse(SCALARS).expect("uchar_scalar_vectors.txt");
+        for record in file.records() {
+            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
+            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
+            let answers = (first..=last).map(|cp| {
+                let text = match (record.fields[0], record.fields[1]) {
+                    ("u", "upper") => format!("\\u{cp:04X}"),
+                    ("u", _) => format!("\\u{cp:04x}"),
+                    (_, "upper") => format!("\\U{cp:08X}"),
+                    _ => format!("\\U{cp:08x}"),
+                };
+                uchar(&text)
+            });
+            assert_eq!(
+                answer_digest(answers),
+                record.fields[4],
+                "{:?}",
+                record.fields
+            );
+        }
+    }
+}

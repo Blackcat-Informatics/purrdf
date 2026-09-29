@@ -1,0 +1,912 @@
+# JSON Pointer reference tokens and pointers (frozen), RFC 6901.
+#
+# `escape` records: a reference token and its escaped form (`~` as `~0`, `/` as `~1`).
+# `parse` records: a pointer and its unescaped tokens, or `-` when it is not a JSON
+# Pointer (it must be empty or begin with `/`, and every `~` is followed by `0` or `1`);
+# the answer is the token count followed by each token. `plane` records escape every
+# scalar value of a plane as the token `<c>~<c>/`, as the SHA-256 of the per-scalar
+# answers each followed by a line feed. Inputs are the tokens and pointers over `~`,
+# `/`, `0`, `1`, `2` and a letter in every arrangement up to three, edge cases, and a
+# SplitMix64 corpus (seed 0x5EED_7015_0000_0001). Recorded from the JSON Schema
+# pointer module.
+#
+# Fields: kind, input, answer fields.
+# vector-count: 897
+# body-sha256: c1defef012f297b3691067f581bb83879a871ee7673a9eeba1b1d88f84e015bc
+escape	\0	\0
+escape	a	a
+escape	~	~0
+escape	/	~1
+escape	~0	~00
+escape	~1	~01
+escape	~/	~0~1
+escape	/~	~1~0
+escape	a~b/c	a~0b~1c
+escape	~~//	~0~0~1~1
+escape	%	%
+escape	é	é
+escape	 	 
+escape	🐱	🐱
+escape	\\	\\
+escape	~2	~02
+escape	01	01
+escape	-	-
+escape	a\x20b	a\x20b
+escape	~~	~0~0
+escape	~~~	~0~0~0
+escape	~~/	~0~0~1
+escape	~~0	~0~00
+escape	~~1	~0~01
+escape	~~a	~0~0a
+escape	~~é	~0~0é
+escape	~/~	~0~1~0
+escape	~//	~0~1~1
+escape	~/0	~0~10
+escape	~/1	~0~11
+escape	~/a	~0~1a
+escape	~/é	~0~1é
+escape	~0~	~00~0
+escape	~0/	~00~1
+escape	~00	~000
+escape	~01	~001
+escape	~0a	~00a
+escape	~0é	~00é
+escape	~1~	~01~0
+escape	~1/	~01~1
+escape	~10	~010
+escape	~11	~011
+escape	~1a	~01a
+escape	~1é	~01é
+escape	~a	~0a
+escape	~a~	~0a~0
+escape	~a/	~0a~1
+escape	~a0	~0a0
+escape	~a1	~0a1
+escape	~aa	~0aa
+escape	~aé	~0aé
+escape	~é	~0é
+escape	~é~	~0é~0
+escape	~é/	~0é~1
+escape	~é0	~0é0
+escape	~é1	~0é1
+escape	~éa	~0éa
+escape	~éé	~0éé
+escape	/~~	~1~0~0
+escape	/~/	~1~0~1
+escape	/~0	~1~00
+escape	/~1	~1~01
+escape	/~a	~1~0a
+escape	/~é	~1~0é
+escape	//	~1~1
+escape	//~	~1~1~0
+escape	///	~1~1~1
+escape	//0	~1~10
+escape	//1	~1~11
+escape	//a	~1~1a
+escape	//é	~1~1é
+escape	/0	~10
+escape	/0~	~10~0
+escape	/0/	~10~1
+escape	/00	~100
+escape	/01	~101
+escape	/0a	~10a
+escape	/0é	~10é
+escape	/1	~11
+escape	/1~	~11~0
+escape	/1/	~11~1
+escape	/10	~110
+escape	/11	~111
+escape	/1a	~11a
+escape	/1é	~11é
+escape	/a	~1a
+escape	/a~	~1a~0
+escape	/a/	~1a~1
+escape	/a0	~1a0
+escape	/a1	~1a1
+escape	/aa	~1aa
+escape	/aé	~1aé
+escape	/é	~1é
+escape	/é~	~1é~0
+escape	/é/	~1é~1
+escape	/é0	~1é0
+escape	/é1	~1é1
+escape	/éa	~1éa
+escape	/éé	~1éé
+escape	0~	0~0
+escape	0~~	0~0~0
+escape	0~/	0~0~1
+escape	0~0	0~00
+escape	0~1	0~01
+escape	0~a	0~0a
+escape	0~é	0~0é
+escape	0/	0~1
+escape	0/~	0~1~0
+escape	0//	0~1~1
+escape	0/0	0~10
+escape	0/1	0~11
+escape	0/a	0~1a
+escape	0/é	0~1é
+escape	00	00
+escape	00~	00~0
+escape	00/	00~1
+escape	000	000
+escape	001	001
+escape	00a	00a
+escape	00é	00é
+escape	01~	01~0
+escape	01/	01~1
+escape	010	010
+escape	011	011
+escape	01a	01a
+escape	01é	01é
+escape	0a	0a
+escape	0a~	0a~0
+escape	0a/	0a~1
+escape	0a0	0a0
+escape	0a1	0a1
+escape	0aa	0aa
+escape	0aé	0aé
+escape	0é	0é
+escape	0é~	0é~0
+escape	0é/	0é~1
+escape	0é0	0é0
+escape	0é1	0é1
+escape	0éa	0éa
+escape	0éé	0éé
+escape	1~	1~0
+escape	1~~	1~0~0
+escape	1~/	1~0~1
+escape	1~0	1~00
+escape	1~1	1~01
+escape	1~a	1~0a
+escape	1~é	1~0é
+escape	1/	1~1
+escape	1/~	1~1~0
+escape	1//	1~1~1
+escape	1/0	1~10
+escape	1/1	1~11
+escape	1/a	1~1a
+escape	1/é	1~1é
+escape	10	10
+escape	10~	10~0
+escape	10/	10~1
+escape	100	100
+escape	101	101
+escape	10a	10a
+escape	10é	10é
+escape	11	11
+escape	11~	11~0
+escape	11/	11~1
+escape	110	110
+escape	111	111
+escape	11a	11a
+escape	11é	11é
+escape	1a	1a
+escape	1a~	1a~0
+escape	1a/	1a~1
+escape	1a0	1a0
+escape	1a1	1a1
+escape	1aa	1aa
+escape	1aé	1aé
+escape	1é	1é
+escape	1é~	1é~0
+escape	1é/	1é~1
+escape	1é0	1é0
+escape	1é1	1é1
+escape	1éa	1éa
+escape	1éé	1éé
+escape	a~	a~0
+escape	a~~	a~0~0
+escape	a~/	a~0~1
+escape	a~0	a~00
+escape	a~1	a~01
+escape	a~a	a~0a
+escape	a~é	a~0é
+escape	a/	a~1
+escape	a/~	a~1~0
+escape	a//	a~1~1
+escape	a/0	a~10
+escape	a/1	a~11
+escape	a/a	a~1a
+escape	a/é	a~1é
+escape	a0	a0
+escape	a0~	a0~0
+escape	a0/	a0~1
+escape	a00	a00
+escape	a01	a01
+escape	a0a	a0a
+escape	a0é	a0é
+escape	a1	a1
+escape	a1~	a1~0
+escape	a1/	a1~1
+escape	a10	a10
+escape	a11	a11
+escape	a1a	a1a
+escape	a1é	a1é
+escape	aa	aa
+escape	aa~	aa~0
+escape	aa/	aa~1
+escape	aa0	aa0
+escape	aa1	aa1
+escape	aaa	aaa
+escape	aaé	aaé
+escape	aé	aé
+escape	aé~	aé~0
+escape	aé/	aé~1
+escape	aé0	aé0
+escape	aé1	aé1
+escape	aéa	aéa
+escape	aéé	aéé
+escape	é~	é~0
+escape	é~~	é~0~0
+escape	é~/	é~0~1
+escape	é~0	é~00
+escape	é~1	é~01
+escape	é~a	é~0a
+escape	é~é	é~0é
+escape	é/	é~1
+escape	é/~	é~1~0
+escape	é//	é~1~1
+escape	é/0	é~10
+escape	é/1	é~11
+escape	é/a	é~1a
+escape	é/é	é~1é
+escape	é0	é0
+escape	é0~	é0~0
+escape	é0/	é0~1
+escape	é00	é00
+escape	é01	é01
+escape	é0a	é0a
+escape	é0é	é0é
+escape	é1	é1
+escape	é1~	é1~0
+escape	é1/	é1~1
+escape	é10	é10
+escape	é11	é11
+escape	é1a	é1a
+escape	é1é	é1é
+escape	éa	éa
+escape	éa~	éa~0
+escape	éa/	éa~1
+escape	éa0	éa0
+escape	éa1	éa1
+escape	éaa	éaa
+escape	éaé	éaé
+escape	éé	éé
+escape	éé~	éé~0
+escape	éé/	éé~1
+escape	éé0	éé0
+escape	éé1	éé1
+escape	ééa	ééa
+escape	ééé	ééé
+escape	éé~a//	éé~0a~1~1
+escape	12aa	12aa
+escape	2a2a	2a2a
+escape	\x2022	\x2022
+escape	0~0/\x20	0~00~1\x20
+escape	/~\x20/	~1~0\x20~1
+escape	é2/0a~0	é2~10a~00
+escape	\x20~\x20	\x20~0\x20
+escape	é002é	é002é
+escape	a//10é00	a~1~110é00
+escape	12	12
+escape	é~2\x20\x20aa~	é~02\x20\x20aa~0
+escape	0é\x201	0é\x201
+escape	//\x202aé	~1~1\x202aé
+escape	\x20a/0/0~\x20é	\x20a~10~10~0\x20é
+escape	\x20\x200é~\x20\x20é	\x20\x200é~0\x20\x20é
+escape	2//	2~1~1
+escape	~~/0aa~0	~0~0~10aa~00
+escape	/é120/a\x20	~1é120~1a\x20
+escape	éé\x20~é	éé\x20~0é
+escape	a2///\x20~0	a2~1~1~1\x20~00
+escape	~\x20\x20	~0\x20\x20
+escape	2/	2~1
+escape	202~~1/2	202~0~01~12
+escape	0~02\x20é2	0~002\x20é2
+escape	12\x20~2\x20	12\x20~02\x20
+escape	~110	~0110
+escape	0~2	0~02
+escape	2~~é/\x20	2~0~0é~1\x20
+escape	a\x20//0	a\x20~1~10
+escape	\x20~a22\x20~	\x20~0a22\x20~0
+escape	110\x200/~é~	110\x200~1~0é~0
+escape	aa2/\x20	aa2~1\x20
+escape	aa2	aa2
+escape	0	0
+escape	\x20	\x20
+escape	2a~\x20é/~1	2a~0\x20é~1~01
+escape	/é0a\x20\x202\x20	~1é0a\x20\x202\x20
+escape	\x202aaa1	\x202aaa1
+escape	éaa2\x20	éaa2\x20
+escape	aa\x20/1~0a	aa\x20~11~00a
+escape	\x20aé22\x20	\x20aé22\x20
+escape	/00~/é\x20	~100~0~1é\x20
+escape	/\x20	~1\x20
+escape	20	20
+escape	2~11	2~011
+escape	a~//aa1	a~0~1~1aa1
+escape	\x200~2/1é	\x200~02~11é
+escape	21~1	21~01
+escape	2a1\x20/é	2a1\x20~1é
+escape	1\x20/\x20	1\x20~1\x20
+escape	~00a/é	~000a~1é
+escape	~é/~~~a1	~0é~1~0~0~0a1
+escape	é20\x20\x202/	é20\x20\x202~1
+escape	\x20a0	\x20a0
+escape	aéa2a01/	aéa2a01~1
+escape	/\x20éé\x2010\x20	~1\x20éé\x2010\x20
+escape	é011é~102	é011é~0102
+escape	2~~é/a\x20é	2~0~0é~1a\x20é
+escape	\x20~aaa000	\x20~0aaa000
+escape	~~é22	~0~0é22
+escape	/\x20é	~1\x20é
+escape	21é2\x20\x202/	21é2\x20\x202~1
+escape	\x20é~é\x20	\x20é~0é\x20
+escape	2\x20é110	2\x20é110
+escape	0~é2/é	0~0é2~1é
+escape	2éa\x20a~	2éa\x20a~0
+escape	0é~/	0é~0~1
+escape	0\x20	0\x20
+escape	/10a	~110a
+escape	/01//10~é	~101~1~110~0é
+escape	~\x20	~0\x20
+escape	211/\x2020/	211~1\x2020~1
+escape	/10é	~110é
+escape	~é/0a1~	~0é~10a1~0
+escape	é10//101a	é10~1~1101a
+escape	é\x201a	é\x201a
+escape	02éa2/éa	02éa2~1éa
+escape	\x201ééé2	\x201ééé2
+escape	é/é2	é~1é2
+escape	1\x20é0~/a0	1\x20é0~0~1a0
+escape	aé\x2000/\x20\x20	aé\x2000~1\x20\x20
+escape	01é~21	01é~021
+escape	\x201aa2~2	\x201aa2~02
+escape	1éa0/	1éa0~1
+escape	0a0~1\x20\x202	0a0~01\x20\x202
+escape	\x201a	\x201a
+escape	2~\x20~a~	2~0\x20~0a~0
+escape	///\x202~	~1~1~1\x202~0
+escape	1020\x20\x200	1020\x20\x200
+escape	éé2\x200/\x20	éé2\x200~1\x20
+escape	é1é0~~~	é1é0~0~0~0
+escape	0\x200\x20\x2000	0\x200\x20\x2000
+escape	2a	2a
+escape	/\x201é	~1\x201é
+escape	/a1a2/21/	~1a1a2~121~1
+escape	/ééa	~1ééa
+escape	1/é\x20/~0\x20~	1~1é\x20~1~00\x20~0
+escape	a~1/	a~01~1
+escape	aa//~éaé0	aa~1~1~0éaé0
+escape	~/aé/	~0~1aé~1
+escape	\x201\x20aa	\x201\x20aa
+escape	22/	22~1
+escape	a/000aé	a~1000aé
+escape	210~é2a	210~0é2a
+escape	0é2a00/2é	0é2a00~12é
+escape	0\x20~/	0\x20~0~1
+escape	~0é~\x20	~00é~0\x20
+escape	\x2020é\x20\x20012	\x2020é\x20\x20012
+escape	/\x20~1~é1é	~1\x20~01~0é1é
+escape	\x20é0~	\x20é0~0
+escape	a/~120	a~1~0120
+escape	\x20aé2éa110	\x20aé2éa110
+escape	é00é0\x20a\x20	é00é0\x20a\x20
+escape	~\x20\x20~1	~0\x20\x20~01
+escape	a0\x20aa\x20~1a	a0\x20aa\x20~01a
+escape	2a/a2/~	2a~1a2~1~0
+escape	2	2
+escape	a/\x20\x2002	a~1\x20\x2002
+escape	\x20~0~//	\x20~00~0~1~1
+escape	00a02\x20/a1	00a02\x20~1a1
+escape	02a\x20\x20	02a\x20\x20
+escape	é~a/21é\x20	é~0a~121é\x20
+escape	1\x202~/2	1\x202~0~12
+escape	~é/~1é\x20/\x20	~0é~1~01é\x20~1\x20
+escape	/0~1~a/~0	~10~01~0a~1~00
+escape	~\x2010a0a	~0\x2010a0a
+escape	a121	a121
+escape	\x20\x200/a101	\x20\x200~1a101
+escape	1é210a1	1é210a1
+escape	~0~1a\x20022	~00~01a\x20022
+escape	é010/a~\x20é	é010~1a~0\x20é
+escape	/12éaa~a1	~112éaa~0a1
+escape	20a~éé	20a~0éé
+escape	é~\x20é	é~0\x20é
+escape	0012120\x20	0012120\x20
+escape	/1~\x20é0\x20	~11~0\x20é0\x20
+escape	é/\x20\x201\x20	é~1\x20\x201\x20
+escape	ééé2é1	ééé2é1
+escape	~é\x2011\x2011	~0é\x2011\x2011
+escape	~1/2~é~~~	~01~12~0é~0~0~0
+escape	12/0\x2002~2	12~10\x2002~02
+escape	0é\x20\x201a2	0é\x20\x201a2
+escape	~100	~0100
+escape	a2a12a\x20	a2a12a\x20
+escape	aa2aa/22	aa2aa~122
+escape	\x20/~~2~/	\x20~1~0~02~0~1
+escape	2a12~~	2a12~0~0
+escape	~\x202\x20a/2	~0\x202\x20a~12
+escape	~2aé2\x20/01	~02aé2\x20~101
+escape	~2/\x20é\x20/a	~02~1\x20é\x20~1a
+escape	\x201	\x201
+escape	é/\x20~a1\x20~~	é~1\x20~0a1\x20~0~0
+escape	2é0é1	2é0é1
+escape	\x202a\x20é/0é	\x202a\x20é~10é
+escape	a22	a22
+escape	22	22
+escape	é102é\x20202	é102é\x20202
+escape	22\x20~\x20\x20~0	22\x20~0\x20\x20~00
+escape	11é\x20/0é1~	11é\x20~10é1~0
+escape	112éa\x20é2~	112éa\x20é2~0
+escape	éé1~/a	éé1~0~1a
+escape	/0~00aé2	~10~000aé2
+escape	/~a0	~1~0a0
+escape	/01\x20/éé	~101\x20~1éé
+escape	~é\x20	~0é\x20
+escape	\x20/a\x20	\x20~1a\x20
+escape	02\x20\x20~1	02\x20\x20~01
+escape	~012~aéé	~0012~0aéé
+escape	2~/\x20	2~0~1\x20
+escape	a21é	a21é
+escape	é2é1\x201/	é2é1\x201~1
+escape	/a\x201\x20a\x20	~1a\x201\x20a\x20
+escape	//0\x20a0	~1~10\x20a0
+escape	2aé/\x20aa/	2aé~1\x20aa~1
+escape	\x20éa\x20~~~a	\x20éa\x20~0~0~0a
+escape	a12a~2	a12a~02
+escape	2/120/10	2~1120~110
+escape	é20a0é	é20a0é
+escape	~\x20a10\x20	~0\x20a10\x20
+escape	\x202\x20//~2é	\x202\x20~1~1~02é
+escape	~\x200/2~	~0\x200~12~0
+escape	aa\x2001a	aa\x2001a
+parse	\0	0
+parse	/	1	\0
+parse	//	2	\0	\0
+parse	/a	1	a
+parse	a	-
+parse	/a~0b	1	a~b
+parse	/a~1b	1	a/b
+parse	/~	-
+parse	/~2	-
+parse	/a~	-
+parse	/~01	1	~1
+parse	/~10	1	/0
+parse	/~0~1	1	~/
+parse	\x23/a	-
+parse	/a/	2	a	\0
+parse	/é	1	é
+parse	~0	-
+parse	/~~	-
+parse	/~a	-
+parse	/0	1	0
+parse	/-	1	-
+parse	/a//b	3	a	\0	b
+parse	///	3	\0	\0	\0
+parse	////	4	\0	\0	\0	\0
+parse	///~	-
+parse	///0	3	\0	\0	0
+parse	///1	3	\0	\0	1
+parse	///2	3	\0	\0	2
+parse	///a	3	\0	\0	a
+parse	//~/	-
+parse	//~~	-
+parse	//~0	2	\0	~
+parse	//~1	2	\0	/
+parse	//~2	-
+parse	//~a	-
+parse	//0/	3	\0	0	\0
+parse	//0~	-
+parse	//00	2	\0	00
+parse	//01	2	\0	01
+parse	//02	2	\0	02
+parse	//0a	2	\0	0a
+parse	//1/	3	\0	1	\0
+parse	//1~	-
+parse	//10	2	\0	10
+parse	//11	2	\0	11
+parse	//12	2	\0	12
+parse	//1a	2	\0	1a
+parse	//2/	3	\0	2	\0
+parse	//2~	-
+parse	//20	2	\0	20
+parse	//21	2	\0	21
+parse	//22	2	\0	22
+parse	//2a	2	\0	2a
+parse	//a/	3	\0	a	\0
+parse	//a~	-
+parse	//a0	2	\0	a0
+parse	//a1	2	\0	a1
+parse	//a2	2	\0	a2
+parse	//aa	2	\0	aa
+parse	/~//	-
+parse	/~/~	-
+parse	/~/0	-
+parse	/~/1	-
+parse	/~/2	-
+parse	/~/a	-
+parse	/~~/	-
+parse	/~~~	-
+parse	/~~0	-
+parse	/~~1	-
+parse	/~~2	-
+parse	/~~a	-
+parse	/~0/	2	~	\0
+parse	/~0~	-
+parse	/~00	1	~0
+parse	/~02	1	~2
+parse	/~0a	1	~a
+parse	/~1/	2	/	\0
+parse	/~1~	-
+parse	/~11	1	/1
+parse	/~12	1	/2
+parse	/~1a	1	/a
+parse	/~2/	-
+parse	/~2~	-
+parse	/~20	-
+parse	/~21	-
+parse	/~22	-
+parse	/~2a	-
+parse	/~a/	-
+parse	/~a~	-
+parse	/~a0	-
+parse	/~a1	-
+parse	/~a2	-
+parse	/~aa	-
+parse	/0//	3	0	\0	\0
+parse	/0/~	-
+parse	/0/0	2	0	0
+parse	/0/1	2	0	1
+parse	/0/2	2	0	2
+parse	/0/a	2	0	a
+parse	/0~/	-
+parse	/0~~	-
+parse	/0~0	1	0~
+parse	/0~1	1	0/
+parse	/0~2	-
+parse	/0~a	-
+parse	/00/	2	00	\0
+parse	/00~	-
+parse	/000	1	000
+parse	/001	1	001
+parse	/002	1	002
+parse	/00a	1	00a
+parse	/01/	2	01	\0
+parse	/01~	-
+parse	/010	1	010
+parse	/011	1	011
+parse	/012	1	012
+parse	/01a	1	01a
+parse	/02/	2	02	\0
+parse	/02~	-
+parse	/020	1	020
+parse	/021	1	021
+parse	/022	1	022
+parse	/02a	1	02a
+parse	/0a/	2	0a	\0
+parse	/0a~	-
+parse	/0a0	1	0a0
+parse	/0a1	1	0a1
+parse	/0a2	1	0a2
+parse	/0aa	1	0aa
+parse	/1//	3	1	\0	\0
+parse	/1/~	-
+parse	/1/0	2	1	0
+parse	/1/1	2	1	1
+parse	/1/2	2	1	2
+parse	/1/a	2	1	a
+parse	/1~/	-
+parse	/1~~	-
+parse	/1~0	1	1~
+parse	/1~1	1	1/
+parse	/1~2	-
+parse	/1~a	-
+parse	/10/	2	10	\0
+parse	/10~	-
+parse	/100	1	100
+parse	/101	1	101
+parse	/102	1	102
+parse	/10a	1	10a
+parse	/11/	2	11	\0
+parse	/11~	-
+parse	/110	1	110
+parse	/111	1	111
+parse	/112	1	112
+parse	/11a	1	11a
+parse	/12/	2	12	\0
+parse	/12~	-
+parse	/120	1	120
+parse	/121	1	121
+parse	/122	1	122
+parse	/12a	1	12a
+parse	/1a/	2	1a	\0
+parse	/1a~	-
+parse	/1a0	1	1a0
+parse	/1a1	1	1a1
+parse	/1a2	1	1a2
+parse	/1aa	1	1aa
+parse	/2//	3	2	\0	\0
+parse	/2/~	-
+parse	/2/0	2	2	0
+parse	/2/1	2	2	1
+parse	/2/2	2	2	2
+parse	/2/a	2	2	a
+parse	/2~/	-
+parse	/2~~	-
+parse	/2~0	1	2~
+parse	/2~1	1	2/
+parse	/2~2	-
+parse	/2~a	-
+parse	/20/	2	20	\0
+parse	/20~	-
+parse	/200	1	200
+parse	/201	1	201
+parse	/202	1	202
+parse	/20a	1	20a
+parse	/21/	2	21	\0
+parse	/21~	-
+parse	/210	1	210
+parse	/211	1	211
+parse	/212	1	212
+parse	/21a	1	21a
+parse	/22/	2	22	\0
+parse	/22~	-
+parse	/220	1	220
+parse	/221	1	221
+parse	/222	1	222
+parse	/22a	1	22a
+parse	/2a/	2	2a	\0
+parse	/2a~	-
+parse	/2a0	1	2a0
+parse	/2a1	1	2a1
+parse	/2a2	1	2a2
+parse	/2aa	1	2aa
+parse	/a//	3	a	\0	\0
+parse	/a/~	-
+parse	/a/0	2	a	0
+parse	/a/1	2	a	1
+parse	/a/2	2	a	2
+parse	/a/a	2	a	a
+parse	/a~/	-
+parse	/a~~	-
+parse	/a~0	1	a~
+parse	/a~1	1	a/
+parse	/a~2	-
+parse	/a~a	-
+parse	/a0/	2	a0	\0
+parse	/a0~	-
+parse	/a00	1	a00
+parse	/a01	1	a01
+parse	/a02	1	a02
+parse	/a0a	1	a0a
+parse	/a1/	2	a1	\0
+parse	/a1~	-
+parse	/a10	1	a10
+parse	/a11	1	a11
+parse	/a12	1	a12
+parse	/a1a	1	a1a
+parse	/a2/	2	a2	\0
+parse	/a2~	-
+parse	/a20	1	a20
+parse	/a21	1	a21
+parse	/a22	1	a22
+parse	/a2a	1	a2a
+parse	/aa/	2	aa	\0
+parse	/aa~	-
+parse	/aa0	1	aa0
+parse	/aa1	1	aa1
+parse	/aa2	1	aa2
+parse	/aaa	1	aaa
+parse	/éé~a//	-
+parse	/12aa	1	12aa
+parse	/2a2a	1	2a2a
+parse	/\x2022	1	\x2022
+parse	/0~0/\x20	2	0~	\x20
+parse	//~\x20/	-
+parse	/é2/0a~0	2	é2	0a~
+parse	/\x20~\x20	-
+parse	/é002é	1	é002é
+parse	/a//10é00	3	a	\0	10é00
+parse	/12	1	12
+parse	/é~2\x20\x20aa~	-
+parse	/0é\x201	1	0é\x201
+parse	///\x202aé	3	\0	\0	\x202aé
+parse	/\x20a/0/0~\x20é	-
+parse	/\x20\x200é~\x20\x20é	-
+parse	/~~/0aa~0	-
+parse	//é120/a\x20	3	\0	é120	a\x20
+parse	/~0	1	~
+parse	/aa	1	aa
+parse	/éé\x20~é	-
+parse	/a2///\x20~0	4	a2	\0	\0	\x20~
+parse	/~\x20\x20	-
+parse	/2/	2	2	\0
+parse	/202~~1/2	-
+parse	/0~02\x20é2	1	0~2\x20é2
+parse	/12\x20~2\x20	-
+parse	/~110	1	/10
+parse	/2~~é/\x20	-
+parse	//a	2	\0	a
+parse	/a1	1	a1
+parse	/a\x20//0	3	a\x20	\0	0
+parse	/\x20~a22\x20~	-
+parse	/110\x200/~é~	-
+parse	/aa2/\x20	2	aa2	\x20
+parse	/\x20	1	\x20
+parse	/2a~\x20é/~1	-
+parse	//é0a\x20\x202\x20	2	\0	é0a\x20\x202\x20
+parse	/\x202aaa1	1	\x202aaa1
+parse	/éaa2\x20	1	éaa2\x20
+parse	/aa\x20/1~0a	2	aa\x20	1~a
+parse	/\x20aé22\x20	1	\x20aé22\x20
+parse	//00~/é\x20	-
+parse	//\x20	2	\0	\x20
+parse	/20	1	20
+parse	/2~11	1	2/1
+parse	/1é	1	1é
+parse	/a~//aa1	-
+parse	/1/	2	1	\0
+parse	/\x200~2/1é	-
+parse	/21~1	1	21/
+parse	/2a1\x20/é	2	2a1\x20	é
+parse	/1\x20/\x20	2	1\x20	\x20
+parse	/~00a/é	2	~0a	é
+parse	/~é/~~~a1	-
+parse	/é20\x20\x202/	2	é20\x20\x202	\0
+parse	/\x20a0	1	\x20a0
+parse	/aéa2a01/	2	aéa2a01	\0
+parse	//\x20éé\x2010\x20	2	\0	\x20éé\x2010\x20
+parse	/é011é~102	1	é011é/02
+parse	/2~~é/a\x20é	-
+parse	/\x20~aaa000	-
+parse	/~~é22	-
+parse	//\x20é	2	\0	\x20é
+parse	/21é2\x20\x202/	2	21é2\x20\x202	\0
+parse	/\x20é~é\x20	-
+parse	/2\x20é110	1	2\x20é110
+parse	/0~é2/é	-
+parse	/2éa\x20a~	-
+parse	/0é~/	-
+parse	/0\x20	1	0\x20
+parse	//10a	2	\0	10a
+parse	//01//10~é	-
+parse	/~\x20	-
+parse	/211/\x2020/	3	211	\x2020	\0
+parse	//10é	2	\0	10é
+parse	/~é/0a1~	-
+parse	/é10//101a	3	é10	\0	101a
+parse	/é1	1	é1
+parse	/é\x201a	1	é\x201a
+parse	/02éa2/éa	2	02éa2	éa
+parse	/\x201ééé2	1	\x201ééé2
+parse	/é/é2	2	é	é2
+parse	/1\x20é0~/a0	-
+parse	/aé\x2000/\x20\x20	2	aé\x2000	\x20\x20
+parse	/01é~21	-
+parse	/\x201aa2~2	-
+parse	/1éa0/	2	1éa0	\0
+parse	/0a0~1\x20\x202	1	0a0/\x20\x202
+parse	/\x201a	1	\x201a
+parse	/2~\x20~a~	-
+parse	////\x202~	-
+parse	/1020\x20\x200	1	1020\x20\x200
+parse	/éé2\x200/\x20	2	éé2\x200	\x20
+parse	/é1é0~~~	-
+parse	/0\x200\x20\x2000	1	0\x200\x20\x2000
+parse	/2a	1	2a
+parse	//\x201é	2	\0	\x201é
+parse	//a1a2/21/	4	\0	a1a2	21	\0
+parse	//ééa	2	\0	ééa
+parse	/1/é\x20/~0\x20~	-
+parse	/a~1/	2	a/	\0
+parse	/aa//~éaé0	-
+parse	/0a	1	0a
+parse	/~/aé/	-
+parse	/~1	1	/
+parse	/\x201\x20aa	1	\x201\x20aa
+parse	/a/000aé	2	a	000aé
+parse	/210~é2a	-
+parse	/0é2a00/2é	2	0é2a00	2é
+parse	/0\x20~/	-
+parse	/~0é~\x20	-
+parse	/\x2020é\x20\x20012	1	\x2020é\x20\x20012
+parse	//\x20~1~é1é	-
+parse	/\x20é0~	-
+parse	/a/~120	2	a	/20
+parse	/\x20aé2éa110	1	\x20aé2éa110
+parse	/é00é0\x20a\x20	1	é00é0\x20a\x20
+parse	/~\x20\x20~1	-
+parse	/a0\x20aa\x20~1a	1	a0\x20aa\x20/a
+parse	/2a/a2/~	-
+parse	/2	1	2
+parse	/00	1	00
+parse	/a/\x20\x2002	2	a	\x20\x2002
+parse	/\x20~0~//	-
+parse	/00a02\x20/a1	2	00a02\x20	a1
+parse	/02a\x20\x20	1	02a\x20\x20
+parse	/é~a/21é\x20	-
+parse	/1\x202~/2	-
+parse	/~é/~1é\x20/\x20	-
+parse	//0~1~a/~0	-
+parse	/~\x2010a0a	-
+parse	/a121	1	a121
+parse	/\x20\x200/a101	2	\x20\x200	a101
+parse	/1é210a1	1	1é210a1
+parse	/~0~1a\x20022	1	~/a\x20022
+parse	/é010/a~\x20é	-
+parse	//12éaa~a1	-
+parse	/20a~éé	-
+parse	/é~\x20é	-
+parse	/0012120\x20	1	0012120\x20
+parse	/é~	-
+parse	//1~\x20é0\x20	-
+parse	/é/	2	é	\0
+parse	/é/\x20\x201\x20	2	é	\x20\x201\x20
+parse	/ééé2é1	1	ééé2é1
+parse	/~é\x2011\x2011	-
+parse	/~1/2~é~~~	-
+parse	/12/0\x2002~2	-
+parse	/0é\x20\x201a2	1	0é\x20\x201a2
+parse	/~100	1	/00
+parse	/a2a12a\x20	1	a2a12a\x20
+parse	/aa2aa/22	2	aa2aa	22
+parse	/\x20/~~2~/	-
+parse	/2a12~~	-
+parse	/~\x202\x20a/2	-
+parse	/~2aé2\x20/01	-
+parse	/~2/\x20é\x20/a	-
+parse	/\x201	1	\x201
+parse	/é/\x20~a1\x20~~	-
+parse	/2é0é1	1	2é0é1
+parse	/0/	2	0	\0
+parse	/éa	1	éa
+parse	/\x202a\x20é/0é	2	\x202a\x20é	0é
+parse	/22	1	22
+parse	/é102é\x20202	1	é102é\x20202
+parse	/22\x20~\x20\x20~0	-
+parse	/11é\x20/0é1~	-
+parse	/112éa\x20é2~	-
+parse	/éé1~/a	-
+parse	//0~00aé2	2	\0	0~0aé2
+parse	//~a0	-
+parse	//01\x20/éé	3	\0	01\x20	éé
+parse	/~é\x20	-
+parse	/\x20/a\x20	2	\x20	a\x20
+parse	/02\x20\x20~1	1	02\x20\x20/
+parse	/~012~aéé	-
+parse	/2~/\x20	-
+parse	/~/	-
+parse	/a21é	1	a21é
+parse	/é2é1\x201/	2	é2é1\x201	\0
+parse	//a\x201\x20a\x20	2	\0	a\x201\x20a\x20
+parse	///0\x20a0	3	\0	\0	0\x20a0
+parse	/2aé/\x20aa/	3	2aé	\x20aa	\0
+parse	/\x20éa\x20~~~a	-
+parse	/a12a~2	-
+parse	/2/120/10	3	2	120	10
+parse	/é20a0é	1	é20a0é
+parse	/éé	1	éé
+parse	//1	2	\0	1
+parse	/~\x20a10\x20	-
+parse	/\x202\x20//~2é	-
+parse	/~\x200/2~	-
+parse	/aa\x2001a	1	aa\x2001a
+plane	0	8bcb737394684481c40ffb396f261a74b2b1e909dbbef8c705226dbf6a70992c
+plane	1	29fef29bb87592647dce05f5cbc1d186ad7401183306baf66fa615880541e1d7
+plane	2	7e5be1a89f53a76be5e43dd416cad9b43eba9ab7793c3333b4fcb2192aec33ab
+plane	3	cc9cf5c503dc525d42a76c900729734cef5bcc18df171bf79d1bc3809647c296
+plane	4	fb44cab59a8d0e28c1ea8267def80de255db5bf88eaee41c831628c335770004
+plane	5	be9fb7a5dcc0a7d46118794d83547c7d0c5cbcc5bfe37dc70562370d8ed66030
+plane	6	592c7424a5d72e47a3f6f49b2c873f0a772c4bda202b12e14c670e101ed60bcd
+plane	7	5976333dca5c0544f36b3f9b0e2c4c1245591ccca690a80a7af94d44b6c3a050
+plane	8	fab44a02d5ee3aa405f2c3d32f06612b4fdfdf0b111ef9e4003c83a9bad1edf0
+plane	9	0fd3d7773f08d6f0cd13fbae29136a8d9599648c422c2860b627b5afb8d4f345
+plane	A	ffe176297553a547808d1a53ce79a26fc9f331470560e326f5ee64665777d54e
+plane	B	ecd568333013c779440773a9bb2fad31dafbf66cb36689a79051f889eb8aad1a
+plane	C	d00dc6e19698ca14529b3624fd78e8d7a22bb27ed72032358d980bd2936ad593
+plane	D	75d35a6857a822c2fed4fac14e3c21406c0fd972af7d00eb50fa4f12502d1d1d
+plane	E	3e8af29063c78e25267623acd758200d09cf0ece8f01e09765bdfc21cb9b854f
+plane	F	33447ae4db761d8883266587abf9c52ec65d763cf670b5b1a897970a581f1c8d
+plane	10	928f24ac6804ae6264493efad741dfac461c3687dcb73c0b97ddc9857bd30a73

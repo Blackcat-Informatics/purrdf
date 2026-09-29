@@ -1366,3 +1366,84 @@ mod tests {
         }
     }
 }
+
+/// The frozen JSON string-body decoding vectors, replayed against the GeoJSON reader.
+#[cfg(test)]
+mod json_string_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
+
+    const STRINGS: &str = include_str!("../../lex/tests/vectors/json_string_vectors.txt");
+    const UNITS: &str = include_str!("../../lex/tests/vectors/json_unit_vectors.txt");
+
+    /// `body` (the text between the quotes) decoded, or `None` when refused.
+    fn decode(body: &str) -> Option<String> {
+        let text = format!("\"{body}\"");
+        let mut parser = super::Parser {
+            text: &text,
+            bytes: text.as_bytes(),
+            pos: 0,
+        };
+        parser.string().ok().filter(|_| parser.pos == text.len())
+    }
+
+    fn answer(body: &str) -> String {
+        decode(body).map_or_else(|| "-".to_owned(), |text| encode_str(&format!("={text}")))
+    }
+
+    /// Whether this copy is known to answer `body` differently from `expected`.
+    fn skipped(body: &str, expected: &str) -> bool {
+        let _ = (body, expected);
+        false
+    }
+
+    #[test]
+    fn string_bodies_replay_the_frozen_vectors() {
+        let file = VectorFile::parse(STRINGS).expect("json_string_vectors.txt");
+        let mut replayed = 0;
+        for record in file.records() {
+            let body = decode_str(record.fields[0]).expect("an encoded body");
+            let expected = decode_str(record.fields[1]).expect("an encoded answer");
+            if skipped(&body, &expected) {
+                continue;
+            }
+            assert_eq!(answer(&body), record.fields[1], "{body:?}");
+            replayed += 1;
+        }
+        assert!(replayed > 1000, "{replayed}");
+    }
+
+    #[test]
+    fn every_unit_and_pair_replays_the_frozen_digests() {
+        let file = VectorFile::parse(UNITS).expect("json_unit_vectors.txt");
+        for record in file.records() {
+            let upper = record.fields[1] == "upper";
+            let unit = |u: u32| {
+                if upper {
+                    format!("\\u{u:04X}")
+                } else {
+                    format!("\\u{u:04x}")
+                }
+            };
+            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
+            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
+            let answers = (first..=last).map(|value| {
+                if record.fields[0] == "unit" {
+                    answer(&unit(value))
+                } else {
+                    let offset = value - 0x1_0000;
+                    answer(&format!(
+                        "{}{}",
+                        unit(0xD800 + (offset >> 10)),
+                        unit(0xDC00 + (offset & 0x3FF))
+                    ))
+                }
+            });
+            assert_eq!(
+                answer_digest(answers),
+                record.fields[4],
+                "{:?}",
+                record.fields
+            );
+        }
+    }
+}

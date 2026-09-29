@@ -1162,3 +1162,105 @@ mod tests {
         }
     }
 }
+
+/// The frozen percent-encoding vectors, replayed against the IRI-to-URI mapping.
+#[cfg(test)]
+mod percent_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
+
+    /// Replay one vector file: `run` answers an input (`None` for a refusal),
+    /// `encode` says whether answers are encoded text rather than `=`-prefixed
+    /// decodings, and `skipped` names inputs this copy is known to answer differently.
+    fn replay(
+        vectors: &str,
+        encode: bool,
+        run: impl Fn(&str) -> Option<String>,
+        skipped: impl Fn(&str) -> bool,
+        plane_skipped: impl Fn(u32) -> bool,
+    ) {
+        let answer = |input: &str| match run(input) {
+            Some(value) if encode => encode_str(&value),
+            Some(value) => encode_str(&format!("={value}")),
+            None => "-".to_owned(),
+        };
+        let file = VectorFile::parse(vectors).expect("a percent vector file");
+        let mut replayed = 0;
+        for record in file.records() {
+            if record.fields[0] == "plane" {
+                let plane = u32::from_str_radix(record.fields[1], 16).expect("hex");
+                if plane_skipped(plane) {
+                    continue;
+                }
+                let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
+                    .filter_map(char::from_u32)
+                    .filter(|c| !skipped(&c.to_string()))
+                    .map(|c| answer(&c.to_string()));
+                assert_eq!(answer_digest(answers), record.fields[2], "plane {plane:X}");
+            } else {
+                let input = decode_str(record.fields[1]).expect("an encoded input");
+                if skipped(&input) {
+                    continue;
+                }
+                assert_eq!(answer(&input), record.fields[2], "{input:?}");
+            }
+            replayed += 1;
+        }
+        assert!(replayed > 400, "{replayed}");
+    }
+
+    #[test]
+    fn non_ascii_replays_the_frozen_vectors() {
+        replay(
+            include_str!("../../lex/tests/vectors/percent_non_ascii_vectors.txt"),
+            true,
+            |input| {
+                let mut out = String::new();
+                super::percent_encode_non_ascii(input, &mut out);
+                Some(out)
+            },
+            |input| {
+                let _ = input;
+                false
+            },
+            |plane| {
+                let _ = plane;
+                false
+            },
+        );
+    }
+}
+
+/// The frozen first-needle vectors, replayed against the IRI component splitter's delimiter scan.
+#[cfg(test)]
+mod find_byte_frozen_vectors {
+    use purrdf_testkit::vectors::{VectorFile, decode_bytes};
+
+    const FIND: &str = include_str!("../../lex/tests/vectors/find_byte_vectors.txt");
+
+    fn find(needles: &[u8], hay: &[u8]) -> Option<usize> {
+        match needles {
+            [a] => super::find_first_byte(hay, *a),
+            [a, b] => super::find_first_of(hay, [*a, *b]),
+            [a, b, c] => super::find_first_of(hay, [*a, *b, *c]),
+            [a, b, c, d] => super::find_first_of(hay, [*a, *b, *c, *d]),
+            _ => unreachable!("one to four needles"),
+        }
+    }
+
+    #[test]
+    fn needle_scans_replay_the_frozen_vectors() {
+        let file = VectorFile::parse(FIND).expect("find_byte_vectors.txt");
+        let mut replayed = 0;
+        for record in file.records() {
+            let needles = decode_bytes(record.fields[0]).expect("needles");
+            if ![1, 2, 3, 4].contains(&needles.len()) {
+                continue;
+            }
+            let hay = decode_bytes(record.fields[1]).expect("haystack");
+            let answer = find(&needles, &hay).map_or_else(|| "-".to_owned(), |at| at.to_string());
+            assert_eq!(answer, record.fields[2], "{needles:?} in {hay:?}");
+            replayed += 1;
+        }
+        assert!(replayed > 1000, "{replayed}");
+    }
+}

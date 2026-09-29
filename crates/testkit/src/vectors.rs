@@ -537,3 +537,31 @@ fn decode(field: &str, encoding: Encoding) -> Result<Vec<u8>, VectorError> {
 pub fn sha256_hex(data: &[u8]) -> String {
     purrdf_hash::hex::encode(&Sha256::digest(data))
 }
+
+/// The lowercase hex SHA-256 of `answers`, each followed by `\n`: one record's
+/// summary of an input set too large to list line by line, such as every
+/// Unicode scalar value.
+///
+/// A replay regenerates the same inputs in the same order, computes its own
+/// answers and compares this one field, so a disagreement anywhere in the set
+/// fails the record. Each answer should already be in the record's field
+/// encoding (see [`encode_str`]), so an answer holding `\n` cannot run into the
+/// next one.
+///
+/// ```
+/// use purrdf_testkit::vectors::{answer_digest, sha256_hex};
+///
+/// assert_eq!(answer_digest(["a", "b"]), sha256_hex(b"a\nb\n"));
+/// ```
+pub fn answer_digest<I, S>(answers: I) -> String
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    let mut hasher = Sha256::new();
+    for answer in answers {
+        hasher.update(answer.as_ref().as_bytes());
+        hasher.update(b"\n");
+    }
+    purrdf_hash::hex::encode(&hasher.finalize())
+}
