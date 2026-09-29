@@ -1,0 +1,368 @@
+# SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+# SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+# The helpers ledger: one row per job — a piece of functionality the workspace
+# implements exactly once — naming its single home, what it replaces, and the
+# sanctioned second implementations. Read by crates/helper-census and by
+# scripts/check-shared-helpers.py (in `make check`); the IRI resolver gate
+# (scripts/check-iri-resolver-singleton.py) reads its exemptions from here too.
+#
+# [[job]] — every key is required; an empty array states "none".
+#   id                = the row id, used by `--census <id>` and `--count <id>`.
+#   summary           = what the job is, in one line.
+#   home              = the single implementation, `crate::path::item`; it must
+#                       resolve (through re-exports) to a defined item. The home
+#                       CRATE is the job's home: a forbidden match elsewhere is a
+#                       copy, and copies inside the home crate are the isomorphic
+#                       group rule's business.
+#   entry_points      = further public paths to the same implementation (aliases,
+#                       re-exports, thin shims); each must resolve.
+#   spec              = the specification or contract the home implements.
+#   vectors           = repo-relative frozen vector files; each must exist.
+#   bench             = `package:bench-target` ids; each must be a bench target.
+#   sites             = scripts/simd-asm-manifest.toml site ids; every symbol a
+#                       site measures must lie in the home crate.
+#   replaces_external = external packages the home replaces; each must be banned
+#                       in scripts/check-banned-deps.py.
+#   enforced          = true: a forbidden match outside the home fails the gate.
+#                       false: the job still has copies; --census and --count
+#                       report them. A job with no copies left must be enforced.
+#
+# [job.forbidden] — what may not appear outside the home crate.
+#   constants    = integer literals, any spelling, compared by value
+#                  (`0xcbf2_9ce4_8422_2325` is its decimal spelling too).
+#   fingerprints = helper-census ids: `body:<hex>` (a structural body shape),
+#                  `shim:<hex>` (a forwarder shape), `table:hex-lower` or
+#                  `table:hex-upper` (a hex-digit table), or a census rule over
+#                  every first-party file, tests and benches included
+#                  (`rule:std-default-hasher`: a std HashMap/HashSet left on
+#                  its random default hasher). A body or shim fingerprint must
+#                  still match some unit.
+#   names        = regular expressions over function names.
+#
+# [[job.variant]] — a sanctioned second implementation; each is re-checked on
+# every run, and one that no longer matches anything is STALE and fails.
+#   symbol    = the variant, `crate::path::item`; must resolve, in `file`.
+#   file      = the repo-relative file that defines it.
+#   detector  = what it is exempt from: `isomorphic` (it may share a body shape
+#               with the home), `forbidden` (it may hold a forbidden pattern),
+#               or a rule id of the IRI resolver gate.
+#   criterion = why it may exist: `a` (a specification or conformance suite
+#               requires the difference), `b` (a tangible benefit its
+#               documentation states), `c` (a measured, significant speedup that
+#               cannot be centralised), or `layering` (its callers cannot reach
+#               the home).
+#   anchor    = the documented item that states the reason; it must resolve and
+#               carry documentation.
+#   reason    = the reason, in one or two sentences.
+
+[[job]]
+id = "iri-reference-resolution"
+summary = "RFC 3986 reference resolution: the base-precedence chain and the reference arithmetic"
+home = "purrdf_iri::BaseScope"
+entry_points = ["purrdf_iri::Iri::resolve", "purrdf_core::BaseIri", "purrdf_core::parse_iri"]
+spec = "RFC 3986 section 5.1 (establishing a base) and section 5.2 (relative resolution), over RFC 3987 IRIs"
+vectors = []
+bench = ["purrdf-iri:parse"]
+sites = []
+replaces_external = ["fluent-uri", "oxiri", "url"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['remove_dot_segments$', 'merge_paths?$']
+
+[[job.variant]]
+symbol = "purrdf_gts::files::validate_symlink_target"
+file = "crates/gts/src/files.rs"
+detector = "dot-segment-loop"
+criterion = "b"
+anchor = "purrdf_gts::files::validate_symlink_target"
+reason = "Archive symlink targets are member paths, not IRI references: an escape above the extraction root must be refused, where RFC 3986 dot-segment removal clamps at the root and would turn a rejected zip-slip into a silently rewritten path."
+
+[[job.variant]]
+symbol = "purrdf_rdf::native_codecs::okf::reader::resolve_link_path"
+file = "crates/rdf/src/native_codecs/okf/reader.rs"
+detector = "dot-segment-loop"
+criterion = "b"
+anchor = "purrdf_rdf::native_codecs::okf::reader::resolve_link_path"
+reason = "OKF bundle-relative Markdown link targets are member paths inside the bundle's file tree; a link that climbs above the bundle root is refused, which RFC 3986 dot-segment removal would clamp instead."
+
+[[job.variant]]
+symbol = "purrdf_rdf::projections::research_object::config::ResearchObjectIdentity::resolve_relative"
+file = "crates/rdf/src/projections/research_object/config.rs"
+detector = "resolver-fn"
+criterion = "b"
+anchor = "purrdf_rdf::projections::research_object::config::ResearchObjectIdentity::resolve_relative"
+reason = "Not a resolver: it first refuses every input a resolver would have to reason about (absolute, dot-segment, query, fragment, backslash) and then concatenates under a caller-owned base, so nothing of RFC 3986 section 5.2 is re-implemented."
+
+[[job]]
+id = "fixed-key-table-hash"
+summary = "The fixed-key table hasher behind every workspace hash map and set"
+home = "purrdf_hash::fixed::FixedState"
+entry_points = [
+    "purrdf_core::FastHasher",
+    "purrdf_core::FastMap",
+    "purrdf_core::FastSet",
+]
+spec = "the frozen FixedHasher self-vectors: a fixed compile-time key schedule, build-specific and never persisted"
+vectors = [
+    "crates/hash/tests/vectors/fixed_hasher_aes_vectors.txt",
+    "crates/hash/tests/vectors/fixed_hasher_portable_vectors.txt",
+]
+bench = ["purrdf-hash:hasher"]
+sites = ["hash.fixed-compress"]
+replaces_external = ["ahash", "foldhash"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "fixed-hasher-everywhere"
+summary = "No std hash map or set is left on its per-process random default hasher, in shipping code, tests or benches"
+home = "purrdf_hash::fixed::FixedState"
+entry_points = ["purrdf_core::FastMap", "purrdf_core::FastSet"]
+spec = "byte determinism: a map's iteration order must not vary from one process to the next"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:std-default-hasher"]
+names = []
+
+[[job]]
+id = "blake3"
+summary = "BLAKE3-256, one-shot and streaming, with caller-scheduled subtrees"
+home = "purrdf_hash::blake3::hash"
+entry_points = ["purrdf_hash::blake3::Streaming", "purrdf_hash::blake3::Hash"]
+spec = "the BLAKE3 specification (O'Connor, Aumasson, Neves, Wilcox-O'Hearn), unkeyed hash mode"
+vectors = [
+    "crates/hash/tests/vectors/blake3_differential_vectors.txt",
+    "crates/hash/tests/vectors/blake3_random_vectors.txt",
+]
+bench = ["purrdf-hash:digests"]
+sites = ["blake3.hash-many-dispatch", "blake3.single-block"]
+replaces_external = ["blake3", "arrayref", "arrayvec", "constant_time_eq"]
+enforced = true
+
+[job.forbidden]
+constants = ["0x6a09_e667", "0xbb67_ae85", "0x5be0_cd19"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "md5"
+summary = "MD5 message digest, one-shot and streaming"
+home = "purrdf_hash::md5::Md5"
+entry_points = []
+spec = "RFC 1321"
+vectors = ["crates/hash/tests/vectors/md5_differential_vectors.txt"]
+bench = ["purrdf-hash:digests"]
+sites = []
+replaces_external = ["md-5"]
+enforced = true
+
+[job.forbidden]
+constants = ["0xd76a_a478", "0xe8c7_b756"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "sha1"
+summary = "SHA-1 message digest, one-shot and streaming, with the x86 SHA and Armv8 SHA1 instruction paths"
+home = "purrdf_hash::sha1::Sha1"
+entry_points = []
+spec = "FIPS 180-4 section 6.1"
+vectors = ["crates/hash/tests/vectors/sha1_differential_vectors.txt"]
+bench = ["purrdf-hash:digests"]
+sites = ["hash.sha1-block"]
+replaces_external = ["sha1"]
+enforced = true
+
+[job.forbidden]
+constants = ["0x5a82_7999", "0x6ed9_eba1", "0x8f1b_bcdc", "0xca62_c1d6", "0xc3d2_e1f0"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "sha3"
+summary = "SHA3-224/256/384/512 and the Keccak-f[1600] permutation"
+home = "purrdf_hash::sha3::Sha3"
+entry_points = ["purrdf_hash::sha3::keccak_f1600"]
+spec = "FIPS 202"
+vectors = [
+    "crates/hash/tests/vectors/sha3_224_differential_vectors.txt",
+    "crates/hash/tests/vectors/sha3_256_differential_vectors.txt",
+    "crates/hash/tests/vectors/sha3_384_differential_vectors.txt",
+    "crates/hash/tests/vectors/sha3_512_differential_vectors.txt",
+]
+bench = ["purrdf-hash:digests"]
+sites = []
+replaces_external = ["sha3", "keccak"]
+enforced = true
+
+[job.forbidden]
+constants = ["0x8000_0000_8000_8008", "0x8000_0000_0000_808a"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "crc32"
+summary = "CRC-32/ISO-HDLC with the pclmulqdq and Armv8 CRC32 instruction paths"
+home = "purrdf_hash::crc32::Crc32"
+entry_points = []
+spec = "CRC-32/ISO-HDLC (ISO 3309, ITU-T V.42): reflected polynomial 0x04C11DB7, initial and final XOR 0xFFFFFFFF"
+vectors = ["crates/hash/tests/vectors/crc32_differential_vectors.txt"]
+bench = ["purrdf-hash:digests"]
+sites = ["hash.crc32-update"]
+replaces_external = ["crc32fast"]
+enforced = true
+
+[job.forbidden]
+constants = ["0xedb8_8320", "0x1_04c1_1db7"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "deflate-gzip"
+summary = "DEFLATE and gzip: streaming decoder and deterministic encoder"
+home = "purrdf_deflate::Inflater"
+entry_points = ["purrdf_deflate::Deflater", "purrdf_deflate::GzipDecoder", "purrdf_deflate::GzipWriter"]
+spec = "RFC 1951 (DEFLATE) and RFC 1952 (gzip)"
+vectors = []
+bench = ["purrdf-deflate:gzip"]
+sites = ["deflate.match-copy", "deflate.match-length", "deflate.hash-windows"]
+replaces_external = ["flate2", "miniz_oxide", "adler2", "simd-adler32"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "csvw-dialect-csv"
+summary = "The W3C CSVW dialect CSV reader and writer"
+home = "purrdf_core::csv::Reader"
+entry_points = ["purrdf_core::csv::Writer", "purrdf_core::csv::Dialect", "purrdf_core::csv::read_table"]
+spec = "W3C Metadata Vocabulary for Tabular Data, section 5.9 (dialect descriptions), over RFC 4180"
+vectors = []
+bench = []
+sites = ["core.csv-field"]
+replaces_external = ["csv", "csv-core"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "strongly-connected-components"
+summary = "Iterative Tarjan strongly connected components over an adjacency list"
+home = "purrdf_core::graph::tarjan_scc"
+entry_points = []
+spec = "Tarjan 1972, iterative formulation: components in reverse topological order"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["petgraph"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "small-vector"
+summary = "The inline small-vector type"
+home = "purrdf_core::SmallVec"
+entry_points = []
+spec = "the SmallVec API contract: inline storage up to the array's capacity, then a heap spill"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["smallvec"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "lowercase-hex"
+summary = "Lowercase base16 rendering of byte strings"
+home = "purrdf_hash::hex::Lower"
+entry_points = ["purrdf_core::hex::lower"]
+spec = "RFC 4648 section 8 (base16), lowercase alphabet"
+vectors = []
+bench = ["purrdf-hash:digests"]
+sites = ["hash.hex-encode"]
+replaces_external = ["hex"]
+enforced = false
+
+[job.forbidden]
+constants = []
+fingerprints = ["table:hex-lower"]
+names = []
+
+[[job]]
+id = "json-schema-validation"
+summary = "JSON Schema validation, drafts 2020-12, 2019-09 and 07"
+home = "purrdf_jsonschema::Schema"
+entry_points = ["purrdf_jsonschema::Registry"]
+spec = "JSON Schema Core and Validation, drafts 2020-12, 2019-09 and 07, checked by the JSON-Schema-Test-Suite"
+vectors = []
+bench = ["purrdf-jsonschema:validate"]
+sites = []
+replaces_external = ["boon", "appendlist"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "byte-exact-goldens"
+summary = "Byte-exact checked-in golden files for tests"
+home = "purrdf_testkit::assert_golden"
+entry_points = []
+spec = "the testkit golden contract: the checked-in bytes are the expectation; a mismatch fails and names the file"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["insta", "similar", "console"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []
+
+[[job]]
+id = "test-temporary-paths"
+summary = "Temporary directories and files for tests, under the target directory"
+home = "purrdf_testkit::TempDir"
+entry_points = ["purrdf_testkit::NamedTempFile", "purrdf_testkit::temp_dir", "purrdf_testkit::temp_file"]
+spec = "the testkit temporary-path contract: created under the target directory, removed on drop"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["tempfile"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = []

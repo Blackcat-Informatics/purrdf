@@ -69,6 +69,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
 | `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, and the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property); depends on no `purrdf-*` crate (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
+| `helper-census` (`crates/helper-census`) | The structural helper census: normalises every shipping function body (local names renamed, literals abstracted) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml` (`publish = false`, host tool) |
 
 ## 2. Hard constraints (violating these fails CI or review)
 
@@ -82,6 +83,18 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   `purrdf-iri`, `purrdf-xsd`, `purrdf-events`, and `purrdf-hash` must keep
   **zero runtime dependencies**, and `purrdf-deflate`'s only runtime
   dependency is `purrdf-hash` (`make rdf-core-hygiene` checks both).
+* **One home per job.** `helpers-ledger.toml` names the single implementation
+  of each job the workspace provides once, what it replaces, and each sanctioned
+  second implementation with its criterion and documented reason;
+  `scripts/check-shared-helpers.py` (in `make check`, or `make helpers-hygiene`)
+  runs `crates/helper-census` and fails on an unresolvable home, a forbidden copy
+  outside an enforced job's home, a stale exemption, or a `#[path]` include that
+  leaves its crate. `layers.toml` declares which first-party crate may depend on
+  which, with `purrdf-hash` the root every crate may use;
+  `scripts/check-layers.py` (in `make check`, or `make layer-hygiene`) fails on
+  any first-party normal edge it does not allow and on any row the resolved graph
+  no longer matches, and `--home-for A B …` names the common dependency
+  closest to the given callers — where one implementation they share belongs.
 * **Terminal ring-fence: a scanner's character classes are exact, in both
   directions.** They decide **token boundaries**, not merely membership, so
   substituting a Unicode property for a production's enumerated set does not
@@ -111,7 +124,11 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   If your change alters emitted bytes, you must update the affected goldens and
   say why in the PR. Never introduce iteration-order, time, or RNG dependence
   into output paths (hashers are the fixed-key `purrdf_hash::fixed::FixedHasher`
-  for this reason).
+  for this reason). No `std` `HashMap`/`HashSet` is left on its random default hasher
+  anywhere, tests and benches included: clippy bans the `RandomState` types and
+  constructors, and the `fixed-hasher-everywhere` job in `helpers-ledger.toml`
+  refuses every other spelling (`HashMap<K, V>`, `HashMap::default()`, `from`,
+  `collect`) — name `purrdf_core::FastMap`/`FastSet` or a `FixedState` map.
 * **Conformance corpora are the contract**: W3C SPARQL 1.1
   (`crates/sparql-conformance`), the W3C SHACL suite (`vectors/shacl/`), the
   shexTest v2.1.0 suite (`vectors/shexTest/`), the first-party SHACL corpus
@@ -260,10 +277,11 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 Tag-driven trusted publishing: `rust-v*` → crates.io (29 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
-is single-sourced in `[workspace.package]`. Nine members never reach
+is single-sourced in `[workspace.package]`. Ten members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`, `purrdf-cli`,
 `purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`,
-`purrdf-testkit`, `wasm-link`, and `purrdf-python` (PyPI via maturin instead).
+`purrdf-testkit`, `wasm-link`, `helper-census`, and `purrdf-python` (PyPI via
+maturin instead).
 `purrdf-alloc-probe` and `purrdf-testkit` are dev-dependencies of published
 crates, so their root `[workspace.dependencies]` entries are path-only with
 **no `version`** — cargo then strips them from the packaged manifest, which is

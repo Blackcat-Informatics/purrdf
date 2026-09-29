@@ -21173,7 +21173,7 @@ msgstr ""
 
 #: src/project/releases.md:75
 msgid ""
-"Nine workspace members are deliberately never published to crates.io: "
+"Ten workspace members are deliberately never published to crates.io: "
 "`purrdf-capi` (built via cargo-c, distributed as `libpurrdf`), `purrdf-"
 "sparql-conformance` (the test harness), `purrdf-cli` (the `purrdf` binary), "
 "`purrdf-envelope-probe` (the micro-hardware envelope capture tool), `purrdf-"
@@ -21181,21 +21181,23 @@ msgid ""
 "allocator the allocation tests and benches measure with), `purrdf-testkit` "
 "(the shared test support: goldens, temporary paths, frozen vectors and the "
 "`harness = false` runner), `wasm-link` (the wasm package's post-link step), "
-"and `purrdf-python` (the extension crate, which ships to PyPI via maturin "
+"`helper-census` (the structural census behind the shared-helpers gate), and "
+"`purrdf-python` (the extension crate, which ships to PyPI via maturin "
 "instead)."
 msgstr ""
-"有九个工作区成员有意从不发布到 crates.io：`purrdf-capi`（经由 cargo-c 构建，"
+"有十个工作区成员有意从不发布到 crates.io：`purrdf-capi`（经由 cargo-c 构建，"
 "以 `libpurrdf` 的形式分发）、`purrdf-sparql-conformance`（测试框架）、"
 "`purrdf-cli`（`purrdf` 二进制文件）、`purrdf-envelope-probe`（微型硬件包络采"
 "集工具）、`purrdf-bench`（基准测试工具）、`purrdf-alloc-probe`（分配测试与基"
 "准测试进行测量时所共用的计数分配器）、`purrdf-testkit`（共用测试支持：黄金文"
 "件、临时路径、冻结向量与 `harness = false` 运行器）、`wasm-link`（wasm 包的链"
-"接后处理工具），以及 `purrdf-python`（扩展 crate，改为经由 maturin 发布到 "
+"接后处理工具）、`helper-census`（共享辅助函数门禁背后的结构普查工具），以及 "
+"`purrdf-python`（扩展 crate，改为经由 maturin 发布到 "
 "PyPI）。"
 
-#: src/project/releases.md:85
+#: src/project/releases.md:86
 msgid ""
-"`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the nine that "
+"`purrdf-alloc-probe` and `purrdf-testkit` are the only two of the ten that "
 "published crates depend on, and they reach them solely through `[dev-"
 "dependencies]`. Their root `[workspace.dependencies]` entries are therefore "
 "path-only, with no `version` key, which is what makes cargo drop them from "
@@ -21203,54 +21205,54 @@ msgid ""
 "of a published one, and `cargo publish`'s verification step resolves dev-"
 "dependencies too."
 msgstr ""
-"这九个成员中，只有 `purrdf-alloc-probe` 和 `purrdf-testkit` 被已发布的 crate "
+"这十个成员中，只有 `purrdf-alloc-probe` 和 `purrdf-testkit` 被已发布的 crate "
 "所依赖，并且仅通过 `[dev-dependencies]` 引入。因此，它们在根 "
 "`[workspace.dependencies]` 中的条目只有路径、没有 `version` 键，这正是 cargo "
 "将它们从打包后的清单中去除的原因：未发布的 crate 不能成为已发布 crate 的带版"
 "本依赖，而 `cargo publish` 的验证步骤也会解析 dev-dependencies。"
 
-#: src/project/releases.md:93
+#: src/project/releases.md:94
 msgid "Cutting a release"
 msgstr "切出一个发布"
 
-#: src/project/releases.md:95
+#: src/project/releases.md:96
 msgid ""
 "The coherent flow from `main` uses the `make` helpers so the three lanes can "
 "never drift:"
 msgstr ""
 "从 `main` 出发的连贯流程使用 `make` 辅助目标，因此三条通道永远不会出现偏差："
 
-#: src/project/releases.md:99
+#: src/project/releases.md:100
 msgid ""
 "# 1. Bump all three version sources in lockstep (fails unless they end up "
 "equal).\n"
 msgstr "# 1. 同步递增全部三个版本来源（除非最终三者相等，否则失败）。\n"
 
-#: src/project/releases.md:101
+#: src/project/releases.md:102
 msgid ""
 "# 2. Regenerate the committed C-ABI header from the bumped crate version.\n"
 msgstr "# 2. 依据递增后的 crate 版本重新生成已提交的 C-ABI 头文件。\n"
 
-#: src/project/releases.md:104
+#: src/project/releases.md:105
 msgid "# 3. Regenerate the changelog from the conventional-commit history.\n"
 msgstr "# 3. 依据约定式提交（conventional commit）历史重新生成变更日志。\n"
 
-#: src/project/releases.md:107
+#: src/project/releases.md:108
 msgid ""
 "# 4. Review, then commit the release bump, generated header, and changelog.\n"
 msgstr "# 4. 审阅后，提交版本递增、生成的头文件与变更日志。\n"
 
-#: src/project/releases.md:109
+#: src/project/releases.md:110
 msgid "\"chore(release): 0.2.2\""
 msgstr "\"chore(release): 0.2.2\""
 
-#: src/project/releases.md:110
+#: src/project/releases.md:111
 msgid ""
 "# 5. From an up-to-date main, run every release gate, then push all three "
 "tags.\n"
 msgstr "# 5. 从最新的 main 出发，运行每一道发布关卡，然后推送全部三个标签。\n"
 
-#: src/project/releases.md:115
+#: src/project/releases.md:116
 msgid ""
 "`make release-tags` refuses to run unless the working tree is clean, the "
 "branch is `main` and synchronized with `origin/main`, the version check "
@@ -21273,11 +21275,11 @@ msgstr ""
 "预检通过之前，不会创建任何标签。每个标签触发各自的通道，而 cargo 通道还会额外"
 "发布一个依据已提交的 `CHANGELOG.md` 构建的 GitHub Release。"
 
-#: src/project/releases.md:127
+#: src/project/releases.md:128
 msgid "Citing PurRDF"
 msgstr "引用 PurRDF"
 
-#: src/project/releases.md:129
+#: src/project/releases.md:130
 msgid ""
 "Releases carry a DOI; if you use PurRDF in research, please cite it — see "
 "[`CITATION.cff`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"

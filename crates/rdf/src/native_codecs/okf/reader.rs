@@ -905,6 +905,14 @@ fn unescape_markdown(value: &str) -> String {
     out
 }
 
+/// The bundle-relative Markdown document a link target names, or `None` for a
+/// link that is not a bundle-relative `.md` path (a fragment, an absolute path, an
+/// IRI with a scheme, or another file type).
+///
+/// Targets are member paths inside the bundle's file tree, not IRI references, so
+/// this is not RFC 3986 reference resolution: dot-segment removal there clamps `..`
+/// at the root, which would quietly retarget an escaping link at a document inside
+/// the bundle. Here a `..` that climbs above the bundle root is refused.
 pub(super) fn resolve_link_path(
     source_path: &str,
     target: &str,

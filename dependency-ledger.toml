@@ -476,7 +476,7 @@ metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false
 
 [packages.proc-macro2]
 category = "oracle"
-reason = "token substrate for the syn-based source census tests"
+reason = "token substrate for the syn-based source census tests and the unpublished helper-census tool"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.pyo3]
@@ -621,7 +621,7 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 
 [packages.syn]
 category = "oracle"
-reason = "Rust source parser for the source-census tests in rdf and shapes"
+reason = "Rust source parser for the source-census tests in rdf and shapes and the unpublished helper-census tool"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.target-lexicon]

@@ -146,6 +146,21 @@ jobs:
       - name: Check no replaced dependency re-entered the lock
         run: python3 scripts/check-banned-deps.py
 
+      - name: Check the layering gate can still fail
+        run: python3 scripts/check-layers.py --self-test
+
+      - name: Check every first-party crate edge is one layers.toml allows
+        run: python3 scripts/check-layers.py
+
+      - name: Check the helper census can still find a copy
+        run: cargo run -q --locked -p helper-census -- --self-test
+
+      - name: Check the shared-helpers gate can still fail
+        run: python3 scripts/check-shared-helpers.py --self-test
+
+      - name: Check helpers-ledger.toml holds (one home per job, no stale exemption)
+        run: python3 scripts/check-shared-helpers.py
+
       - name: Check vendored-corpus byte-freeze
         run: python3 scripts/check-corpus-frozen.py
 

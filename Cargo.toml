@@ -17,6 +17,7 @@ members = [
     "crates/geo",
     "crates/gts",
     "crates/hash",
+    "crates/helper-census",
     "crates/hnsw",
     "crates/iri",
     "crates/json",
@@ -106,8 +107,11 @@ purrdf-validate = { path = "crates/validate", version = "2.0.2" }
 purrdf-xsd = { path = "crates/xsd", version = "2.0.2" }
 
 # --- external crates ---
-# Test-only structural source census; both already occur in the resolved graph.
-proc-macro2 = "1"
+# The structural source censuses (the rdf and shapes census tests and the
+# unpublished helper-census binary); both already occur in the resolved graph.
+# `span-locations` gives the helper census line numbers and the byte ranges it
+# re-lexes function bodies from; it changes nothing inside a real proc macro.
+proc-macro2 = { version = "1", features = ["span-locations"] }
 syn = { version = "2", features = ["full", "visit"] }
 aes-gcm = { version = "0.11", default-features = false, features = ["aes", "alloc"] }
 ciborium = "0.2"

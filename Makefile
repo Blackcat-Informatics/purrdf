@@ -48,7 +48,7 @@ $(error unable to resolve CARGO_TARGET_DIR; set it explicitly or ensure cargo me
 endif
 CAPI_HEADER := crates/rdf-capi/include/purrdf.h
 
-.PHONY: help doctor metadata fmt check test-shard geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
+.PHONY: help doctor metadata fmt check test-shard geo-determinism hnsw-determinism simd-asm book book-samples book-pot book-po-update book-zh check-i18n check-issue-refs check-brand-casing check-spec-attribution changelog bump release-tags test doc bench bench-prepared-reuse bench-python scale-corpus columnar-oracle csvw-conformance csvw-oracle obographs-oracle projection-oracles pydantic-oracle linkml-oracle typescript-oracle graphql-oracle jsonschema-pattern-oracle pytest conformance iri-resolver-hygiene layer-hygiene helpers-hygiene serializer-rewind-hygiene terminal-hygiene thread-local-hygiene build-profile-hygiene rdf-core-hygiene python-binding-hygiene wasm wasm-test wasm-pkg wasm-pkg-test wasm-pkg-bench playground playground-smoke \
 	capi-build capi-header capi-check capi-install test-gts-selected-blobs lint-gts-selected-blobs doc-gts-selected-blobs node-prerequisite binaryen-prerequisite cnschema-probe benchmark-acquire lubm watdiv miri
 
 # The changelog generator is pinned so the committed CHANGELOG.md and the notes
@@ -112,6 +112,11 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/fetch-locked-deps.py
 	python3 scripts/check-banned-deps.py --self-test
 	python3 scripts/check-banned-deps.py
+	python3 scripts/check-layers.py --self-test
+	python3 scripts/check-layers.py
+	cargo run -q --locked -p helper-census -- --self-test
+	python3 scripts/check-shared-helpers.py --self-test
+	python3 scripts/check-shared-helpers.py
 	python3 scripts/check-corpus-frozen.py
 	bash scripts/check-generated.sh
 	python3 scripts/check-issue-refs.py
@@ -438,6 +443,15 @@ conformance: ## Umbrella conformance matrix: native Rust W3C suites + the Python
 
 iri-resolver-hygiene: ## Prove the resolver ring-fence: RFC 3986 reference resolution only in crates/iri/src.
 	python3 scripts/check-iri-resolver-singleton.py
+
+layer-hygiene: ## Prove every first-party crate edge is one layers.toml allows, and the table is exact.
+	python3 scripts/check-layers.py --self-test
+	python3 scripts/check-layers.py
+
+helpers-hygiene: ## Prove helpers-ledger.toml holds: one home per job, no forbidden copy, no stale exemption, no cross-crate #[path].
+	cargo run -q --locked -p helper-census -- --self-test
+	python3 scripts/check-shared-helpers.py --self-test
+	python3 scripts/check-shared-helpers.py
 
 serializer-rewind-hygiene: ## Prove no serializer takes back output it already produced.
 	python3 scripts/check-serializer-rewinds.py --self-test

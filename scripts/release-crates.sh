@@ -14,7 +14,7 @@
 #
 # `purrdf-python`, `purrdf-cli`, `purrdf-capi`, `purrdf-sparql-conformance`,
 # `purrdf-envelope-probe`, `purrdf-bench`, `purrdf-alloc-probe`,
-# `purrdf-testkit` and `wasm-link`
+# `purrdf-testkit`, `wasm-link` and `helper-census`
 # are deliberately NOT here — see docs/RELEASE.md.
 #
 # `purrdf-alloc-probe` and `purrdf-testkit` are the ones of those that published

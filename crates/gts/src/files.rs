@@ -1692,6 +1692,15 @@ fn prepare_create_node_target(target: &Path, archive_path: &str) -> Result<(), S
     }
 }
 
+/// Refuse a symlink whose target, read relative to the link's own directory,
+/// leaves the extraction root.
+///
+/// Targets are archive member paths, not IRI references, so this is not RFC 3986
+/// reference resolution: dot-segment removal there clamps `..` at the root, which
+/// would silently rewrite an escaping target into one inside the tree. Here a `..`
+/// that would climb above the root is refused, together with absolute,
+/// drive-relative and backslash-separated targets, so a hostile archive cannot
+/// plant a link that points outside the destination.
 fn validate_symlink_target(archive_path: &str, link_target: &str) -> Result<(), String> {
     if link_target.is_empty() {
         return Err(format!("symlink entry {archive_path} needs linkTarget"));
