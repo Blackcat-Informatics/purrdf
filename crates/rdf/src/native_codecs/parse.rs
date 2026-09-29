@@ -910,17 +910,15 @@ fn parse_gts_direction(
     value: Option<&str>,
     language: Option<&str>,
 ) -> Result<Option<RdfTextDirection>, RdfDiagnostic> {
-    let direction = match value {
-        None => return Ok(None),
-        Some("ltr") => RdfTextDirection::Ltr,
-        Some("rtl") => RdfTextDirection::Rtl,
-        Some(other) => {
-            return Err(RdfDiagnostic::error(
-                "native-codec-invalid-direction",
-                format!("unrecognized GTS literal base direction {other:?}"),
-            ));
-        }
+    let Some(value) = value else {
+        return Ok(None);
     };
+    let direction = RdfTextDirection::from_str_token(value).ok_or_else(|| {
+        RdfDiagnostic::error(
+            "native-codec-invalid-direction",
+            format!("unrecognized GTS literal base direction {value:?}"),
+        )
+    })?;
     if language.is_none_or(str::is_empty) {
         return Err(RdfDiagnostic::error(
             "native-codec-direction-without-language",

@@ -56,17 +56,12 @@ use purrdf_core::{RdfTextDirection, TermValue};
 use crate::fusion_stream::{CounterReading, StratumResolution};
 use crate::iri::Iri;
 
-/// `xsd:string`, the datatype a plain literal carries in the kernel's term
-/// model. Spelled here because the kernel's own constant is crate-private; it is
-/// the RDF specification's IRI, not vocabulary this layer mints.
-pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-
-/// `rdf:langString`, the datatype a language-tagged literal carries.
-pub(crate) const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-
-/// `rdf:dirLangString`, the datatype a directional language-tagged literal
-/// carries (RDF 1.2).
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+// `xsd:string` is the datatype a plain literal carries in the kernel's term
+// model, and `rdf:langString` the datatype of a language-tagged one.
+pub(crate) use purrdf_core::datatype::XSD_STRING;
+#[cfg(test)]
+use purrdf_core::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+pub(crate) use purrdf_core::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 
 /// A term value that has no SPARQL constant form.
 ///
@@ -620,13 +615,14 @@ impl<'a> Cursor<'a> {
         }
         let raw = &self.text[start..self.position];
         let (tag, direction) = match raw.rsplit_once("--") {
-            Some((tag, "ltr")) => (tag, Some(RdfTextDirection::Ltr)),
-            Some((tag, "rtl")) => (tag, Some(RdfTextDirection::Rtl)),
-            Some((_, other)) => {
-                return Err(format!(
-                    "invalid base direction `--{other}`: it must be exactly `ltr` or `rtl`"
-                ));
-            }
+            Some((tag, token)) => match RdfTextDirection::from_str_token(token) {
+                Some(direction) => (tag, Some(direction)),
+                None => {
+                    return Err(format!(
+                        "invalid base direction `--{token}`: it must be exactly `ltr` or `rtl`"
+                    ));
+                }
+            },
             None => (raw, None),
         };
         if !is_langtag(tag) {

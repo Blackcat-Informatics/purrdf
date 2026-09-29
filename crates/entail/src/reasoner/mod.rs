@@ -152,11 +152,7 @@ pub(crate) fn term_key(term: &TermValue) -> (u8, String) {
                 format!(
                     "{datatype}\u{1f}{}\u{1f}{}\u{1f}{lexical_form}",
                     language.as_deref().unwrap_or(""),
-                    match direction {
-                        Some(purrdf_core::RdfTextDirection::Ltr) => "ltr",
-                        Some(purrdf_core::RdfTextDirection::Rtl) => "rtl",
-                        None => "",
-                    }
+                    direction.map_or("", purrdf_core::RdfTextDirection::as_str)
                 ),
             ),
             TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),

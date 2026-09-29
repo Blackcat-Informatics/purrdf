@@ -507,13 +507,7 @@ fn fmt_triple_pattern(t: &TriplePattern) -> String {
 /// Render a [`Literal`] in SPARQL surface syntax.
 fn fmt_literal(l: &Literal) -> String {
     match (l.language(), l.direction()) {
-        (Some(lang), Some(dir)) => {
-            let d = match dir {
-                crate::ast::BaseDirection::Ltr => "ltr",
-                crate::ast::BaseDirection::Rtl => "rtl",
-            };
-            format!("{:?}@{lang}--{d}", l.value())
-        }
+        (Some(lang), Some(dir)) => format!("{:?}@{lang}--{}", l.value(), dir.as_str()),
         (Some(lang), None) => format!("{:?}@{lang}", l.value()),
         (None, _) => format!("{:?}^^<{}>", l.value(), l.datatype().as_str()),
     }

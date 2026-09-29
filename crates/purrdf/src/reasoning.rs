@@ -15,12 +15,12 @@ use purrdf_entail::{
     RuleSet, materialize_combined_until,
 };
 use purrdf_rdf::{
-    DatasetView, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, RdfTextDirection,
-    SparqlRequest, SparqlResult, TermValue, dataset_from_view,
+    DatasetView, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfQuad, RdfTerm, SparqlRequest,
+    SparqlResult, TermValue, dataset_from_view,
 };
 use purrdf_sparql_algebra::{
-    BaseDirection, BlankNode, Expression, GraphPattern, GroundTerm, Literal, NamedNodePattern,
-    OrderExpression, PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    BlankNode, Expression, GraphPattern, GroundTerm, Literal, NamedNodePattern, OrderExpression,
+    PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
 };
 use purrdf_sparql_eval::{
     BudgetExhausted, EvalError, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
@@ -1888,11 +1888,8 @@ fn literal_to_term_value(literal: &Literal) -> TermValue {
         Some(language) => TermValue::Literal {
             lexical_form: literal.value().to_owned(),
             datatype: literal.datatype().as_str().to_owned(),
-            language: Some(language.to_ascii_lowercase()),
-            direction: literal.direction().map(|direction| match direction {
-                BaseDirection::Ltr => RdfTextDirection::Ltr,
-                BaseDirection::Rtl => RdfTextDirection::Rtl,
-            }),
+            language: Some(purrdf_iri::langtag::identity_fold(language)),
+            direction: literal.direction(),
         },
         None => TermValue::typed_literal(literal.value(), literal.datatype().as_str()),
     }

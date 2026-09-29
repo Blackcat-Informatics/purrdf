@@ -21,15 +21,14 @@ use super::term_walk::TermBox;
 use crate::RdfTextDirection;
 
 /// The `xsd:string` datatype IRI — the default datatype of a plain literal (C0.1).
-pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+pub(crate) use purrdf_xsd::datatype::XSD_STRING;
 
 /// The `rdf:langString` datatype IRI — the default datatype of a language-tagged
 /// literal (C0.1).
-pub(crate) const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+pub(crate) use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 
 /// The datatype of an RDF 1.2 directional language-tagged literal.
-pub(crate) const RDF_DIR_LANG_STRING: &str =
-    "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+pub(crate) use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
 
 /// Opaque term identity, LOCAL to one frozen `RdfDataset`. Deliberately NOT
 /// `Serialize`/`Deserialize`, not merge-stable, not meaningful across datasets
@@ -361,7 +360,7 @@ impl TermValue {
         Self::Literal {
             lexical_form: lexical_form.into(),
             datatype: RDF_LANG_STRING.to_owned(),
-            language: Some(language.as_ref().to_lowercase()),
+            language: Some(purrdf_iri::langtag::identity_fold(language.as_ref())),
             direction: None,
         }
     }

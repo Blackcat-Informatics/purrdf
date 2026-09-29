@@ -15,17 +15,14 @@
 //! models.
 
 use purrdf::{RdfLiteral, RdfTerm, RdfTextDirection, RdfTriple};
+use purrdf_core::langtag::identity_fold;
 use wasm_bindgen::prelude::*;
 
-/// `xsd:string` — the datatype of a plain literal (RDF 1.1 §3.3).
-pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// `rdf:langString` — the datatype of a language-tagged literal.
+pub(crate) use purrdf_core::datatype::XSD_STRING;
 #[cfg(test)]
-pub(crate) const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-/// `rdf:dirLangString` — the datatype of a directional language-tagged literal (RDF 1.2).
-#[cfg(test)]
-pub(crate) const RDF_DIR_LANG_STRING: &str =
-    "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+use purrdf_core::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, LANG_STRING as RDF_LANG_STRING,
+};
 
 /// The internal shape of a [`Term`]. Covers the four RDF term kinds plus the two
 /// query/graph term kinds RDF/JS adds (`Variable`, `DefaultGraph`).
@@ -59,7 +56,7 @@ pub(crate) fn canonicalize_literal(lit: RdfLiteral) -> RdfLiteral {
     let datatype = lit.datatype_iri().to_owned();
     RdfLiteral {
         datatype: Some(datatype),
-        language: lit.language.map(|language| language.to_lowercase()),
+        language: lit.language.as_deref().map(identity_fold),
         ..lit
     }
 }
@@ -313,13 +310,9 @@ impl Quad {
 ///
 /// Returns a plain `String` error (native-testable; a `JsError` panics off wasm).
 pub(crate) fn parse_direction(direction: &str) -> Result<RdfTextDirection, String> {
-    match direction {
-        "ltr" => Ok(RdfTextDirection::Ltr),
-        "rtl" => Ok(RdfTextDirection::Rtl),
-        other => Err(format!(
-            "invalid base direction {other:?} (expected \"ltr\" or \"rtl\")"
-        )),
-    }
+    RdfTextDirection::from_str_token(direction).ok_or_else(|| {
+        format!("invalid base direction {direction:?} (expected \"ltr\" or \"rtl\")")
+    })
 }
 
 #[cfg(test)]

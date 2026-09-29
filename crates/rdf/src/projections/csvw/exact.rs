@@ -9,7 +9,8 @@ use std::sync::Arc;
 
 use purrdf_core::csv::{Dialect, Reader, StringRecord, Writer};
 use purrdf_core::{
-    BlankScope, DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId,
+    BlankScope, DatasetView, LossLedger, RdfDataset, RdfDatasetBuilder, RdfLiteral,
+    RdfTextDirection, TermId,
 };
 use serde::Serialize;
 
@@ -494,9 +495,8 @@ fn write_terms(
                     })?
                     .to_owned(),
                 language.clone().unwrap_or_default(),
-                direction.map_or_else(String::new, |value| match value {
-                    ProjectionDirection::Ltr => "ltr".to_owned(),
-                    ProjectionDirection::Rtl => "rtl".to_owned(),
+                direction.map_or_else(String::new, |value| {
+                    RdfTextDirection::from(value).as_str().to_owned()
                 }),
                 String::new(),
                 String::new(),
@@ -969,16 +969,15 @@ fn resolve_term_row(
                 )
                 .at_path(TERMS_PATH));
             };
-            let direction = match row.direction.as_str() {
-                "" => None,
-                "ltr" => Some(ProjectionDirection::Ltr),
-                "rtl" => Some(ProjectionDirection::Rtl),
-                _ => {
-                    return Err(ProjectionError::syntax(
-                        "literal direction must be empty, ltr, or rtl",
-                    )
-                    .at_path(TERMS_PATH));
-                }
+            let direction = if row.direction.is_empty() {
+                None
+            } else {
+                let direction =
+                    RdfTextDirection::from_str_token(&row.direction).ok_or_else(|| {
+                        ProjectionError::syntax("literal direction must be empty, ltr, or rtl")
+                            .at_path(TERMS_PATH)
+                    })?;
+                Some(ProjectionDirection::from(direction))
             };
             ProjectionTerm::Literal {
                 lexical: row.value.clone(),

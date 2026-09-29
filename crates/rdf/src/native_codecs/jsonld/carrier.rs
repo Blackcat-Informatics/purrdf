@@ -16,6 +16,8 @@ use serde::ser::{Error as _, SerializeMap, SerializeSeq};
 use serde::{Serialize, Serializer};
 use serde_json::Value as JsonValue;
 
+use purrdf_iri::langtag::identity_fold;
+
 use super::{
     CompiledJsonLdContext, JsonLdContainer, JsonLdDirection, JsonLdNullable, JsonLdTermDefinition,
     JsonLdTermSelection, JsonLdTermSelectionKind, JsonLdTypeMapping, RdfDiagnostic, decode,
@@ -1301,11 +1303,11 @@ fn literal_preferences(literal: &Literal) -> (JsonLdTermSelectionKind, Vec<Strin
     let mut preferred = Vec::new();
     match (&literal.language, &literal.direction) {
         (Some(language), Some(direction)) => {
-            preferred.push(format!("{}_{}", language.to_ascii_lowercase(), direction));
-            preferred.push(language.to_ascii_lowercase());
+            preferred.push(format!("{}_{}", identity_fold(language), direction));
+            preferred.push(identity_fold(language));
             preferred.push(format!("_{direction}"));
         }
-        (Some(language), None) => preferred.push(language.to_ascii_lowercase()),
+        (Some(language), None) => preferred.push(identity_fold(language)),
         (None, Some(direction)) => preferred.push(format!("_{direction}")),
         (None, None) => preferred.push("@null".to_owned()),
     }
@@ -1476,8 +1478,7 @@ fn compact_language_map(
             || literal.direction.as_deref()
                 != match definition.direction_mapping() {
                     Some(JsonLdNullable::Null) => None,
-                    Some(JsonLdNullable::Value(JsonLdDirection::LeftToRight)) => Some("ltr"),
-                    Some(JsonLdNullable::Value(JsonLdDirection::RightToLeft)) => Some("rtl"),
+                    Some(JsonLdNullable::Value(direction)) => Some(direction.as_str()),
                     None => context.default_direction().map(JsonLdDirection::as_str),
                 }
         {
@@ -1691,8 +1692,7 @@ fn literal_matches_mapping(
             };
             let direction = match definition.direction_mapping() {
                 Some(JsonLdNullable::Null) => None,
-                Some(JsonLdNullable::Value(JsonLdDirection::LeftToRight)) => Some("ltr"),
-                Some(JsonLdNullable::Value(JsonLdDirection::RightToLeft)) => Some("rtl"),
+                Some(JsonLdNullable::Value(direction)) => Some(direction.as_str()),
                 None => context.default_direction().map(JsonLdDirection::as_str),
             };
             literal.language.as_deref() == language && literal.direction.as_deref() == direction

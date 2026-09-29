@@ -18,24 +18,11 @@ pub enum RdfTermKind {
 }
 
 /// RDF 1.2 base direction for directional language-tagged literals.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum RdfTextDirection {
-    /// Left-to-right base direction (`ltr`).
-    Ltr,
-    /// Right-to-left base direction (`rtl`).
-    Rtl,
-}
-
-impl RdfTextDirection {
-    /// The lowercase direction token (`"ltr"` or `"rtl"`) as it appears in
-    /// concrete syntaxes.
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Ltr => "ltr",
-            Self::Rtl => "rtl",
-        }
-    }
-}
+///
+/// The one direction type of the RDF stack, defined in `purrdf-cdt` (the lowest
+/// crate every direction-carrying crate reaches) and named here under the IR's
+/// spelling: `as_str` writes the `ltr`/`rtl` token and `from_str_token` reads it.
+pub use purrdf_cdt::TextDirection as RdfTextDirection;
 
 /// An RDF literal, including RDF 1.2 language direction when available.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
@@ -130,13 +117,11 @@ impl RdfLiteral {
         Ok(())
     }
 
-    /// The RDF datatype implied by a language tag and its optional base direction.
+    /// The RDF datatype implied by a language tag and its optional base direction:
+    /// [`purrdf_iri::vocab::language_datatype_iri`] over the direction's presence.
     #[must_use]
     pub const fn language_datatype_iri(direction: Option<RdfTextDirection>) -> &'static str {
-        match direction {
-            Some(_) => RDF_DIR_LANG_STRING,
-            None => RDF_LANG_STRING,
-        }
+        purrdf_iri::vocab::language_datatype_iri(direction.is_some())
     }
 
     /// The expanded datatype used when this owned literal is interned.
@@ -492,7 +477,7 @@ mod tests {
             // The intern-time lowercase fold must not change the answer: the
             // `LANGTAG` terminal is case-insensitive, so the check is the same
             // either side of it.
-            let folded = tag.to_lowercase();
+            let folded = purrdf_iri::langtag::identity_fold(tag);
             RdfLiteral::validate_components(RDF_LANG_STRING, Some(folded.as_str()), None)
                 .unwrap_or_else(|reason| panic!("{folded:?} refused after the fold: {reason}"));
         }

@@ -4023,7 +4023,7 @@ const UNIQUE_LANG_INLINE: usize = 8;
 /// duplicated values are `rdf:dirLangString`s (`ar--ltr`), so the message names
 /// exactly the group the result is about.
 fn duplicate_language_message(lang: &str, direction: Option<RdfTextDirection>) -> String {
-    let lang = lang.to_ascii_lowercase();
+    let lang = purrdf_iri::langtag::identity_fold(lang);
     match direction {
         Some(direction) => format!("duplicate language tag: {lang}--{}", direction.as_str()),
         None => format!("duplicate language tag: {lang}"),

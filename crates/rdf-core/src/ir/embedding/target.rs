@@ -1243,10 +1243,7 @@ fn four_digest_block(
 fn validate_language_tag(language: &str) -> Result<(), EmbeddingError> {
     purrdf_iri::langtag::parse(language)
         .map_err(|error| EmbeddingError::Malformed(error.message()))?;
-    let canonical_lowercase = language
-        .bytes()
-        .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'-');
-    if !canonical_lowercase {
+    if !purrdf_iri::langtag::is_identity_folded(language) {
         return Err(EmbeddingError::Malformed(
             "language tag is well-formed but not lowercase",
         ));
@@ -1487,7 +1484,7 @@ mod tests {
             );
             // …and the lowercase neighbour of each is accepted, so the rule is
             // about case and nothing else.
-            validate_language_tag(&cased.to_ascii_lowercase())
+            validate_language_tag(&purrdf_iri::langtag::identity_fold(cased))
                 .expect("the lowercase spelling is accepted");
         }
 

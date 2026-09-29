@@ -345,7 +345,7 @@ impl ProjectionTerm {
                 }
                 if let Some(language) = language {
                     validate_language_tag(language)?;
-                    if language != &language.to_lowercase() {
+                    if !langtag::is_identity_folded(language) {
                         return Err(ProjectionError::term(
                             "language tag must use lowercase canonical form",
                         ));

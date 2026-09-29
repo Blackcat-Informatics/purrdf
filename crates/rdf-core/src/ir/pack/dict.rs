@@ -1176,11 +1176,9 @@ impl PackDict {
                         *direction,
                     )
                     .map_err(PackDictError::Malformed)?;
-                    // Test the lowercase fixed point without allocating a second
-                    // tag. Ingress lowercases language tags for RDF term identity.
-                    if language.is_some_and(|tag| {
-                        !tag.chars().flat_map(char::to_lowercase).eq(tag.chars())
-                    }) {
+                    // Test the identity-fold fixed point without allocating a
+                    // second tag. Ingress folds language tags for RDF term identity.
+                    if language.is_some_and(|tag| !purrdf_iri::langtag::is_identity_folded(tag)) {
                         return Err(PackDictError::Malformed(
                             "dict: language tag is not lowercase",
                         ));

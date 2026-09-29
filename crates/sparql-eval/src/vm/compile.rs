@@ -406,7 +406,7 @@ impl Compiler {
                 {
                     let op = self.string(
                         lit.value().to_owned(),
-                        lit.language().map(str::to_ascii_lowercase),
+                        lit.language().map(purrdf_iri::langtag::identity_fold),
                     );
                     out.push(Task::Emit(op));
                 }
@@ -437,8 +437,11 @@ impl Compiler {
             },
             Mode::LangLexical => match expr {
                 Expression::Literal(lit) => {
-                    let op =
-                        self.string(lit.language().map_or_default(str::to_ascii_lowercase), None);
+                    let op = self.string(
+                        lit.language()
+                            .map_or_default(purrdf_iri::langtag::identity_fold),
+                        None,
+                    );
                     out.push(Task::Emit(op));
                 }
                 _ => {
@@ -696,9 +699,10 @@ fn constant_string_arg(expr: Option<&Expression>) -> Option<String> {
             _ => None,
         },
         Expression::FunctionCall(Function::Lang, inner) if inner.len() == 1 => match &inner[0] {
-            Expression::Literal(lit) => {
-                Some(lit.language().map_or_default(str::to_ascii_lowercase))
-            }
+            Expression::Literal(lit) => Some(
+                lit.language()
+                    .map_or_default(purrdf_iri::langtag::identity_fold),
+            ),
             _ => None,
         },
         _ => None,

@@ -31,9 +31,8 @@ use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 use crate::error::Error;
 use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+use purrdf_core::datatype::XSD_STRING;
+use purrdf_core::vocab::language_datatype_iri;
 
 /// Dense decoded row and bounded row-prefix result aliases keep the streaming reader's
 /// signatures readable without changing the public model.
@@ -477,9 +476,10 @@ fn decode_binding_node(value: &Json) -> Result<BindingNode<'_>, Error> {
                 .or_else(|| obj_get(obj, "dir"))
                 .and_then(Json::as_str)
             {
-                Some("ltr") => Some(RdfTextDirection::Ltr),
-                Some("rtl") => Some(RdfTextDirection::Rtl),
-                Some(other) => return Err(fmt(&format!("unknown base direction `{other}`"))),
+                Some(token) => Some(
+                    RdfTextDirection::from_str_token(token)
+                        .ok_or_else(|| fmt(&format!("unknown base direction `{token}`")))?,
+                ),
                 None => None,
             };
             let datatype = obj_get(obj, "datatype").and_then(Json::as_str);

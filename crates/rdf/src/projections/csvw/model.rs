@@ -5,6 +5,7 @@
 
 use std::collections::BTreeMap;
 
+use purrdf_core::RdfTextDirection;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -47,6 +48,24 @@ pub enum CsvwTableDirection {
     Ltr,
     /// Right-to-left columns.
     Rtl,
+}
+
+impl From<RdfTextDirection> for CsvwTextDirection {
+    fn from(direction: RdfTextDirection) -> Self {
+        match direction {
+            RdfTextDirection::Ltr => Self::Ltr,
+            RdfTextDirection::Rtl => Self::Rtl,
+        }
+    }
+}
+
+impl From<RdfTextDirection> for CsvwTableDirection {
+    fn from(direction: RdfTextDirection) -> Self {
+        match direction {
+            RdfTextDirection::Ltr => Self::Ltr,
+            RdfTextDirection::Rtl => Self::Rtl,
+        }
+    }
 }
 
 /// Whitespace trimming policy from a CSVW dialect description.

@@ -237,7 +237,9 @@ impl Parser<'_> {
                     continue;
                 };
                 if let Some(tag) = literal.language() {
-                    *tags.entry(tag.to_ascii_lowercase()).or_default() += 1;
+                    *tags
+                        .entry(purrdf_iri::langtag::identity_fold(tag))
+                        .or_default() += 1;
                 } else if literal.datatype_str() == xsd::STRING {
                     strings += 1;
                 }

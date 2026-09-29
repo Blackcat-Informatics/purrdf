@@ -39,9 +39,15 @@
 //!   subtags — in borrowing or owning form, and
 //!   [`langtag::canonical_case`] rewrites it in the §2.1.1 case convention
 //!   (language lower, region upper, script title, registered spelling for the
-//!   grandfathered tags). The boundary is well-formedness: subtags are never
+//!   grandfathered tags). [`langtag::identity_fold`] is the RDF 1.2 value-space
+//!   fold (lowercase) every store and comparison keys a tag by. The boundary is well-formedness: subtags are never
 //!   checked against the IANA Language Subtag Registry, and RFC 4647
 //!   language-range matching is outside this crate's scope entirely.
+//! * **W3C vocabularies** — [`vocab`], one module per W3C namespace (`rdf`,
+//!   `rdfs`, `owl`, `sh`, `skos`, `prov`, …) holding its `NS` and one constant
+//!   per term the workspace names, and [`vocab::language_datatype_iri`]. PurRDF
+//!   mints no vocabulary: every constant is a term of a W3C Recommendation, and
+//!   the XSD datatypes live with their value space in `purrdf-xsd`.
 //! * **Grammar terminals** — [`terminals`], the exact Turtle/SPARQL character
 //!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`) and
 //!   the byte-class scanners built from them, re-exported from their home in

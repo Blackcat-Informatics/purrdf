@@ -3576,9 +3576,7 @@ pub(crate) fn outer_bindings_for_substitution<D: DatasetView + Sync>(
 /// sees a value read back out of `ctx.scratch`), matching
 /// `outer_bindings_for_substitution`'s sibling `Expression` construction.
 fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebra::GroundTerm> {
-    use purrdf_sparql_algebra::{
-        BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode,
-    };
+    use purrdf_sparql_algebra::{BlankNode, GroundTerm, GroundTriple, Literal, NamedNode};
 
     /// One step of the build: convert a value, or assemble a quoted triple under its
     /// predicate IRI from the two ground terms built last — its object, then its
@@ -3605,16 +3603,9 @@ fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebr
                 direction,
             }) => {
                 let lit = if let Some(lang) = language {
-                    // The algebra's `BaseDirection` and the IR's `RdfTextDirection` are
-                    // the same two-value RDF 1.2 base-direction enum in two crates;
-                    // `crate::convert::map_direction` maps the OTHER way (algebra → IR,
-                    // for a query-authored literal reaching the dataset lookup key), so
-                    // this direction gets the mirrored match inline.
-                    let dir = direction.map(|d| match d {
-                        RdfTextDirection::Ltr => BaseDirection::Ltr,
-                        RdfTextDirection::Rtl => BaseDirection::Rtl,
-                    });
-                    Literal::new_lang(lexical_form, lang, dir)
+                    // The algebra's `BaseDirection` and the IR's `RdfTextDirection`
+                    // are the one base-direction type, so the direction passes through.
+                    Literal::new_lang(lexical_form, lang, *direction)
                 } else {
                     Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
                 };
@@ -4905,7 +4896,7 @@ const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
 ///
 /// # Case
 ///
-/// Called on the tag **as the query wrote it**, before `to_ascii_lowercase`.
+/// Called on the tag **as the query wrote it**, before `identity_fold`.
 /// That is not a coin-flip: under [`LANGTAG_PROFILE`] every production is
 /// defined over case-insensitive character classes (`ALPHA` is `[a-zA-Z]`, the
 /// terminal's later subtags are `[a-zA-Z0-9]`) and the only other rule is a
@@ -4945,12 +4936,16 @@ fn eval_str_lang<D: DatasetView + Sync>(
     if !well_formed_langtag(&lang) {
         return Ok(None); // not a language tag at all — see `well_formed_langtag`
     }
-    Ok(make_string(ctx, lex, Some(lang.to_ascii_lowercase())))
+    Ok(make_string(
+        ctx,
+        lex,
+        Some(purrdf_iri::langtag::identity_fold(&lang)),
+    ))
 }
 
 /// `STRLANGDIR(lexical, lang, dir)` — RDF 1.2 directional-language-string
-/// constructor. An empty `dir` yields a plain `rdf:langString`; `ltr`/`rtl`
-/// (case-insensitive) yield an `rdf:dirLangString`; any other direction errors.
+/// constructor. `ltr`/`rtl` (case-sensitive) yield an `rdf:dirLangString`; any
+/// other direction, including an empty one, errors.
 ///
 /// The language half is held to [`LANGTAG_PROFILE`] exactly as [`eval_str_lang`]
 /// holds it, and refuses the same way — unbound, not a query abort. A direction
@@ -4975,17 +4970,15 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
     }
     // The base direction must be exactly `ltr`/`rtl` (case-sensitive); anything
     // else, including an empty string, is a type error (unbound).
-    let direction = match dir.as_str() {
-        "ltr" => RdfTextDirection::Ltr,
-        "rtl" => RdfTextDirection::Rtl,
-        _ => return Ok(None),
+    let Some(direction) = RdfTextDirection::from_str_token(&dir) else {
+        return Ok(None);
     };
     Ok(intern_leaf(
         ctx,
         TermValue::Literal {
             lexical_form: lex,
             datatype: RDF_DIR_LANG_STRING.to_owned(),
-            language: Some(lang.to_ascii_lowercase()),
+            language: Some(purrdf_iri::langtag::identity_fold(&lang)),
             direction: Some(direction),
         },
     ))
@@ -5591,8 +5584,8 @@ mod tests {
     fn lang_matches_byte_comparison_matches_lowercased_semantics() {
         // The reference: what the allocation-based implementation computed.
         fn reference(tag: &str, range: &str) -> bool {
-            let tag = tag.to_ascii_lowercase();
-            let range = range.to_ascii_lowercase();
+            let tag = purrdf_iri::langtag::identity_fold(tag);
+            let range = purrdf_iri::langtag::identity_fold(range);
             range == "*" || tag == range || tag.starts_with(&(range + "-"))
         }
         let cases: &[(&str, &str, bool)] = &[
@@ -9680,7 +9673,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("STRLANG(\"x\", {tag:?}) must still bind"));
             assert_eq!(
                 tag_of(&value),
-                Some(tag.to_ascii_lowercase().as_str()),
+                Some(purrdf_iri::langtag::identity_fold(tag).as_str()),
                 "the gate must not change which tag STRLANG produces, only \
                  whether it produces one"
             );
@@ -9709,7 +9702,10 @@ mod tests {
                 let value = str_lang_dir(&ds, "x", tag, dir).unwrap_or_else(|| {
                     panic!("STRLANGDIR(\"x\", {tag:?}, {dir:?}) must still bind")
                 });
-                assert_eq!(tag_of(&value), Some(tag.to_ascii_lowercase().as_str()));
+                assert_eq!(
+                    tag_of(&value),
+                    Some(purrdf_iri::langtag::identity_fold(tag).as_str())
+                );
             }
         }
     }
@@ -9724,8 +9720,8 @@ mod tests {
         for tag in ACCEPTED_TAGS.iter().chain(REFUSED_TAGS) {
             assert_eq!(
                 well_formed_langtag(tag),
-                well_formed_langtag(&tag.to_ascii_lowercase()),
-                "gating before vs after `to_ascii_lowercase` must accept the same \
+                well_formed_langtag(&purrdf_iri::langtag::identity_fold(tag)),
+                "gating before vs after `identity_fold` must accept the same \
                  set, else the order of the two lines would be load-bearing ({tag:?})"
             );
         }
@@ -10518,8 +10514,8 @@ mod walk_tests {
 
     use purrdf_core::{BlankScope, RdfTextDirection, TermBox, TermValue};
     use purrdf_sparql_algebra::{
-        AggregateExpression, AggregateFunction, BaseDirection, BlankNode, Chain, Child, Expression,
-        Function, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
+        AggregateExpression, AggregateFunction, BlankNode, Chain, Child, Expression, Function,
+        GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
         OrderExpression, PropertyFunctionCall, TermPattern, TriplePattern, Variable,
     };
 
@@ -10750,11 +10746,7 @@ mod walk_tests {
                 direction,
             } => {
                 let lit = if let Some(lang) = language {
-                    let dir = direction.map(|d| match d {
-                        RdfTextDirection::Ltr => BaseDirection::Ltr,
-                        RdfTextDirection::Rtl => BaseDirection::Rtl,
-                    });
-                    Literal::new_lang(lexical_form, lang, dir)
+                    Literal::new_lang(lexical_form, lang, *direction)
                 } else {
                     Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
                 };

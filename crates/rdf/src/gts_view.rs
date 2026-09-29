@@ -581,7 +581,7 @@ impl GtsFoldView {
                 lang.clone()
             };
             if !public.eq_ignore_ascii_case("en") {
-                tags.insert(public.to_ascii_lowercase());
+                tags.insert(identity_fold(&public));
             }
         }
         tags
@@ -741,7 +741,7 @@ impl GtsFoldView {
         let mut by_bcp: BTreeMap<String, Vec<LitRow>> = BTreeMap::new();
         for &tid in candidates {
             let bcp = self.public_bcp47_for(tid);
-            let key = bcp.as_deref().unwrap_or("").to_ascii_lowercase();
+            let key = identity_fold(bcp.as_deref().unwrap_or(""));
             let original = self.lang(tid).unwrap_or("").to_string();
             by_bcp
                 .entry(key)
@@ -758,10 +758,7 @@ impl GtsFoldView {
         if requested.is_empty() {
             return vec!["en".to_string()];
         }
-        requested
-            .iter()
-            .map(|tag| tag.to_ascii_lowercase())
-            .collect()
+        requested.iter().map(|tag| identity_fold(tag)).collect()
     }
 
     fn select_literal(
@@ -906,7 +903,7 @@ fn term_kind_int(kind: TermKind) -> u8 {
 }
 
 fn is_internal_tag(lang: &str) -> bool {
-    let lower = lang.to_ascii_lowercase();
+    let lower = identity_fold(lang);
     let Some(suffix) = lower.strip_prefix("x-purrdf-") else {
         return false;
     };
@@ -917,7 +914,7 @@ fn is_internal_tag(lang: &str) -> bool {
 }
 
 fn rank_language(lang: &str) -> (u8, String) {
-    let lower = lang.to_ascii_lowercase();
+    let lower = identity_fold(lang);
     let rank = u8::from(lower != "x-purrdf-english");
     (rank, lower)
 }

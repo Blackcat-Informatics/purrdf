@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ::purrdf::RdfLocation;
+use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
 use serde_json::{Map, Value};
 
@@ -1758,7 +1759,9 @@ impl NativeImporter {
                 "properties": {
                     "@value": { "type": "string" },
                     "@language": { "type": "string" },
-                    "@direction": { "enum": ["ltr", "rtl"] }
+                    "@direction": {
+                        "enum": [RdfTextDirection::Ltr.as_str(), RdfTextDirection::Rtl.as_str()]
+                    }
                 },
                 "required": ["@value", "@language", "@direction"]
             })));

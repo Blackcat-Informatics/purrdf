@@ -701,14 +701,7 @@ fn shacl_messages(messages: &[Literal]) -> serde_json::Value {
                     entry.insert("language".to_owned(), language.into());
                 }
                 if let Some(direction) = m.direction() {
-                    entry.insert(
-                        "direction".to_owned(),
-                        match direction {
-                            purrdf_core::RdfTextDirection::Ltr => "ltr",
-                            purrdf_core::RdfTextDirection::Rtl => "rtl",
-                        }
-                        .into(),
-                    );
+                    entry.insert("direction".to_owned(), direction.as_str().into());
                 }
                 if m.language().is_none() && m.datatype_str() != XSD_STRING {
                     entry.insert("datatype".to_owned(), m.datatype_str().into());

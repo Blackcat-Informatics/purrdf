@@ -133,32 +133,9 @@ impl Default for JsonLdContextLimits {
     }
 }
 
-/// Base direction carried by a JSON-LD 1.1 context or term definition.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub enum JsonLdDirection {
-    /// Left-to-right text.
-    LeftToRight,
-    /// Right-to-left text.
-    RightToLeft,
-}
-
-impl JsonLdDirection {
-    /// JSON-LD spelling of this direction.
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::LeftToRight => "ltr",
-            Self::RightToLeft => "rtl",
-        }
-    }
-
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "ltr" => Some(Self::LeftToRight),
-            "rtl" => Some(Self::RightToLeft),
-            _ => None,
-        }
-    }
-}
+/// Base direction carried by a JSON-LD 1.1 context or term definition: the one
+/// RDF 1.2 base-direction enum, whose `as_str` is the JSON-LD `@direction` spelling.
+pub use purrdf_core::RdfTextDirection as JsonLdDirection;
 
 /// Explicit nullable mapping in a JSON-LD term definition.
 ///

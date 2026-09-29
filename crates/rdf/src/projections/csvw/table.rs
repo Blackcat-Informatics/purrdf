@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::csv::{CsvErrorKind, Dialect, Encoding, LineTerminators, Trim, read_table};
+use purrdf_iri::langtag::identity_fold;
 use purrdf_iri::terminals::{is_ws, is_xml_name_char, is_xml_name_start_char};
 use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
@@ -350,7 +351,7 @@ fn header_titles(
     if values.is_empty() {
         CsvwNaturalLanguage::new()
     } else {
-        BTreeMap::from([(language.unwrap_or("und").to_ascii_lowercase(), values)])
+        BTreeMap::from([(identity_fold(language.unwrap_or("und")), values)])
     }
 }
 
@@ -524,7 +525,7 @@ fn parse_component(
                 source: source.clone(),
                 lexical: source,
                 datatype: config.vocabulary().xsd("string"),
-                language: language.map(str::to_ascii_lowercase),
+                language: language.map(identity_fold),
                 direction,
             };
         }
@@ -535,7 +536,7 @@ fn parse_component(
         lexical,
         datatype: datatype.id.clone().unwrap_or_else(|| datatype.base.clone()),
         language: language_datatype
-            .then(|| language.map(str::to_ascii_lowercase))
+            .then(|| language.map(identity_fold))
             .flatten(),
         direction: language_datatype.then_some(direction).flatten(),
     }

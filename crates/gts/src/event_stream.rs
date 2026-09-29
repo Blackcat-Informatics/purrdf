@@ -327,13 +327,9 @@ fn parse_direction(
 ) -> Result<Option<TextDirection>, EventError> {
     let parsed = match direction {
         None => return Ok(None),
-        Some("ltr") => TextDirection::Ltr,
-        Some("rtl") => TextDirection::Rtl,
-        Some(other) => {
-            return Err(EventError::message(format!(
-                "unrecognized GTS literal base direction {other:?}"
-            )));
-        }
+        Some(token) => TextDirection::from_token(token).ok_or_else(|| {
+            EventError::message(format!("unrecognized GTS literal base direction {token:?}"))
+        })?,
     };
     if lang.is_none_or(str::is_empty) {
         return Err(EventError::message(

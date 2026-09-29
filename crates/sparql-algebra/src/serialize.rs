@@ -53,8 +53,8 @@ use crate::algebra::{
     OrderExpression, PropertyFunctionCall, PropertyPathExpression,
 };
 use crate::ast::{
-    BaseDirection, GroundTerm, Literal, NamedNodePattern, RDF_LANG_STRING, TermPattern,
-    TriplePattern, Variable, XSD_STRING,
+    GroundTerm, Literal, NamedNodePattern, RDF_LANG_STRING, TermPattern, TriplePattern, Variable,
+    XSD_STRING,
 };
 use crate::walk::{Flow, NodeRef, Visit, walk_pre_post};
 use crate::worklist::WorkList;
@@ -1636,11 +1636,7 @@ fn fmt_literal(s: &mut String, l: &Literal) {
     s.push('"');
     match (l.language(), l.direction()) {
         (Some(lang), Some(dir)) => {
-            let d = match dir {
-                BaseDirection::Ltr => "ltr",
-                BaseDirection::Rtl => "rtl",
-            };
-            let _ = write!(s, "@{lang}--{d}");
+            let _ = write!(s, "@{lang}--{}", dir.as_str());
         }
         (Some(lang), None) => {
             let _ = write!(s, "@{lang}");

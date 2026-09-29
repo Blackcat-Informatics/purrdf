@@ -38,8 +38,8 @@ use ::purrdf::{BlankScope, RdfLiteral, TermRef};
 use ::purrdf::{RdfTextDirection, TermId, TermValue};
 use purrdf_core::SmallVec;
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Stable canonical ordering for RDF-facing values whose display form is the
 /// byte-level ordering contract. Each key is rendered exactly once.
@@ -517,10 +517,10 @@ impl<'a> CanonicalBytes<'a> {
     ) {
         if let Some(language) = language {
             if let Some(direction) = direction {
-                self.parts.push(CanonicalPart::Raw(match direction {
-                    RdfTextDirection::Ltr => b"--ltr",
-                    RdfTextDirection::Rtl => b"--rtl",
-                }));
+                // The parts are a stack, so `--` is pushed after the token it precedes.
+                self.parts
+                    .push(CanonicalPart::Raw(direction.as_str().as_bytes()));
+                self.parts.push(CanonicalPart::Raw(b"--"));
             }
             self.parts.push(CanonicalPart::Raw(language.as_bytes()));
             self.parts.push(CanonicalPart::Raw(b"\"@"));
@@ -1057,8 +1057,7 @@ fn render_literal(l: &Literal) -> String {
     let lex = escape_literal(&l.lexical);
     if let Some(lang) = &l.language {
         return match l.direction {
-            Some(RdfTextDirection::Ltr) => format!("\"{lex}\"@{lang}--ltr"),
-            Some(RdfTextDirection::Rtl) => format!("\"{lex}\"@{lang}--rtl"),
+            Some(direction) => format!("\"{lex}\"@{lang}--{}", direction.as_str()),
             None => format!("\"{lex}\"@{lang}"),
         };
     }

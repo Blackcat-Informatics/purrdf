@@ -335,7 +335,7 @@ impl Walker {
             {
                 Ok(Some((
                     lit.value().to_owned(),
-                    lit.language().map(str::to_ascii_lowercase),
+                    lit.language().map(purrdf_iri::langtag::identity_fold),
                 )))
             }
             Expression::FunctionCall(Function::Str, inner) if inner.len() == 1 => {
@@ -350,9 +350,10 @@ impl Walker {
             }
             Expression::FunctionCall(Function::Lang, inner) if inner.len() == 1 => {
                 let lexical = match &inner[0] {
-                    Expression::Literal(lit) => {
-                        Some(lit.language().map_or_default(str::to_ascii_lowercase))
-                    }
+                    Expression::Literal(lit) => Some(
+                        lit.language()
+                            .map_or_default(purrdf_iri::langtag::identity_fold),
+                    ),
                     other => self
                         .term(other, row, schema, ctx)?
                         .and_then(|term| helpers::lang_lexical_term(ctx, term)),

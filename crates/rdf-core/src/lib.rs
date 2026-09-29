@@ -232,6 +232,10 @@ pub use provenance::{
     DatasetProvenance, OriginKind, OriginSetId, OriginSetInterner, ProvenanceError, UnitId,
     UnitInterner, check_provenance,
 };
+/// The BCP 47 language-tag grammar and the RDF 1.2 identity fold of a tag
+/// ([`langtag::identity_fold`]), re-exported so every crate above the kernel
+/// folds and judges tags by the one law the kernel interns under.
+pub use purrdf_iri::langtag;
 /// The exact Turtle/SPARQL terminal character classes (`WS`, `PN_CHARS_BASE`,
 /// `PN_CHARS_U`, `PN_CHARS`, `VARNAME`), re-exported from [`purrdf_iri`].
 ///

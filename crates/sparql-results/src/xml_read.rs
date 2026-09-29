@@ -295,15 +295,15 @@ fn decode_leaf(elem: &Element) -> Result<Option<TermValue>, Error> {
                 .or_else(|| elem.attr("dir"))
                 .or_else(|| elem.attr("purrdf:dir"));
             let direction = match dir_str {
-                Some("ltr") => Some(RdfTextDirection::Ltr),
-                Some("rtl") => Some(RdfTextDirection::Rtl),
-                Some(other) => return Err(fmt(&format!("unknown base direction `{other}`"))),
+                Some(token) => Some(
+                    RdfTextDirection::from_str_token(token)
+                        .ok_or_else(|| fmt(&format!("unknown base direction `{token}`")))?,
+                ),
                 None => None,
             };
             let datatype = match elem.attr("datatype") {
                 Some(dt) => dt.to_owned(),
-                None if language.is_some() && direction.is_some() => RDF_DIR_LANGSTRING.to_owned(),
-                None if language.is_some() => RDF_LANGSTRING.to_owned(),
+                None if language.is_some() => language_datatype_iri(direction.is_some()).to_owned(),
                 None => XSD_STRING.to_owned(),
             };
             TermValue::Literal {

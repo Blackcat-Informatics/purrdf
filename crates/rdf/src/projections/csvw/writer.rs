@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::csv::{Dialect, write_record_text};
-use purrdf_core::{DatasetView, LossLedger};
+use purrdf_core::{DatasetView, LossLedger, RdfTextDirection};
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
@@ -607,15 +607,15 @@ fn insert_value(object: &mut Map<String, Value>, key: &str, value: Option<&Value
 const fn table_direction(direction: CsvwTableDirection) -> &'static str {
     match direction {
         CsvwTableDirection::Auto => "auto",
-        CsvwTableDirection::Ltr => "ltr",
-        CsvwTableDirection::Rtl => "rtl",
+        CsvwTableDirection::Ltr => RdfTextDirection::Ltr.as_str(),
+        CsvwTableDirection::Rtl => RdfTextDirection::Rtl.as_str(),
     }
 }
 
 const fn text_direction(direction: CsvwTextDirection) -> &'static str {
     match direction {
-        CsvwTextDirection::Ltr => "ltr",
-        CsvwTextDirection::Rtl => "rtl",
+        CsvwTextDirection::Ltr => RdfTextDirection::Ltr.as_str(),
+        CsvwTextDirection::Rtl => RdfTextDirection::Rtl.as_str(),
         CsvwTextDirection::Auto => "auto",
         CsvwTextDirection::Inherit => "inherit",
     }

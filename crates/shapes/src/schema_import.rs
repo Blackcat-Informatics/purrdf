@@ -16,7 +16,12 @@ use std::fmt;
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf::RdfLocation;
+use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
+use purrdf_iri::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, FIRST as RDF_FIRST, LANG_STRING as RDF_LANG_STRING,
+    NIL as RDF_NIL, REST as RDF_REST, TYPE as RDF_TYPE,
+};
 use purrdf_xsd::ieee::Binary64Scope;
 use serde_json::{Map, Number, Value};
 
@@ -2861,8 +2866,8 @@ fn is_dir_lang_string_schema(value: &Value) -> bool {
                             .get("@direction")
                             .and_then(|schema| schema.get("enum"))
                             == Some(&Value::Array(vec![
-                                Value::String("ltr".to_owned()),
-                                Value::String("rtl".to_owned()),
+                                Value::String(RdfTextDirection::Ltr.as_str().to_owned()),
+                                Value::String(RdfTextDirection::Rtl.as_str().to_owned()),
                             ]))
                 })
             && is_exact_required(

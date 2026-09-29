@@ -148,6 +148,7 @@ use std::fmt::Write as _;
 
 use ::purrdf::RdfDataset;
 use ::purrdf::RdfLocation;
+use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -5525,7 +5526,9 @@ fn datatype_value_schema(dt_iri: &str, ns: &Namespaces) -> Value {
             "properties": {
                 "@value": { "type": "string" },
                 "@language": { "type": "string" },
-                "@direction": { "enum": ["ltr", "rtl"] }
+                "@direction": {
+                    "enum": [RdfTextDirection::Ltr.as_str(), RdfTextDirection::Rtl.as_str()]
+                }
             },
             "required": ["@value", "@language", "@direction"]
         });

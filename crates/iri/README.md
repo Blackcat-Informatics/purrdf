@@ -31,6 +31,12 @@ CURIE/prefix handling.
   percent-encoding, and dot-segment normalization; idempotent.
 - **CURIE/prefix** — `expand_curie` / `resolve` / `contract` over a
   `PrefixMap`.
+- **W3C vocabularies** — `vocab`: one module per W3C namespace (`rdf`,
+  `rdfs`, `owl`, `sh`, `skos`, `prov`, …) with its `NS` and a constant per
+  term, and `vocab::language_datatype_iri`. PurRDF mints no vocabulary: every
+  constant is a term of a W3C Recommendation.
+- **BCP 47 language tags** — `langtag`: RFC 5646 well-formedness, the
+  §2.1.1 canonical case, and `identity_fold`, the RDF 1.2 value-space fold.
 - **IDNA2008** — `idna`: RFC 5891 host-name validation over the RFC 5892
   derived property, contextual rules and the RFC 5893 Bidi rule, RFC 3492
   Punycode, and `Iri::to_uri` (RFC 3987 §3.1). Tables are generated from the

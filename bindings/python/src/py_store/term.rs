@@ -20,6 +20,7 @@
 use std::fmt::Write as _;
 use std::hash::BuildHasher;
 
+use purrdf_core::langtag::identity_fold;
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
 
@@ -42,14 +43,15 @@ fn literal_datatype_iri(lit: &RdfLiteral) -> &str {
 /// native [`RdfTextDirection`]. A `None` argument yields `None`; any other string is
 /// rejected, mirroring the closed direction vocabulary of RDF 1.2.
 fn parse_direction(direction: Option<&str>) -> PyResult<Option<RdfTextDirection>> {
-    match direction {
-        None => Ok(None),
-        Some("ltr") => Ok(Some(RdfTextDirection::Ltr)),
-        Some("rtl") => Ok(Some(RdfTextDirection::Rtl)),
-        Some(other) => Err(PyValueError::new_err(format!(
-            "invalid base direction `{other}`: expected \"ltr\" or \"rtl\""
-        ))),
-    }
+    direction
+        .map(|token| {
+            RdfTextDirection::from_str_token(token).ok_or_else(|| {
+                PyValueError::new_err(format!(
+                    "invalid base direction `{token}`: expected \"ltr\" or \"rtl\""
+                ))
+            })
+        })
+        .transpose()
 }
 
 /// An IRI node. Mirrors the oxigraph Python `NamedNode`.
@@ -285,7 +287,7 @@ fn literal_key_string(lit: &RdfLiteral) -> String {
     framed_key(&[
         lex,
         dt,
-        &lang.unwrap_or("").to_ascii_lowercase(),
+        &identity_fold(lang.unwrap_or("")),
         direction.map_or("", RdfTextDirection::as_str),
     ])
 }
@@ -680,7 +682,7 @@ pub(super) fn rdf_term_to_value_scoped(term: &RdfTerm, scope: BlankScope) -> Ter
         RdfTerm::Literal(lit) => TermValue::Literal {
             lexical_form: lit.lexical_form.clone(),
             datatype: literal_datatype_iri(lit).to_owned(),
-            language: lit.language.as_deref().map(str::to_ascii_lowercase),
+            language: lit.language.as_deref().map(identity_fold),
             direction: lit.direction,
         },
         RdfTerm::Triple(t) => TermValue::Triple {

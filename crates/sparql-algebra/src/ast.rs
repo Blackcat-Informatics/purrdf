@@ -161,14 +161,9 @@ impl core::fmt::Debug for Variable {
     }
 }
 
-/// The base text direction of an RDF 1.2 directional language-tagged string.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum BaseDirection {
-    /// Left-to-right (`--ltr`).
-    Ltr,
-    /// Right-to-left (`--rtl`).
-    Rtl,
-}
+/// The base text direction of an RDF 1.2 directional language-tagged string:
+/// the stack's one direction type, defined in `purrdf-cdt`.
+pub use purrdf_cdt::TextDirection as BaseDirection;
 
 /// An RDF literal: a lexical form plus a datatype, language tag and RDF 1.2
 /// base direction where required by that datatype.
@@ -222,11 +217,9 @@ impl Literal {
         language: impl Into<String>,
         direction: Option<BaseDirection>,
     ) -> Self {
-        let datatype = NamedNode::new_unchecked(if direction.is_some() {
-            RDF_DIR_LANG_STRING
-        } else {
-            RDF_LANG_STRING
-        });
+        let datatype = NamedNode::new_unchecked(purrdf_iri::vocab::language_datatype_iri(
+            direction.is_some(),
+        ));
         Self {
             value: value.into().into(),
             datatype,

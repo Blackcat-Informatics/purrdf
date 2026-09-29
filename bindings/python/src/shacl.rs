@@ -237,16 +237,10 @@ fn messages_list<'py>(
             entry.set_item("language", language)?;
         }
         if let Some(direction) = message.direction() {
-            entry.set_item(
-                "direction",
-                match direction {
-                    ::purrdf::RdfTextDirection::Ltr => "ltr",
-                    ::purrdf::RdfTextDirection::Rtl => "rtl",
-                },
-            )?;
+            entry.set_item("direction", direction.as_str())?;
         }
         if message.language().is_none()
-            && message.datatype_str() != "http://www.w3.org/2001/XMLSchema#string"
+            && message.datatype_str() != purrdf_core::datatype::XSD_STRING
         {
             entry.set_item("datatype", message.datatype_str())?;
         }

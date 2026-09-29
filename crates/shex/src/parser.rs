@@ -901,7 +901,7 @@ impl Parser<'_> {
                             // Language-tagged literals carry lowercase tags
                             // in the RDF data model (and the ShExJ ground
                             // truth).
-                            language: Some(tag.to_ascii_lowercase()),
+                            language: Some(purrdf_iri::langtag::identity_fold(&tag)),
                             datatype: None,
                         })
                     }

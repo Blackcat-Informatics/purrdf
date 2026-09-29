@@ -3762,17 +3762,18 @@ fn is_modifier_terminator_word(w: &str) -> bool {
 /// a query may write is a tag a document may hold.
 fn split_lang_dir(tag: &str, at: usize) -> Result<(String, Option<BaseDirection>)> {
     let (lang, dir) = match tag.split_once("--") {
-        Some((lang, "ltr")) => (lang, Some(BaseDirection::Ltr)),
-        Some((lang, "rtl")) => (lang, Some(BaseDirection::Rtl)),
-        Some((_, dir)) => {
-            return Err(ParseError::syntax(
-                format!(
-                    "invalid base direction `--{dir}` in `@{tag}`: \
-                     must be exactly `ltr` or `rtl` (lower case)"
-                ),
-                at,
-            ));
-        }
+        Some((lang, dir)) => match BaseDirection::from_str_token(dir) {
+            Some(direction) => (lang, Some(direction)),
+            None => {
+                return Err(ParseError::syntax(
+                    format!(
+                        "invalid base direction `--{dir}` in `@{tag}`: \
+                         must be exactly `ltr` or `rtl` (lower case)"
+                    ),
+                    at,
+                ));
+            }
+        },
         None => (tag, None),
     };
     if let Err(error) = langtag::parse_with(lang, LANGTAG_PROFILE) {

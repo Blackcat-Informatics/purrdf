@@ -1388,8 +1388,8 @@ impl RdfDataset {
             datatype
         };
         let lowered = language
-            .filter(|tag| !super::builder::is_lowercase(tag))
-            .map(str::to_lowercase);
+            .filter(|tag| !purrdf_iri::langtag::is_identity_folded(tag))
+            .map(purrdf_iri::langtag::identity_fold);
         let language = lowered.as_deref().or(language);
 
         let datatype_id = self.term_id_by_iri(datatype)?;

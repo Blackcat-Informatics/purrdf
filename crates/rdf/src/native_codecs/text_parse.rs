@@ -1093,7 +1093,7 @@ fn split_lang_direction(
     column: u32,
 ) -> Result<(String, Option<String>), RdfDiagnostic> {
     if let Some((base, dir)) = raw.rsplit_once("--") {
-        if matches!(dir, "ltr" | "rtl") && !base.is_empty() {
+        if crate::RdfTextDirection::from_str_token(dir).is_some() && !base.is_empty() {
             Ok((base.to_owned(), Some(dir.to_owned())))
         } else {
             Err(err_at("invalid literal base direction", line_no, column))

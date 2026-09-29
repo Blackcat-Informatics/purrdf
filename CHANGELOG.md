@@ -1131,6 +1131,14 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **rdf (BREAKING):** `JsonLdDirection` is a re-export of the one RDF 1.2
+  base-direction type (`purrdf_core::RdfTextDirection`): its variants are
+  `Ltr`/`Rtl` rather than `LeftToRight`/`RightToLeft`, and it gains
+  `from_str_token`. `as_str` and the JSON-LD bytes are unchanged.
+- **core, sparql-algebra:** `RdfTextDirection` and `BaseDirection` are
+  re-exports of `purrdf_cdt::TextDirection`, the one RDF 1.2 base-direction
+  type; `as_str` is a `const fn`, `from_str_token` reads the `ltr`/`rtl`
+  token, and `BaseDirection` gains `PartialOrd`/`Ord`.
 - **retrieval:** `PLAN_ID_DOMAIN`, `FUSION_PROFILE_ID_DOMAIN` and
   `EVIDENCE_ID_DOMAIN` are `purrdf_hash::Domain` constants rather than `&str`;
   their bytes, and every `PlanId`, `FusionProfileId` and `EvidenceId`, are
