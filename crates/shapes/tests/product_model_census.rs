@@ -155,12 +155,7 @@ const PROFILE_ID: &str = "purrdf-shacl-core-v1";
 /// the place it ships from. A change to it is a change to what a prepared product
 /// MEANS, and every product minted under the old id describes a different model.
 fn shipped_stage_id() -> String {
-    purrdf_shapes::product::STAGE_ID
-        .iter()
-        .fold(String::with_capacity(64), |mut out, byte| {
-            let _ = write!(out, "{byte:02x}");
-            out
-        })
+    purrdf_hash::hex::encode(&purrdf_shapes::product::STAGE_ID)
 }
 
 // ── Census data model ───────────────────────────────────────────────────────────
@@ -1343,7 +1338,7 @@ pub fn stage_id(
     analysis: &[(String, String)],
 ) -> String {
     let preimage = stage_id_preimage(types, builtins, components, analysis);
-    purrdf_gts::wire::hex(&purrdf_gts::wire::blake3_256(preimage.as_bytes()))
+    purrdf_hash::hex::encode(&purrdf_gts::wire::blake3_256(preimage.as_bytes()))
 }
 
 /// The stage id of the live repository sources.
@@ -1593,7 +1588,7 @@ fn stage_id_depends_on_the_profile_id() {
     );
     assert_ne!(real, other, "the profile line must appear in the preimage");
     assert_ne!(
-        purrdf_gts::wire::hex(&purrdf_gts::wire::blake3_256(other.as_bytes())),
+        purrdf_hash::hex::encode(&purrdf_gts::wire::blake3_256(other.as_bytes())),
         live_stage_id()
     );
 }

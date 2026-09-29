@@ -24,7 +24,7 @@ use std::hash::BuildHasher;
 use ciborium::value::Value;
 use hashbrown::HashTable;
 use purrdf_gts::model::{AnnotationRow, ReifierRow, Term, TermKind, is_literal_direction};
-use purrdf_gts::wire::{blake3_256, canonical, hex};
+use purrdf_gts::wire::{canonical, digest_str};
 use purrdf_gts::writer::Writer;
 
 use crate::{
@@ -1006,7 +1006,7 @@ impl SnapshotBuilder {
     /// existing archive.
     pub fn snapshot_content_id(&self) -> String {
         let bytes = canonical(&self.snapshot_payload());
-        format!("blake3:{}", hex(&blake3_256(&bytes)))
+        digest_str(&bytes)
     }
 }
 

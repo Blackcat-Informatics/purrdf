@@ -56,9 +56,6 @@ use alloc::vec::Vec;
 use crate::term::{CdtEntry, CdtKey, CdtLiteral, CdtTerm, CdtTripleTerm};
 use crate::value::{CdtContents, CdtValue};
 
-/// Uppercase hex digits, for the `\u00XX` escape forms.
-const HEX_UPPER: [u8; 16] = *b"0123456789ABCDEF";
-
 /// One step of the iterative renderer.
 enum Job<'a> {
     /// Render a term (which may open a nested composite).
@@ -330,18 +327,16 @@ fn is_iri_forbidden(ch: char) -> bool {
 /// wide branch is what keeps the function total over `char`.
 fn push_uchar<S: Sink>(out: &mut S, ch: char) {
     let value = ch as u32;
-    if value <= 0xFFFF {
-        out.put_str("\\u");
-        push_hex(out, value, 4);
+    let bytes = value.to_be_bytes();
+    let (escape, digits) = if value <= 0xFFFF {
+        ("\\u", &bytes[2..])
     } else {
-        out.put_str("\\U");
-        push_hex(out, value, 8);
-    }
-}
-
-fn push_hex<S: Sink>(out: &mut S, value: u32, digits: u32) {
-    for shift in (0..digits).rev() {
-        let nibble = (value >> (shift * 4)) & 0xF;
-        out.put_char(HEX_UPPER[nibble as usize] as char);
+        ("\\U", &bytes[..])
+    };
+    out.put_str(escape);
+    let mut buffer = [0u8; 8];
+    // Eight bytes hold the rendering of at most four.
+    if let Ok(text) = purrdf_hash::hex::encode_upper_to_slice(digits, &mut buffer) {
+        out.put_str(text);
     }
 }

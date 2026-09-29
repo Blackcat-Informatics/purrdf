@@ -90,7 +90,7 @@ fn percent_encode(value: &str) -> String {
             out.push(byte as char);
         } else {
             out.push('%');
-            let _ = write!(out, "{byte:02X}");
+            purrdf_hash::hex::encode_upper_into(&[byte], &mut out);
         }
     }
     out

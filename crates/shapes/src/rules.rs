@@ -1758,15 +1758,13 @@ fn mint_tag(focus: Option<&Term>, execution: u64) -> String {
 fn focus_tag(focus: &Term) -> String {
     let rendered = focus.to_string();
     let mut tag = String::with_capacity(rendered.len() * 3 + 2);
-    const HEX: &[u8; 16] = b"0123456789abcdef";
     tag.push('f');
     for byte in rendered.bytes() {
         if byte.is_ascii_alphanumeric() {
             tag.push(char::from(byte));
         } else {
             tag.push('-');
-            tag.push(char::from(HEX[usize::from(byte >> 4)]));
-            tag.push(char::from(HEX[usize::from(byte & 0x0f)]));
+            purrdf_hash::hex::encode_into(&[byte], &mut tag);
         }
     }
     tag.push('_');

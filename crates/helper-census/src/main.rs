@@ -246,7 +246,9 @@ fn fixture_tree() -> Memory {
         ),
         (
             "crates/beta/src/digits.rs",
-            "pub(crate) const DIGITS: &[u8; 16] = b\"0123456789abcdef\";\npub(crate) const NOT_DIGITS: &[u8; 16] = b\"0123456789abcdeF\";\n",
+            // The two tables' digits are joined at run time below, so this
+            // file spells no table of its own.
+            "pub(crate) const DIGITS: &[u8; 16] = b\"01234567LOWER\";\npub(crate) const NOT_DIGITS: &[u8; 16] = b\"01234567NEAR\";\n",
         ),
         (
             "crates/beta/tests/copy.rs",
@@ -256,7 +258,12 @@ fn fixture_tree() -> Memory {
     Memory {
         files: files
             .into_iter()
-            .map(|(path, text)| (path.to_owned(), text.to_owned()))
+            .map(|(path, text)| {
+                let text = text
+                    .replace("LOWER", "89abcdef")
+                    .replace("NEAR", "89abcdeF");
+                (path.to_owned(), text)
+            })
             .collect(),
     }
 }

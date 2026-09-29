@@ -41,6 +41,7 @@
 
 use std::sync::Arc;
 
+use purrdf_hash::hex::Digest32;
 use sha2::{Digest, Sha256};
 
 use crate::dataset_view::DatasetView;
@@ -66,20 +67,20 @@ use super::container::{PackError, PackView};
 /// (e.g. one merely read off [`PackView::rdfc_digest`] without recomputing it) with
 /// one [`verify_pack`] has independently certified.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub struct PackDigest([u8; 32]);
+pub struct PackDigest(Digest32);
 
 impl PackDigest {
     /// The raw 32 digest bytes.
     #[inline]
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+        self.0.as_bytes()
     }
 
     /// The lowercase-hex rendering of the digest (64 chars).
     #[must_use]
     pub fn to_hex(&self) -> String {
-        crate::hex::lower(&self.0)
+        self.0.to_hex()
     }
 }
 
@@ -91,7 +92,7 @@ impl std::fmt::Debug for PackDigest {
 
 impl std::fmt::Display for PackDigest {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(&self.to_hex())
+        std::fmt::Display::fmt(&self.0, f)
     }
 }
 
@@ -228,7 +229,7 @@ pub fn verify_pack(bytes: &[u8]) -> Result<PackDigest, PackError> {
         return Err(PackError::RdfcDigestMismatch { expected, computed });
     }
 
-    Ok(PackDigest(expected))
+    Ok(PackDigest(Digest32::new(expected)))
 }
 
 /// Read a pack's stored canonical-identity digest AFTER structural validation, without the
@@ -258,21 +259,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn pack_digest_to_hex_is_64_lowercase_hex_chars() {
-        let digest = PackDigest([0xab; 32]);
-        let hex = digest.to_hex();
-        assert_eq!(hex.len(), 64);
-        assert!(
-            hex.chars()
-                .all(|c| c.is_ascii_hexdigit() && !c.is_ascii_uppercase()),
-            "to_hex must be lowercase hex: {hex}"
-        );
-        assert_eq!(hex, "ab".repeat(32));
-    }
-
-    #[test]
     fn pack_digest_debug_and_display_agree_with_to_hex() {
-        let digest = PackDigest([0x0f; 32]);
+        let digest = PackDigest(Digest32::new([0x0f; 32]));
         assert_eq!(format!("{digest}"), digest.to_hex());
         assert!(format!("{digest:?}").contains(&digest.to_hex()));
     }

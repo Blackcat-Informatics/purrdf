@@ -997,8 +997,8 @@ fn both_real_producers_attest_the_generation_of_the_index_that_answered() {
         assert_eq!(generation.len(), 64, "{stratum}: a 32-byte digest in hex");
         assert!(
             generation
-                .chars()
-                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+                .bytes()
+                .all(|b| purrdf_hash::hex::nibble_canonical(b).is_some()),
             "{stratum}: rendered in lowercase hex, got {generation}"
         );
     }
@@ -1013,7 +1013,7 @@ fn both_real_producers_attest_the_generation_of_the_index_that_answered() {
     // the wrong thing would pass every assertion above and fail these two.
     assert_eq!(
         lexical,
-        purrdf_core::hex::lower(&text_index().fingerprint()),
+        purrdf_hash::hex::encode(&text_index().fingerprint()),
         "the lexical stratum attests the text index's own content fingerprint"
     );
     assert_eq!(

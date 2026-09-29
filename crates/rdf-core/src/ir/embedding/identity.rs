@@ -11,6 +11,7 @@
 use core::fmt;
 
 use purrdf_hash::Domain;
+use purrdf_hash::hex::Digest32;
 use sha2::{Digest as _, Sha256};
 
 use crate::ContentDigest;
@@ -42,43 +43,43 @@ macro_rules! identity_type {
         $(#[$meta])*
         #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
         #[repr(transparent)]
-        pub struct $name([u8; 32]);
+        pub struct $name(Digest32);
 
         impl $name {
             /// Adopts already-decoded identity bytes without hashing them.
             #[must_use]
             pub const fn from_raw(bytes: [u8; 32]) -> Self {
-                Self(bytes)
+                Self(Digest32::new(bytes))
             }
 
             /// Returns the exact 32 persisted bytes.
             #[must_use]
             pub const fn as_bytes(&self) -> &[u8; 32] {
-                &self.0
+                self.0.as_bytes()
             }
 
             /// Consumes the identity and returns its exact persisted bytes.
             #[must_use]
             pub const fn into_bytes(self) -> [u8; 32] {
-                self.0
+                self.0.into_bytes()
             }
 
             /// Renders lowercase hexadecimal for diagnostics and tooling.
             #[must_use]
             pub fn to_hex(self) -> String {
-                crate::hex::lower(&self.0)
+                self.0.to_hex()
             }
         }
 
         impl fmt::Debug for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.debug_tuple(stringify!($name)).field(&crate::hex::lower(&self.0)).finish()
+                f.debug_tuple(stringify!($name)).field(&self.0.to_hex()).finish()
             }
         }
 
         impl fmt::Display for $name {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str(&crate::hex::lower(&self.0))
+                fmt::Display::fmt(&self.0, f)
             }
         }
     };
@@ -267,7 +268,7 @@ pub fn derive_target_set_id(target_ids: &[TargetId]) -> TargetSetId {
 /// Derives a role digest for an extension relation.
 #[must_use]
 pub fn derive_relation_role_digest(role_bytes: &[u8]) -> [u8; 32] {
-    hash_fold(D_RELATION_ROLE, &[role_bytes])
+    hash_fold(D_RELATION_ROLE, &[role_bytes]).into_bytes()
 }
 
 /// Derives the typed content digest of exact stored matrix bytes.
@@ -399,7 +400,7 @@ pub fn derive_artifact_root(header_zero_root: &[u8], directory: &[u8]) -> Artifa
     ArtifactRoot(hash_fold(D_ARTIFACT, &[header_zero_root, directory]))
 }
 
-fn hash_fold(domain: Domain, fields: &[&[u8]]) -> [u8; 32] {
+fn hash_fold(domain: Domain, fields: &[&[u8]]) -> Digest32 {
     let mut hasher = Sha256::new();
     hasher.update(domain.as_bytes());
     for field in fields {
@@ -407,7 +408,7 @@ fn hash_fold(domain: Domain, fields: &[&[u8]]) -> [u8; 32] {
         hasher.update(length.to_le_bytes());
         hasher.update(field);
     }
-    hasher.finalize().into()
+    Digest32::new(hasher.finalize().into())
 }
 
 #[cfg(test)]

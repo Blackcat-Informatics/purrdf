@@ -29,6 +29,8 @@ path = "src/lib.rs"
 name = "purrdf_validate"
 
 [dependencies]
+# Base16 rendering and reading of the digests this crate prints and parses.
+purrdf-hash = { workspace = true }
 # SHACL validation report types (ValidationReport / ValidationResult / Severity /
 # Path) — the primary input rendered to SARIF.
 purrdf-shapes = { workspace = true }

@@ -395,7 +395,7 @@ fn partition_keys(index: &TextIndex) -> Vec<PartitionKey> {
 /// function of the index's content, so two processes that built the same index
 /// from the same rows attest the same generation and a reader may compare them.
 fn index_generation(index: &TextIndex) -> Arc<str> {
-    Arc::from(purrdf_core::hex::lower(&index.fingerprint()))
+    Arc::from(purrdf_hash::hex::encode(&index.fingerprint()))
 }
 
 // ---------------------------------------------------------------------------
@@ -3006,7 +3006,7 @@ mod tests {
             .expect("a bound needle is admissible");
         assert_eq!(
             cursor.generation(),
-            IndexGeneration::Declared(Arc::from(purrdf_core::hex::lower(&index.fingerprint()))),
+            IndexGeneration::Declared(Arc::from(purrdf_hash::hex::encode(&index.fingerprint()))),
             "an empty index has an identity, so its producer attests one"
         );
 

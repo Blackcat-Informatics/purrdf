@@ -10,7 +10,7 @@ use core::arch::wasm32::{
 };
 
 use super::HexEncode;
-use crate::hex::{ALPHABET, encode_portable};
+use crate::hex::{ALPHABET, UPPER_ALPHABET, encode_portable};
 
 /// Sixteen bytes as a vector, byte `i` in lane `i`.
 #[inline]
@@ -52,9 +52,9 @@ pub(crate) const fn hex_wasm32_simd128() -> Option<HexEncode> {
 /// Sixteen input bytes per step: the high and low nibbles of every byte,
 /// each looked up in the alphabet with `i8x16.swizzle`, then interleaved
 /// high-first into thirty-two characters. The tail after the last whole step
-/// is encoded by the portable table.
-fn hex_encode(input: &[u8], output: &mut [u8]) {
-    let alphabet = load(ALPHABET);
+/// is encoded by the portable compare-select loop.
+fn hex_encode(input: &[u8], output: &mut [u8], upper: bool) {
+    let alphabet = load(if upper { UPPER_ALPHABET } else { ALPHABET });
     let low_nibble = u8x16_splat(0x0f);
     let (chunks, tail) = input.as_chunks::<16>();
     let (pairs, _) = output.as_chunks_mut::<32>();
@@ -75,5 +75,5 @@ fn hex_encode(input: &[u8], output: &mut [u8]) {
         );
     }
     let done = chunks.len() * 16;
-    encode_portable(tail, &mut output[2 * done..]);
+    encode_portable(tail, &mut output[2 * done..], upper);
 }

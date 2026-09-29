@@ -970,8 +970,8 @@ fn two_builds_of_one_corpus_attest_one_generation_and_a_new_document_moves_it() 
     );
     assert_eq!(left.len(), 64, "a 32-byte digest rendered as hex");
     assert!(
-        left.chars()
-            .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        left.bytes()
+            .all(|b| purrdf_hash::hex::nibble_canonical(b).is_some()),
         "rendered in lowercase hex, like every other digest this workspace ships: {left}"
     );
 

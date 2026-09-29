@@ -9,7 +9,6 @@
 //! executed, and every restricted answer is compared against the unrestricted answer of
 //! the same request without the parameter — which the fixture makes different.
 
-use std::fmt::Write as _;
 use std::sync::Arc;
 
 use purrdf_core::{
@@ -47,7 +46,8 @@ fn enc(text: &str) -> String {
         if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
             out.push(char::from(byte));
         } else {
-            write!(out, "%{byte:02X}").expect("writing to a String cannot fail");
+            out.push('%');
+            purrdf_hash::hex::encode_upper_into(&[byte], &mut out);
         }
     }
     out

@@ -61,10 +61,7 @@ pub(crate) fn is_fingerprint_id(id: &str) -> bool {
             && if kind == "table" {
                 rest == "hex-lower" || rest == "hex-upper"
             } else if kind == "rule" {
-                id == crate::rules::STD_DEFAULT_HASHER
-                    || id == crate::rules::VOCABULARY_LITERAL
-                    || id == crate::rules::HOME_LITERAL
-                    || crate::rules::DELEGATED_RULES.contains(&id)
+                crate::rules::RULES.contains(&id) || crate::rules::DELEGATED_RULES.contains(&id)
             } else {
                 rest.len() == 16
                     && rest
@@ -391,7 +388,7 @@ pub(crate) fn hex_tables(stream: &TokenStream, out: &mut BTreeSet<&'static str>)
 /// Which hex-digit table `digits` spells, if any. The sixteen digits are rendered
 /// by the workspace's own base16 encoder rather than retyped, so the census does
 /// not carry the table it looks for.
-fn classify_digits(digits: &str) -> Option<&'static str> {
+pub(crate) fn classify_digits(digits: &str) -> Option<&'static str> {
     const ASCENDING_NIBBLES: [u8; 8] = [0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef];
     if digits.len() != 2 * ASCENDING_NIBBLES.len() {
         return None;
@@ -523,24 +520,28 @@ mod tests {
 
     #[test]
     fn hex_tables_are_found_in_every_spelling_and_nothing_else_is() {
+        // The digits are rendered, not spelt, so this file holds no table.
+        let lower = purrdf_hash::hex::encode(&[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
+        let upper = lower.to_ascii_uppercase();
+        let near = format!("{}F", &lower[..15]);
         for (source, expected) in [
-            ("b\"0123456789abcdef\"", Some(HEX_LOWER)),
-            ("\"0123456789ABCDEF\"", Some(HEX_UPPER)),
-            ("br\"0123456789abcdef\"", Some(HEX_LOWER)),
+            (format!("b\"{lower}\""), Some(HEX_LOWER)),
+            (format!("\"{upper}\""), Some(HEX_UPPER)),
+            (format!("br\"{lower}\""), Some(HEX_LOWER)),
             (
-                "[b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd', b'e', b'f']",
+                "[b'0', b'1', b'2', b'3', b'4', b'5', b'6', b'7', b'8', b'9', b'a', b'b', b'c', b'd', b'e', b'f']".to_owned(),
                 Some(HEX_LOWER),
             ),
             (
-                "['0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F']",
+                "['0','1','2','3','4','5','6','7','8','9','A','B','C','D','E','F']".to_owned(),
                 Some(HEX_UPPER),
             ),
-            ("b\"0123456789abcdeF\"", None),
-            ("b\"0123456789abcdefg\"", None),
-            ("[b'0', b'1']", None),
+            (format!("b\"{near}\""), None),
+            (format!("b\"{lower}g\""), None),
+            ("[b'0', b'1']".to_owned(), None),
         ] {
             let mut found = BTreeSet::new();
-            hex_tables(&tokens(source), &mut found);
+            hex_tables(&tokens(&source), &mut found);
             assert_eq!(found.into_iter().next(), expected, "{source}");
         }
     }

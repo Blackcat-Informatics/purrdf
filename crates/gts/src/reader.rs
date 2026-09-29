@@ -33,7 +33,8 @@ use crate::reader_rows::{
 use crate::reader_union::union_segments;
 use crate::stream::DIGEST as STREAM_DIGEST;
 use crate::wire::{
-    MAGIC, VERSION, content_id, digest_str, header_id, hex, iter_items, map_get, unwrap_header,
+    MAGIC, VERSION, content_id, digest_label, digest_str, header_id, iter_items, map_get,
+    unwrap_header,
 };
 
 pub(crate) fn as_i128(v: &Value) -> Option<i128> {
@@ -81,8 +82,8 @@ pub fn public_blob_digest(value: &Value) -> Option<String> {
     };
     match map_get(entries, "digest") {
         Some(Value::Text(text)) if text.starts_with("blake3:") => Some(text.clone()),
-        Some(Value::Text(text)) => Some(format!("blake3:{text}")),
-        Some(Value::Bytes(bytes)) if bytes.len() == 32 => Some(format!("blake3:{}", hex(bytes))),
+        Some(Value::Text(text)) => Some(["blake3:", text].concat()),
+        Some(Value::Bytes(bytes)) if bytes.len() == 32 => Some(digest_label(bytes)),
         _ => None,
     }
 }

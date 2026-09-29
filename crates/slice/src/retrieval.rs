@@ -48,7 +48,6 @@
 //!
 //! [`IriError::NoBase`]: purrdf_iri::IriError::NoBase
 
-use std::fmt::Write as _;
 use std::path::Path;
 
 use purrdf_iri::BaseIri;
@@ -210,7 +209,8 @@ fn percent_encode(text: &str, extra: &[u8]) -> String {
         if keep {
             encoded.push(byte as char);
         } else {
-            let _ = write!(encoded, "%{byte:02X}");
+            encoded.push('%');
+            purrdf_hash::hex::encode_upper_into(&[byte], &mut encoded);
         }
     }
     encoded

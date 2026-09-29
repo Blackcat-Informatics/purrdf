@@ -51,14 +51,7 @@ struct Fixture {
 fn frozen_fixture() -> Fixture {
     let vector: serde_json::Value =
         serde_json::from_str(include_str!("../../../vectors/encrypt0/basic.json")).unwrap();
-    let bytes = |field: &str| {
-        let (pairs, tail) = vector[field].as_str().unwrap().as_bytes().as_chunks::<2>();
-        assert_eq!(tail, [0_u8; 0]);
-        pairs
-            .iter()
-            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
-            .collect::<Vec<_>>()
-    };
+    let bytes = |field: &str| purrdf_hash::hex::decode(vector[field].as_str().unwrap()).unwrap();
     Fixture {
         blob: bytes("cose"),
         key: bytes("key").try_into().unwrap(),

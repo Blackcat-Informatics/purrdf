@@ -1593,7 +1593,7 @@ pub fn derivation_id(dag: &TermDag, proof: &FolProof) -> String {
             }
         }
     }
-    hex_lower(&hasher.finalize())
+    purrdf_hash::hex::encode(&hasher.finalize())
 }
 
 /// The **flat** derivation identity — the published flat recipe, folding a node's
@@ -1619,20 +1619,8 @@ pub fn flat_derivation_id(dag: &TermDag, proof: &FolProof) -> String {
     hasher.update(proof.rule_identity().as_bytes());
     hasher.update(b"\n");
     hasher.update(premise_keys.join("\n").as_bytes());
-    hex_lower(&hasher.finalize())
+    purrdf_hash::hex::encode(&hasher.finalize())
 }
-
-/// Lowercase hexadecimal rendering of `bytes`: the workspace's one one-shot hex
-/// renderer, re-exported here under the name this crate has always used for it.
-///
-/// This is a re-export, not a second implementation — the single transcription lives in
-/// [`purrdf_core::hex::lower`], reached by every crate downstream of the IR kernel.
-/// [`crate::cache::ContractHash::to_hex`] reuses it rather than carrying its own copy.
-/// [`crate::chase`]'s witness-label renderer deliberately does NOT: it is called once per
-/// invented witness inside the chase's fixpoint loop, so it keeps its own lookup-table
-/// implementation rather than paying this function's per-byte `write!` formatting overhead
-/// on a hot path.
-pub(crate) use purrdf_core::hex::lower as hex_lower;
 
 // ── The DlClause lowering adapter ───────────────────────────────────────────────
 

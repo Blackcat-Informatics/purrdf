@@ -412,22 +412,21 @@ fn decode_envelope(token: &str) -> Option<(String, BlankScope)> {
 /// exactly what [`push_hex6`] writes. Lowercase is deliberately refused so the
 /// decode accepts only the escape's own image.
 fn hex6_digit(c: char) -> Option<u32> {
-    match c {
-        '0'..='9' => Some(c as u32 - '0' as u32),
-        'A'..='F' => Some(c as u32 - 'A' as u32 + 10),
-        _ => None,
-    }
+    let byte = u8::try_from(c).ok().filter(|b| !b.is_ascii_lowercase())?;
+    purrdf_hash::hex::nibble(byte).map(u32::from)
 }
 
 /// Append `cp` as exactly six uppercase hex digits (24 bits covers the whole
 /// `0..=0x10FFFF` scalar range), the fixed-width escape body [`escape_label`]
-/// writes after each `_`.
+/// writes after each `_`: the low three bytes of `cp`, big-endian, in
+/// uppercase base16.
 fn push_hex6(cp: u32, out: &mut String) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    for nibble in (0..6).rev() {
-        let index = ((cp >> (nibble * 4)) & 0xF) as usize;
-        out.push(char::from(HEX[index]));
-    }
+    let [_, high, middle, low] = cp.to_be_bytes();
+    let mut digits = [0u8; 6];
+    out.push_str(
+        purrdf_hash::hex::encode_upper_to_slice(&[high, middle, low], &mut digits)
+            .expect("three bytes render in six digits"),
+    );
 }
 
 /// Whether `label` is legal as a serialized blank-node label (`_:{label}`).

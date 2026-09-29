@@ -27,3 +27,7 @@ path = "src/main.rs"
 [dependencies]
 # Writes the appended templates; existing module bytes remain unchanged.
 wasm-encoder.workspace = true
+
+[dev-dependencies]
+# The base16 reader the frozen instruction-span fixture is decoded with.
+purrdf-hash = { workspace = true }

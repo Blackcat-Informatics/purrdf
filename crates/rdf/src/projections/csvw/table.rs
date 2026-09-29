@@ -403,8 +403,8 @@ fn percent_encode(value: &str) -> String {
         if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'~') {
             output.push(char::from(byte));
         } else {
-            use std::fmt::Write as _;
-            let _ = write!(output, "%{byte:02X}");
+            output.push('%');
+            purrdf_hash::hex::encode_upper_into(&[byte], &mut output);
         }
     }
     output

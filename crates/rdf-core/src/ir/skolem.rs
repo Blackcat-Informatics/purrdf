@@ -68,6 +68,8 @@ use std::fmt::Write as _;
 use std::ops::ControlFlow;
 use std::sync::Arc;
 
+use purrdf_hash::hex::nibble_canonical;
+
 use crate::RdfLiteral;
 
 use super::builder::RdfDatasetBuilder;
@@ -237,7 +239,12 @@ fn encode_blank(label: &str, scope: BlankScope) -> String {
         if byte.is_ascii_alphanumeric() {
             out.push(char::from(byte));
         } else {
-            let _ = write!(out, "-{byte:02x}");
+            out.push('-');
+            let mut digits = [0u8; 2];
+            out.push_str(
+                purrdf_hash::hex::encode_to_slice(&[byte], &mut digits)
+                    .expect("one byte renders in two digits"),
+            );
         }
     }
     out
@@ -275,7 +282,7 @@ fn decode_blank(encoded: &str) -> Result<(String, BlankScope), &'static str> {
                 let (Some(&hi), Some(&lo)) = (bytes.get(i + 1), bytes.get(i + 2)) else {
                     return Err("a '-' escape is not followed by two hex digits");
                 };
-                let (Some(hi), Some(lo)) = (lower_hex_value(hi), lower_hex_value(lo)) else {
+                let (Some(hi), Some(lo)) = (nibble_canonical(hi), nibble_canonical(lo)) else {
                     return Err("a '-' escape carries a non-lowercase-hex digit");
                 };
                 let byte = hi * 16 + lo;
@@ -295,16 +302,6 @@ fn decode_blank(encoded: &str) -> Result<(String, BlankScope), &'static str> {
     let label = String::from_utf8(label_bytes)
         .map_err(|_| "the escaped label bytes are not valid UTF-8")?;
     Ok((label, BlankScope(scope)))
-}
-
-/// The value of a lowercase hex digit (`[0-9a-f]`), or `None` — uppercase is
-/// rejected so every byte has exactly one escape spelling (canonicality).
-const fn lower_hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        _ => None,
-    }
 }
 
 /// How a whole-dataset rewrite maps the two leaf term kinds a rewrite may

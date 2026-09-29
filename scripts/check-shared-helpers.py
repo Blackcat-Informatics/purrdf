@@ -578,6 +578,108 @@ def literal_fixture_cases() -> list[tuple[str, bool]]:
     ]
 
 
+# A seeded workspace for the base16 rules, run through the real census: the
+# `rule:hex-format-loop` lines marked POSITIVE (a two-digit hex format inside a
+# loop or closure, in shipping code and in a test) must be reported and the
+# neighbours beside them (one pair outside any loop, a pair in an assertion
+# message, an escaped brace, a wider spec) must not; likewise a byte-pair radix
+# parse and a hex-digit table outside the home. The home's own table is its.
+# The tables' digits are joined when the fixture is written, so this file
+# spells none.
+HEX_FIXTURE_LEDGER = """
+[[job]]
+id = "hex"
+summary = "s"
+home = "fixture_hash::hex::encode"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:hex-format-loop", "rule:hex-pair-radix", "rule:hex-table"]
+names = []
+"""
+
+HEX_DIGITS_LOWER = "01234567" + "89abcdef"
+
+HEX_FIXTURE_FILES = {
+    "crates/hash/Cargo.toml": '[package]\nname = "fixture-hash"\n',
+    "crates/hash/src/lib.rs": "pub mod hex;\n",
+    "crates/hash/src/hex.rs": (
+        f'const ALPHABET: &[u8; 16] = b"{HEX_DIGITS_LOWER}";\n'
+        "/// The one encoder.\npub fn encode(bytes: &[u8]) -> String { String::new() }\n"
+    ),
+    "crates/user/Cargo.toml": '[package]\nname = "fixture-user"\n',
+    "crates/user/src/lib.rs": (
+        "use std::fmt::Write as _;\n"
+        "pub fn render(bytes: &[u8], out: &mut String) {\n"
+        '    for byte in bytes { let _ = write!(out, "{byte:02x}"); } // POSITIVE\n'
+        '    let pairs: Vec<String> = bytes.iter().map(|b| format!("%{b:02X}")).collect(); // POSITIVE\n'
+        '    let one = format!("{:02x}", bytes[0]);\n'
+        '    for b in bytes { assert!(*b < 255, "byte {b:02x}"); }\n'
+        '    for b in bytes { let _ = write!(out, "{{:02x}} U+{:04X}", u32::from(*b)); }\n'
+        "}\n"
+        'pub fn pair(text: &str) -> u8 { u8::from_str_radix(text, 16).unwrap_or(0) } // POSITIVE\n'
+        "pub fn point(text: &str) -> u32 { u32::from_str_radix(text, 16).unwrap_or(0) }\n"
+        f'pub const DIGITS: &str = "{HEX_DIGITS_LOWER.upper()}"; // POSITIVE\n'
+        f'pub const NEAR: &str = "{HEX_DIGITS_LOWER}g";\n'
+    ),
+    "crates/user/tests/it.rs": (
+        "#[test]\n"
+        "fn renders() {\n"
+        '    let s = [1u8, 2].iter().fold(String::new(), |mut o, b| { o.push_str(&format!("{b:02x}")); o }); // POSITIVE\n'
+        "}\n"
+    ),
+}
+
+
+def hex_rule_fixture_cases() -> list[tuple[str, bool]]:
+    """Run the census over the seeded base16 workspace and compare its hits with
+    the lines marked POSITIVE."""
+    with tempfile.TemporaryDirectory(prefix="helper-census-hex-fixture-") as directory:
+        root = Path(directory)
+        expected: set[tuple[str, int]] = set()
+        for relative, text in HEX_FIXTURE_FILES.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            expected |= {
+                (relative, number)
+                for number, line in enumerate(text.splitlines(), start=1)
+                if line.endswith("// POSITIVE")
+            }
+        (root / "helpers-ledger.toml").write_text(HEX_FIXTURE_LEDGER, encoding="utf-8")
+        try:
+            index = json.loads(run_census("--index", root=root))
+        except (CensusError, json.JSONDecodeError) as exc:
+            return [(f"the census runs over the seeded base16 workspace ({exc})", False)]
+    job = index["jobs"]["hex"]
+    copies = {(match["file"], match["line"]) for match in job["matches"] if not match["in_home"]}
+    home = {(match["file"], match["line"]) for match in job["matches"] if match["in_home"]}
+    loops = {
+        (match["file"], match["line"])
+        for match in job["matches"]
+        if any(reason.startswith("rule:hex-format-loop") for reason in match["reasons"])
+    }
+    loop_positives = {hit for hit in expected if "02" in HEX_FIXTURE_FILES[hit[0]].splitlines()[hit[1] - 1]}
+    return [
+        ("every seeded two-digit hex format inside a loop or closure is reported", loop_positives <= loops),
+        (
+            "a pair formatted once, a pair in an assertion message, an escaped brace and a wider spec are not",
+            loops <= loop_positives,
+        ),
+        ("every seeded base16 copy (loop, pair parse, table) is reported", expected <= copies),
+        ("a u32 code-point parse and a near-miss table are not reported", copies <= expected),
+        ("the home's own digit table is the home's, not a copy", home == {("crates/hash/src/hex.rs", 1)}),
+        ("each base16 hit is a copy of the enforced job", job["copies"] == len(expected)),
+    ]
+
+
 def fixture_ledger() -> dict:
     return {
         "job": [
@@ -834,6 +936,7 @@ def self_test() -> int:
 
     cases.extend(rule_fixture_cases())
     cases.extend(literal_fixture_cases())
+    cases.extend(hex_rule_fixture_cases())
 
     failed = 0
     for name, held in cases:

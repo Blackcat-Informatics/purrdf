@@ -37,10 +37,10 @@
 use crate::gts_import_blobs::BlobCollector;
 use ciborium::value::Value;
 use purrdf_core::cdt_blank::BlankBinding;
-use purrdf_core::hex;
 use purrdf_gts::model::{Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};
 use purrdf_gts::reader::{BlobPayload, BlobRefusal, FrameContext};
 use purrdf_gts::segment_decode::{ResolvedSink, SegmentResolver};
+use purrdf_hash::hex;
 
 use crate::{
     BlankScope, GtsBundle, RdfDatasetBuilder, RdfDiagnostic, RdfEnvelope, RdfLiteral, RdfLocation,
@@ -356,7 +356,7 @@ impl ResolvedSink for SinkImporter<'_> {
 
     fn opaque(&mut self, _segment_index: usize, opaque: &OpaqueNode) -> Result<(), RdfDiagnostic> {
         self.lookaside.opaque_nodes.push(RdfOpaqueNodeRecord {
-            id: hex::lower(&opaque.id),
+            id: hex::encode(&opaque.id),
             frame_type: opaque.frame_type.clone(),
             reason: opaque.reason.clone(),
             signature_status: opaque.sigstat.clone(),
@@ -371,7 +371,7 @@ impl ResolvedSink for SinkImporter<'_> {
         signature: &Signature,
     ) -> Result<(), RdfDiagnostic> {
         self.lookaside.signatures.push(RdfSignatureRecord {
-            frame_id: hex::lower(&signature.frame_id),
+            frame_id: hex::encode(&signature.frame_id),
             key_id: signature.kid.clone(),
             status: signature.status.clone(),
             has_cose: signature.cose.is_some(),
@@ -384,7 +384,7 @@ impl ResolvedSink for SinkImporter<'_> {
             blobs.segment_head(segment_index, head);
         }
         // Grow/patch the per-segment record with its head id.
-        self.ensure_segment_record(segment_index).head = Some(hex::lower(head));
+        self.ensure_segment_record(segment_index).head = Some(hex::encode(head));
         Ok(())
     }
 

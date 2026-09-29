@@ -414,7 +414,8 @@ pub fn encode_str(text: &str) -> String {
         match character {
             '\\' => encoded.push_str("\\\\"),
             ascii if ascii.is_ascii() && escaped_in_text(ascii as u8) => {
-                let _ = write!(encoded, "\\x{:02x}", ascii as u8);
+                encoded.push_str("\\x");
+                purrdf_hash::hex::encode_into(&[ascii as u8], &mut encoded);
             }
             other => encoded.push(other),
         }
@@ -433,7 +434,8 @@ pub fn encode_bytes(bytes: &[u8]) -> String {
         match byte {
             b'\\' => encoded.push_str("\\\\"),
             byte if escaped_in_text(byte) || byte >= 0x80 => {
-                let _ = write!(encoded, "\\x{byte:02x}");
+                encoded.push_str("\\x");
+                purrdf_hash::hex::encode_into(&[byte], &mut encoded);
             }
             byte => encoded.push(char::from(byte)),
         }
@@ -506,9 +508,9 @@ fn decode(field: &str, encoding: Encoding) -> Result<Vec<u8>, VectorError> {
                 let digits = bytes
                     .get(index + 2..index + 4)
                     .ok_or_else(|| malformed("`\\x` needs two hex digits"))?;
-                let high = hex_value(digits[0])
+                let high = purrdf_hash::hex::nibble_canonical(digits[0])
                     .ok_or_else(|| malformed("`\\x` needs lowercase hex digits"))?;
-                let low = hex_value(digits[1])
+                let low = purrdf_hash::hex::nibble_canonical(digits[1])
                     .ok_or_else(|| malformed("`\\x` needs lowercase hex digits"))?;
                 let value = (high << 4) | low;
                 if value >= 0x80 && encoding == Encoding::Text {
@@ -531,20 +533,7 @@ fn decode(field: &str, encoding: Encoding) -> Result<Vec<u8>, VectorError> {
     Ok(decoded)
 }
 
-const fn hex_value(digit: u8) -> Option<u8> {
-    match digit {
-        b'0'..=b'9' => Some(digit - b'0'),
-        b'a'..=b'f' => Some(digit - b'a' + 10),
-        _ => None,
-    }
-}
-
 /// The lowercase hex SHA-256 of `data`.
 pub fn sha256_hex(data: &[u8]) -> String {
-    Sha256::digest(data)
-        .iter()
-        .fold(String::with_capacity(64), |mut hex, byte| {
-            let _ = write!(hex, "{byte:02x}");
-            hex
-        })
+    purrdf_hash::hex::encode(&Sha256::digest(data))
 }

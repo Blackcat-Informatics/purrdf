@@ -13,15 +13,14 @@
 //! a caller minting a `Blake3ContentId` hashes the bytes itself and hands over
 //! the resulting hex or raw bytes.
 //!
-//! The hex-decode loop is shared with `ContentDigest::from_hex` via
-//! `decode_hex_32` / `decode_hex_32_lower` so the two domains
-//! never drift apart on parsing behavior; only the case-sensitivity policy
-//! differs (this domain requires canonical lowercase hex).
+//! Both domains read their hex through `purrdf_hash::hex`, so they never drift
+//! apart on parsing behavior; only the case-sensitivity policy differs (this
+//! domain requires canonical lowercase hex).
 
 use std::fmt;
 
 use crate::RdfDiagnostic;
-use crate::content_store::decode_hex_32_lower;
+use purrdf_hash::hex::Digest32;
 
 /// A content id in the BLAKE3 GTS domain (`blake3:<hex>` term references).
 ///
@@ -31,7 +30,7 @@ use crate::content_store::decode_hex_32_lower;
 /// bytes a caller already has): the digest is the reference writer's, not this
 /// type's.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub struct Blake3ContentId([u8; 32]);
+pub struct Blake3ContentId(Digest32);
 
 impl Blake3ContentId {
     /// Wrap 32 raw BLAKE3 digest bytes as a `Blake3ContentId` WITHOUT hashing.
@@ -40,19 +39,19 @@ impl Blake3ContentId {
     /// want to carry the result as a `Blake3ContentId`.
     #[must_use]
     pub const fn from_raw(raw: [u8; 32]) -> Self {
-        Self(raw)
+        Self(Digest32::new(raw))
     }
 
     /// The 32 raw digest bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; 32] {
-        &self.0
+        self.0.as_bytes()
     }
 
     /// The lowercase-hex rendering of the digest (64 chars).
     #[must_use]
     pub fn to_hex(&self) -> String {
-        crate::hex::lower(&self.0)
+        self.0.to_hex()
     }
 
     /// Parse a canonical 64-char **lowercase** hex digest. Returns `None` on
@@ -65,7 +64,7 @@ impl Blake3ContentId {
     /// malformed rather than silently normalized.
     #[must_use]
     pub fn from_hex(hex: &str) -> Option<Self> {
-        decode_hex_32_lower(hex).map(Self)
+        Digest32::from_hex(hex).map(Self)
     }
 }
 
@@ -128,13 +127,13 @@ impl ContentIdScheme {
 
 impl fmt::Debug for Blake3ContentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Blake3ContentId({})", self.to_hex())
+        write!(f, "Blake3ContentId({})", self.0)
     }
 }
 
 impl fmt::Display for Blake3ContentId {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_hex())
+        fmt::Display::fmt(&self.0, f)
     }
 }
 

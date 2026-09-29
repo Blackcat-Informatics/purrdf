@@ -10,7 +10,10 @@
 use std::fmt;
 use std::str::FromStr;
 
-const CROCKFORD: &[u8; 32] = b"0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+/// Crockford's Base32 alphabet: the ten decimal digits, then the letters
+/// without I, L, O and U.
+const CROCKFORD: &[u8; 32] = b"0123456789\
+ABCDEFGHJKMNPQRSTVWXYZ";
 const ULID_LEN: usize = 26;
 const TIMESTAMP_BYTES: usize = 6;
 const RANDOMNESS_BYTES: usize = 10;

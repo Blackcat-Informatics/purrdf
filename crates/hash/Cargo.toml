@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-hash"
-description = "Native, zero-dependency hashing for PurRDF: BLAKE3, MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot, lowercase hex rendering, the fixed-key table hasher, FNV-1a and SplitMix64"
+description = "Native, zero-dependency hashing for PurRDF: BLAKE3, MD5, SHA-1, SHA-3/Keccak and CRC-32 digests, streaming and one-shot, the base16 codec and 32-byte digest value, the fixed-key table hasher, FNV-1a and SplitMix64"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -12,7 +12,7 @@ homepage.workspace = true
 documentation = "https://docs.rs/purrdf-hash"
 rust-version.workspace = true
 keywords = ["blake3", "sha3", "crc32", "hash", "digest"]
-categories = ["algorithms", "cryptography", "no-std::no-alloc"]
+categories = ["algorithms", "cryptography", "encoding"]
 
 [package.metadata.docs.rs]
 all-features = true
@@ -23,8 +23,9 @@ workspace = true
 [lib]
 # rlib-only, ZERO runtime dependencies: the root of layers.toml, which every
 # crate may depend on, held to that by `make rdf-core-hygiene`. Pure integer
-# arithmetic over caller-supplied bytes: no allocation, no threads, no
-# filesystem, no clock, no entropy, so it is wasm32-clean on every target.
+# arithmetic over caller-supplied bytes (the base16 functions that return an
+# owned String or Vec allocate only that value): no threads, no filesystem,
+# no clock, no entropy, so it is wasm32-clean on every target.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_hash"

@@ -1677,6 +1677,9 @@ mod tests {
     use crate::ir::term::{RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_STRING};
     use purrdf_testkit::prop::prelude::*;
 
+    /// The content-id recognition prefix these tests configure.
+    const SCHEME: &str = "blake3:";
+
     fn lit_simple(s: &str) -> RdfLiteral {
         RdfLiteral::simple(s)
     }
@@ -1768,7 +1771,7 @@ mod tests {
     /// scheme (and, optionally, the derivation predicate) before any intern.
     #[test]
     fn with_content_addressing_sets_config() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let b = RdfDatasetBuilder::with_content_addressing(
             scheme.clone(),
             Some("http://example.org/derivedFrom".to_string()),
@@ -1784,10 +1787,10 @@ mod tests {
     /// decoded bytes.
     #[test]
     fn intern_iri_recognizes_content_id() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
         let hex = "ab".repeat(32);
-        let id = b.intern_iri(&format!("blake3:{hex}"));
+        let id = b.intern_iri(&format!("{SCHEME}{hex}"));
         let expected = Blake3ContentId::from_hex(&hex).expect("valid hex");
         assert_eq!(b.interner.content_id(id), Some(expected));
     }
@@ -1796,9 +1799,9 @@ mod tests {
     /// exactly one side-table entry (idempotent, no double-insert drift).
     #[test]
     fn intern_iri_content_id_is_idempotent() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
-        let iri = format!("blake3:{}", "cd".repeat(32));
+        let iri = format!("{SCHEME}{}", "cd".repeat(32));
         let a = b.intern_iri(&iri);
         let c = b.intern_iri(&iri);
         assert_eq!(a, c);
@@ -1809,13 +1812,13 @@ mod tests {
     /// error: no side-table entry, but interning still succeeds.
     #[test]
     fn intern_iri_rejects_malformed_suffix_as_ordinary_iri() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
 
-        let too_short = format!("blake3:{}", "a".repeat(63));
-        let too_long = format!("blake3:{}", "a".repeat(65));
-        let non_hex = format!("blake3:{}z", "a".repeat(63));
-        let uppercase = format!("blake3:{}", "AB".repeat(32));
+        let too_short = format!("{SCHEME}{}", "a".repeat(63));
+        let too_long = format!("{SCHEME}{}", "a".repeat(65));
+        let non_hex = format!("{SCHEME}{}z", "a".repeat(63));
+        let uppercase = format!("{SCHEME}{}", "AB".repeat(32));
 
         for iri in [&too_short, &too_long, &non_hex, &uppercase] {
             let id = b.intern_iri(iri);
@@ -1831,7 +1834,7 @@ mod tests {
     /// An ordinary IRI with no content-id prefix at all gets no entry.
     #[test]
     fn intern_iri_ordinary_iri_has_no_content_id() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
         let id = b.intern_iri("http://example.org/x");
         assert_eq!(b.interner.content_id(id), None);
@@ -1842,9 +1845,9 @@ mod tests {
     /// not by a runtime check).
     #[test]
     fn intern_blank_never_recognized_as_content_id() {
-        let scheme = ContentIdScheme::new("blake3:").expect("valid scheme");
+        let scheme = ContentIdScheme::new(SCHEME).expect("valid scheme");
         let mut b = RdfDatasetBuilder::with_content_addressing(scheme, None);
-        let label = format!("blake3:{}", "ef".repeat(32));
+        let label = format!("{SCHEME}{}", "ef".repeat(32));
         let id = b.intern_blank(&label, BlankScope::DEFAULT);
         assert_eq!(b.interner.content_id(id), None);
         assert!(b.interner.content_ids.is_empty());
@@ -1855,7 +1858,7 @@ mod tests {
     #[test]
     fn intern_iri_no_recognition_when_scheme_inactive() {
         let mut b = RdfDatasetBuilder::new();
-        let id = b.intern_iri(&format!("blake3:{}", "12".repeat(32)));
+        let id = b.intern_iri(&format!("{SCHEME}{}", "12".repeat(32)));
         assert_eq!(b.interner.content_id(id), None);
         assert!(b.interner.content_ids.is_empty());
     }

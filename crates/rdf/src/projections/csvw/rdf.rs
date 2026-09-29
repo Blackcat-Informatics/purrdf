@@ -519,7 +519,6 @@ fn push_percent_encoded(
     find: impl Fn(&[u8]) -> Option<usize>,
     output: &mut String,
 ) {
-    const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
     let bytes = value.as_bytes();
     let mut run_start = 0;
     let mut hit = first;
@@ -529,8 +528,7 @@ fn push_percent_encoded(
         }
         let byte = bytes[hit];
         output.push('%');
-        output.push(char::from(HEX_UPPER[usize::from(byte >> 4)]));
-        output.push(char::from(HEX_UPPER[usize::from(byte & 0xF)]));
+        purrdf_hash::hex::encode_upper_into(&[byte], output);
         run_start = hit + 1;
         match find(&bytes[run_start..]) {
             Some(offset) => hit = run_start + offset,
@@ -650,7 +648,6 @@ mod tests {
         reserved_byte, unreserved_byte,
     };
     use std::borrow::Cow;
-    use std::fmt::Write as _;
 
     /// The per-byte reserved expansion the scan replaced, kept as the oracle.
     fn percent_encode_reserved_reference(value: &str) -> Cow<'_, str> {
@@ -663,7 +660,8 @@ mod tests {
             if reserved_byte(byte) {
                 output.push(char::from(byte));
             } else {
-                let _ = write!(output, "%{byte:02X}");
+                output.push('%');
+                purrdf_hash::hex::encode_upper_into(&[byte], &mut output);
             }
         }
         Cow::Owned(output)
@@ -676,7 +674,8 @@ mod tests {
             if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
                 output.push(char::from(byte));
             } else {
-                let _ = write!(output, "%{byte:02X}");
+                output.push('%');
+                purrdf_hash::hex::encode_upper_into(&[byte], &mut output);
             }
         }
         output

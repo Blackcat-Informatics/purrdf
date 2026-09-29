@@ -814,18 +814,13 @@ impl<'a> Scanner<'a> {
         };
         let mut value: u32 = 0;
         for byte in hex.bytes() {
-            let nibble = match byte {
-                b'0'..=b'9' => u32::from(byte - b'0'),
-                b'a'..=b'f' => u32::from(byte - b'a') + 10,
-                b'A'..=b'F' => u32::from(byte - b'A') + 10,
-                _ => {
-                    return Err(CdtError::BadEscape {
-                        offset: start,
-                        reason: "a \\u escape takes hexadecimal digits only",
-                    });
-                }
+            let Some(nibble) = purrdf_hash::hex::nibble(byte) else {
+                return Err(CdtError::BadEscape {
+                    offset: start,
+                    reason: "a \\u escape takes hexadecimal digits only",
+                });
             };
-            value = value * 16 + nibble;
+            value = value * 16 + u32::from(nibble);
         }
         let Some(ch) = char::from_u32(value) else {
             return Err(CdtError::BadEscape {

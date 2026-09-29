@@ -163,18 +163,18 @@ pub fn find_first_candidate(bytes: &[u8]) -> Option<usize> {
     CANDIDATES.find_first(bytes)
 }
 
-/// Upper-case hex digits, for the `\u00XX` spelling.
-const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
-
 /// Append the `UCHAR` of `ch`, a scalar [`is_iriref_escape_required`] answers
 /// `true` for and hence at most U+009F: `\u00XX` in upper-case hex, the bytes
 /// `write!(out, "\\u{:04X}", ch as u32)` produces.
 fn push_uchar<W: TextOut + ?Sized>(ch: char, out: &mut W) {
     let v = u32::from(ch);
     debug_assert!(v <= 0x9F, "only scalars up to U+009F are escaped");
+    let mut digits = [0u8; 2];
     out.push_str("\\u00");
-    out.push(char::from(HEX_UPPER[((v >> 4) & 0xF) as usize]));
-    out.push(char::from(HEX_UPPER[(v & 0xF) as usize]));
+    out.push_str(
+        purrdf_hash::hex::encode_upper_to_slice(&[v as u8], &mut digits)
+            .expect("one byte renders in two digits"),
+    );
 }
 
 /// Append `iri[at..]` escaped, copying each run between two escapes whole.

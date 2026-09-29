@@ -27,7 +27,7 @@ use purrdf_gts::compact::{DEFAULT_DICT_NAME, DictPlan, DictStrategy};
 use purrdf_gts::dict::raw_content_dict;
 use purrdf_gts::model::Graph;
 use purrdf_gts::reader::read;
-use purrdf_gts::wire::{hex, map_get};
+use purrdf_gts::wire::map_get;
 use purrdf_gts::writer::{FrameOptions, Writer, WriterOptions};
 use serde_json::{Value as Json, json};
 
@@ -291,7 +291,11 @@ fn fold_json(graph: &Graph, mode: &str) -> Json {
             })
         })
         .collect();
-    let segment_heads: Vec<String> = graph.segment_heads.iter().map(|head| hex(head)).collect();
+    let segment_heads: Vec<String> = graph
+        .segment_heads
+        .iter()
+        .map(|head| purrdf_hash::hex::encode(head))
+        .collect();
 
     json!({
         "blobs": blobs_json(graph),

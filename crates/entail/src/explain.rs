@@ -85,7 +85,6 @@ use purrdf_datalog::seminaive::{compile, evaluate};
 use purrdf_datalog::store::{Fact, RelationStore};
 
 use crate::calculus::{ChaseRule, program_with_attribution};
-use crate::digest_hex::hex;
 use crate::engine::{seed, surface_of};
 use crate::interner::{Interner, intern_into};
 use crate::reasoner::{DlAxiom, Reasoner, Verdict};
@@ -363,7 +362,7 @@ impl ChaseProof {
     /// [`Self::digest`] as lowercase hex.
     #[must_use]
     pub fn digest_hex(&self) -> String {
-        hex(self.digest())
+        purrdf_hash::hex::encode(&self.digest())
     }
 
     /// RE-DERIVE the conclusion from the proof and the clause program.
@@ -732,7 +731,7 @@ impl Justification {
     /// [`Self::digest`] as lowercase hex.
     #[must_use]
     pub fn digest_hex(&self) -> String {
-        hex(self.digest())
+        purrdf_hash::hex::encode(&self.digest())
     }
 
     /// SUFFICIENCY, re-decided: does the justification alone still entail the axiom?
@@ -1227,7 +1226,10 @@ mod tests {
         let second = justify(&chain(), &cat_is_an_animal()).expect("entailed");
         assert_eq!(first.digest(), second.digest());
         assert_eq!(first.digest_hex().len(), 64);
-        assert_eq!(hex(first.digest()), first.digest_hex());
+        assert_eq!(
+            purrdf_hash::hex::encode(&first.digest()),
+            first.digest_hex()
+        );
 
         // The SAME two axioms reached from a different ontology digest identically: the
         // digest is over the justification, not over what it was carved out of.

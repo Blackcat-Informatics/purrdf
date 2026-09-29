@@ -50,6 +50,7 @@
 //! output.
 
 use purrdf_hash::Domain;
+use purrdf_hash::hex::Digest32;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
@@ -57,7 +58,6 @@ use std::sync::Arc;
 use crate::clause::{ClauseAtom, ClauseTerm, DlClause};
 use crate::guard::{Guard, GuardReads};
 use crate::plan::Executable;
-use crate::resolve_fol::hex_lower;
 use crate::schedule::Schedule;
 use crate::seminaive::{EvalError, EvalOptions, MAX_TERM_ARENA_BYTES, compile};
 
@@ -311,24 +311,24 @@ const CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-contract-v1");
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ContractHash {
     /// The folded digest.
-    digest: [u8; 32],
+    digest: Digest32,
 }
 
 impl ContractHash {
     /// The 32-byte digest.
     pub fn digest(&self) -> &[u8; 32] {
-        &self.digest
+        self.digest.as_bytes()
     }
 
     /// The digest as 64 lowercase hex characters.
     pub fn to_hex(&self) -> String {
-        hex_lower(&self.digest)
+        self.digest.to_hex()
     }
 }
 
 impl fmt::Display for ContractHash {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(&self.to_hex())
+        fmt::Display::fmt(&self.digest, f)
     }
 }
 
@@ -404,7 +404,7 @@ pub fn contract_hash_with(rules: &[DlClause], options: &EvalOptions) -> Contract
     hasher.update(digest.digest());
     fold_term_generating_limit(&mut hasher, options);
     ContractHash {
-        digest: *hasher.finalize().as_bytes(),
+        digest: Digest32::new(*hasher.finalize().as_bytes()),
     }
 }
 
@@ -470,7 +470,7 @@ pub fn scheduled_contract_hash(
         }
     }
     ContractHash {
-        digest: *hasher.finalize().as_bytes(),
+        digest: Digest32::new(*hasher.finalize().as_bytes()),
     }
 }
 
@@ -496,7 +496,7 @@ fn contract_digest(
     hasher.update(&max_term_arena_bytes.to_le_bytes());
     hasher.update(&canonical_rule_hash(rules));
     ContractHash {
-        digest: *hasher.finalize().as_bytes(),
+        digest: Digest32::new(*hasher.finalize().as_bytes()),
     }
 }
 
@@ -509,7 +509,7 @@ fn contract_digest(
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PlanIdentity {
     /// The folded content address — the cache key.
-    digest: [u8; 32],
+    digest: Digest32,
 }
 
 impl PlanIdentity {
@@ -525,13 +525,13 @@ impl PlanIdentity {
         frame_str(&mut hasher, contract_hash);
         hasher.update(&canonical_rule_hash(rules));
         Self {
-            digest: *hasher.finalize().as_bytes(),
+            digest: Digest32::new(*hasher.finalize().as_bytes()),
         }
     }
 
     /// The 32-byte content address.
     pub fn digest(&self) -> &[u8; 32] {
-        &self.digest
+        self.digest.as_bytes()
     }
 }
 

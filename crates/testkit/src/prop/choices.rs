@@ -123,7 +123,7 @@ impl Choices {
     /// Replay a hexadecimal choice sequence, as printed by a failing property.
     /// ASCII whitespace between digits is ignored.
     pub fn from_hex(hex: &str) -> Result<Self, HexError> {
-        Ok(Self::from_bytes(&decode_hex(hex)?))
+        Ok(Self::from_bytes(&choice_bytes(hex)?))
     }
 
     pub(crate) fn replay_values(values: Vec<u64>, rejects_left: u32) -> Self {
@@ -274,7 +274,7 @@ impl Choices {
     /// The record as lowercase hexadecimal, the form a failing property
     /// prints and [`Choices::from_hex`] reads.
     pub fn to_hex(&self) -> String {
-        encode_hex(&self.to_bytes())
+        purrdf_hash::hex::encode(&self.to_bytes())
     }
 }
 
@@ -291,50 +291,28 @@ const fn reduce(raw: u64, max: u64) -> u64 {
     }
 }
 
-pub(crate) fn encode_hex(bytes: &[u8]) -> String {
-    const DIGITS: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &byte in bytes {
-        out.push(char::from(DIGITS[usize::from(byte >> 4)]));
-        out.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
-    }
-    out
-}
-
-fn decode_hex(hex: &str) -> Result<Vec<u8>, HexError> {
-    let digits: Vec<u8> = hex
-        .bytes()
-        .filter(|byte| !byte.is_ascii_whitespace())
+/// The choice sequence `hex` spells, ASCII whitespace between digits ignored,
+/// read by [`purrdf_hash::hex::decode`] and refused in this module's words.
+fn choice_bytes(hex: &str) -> Result<Vec<u8>, HexError> {
+    let digits: String = hex
+        .chars()
+        .filter(|character| !character.is_ascii_whitespace())
         .collect();
-    if !digits.len().is_multiple_of(2) {
-        return Err(HexError(format!(
+    purrdf_hash::hex::decode(&digits).map_err(|error| match error {
+        purrdf_hash::hex::HexError::InvalidDigit { byte, .. } => HexError(format!(
+            "`{}` is not a hexadecimal digit",
+            char::from(byte).escape_default()
+        )),
+        _ => HexError(format!(
             "a choice sequence has an even number of hex digits, not {}",
             digits.len()
-        )));
-    }
-    let (pairs, _) = digits.as_chunks::<2>();
-    pairs
-        .iter()
-        .map(|pair| {
-            let nibble = |digit: u8| {
-                char::from(digit)
-                    .to_digit(16)
-                    .map(|value| value as u8)
-                    .ok_or_else(|| {
-                        HexError(format!(
-                            "`{}` is not a hexadecimal digit",
-                            char::from(digit).escape_default()
-                        ))
-                    })
-            };
-            Ok((nibble(pair[0])? << 4) | nibble(pair[1])?)
-        })
-        .collect()
+        )),
+    })
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{Choices, byte_width, decode_hex, encode_hex};
+    use super::{Choices, byte_width, choice_bytes};
 
     #[test]
     fn byte_width_is_the_fewest_bytes_holding_the_bound() {
@@ -347,12 +325,11 @@ mod tests {
 
     #[test]
     fn hex_round_trips_and_refuses_what_is_not_hex() {
-        assert_eq!(encode_hex(&[0x00, 0xab, 0x7f]), "00ab7f");
-        assert_eq!(decode_hex("00ab7f"), Ok(vec![0x00, 0xab, 0x7f]));
-        assert_eq!(decode_hex("00 AB\n7f"), Ok(vec![0x00, 0xab, 0x7f]));
-        assert!(decode_hex("0").is_err());
-        assert!(decode_hex("0g").is_err());
-        assert_eq!(decode_hex(""), Ok(Vec::new()));
+        assert_eq!(choice_bytes("00ab7f"), Ok(vec![0x00, 0xab, 0x7f]));
+        assert_eq!(choice_bytes("00 AB\n7f"), Ok(vec![0x00, 0xab, 0x7f]));
+        assert!(choice_bytes("0").is_err());
+        assert!(choice_bytes("0g").is_err());
+        assert_eq!(choice_bytes(""), Ok(Vec::new()));
     }
 
     #[test]

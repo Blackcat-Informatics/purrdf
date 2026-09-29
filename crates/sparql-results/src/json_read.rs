@@ -1134,14 +1134,10 @@ impl<'a> JsonParser<'a> {
         }
         let mut value: u32 = 0;
         for _ in 0..4 {
-            let c = self.bytes[self.pos];
-            let digit = match c {
-                b'0'..=b'9' => u32::from(c - b'0'),
-                b'a'..=b'f' => u32::from(c - b'a' + 10),
-                b'A'..=b'F' => u32::from(c - b'A' + 10),
-                _ => return Err(fmt("non-hex digit in \\u escape")),
+            let Some(digit) = purrdf_hash::hex::nibble(self.bytes[self.pos]) else {
+                return Err(fmt("non-hex digit in \\u escape"));
             };
-            value = value * 16 + digit;
+            value = value * 16 + u32::from(digit);
             self.pos += 1;
         }
         Ok(value)

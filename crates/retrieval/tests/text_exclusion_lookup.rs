@@ -873,9 +873,9 @@ fn a_lookup_answered_by_a_rebuilt_index_is_refused_and_one_at_the_pinned_generat
     };
     assert_eq!(stratum, &Side::Right.stratum(), "{refused}");
     assert!(
-        reason.contains(&purrdf_core::hex::lower(
+        reason.contains(&purrdf_hash::hex::encode(
             &rebuilt_index(&dataset, Side::Right).fingerprint()
-        )) && reason.contains(&purrdf_core::hex::lower(
+        )) && reason.contains(&purrdf_hash::hex::encode(
             &index(&dataset, Side::Right).fingerprint()
         )),
         "the refusal names both generations: {reason}"
@@ -946,7 +946,7 @@ fn the_evidence_binds_the_lookups_and_a_run_without_lookups_is_unchanged() {
         assert_eq!(
             control.attestations.get(&iri(&side.stratum())),
             Some(&PfAttestation {
-                generation: IndexGeneration::Declared(Arc::from(purrdf_core::hex::lower(
+                generation: IndexGeneration::Declared(Arc::from(purrdf_hash::hex::encode(
                     &index(&dataset, side).fingerprint()
                 ))),
                 service: ServiceLevel::Undeclared,

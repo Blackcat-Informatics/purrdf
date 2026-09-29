@@ -166,18 +166,17 @@ pub fn blake3_256(data: &[u8]) -> [u8; 32] {
     *purrdf_hash::blake3::hash_with_join(data, grain, &RayonJoin).as_bytes()
 }
 
-/// Lowercase hex of a byte string.
-pub fn hex(data: &[u8]) -> String {
-    use std::fmt::Write as _;
-    data.iter().fold(String::new(), |mut out, b| {
-        let _ = write!(out, "{b:02x}");
-        out
-    })
+/// A `blake3:<hex>` content digest for inline blob addressing (§12): the
+/// BLAKE3-256 of `data`, as [`digest_label`] spells it.
+pub fn digest_str(data: &[u8]) -> String {
+    digest_label(&blake3_256(data))
 }
 
-/// A `blake3:<hex>` content digest for inline blob addressing (§12).
-pub fn digest_str(data: &[u8]) -> String {
-    format!("blake3:{}", purrdf_hash::hex::Lower(&blake3_256(data)))
+/// The `blake3:<hex>` spelling of a BLAKE3 digest already computed: the
+/// scheme, then the digest's lowercase base16. The one place a GTS content
+/// identifier is spelt.
+pub fn digest_label(digest: &[u8]) -> String {
+    format!("blake3:{}", purrdf_hash::hex::Lower(digest))
 }
 
 /// Get a map entry by text key (first match, like Python `dict.get`).

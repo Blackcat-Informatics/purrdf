@@ -485,11 +485,8 @@ impl Parser<'_> {
             let Some(&byte) = self.bytes.get(self.pos) else {
                 return Err(self.expected(at, "four hexadecimal digits after `\\u`"));
             };
-            let digit = match byte {
-                b'0'..=b'9' => byte - b'0',
-                b'a'..=b'f' => byte - b'a' + 10,
-                b'A'..=b'F' => byte - b'A' + 10,
-                _ => return Err(self.expected(at, "four hexadecimal digits after `\\u`")),
+            let Some(digit) = purrdf_hash::hex::nibble(byte) else {
+                return Err(self.expected(at, "four hexadecimal digits after `\\u`"));
             };
             unit = (unit << 4) | u16::from(digit);
             self.pos += 1;

@@ -110,8 +110,8 @@ pub(crate) fn percent_decode(text: &str) -> Option<String> {
     let mut index = 0;
     while index < bytes.len() {
         if bytes[index] == b'%' {
-            let high = hex_value(*bytes.get(index + 1)?)?;
-            let low = hex_value(*bytes.get(index + 2)?)?;
+            let high = purrdf_hash::hex::nibble(*bytes.get(index + 1)?)?;
+            let low = purrdf_hash::hex::nibble(*bytes.get(index + 2)?)?;
             out.push(high << 4 | low);
             index += 3;
         } else {
@@ -122,20 +122,10 @@ pub(crate) fn percent_decode(text: &str) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-const fn hex_value(byte: u8) -> Option<u8> {
-    match byte {
-        b'0'..=b'9' => Some(byte - b'0'),
-        b'a'..=b'f' => Some(byte - b'a' + 10),
-        b'A'..=b'F' => Some(byte - b'A' + 10),
-        _ => None,
-    }
-}
-
 /// Write an escaped pointer as a URI fragment body: every byte outside RFC
 /// 3986's `fragment` set (`pchar / "/" / "?"`) is percent-encoded, so the
 /// absolute keyword location is a well-formed URI.
 pub(crate) fn fragment_encode(pointer: &str) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     let mut out = String::with_capacity(pointer.len());
     for &byte in pointer.as_bytes() {
         let allowed = byte.is_ascii_alphanumeric()
@@ -164,8 +154,7 @@ pub(crate) fn fragment_encode(pointer: &str) -> String {
             out.push(char::from(byte));
         } else {
             out.push('%');
-            out.push(char::from(HEX[usize::from(byte >> 4)]));
-            out.push(char::from(HEX[usize::from(byte & 0x0f)]));
+            purrdf_hash::hex::encode_upper_into(&[byte], &mut out);
         }
     }
     out
