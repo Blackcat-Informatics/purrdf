@@ -73,6 +73,12 @@ deps = [{ name = "purrdf-hash", pending = true }]
 external = []
 
 [[crate]]
+name = "purrdf-ed25519"
+deps = ["purrdf-hash"]
+# SHA-512 is Ed25519's hash (RFC 8032), from the single SHA-2 implementation.
+external = ["sha2"]
+
+[[crate]]
 name = "purrdf-lex"
 deps = ["purrdf-hash"]
 external = []
@@ -116,6 +122,7 @@ deps = [
 name = "purrdf-gts"
 deps = [
     "purrdf-deflate",
+    { name = "purrdf-ed25519", pending = true },
     "purrdf-events",
     "purrdf-hash",
     "purrdf-iri",
@@ -232,6 +239,7 @@ deps = [
 name = "purrdf-rdf"
 deps = [
     "purrdf-core",
+    { name = "purrdf-ed25519", pending = true },
     "purrdf-events",
     "purrdf-gts",
     "purrdf-hash",

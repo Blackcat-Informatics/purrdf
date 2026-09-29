@@ -12,6 +12,7 @@ members = [
     "crates/columnar",
     "crates/datalog",
     "crates/deflate",
+    "crates/ed25519",
     "crates/entail",
     "crates/envelope-probe",
     "crates/geo",
@@ -79,6 +80,7 @@ purrdf-columnar = { path = "crates/columnar", version = "2.0.2" }
 purrdf-core = { path = "crates/rdf-core", version = "2.0.2" }
 purrdf-datalog = { path = "crates/datalog", version = "2.0.2" }
 purrdf-deflate = { path = "crates/deflate", version = "2.0.2" }
+purrdf-ed25519 = { path = "crates/ed25519", version = "2.0.2" }
 purrdf-entail = { path = "crates/entail", version = "2.0.2" }
 purrdf-events = { path = "crates/rdf-events", version = "2.0.2" }
 purrdf-geo = { path = "crates/geo", version = "2.0.2" }

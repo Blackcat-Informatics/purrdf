@@ -402,7 +402,6 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "transitive:ed25519-dalek"
 reason = "Curve25519 group arithmetic for Ed25519"
 duplicates_native = "purrdf_ed25519"
-pending_native = true
 holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
@@ -410,7 +409,6 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "transitive:ed25519-dalek"
 reason = "SIMD backend derive macros for curve25519-dalek"
 duplicates_native = "purrdf_ed25519"
-pending_native = true
 holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = true }
 
@@ -425,7 +423,6 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "transitive:ed25519-dalek"
 reason = "Ed25519 signature types"
 duplicates_native = "purrdf_ed25519"
-pending_native = true
 holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
@@ -433,7 +430,6 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "crypto"
 reason = "Ed25519 (RFC 8032) signatures for GTS COSE_Sign1 and RDF signing"
 duplicates_native = "purrdf_ed25519"
-pending_native = true
 metrics = { direct = true, exclusive_closure = 10, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.either]
@@ -461,7 +457,6 @@ metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, b
 category = "transitive:ed25519-dalek"
 reason = "formally verified field arithmetic for curve25519-dalek"
 duplicates_native = "purrdf_ed25519"
-pending_native = true
 holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
@@ -681,7 +676,6 @@ metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, b
 category = "transitive:ed25519-dalek"
 reason = "rustc version probe for curve25519-dalek builds"
 duplicates_native = "purrdf_ed25519"
-pending_native = true
 holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
@@ -704,7 +698,6 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "transitive:ed25519-dalek"
 reason = "version parsing for rustc_version"
 duplicates_native = "purrdf_ed25519"
-pending_native = true
 holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
@@ -755,7 +748,6 @@ metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, b
 category = "transitive:ed25519-dalek"
 reason = "signature traits for Ed25519"
 duplicates_native = "purrdf_ed25519"
-pending_native = true
 holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
@@ -776,7 +768,6 @@ metrics = { direct = true, exclusive_closure = 2, release = true, wasm = true, b
 category = "transitive:ed25519-dalek"
 reason = "constant-time primitives for curve25519-dalek"
 duplicates_native = "purrdf_ed25519"
-pending_native = true
 holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
@@ -922,7 +913,6 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "transitive:ed25519-dalek"
 reason = "secret-key wiping for Ed25519 and AES keys"
 duplicates_native = "purrdf_ed25519"
-pending_native = true
 holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
