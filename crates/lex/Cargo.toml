@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-lex"
-description = "Native lexical foundations for PurRDF's grammars, over the zero-dependency purrdf-hash root: the exact Turtle/SPARQL/XML/ECMA-262 character-class terminals and escape decoders, chunked byte-class scanners and needle searches that lower to packed compares, the RFC 8259 JSON string escaper and decoder, RFC 6901 JSON Pointer tokens, RFC 3986 percent-encoding, and Unicode normalization (NFC, NFD, NFKC, NFKD) as streaming stages"
+description = "Native lexical foundations for PurRDF's grammars, over the zero-dependency purrdf-hash root: the exact Turtle/SPARQL/XML/ECMA-262 character-class terminals and escape decoders, chunked byte-class scanners and needle searches that lower to packed compares, the RFC 8259 JSON string escaper and decoder, the JSON reader, value and deterministic writer, the YAML 1.2 reader and emitter, the RFC 8949 CBOR codec, RFC 6901 JSON Pointer tokens, RFC 3986 percent-encoding, and Unicode normalization (NFC, NFD, NFKC, NFKD) as streaming stages"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true

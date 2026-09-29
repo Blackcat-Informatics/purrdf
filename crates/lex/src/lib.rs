@@ -16,9 +16,10 @@
 //!
 //! This crate is the home of the workspace's lexical layer: byte-class
 //! scanning, grammar terminals, term syntax, literal and IRI escaping, percent
-//! encoding, JSON strings, JSON pointers, a JSON reader and writer, an XML
-//! reader and Unicode normalisation. Each is a law a grammar states; none is a
-//! vocabulary, and nothing here mints an IRI.
+//! encoding, JSON strings, JSON pointers, a JSON reader and writer, a YAML
+//! reader and writer, a CBOR codec, an XML reader and Unicode normalisation.
+//! Each is a law a grammar states; none is a vocabulary, and nothing here
+//! mints an IRI.
 //!
 //! * **Grammar terminals** — [`terminals`], the exact Turtle/SPARQL character
 //!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`), the
@@ -54,6 +55,16 @@
 //!   scanner ([`json_escape::JsonEscapes`] names the spellings those writers
 //!   pin), and the one decoder every reader shares ([`json_escape::unescape`]),
 //!   which refuses an unpaired surrogate.
+//! * **JSON documents** — [`json`], the one RFC 8259 reader, value and writer:
+//!   a pull [`json::Reader`] with byte offsets, streaming skips and an
+//!   occurrence table, a [`json::Value`] whose numbers keep their lexemes and
+//!   whose objects keep every member in order, and a deterministic compact and
+//!   pretty writer, none of them recursing on the machine stack.
+//! * **YAML documents** — [`yaml`], the one YAML 1.2 reader and deterministic
+//!   block emitter, over the JSON data model.
+//! * **CBOR** — [`cbor`], the one RFC 8949 codec: the shortest-form head,
+//!   as-is and core deterministic encoding, and well-formed and deterministic
+//!   decoding.
 //! * **JSON Pointer** — [`json_pointer`], RFC 6901 reference tokens.
 //! * **Percent-encoding** — [`percent`], the RFC 3986 encoder over the sets
 //!   the specifications define, the strict and form-urlencoded decoders, and
@@ -91,6 +102,8 @@
 )]
 #![forbid(unsafe_code)]
 
+pub mod cbor;
+pub mod json;
 pub mod json_escape;
 pub mod json_pointer;
 pub mod percent;
@@ -98,3 +111,4 @@ pub mod scan;
 pub mod terminals;
 pub mod unicode;
 mod unicode_tables;
+pub mod yaml;

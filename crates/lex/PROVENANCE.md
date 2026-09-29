@@ -45,3 +45,17 @@ carries a SHA-256 of its body.
   `unicode-normalization` 0.1.25 crate answered them (Unicode 17.0.0).
 
 Both are replayed by `tests/unicode_normalization.rs`.
+
+## `src/yaml/write.rs` — the reference emitter's layout rules
+
+The YAML emitter is first-party code, but its scalar analysis, its choice of
+scalar style and its block layout (indentation, indentless sequences in
+mappings, explicit keys, block scalar indicators) reproduce the decisions of
+libyaml's emitter, so that YAML the workspace previously wrote through
+`serde_yaml` keeps its bytes. The rules were read from the Rust translation
+`unsafe-libyaml` 0.2.11 (MIT), which `serde_yaml_ng` 0.10 drives; the MIT
+permission notice of that work applies to them.
+
+`src/yaml/tests.rs` carries a table of JSON values and the YAML bytes
+`serde_yaml_ng` 0.10 wrote for them, captured from that crate over the same
+values; the emitter reproduces each row.
