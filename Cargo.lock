@@ -661,6 +661,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "purrdf-ed25519"
+version = "2.0.2"
+dependencies = [
+ "ed25519-dalek",
+ "purrdf-hash",
+ "purrdf-testkit",
+ "sha2",
+]
+
+[[package]]
 name = "purrdf-entail"
 version = "2.0.2"
 dependencies = [

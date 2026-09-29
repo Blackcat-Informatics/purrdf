@@ -54,6 +54,7 @@ PURRDF_RELEASE_CRATES=(
   purrdf-jsonschema
   purrdf-deflate
   purrdf-stack
+  purrdf-ed25519
   purrdf-gts
   purrdf-core
   purrdf-columnar
@@ -104,6 +105,7 @@ PURRDF_UNBOOTSTRAPPED_CRATES=(
   purrdf-jsonschema
   purrdf-deflate
   purrdf-stack
+  purrdf-ed25519
   purrdf-hnsw
   purrdf-retrieval
 )
