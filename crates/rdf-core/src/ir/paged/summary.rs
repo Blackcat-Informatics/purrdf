@@ -29,7 +29,7 @@
 //!
 //! The mixing function is written inline from fixed constants precisely so it is
 //! byte-identical across runs, platforms and `wasm32-unknown-unknown`. It is NOT a
-//! `std::collections::hash_map::DefaultHasher`/`RandomState` hash, which is seeded
+//! hash through std's default hasher or its random state, which is seeded
 //! per-process and would make the digest a different number on every run; and it
 //! reads no address, clock, or thread identity.
 

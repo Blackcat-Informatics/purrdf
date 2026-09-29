@@ -44,7 +44,7 @@
 //! are fixed by its specification and pinned by that module's reference test
 //! values. Not the table hasher `FixedHasher` (a different function on a build
 //! with AES than on one without, so its output cannot address content), not
-//! [`std::hash::DefaultHasher`] (SipHash with an unspecified, version-dependent
+//! std's default SipHash hasher (with an unspecified, version-dependent
 //! implementation). A digest that is compared across two builds must be a
 //! function of the bytes and of nothing else, so it is computed by a function
 //! whose every output is specified independently of any build.

@@ -14,7 +14,7 @@
 //!
 //! # Why the digest is FNV-1a
 //!
-//! The digest must be a function of the bytes and **nothing else**. `DefaultHasher` is
+//! The digest must be a function of the bytes and **nothing else**. std's default hasher is
 //! SipHash with an unspecified per-process key, and the table hasher `FixedHasher` is a
 //! different function on a build with AES than on one without; either would make the
 //! digest move for reasons that have nothing to do with the graph, which is the exact
