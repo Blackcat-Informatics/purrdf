@@ -324,8 +324,8 @@ fn an_empty_or_punctuation_only_input_yields_no_tokens() {
 ///
 /// Tokenization is a function of the Unicode tables it is generated from —
 /// case folding, normalization, word-break properties and the alphanumeric
-/// predicate — all generated in this crate from the one vendored Unicode
-/// Character Database. A regenerated table can therefore change what a literal
+/// predicate — all generated in this crate from the vendored Unicode Character
+/// Database in `crates/iri/unicode/`. A regenerated table can therefore change what a literal
 /// tokenizes to, which changes the term dictionary, which changes which
 /// documents a query retrieves. Nothing about that failure announces itself:
 /// the engine still returns rows, just not the same rows, and a ranking that

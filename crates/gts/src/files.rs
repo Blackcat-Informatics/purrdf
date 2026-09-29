@@ -14,8 +14,10 @@ use crate::model::{Graph, Quad, Term, TermKind};
 // This crate's one lowercase-hex renderer, shared with `compact`, `openpgp`,
 // `reader` and the rest of the container. It is deliberately NOT
 // `purrdf_core::hex::lower` (the renderer the IR-side crates share): the GTS
-// container engine does not depend on the IR kernel, and inverting that layering
-// to save four lines would make every GTS consumer pull `purrdf-core` in.
+// container engine depends on the foundation crates (`purrdf-events`,
+// `purrdf-iri`, `purrdf-xsd`, `purrdf-hash`, `purrdf-deflate`) and never on the
+// IR kernel, and inverting that layering to save four lines would make every GTS
+// consumer pull `purrdf-core` in.
 use crate::wire::hex;
 use crate::writer::{Writer, WriterOptions, digest_string};
 

@@ -35,10 +35,11 @@
 //!   `HashHex`, and the LPG projection's block renderer. They render the same
 //!   characters but do not produce this function's return type, so routing them
 //!   through it would *add* the allocation they exist to avoid.
-//! * **Crates that cannot reach this one.** `purrdf-gts` declares exactly one
-//!   first-party dependency, the zero-dependency events crate; giving it an edge
-//!   to the IR kernel to share four lines would invert the layering that puts
-//!   `purrdf-rdf` above both. It keeps one renderer of its own, in `wire`.
+//! * **Crates that cannot reach this one.** `purrdf-gts` depends on the
+//!   foundation crates (`purrdf-events`, `purrdf-iri`, `purrdf-xsd`,
+//!   `purrdf-hash`, `purrdf-deflate`) and never on the IR kernel; giving it an
+//!   edge to `purrdf-core` to share four lines would invert the layering that
+//!   puts `purrdf-rdf` above both. It keeps one renderer of its own, in `wire`.
 //! * **Selective escapes, which are not this operation.** `crate::ir::skolem`
 //!   and `purrdf_shapes::rules`'s focus tag both emit `-{byte:02x}` for
 //!   non-alphanumeric bytes ONLY, passing the rest through. That is an escape,
@@ -56,10 +57,8 @@
 //! exist outside the cases above — check this list before adding another, and
 //! add to the list rather than leaving a new copy unexplained.
 //!
-//! This list is deliberately not numbered. An earlier revision of it said "two
-//! kinds" above four bullets, and the pull request that introduced this module
-//! carried a count of the copies it had folded that was stale one commit later.
-//! A tally in prose has no gate behind it.
+//! This list is deliberately not numbered: a tally in prose has no gate behind
+//! it, so it goes stale the first time the list changes.
 
 /// The lowercase hex digit of nibble `n` (`0..16`), as comparisons only.
 ///

@@ -8,9 +8,10 @@
 //! is the SHA-256 blob-store address computed by this crate (`of`/`from_raw`),
 //! `Blake3ContentId` addresses the separate BLAKE3 domain used by the GTS
 //! `blake3:<hex>` term encoding produced *outside* this crate. This type is
-//! **decode-only**: it never hashes bytes and `purrdf-core` gains no `blake3`
-//! dependency from it. Callers that need to mint a `Blake3ContentId` from raw
-//! bytes must hash elsewhere and hand the crate the resulting hex or raw bytes.
+//! **decode-only**: it never hashes bytes. The digest belongs to whoever wrote
+//! the reference (the GTS container computes it with `purrdf_hash::blake3`), so
+//! a caller minting a `Blake3ContentId` hashes the bytes itself and hands over
+//! the resulting hex or raw bytes.
 //!
 //! The hex-decode loop is shared with `ContentDigest::from_hex` via
 //! `decode_hex_32` / `decode_hex_32_lower` so the two domains
@@ -27,7 +28,8 @@ use crate::content_store::decode_hex_32_lower;
 /// Distinct from [`ContentDigest`](crate::content_store::ContentDigest), which
 /// is the SHA-256 blob-store domain. `Blake3ContentId` never hashes bytes —
 /// it only decodes a pre-computed 64-char lowercase hex string (or wraps raw
-/// bytes a caller already has) so this crate stays free of a `blake3` dependency.
+/// bytes a caller already has): the digest is the reference writer's, not this
+/// type's.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct Blake3ContentId([u8; 32]);
 

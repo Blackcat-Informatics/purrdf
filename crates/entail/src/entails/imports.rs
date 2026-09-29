@@ -60,9 +60,11 @@
 //! # The closure is transitive, because the specification's is
 //!
 //! An imported document may import further documents, and OWL 2's imports closure is the
-//! transitive one. The resolution below is therefore a work-list to a fixpoint over the
-//! import graph, visiting each document once — which also makes a cyclic import (`A`
-//! imports `B` imports `A`, which OWL 2 explicitly permits) terminate rather than loop.
+//! transitive one. The kernel's [`ImportMap::closure`] computes it as a work-list to a
+//! fixpoint over the import graph, visiting each document once — which also makes a cyclic
+//! import (`A` imports `B` imports `A`, which OWL 2 explicitly permits) terminate rather
+//! than loop — and [`resolve`] turns what that closure could not resolve, reach or reconcile
+//! into this crate's refusals before merging it.
 //!
 //! # Blank nodes are standardized apart, and the premise's are not moved
 //!
@@ -79,7 +81,7 @@
 //!
 //! # ONE import concept for the crate
 //!
-//! This crate already had a caller-owns-the-I/O import discipline before this module:
+//! This crate has one caller-owns-the-I/O import discipline:
 //! [`resolve_rif_imports`](crate::resolve_rif_imports) takes a
 //! [`crate::RifImport`]'s location and a resolver CALLBACK, and the library
 //! fetches nothing. [`ImportMap`] is the same discipline in table form, and
