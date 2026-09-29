@@ -48,6 +48,7 @@
 //! words may be disclosed. It matches every variant, so a failure added to the enum
 //! cannot compile until it has a status.
 
+use purrdf_iri::percent;
 use std::fmt;
 
 use purrdf_sparql_algebra::lexer::{Token, tokenize};
@@ -878,53 +879,18 @@ fn decode_form(text: &str) -> Result<Vec<(String, String)>, ProtocolError> {
         .filter(|pair| !pair.is_empty())
         .map(|pair| {
             let (name, value) = pair.split_once('=').unwrap_or((pair, ""));
-            Ok((percent_decode(name)?, percent_decode(value)?))
+            Ok((form_component(name)?, form_component(value)?))
         })
         .collect()
 }
 
-fn percent_decode(text: &str) -> Result<String, ProtocolError> {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut index = 0;
-    while index < bytes.len() {
-        match bytes[index] {
-            b'+' => {
-                out.push(b' ');
-                index += 1;
-            }
-            b'%' => {
-                let hex = |offset: usize| {
-                    bytes
-                        .get(index + offset)
-                        .copied()
-                        .and_then(purrdf_hash::hex::nibble)
-                };
-                let (Some(high), Some(low)) = (hex(1), hex(2)) else {
-                    let end = (index + 3).min(bytes.len());
-                    return Err(ProtocolError::MalformedForm {
-                        reason: format!(
-                            "`%` must be followed by two hex digits, found `{}` in `{text}`",
-                            String::from_utf8_lossy(&bytes[index..end])
-                        ),
-                    });
-                };
-                out.push((high << 4) | low);
-                index += 3;
-            }
-            byte => {
-                out.push(byte);
-                index += 1;
-            }
-        }
-    }
-    String::from_utf8(out).map_err(|err| ProtocolError::MalformedForm {
-        reason: format!(
-            "`{text}` decodes to bytes that are not UTF-8 (invalid sequence at decoded offset \
-             {})",
-            err.utf8_error().valid_up_to()
-        ),
-    })
+/// One form name or value decoded by [`percent::decode_form`].
+fn form_component(text: &str) -> Result<String, ProtocolError> {
+    percent::decode_form(text)
+        .map(std::borrow::Cow::into_owned)
+        .map_err(|error| ProtocolError::MalformedForm {
+            reason: format!("`{text}` is not form-urlencoded: {error}"),
+        })
 }
 
 /// The formats a solutions result is offered in, in server preference order: the token
@@ -1471,68 +1437,5 @@ pub const fn problem_for(code: FailureCode) -> Problem {
         status,
         code: problem_code,
         detail,
-    }
-}
-
-/// The frozen percent-encoding vectors, replayed against the SPARQL protocol form reader.
-#[cfg(test)]
-mod percent_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, decode_str, encode_str};
-
-    /// Replay one vector file: `run` answers an input (`None` for a refusal),
-    /// `encode` says whether answers are encoded text rather than `=`-prefixed
-    /// decodings, and `skipped` names inputs this copy is known to answer differently.
-    fn replay(
-        vectors: &str,
-        encode: bool,
-        run: impl Fn(&str) -> Option<String>,
-        skipped: impl Fn(&str) -> bool,
-        plane_skipped: impl Fn(u32) -> bool,
-    ) {
-        let answer = |input: &str| match run(input) {
-            Some(value) if encode => encode_str(&value),
-            Some(value) => encode_str(&format!("={value}")),
-            None => "-".to_owned(),
-        };
-        let file = VectorFile::parse(vectors).expect("a percent vector file");
-        let mut replayed = 0;
-        for record in file.records() {
-            if record.fields[0] == "plane" {
-                let plane = u32::from_str_radix(record.fields[1], 16).expect("hex");
-                if plane_skipped(plane) {
-                    continue;
-                }
-                let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                    .filter_map(char::from_u32)
-                    .filter(|c| !skipped(&c.to_string()))
-                    .map(|c| answer(&c.to_string()));
-                let _ = answers;
-            } else {
-                let input = decode_str(record.fields[1]).expect("an encoded input");
-                if skipped(&input) {
-                    continue;
-                }
-                assert_eq!(answer(&input), record.fields[2], "{input:?}");
-            }
-            replayed += 1;
-        }
-        assert!(replayed > 400, "{replayed}");
-    }
-
-    #[test]
-    fn decode_form_replays_the_frozen_vectors() {
-        replay(
-            include_str!("../../lex/tests/vectors/percent_decode_form_vectors.txt"),
-            false,
-            |input| super::percent_decode(input).ok(),
-            |input| {
-                let _ = input;
-                false
-            },
-            |plane| {
-                let _ = plane;
-                false
-            },
-        );
     }
 }

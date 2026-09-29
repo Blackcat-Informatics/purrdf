@@ -240,40 +240,13 @@ impl ServiceCredential {
                      the field separator, so encoding one would move part of the user id into \
                      the password"
                 );
-                let encoded = base64_standard(format!("{username}:{password}").as_bytes());
+                let encoded =
+                    purrdf_xsd::canonical_base64(format!("{username}:{password}").as_bytes());
                 ("Authorization".to_owned(), format!("Basic {encoded}"))
             }
             Self::Header { name, value } => (name.clone(), value.clone()),
         }
     }
-}
-
-/// RFC 4648 §4 base64 with the standard alphabet and `=` padding.
-///
-/// Hand-rolled rather than a dependency: it is twenty lines, it is on the wasm path, and
-/// HTTP Basic is its only caller.
-fn base64_standard(bytes: &[u8]) -> String {
-    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
-    let mut out = String::with_capacity(bytes.len().div_ceil(3) * 4);
-    for chunk in bytes.chunks(3) {
-        let b0 = u32::from(chunk[0]);
-        let b1 = chunk.get(1).copied().map_or(0, u32::from);
-        let b2 = chunk.get(2).copied().map_or(0, u32::from);
-        let triple = (b0 << 16) | (b1 << 8) | b2;
-        out.push(ALPHABET[(triple >> 18) as usize & 0x3f] as char);
-        out.push(ALPHABET[(triple >> 12) as usize & 0x3f] as char);
-        out.push(if chunk.len() > 1 {
-            ALPHABET[(triple >> 6) as usize & 0x3f] as char
-        } else {
-            '='
-        });
-        out.push(if chunk.len() > 2 {
-            ALPHABET[triple as usize & 0x3f] as char
-        } else {
-            '='
-        });
-    }
-    out
 }
 
 // ── Denials ──────────────────────────────────────────────────────────────────────
@@ -816,29 +789,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn base64_matches_the_rfc_4648_test_vectors() {
-        // RFC 4648 §10, verbatim: the padding boundaries are where a hand-rolled encoder
-        // goes wrong, and every one of them is exercised here.
-        for (input, expected) in [
-            ("", ""),
-            ("f", "Zg=="),
-            ("fo", "Zm8="),
-            ("foo", "Zm9v"),
-            ("foob", "Zm9vYg=="),
-            ("fooba", "Zm9vYmE="),
-            ("foobar", "Zm9vYmFy"),
-        ] {
-            assert_eq!(
-                base64_standard(input.as_bytes()),
-                expected,
-                "input {input:?}"
-            );
-        }
-        // A byte outside ASCII exercises the high bits of the 24-bit group.
-        assert_eq!(base64_standard(&[0xff, 0xef, 0xbf]), "/++/");
-    }
-
-    #[test]
     fn a_basic_credential_renders_the_rfc_7617_header() {
         let (name, value) = ServiceCredential::Basic {
             username: "Aladdin".to_owned(),
@@ -1175,7 +1125,7 @@ mod tests {
             value,
             format!(
                 "Basic {}",
-                base64_standard("user:p\r\nass\0word — café".as_bytes())
+                purrdf_xsd::canonical_base64("user:p\r\nass\0word — café".as_bytes())
             )
         );
 
@@ -1214,7 +1164,7 @@ mod tests {
         .header();
         assert_eq!(
             value,
-            format!("Basic {}", base64_standard(b"user:pass:word"))
+            format!("Basic {}", purrdf_xsd::canonical_base64(b"user:pass:word"))
         );
     }
 }

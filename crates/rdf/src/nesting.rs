@@ -90,7 +90,7 @@ pub(crate) fn guard_xml_nesting(text: &str) -> Result<(), usize> {
     let mut at = 0usize;
     let mut depth = 0usize;
     while at < bytes.len() {
-        let Some(offset) = memchr::memchr(b'<', &bytes[at..]) else {
+        let Some(offset) = purrdf_iri::scan::find_byte(&bytes[at..], b'<') else {
             break;
         };
         at += offset;

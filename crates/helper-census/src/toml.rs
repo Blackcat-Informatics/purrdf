@@ -386,10 +386,15 @@ impl Reader {
     fn unicode_escape(&mut self, width: usize) -> Result<char, Error> {
         let mut scalar = 0_u32;
         for _ in 0..width {
-            let digit = self.bump().and_then(|next| next.to_digit(16)).map_or_else(
-                || self.fail("a unicode escape needs hexadecimal digits"),
-                Ok,
-            )?;
+            let digit = self
+                .bump()
+                .and_then(|next| u8::try_from(next).ok())
+                .and_then(purrdf_hash::hex::nibble)
+                .map(u32::from)
+                .map_or_else(
+                    || self.fail("a unicode escape needs hexadecimal digits"),
+                    Ok,
+                )?;
             scalar = scalar * 16 + digit;
         }
         char::from_u32(scalar).map_or_else(

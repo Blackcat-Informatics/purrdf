@@ -15,6 +15,7 @@
 //! oxigraph-free. The SRX grammar is shallow and fixed, so a tree-walk is enough.
 
 use purrdf_core::TermBox;
+use purrdf_core::terminals;
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
 
 use crate::error::Error;
@@ -108,24 +109,11 @@ pub fn from_xml_boolean(bytes: &[u8]) -> Result<bool, Error> {
         .child("boolean")
         .ok_or_else(|| fmt("missing <boolean>"))?;
     let text = boolean.text();
-    match trim_xml_space(&text) {
+    match terminals::trim_ws(&text) {
         "true" => Ok(true),
         "false" => Ok(false),
         other => Err(fmt(&format!("invalid <boolean> value `{other}`"))),
     }
-}
-
-/// Strip leading and trailing XML `S` — and only XML `S` — from `text`.
-///
-/// > `S ::= (#x20 | #x9 | #xD | #xA)+` (XML 1.0 §2.3, production 3)
-///
-/// The predicate comes from [`purrdf_iri::terminals::is_ws`], the workspace's
-/// single transcription of that four-member set, rather than from a local
-/// spelling: every scalar outside ASCII fails `u8::try_from`, so the test is
-/// exact in both directions and cannot drift into [`char::is_whitespace`]'s
-/// twenty-six.
-fn trim_xml_space(text: &str) -> &str {
-    text.trim_matches(|c: char| u8::try_from(c).is_ok_and(purrdf_iri::terminals::is_ws))
 }
 
 /// Decode the additive `<provenance>` element (under `namespace.iri()`) a
@@ -480,14 +468,9 @@ impl<'a> XmlParser<'a> {
         self.bytes[self.pos..].starts_with(s.as_bytes())
     }
 
+    /// Skip XML `S ::= (#x20 | #x9 | #xD | #xA)+`.
     fn skip_ws(&mut self) {
-        while let Some(c) = self.peek() {
-            if matches!(c, b' ' | b'\t' | b'\n' | b'\r') {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
+        self.pos = terminals::skip_ws(self.bytes, self.pos);
     }
 
     /// Skip XML declarations, comments, processing instructions, and doctype.
@@ -758,30 +741,12 @@ fn unescape(s: &str) -> Result<String, Error> {
             "amp" => out.push('&'),
             "quot" => out.push('"'),
             "apos" => out.push('\''),
-            _ if entity.starts_with("#x") || entity.starts_with("#X") => {
-                // `[0-9a-fA-F]+`: a sign is not a digit.
-                let digits = &entity[2..];
-                let code = (!digits.is_empty())
-                    .then_some(digits)
-                    .and_then(|digits| {
-                        digits.bytes().try_fold(0_u32, |value, byte| {
-                            let digit = purrdf_hash::hex::nibble(byte)?;
-                            value.checked_mul(16)?.checked_add(u32::from(digit))
-                        })
-                    })
-                    .ok_or_else(|| fmt("bad hex character reference"))?;
-                out.push(char::from_u32(code).ok_or_else(|| fmt("invalid character reference"))?);
-            }
-            _ if entity.starts_with('#') => {
-                // `[0-9]+`: a sign is not a digit.
-                let digits = &entity[1..];
-                let code = digits
-                    .bytes()
-                    .all(|byte| byte.is_ascii_digit())
-                    .then(|| digits.parse::<u32>().ok())
-                    .flatten()
-                    .ok_or_else(|| fmt("bad character reference"))?;
-                out.push(char::from_u32(code).ok_or_else(|| fmt("invalid character reference"))?);
+            _ if let Some(body) = entity.strip_prefix('#') => {
+                out.push(terminals::decode_char_ref(body.as_bytes()).ok_or_else(|| {
+                    fmt(&format!(
+                        "`&{entity};` is not a character reference to an XML `Char`"
+                    ))
+                })?);
             }
             other => return Err(fmt(&format!("unknown entity &{other};"))),
         }
@@ -797,6 +762,42 @@ mod tests {
     use crate::xml::to_xml;
     use purrdf_core::SparqlResult;
     use purrdf_core::TermBox;
+
+    #[test]
+    fn a_character_reference_to_a_non_char_is_refused() {
+        let decimal_zero = format!("&#{};", 0);
+        for text in [
+            "&#x0;",
+            &decimal_zero,
+            "&#x1;",
+            "&#xFFFE;",
+            "&#xFFFF;",
+            "&#xD800;",
+            "&#X41;",
+        ] {
+            assert!(unescape(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn a_character_reference_to_a_char_still_decodes() {
+        for (text, expected) in [
+            ("&#x9;", "\t"),
+            ("&#xA;", "\n"),
+            ("&#xD;", "\r"),
+            ("&#x20;", " "),
+            ("&#xFFFD;", "\u{fffd}"),
+            ("&#x10000;", "\u{10000}"),
+            ("&#x10FFFF;", "\u{10ffff}"),
+            ("&#x0010FFFF;", "\u{10ffff}"),
+        ] {
+            assert_eq!(
+                unescape(text).expect("a lawful reference"),
+                expected,
+                "{text}"
+            );
+        }
+    }
 
     #[test]
     fn a_signed_character_reference_is_refused() {

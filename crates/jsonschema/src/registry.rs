@@ -27,6 +27,7 @@ use crate::dialect::{self, Dialect, Vocabularies};
 use crate::error::SchemaError;
 use crate::meta_set::Metaschemas;
 use crate::pointer;
+use purrdf_iri::percent;
 
 /// The draft 2020-12 meta-schema URI.
 pub const DRAFT_2020_12: &str = "https://json-schema.org/draft/2020-12/schema";
@@ -254,7 +255,7 @@ impl Registry {
                     pointer: resource.pointer.clone(),
                 });
             }
-            Some(fragment) => pointer::percent_decode(fragment)?,
+            Some(fragment) => percent::decode(fragment).ok()?.into_owned(),
         };
         let pointer = if fragment.starts_with('/') {
             let tokens = pointer::tokens(&fragment)?;
@@ -719,7 +720,9 @@ fn identifier(
             // Draft-07 Core §8.2.3: a plain-name fragment is a
             // location-independent identifier; any other fragment has no
             // defined meaning.
-            let name = pointer::percent_decode(fragment)
+            let name = percent::decode(fragment)
+                .ok()
+                .map(std::borrow::Cow::into_owned)
                 .filter(|name| dialect.is_anchor_name(name))
                 .ok_or_else(|| SchemaError::InvalidIdentifier {
                     location: location(),

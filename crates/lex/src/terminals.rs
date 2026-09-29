@@ -80,7 +80,7 @@
 //! as a [`ByteClass`] over its own `const [u8; 256]` table and gets the same
 //! kernel rather than a retyped one.
 //!
-//! This module lives in the zero-dependency [`purrdf-lex`](crate) leaf because
+//! This module lives in the [`purrdf-lex`](crate) leaf, over the zero-dependency hash root, because
 //! that is the one crate every grammar in the workspace reaches — the IRI
 //! parser, `purrdf-sparql-algebra`, `purrdf-shex` and the RDF text codecs — so
 //! sharing one transcription costs no new dependency edge and cannot introduce
@@ -101,6 +101,8 @@
 //! the resemblance is the trap: `PN_CHARS_BASE` is `NameStartChar` minus `':'`
 //! and `'_'`, and `NameChar` is `PN_CHARS` plus `':'` and `'.'`. Neither pair
 //! may be aliased to the other — see [`is_xml_name_start_char`].
+
+use std::borrow::Cow;
 
 pub use crate::scan::{
     ByteClass, byte_run_count, find_first_iri_body_special, find_first_json_string_special,
@@ -175,11 +177,25 @@ pub(crate) const fn class_table(ranges: &[ScalarRange]) -> [u8; 256] {
 
 /// Whether `cp` falls in one of `ranges`, by binary search.
 ///
-/// Correct only for a sorted, disjoint table — which is why every table the
-/// `terminal!` macro emits carries a compile-time proof of exactly
-/// that, rather than a comment asserting it.
+/// The workspace's one membership search over a table of inclusive
+/// `[lo, hi]` ranges. Correct only for a table sorted by `lo` whose ranges do
+/// not overlap (adjacent ranges are fine) — which is why every table the
+/// `terminal!` macro emits carries a compile-time proof of exactly that,
+/// rather than a comment asserting it; a caller with its own table owes it the
+/// same. A `const fn`, so a class table can be derived from a range table at
+/// compile time.
+///
+/// ```rust
+/// use purrdf_lex::terminals::in_ranges;
+///
+/// const DIGITS_AND_GREEK: &[(u32, u32)] = &[(0x30, 0x39), (0x391, 0x3A9)];
+/// assert!(in_ranges(u32::from('7'), DIGITS_AND_GREEK));
+/// assert!(in_ranges(u32::from('Ω'), DIGITS_AND_GREEK));
+/// assert!(!in_ranges(u32::from('a'), DIGITS_AND_GREEK));
+/// ```
+#[must_use]
 #[inline]
-pub(crate) const fn in_ranges(cp: u32, ranges: &[ScalarRange]) -> bool {
+pub const fn in_ranges(cp: u32, ranges: &[ScalarRange]) -> bool {
     let mut lo = 0;
     let mut hi = ranges.len();
     while lo < hi {
@@ -1115,6 +1131,421 @@ terminal! {
         (0x0300, 0x036F), // [#x300-#x36F]
         (0x203F, 0x2040), // [#x203F-#x2040]
     ];
+}
+
+/// The `NCName` start class of *Namespaces in XML 1.0* §3, production `[4]`:
+/// an XML [`NameStartChar`](is_xml_name_start_char) other than `':'`.
+///
+/// `NCName ::= Name - (Char* ':' Char*)`, so the colon is subtracted in both
+/// positions and nothing else is: `_` stays (unlike
+/// [`PN_CHARS_BASE`](is_pn_chars_base)), and so does every non-ASCII range.
+///
+/// ```rust
+/// use purrdf_lex::terminals::is_ncname_start;
+///
+/// assert!(is_ncname_start('a') && is_ncname_start('_') && is_ncname_start('é'));
+/// assert!(!is_ncname_start(':') && !is_ncname_start('-') && !is_ncname_start('0'));
+/// ```
+#[must_use]
+#[inline]
+pub const fn is_ncname_start(c: char) -> bool {
+    is_xml_name_start_char(c) && c != ':'
+}
+
+/// The `NCName` continuation class of *Namespaces in XML 1.0* §3: an XML
+/// [`NameChar`](is_xml_name_char) other than `':'`.
+///
+/// ```rust
+/// use purrdf_lex::terminals::is_ncname_char;
+///
+/// assert!(is_ncname_char('-') && is_ncname_char('.') && is_ncname_char('0'));
+/// assert!(!is_ncname_char(':') && !is_ncname_char(' '));
+/// ```
+#[must_use]
+#[inline]
+pub const fn is_ncname_char(c: char) -> bool {
+    is_xml_name_char(c) && c != ':'
+}
+
+/// Whether `text` is an `NCName` (*Namespaces in XML 1.0* §3, production
+/// `[4]`): non-empty, its first scalar [`is_ncname_start`] and every other
+/// [`is_ncname_char`].
+///
+/// ```rust
+/// use purrdf_lex::terminals::is_ncname;
+///
+/// assert!(is_ncname("_a.b-c") && is_ncname("é"));
+/// assert!(!is_ncname("") && !is_ncname("ns:local") && !is_ncname("1a"));
+/// ```
+#[must_use]
+pub fn is_ncname(text: &str) -> bool {
+    let mut chars = text.chars();
+    chars.next().is_some_and(is_ncname_start) && chars.all(is_ncname_char)
+}
+
+/// The offset of the first byte at or after `at` that is not
+/// [`WS`](is_ws), or `bytes.len()` when every byte from `at` on is.
+///
+/// The skip a Turtle, SPARQL, N-Triples, XML (`S`) or JSON (`ws`) reader
+/// takes between tokens: all four grammars name exactly SPACE, TAB, LINE FEED
+/// and CARRIAGE RETURN. It is the [`find_first_trivia`] scan, so a long run is
+/// skipped sixteen bytes at a time.
+///
+/// # Panics
+///
+/// When `at` is past the end of `bytes`.
+///
+/// ```rust
+/// use purrdf_lex::terminals::skip_ws;
+///
+/// assert_eq!(skip_ws(b"a \t\r\nb", 1), 5);
+/// assert_eq!(skip_ws(b"a\x0cb", 1), 1); // FORM FEED is not WS
+/// assert_eq!(skip_ws(b"a  ", 1), 3);
+/// ```
+#[must_use]
+#[inline]
+pub fn skip_ws(bytes: &[u8], at: usize) -> usize {
+    let rest = &bytes[at..];
+    at + find_first_trivia(rest).unwrap_or(rest.len())
+}
+
+/// `text` without its leading and trailing [`WS`](is_ws).
+///
+/// Where a grammar says its value is surrounded by optional `WS` (XML `S`, a
+/// JSON `ws`, the Turtle/SPARQL `WS`), this is the trim: FORM FEED, VERTICAL
+/// TAB, NO-BREAK SPACE and every other Unicode space are content, where
+/// [`str::trim`] would remove them.
+///
+/// ```rust
+/// use purrdf_lex::terminals::trim_ws;
+///
+/// assert_eq!(trim_ws(" \t true\r\n"), "true");
+/// assert_eq!(trim_ws("\u{a0}x\u{c}"), "\u{a0}x\u{c}");
+/// ```
+#[must_use]
+#[inline]
+pub fn trim_ws(text: &str) -> &str {
+    let bytes = text.as_bytes();
+    let start = skip_ws(bytes, 0);
+    let end = bytes[start..]
+        .iter()
+        .rposition(|&b| !is_ws(b))
+        .map_or(start, |last| start + last + 1);
+    // Every `WS` member is ASCII, so both ends are `char` boundaries.
+    &text[start..end]
+}
+
+/// `ECHAR ::= '\' [tbnrf"'\]`: the scalar the escape letter `letter` (the byte
+/// after the backslash) denotes, or `None` when it is not one of the eight.
+///
+/// The Turtle, TriG, N-Triples, N-Quads, SPARQL and ShExC string escape, which
+/// every grammar spells alike. A `u` or `U` opens a [`UCHAR`](decode_uchar)
+/// instead and answers `None` here.
+///
+/// ```rust
+/// use purrdf_lex::terminals::echar_value;
+///
+/// assert_eq!(echar_value(b't'), Some('\t'));
+/// assert_eq!(echar_value(b'f'), Some('\u{c}'));
+/// assert_eq!(echar_value(b'/'), None); // JSON's, not ECHAR's
+/// assert_eq!(echar_value(b'u'), None); // a UCHAR
+/// ```
+#[must_use]
+pub const fn echar_value(letter: u8) -> Option<char> {
+    match letter {
+        b't' => Some('\t'),
+        b'b' => Some('\u{8}'),
+        b'n' => Some('\n'),
+        b'r' => Some('\r'),
+        b'f' => Some('\u{c}'),
+        b'"' => Some('"'),
+        b'\'' => Some('\''),
+        b'\\' => Some('\\'),
+        _ => None,
+    }
+}
+
+/// Why a [`UCHAR`](decode_uchar) did not decode.
+///
+/// Three kinds, because a scanner reports them differently: a backslash that
+/// opens nothing is a defect at the backslash, while a malformed escape body
+/// is a defect of the terminal being scanned.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum UcharError {
+    /// The backslash is not followed by `u` or `U`.
+    NotAnEscape,
+    /// The `u`/`U` is not followed by its full run of `HEX` digits: input ran
+    /// out, or something that is not a digit (a sign included) stands in it.
+    BadHex,
+    /// The digits denote no Unicode scalar value: a surrogate, or a value above
+    /// U+10FFFF.
+    NotAScalar,
+}
+
+/// Decode the `UCHAR` at the start of `bytes` (whose first byte is the
+/// backslash): the scalar and the bytes the escape spans (`6` or `10`).
+///
+/// ```text
+/// UCHAR ::= '\u' HEX HEX HEX HEX | '\U' HEX HEX HEX HEX HEX HEX HEX HEX
+/// HEX   ::= [0-9] | [A-F] | [a-f]
+/// ```
+///
+/// Strict: every digit goes through [`purrdf_hash::hex::nibble`], so a sign,
+/// a space or a fullwidth digit is not a digit, and the value must be a
+/// Unicode scalar (the surrogates and everything above U+10FFFF are refused,
+/// never replaced). The one decoder behind every IRIREF body and string
+/// literal in the workspace.
+///
+/// # Errors
+///
+/// [`UcharError`] names what is wrong.
+///
+/// ```rust
+/// use purrdf_lex::terminals::{UcharError, decode_uchar};
+///
+/// assert_eq!(decode_uchar(b"\\u00e9tail"), Ok(('é', 6)));
+/// assert_eq!(decode_uchar(b"\\U0001F431"), Ok(('\u{1f431}', 10)));
+/// assert_eq!(decode_uchar(b"\\u+041"), Err(UcharError::BadHex));
+/// assert_eq!(decode_uchar(b"\\uD800"), Err(UcharError::NotAScalar));
+/// assert_eq!(decode_uchar(b"\\x41"), Err(UcharError::NotAnEscape));
+/// ```
+pub fn decode_uchar(bytes: &[u8]) -> Result<(char, usize), UcharError> {
+    decode_uchar_at(|ahead| bytes.get(ahead).copied())
+}
+
+/// [`decode_uchar`] for a scanner whose cursor is not a byte slice: `peek(k)`
+/// yields the byte `k` positions past the backslash's (the backslash is
+/// `peek(0)`), or `None` at the end of input. The escape is ASCII, so a
+/// cursor over `char`s passes each scalar narrowed to a byte, with anything
+/// non-ASCII as a byte that is no digit (`0xFF`); the count returned is then
+/// scalars as well as bytes.
+///
+/// # Errors
+///
+/// [`UcharError`] names what is wrong.
+///
+/// ```rust
+/// use purrdf_lex::terminals::decode_uchar_at;
+///
+/// let chars: Vec<char> = "\\u0041".chars().collect();
+/// let peek = |k: usize| chars.get(k).map(|&c| u8::try_from(c).unwrap_or(u8::MAX));
+/// assert_eq!(decode_uchar_at(peek), Ok(('A', 6)));
+/// ```
+pub fn decode_uchar_at(peek: impl Fn(usize) -> Option<u8>) -> Result<(char, usize), UcharError> {
+    let width = match peek(1) {
+        Some(b'u') => 4,
+        Some(b'U') => 8,
+        _ => return Err(UcharError::NotAnEscape),
+    };
+    let mut value: u32 = 0;
+    for k in 0..width {
+        let digit = peek(2 + k)
+            .and_then(purrdf_hash::hex::nibble)
+            .ok_or(UcharError::BadHex)?;
+        // Eight digits of four bits fill a `u32` exactly, so no step overflows.
+        value = (value << 4) | u32::from(digit);
+    }
+    let decoded = char::from_u32(value).ok_or(UcharError::NotAScalar)?;
+    Ok((decoded, 2 + width))
+}
+
+/// `text` with every well-formed [`UCHAR`](decode_uchar) replaced by the
+/// scalar it denotes and everything else — a backslash that opens no
+/// well-formed `UCHAR` included — copied through as itself; borrowed when
+/// `text` holds no backslash.
+///
+/// For a caller that needs an IRIREF body's value without judging the escape
+/// (the parser that owns the grammar has, or will): nothing is dropped, so a
+/// malformed escape stays visible in the result.
+///
+/// ```rust
+/// use purrdf_lex::terminals::expand_uchars;
+///
+/// assert_eq!(expand_uchars("urn:\\u00e9"), "urn:é");
+/// assert_eq!(expand_uchars("urn:\\u+0e9"), "urn:\\u+0e9");
+/// assert!(matches!(expand_uchars("urn:plain"), std::borrow::Cow::Borrowed(_)));
+/// ```
+#[must_use]
+pub fn expand_uchars(text: &str) -> Cow<'_, str> {
+    let bytes = text.as_bytes();
+    let Some(first) = bytes.iter().position(|&b| b == b'\\') else {
+        return Cow::Borrowed(text);
+    };
+    let mut out = String::with_capacity(text.len());
+    let mut copied = 0;
+    let mut at = first;
+    while at < bytes.len() {
+        if bytes[at] == b'\\'
+            && let Ok((decoded, width)) = decode_uchar(&bytes[at..])
+        {
+            out.push_str(&text[copied..at]);
+            out.push(decoded);
+            at += width;
+            copied = at;
+        } else {
+            at += 1;
+        }
+    }
+    // Every stop is an ASCII backslash or the end of an ASCII escape, so each
+    // slice starts and ends on a `char` boundary.
+    out.push_str(&text[copied..]);
+    Cow::Owned(out)
+}
+
+/// The scalar an XML character reference names, given its body — the text
+/// between `&#` and `;`.
+///
+/// ```text
+/// CharRef ::= '&#' [0-9]+ ';' | '&#x' [0-9a-fA-F]+ ';'
+/// ```
+///
+/// *XML 1.0 Fifth Edition* §4.1, production `[66]`, with its well-formedness
+/// constraint Legal Character: the scalar must match [`Char`](is_xml_char).
+/// The `x` is lowercase, every digit is a digit (no sign), and the value may
+/// carry leading zeros but no more; `None` otherwise.
+///
+/// ```rust
+/// use purrdf_lex::terminals::decode_char_ref;
+///
+/// assert_eq!(decode_char_ref(b"x41"), Some('A'));
+/// assert_eq!(decode_char_ref(b"65"), Some('A'));
+/// assert_eq!(decode_char_ref(b"x+41"), None);
+/// assert_eq!(decode_char_ref(b"X41"), None);
+/// assert_eq!(decode_char_ref(b"x0"), None); // not a Char
+/// ```
+#[must_use]
+pub fn decode_char_ref(body: &[u8]) -> Option<char> {
+    let code = match body {
+        [b'x', digits @ ..] => purrdf_hash::hex::parse_u32(digits)?,
+        digits if !digits.is_empty() => digits.iter().try_fold(0_u32, |value, &byte| {
+            let digit = byte.checked_sub(b'0').filter(|&digit| digit <= 9)?;
+            value.checked_mul(10)?.checked_add(u32::from(digit))
+        })?,
+        _ => return None,
+    };
+    char::from_u32(code).filter(|&c| is_xml_char(c))
+}
+
+#[cfg(test)]
+mod escape_and_trivia_tests {
+    use super::{
+        UcharError, decode_char_ref, decode_uchar, decode_uchar_at, echar_value, expand_uchars,
+        is_ncname, is_ncname_char, is_ncname_start, is_xml_name_char, is_xml_name_start_char,
+        skip_ws, trim_ws,
+    };
+
+    #[test]
+    fn a_signed_or_short_uchar_is_refused() {
+        for text in [
+            "\\u+041",
+            "\\u-041",
+            "\\U+0000041",
+            "\\u 041",
+            "\\u004",
+            "\\u004g",
+            "\\u",
+        ] {
+            assert_eq!(
+                decode_uchar(text.as_bytes()),
+                Err(UcharError::BadHex),
+                "{text}"
+            );
+        }
+        assert_eq!(decode_uchar(b"\\x41"), Err(UcharError::NotAnEscape));
+        assert_eq!(decode_uchar(b"\\uDFFF"), Err(UcharError::NotAScalar));
+        assert_eq!(decode_uchar(b"\\U00110000"), Err(UcharError::NotAScalar));
+    }
+
+    #[test]
+    fn an_unsigned_uchar_of_either_case_decodes() {
+        assert_eq!(decode_uchar(b"\\u0041"), Ok(('A', 6)));
+        assert_eq!(decode_uchar(b"\\u00e9"), Ok(('\u{e9}', 6)));
+        assert_eq!(decode_uchar(b"\\u00E9"), Ok(('\u{e9}', 6)));
+        assert_eq!(decode_uchar(b"\\U0010FFFF9"), Ok(('\u{10ffff}', 10)));
+        let chars: Vec<char> = "\\u00\u{e9}9".chars().collect();
+        let peek = |k: usize| chars.get(k).map(|&c| u8::try_from(c).unwrap_or(u8::MAX));
+        assert_eq!(decode_uchar_at(peek), Err(UcharError::BadHex));
+    }
+
+    #[test]
+    fn echar_is_exactly_its_eight_letters() {
+        let letters: Vec<u8> = (0_u8..=u8::MAX)
+            .filter(|&b| echar_value(b).is_some())
+            .collect();
+        assert_eq!(letters, b"\"'\\bfnrt");
+    }
+
+    #[test]
+    fn expansion_keeps_every_backslash_it_cannot_decode() {
+        assert_eq!(expand_uchars("a\\u0041\\u+041\\\\u0042"), "aA\\u+041\\B");
+        assert_eq!(expand_uchars("\\"), "\\");
+    }
+
+    #[test]
+    fn a_character_reference_must_be_well_formed_and_name_a_char() {
+        for body in [
+            &b"x+41"[..],
+            b"X41",
+            b"+65",
+            b"x",
+            b"",
+            b"x0",
+            b"0",
+            b"xD800",
+            b"xFFFE",
+            b"x110000",
+            b"99999999999",
+        ] {
+            assert_eq!(decode_char_ref(body), None, "{body:?}");
+        }
+        for (body, expected) in [
+            (&b"x41"[..], 'A'),
+            (b"65", 'A'),
+            (b"x0041", 'A'),
+            (b"x9", '\t'),
+            (b"x10FFFF", '\u{10ffff}'),
+        ] {
+            assert_eq!(decode_char_ref(body), Some(expected), "{body:?}");
+        }
+    }
+
+    #[test]
+    fn form_feed_and_unicode_spaces_are_not_skipped_or_trimmed() {
+        assert_eq!(skip_ws(b" \x0c", 0), 1);
+        assert_eq!(skip_ws("\u{a0}".as_bytes(), 0), 0);
+        assert_eq!(trim_ws("\u{c}x\u{b}"), "\u{c}x\u{b}");
+        assert_eq!(trim_ws("\u{2028}x\u{3000}"), "\u{2028}x\u{3000}");
+    }
+
+    #[test]
+    fn space_tab_carriage_return_and_line_feed_are_skipped_and_trimmed() {
+        assert_eq!(skip_ws(b"x \t\r\ny", 1), 5);
+        assert_eq!(skip_ws(b"   ", 0), 3);
+        assert_eq!(trim_ws(" \t\r\nx y\n\r\t "), "x y");
+        assert_eq!(trim_ws(" \t "), "");
+        assert_eq!(trim_ws(""), "");
+    }
+
+    #[test]
+    fn ncname_is_the_xml_name_classes_without_the_colon() {
+        for cp in 0..=0x10_FFFF_u32 {
+            let Some(c) = char::from_u32(cp) else {
+                continue;
+            };
+            assert_eq!(
+                is_ncname_start(c),
+                is_xml_name_start_char(c) && c != ':',
+                "{cp:#x}"
+            );
+            assert_eq!(
+                is_ncname_char(c),
+                is_xml_name_char(c) && c != ':',
+                "{cp:#x}"
+            );
+        }
+        assert!(is_ncname("a") && is_ncname("_") && is_ncname("a."));
+        assert!(!is_ncname("a:b") && !is_ncname(".a") && !is_ncname(""));
+    }
 }
 
 #[cfg(test)]

@@ -811,7 +811,7 @@ impl Parser {
     fn hex_digits(&mut self, count: usize) -> Option<u32> {
         let mut value = 0_u32;
         for ahead in 0..count {
-            let digit = self.peek_at(ahead)?.to_digit(16)?;
+            let digit = hex_digit_value(self.peek_at(ahead)?)?;
             value = value * 16 + digit;
         }
         self.pos += count;
@@ -824,7 +824,7 @@ impl Parser {
         if self.eat('{') {
             let mut value = 0_u32;
             let mut digits = 0;
-            while let Some(digit) = self.peek().and_then(|ch| ch.to_digit(16)) {
+            while let Some(digit) = self.peek().and_then(hex_digit_value) {
                 value = value.saturating_mul(16).saturating_add(digit);
                 digits += 1;
                 self.pos += 1;
@@ -1056,6 +1056,14 @@ fn identifier_part(ch: char) -> bool {
     matches!(ch, '$' | '\u{200C}' | '\u{200D}') || contains_property("ID_Continue", u32::from(ch))
 }
 
+/// The value of one ECMA-262 `HexDigit`, read by [`purrdf_hash::hex::nibble`].
+fn hex_digit_value(ch: char) -> Option<u32> {
+    u8::try_from(ch)
+        .ok()
+        .and_then(purrdf_hash::hex::nibble)
+        .map(u32::from)
+}
+
 fn property_ranges(name: &str) -> &'static [(u32, u32)] {
     let index = unicode_ranges::RANGES
         .binary_search_by_key(&name, |(key, _)| key)
@@ -1064,9 +1072,7 @@ fn property_ranges(name: &str) -> &'static [(u32, u32)] {
 }
 
 fn contains_property(name: &str, code: u32) -> bool {
-    let ranges = property_ranges(name);
-    let index = ranges.partition_point(|(_, high)| *high < code);
-    ranges.get(index).is_some_and(|(low, _)| *low <= code)
+    purrdf_iri::terminals::in_ranges(code, property_ranges(name))
 }
 
 fn canonicalize(code: u32) -> u32 {

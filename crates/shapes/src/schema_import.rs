@@ -9,6 +9,7 @@
 //! drift between five readers. Accepted omissions are always recorded on a
 //! closed source-language → `shacl` loss profile.
 
+use purrdf_iri::json_pointer;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
@@ -403,15 +404,7 @@ fn validate_absolute_iri(label: &str, value: &str) -> Result<(), SchemaImportErr
 }
 
 fn definition_path(key: &str) -> String {
-    format!("#/$defs/{}", pointer_escape(key))
-}
-
-fn pointer_escape(value: &str) -> Cow<'_, str> {
-    if value.contains('~') || value.contains('/') {
-        Cow::Owned(value.replace('~', "~0").replace('/', "~1"))
-    } else {
-        Cow::Borrowed(value)
-    }
+    format!("#/$defs/{}", json_pointer::escape_token(key))
 }
 
 fn fnv1a(bytes: &[u8]) -> u64 {
@@ -444,7 +437,7 @@ impl ImportContext<'_> {
         generated_envelope: bool,
     ) -> Result<(), SchemaImportError> {
         for (keyword, value) in root {
-            let path = format!("#/{}", pointer_escape(keyword));
+            let path = format!("#/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "$schema" | "$id" if generated_envelope => {}
                 "$schema" | "$id" | "$anchor" | "$dynamicAnchor" => {
@@ -507,7 +500,7 @@ impl ImportContext<'_> {
         path: &str,
     ) -> Result<(), SchemaImportError> {
         for (keyword, value) in object {
-            let location = format!("{path}/{}", pointer_escape(keyword));
+            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "$ref" => {}
                 "title" | "description" | "$comment" | "default" | "examples" | "deprecated"
@@ -562,13 +555,13 @@ impl ImportContext<'_> {
                 if !self.generated_envelope {
                     self.record(
                         "value-term-kind-widened",
-                        &format!("{path}/properties/{}", pointer_escape(key)),
+                        &format!("{path}/properties/{}", json_pointer::escape_token(key)),
                     );
                 }
                 continue;
             }
             imported_property_names.insert(key.clone());
-            let property_path = format!("{path}/properties/{}", pointer_escape(key));
+            let property_path = format!("{path}/properties/{}", json_pointer::escape_token(key));
             let predicate_iri = self
                 .config
                 .namespaces
@@ -631,7 +624,10 @@ impl ImportContext<'_> {
                 )));
             }
             property_shapes.push(PropertyShape {
-                id: property_shape_id(&id, &format!("{path}/properties/{}", pointer_escape(key))),
+                id: property_shape_id(
+                    &id,
+                    &format!("{path}/properties/{}", json_pointer::escape_token(key)),
+                ),
                 path: Path::Predicate(NamedNode::new_unchecked(predicate_iri)),
                 values: None,
                 default_value: None,
@@ -784,7 +780,7 @@ impl ImportContext<'_> {
         path: &str,
     ) -> Result<(), SchemaImportError> {
         for (keyword, value) in object {
-            let location = format!("{path}/{}", pointer_escape(keyword));
+            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "type"
                 | "properties"
@@ -933,7 +929,7 @@ impl ImportContext<'_> {
             }
         }
         for (keyword, value) in object {
-            let location = format!("{path}/{}", pointer_escape(keyword));
+            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "allOf" if contains_is_has_value => {}
                 "type" | "items" | "minItems" | "maxItems" | "contains" | "minContains"
@@ -1112,7 +1108,7 @@ impl ImportContext<'_> {
             if handled.contains(keyword.as_str()) {
                 continue;
             }
-            let location = format!("{path}/{}", pointer_escape(keyword));
+            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "title" | "description" | "$comment" | "default" | "examples" | "deprecated"
                 | "readOnly" | "writeOnly" => {
@@ -1728,7 +1724,7 @@ impl ImportContext<'_> {
     ) -> Result<(), SchemaImportError> {
         let start = constraints.len();
         for (keyword, value) in members {
-            let location = format!("{path}/{}", pointer_escape(keyword));
+            let location = format!("{path}/{}", json_pointer::escape_token(keyword));
             match keyword.as_str() {
                 "type" => {}
                 "minItems" => {
@@ -1879,8 +1875,10 @@ impl ImportContext<'_> {
                 if !is_plain_node_ref(tail_node) {
                     return Ok(false);
                 }
-                let tail_path =
-                    format!("{base}/{}/anyOf/0/properties/@list", pointer_escape(&rest));
+                let tail_path = format!(
+                    "{base}/{}/anyOf/0/properties/@list",
+                    json_pointer::escape_token(&rest)
+                );
                 let mut listed = Vec::new();
                 self.import_list_members(members, &tail_path, 1, &mut listed)?;
                 // The tail's own member shape repeats the head's; a lone
@@ -1901,7 +1899,7 @@ impl ImportContext<'_> {
                 if let Some(member) = head {
                     let shape = self.import_member_shape(
                         member,
-                        &format!("{base}/{}/allOf/1", pointer_escape(&first)),
+                        &format!("{base}/{}/allOf/1", json_pointer::escape_token(&first)),
                     )?;
                     listed.push(Constraint::MemberShape(Box::new(shape)));
                 }
@@ -2103,7 +2101,7 @@ impl ImportContext<'_> {
             .namespaces
             .expand_iri(predicate)
             .map_err(|error| SchemaImportError::new(format!("{path} predicate: {error}")))?;
-        let object_path = format!("{path}/{}", pointer_escape(predicate.as_str()));
+        let object_path = format!("{path}/{}", json_pointer::escape_token(predicate.as_str()));
         let Some(object) = self.import_term(object, &object_path)? else {
             return Ok(None);
         };
@@ -2192,7 +2190,7 @@ fn validate_value_limits(
                     value,
                     depth + 1,
                     nodes,
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", json_pointer::escape_token(key)),
                 )?;
             }
             Ok(())
@@ -2225,7 +2223,7 @@ fn validate_references(
         validate_json_keyword_value(
             keyword,
             value,
-            &format!("{path}/{}", pointer_escape(keyword)),
+            &format!("{path}/{}", json_pointer::escape_token(keyword)),
         )?;
     }
     for keyword in ["$dynamicRef", "$recursiveRef"] {
@@ -2274,7 +2272,7 @@ fn validate_references(
                 validate_references(
                     child,
                     definitions,
-                    &format!("{path}/{keyword}/{}", pointer_escape(key)),
+                    &format!("{path}/{keyword}/{}", json_pointer::escape_token(key)),
                     depth + 1,
                 )?;
             }
@@ -2531,24 +2529,7 @@ fn reference_key(reference: &str) -> Option<String> {
     if encoded.contains('/') {
         return None;
     }
-    pointer_unescape(encoded)
-}
-
-fn pointer_unescape(value: &str) -> Option<String> {
-    let mut output = String::with_capacity(value.len());
-    let mut characters = value.chars();
-    while let Some(character) = characters.next() {
-        if character != '~' {
-            output.push(character);
-            continue;
-        }
-        match characters.next()? {
-            '0' => output.push('~'),
-            '1' => output.push('/'),
-            _ => return None,
-        }
-    }
-    Some(output)
+    json_pointer::unescape_token(encoded).map(Cow::into_owned)
 }
 
 fn is_typed_literal_schema(value: &Value) -> bool {
@@ -3311,14 +3292,7 @@ fn case_insensitive_tag(value: &str) -> Option<String> {
             let escape = rest.strip_prefix("\\u{")?;
             let end = escape.find('}')?;
             // ECMA-262 `\u{ CodePoint }`: one or more hex digits, no sign.
-            let digits = &escape[..end];
-            if digits.is_empty() {
-                return None;
-            }
-            let code = digits.bytes().try_fold(0_u32, |value, byte| {
-                let digit = purrdf_hash::hex::nibble(byte)?;
-                value.checked_mul(16)?.checked_add(u32::from(digit))
-            })?;
+            let code = purrdf_hash::hex::parse_u32(&escape.as_bytes()[..end])?;
             output.push(char::from_u32(code)?);
             rest = &escape[end + 1..];
         }
@@ -3497,7 +3471,10 @@ fn validate_json_keyword_value(
                 return invalid("an object of unique string arrays");
             };
             for (name, names) in entries {
-                validate_unique_string_array(names, &format!("{path}/{}", pointer_escape(name)))?;
+                validate_unique_string_array(
+                    names,
+                    &format!("{path}/{}", json_pointer::escape_token(name)),
+                )?;
             }
             Ok(())
         }
@@ -4334,67 +4311,5 @@ mod tests {
             "{}",
             imported.losses.render_json()
         );
-    }
-}
-
-/// The frozen JSON Pointer vectors, replayed against the schema importer's definition pointers.
-#[cfg(test)]
-mod json_pointer_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    const POINTERS: &str = include_str!("../../lex/tests/vectors/json_pointer_vectors.txt");
-
-    fn escape(token: &str) -> String {
-        super::pointer_escape(token).into_owned()
-    }
-
-    fn unescape(token: &str) -> Option<String> {
-        super::pointer_unescape(token)
-    }
-
-    #[test]
-    fn pointers_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(POINTERS).expect("json_pointer_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let fields = &record.fields;
-            match fields[0] {
-                "escape" => {
-                    let token = decode_str(fields[1]).expect("a token");
-                    assert_eq!(encode_str(&escape(&token)), fields[2], "{token:?}");
-                    replayed += 1;
-                }
-                "plane" => {
-                    let plane = u32::from_str_radix(fields[1], 16).expect("hex");
-                    let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                        .filter_map(char::from_u32)
-                        .map(|c| encode_str(&escape(&format!("{c}~{c}/"))));
-                    assert_eq!(answer_digest(answers), fields[2], "plane {plane:X}");
-                    replayed += 1;
-                }
-                "parse" => {
-                    let pointer = decode_str(fields[1]).expect("a pointer");
-                    let expected: Option<Vec<String>> = (fields[2] != "-").then(|| {
-                        fields[3..]
-                            .iter()
-                            .map(|token| decode_str(token).expect("a token"))
-                            .collect()
-                    });
-                    if let Some(token) = pointer
-                        .strip_prefix('/')
-                        .filter(|token| !token.contains('/'))
-                    {
-                        assert_eq!(
-                            unescape(token).map(|token| vec![token]),
-                            expected,
-                            "{pointer:?}"
-                        );
-                        replayed += 1;
-                    }
-                }
-                _ => {}
-            }
-        }
-        assert!(replayed > 100, "{replayed}");
     }
 }

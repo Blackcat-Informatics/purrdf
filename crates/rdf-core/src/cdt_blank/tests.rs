@@ -7,7 +7,7 @@
 
 use super::{
     BlankBinding, CdtBlankError, bind_cdt_blank_labels, cdt_embedded_blanks, decode_escape,
-    is_cdt_datatype, rewrite_cdt_blank_terms, unescape_iri,
+    is_cdt_datatype, rewrite_cdt_blank_terms,
 };
 use crate::blank_label::{LabelAlphabet, encode_blank_label};
 use crate::ir::term::BlankScope;
@@ -375,12 +375,15 @@ fn a_no_op_rewrite_borrows() {
 fn a_signed_uchar_is_not_an_escape() {
     assert_eq!(decode_escape("\\u+041", 0), ('\\', 1));
     assert_eq!(decode_escape("\\U+0000041", 0), ('\\', 1));
-    assert_ne!(unescape_iri("urn:\\u+041"), "urn:A");
+    assert_eq!(
+        purrdf_iri::terminals::expand_uchars("urn:\\u+041"),
+        "urn:\\u+041"
+    );
 }
 
 #[test]
 fn an_unsigned_uchar_still_decodes() {
     assert_eq!(decode_escape("\\u0041", 0), ('A', 6));
     assert_eq!(decode_escape("\\U00000041", 0), ('A', 10));
-    assert_eq!(unescape_iri("urn:\\u0041"), "urn:A");
+    assert_eq!(purrdf_iri::terminals::expand_uchars("urn:\\u0041"), "urn:A");
 }

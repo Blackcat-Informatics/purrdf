@@ -307,9 +307,11 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "winapi-util": "purrdf_testkit::bench::store (old walkdir closure)",
 }
 
-# Reserved for a future direct-only removal, if one is ever authorized.
-# Every current removal is an any-edge ban, including hex and rand_core.
+# Removed as a direct dependency of every workspace member, while a direct
+# dependency's own closure still reaches it: no member may name it again.
 BANNED_DIRECT_ONLY: dict[str, str] = {
+    # regex and serde_json keep it in the graph through their own closures.
+    "memchr": "purrdf_lex::scan::find_byte / find_byte2 (and a purrdf_lex::scan::ByteClass for a fixed class)",
 }
 
 DEP_TABLE_KEYS = ("dependencies", "dev-dependencies", "build-dependencies")

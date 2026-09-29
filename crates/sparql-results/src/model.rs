@@ -84,44 +84,6 @@ pub struct ProvenanceNamespace {
     iri: String,
 }
 
-/// `true` for a Unicode scalar value in the XML 1.0 (Fifth Edition)
-/// `NameStartChar` production, EXCLUDING `:` — i.e. the XML Namespaces
-/// `NCNameStartChar` character class
-/// (<https://www.w3.org/TR/xml-names/#NT-NCName> defines `NCName` as the XML
-/// `Name` production with every `:` removed;
-/// <https://www.w3.org/TR/xml/#NT-NameStartChar> is the source `NameStartChar`
-/// production this restricts).
-///
-/// `NCName` is `Name` with every `:` removed, so the subtraction is applied in
-/// this position and in the continuation alike — a colon excluded only at the
-/// head would make `ns:local` a valid `NCName`, which it is not.
-const fn is_ncname_start_char(c: char) -> bool {
-    purrdf_iri::terminals::is_xml_name_start_char(c) && c != ':'
-}
-
-/// `true` for a Unicode scalar value in the XML 1.0 `NameChar` production,
-/// EXCLUDING `:` — the XML Namespaces `NCNameChar` character class (every
-/// `NCNameStartChar` plus the additional non-leading `NameChar` extras:
-/// `-`, `.`, digits, the middle dot, and two combining-mark ranges).
-const fn is_ncname_char(c: char) -> bool {
-    purrdf_iri::terminals::is_xml_name_char(c) && c != ':'
-}
-
-/// `true` iff `s` is a valid XML Namespaces `NCName`
-/// (<https://www.w3.org/TR/xml-names/#NT-NCName>): non-empty, its first
-/// character is an `NCNameStartChar`, and every subsequent character is an
-/// `NCNameChar`. Notably this rejects `:` anywhere in `s` (the entire point of
-/// the "NC" — "no colon" — restriction), which is also what keeps a prefix
-/// from being confused with a full `QName`.
-fn is_valid_ncname(s: &str) -> bool {
-    let mut chars = s.chars();
-    match chars.next() {
-        Some(c) if is_ncname_start_char(c) => {}
-        _ => return false,
-    }
-    chars.all(is_ncname_char)
-}
-
 /// `true` iff `prefix` is one of the two prefixes the XML Namespaces
 /// specification reserves outright: `xml` (permanently bound to
 /// `http://www.w3.org/XML/1998/namespace`, and which "MUST NOT be … bound to
@@ -176,7 +138,7 @@ impl ProvenanceNamespace {
     ) -> Result<Self, crate::error::Error> {
         let prefix = prefix.into();
         let iri = iri.into();
-        if !is_valid_ncname(&prefix) {
+        if !purrdf_iri::terminals::is_ncname(&prefix) {
             return Err(crate::error::Error::InvalidNamespace(format!(
                 "namespace prefix {prefix:?} is not a valid XML NCName"
             )));

@@ -90,10 +90,6 @@ roxmltree = { workspace = true }
 # rayon compiles cleanly on wasm32-unknown-unknown and degrades to inline-sequential
 # execution there (same pattern as purrdf-slice's catalog scan).
 rayon = { workspace = true }
-# SIMD-accelerated byte scanning on the native codec hot paths (chunk-parallel
-# newline splitting; serializer escape fast-path classification). SIMD on
-# x86/aarch64, portable SWAR fallback elsewhere — wasm-clean, no feature gate.
-memchr = { workspace = true }
 # RDFC-1.0 digest of the compaction certificate's content projection
 # (`gts_certify`): default features (std) re-enabled, matching `purrdf-core`'s
 # own canonicalizer — the workspace-level entry is default-features = false

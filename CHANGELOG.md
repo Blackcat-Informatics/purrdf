@@ -10,6 +10,30 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **lex:** `purrdf_lex` holds the workspace's escape decoders and lexical
+  laws that grammar readers had each spelled for themselves:
+  `terminals::decode_uchar` / `decode_uchar_at` (`UCHAR`), `echar_value`
+  (`ECHAR`), `expand_uchars`, `decode_char_ref` (the XML 1.0 `CharRef`, which
+  must name a `Char`), `skip_ws` / `trim_ws` (the four-scalar `WS`, XML `S` and
+  JSON `ws`), `is_ncname`, `is_ncname_start`, `is_ncname_char` and `in_ranges`
+  (now public); `json_escape::unescape`, `decode_escape`, `decode_u_escape` and
+  `code_unit`, the one RFC 8259 string decoder, which refuses an unpaired
+  surrogate; `json_pointer` (RFC 6901 `escape_token`, `push_token`,
+  `unescape_token`, `tokens`, `array_index`); `percent` (`encode` and
+  `push_encoded` over the sets RFC 3986, RFC 3987 and RFC 6570 define,
+  `push_triplet`, strict `decode`, `decode_form` for
+  `application/x-www-form-urlencoded`, and RFC 3986 §6.2.2 `normalize`); and
+  `scan::find_byte` / `find_byte2`, the first occurrence of a byte known only
+  at run time. `purrdf_iri` re-exports `json_pointer` and `percent` beside its
+  other lexical modules. Frozen vectors in `crates/lex/tests/vectors/`
+  (UCHAR/ECHAR over every value to U+11FFFF, JSON strings over every code unit
+  and surrogate pair, JSON Pointer tokens, every percent-encoding set, needle
+  search) were recorded from the implementations these replace and are
+  replayed natively and on wasm32. `purrdf-lex` now depends on `purrdf-hash`,
+  whose `hex::nibble` reads every digit.
+- **hash:** `purrdf_hash::hex::parse_u32`, the number one or more hex digits
+  spell, with no sign, prefix or whitespace (`u32::from_str_radix` accepts a
+  leading `+`).
 - **hash:** `purrdf_hash::hex` is the workspace's base16 (RFC 4648 §8) codec.
   Rendering: `Lower` and `Upper` (`Display`, no allocation), `encode` /
   `encode_upper` (an owned `String`), `encode_into` / `encode_upper_into`
@@ -1118,6 +1142,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **deps:** `memchr` is no longer a dependency of any workspace member: the SPARQL
+  tokenizer, the line-oriented codecs, the XML nesting guard and the IRI
+  component splitter search with `purrdf_lex::scan::find_byte` / `find_byte2`
+  or a `ByteClass`. It stays in the graph only through `regex` and
+  `serde_json`, and `scripts/check-banned-deps.py` refuses it as a direct
+  dependency.
+- **lex:** every reader that decoded a `UCHAR`, an `ECHAR`, an XML character
+  reference or a JSON string escape, skipped or trimmed grammar whitespace,
+  escaped a JSON Pointer token, percent-encoded or percent-decoded, or searched a
+  range table does it through `purrdf_lex`. `purrdf_core::blank_label::is_valid_ncname`
+  answers through `purrdf_lex::terminals::is_ncname`; the SHACL, OWL and CSVW
+  lexical-form trims are `trim_ws`. HTTP Basic credentials in `SERVICE`
+  requests are encoded by `purrdf_xsd::canonical_base64`.
 - **core, gts:** base16 has one implementation, `purrdf_hash::hex`, and the
   copies are gone. **Breaking API:** the `purrdf_core::hex` module is removed
   (`purrdf_core::hex::lower(bytes)` is `purrdf_hash::hex::encode(bytes)`, the
@@ -1666,6 +1703,38 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **escapes:** a signed escape is refused. `\u+041` and `\U+0000041` were read
+  as `A` by the retrieval term decoder and by the composite-literal blank-node
+  rewriter (whose decoder used `u32::from_str_radix`, which accepts a leading
+  `+`), `&#x+41;` and `&#+65;` as `A` by the SPARQL results XML reader, and
+  `\u{+41}` by the JSON Schema language-tag import; `\u0041`, `&#x41;` and
+  `&#65;` still decode.
+- **sparql-results:** an XML character reference must be well formed and name an
+  XML `Char` (XML 1.0 §4.1, WFC Legal Character): `&#x0;`, `&#1;`, `&#xFFFE;`
+  and the uppercase `&#X41;` are refused; `&#x9;`, `&#xFFFD;` and `&#x10FFFF;`
+  still decode.
+- **retrieval:** the canonical term decoder separates terms by `WS` (space, tab,
+  carriage return, line feed) only. FORM FEED was accepted as a separator
+  through `is_ascii_whitespace`; it is now refused, and so is any other
+  control character in a blank-node label, which the writer never emits.
+- **gts:** the MMR document reader kept each raw byte of a non-ASCII JSON string
+  as a separate Latin-1 scalar, and refused every surrogate-pair escape; strings
+  now decode as UTF-8 with pairs combined, and an unpaired surrogate is still
+  refused.
+- **rdf:** a CSVW column name derived from a title is an RFC 6570 `varname`
+  (CSVW Metadata Vocabulary §5.6): `~` is written `%7E`, a `.` that begins, ends
+  or doubles is written `%2E`, and a table read without metadata writes a
+  leading `_` as `%5F` as the metadata reader already did, so a derived name
+  never takes a reserved one.
+- **entail:** RIF-XML text is trimmed by XML `S`; a NO-BREAK SPACE at either end
+  is content rather than trimmed.
+- **slice:** the dependency fixer recognizes a `@prefix` directive only after
+  Turtle `WS`; one led by a NO-BREAK SPACE or FORM FEED is not a directive.
+- **shapes:** a PEP 440 version for the Pydantic projection may be surrounded by
+  any whitespace Python's `str.isspace` names, as the reference pattern's `\s`
+  admits; it was limited to ASCII whitespace.
+- **core:** the composite-literal blank-node rewriter keeps a malformed `UCHAR` in
+  a datatype IRIREF as written rather than dropping it.
 - **jsonschema:** a pattern whose groups nest within the parser's limit but
   wrap repetitions, alternations and sequences between them (for example 250
   levels of `(?:a|…b)*`) is compiled; it was refused as a resource error

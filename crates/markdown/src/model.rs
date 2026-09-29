@@ -38,7 +38,7 @@ use purrdf_core::embedding::{ChunkingContractId, TargetId, TextChunkTarget};
 use crate::dialect::Reading;
 use crate::error::MarkdownError;
 use crate::profile::Profile;
-use crate::split::{floor_boundary, split_spans};
+use crate::split::split_spans;
 
 /// How many bytes of context a unit's [content anchor](Unit::anchor)
 /// reaches on each side, snapped to a scalar boundary so the context is
@@ -429,10 +429,10 @@ impl<'a> Unit<'a> {
     #[must_use]
     pub fn prefix(&self) -> &'a str {
         let start = self.span.start as usize;
-        let mut from = start.saturating_sub(CONTEXT_BYTES);
-        while from < start && !self.source.is_char_boundary(from) {
-            from += 1;
-        }
+        // `start` is a boundary, so the snap forward never passes it.
+        let from = self
+            .source
+            .ceil_char_boundary(start.saturating_sub(CONTEXT_BYTES));
         &self.source[from..start]
     }
 
@@ -442,10 +442,9 @@ impl<'a> Unit<'a> {
     #[must_use]
     pub fn suffix(&self) -> &'a str {
         let end = self.span.end as usize;
-        let to = floor_boundary(
-            self.source,
-            self.source.len().min(end.saturating_add(CONTEXT_BYTES)),
-        );
+        let to = self
+            .source
+            .floor_char_boundary(end.saturating_add(CONTEXT_BYTES));
         &self.source[end..to]
     }
 

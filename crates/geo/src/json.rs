@@ -48,7 +48,8 @@
 
 use core::mem;
 
-use purrdf_iri::json_escape::{JsonEscapes, push_string};
+use purrdf_iri::json_escape::{self, JsonEscapeErrorKind, JsonEscapes, push_string};
+use purrdf_iri::terminals;
 
 use crate::error::GeoError;
 
@@ -206,13 +207,7 @@ impl Parser<'_> {
 
     /// RFC 8259 §2 whitespace, which is these four characters and nothing else.
     fn skip_whitespace(&mut self) {
-        while let Some(&byte) = self.bytes.get(self.pos) {
-            if matches!(byte, b' ' | b'\t' | b'\n' | b'\r') {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
+        self.pos = terminals::skip_ws(self.bytes, self.pos);
     }
 
     /// Read the value at the cursor, with every array and object it nests.
@@ -402,96 +397,38 @@ impl Parser<'_> {
     }
 
     /// One escape sequence, the backslash already consumed.
+    ///
+    /// Decoded by [`json_escape::decode_escape`]: a `\u` escape names a scalar
+    /// or a complete surrogate pair, and an unpaired surrogate is refused rather
+    /// than replaced with U+FFFD, because a replacement character is a silent
+    /// corruption (RFC 8259 §7).
     fn escape(&mut self, out: &mut String) -> Result<(), GeoError> {
-        let at = self.pos;
-        let Some(&byte) = self.bytes.get(at) else {
-            return Err(self.expected(at, "an escape character after `\\`"));
-        };
-        self.pos += 1;
-        let short = match byte {
-            b'"' => Some('"'),
-            b'\\' => Some('\\'),
-            b'/' => Some('/'),
-            b'b' => Some('\u{8}'),
-            b'f' => Some('\u{c}'),
-            b'n' => Some('\n'),
-            b'r' => Some('\r'),
-            b't' => Some('\t'),
-            b'u' => None,
-            _ => {
-                return Err(self.expected(
+        let backslash = self.pos - 1;
+        let (character, width) =
+            json_escape::decode_escape(&self.bytes[backslash..]).map_err(|error| {
+                let at = backslash + error.offset;
+                self.expected(
                     at,
-                    "one of `\"`, `\\`, `/`, `b`, `f`, `n`, `r`, `t` \
-                                              or `u` after `\\`",
-                ));
-            }
-        };
-        if let Some(character) = short {
-            out.push(character);
-            return Ok(());
-        }
-        out.push(self.escaped_char()?);
+                    match error.kind {
+                        JsonEscapeErrorKind::Truncated | JsonEscapeErrorKind::BadEscape => {
+                            "one of `\"`, `\\`, `/`, `b`, `f`, `n`, `r`, `t` or `u` after `\\`, \
+                             and four hexadecimal digits after `\\u`"
+                        }
+                        JsonEscapeErrorKind::BadHex => "four hexadecimal digits after `\\u`",
+                        JsonEscapeErrorKind::UnpairedHigh => {
+                            "`\\u` introducing the low surrogate (`\\uDC00` to `\\uDFFF`) that \
+                             completes a surrogate pair"
+                        }
+                        JsonEscapeErrorKind::UnpairedLow => {
+                            "a Unicode scalar value or a high surrogate; this `\\u` escape is an \
+                             unpaired low surrogate, which denotes no character"
+                        }
+                    },
+                )
+            })?;
+        out.push(character);
+        self.pos = backslash + width;
         Ok(())
-    }
-
-    /// The character a `\u` escape denotes, consuming a following low surrogate
-    /// when the first unit is a high surrogate.
-    fn escaped_char(&mut self) -> Result<char, GeoError> {
-        const HIGH: core::ops::RangeInclusive<u16> = 0xD800..=0xDBFF;
-        const LOW: core::ops::RangeInclusive<u16> = 0xDC00..=0xDFFF;
-
-        let at = self.pos;
-        let first = self.hex4()?;
-        if LOW.contains(&first) {
-            return Err(self.expected(
-                at,
-                "a Unicode scalar value or a high surrogate; this `\\u` escape is an unpaired low \
-                 surrogate, which denotes no character",
-            ));
-        }
-        if !HIGH.contains(&first) {
-            return char::from_u32(u32::from(first))
-                .ok_or_else(|| self.expected(at, "a `\\u` escape naming a Unicode scalar value"));
-        }
-        // A high surrogate is only half a character; RFC 8259 §7 says the pair
-        // must be complete, and an unpaired one is refused rather than replaced
-        // with U+FFFD, because a replacement character is a silent corruption.
-        if self.bytes.get(self.pos) != Some(&b'\\') || self.bytes.get(self.pos + 1) != Some(&b'u') {
-            return Err(self.expected(
-                self.pos,
-                "`\\u` introducing the low surrogate that completes a surrogate pair",
-            ));
-        }
-        self.pos += 2;
-        let second_at = self.pos;
-        let second = self.hex4()?;
-        if !LOW.contains(&second) {
-            return Err(self.expected(
-                second_at,
-                "a low surrogate (`\\uDC00` to `\\uDFFF`) completing a surrogate pair",
-            ));
-        }
-        let combined =
-            0x1_0000 + ((u32::from(first) - 0xD800) << 10) + (u32::from(second) - 0xDC00);
-        char::from_u32(combined)
-            .ok_or_else(|| self.expected(at, "a surrogate pair naming a Unicode scalar value"))
-    }
-
-    /// Exactly four hexadecimal digits, as one UTF-16 code unit.
-    fn hex4(&mut self) -> Result<u16, GeoError> {
-        let at = self.pos;
-        let mut unit: u16 = 0;
-        for _ in 0..4 {
-            let Some(&byte) = self.bytes.get(self.pos) else {
-                return Err(self.expected(at, "four hexadecimal digits after `\\u`"));
-            };
-            let Some(digit) = purrdf_hash::hex::nibble(byte) else {
-                return Err(self.expected(at, "four hexadecimal digits after `\\u`"));
-            };
-            unit = (unit << 4) | u16::from(digit);
-            self.pos += 1;
-        }
-        Ok(unit)
     }
 
     /// A number: validated against the RFC 8259 grammar, then kept as text.
@@ -1362,87 +1299,6 @@ mod tests {
             assert_eq!(
                 once, twice,
                 "write then parse is the identity on a parsed value: {text}"
-            );
-        }
-    }
-}
-
-/// The frozen JSON string-body decoding vectors, replayed against the GeoJSON reader.
-#[cfg(test)]
-mod json_string_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    const STRINGS: &str = include_str!("../../lex/tests/vectors/json_string_vectors.txt");
-    const UNITS: &str = include_str!("../../lex/tests/vectors/json_unit_vectors.txt");
-
-    /// `body` (the text between the quotes) decoded, or `None` when refused.
-    fn decode(body: &str) -> Option<String> {
-        let text = format!("\"{body}\"");
-        let mut parser = super::Parser {
-            text: &text,
-            bytes: text.as_bytes(),
-            pos: 0,
-        };
-        parser.string().ok().filter(|_| parser.pos == text.len())
-    }
-
-    fn answer(body: &str) -> String {
-        decode(body).map_or_else(|| "-".to_owned(), |text| encode_str(&format!("={text}")))
-    }
-
-    /// Whether this copy is known to answer `body` differently from `expected`.
-    fn skipped(body: &str, expected: &str) -> bool {
-        let _ = (body, expected);
-        false
-    }
-
-    #[test]
-    fn string_bodies_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(STRINGS).expect("json_string_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let body = decode_str(record.fields[0]).expect("an encoded body");
-            let expected = decode_str(record.fields[1]).expect("an encoded answer");
-            if skipped(&body, &expected) {
-                continue;
-            }
-            assert_eq!(answer(&body), record.fields[1], "{body:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
-    }
-
-    #[test]
-    fn every_unit_and_pair_replays_the_frozen_digests() {
-        let file = VectorFile::parse(UNITS).expect("json_unit_vectors.txt");
-        for record in file.records() {
-            let upper = record.fields[1] == "upper";
-            let unit = |u: u32| {
-                if upper {
-                    format!("\\u{u:04X}")
-                } else {
-                    format!("\\u{u:04x}")
-                }
-            };
-            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
-            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
-            let answers = (first..=last).map(|value| {
-                if record.fields[0] == "unit" {
-                    answer(&unit(value))
-                } else {
-                    let offset = value - 0x1_0000;
-                    answer(&format!(
-                        "{}{}",
-                        unit(0xD800 + (offset >> 10)),
-                        unit(0xDC00 + (offset & 0x3FF))
-                    ))
-                }
-            });
-            assert_eq!(
-                answer_digest(answers),
-                record.fields[4],
-                "{:?}",
-                record.fields
             );
         }
     }

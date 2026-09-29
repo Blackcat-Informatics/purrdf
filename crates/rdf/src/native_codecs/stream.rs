@@ -53,6 +53,7 @@
 //! boundary, multi-byte UTF-8 straddling the read buffer, CRLF endings, and a final
 //! line with no terminator.
 
+use purrdf_iri::scan::{find_byte, find_byte2};
 use std::io::{BufRead, BufReader, Read};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::str::Utf8Error;
@@ -245,8 +246,8 @@ impl<R: Read> LineReader<R> {
                 return Ok(!self.raw.is_empty());
             }
             let found = match self.line_end {
-                LineEnd::RdfEol => memchr::memchr2(b'\r', b'\n', available),
-                LineEnd::Ndjson => memchr::memchr(b'\n', available),
+                LineEnd::RdfEol => find_byte2(available, b'\r', b'\n'),
+                LineEnd::Ndjson => find_byte(available, b'\n'),
             };
             let Some(at) = found else {
                 let take = available.len();

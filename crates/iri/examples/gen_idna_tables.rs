@@ -80,7 +80,8 @@ fn read(path: &Path) -> String {
 }
 
 fn hex(field: &str) -> u32 {
-    u32::from_str_radix(field.trim(), 16).unwrap_or_else(|err| panic!("bad hex {field:?}: {err}"))
+    purrdf_hash::hex::parse_u32(field.trim().as_bytes())
+        .unwrap_or_else(|| panic!("bad hex {field:?}"))
 }
 
 fn hex_list(field: &str) -> Vec<u32> {

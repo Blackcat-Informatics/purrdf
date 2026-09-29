@@ -3,12 +3,11 @@
 
 //! Normative CSVW-to-RDF conversion.
 
-use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
-use purrdf_iri::terminals::{ByteClass, byte_run_count};
+use purrdf_iri::percent;
 use serde_json::Value;
 
 use super::super::ProjectionError;
@@ -441,9 +440,9 @@ fn expand_url(
         if name == "_name" {
             output.push_str(value);
         } else if operator == Some('+') {
-            output.push_str(&percent_encode_reserved(value));
+            percent::push_encoded(&mut output, value, percent::URI_TEMPLATE_RESERVED);
         } else {
-            output.push_str(&percent_encode(value));
+            percent::push_encoded(&mut output, value, percent::UNRESERVED);
         }
         rest = &after[close + 1..];
     }
@@ -463,163 +462,12 @@ fn expand_url(
         .map_err(|error| ProjectionError::term(format!("invalid expanded CSVW URL: {error}")))
 }
 
-/// The `{+name}` (reserved) expansion: every byte [`reserved_byte`] admits is
-/// written as itself and every other byte as `%XX`, borrowing `value` when
-/// nothing needs encoding.
-fn percent_encode_reserved(value: &str) -> Cow<'_, str> {
-    let Some(first) = find_first_reserved_escape(value.as_bytes()) else {
-        return Cow::Borrowed(value);
-    };
-    let mut output = String::with_capacity(value.len() + 2);
-    push_percent_encoded(value, first, find_first_reserved_escape, &mut output);
-    Cow::Owned(output)
-}
-
-/// The bytes the reserved expansion percent-encodes: every byte
-/// [`reserved_byte`] does not admit (the C0 controls, space, `"`, `<`, `>`,
-/// `\`, `^`, `` ` ``, `{`, `|`, `}`, DEL and every non-ASCII byte).
-const RESERVED_ESCAPE_TABLE: [u8; 256] = {
-    let mut table = [0_u8; 256];
-    let mut b: u8 = 0;
-    loop {
-        if !reserved_byte(b) {
-            table[b as usize] = 1;
-        }
-        if b == u8::MAX {
-            break;
-        }
-        b += 1;
-    }
-    table
-};
-
-const RESERVED_ESCAPES: ByteClass<{ byte_run_count(&RESERVED_ESCAPE_TABLE) }> =
-    ByteClass::from_table(RESERVED_ESCAPE_TABLE);
-
-/// The offset of the first byte of `bytes` the reserved expansion encodes.
-///
-/// Out of line, so the class compiles to one kernel with its runs folded in as
-/// constants.
-#[inline(never)]
-fn find_first_reserved_escape(bytes: &[u8]) -> Option<usize> {
-    RESERVED_ESCAPES.find_first(bytes)
-}
-
-/// Append `value` to `output` with every byte `find` stops at written as
-/// `%XX` (uppercase hex) and every other byte as itself; `first` is the offset
-/// of the first stop.
-///
-/// Both encoded classes hold every non-ASCII byte, so a run between two stops
-/// is ASCII and begins and ends on a `char` boundary. The position after a stop
-/// may fall inside a multi-byte scalar, but then the next byte is a stop too
-/// and the run there is empty, so it is never sliced.
-fn push_percent_encoded(
-    value: &str,
-    first: usize,
-    find: impl Fn(&[u8]) -> Option<usize>,
-    output: &mut String,
-) {
-    let bytes = value.as_bytes();
-    let mut run_start = 0;
-    let mut hit = first;
-    loop {
-        if hit > run_start {
-            output.push_str(&value[run_start..hit]);
-        }
-        let byte = bytes[hit];
-        output.push('%');
-        purrdf_hash::hex::encode_upper_into(&[byte], output);
-        run_start = hit + 1;
-        match find(&bytes[run_start..]) {
-            Some(offset) => hit = run_start + offset,
-            None => break,
-        }
-    }
-    output.push_str(&value[run_start..]);
-}
-
-const fn reserved_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric()
-        || matches!(
-            byte,
-            b'-' | b'.'
-                | b'_'
-                | b'~'
-                | b':'
-                | b'/'
-                | b'?'
-                | b'#'
-                | b'['
-                | b']'
-                | b'@'
-                | b'!'
-                | b'$'
-                | b'&'
-                | b'\''
-                | b'('
-                | b')'
-                | b'*'
-                | b'+'
-                | b','
-                | b';'
-                | b'='
-                | b'%'
-        )
-}
-
 fn fragment_iri(table_url: &str, name: &str) -> Result<String, ProjectionError> {
     let base = purrdf_iri::parse(table_url)
         .map_err(|error| ProjectionError::term(format!("invalid CSVW table URL: {error}")))?;
     base.resolve(&format!("#{name}"))
         .map(|iri| iri.as_str().to_owned())
         .map_err(|error| ProjectionError::term(format!("invalid CSVW property URL: {error}")))
-}
-
-/// The `{name}` (simple) expansion: every byte [`unreserved_byte`] admits is
-/// written as itself and every other byte as `%XX`.
-fn percent_encode(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    match find_first_unreserved_escape(value.as_bytes()) {
-        Some(first) => {
-            push_percent_encoded(value, first, find_first_unreserved_escape, &mut output);
-        }
-        None => output.push_str(value),
-    }
-    output
-}
-
-/// RFC 3986's `unreserved`: ASCII letters and digits, `-`, `.`, `_` and `~`.
-const fn unreserved_byte(byte: u8) -> bool {
-    byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')
-}
-
-/// The bytes the simple expansion percent-encodes: every byte
-/// [`unreserved_byte`] does not admit.
-const UNRESERVED_ESCAPE_TABLE: [u8; 256] = {
-    let mut table = [0_u8; 256];
-    let mut b: u8 = 0;
-    loop {
-        if !unreserved_byte(b) {
-            table[b as usize] = 1;
-        }
-        if b == u8::MAX {
-            break;
-        }
-        b += 1;
-    }
-    table
-};
-
-const UNRESERVED_ESCAPES: ByteClass<{ byte_run_count(&UNRESERVED_ESCAPE_TABLE) }> =
-    ByteClass::from_table(UNRESERVED_ESCAPE_TABLE);
-
-/// The offset of the first byte of `bytes` the simple expansion encodes.
-///
-/// Out of line, so the class compiles to one kernel with its runs folded in as
-/// constants.
-#[inline(never)]
-fn find_first_unreserved_escape(bytes: &[u8]) -> Option<usize> {
-    UNRESERVED_ESCAPES.find_first(bytes)
 }
 
 fn expand_jsonld_iri(value: &str, config: &CsvwConfig) -> Result<String, ProjectionError> {
@@ -639,206 +487,4 @@ fn expand_jsonld_iri(value: &str, config: &CsvwConfig) -> Result<String, Project
     base.resolve(value)
         .map(|iri| iri.as_str().to_owned())
         .map_err(|error| ProjectionError::term(format!("invalid CSVW JSON-LD IRI: {error}")))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{
-        RESERVED_ESCAPES, UNRESERVED_ESCAPES, percent_encode, percent_encode_reserved,
-        reserved_byte, unreserved_byte,
-    };
-    use std::borrow::Cow;
-
-    /// The per-byte reserved expansion the scan replaced, kept as the oracle.
-    fn percent_encode_reserved_reference(value: &str) -> Cow<'_, str> {
-        let Some(first_escape) = value.bytes().position(|byte| !reserved_byte(byte)) else {
-            return Cow::Borrowed(value);
-        };
-        let mut output = String::with_capacity(value.len() + 2);
-        output.push_str(&value[..first_escape]);
-        for &byte in &value.as_bytes()[first_escape..] {
-            if reserved_byte(byte) {
-                output.push(char::from(byte));
-            } else {
-                output.push('%');
-                purrdf_hash::hex::encode_upper_into(&[byte], &mut output);
-            }
-        }
-        Cow::Owned(output)
-    }
-
-    /// The per-byte simple expansion the scan replaced, kept as the oracle.
-    fn percent_encode_reference(value: &str) -> String {
-        let mut output = String::with_capacity(value.len());
-        for byte in value.bytes() {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                output.push(char::from(byte));
-            } else {
-                output.push('%');
-                purrdf_hash::hex::encode_upper_into(&[byte], &mut output);
-            }
-        }
-        output
-    }
-
-    /// Every ASCII scalar and non-ASCII scalars of each UTF-8 width, each
-    /// placed after every prefix length 0 to 40 of a plain run (so across the
-    /// sixteen-byte chunks and into the tail), alone, doubled, and followed by
-    /// plain text, other stops and a second scalar.
-    fn samples() -> Vec<String> {
-        let mut scalars: Vec<char> = (0_u8..=0x7F).map(char::from).collect();
-        scalars.extend([
-            '\u{85}',
-            '\u{a0}',
-            '\u{e9}',
-            '\u{2028}',
-            '\u{feff}',
-            '\u{1f600}',
-        ]);
-        let mut out = vec![String::new()];
-        for &c in &scalars {
-            for prefix in 0..=40 {
-                let plain = "a/b".repeat(prefix / 3 + 1);
-                let head = &plain[..prefix.min(plain.len())];
-                out.push(format!("{head}{c}"));
-                out.push(format!("{head}{c}{c}"));
-                out.push(format!("{head}{c}tail-0123456789-ABCDEFGHIJ"));
-                out.push(format!("{head}{c} %{{}}\u{e9}{head}\u{1f600}"));
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn reserved_expansion_scan_equals_the_per_byte_encoder() {
-        for byte in 0_u8..=u8::MAX {
-            assert_eq!(
-                RESERVED_ESCAPES.contains(byte),
-                !reserved_byte(byte),
-                "{byte:#04x}"
-            );
-        }
-        for value in samples() {
-            let expected = percent_encode_reserved_reference(&value);
-            let actual = percent_encode_reserved(&value);
-            assert_eq!(actual, expected, "{value:?}");
-            assert_eq!(
-                matches!(actual, Cow::Borrowed(_)),
-                matches!(expected, Cow::Borrowed(_)),
-                "{value:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn simple_expansion_scan_equals_the_per_byte_encoder() {
-        for byte in 0_u8..=u8::MAX {
-            assert_eq!(
-                UNRESERVED_ESCAPES.contains(byte),
-                !unreserved_byte(byte),
-                "{byte:#04x}"
-            );
-        }
-        for value in samples() {
-            assert_eq!(
-                percent_encode(&value),
-                percent_encode_reference(&value),
-                "{value:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn reserved_expansion_borrows_unchanged_iris_and_encodes_only_on_demand() {
-        let unchanged = "https://example.org/a/b?x=y#fragment";
-        assert!(matches!(
-            percent_encode_reserved(unchanged),
-            Cow::Borrowed(value) if value == unchanged
-        ));
-
-        assert_eq!(
-            percent_encode_reserved("https://example.org/na\u{ef}ve path"),
-            Cow::<str>::Owned("https://example.org/na%C3%AFve%20path".to_owned())
-        );
-    }
-}
-
-/// The frozen percent-encoding vectors, replayed against the CSVW URI-template expansions.
-#[cfg(test)]
-mod percent_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    /// Replay one vector file: `run` answers an input (`None` for a refusal),
-    /// `encode` says whether answers are encoded text rather than `=`-prefixed
-    /// decodings, and `skipped` names inputs this copy is known to answer differently.
-    fn replay(
-        vectors: &str,
-        encode: bool,
-        run: impl Fn(&str) -> Option<String>,
-        skipped: impl Fn(&str) -> bool,
-        plane_skipped: impl Fn(u32) -> bool,
-    ) {
-        let answer = |input: &str| match run(input) {
-            Some(value) if encode => encode_str(&value),
-            Some(value) => encode_str(&format!("={value}")),
-            None => "-".to_owned(),
-        };
-        let file = VectorFile::parse(vectors).expect("a percent vector file");
-        let mut replayed = 0;
-        for record in file.records() {
-            if record.fields[0] == "plane" {
-                let plane = u32::from_str_radix(record.fields[1], 16).expect("hex");
-                if plane_skipped(plane) {
-                    continue;
-                }
-                let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                    .filter_map(char::from_u32)
-                    .filter(|c| !skipped(&c.to_string()))
-                    .map(|c| answer(&c.to_string()));
-                assert_eq!(answer_digest(answers), record.fields[2], "plane {plane:X}");
-            } else {
-                let input = decode_str(record.fields[1]).expect("an encoded input");
-                if skipped(&input) {
-                    continue;
-                }
-                assert_eq!(answer(&input), record.fields[2], "{input:?}");
-            }
-            replayed += 1;
-        }
-        assert!(replayed > 400, "{replayed}");
-    }
-
-    #[test]
-    fn unreserved_replays_the_frozen_vectors() {
-        replay(
-            include_str!("../../../../lex/tests/vectors/percent_unreserved_vectors.txt"),
-            true,
-            |input| Some(super::percent_encode(input)),
-            |input| {
-                let _ = input;
-                false
-            },
-            |plane| {
-                let _ = plane;
-                false
-            },
-        );
-    }
-
-    #[test]
-    fn uri_template_reserved_replays_the_frozen_vectors() {
-        replay(
-            include_str!("../../../../lex/tests/vectors/percent_uri_template_reserved_vectors.txt"),
-            true,
-            |input| Some(super::percent_encode_reserved(input).into_owned()),
-            |input| {
-                let _ = input;
-                false
-            },
-            |plane| {
-                let _ = plane;
-                false
-            },
-        );
-    }
 }

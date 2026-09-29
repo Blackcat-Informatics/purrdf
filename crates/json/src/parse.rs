@@ -6,6 +6,8 @@
 use std::{borrow::Cow, fmt::Write as _, ops::Range};
 
 use purrdf_core::terminals::find_first_json_string_special;
+use purrdf_lex::json_escape::{self, JsonEscapeErrorKind};
+use purrdf_lex::json_pointer;
 
 use crate::{Bounds, JsonError, Kind, Value};
 
@@ -172,7 +174,7 @@ impl Parser<'_> {
             if object {
                 let span = self.string()?;
                 let key = unescape(&self.text[span.clone()], span.start)?;
-                push_token(path, &key);
+                json_pointer::push_token(path, &key);
                 self.whitespace();
                 self.expect(b':', ":")?;
                 self.whitespace();
@@ -267,7 +269,7 @@ impl Parser<'_> {
                         }
                         Some(b'u') => {
                             self.at += 1;
-                            self.hex4()?;
+                            self.code_unit()?;
                         }
                         _ => return Err(self.syntax("a JSON escape")),
                     }
@@ -300,7 +302,7 @@ impl Parser<'_> {
                         }
                         Some(b'u') => {
                             self.at += 1;
-                            self.hex4()?;
+                            self.code_unit()?;
                         }
                         _ => return Err(self.syntax("a JSON escape")),
                     }
@@ -313,27 +315,18 @@ impl Parser<'_> {
         }
     }
 
-    fn hex4(&mut self) -> Result<u32, JsonError> {
-        let mut result = 0;
-        for _ in 0..4 {
-            let digit = self
-                .peek()
-                .and_then(purrdf_hash::hex::nibble)
-                .ok_or_else(|| self.syntax("four hexadecimal digits"))?;
-            result = result * 16 + u32::from(digit);
-            self.at += 1;
-        }
-        Ok(result)
-    }
-}
-
-fn push_token(path: &mut String, token: &str) {
-    path.push('/');
-    for character in token.chars() {
-        match character {
-            '~' => path.push_str("~0"),
-            '/' => path.push_str("~1"),
-            other => path.push(other),
+    /// The `4HEXDIG` of a `\\u` escape, syntax only: a value keeps its text raw,
+    /// and RFC 8259's grammar admits an unpaired surrogate there.
+    fn code_unit(&mut self) -> Result<u32, JsonError> {
+        match json_escape::code_unit(&self.bytes[self.at..]) {
+            Ok(unit) => {
+                self.at += 4;
+                Ok(unit)
+            }
+            Err(error) => {
+                self.at += error.offset;
+                Err(self.syntax("four hexadecimal digits"))
+            }
         }
     }
 }
@@ -342,71 +335,17 @@ fn push_token(path: &mut String, token: &str) {
 // require paired surrogate escapes for a representable RFC 6901 pointer. Keep a
 // typed error here as well so parser disagreement cannot silently discard a key.
 fn unescape(raw: &str, at: usize) -> Result<Cow<'_, str>, JsonError> {
-    if !raw.contains('\\') {
-        return Ok(Cow::Borrowed(raw));
-    }
-    let mut output = String::with_capacity(raw.len());
-    let mut chars = raw.chars();
-    while let Some(character) = chars.next() {
-        if character != '\\' {
-            output.push(character);
-            continue;
+    json_escape::unescape(raw).map_err(|error| match error.kind {
+        JsonEscapeErrorKind::UnpairedHigh | JsonEscapeErrorKind::UnpairedLow => {
+            JsonError::LoneSurrogate { at }
         }
-        let next = chars.next().ok_or(JsonError::Syntax {
+        JsonEscapeErrorKind::Truncated
+        | JsonEscapeErrorKind::BadEscape
+        | JsonEscapeErrorKind::BadHex => JsonError::Syntax {
             at,
             expected: "a JSON escape",
-        })?;
-        match next {
-            '"' => output.push('"'),
-            '\\' => output.push('\\'),
-            '/' => output.push('/'),
-            'b' => output.push('\u{8}'),
-            'f' => output.push('\u{c}'),
-            'n' => output.push('\n'),
-            'r' => output.push('\r'),
-            't' => output.push('\t'),
-            'u' => {
-                let high = read_code_unit(&mut chars, at)?;
-                let codepoint = if (0xD800..0xDC00).contains(&high) {
-                    if chars.next() != Some('\\') || chars.next() != Some('u') {
-                        return Err(JsonError::LoneSurrogate { at });
-                    }
-                    let low = read_code_unit(&mut chars, at)?;
-                    if !(0xDC00..0xE000).contains(&low) {
-                        return Err(JsonError::LoneSurrogate { at });
-                    }
-                    0x1_0000 + ((high - 0xD800) << 10) + low - 0xDC00
-                } else {
-                    high
-                };
-                output.push(char::from_u32(codepoint).ok_or(JsonError::LoneSurrogate { at })?);
-            }
-            _ => {
-                return Err(JsonError::Syntax {
-                    at,
-                    expected: "a JSON escape",
-                });
-            }
-        }
-    }
-    Ok(Cow::Owned(output))
-}
-
-/// The four hex digits of a `\uXXXX` escape as one UTF-16 code unit.
-fn read_code_unit(chars: &mut core::str::Chars<'_>, at: usize) -> Result<u32, JsonError> {
-    let mut result = 0;
-    for _ in 0..4 {
-        let digit = chars
-            .next()
-            .and_then(|character| u8::try_from(character).ok())
-            .and_then(purrdf_hash::hex::nibble)
-            .ok_or(JsonError::Syntax {
-                at,
-                expected: "four hexadecimal digits",
-            })?;
-        result = result * 16 + u32::from(digit);
-    }
-    Ok(result)
+        },
+    })
 }
 
 #[cfg(test)]
@@ -499,122 +438,5 @@ mod tests {
             }
         }
         assert!(ok > 0 && refused > 0, "{ok} {refused}");
-    }
-}
-
-/// The frozen JSON string-body decoding vectors, replayed against the member-name unescaper.
-#[cfg(test)]
-mod json_string_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    const STRINGS: &str = include_str!("../../lex/tests/vectors/json_string_vectors.txt");
-    const UNITS: &str = include_str!("../../lex/tests/vectors/json_unit_vectors.txt");
-
-    /// `body` (the text between the quotes) decoded, or `None` when refused.
-    fn decode(body: &str) -> Option<String> {
-        super::unescape(body, 0)
-            .ok()
-            .map(std::borrow::Cow::into_owned)
-    }
-
-    fn answer(body: &str) -> String {
-        decode(body).map_or_else(|| "-".to_owned(), |text| encode_str(&format!("={text}")))
-    }
-
-    /// Whether this copy is known to answer `body` differently from `expected`.
-    fn skipped(body: &str, expected: &str) -> bool {
-        let _ = (body, expected);
-        false
-    }
-
-    #[test]
-    fn string_bodies_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(STRINGS).expect("json_string_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let body = decode_str(record.fields[0]).expect("an encoded body");
-            let expected = decode_str(record.fields[1]).expect("an encoded answer");
-            if skipped(&body, &expected) {
-                continue;
-            }
-            assert_eq!(answer(&body), record.fields[1], "{body:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
-    }
-
-    #[test]
-    fn every_unit_and_pair_replays_the_frozen_digests() {
-        let file = VectorFile::parse(UNITS).expect("json_unit_vectors.txt");
-        for record in file.records() {
-            let upper = record.fields[1] == "upper";
-            let unit = |u: u32| {
-                if upper {
-                    format!("\\u{u:04X}")
-                } else {
-                    format!("\\u{u:04x}")
-                }
-            };
-            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
-            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
-            let answers = (first..=last).map(|value| {
-                if record.fields[0] == "unit" {
-                    answer(&unit(value))
-                } else {
-                    let offset = value - 0x1_0000;
-                    answer(&format!(
-                        "{}{}",
-                        unit(0xD800 + (offset >> 10)),
-                        unit(0xDC00 + (offset & 0x3FF))
-                    ))
-                }
-            });
-            assert_eq!(
-                answer_digest(answers),
-                record.fields[4],
-                "{:?}",
-                record.fields
-            );
-        }
-    }
-}
-
-/// The frozen JSON Pointer vectors, replayed against the value-path writer.
-#[cfg(test)]
-mod json_pointer_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    const POINTERS: &str = include_str!("../../lex/tests/vectors/json_pointer_vectors.txt");
-
-    fn escape(token: &str) -> String {
-        let mut path = String::new();
-        super::push_token(&mut path, token);
-        path.split_off(1)
-    }
-
-    #[test]
-    fn pointers_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(POINTERS).expect("json_pointer_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let fields = &record.fields;
-            match fields[0] {
-                "escape" => {
-                    let token = decode_str(fields[1]).expect("a token");
-                    assert_eq!(encode_str(&escape(&token)), fields[2], "{token:?}");
-                    replayed += 1;
-                }
-                "plane" => {
-                    let plane = u32::from_str_radix(fields[1], 16).expect("hex");
-                    let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                        .filter_map(char::from_u32)
-                        .map(|c| encode_str(&escape(&format!("{c}~{c}/"))));
-                    assert_eq!(answer_digest(answers), fields[2], "plane {plane:X}");
-                    replayed += 1;
-                }
-                _ => {}
-            }
-        }
-        assert!(replayed > 100, "{replayed}");
     }
 }

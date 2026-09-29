@@ -474,7 +474,8 @@ fn text_of(node: &Node<'_, '_>) -> String {
             text.push_str(value);
         }
     }
-    text.trim().to_owned()
+    // XML `S`, not Unicode `White_Space`: a NO-BREAK SPACE at either end is content.
+    purrdf_iri::terminals::trim_ws(&text).to_owned()
 }
 
 #[cfg(test)]

@@ -3332,7 +3332,7 @@ const QUERY_VAR_IRI: &str = "urn:purrdf-query-variable:purrdfQvar";
 /// contain the namespace as text, the parser hands back an IRI that does, and a sweep over
 /// the raw bytes alone would then read the caller's own IRI back as a variable — one
 /// spelling answering a different question from the other. So the sweep runs over the raw
-/// text AND over [`uchar_expanded`], and either occurrence extends the namespace.
+/// text AND over its `UCHAR` expansion ([`purrdf_iri::terminals::expand_uchars`]), and either occurrence extends the namespace.
 ///
 /// That is sound rather than approximate. The lexer's only transformation of an IRIREF
 /// body is `\uXXXX`/`\UXXXXXXXX` decoding, and in a document that parses at all every `\`
@@ -3350,7 +3350,11 @@ fn parse_bgp(text: &str) -> Result<Vec<purrdf_entail::QTriple>, String> {
     // The one namespace the caller's own text does not contain — the IRI a variable is
     // rewritten INTO, so no IRI the caller wrote can be read back as a variable, in either
     // of the two ways N-Triples lets them write it (see the item docs).
-    let expanded = uchar_expanded(text);
+    // Every well-formed `UCHAR` replaced by the character it denotes, and every other `\`
+    // copied through as itself, exactly as the lexer leaves it: an IRIREF's only decoding is
+    // this one, so an IRI the parser will hand back containing the stand-in namespace spells
+    // it here, whichever of the two ways the caller wrote it.
+    let expanded = purrdf_iri::terminals::expand_uchars(text);
     let mut iri_prefix = QUERY_VAR_IRI.to_owned();
     while text.contains(&iri_prefix) || expanded.contains(&iri_prefix) {
         iri_prefix.push('q');
@@ -3566,63 +3570,6 @@ fn restore_query_vars(
             })
         },
     )
-}
-
-/// `text` with every N-Triples `UCHAR` escape — `\uXXXX` and `\UXXXXXXXX` — replaced by the
-/// character it denotes.
-///
-/// The one string [`parse_bgp`]'s namespace sweep needs beside the raw text: an IRIREF's
-/// only decoding is this one, so an IRI the parser will hand back containing the stand-in
-/// namespace must spell that namespace here, whichever of the two ways the caller wrote it.
-/// See [`parse_bgp`] for why sweeping the raw bytes alone is not enough and why expanding an
-/// escape the parser would not decode costs nothing.
-///
-/// A `\` that does not begin a well-formed `UCHAR` is copied through as itself, exactly as
-/// the lexer leaves it — one that reaches an IRIREF makes the document unparseable, and one
-/// inside a literal is some other escape whose expansion no IRI can be read out of.
-fn uchar_expanded(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = String::with_capacity(text.len());
-    let mut at = 0;
-    while at < bytes.len() {
-        if bytes[at] == b'\\'
-            && let Some((width, decoded)) = read_uchar(bytes, at)
-        {
-            out.push(decoded);
-            at += width;
-            continue;
-        }
-        // `at` is a char boundary: every byte consumed above is ASCII, and so is every byte
-        // of an escape, so the slice below always starts on one.
-        let character = text[at..]
-            .chars()
-            .next()
-            .expect("`at` is a char boundary inside the string");
-        out.push(character);
-        at += character.len_utf8();
-    }
-    out
-}
-
-/// The `UCHAR` escape starting at byte `at` (the `\`), as `(bytes consumed, character)`.
-///
-/// The escape is all-ASCII, so the byte count is the character count. `None` for anything
-/// that is not a complete, in-range `\uXXXX` / `\UXXXXXXXX` — the same reading the lexer
-/// this shadows applies, so the two agree about what an escape IS as well as about what it
-/// denotes.
-fn read_uchar(bytes: &[u8], at: usize) -> Option<(usize, char)> {
-    let width = match *bytes.get(at + 1)? {
-        b'u' => 4,
-        b'U' => 8,
-        _ => return None,
-    };
-    let mut value: u32 = 0;
-    for offset in 0..width {
-        // Sixteen times a 28-bit prefix plus a digit, `width` times: `\U`'s eight digits
-        // reach `u32::MAX` exactly, so no step can overflow.
-        value = value * 16 + char::from(*bytes.get(at + 2 + offset)?).to_digit(16)?;
-    }
-    Some((2 + width, char::from_u32(value)?))
 }
 
 /// The caller's `owl:imports` table, as an ORDERED list of `(ontology-iri, document)` pairs.
@@ -8822,70 +8769,5 @@ mod term_walk_tests {
             .expect("the thread starts")
             .join()
             .expect("the rendering did not overflow the thread's stack");
-    }
-}
-
-/// The frozen UCHAR/ECHAR decoding vectors, replayed against the regime premise scanner's UCHAR reader.
-#[cfg(test)]
-mod escape_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str};
-
-    const ESCAPES: &str = include_str!("../../lex/tests/vectors/escape_vectors.txt");
-    const SCALARS: &str = include_str!("../../lex/tests/vectors/uchar_scalar_vectors.txt");
-
-    fn show(decoded: Option<(char, usize)>) -> String {
-        decoded.map_or_else(
-            || "-".to_owned(),
-            |(c, n)| format!("{:04X}/{n}", u32::from(c)),
-        )
-    }
-
-    fn uchar(input: &str) -> String {
-        show(super::read_uchar(input.as_bytes(), 0).map(|(n, c)| (c, n)))
-    }
-
-    /// Whether this copy is known to answer `input` differently from the vectors.
-    fn skipped(input: &str) -> bool {
-        let _ = input;
-        false
-    }
-
-    #[test]
-    fn escapes_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(ESCAPES).expect("escape_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let input = decode_str(record.fields[0]).expect("an encoded input");
-            if skipped(&input) {
-                continue;
-            }
-            assert_eq!(uchar(&input), record.fields[1], "UCHAR {input:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
-    }
-
-    #[test]
-    fn every_scalar_replays_the_frozen_digests() {
-        let file = VectorFile::parse(SCALARS).expect("uchar_scalar_vectors.txt");
-        for record in file.records() {
-            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
-            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
-            let answers = (first..=last).map(|cp| {
-                let text = match (record.fields[0], record.fields[1]) {
-                    ("u", "upper") => format!("\\u{cp:04X}"),
-                    ("u", _) => format!("\\u{cp:04x}"),
-                    (_, "upper") => format!("\\U{cp:08X}"),
-                    _ => format!("\\U{cp:08x}"),
-                };
-                uchar(&text)
-            });
-            assert_eq!(
-                answer_digest(answers),
-                record.fields[4],
-                "{:?}",
-                record.fields
-            );
-        }
     }
 }

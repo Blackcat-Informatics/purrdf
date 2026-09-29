@@ -503,3 +503,148 @@ enforced = true
 constants = []
 fingerprints = []
 names = ['^bootstrap_(median|change)$', '^classify_outliers$', '^median_absolute_deviation$']
+
+[[job]]
+id = "escape-decode"
+summary = "Decoding the escapes of the RDF, SPARQL, ShEx, XML and JSON grammars: UCHAR, ECHAR, an XML character reference, a JSON string escape, and every hex digit and code point they spell"
+home = "purrdf_lex::terminals::decode_uchar"
+entry_points = [
+    "purrdf_lex::terminals::decode_uchar_at",
+    "purrdf_lex::terminals::echar_value",
+    "purrdf_lex::terminals::expand_uchars",
+    "purrdf_lex::terminals::decode_char_ref",
+    "purrdf_lex::json_escape::decode_escape",
+    "purrdf_lex::json_escape::decode_u_escape",
+    "purrdf_lex::json_escape::unescape",
+    "purrdf_iri::terminals",
+    "purrdf_iri::json_escape",
+    "purrdf_hash::hex::parse_u32",
+]
+spec = "UCHAR and ECHAR of RDF 1.2 Turtle section 6.5 and SPARQL 1.2 section 19.8; XML 1.0 Fifth Edition production 66 CharRef with the Legal Character constraint; RFC 8259 section 7 string escapes, surrogate pairs required"
+vectors = [
+    "crates/lex/tests/vectors/escape_vectors.txt",
+    "crates/lex/tests/vectors/uchar_scalar_vectors.txt",
+    "crates/lex/tests/vectors/json_string_vectors.txt",
+    "crates/lex/tests/vectors/json_unit_vectors.txt",
+]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:hex-digit-radix"]
+names = ['^(hex4|read_hex4|read_code_unit|parse_unicode_escape|escaped_char|unescape_iri|uchar_expanded|decode_uchar|decode_char_ref|hex_scalar)$']
+
+[[job]]
+id = "grammar-ws"
+summary = "The WS terminal every grammar reader skips and trims: SPACE, TAB, LINE FEED and CARRIAGE RETURN, never FORM FEED"
+home = "purrdf_lex::terminals::skip_ws"
+entry_points = [
+    "purrdf_lex::terminals::trim_ws",
+    "purrdf_lex::terminals::find_first_trivia",
+]
+spec = "WS of RDF 1.2 Turtle section 6.5 and SPARQL 1.2 section 19.8; S of XML 1.0 production 3; ws of RFC 8259 section 2: the same four scalars"
+vectors = []
+bench = ["purrdf-lex:scan"]
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:grammar-ws"]
+names = []
+
+[[job]]
+id = "json-pointer"
+summary = "RFC 6901 JSON Pointer reference tokens: the ~0/~1 escape, pointer parsing and the array-index token"
+home = "purrdf_lex::json_pointer::escape_token"
+entry_points = [
+    "purrdf_lex::json_pointer::push_token",
+    "purrdf_lex::json_pointer::unescape_token",
+    "purrdf_lex::json_pointer::tokens",
+    "purrdf_lex::json_pointer::array_index",
+    "purrdf_iri::json_pointer",
+]
+spec = "RFC 6901 sections 3 and 4"
+vectors = ["crates/lex/tests/vectors/json_pointer_vectors.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:json-pointer-escape"]
+names = ['^(pointer_escape|pointer_unescape|escape_json_pointer\w*|unescape_token|escape_token)$']
+
+[[job]]
+id = "percent-encoding"
+summary = "Percent-encoding over the sets the specifications define, strict and form-urlencoded decoding, and RFC 3986 normalization"
+home = "purrdf_lex::percent::encode"
+entry_points = [
+    "purrdf_lex::percent::push_encoded",
+    "purrdf_lex::percent::push_triplet",
+    "purrdf_lex::percent::decode",
+    "purrdf_lex::percent::decode_form",
+    "purrdf_lex::percent::normalize",
+    "purrdf_iri::percent",
+]
+spec = "RFC 3986 sections 2.1, 2.3, 3.2.2, 3.3, 3.5 and 6.2.2; RFC 3987 section 3.1; RFC 6570 section 3.2.3; the WHATWG URL application/x-www-form-urlencoded parser"
+vectors = [
+    "crates/lex/tests/vectors/percent_unreserved_vectors.txt",
+    "crates/lex/tests/vectors/percent_unreserved_slash_vectors.txt",
+    "crates/lex/tests/vectors/percent_sub_delims_vectors.txt",
+    "crates/lex/tests/vectors/percent_path_vectors.txt",
+    "crates/lex/tests/vectors/percent_fragment_vectors.txt",
+    "crates/lex/tests/vectors/percent_uri_template_reserved_vectors.txt",
+    "crates/lex/tests/vectors/percent_non_ascii_vectors.txt",
+    "crates/lex/tests/vectors/percent_decode_vectors.txt",
+    "crates/lex/tests/vectors/percent_decode_form_vectors.txt",
+    "crates/lex/tests/vectors/percent_normalize_vectors.txt",
+]
+bench = []
+sites = ["lex.percent-encode"]
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(percent_encode\w*|percent_decode\w*|pct_normalize|pct_decode|pct_encode|fragment_encode|encode_for_uri|push_percent_encoded)$']
+
+[[job]]
+id = "range-table-search"
+summary = "Membership of a scalar in a sorted table of inclusive ranges"
+home = "purrdf_lex::terminals::in_ranges"
+entry_points = ["purrdf_iri::terminals"]
+spec = "binary search over a table sorted by its lower bounds with no overlapping ranges"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^in_ranges$']
+
+[[job]]
+id = "byte-search"
+summary = "The first occurrence of one or two bytes known only at run time"
+home = "purrdf_lex::scan::find_byte"
+entry_points = ["purrdf_lex::scan::find_byte2", "purrdf_iri::scan"]
+spec = "the first offset whose byte equals a needle, or none"
+vectors = ["crates/lex/tests/vectors/find_byte_vectors.txt"]
+bench = ["purrdf-lex:scan"]
+sites = []
+replaces_external = ["memchr"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(find_first_byte|find_first_of|memchr[23]?)$']

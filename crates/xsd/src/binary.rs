@@ -270,6 +270,29 @@ pub fn parse_binary(datatype: XsdDatatype, lexical: &str) -> Result<Vec<u8>, Xsd
 mod tests {
     use super::*;
 
+    #[test]
+    fn canonical_base64_matches_the_rfc_4648_test_vectors() {
+        // RFC 4648 §10, verbatim: the padding boundaries are where an encoder goes wrong,
+        // and every one of them is exercised here.
+        for (input, expected) in [
+            ("", ""),
+            ("f", "Zg=="),
+            ("fo", "Zm8="),
+            ("foo", "Zm9v"),
+            ("foob", "Zm9vYg=="),
+            ("fooba", "Zm9vYmE="),
+            ("foobar", "Zm9vYmFy"),
+        ] {
+            assert_eq!(
+                canonical_base64(input.as_bytes()),
+                expected,
+                "input {input:?}"
+            );
+        }
+        // A byte outside ASCII exercises the high bits of the 24-bit group.
+        assert_eq!(canonical_base64(&[0xff, 0xef, 0xbf]), "/++/");
+    }
+
     // ── hexBinary positive ────────────────────────────────────────────────────────
 
     #[test]

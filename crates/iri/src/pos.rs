@@ -59,19 +59,17 @@ pub struct LineIndex {
 }
 
 impl LineIndex {
-    /// Build the newline table for `src` with a single linear scan.
-    ///
-    /// A plain byte loop (not `memchr`) is deliberate: this crate takes no
-    /// third-party dependency, and the scan only runs when a diagnostic is being
-    /// constructed, so it is never on a hot path.
+    /// Build the newline table for `src` with a single linear scan, each line
+    /// feed found by [`purrdf_lex::scan::find_byte`].
     #[must_use]
     pub fn new(src: &str) -> Self {
-        let mut line_starts = Vec::with_capacity(src.len() / 32 + 1);
+        let bytes = src.as_bytes();
+        let mut line_starts = Vec::with_capacity(bytes.len() / 32 + 1);
         line_starts.push(0);
-        for (i, &b) in src.as_bytes().iter().enumerate() {
-            if b == b'\n' {
-                line_starts.push(i + 1);
-            }
+        let mut at = 0;
+        while let Some(offset) = purrdf_lex::scan::find_byte(&bytes[at..], b'\n') {
+            at += offset + 1;
+            line_starts.push(at);
         }
         Self { line_starts }
     }
@@ -85,10 +83,7 @@ impl LineIndex {
     pub fn locate(&self, src: &str, byte_offset: usize) -> Position {
         // Clamp to the source length, then down to a char boundary so the
         // column slice below can never split a multi-byte scalar value.
-        let mut off = byte_offset.min(src.len());
-        while off > 0 && !src.is_char_boundary(off) {
-            off -= 1;
-        }
+        let off = src.floor_char_boundary(byte_offset);
 
         // The line containing `off` is the one with the greatest start <= off.
         // `line_starts[0] == 0 <= off`, so `count` is always >= 1.

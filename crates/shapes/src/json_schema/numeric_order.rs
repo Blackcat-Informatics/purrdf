@@ -69,7 +69,7 @@ impl Decimal {
     /// Parse an `xsd:decimal` lexical form (after the `collapse` trim), or an
     /// `xsd:integer` one when `integer` is set; `None` when it is not one.
     pub(super) fn parse(lexical: &str, integer: bool) -> Option<Self> {
-        let lexical = lexical.trim_matches(['\t', '\n', '\r', ' ']);
+        let lexical = purrdf_iri::terminals::trim_ws(lexical);
         let (negative, body) = match lexical.as_bytes().first() {
             Some(b'-') => (true, &lexical[1..]),
             Some(b'+') => (false, &lexical[1..]),

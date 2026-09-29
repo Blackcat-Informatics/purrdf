@@ -525,6 +525,135 @@ def hex_rule_fixture_cases() -> list[tuple[str, bool]]:
     ]
 
 
+# A seeded workspace for the lexical-terminal rules, run through the real census.
+# Each job names one rule; every line marked POSITIVE must be reported against its
+# job and nothing else may be. The neighbours beside each positive are the valid
+# spellings the rule must leave alone: the shared predicate, a decimal radix, a
+# pointer escape inside a longer literal or inside the home package, and the same
+# patterns in test code, which may name a trap to pin it.
+LEX_FIXTURE_LEDGER = """
+[[job]]
+id = "grammar-ws"
+summary = "s"
+home = "fixture_lex::skip_ws"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:grammar-ws"]
+names = []
+
+[[job]]
+id = "json-pointer"
+summary = "s"
+home = "fixture_lex::escape_token"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:json-pointer-escape"]
+names = []
+
+[[job]]
+id = "escape-decode"
+summary = "s"
+home = "fixture_lex::skip_ws"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:hex-digit-radix"]
+names = []
+"""
+
+LEX_FIXTURE_FILES = {
+    "crates/lex/Cargo.toml": '[package]\nname = "fixture-lex"\n',
+    "crates/lex/src/lib.rs": (
+        "/// The one WS skip.\npub fn skip_ws(b: &[u8]) -> usize { b.len() }\n"
+        "/// The one token escape.\n"
+        'pub fn escape_token(t: &str) -> String { t.replace(\'~\', "~0").replace(\'/\', "~1") }\n'
+    ),
+    "crates/user/Cargo.toml": '[package]\nname = "fixture-user"\n',
+    "crates/user/src/lib.rs": (
+        "pub fn gap(b: u8) -> bool { b.is_ascii_whitespace() } // GRAMMAR-WS\n"
+        "pub fn all_gap(s: &str) -> bool { s.bytes().all(|b| u8::is_ascii_whitespace(&b)) } // GRAMMAR-WS\n"
+        "pub fn ws(b: u8) -> bool { matches!(b, b' ' | b'\\t' | b'\\n' | b'\\r') }\n"
+        'pub fn esc(t: &str) -> String { t.replace(\'~\', "~0") } // JSON-POINTER\n'
+        'pub fn slash(t: &str) -> String { t.replace(\'/\', "~1") } // JSON-POINTER\n'
+        'pub fn path() -> &\'static str { "/a~1b/c~0d" }\n'
+        "pub fn digit(c: char) -> Option<u32> { c.to_digit(16) } // HEX-DIGIT\n"
+        "pub fn point(t: &str) -> Option<u32> { u32::from_str_radix(t, 16).ok() } // HEX-DIGIT\n"
+        "pub fn decimal(c: char) -> Option<u32> { c.to_digit(10) }\n"
+        "pub fn count(t: &str) -> Option<u32> { u32::from_str_radix(t, 10).ok() }\n"
+        "#[cfg(test)]\n"
+        "mod tests {\n"
+        '    fn traps(b: u8) -> bool { b.is_ascii_whitespace() && "~1".is_empty() && char::from(b).to_digit(16).is_some() }\n'
+        "}\n"
+    ),
+    "crates/user/tests/it.rs": (
+        "#[test]\n"
+        'fn pins() { assert!(b\' \'.is_ascii_whitespace() && "~0".len() == 2 && \'a\'.to_digit(16) == Some(10)); }\n'
+    ),
+}
+
+
+def lex_rule_fixture_cases() -> list[tuple[str, bool]]:
+    """Run the census over the seeded lexical workspace and compare each job's
+    hits with the lines marked for it."""
+    markers = {"grammar-ws": "// GRAMMAR-WS", "json-pointer": "// JSON-POINTER", "escape-decode": "// HEX-DIGIT"}
+    with tempfile.TemporaryDirectory(prefix="helper-census-lex-fixture-") as directory:
+        root = Path(directory)
+        expected: dict[str, set[tuple[str, int]]] = {job: set() for job in markers}
+        for relative, text in LEX_FIXTURE_FILES.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            for number, line in enumerate(text.splitlines(), start=1):
+                for job, marker in markers.items():
+                    if line.endswith(marker):
+                        expected[job].add((relative, number))
+        (root / "helpers-ledger.toml").write_text(LEX_FIXTURE_LEDGER, encoding="utf-8")
+        try:
+            index = json.loads(run_census("--index", root=root))
+        except (CensusError, json.JSONDecodeError) as exc:
+            return [(f"the census runs over the seeded lexical workspace ({exc})", False)]
+    cases: list[tuple[str, bool]] = []
+    for job, lines in expected.items():
+        found = index["jobs"][job]
+        copies = {(match["file"], match["line"]) for match in found["matches"] if not match["in_home"]}
+        cases.append((f"every seeded {job} spelling in shipping code is reported", lines <= copies))
+        cases.append(
+            (
+                f"the {job} neighbours (the shared spelling, test code, the home) are not reported",
+                copies <= lines,
+            )
+        )
+        cases.append((f"each {job} hit is a copy of the enforced job", found["copies"] == len(lines)))
+    pointer_home = {
+        (match["file"], match["line"]) for match in index["jobs"]["json-pointer"]["matches"] if match["in_home"]
+    }
+    cases.append(("the pointer escape inside its home is the home's, not a copy", pointer_home == {("crates/lex/src/lib.rs", 4)}))
+    return cases
+
+
 def fixture_ledger() -> dict:
     return {
         "job": [
@@ -781,6 +910,7 @@ def self_test() -> int:
 
     cases.extend(rule_fixture_cases())
     cases.extend(hex_rule_fixture_cases())
+    cases.extend(lex_rule_fixture_cases())
 
     failed = 0
     for name, held in cases:

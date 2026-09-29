@@ -8,7 +8,7 @@
 //! |---|---|
 //! | render, lowercase | [`Lower`] (`Display`), [`encode`], [`encode_into`], [`encode_to_slice`] |
 //! | render, uppercase | [`Upper`] (`Display`), [`encode_upper`], [`encode_upper_into`], [`encode_upper_to_slice`] |
-//! | read, either case | [`decode`], [`decode_32`], [`nibble`] |
+//! | read, either case | [`decode`], [`decode_32`], [`nibble`], [`parse_u32`] |
 //! | read, canonical lowercase | [`decode_canonical`], [`decode_32_canonical`], [`nibble_canonical`] |
 //! | a 32-byte digest | [`Digest32`] |
 //!
@@ -432,6 +432,37 @@ fn digit_value<const ANY_CASE: bool>(byte: u8) -> Option<u8> {
 #[inline]
 pub fn nibble(byte: u8) -> Option<u8> {
     digit_value::<true>(byte)
+}
+
+/// The number one or more hex digits of either case spell, most significant
+/// first, or `None` when `digits` is empty, holds a byte that is not a digit,
+/// or spells a value above [`u32::MAX`].
+///
+/// Strict like [`nibble`], which reads each digit: no sign, no `0x` prefix, no
+/// whitespace, where `u32::from_str_radix` accepts a leading `+`. Leading
+/// zeros are value-neutral and any number of them is accepted, as the grammars
+/// that spell a code point in variable-length hex allow (`&#x0041;`,
+/// ECMAScript's `\u{0041}`, a Unicode Character Database field).
+///
+/// ```
+/// use purrdf_hash::hex::parse_u32;
+///
+/// assert_eq!(parse_u32(b"1F431"), Some(0x1_F431));
+/// assert_eq!(parse_u32(b"000000000041"), Some(0x41));
+/// assert_eq!(parse_u32(b"FFFFFFFF"), Some(u32::MAX));
+/// assert_eq!(parse_u32(b"100000000"), None);
+/// assert_eq!(parse_u32(b"+41"), None);
+/// assert_eq!(parse_u32(b""), None);
+/// ```
+#[must_use]
+pub fn parse_u32(digits: &[u8]) -> Option<u32> {
+    if digits.is_empty() {
+        return None;
+    }
+    digits.iter().try_fold(0_u32, |value, &byte| {
+        let digit = nibble(byte)?;
+        value.checked_mul(16)?.checked_add(u32::from(digit))
+    })
 }
 
 /// The value of one canonical lowercase hex digit (`0`–`9`, `a`–`f`), or

@@ -181,6 +181,38 @@ SCANNERS: dict[str, str] = {
         "manifest moves a scoreboard, and the scoreboard is this repository's "
         "conformance claim"
     ),
+    "crates/retrieval/src/render.rs": (
+        "reads a caller's canonical term lexical back through a `Cursor` whose "
+        "position is `position` but which exposes no `fn peek`; it decides where "
+        "a term, a blank-node label and a `<<( )>>` triple term end, and its "
+        "separator test once admitted FORM FEED through `is_ascii_whitespace`"
+    ),
+    "crates/rdf-core/src/cdt_blank.rs": (
+        "walks composite-literal and IRIREF text with a local index to find "
+        "escapes, IRIREF ends and blank labels, with no cursor struct at all"
+    ),
+    "crates/json/src/parse.rs": (
+        "IS the ordered JSON reader, its position in `self.at`, so the cursor "
+        "pattern misses it; its whitespace and string scans decide RFC 8259 token "
+        "boundaries"
+    ),
+    "crates/rdf/src/json_value.rs": (
+        "a JSON reader whose position is `self.at`; its whitespace skip is RFC "
+        "8259's `ws`"
+    ),
+    "crates/rdf/src/native_codecs/trix.rs": (
+        "trims TriX element text by XML `S`, which decides the IRI or literal a "
+        "`<uri>`/`<plainLiteral>` names; it walks a DOM, so it holds no cursor"
+    ),
+    "crates/entail/src/rif_xml.rs": (
+        "reads RIF-XML text content and trims it by XML `S`; the same job as "
+        "crates/sparql-conformance/src/rif_xml.rs, in a shipped crate, over a DOM "
+        "rather than a cursor"
+    ),
+    "crates/slice/src/fix_deps.rs": (
+        "edits Turtle source in place and decides where a term ends by `WS` and "
+        "punctuation, with byte offsets and no cursor"
+    ),
     # The `xsd_regex` module keeps its one character cursor in `scan.rs`, which
     # the structure test DOES see (it holds both `fn peek` and `self.pos`), so
     # `scan.rs` is deliberately absent from this ledger. The files below are the

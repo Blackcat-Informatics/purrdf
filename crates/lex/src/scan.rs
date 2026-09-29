@@ -338,6 +338,90 @@ fn find_first_in_one_run(bytes: &[u8], runs: &[ByteRun], table: &[u8; 256]) -> O
         .map(|i| chunks.len() * CHUNK + i)
 }
 
+/// The offset of the first byte of `bytes` equal to one of `needles`, or
+/// `None`: the body of [`find_byte`] and [`find_byte2`].
+///
+/// The needles are known only at run time, so a chunk's lanes are equality
+/// compares against each needle rather than run compares folded in as
+/// constants; otherwise the formulation is [`find_first_in_one_run`]'s. The
+/// clean-chunk test is the lanes' maximum, and the chunk that holds a hit
+/// re-tests its bytes for the offset, the shape that lowers to a packed
+/// compare and one mask extraction per chunk on every vector target.
+#[allow(
+    clippy::inline_always,
+    reason = "each public search is one monomorphic kernel: the shared body must be inlined \
+              into it so the needle count folds in and the lane loop vectorizes"
+)]
+#[inline(always)]
+fn find_needles<const N: usize>(bytes: &[u8], needles: [u8; N]) -> Option<usize> {
+    let (chunks, tail) = bytes.as_chunks::<CHUNK>();
+    for (k, chunk) in chunks.iter().enumerate() {
+        let mut lanes = [0_u8; CHUNK];
+        for (lane, &b) in lanes.iter_mut().zip(chunk) {
+            let mut hit = false;
+            for needle in needles {
+                hit |= b == needle;
+            }
+            *lane = u8::from(hit).wrapping_neg();
+        }
+        if lanes.iter().fold(0, |most, &lane| most.max(lane)) != 0 {
+            return chunk
+                .iter()
+                .position(|b| needles.contains(b))
+                .map(|first| k * CHUNK + first);
+        }
+    }
+    tail.iter()
+        .position(|b| needles.contains(b))
+        .map(|i| chunks.len() * CHUNK + i)
+}
+
+/// The offset of the first byte of `bytes` equal to `needle`, or `None`.
+///
+/// The workspace's one search for a byte known only at run time — a quote
+/// that is `"` or `'` by context, a line terminator a caller chooses. A
+/// needle fixed at compile time is a class: declare it as a [`ByteClass`],
+/// whose runs fold in as constants.
+///
+/// Sixteen-byte chunks, each answered by equality compares into `0x00`/`0xFF`
+/// lanes whose maximum is the clean-chunk test, then the hit chunk re-tested
+/// for the offset, and the tail byte by byte: the shape that lowers to
+/// `pcmpeqb`/`pmovmskb` on x86_64, `cmeq` and a pairwise fold on aarch64 and
+/// `i8x16.eq` under wasm `simd128`. It is the formulation of every other
+/// scanner here, so a sixteen-byte chunk is one packed compare where a
+/// word-at-a-time (SWAR) scan does eight bytes of scalar arithmetic, and it
+/// has no run-time dispatch, so a short input pays no selection cost.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_lex::scan::find_byte;
+///
+/// assert_eq!(find_byte(b"key=value", b'='), Some(3));
+/// assert_eq!(find_byte(b"no separator", b'='), None);
+/// ```
+#[must_use]
+pub fn find_byte(bytes: &[u8], needle: u8) -> Option<usize> {
+    find_needles(bytes, [needle])
+}
+
+/// The offset of the first byte of `bytes` equal to `first` or `second`, or
+/// `None`: [`find_byte`] for two needles known only at run time.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_lex::scan::find_byte2;
+///
+/// assert_eq!(find_byte2(b"line one\r\nline two", b'\r', b'\n'), Some(8));
+/// assert_eq!(find_byte2(b"'quoted' \\", b'"', b'\\'), Some(9));
+/// assert_eq!(find_byte2(b"clean", b'"', b'\\'), None);
+/// ```
+#[must_use]
+pub fn find_byte2(bytes: &[u8], first: u8, second: u8) -> Option<usize> {
+    find_needles(bytes, [first, second])
+}
+
 /// The `WS` class table, projected from [`ws_ranges`].
 const TRIVIA_TABLE: [u8; 256] = class_table(ws_ranges());
 const TRIVIA_RUNS: [ByteRun; count_runs(&TRIVIA_TABLE)] = byte_runs(&TRIVIA_TABLE);

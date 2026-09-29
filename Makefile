@@ -689,6 +689,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# runs its round trips, refusals and kernel differentials on the baseline
 	@# build (portable kernels) and the +simd128 build (simd128 kernels), so the
 	@# encoder's bytes and the decoder's output are held to one answer there.
+	@# purrdf-lex replays its frozen lexical vectors (UCHAR/ECHAR, JSON strings
+	@# and pointers, every percent-encoding set, needle search) on both builds,
+	@# so the byte scanners' simd128 and scalar lanes give the native answers.
 	@#
 	@# The prepared SHACL product is the same hazard with a longer fuse: a product
 	@# is written by a build tool on a host and restored months later in a browser,
@@ -809,7 +812,15 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-deflate --test deflate_conformance; \
+			-p purrdf-deflate --test deflate_conformance \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-lex --test frozen_vectors \
+		&& env -u RUSTFLAGS \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \
+			cargo test --locked --target wasm32-unknown-unknown \
+			-p purrdf-lex --test frozen_vectors; \
 	fi
 
 wasm-pkg: ## Build the purrdf npm/ESM package (release wasm + wasm-bindgen web bindings) into crates/rdf-wasm/js/pkg/.

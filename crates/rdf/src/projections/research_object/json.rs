@@ -335,32 +335,10 @@ pub(super) fn normalize_lifted_jsonld(
 }
 
 pub(super) fn json_pointer(parent: &str, member: &str) -> String {
-    let escaped = escape_json_pointer_member(member);
-    if parent.is_empty() {
-        format!("/{escaped}")
-    } else {
-        format!("{parent}/{escaped}")
-    }
-}
-
-fn escape_json_pointer_member(member: &str) -> Cow<'_, str> {
-    let escape_count = member
-        .bytes()
-        .filter(|byte| matches!(byte, b'~' | b'/'))
-        .count();
-    if escape_count == 0 {
-        return Cow::Borrowed(member);
-    }
-
-    let mut escaped = String::with_capacity(member.len() + escape_count);
-    for character in member.chars() {
-        match character {
-            '~' => escaped.push_str("~0"),
-            '/' => escaped.push_str("~1"),
-            _ => escaped.push(character),
-        }
-    }
-    Cow::Owned(escaped)
+    let mut pointer = String::with_capacity(parent.len() + 1 + member.len());
+    pointer.push_str(parent);
+    purrdf_iri::json_pointer::push_token(&mut pointer, member);
+    pointer
 }
 
 #[cfg(test)]
@@ -527,51 +505,8 @@ mod tests {
     }
 
     #[test]
-    fn json_pointer_borrows_clean_members_and_escapes_rfc6901_tokens() {
-        assert!(matches!(
-            escape_json_pointer_member("plain"),
-            Cow::Borrowed("plain")
-        ));
-        assert_eq!(escape_json_pointer_member("a~/b"), "a~0~1b");
+    fn json_pointer_escapes_rfc6901_tokens() {
         assert_eq!(json_pointer("", "plain"), "/plain");
         assert_eq!(json_pointer("/items/0", "a~/b"), "/items/0/a~0~1b");
-    }
-}
-
-/// The frozen JSON Pointer vectors, replayed against the research-object pointer writer.
-#[cfg(test)]
-mod json_pointer_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    const POINTERS: &str = include_str!("../../../../lex/tests/vectors/json_pointer_vectors.txt");
-
-    fn escape(token: &str) -> String {
-        super::escape_json_pointer_member(token).into_owned()
-    }
-
-    #[test]
-    fn pointers_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(POINTERS).expect("json_pointer_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let fields = &record.fields;
-            match fields[0] {
-                "escape" => {
-                    let token = decode_str(fields[1]).expect("a token");
-                    assert_eq!(encode_str(&escape(&token)), fields[2], "{token:?}");
-                    replayed += 1;
-                }
-                "plane" => {
-                    let plane = u32::from_str_radix(fields[1], 16).expect("hex");
-                    let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                        .filter_map(char::from_u32)
-                        .map(|c| encode_str(&escape(&format!("{c}~{c}/"))));
-                    assert_eq!(answer_digest(answers), fields[2], "plane {plane:X}");
-                    replayed += 1;
-                }
-                _ => {}
-            }
-        }
-        assert!(replayed > 100, "{replayed}");
     }
 }

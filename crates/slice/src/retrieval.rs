@@ -48,6 +48,7 @@
 //!
 //! [`IriError::NoBase`]: purrdf_iri::IriError::NoBase
 
+use purrdf_iri::percent;
 use std::path::Path;
 
 use purrdf_iri::BaseIri;
@@ -120,8 +121,8 @@ pub fn file_iri_for_absolute_path(text: &str) -> String {
 fn file_iri_from_parts(authority: &str, path: &str) -> String {
     format!(
         "file://{}{}",
-        percent_encode(authority, b""),
-        percent_encode(path, b":@/")
+        percent::encode(authority, percent::REG_NAME),
+        percent::encode(path, percent::PATH)
     )
 }
 
@@ -175,45 +176,6 @@ fn absolute_iri_path(text: &str) -> String {
     } else {
         format!("/{slashed}")
     }
-}
-
-/// Percent-encode one component of a `file://` IRI.
-///
-/// RFC-3986 §2.3 `unreserved` and §2.2 `sub-delims` survive verbatim in every component;
-/// `extra` names what this component additionally keeps (`path-abempty` keeps `:`, `@` and
-/// the `/` separators, a `reg-name` authority keeps neither). Everything else — space, `#`,
-/// `?`, `%` and every non-ASCII byte — is percent-encoded, so the result round-trips as a
-/// URI rather than re-parsing as a query or a fragment.
-fn percent_encode(text: &str, extra: &[u8]) -> String {
-    let mut encoded = String::with_capacity(text.len() + 8);
-    for &byte in text.as_bytes() {
-        let keep = byte.is_ascii_alphanumeric()
-            || matches!(
-                byte,
-                b'-' | b'.'
-                    | b'_'
-                    | b'~'
-                    | b'!'
-                    | b'$'
-                    | b'&'
-                    | b'\''
-                    | b'('
-                    | b')'
-                    | b'*'
-                    | b'+'
-                    | b','
-                    | b';'
-                    | b'='
-            )
-            || extra.contains(&byte);
-        if keep {
-            encoded.push(byte as char);
-        } else {
-            encoded.push('%');
-            purrdf_hash::hex::encode_upper_into(&[byte], &mut encoded);
-        }
-    }
-    encoded
 }
 
 #[cfg(test)]
@@ -288,10 +250,10 @@ mod tests {
     #[test]
     fn each_component_encodes_under_its_own_rule() {
         assert_eq!(
-            percent_encode("a b#c?d%e\u{e9}/f:g@h", b":@/"),
+            percent::encode("a b#c?d%e\u{e9}/f:g@h", percent::PATH),
             "a%20b%23c%3Fd%25e%C3%A9/f:g@h"
         );
-        assert_eq!(percent_encode("a/b:c", b""), "a%2Fb%3Ac");
+        assert_eq!(percent::encode("a/b:c", percent::REG_NAME), "a%2Fb%3Ac");
     }
 
     // ── Filesystem derivation ──────────────────────────────────────────────────
@@ -374,86 +336,6 @@ mod tests {
         assert_eq!(
             retrieval_base_iri(&path).expect("retrieval IRI").as_str(),
             file_iri_for_absolute_path(canonical.to_str().expect("UTF-8 temp path"))
-        );
-    }
-}
-
-/// The frozen percent-encoding vectors, replayed against the file-IRI encoders.
-#[cfg(test)]
-mod percent_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    /// Replay one vector file: `run` answers an input (`None` for a refusal),
-    /// `encode` says whether answers are encoded text rather than `=`-prefixed
-    /// decodings, and `skipped` names inputs this copy is known to answer differently.
-    fn replay(
-        vectors: &str,
-        encode: bool,
-        run: impl Fn(&str) -> Option<String>,
-        skipped: impl Fn(&str) -> bool,
-        plane_skipped: impl Fn(u32) -> bool,
-    ) {
-        let answer = |input: &str| match run(input) {
-            Some(value) if encode => encode_str(&value),
-            Some(value) => encode_str(&format!("={value}")),
-            None => "-".to_owned(),
-        };
-        let file = VectorFile::parse(vectors).expect("a percent vector file");
-        let mut replayed = 0;
-        for record in file.records() {
-            if record.fields[0] == "plane" {
-                let plane = u32::from_str_radix(record.fields[1], 16).expect("hex");
-                if plane_skipped(plane) {
-                    continue;
-                }
-                let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                    .filter_map(char::from_u32)
-                    .filter(|c| !skipped(&c.to_string()))
-                    .map(|c| answer(&c.to_string()));
-                assert_eq!(answer_digest(answers), record.fields[2], "plane {plane:X}");
-            } else {
-                let input = decode_str(record.fields[1]).expect("an encoded input");
-                if skipped(&input) {
-                    continue;
-                }
-                assert_eq!(answer(&input), record.fields[2], "{input:?}");
-            }
-            replayed += 1;
-        }
-        assert!(replayed > 400, "{replayed}");
-    }
-
-    #[test]
-    fn sub_delims_replays_the_frozen_vectors() {
-        replay(
-            include_str!("../../lex/tests/vectors/percent_sub_delims_vectors.txt"),
-            true,
-            |input| Some(super::percent_encode(input, b"")),
-            |input| {
-                let _ = input;
-                false
-            },
-            |plane| {
-                let _ = plane;
-                false
-            },
-        );
-    }
-
-    #[test]
-    fn path_replays_the_frozen_vectors() {
-        replay(
-            include_str!("../../lex/tests/vectors/percent_path_vectors.txt"),
-            true,
-            |input| Some(super::percent_encode(input, b":@/")),
-            |input| {
-                let _ = input;
-                false
-            },
-            |plane| {
-                let _ = plane;
-                false
-            },
         );
     }
 }

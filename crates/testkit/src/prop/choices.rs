@@ -291,12 +291,13 @@ const fn reduce(raw: u64, max: u64) -> u64 {
     }
 }
 
-/// The choice sequence `hex` spells, ASCII whitespace between digits ignored,
-/// read by [`purrdf_hash::hex::decode`] and refused in this module's words.
+/// The choice sequence `hex` spells, spaces, tabs and line breaks between
+/// digits ignored, read by [`purrdf_hash::hex::decode`] and refused in this
+/// module's words.
 fn choice_bytes(hex: &str) -> Result<Vec<u8>, HexError> {
     let digits: String = hex
         .chars()
-        .filter(|character| !character.is_ascii_whitespace())
+        .filter(|character| !matches!(character, ' ' | '\t' | '\n' | '\r'))
         .collect();
     purrdf_hash::hex::decode(&digits).map_err(|error| match error {
         purrdf_hash::hex::HexError::InvalidDigit { byte, .. } => HexError(format!(

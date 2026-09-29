@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::csv::{CsvErrorKind, Dialect, Encoding, LineTerminators, Trim, read_table};
-use purrdf_iri::terminals::{is_ws, is_xml_name_char, is_xml_name_start_char};
+use purrdf_iri::terminals::{self, is_ws, is_xml_name_char, is_xml_name_start_char};
 use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
 
@@ -231,7 +231,7 @@ fn reconcile_schema(
                     .and_then(|values| values.first())
                     .map_or_else(
                         || format!("_col.{}", index + 1),
-                        |title| percent_encode(title),
+                        |title| super::metadata::column_name_from_title(title),
                     )
             };
             table.schema.columns.push(default_column(
@@ -394,19 +394,6 @@ fn default_column(
         inherited,
         annotations: CsvwAnnotations::new(),
     }
-}
-
-fn percent_encode(value: &str) -> String {
-    let mut output = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'~') {
-            output.push(char::from(byte));
-        } else {
-            output.push('%');
-            purrdf_hash::hex::encode_upper_into(&[byte], &mut output);
-        }
-    }
-    output
 }
 
 fn row_url(table_url: &str, source_number: usize) -> Result<String, ProjectionError> {
@@ -908,12 +895,11 @@ pub(super) fn validate_xsd_language(value: &str) -> Result<(), String> {
 ///   failed spelled `cafe` + U+0301, though the two are canonically equivalent
 ///   and NFD is what many exporters emit.
 fn valid_xml_name(value: &str, colon: bool) -> bool {
-    let colon_ok = |character: char| colon || character != ':';
+    if !colon {
+        return terminals::is_ncname(value);
+    }
     let mut chars = value.chars();
-    chars
-        .next()
-        .is_some_and(|character| is_xml_name_start_char(character) && colon_ok(character))
-        && chars.all(|character| is_xml_name_char(character) && colon_ok(character))
+    chars.next().is_some_and(is_xml_name_start_char) && chars.all(is_xml_name_char)
 }
 
 fn numeric_datatype(local: &str) -> bool {
@@ -1844,73 +1830,5 @@ mod tests {
         // And non-ASCII Unicode whitespace is likewise ordinary content: U+00A0
         // encodes as two bytes, so `"YW\u{A0}"` is four bytes, one whole quad.
         assert_eq!(base64_octet_length("YW\u{A0}"), Ok(3));
-    }
-}
-
-/// The frozen percent-encoding vectors, replayed against the CSVW table's title-derived column names.
-#[cfg(test)]
-mod percent_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    /// Replay one vector file: `run` answers an input (`None` for a refusal),
-    /// `encode` says whether answers are encoded text rather than `=`-prefixed
-    /// decodings, and `skipped` names inputs this copy is known to answer differently.
-    fn replay(
-        vectors: &str,
-        encode: bool,
-        run: impl Fn(&str) -> Option<String>,
-        skipped: impl Fn(&str) -> bool,
-        plane_skipped: impl Fn(u32) -> bool,
-    ) {
-        let answer = |input: &str| match run(input) {
-            Some(value) if encode => encode_str(&value),
-            Some(value) => encode_str(&format!("={value}")),
-            None => "-".to_owned(),
-        };
-        let file = VectorFile::parse(vectors).expect("a percent vector file");
-        let mut replayed = 0;
-        for record in file.records() {
-            if record.fields[0] == "plane" {
-                let plane = u32::from_str_radix(record.fields[1], 16).expect("hex");
-                if plane_skipped(plane) {
-                    continue;
-                }
-                let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                    .filter_map(char::from_u32)
-                    .filter(|c| !skipped(&c.to_string()))
-                    .map(|c| answer(&c.to_string()));
-                assert_eq!(answer_digest(answers), record.fields[2], "plane {plane:X}");
-            } else {
-                let input = decode_str(record.fields[1]).expect("an encoded input");
-                if skipped(&input) {
-                    continue;
-                }
-                assert_eq!(answer(&input), record.fields[2], "{input:?}");
-            }
-            replayed += 1;
-        }
-        assert!(replayed > 400, "{replayed}");
-    }
-
-    #[test]
-    fn csvw_name_replays_the_frozen_vectors() {
-        replay(
-            include_str!("../../../../lex/tests/vectors/percent_csvw_name_vectors.txt"),
-            true,
-            |input| Some(super::percent_encode(input)),
-            |input| {
-                let _ = input;
-                // This copy keeps a leading `_` that the metadata reader writes as `%5F`.
-                input.starts_with('_')
-                    || input.contains(char::from(0x7e))
-                    || input.starts_with('.')
-                    || input.ends_with('.')
-                    || input.contains("..")
-            },
-            |plane| {
-                let _ = plane;
-                plane == 0
-            },
-        );
     }
 }

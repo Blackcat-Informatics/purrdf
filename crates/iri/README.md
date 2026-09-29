@@ -17,9 +17,10 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 `purrdf-iri` is the IRI/URI foundation of the PurRDF toolkit: a pure-Rust,
-wasm-clean crate with no third-party dependency — its one runtime dependency
-is the zero-dependency lexical layer
-[`purrdf-lex`](https://crates.io/crates/purrdf-lex) — implementing RFC 3987/3986
+wasm-clean crate with no third-party dependency — its runtime dependencies are
+the lexical layer [`purrdf-lex`](https://crates.io/crates/purrdf-lex) and the
+zero-dependency [`purrdf-hash`](https://crates.io/crates/purrdf-hash) —
+implementing RFC 3987/3986
 parsing, validation, reference resolution, syntax normalization, and
 CURIE/prefix handling.
 

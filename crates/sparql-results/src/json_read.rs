@@ -25,8 +25,9 @@
 //! `SERVICE` endpoint's deeply nested answer from overflowing the stack.
 
 use purrdf_core::TermBox;
-use purrdf_core::terminals::find_first_json_string_special;
+use purrdf_core::terminals::{self, find_first_json_string_special};
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
+use purrdf_iri::json_escape;
 
 use crate::error::Error;
 use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
@@ -634,14 +635,9 @@ impl<'a> JsonParser<'a> {
         self.bytes.get(self.pos).copied()
     }
 
+    /// Skip JSON `ws = *( %x20 / %x09 / %x0A / %x0D )`.
     fn skip_ws(&mut self) {
-        while let Some(c) = self.peek() {
-            if matches!(c, b' ' | b'\t' | b'\n' | b'\r') {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
+        self.pos = terminals::skip_ws(self.bytes, self.pos);
     }
 
     /// Consume `byte` after whitespace, or return a format error with `message`.
@@ -1018,24 +1014,10 @@ impl<'a> JsonParser<'a> {
 
     /// Decode the escape after a `\\` into `s`.
     fn parse_escape(&mut self, s: &mut String) -> Result<(), Error> {
-        let Some(esc) = self.peek() else {
-            return Err(fmt("unterminated escape"));
-        };
-        self.pos += 1;
-        match esc {
-            b'"' => s.push('"'),
-            b'\\' => s.push('\\'),
-            b'/' => s.push('/'),
-            b'b' => s.push('\u{0008}'),
-            b'f' => s.push('\u{000C}'),
-            b'n' => s.push('\n'),
-            b'r' => s.push('\r'),
-            b't' => s.push('\t'),
-            b'u' => s.push(self.parse_unicode_escape()?),
-            other => {
-                return Err(fmt(&format!("bad escape \\{}", other as char)));
-            }
-        }
+        let (decoded, width) = json_escape::decode_escape(&self.bytes[self.pos - 1..])
+            .map_err(|error| fmt(&format!("bad string escape: {error}")))?;
+        s.push(decoded);
+        self.pos += width - 1;
         Ok(())
     }
 
@@ -1076,24 +1058,7 @@ impl<'a> JsonParser<'a> {
                 }
                 b'\\' => {
                     self.pos += 1;
-                    let Some(esc) = self.peek() else {
-                        return Err(fmt("unterminated escape"));
-                    };
-                    self.pos += 1;
-                    match esc {
-                        b'"' => s.push('"'),
-                        b'\\' => s.push('\\'),
-                        b'/' => s.push('/'),
-                        b'b' => s.push('\u{0008}'),
-                        b'f' => s.push('\u{000C}'),
-                        b'n' => s.push('\n'),
-                        b'r' => s.push('\r'),
-                        b't' => s.push('\t'),
-                        b'u' => s.push(self.parse_unicode_escape()?),
-                        other => {
-                            return Err(fmt(&format!("bad escape \\{}", other as char)));
-                        }
-                    }
+                    self.parse_escape(&mut s)?;
                 }
                 // A raw multibyte UTF-8 sequence: copy the whole code point.
                 _ => {
@@ -1102,46 +1067,6 @@ impl<'a> JsonParser<'a> {
                 }
             }
         }
-    }
-
-    /// Decode a `\uXXXX` escape (with surrogate-pair handling), positioned just
-    /// after the `u`.
-    fn parse_unicode_escape(&mut self) -> Result<char, Error> {
-        let hi = self.read_hex4()?;
-        if (0xD800..=0xDBFF).contains(&hi) {
-            // High surrogate: expect a following `\uXXXX` low surrogate.
-            if self.peek() != Some(b'\\') {
-                return Err(fmt("lone high surrogate"));
-            }
-            self.pos += 1;
-            if self.peek() != Some(b'u') {
-                return Err(fmt("lone high surrogate"));
-            }
-            self.pos += 1;
-            let lo = self.read_hex4()?;
-            if !(0xDC00..=0xDFFF).contains(&lo) {
-                return Err(fmt("invalid low surrogate"));
-            }
-            let c = 0x1_0000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
-            char::from_u32(c).ok_or_else(|| fmt("invalid surrogate pair"))
-        } else {
-            char::from_u32(hi).ok_or_else(|| fmt("invalid \\u escape"))
-        }
-    }
-
-    fn read_hex4(&mut self) -> Result<u32, Error> {
-        if self.pos + 4 > self.bytes.len() {
-            return Err(fmt("truncated \\u escape"));
-        }
-        let mut value: u32 = 0;
-        for _ in 0..4 {
-            let Some(digit) = purrdf_hash::hex::nibble(self.bytes[self.pos]) else {
-                return Err(fmt("non-hex digit in \\u escape"));
-            };
-            value = value * 16 + u32::from(digit);
-            self.pos += 1;
-        }
-        Ok(value)
     }
 
     /// Consume one UTF-8 code point starting at `pos` in O(1).
@@ -2037,86 +1962,6 @@ mod tests {
                 from_json_bounded(doc.as_bytes(), u64::MAX),
                 Err(format_error(message)),
                 "skipping parser on {doc}"
-            );
-        }
-    }
-}
-
-/// The frozen JSON string-body decoding vectors, replayed against the SPARQL results JSON reader.
-#[cfg(test)]
-mod json_string_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    const STRINGS: &str = include_str!("../../lex/tests/vectors/json_string_vectors.txt");
-    const UNITS: &str = include_str!("../../lex/tests/vectors/json_unit_vectors.txt");
-
-    /// `body` (the text between the quotes) decoded, or `None` when refused.
-    fn decode(body: &str) -> Option<String> {
-        let text = format!("\"{body}\"");
-        let mut parser = super::JsonParser::new(text.as_bytes());
-        parser
-            .parse_string()
-            .ok()
-            .filter(|_| parser.pos == text.len())
-    }
-
-    fn answer(body: &str) -> String {
-        decode(body).map_or_else(|| "-".to_owned(), |text| encode_str(&format!("={text}")))
-    }
-
-    /// Whether this copy is known to answer `body` differently from `expected`.
-    fn skipped(body: &str, expected: &str) -> bool {
-        let _ = (body, expected);
-        false
-    }
-
-    #[test]
-    fn string_bodies_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(STRINGS).expect("json_string_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let body = decode_str(record.fields[0]).expect("an encoded body");
-            let expected = decode_str(record.fields[1]).expect("an encoded answer");
-            if skipped(&body, &expected) {
-                continue;
-            }
-            assert_eq!(answer(&body), record.fields[1], "{body:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
-    }
-
-    #[test]
-    fn every_unit_and_pair_replays_the_frozen_digests() {
-        let file = VectorFile::parse(UNITS).expect("json_unit_vectors.txt");
-        for record in file.records() {
-            let upper = record.fields[1] == "upper";
-            let unit = |u: u32| {
-                if upper {
-                    format!("\\u{u:04X}")
-                } else {
-                    format!("\\u{u:04x}")
-                }
-            };
-            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
-            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
-            let answers = (first..=last).map(|value| {
-                if record.fields[0] == "unit" {
-                    answer(&unit(value))
-                } else {
-                    let offset = value - 0x1_0000;
-                    answer(&format!(
-                        "{}{}",
-                        unit(0xD800 + (offset >> 10)),
-                        unit(0xDC00 + (offset & 0x3FF))
-                    ))
-                }
-            });
-            assert_eq!(
-                answer_digest(answers),
-                record.fields[4],
-                "{:?}",
-                record.fields
             );
         }
     }

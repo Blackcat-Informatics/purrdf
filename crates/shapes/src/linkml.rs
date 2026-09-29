@@ -10,7 +10,8 @@
 //! byte-stable YAML representation while preserving fields the emitter does
 //! not author.
 
-use std::borrow::Cow;
+use purrdf_iri::json_pointer;
+use purrdf_iri::terminals::{is_ncname_char, is_ncname_start};
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error;
 use std::fmt;
@@ -616,20 +617,12 @@ fn validate_json_value(
                     child,
                     depth + 1,
                     nodes,
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", json_pointer::escape_token(key)),
                 )?;
             }
             Ok(())
         }
         Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => Ok(()),
-    }
-}
-
-fn pointer_escape(value: &str) -> Cow<'_, str> {
-    if value.contains('~') || value.contains('/') {
-        Cow::Owned(value.replace('~', "~0").replace('/', "~1"))
-    } else {
-        Cow::Borrowed(value)
     }
 }
 
@@ -717,64 +710,13 @@ fn validate_identifier(label: &str, value: &str) -> Result<(), LinkmlError> {
     Ok(())
 }
 
-/// The FIRST scalar of an `NCName`.
-///
-/// ```text
-/// NCNameStartChar ::= NameStartChar - ':'
-/// NameStartChar   ::= ':' | [A-Z] | '_' | [a-z] | [#xC0-#xD6] | [#xD8-#xF6]
-///                   | [#xF8-#x2FF] | [#x370-#x37D] | [#x37F-#x1FFF]
-///                   | [#x200C-#x200D] | [#x2070-#x218F] | [#x2C00-#x2FEF]
-///                   | [#x3001-#xD7FF] | [#xF900-#xFDCF] | [#xFDF0-#xFFFD]
-///                   | [#x10000-#xEFFFF]
-/// ```
-///
-/// *Namespaces in XML 1.0 (Third Edition)* §3 `[4]`, over XML 1.0 Fifth Edition
-/// §2.3 `[4]`. [`validate_identifier`] names this production in its own refusal
-/// message, so the predicate has to be the production and not a resemblance of
-/// it.
-///
-/// [`char::is_alphabetic`] is not this class, and is wrong in BOTH directions,
-/// which is why substituting it was invisible from either side alone: it
-/// **admits** U+00AA FEMININE ORDINAL INDICATOR, U+00B5 MICRO SIGN and U+00BA
-/// MASCULINE ORDINAL INDICATOR, all of which sit below the production's first
-/// non-ASCII range `[#xC0-#xD6]`, and it **refuses** U+200C ZERO WIDTH
-/// NON-JOINER and U+200D ZERO WIDTH JOINER, which the production names
-/// explicitly at `[#x200C-#x200D]` but Unicode classifies as `Cf`.
-fn is_ncname_start(character: char) -> bool {
-    character != ':' && terminals::is_xml_name_start_char(character)
-}
-
-/// Every SUBSEQUENT scalar of an `NCName`.
-///
-/// ```text
-/// NCNameChar ::= NameChar - ':'
-/// NameChar   ::= NameStartChar | '-' | '.' | [0-9] | #xB7
-///              | [#x300-#x36F] | [#x203F-#x2040]
-/// ```
-///
-/// *Namespaces in XML 1.0 (Third Edition)* §3 `[5]`, over XML 1.0 Fifth Edition
-/// §2.3 `[4a]`. The `':'` is subtracted HERE as well as at the head: `NCName` is
-/// `Name` minus the colon in every position, which is the whole reason the
-/// production exists, so `ns:local` is two `NCName`s and never one.
-///
-/// [`char::is_alphanumeric`] is not this class either: it admits U+00AA and the
-/// `No`/`Nl` numerals (U+00B2 SUPERSCRIPT TWO among them) that `NameChar` does
-/// not name, and refuses the two zero-width joiners that it does.
-fn is_ncname_char(character: char) -> bool {
-    character != ':' && terminals::is_xml_name_char(character)
-}
-
 /// Whether `value` is an XML `NCName`.
 ///
 /// `NCName ::= NCNameStartChar NCNameChar*` (*Namespaces in XML 1.0 (Third
 /// Edition)* §3 `[4]`) — the production [`validate_identifier`] refuses by name,
-/// spelled through [`is_ncname_start`] and [`is_ncname_char`].
+/// spelled through [`terminals::is_ncname`].
 fn is_linkml_identifier(value: &str) -> bool {
-    let mut characters = value.chars();
-    let Some(first) = characters.next() else {
-        return false;
-    };
-    is_ncname_start(first) && characters.all(is_ncname_char)
+    terminals::is_ncname(value)
 }
 
 pub(super) fn is_reserved_jsonld_slot(value: &str) -> bool {
@@ -1344,43 +1286,5 @@ x-value: .nan
         let document = LinkmlDocument::from_value(value.clone()).expect("valid document");
         let reparsed = parse_linkml(&write_linkml(&document).unwrap()).unwrap();
         assert_eq!(reparsed.into_value(), value);
-    }
-}
-
-/// The frozen JSON Pointer vectors, replayed against the LinkML projection's definition pointers.
-#[cfg(test)]
-mod json_pointer_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    const POINTERS: &str = include_str!("../../lex/tests/vectors/json_pointer_vectors.txt");
-
-    fn escape(token: &str) -> String {
-        super::pointer_escape(token).into_owned()
-    }
-
-    #[test]
-    fn pointers_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(POINTERS).expect("json_pointer_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let fields = &record.fields;
-            match fields[0] {
-                "escape" => {
-                    let token = decode_str(fields[1]).expect("a token");
-                    assert_eq!(encode_str(&escape(&token)), fields[2], "{token:?}");
-                    replayed += 1;
-                }
-                "plane" => {
-                    let plane = u32::from_str_radix(fields[1], 16).expect("hex");
-                    let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                        .filter_map(char::from_u32)
-                        .map(|c| encode_str(&escape(&format!("{c}~{c}/"))));
-                    assert_eq!(answer_digest(answers), fields[2], "plane {plane:X}");
-                    replayed += 1;
-                }
-                _ => {}
-            }
-        }
-        assert!(replayed > 100, "{replayed}");
     }
 }

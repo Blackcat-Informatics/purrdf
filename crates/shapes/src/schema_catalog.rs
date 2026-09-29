@@ -167,12 +167,11 @@ pub(crate) fn reference_key(reference: &str) -> Option<String> {
     if encoded.contains('/') {
         return None;
     }
-    pointer_unescape(encoded)
+    purrdf_iri::json_pointer::unescape_token(encoded).map(std::borrow::Cow::into_owned)
 }
 
-pub(crate) fn pointer_escape(value: &str) -> String {
-    value.replace('~', "~0").replace('/', "~1")
-}
+/// An RFC 6901 reference token escaped for a `#/$defs/…` pointer.
+pub(crate) use purrdf_iri::json_pointer::escape_token as pointer_escape;
 
 pub(crate) const fn schema_map_keywords() -> &'static [&'static str] {
     &[
@@ -279,23 +278,6 @@ fn validate_schema(
         }
     }
     Ok(())
-}
-
-fn pointer_unescape(value: &str) -> Option<String> {
-    let mut output = String::with_capacity(value.len());
-    let mut characters = value.chars();
-    while let Some(character) = characters.next() {
-        if character != '~' {
-            output.push(character);
-            continue;
-        }
-        match characters.next()? {
-            '0' => output.push('~'),
-            '1' => output.push('/'),
-            _ => return None,
-        }
-    }
-    Some(output)
 }
 
 #[cfg(test)]
@@ -614,67 +596,5 @@ mod tests {
             .expect("bounded parser accepts the same JSON value");
             assert_eq!(actual, expected, "{source}");
         }
-    }
-}
-
-/// The frozen JSON Pointer vectors, replayed against the schema catalog's definition pointers.
-#[cfg(test)]
-mod json_pointer_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    const POINTERS: &str = include_str!("../../lex/tests/vectors/json_pointer_vectors.txt");
-
-    fn escape(token: &str) -> String {
-        super::pointer_escape(token)
-    }
-
-    fn unescape(token: &str) -> Option<String> {
-        super::pointer_unescape(token)
-    }
-
-    #[test]
-    fn pointers_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(POINTERS).expect("json_pointer_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let fields = &record.fields;
-            match fields[0] {
-                "escape" => {
-                    let token = decode_str(fields[1]).expect("a token");
-                    assert_eq!(encode_str(&escape(&token)), fields[2], "{token:?}");
-                    replayed += 1;
-                }
-                "plane" => {
-                    let plane = u32::from_str_radix(fields[1], 16).expect("hex");
-                    let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                        .filter_map(char::from_u32)
-                        .map(|c| encode_str(&escape(&format!("{c}~{c}/"))));
-                    assert_eq!(answer_digest(answers), fields[2], "plane {plane:X}");
-                    replayed += 1;
-                }
-                "parse" => {
-                    let pointer = decode_str(fields[1]).expect("a pointer");
-                    let expected: Option<Vec<String>> = (fields[2] != "-").then(|| {
-                        fields[3..]
-                            .iter()
-                            .map(|token| decode_str(token).expect("a token"))
-                            .collect()
-                    });
-                    if let Some(token) = pointer
-                        .strip_prefix('/')
-                        .filter(|token| !token.contains('/'))
-                    {
-                        assert_eq!(
-                            unescape(token).map(|token| vec![token]),
-                            expected,
-                            "{pointer:?}"
-                        );
-                        replayed += 1;
-                    }
-                }
-                _ => {}
-            }
-        }
-        assert!(replayed > 100, "{replayed}");
     }
 }

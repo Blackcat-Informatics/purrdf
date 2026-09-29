@@ -23,10 +23,8 @@ workspace = true
 [lib]
 # rlib-only, wasm-clean leaf: the SPARQL front-end of the native query stack. It
 # must NOT pull any oxigraph-family crate (it replaces the oxigraph-family SPARQL
-# parser). It builds on the two CLOSED foundation leaves `purrdf-iri` and
-# `purrdf-xsd`, plus `memchr` (a wasm-clean SIMD byte-scan primitive for the
-# tokenizer hot paths — not a foundation leaf, the same class of infra dep as the
-# rayon edges elsewhere); it deliberately does NOT depend on `purrdf-core`
+# parser). It builds on the foundation leaves `purrdf-lex`, `purrdf-iri` and
+# `purrdf-xsd`; it deliberately does NOT depend on `purrdf-core`
 # (whose terms are dataset-interned `TermId` and which pulls a `gts` default feature).
 crate-type = ["rlib"]
 path = "src/lib.rs"
@@ -44,10 +42,9 @@ purrdf-cdt = { workspace = true }
 # The fixed-key table hasher behind the parser's prefix and blank-label maps:
 # their iteration order is the same on every run.
 purrdf-hash = { workspace = true }
-# SIMD byte scanning on the tokenizer hot paths (string-literal body, IRIREF end,
-# comment/EOL). SIMD on x86/aarch64, portable SWAR fallback — wasm-clean, no feature
-# gate. NOT an oxigraph-family crate, so the front-end stays a clean native leaf.
-memchr = { workspace = true }
+# The lexical layer: terminals, escape decoders and the chunked byte scans on
+# the tokenizer hot paths (string-literal body, IRIREF end, comment/EOL).
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
 # Byte-exact golden files for the algebra snapshots, and the property harness

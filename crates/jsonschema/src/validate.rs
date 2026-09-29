@@ -40,6 +40,7 @@ use crate::number::Decimal;
 use crate::output::{Output, OutputUnit};
 use crate::pointer;
 use crate::schema::{Body, JsonType, Keyword, Kind, Node, NodeId, Pattern, Schema};
+use purrdf_iri::percent;
 
 /// The longest chain of `$ref`, `$dynamicRef` and `$recursiveRef`
 /// resolutions an evaluation follows in a row at one instance location.
@@ -218,7 +219,7 @@ impl Token<'_, '_> {
     fn push_to(self, path: &mut String) {
         let escaped = match self {
             Self::None => return,
-            Self::Index(index) => index.to_string(),
+            Self::Index(index) => std::borrow::Cow::Owned(index.to_string()),
             Self::Schema(token) => pointer::escape_token(token),
             Self::Instance(token) => pointer::escape_token(token),
         };
@@ -838,7 +839,7 @@ impl<'s> Evaluator<'s> {
             absolute_keyword_location: format!(
                 "{}/{}",
                 node.location,
-                pointer::fragment_encode(&pointer::escape_token(name))
+                percent::encode(&pointer::escape_token(name), percent::FRAGMENT)
             ),
             instance_location: self.instance_path.clone(),
             error,

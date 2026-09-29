@@ -4,7 +4,7 @@
 //! The workspace's one JSON string-body escape law (RFC 8259 §7).
 //!
 //! Every PurRDF writer that emits a JSON string escapes its body here. The law
-//! lives in this zero-dependency leaf, beside the
+//! lives in this lexical leaf, beside the
 //! [`find_first_json_string_special`] class it scans with, because it is the one
 //! crate every JSON-emitting crate already reaches — including the GTS container
 //! crate, which deliberately does not depend on `purrdf-core`.
@@ -25,6 +25,8 @@
 //! is ASCII or a UTF-8 lead byte, so each run ends on a `char` boundary, and
 //! every rule maps one `char` independently, so escaping a string's fragments
 //! one by one gives the same bytes as escaping the whole.
+
+use std::borrow::Cow;
 
 use crate::scan::{ByteClass, byte_run_count, find_first_json_string_special};
 
@@ -219,6 +221,286 @@ pub fn push_string(out: &mut String, value: &str, escapes: JsonEscapes) {
     out.push('"');
     push_body(out, value, escapes);
     out.push('"');
+}
+
+/// What is wrong with a JSON escape (RFC 8259 §7).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonEscapeErrorKind {
+    /// The input ends inside the escape.
+    Truncated,
+    /// The backslash is followed by something other than `"`, `\`, `/`, `b`,
+    /// `f`, `n`, `r`, `t` or `u`.
+    BadEscape,
+    /// A `\u` is not followed by four hex digits.
+    BadHex,
+    /// A high surrogate (`\uD800`-`\uDBFF`) is not followed by a `\u` low
+    /// surrogate.
+    UnpairedHigh,
+    /// A low surrogate (`\uDC00`-`\uDFFF`) with no high surrogate before it.
+    UnpairedLow,
+}
+
+/// A refused JSON escape: what is wrong, and where.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JsonEscapeError {
+    /// What is wrong.
+    pub kind: JsonEscapeErrorKind,
+    /// The byte offset, in the input handed to the decoder, of the defect: the
+    /// escape's backslash, a digit that is not one, or the missing low
+    /// surrogate's position.
+    pub offset: usize,
+}
+
+impl JsonEscapeError {
+    const fn at(kind: JsonEscapeErrorKind, offset: usize) -> Self {
+        Self { kind, offset }
+    }
+}
+
+impl core::fmt::Display for JsonEscapeError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        let what = match self.kind {
+            JsonEscapeErrorKind::Truncated => "the input ends inside an escape",
+            JsonEscapeErrorKind::BadEscape => {
+                "a backslash must be followed by one of `\"`, `\\`, `/`, `b`, `f`, `n`, `r`, `t` \
+                 or `u`"
+            }
+            JsonEscapeErrorKind::BadHex => "`\\u` must be followed by four hexadecimal digits",
+            JsonEscapeErrorKind::UnpairedHigh => {
+                "a high surrogate must be followed by a `\\u` low surrogate"
+            }
+            JsonEscapeErrorKind::UnpairedLow => "a low surrogate has no high surrogate before it",
+        };
+        write!(f, "{what} (byte {})", self.offset)
+    }
+}
+
+impl std::error::Error for JsonEscapeError {}
+
+/// The four hex digits at the start of `bytes` as one UTF-16 code unit: the
+/// `4HEXDIG` of a `\u` escape, read without judging it as a scalar.
+///
+/// For a reader that validates a string's escape syntax but keeps its text
+/// raw, where RFC 8259's grammar admits an unpaired surrogate. [`decode_u_escape`]
+/// is the decoder.
+///
+/// # Errors
+///
+/// [`JsonEscapeError`], with its offset into `bytes`.
+///
+/// ```rust
+/// use purrdf_lex::json_escape::code_unit;
+///
+/// assert_eq!(code_unit(b"d800"), Ok(0xD800));
+/// assert!(code_unit(b"+041").is_err());
+/// ```
+pub fn code_unit(bytes: &[u8]) -> Result<u32, JsonEscapeError> {
+    let mut unit = 0_u32;
+    for k in 0..4 {
+        let Some(&byte) = bytes.get(k) else {
+            return Err(JsonEscapeError::at(JsonEscapeErrorKind::Truncated, k));
+        };
+        let digit = purrdf_hash::hex::nibble(byte)
+            .ok_or_else(|| JsonEscapeError::at(JsonEscapeErrorKind::BadHex, k))?;
+        unit = (unit << 4) | u32::from(digit);
+    }
+    Ok(unit)
+}
+
+/// Decode a `\u` escape whose four digits begin `bytes` (the `\u` itself
+/// already consumed): the scalar and the bytes consumed from `bytes` — `4`, or
+/// `10` when a high surrogate takes the `\uXXXX` low surrogate after it.
+///
+/// RFC 8259 §7 spells a scalar above U+FFFF as a UTF-16 surrogate pair, and
+/// an unpaired surrogate denotes no character: it is refused, never replaced
+/// with U+FFFD, because a replacement character is a silent corruption. Every
+/// digit is read by [`purrdf_hash::hex::nibble`], so a sign is not a digit.
+///
+/// # Errors
+///
+/// [`JsonEscapeError`], with its offset into `bytes`.
+///
+/// ```rust
+/// use purrdf_lex::json_escape::{JsonEscapeErrorKind, decode_u_escape};
+///
+/// assert_eq!(decode_u_escape(b"0041"), Ok(('A', 4)));
+/// assert_eq!(decode_u_escape(b"d83d\\ude00"), Ok(('\u{1f600}', 10)));
+/// let lone_low = decode_u_escape(b"de00").unwrap_err();
+/// assert_eq!(lone_low.kind, JsonEscapeErrorKind::UnpairedLow);
+/// let lone_high = decode_u_escape(b"d83d!").unwrap_err();
+/// assert_eq!((lone_high.kind, lone_high.offset), (JsonEscapeErrorKind::UnpairedHigh, 4));
+/// ```
+pub fn decode_u_escape(bytes: &[u8]) -> Result<(char, usize), JsonEscapeError> {
+    let first = code_unit(bytes)?;
+    let scalar = match first {
+        0xDC00..=0xDFFF => {
+            return Err(JsonEscapeError::at(JsonEscapeErrorKind::UnpairedLow, 0));
+        }
+        0xD800..=0xDBFF => {
+            if bytes.get(4) != Some(&b'\\') || bytes.get(5) != Some(&b'u') {
+                return Err(JsonEscapeError::at(JsonEscapeErrorKind::UnpairedHigh, 4));
+            }
+            let second = code_unit(&bytes[6..]).map_err(|error| JsonEscapeError {
+                offset: 6 + error.offset,
+                ..error
+            })?;
+            if !(0xDC00..=0xDFFF).contains(&second) {
+                return Err(JsonEscapeError::at(JsonEscapeErrorKind::UnpairedHigh, 4));
+            }
+            let pair = 0x1_0000 + ((first - 0xD800) << 10) + (second - 0xDC00);
+            return char::from_u32(pair)
+                .map(|c| (c, 10))
+                .ok_or(JsonEscapeError::at(JsonEscapeErrorKind::UnpairedHigh, 4));
+        }
+        unit => unit,
+    };
+    // Every unit outside the surrogate block is a scalar.
+    char::from_u32(scalar)
+        .map(|c| (c, 4))
+        .ok_or(JsonEscapeError::at(JsonEscapeErrorKind::BadHex, 0))
+}
+
+/// Decode the escape whose backslash is the first byte of `bytes`: the scalar
+/// and the bytes the escape spans (`2`, `6`, or `12` for a surrogate pair).
+///
+/// ```text
+/// escape = %x5C ( %x22 / %x5C / %x2F / %x62 / %x66 / %x6E / %x72 / %x74 / %x75 4HEXDIG )
+/// ```
+///
+/// # Errors
+///
+/// [`JsonEscapeError`], with its offset into `bytes`.
+///
+/// ```rust
+/// use purrdf_lex::json_escape::decode_escape;
+///
+/// assert_eq!(decode_escape(b"\\/rest"), Ok(('/', 2)));
+/// assert_eq!(decode_escape(b"\\u00e9"), Ok(('é', 6)));
+/// assert!(decode_escape(b"\\x41").is_err());
+/// ```
+pub fn decode_escape(bytes: &[u8]) -> Result<(char, usize), JsonEscapeError> {
+    let Some(&letter) = bytes.get(1) else {
+        return Err(JsonEscapeError::at(JsonEscapeErrorKind::Truncated, 0));
+    };
+    let short = match letter {
+        b'"' => '"',
+        b'\\' => '\\',
+        b'/' => '/',
+        b'b' => '\u{8}',
+        b'f' => '\u{c}',
+        b'n' => '\n',
+        b'r' => '\r',
+        b't' => '\t',
+        b'u' => {
+            return decode_u_escape(&bytes[2..])
+                .map(|(c, consumed)| (c, 2 + consumed))
+                .map_err(|error| JsonEscapeError {
+                    offset: 2 + error.offset,
+                    ..error
+                });
+        }
+        _ => return Err(JsonEscapeError::at(JsonEscapeErrorKind::BadEscape, 0)),
+    };
+    Ok((short, 2))
+}
+
+/// A JSON string body (the text between the quotes) with every escape
+/// decoded, borrowed when it holds none.
+///
+/// The one decoder behind every PurRDF JSON reader. It decodes escapes only:
+/// every other scalar is copied as itself, so a reader that must refuse raw
+/// control characters (RFC 8259 §7) checks for them where it finds the
+/// string's end — the scan it already runs.
+///
+/// # Errors
+///
+/// [`JsonEscapeError`], with its offset into `body`.
+///
+/// ```rust
+/// use purrdf_lex::json_escape::unescape;
+///
+/// assert_eq!(unescape(r"a\nbé😀").unwrap(), "a\nbé\u{1f600}");
+/// assert!(matches!(unescape("plain").unwrap(), std::borrow::Cow::Borrowed("plain")));
+/// assert!(unescape(r"\udc00").is_err());
+/// ```
+pub fn unescape(body: &str) -> Result<Cow<'_, str>, JsonEscapeError> {
+    let bytes = body.as_bytes();
+    let Some(first) = bytes.iter().position(|&b| b == b'\\') else {
+        return Ok(Cow::Borrowed(body));
+    };
+    let mut out = String::with_capacity(body.len());
+    out.push_str(&body[..first]);
+    let mut at = first;
+    loop {
+        let (decoded, width) = decode_escape(&bytes[at..]).map_err(|error| JsonEscapeError {
+            offset: at + error.offset,
+            ..error
+        })?;
+        out.push(decoded);
+        at += width;
+        // The run up to the next backslash is copied whole; a backslash is
+        // ASCII, so both ends are `char` boundaries.
+        let run = bytes[at..]
+            .iter()
+            .position(|&b| b == b'\\')
+            .map_or(bytes.len(), |next| at + next);
+        out.push_str(&body[at..run]);
+        if run == bytes.len() {
+            return Ok(Cow::Owned(out));
+        }
+        at = run;
+    }
+}
+
+#[cfg(test)]
+mod decode_tests {
+    use super::{JsonEscapeErrorKind, decode_escape, decode_u_escape, unescape};
+
+    #[test]
+    fn a_lone_low_surrogate_is_refused() {
+        for body in [r"\udc00", r"\uDFFF", r"a\uDC00b", r"\udc00\ud800"] {
+            let error = unescape(body).unwrap_err();
+            assert_eq!(error.kind, JsonEscapeErrorKind::UnpairedLow, "{body}");
+        }
+    }
+
+    #[test]
+    fn a_lone_or_badly_paired_high_surrogate_is_refused() {
+        for body in [
+            r"\ud800",
+            r"\ud800x",
+            r"\ud800\n",
+            r"\ud800\u0041",
+            r"\ud800\ud800",
+        ] {
+            let error = unescape(body).unwrap_err();
+            assert_eq!(error.kind, JsonEscapeErrorKind::UnpairedHigh, "{body}");
+        }
+    }
+
+    #[test]
+    fn a_valid_pair_and_a_plain_unit_decode() {
+        assert_eq!(unescape(r"\ud83d\ude00").unwrap(), "\u{1f600}");
+        assert_eq!(unescape(r"\uD800\uDC00").unwrap(), "\u{10000}");
+        assert_eq!(unescape(r"\u0041").unwrap(), "A");
+        assert_eq!(decode_u_escape(b"0041"), Ok(('A', 4)));
+    }
+
+    #[test]
+    fn a_signed_or_short_unit_is_refused_where_the_digits_are() {
+        let error = decode_escape(b"\\u+041").unwrap_err();
+        assert_eq!((error.kind, error.offset), (JsonEscapeErrorKind::BadHex, 2));
+        let error = decode_escape(b"\\u00").unwrap_err();
+        assert_eq!(
+            (error.kind, error.offset),
+            (JsonEscapeErrorKind::Truncated, 4)
+        );
+        let error = unescape(r"ab\q").unwrap_err();
+        assert_eq!(
+            (error.kind, error.offset),
+            (JsonEscapeErrorKind::BadEscape, 2)
+        );
+    }
 }
 
 #[cfg(test)]

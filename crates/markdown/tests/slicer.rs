@@ -322,14 +322,6 @@ fn split_chains_before_a_heading(claims: &[Claim]) -> Vec<(Vec<&Claim>, &Claim)>
     out
 }
 
-/// The last scalar boundary at or before an offset.
-fn floor_boundary(text: &str, mut i: usize) -> usize {
-    while !text.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
 /// The model of a document under a profile.
 fn model<'a>(text: &'a str, profile: &Profile) -> Document<'a> {
     analyze(
@@ -3581,7 +3573,7 @@ fn at_the_narrowest_bounds_every_piece_stays_inside_the_bound_and_the_pieces_cov
                                     snapped_to_a_scalar_boundary += 1;
                                     assert_eq!(
                                         start,
-                                        floor_boundary(text, candidate),
+                                        text.floor_char_boundary(candidate),
                                         "with no line start to reach, the scalar boundary at or \
                                          before the candidate"
                                     );
@@ -3617,7 +3609,7 @@ fn at_the_narrowest_bounds_every_piece_stays_inside_the_bound_and_the_pieces_cov
                                 scalar_cuts += 1;
                                 assert_eq!(
                                     end,
-                                    floor_boundary(text, bound),
+                                    text.floor_char_boundary(bound),
                                     "with no newline the cut is the last scalar boundary at or \
                                      before the bound"
                                 );

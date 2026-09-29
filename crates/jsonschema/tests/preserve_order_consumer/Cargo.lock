@@ -158,6 +158,9 @@ dependencies = [
 [[package]]
 name = "purrdf-lex"
 version = "2.0.2"
+dependencies = [
+ "purrdf-hash",
+]
 
 [[package]]
 name = "purrdf-testkit"

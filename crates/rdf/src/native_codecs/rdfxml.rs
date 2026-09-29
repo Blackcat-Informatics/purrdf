@@ -36,6 +36,7 @@
 //! scoping.
 
 use purrdf_core::sink::{TextOut, TextSink};
+use purrdf_iri::terminals;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -1864,10 +1865,10 @@ impl std::fmt::Display for SerializerQName<'_> {
 fn split_property_iri(iri: &str) -> Result<(&str, &str), RdfDiagnostic> {
     let mut start = None;
     for (index, ch) in iri.char_indices().rev() {
-        if !is_ncname_char(ch) {
+        if !terminals::is_ncname_char(ch) {
             break;
         }
-        if is_ncname_start_char(ch) {
+        if terminals::is_ncname_start(ch) {
             start = Some(index);
         }
     }
@@ -1880,27 +1881,6 @@ fn split_property_iri(iri: &str) -> Result<(&str, &str), RdfDiagnostic> {
         ))
     })?;
     Ok(iri.split_at(split))
-}
-
-/// Whether `ch` may OPEN an `NCName`: `NCNameStartChar ::= NameStartChar - ':'`
-/// (Namespaces in XML 1.0 3e §3).
-///
-/// [`is_xml_name_start_char`](purrdf_iri::terminals::is_xml_name_start_char) admits the
-/// `':'` that XML's own `Name` admits, so the subtraction is made here and is not
-/// optional — without it `ns:local` would qualify as a local part, which is the exact
-/// string the namespaces specification had to mint `NCName` to exclude.
-fn is_ncname_start_char(ch: char) -> bool {
-    purrdf_iri::terminals::is_xml_name_start_char(ch) && ch != ':'
-}
-
-/// Whether `ch` may CONTINUE an `NCName`: `NCNameChar ::= NameChar - ':'`
-/// (Namespaces in XML 1.0 3e §3).
-///
-/// Wider than [`is_ncname_start_char`] by `'-'`, `'.'`, `[0-9]`, U+00B7 MIDDLE DOT, the
-/// combining marks `[#x300-#x36F]` and the two ties `[#x203F-#x2040]` — the scalars that
-/// may follow a name's first character and may not be it.
-fn is_ncname_char(ch: char) -> bool {
-    purrdf_iri::terminals::is_xml_name_char(ch) && ch != ':'
 }
 
 #[cfg(test)]

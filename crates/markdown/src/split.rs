@@ -23,7 +23,7 @@ use crate::profile::Profile;
 /// a bound of four or more. The widest UTF-8 scalar is four bytes, so
 /// the scalar opening a piece ends at or before `ps + 4`, which is at
 /// or before `ps + max_bytes` — the bound itself. The fallback's
-/// `ceil_boundary(ps + 1)` therefore cannot climb past the bound, the
+/// `ceil_char_boundary(ps + 1)` therefore cannot climb past the bound, the
 /// newline branch cuts at an offset the bound already covers, and every
 /// cut is at or before the bound. The same fact is what puts `bytes[cut]`
 /// in range: a piece is only cut when the unit runs past the bound, so
@@ -45,7 +45,9 @@ pub(crate) fn split_spans(
         let bound = ps + profile.max_bytes;
         let cut = match bytes[ps..=bound].iter().rposition(|b| *b == b'\n') {
             Some(i) if i > 0 => ps + i,
-            _ => floor_boundary(text, bound).max(ceil_boundary(text, ps + 1)),
+            _ => text
+                .floor_char_boundary(bound)
+                .max(text.ceil_char_boundary(ps + 1)),
         };
         debug_assert!(
             cut <= bound,
@@ -72,24 +74,8 @@ fn overlap_start(text: &str, ps: usize, cut: usize, overlap: usize) -> Option<us
     let snapped = text.as_bytes()[ps..candidate]
         .iter()
         .rposition(|b| *b == b'\n')
-        .map_or_else(|| floor_boundary(text, candidate), |i| ps + i + 1);
+        .map_or_else(|| text.floor_char_boundary(candidate), |i| ps + i + 1);
     (snapped > ps).then_some(snapped)
-}
-
-/// The last scalar boundary at or before an offset.
-pub(crate) fn floor_boundary(text: &str, mut i: usize) -> usize {
-    while !text.is_char_boundary(i) {
-        i -= 1;
-    }
-    i
-}
-
-/// The first scalar boundary at or after an offset.
-pub(crate) fn ceil_boundary(text: &str, mut i: usize) -> usize {
-    while i < text.len() && !text.is_char_boundary(i) {
-        i += 1;
-    }
-    i
 }
 
 #[cfg(test)]

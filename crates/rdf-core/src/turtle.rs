@@ -80,29 +80,16 @@ fn emit_blank_label(label: &str) -> Cow<'_, str> {
 /// Used to mint rule IRIs (`<base>rule/<encoded-name>`) byte-identically to the
 /// retired Python `_rule_iri` so the inferred-closure / explanations artifacts
 /// stay RDF-isomorphic to the committed files.
-fn percent_encode(value: &str) -> String {
-    fn is_unreserved(b: u8) -> bool {
-        b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'_' | b'~')
-    }
-    let mut out = String::with_capacity(value.len());
-    for &byte in value.as_bytes() {
-        if is_unreserved(byte) {
-            out.push(byte as char);
-        } else {
-            out.push('%');
-            purrdf_hash::hex::encode_upper_into(&[byte], &mut out);
-        }
-    }
-    out
-}
-
 /// Mint the namespaced, percent-encoded rule IRI for a rule label.
 ///
 /// `base` is the caller-supplied rule-IRI base (e.g. `https://example.org/vocab/rule/`)
 /// and `rule_name` the firing rule's name. The result is `<base + encoded-name>`,
 /// matching the retired Python `_rule_iri` byte-for-byte.
 pub fn rule_iri(base: &str, rule_name: &str) -> String {
-    format!("{base}{}", percent_encode(rule_name))
+    format!(
+        "{base}{}",
+        purrdf_iri::percent::encode(rule_name, purrdf_iri::percent::UNRESERVED)
+    )
 }
 
 /// Escape a string for embedding in a double-quoted Turtle literal.
@@ -599,14 +586,14 @@ mod tests {
     }
 
     #[test]
-    fn percent_encode_matches_urllib_quote_safe_empty() {
+    fn a_rule_name_is_encoded_like_urllib_quote_with_nothing_safe() {
         // colon → %3A, hyphen kept, alnum kept (matches the committed rule IRIs).
         assert_eq!(
-            percent_encode("el:subPropertyOf-transitive"),
+            rule_iri("", "el:subPropertyOf-transitive"),
             "el%3AsubPropertyOf-transitive"
         );
         // space → %20, slash → %2F, unreserved kept.
-        assert_eq!(percent_encode("a b/c.d_e~f"), "a%20b%2Fc.d_e~f");
+        assert_eq!(rule_iri("", "a b/c.d_e~f"), "a%20b%2Fc.d_e~f");
     }
 
     #[test]
@@ -1094,68 +1081,5 @@ mod tests {
             .expect("the thread starts")
             .join()
             .expect("no writer overflowed the thread's stack");
-    }
-}
-
-/// The frozen percent-encoding vectors, replayed against the rule-IRI encoder.
-#[cfg(test)]
-mod percent_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    /// Replay one vector file: `run` answers an input (`None` for a refusal),
-    /// `encode` says whether answers are encoded text rather than `=`-prefixed
-    /// decodings, and `skipped` names inputs this copy is known to answer differently.
-    fn replay(
-        vectors: &str,
-        encode: bool,
-        run: impl Fn(&str) -> Option<String>,
-        skipped: impl Fn(&str) -> bool,
-        plane_skipped: impl Fn(u32) -> bool,
-    ) {
-        let answer = |input: &str| match run(input) {
-            Some(value) if encode => encode_str(&value),
-            Some(value) => encode_str(&format!("={value}")),
-            None => "-".to_owned(),
-        };
-        let file = VectorFile::parse(vectors).expect("a percent vector file");
-        let mut replayed = 0;
-        for record in file.records() {
-            if record.fields[0] == "plane" {
-                let plane = u32::from_str_radix(record.fields[1], 16).expect("hex");
-                if plane_skipped(plane) {
-                    continue;
-                }
-                let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                    .filter_map(char::from_u32)
-                    .filter(|c| !skipped(&c.to_string()))
-                    .map(|c| answer(&c.to_string()));
-                assert_eq!(answer_digest(answers), record.fields[2], "plane {plane:X}");
-            } else {
-                let input = decode_str(record.fields[1]).expect("an encoded input");
-                if skipped(&input) {
-                    continue;
-                }
-                assert_eq!(answer(&input), record.fields[2], "{input:?}");
-            }
-            replayed += 1;
-        }
-        assert!(replayed > 400, "{replayed}");
-    }
-
-    #[test]
-    fn unreserved_replays_the_frozen_vectors() {
-        replay(
-            include_str!("../../lex/tests/vectors/percent_unreserved_vectors.txt"),
-            true,
-            |input| Some(super::percent_encode(input)),
-            |input| {
-                let _ = input;
-                false
-            },
-            |plane| {
-                let _ = plane;
-                false
-            },
-        );
     }
 }

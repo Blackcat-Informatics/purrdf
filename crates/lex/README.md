@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   </a>
 </p>
 
-# `purrdf-lex` — Zero-Dependency Lexical Foundations for PurRDF's Grammars
+# `purrdf-lex` — Lexical Foundations for PurRDF's Grammars
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-lex.svg)](https://crates.io/crates/purrdf-lex)
 [![docs.rs](https://docs.rs/purrdf-lex/badge.svg)](https://docs.rs/purrdf-lex)
@@ -20,8 +20,9 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 the IRI parser, the Turtle/TriG/N-Triples/N-Quads codecs, the SPARQL lexer,
 the SPARQL results writers, JSON-LD, JSON Schema and the GTS container all
 decide token boundaries and escapes with it, so each lexical law is written
-down once. It has **no runtime dependencies**, contains no `unsafe` code, and
-builds for `wasm32-unknown-unknown`.
+down once. Its one runtime dependency is `purrdf-hash`, the workspace's
+zero-dependency root (for its hex-digit reader); it contains no `unsafe` code
+and builds for `wasm32-unknown-unknown`.
 
 Its scope is the workspace's lexical foundations: byte-class scanning,
 grammar terminals, term syntax, literal and IRI escaping, percent encoding,
@@ -32,7 +33,11 @@ Unicode normalisation.
 |---|---|---|
 | `terminals` | The exact character classes `WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`, `IRIREF`'s forbidden set, XML `Char`, `NameStartChar`, `NameChar` and Unicode `White_Space`, each a range table proved sorted and disjoint at compile time | SPARQL 1.2 Query §19.8, RDF 1.2 Turtle §6.5, XML 1.0 (Fifth Edition) §2.2–2.3, RFC 8259 §7 |
 | `scan` | Chunked byte-class scanners over those tables (`find_first_trivia`, `find_first_iri_body_special`, `find_first_json_string_special`, `find_first_xml_special`) and `ByteClass`, the same kernel over a caller's own class | — |
-| `json_escape` | The one JSON string-body escaper every PurRDF JSON writer shares, in the four spellings those writers pin (`JsonEscapes`) | RFC 8259 §7 |
+| `terminals` (escapes and `WS`) | `decode_uchar`, `echar_value`, `expand_uchars` and `decode_char_ref`, strict decoders of `UCHAR`, `ECHAR` and the XML `CharRef`; `skip_ws` and `trim_ws`, the four-scalar `WS` skip and trim; `is_ncname`; `in_ranges`, the one range-table search | RDF 1.2 Turtle §6.5, SPARQL 1.2 §19.8, XML 1.0 §4.1 `[66]`, Namespaces in XML 1.0 §3 |
+| `scan` (needles) | `find_byte` and `find_byte2`, the first occurrence of a byte known only at run time | — |
+| `json_escape` | The one JSON string-body escaper every PurRDF JSON writer shares, in the four spellings those writers pin (`JsonEscapes`), and the one decoder every reader shares (`unescape`, `decode_escape`, `decode_u_escape`), which refuses an unpaired surrogate | RFC 8259 §7 |
+| `json_pointer` | Reference-token escaping and unescaping, pointer parsing, the array-index token | RFC 6901 |
+| `percent` | `encode` over the specification-defined sets (`UNRESERVED`, `REG_NAME`, `PATH`, `FRAGMENT`, `URI_TEMPLATE_RESERVED`, `NON_ASCII`, …), strict `decode`, `decode_form`, `normalize` | RFC 3986 §2, §3, §6.2.2; RFC 3987 §3.1; RFC 6570 §3.2.3 |
 
 ## Why a scanner may not approximate
 

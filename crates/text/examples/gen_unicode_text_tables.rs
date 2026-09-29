@@ -91,7 +91,8 @@ fn read(dir: &Path, name: &str) -> String {
 }
 
 fn hex(text: &str) -> u32 {
-    u32::from_str_radix(text.trim(), 16).unwrap_or_else(|err| panic!("bad hex {text:?}: {err}"))
+    purrdf_hash::hex::parse_u32(text.trim().as_bytes())
+        .unwrap_or_else(|| panic!("bad hex {text:?}"))
 }
 
 /// The data lines of a UCD file: comments stripped, blanks skipped, fields

@@ -59,7 +59,7 @@
 use alloc::string::{String, ToString};
 use alloc::vec::Vec;
 
-use purrdf_iri::langtag;
+use purrdf_iri::{langtag, terminals};
 
 use crate::datatype::{
     CdtDatatype, RDF_DIR_LANG_STRING, RDF_LANG_STRING, XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE,
@@ -602,7 +602,7 @@ impl<'a> Scanner<'a> {
     /// `BLANK_NODE_LABEL ::= '_:' (PN_CHARS_U | [0-9]) ((PN_CHARS | '.')* PN_CHARS)?`
     ///
     /// The label body is scanned with
-    /// [`purrdf_iri::terminals::is_pn_chars`], the workspace's single
+    /// [`terminals::is_pn_chars`], the workspace's single
     /// transcription of
     ///
     /// > `PN_CHARS ::= PN_CHARS_U | '-' | [0-9] | #xB7 | [#x300-#x36F] |`
@@ -620,7 +620,7 @@ impl<'a> Scanner<'a> {
     /// # The head is a different class from the tail
     ///
     /// The first scalar after `_:` is `( PN_CHARS_U | [0-9] )` —
-    /// [`purrdf_iri::terminals::is_blank_node_label_start`] — which is strictly
+    /// [`terminals::is_blank_node_label_start`] — which is strictly
     /// narrower than the `PN_CHARS` the rest of the label is made of. `'-'`,
     /// U+00B7 MIDDLE DOT, the combining marks `[#x300-#x36F]` and the ties
     /// `[#x203F-#x2040]` may continue a label and may not open one, and `'.'`
@@ -639,7 +639,7 @@ impl<'a> Scanner<'a> {
         self.expect(b':', "`_:` opening a blank node label")?;
         let body_start = self.position;
         match self.input[self.position..].chars().next() {
-            Some(ch) if purrdf_iri::terminals::is_blank_node_label_start(ch) => {
+            Some(ch) if terminals::is_blank_node_label_start(ch) => {
                 self.position += ch.len_utf8();
             }
             _ => {
@@ -650,7 +650,7 @@ impl<'a> Scanner<'a> {
             }
         }
         while let Some(ch) = self.input[self.position..].chars().next() {
-            if purrdf_iri::terminals::is_pn_chars(ch) || ch == '.' {
+            if terminals::is_pn_chars(ch) || ch == '.' {
                 self.position += ch.len_utf8();
             } else {
                 break;
@@ -755,42 +755,14 @@ impl<'a> Scanner<'a> {
         let start = self.position;
         match self.bytes.get(self.position + 1) {
             Some(b'u' | b'U') => self.parse_uchar(),
-            Some(b't') => {
+            Some(&letter) => {
+                let decoded = terminals::echar_value(letter).ok_or(CdtError::BadEscape {
+                    offset: start,
+                    reason: "only \\t \\b \\n \\r \\f \\\" \\' \\\\ \\uXXXX and \\UXXXXXXXX are escapes",
+                })?;
                 self.position += 2;
-                Ok('\t')
+                Ok(decoded)
             }
-            Some(b'b') => {
-                self.position += 2;
-                Ok('\u{8}')
-            }
-            Some(b'n') => {
-                self.position += 2;
-                Ok('\n')
-            }
-            Some(b'r') => {
-                self.position += 2;
-                Ok('\r')
-            }
-            Some(b'f') => {
-                self.position += 2;
-                Ok('\u{c}')
-            }
-            Some(b'"') => {
-                self.position += 2;
-                Ok('"')
-            }
-            Some(b'\'') => {
-                self.position += 2;
-                Ok('\'')
-            }
-            Some(b'\\') => {
-                self.position += 2;
-                Ok('\\')
-            }
-            Some(_) => Err(CdtError::BadEscape {
-                offset: start,
-                reason: "only \\t \\b \\n \\r \\f \\\" \\' \\\\ \\uXXXX and \\UXXXXXXXX are escapes",
-            }),
             None => Err(CdtError::BadEscape {
                 offset: start,
                 reason: "the lexical form ends inside an escape sequence",
@@ -801,42 +773,32 @@ impl<'a> Scanner<'a> {
     /// `UCHAR ::= '\\u' HEX HEX HEX HEX | '\\U' HEX HEX HEX HEX HEX HEX HEX HEX`
     fn parse_uchar(&mut self) -> Result<char, CdtError> {
         let start = self.position;
-        let digits = match self.bytes.get(self.position + 1) {
-            Some(b'u') => 4usize,
-            Some(b'U') => 8usize,
-            _ => {
-                return Err(CdtError::BadEscape {
+        let (decoded, consumed) =
+            terminals::decode_uchar(&self.bytes[start..]).map_err(|defect| {
+                CdtError::BadEscape {
                     offset: start,
-                    reason: "expected \\uXXXX or \\UXXXXXXXX",
-                });
-            }
-        };
-        let from = self.position + 2;
-        let to = from + digits;
-        let Some(hex) = self.input.get(from..to) else {
-            return Err(CdtError::BadEscape {
-                offset: start,
-                reason: "the lexical form ends inside a \\u escape",
-            });
-        };
-        let mut value: u32 = 0;
-        for byte in hex.bytes() {
-            let Some(nibble) = purrdf_hash::hex::nibble(byte) else {
-                return Err(CdtError::BadEscape {
-                    offset: start,
-                    reason: "a \\u escape takes hexadecimal digits only",
-                });
-            };
-            value = value * 16 + u32::from(nibble);
-        }
-        let Some(ch) = char::from_u32(value) else {
-            return Err(CdtError::BadEscape {
-                offset: start,
-                reason: "the escape does not name a Unicode scalar value",
-            });
-        };
-        self.position = to;
-        Ok(ch)
+                    reason: match defect {
+                        terminals::UcharError::NotAnEscape => "expected \\uXXXX or \\UXXXXXXXX",
+                        terminals::UcharError::BadHex => {
+                            if self.bytes.len() - start
+                                < match self.bytes.get(start + 1) {
+                                    Some(b'U') => 10,
+                                    _ => 6,
+                                }
+                            {
+                                "the lexical form ends inside a \\u escape"
+                            } else {
+                                "a \\u escape takes hexadecimal digits only"
+                            }
+                        }
+                        terminals::UcharError::NotAScalar => {
+                            "the escape does not name a Unicode scalar value"
+                        }
+                    },
+                }
+            })?;
+        self.position = start + consumed;
+        Ok(decoded)
     }
 
     /// `LANGTAG ::= '@' [a-zA-Z]+ ('-' [a-zA-Z0-9]+)*`, plus RDF 1.2's `'--' [a-zA-Z]+`
@@ -1049,86 +1011,3 @@ fn finish_map(mut entries: Vec<(usize, CdtEntry)>) -> Result<CdtValue, CdtError>
 // transcription now lives in `purrdf_iri::terminals`, with the W3C production
 // quoted at each predicate and its ranges proved sorted and disjoint at compile
 // time; `parse_blank_node_label` reaches it directly.
-
-/// The frozen UCHAR/ECHAR decoding vectors, replayed against the composite-literal parser's escape readers.
-#[cfg(test)]
-mod escape_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str};
-    use std::borrow::ToOwned as _;
-    use std::format;
-    use std::string::String;
-
-    const ESCAPES: &str = include_str!("../../lex/tests/vectors/escape_vectors.txt");
-    const SCALARS: &str = include_str!("../../lex/tests/vectors/uchar_scalar_vectors.txt");
-
-    fn show(decoded: Option<(char, usize)>) -> String {
-        decoded.map_or_else(
-            || "-".to_owned(),
-            |(c, n)| format!("{:04X}/{n}", u32::from(c)),
-        )
-    }
-
-    fn uchar(input: &str) -> String {
-        show({
-            let mut parser = super::Scanner::new(input);
-            parser.parse_uchar().ok().map(|c| (c, parser.position))
-        })
-    }
-
-    fn string(input: &str) -> String {
-        show({
-            let mut parser = super::Scanner::new(input);
-            if input.starts_with('\\') {
-                parser.parse_escape().ok().map(|c| (c, parser.position))
-            } else {
-                None
-            }
-        })
-    }
-
-    /// Whether this copy is known to answer `input` differently from the vectors.
-    fn skipped(input: &str) -> bool {
-        let _ = input;
-        false
-    }
-
-    #[test]
-    fn escapes_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(ESCAPES).expect("escape_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let input = decode_str(record.fields[0]).expect("an encoded input");
-            if skipped(&input) {
-                continue;
-            }
-            assert_eq!(uchar(&input), record.fields[1], "UCHAR {input:?}");
-            assert_eq!(string(&input), record.fields[2], "string escape {input:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
-    }
-
-    #[test]
-    fn every_scalar_replays_the_frozen_digests() {
-        let file = VectorFile::parse(SCALARS).expect("uchar_scalar_vectors.txt");
-        for record in file.records() {
-            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
-            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
-            let answers = (first..=last).map(|cp| {
-                let text = match (record.fields[0], record.fields[1]) {
-                    ("u", "upper") => format!("\\u{cp:04X}"),
-                    ("u", _) => format!("\\u{cp:04x}"),
-                    (_, "upper") => format!("\\U{cp:08X}"),
-                    _ => format!("\\U{cp:08x}"),
-                };
-                uchar(&text)
-            });
-            assert_eq!(
-                answer_digest(answers),
-                record.fields[4],
-                "{:?}",
-                record.fields
-            );
-        }
-    }
-}

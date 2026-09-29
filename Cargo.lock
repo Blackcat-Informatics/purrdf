@@ -769,6 +769,7 @@ dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
+ "purrdf-lex",
  "purrdf-rdf",
  "purrdf-sparql-eval",
  "purrdf-testkit",
@@ -789,6 +790,7 @@ dependencies = [
 name = "purrdf-lex"
 version = "2.0.2"
 dependencies = [
+ "purrdf-hash",
  "purrdf-testkit",
 ]
 
@@ -826,7 +828,6 @@ dependencies = [
  "ciborium",
  "ed25519-dalek",
  "hashbrown",
- "memchr",
  "proc-macro2",
  "purrdf-alloc-probe",
  "purrdf-cdt",
@@ -926,11 +927,11 @@ dependencies = [
 name = "purrdf-sparql-algebra"
 version = "2.0.2"
 dependencies = [
- "memchr",
  "purrdf-alloc-probe",
  "purrdf-cdt",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-testkit",
  "purrdf-xsd",
  "regex",

@@ -2047,7 +2047,7 @@ fn name_from_titles(
         .and_then(|values| values.first());
     title.map_or_else(
         || format!("_col.{}", number + 1),
-        |value| percent_encode_variable(value),
+        |value| column_name_from_title(value),
     )
 }
 
@@ -2062,18 +2062,32 @@ fn valid_column_name(value: &str) -> bool {
     })
 }
 
-fn percent_encode_variable(value: &str) -> String {
+/// The `name` a column takes from its title when it has none (CSVW Metadata
+/// Vocabulary for Tabular Data, section 5.6 Columns): the title
+/// "percent-encoded as necessary", where a name is restricted to a
+/// `varname` of RFC 6570 section 2.3 (`varchar *( ["."] varchar )`, `varchar
+/// = ALPHA / DIGIT / "_" / pct-encoded`) and "names beginning with `_` are
+/// reserved by this specification".
+///
+/// So ALPHA, DIGIT and `_` are kept, a `.` is kept only between two varchars
+/// (never first, last or doubled), every other byte of the UTF-8 is written
+/// `%XX` in uppercase (`-` and `~` included: neither is a varchar), and a
+/// leading `_` is written `%5F`, so a derived name never takes a reserved one
+/// such as `_row` or `_col.1`.
+pub(super) fn column_name_from_title(value: &str) -> String {
+    let bytes = value.as_bytes();
     let mut output = String::with_capacity(value.len());
-    for byte in value.bytes() {
-        if byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'~') {
+    for (index, &byte) in bytes.iter().enumerate() {
+        let keep = byte.is_ascii_alphanumeric()
+            || (byte == b'_' && index > 0)
+            || (byte == b'.'
+                && index > 0
+                && bytes.get(index + 1).is_some_and(|&next| next != b'.'));
+        if keep {
             output.push(char::from(byte));
         } else {
-            output.push('%');
-            purrdf_hash::hex::encode_upper_into(&[byte], &mut output);
+            purrdf_iri::percent::push_triplet(&mut output, byte);
         }
-    }
-    if output.starts_with('_') {
-        output.replace_range(..1, "%5F");
     }
     output
 }
@@ -2949,6 +2963,37 @@ mod tests {
 }
 
 /// The frozen percent-encoding vectors, replayed against the CSVW metadata reader's title-derived column names.
+/// The title-derived column name.
+#[cfg(test)]
+mod column_name_from_title {
+    use super::column_name_from_title;
+
+    #[test]
+    fn a_non_varchar_is_percent_encoded() {
+        assert_eq!(column_name_from_title("a~b"), "a%7Eb");
+        assert_eq!(column_name_from_title("a-b"), "a%2Db");
+        assert_eq!(column_name_from_title("a b"), "a%20b");
+        assert_eq!(column_name_from_title("caf\u{e9}"), "caf%C3%A9");
+    }
+
+    #[test]
+    fn a_dot_between_varchars_is_kept_and_any_other_is_encoded() {
+        assert_eq!(column_name_from_title("a.b"), "a.b");
+        assert_eq!(column_name_from_title("a.%"), "a.%25");
+        assert_eq!(column_name_from_title(".a"), "%2Ea");
+        assert_eq!(column_name_from_title("a."), "a%2E");
+        assert_eq!(column_name_from_title("a..b"), "a%2E.b");
+        assert_eq!(column_name_from_title("."), "%2E");
+    }
+
+    #[test]
+    fn a_leading_underscore_is_encoded_and_any_other_is_kept() {
+        assert_eq!(column_name_from_title("_row"), "%5Frow");
+        assert_eq!(column_name_from_title("a_b_"), "a_b_");
+        assert_eq!(column_name_from_title("__"), "%5F_");
+    }
+}
+
 #[cfg(test)]
 mod percent_frozen_vectors {
     use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
@@ -2998,7 +3043,7 @@ mod percent_frozen_vectors {
         replay(
             include_str!("../../../../lex/tests/vectors/percent_csvw_name_vectors.txt"),
             true,
-            |input| Some(super::percent_encode_variable(input)),
+            |input| Some(super::column_name_from_title(input)),
             |input| {
                 let _ = input;
                 // Titles the vectors do not record.

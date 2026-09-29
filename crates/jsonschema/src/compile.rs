@@ -35,6 +35,7 @@ use crate::registry::{Document, Location, Registry};
 use crate::schema::{
     Body, CompiledResource, JsonType, Keyword, Kind, Node, NodeId, Pattern, Schema,
 };
+use purrdf_iri::percent;
 
 /// Compile the schema at the absolute URI `uri` (a fragment may select a
 /// subschema by JSON Pointer or anchor), and check every document it reaches
@@ -195,7 +196,7 @@ struct Compiler<'r> {
 fn at(location: &str, keyword: &str) -> String {
     format!(
         "{location}/{}",
-        pointer::fragment_encode(&pointer::escape_token(keyword))
+        percent::encode(&pointer::escape_token(keyword), percent::FRAGMENT).into_owned()
     )
 }
 
@@ -282,7 +283,11 @@ impl Compiler<'_> {
             .pointer
             .strip_prefix(resource.pointer.as_str())
             .unwrap_or(&location.pointer);
-        let absolute = format!("{}#{}", resource.uri, pointer::fragment_encode(relative));
+        let absolute = format!(
+            "{}#{}",
+            resource.uri,
+            percent::encode(relative, percent::FRAGMENT)
+        );
         let compiled_resource = self.resource(registry_resource);
         self.documents.insert(location.doc);
         let (dialect, vocabularies) = self.vocabularies(registry_resource)?;
@@ -470,7 +475,7 @@ impl Compiler<'_> {
                 "$dynamicRef" if modern => {
                     let (target, resolved) = self.reference(context, keyword, value)?;
                     let anchor = resolved.split_once('#').and_then(|(base, fragment)| {
-                        let name = pointer::percent_decode(fragment)?;
+                        let name = percent::decode(fragment).ok()?.into_owned();
                         if name.is_empty() || name.starts_with('/') {
                             return None;
                         }

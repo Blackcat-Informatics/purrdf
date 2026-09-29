@@ -204,11 +204,7 @@ fn entries(snapshot: &str) -> Vec<(&str, &str)> {
 
 /// A bounded prefix of a possibly very long line, for a failure message.
 fn clip(line: &str) -> &str {
-    let mut end = line.len().min(600);
-    while !line.is_char_boundary(end) {
-        end -= 1;
-    }
-    &line[..end]
+    &line[..line.floor_char_boundary(600)]
 }
 
 #[test]

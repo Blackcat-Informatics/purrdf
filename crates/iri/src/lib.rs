@@ -155,9 +155,10 @@ pub mod pos;
 mod resolve;
 
 /// The lexical foundations this crate scans with, re-exported so the paths
-/// `purrdf_iri::terminals`, `purrdf_iri::scan` and `purrdf_iri::json_escape`
+/// `purrdf_iri::terminals`, `purrdf_iri::scan`, `purrdf_iri::json_escape`,
+/// `purrdf_iri::json_pointer` and `purrdf_iri::percent`
 /// name the same items as their home in [`purrdf_lex`].
-pub use purrdf_lex::{json_escape, scan, terminals};
+pub use purrdf_lex::{json_escape, json_pointer, percent, scan, terminals};
 
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
 pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};

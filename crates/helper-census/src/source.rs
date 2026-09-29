@@ -250,6 +250,8 @@ impl Workspace {
                         .extend(crate::rules::std_default_hasher(package, &path, &parsed));
                     self.rule_hits
                         .extend(crate::rules::hex_rules(package, &path, &parsed));
+                    self.rule_hits
+                        .extend(crate::rules::lex_rules(package, &path, &parsed));
                 }
                 Err(error) => self.errors.push(format!("{path}: {error}")),
             }

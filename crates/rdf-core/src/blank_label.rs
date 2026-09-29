@@ -151,7 +151,6 @@
 //! canonical label is legal everywhere and [`encode_blank_label`] is the
 //! identity on it.
 
-use core::cmp::Ordering;
 use std::borrow::Cow;
 
 use crate::BlankScope;
@@ -499,21 +498,12 @@ pub fn is_valid_blank_node_label_prefix(prefix: &str) -> bool {
 /// Implements the exact production `NCName ::= NCNameStartChar NCNameChar*`,
 /// where `NCNameStartChar = NameStartChar - ':'` and `NCNameChar` is
 /// `NCNameStartChar` plus `'-' | '.' | [0-9] | #xB7 | [#x0300-#x036F] |
-/// [#x203F-#x2040]`. `NCNameStartChar` is character-for-character identical
-/// to the Turtle/SPARQL `PN_CHARS_U` alphabet, so this reuses the same
-/// range tables as [`is_valid_blank_node_label`]. Unlike a blank-node label,
-/// an `NCName` MAY end in `.`: the grammar places no restriction on the
-/// final character.
+/// [#x203F-#x2040]`, decided by [`purrdf_iri::terminals::is_ncname`]. Unlike
+/// a blank-node label, an `NCName` MAY end in `.`: the grammar places no
+/// restriction on the final character.
 #[must_use]
 pub fn is_valid_ncname(label: &str) -> bool {
-    let mut chars = label.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !is_pn_chars_u(first) {
-        return false;
-    }
-    chars.all(|ch| is_pn_chars(ch) || ch == '.')
+    purrdf_iri::terminals::is_ncname(label)
 }
 
 /// Whether `label` survives XML 1.0 character data unchanged.
@@ -614,25 +604,9 @@ const PN_CHARS_EXTRA_RANGES: &[CharRange] = &[
     (0x203F, 0x2040), // [#x203F-#x2040]
 ];
 
-/// Binary-search `cp` against a sorted, non-overlapping table of inclusive
-/// ranges.
-fn in_ranges(cp: u32, ranges: &[CharRange]) -> bool {
-    ranges
-        .binary_search_by(|&(lo, hi)| {
-            if cp < lo {
-                Ordering::Greater
-            } else if cp > hi {
-                Ordering::Less
-            } else {
-                Ordering::Equal
-            }
-        })
-        .is_ok()
-}
-
 /// `PN_CHARS_BASE` (== XML `NameStartChar - ':' - '_'`).
 fn is_pn_chars_base(c: char) -> bool {
-    in_ranges(c as u32, PN_CHARS_BASE_RANGES)
+    purrdf_iri::terminals::in_ranges(u32::from(c), PN_CHARS_BASE_RANGES)
 }
 
 /// `PN_CHARS_U ::= PN_CHARS_BASE | '_'` (== `NCNameStartChar`).
@@ -643,7 +617,10 @@ pub(crate) fn is_pn_chars_u(c: char) -> bool {
 /// `PN_CHARS ::= PN_CHARS_U | '-' | [0-9] | #xB7 | [#x300-#x036F] |
 /// [#x203F-#x2040]`.
 pub(crate) fn is_pn_chars(c: char) -> bool {
-    is_pn_chars_u(c) || c == '-' || c.is_ascii_digit() || in_ranges(c as u32, PN_CHARS_EXTRA_RANGES)
+    is_pn_chars_u(c)
+        || c == '-'
+        || c.is_ascii_digit()
+        || purrdf_iri::terminals::in_ranges(u32::from(c), PN_CHARS_EXTRA_RANGES)
 }
 
 #[cfg(test)]

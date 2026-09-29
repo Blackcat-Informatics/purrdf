@@ -41,27 +41,28 @@ packages = [
 rlib_packages = ["purrdf-wasm"]
 
 [[site]]
-id = "memchr.sparql-lex-string"
-summary = "memchr2 kernels behind the SPARQL lexer's string clean-run skip (`Lexer::lex_string`, inlined into `Lexer::lex_one`)"
+id = "lex.find-byte2-sparql-string"
+summary = "`scan::find_byte2`, the two-needle search behind the SPARQL lexer's string clean-run skip (`Lexer::lex_string`, inlined into `Lexer::lex_one`)"
 
-  # x86_64 baseline: memchr's SSE2 kernel. Measured v30.
+  # x86_64 baseline: the SSE2 build of the chunked kernel. The floor was measured v30 on
+  # memchr's kernel, which this search replaces; it is carried unchanged until re-measured.
   [[site.measure]]
   label = "sse2"
   configs = ["x86_64"]
-  crate = "memchr"
-  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_sse2"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
   min_vector_ops = 15
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
   forbid_relaxed = true
 
-  # memchr's AVX2 kernel, selected at run time on the baseline build and the only kernel
-  # emitted when the build already assumes AVX2. Measured v36 (x86_64), v38 (x86_64-v3).
+  # The kernel as the build that assumes AVX2 emits it (there is no run-time dispatch, so
+  # the baseline build carries only the SSE2 form). Measured v36 (x86_64), v38 (x86_64-v3).
   [[site.measure]]
   label = "avx2"
-  configs = ["x86_64", "x86_64-v3"]
-  crate = "memchr"
-  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
   min_vector_ops = 18
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -73,8 +74,8 @@ summary = "memchr2 kernels behind the SPARQL lexer's string clean-run skip (`Lex
   [[site.measure]]
   label = "avx2 (avx512 masks)"
   configs = ["x86_64-v4"]
-  crate = "memchr"
-  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_avx2"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
   min_vector_ops = 8
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -116,15 +117,15 @@ summary = "memchr2 kernels behind the SPARQL lexer's string clean-run skip (`Lex
   forbid_relaxed = true
 
 [[site]]
-id = "memchr.rdf-line-split"
-summary = "memchr2 kernels behind the line-oriented codecs' line split (`split_line_chunks` / `count_line_terminators`, inlined into `parse_lines_parallel`)"
+id = "lex.find-byte2-line-split"
+summary = "`scan::find_byte2`, the two-needle search behind the line-oriented codecs' line split (`split_line_chunks` / `count_line_terminators`, inlined into `parse_lines_parallel`)"
 
-  # x86_64: the same memchr kernels the lexer reaches, by the same run-time dispatch.
+  # x86_64: the same `find_byte2` kernel the lexer reaches.
   [[site.measure]]
   label = "sse2"
   configs = ["x86_64"]
-  crate = "memchr"
-  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_sse2"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
   min_vector_ops = 15
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -132,9 +133,9 @@ summary = "memchr2 kernels behind the line-oriented codecs' line split (`split_l
 
   [[site.measure]]
   label = "avx2"
-  configs = ["x86_64", "x86_64-v3"]
-  crate = "memchr"
-  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_avx2"
+  configs = ["x86_64-v3"]
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
   min_vector_ops = 18
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -143,8 +144,8 @@ summary = "memchr2 kernels behind the line-oriented codecs' line split (`split_l
   [[site.measure]]
   label = "avx2 (avx512 masks)"
   configs = ["x86_64-v4"]
-  crate = "memchr"
-  symbol = "memchr::arch::x86_64::memchr::memchr2_raw::find_avx2"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_byte2"
   min_vector_ops = 8
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -868,15 +869,16 @@ summary = "`SerGraph::sort_canonical`, the serializer's canonical statement sort
   forbid_relaxed = true
 
 [[site]]
-id = "iri.find-first-of"
-summary = "`parse::find_first_of`, the u64 SWAR delimiter scan, inlined into `parse::scan`"
+id = "iri.delimiter-scan"
+summary = "`parse::find_scheme_end`, the IRI component splitter's `:`/`/`/`?`/`#` scan, a `purrdf_lex::scan::ByteClass` kernel compiled out of line"
 
-  # SWAR: the word-at-a-time exit is a trailing-zero count on the match mask.
+  # The hit chunk's offset is a trailing-zero count on the lane mask. The floors and
+  # mnemonics were measured on the SWAR scan this kernel replaces; carried until re-measured.
   [[site.measure]]
   label = "swar"
   configs = ["x86_64"]
   crate = "purrdf_iri"
-  symbol = "purrdf_iri::parse::scan"
+  symbol = "purrdf_iri::parse::find_scheme_end"
   min_vector_ops = 0
   require_mnemonics = ["rep bsfq"]
   max_fma = 0
@@ -886,7 +888,7 @@ summary = "`parse::find_first_of`, the u64 SWAR delimiter scan, inlined into `pa
   label = "swar"
   configs = ["x86_64-v3", "x86_64-v4"]
   crate = "purrdf_iri"
-  symbol = "purrdf_iri::parse::scan"
+  symbol = "purrdf_iri::parse::find_scheme_end"
   min_vector_ops = 0
   require_mnemonics = ["tzcntq"]
   max_fma = 0
@@ -896,7 +898,7 @@ summary = "`parse::find_first_of`, the u64 SWAR delimiter scan, inlined into `pa
   label = "swar"
   configs = ["aarch64", "aarch64-neoverse-v1"]
   crate = "purrdf_iri"
-  symbol = "purrdf_iri::parse::scan"
+  symbol = "purrdf_iri::parse::find_scheme_end"
   min_vector_ops = 0
   require_mnemonics = ["rbit", "clz"]
   max_fma = 0
@@ -906,7 +908,7 @@ summary = "`parse::find_first_of`, the u64 SWAR delimiter scan, inlined into `pa
   label = "swar"
   configs = ["wasm32", "wasm32-simd128"]
   crate = "purrdf_iri"
-  symbol = "purrdf_iri::parse::scan"
+  symbol = "purrdf_iri::parse::find_scheme_end"
   min_vector_ops = 0
   require_mnemonics = ["i64.ctz"]
   max_fma = 0
@@ -6005,15 +6007,15 @@ summary = "`projections::carrier::project_archive`, the carrier projections (CSV
 
 
 [[site]]
-id = "rdf.csvw-percent-encode"
-summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW URI-template expansions: each plain run found by a `ByteClass` scan of the bytes the expansion encodes (`find_first_reserved_escape`, `find_first_unreserved_escape`), both inlined into `expand_url`"
+id = "lex.percent-encode"
+summary = "`percent::URI_TEMPLATE_RESERVED` and `percent::UNRESERVED`, the RFC 6570 reserved and simple expansions: each plain run found by a `ByteClass` scan of the bytes the set encodes (`uri_template_reserved_escape`, `unreserved_escape`)"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v22.
   [[site.measure]]
   label = "reserved sse2"
   configs = ["x86_64"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::uri_template_reserved_escape"
   min_vector_ops = 11
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -6023,8 +6025,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "reserved avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::uri_template_reserved_escape"
   min_vector_ops = 10
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -6034,8 +6036,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "reserved avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::uri_template_reserved_escape"
   min_vector_ops = 4
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -6045,8 +6047,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "reserved neon"
   configs = ["aarch64"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::uri_template_reserved_escape"
   min_vector_ops = 9
   require_mnemonics = ["cmeq .16b"]
   max_fma = 0
@@ -6056,8 +6058,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "reserved sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::uri_template_reserved_escape"
   min_vector_ops = 6
   require_mnemonics = ["cmpeq"]
   max_fma = 0
@@ -6067,8 +6069,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "reserved scalar"
   configs = ["wasm32"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::uri_template_reserved_escape"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -6077,8 +6079,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "reserved simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_reserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::uri_template_reserved_escape"
   min_vector_ops = 8
   require_mnemonics = ["i8x16.eq"]
   max_fma = 0
@@ -6088,8 +6090,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "simple sse2"
   configs = ["x86_64"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::unreserved_escape"
   min_vector_ops = 12
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -6099,8 +6101,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "simple avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::unreserved_escape"
   min_vector_ops = 12
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -6110,8 +6112,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "simple avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::unreserved_escape"
   min_vector_ops = 5
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -6121,8 +6123,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "simple neon"
   configs = ["aarch64"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::unreserved_escape"
   min_vector_ops = 9
   require_mnemonics = ["cmeq .16b"]
   max_fma = 0
@@ -6132,8 +6134,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "simple sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::unreserved_escape"
   min_vector_ops = 7
   require_mnemonics = ["cmpeq"]
   max_fma = 0
@@ -6143,8 +6145,8 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "simple scalar"
   configs = ["wasm32"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::unreserved_escape"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -6153,14 +6155,18 @@ summary = "`csvw::rdf::percent_encode_reserved` and `percent_encode`, the CSVW U
   [[site.measure]]
   label = "simple simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_rdf"
-  symbol = "purrdf_rdf::projections::csvw::rdf::find_first_unreserved_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::percent::unreserved_escape"
   min_vector_ops = 9
   require_mnemonics = ["i8x16.eq"]
   max_fma = 0
   forbid_relaxed = true
 
-  # The template driver: both expansions and `push_percent_encoded` inline into it; a scan call, a run copy and a `%XX` push per stop, scalar by nature.
+[[site]]
+id = "rdf.csvw-uri-template"
+summary = "`csvw::rdf::expand_url`, the CSVW URI-template driver over the `purrdf_lex::percent` expansions"
+
+  # The template driver: a `percent::push_encoded` call per expression, whose scan, run copy and `%XX` push per stop are scalar by nature.
   [[site.measure]]
   label = "call site"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]

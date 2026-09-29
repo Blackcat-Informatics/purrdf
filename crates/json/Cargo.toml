@@ -22,6 +22,9 @@ purrdf-core.workspace = true
 # The workspace root: the profile and document identity preimages open under
 # registered `purrdf_hash::Domain` constants.
 purrdf-hash.workspace = true
+# The one JSON string-escape decoder and RFC 6901 token escape every PurRDF JSON
+# reader shares.
+purrdf-lex.workspace = true
 
 [dev-dependencies]
 # The workspace's shared counting allocator, for the `ordered_json_alloc` bench

@@ -53,10 +53,10 @@ fn parse_blocks_txt(text: &str) -> Vec<RawBlock> {
         let Some((lo_str, hi_str)) = range.trim().split_once("..") else {
             panic!("Blocks.txt range has no `..` separator: {line:?}");
         };
-        let lo = u32::from_str_radix(lo_str.trim(), 16)
-            .unwrap_or_else(|err| panic!("bad start codepoint {lo_str:?} in {line:?}: {err}"));
-        let hi = u32::from_str_radix(hi_str.trim(), 16)
-            .unwrap_or_else(|err| panic!("bad end codepoint {hi_str:?} in {line:?}: {err}"));
+        let lo = purrdf_hash::hex::parse_u32(lo_str.trim().as_bytes())
+            .unwrap_or_else(|| panic!("bad start codepoint {lo_str:?} in {line:?}"));
+        let hi = purrdf_hash::hex::parse_u32(hi_str.trim().as_bytes())
+            .unwrap_or_else(|| panic!("bad end codepoint {hi_str:?} in {line:?}"));
         blocks.push(RawBlock {
             lo,
             hi,

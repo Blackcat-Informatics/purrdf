@@ -3439,45 +3439,6 @@ pub(crate) fn substitute_path_placeholder<'q>(
 
 // ── Helper functions ───────────────────────────────────────────────────────────
 
-/// Apply the `whiteSpace` = `collapse` normalization every XSD atomic datatype
-/// below fixes, as far as a one-token lexical space can observe it.
-///
-/// XSD 1.1 Part 2 §4.3.6 defines the two steps `collapse` performs:
-///
-/// > `replace` — All occurrences of `#x9` (tab), `#xA` (line feed) and `#xD`
-/// > (carriage return) are replaced with `#x20` (space).
-/// >
-/// > `collapse` — After the processing implied by `replace`, contiguous
-/// > sequences of `#x20`s are collapsed to a single `#x20`, and any `#x20` at
-/// > the start or end of the string are then removed.
-///
-/// So the whole normalization quantifies over exactly four code points — the
-/// same four as XML `S`, "`S ::= (#x20 | #x9 | #xD | #xA)+`" (XML 1.0 5e §2.3
-/// `[3]`) — and [`purrdf_iri::terminals::is_ws_char`] is that class.
-///
-/// # Why trimming is the whole of `collapse` for these datatypes
-///
-/// `collapse` also squeezes INTERNAL runs, which this does not. That is sound
-/// here and only here: every lexical space this helper feeds
-/// (`xsd:integer`, `xsd:decimal`, `xsd:double`, `xsd:float`, `xsd:boolean`) is a
-/// single token containing no `#x20` at all, so an internal run survives
-/// `collapse` as one `#x20` and is refused by the token grammar either way. The
-/// verdict is identical; only the trimming is observable.
-///
-/// # The direction of the error this replaces
-///
-/// These sites called [`str::trim`], which trims the Unicode `White_Space`
-/// property — twenty-six code points where the datatype names four. That is
-/// **over-acceptance**: a SHACL validator handed `"\u{A0}42"` as an
-/// `xsd:integer` stripped the NO-BREAK SPACE and reported a conforming typed
-/// literal, though U+00A0 is not touched by `replace` or `collapse` and the
-/// value is not in `xsd:integer`'s lexical space at all. `sh:datatype`
-/// conformance is a claim about the datatype, so accepting a literal the
-/// datatype refuses makes the report wrong, not merely lenient.
-fn collapse_trim(s: &str) -> &str {
-    s.trim_matches(purrdf_iri::terminals::is_ws_char)
-}
-
 /// `xsd:integer` lexical space: optional sign then one-or-more ASCII digits.
 /// Unbounded — no native-int overflow.
 ///
@@ -3485,7 +3446,7 @@ fn collapse_trim(s: &str) -> &str {
 /// the lexical form is trimmed with [`collapse_trim`] and not with
 /// [`str::trim`].
 fn is_xsd_integer_lexical(s: &str) -> bool {
-    let s = collapse_trim(s);
+    let s = purrdf_iri::terminals::trim_ws(s);
     let digits = s.strip_prefix(['+', '-']).unwrap_or(s);
     !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
 }
@@ -3496,7 +3457,7 @@ fn is_xsd_integer_lexical(s: &str) -> bool {
 /// `xsd:decimal` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.3), so the
 /// lexical form is trimmed with [`collapse_trim`] and not with [`str::trim`].
 fn is_xsd_decimal_lexical(s: &str) -> bool {
-    let s = collapse_trim(s);
+    let s = purrdf_iri::terminals::trim_ws(s);
     let body = s.strip_prefix(['+', '-']).unwrap_or(s);
     if body.is_empty() {
         return false;
@@ -3586,13 +3547,16 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
         // they are trimmed with the four code points `collapse` names and not
         // with `str::trim`'s Unicode `White_Space` property.
         "http://www.w3.org/2001/XMLSchema#double" => {
-            purrdf_xsd::parse_double_xsd10(collapse_trim(lex)).is_ok()
+            purrdf_xsd::parse_double_xsd10(purrdf_iri::terminals::trim_ws(lex)).is_ok()
         }
         "http://www.w3.org/2001/XMLSchema#float" => {
-            purrdf_xsd::parse_float_xsd10(collapse_trim(lex)).is_ok()
+            purrdf_xsd::parse_float_xsd10(purrdf_iri::terminals::trim_ws(lex)).is_ok()
         }
         "http://www.w3.org/2001/XMLSchema#boolean" => {
-            matches!(collapse_trim(lex), "true" | "false" | "1" | "0")
+            matches!(
+                purrdf_iri::terminals::trim_ws(lex),
+                "true" | "false" | "1" | "0"
+            )
         }
         _ => true,
     }
@@ -3611,7 +3575,7 @@ fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> boo
     // applied: two trims of one lexical form that disagreed about the class
     // would let a value pass the lexical gate and then be re-read differently by
     // the bound check.
-    let trimmed = collapse_trim(lex);
+    let trimmed = purrdf_iri::terminals::trim_ws(lex);
     // For sign-constrained but unbounded types, fall back to a lexical sign check
     // when the magnitude exceeds i128 (astronomically large; never in practice).
     let value = trimmed.parse::<i128>().ok();
@@ -3918,7 +3882,7 @@ fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
         // Every datatype listed above fixes `whiteSpace` = `collapse`, so the
         // lexical form is trimmed with the four code points that names — see
         // [`collapse_trim`].
-        collapse_trim(lexical).parse::<f64>().ok()
+        purrdf_iri::terminals::trim_ws(lexical).parse::<f64>().ok()
     } else {
         None
     }
@@ -4003,8 +3967,10 @@ fn temporal_parts_cmp(
     }
     // The three datatypes fix `whiteSpace` = `collapse`; a lexical form with an
     // interior space is not one, so the collapse is the trim.
-    let va = purrdf_xsd::parse_by_iri(collapse_trim(a_lexical), a_datatype).ok()??;
-    let vb = purrdf_xsd::parse_by_iri(collapse_trim(b_lexical), b_datatype).ok()??;
+    let va =
+        purrdf_xsd::parse_by_iri(purrdf_iri::terminals::trim_ws(a_lexical), a_datatype).ok()??;
+    let vb =
+        purrdf_xsd::parse_by_iri(purrdf_iri::terminals::trim_ws(b_lexical), b_datatype).ok()??;
     purrdf_xsd::value_cmp(&va, &vb)
 }
 
@@ -4350,7 +4316,7 @@ fn compare_literal_views(
     if da == XSD_BOOLEAN && db == XSD_BOOLEAN {
         // `xsd:boolean` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.2),
         // so the lexical form is trimmed with [`collapse_trim`].
-        let bool_of = |lex: &str| match collapse_trim(lex) {
+        let bool_of = |lex: &str| match purrdf_iri::terminals::trim_ws(lex) {
             "true" | "1" => Some(true),
             "false" | "0" => Some(false),
             _ => None,
@@ -5858,15 +5824,15 @@ mod tests {
             let named = matches!(c, '\u{20}' | '\u{9}' | '\u{D}' | '\u{A}');
             let padded = format!("{c}x{c}");
             assert_eq!(
-                collapse_trim(&padded) == "x",
+                purrdf_iri::terminals::trim_ws(&padded) == "x",
                 named,
                 "{c:?} ({cp:#06X}) must be stripped iff whiteSpace=collapse names it"
             );
         }
-        assert_eq!(collapse_trim(" \t\r\n42\n\r\t "), "42");
-        assert_eq!(collapse_trim("4 2"), "4 2");
-        assert_eq!(collapse_trim(""), "");
-        assert_eq!(collapse_trim("   "), "");
+        assert_eq!(purrdf_iri::terminals::trim_ws(" \t\r\n42\n\r\t "), "42");
+        assert_eq!(purrdf_iri::terminals::trim_ws("4 2"), "4 2");
+        assert_eq!(purrdf_iri::terminals::trim_ws(""), "");
+        assert_eq!(purrdf_iri::terminals::trim_ws("   "), "");
     }
 
     /// XSD lexical spaces are trimmed with the four code points

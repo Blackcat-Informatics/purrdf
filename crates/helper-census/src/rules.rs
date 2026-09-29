@@ -50,6 +50,23 @@
 //!   string of the sixteen digits in order or as a bracketed array of them.
 //!   Unlike the other rules it is exempt inside the job's home package, which
 //!   holds the vector kernels' lookup tables.
+//!
+//! Three rules hold the lexical terminals to their home, `purrdf_lex`. Each is
+//! checked over shipping code only: an item under `#[test]` or a `#[cfg]` that
+//! needs `cfg(test)`, and every file under a `tests`, `benches` or `examples`
+//! directory, may spell the pattern, because a test that pins a trap has to
+//! name it.
+//!
+//! * `grammar-ws`: `is_ascii_whitespace`, called as a method or named as a
+//!   path. It admits U+000C FORM FEED, which no grammar's `WS` names, and
+//!   refuses U+000B; read `WS` through `purrdf_lex::terminals`.
+//! * `json-pointer-escape`: the string literal `"~0"` or `"~1"` on its own,
+//!   the RFC 6901 escape spelled outside `purrdf_lex::json_pointer`. Exempt
+//!   inside the job's home package.
+//! * `hex-digit-radix`: `.to_digit(16)`, or `from_str_radix(_, 16)` into any
+//!   integer type but `u8` (which is `hex-pair-radix`): a hex digit or code
+//!   point read past `purrdf_hash::hex::nibble`, and `from_str_radix` accepts a
+//!   leading `+` that no grammar's `HEX` does.
 
 use std::collections::BTreeSet;
 
@@ -76,13 +93,22 @@ pub(crate) const HEX_FORMAT_LOOP: &str = "rule:hex-format-loop";
 pub(crate) const HEX_PAIR_RADIX: &str = "rule:hex-pair-radix";
 /// A hex-digit table outside the home package.
 pub(crate) const HEX_TABLE: &str = "rule:hex-table";
+/// `is_ascii_whitespace` in shipping code.
+pub(crate) const GRAMMAR_WS: &str = "rule:grammar-ws";
+/// The RFC 6901 escape `"~0"`/`"~1"` spelled as a literal in shipping code.
+pub(crate) const JSON_POINTER_ESCAPE: &str = "rule:json-pointer-escape";
+/// `.to_digit(16)` or a wide `from_str_radix(_, 16)` in shipping code.
+pub(crate) const HEX_DIGIT_RADIX: &str = "rule:hex-digit-radix";
 
 /// Every rule the census computes itself.
-pub(crate) const RULES: [&str; 4] = [
+pub(crate) const RULES: [&str; 7] = [
     STD_DEFAULT_HASHER,
     HEX_FORMAT_LOOP,
     HEX_PAIR_RADIX,
     HEX_TABLE,
+    GRAMMAR_WS,
+    JSON_POINTER_ESCAPE,
+    HEX_DIGIT_RADIX,
 ];
 
 /// The formatting macros whose format string `hex-format-loop` reads.
@@ -691,6 +717,208 @@ pub(crate) fn hex_rules(package: &str, file: &str, parsed: &syn::File) -> Vec<Ru
     visitor.hits
 }
 
+/// The visitor for the three lexical-terminal rules, over shipping code.
+struct LexRules<'a> {
+    package: &'a str,
+    file: &'a str,
+    scope: Vec<String>,
+    /// How many test-only items enclose the current node.
+    in_test: usize,
+    hits: Vec<RuleHit>,
+}
+
+impl LexRules<'_> {
+    fn hit(&mut self, rule: &'static str, line: usize, detail: &str) {
+        if self.in_test > 0 {
+            return;
+        }
+        let mut symbol = self.file.to_owned();
+        for scope in &self.scope {
+            symbol.push_str("::");
+            symbol.push_str(scope);
+        }
+        self.hits.push(RuleHit {
+            rule,
+            package: self.package.to_owned(),
+            file: self.file.to_owned(),
+            line,
+            symbol,
+            detail: detail.to_owned(),
+            home_exempt: rule == JSON_POINTER_ESCAPE,
+        });
+    }
+
+    fn item(&mut self, name: String, attrs: &[syn::Attribute], walk: impl FnOnce(&mut Self)) {
+        let test = crate::source::is_test_only(attrs);
+        self.in_test += usize::from(test);
+        self.scope.push(name);
+        walk(self);
+        self.scope.pop();
+        self.in_test -= usize::from(test);
+    }
+}
+
+/// Whether `expression` is the integer literal `16`.
+fn is_sixteen(expression: &syn::Expr) -> bool {
+    matches!(expression, syn::Expr::Lit(syn::ExprLit { lit: syn::Lit::Int(radix), .. }) if radix.base10_digits() == "16")
+}
+
+const GRAMMAR_WS_DETAIL: &str = "`is_ascii_whitespace` admits U+000C FORM FEED, which no grammar's `WS` names; \
+     read `WS` through purrdf_lex::terminals (`is_ws`, `skip_ws`, `trim_ws`)";
+const HEX_DIGIT_DETAIL: &str = "a radix-16 digit read outside purrdf_hash::hex (`nibble`, `parse_u32`); \
+     `from_str_radix` accepts a leading `+`";
+
+impl<'ast> Visit<'ast> for LexRules<'_> {
+    fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        let method = node.method.to_string();
+        if method == "is_ascii_whitespace" {
+            self.hit(
+                GRAMMAR_WS,
+                node.method.span().start().line,
+                GRAMMAR_WS_DETAIL,
+            );
+        }
+        if method == "to_digit" && node.args.len() == 1 && node.args.first().is_some_and(is_sixteen)
+        {
+            self.hit(
+                HEX_DIGIT_RADIX,
+                node.method.span().start().line,
+                HEX_DIGIT_DETAIL,
+            );
+        }
+        syn::visit::visit_expr_method_call(self, node);
+    }
+
+    fn visit_expr_path(&mut self, node: &'ast syn::ExprPath) {
+        if node
+            .path
+            .segments
+            .last()
+            .is_some_and(|segment| segment.ident == "is_ascii_whitespace")
+        {
+            self.hit(
+                GRAMMAR_WS,
+                node.path
+                    .segments
+                    .last()
+                    .map_or(0, |segment| segment.ident.span().start().line),
+                GRAMMAR_WS_DETAIL,
+            );
+        }
+        syn::visit::visit_expr_path(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(function) = node.func.as_ref() {
+            let segments: Vec<String> = function
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            let names_u8 = segments.len() >= 2 && segments[segments.len() - 2] == "u8";
+            if !names_u8
+                && segments.last().is_some_and(|last| last == "from_str_radix")
+                && node.args.len() == 2
+                && node.args.iter().nth(1).is_some_and(is_sixteen)
+            {
+                let line = function
+                    .path
+                    .segments
+                    .last()
+                    .map_or(0, |segment| segment.ident.span().start().line);
+                self.hit(HEX_DIGIT_RADIX, line, HEX_DIGIT_DETAIL);
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
+        // Spelled as bytes, so this rule does not match itself.
+        if matches!(node.value().as_bytes(), [b'~', b'0' | b'1']) {
+            self.hit(
+                JSON_POINTER_ESCAPE,
+                node.span().start().line,
+                "the RFC 6901 escape spelled outside purrdf_lex::json_pointer; escape and read \
+                 reference tokens through it",
+            );
+        }
+    }
+
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        if let Ok(arguments) = node.parse_body_with(
+            syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+        ) {
+            for argument in &arguments {
+                self.visit_expr(argument);
+            }
+        }
+        syn::visit::visit_macro(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        self.item(node.sig.ident.to_string(), &node.attrs, |this| {
+            syn::visit::visit_item_fn(this, node);
+        });
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        self.item(node.sig.ident.to_string(), &node.attrs, |this| {
+            syn::visit::visit_impl_item_fn(this, node);
+        });
+    }
+
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        self.item(node.ident.to_string(), &node.attrs, |this| {
+            syn::visit::visit_item_mod(this, node);
+        });
+    }
+
+    fn visit_item_impl(&mut self, node: &'ast syn::ItemImpl) {
+        let test = crate::source::is_test_only(&node.attrs);
+        self.in_test += usize::from(test);
+        syn::visit::visit_item_impl(self, node);
+        self.in_test -= usize::from(test);
+    }
+
+    fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
+        self.item(node.ident.to_string(), &node.attrs, |this| {
+            syn::visit::visit_item_const(this, node);
+        });
+    }
+
+    fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
+        self.item(node.ident.to_string(), &node.attrs, |this| {
+            syn::visit::visit_item_static(this, node);
+        });
+    }
+}
+
+/// Whether `file` sits under a `tests`, `benches` or `examples` directory.
+fn is_test_file(file: &str) -> bool {
+    file.split('/')
+        .rev()
+        .skip(1)
+        .any(|directory| matches!(directory, "tests" | "benches" | "examples"))
+}
+
+/// Every `grammar-ws`, `json-pointer-escape` and `hex-digit-radix` hit in one
+/// parsed file of shipping code.
+pub(crate) fn lex_rules(package: &str, file: &str, parsed: &syn::File) -> Vec<RuleHit> {
+    if is_test_file(file) {
+        return Vec::new();
+    }
+    let mut visitor = LexRules {
+        package,
+        file,
+        scope: Vec::new(),
+        in_test: 0,
+        hits: Vec::new(),
+    };
+    visitor.visit_file(parsed);
+    visitor.hits
+}
+
 #[cfg(test)]
 mod tests {
     use super::std_default_hasher;
@@ -809,5 +1037,49 @@ fn f(bytes: &[u8], out: &mut String) {
                 (super::HEX_TABLE, 4),
             ]
         );
+    }
+
+    fn lex_lines(file: &str, source: &str) -> Vec<(&'static str, usize)> {
+        let parsed = syn::parse_file(source).expect("fixture parses");
+        super::lex_rules("p", file, &parsed)
+            .iter()
+            .map(|hit| (hit.rule, hit.line))
+            .collect()
+    }
+
+    #[test]
+    fn the_lexical_rules_fire_in_shipping_code_and_not_in_tests() {
+        let source = "\
+fn f(b: u8, c: char, s: &str) -> bool {
+    let _ = b.is_ascii_whitespace();
+    let _ = s.bytes().all(|b| b.is_ascii_whitespace() || b == 0);
+    let _ = s.bytes().any(u8::is_ascii_whitespace);
+    let _ = c.to_digit(16);
+    let _ = c.to_digit(10);
+    let _ = u32::from_str_radix(s, 16);
+    let _ = u32::from_str_radix(s, 10);
+    let _ = s.replace('~', \"~0\");
+    let _ = \"a~0b\";
+    true
+}
+#[cfg(test)]
+mod tests {
+    fn g(b: u8) -> bool { b.is_ascii_whitespace() && \"~1\".is_empty() }
+}
+#[test]
+fn h() { let _ = char::from(0).to_digit(16); }
+";
+        assert_eq!(
+            lex_lines("crates/p/src/lib.rs", source),
+            vec![
+                (super::GRAMMAR_WS, 2),
+                (super::GRAMMAR_WS, 3),
+                (super::GRAMMAR_WS, 4),
+                (super::HEX_DIGIT_RADIX, 5),
+                (super::HEX_DIGIT_RADIX, 7),
+                (super::JSON_POINTER_ESCAPE, 9),
+            ]
+        );
+        assert_eq!(lex_lines("crates/p/tests/it.rs", source), Vec::new());
     }
 }

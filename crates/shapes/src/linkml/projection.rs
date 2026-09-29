@@ -611,10 +611,7 @@ fn collision_name(base: &str, source: &str, ordinal: usize) -> Result<String, Li
             "LinkML prefix {prefix:?} leaves no local-name byte within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
         )));
     }
-    let mut end = local.len().min(local_budget);
-    while !local.is_char_boundary(end) {
-        end -= 1;
-    }
+    let end = local.floor_char_boundary(local_budget);
     if end == 0 {
         return Err(LinkmlError::new(format!(
             "LinkML prefix {prefix:?} leaves no complete local-name character within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"

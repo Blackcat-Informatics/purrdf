@@ -19,7 +19,8 @@
 
 use std::borrow::Cow;
 
-use purrdf_iri::terminals;
+use purrdf_lex::scan::{find_byte, find_byte2};
+use purrdf_lex::terminals;
 
 use crate::error::{ParseError, Result};
 
@@ -186,7 +187,7 @@ pub fn tokenize_with(input: &str, options: LexerOptions) -> Result<Vec<Spanned<'
 /// advances by whole chars). Working directly on the source bytes avoids the
 /// `char_indices().collect()` full-input materialization the prior cursor paid up
 /// front, and lets the hot scans (string body, `IRIREF` end, comment tails) run
-/// through `memchr`. Token spans are byte offsets, so `pos` *is* the span cursor.
+/// through the chunked byte scans of [`purrdf_lex::scan`]. Token spans are byte offsets, so `pos` *is* the span cursor.
 struct Lexer<'a> {
     src: &'a str,
     bytes: &'a [u8],
@@ -267,7 +268,7 @@ impl<'a> Lexer<'a> {
 
     /// Skip `WS` and `#` line comments. A whitespace run is skipped with one
     /// [`terminals::find_first_trivia`] — a chunked scan that tests sixteen bytes
-    /// at a time — and a comment tail with a single `memchr` to the newline,
+    /// at a time — and a comment tail with a single [`find_byte`] to the newline,
     /// rather than a per-byte walk for either.
     ///
     /// The whitespace test is [`terminals::is_ws`] — the grammar's
@@ -299,7 +300,7 @@ impl<'a> Lexer<'a> {
             if self.byte_at(0) != Some(b'#') {
                 break;
             }
-            match memchr::memchr(b'\n', &self.bytes[self.pos..]) {
+            match find_byte(&self.bytes[self.pos..], b'\n') {
                 // Consume through the newline (byte-identical to the prior
                 // per-char loop, which broke AFTER pushing past '\n').
                 Some(rel) => self.pos += rel + 1,
@@ -477,21 +478,12 @@ impl<'a> Lexer<'a> {
         Ok(self.two_or_one('<', Token::TripleOpen, '=', Token::LtEq, Token::Lt))
     }
 
-    /// Read a `\uXXXX` / `\UXXXXXXXX` escape starting at byte offset `i` (the `\`).
-    /// Returns `(bytes_consumed, decoded_char)`. The escape is all-ASCII, so the
-    /// byte count equals the char count.
+    /// Read the `UCHAR` escape whose backslash is at byte offset `i`:
+    /// `(bytes consumed, decoded char)`, through [`terminals::decode_uchar`].
     fn read_uchar(&self, i: usize) -> Option<(usize, char)> {
-        let width = match *self.bytes.get(i + 1)? {
-            b'u' => 4,
-            b'U' => 8,
-            _ => return None,
-        };
-        let mut value: u32 = 0;
-        for k in 0..width {
-            value = value * 16 + char::from(*self.bytes.get(i + 2 + k)?).to_digit(16)?;
-        }
-        let decoded = char::from_u32(value)?;
-        Some((2 + width, decoded))
+        terminals::decode_uchar(&self.bytes[i..])
+            .ok()
+            .map(|(decoded, consumed)| (consumed, decoded))
     }
 
     fn lex_string(&mut self, quote: char, start: usize) -> Result<Token<'a>> {
@@ -516,17 +508,17 @@ impl<'a> Lexer<'a> {
         }
         let mut value = String::new();
         loop {
-            // memchr-forward over the clean run to the next interesting byte: the
+            // Scan forward over the clean run to the next interesting byte: the
             // quote or a `\` escape (both forms), plus a raw CR/LF for the short form
             // (which forbids them). The skipped bytes are literal content, copied
             // wholesale in one `push_str` instead of char by char.
             let tail = &self.bytes[self.pos..];
             let stop = if long {
-                memchr::memchr2(quote_byte, b'\\', tail)
+                find_byte2(tail, quote_byte, b'\\')
             } else {
                 min_opt(
-                    memchr::memchr2(quote_byte, b'\\', tail),
-                    memchr::memchr2(b'\n', b'\r', tail),
+                    find_byte2(tail, quote_byte, b'\\'),
+                    find_byte2(tail, b'\n', b'\r'),
                 )
             };
             let Some(stop) = stop else {
@@ -536,21 +528,20 @@ impl<'a> Lexer<'a> {
                 value.push_str(&self.src[self.pos..self.pos + stop]);
                 self.pos += stop;
             }
-            let c = self.cur().expect("memchr stop is a byte within the source");
+            let c = self
+                .cur()
+                .expect("the scan stop is a byte within the source");
             if c == '\\' {
                 self.pos += 1;
                 let Some(esc) = self.cur() else {
                     return Err(ParseError::lex("unterminated escape", start));
                 };
+                if let Some(decoded) = u8::try_from(esc).ok().and_then(terminals::echar_value) {
+                    value.push(decoded);
+                    self.pos += 1; // the escape char is ASCII
+                    continue;
+                }
                 match esc {
-                    't' => value.push('\t'),
-                    'n' => value.push('\n'),
-                    'r' => value.push('\r'),
-                    'b' => value.push('\u{0008}'),
-                    'f' => value.push('\u{000C}'),
-                    '"' => value.push('"'),
-                    '\'' => value.push('\''),
-                    '\\' => value.push('\\'),
                     'u' | 'U' => {
                         // Re-decode via read_uchar starting at the backslash.
                         let bs = self.pos - 1;
@@ -565,8 +556,6 @@ impl<'a> Lexer<'a> {
                         return Err(ParseError::lex(format!("bad escape \\{other}"), start));
                     }
                 }
-                self.pos += 1; // the escape char is ASCII
-                continue;
             }
             if c == quote {
                 if long {
@@ -609,7 +598,7 @@ impl<'a> Lexer<'a> {
                 // Long form: scan to the next quote or `\`. A `\` forces the owned
                 // path; a quote closes only when it is a `"""` / `'''` triple —
                 // a lone quote is literal content, so scanning continues past it.
-                let rel = memchr::memchr2(quote_byte, b'\\', tail)?;
+                let rel = find_byte2(tail, quote_byte, b'\\')?;
                 let at = p + rel;
                 if self.bytes[at] == b'\\' {
                     return None;
@@ -623,8 +612,8 @@ impl<'a> Lexer<'a> {
             } else {
                 // Short form: stop at the quote, a `\`, or a raw CR/LF (forbidden).
                 let stop = min_opt(
-                    memchr::memchr2(quote_byte, b'\\', tail),
-                    memchr::memchr2(b'\n', b'\r', tail),
+                    find_byte2(tail, quote_byte, b'\\'),
+                    find_byte2(tail, b'\n', b'\r'),
                 )?;
                 let at = p + stop;
                 if self.bytes[at] == quote_byte {
@@ -1056,7 +1045,7 @@ impl<'a> Lexer<'a> {
     }
 }
 
-/// The smaller of two optional offsets — the earliest of two `memchr` hits, or
+/// The smaller of two optional offsets — the earliest of two scan hits, or
 /// whichever is present, or `None` when neither matched.
 fn min_opt(a: Option<usize>, b: Option<usize>) -> Option<usize> {
     match (a, b) {
@@ -1251,7 +1240,7 @@ impl<'a> Lexer<'a> {
         loop {
             match self.byte_at(0) {
                 Some(b) if terminals::is_ws(b) => self.pos += 1,
-                Some(b'#') => match memchr::memchr(b'\n', &self.bytes[self.pos..]) {
+                Some(b'#') => match find_byte(&self.bytes[self.pos..], b'\n') {
                     Some(rel) => self.pos += rel + 1,
                     None => self.pos = self.bytes.len(),
                 },
@@ -1260,11 +1249,11 @@ impl<'a> Lexer<'a> {
         }
     }
 
-    /// The three-pass `IRIREF` scan: `memchr` to `>`, a backslash scan, then a
+    /// The three-pass `IRIREF` scan: a needle search to `>`, a backslash scan, then a
     /// forbidden-byte scan.
     fn lex_lt_or_iri_reference(&mut self) -> Result<Token<'a>> {
         let body_start = self.pos + 1;
-        if let Some(rel) = memchr::memchr(b'>', &self.bytes[body_start..]) {
+        if let Some(rel) = find_byte(&self.bytes[body_start..], b'>') {
             let end = body_start + rel;
             let body = &self.src[body_start..end];
             if !body.as_bytes().contains(&b'\\') {
@@ -2903,123 +2892,5 @@ mod tests {
                 Token::Word("sarif"),
             ]
         );
-    }
-}
-
-/// The frozen UCHAR/ECHAR decoding vectors, replayed against the SPARQL/Turtle lexer's UCHAR reader and string-literal escapes.
-#[cfg(test)]
-mod escape_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str};
-
-    const ESCAPES: &str = include_str!("../../lex/tests/vectors/escape_vectors.txt");
-    const SCALARS: &str = include_str!("../../lex/tests/vectors/uchar_scalar_vectors.txt");
-
-    /// The escape at the start of `input`, read by the string-literal scanner: the
-    /// literal's first scalar and the input bytes the escape spanned.
-    fn literal(input: &str) -> Option<(char, usize)> {
-        let text = format!("\"{input}\"");
-        let tokens = super::tokenize(&text).ok()?;
-        let [only] = tokens.as_slice() else {
-            return None;
-        };
-        let super::Token::StringLit(value) = &only.token else {
-            return None;
-        };
-        let first = value.chars().next()?;
-        Some((first, input.len() - (value.len() - first.len_utf8())))
-    }
-
-    fn show(decoded: Option<(char, usize)>) -> String {
-        decoded.map_or_else(
-            || "-".to_owned(),
-            |(c, n)| format!("{:04X}/{n}", u32::from(c)),
-        )
-    }
-
-    fn uchar(input: &str) -> String {
-        show(super::Lexer::new(input).read_uchar(0).map(|(n, c)| (c, n)))
-    }
-
-    fn string(input: &str) -> String {
-        show(literal(input))
-    }
-
-    /// Whether this copy is known to answer `input` differently from the vectors.
-    fn skipped(input: &str) -> bool {
-        let _ = input;
-        false
-    }
-
-    #[test]
-    fn escapes_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(ESCAPES).expect("escape_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let input = decode_str(record.fields[0]).expect("an encoded input");
-            if skipped(&input) {
-                continue;
-            }
-            assert_eq!(uchar(&input), record.fields[1], "UCHAR {input:?}");
-            assert_eq!(string(&input), record.fields[2], "string escape {input:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
-    }
-
-    #[test]
-    fn every_scalar_replays_the_frozen_digests() {
-        let file = VectorFile::parse(SCALARS).expect("uchar_scalar_vectors.txt");
-        for record in file.records() {
-            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
-            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
-            let answers = (first..=last).map(|cp| {
-                let text = match (record.fields[0], record.fields[1]) {
-                    ("u", "upper") => format!("\\u{cp:04X}"),
-                    ("u", _) => format!("\\u{cp:04x}"),
-                    (_, "upper") => format!("\\U{cp:08X}"),
-                    _ => format!("\\U{cp:08x}"),
-                };
-                uchar(&text)
-            });
-            assert_eq!(
-                answer_digest(answers),
-                record.fields[4],
-                "{:?}",
-                record.fields
-            );
-        }
-    }
-}
-
-/// The frozen first-needle vectors, replayed against the `memchr` searches the lexer calls.
-#[cfg(test)]
-mod find_byte_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, decode_bytes};
-
-    const FIND: &str = include_str!("../../lex/tests/vectors/find_byte_vectors.txt");
-
-    fn find(needles: &[u8], hay: &[u8]) -> Option<usize> {
-        match needles {
-            [a] => memchr::memchr(*a, hay),
-            [a, b] => memchr::memchr2(*a, *b, hay),
-            _ => unreachable!("one or two needles"),
-        }
-    }
-
-    #[test]
-    fn needle_scans_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(FIND).expect("find_byte_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let needles = decode_bytes(record.fields[0]).expect("needles");
-            if ![1, 2].contains(&needles.len()) {
-                continue;
-            }
-            let hay = decode_bytes(record.fields[1]).expect("haystack");
-            let answer = find(&needles, &hay).map_or_else(|| "-".to_owned(), |at| at.to_string());
-            assert_eq!(answer, record.fields[2], "{needles:?} in {hay:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
     }
 }

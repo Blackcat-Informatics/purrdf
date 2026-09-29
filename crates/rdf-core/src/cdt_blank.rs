@@ -90,6 +90,8 @@
 
 use std::borrow::Cow;
 
+use purrdf_iri::terminals::{self, expand_uchars};
+
 use purrdf_cdt::{CDT_LIST, CDT_MAP, CdtContents, CdtError, CdtTerm, CdtValue, parse_cdt_by_iri};
 
 use crate::blank_label::{LabelAlphabet, decode_blank_label, encode_blank_label};
@@ -712,7 +714,7 @@ fn push_iri_span(
         start: region.root_of(open),
         end: region.root_of(end),
         kind: TokenKind::Iri {
-            iri: unescape_iri(&region.text[open + 1..close]).into_owned(),
+            iri: expand_uchars(&region.text[open + 1..close]).into_owned(),
             iri_only,
         },
     });
@@ -773,7 +775,9 @@ fn scan_string(
     let Some(close) = close else {
         return iri_end;
     };
-    let datatype = unescape_iri(&region.text[iri_start + 1..close]);
+    // An IRIREF body's `UCHAR` escapes decoded, so a datatype written with them
+    // still compares equal to the composite IRIs.
+    let datatype = expand_uchars(&region.text[iri_start + 1..close]);
     if is_cdt_datatype(&datatype) {
         queue.push(unescaped_region(region, content_start, content_end));
     }
@@ -781,52 +785,6 @@ fn scan_string(
     // blanks from IRIs must refuse here rather than write an invalid literal.
     push_iri_span(region, iri_start, close, iri_end, true, spans);
     iri_end
-}
-
-/// Unescape an `IRIREF` body's `UCHAR` escapes so a datatype written with them
-/// still compares equal to the composite IRIs.
-fn unescape_iri(raw: &str) -> Cow<'_, str> {
-    if !raw.contains('\\') {
-        return Cow::Borrowed(raw);
-    }
-    let mut out = String::with_capacity(raw.len());
-    let bytes = raw.as_bytes();
-    let mut i = 0usize;
-    while i < bytes.len() {
-        if bytes[i] == b'\\' {
-            let width = match bytes.get(i + 1) {
-                Some(b'u') => 4,
-                Some(b'U') => 8,
-                _ => {
-                    i += 2;
-                    continue;
-                }
-            };
-            let hex = raw.get(i + 2..i + 2 + width).unwrap_or("");
-            if let Some(ch) = hex_scalar(hex) {
-                out.push(ch);
-            }
-            i += 2 + width;
-        } else {
-            let ch = raw[i..].chars().next().unwrap_or('\u{fffd}');
-            out.push(ch);
-            i += ch.len_utf8();
-        }
-    }
-    Cow::Owned(out)
-}
-
-/// The scalar a `UCHAR`'s digits name: every byte a `HEX` digit (no sign), the
-/// value a Unicode scalar. An empty digit run names nothing.
-fn hex_scalar(hex: &str) -> Option<char> {
-    if hex.is_empty() {
-        return None;
-    }
-    hex.bytes()
-        .try_fold(0_u32, |value, byte| {
-            purrdf_hash::hex::nibble(byte).map(|digit| (value << 4) | u32::from(digit))
-        })
-        .and_then(char::from_u32)
 }
 
 /// Build the scan region for an embedded composite literal: its content
@@ -867,100 +825,12 @@ fn unescaped_region(region: &Region, content_start: usize, content_end: usize) -
 /// consumed. An unrecognized sequence yields its own backslash so the scan stays
 /// total; the grammar has already refused such a form on the validating path.
 fn decode_escape(raw: &str, at: usize) -> (char, usize) {
-    let bytes = raw.as_bytes();
-    match bytes.get(at + 1) {
-        Some(b't') => ('\t', 2),
-        Some(b'b') => ('\u{8}', 2),
-        Some(b'n') => ('\n', 2),
-        Some(b'r') => ('\r', 2),
-        Some(b'f') => ('\u{c}', 2),
-        Some(b'"') => ('"', 2),
-        Some(b'\'') => ('\'', 2),
-        Some(b'\\') => ('\\', 2),
-        Some(marker @ (b'u' | b'U')) => {
-            let width = if *marker == b'u' { 4 } else { 8 };
-            let hex = raw.get(at + 2..at + 2 + width).unwrap_or("");
-            hex_scalar(hex).map_or(('\\', 1), |ch| (ch, 2 + width))
-        }
-        _ => ('\\', 1),
+    let bytes = &raw.as_bytes()[at..];
+    if let Some(decoded) = bytes.get(1).copied().and_then(terminals::echar_value) {
+        return (decoded, 2);
     }
+    terminals::decode_uchar(bytes).unwrap_or(('\\', 1))
 }
 
 #[cfg(test)]
 mod tests;
-
-/// The frozen UCHAR/ECHAR decoding vectors, replayed against the composite blank-node rewriter's escape reader.
-#[cfg(test)]
-mod escape_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str};
-
-    const ESCAPES: &str = include_str!("../../lex/tests/vectors/escape_vectors.txt");
-    const SCALARS: &str = include_str!("../../lex/tests/vectors/uchar_scalar_vectors.txt");
-
-    fn show(decoded: Option<(char, usize)>) -> String {
-        decoded.map_or_else(
-            || "-".to_owned(),
-            |(c, n)| format!("{:04X}/{n}", u32::from(c)),
-        )
-    }
-
-    fn uchar(input: &str) -> String {
-        show({
-            let (c, n) = super::decode_escape(input, 0);
-            (n > 1 && matches!(input.as_bytes().get(1), Some(b'u' | b'U'))).then_some((c, n))
-        })
-    }
-
-    fn string(input: &str) -> String {
-        show({
-            let (c, n) = super::decode_escape(input, 0);
-            (n > 1).then_some((c, n))
-        })
-    }
-
-    /// Whether this copy is known to answer `input` differently from the vectors.
-    fn skipped(input: &str) -> bool {
-        let _ = input;
-        false
-    }
-
-    #[test]
-    fn escapes_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(ESCAPES).expect("escape_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let input = decode_str(record.fields[0]).expect("an encoded input");
-            if skipped(&input) {
-                continue;
-            }
-            assert_eq!(uchar(&input), record.fields[1], "UCHAR {input:?}");
-            assert_eq!(string(&input), record.fields[2], "string escape {input:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
-    }
-
-    #[test]
-    fn every_scalar_replays_the_frozen_digests() {
-        let file = VectorFile::parse(SCALARS).expect("uchar_scalar_vectors.txt");
-        for record in file.records() {
-            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
-            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
-            let answers = (first..=last).map(|cp| {
-                let text = match (record.fields[0], record.fields[1]) {
-                    ("u", "upper") => format!("\\u{cp:04X}"),
-                    ("u", _) => format!("\\u{cp:04x}"),
-                    (_, "upper") => format!("\\U{cp:08X}"),
-                    _ => format!("\\U{cp:08x}"),
-                };
-                uchar(&text)
-            });
-            assert_eq!(
-                answer_digest(answers),
-                record.fields[4],
-                "{:?}",
-                record.fields
-            );
-        }
-    }
-}

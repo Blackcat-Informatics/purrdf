@@ -108,7 +108,7 @@ use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, langtag, terminals};
 
 use crate::ast::Schema;
 use crate::error::{Result, ShexError};
-use crate::lexer::{LANGTAG_PROFILE, UcharDefect, decode_uchar};
+use crate::lexer::{LANGTAG_PROFILE, uchar_byte};
 use crate::statement;
 use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions, validate_with};
 
@@ -770,16 +770,26 @@ impl MapParser {
     /// Every failure is a hard error rather than a fallback to the raw backslash,
     /// because no production reachable from here gives `'\'` any other reading.
     fn read_uchar(&mut self) -> Result<char> {
+        self.uchar("IRI")
+    }
+
+    /// Decode the `UCHAR` whose backslash is the current scalar, naming `what`
+    /// (an IRI or a string) in the error, and advance past it.
+    fn uchar(&mut self, what: &str) -> Result<char> {
         let (decoded, consumed) =
-            decode_uchar(|ahead| self.peek_at(ahead)).map_err(|defect| match defect {
-                UcharDefect::NotAnEscape => {
-                    self.err("a backslash in an IRI must open a \\u/\\U escape")
-                }
-                UcharDefect::BadHex => self.err("bad \\u/\\U escape in IRI (expected hex digits)"),
-                UcharDefect::NotAScalar => {
-                    self.err("\\u/\\U escape in IRI is not a Unicode scalar value")
-                }
-            })?;
+            terminals::decode_uchar_at(|ahead| self.peek_at(ahead).map(uchar_byte)).map_err(
+                |defect| match defect {
+                    terminals::UcharError::NotAnEscape => self.err(&format!(
+                        "a backslash in an {what} must open a \\u/\\U escape"
+                    )),
+                    terminals::UcharError::BadHex => self.err(&format!(
+                        "bad \\u/\\U escape in {what} (expected hex digits)"
+                    )),
+                    terminals::UcharError::NotAScalar => self.err(&format!(
+                        "\\u/\\U escape in {what} is not a Unicode scalar value"
+                    )),
+                },
+            )?;
         self.pos += consumed;
         Ok(decoded)
     }
@@ -901,35 +911,18 @@ impl MapParser {
         }
     }
 
+    /// `ECHAR` or `UCHAR`, the backslash already consumed.
     fn parse_escape(&mut self) -> Result<char> {
         let escaped = self.peek().ok_or_else(|| self.err("dangling escape"))?;
-        self.pos += 1;
-        match escaped {
-            't' => Ok('\t'),
-            'b' => Ok('\u{8}'),
-            'n' => Ok('\n'),
-            'r' => Ok('\r'),
-            'f' => Ok('\u{c}'),
-            '"' => Ok('"'),
-            '\'' => Ok('\''),
-            '\\' => Ok('\\'),
-            'u' => self.parse_hex(4),
-            'U' => self.parse_hex(8),
-            _ => Err(self.err("invalid string escape")),
-        }
-    }
-
-    fn parse_hex(&mut self, digits: usize) -> Result<char> {
-        let mut value: u32 = 0;
-        for _ in 0..digits {
-            let c = self
-                .peek()
-                .ok_or_else(|| self.err("short unicode escape"))?;
-            let d = c.to_digit(16).ok_or_else(|| self.err("bad hex digit"))?;
-            value = value * 16 + d;
+        if let Some(decoded) = u8::try_from(escaped).ok().and_then(terminals::echar_value) {
             self.pos += 1;
+            return Ok(decoded);
         }
-        char::from_u32(value).ok_or_else(|| self.err("escape is not a scalar value"))
+        if matches!(escaped, 'u' | 'U') {
+            self.pos -= 1;
+            return self.uchar("string");
+        }
+        Err(self.err("invalid string escape"))
     }
 
     /// Resolve an `<iri>` against the base the map was parsed with.
@@ -1288,65 +1281,5 @@ mod term_walk_tests {
             .expect("the thread starts")
             .join()
             .expect("the parser did not overflow the thread's stack");
-    }
-}
-
-/// The frozen UCHAR/ECHAR decoding vectors, replayed against the ShapeMap literal escape reader.
-#[cfg(test)]
-mod escape_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, decode_str};
-
-    const ESCAPES: &str = include_str!("../../lex/tests/vectors/escape_vectors.txt");
-
-    fn show(decoded: Option<(char, usize)>) -> String {
-        decoded.map_or_else(
-            || "-".to_owned(),
-            |(c, n)| format!("{:04X}/{n}", u32::from(c)),
-        )
-    }
-
-    fn string(input: &str) -> String {
-        show({
-            let mut parser = super::MapParser {
-                chars: input.chars().collect(),
-                pos: 1,
-                base: purrdf_iri::BaseScope::empty(),
-            };
-            let decoded = if input.starts_with('\\') {
-                parser.parse_escape().ok()
-            } else {
-                None
-            };
-            decoded.map(|c| {
-                (
-                    c,
-                    parser.chars[..parser.pos]
-                        .iter()
-                        .map(|c| c.len_utf8())
-                        .sum(),
-                )
-            })
-        })
-    }
-
-    /// Whether this copy is known to answer `input` differently from the vectors.
-    fn skipped(input: &str) -> bool {
-        let _ = input;
-        false
-    }
-
-    #[test]
-    fn escapes_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(ESCAPES).expect("escape_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let input = decode_str(record.fields[0]).expect("an encoded input");
-            if skipped(&input) {
-                continue;
-            }
-            assert_eq!(string(&input), record.fields[2], "string escape {input:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
     }
 }

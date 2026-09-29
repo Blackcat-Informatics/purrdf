@@ -36,7 +36,8 @@
 use std::collections::BTreeMap;
 
 use purrdf_iri::langtag;
-use purrdf_iri::terminals::is_ws;
+use purrdf_iri::scan::find_byte2;
+use purrdf_iri::terminals;
 use purrdf_iri::{BaseOrigin, BaseScope, Iri, IriError, Position};
 use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize, tokenize_turtle};
 use rayon::prelude::*;
@@ -112,35 +113,12 @@ const BYTE_ORDER_MARK: char = '\u{feff}';
 /// `0x80`, so a raw-byte test can neither miss a member nor alias one — and the byte
 /// index it stops at is therefore always a scalar boundary.
 fn trim_ws_start(raw: &str) -> &str {
-    let bytes = raw.as_bytes();
-    let start = bytes
-        .iter()
-        .position(|&byte| !is_ws(byte))
-        .unwrap_or(bytes.len());
-    &raw[start..]
-}
-
-/// `raw` with its leading AND trailing runs of `WS` removed — the line-grammar-exact
-/// replacement for [`str::trim`].
-///
-/// > `WS ::= #x20 | #x9 | #xD | #xA`
-///
-/// — Turtle 1.2 §6.5 / SPARQL 1.2 §19.8. See [`trim_ws_start`] for why the four-member
-/// production and the twenty-six-member Unicode property are not interchangeable and
-/// why the byte-wise scan is exact.
-fn trim_ws(raw: &str) -> &str {
-    let trimmed = trim_ws_start(raw);
-    let bytes = trimmed.as_bytes();
-    let end = bytes
-        .iter()
-        .rposition(|&byte| !is_ws(byte))
-        .map_or(0, |last| last + 1);
-    &trimmed[..end]
+    &raw[terminals::skip_ws(raw.as_bytes(), 0)..]
 }
 
 /// 1-based column (counted in Unicode scalar values) of a byte offset that lies
 /// within the TRIMMED content of `raw`. `trimmed_off` is a byte offset into
-/// [`trim_ws(raw)`](trim_ws) (i.e. token spans from tokenizing the trimmed line); it is
+/// the trimmed line [`terminals::trim_ws`] makes of it (i.e. token spans from tokenizing the trimmed line); it is
 /// rebased onto `raw` by adding the leading-`WS` width.
 ///
 /// > `WS ::= #x20 | #x9 | #xD | #xA`
@@ -159,10 +137,7 @@ fn trim_ws(raw: &str) -> &str {
 /// reported the column of the `<` after it.
 fn column_in_raw(raw: &str, trimmed_off: usize) -> u32 {
     let lead = raw.len() - trim_ws_start(raw).len();
-    let mut byte = (lead + trimmed_off).min(raw.len());
-    while byte > 0 && !raw.is_char_boundary(byte) {
-        byte -= 1;
-    }
+    let byte = raw.floor_char_boundary(lead + trimmed_off);
     u32::try_from(raw[..byte].chars().count() + 1).unwrap_or(u32::MAX)
 }
 
@@ -442,7 +417,7 @@ impl<'a> Iterator for PhysicalLines<'a> {
             return None;
         }
         let bytes = self.rest.as_bytes();
-        let Some(offset) = memchr::memchr2(b'\r', b'\n', bytes) else {
+        let Some(offset) = find_byte2(bytes, b'\r', b'\n') else {
             // A final line that ends at end-of-input: `EOL?` is optional, so this is a
             // line, and (like `str::lines`) a document that DOES end in a terminator
             // yields no extra empty line after it — `rest` is empty and the iterator ends.
@@ -469,7 +444,7 @@ fn count_line_terminators(text: &str) -> u32 {
     let bytes = text.as_bytes();
     let mut count = 0u32;
     let mut at = 0usize;
-    while let Some(offset) = memchr::memchr2(b'\r', b'\n', &bytes[at..]) {
+    while let Some(offset) = find_byte2(&bytes[at..], b'\r', b'\n') {
         let start = at + offset;
         at = start + eol_width(bytes, start);
         count = count.saturating_add(1);
@@ -499,7 +474,7 @@ fn split_line_chunks(text: &str, target_bytes: usize) -> Vec<&str> {
     while start < text.len() {
         let mut end = start.saturating_add(target).min(text.len());
         if end < text.len() {
-            end = match memchr::memchr2(b'\r', b'\n', &bytes[end..]) {
+            end = match find_byte2(&bytes[end..], b'\r', b'\n') {
                 Some(offset) => {
                     let at = end + offset;
                     at + eol_width(bytes, at)
@@ -772,7 +747,7 @@ fn parse_one_line(
     lineno: u32,
     base: &BaseScope,
 ) -> Result<Option<Statement>, RdfDiagnostic> {
-    let line = trim_ws(raw);
+    let line = terminals::trim_ws(raw);
     if line.is_empty() || line.starts_with('#') {
         return Ok(None);
     }

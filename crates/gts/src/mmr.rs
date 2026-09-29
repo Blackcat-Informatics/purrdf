@@ -9,7 +9,8 @@
 use ciborium::value::Value;
 use purrdf_hash::Domain;
 use purrdf_hash::hex::Lower;
-use purrdf_iri::json_escape::{JsonEscapes, push_body};
+use purrdf_iri::json_escape::{self, JsonEscapes, push_body};
+use purrdf_iri::terminals;
 
 use crate::wire::{
     MAGIC, VERSION, blake3_256, canonical, content_id, header_id, iter_items, map_get,
@@ -502,13 +503,7 @@ impl<'a> JsonParser<'a> {
     }
 
     fn ws(&mut self) {
-        while self
-            .bytes
-            .get(self.pos)
-            .is_some_and(|b| matches!(b, b' ' | b'\n' | b'\r' | b'\t'))
-        {
-            self.pos += 1;
-        }
+        self.pos = terminals::skip_ws(self.bytes, self.pos);
     }
 
     fn value(&mut self) -> Result<Json, String> {
@@ -606,58 +601,31 @@ impl<'a> JsonParser<'a> {
             return Err(format!("expected string at byte {}", self.pos));
         }
         self.pos += 1;
-        let mut out = String::new();
+        // Raw bytes are gathered as bytes and checked as UTF-8 once, so a
+        // multi-byte scalar is kept whole rather than read byte by byte.
+        let mut out = Vec::new();
         while let Some(byte) = self.bytes.get(self.pos).copied() {
-            self.pos += 1;
             match byte {
-                b'"' => return Ok(out),
-                b'\\' => {
-                    let esc = self
-                        .bytes
-                        .get(self.pos)
-                        .copied()
-                        .ok_or_else(|| "unterminated JSON escape".to_string())?;
+                b'"' => {
                     self.pos += 1;
-                    match esc {
-                        b'"' => out.push('"'),
-                        b'\\' => out.push('\\'),
-                        b'/' => out.push('/'),
-                        b'b' => out.push('\u{0008}'),
-                        b'f' => out.push('\u{000c}'),
-                        b'n' => out.push('\n'),
-                        b'r' => out.push('\r'),
-                        b't' => out.push('\t'),
-                        b'u' => {
-                            let cp = self.hex4()?;
-                            let ch = char::from_u32(cp)
-                                .ok_or_else(|| format!("invalid unicode escape {cp:04x}"))?;
-                            out.push(ch);
-                        }
-                        _ => return Err(format!("invalid JSON escape '\\{}'", esc as char)),
-                    }
+                    return String::from_utf8(out)
+                        .map_err(|_| "JSON string is not UTF-8".to_string());
+                }
+                b'\\' => {
+                    let (ch, width) = json_escape::decode_escape(&self.bytes[self.pos..])
+                        .map_err(|error| format!("invalid JSON escape: {error}"))?;
+                    let mut utf8 = [0_u8; 4];
+                    out.extend_from_slice(ch.encode_utf8(&mut utf8).as_bytes());
+                    self.pos += width;
                 }
                 0x00..=0x1f => return Err("control byte in JSON string".to_string()),
-                _ => out.push(byte as char),
+                _ => {
+                    out.push(byte);
+                    self.pos += 1;
+                }
             }
         }
         Err("unterminated JSON string".to_string())
-    }
-
-    fn hex4(&mut self) -> Result<u32, String> {
-        let start = self.pos;
-        let mut value = 0u32;
-        for _ in 0..4 {
-            let byte = self
-                .bytes
-                .get(self.pos)
-                .copied()
-                .ok_or_else(|| "short unicode escape".to_string())?;
-            self.pos += 1;
-            let digit = purrdf_hash::hex::nibble(byte)
-                .ok_or_else(|| format!("invalid unicode escape at byte {start}"))?;
-            value = (value << 4) | u32::from(digit);
-        }
-        Ok(value)
     }
 
     fn number(&mut self) -> Result<u64, String> {
@@ -914,6 +882,36 @@ mod tests {
         vec![n; 32]
     }
 
+    fn json_string(text: &str) -> Result<String, String> {
+        JsonParser::new(text).string()
+    }
+
+    #[test]
+    fn a_json_string_keeps_raw_non_ascii_scalars_whole() {
+        assert_eq!(
+            json_string("\"caf\u{e9} \u{1f431}\"").as_deref(),
+            Ok("caf\u{e9} \u{1f431}")
+        );
+    }
+
+    #[test]
+    fn a_json_surrogate_pair_decodes_to_its_scalar() {
+        assert_eq!(json_string(r#""\ud83d\ude00""#).as_deref(), Ok("\u{1f600}"));
+        assert_eq!(json_string(r#""\u00e9""#).as_deref(), Ok("\u{e9}"));
+    }
+
+    #[test]
+    fn an_unpaired_json_surrogate_is_still_refused() {
+        for text in [
+            r#""\ud83d""#,
+            r#""\ud83dx""#,
+            r#""\ude00""#,
+            r#""\ud83d\u0041""#,
+        ] {
+            assert!(json_string(text).is_err(), "{text}");
+        }
+    }
+
     #[test]
     fn proof_round_trip_and_tamper() {
         let frame_ids = vec![id(1), id(2), id(3), id(4), id(5)];
@@ -991,92 +989,6 @@ mod tests {
         ];
         for case in cases {
             assert_eq!(json_escape(case), json_escape_reference(case), "{case:?}");
-        }
-    }
-}
-
-/// The frozen JSON string-body decoding vectors, replayed against the MMR document reader.
-#[cfg(test)]
-mod json_string_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    const STRINGS: &str = include_str!("../../lex/tests/vectors/json_string_vectors.txt");
-    const UNITS: &str = include_str!("../../lex/tests/vectors/json_unit_vectors.txt");
-
-    /// `body` (the text between the quotes) decoded, or `None` when refused.
-    fn decode(body: &str) -> Option<String> {
-        let text = format!("\"{body}\"");
-        let mut parser = super::JsonParser {
-            bytes: text.as_bytes(),
-            pos: 0,
-        };
-        parser.string().ok().filter(|_| parser.pos == text.len())
-    }
-
-    fn answer(body: &str) -> String {
-        decode(body).map_or_else(|| "-".to_owned(), |text| encode_str(&format!("={text}")))
-    }
-
-    /// Whether this copy is known to answer `body` differently from `expected`.
-    fn skipped(body: &str, expected: &str) -> bool {
-        let _ = (body, expected);
-        // This reader pushes each raw non-ASCII byte as its own scalar and has no surrogate
-        // pairs, so it differs on raw non-ASCII bodies and on every astral scalar.
-        !body.is_ascii() || expected.chars().any(|c| u32::from(c) > 0xFFFF)
-    }
-
-    #[test]
-    fn string_bodies_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(STRINGS).expect("json_string_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let body = decode_str(record.fields[0]).expect("an encoded body");
-            let expected = decode_str(record.fields[1]).expect("an encoded answer");
-            if skipped(&body, &expected) {
-                continue;
-            }
-            assert_eq!(answer(&body), record.fields[1], "{body:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
-    }
-
-    #[test]
-    fn every_unit_and_pair_replays_the_frozen_digests() {
-        let file = VectorFile::parse(UNITS).expect("json_unit_vectors.txt");
-        for record in file.records() {
-            // This reader has no surrogate pairs, so only the unit records replay.
-            if record.fields[0] == "pair" {
-                continue;
-            }
-            let upper = record.fields[1] == "upper";
-            let unit = |u: u32| {
-                if upper {
-                    format!("\\u{u:04X}")
-                } else {
-                    format!("\\u{u:04x}")
-                }
-            };
-            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
-            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
-            let answers = (first..=last).map(|value| {
-                if record.fields[0] == "unit" {
-                    answer(&unit(value))
-                } else {
-                    let offset = value - 0x1_0000;
-                    answer(&format!(
-                        "{}{}",
-                        unit(0xD800 + (offset >> 10)),
-                        unit(0xDC00 + (offset & 0x3FF))
-                    ))
-                }
-            });
-            assert_eq!(
-                answer_digest(answers),
-                record.fields[4],
-                "{:?}",
-                record.fields
-            );
         }
     }
 }

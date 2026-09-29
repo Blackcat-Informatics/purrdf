@@ -117,45 +117,6 @@ use crate::vocab::{
 /// This crate's sibling bound on RDF 1.2 triple-term nesting is 16.
 pub(crate) const MAX_EXPRESSION_DEPTH: usize = 256;
 
-/// Apply the `whiteSpace` = `collapse` normalization an XSD atomic datatype fixes, as far as
-/// a single-token lexical space can observe it.
-///
-/// XSD 1.1 Part 2 §4.3.6 states the two steps in full:
-///
-/// > `replace` — All occurrences of `#x9` (tab), `#xA` (line feed) and `#xD` (carriage
-/// > return) are replaced with `#x20` (space).
-/// >
-/// > `collapse` — After the processing implied by `replace`, contiguous sequences of `#x20`s
-/// > are collapsed to a single `#x20`, and any `#x20` at the start or end of the string are
-/// > then removed.
-///
-/// The whole normalization therefore quantifies over four code points and no others — the
-/// same four as XML `S`, "`S ::= (#x20 | #x9 | #xD | #xA)+`" (XML 1.0 5e §2.3 `[3]`) — and
-/// [`purrdf_iri::terminals::is_ws_char`] is that class.
-///
-/// Squeezing internal runs is not performed, and does not need to be: every lexical space
-/// this is applied to here (`xsd:boolean`, `xsd:integer`, `xsd:nonNegativeInteger`) is a
-/// single token containing no `#x20`, so an internal run survives `collapse` as one `#x20`
-/// and is refused by the token grammar either way. The verdict is identical; only the
-/// trimming is observable.
-///
-/// # Why this is not [`str::trim`], and why the direction matters HERE
-///
-/// `str::trim` trims the Unicode `White_Space` property — twenty-six code points, including
-/// U+00A0 NO-BREAK SPACE, U+2028, U+3000 and the `[#x2000-#x200A]` block — where the
-/// datatype names four. Every one of the extra twenty-two is **over-acceptance**: the
-/// lexical form `"\u{A0}2"` is not in `xsd:nonNegativeInteger`'s lexical space at all, and a
-/// trim that strips the NO-BREAK SPACE turns it into the cardinality bound `2`.
-///
-/// This is a reasoner, so an ill-typed literal admitted here does not surface as a lenient
-/// parse: it becomes a premise. A cardinality restriction, an `owl:hasSelf` truth value or a
-/// length facet read out of a literal the datatype refuses makes every consequence drawn
-/// from it a DERIVED verdict resting on input the ontology does not state — reported with
-/// the same certificate as a sound one.
-fn collapse_trim(lexical: &str) -> &str {
-    lexical.trim_matches(purrdf_iri::terminals::is_ws_char)
-}
-
 /// Which constraining facet a predicate of an `owl:withRestrictions` list cell states.
 ///
 /// The facet IRIs sit in the XML Schema namespace, which the OWL-2-RDF mapping does not
@@ -813,7 +774,9 @@ impl<'a> CeExtractor<'a> {
                 // (XSD 1.1 Part 2 §4.3.1), which fixes `whiteSpace` = `collapse` — see
                 // `collapse_trim`. `None` here makes the whole range opaque rather than
                 // dropping the facet, so an ill-typed bound cannot shrink a range.
-                let length = collapse_trim(lexical_form).parse::<u64>().ok()?;
+                let length = purrdf_iri::terminals::trim_ws(lexical_form)
+                    .parse::<u64>()
+                    .ok()?;
                 Some(match slot {
                     FacetSlot::Length => Facet::Length(length),
                     FacetSlot::MinLength => Facet::MinLength(length),
@@ -919,11 +882,13 @@ impl<'a> CeExtractor<'a> {
             // "`{true, false, 1, 0}`" and which fixes `whiteSpace` = `collapse`
             // (XSD 1.1 Part 2 §3.3.2) — see `collapse_trim`. A value the datatype
             // refuses is `None`, which is the opaque reading, not a guessed truth.
-            TermValue::Literal { lexical_form, .. } => match collapse_trim(lexical_form) {
-                "true" | "1" => Some(true),
-                "false" | "0" => Some(false),
-                _ => None,
-            },
+            TermValue::Literal { lexical_form, .. } => {
+                match purrdf_iri::terminals::trim_ws(lexical_form) {
+                    "true" | "1" => Some(true),
+                    "false" | "0" => Some(false),
+                    _ => None,
+                }
+            }
             _ => None,
         };
         match truth {
@@ -981,9 +946,13 @@ impl<'a> CeExtractor<'a> {
                 // (XSD 1.1 Part 2 §3.4.13 `xsd:integer`, from which it derives) — see
                 // `collapse_trim`. A lexical form the datatype refuses is a malformed
                 // graph and a hard error, never a bound guessed from it.
-                let n = collapse_trim(lexical_form).parse::<u32>().map_err(|_| {
-                    EntailError::Parse(format!("non-integer cardinality literal: {lexical_form:?}"))
-                })?;
+                let n = purrdf_iri::terminals::trim_ws(lexical_form)
+                    .parse::<u32>()
+                    .map_err(|_| {
+                        EntailError::Parse(format!(
+                            "non-integer cardinality literal: {lexical_form:?}"
+                        ))
+                    })?;
                 if n == u32::MAX {
                     return Err(EntailError::Parse(format!(
                         "cardinality {n} exceeds this reasoner's representable bound \
@@ -1801,17 +1770,17 @@ mod tests {
             let named = matches!(c, '\u{20}' | '\u{9}' | '\u{D}' | '\u{A}');
             let padded = format!("{c}x{c}");
             assert_eq!(
-                super::collapse_trim(&padded) == "x",
+                purrdf_iri::terminals::trim_ws(&padded) == "x",
                 named,
                 "{c:?} ({cp:#06X}) must be stripped iff whiteSpace=collapse names it"
             );
         }
         // Runs at both ends go, and an interior member survives as content the token
         // grammar then refuses — `collapse` squeezes it, it never deletes it.
-        assert_eq!(super::collapse_trim(" \t\r\n42\n\r\t "), "42");
-        assert_eq!(super::collapse_trim("4 2"), "4 2");
-        assert_eq!(super::collapse_trim(""), "");
-        assert_eq!(super::collapse_trim("   "), "");
+        assert_eq!(purrdf_iri::terminals::trim_ws(" \t\r\n42\n\r\t "), "42");
+        assert_eq!(purrdf_iri::terminals::trim_ws("4 2"), "4 2");
+        assert_eq!(purrdf_iri::terminals::trim_ws(""), "");
+        assert_eq!(purrdf_iri::terminals::trim_ws("   "), "");
     }
 
     /// A cardinality bound is read after `whiteSpace` = `collapse`, which names four code

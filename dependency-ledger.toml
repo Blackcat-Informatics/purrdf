@@ -550,11 +550,11 @@ distinct = "platform declarations for thread stack bounds and the CLI's mmap and
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
 
 [packages.memchr]
-category = "runtime"
-reason = "SIMD byte search for parser line splitting and escape scanning"
+category = "transitive:regex"
+reason = "byte search inside regex's literal prefilters and serde_json's reader; no workspace member names it"
 duplicates_native = "purrdf_lex::scan::find_byte"
-pending_native = true
-metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+holder = "regex"
+metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.once_cell]
 category = "transitive:wasm-bindgen"

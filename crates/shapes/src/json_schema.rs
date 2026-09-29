@@ -4547,7 +4547,7 @@ fn range_bound(term: &Term) -> RangeBound {
     let Term::Literal(literal) = term else {
         return RangeBound::Incomparable;
     };
-    let lexical = literal.value().trim_matches(['\t', '\n', '\r', ' ']);
+    let lexical = purrdf_iri::terminals::trim_ws(literal.value());
     let Some(local) = literal.datatype_str().strip_prefix(XSD_NS) else {
         return RangeBound::Incomparable;
     };
@@ -5026,7 +5026,7 @@ fn ieee_member_satisfies(member: &Term, bounds: &[(Facet, BoundNumberValue)]) ->
     let Term::Literal(literal) = member else {
         return false;
     };
-    let lexical = literal.value().trim_matches(['\t', '\n', '\r', ' ']);
+    let lexical = purrdf_iri::terminals::trim_ws(literal.value());
     let value = if literal.datatype_str() == XSD_FLOAT {
         purrdf_xsd::parse_float_xsd10(lexical).ok().map(f64::from)
     } else {

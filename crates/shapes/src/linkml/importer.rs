@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 
 use super::{
     LinkmlDocument, LinkmlError, LinkmlPackage, LinkmlSlotDiagnostic, LinkmlSlotDisposition,
-    LinkmlSlotRename, is_linkml_identifier, parse_linkml, pointer_escape, projection, write_linkml,
+    LinkmlSlotRename, is_linkml_identifier, parse_linkml, projection, write_linkml,
 };
 use crate::schema_import::{ImportedShapes, SchemaImportConfig, import_schema_value_from};
 use crate::term::Term;
@@ -401,7 +401,10 @@ fn verify_source_context<'a>(
     source_name: &str,
     root: &'a Map<String, Value>,
 ) -> Result<&'a Map<String, Value>, LinkmlError> {
-    let suffix = format!("/properties/{}", pointer_escape(source_name));
+    let suffix = format!(
+        "/properties/{}",
+        purrdf_iri::json_pointer::escape_token(source_name)
+    );
     if !source_path.ends_with(&suffix) {
         return Err(LinkmlError::new(format!(
             "LinkML package slot report path {source_path:?} does not name source property {source_name:?}"
@@ -634,7 +637,7 @@ impl NativeImporter {
             if self.root.contains_key(key) {
                 self.record(
                     "schema-identity-dropped",
-                    &format!("#/{}", pointer_escape(key)),
+                    &format!("#/{}", purrdf_iri::json_pointer::escape_token(key)),
                 );
             }
         }
@@ -681,8 +684,8 @@ impl NativeImporter {
                             "unknown-keyword-dropped",
                             &format!(
                                 "#/prefixes/{}/{}",
-                                pointer_escape(&prefix),
-                                pointer_escape(key)
+                                purrdf_iri::json_pointer::escape_token(&prefix),
+                                purrdf_iri::json_pointer::escape_token(key)
                             ),
                         );
                     }
@@ -705,7 +708,7 @@ impl NativeImporter {
             ) {
                 self.record(
                     "unknown-keyword-dropped",
-                    &format!("#/{}", pointer_escape(&key)),
+                    &format!("#/{}", purrdf_iri::json_pointer::escape_token(&key)),
                 );
             }
         }
@@ -775,10 +778,13 @@ impl NativeImporter {
                 let usage = usage.as_object().ok_or_else(|| {
                     LinkmlError::new(format!(
                         "{path}/slot_usage/{} must be a mapping",
-                        pointer_escape(slot_name)
+                        purrdf_iri::json_pointer::escape_token(slot_name)
                     ))
                 })?;
-                let usage_path = format!("{path}/slot_usage/{}", pointer_escape(slot_name));
+                let usage_path = format!(
+                    "{path}/slot_usage/{}",
+                    purrdf_iri::json_pointer::escape_token(slot_name)
+                );
                 if let Some((slot, slot_path)) = local_slots.get_mut(slot_name) {
                     slot.extend(usage.clone());
                     *slot_path = usage_path;
@@ -805,7 +811,7 @@ impl NativeImporter {
                 let slot = slot.as_object().ok_or_else(|| {
                     LinkmlError::new(format!(
                         "{path}/attributes/{} must be a mapping",
-                        pointer_escape(slot_name)
+                        purrdf_iri::json_pointer::escape_token(slot_name)
                     ))
                 })?;
                 if local_slots
@@ -813,7 +819,10 @@ impl NativeImporter {
                         slot_name.clone(),
                         (
                             slot.clone(),
-                            format!("{path}/attributes/{}", pointer_escape(slot_name)),
+                            format!(
+                                "{path}/attributes/{}",
+                                purrdf_iri::json_pointer::escape_token(slot_name)
+                            ),
                         ),
                     )
                     .is_some()
@@ -847,7 +856,7 @@ impl NativeImporter {
             let pivot_path = format!(
                 "{}/properties/{}",
                 definition_path(self.identity(name)?),
-                pointer_escape(&property_identity)
+                purrdf_iri::json_pointer::escape_token(&property_identity)
             );
             self.map_location(&pivot_path, &slot_path);
             self.map_expression_locations(&pivot_path, &slot_path, &slot, &property_schema);
@@ -910,7 +919,10 @@ impl NativeImporter {
                 if !matches!(key.as_str(), "allowed" | "range_expression") {
                     self.record(
                         "unknown-keyword-dropped",
-                        &format!("{path}/extra_slots/{}", pointer_escape(key)),
+                        &format!(
+                            "{path}/extra_slots/{}",
+                            purrdf_iri::json_pointer::escape_token(key)
+                        ),
                     );
                 }
             }
@@ -1130,7 +1142,10 @@ impl NativeImporter {
             }
             Some(ElementKind::Class | ElementKind::Enum) => Ok(Value::Object(Map::from_iter([(
                 "$ref".to_owned(),
-                Value::String(format!("#/$defs/{}", pointer_escape(self.identity(range)?))),
+                Value::String(format!(
+                    "#/$defs/{}",
+                    purrdf_iri::json_pointer::escape_token(self.identity(range)?)
+                )),
             )]))),
             Some(ElementKind::Type) => self.type_schema(range, visiting, depth),
             None => Err(LinkmlError::new(format!(
@@ -1214,7 +1229,10 @@ impl NativeImporter {
         }
         let mut members = Vec::new();
         for (text, definition) in values {
-            let member_path = format!("{path}/permissible_values/{}", pointer_escape(text));
+            let member_path = format!(
+                "{path}/permissible_values/{}",
+                purrdf_iri::json_pointer::escape_token(text)
+            );
             let member = match definition {
                 Value::Null => Value::String(text.clone()),
                 Value::String(description) => {
@@ -1240,17 +1258,23 @@ impl NativeImporter {
                             if !value.is_string() {
                                 return Err(LinkmlError::new(format!(
                                     "{member_path}/{} must be a string",
-                                    pointer_escape(key)
+                                    purrdf_iri::json_pointer::escape_token(key)
                                 )));
                             }
                             self.record(
                                 "enum-metadata-dropped",
-                                &format!("{member_path}/{}", pointer_escape(key)),
+                                &format!(
+                                    "{member_path}/{}",
+                                    purrdf_iri::json_pointer::escape_token(key)
+                                ),
                             );
                         } else if key != "meaning" {
                             self.record(
                                 "unknown-keyword-dropped",
-                                &format!("{member_path}/{}", pointer_escape(key)),
+                                &format!(
+                                    "{member_path}/{}",
+                                    purrdf_iri::json_pointer::escape_token(key)
+                                ),
                             );
                         }
                     }
@@ -1269,17 +1293,17 @@ impl NativeImporter {
                 if !value.is_string() {
                     return Err(LinkmlError::new(format!(
                         "{path}/{} must be a string",
-                        pointer_escape(key)
+                        purrdf_iri::json_pointer::escape_token(key)
                     )));
                 }
                 self.record(
                     "annotation-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
                 );
             } else if !matches!(key.as_str(), "enum_uri" | "permissible_values") {
                 self.record(
                     "unknown-keyword-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
                 );
             }
         }
@@ -1442,7 +1466,7 @@ impl NativeImporter {
                 if !condition.is_object() {
                     return Err(LinkmlError::new(format!(
                         "{path}/slot_conditions/{} must be a mapping",
-                        pointer_escape(slot)
+                        purrdf_iri::json_pointer::escape_token(slot)
                     )));
                 }
             }
@@ -1819,12 +1843,12 @@ impl NativeImporter {
                 if !value.is_string() {
                     return Err(LinkmlError::new(format!(
                         "{path}/{} must be a string",
-                        pointer_escape(key)
+                        purrdf_iri::json_pointer::escape_token(key)
                     )));
                 }
                 self.record(
                     "annotation-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
                 );
             } else if key == "alias" {
                 if !value.is_string() {
@@ -1834,7 +1858,7 @@ impl NativeImporter {
             } else if !known.contains(&key.as_str()) {
                 self.record(
                     "unknown-keyword-dropped",
-                    &format!("{path}/{}", pointer_escape(key)),
+                    &format!("{path}/{}", purrdf_iri::json_pointer::escape_token(key)),
                 );
             }
         }
@@ -2002,13 +2026,13 @@ fn document_prefixes(root: &Map<String, Value>) -> Result<BTreeMap<String, Strin
                     .ok_or_else(|| {
                         LinkmlError::new(format!(
                             "#/prefixes/{} requires string prefix_reference",
-                            pointer_escape(prefix)
+                            purrdf_iri::json_pointer::escape_token(prefix)
                         ))
                     })?,
                 _ => {
                     return Err(LinkmlError::new(format!(
                         "#/prefixes/{} must be a string or mapping",
-                        pointer_escape(prefix)
+                        purrdf_iri::json_pointer::escape_token(prefix)
                     )));
                 }
             };
@@ -2078,11 +2102,14 @@ fn optional_u64(
 }
 
 fn element_path(section: &str, name: &str) -> String {
-    format!("#/{section}/{}", pointer_escape(name))
+    format!(
+        "#/{section}/{}",
+        purrdf_iri::json_pointer::escape_token(name)
+    )
 }
 
 fn definition_path(key: &str) -> String {
-    format!("#/$defs/{}", pointer_escape(key))
+    format!("#/$defs/{}", purrdf_iri::json_pointer::escape_token(key))
 }
 
 fn remap_location(subject: &str, mappings: &BTreeMap<String, String>) -> String {

@@ -89,10 +89,9 @@ impl Parser<'_> {
         Error::Limit(format!("{message} at byte {}", self.at))
     }
 
+    /// Skip JSON `ws = *( %x20 / %x09 / %x0A / %x0D )`.
     fn whitespace(&mut self) {
-        while matches!(self.bytes.get(self.at), Some(b' ' | b'\t' | b'\r' | b'\n')) {
-            self.at += 1;
-        }
+        self.at = purrdf_iri::terminals::skip_ws(self.bytes, self.at);
     }
 
     fn take(&mut self, byte: u8) -> bool {

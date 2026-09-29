@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-lex"
-description = "Native, zero-dependency lexical foundations for PurRDF's grammars: the exact Turtle/SPARQL/XML character-class terminals, chunked byte-class scanners that lower to packed compares, and the RFC 8259 JSON string escaper"
+description = "Native lexical foundations for PurRDF's grammars, over the zero-dependency purrdf-hash root: the exact Turtle/SPARQL/XML character-class terminals and escape decoders, chunked byte-class scanners and needle searches that lower to packed compares, the RFC 8259 JSON string escaper and decoder, RFC 6901 JSON Pointer tokens, and RFC 3986 percent-encoding"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -21,13 +21,18 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only, ZERO runtime dependencies: the lexical layer directly above the
+# rlib-only, one runtime dependency: the lexical layer directly above the
 # `purrdf-hash` root in layers.toml, held to that by `make rdf-core-hygiene`.
 # Portable Rust over caller-supplied bytes — no `unsafe`, no threads, no
 # filesystem, no clock, no entropy — so it is wasm32-clean on every target.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_lex"
+
+[dependencies]
+# The one hex-digit reader (`hex::nibble`, `hex::parse_u32`) every escape and
+# percent-encoding decoder here reads its digits with: the zero-dependency root.
+purrdf-hash = { workspace = true }
 
 [dev-dependencies]
 # The SplitMix64 stream the scanner and escaper equivalence tests draw their
@@ -37,4 +42,8 @@ purrdf-testkit = { workspace = true }
 
 [[bench]]
 name = "scan"
+harness = false
+
+[[test]]
+name = "frozen_vectors"
 harness = false

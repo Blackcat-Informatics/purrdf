@@ -116,7 +116,7 @@ impl Bound {
     /// The bound a literal of `kind` states; `None` when the lexical form is
     /// not one of the datatype (the validator then compares it with nothing).
     pub(super) fn parse(kind: Kind, lexical: &str) -> Option<Self> {
-        let lexical = lexical.trim_matches(['\t', '\n', '\r', ' ']);
+        let lexical = purrdf_iri::terminals::trim_ws(lexical);
         let iri = format!("http://www.w3.org/2001/XMLSchema#{}", kind.local());
         purrdf_xsd::parse_by_iri(lexical, &iri).ok()??;
         let (body, zone) = split_zone(lexical);
@@ -759,7 +759,7 @@ mod tests {
     /// the bound in the facet's direction.
     fn validator(kind: Kind, value: &str, bound: &str, facet: Facet) -> bool {
         let iri = format!("{XSD}{}", kind.local());
-        let trim = |text: &str| text.trim_matches(['\t', '\n', '\r', ' ']).to_owned();
+        let trim = |text: &str| purrdf_iri::terminals::trim_ws(text).to_owned();
         let (Ok(Some(value)), Ok(Some(bound))) = (
             purrdf_xsd::parse_by_iri(&trim(value), &iri),
             purrdf_xsd::parse_by_iri(&trim(bound), &iri),

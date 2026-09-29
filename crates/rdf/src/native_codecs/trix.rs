@@ -32,7 +32,6 @@ use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_iri::langtag;
-use purrdf_iri::terminals::is_ws;
 
 /// The TriX codec: a standalone (non-line-family) [`RdfCodec`] over the "Triples in XML"
 /// quads syntax. A classic quad syntax with no RDF-1.2 triple-term surface, so it is
@@ -324,16 +323,7 @@ fn element_text(element: Node<'_, '_>) -> String {
 /// `roxmltree` hands it over, and `#xA` is `S`, so pretty-printed indentation around a
 /// `<uri>` is removed exactly as it always was.
 fn trim_xml_s(text: &str) -> &str {
-    let bytes = text.as_bytes();
-    let start = bytes
-        .iter()
-        .position(|&byte| !is_ws(byte))
-        .unwrap_or(bytes.len());
-    let end = bytes
-        .iter()
-        .rposition(|&byte| !is_ws(byte))
-        .map_or(start, |last| last + 1);
-    &text[start..end]
+    purrdf_iri::terminals::trim_ws(text)
 }
 
 /// The direct text of `element` with its surrounding XML `S` removed — see

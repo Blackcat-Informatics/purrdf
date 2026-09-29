@@ -41,16 +41,7 @@ fn post(
 
 /// Percent-encode everything but the unreserved characters, as a form encoder would.
 fn enc(text: &str) -> String {
-    let mut out = String::new();
-    for byte in text.bytes() {
-        if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
-            out.push(char::from(byte));
-        } else {
-            out.push('%');
-            purrdf_hash::hex::encode_upper_into(&[byte], &mut out);
-        }
-    }
-    out
+    purrdf_iri::percent::encode(text, purrdf_iri::percent::UNRESERVED).into_owned()
 }
 
 fn ok(result: Result<ProtocolRequest, ProtocolError>) -> ProtocolRequest {

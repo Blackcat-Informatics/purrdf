@@ -3831,7 +3831,10 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
 
         // ---- ENCODE_FOR_URI -----------------------------------------------
         Function::EncodeForUri => match string_arg(vals, 0) {
-            Some((s, _)) => Ok(Some(string_term(ctx, &encode_for_uri(&s)))),
+            Some((s, _)) => Ok(Some(string_term(
+                ctx,
+                &purrdf_iri::percent::encode(&s, purrdf_iri::percent::UNRESERVED),
+            ))),
             None => Ok(None),
         },
 
@@ -5239,24 +5242,6 @@ fn resolve_against_base(base: Option<&str>, reference: &str) -> Option<String> {
     let base = base?;
     let base_iri = purrdf_iri::parse(base).ok()?;
     Some(base_iri.resolve(reference).ok()?.as_str().to_owned())
-}
-
-/// Percent-encode every byte except unreserved characters (RFC 3986 §2.3:
-/// `A-Za-z0-9 - _ . ~`). All other bytes become `%XX` in uppercase hex.
-fn encode_for_uri(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    for byte in s.as_bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'_' | b'.' | b'~' => {
-                out.push(char::from(*byte));
-            }
-            b => {
-                out.push('%');
-                purrdf_hash::hex::encode_upper_into(&[*b], &mut out);
-            }
-        }
-    }
-    out
 }
 
 /// Format a timezone offset in minutes as an `xsd:dayTimeDuration` string,
@@ -11654,68 +11639,5 @@ mod rdf_equal_tests {
             .expect("spawn")
             .join()
             .expect("the 128 KiB thread returned");
-    }
-}
-
-/// The frozen percent-encoding vectors, replayed against `ENCODE_FOR_URI`.
-#[cfg(test)]
-mod percent_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str, encode_str};
-
-    /// Replay one vector file: `run` answers an input (`None` for a refusal),
-    /// `encode` says whether answers are encoded text rather than `=`-prefixed
-    /// decodings, and `skipped` names inputs this copy is known to answer differently.
-    fn replay(
-        vectors: &str,
-        encode: bool,
-        run: impl Fn(&str) -> Option<String>,
-        skipped: impl Fn(&str) -> bool,
-        plane_skipped: impl Fn(u32) -> bool,
-    ) {
-        let answer = |input: &str| match run(input) {
-            Some(value) if encode => encode_str(&value),
-            Some(value) => encode_str(&format!("={value}")),
-            None => "-".to_owned(),
-        };
-        let file = VectorFile::parse(vectors).expect("a percent vector file");
-        let mut replayed = 0;
-        for record in file.records() {
-            if record.fields[0] == "plane" {
-                let plane = u32::from_str_radix(record.fields[1], 16).expect("hex");
-                if plane_skipped(plane) {
-                    continue;
-                }
-                let answers = ((plane << 16)..=((plane << 16) | 0xFFFF))
-                    .filter_map(char::from_u32)
-                    .filter(|c| !skipped(&c.to_string()))
-                    .map(|c| answer(&c.to_string()));
-                assert_eq!(answer_digest(answers), record.fields[2], "plane {plane:X}");
-            } else {
-                let input = decode_str(record.fields[1]).expect("an encoded input");
-                if skipped(&input) {
-                    continue;
-                }
-                assert_eq!(answer(&input), record.fields[2], "{input:?}");
-            }
-            replayed += 1;
-        }
-        assert!(replayed > 400, "{replayed}");
-    }
-
-    #[test]
-    fn unreserved_replays_the_frozen_vectors() {
-        replay(
-            include_str!("../../lex/tests/vectors/percent_unreserved_vectors.txt"),
-            true,
-            |input| Some(super::encode_for_uri(input)),
-            |input| {
-                let _ = input;
-                false
-            },
-            |plane| {
-                let _ = plane;
-                false
-            },
-        );
     }
 }

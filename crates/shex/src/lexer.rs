@@ -168,70 +168,11 @@ pub fn tokenize(input: &str) -> Result<Vec<Spanned>> {
     Lexer::new(input).run()
 }
 
-/// Why a `UCHAR` at a cursor did not decode.
-///
-/// Three arms rather than one error, because the two scanners that share
-/// [`decode_uchar`] report them at different source offsets: a backslash that
-/// opens nothing at all is a defect AT the backslash, while a malformed escape
-/// body is reported at the start of the terminal being scanned.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum UcharDefect {
-    /// The backslash is followed by something other than `u` or `U`, so it does
-    /// not open a `UCHAR` — and `'\'` has no other reading in any production
-    /// that admits `UCHAR`.
-    NotAnEscape,
-    /// The `u`/`U` is not followed by its full run of `HEX ::= [0-9] | [A-F] |
-    /// [a-f]` digits (input ran out, or a non-hex scalar stands in the run).
-    BadHex,
-    /// The digits are well formed and denote no Unicode scalar value: a value
-    /// above U+10FFFF, or one of the U+D800-U+DFFF surrogates.
-    NotAScalar,
-}
-
-/// Decode the `UCHAR` whose backslash `peek(0)` stands on.
-///
-/// ```text
-/// UCHAR ::= '\u' HEX HEX HEX HEX | '\U' HEX HEX HEX HEX HEX HEX HEX HEX
-/// HEX   ::= [0-9] | [A-F] | [a-f]
-/// ```
-///
-/// `peek(ahead)` yields the scalar `ahead` positions past the backslash, or
-/// `None` at end of input. Returns the decoded scalar and how many scalars the
-/// escape consumed (`2 + 4` or `2 + 8`), so a caller advances its own cursor
-/// without re-deriving the width.
-///
-/// # One decoder, two scanners
-///
-/// ShExC and the ShapeMap grammar spell `UCHAR` identically — ShapeMap's `[18t]
-/// IRIREF` is the same production `[18t]` Turtle and SPARQL carry — so this is
-/// the one transcription both read. It is not a convenience: a second copy is
-/// free to differ on exactly the three edges that decide identity rather than
-/// well-formedness (a bare `'\'`, mixed-case hex, and a surrogate), and a
-/// scanner that resolves `\uD800` to U+FFFD names a different node than one
-/// that refuses it.
-///
-/// Mixed-case hex is lawful in both directions of the `HEX` class, so
-/// `é` and `é` decode to the same `é`.
-pub(crate) fn decode_uchar(
-    peek: impl Fn(usize) -> Option<char>,
-) -> std::result::Result<(char, usize), UcharDefect> {
-    let width = match peek(1) {
-        Some('u') => 4,
-        Some('U') => 8,
-        _ => return Err(UcharDefect::NotAnEscape),
-    };
-    let mut value: u32 = 0;
-    for k in 0..width {
-        let digit = peek(2 + k)
-            .and_then(|c| c.to_digit(16))
-            .ok_or(UcharDefect::BadHex)?;
-        value = value * 16 + digit;
-    }
-    // `char::from_u32` is the scalar-value test itself: it refuses both
-    // U+D800-U+DFFF and everything above U+10FFFF, which is exactly the pair
-    // `\U` can spell and Unicode does not name.
-    let decoded = char::from_u32(value).ok_or(UcharDefect::NotAScalar)?;
-    Ok((decoded, 2 + width))
+/// A scalar narrowed to the byte a [`terminals::decode_uchar_at`] cursor reads:
+/// every `UCHAR` byte is ASCII, so a non-ASCII scalar is `0xFF`, a byte that is
+/// neither a marker nor a digit.
+pub(crate) fn uchar_byte(c: char) -> u8 {
+    u8::try_from(c).unwrap_or(u8::MAX)
 }
 
 /// The acceptance language a `LANGTAG` body (the text after the `@`) is decided
@@ -470,23 +411,25 @@ impl<'a> Lexer<'a> {
     /// backslash), advancing past it. Anything else after the backslash is a
     /// hard error.
     ///
-    /// The decoding itself is [`decode_uchar`], shared with the shape map
-    /// scanner; this method only positions the three defects, which is the one
-    /// thing the two scanners do differently.
+    /// The decoding itself is [`terminals::decode_uchar_at`]; this method only
+    /// positions the three defects, which is the one thing the two scanners do
+    /// differently.
     fn read_uchar(&mut self, err_at: usize) -> Result<char> {
         let (decoded, consumed) =
-            decode_uchar(|ahead| self.peek(ahead)).map_err(|defect| match defect {
-                UcharDefect::NotAnEscape => ShexError::lex(
-                    "backslash must start a \\u/\\U escape here",
-                    self.byte_at(self.pos),
-                ),
-                UcharDefect::BadHex => {
-                    ShexError::lex("bad \\u/\\U escape (expected hex digits)", err_at)
-                }
-                UcharDefect::NotAScalar => {
-                    ShexError::lex("\\u/\\U escape is not a Unicode scalar", err_at)
-                }
-            })?;
+            terminals::decode_uchar_at(|ahead| self.peek(ahead).map(uchar_byte)).map_err(
+                |defect| match defect {
+                    terminals::UcharError::NotAnEscape => ShexError::lex(
+                        "backslash must start a \\u/\\U escape here",
+                        self.byte_at(self.pos),
+                    ),
+                    terminals::UcharError::BadHex => {
+                        ShexError::lex("bad \\u/\\U escape (expected hex digits)", err_at)
+                    }
+                    terminals::UcharError::NotAScalar => {
+                        ShexError::lex("\\u/\\U escape is not a Unicode scalar", err_at)
+                    }
+                },
+            )?;
         self.pos += consumed;
         Ok(decoded)
     }
@@ -500,15 +443,16 @@ impl<'a> Lexer<'a> {
                 return Err(ShexError::lex("unterminated string literal", start));
             };
             if c == '\\' {
+                if let Some(decoded) = self
+                    .peek(1)
+                    .and_then(|c| u8::try_from(c).ok())
+                    .and_then(terminals::echar_value)
+                {
+                    value.push(decoded);
+                    self.pos += 2;
+                    continue;
+                }
                 match self.peek(1) {
-                    Some('t') => value.push('\t'),
-                    Some('b') => value.push('\u{0008}'),
-                    Some('n') => value.push('\n'),
-                    Some('r') => value.push('\r'),
-                    Some('f') => value.push('\u{000C}'),
-                    Some('"') => value.push('"'),
-                    Some('\'') => value.push('\''),
-                    Some('\\') => value.push('\\'),
                     Some('u' | 'U') => {
                         let decoded = self.read_uchar(start)?;
                         value.push(decoded);
@@ -524,8 +468,6 @@ impl<'a> Lexer<'a> {
                         ));
                     }
                 }
-                self.pos += 2;
-                continue;
             }
             if c == quote {
                 if long {
@@ -1188,94 +1130,6 @@ mod tests {
             assert!(
                 error.contains(code),
                 "`@{tag}` must refuse under {code}, got {error}"
-            );
-        }
-    }
-}
-
-/// The frozen UCHAR/ECHAR decoding vectors, replayed against the ShExC UCHAR decoder and string-literal escapes.
-#[cfg(test)]
-mod escape_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str};
-
-    const ESCAPES: &str = include_str!("../../lex/tests/vectors/escape_vectors.txt");
-    const SCALARS: &str = include_str!("../../lex/tests/vectors/uchar_scalar_vectors.txt");
-
-    /// The escape at the start of `input`, read by the string-literal scanner: the
-    /// literal's first scalar and the input bytes the escape spanned.
-    fn literal(input: &str) -> Option<(char, usize)> {
-        let text = format!("\"{input}\"");
-        let tokens = super::tokenize(&text).ok()?;
-        let [only] = tokens.as_slice() else {
-            return None;
-        };
-        let super::Token::StringLit(value) = &only.token else {
-            return None;
-        };
-        let first = value.chars().next()?;
-        Some((first, input.len() - (value.len() - first.len_utf8())))
-    }
-
-    fn show(decoded: Option<(char, usize)>) -> String {
-        decoded.map_or_else(
-            || "-".to_owned(),
-            |(c, n)| format!("{:04X}/{n}", u32::from(c)),
-        )
-    }
-
-    fn uchar(input: &str) -> String {
-        show({
-            let chars: Vec<char> = input.chars().collect();
-            super::decode_uchar(|k| chars.get(k).copied()).ok()
-        })
-    }
-
-    fn string(input: &str) -> String {
-        show(literal(input))
-    }
-
-    /// Whether this copy is known to answer `input` differently from the vectors.
-    fn skipped(input: &str) -> bool {
-        let _ = input;
-        false
-    }
-
-    #[test]
-    fn escapes_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(ESCAPES).expect("escape_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let input = decode_str(record.fields[0]).expect("an encoded input");
-            if skipped(&input) {
-                continue;
-            }
-            assert_eq!(uchar(&input), record.fields[1], "UCHAR {input:?}");
-            assert_eq!(string(&input), record.fields[2], "string escape {input:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
-    }
-
-    #[test]
-    fn every_scalar_replays_the_frozen_digests() {
-        let file = VectorFile::parse(SCALARS).expect("uchar_scalar_vectors.txt");
-        for record in file.records() {
-            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
-            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
-            let answers = (first..=last).map(|cp| {
-                let text = match (record.fields[0], record.fields[1]) {
-                    ("u", "upper") => format!("\\u{cp:04X}"),
-                    ("u", _) => format!("\\u{cp:04x}"),
-                    (_, "upper") => format!("\\U{cp:08X}"),
-                    _ => format!("\\U{cp:08x}"),
-                };
-                uchar(&text)
-            });
-            assert_eq!(
-                answer_digest(answers),
-                record.fields[4],
-                "{:?}",
-                record.fields
             );
         }
     }

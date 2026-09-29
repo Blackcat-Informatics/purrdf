@@ -51,6 +51,7 @@ use core::fmt::Write as _;
 use purrdf_core::TermBox;
 use std::collections::BTreeMap;
 
+use purrdf_core::terminals;
 use purrdf_core::{RdfTextDirection, TermValue};
 
 use crate::fusion_stream::{CounterReading, StratumResolution};
@@ -432,7 +433,7 @@ impl<'a> Cursor<'a> {
     /// than skipped.
     fn skip_whitespace(&mut self) {
         while let Some(ch) = self.rest().chars().next() {
-            if purrdf_core::terminals::is_ws_char(ch) {
+            if terminals::is_ws_char(ch) {
                 self.position += ch.len_utf8();
             } else {
                 break;
@@ -562,7 +563,7 @@ impl<'a> Cursor<'a> {
     fn blank_label(&mut self) -> Result<String, String> {
         let start = self.position;
         while let Some(ch) = self.rest().chars().next() {
-            if purrdf_core::terminals::is_ws_char(ch) || ch == ')' || ch == '>' {
+            if terminals::is_ws_char(ch) || ch == ')' || ch == '>' {
                 break;
             }
             if ch.is_ascii_control() {
@@ -654,21 +655,10 @@ impl<'a> Cursor<'a> {
         Ok((tag.to_owned(), direction))
     }
 
-    /// Resolve one `\…` escape inside a literal.
+    /// Resolve one `\…` escape inside a literal: an `ECHAR` or a `UCHAR`.
     fn echar(&mut self) -> Result<char, String> {
         let escape = self.rest().as_bytes().get(1).copied();
-        let simple = match escape {
-            Some(b't') => Some('\t'),
-            Some(b'b') => Some('\u{08}'),
-            Some(b'n') => Some('\n'),
-            Some(b'r') => Some('\r'),
-            Some(b'f') => Some('\u{0c}'),
-            Some(b'"') => Some('"'),
-            Some(b'\'') => Some('\''),
-            Some(b'\\') => Some('\\'),
-            _ => None,
-        };
-        if let Some(resolved) = simple {
+        if let Some(resolved) = escape.and_then(terminals::echar_value) {
             self.position += 2;
             return Ok(resolved);
         }
@@ -677,31 +667,27 @@ impl<'a> Cursor<'a> {
 
     /// Resolve one `\uXXXX` / `\UXXXXXXXX` escape.
     fn uchar(&mut self) -> Result<char, String> {
-        let width = match self.rest().as_bytes().get(1).copied() {
-            Some(b'u') => 4,
-            Some(b'U') => 8,
-            _ => {
-                return Err(format!(
+        let (resolved, width) =
+            terminals::decode_uchar(self.rest().as_bytes()).map_err(|defect| match defect {
+                terminals::UcharError::NotAnEscape => format!(
                     "unrecognized escape at byte {}: only \\t \\b \\n \\r \\f \\\" \\' \
                      \\\\ \\uXXXX and \\UXXXXXXXX are canonical",
                     self.position
-                ));
-            }
-        };
-        let digits = self
-            .rest()
-            .get(2..2 + width)
-            .ok_or_else(|| format!("truncated escape at byte {}", self.position))?;
-        // `HEX ::= [0-9] | [A-F] | [a-f]`, every digit: a sign is not a digit.
-        let code_point = digits
-            .bytes()
-            .try_fold(0_u32, |value, byte| {
-                purrdf_hash::hex::nibble(byte).map(|digit| (value << 4) | u32::from(digit))
-            })
-            .ok_or_else(|| format!("`{digits}` is not hexadecimal at byte {}", self.position))?;
-        let resolved = char::from_u32(code_point)
-            .ok_or_else(|| format!("`{digits}` is not a Unicode scalar value"))?;
-        self.position += 2 + width;
+                ),
+                terminals::UcharError::BadHex => {
+                    format!(
+                        "truncated or non-hexadecimal escape at byte {}",
+                        self.position
+                    )
+                }
+                terminals::UcharError::NotAScalar => {
+                    format!(
+                        "the escape at byte {} is not a Unicode scalar value",
+                        self.position
+                    )
+                }
+            })?;
+        self.position += width;
         Ok(resolved)
     }
 }
@@ -1213,81 +1199,5 @@ mod term_walk_tests {
             .expect("the thread starts")
             .join()
             .expect("no walk overflowed the thread's stack");
-    }
-}
-
-/// The frozen UCHAR/ECHAR decoding vectors, replayed against the term codec's escape readers.
-#[cfg(test)]
-mod escape_frozen_vectors {
-    use purrdf_testkit::vectors::{VectorFile, answer_digest, decode_str};
-
-    const ESCAPES: &str = include_str!("../../lex/tests/vectors/escape_vectors.txt");
-    const SCALARS: &str = include_str!("../../lex/tests/vectors/uchar_scalar_vectors.txt");
-
-    fn show(decoded: Option<(char, usize)>) -> String {
-        decoded.map_or_else(
-            || "-".to_owned(),
-            |(c, n)| format!("{:04X}/{n}", u32::from(c)),
-        )
-    }
-
-    fn uchar(input: &str) -> String {
-        show({
-            let mut cursor = super::Cursor::new(input);
-            cursor.uchar().ok().map(|c| (c, cursor.position))
-        })
-    }
-
-    fn string(input: &str) -> String {
-        show({
-            let mut cursor = super::Cursor::new(input);
-            cursor.echar().ok().map(|c| (c, cursor.position))
-        })
-    }
-
-    /// Whether this copy is known to answer `input` differently from the vectors.
-    fn skipped(input: &str) -> bool {
-        let _ = input;
-        false
-    }
-
-    #[test]
-    fn escapes_replay_the_frozen_vectors() {
-        let file = VectorFile::parse(ESCAPES).expect("escape_vectors.txt");
-        let mut replayed = 0;
-        for record in file.records() {
-            let input = decode_str(record.fields[0]).expect("an encoded input");
-            if skipped(&input) {
-                continue;
-            }
-            assert_eq!(uchar(&input), record.fields[1], "UCHAR {input:?}");
-            assert_eq!(string(&input), record.fields[2], "string escape {input:?}");
-            replayed += 1;
-        }
-        assert!(replayed > 1000, "{replayed}");
-    }
-
-    #[test]
-    fn every_scalar_replays_the_frozen_digests() {
-        let file = VectorFile::parse(SCALARS).expect("uchar_scalar_vectors.txt");
-        for record in file.records() {
-            let first = u32::from_str_radix(record.fields[2], 16).expect("hex");
-            let last = u32::from_str_radix(record.fields[3], 16).expect("hex");
-            let answers = (first..=last).map(|cp| {
-                let text = match (record.fields[0], record.fields[1]) {
-                    ("u", "upper") => format!("\\u{cp:04X}"),
-                    ("u", _) => format!("\\u{cp:04x}"),
-                    (_, "upper") => format!("\\U{cp:08X}"),
-                    _ => format!("\\U{cp:08x}"),
-                };
-                uchar(&text)
-            });
-            assert_eq!(
-                answer_digest(answers),
-                record.fields[4],
-                "{:?}",
-                record.fields
-            );
-        }
     }
 }
