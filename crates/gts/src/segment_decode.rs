@@ -55,7 +55,7 @@
 //! or reifier binding — one still unresolved after ALL of a segment's events are
 //! seen — is an [`Err`], never a silent skip.
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::FastMap;
 use crate::model::{

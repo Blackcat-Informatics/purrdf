@@ -665,7 +665,6 @@ name = "purrdf-gts"
 version = "2.0.2"
 dependencies = [
  "aes-gcm",
- "ciborium",
  "fastrand",
  "getrandom",
  "purrdf-alloc-probe",
@@ -678,8 +677,6 @@ dependencies = [
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
- "serde",
- "serde_json",
  "structured-zstd",
  "visual-hashing",
 ]

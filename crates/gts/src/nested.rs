@@ -5,7 +5,7 @@
 
 use crate::FastSet;
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::model::{Diagnostic, Graph};
 use crate::reader::read;

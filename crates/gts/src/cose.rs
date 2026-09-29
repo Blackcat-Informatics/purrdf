@@ -9,9 +9,8 @@
 
 use aes_gcm::aead::{Aead, AeadInOut, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
-use ciborium::value::{Integer, Value};
 use purrdf_ed25519::{Signature, SigningKey, VerifyingKey};
-use serde::{Serialize, Serializer};
+use purrdf_lex::cbor::{self, Integer, Value, head};
 use std::borrow::Cow;
 
 use crate::model;
@@ -78,18 +77,15 @@ pub fn sign_id(frame_id: &[u8], signing_key: &SigningKey, kid: &str) -> Vec<u8> 
 
 /// Parse a COSE_Sign1 into `(kid, protected, signature)`, or `None` if malformed.
 pub fn parse(sig: &[u8]) -> Option<(String, Vec<u8>, [u8; 64])> {
-    let value: Value = ciborium::de::from_reader(sig).ok()?;
-    let body = match value {
-        Value::Tag(_, inner) => *inner,
-        other => other,
-    };
+    let (value, _) = cbor::decode_prefix(sig, cbor::Limits::DEFAULT).ok()?;
+    let body = value.as_tag().map_or(&value, |(_, inner)| inner);
     let array = body.as_array()?;
     if array.len() != 4 {
         return None;
     }
-    let protected = array[0].as_bytes()?.clone();
+    let protected = array[0].as_bytes()?.to_vec();
     let unprotected = array[1].as_map()?;
-    let signature: [u8; 64] = array[3].as_bytes()?.as_slice().try_into().ok()?;
+    let signature: [u8; 64] = array[3].as_bytes()?.try_into().ok()?;
     let kid_target = Integer::from(KID);
     let kid = unprotected.iter().find_map(|(k, v)| match (k, v) {
         (Value::Integer(i), Value::Bytes(b)) if *i == kid_target => {
@@ -183,19 +179,13 @@ fn encrypt0_protected() -> Vec<u8> {
 
 /// The COSE `Enc_structure` bound as AAD (RFC 9052 §5.3): no external AAD.
 fn enc_structure(protected: &[u8]) -> Vec<u8> {
-    struct Bytes<'a>(&'a [u8]);
-
-    impl Serialize for Bytes<'_> {
-        fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-            serializer.serialize_bytes(self.0)
-        }
-    }
-
     // One array byte, nine context bytes, at most nine byte-string header
     // bytes, and one empty byte string. No owned CBOR tree or growth copies.
     let mut aad = Vec::with_capacity(protected.len().saturating_add(20));
-    ciborium::ser::into_writer(&("Encrypt0", Bytes(protected), Bytes(&[])), &mut aad)
-        .expect("CBOR encoding to a Vec cannot fail");
+    head::push_head(&mut aad, head::ARRAY, 3);
+    head::write_text(&mut aad, "Encrypt0").expect("writing to a Vec cannot fail");
+    head::write_bytes(&mut aad, protected).expect("writing to a Vec cannot fail");
+    head::write_bytes(&mut aad, &[]).expect("writing to a Vec cannot fail");
     aad
 }
 
@@ -259,22 +249,16 @@ fn parse_encrypt0(blob: &[u8]) -> Option<Encrypt0Parts<'_>> {
 
 /// Preserve the complete decoder's accepted forms outside the borrowed view.
 fn parse_encrypt0_owned(blob: &[u8]) -> Option<Encrypt0Parts<'_>> {
-    let value: Value = ciborium::de::from_reader(blob).ok()?;
-    let body = match value {
-        Value::Tag(_, inner) => *inner,
-        other => other,
+    let (mut value, _) = cbor::decode_prefix(blob, cbor::Limits::DEFAULT).ok()?;
+    let body = match &mut value {
+        Value::Tag(_, inner) => inner.take(),
+        other => other.take(),
     };
-    let Value::Array(array) = body else {
-        return None;
-    };
-    let [
-        Value::Bytes(protected),
-        Value::Map(unprotected),
-        Value::Bytes(ciphertext),
-    ]: [Value; 3] = array.try_into().ok()?
-    else {
-        return None;
-    };
+    let [protected, unprotected, ciphertext]: [Value; 3] =
+        body.into_array().ok()?.try_into().ok()?;
+    let protected = protected.into_bytes().ok()?;
+    let unprotected = unprotected.into_map().ok()?;
+    let ciphertext = ciphertext.into_bytes().ok()?;
     let kid_target = Integer::from(KID);
     let iv_target = Integer::from(IV);
     let kid = unprotected.iter().find_map(|(k, v)| match (k, v) {

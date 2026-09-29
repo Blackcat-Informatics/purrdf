@@ -36,10 +36,10 @@ fn header_count(bytes: &[u8]) -> usize {
         .iter()
         .filter(|(_, item)| {
             let inner = match item {
-                ciborium::value::Value::Tag(_, inner) => inner.as_ref(),
+                purrdf_lex::cbor::Value::Tag(_, inner) => inner.as_ref(),
                 other => other,
             };
-            matches!(inner, ciborium::value::Value::Map(entries)
+            matches!(inner, purrdf_lex::cbor::Value::Map(entries)
                 if map_get(entries, "gts").is_some() && map_get(entries, "t").is_none())
         })
         .count()
@@ -51,13 +51,13 @@ fn chain(bytes: &[u8]) -> Vec<(Vec<u8>, Vec<u8>)> {
     items
         .iter()
         .filter_map(|(_, item)| {
-            let ciborium::value::Value::Map(frame) = item else {
+            let purrdf_lex::cbor::Value::Map(frame) = item else {
                 return None;
             };
             map_get(frame, "t")?;
             let (
-                Some(ciborium::value::Value::Bytes(prev)),
-                Some(ciborium::value::Value::Bytes(id)),
+                Some(purrdf_lex::cbor::Value::Bytes(prev)),
+                Some(purrdf_lex::cbor::Value::Bytes(id)),
             ) = (map_get(frame, "prev"), map_get(frame, "id"))
             else {
                 return None;
@@ -223,7 +223,7 @@ fn the_default_memory_profile_is_transform_chained() {
     let transformed = items
         .iter()
         .filter(|(_, item)| {
-            matches!(item, ciborium::value::Value::Map(frame)
+            matches!(item, purrdf_lex::cbor::Value::Map(frame)
                 if map_get(frame, "t").is_some() && map_get(frame, "x").is_some())
         })
         .count();
@@ -297,13 +297,13 @@ fn a_dictionary_capable_store_pins_the_dictionary_exactly_once() {
     let selected_ids: Vec<i64> = items
         .iter()
         .filter_map(|(_, item)| {
-            let ciborium::value::Value::Map(frame) = item else {
+            let purrdf_lex::cbor::Value::Map(frame) = item else {
                 return None;
             };
-            let Some(ciborium::value::Value::Array(chain)) = map_get(frame, "x") else {
+            let Some(purrdf_lex::cbor::Value::Array(chain)) = map_get(frame, "x") else {
                 return None;
             };
-            let [ciborium::value::Value::Integer(raw)] = chain.as_slice() else {
+            let [purrdf_lex::cbor::Value::Integer(raw)] = chain.as_slice() else {
                 panic!("each memory payload must ride exactly one catalog transform");
             };
             Some(i64::try_from(i128::from(*raw)).expect("catalog id fits i64"))

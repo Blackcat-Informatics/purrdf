@@ -3,11 +3,11 @@
 
 //! Blob replacement preserves insertion order and segment-local metadata.
 
-use ciborium::Value;
 use purrdf_gts::model::Graph;
 use purrdf_gts::reader::{BlobPayload, StreamingSink, read, read_to_sink};
 use purrdf_gts::wire::{digest_str, map_get};
 use purrdf_gts::writer::Writer;
+use purrdf_lex::cbor::Value;
 
 #[derive(Debug, PartialEq)]
 struct Event {

@@ -11,7 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::codec::{Codec, CodecError, EncodeOptions, encode_chain_with_options};
 use crate::model::{
@@ -25,11 +25,11 @@ use crate::wire::{
 pub const DEFAULT_RSYNCABLE_THRESHOLD: usize = 65_536;
 
 fn iv(n: i64) -> Value {
-    Value::Integer(ciborium::value::Integer::from(n))
+    Value::Integer(purrdf_lex::cbor::Integer::from(n))
 }
 
 fn uv(n: usize) -> Value {
-    Value::Integer(ciborium::value::Integer::from(n as u64))
+    Value::Integer(purrdf_lex::cbor::Integer::from(n as u64))
 }
 
 /// Serialise a [`Term`] to its wire map (dropping absent fields).
@@ -1771,7 +1771,7 @@ mod term_walk_tests {
     //! recursive references, on generated term tables with cycles and dangling ids, and
     //! over a chain far deeper than a 128 KiB thread could recurse.
 
-    use ciborium::value::Value;
+    use purrdf_lex::cbor::Value;
 
     use super::{canonical, term_identity_key, term_nesting_depth, text_or_null};
     use crate::model::{Graph, Term, TermKind};

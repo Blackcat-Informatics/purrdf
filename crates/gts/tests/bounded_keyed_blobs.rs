@@ -232,8 +232,8 @@ fn encoded_payload_len(container: &[u8]) -> usize {
             value
                 .as_map()
                 .and_then(|map| purrdf_gts::wire::map_get(map, "d"))
-                .and_then(ciborium::Value::as_bytes)
-                .map(Vec::len)
+                .and_then(purrdf_lex::cbor::Value::as_bytes)
+                .map(<[u8]>::len)
         })
         .expect("authored blob must contain encoded bytes")
 }

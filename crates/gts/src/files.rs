@@ -10,7 +10,8 @@ use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
+use purrdf_lex::cbor::head::{BYTES, MAP, write_bytes, write_head, write_text};
 
 use crate::model::{Graph, Quad, Term, TermKind};
 use crate::wire::digest_label;
@@ -440,42 +441,6 @@ fn guess_media_type(path: &Path) -> String {
     }
 }
 
-fn write_cbor_type_len<W: Write>(writer: &mut W, major: u8, len: u64) -> std::io::Result<()> {
-    let prefix = major << 5;
-    if len < 24 {
-        writer.write_all(&[prefix | len as u8])
-    } else if u8::try_from(len).is_ok() {
-        writer.write_all(&[prefix | 0x18, len as u8])
-    } else if u16::try_from(len).is_ok() {
-        writer.write_all(&[prefix | 0x19])?;
-        writer.write_all(&(len as u16).to_be_bytes())
-    } else if u32::try_from(len).is_ok() {
-        writer.write_all(&[prefix | 0x1a])?;
-        writer.write_all(&(len as u32).to_be_bytes())
-    } else {
-        writer.write_all(&[prefix | 0x1b])?;
-        writer.write_all(&len.to_be_bytes())
-    }
-}
-
-fn write_cbor_map_len<W: Write>(writer: &mut W, len: u64) -> std::io::Result<()> {
-    write_cbor_type_len(writer, 5, len)
-}
-
-fn write_cbor_text<W: Write>(writer: &mut W, text: &str) -> std::io::Result<()> {
-    write_cbor_type_len(writer, 3, text.len() as u64)?;
-    writer.write_all(text.as_bytes())
-}
-
-fn write_cbor_bytes_header<W: Write>(writer: &mut W, len: u64) -> std::io::Result<()> {
-    write_cbor_type_len(writer, 2, len)
-}
-
-fn write_cbor_bytes<W: Write>(writer: &mut W, bytes: &[u8]) -> std::io::Result<()> {
-    write_cbor_bytes_header(writer, bytes.len() as u64)?;
-    writer.write_all(bytes)
-}
-
 fn write_blob_pub_map<W: Write>(
     writer: &mut W,
     digest: &str,
@@ -483,17 +448,17 @@ fn write_blob_pub_map<W: Write>(
     representation: Option<&str>,
 ) -> std::io::Result<()> {
     let len = 1 + u64::from(media_type.is_some()) + u64::from(representation.is_some());
-    write_cbor_map_len(writer, len)?;
+    write_head(writer, MAP, len)?;
     if let Some(media_type) = media_type {
-        write_cbor_text(writer, "mt")?;
-        write_cbor_text(writer, media_type)?;
+        write_text(writer, "mt")?;
+        write_text(writer, media_type)?;
     }
     if let Some(representation) = representation {
-        write_cbor_text(writer, "rep")?;
-        write_cbor_text(writer, representation)?;
+        write_text(writer, "rep")?;
+        write_text(writer, representation)?;
     }
-    write_cbor_text(writer, "digest")?;
-    write_cbor_text(writer, digest)
+    write_text(writer, "digest")?;
+    write_text(writer, digest)
 }
 
 fn copy_counted_and_hash<R: Read, W: Write>(
@@ -530,16 +495,16 @@ fn write_blob_preimage<R: Read, W: Write>(
     representation: Option<&str>,
     prev: &[u8],
 ) -> std::io::Result<String> {
-    write_cbor_map_len(writer, 4)?;
-    write_cbor_text(writer, "d")?;
-    write_cbor_bytes_header(writer, size)?;
+    write_head(writer, MAP, 4)?;
+    write_text(writer, "d")?;
+    write_head(writer, BYTES, size)?;
     let (digest, _) = copy_counted_and_hash(reader, writer, size)?;
-    write_cbor_text(writer, "t")?;
-    write_cbor_text(writer, "blob")?;
-    write_cbor_text(writer, "pub")?;
+    write_text(writer, "t")?;
+    write_text(writer, "blob")?;
+    write_text(writer, "pub")?;
     write_blob_pub_map(writer, &digest, media_type, representation)?;
-    write_cbor_text(writer, "prev")?;
-    write_cbor_bytes(writer, prev)?;
+    write_text(writer, "prev")?;
+    write_bytes(writer, prev)?;
     Ok(digest)
 }
 
@@ -557,9 +522,9 @@ fn write_blob_frame<R: Read, W: Write>(
     reader: R,
     meta: &BlobFrameMeta<'_>,
 ) -> std::io::Result<()> {
-    write_cbor_map_len(writer, 5)?;
-    write_cbor_text(writer, "d")?;
-    write_cbor_bytes_header(writer, meta.size)?;
+    write_head(writer, MAP, 5)?;
+    write_text(writer, "d")?;
+    write_head(writer, BYTES, meta.size)?;
     let (observed_digest, _) = copy_counted_and_hash(reader, writer, meta.size)?;
     if observed_digest != meta.digest {
         return Err(std::io::Error::new(
@@ -570,14 +535,14 @@ fn write_blob_frame<R: Read, W: Write>(
             ),
         ));
     }
-    write_cbor_text(writer, "t")?;
-    write_cbor_text(writer, "blob")?;
-    write_cbor_text(writer, "id")?;
-    write_cbor_bytes(writer, meta.id)?;
-    write_cbor_text(writer, "pub")?;
+    write_text(writer, "t")?;
+    write_text(writer, "blob")?;
+    write_text(writer, "id")?;
+    write_bytes(writer, meta.id)?;
+    write_text(writer, "pub")?;
     write_blob_pub_map(writer, meta.digest, meta.media_type, meta.representation)?;
-    write_cbor_text(writer, "prev")?;
-    write_cbor_bytes(writer, meta.prev)
+    write_text(writer, "prev")?;
+    write_bytes(writer, meta.prev)
 }
 
 fn append_blob_path<W: Write>(

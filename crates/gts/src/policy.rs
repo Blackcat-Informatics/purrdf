@@ -13,7 +13,7 @@ use std::collections::BTreeSet;
 
 use crate::FastSet;
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::model::{Graph, Signature, TermKind};
 use crate::stream::{SEALED_SOURCE, STREAM_NS};
