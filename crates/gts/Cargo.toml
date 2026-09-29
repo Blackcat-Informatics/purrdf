@@ -35,6 +35,9 @@ purrdf-events = { workspace = true }
 # contract) and is already wasm32-clean, so it drags nothing in and `make wasm`
 # stays green.
 purrdf-iri = { workspace = true }
+# The one Crockford Base32 renderer and reader (`purrdf_lex::crockford`) behind
+# the ULID text form. A leaf over `purrdf-hash` only, and wasm32-clean.
+purrdf-lex = { workspace = true }
 # The RFC 3339 grammar and writer (`purrdf_xsd::rfc3339`) behind the files/tar
 # profiles' `modified` timestamps; `src/rfc3339.rs` names the profiles' reading
 # of it. A wasm32-clean leaf, so the edge adds nothing below it.

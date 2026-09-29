@@ -699,8 +699,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "iri scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 11
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -710,8 +710,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "iri scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 11
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -721,8 +721,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "iri scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 5
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -732,8 +732,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "iri scan neon"
   configs = ["aarch64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 10
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -743,8 +743,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "iri scan sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 6
   require_mnemonics = ["cmpeq"]
   max_fma = 0
@@ -754,8 +754,8 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "iri scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -764,19 +764,19 @@ summary = "`ser_model::escape_iri` / `escape_literal`: one chunked scan for the 
   [[site.measure]]
   label = "iri scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 9
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
   forbid_relaxed = true
 
-  # `escape_iri` is `purrdf_core::iri_escape::escape`, inlined at every call site; the driver is measured there. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
+  # `escape_iri` is `purrdf_lex::iri_escape::escape`, inlined at every call site; the driver is measured there. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
   [[site.measure]]
   label = "iri (in iri_escape::escape)"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::escape"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2177,14 +2177,14 @@ summary = "the pack triples `(?,p,o)` access path (`partition_rows`: the shorter
 
 [[site]]
 id = "core.canon-escape"
-summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-Quads escapes: one chunked scan per value, bulk copies of the clean runs"
+summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-Quads escapes over `purrdf_lex::iri_escape` and the `Canonical` carrier of `purrdf_lex::literal_escape`: one chunked scan per value, bulk copies of the clean runs"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v23.
   [[site.measure]]
   label = "iri scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 11
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -2194,8 +2194,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "iri scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 11
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -2205,8 +2205,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "iri scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 5
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -2216,8 +2216,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "iri scan neon"
   configs = ["aarch64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 10
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -2227,8 +2227,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "iri scan sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 6
   require_mnemonics = ["cmpeq"]
   max_fma = 0
@@ -2238,8 +2238,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "iri scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2248,14 +2248,14 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "iri scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 9
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
   forbid_relaxed = true
 
-  # Delegates to `iri_escape::push_escaped`. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
+  # Delegates to `purrdf_lex::iri_escape::push_escaped`. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
   [[site.measure]]
   label = "iri"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -2269,8 +2269,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "literal scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 5
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -2280,8 +2280,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "literal scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 11
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -2291,8 +2291,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "literal scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 9
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -2302,8 +2302,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "literal scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 4
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -2313,8 +2313,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "literal scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2323,8 +2323,8 @@ summary = "`canon::write_iri_escaped` / `write_literal_escaped`, the RDFC-1.0 N-
   [[site.measure]]
   label = "literal scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -2840,8 +2840,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "iri scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 11
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -2851,8 +2851,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "iri scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 11
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -2862,8 +2862,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "iri scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 5
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -2873,8 +2873,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "iri scan neon"
   configs = ["aarch64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 10
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -2884,8 +2884,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "iri scan sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 6
   require_mnemonics = ["cmpeq"]
   max_fma = 0
@@ -2895,8 +2895,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "iri scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2905,14 +2905,14 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "iri scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::iri_escape::find_first_candidate"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::iri_escape::find_first_candidate"
   min_vector_ops = 9
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
   forbid_relaxed = true
 
-  # Delegates to `purrdf_core::iri_escape::push_escaped`, monomorphized here. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
+  # Delegates to `purrdf_lex::iri_escape::push_escaped`, monomorphized here. The escape driver: scalar by nature (a scan call, a `char` decode and a push per stop); the entry records its counts.
   [[site.measure]]
   label = "iri"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
@@ -2926,8 +2926,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "literal scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 5
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -2937,8 +2937,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "literal scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 11
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -2948,8 +2948,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "literal scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 9
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -2959,8 +2959,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "literal scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 4
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -2970,8 +2970,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "literal scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2980,8 +2980,8 @@ summary = "`engine::write_iri_escaped` / `write_literal_escaped` (the latter inl
   [[site.measure]]
   label = "literal scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::canon::find_first_literal_escape"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::literal_escape::find_first_literal_escape"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0

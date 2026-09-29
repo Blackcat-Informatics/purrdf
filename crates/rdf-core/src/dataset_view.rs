@@ -18,14 +18,70 @@ use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::RdfStoreCapabilities;
+use crate::collections::{ListError, ListErrorKind, RdfListError, container_member_index};
 use crate::collections::{RDF_ALT, RDF_BAG, RDF_FIRST, RDF_NIL, RDF_REST, RDF_SEQ, RDF_TYPE};
-use crate::collections::{RdfListError, container_member_index};
 use crate::ir::{QuadIds, QuadProbePlan, QuadRef, RdfDataset, TermId, TermRef, TermValue};
 
 mod sealed {
     pub trait Sealed {}
 
     impl Sealed for crate::ir::MutableDataset {}
+}
+
+/// How many distinct objects a `(subject, predicate, ?)` pattern has.
+enum Sole<Id> {
+    None,
+    One(Id),
+    Many,
+}
+
+/// The distinct object of `(subject, predicate, ?)` in `graph`, if there is
+/// exactly one. A statement asserted in several named graphs is one object.
+fn sole_object<V: DatasetView + ?Sized>(
+    view: &V,
+    subject: V::Id,
+    predicate: Option<V::Id>,
+    graph: GraphMatch<V::Id>,
+) -> Sole<V::Id> {
+    let Some(predicate) = predicate else {
+        return Sole::None;
+    };
+    let mut found = Sole::None;
+    for quad in view.quads_for_pattern(Some(subject), Some(predicate), None, graph) {
+        match found {
+            Sole::One(existing) if existing != quad.o => return Sole::Many,
+            _ => found = Sole::One(quad.o),
+        }
+    }
+    found
+}
+
+/// Where a cycle of length `length` on the `rdf:rest` chain from `head`
+/// begins: the number of cells before it, and its first cell. Two cursors
+/// `length` cells apart meet exactly there. Every cell they visit was already
+/// validated by the walk that found the cycle, so each has one `rdf:rest`.
+fn cycle_start<V: DatasetView + ?Sized>(
+    view: &V,
+    head: V::Id,
+    length: usize,
+    rest: Option<V::Id>,
+    graph: GraphMatch<V::Id>,
+) -> (usize, V::Id) {
+    let step = |cell: V::Id| match sole_object(view, cell, rest, graph) {
+        Sole::One(next) => next,
+        Sole::None | Sole::Many => unreachable!("the walk validated every cell on the cycle"),
+    };
+    let mut ahead = head;
+    for _ in 0..length {
+        ahead = step(ahead);
+    }
+    let (mut behind, mut prefix) = (head, 0);
+    while behind != ahead {
+        behind = step(behind);
+        ahead = step(ahead);
+        prefix += 1;
+    }
+    (prefix, behind)
 }
 
 /// Why [`DatasetView::term_value`] could not resolve an id to a value.
@@ -512,16 +568,121 @@ pub trait DatasetView {
         set.into_iter()
     }
 
+    /// The distinct objects of `(subject, predicate, ?)` in `graph`, ascending
+    /// by id.
+    ///
+    /// Distinct because an RDF graph is a set: a statement asserted in several
+    /// named graphs is one value when `graph` spans them.
+    fn objects(
+        &self,
+        subject: Self::Id,
+        predicate: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Vec<Self::Id> {
+        let mut objects: Vec<Self::Id> = self
+            .quads_for_pattern(Some(subject), Some(predicate), None, graph)
+            .map(|q| q.o)
+            .collect();
+        objects.sort_unstable();
+        objects.dedup();
+        objects
+    }
+
+    /// The members of the RDF Collection headed by `head` in `graph`, in list
+    /// order — the one strict walker.
+    ///
+    /// `head` is `rdf:nil` (the empty list) or a cell; every cell must have
+    /// exactly one distinct `rdf:first` and exactly one distinct `rdf:rest`,
+    /// the `rdf:rest` chain must reach `rdf:nil` without revisiting a cell, and
+    /// `rdf:nil` must carry neither edge (RDF 1.2 Semantics §D.3, SHACL 1.2
+    /// Core §1.4). Anything else is a [`ListError`] naming the broken
+    /// invariant, the node where the walk stopped and every member read before
+    /// it. Nothing else about a cell is constrained: a cell may be an IRI or a
+    /// blank node, may carry `rdf:type rdf:List` or any other statement, and a
+    /// member may be any term — a literal or a triple term included.
+    ///
+    /// The cycle check allocates nothing: Brent's algorithm keeps one saved
+    /// cell and compares each step against it, so a cycle is found within
+    /// twice the walked length and a well-formed list costs no lookup beyond
+    /// its own edges.
+    ///
+    /// # Errors
+    ///
+    /// [`ListError`] when the collection is malformed; see
+    /// [`ListErrorKind`].
+    fn rdf_list_strict(
+        &self,
+        head: Self::Id,
+        graph: GraphMatch<Self::Id>,
+    ) -> Result<Vec<Self::Id>, ListError<Self::Id>> {
+        let first = self.term_id_by_value(&TermValue::iri(RDF_FIRST));
+        let rest = self.term_id_by_value(&TermValue::iri(RDF_REST));
+        let nil = self.term_id_by_value(&TermValue::iri(RDF_NIL));
+        let mut members = Vec::new();
+        let fail = |kind, members, node| {
+            Err(ListError {
+                kind,
+                members,
+                node,
+            })
+        };
+        // Brent: `saved` is compared against every cell; it jumps forward to
+        // the current cell whenever `steps` reaches `power`, which doubles.
+        let (mut saved, mut power, mut steps) = (head, 1_usize, 0_usize);
+        let mut cell = head;
+        loop {
+            if Some(cell) == nil {
+                let carries = |p: Option<Self::Id>| {
+                    p.is_some_and(|p| {
+                        self.quads_for_pattern(Some(cell), Some(p), None, graph)
+                            .next()
+                            .is_some()
+                    })
+                };
+                if carries(first) || carries(rest) {
+                    return fail(ListErrorKind::NonEmptyNil, members, cell);
+                }
+                return Ok(members);
+            }
+            match sole_object(self, cell, first, graph) {
+                Sole::None => return fail(ListErrorKind::MissingFirst, members, cell),
+                Sole::Many => return fail(ListErrorKind::MultipleFirst, members, cell),
+                Sole::One(member) => members.push(member),
+            }
+            let next = match sole_object(self, cell, rest, graph) {
+                Sole::None => return fail(ListErrorKind::MissingRest, members, cell),
+                Sole::Many => return fail(ListErrorKind::MultipleRest, members, cell),
+                Sole::One(next) => next,
+            };
+            steps += 1;
+            if next == saved {
+                // `steps` is now the cycle's length: find where it starts
+                // (two cursors `steps` apart meet at the first repeated cell)
+                // and keep each distinct cell's member once.
+                let (prefix, entry) = cycle_start(self, head, steps, rest, graph);
+                members.truncate(prefix + steps);
+                return fail(ListErrorKind::Cycle, members, entry);
+            }
+            if steps == power {
+                saved = next;
+                power *= 2;
+                steps = 0;
+            }
+            cell = next;
+        }
+    }
+
     /// Materialize an `rdf:first`/`rdf:rest`/`rdf:nil` Collection whose head is
     /// `head`, scoped to `graph`. Returns members in list order.
     ///
-    /// Cycle-guarded: a revisited cell terminates the walk gracefully (`Ok`,
-    /// truncated at the cycle), matching the reference GTS walker. A MALFORMED cell
-    /// — a cons cell with no `rdf:first`, more than one `rdf:first`, or an
-    /// `rdf:rest` to a term that is neither `rdf:nil` nor a cons cell — is a hard
-    /// error ([`RdfListError`]): this walker is also a validator. A head that is
-    /// `rdf:nil` or is not a list (carries neither `rdf:first` nor `rdf:rest`)
-    /// yields an empty `Vec`.
+    /// The lenient reading over [`rdf_list_strict`](Self::rdf_list_strict):
+    /// a head that is `rdf:nil` or no list at all (it carries neither
+    /// `rdf:first` nor `rdf:rest`) yields an empty `Vec`, and a walk that
+    /// meets a cycle, a cell with no `rdf:rest`, or an `rdf:nil` carrying
+    /// edges ends there with the members read so far — the reading of the
+    /// GTS reference walker. Every other malformation is an [`RdfListError`]:
+    /// a cell with no or several `rdf:first`, several `rdf:rest`, or an
+    /// `rdf:rest` to a term that is neither `rdf:nil` nor a cell.
     ///
     /// If the `rdf:first` IRI is not interned in this view at all, no Collection can
     /// exist, so the result is an empty `Vec` (`Ok`), not an error.
@@ -530,72 +691,32 @@ pub trait DatasetView {
         head: Self::Id,
         graph: GraphMatch<Self::Id>,
     ) -> Result<Vec<Self::Id>, RdfListError> {
-        // No `rdf:first` in the term table ⇒ no cons cell can exist here.
-        let Some(first_p) = self.term_id_by_value(&TermValue::iri(RDF_FIRST)) else {
-            return Ok(Vec::new());
+        let error = match self.rdf_list_strict(head, graph) {
+            Ok(members) => return Ok(members),
+            Err(error) => error,
         };
-        // `rdf:rest`/`rdf:nil` may be absent; the walk handles that inline (a
-        // missing `rdf:rest` edge simply ends the list, absent `rdf:nil` matches no
-        // terminator).
-        let rest_p = self.term_id_by_value(&TermValue::iri(RDF_REST));
-        let nil = self.term_id_by_value(&TermValue::iri(RDF_NIL));
-
-        let mut out = Vec::new();
-        // Cycle guard: revisited cell terminates the walk (mirrors the reference
-        // GTS `rdf_list` seen-set).
-        let mut seen: BTreeSet<Self::Id> = BTreeSet::new();
-        let mut current = head;
-        loop {
-            if Some(current) == nil {
-                break;
+        match error.kind {
+            ListErrorKind::Cycle | ListErrorKind::MissingRest | ListErrorKind::NonEmptyNil => {
+                Ok(error.members)
             }
-            if !seen.insert(current) {
-                break;
-            }
-
-            // Gather this cell's `rdf:first` objects: zero or many is malformed
-            // (the defensive multi-edge detection of the reference list walker).
-            let mut first_obj = None;
-            let mut first_count = 0usize;
-            for q in self.quads_for_pattern(Some(current), Some(first_p), None, graph) {
-                first_obj = Some(q.o);
-                first_count += 1;
-            }
-            // The single `rdf:rest` object, if any.
-            let mut rest_obj = None;
-            if let Some(rest_p) = rest_p {
-                for q in self.quads_for_pattern(Some(current), Some(rest_p), None, graph) {
-                    rest_obj = Some(q.o);
+            ListErrorKind::MultipleFirst => Err(RdfListError::MultipleFirst),
+            ListErrorKind::MultipleRest => Err(RdfListError::MultipleRest),
+            // A node with neither edge: the head is no list, an interior node
+            // is a dangling tail.
+            ListErrorKind::MissingFirst => {
+                let rest = self.term_id_by_value(&TermValue::iri(RDF_REST));
+                let has_rest = rest.is_some_and(|rest| {
+                    self.quads_for_pattern(Some(error.node), Some(rest), None, graph)
+                        .next()
+                        .is_some()
+                });
+                match (has_rest, error.node == head) {
+                    (true, _) => Err(RdfListError::MissingFirst),
+                    (false, true) => Ok(Vec::new()),
+                    (false, false) => Err(RdfListError::DanglingRest),
                 }
             }
-
-            // Neither edge ⇒ not a cons cell. Only `head` can reach this branch
-            // (interior cells are only entered through a rest edge validated to
-            // point at `rdf:nil` or a cons cell); it means `head` is simply not a
-            // list ⇒ an empty Vec.
-            if first_count == 0 && rest_obj.is_none() {
-                break;
-            }
-            if first_count == 0 {
-                return Err(RdfListError::MissingFirst);
-            }
-            if first_count > 1 {
-                return Err(RdfListError::MultipleFirst);
-            }
-            out.push(first_obj.expect("first_count == 1 implies a first object"));
-
-            // A cons cell with no `rdf:rest` edge ends the list (a truncated, but
-            // not malformed, tail). Otherwise validate the rest target before
-            // following it.
-            let Some(next) = rest_obj else {
-                break;
-            };
-            if Some(next) != nil && !self.is_cons_cell(next, first_p, rest_p, graph) {
-                return Err(RdfListError::DanglingRest);
-            }
-            current = next;
         }
-        Ok(out)
     }
 
     /// RDF Container members `rdf:_1`..`rdf:_n` of `head` in numeric order, scoped

@@ -61,6 +61,8 @@ pub enum RdfListError {
     /// An `rdf:rest` edge points at a term that is neither `rdf:nil` nor a cons
     /// cell (a term with no `rdf:first`/`rdf:rest`) — a dangling tail.
     DanglingRest,
+    /// A cons cell carries more than one `rdf:rest` object (ambiguous tail).
+    MultipleRest,
 }
 
 impl std::fmt::Display for RdfListError {
@@ -71,12 +73,170 @@ impl std::fmt::Display for RdfListError {
             Self::DanglingRest => {
                 "rdf:List rdf:rest points at a term that is neither rdf:nil nor a cons cell"
             }
+            Self::MultipleRest => "rdf:List cons cell with multiple rdf:rest objects",
         };
         f.write_str(msg)
     }
 }
 
 impl std::error::Error for RdfListError {}
+
+/// Which invariant of an RDF Collection the strict walker
+/// ([`DatasetView::rdf_list_strict`](crate::DatasetView::rdf_list_strict))
+/// found broken, at [`ListError::node`].
+///
+/// RDF 1.2 Semantics §D.3 and SHACL 1.2 Core §1.4 define a well-formed list:
+/// every cell has exactly one `rdf:first` and exactly one `rdf:rest`, the
+/// `rdf:rest` chain reaches `rdf:nil` without revisiting a cell, and `rdf:nil`
+/// itself has neither edge.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+pub enum ListErrorKind {
+    /// The `rdf:rest` chain returns to `node`, a cell already walked.
+    Cycle,
+    /// `node` is on the chain (the head, or an `rdf:rest` object that is not
+    /// `rdf:nil`) and has no `rdf:first`.
+    MissingFirst,
+    /// `node` has more than one distinct `rdf:first` object.
+    MultipleFirst,
+    /// `node` has an `rdf:first` and no `rdf:rest`: the chain never ends.
+    MissingRest,
+    /// `node` has more than one distinct `rdf:rest` object.
+    MultipleRest,
+    /// `node` is `rdf:nil` and carries an `rdf:first` or `rdf:rest`.
+    NonEmptyNil,
+}
+
+impl ListErrorKind {
+    const fn describe(self) -> &'static str {
+        match self {
+            Self::Cycle => "its rdf:rest chain returns to a cell already walked",
+            Self::MissingFirst => "a cell on its rdf:rest chain has no rdf:first",
+            Self::MultipleFirst => "a cell has more than one rdf:first",
+            Self::MissingRest => "a cell has no rdf:rest",
+            Self::MultipleRest => "a cell has more than one rdf:rest",
+            Self::NonEmptyNil => "rdf:nil carries an rdf:first or rdf:rest",
+        }
+    }
+}
+
+/// A malformed RDF Collection: what was broken, where, and every member read
+/// before the walk stopped.
+///
+/// `members` holds, in list order, the `rdf:first` object of every cell that
+/// had exactly one. For [`ListErrorKind::MissingRest`] and
+/// [`ListErrorKind::MultipleRest`] that includes `node`'s own member; for
+/// [`ListErrorKind::Cycle`] it is each distinct cell's member once, the list a
+/// reader that stops at the revisited cell would see. A caller whose
+/// specification recovers from a variant (truncating at a cycle, say) reads
+/// the recovered list from here instead of walking again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListError<Id = crate::ir::TermId> {
+    /// What was broken.
+    pub kind: ListErrorKind,
+    /// The members read before the walk stopped (see the type docs).
+    pub members: Vec<Id>,
+    /// The cell (or `rdf:nil`) where the walk stopped.
+    pub node: Id,
+}
+
+impl<Id: std::fmt::Debug> std::fmt::Display for ListError<Id> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "malformed rdf:List: {} (at {:?}, after {} member(s))",
+            self.kind.describe(),
+            self.node,
+            self.members.len()
+        )
+    }
+}
+
+impl<Id: std::fmt::Debug> std::error::Error for ListError<Id> {}
+
+/// The three terms an RDF Collection is written with, in a caller's term
+/// type: `rdf:first`, `rdf:rest` and `rdf:nil`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListVocab<T> {
+    /// `rdf:first`.
+    pub first: T,
+    /// `rdf:rest`.
+    pub rest: T,
+    /// `rdf:nil`.
+    pub nil: T,
+}
+
+impl ListVocab<crate::ir::TermValue> {
+    /// The three terms as owned [`TermValue`](crate::ir::TermValue) IRIs.
+    #[must_use]
+    pub fn term_values() -> Self {
+        use crate::ir::TermValue;
+        Self {
+            first: TermValue::iri(RDF_FIRST),
+            rest: TermValue::iri(RDF_REST),
+            nil: TermValue::iri(RDF_NIL),
+        }
+    }
+}
+
+/// Write `members` as an RDF Collection and return its head: `rdf:nil` for
+/// no members, else the first cell.
+///
+/// `cell(i)` mints the `i`-th cell (a blank node or an IRI, in the caller's
+/// scheme), called once per member in order; `emit(subject, predicate,
+/// object)` receives, per cell, its `rdf:first` statement and then its
+/// `rdf:rest` statement, whose object is the next cell or `rdf:nil`. The
+/// caller links the head from wherever the list hangs, and adds any further
+/// statements about the cells (an `rdf:type rdf:List`, say) in `emit`.
+///
+/// Generic over the term type, so one construction serves a builder keyed by
+/// ids, an owned-term quad list and a CONSTRUCT buffer alike.
+///
+/// ```
+/// use purrdf_core::collections::{ListVocab, build_rdf_list};
+///
+/// let vocab = ListVocab { first: "first", rest: "rest", nil: "nil" };
+/// let mut triples = Vec::new();
+/// let cells = ["c0", "c1"];
+/// let head = build_rdf_list(["a", "b"], &vocab, |i| cells[i], |s, p, o| triples.push((s, p, o)));
+/// assert_eq!(head, "c0");
+/// assert_eq!(
+///     triples,
+///     [("c0", "first", "a"), ("c0", "rest", "c1"), ("c1", "first", "b"), ("c1", "rest", "nil")]
+/// );
+/// let empty = build_rdf_list(Vec::<&str>::new(), &vocab, |i| cells[i], |_, _, _| unreachable!());
+/// assert_eq!(empty, "nil");
+/// ```
+pub fn build_rdf_list<T, I>(
+    members: I,
+    vocab: &ListVocab<T>,
+    mut cell: impl FnMut(usize) -> T,
+    mut emit: impl FnMut(T, T, T),
+) -> T
+where
+    T: Clone,
+    I: IntoIterator<Item = T>,
+{
+    let mut members = members.into_iter().peekable();
+    if members.peek().is_none() {
+        return vocab.nil.clone();
+    }
+    let head = cell(0);
+    let mut current = head.clone();
+    let mut index = 0;
+    while let Some(member) = members.next() {
+        emit(current.clone(), vocab.first.clone(), member);
+        let next = if members.peek().is_some() {
+            index += 1;
+            cell(index)
+        } else {
+            vocab.nil.clone()
+        };
+        emit(current, vocab.rest.clone(), next.clone());
+        current = next;
+    }
+    head
+}
 
 #[cfg(test)]
 mod tests {
@@ -379,6 +539,313 @@ mod tests {
             ds.rdf_list(head, GraphMatch::Default)
                 .expect("default empty"),
             [] as [_; 0]
+        );
+    }
+
+    fn strict(ds: &crate::ir::RdfDataset, head: TermId) -> Result<Vec<TermId>, ListError> {
+        ds.rdf_list_strict(head, GraphMatch::Any)
+    }
+
+    #[test]
+    fn two_rdf_rest_edges_are_refused() {
+        let mut b = RdfDatasetBuilder::new();
+        let (first, rest, nil) = (
+            rdf(&mut b, "first"),
+            rdf(&mut b, "rest"),
+            rdf(&mut b, "nil"),
+        );
+        let a = iri(&mut b, "a");
+        let head = b.intern_blank("head", BlankScope::DEFAULT);
+        let other = b.intern_blank("other", BlankScope::DEFAULT);
+        b.push_quad(head, first, a, None);
+        b.push_quad(head, rest, nil, None);
+        b.push_quad(head, rest, other, None);
+        b.push_quad(other, first, a, None);
+        b.push_quad(other, rest, nil, None);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(
+            strict(&ds, head),
+            Err(ListError {
+                kind: ListErrorKind::MultipleRest,
+                members: vec![a],
+                node: head,
+            })
+        );
+        // The lenient reading refuses it too rather than picking one tail.
+        assert_eq!(
+            ds.rdf_list(head, GraphMatch::Any),
+            Err(RdfListError::MultipleRest)
+        );
+    }
+
+    #[test]
+    fn a_well_formed_three_element_list_walks() {
+        let mut b = RdfDatasetBuilder::new();
+        let (a, bb, c) = (iri(&mut b, "a"), iri(&mut b, "b"), iri(&mut b, "c"));
+        let head = build_list(&mut b, &[a, bb, c], None);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(strict(&ds, head), Ok(vec![a, bb, c]));
+    }
+
+    #[test]
+    fn an_rdf_nil_head_is_the_empty_list() {
+        let mut b = RdfDatasetBuilder::new();
+        let nil = rdf(&mut b, "nil");
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(strict(&ds, nil), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn cells_typed_rdf_list_and_annotated_still_walk() {
+        let mut b = RdfDatasetBuilder::new();
+        let (a, bb) = (iri(&mut b, "a"), iri(&mut b, "b"));
+        let head = build_list(&mut b, &[a, bb], None);
+        let (first, ty, list) = (
+            rdf(&mut b, "first"),
+            rdf(&mut b, "type"),
+            rdf(&mut b, "List"),
+        );
+        let note = iri(&mut b, "note");
+        let reifier = iri(&mut b, "reifier");
+        let text = b.intern_literal(RdfLiteral::simple("the first member"));
+        b.push_quad(head, ty, list, None);
+        b.push_quad(head, note, text, None);
+        let statement = b.intern_triple(head, first, a);
+        b.push_reifier(reifier, statement);
+        b.push_annotation(reifier, note, text);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(strict(&ds, head), Ok(vec![a, bb]));
+    }
+
+    #[test]
+    fn iri_named_cells_walk() {
+        let mut b = RdfDatasetBuilder::new();
+        let (first, rest, nil) = (
+            rdf(&mut b, "first"),
+            rdf(&mut b, "rest"),
+            rdf(&mut b, "nil"),
+        );
+        let (a, bb) = (iri(&mut b, "a"), iri(&mut b, "b"));
+        let (c0, c1) = (iri(&mut b, "cell0"), iri(&mut b, "cell1"));
+        b.push_quad(c0, first, a, None);
+        b.push_quad(c0, rest, c1, None);
+        b.push_quad(c1, first, bb, None);
+        b.push_quad(c1, rest, nil, None);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(strict(&ds, c0), Ok(vec![a, bb]));
+    }
+
+    #[test]
+    fn literal_and_triple_term_members_walk() {
+        let mut b = RdfDatasetBuilder::new();
+        let literal = b.intern_literal(RdfLiteral::simple("x"));
+        let (s, p, o) = (iri(&mut b, "s"), iri(&mut b, "p"), iri(&mut b, "o"));
+        let triple = b.intern_triple(s, p, o);
+        let head = build_list(&mut b, &[literal, triple], None);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(strict(&ds, head), Ok(vec![literal, triple]));
+    }
+
+    #[test]
+    fn a_statement_in_several_graphs_is_one_edge() {
+        let mut b = RdfDatasetBuilder::new();
+        let (first, rest, nil) = (
+            rdf(&mut b, "first"),
+            rdf(&mut b, "rest"),
+            rdf(&mut b, "nil"),
+        );
+        let a = iri(&mut b, "a");
+        let (g1, g2) = (iri(&mut b, "g1"), iri(&mut b, "g2"));
+        let head = b.intern_blank("head", BlankScope::DEFAULT);
+        for g in [g1, g2] {
+            b.push_quad(head, first, a, Some(g));
+            b.push_quad(head, rest, nil, Some(g));
+        }
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(strict(&ds, head), Ok(vec![a]));
+        assert_eq!(ds.objects(head, first, GraphMatch::Any), vec![a]);
+        assert_eq!(ds.objects(head, first, GraphMatch::Named(g1)), vec![a]);
+        assert_eq!(ds.objects(head, first, GraphMatch::Default), Vec::new());
+    }
+
+    #[test]
+    fn a_cycle_is_refused_with_each_cell_read_once() {
+        let mut b = RdfDatasetBuilder::new();
+        let (first, rest) = (rdf(&mut b, "first"), rdf(&mut b, "rest"));
+        let members: Vec<TermId> = (0..7).map(|i| iri(&mut b, &format!("m{i}"))).collect();
+        let cells: Vec<TermId> = (0..7)
+            .map(|i| b.intern_blank(&format!("c{i}"), BlankScope::DEFAULT))
+            .collect();
+        // c0 → … → c6 → c2: a prefix of two cells and a cycle of five.
+        for i in 0..7 {
+            b.push_quad(cells[i], first, members[i], None);
+            let next = if i == 6 { cells[2] } else { cells[i + 1] };
+            b.push_quad(cells[i], rest, next, None);
+        }
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(
+            strict(&ds, cells[0]),
+            Err(ListError {
+                kind: ListErrorKind::Cycle,
+                members,
+                node: cells[2],
+            })
+        );
+        // Every length of prefix and cycle is found with the right entry.
+        for prefix in 0..5_usize {
+            for cycle in 1..9_usize {
+                let mut b = RdfDatasetBuilder::new();
+                let (first, rest) = (rdf(&mut b, "first"), rdf(&mut b, "rest"));
+                let total = prefix + cycle;
+                let cells: Vec<TermId> = (0..total)
+                    .map(|i| b.intern_blank(&format!("c{i}"), BlankScope::DEFAULT))
+                    .collect();
+                let m = iri(&mut b, "m");
+                for i in 0..total {
+                    b.push_quad(cells[i], first, m, None);
+                    let next = if i + 1 == total {
+                        cells[prefix]
+                    } else {
+                        cells[i + 1]
+                    };
+                    b.push_quad(cells[i], rest, next, None);
+                }
+                let ds = b.freeze().expect("freeze");
+                let error = strict(&ds, cells[0]).expect_err("a cycle");
+                assert_eq!(error.kind, ListErrorKind::Cycle);
+                assert_eq!(error.node, cells[prefix], "{prefix} {cycle}");
+                assert_eq!(error.members.len(), total, "{prefix} {cycle}");
+            }
+        }
+    }
+
+    #[test]
+    fn missing_edges_are_refused_and_the_error_names_the_cell() {
+        let mut b = RdfDatasetBuilder::new();
+        let (first, rest) = (rdf(&mut b, "first"), rdf(&mut b, "rest"));
+        let a = iri(&mut b, "a");
+        let no_rest = b.intern_blank("no_rest", BlankScope::DEFAULT);
+        b.push_quad(no_rest, first, a, None);
+        let plain = iri(&mut b, "plain");
+        let to_plain = b.intern_blank("to_plain", BlankScope::DEFAULT);
+        b.push_quad(to_plain, first, a, None);
+        b.push_quad(to_plain, rest, plain, None);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(
+            strict(&ds, no_rest),
+            Err(ListError {
+                kind: ListErrorKind::MissingRest,
+                members: vec![a],
+                node: no_rest,
+            })
+        );
+        assert_eq!(
+            strict(&ds, to_plain),
+            Err(ListError {
+                kind: ListErrorKind::MissingFirst,
+                members: vec![a],
+                node: plain,
+            })
+        );
+        // The lenient reading keeps its recoveries.
+        assert_eq!(ds.rdf_list(no_rest, GraphMatch::Any), Ok(vec![a]));
+        assert_eq!(
+            ds.rdf_list(to_plain, GraphMatch::Any),
+            Err(RdfListError::DanglingRest)
+        );
+        assert_eq!(
+            strict(&ds, plain).map_err(|e| e.kind),
+            Err(ListErrorKind::MissingFirst)
+        );
+        assert_eq!(ds.rdf_list(plain, GraphMatch::Any), Ok(Vec::new()));
+        let _ = rest;
+    }
+
+    #[test]
+    fn an_rdf_nil_with_edges_is_refused_and_a_bare_one_is_read() {
+        let mut b = RdfDatasetBuilder::new();
+        let (first, nil) = (rdf(&mut b, "first"), rdf(&mut b, "nil"));
+        let a = iri(&mut b, "a");
+        let head = build_list(&mut b, &[a], None);
+        b.push_quad(nil, first, a, None);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(
+            strict(&ds, head),
+            Err(ListError {
+                kind: ListErrorKind::NonEmptyNil,
+                members: vec![a],
+                node: nil,
+            })
+        );
+        let mut b = RdfDatasetBuilder::new();
+        let a = iri(&mut b, "a");
+        let head = build_list(&mut b, &[a], None);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(strict(&ds, head), Ok(vec![a]));
+    }
+
+    #[test]
+    fn a_built_list_walks_back_to_its_members() {
+        let mut b = RdfDatasetBuilder::new();
+        let vocab = ListVocab {
+            first: rdf(&mut b, "first"),
+            rest: rdf(&mut b, "rest"),
+            nil: rdf(&mut b, "nil"),
+        };
+        let members: Vec<TermId> = (0..4).map(|i| iri(&mut b, &format!("m{i}"))).collect();
+        let cells: Vec<TermId> = (0..4)
+            .map(|i| b.intern_blank(&format!("cell{i}"), BlankScope::DEFAULT))
+            .collect();
+        let mut quads = Vec::new();
+        let head = build_rdf_list(
+            members.iter().copied(),
+            &vocab,
+            |i| cells[i],
+            |s, p, o| {
+                quads.push((s, p, o));
+            },
+        );
+        assert_eq!(head, cells[0]);
+        assert_eq!(quads.len(), 8);
+        for (s, p, o) in quads {
+            b.push_quad(s, p, o, None);
+        }
+        let empty = build_rdf_list(
+            Vec::new(),
+            &vocab,
+            |_| unreachable!(),
+            |_, _, _| unreachable!(),
+        );
+        assert_eq!(empty, vocab.nil);
+        let ds = b.freeze().expect("freeze");
+        assert_eq!(strict(&ds, head), Ok(members));
+        assert_eq!(strict(&ds, empty), Ok(Vec::new()));
+    }
+
+    #[test]
+    fn a_list_of_owned_terms_is_built_with_the_rdf_vocabulary() {
+        use crate::ir::TermValue;
+        let vocab = ListVocab::term_values();
+        let mut triples = Vec::new();
+        let head = build_rdf_list(
+            [TermValue::simple_literal("x")],
+            &vocab,
+            |i| TermValue::Blank {
+                label: format!("c{i}"),
+                scope: BlankScope::DEFAULT,
+            },
+            |s, p, o| triples.push((s, p, o)),
+        );
+        assert_eq!(
+            triples,
+            [
+                (
+                    head.clone(),
+                    TermValue::iri(RDF_FIRST),
+                    TermValue::simple_literal("x")
+                ),
+                (head, TermValue::iri(RDF_REST), TermValue::iri(RDF_NIL)),
+            ]
         );
     }
 }

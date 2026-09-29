@@ -120,7 +120,7 @@ deps = [
     "purrdf-hash",
     "purrdf-iri",
     "purrdf-xsd",
-    { name = "purrdf-lex", pending = true },
+    "purrdf-lex",
 ]
 
 [[crate]]
@@ -145,7 +145,7 @@ deps = [
     "purrdf-hash",
     "purrdf-iri",
     "purrdf-xsd",
-    { name = "purrdf-lex", pending = true },
+    "purrdf-lex",
 ]
 
 [[crate]]

@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The ONE transcription of which scalars an `IRIREF` writer must escape — the
-//! egress mirror of [`purrdf_iri::terminals::is_iriref_forbidden`].
+//! egress mirror of [`crate::terminals::is_iriref_forbidden`].
 //!
 //! # Why egress needs its own name for the same law
 //!
@@ -13,7 +13,7 @@
 //! ```
 //!
 //! (SPARQL 1.2 §19.8 / Turtle 1.2 §6.5 `[18t]`.) A *parser* asks **may this
-//! scalar stand here raw?** — that is [`purrdf_iri::terminals::is_iriref_forbidden`],
+//! scalar stand here raw?** — that is [`crate::terminals::is_iriref_forbidden`],
 //! and it is exact in both directions because it decides where the body ends.
 //! A *writer* asks the weaker question **must this scalar ride as a `UCHAR`?**,
 //! and the production answers only half of it: every forbidden scalar must ride
@@ -23,9 +23,11 @@
 //! a writer is free to escape a wider set, and why a divergence between two
 //! writers is invisible until someone diffs their bytes.
 //!
-//! That freedom is exactly how this law came to be transcribed FIVE times in
-//! this workspace. The predicate below is the one spelling. The emission is
-//! here too: every escaped scalar is at most U+009F, so every writer's `UCHAR`
+//! That freedom is why the law needs one spelling: two writers that each chose
+//! a defensible escape set would emit different bytes for the same IRI, and a
+//! canonical form or a golden file would notice before any parser did. The
+//! predicate below is that spelling, in the lexical layer every writer
+//! reaches. The emission is here too: every escaped scalar is at most U+009F, so every writer's `UCHAR`
 //! is the same `\u00XX` in upper-case hex, and [`push_escaped`] (for a writer
 //! appending to a text sink) and [`escape`] (for one that borrows a clean
 //! value) are the one implementation of it. Both are one pass of
@@ -34,7 +36,7 @@
 //!
 //! # The one scalar range egress adds, and why
 //!
-//! [`is_iriref_escape_required`] is [`purrdf_iri::terminals::is_iriref_forbidden`]
+//! [`is_iriref_escape_required`] is [`crate::terminals::is_iriref_forbidden`]
 //! widened by exactly `[#x7F-#x9F]` — DEL and the C1 control block. Those are
 //! **lawful raw** in an `IRIREF` body and the ingress predicate rightly permits
 //! them; they are escaped on the way out because this workspace's serialized
@@ -53,8 +55,8 @@
 //! a reader unable to tell which half of the answer came from the grammar and
 //! which from the carrier.
 
-use crate::sink::TextOut;
-use purrdf_iri::terminals::{ByteClass, byte_run_count};
+use crate::terminals::{ByteClass, byte_run_count};
+use crate::text_out::TextOut;
 use std::borrow::Cow;
 
 /// DEL and the C1 control block, `[#x7F-#x9F]` — the single range this egress
@@ -66,7 +68,7 @@ const C1_AND_DEL: (char, char) = ('\u{7F}', '\u{9F}');
 ///
 /// This is the union of two enumerated sets and nothing else:
 ///
-/// * [`purrdf_iri::terminals::is_iriref_forbidden`] — `[#x00-#x20]` (every C0
+/// * [`crate::terminals::is_iriref_forbidden`] — `[#x00-#x20]` (every C0
 ///   control **plus the SPACE**) and the nine reserved delimiters
 ///   ``< > " { } | ^ ` \``, which the grammar forbids raw;
 /// * `C1_AND_DEL` — `[#x7F-#x9F]`, DEL and the C1 control block, which the
@@ -78,7 +80,7 @@ const C1_AND_DEL: (char, char) = ('\u{7F}', '\u{9F}');
 /// and must ride verbatim or the writers stop round-tripping.
 ///
 /// ```
-/// use purrdf_core::iri_escape::is_iriref_escape_required;
+/// use purrdf_lex::iri_escape::is_iriref_escape_required;
 ///
 /// // The grammar's own exclusions.
 /// assert!(is_iriref_escape_required(' '));
@@ -95,7 +97,7 @@ const C1_AND_DEL: (char, char) = ('\u{7F}', '\u{9F}');
 #[inline]
 #[must_use]
 pub const fn is_iriref_escape_required(c: char) -> bool {
-    purrdf_iri::terminals::is_iriref_forbidden(c) || (C1_AND_DEL.0 <= c && c <= C1_AND_DEL.1)
+    crate::terminals::is_iriref_forbidden(c) || (C1_AND_DEL.0 <= c && c <= C1_AND_DEL.1)
 }
 
 /// The bytes that can begin a scalar [`is_iriref_escape_required`] answers
@@ -144,11 +146,11 @@ const CANDIDATES: ByteClass<{ byte_run_count(&CANDIDATE_TABLE) }> =
 /// scalar that rides verbatim, and the offset is always a char boundary of a
 /// `str`'s bytes (the class holds ASCII bytes and one lead byte).
 ///
-/// The chunked kernel of [`purrdf_iri::terminals::ByteClass`], so the scan is
+/// The chunked kernel of [`crate::terminals::ByteClass`], so the scan is
 /// sixteen-byte packed compares on every target with a vector unit.
 ///
 /// ```
-/// use purrdf_core::iri_escape::find_first_candidate;
+/// use purrdf_lex::iri_escape::find_first_candidate;
 ///
 /// assert_eq!(find_first_candidate(b"https://example.org/a b"), Some(21));
 /// assert_eq!(find_first_candidate(b"https://example.org/a"), None);
@@ -208,7 +210,7 @@ fn push_escaped_from<W: TextOut + ?Sized>(iri: &str, mut at: usize, out: &mut W)
 /// writer; one scan with bulk copies of the clean runs.
 ///
 /// ```
-/// use purrdf_core::iri_escape::push_escaped;
+/// use purrdf_lex::iri_escape::push_escaped;
 ///
 /// let mut out = String::new();
 /// push_escaped("urn:ex:a b<\u{85}>\u{a0}", &mut out);
@@ -227,7 +229,7 @@ pub fn push_escaped<W: TextOut + ?Sized>(iri: &str, out: &mut W) {
 ///
 /// ```
 /// use std::borrow::Cow;
-/// use purrdf_core::iri_escape::escape;
+/// use purrdf_lex::iri_escape::escape;
 ///
 /// assert!(matches!(escape("https://example.org/caf\u{e9}"), Cow::Borrowed(_)));
 /// assert_eq!(escape("urn:ex:a b"), "urn:ex:a\\u0020b");
@@ -266,24 +268,23 @@ mod tests {
         (0..=0x0010_FFFF_u32).filter_map(char::from_u32)
     }
 
-    /// The spelling the five writers carried before they were collapsed onto
-    /// one predicate, transcribed verbatim from their match arms.
+    /// The escape set as a flat match: the grammar's nine delimiters, every
+    /// control scalar and the SPACE.
     ///
-    /// This is the byte-determinism proof the collapse rests on: the goldens
-    /// and frozen vectors were produced by this function, so if the new
-    /// predicate disagrees with it at a single scalar, a golden changes.
-    fn the_spelling_the_writers_carried(c: char) -> bool {
+    /// The goldens and frozen vectors were produced by this spelling, so if
+    /// the predicate disagrees with it at a single scalar, a golden changes.
+    fn the_flat_escape_set(c: char) -> bool {
         matches!(c, '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\')
             || c.is_control()
             || c == ' '
     }
 
     #[test]
-    fn the_collapse_changes_no_emitted_byte() {
+    fn the_predicate_is_the_flat_escape_set_at_every_scalar() {
         for c in all_scalars() {
             assert_eq!(
                 is_iriref_escape_required(c),
-                the_spelling_the_writers_carried(c),
+                the_flat_escape_set(c),
                 "{c:?}"
             );
         }
@@ -294,13 +295,13 @@ mod tests {
         for c in all_scalars() {
             // Everything the grammar forbids must be escaped: a writer that
             // emitted one raw would mint a document no parser reads back.
-            if purrdf_iri::terminals::is_iriref_forbidden(c) {
+            if crate::terminals::is_iriref_forbidden(c) {
                 assert!(is_iriref_escape_required(c), "{c:?}");
             }
             // And the difference is one enumerated range, stated as a total
             // function so neither side can drift.
             assert_eq!(
-                is_iriref_escape_required(c) && !purrdf_iri::terminals::is_iriref_forbidden(c),
+                is_iriref_escape_required(c) && !crate::terminals::is_iriref_forbidden(c),
                 matches!(c, '\u{7F}'..='\u{9F}'),
                 "{c:?}"
             );
@@ -336,8 +337,7 @@ mod tests {
         }
     }
 
-    /// The per-scalar writer `push_escaped` replaced: the loop the canonical
-    /// N-Quads and entailment writers carried, kept as the oracle.
+    /// The per-scalar writer, kept as the oracle for the clean-run emitter.
     fn reference(iri: &str) -> String {
         let mut out = String::new();
         for ch in iri.chars() {
