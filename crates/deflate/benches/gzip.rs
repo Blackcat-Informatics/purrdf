@@ -8,14 +8,14 @@
 //! Each encode case prints its compressed size once (`gzip-size …` lines), so
 //! a run records density beside throughput.
 
-#![allow(missing_docs)] // criterion_main! generates an undocumented `main`
+#![allow(missing_docs)] // a bench target is not public API
 
 use std::hint::black_box;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_deflate::backend::Backend;
 use purrdf_deflate::{Deflater, GzipDecoder, Level, gzip};
 use purrdf_hash::Backend as _;
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
 
 const SIZES: [(usize, &str); 3] = [(4 << 10, "4KiB"), (1 << 20, "1MiB"), (16 << 20, "16MiB")];
 
@@ -93,7 +93,7 @@ fn corpus() -> Vec<(&'static str, &'static str, Vec<u8>)> {
     all
 }
 
-fn encode(c: &mut Criterion) {
+fn encode(c: &mut Bench) {
     let mut group = c.benchmark_group("gzip-encode");
     for (kind, label, data) in corpus() {
         let size = gzip::compress(&data, Level::DEFAULT).len();
@@ -107,7 +107,7 @@ fn encode(c: &mut Criterion) {
     group.finish();
 }
 
-fn decode(c: &mut Criterion) {
+fn decode(c: &mut Bench) {
     let mut group = c.benchmark_group("gzip-decode");
     for (kind, label, data) in corpus() {
         let framed = gzip::compress(&data, Level::DEFAULT);
@@ -136,7 +136,7 @@ fn decode(c: &mut Criterion) {
 }
 
 /// Append successive gzip members into reusable output without staging copies.
-fn decode_vec(c: &mut Criterion) {
+fn decode_vec(c: &mut Bench) {
     let mut group = c.benchmark_group("gzip-decode-vector");
     for (kind, label, data) in corpus() {
         let framed = gzip::compress(&data, Level::DEFAULT);
@@ -160,7 +160,7 @@ fn decode_vec(c: &mut Criterion) {
 }
 
 /// Encode and decode of the 1 MiB text case per kernel path.
-fn paths(c: &mut Criterion) {
+fn paths(c: &mut Bench) {
     let data = text(1 << 20);
     let mut group = c.benchmark_group("deflate-paths");
     group.throughput(Throughput::Bytes(data.len() as u64));
@@ -189,5 +189,5 @@ fn paths(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, encode, decode, decode_vec, paths);
-criterion_main!(benches);
+bench_group!(benches, encode, decode, decode_vec, paths);
+bench_main!(benches);

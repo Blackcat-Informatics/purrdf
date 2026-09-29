@@ -1,10 +1,11 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
-//! Timed Criterion benchmarks for the PURREMB companion format.
+//! Timed benchmarks for the PURREMB companion format.
 //!
 //! This process intentionally uses Rust's normal global allocator. Allocation
 //! traffic is measured by the separate `purremb_alloc` process so atomic
@@ -13,12 +14,12 @@
 use std::io::Cursor;
 use std::time::Duration;
 
-use criterion::{BatchSize, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_core::distance::{Arithmetic as _, Exact};
 use purrdf_core::{
     EmbeddingStreamWriter, EmbeddingView, ResidentEmbeddingCertificate, reopen_prevalidated,
     verify_embedding,
 };
+use purrdf_testkit::bench::{BatchSize, Bench, Throughput, bench_group, bench_main};
 
 #[path = "support/purremb.rs"]
 mod fixture;
@@ -36,7 +37,7 @@ fn certificate(bytes: &[u8]) -> ResidentEmbeddingCertificate<'_> {
         .into_certificate()
 }
 
-fn bench_f32(c: &mut Criterion, fixture: &F32Fixture) {
+fn bench_f32(c: &mut Bench, fixture: &F32Fixture) {
     let bytes = usize_to_u64(fixture.bytes.len());
     let certificate = certificate(&fixture.bytes);
     {
@@ -221,7 +222,7 @@ fn bench_f32(c: &mut Criterion, fixture: &F32Fixture) {
     }
 }
 
-fn bench_f64(c: &mut Criterion, fixture: &F64Fixture) {
+fn bench_f64(c: &mut Bench, fixture: &F64Fixture) {
     let certificate = certificate(&fixture.bytes);
     {
         let mut validation = c.benchmark_group("purremb_f64_validation");
@@ -247,7 +248,7 @@ fn bench_f64(c: &mut Criterion, fixture: &F64Fixture) {
     });
 }
 
-fn bench_catalog(c: &mut Criterion, fixture: &CatalogFixture) {
+fn bench_catalog(c: &mut Bench, fixture: &CatalogFixture) {
     let view = EmbeddingView::from_bytes(&fixture.bytes).expect("catalog view");
     let mut group = c.benchmark_group("purremb_chunk_catalog");
     group.bench_function("target_by_id", |benchmark| {
@@ -269,7 +270,7 @@ fn bench_catalog(c: &mut Criterion, fixture: &CatalogFixture) {
     group.finish();
 }
 
-fn purremb_benchmarks(c: &mut Criterion) {
+fn purremb_benchmarks(c: &mut Bench) {
     let f32_fixture = build_f32_fixture();
     println!(
         "[purremb] f32_fixture rows={} dimensions={} artifact_bytes={}",
@@ -297,5 +298,5 @@ fn purremb_benchmarks(c: &mut Criterion) {
     bench_catalog(c, &catalog);
 }
 
-criterion_group!(benches, purremb_benchmarks);
-criterion_main!(benches);
+bench_group!(benches, purremb_benchmarks);
+bench_main!(benches);

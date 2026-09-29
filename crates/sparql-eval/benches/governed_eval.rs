@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only execution-governor cost envelope.
@@ -26,11 +26,10 @@
 //!   differ only below it.
 //!
 //! Timing is deliberately not a gate. Correctness and exact receipts are asserted before
-//! Criterion samples; this target only reports the price of those guarantees.
+//! the harness samples; this target only reports the price of those guarantees.
 
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, ResourceDimension, SparqlResult, TermValue,
 };
@@ -38,6 +37,7 @@ use purrdf_sparql_eval::{
     CancellationFlag, EvalOptions, GovernedOutcome, NativeSparqlEngine, PreparedQuery,
     QueryGovernors, QueryOptions,
 };
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 const EX: &str = "https://example.org/";
 const JOIN_QUERY: &str = "SELECT ?s ?o ?z WHERE { \
@@ -115,7 +115,7 @@ fn run_governed(
     (result_rows(&result), fuel)
 }
 
-fn bench_governed_query(c: &mut Criterion) {
+fn bench_governed_query(c: &mut Bench) {
     const ROWS: usize = 4096;
 
     let dataset = join_dataset(ROWS);
@@ -142,11 +142,11 @@ fn bench_governed_query(c: &mut Criterion) {
 
     let mut group = c.benchmark_group("governed_eval/query_4096");
     group.bench_function("ungoverned_baseline", |bencher| {
-        bencher.iter(|| criterion::black_box(run_plain(&parallel, &dataset, &prepared)));
+        bencher.iter(|| std::hint::black_box(run_plain(&parallel, &dataset, &prepared)));
     });
     group.bench_function("unbounded_carrier", |bencher| {
         bencher.iter(|| {
-            criterion::black_box(run_governed(
+            std::hint::black_box(run_governed(
                 &parallel,
                 &dataset,
                 &prepared,
@@ -156,7 +156,7 @@ fn bench_governed_query(c: &mut Criterion) {
     });
     group.bench_function("metered_receipt_parallel", |bencher| {
         bencher.iter(|| {
-            criterion::black_box(run_governed(
+            std::hint::black_box(run_governed(
                 &parallel,
                 &dataset,
                 &prepared,
@@ -166,7 +166,7 @@ fn bench_governed_query(c: &mut Criterion) {
     });
     group.bench_function("metered_receipt_sequential", |bencher| {
         bencher.iter(|| {
-            criterion::black_box(run_governed(
+            std::hint::black_box(run_governed(
                 &sequential,
                 &dataset,
                 &prepared,
@@ -177,7 +177,7 @@ fn bench_governed_query(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_path_scaling(c: &mut Criterion) {
+fn bench_path_scaling(c: &mut Bench) {
     let engine = NativeSparqlEngine::new();
     let prepared = engine
         .prepare_query(PATH_QUERY, None)
@@ -188,7 +188,7 @@ fn bench_path_scaling(c: &mut Criterion) {
         let dataset = ring_dataset(nodes);
         assert_eq!(run_plain(&engine, &dataset, &prepared), 1);
         group.bench_with_input(BenchmarkId::from_parameter(nodes), &nodes, |bencher, _| {
-            bencher.iter(|| criterion::black_box(run_plain(&engine, &dataset, &prepared)));
+            bencher.iter(|| std::hint::black_box(run_plain(&engine, &dataset, &prepared)));
         });
     }
     group.finish();
@@ -218,7 +218,7 @@ fn loop_dataset(rows: usize) -> Arc<RdfDataset> {
     builder.freeze().expect("freeze the row-loop dataset")
 }
 
-/// `(criterion id, query text, exact expected rows)` for the three row loops.
+/// `(bench id, query text, exact expected rows)` for the three row loops.
 const LOOP_QUERIES: &[(&str, &str, usize)] = &[
     (
         "filter",
@@ -270,7 +270,7 @@ fn run_loop(
     )
 }
 
-fn bench_governed_row_loops(c: &mut Criterion) {
+fn bench_governed_row_loops(c: &mut Bench) {
     let dataset = loop_dataset(LOOP_ROWS);
     let parallel = NativeSparqlEngine::new();
     let sequential = NativeSparqlEngine::new().with_eval_options(EvalOptions {
@@ -297,7 +297,7 @@ fn bench_governed_row_loops(c: &mut Criterion) {
                 );
                 group.bench_function(format!("{shape}/{lane}/{governed}"), |bencher| {
                     bencher.iter(|| {
-                        criterion::black_box(run_loop(
+                        std::hint::black_box(run_loop(
                             engine,
                             &dataset,
                             &prepared,
@@ -311,10 +311,10 @@ fn bench_governed_row_loops(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_governed_query,
     bench_path_scaling,
     bench_governed_row_loops
 );
-criterion_main!(benches);
+bench_main!(benches);

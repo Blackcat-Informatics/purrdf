@@ -1,7 +1,7 @@
 # SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
-# The criterion + Python-compat benchmark suites, OFF the per-push path.
+# The native bench-harness + Python-compat benchmark suites, OFF the per-push path.
 #
 # These run ~90-120 minutes and are `continue-on-error` by project rule: a bench
 # never gates a merge, and PurRDF asserts no speedups (docs/BENCHMARKS.md). Run
@@ -25,7 +25,7 @@ on:
     inputs:
       base_ref:
         description: >-
-          Base commit for the x86_64 and aarch64 criterion comparison. Empty means the
+          Base commit for the x86_64 and aarch64 bench comparison. Empty means the
           merge-base of origin/main and the dispatched commit.
         required: false
         default: ""
@@ -46,6 +46,10 @@ jobs:
     # nothing.
     permissions:
       contents: read
+    env:
+      # Where purrdf_testkit::bench writes each benchmark's estimates.json, named
+      # explicitly so the artifact upload below reads the same directory.
+      PURRDF_BENCH_HOME: ${{ github.workspace }}/target/purrdf-bench
     steps:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
@@ -108,11 +112,10 @@ jobs:
           cargo bench -p purrdf-xsd --no-run --locked
           cargo bench -p purrdf-sparql-algebra --bench tokenize --no-run --locked
           cargo bench -p purrdf-sparql-results --no-run --locked
-          cargo bench -p purrdf-hash --no-run --locked
           cargo bench -p purrdf-hash-conformance --no-run --locked
           cargo bench -p purrdf-deflate --no-run --locked
 
-      - name: Run native criterion suites
+      - name: Run the native bench suites
         run: |
           cargo bench -p purrdf-gts --locked
           cargo bench -p purrdf-core --locked
@@ -128,7 +131,6 @@ jobs:
           cargo bench -p purrdf-xsd --locked
           cargo bench -p purrdf-sparql-algebra --bench tokenize --locked
           cargo bench -p purrdf-sparql-results --locked
-          cargo bench -p purrdf-hash --locked
           cargo bench -p purrdf-hash-conformance --locked
           cargo bench -p purrdf-deflate --locked
 
@@ -144,17 +146,17 @@ jobs:
         with:
           name: benchmark-results
           path: |
-            target/criterion/
+            target/purrdf-bench/
             bindings/python/bench_compat.json
           if-no-files-found: warn
 
-  # THE HEAD AGAINST ITS BASE, ON ONE MACHINE, IN ONE RUN. Two criterion runs on two
+  # THE HEAD AGAINST ITS BASE, ON ONE MACHINE, IN ONE RUN. Two bench runs on two
   # different runners compare two machines as much as two commits; the numbers only
   # mean something when the base and the head are measured back to back on the same
-  # host. So each matrix entry builds and runs one criterion target on the base commit
+  # host. So each matrix entry builds and runs one bench target on the base commit
   # with `--save-baseline base`, then on the head against that baseline, sharing one
-  # target directory so criterion's baseline store (`target/criterion`) is the same
-  # directory for both.
+  # benchmark store (PURRDF_BENCH_HOME, `target/purrdf-bench`) so the head run reads
+  # exactly the records the base run saved.
   #
   # Every target runs on both architectures the library ships on: `ubuntu-latest`
   # (x86_64) and `ubuntu-24.04-arm` (aarch64). A regression can live on one only --
@@ -168,13 +170,14 @@ jobs:
   # answers nothing. It gates no merge either way, because nothing on a pull request
   # triggers it.
   #
-  # One matrix entry per criterion target, not per crate, because every CI job must
+  # One matrix entry per bench target, not per crate, because every CI job must
   # fit in 30 minutes: one entry is two optimized builds of one bench binary plus two
   # runs of it, and the largest crate carries fourteen suites. The target list is
-  # computed by `scripts/bench-criterion-targets.py` from the `make bench` crate list,
-  # so the population cannot drift from the Makefile, and only criterion suites are
-  # in it -- the allocation probes are plain `main` functions that do not accept
-  # criterion's baseline flags.
+  # computed by `scripts/bench-suite-targets.py` from the `make bench` crate list,
+  # so the population cannot drift from the Makefile, and only purrdf_testkit::bench
+  # suites are in it -- the allocation probes are plain `main` functions that do not
+  # accept the harness's baseline flags. A target the base commit runs on another
+  # harness is marked as having no base, since its records are not this harness's.
   bench-compare-plan:
     if: github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -212,14 +215,14 @@ jobs:
           echo "base commit: $sha (head: $(git rev-parse HEAD))"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
 
-      - name: List the criterion targets of the head and the base
+      - name: List the bench-harness targets of the head and the base
         id: targets
         env:
           BASE_SHA: ${{ steps.base.outputs.sha }}
         run: |
           set -euo pipefail
           git worktree add --detach ../base "$BASE_SHA"
-          targets="$(python3 scripts/bench-criterion-targets.py --root . --base-root ../base)"
+          targets="$(python3 scripts/bench-suite-targets.py --root . --base-root ../base)"
           echo "$targets"
           echo "targets=$targets" >> "$GITHUB_OUTPUT"
 
@@ -238,11 +241,11 @@ jobs:
     env:
       # Each tree builds into its own target directory: the two trees contain path
       # crates with the same name and version, and a shared directory lets the head
-      # build link against units compiled from the base's sources. Only criterion's
-      # baselines are shared, through CRITERION_HOME, so the head run finds exactly
+      # build link against units compiled from the base's sources. Only the benchmark
+      # store is shared, through PURRDF_BENCH_HOME, so the head run finds exactly
       # what the base run saved.
       CARGO_TARGET_DIR: ${{ github.workspace }}/target
-      CRITERION_HOME: ${{ github.workspace }}/target/criterion
+      PURRDF_BENCH_HOME: ${{ github.workspace }}/target/purrdf-bench
       BASE_SHA: ${{ needs.bench-compare-plan.outputs.base }}
       RUNNER_LABEL: ${{ matrix.runner }}
       CRATE: ${{ matrix.target.crate }}
@@ -273,8 +276,8 @@ jobs:
           cargo bench --locked -p "$CRATE" --bench "$BENCH" -- --save-baseline base \
             2>&1 | tee "$GITHUB_WORKSPACE/bench-base.log"
 
-      # `--baseline-lenient` rather than `--baseline`: the strict form aborts the whole
-      # target when ONE benchmark in it has no saved baseline, which is exactly the
+      # `--baseline-lenient` rather than `--baseline`: the strict form fails the run
+      # when ONE benchmark in the target has no saved baseline, which is exactly the
       # state of a benchmark function added by the change under test. The lenient form
       # still compares every benchmark the base recorded.
       - name: Measure the head against the base baseline
@@ -283,17 +286,17 @@ jobs:
           if [ "$IN_BASE" = "true" ]; then
             compare=(--baseline-lenient base)
           else
-            echo "$CRATE/$BENCH does not exist at $BASE_SHA; recording the head without a comparison"
+            echo "$CRATE/$BENCH is not a bench-harness suite at $BASE_SHA; recording the head without a comparison"
             compare=()
           fi
           cargo bench --locked -p "$CRATE" --bench "$BENCH" -- "${compare[@]}" \
             2>&1 | tee bench-head.log
 
-      - name: Fail on any regression criterion reports
+      - name: Fail on any regression the harness reports
         run: |
           set -euo pipefail
           if grep -n -B2 'Performance has regressed' bench-head.log; then
-            echo "::error::criterion reports a regression in $CRATE/$BENCH on $RUNNER_LABEL against $BASE_SHA"
+            echo "::error::the bench harness reports a regression in $CRATE/$BENCH on $RUNNER_LABEL against $BASE_SHA"
             exit 1
           fi
           echo "no regression reported in $CRATE/$BENCH on $RUNNER_LABEL against $BASE_SHA"
@@ -306,5 +309,5 @@ jobs:
           path: |
             bench-base.log
             bench-head.log
-            target/criterion/
+            target/purrdf-bench/
           if-no-files-found: warn

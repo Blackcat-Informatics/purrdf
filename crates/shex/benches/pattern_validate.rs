@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Per-value-node cost of the ShEx `PATTERN` facet's
@@ -30,9 +30,9 @@
 
 use std::sync::Arc;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_shex::{Schema, ShapeSelector, parse_shexc, validate};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 /// Nodes per shared-pattern validation call.
 const NODE_COUNT: usize = 3_000;
@@ -106,7 +106,7 @@ fn distinct_fixture(count: usize) -> Fixture {
     Fixture { schema, data, map }
 }
 
-fn bench_pattern_validate(c: &mut Criterion) {
+fn bench_pattern_validate(c: &mut Bench) {
     let shared_valid = shared_fixture(r"^W-[0-9]+$");
     // `[a` is an unterminated character class: the ShExC lexer accepts it and
     // the shared compiler refuses it, which is exactly the cache's failure arm.
@@ -183,5 +183,5 @@ fn bench_pattern_validate(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_pattern_validate);
-criterion_main!(benches);
+bench_group!(benches, bench_pattern_validate);
+bench_main!(benches);

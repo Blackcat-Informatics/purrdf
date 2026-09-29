@@ -20,8 +20,8 @@ Quick orientation:
 * **PurRDF is NOT an ontology**: it mints no vocabulary IRIs. Vocabularies are
   caller-supplied configuration with no fabricated defaults (hard error or
   inactive feature when absent); test fixtures use `example.org`.
-* **Perf changes need a bench**: extend the criterion benches rather than
-  asserting a speedup.
+* **Perf changes need a bench**: extend the benches (`purrdf_testkit::bench`)
+  rather than asserting a speedup.
 * **A refusal is a claim too — prove it.** Over-refusal (rejecting input that is
   actually valid) is the mirror of the silent-drop bug, and it shows up exactly
   when you are tightening validation. It hides well: every test passes, and a

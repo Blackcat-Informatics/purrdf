@@ -95,7 +95,7 @@ pub(crate) struct SafetyRegistries<'a> {
 }
 
 /// Rows/groups at or below this stay sequential (thread spin-up would dominate
-/// the work for small inputs). Tuned against the criterion benches in
+/// the work for small inputs). Tuned against the benches in
 /// `crates/sparql-eval/benches/`, which are report-only and assert no timing.
 pub(crate) const PARALLEL_MIN_ROWS: usize = 1024;
 

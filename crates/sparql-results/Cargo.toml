@@ -50,10 +50,6 @@ purrdf-testkit = { workspace = true }
 # windows exactly as a streamed document does. Only an allocator can tell them
 # apart. Dev-only, so no release crate and no wasm build ever sees it.
 purrdf-alloc-probe = { workspace = true }
-# Borrowed-writer streaming N-Triples serialization hot-path baseline. Defaults
-# off (no plotters/rayon) like the sibling crates, so `make bench` stays lean and
-# no oxigraph-family edge enters the dev tree.
-criterion = { workspace = true }
 
 [[bench]]
 # CONSTRUCT-graph -> N-Triples streaming serialization (`to_json`'s `Graph`

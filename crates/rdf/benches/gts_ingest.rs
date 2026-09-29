@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! One-path GTS ingestion, measured three ways through to emitted bytes.
@@ -27,13 +27,12 @@
 //! accounting families by name. The byte figures are ACCOUNTED bytes — the
 //! retention ledger's own deduplicated retention, this view's incremental charge,
 //! and the ingest report's scratch peak. They are not OS resident set size, which
-//! criterion cannot measure and this bench does not pretend to.
+//! the harness cannot measure and this bench does not pretend to.
 
 use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use purrdf_rdf::gts_compose::SnapshotBuilder;
 use purrdf_rdf::gts_fixtures::{
     SELECTED, emitted, keystone_base, keystone_contribution, keystone_delta, keystone_loadout,
@@ -42,6 +41,7 @@ use purrdf_rdf::{
     DatasetView, DeltaDatasetView, PipelineViewBundle, RdfDataset, RetentionLedger,
     ViewAccountingReport, ViewLimits,
 };
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 /// Every field name an observation line must carry. The presence guard reads this
 /// list, so a renamed field fails the bench instead of silently narrowing the
@@ -117,7 +117,7 @@ impl Observation {
 }
 
 /// Print one observation line, self-asserting that every named field survived the
-/// formatting. This is the acceptance mechanism: it runs in criterion's `--test`
+/// formatting. This is the acceptance mechanism: it runs in the harness's `--test`
 /// smoke mode too, so a shape that stopped reporting fails the bench.
 fn observe(shape: &str, variant: &str, elapsed: Duration, observed: Observation) {
     let line = format!(
@@ -298,7 +298,7 @@ fn run_delta(shape: &IngestShape, limits: ViewLimits) -> (Observation, Vec<u8>) 
     (observed, bytes)
 }
 
-fn gts_ingest(c: &mut Criterion) {
+fn gts_ingest(c: &mut Bench) {
     // The default ceilings admit every shape here (33 sources at the widest,
     // against `max_sources = 64`), so no ceiling is fabricated for the bench.
     let limits = ViewLimits::default();
@@ -321,8 +321,8 @@ fn gts_ingest(c: &mut Criterion) {
         "the view surface and the materialized flat surface must ship one container"
     );
 
-    // One plain wall measurement per shape/variant, taken OUTSIDE criterion's own
-    // timing: criterion's report is criterion's, and the observation line is a
+    // One plain wall measurement per shape/variant, taken OUTSIDE the harness's own
+    // timing: the harness's report is the harness's, and the observation line is a
     // separate, plainly-measured record that always emits — `--test` included.
     for shape in &shapes {
         let start = Instant::now();
@@ -359,14 +359,14 @@ fn gts_ingest(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group! {
+bench_group! {
     name = gts_ingest_benches;
     // The machine is shared and contended and these numbers are report-only, so
     // the sample count is small on purpose: precision buys nothing here.
-    config = Criterion::default()
+    config = Bench::default()
         .sample_size(10)
         .warm_up_time(Duration::from_millis(250))
         .measurement_time(Duration::from_secs(2));
     targets = gts_ingest
 }
-criterion_main!(gts_ingest_benches);
+bench_main!(gts_ingest_benches);

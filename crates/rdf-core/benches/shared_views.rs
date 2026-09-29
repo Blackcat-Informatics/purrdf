@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Criterion generates public entry points for this executable only.
+// `bench_group!` generates public entry points for this executable only.
 #![allow(missing_docs)]
 
 //! Controlled view/publication comparisons using identical deterministic RDF.
@@ -11,11 +11,11 @@
 //! The second group, `carrier_propagation`, puts the flat carrier's union path
 //! (`PipelineBundle::accumulate_named_graph`) beside the view carrier's extend
 //! path (`PipelineViewBundle::accumulate_named_graph`) over the same stage plan,
-//! in three shapes that make three different costs visible. Alongside criterion's
+//! in three shapes that make three different costs visible. Alongside the harness's
 //! own timing each measured variant prints one `observation` line carrying all
 //! four accounting families by name — bytes, work, retention and a plain wall
 //! clock. Those bytes are ACCOUNTED bytes (the retention ledger's own figures),
-//! never OS resident set size, which criterion cannot see and this bench does not
+//! never OS resident set size, which the harness cannot see and this bench does not
 //! pretend to measure. Nothing here asserts a magnitude or a speedup: the machine
 //! is not quiet, so read the lines, not their ratios.
 //!
@@ -32,13 +32,13 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use purrdf_core::{
     BlankScope, CompositeDatasetView, CompositeSource, ContentStore, DatasetMut, DatasetProvenance,
     DatasetView, DeltaDatasetView, GraphMatch, MutableDataset, PackBuilder, PipelineBundle,
     PipelineViewBundle, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, RdfLookaside,
     RetentionLedger, TermValue, ViewAccountingReport, ViewLimits, ViewWork,
 };
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 fn fixture(rows: u32, payload_bytes: usize) -> Arc<RdfDataset> {
     let mut builder = RdfDatasetBuilder::new();
@@ -78,7 +78,7 @@ fn scoped_blanks(rows: u32, scope: BlankScope) -> Arc<RdfDataset> {
     builder.freeze().unwrap()
 }
 
-fn benches(c: &mut Criterion) {
+fn benches(c: &mut Bench) {
     let base = fixture(10_000, 65_536);
     let contribution = fixture(20, 65_536);
     let shared = CompositeDatasetView::with_shared_scopes(
@@ -335,7 +335,7 @@ impl Observation {
 }
 
 /// Print one observation line, self-asserting that every named field survived
-/// the formatting. This is the acceptance mechanism: it runs in criterion's
+/// the formatting. This is the acceptance mechanism: it runs in the harness's
 /// `--test` smoke mode too, so a shape that stopped reporting fails the bench.
 fn observe(shape: &str, variant: &str, elapsed: Duration, observed: Observation) {
     let line = format!(
@@ -643,7 +643,7 @@ fn run_delta(shape: &CarrierShape, limits: ViewLimits) -> Observation {
     Observation::from_report(&carrier.accounting())
 }
 
-fn carrier_propagation(c: &mut Criterion) {
+fn carrier_propagation(c: &mut Bench) {
     // The default ceilings admit every shape here (33 sources at the widest,
     // against `max_sources = 64`), so no ceiling is fabricated for the bench.
     let limits = ViewLimits::default();
@@ -659,8 +659,8 @@ fn carrier_propagation(c: &mut Criterion) {
     );
     assert!(issue.base.reifier_quads().count() >= 8);
 
-    // One plain wall measurement per shape/variant, taken OUTSIDE criterion's own
-    // timing: criterion's report is criterion's, and the observation line is a
+    // One plain wall measurement per shape/variant, taken OUTSIDE the harness's own
+    // timing: the harness's report is the harness's, and the observation line is a
     // separate, plainly-measured record that always emits — `--test` included.
     for shape in &shapes {
         let start = Instant::now();
@@ -820,7 +820,7 @@ fn run_pack_view(view: &CompositeDatasetView, owners: &[Arc<RdfDataset>]) -> Obs
     observed
 }
 
-fn pack_output(c: &mut Criterion) {
+fn pack_output(c: &mut Bench) {
     let shapes = carrier_shapes()
         .iter()
         .map(PackShape::new)
@@ -875,7 +875,7 @@ fn pack_output(c: &mut Criterion) {
         );
     }
 
-    // One plain wall measurement per shape/variant, taken OUTSIDE criterion's own
+    // One plain wall measurement per shape/variant, taken OUTSIDE the harness's own
     // timing and always emitted, `--test` included. The variant values carry a
     // `pack_` prefix: the carrier group reports `flat`/`view`/`delta` over these
     // same shape names, and a reader of one combined stdout must be able to tell
@@ -916,28 +916,28 @@ fn pack_output(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(shared_views, benches);
-criterion_group! {
+bench_group!(shared_views, benches);
+bench_group! {
     name = carrier_propagation_benches;
     // The machine is shared and contended and these numbers are report-only, so
     // the sample count is small on purpose: precision buys nothing here.
-    config = Criterion::default()
+    config = Bench::default()
         .sample_size(10)
         .warm_up_time(Duration::from_millis(250))
         .measurement_time(Duration::from_secs(2));
     targets = carrier_propagation
 }
-criterion_group! {
+bench_group! {
     name = pack_output_benches;
     // Report-only and on a contended machine, like the group above it: a small
     // sample is the honest budget, not a precision compromise.
-    config = Criterion::default()
+    config = Bench::default()
         .sample_size(10)
         .warm_up_time(Duration::from_millis(250))
         .measurement_time(Duration::from_secs(2));
     targets = pack_output
 }
-criterion_main!(
+bench_main!(
     shared_views,
     carrier_propagation_benches,
     pack_output_benches

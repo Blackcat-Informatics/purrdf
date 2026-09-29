@@ -54,8 +54,6 @@ memchr = { workspace = true }
 # (lexer round-trips, parser robustness). Path-only and unpublished, so it is
 # stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }
-# Tokenizer hot-path baselines (dev-dep only).
-criterion = { workspace = true }
 # Text extraction for `tests/shipped_sparql_examples.rs` — the gate that pulls
 # SPARQL query/update text and `AGG(<iri>...)` call fragments out of the book,
 # `--help` text, `.pyi`, `.d.ts`, and rustdoc, and parses each with THIS crate's

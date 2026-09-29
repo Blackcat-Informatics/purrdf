@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-hash-conformance"
-description = "The frozen-vector conformance suites of purrdf-hash: digest differentials, BLAKE3 streaming boundaries, base16 rendering and the fixed-key table hasher's self-vectors and quality, replayed natively and on wasm32-unknown-unknown, plus the table hasher's latency bench"
+description = "The frozen-vector conformance suites of purrdf-hash: digest differentials, BLAKE3 streaming boundaries, base16 rendering and the fixed-key table hasher's self-vectors and quality, replayed natively and on wasm32-unknown-unknown, plus the digest and base16 throughput bench and the table hasher's latency bench"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -17,6 +17,10 @@ workspace = true
 
 [lib]
 path = "src/lib.rs"
+# The library holds no benchmarks, and `cargo bench -p purrdf-hash-conformance
+# -- <harness options>` hands every option to each bench target it runs: kept
+# out of the bench run, the library's libtest never sees `--save-baseline`.
+bench = false
 
 [dependencies]
 # The crate under test. It has zero runtime dependencies and uses none of the
@@ -24,16 +28,17 @@ path = "src/lib.rs"
 # depends on it, and a dev-dependency back onto testkit would close a cycle.
 purrdf-hash = { workspace = true }
 # The frozen vector format, the deterministic input stream the vectors are
-# drawn from, and the libtest-compatible `harness = false` runner every target
-# below runs on, natively and on wasm32-unknown-unknown alike.
+# drawn from, the libtest-compatible `harness = false` runner every target
+# below runs on, natively and on wasm32-unknown-unknown alike, and the bench
+# harness both benches run on.
 purrdf-testkit = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# The fixed-key table hasher's latency baselines. DEV-DEPENDENCY ONLY, and
-# native-only: `make wasm-test` builds this crate's wasm32 test targets, cargo
-# builds every declared dev-dependency for them, and criterion is not
-# wasm32-clean.
-criterion = { workspace = true }
+# Digest throughput at 64 B, 1 KiB and 1 MiB per algorithm and per path the
+# host runs, base16 encoding throughput per path, and BLAKE3 one-shot and
+# streaming throughput per backend. Report-only.
+[[bench]]
+name = "digests"
+harness = false
 
 [[bench]]
 name = "hasher"

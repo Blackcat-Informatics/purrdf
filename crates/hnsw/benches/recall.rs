@@ -42,10 +42,10 @@
 //! "expected" recall is hard-coded, and no figure is compared to anything but the exact
 //! answer over the same query and the same corpus.
 //!
-//! # Why one-shot rather than criterion
+//! # Why one-shot rather than the sampling harness
 //!
 //! The output this evidence needs — p50/p99 percentiles over a fixed query set, an
-//! exact-rank histogram, and a visited-work total — is not criterion's output, and the
+//! exact-rank histogram, and a visited-work total — is not the sampling harness's output, and the
 //! point of the target is a readable table rather than a statistical estimate. Timings are
 //! wall-clock samples from a shared host and are disclosed as such; nothing here asserts a
 //! latency, and no gate runs it.

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Profiling harness for index construction and ranked retrieval.
@@ -77,8 +77,8 @@
 
 use std::sync::Arc;
 
-use criterion::{BatchSize, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
+use purrdf_testkit::bench::{BatchSize, Bench, Throughput, bench_group, bench_main, black_box};
 use purrdf_text::{
     Analyzer, B, FieldInput, Fixed, GraphSelector, PartitionFilter, PartitionKey, PreparedCorpus,
     RankingField, RankingProfile, TextIndex, TextIndexConfig, select,
@@ -243,7 +243,7 @@ fn needle(text: &str) -> Vec<String> {
         .collect()
 }
 
-fn benchmark(criterion: &mut Criterion) {
+fn benchmark(criterion: &mut Bench) {
     let dataset = corpus();
     let config = configuration();
     let index = TextIndex::from_dataset(&*dataset, &config).expect("the corpus index must build");
@@ -388,7 +388,7 @@ fn benchmark(criterion: &mut Criterion) {
 
 /// Compare preparation with the hot scoring path; IDF work is measured once,
 /// outside the per-document measurement, just as the production index hoists it.
-fn fielded_arithmetic(criterion: &mut Criterion) {
+fn fielded_arithmetic(criterion: &mut Bench) {
     let profile = RankingProfile::new(
         (0..16)
             .map(|at| RankingField::new(format!("field-{at}"), Fixed::ONE, B).expect("field"))
@@ -421,6 +421,6 @@ fn fielded_arithmetic(criterion: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, benchmark, fielded_arithmetic);
+bench_group!(benches, benchmark, fielded_arithmetic);
 
-criterion_main!(benches);
+bench_main!(benches);

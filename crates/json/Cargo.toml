@@ -36,11 +36,6 @@ purrdf-sparql-eval.workspace = true
 # needs no target gate.
 purrdf-testkit.workspace = true
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# Native-only: criterion drives benches, which the wasm lane never runs, and it
-# is not wasm32-clean (it reaches for processes, terminals and wall-clock timing).
-criterion.workspace = true
-
 # The frozen corpus crossed through the production RDF codecs, on every target:
 # `harness = false` on the shared runner, so `make wasm-test` runs the same named
 # cases in Node through scripts/wasm-test-runner.sh that `cargo test` runs natively.

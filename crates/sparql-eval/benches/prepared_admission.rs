@@ -3,12 +3,12 @@
 
 //! Admission cost in isolation and in minimal repeated execution.
 
-use criterion::{Criterion, criterion_main};
 use purrdf_core::{RdfDatasetBuilder, SparqlEngine, SparqlRequest};
 use purrdf_sparql_eval::{NativeSparqlEngine, QueryOptions};
+use purrdf_testkit::bench::{Bench, bench_main};
 use std::hint::black_box;
 
-fn bench(c: &mut Criterion) {
+fn bench(c: &mut Bench) {
     let engine = NativeSparqlEngine::new();
     let data = RdfDatasetBuilder::new().freeze().unwrap();
     let query = "ASK { VALUES ?x { <http://example.org/value> } }";
@@ -44,9 +44,9 @@ fn bench(c: &mut Criterion) {
     });
     group.finish();
 }
-/// Run admission benchmarks with Criterion CLI configuration.
+/// Run admission benchmarks with the harness's command-line configuration.
 pub fn benches() {
-    let mut criterion = Criterion::default().configure_from_args();
+    let mut criterion = Bench::default().configure_from_args();
     bench(&mut criterion);
 }
-criterion_main!(benches);
+bench_main!(benches);

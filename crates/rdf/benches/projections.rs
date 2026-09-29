@@ -9,7 +9,6 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_rdf::{
     CsvwAction, CsvwConfig, CsvwContext, CsvwDatatype, CsvwInput, CsvwMode, CsvwTermsCardinality,
@@ -30,6 +29,7 @@ use purrdf_rdf::{
     read_lpg_cypher, read_lpg_graphml, read_neo4j_csv, write_lpg_csv, write_lpg_cypher,
     write_lpg_graphml, write_neo4j_csv,
 };
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 #[global_allocator]
 static GLOBAL: CountingAllocator = CountingAllocator;
@@ -658,7 +658,7 @@ fn research_common(config: &ProjectionConfig) -> &ResearchObjectConfig {
 /// Run `operation` inside a per-thread measurement window and print its traffic.
 ///
 /// The window is the per-thread one because every projection below runs on the
-/// thread that calls it, and criterion's own machinery elsewhere in the process
+/// thread that calls it, and the harness's own machinery elsewhere in the process
 /// would otherwise land in the figure.
 fn report_allocations<T>(label: &str, operation: impl FnOnce() -> T) -> T {
     let window = CurrentThreadWindow::open();
@@ -671,7 +671,7 @@ fn report_allocations<T>(label: &str, operation: impl FnOnce() -> T) -> T {
     result
 }
 
-fn benchmark(c: &mut Criterion) {
+fn benchmark(c: &mut Bench) {
     let graph_dataset = graph_dataset();
     let large_graph_dataset = large_multigraph_dataset();
     let obo_dataset = obo_dataset();
@@ -1304,5 +1304,5 @@ fn benchmark(c: &mut Criterion) {
     }
 }
 
-criterion_group!(benches, benchmark);
-criterion_main!(benches);
+bench_group!(benches, benchmark);
+bench_main!(benches);

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only benchmark for the SHACL deterministic canonical-sort path.
@@ -28,8 +28,8 @@
 
 use std::fmt::Write as _;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_shapes::engine::validate_graphs;
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 const NODE_COUNT: usize = 4_000;
 
@@ -78,7 +78,7 @@ ex:WidgetShape a sh:NodeShape ;
     (nt, shapes_ttl)
 }
 
-fn bench_canonical_sort(c: &mut Criterion) {
+fn bench_canonical_sort(c: &mut Bench) {
     let (data_nt, shapes_ttl) = large_violation_inputs();
 
     let mut group = c.benchmark_group("shacl_canonical_sort");
@@ -100,5 +100,5 @@ fn bench_canonical_sort(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_canonical_sort);
-criterion_main!(benches);
+bench_group!(benches, bench_canonical_sort);
+bench_main!(benches);

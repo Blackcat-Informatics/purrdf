@@ -37,10 +37,6 @@ purrdf-testkit = { workspace = true }
 # The fixed-key table hasher for test-side maps. Dev-only, so the crate keeps
 # its zero-runtime-dependency contract.
 purrdf-hash = { workspace = true }
-# Parse hot-path baselines. DEV-DEPENDENCY ONLY: the zero-dep leaf gate checks
-# `cargo tree --edges normal`, which excludes dev-deps, so criterion here does not
-# breach the crate's zero-runtime-dependency contract.
-criterion = { workspace = true }
 
 [[bench]]
 name = "parse"

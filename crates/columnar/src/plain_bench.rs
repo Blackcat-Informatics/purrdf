@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Bench-only access to the PLAIN `INT64` value codec, so the criterion bench
+//! Bench-only access to the PLAIN `INT64` value codec, so the codec bench
 //! can measure the value copy on its own rather than inside a whole five-table
 //! write. Not public API: hidden from the docs, unstable, and no shipping path
 //! calls it.

@@ -9,12 +9,11 @@
 //! interner case calls the terminal key function. The reported time per
 //! element is one table-lookup hash. Report-only; not a gate.
 
-#![allow(missing_docs)] // criterion_main! generates an undocumented `main`
+#![allow(missing_docs)] // a bench target is not public API
 
 use core::hash::{Hash, Hasher};
 use std::hint::black_box;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 #[cfg(all(
     any(target_arch = "x86_64", target_arch = "aarch64"),
     target_endian = "little",
@@ -23,6 +22,7 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use purrdf_hash::backend::AesFixedHasher;
 use purrdf_hash::backend::PortableFixedHasher;
 use purrdf_hash_conformance::iri_corpus;
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
 use purrdf_testkit::rng::Xoshiro256;
 
 /// `count` byte keys whose lengths cycle through `lengths`.
@@ -38,7 +38,7 @@ fn byte_keys(lengths: core::ops::RangeInclusive<usize>, count: usize, seed: u64)
 }
 
 /// Times one function over every class.
-fn bench_path<H: Hasher + Default>(c: &mut Criterion, path: &str, terminal: fn(u8, &[u8]) -> u64) {
+fn bench_path<H: Hasher + Default>(c: &mut Bench, path: &str, terminal: fn(u8, &[u8]) -> u64) {
     let mut rng = Xoshiro256::from_seed(0x6265_6e63_6831);
     let words: Vec<u64> = (0..4096).map(|_| rng.next_u64()).collect();
     let short = byte_keys(1..=16, 4096, 1);
@@ -131,7 +131,7 @@ fn bench_path<H: Hasher + Default>(c: &mut Criterion, path: &str, terminal: fn(u
     group.finish();
 }
 
-fn hashers(c: &mut Criterion) {
+fn hashers(c: &mut Bench) {
     bench_path::<PortableFixedHasher>(c, "portable", PortableFixedHasher::hash_terminal);
     #[cfg(all(
         any(target_arch = "x86_64", target_arch = "aarch64"),
@@ -141,5 +141,5 @@ fn hashers(c: &mut Criterion) {
     bench_path::<AesFixedHasher>(c, "aes", AesFixedHasher::hash_terminal);
 }
 
-criterion_group!(benches, hashers);
-criterion_main!(benches);
+bench_group!(benches, hashers);
+bench_main!(benches);

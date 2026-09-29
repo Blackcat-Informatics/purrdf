@@ -762,7 +762,7 @@ for drift. Built with cargo-c: `make capi-build`.
 The IR keeps every term **once** in a string arena addressed by copyable
 `NonZeroU32` ids, hashes with the fixed-key `FixedHasher` everywhere hot, and freezes datasets
 into `Box<[QuadRow]>` tables with lazy ordinal permutation indexes (~4 bytes/quad
-per axis). Performance claims are backed by criterion benchmarks rather than
+per axis). Performance claims are backed by benchmarks rather than
 adjectives — `crates/rdf-core/benches/ir_layout.rs` measures AoS vs. SoA vs.
 predicate-adjacency layouts (allocation counts, high-water mark, end-to-end
 latency), and the shipped layout is whichever wins. Run them with `make bench`.
@@ -816,7 +816,7 @@ above.
 ```sh
 make metadata   # regenerate + verify generated artifacts
 make check      # fmt, build, tests, hygiene gates
-make bench      # criterion benchmarks
+make bench      # purrdf_testkit::bench benchmarks
 make scale-corpus  # the deterministic scale corpus, across shards
 make lubm       # the LUBM comparison workload, per entailment regime
 make watdiv     # the WatDiv comparison workload over a frozen dataset

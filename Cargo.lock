@@ -47,12 +47,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "anes"
-version = "0.1.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b46cbb362ab8752921c97e041f5e366ee6297bd428a31275b9fcf1e380f7299"
-
-[[package]]
 name = "anstream"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -103,12 +97,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "autocfg"
-version = "1.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2032f911046de80f0a198e0901378627c33f59ea0ac00e363d481118bd70a53"
-
-[[package]]
 name = "block-buffer"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -122,12 +110,6 @@ name = "bumpalo"
 version = "3.20.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "72f5acc6cb2ba439de613abc23857ec3d78374d8ed5ac84e9d11336e87da8649"
-
-[[package]]
-name = "cast"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "37b2a672a2cb129a2e41c10b1224bb368f9f37a2b16b612598138befd7b37eb5"
 
 [[package]]
 name = "cfg-if"
@@ -244,40 +226,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8b2a41393f66f16b0823bb79094d54ac5fbd34ab292ddafb9a0456ac9f87d201"
 dependencies = [
  "libc",
-]
-
-[[package]]
-name = "criterion"
-version = "0.5.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2b12d017a929603d80db1831cd3a24082f8137ce19c69e6447f54f5fc8d692f"
-dependencies = [
- "anes",
- "cast",
- "ciborium",
- "clap",
- "criterion-plot",
- "is-terminal",
- "itertools",
- "num-traits",
- "once_cell",
- "oorandom",
- "regex",
- "serde",
- "serde_derive",
- "serde_json",
- "tinytemplate",
- "walkdir",
-]
-
-[[package]]
-name = "criterion-plot"
-version = "0.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b50826342786a51a89e2da3a28f1c32b06e387201bc2d19791f622c673706b1"
-dependencies = [
- "cast",
- "itertools",
 ]
 
 [[package]]
@@ -478,12 +426,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hermit-abi"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fc0fef456e4baa96da950455cd02c081ca953b141298e41db3fc7e36b1da849c"
-
-[[package]]
 name = "hybrid-array"
 version = "0.4.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -512,30 +454,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "is-terminal"
-version = "0.4.17"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3640c1c38b8e4e43584d8df18be5fc6b0aa314ce6ebf51b53313d4306cca8e46"
-dependencies = [
- "hermit-abi",
- "libc",
- "windows-sys",
-]
-
-[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a6cb138bb79a146c1bd460005623e142ef0181e3d0219cb493e02f7d08a35695"
-
-[[package]]
-name = "itertools"
-version = "0.10.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b0fd2260e829bddf4cb6ea802289de2f86d6a7a690192fbe91b3f46e0f2c8473"
-dependencies = [
- "either",
-]
 
 [[package]]
 name = "itoa"
@@ -562,15 +484,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "88904434abc2901f197fe8cc55f0445e7ded921dba5911dad2e2b39b48e663c4"
 
 [[package]]
-name = "num-traits"
-version = "0.2.19"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "071dfc062690e90b734c0b2273ce72ad0ffa95f0c74596bc250dcfd960262841"
-dependencies = [
- "autocfg",
-]
-
-[[package]]
 name = "once_cell"
 version = "1.21.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -581,12 +494,6 @@ name = "once_cell_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "384b8ab6d37215f3c5301a95a4accb5d64aa607f1fcb26a11b5303878451b4fe"
-
-[[package]]
-name = "oorandom"
-version = "11.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d6790f58c7ff633d8771f42965289203411a5e5c68388703c06e14f24770b41e"
 
 [[package]]
 name = "polyval"
@@ -618,7 +525,6 @@ dependencies = [
 name = "purrdf"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-columnar",
  "purrdf-datalog",
  "purrdf-entail",
@@ -637,6 +543,7 @@ dependencies = [
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-testkit",
  "purrdf-text",
  "purrdf-validate",
  "purrdf-xsd",
@@ -682,7 +589,6 @@ name = "purrdf-cli"
 version = "2.0.2"
 dependencies = [
  "clap",
- "criterion",
  "libc",
  "purrdf",
  "purrdf-alloc-probe",
@@ -707,7 +613,6 @@ dependencies = [
 name = "purrdf-columnar"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-core",
  "purrdf-testkit",
  "structured-zstd",
@@ -717,7 +622,6 @@ dependencies = [
 name = "purrdf-core"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "hashbrown",
  "purrdf-alloc-probe",
  "purrdf-cdt",
@@ -735,7 +639,6 @@ dependencies = [
 name = "purrdf-datalog"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "hashbrown",
  "purrdf-core",
  "purrdf-hash",
@@ -747,7 +650,6 @@ dependencies = [
 name = "purrdf-deflate"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-alloc-probe",
  "purrdf-hash",
  "purrdf-testkit",
@@ -757,7 +659,6 @@ dependencies = [
 name = "purrdf-entail"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "hashbrown",
  "purrdf-core",
  "purrdf-datalog",
@@ -788,7 +689,6 @@ version = "2.0.2"
 name = "purrdf-geo"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-core",
  "purrdf-hash",
  "purrdf-iri",
@@ -806,7 +706,6 @@ version = "2.0.2"
 dependencies = [
  "aes-gcm",
  "ciborium",
- "criterion",
  "ed25519-dalek",
  "fastrand",
  "getrandom",
@@ -828,7 +727,6 @@ dependencies = [
 name = "purrdf-hash"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-alloc-probe",
 ]
 
@@ -836,7 +734,6 @@ dependencies = [
 name = "purrdf-hash-conformance"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-hash",
  "purrdf-testkit",
 ]
@@ -858,7 +755,6 @@ dependencies = [
 name = "purrdf-iri"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-hash",
  "purrdf-testkit",
 ]
@@ -867,7 +763,6 @@ dependencies = [
 name = "purrdf-json"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
@@ -880,7 +775,6 @@ dependencies = [
 name = "purrdf-jsonschema"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-testkit",
@@ -892,7 +786,6 @@ dependencies = [
 name = "purrdf-markdown"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-core",
  "purrdf-hash",
  "purrdf-rdf",
@@ -921,7 +814,6 @@ name = "purrdf-rdf"
 version = "2.0.2"
 dependencies = [
  "ciborium",
- "criterion",
  "ed25519-dalek",
  "hashbrown",
  "memchr",
@@ -952,7 +844,6 @@ dependencies = [
 name = "purrdf-retrieval"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-hash",
@@ -968,7 +859,6 @@ dependencies = [
 name = "purrdf-shapes"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "proc-macro2",
  "purrdf-alloc-probe",
  "purrdf-core",
@@ -995,7 +885,6 @@ dependencies = [
 name = "purrdf-shex"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-core",
  "purrdf-iri",
  "purrdf-rdf",
@@ -1010,7 +899,6 @@ dependencies = [
 name = "purrdf-slice"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-core",
  "purrdf-hash",
  "purrdf-iri",
@@ -1028,7 +916,6 @@ dependencies = [
 name = "purrdf-sparql-algebra"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "memchr",
  "purrdf-alloc-probe",
  "purrdf-cdt",
@@ -1060,7 +947,6 @@ dependencies = [
 name = "purrdf-sparql-eval"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "getrandom",
  "hashbrown",
  "purrdf-alloc-probe",
@@ -1083,7 +969,6 @@ dependencies = [
 name = "purrdf-sparql-results"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-alloc-probe",
  "purrdf-core",
  "purrdf-iri",
@@ -1113,7 +998,6 @@ dependencies = [
 name = "purrdf-text"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-core",
  "purrdf-hash",
  "purrdf-sparql-eval",
@@ -1141,7 +1025,6 @@ dependencies = [
 name = "purrdf-wasm"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf",
  "purrdf-core",
  "purrdf-events",
@@ -1163,7 +1046,6 @@ dependencies = [
 name = "purrdf-xsd"
 version = "2.0.2"
 dependencies = [
- "criterion",
  "purrdf-testkit",
 ]
 
@@ -1316,15 +1198,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9774ba4a74de5f7b1c1451ed6cd5285a32eddb5cccb8cc655a4e50009e06477f"
 
 [[package]]
-name = "same-file"
-version = "1.0.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "93fc1dc3aaa9bfed95e02e6eadabb4baf7e3078b0bd1b4d7b6b0b68378900502"
-dependencies = [
- "winapi-util",
-]
-
-[[package]]
 name = "semver"
 version = "1.0.28"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1443,16 +1316,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adb6935a6f5c20170eeceb1a3835a49e12e19d792f6dd344ccc76a985ca5a6ca"
 
 [[package]]
-name = "tinytemplate"
-version = "1.2.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "be4d6b5f19ff7664e8c98d03e2139cb510db9b0a60b55f8e8709b689d939b6bc"
-dependencies = [
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "twox-hash"
 version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1497,16 +1360,6 @@ name = "visual-hashing"
 version = "1.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "5056c65a9a789c9c1156fbfab38df224d7b729089e3b075892136e8f3092166e"
-
-[[package]]
-name = "walkdir"
-version = "2.5.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "29790946404f91d9c5d06f9874efddea1dc06c5efe94541a7d6863108e3a5e4b"
-dependencies = [
- "same-file",
- "winapi-util",
-]
 
 [[package]]
 name = "wasip2"
@@ -1576,15 +1429,6 @@ name = "wasm-link"
 version = "2.0.2"
 dependencies = [
  "wasm-encoder",
-]
-
-[[package]]
-name = "winapi-util"
-version = "0.1.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c2a7b1c03c876122aa43f3020e6c3c3ee5c05081c9a00739faf7503aeba10d22"
-dependencies = [
- "windows-sys",
 ]
 
 [[package]]

@@ -56,9 +56,6 @@ purrdf-hash = { workspace = true }
 # The `harness = false` suite runner and the frozen differential vectors.
 # Path-only and unpublished, so it is stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }
-# Compile and validation baselines. DEV-DEPENDENCY ONLY: it never reaches the
-# published library's graph.
-criterion = { workspace = true }
 
 [[bench]]
 name = "validate"

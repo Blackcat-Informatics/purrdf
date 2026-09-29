@@ -11,9 +11,9 @@
 
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, SparqlEngine, SparqlRequest, SparqlResult};
 use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 const EX: &str = "https://example.org/";
 const CYCLE_LENGTHS: &[usize] = &[5, 7, 11, 13, 17];
@@ -56,15 +56,15 @@ fn run(engine: &NativeSparqlEngine, dataset: &Arc<RdfDataset>) -> usize {
     }
 }
 
-fn bench_path_range(c: &mut Criterion) {
+fn bench_path_range(c: &mut Bench) {
     let dataset = coprime_cycle_dataset();
     let engine = NativeSparqlEngine::new();
     assert_eq!(run(&engine, &dataset), CYCLE_LENGTHS.len());
 
     c.bench_function("path_range/large_exact_coprime_cycles", |bencher| {
-        bencher.iter(|| criterion::black_box(run(&engine, &dataset)));
+        bencher.iter(|| std::hint::black_box(run(&engine, &dataset)));
     });
 }
 
-criterion_group!(benches, bench_path_range);
-criterion_main!(benches);
+bench_group!(benches, bench_path_range);
+bench_main!(benches);

@@ -47,7 +47,6 @@ purrdf-xsd = { workspace = true }
 purrdf-hash = { workspace = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
 purrdf-sparql-algebra = { workspace = true }
 purrdf-rdf = { workspace = true }
 purrdf-shapes = { workspace = true }

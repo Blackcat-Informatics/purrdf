@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! The fused read taken on demand, against the same read materialised.
@@ -49,7 +49,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_core::{
     AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
@@ -405,7 +405,7 @@ fn materialised(
     .len()
 }
 
-fn reads(c: &mut Criterion) {
+fn reads(c: &mut Bench) {
     let dataset = RdfDatasetBuilder::new()
         .freeze()
         .expect("an empty default graph is structurally valid");
@@ -566,7 +566,7 @@ fn pull_at(
     read
 }
 
-fn depth_taking(c: &mut Criterion) {
+fn depth_taking(c: &mut Bench) {
     let mut group = c.benchmark_group("on_demand_read/depth_taking");
     for rows in [400_usize, 4_000] {
         let relation = EmbeddingKnnRelation::new(Arc::new(embedding_space(rows)));
@@ -587,5 +587,5 @@ fn depth_taking(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, reads, depth_taking);
-criterion_main!(benches);
+bench_group!(benches, reads, depth_taking);
+bench_main!(benches);

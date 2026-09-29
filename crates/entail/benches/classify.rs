@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! OWL-Direct classification benchmark: building a whole class taxonomy.
@@ -33,7 +33,7 @@
 
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, TermId};
 use purrdf_entail::reasoner::Reasoner;
@@ -127,7 +127,7 @@ fn terminology(classes: usize) -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
-fn bench_classify(c: &mut Criterion) {
+fn bench_classify(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_classify");
     for classes in [32usize, 128, 512] {
         let dataset = terminology(classes);
@@ -144,5 +144,5 @@ fn bench_classify(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_classify);
-criterion_main!(benches);
+bench_group!(benches, bench_classify);
+bench_main!(benches);

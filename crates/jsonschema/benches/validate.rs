@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Compile and validation baselines for `purrdf-jsonschema`.
@@ -20,8 +20,8 @@
 //!   cost `from_document` does not pay per call.
 //! * `is_valid/1k` — one compiled schema over 1,000 instances, half invalid.
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_jsonschema::{Metaschemas, Schema};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 use serde_json::{Value, json};
 
 fn metaschemas() -> Metaschemas {
@@ -63,7 +63,7 @@ fn ref_chain(length: usize) -> Value {
     })
 }
 
-fn bench_from_document(c: &mut Criterion) {
+fn bench_from_document(c: &mut Bench) {
     let set = metaschemas();
     let mut group = c.benchmark_group("from_document");
     let document = small();
@@ -91,11 +91,11 @@ fn bench_from_document(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_metaschemas(c: &mut Criterion) {
+fn bench_metaschemas(c: &mut Bench) {
     c.bench_function("metaschemas/build", |b| b.iter(metaschemas));
 }
 
-fn bench_is_valid(c: &mut Criterion) {
+fn bench_is_valid(c: &mut Bench) {
     let set = metaschemas();
     let schema =
         Schema::from_document(&set, "https://example.org/small.json", small()).expect("compiles");
@@ -137,10 +137,10 @@ fn bench_is_valid(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_from_document,
     bench_metaschemas,
     bench_is_valid
 );
-criterion_main!(benches);
+bench_main!(benches);

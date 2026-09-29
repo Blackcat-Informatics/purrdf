@@ -34,10 +34,6 @@ name = "purrdf_xsd"
 # on the shared property harness. Path-only and unpublished, so it is stripped
 # from the packaged manifest.
 purrdf-testkit = { workspace = true }
-# Lexical hot-path baselines. DEV-DEPENDENCY ONLY: the zero-dep leaf gate checks
-# `cargo tree --edges normal`, which excludes dev-deps, so criterion here does not
-# breach the crate's zero-runtime-dependency contract (same footing as purrdf-iri).
-criterion = { workspace = true }
 
 [[bench]]
 name = "lexical"

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Cross-page BGP evaluation latency: the SAME 3-pattern join + `FILTER` query
@@ -35,7 +35,7 @@
 
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 use purrdf_core::{
     DatasetView, InMemoryPageProvider, PagedDataset, RdfDataset, RdfDatasetBuilder, RdfLiteral,
@@ -289,7 +289,7 @@ fn build_multi_graph_dataset_with_empties(
     b.freeze().expect("multi-graph dataset freeze")
 }
 
-fn bench_cross_page_bgp(c: &mut Criterion) {
+fn bench_cross_page_bgp(c: &mut Bench) {
     let corpus = corpus();
 
     // (1) The single-dataset baseline: every triple in one frozen `RdfDataset`.
@@ -333,26 +333,26 @@ fn bench_cross_page_bgp(c: &mut Criterion) {
         bencher.iter(|| {
             let result = engine
                 .query_prepared(
-                    criterion::black_box(&single),
-                    criterion::black_box(&prepared),
+                    std::hint::black_box(&single),
+                    std::hint::black_box(&prepared),
                     &[],
                     QueryOptions::EMPTY,
                 )
                 .expect("single query");
-            criterion::black_box(result);
+            std::hint::black_box(result);
         });
     });
     group.bench_function("paged", |bencher| {
         bencher.iter(|| {
             let result = engine
                 .query_prepared_view(
-                    criterion::black_box(&paged),
-                    criterion::black_box(&prepared),
+                    std::hint::black_box(&paged),
+                    std::hint::black_box(&prepared),
                     &[],
                     QueryOptions::EMPTY,
                 )
                 .expect("paged query");
-            criterion::black_box(result);
+            std::hint::black_box(result);
         });
     });
     group.finish();
@@ -364,7 +364,7 @@ fn bench_cross_page_bgp(c: &mut Criterion) {
 /// quads on the fly) against the single-dataset inherent scan. Same report-only caveats:
 /// a noisy machine and strictly-more per-quad work on the paged side make any
 /// "faster/slower" assertion meaningless — this exists for comparison, not a threshold.
-fn bench_paged_full_scan(c: &mut Criterion) {
+fn bench_paged_full_scan(c: &mut Bench) {
     let corpus = corpus();
     let single = build_page(&corpus);
     let pages = split_pages(&corpus, PAGE_COUNT);
@@ -382,14 +382,14 @@ fn bench_paged_full_scan(c: &mut Criterion) {
     let mut group = c.benchmark_group("paged_full_scan");
     group.bench_function("single", |bencher| {
         bencher.iter(|| {
-            let n = criterion::black_box(&single).quads().count();
-            criterion::black_box(n);
+            let n = std::hint::black_box(&single).quads().count();
+            std::hint::black_box(n);
         });
     });
     group.bench_function("paged", |bencher| {
         bencher.iter(|| {
-            let n = DatasetView::quads(criterion::black_box(&paged)).count();
-            criterion::black_box(n);
+            let n = DatasetView::quads(std::hint::black_box(&paged)).count();
+            std::hint::black_box(n);
         });
     });
     group.finish();
@@ -410,7 +410,7 @@ fn bench_paged_full_scan(c: &mut Criterion) {
 /// deterministic page-count assertion (e.g. that only one page was admitted) belongs
 /// in the test suite, not here. This bench is evidence for a human reader comparing
 /// the two groups, nothing more.
-fn bench_graph_selective_bgp(c: &mut Criterion) {
+fn bench_graph_selective_bgp(c: &mut Bench) {
     // Each named graph gets its own entity ring (`graph_corpus` scopes entity names by
     // graph index, so no two graphs share a subject/object term).
     let per_graph_corpus: Vec<Vec<Triple>> = (0..GRAPH_COUNT)
@@ -474,26 +474,26 @@ fn bench_graph_selective_bgp(c: &mut Criterion) {
         bencher.iter(|| {
             let result = engine
                 .query_prepared(
-                    criterion::black_box(&single),
-                    criterion::black_box(&prepared),
+                    std::hint::black_box(&single),
+                    std::hint::black_box(&prepared),
                     &[],
                     QueryOptions::EMPTY,
                 )
                 .expect("single graph query");
-            criterion::black_box(result);
+            std::hint::black_box(result);
         });
     });
     group.bench_function("paged", |bencher| {
         bencher.iter(|| {
             let result = engine
                 .query_prepared_view(
-                    criterion::black_box(&paged),
-                    criterion::black_box(&prepared),
+                    std::hint::black_box(&paged),
+                    std::hint::black_box(&prepared),
                     &[],
                     QueryOptions::EMPTY,
                 )
                 .expect("paged graph query");
-            criterion::black_box(result);
+            std::hint::black_box(result);
         });
     });
     group.finish();
@@ -518,7 +518,7 @@ fn bench_graph_selective_bgp(c: &mut Criterion) {
 /// running `cargo bench` is not quiet. The falsifiable, deterministic claims — which
 /// graphs enumerate, which pages are materialized, how many inner evaluations run — are
 /// asserted in the test suite (`tests/graph_var_narrowing.rs`), not here.
-fn bench_graph_var_bgp(c: &mut Criterion) {
+fn bench_graph_var_bgp(c: &mut Bench) {
     let per_graph_corpus: Vec<Vec<Triple>> = (0..GRAPH_COUNT)
         .map(|i| graph_corpus(i, GRAPH_ENTITIES))
         .collect();
@@ -586,36 +586,36 @@ fn bench_graph_var_bgp(c: &mut Criterion) {
         bencher.iter(|| {
             let result = engine
                 .query_prepared(
-                    criterion::black_box(&single),
-                    criterion::black_box(&prepared),
+                    std::hint::black_box(&single),
+                    std::hint::black_box(&prepared),
                     &[],
                     QueryOptions::EMPTY,
                 )
                 .expect("single graph-var query");
-            criterion::black_box(result);
+            std::hint::black_box(result);
         });
     });
     group.bench_function("paged", |bencher| {
         bencher.iter(|| {
             let result = engine
                 .query_prepared_view(
-                    criterion::black_box(&paged),
-                    criterion::black_box(&prepared),
+                    std::hint::black_box(&paged),
+                    std::hint::black_box(&prepared),
                     &[],
                     QueryOptions::EMPTY,
                 )
                 .expect("paged graph-var query");
-            criterion::black_box(result);
+            std::hint::black_box(result);
         });
     });
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_cross_page_bgp,
     bench_paged_full_scan,
     bench_graph_selective_bgp,
     bench_graph_var_bgp
 );
-criterion_main!(benches);
+bench_main!(benches);

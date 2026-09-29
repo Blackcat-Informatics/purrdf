@@ -136,7 +136,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/check-python-stub-parity.py
 	python3 scripts/conformance-matrix.py --self-test
 	python3 scripts/check-simd-asm.py --self-test
-	python3 scripts/bench-criterion-targets.py --self-test
+	python3 scripts/bench-suite-targets.py --self-test
 	python3 scripts/cleanroom/transcript_audit.py --self-test
 	python3 scripts/cleanroom/guard_hook.py --self-test
 	python3 scripts/cleanroom/deny_settings.py --self-test
@@ -318,8 +318,8 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	CARGO_PROFILE_RELEASE_DEBUG=false \
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
-bench: ## Run criterion benchmarks (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
+bench: ## Run the purrdf_testkit::bench suites (report-only; never a gate).
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #
@@ -698,6 +698,12 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@# The fixed-key table hasher's portable path computes its folded multiplies
 	@# from 32-bit halves on wasm32; its frozen answers are replayed there too.
 	@#
+	@# The bench harness (purrdf_testkit::bench) runs there too: its own suite
+	@# (statistics, command line, estimates file, whole in-process runs, and the
+	@# refusal of the store options wasm32 has no file system for), then two real
+	@# bench binaries under `--test`, so every routine of the hash benches runs
+	@# once on wasm32 through the same runner and host clock.
+	@#
 	@# Every target here is `harness = false` on purrdf_testkit's runner, so the
 	@# same named cases run natively under `cargo test` and here. Cargo hands each
 	@# wasm32 test binary to scripts/wasm-test-runner.sh, which generates its Node
@@ -779,6 +785,9 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-testkit --test bench \
+		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
+			cargo bench --locked --target wasm32-unknown-unknown \
+			-p purrdf-hash-conformance --bench hasher --bench digests -- --test \
 		&& env -u RUSTFLAGS \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS="$${RUSTFLAGS:-} $${CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS:-} -D warnings -C target-feature=+simd128" \

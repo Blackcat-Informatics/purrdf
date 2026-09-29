@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only latency harness for the `purrdf_core::distance` kernels, under both
@@ -32,18 +32,16 @@
 //! query). The dimensions are common production embedding widths.
 //!
 //! All inputs come from a fixed splitmix64 stream. No timing or speedup is asserted --
-//! criterion's stdout summary is the report, and the two arithmetics are reported side by
+//! the harness's stdout summary is the report, and the two arithmetics are reported side by
 //! side rather than divided into each other.
 
-use std::hint::black_box;
-use std::time::Duration;
-
-use criterion::measurement::WallTime;
-use criterion::{BenchmarkGroup, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_core::distance::{
     Arithmetic, Bound, Exact, Measure, Reassociated, Resolved, RowsRef, Scalar,
 };
+use purrdf_testkit::bench::{Bench, BenchmarkGroup, Throughput, bench_group, bench_main};
 use purrdf_testkit::rng::splitmix64_step;
+use std::hint::black_box;
+use std::time::Duration;
 
 /// The rows in every matrix.
 const ROWS: usize = 4_096;
@@ -108,7 +106,7 @@ impl Fixture {
 
 /// A group with the harness's modest budget: every id runs briefly, and the whole target
 /// stays in the low minutes.
-fn group<'c>(c: &'c mut Criterion, name: &str) -> BenchmarkGroup<'c, WallTime> {
+fn group<'c>(c: &'c mut Bench, name: &str) -> BenchmarkGroup<'c> {
     let mut group = c.benchmark_group(name);
     group.sample_size(10);
     group.warm_up_time(Duration::from_millis(300));
@@ -135,7 +133,7 @@ struct Law<A: Arithmetic> {
 }
 
 fn batch<A: Arithmetic, Q: Scalar, T: Scalar>(
-    group: &mut BenchmarkGroup<'_, WallTime>,
+    group: &mut BenchmarkGroup<'_>,
     law: Law<A>,
     pair: &str,
     dims: usize,
@@ -158,7 +156,7 @@ fn batch<A: Arithmetic, Q: Scalar, T: Scalar>(
 }
 
 fn indexed<A: Arithmetic, Q: Scalar, T: Scalar>(
-    group: &mut BenchmarkGroup<'_, WallTime>,
+    group: &mut BenchmarkGroup<'_>,
     law: Law<A>,
     pair: &str,
     fixture: &Fixture,
@@ -188,7 +186,7 @@ fn indexed<A: Arithmetic, Q: Scalar, T: Scalar>(
 }
 
 fn pair_dot<A: Arithmetic, Q: Scalar, T: Scalar>(
-    group: &mut BenchmarkGroup<'_, WallTime>,
+    group: &mut BenchmarkGroup<'_>,
     law: Law<A>,
     pair: &str,
     dims: usize,
@@ -211,7 +209,7 @@ fn pair_dot<A: Arithmetic, Q: Scalar, T: Scalar>(
 }
 
 fn bounded<A: Arithmetic, Q: Scalar, T: Scalar>(
-    group: &mut BenchmarkGroup<'_, WallTime>,
+    group: &mut BenchmarkGroup<'_>,
     law: Law<A>,
     pair: &str,
     dims: usize,
@@ -302,7 +300,7 @@ macro_rules! each_law_and_pair {
     }};
 }
 
-fn bench_batch(c: &mut Criterion, fixtures: &[Fixture]) {
+fn bench_batch(c: &mut Bench, fixtures: &[Fixture]) {
     let mut group = group(c, "distance_batch");
     for f in fixtures {
         each_law_and_pair!(
@@ -315,7 +313,7 @@ fn bench_batch(c: &mut Criterion, fixtures: &[Fixture]) {
     group.finish();
 }
 
-fn bench_indexed(c: &mut Criterion, fixtures: &[Fixture]) {
+fn bench_indexed(c: &mut Bench, fixtures: &[Fixture]) {
     let mut group = group(c, "distance_indexed");
     for f in fixtures {
         each_law_and_pair!(
@@ -328,7 +326,7 @@ fn bench_indexed(c: &mut Criterion, fixtures: &[Fixture]) {
     group.finish();
 }
 
-fn bench_pair(c: &mut Criterion, fixtures: &[Fixture]) {
+fn bench_pair(c: &mut Bench, fixtures: &[Fixture]) {
     let mut group = group(c, "distance_pair");
     for f in fixtures {
         each_law_and_pair!(
@@ -341,7 +339,7 @@ fn bench_pair(c: &mut Criterion, fixtures: &[Fixture]) {
     group.finish();
 }
 
-fn bench_bounded(c: &mut Criterion, fixtures: &[Fixture]) {
+fn bench_bounded(c: &mut Bench, fixtures: &[Fixture]) {
     let mut group = group(c, "distance_bounded");
     for f in fixtures {
         each_law_and_pair!(
@@ -354,7 +352,7 @@ fn bench_bounded(c: &mut Criterion, fixtures: &[Fixture]) {
     group.finish();
 }
 
-fn bench_distance(c: &mut Criterion) {
+fn bench_distance(c: &mut Bench) {
     let fixtures: Vec<Fixture> = DIMS.into_iter().map(Fixture::new).collect();
     bench_batch(c, &fixtures);
     bench_indexed(c, &fixtures);
@@ -362,5 +360,5 @@ fn bench_distance(c: &mut Criterion) {
     bench_bounded(c, &fixtures);
 }
 
-criterion_group!(benches, bench_distance);
-criterion_main!(benches);
+bench_group!(benches, bench_distance);
+bench_main!(benches);

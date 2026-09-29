@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Parse throughput over a fixed set of thirty realistic queries.
@@ -24,8 +24,8 @@
 //! Report-only, `cargo bench -p purrdf-sparql-algebra --bench parse` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_sparql_algebra::SparqlParser;
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 /// The shared prologue, prefixed to every query below.
 const PROLOGUE: &str = "\
@@ -35,7 +35,7 @@ PREFIX rdfs: <http://www.w3.org/2000/01/rdf-schema#>
 PREFIX xsd: <http://www.w3.org/2001/XMLSchema#>
 ";
 
-/// `(criterion id, query body)`.
+/// `(bench id, query body)`.
 const QUERIES: &[(&str, &str)] = &[
     ("select_one_pattern", "SELECT ?s ?o WHERE { ?s ex:p ?o }"),
     (
@@ -153,7 +153,7 @@ const QUERIES: &[(&str, &str)] = &[
     ),
 ];
 
-fn bench_parse(c: &mut Criterion) {
+fn bench_parse(c: &mut Bench) {
     let parser = SparqlParser::new();
     let texts: Vec<(&str, String)> = QUERIES
         .iter()
@@ -185,5 +185,5 @@ fn bench_parse(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_parse);
-criterion_main!(benches);
+bench_group!(benches, bench_parse);
+bench_main!(benches);

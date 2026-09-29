@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Baseline benchmark for the SHACL Core validator.
@@ -93,7 +93,7 @@
 //!
 //! # The probe lines, and why this target uses both measurement modes
 //!
-//! Interleaved with the criterion groups are `println!` probe lines a human
+//! Interleaved with the bench groups are `println!` probe lines a human
 //! reads when comparing two runs. They are measured with the workspace's shared
 //! counting allocator, and this is the one target that needs both of its
 //! windows in one process:
@@ -104,10 +104,10 @@
 //!   report the parallel sizes as the cheapest in the sweep;
 //! * the schema-import, LinkML-import and slot-emission probes are
 //!   single-threaded, so they use a [`CurrentThreadWindow`], which keeps their
-//!   figures free of whatever criterion's own machinery is doing elsewhere.
+//!   figures free of whatever the harness's own machinery is doing elsewhere.
 //!
 //! The whole-process ledger is armed only inside its windows, so the timed
-//! criterion measurements outside them pay one relaxed load per allocation.
+//! harness measurements outside them pay one relaxed load per allocation.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -116,7 +116,6 @@ use std::path::PathBuf;
 use std::sync::{Arc, Once};
 use std::time::{Duration, Instant};
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf::loss::LossLedger;
 use purrdf::{DatasetView, GraphMatch, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
@@ -133,6 +132,7 @@ use purrdf_shapes::{
     LinkmlConfig, LinkmlDocument, Namespaces, SchemaDatatypeMap, SchemaImportConfig, emit_linkml,
     import_json_schema, import_linkml,
 };
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
 use serde_json::{Map, Value, json};
 
 #[global_allocator]
@@ -237,7 +237,7 @@ fn corpus_cases() -> Vec<(String, String, String)> {
         .collect()
 }
 
-fn bench_validate(c: &mut Criterion) {
+fn bench_validate(c: &mut Bench) {
     let cases = corpus_cases();
 
     let mut group = c.benchmark_group("shacl_validate");
@@ -248,7 +248,7 @@ fn bench_validate(c: &mut Criterion) {
                 // error would run instantly and report a false speedup (gemini review).
                 let report = validate_graphs(data, shapes, None)
                     .unwrap_or_else(|e| panic!("validation failed for {name}: {e:?}"));
-                std::hint::black_box(report);
+                black_box(report);
             }
         });
     });
@@ -856,7 +856,7 @@ fn print_validation_probe(label: &str, fixture: &ValidationFixture) {
     );
 }
 
-fn bench_focus_core(c: &mut Criterion) {
+fn bench_focus_core(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_focus_core");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -877,7 +877,7 @@ fn bench_focus_core(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_focus_closed(c: &mut Criterion) {
+fn bench_focus_closed(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_focus_closed");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -898,7 +898,7 @@ fn bench_focus_closed(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_focus_sparql(c: &mut Criterion) {
+fn bench_focus_sparql(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_focus_sparql");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -919,7 +919,7 @@ fn bench_focus_sparql(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_focus_unique_values(c: &mut Criterion) {
+fn bench_focus_unique_values(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_focus_unique_values_for");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -940,7 +940,7 @@ fn bench_focus_unique_values(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_focus_target_where(c: &mut Criterion) {
+fn bench_focus_target_where(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_focus_target_where");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -965,7 +965,7 @@ fn bench_focus_target_where(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_focus_computed_values(c: &mut Criterion) {
+fn bench_focus_computed_values(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_focus_computed_values");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -990,7 +990,7 @@ fn bench_focus_computed_values(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_focus_sequence_operators(c: &mut Criterion) {
+fn bench_focus_sequence_operators(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_focus_sequence_operators");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -1017,7 +1017,7 @@ fn bench_focus_sequence_operators(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_focus_list_components(c: &mut Criterion) {
+fn bench_focus_list_components(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_focus_list_components");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -1047,7 +1047,7 @@ fn bench_focus_list_components(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_focus_closed_by_types(c: &mut Criterion) {
+fn bench_focus_closed_by_types(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_focus_closed_by_types");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -1115,7 +1115,7 @@ fn print_realtime_probe(prepared: &PreparedValidator, focus_ids: &[FocusId]) {
     );
 }
 
-fn bench_focus_realtime(c: &mut Criterion) {
+fn bench_focus_realtime(c: &mut Bench) {
     const DATASET_FOCUS_NODES: usize = 1_000_000;
 
     let fixture = core_focus_fixture(DATASET_FOCUS_NODES);
@@ -1290,7 +1290,7 @@ fn print_contrast_probe(
 /// contract in `crates/shapes/tests/change_path_alloc.rs`, which is where it
 /// belongs — a bench that gated on it would be a gate on a machine, not on the
 /// code.
-fn bench_change_path_contrast(c: &mut Criterion) {
+fn bench_change_path_contrast(c: &mut Bench) {
     let fixture = contrast_fixture();
 
     let mut group = c.benchmark_group("shacl_change_path_contrast");
@@ -1381,7 +1381,7 @@ fn print_membership_realtime_probe(
     );
 }
 
-fn bench_subclass_membership(c: &mut Criterion) {
+fn bench_subclass_membership(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_subclass_membership");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -1467,7 +1467,7 @@ fn print_membership_pattern_probe<D>(
     );
 }
 
-fn bench_subclass_patterns(c: &mut Criterion) {
+fn bench_subclass_patterns(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_subclass_patterns");
     group.sample_size(20);
     group.warm_up_time(Duration::from_secs(1));
@@ -1558,7 +1558,7 @@ fn run_membership_rules(fixture: &MembershipFixture, shapes: &Shapes) {
     black_box(output);
 }
 
-fn bench_subclass_rule_rounds(c: &mut Criterion) {
+fn bench_subclass_rule_rounds(c: &mut Bench) {
     let shapes = membership_rule_shapes();
     let mut group = c.benchmark_group("shacl_subclass_rule_rounds");
     group.sample_size(10);
@@ -1626,7 +1626,7 @@ ex:step a sh:SPARQLRule ; sh:order 1 ;
 /// The SHACL rules engine closing a chain transitively: every iteration re-executes the
 /// iterating rule over the evaluation graph until a pass infers nothing, so the cost
 /// grows with the chain length in iterations and in graph size at once. Report-only.
-fn bench_rules_transitive_closure(c: &mut Criterion) {
+fn bench_rules_transitive_closure(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_rules_transitive_closure");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -1739,7 +1739,7 @@ fn linkml_import_fixture(config: &SchemaImportConfig) -> LinkmlDocument {
         .document
 }
 
-fn bench_schema_import(c: &mut Criterion) {
+fn bench_schema_import(c: &mut Bench) {
     let schema = schema_import_fixture();
     let config = schema_import_config();
 
@@ -1775,7 +1775,7 @@ fn bench_schema_import(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_linkml_import(c: &mut Criterion) {
+fn bench_linkml_import(c: &mut Bench) {
     let config = schema_import_config();
     let document = linkml_import_fixture(&config);
     let expected_shapes = document
@@ -1908,7 +1908,7 @@ fn linkml_emit_fixture(
     (compiled, config, expected_renames, expected_collisions)
 }
 
-fn bench_linkml_slot_emission(c: &mut Criterion) {
+fn bench_linkml_slot_emission(c: &mut Bench) {
     let mut group = c.benchmark_group("linkml_slot_emission");
     group.sample_size(10);
     for &slots in LINKML_EMIT_SIZES {
@@ -2031,7 +2031,7 @@ fn imports_fixture(variant: ImportsVariant, n: usize) -> (String, ShapesImports)
     (shapes, imports)
 }
 
-fn bench_shapes_graph_imports(c: &mut Criterion) {
+fn bench_shapes_graph_imports(c: &mut Bench) {
     let mut group = c.benchmark_group("shacl_shapes_graph_imports");
     group.sample_size(10);
     group.warm_up_time(Duration::from_secs(1));
@@ -2064,7 +2064,7 @@ fn bench_shapes_graph_imports(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_validate,
     bench_focus_core,
@@ -2087,4 +2087,4 @@ criterion_group!(
     bench_linkml_slot_emission,
     bench_shapes_graph_imports
 );
-criterion_main!(benches);
+bench_main!(benches);

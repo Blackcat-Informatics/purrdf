@@ -93,7 +93,7 @@ on their expected-failure ledgers. See
 
 ## Supporting rules
 
-- **Measured performance** — perf claims require a criterion bench, not an
+- **Measured performance** — perf claims require a bench, not an
   adjective ([Performance](performance.md)).
 - **One version, lockstep releases** — crates.io, PyPI, and npm ship one
   workspace version ([Versioning & Releases](releases.md)).

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Time to refusal of runaway rule sets under the DEFAULT rule-evaluation limits
@@ -40,7 +40,6 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
 use purrdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{self, parse_shapes};
@@ -48,6 +47,7 @@ use purrdf_shapes::rules::{RuleOptions, infer};
 use purrdf_shapes::shapes::Shapes;
 use purrdf_shapes::srl::{self, InferOptions};
 use purrdf_shapes::text_ingest::parse_turtle_to_dataset;
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main, black_box};
 
 const PREFIXES: &str = "@prefix ex: <http://example.org/ns#> .
 @prefix sh: <http://www.w3.org/ns/shacl#> .
@@ -110,7 +110,7 @@ fn load(ttl: &str) -> (Shapes, ShaclData) {
 
 /// Time to refusal: every input is loaded before the group opens, so the group lives
 /// only across its measurements.
-fn bench_refuse(c: &mut Criterion) {
+fn bench_refuse(c: &mut Bench) {
     let loaded: Vec<(&str, (Shapes, ShaclData))> = [
         ("fresh_iri", FRESH_IRI.to_owned()),
         ("concat", format!("{PREFIXES}{CONCAT}")),
@@ -155,7 +155,7 @@ fn bench_refuse(c: &mut Criterion) {
 }
 
 /// Completion of a data-bounded counter.
-fn bench_complete(c: &mut Criterion) {
+fn bench_complete(c: &mut Bench) {
     let loaded: Vec<(usize, (Shapes, ShaclData))> = DEPTHS
         .iter()
         .map(|&length| {
@@ -184,7 +184,7 @@ fn bench_complete(c: &mut Criterion) {
 }
 
 /// Completion of a countdown bounded by a constant.
-fn bench_countdown(c: &mut Criterion) {
+fn bench_countdown(c: &mut Bench) {
     let countdowns: Vec<(usize, (Shapes, ShaclData))> = COUNTDOWNS
         .iter()
         .map(|&start| {
@@ -230,7 +230,7 @@ ex:step a sh:SPARQLRule ; sh:construct
 "#;
 
 /// Completion of the copy workloads the native default limits admit.
-fn bench_copy(c: &mut Criterion) {
+fn bench_copy(c: &mut Bench) {
     let copies: Vec<(usize, (Shapes, ShaclData))> = COPIES
         .iter()
         .map(|&count| {
@@ -258,7 +258,7 @@ fn bench_copy(c: &mut Criterion) {
 }
 
 /// Completion of the transitive closure the native default limits admit.
-fn bench_closure(c: &mut Criterion) {
+fn bench_closure(c: &mut Bench) {
     let closures: Vec<(usize, (Shapes, ShaclData))> = CLOSURE_CHAINS
         .iter()
         .map(|&length| {
@@ -286,7 +286,7 @@ fn bench_closure(c: &mut Criterion) {
 }
 
 /// Completion of a per-focus walk discovering one focus node per iteration.
-fn bench_per_focus_walk(c: &mut Criterion) {
+fn bench_per_focus_walk(c: &mut Bench) {
     let walks: Vec<(usize, (Shapes, ShaclData))> = WALKS
         .iter()
         .map(|&length| {
@@ -313,7 +313,7 @@ fn bench_per_focus_walk(c: &mut Criterion) {
     walk.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_refuse,
     bench_per_focus_walk,
@@ -322,4 +322,4 @@ criterion_group!(
     bench_copy,
     bench_closure
 );
-criterion_main!(benches);
+bench_main!(benches);

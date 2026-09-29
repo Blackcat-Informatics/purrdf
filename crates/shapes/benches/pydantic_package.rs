@@ -1,17 +1,17 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Standard-allocator Criterion instrument for deterministic Pydantic emission.
+//! Standard-allocator timing instrument for deterministic Pydantic emission.
 
 use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_main, black_box};
 
 #[path = "support/pydantic.rs"]
 mod pydantic_support;
 use pydantic_support::{Fixture, Mode, SIZES};
 
-fn bench_pydantic_package(c: &mut Criterion) {
+fn bench_pydantic_package(c: &mut Bench) {
     let mut fixtures = SIZES
         .into_iter()
         .flat_map(|definitions| {
@@ -47,8 +47,8 @@ fn bench_pydantic_package(c: &mut Criterion) {
 
 /// Run the Pydantic package benchmark group.
 pub fn benches() {
-    let mut criterion = Criterion::default().configure_from_args();
+    let mut criterion = Bench::default().configure_from_args();
     bench_pydantic_package(&mut criterion);
 }
 
-criterion_main!(benches);
+bench_main!(benches);

@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Owned vs. borrowed flat-assertion canonicalization, over five fixture shapes.
@@ -57,7 +57,6 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use purrdf_core::InMemoryPageProvider;
 use purrdf_rdf::{
     BlankScope, CanonHash, Canonicalized, CompositeDatasetView, DatasetMut, DatasetView,
@@ -66,6 +65,7 @@ use purrdf_rdf::{
     canonicalize_with, dataset_from_view, flat_dataset_from_quads, flat_rdf_quads_from_dataset,
     try_canonicalize_flat_view,
 };
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 /// Row-groups per dataset — medium, matching this crate's other fixture-scale
 /// benches (`native_codecs`'s `ROWS = 2_000` text rows; this fixture's rows carry
@@ -194,7 +194,7 @@ fn borrowed_route<D: FallibleDatasetView>(view: &D, hash: CanonHash) -> Canonica
 /// asserted byte-identical BEFORE it is timed (see the parity block below), so
 /// a reported timing difference is never mistaken for two routes silently
 /// disagreeing on the answer.
-fn benches(c: &mut Criterion) {
+fn benches(c: &mut Bench) {
     let hash = CanonHash::Sha256;
 
     let plain = plain_dataset();
@@ -324,15 +324,15 @@ fn benches(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group! {
+bench_group! {
     name = flat_view_canon_benches;
     // Report-only and on a contended machine, like the other view-canon benches
     // in this workspace: a small sample is the honest budget, not a precision
     // compromise.
-    config = Criterion::default()
+    config = Bench::default()
         .sample_size(10)
         .warm_up_time(Duration::from_millis(250))
         .measurement_time(Duration::from_secs(2));
     targets = benches
 }
-criterion_main!(flat_view_canon_benches);
+bench_main!(flat_view_canon_benches);

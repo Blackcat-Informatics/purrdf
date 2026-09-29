@@ -96,6 +96,26 @@ smallvec = [
     '^use ::purrdf::\{[^}]*\bsmallvec\};$',
     '^\s+research_object_to_rdf_loss_ledger, rule_iri, skolemize, smallvec, try_canonicalize,$',
 ]
+criterion = [
+    # The benchmark crate was replaced by `purrdf_testkit::bench`. What remains
+    # is the English noun — a standard a thing is judged by — and the
+    # helpers-ledger key of that name. A line holding a `criterion::` path, a
+    # manifest entry `criterion = …` outside the ledger's own key, or the crate
+    # named as a crate or dependency is not matched here.
+    '^(?!.*criterion::)(?!.*`criterion` (?:crate|dependency)).*\b(?:acceptance|pass|truncation|faithful-antecedent) criterion\b',
+    '^(?!.*criterion::)(?!.*`criterion` (?:crate|dependency)).*\b[Tt]he criterion\b',
+    # The continuation line of "never a pass criterion." in the envelope probe's README.
+    '^criterion\.$',
+    # The helpers-ledger variant key: its one-line description in AGENTS.md and
+    # its reader in crates/helper-census.
+    '\bits criterion and documented reason\b',
+    '`file`, `criterion` and `reason`',
+    '^\s*"criterion",$',
+    '\blet criterion = string\(table, "criterion"\)\?;',
+    '\bCRITERIA\.contains\(&criterion\.as_str\(\)\)',
+    'variant criterion `\{criterion\}`',
+    '\.contains\("criterion"\)\);',
+]
 csv = [
     # File names and extensions: every `nodes.csv`, `data/train.csv`,
     # `{token}.csv` artifact path and `.csv` suffix test.
@@ -154,11 +174,6 @@ category = "transitive:regex"
 reason = "multi-literal search inside regex"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.anes]
-category = "transitive:criterion"
-reason = "ANSI escape sequences for criterion output"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
 [packages.anstream]
 category = "transitive:clap"
 reason = "terminal colour stream for clap output"
@@ -184,11 +199,6 @@ category = "transitive:clap"
 reason = "Windows console styling for anstream"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
-[packages.autocfg]
-category = "transitive:criterion"
-reason = "build-time rustc probing for num-traits"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
 [packages.block-buffer]
 category = "transitive:sha2"
 reason = "block buffering for RustCrypto digests"
@@ -199,11 +209,6 @@ category = "transitive:wasm-bindgen"
 reason = "bump allocator for the wasm-bindgen macro backend"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.cast]
-category = "transitive:criterion"
-reason = "numeric casts for criterion statistics"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
 [packages.cfg-if]
 category = "transitive:sha2"
 reason = "cfg dispatch helper used across RustCrypto and others"
@@ -212,7 +217,7 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 [packages.ciborium]
 category = "spec-codec"
 reason = "CBOR (RFC 8949) encode/decode for GTS packs and envelopes"
-metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 7, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.ciborium-io]
 category = "transitive:ciborium"
@@ -232,7 +237,7 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 [packages.clap]
 category = "runtime"
 reason = "command-line argument parsing for the purrdf CLI"
-metrics = { direct = true, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 14, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.clap_builder]
 category = "transitive:clap"
@@ -273,16 +278,6 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "transitive:sha2"
 reason = "runtime CPU feature detection for SIMD crypto"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
-
-[packages.criterion]
-category = "bench"
-reason = "statistical benchmark harness for every crate bench lane"
-metrics = { direct = true, exclusive_closure = 14, release = false, wasm = false, build_script = false, proc_macro = false }
-
-[packages.criterion-plot]
-category = "transitive:criterion"
-reason = "criterion plotting backend"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.crossbeam-deque]
 category = "transitive:rayon"
@@ -389,11 +384,6 @@ category = "transitive:pyo3"
 reason = "identifier case conversion for pyo3 and clap derive macros"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
-[packages.hermit-abi]
-category = "transitive:criterion"
-reason = "Hermit OS ABI for is-terminal"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
 [packages.hybrid-array]
 category = "transitive:sha2"
 reason = "const-generic arrays for RustCrypto"
@@ -409,19 +399,9 @@ category = "transitive:aes-gcm"
 reason = "in/out buffers for cipher"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.is-terminal]
-category = "transitive:criterion"
-reason = "terminal detection for criterion"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
 [packages.is_terminal_polyfill]
 category = "transitive:clap"
 reason = "terminal detection for anstream"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
-[packages.itertools]
-category = "transitive:criterion"
-reason = "iterator adaptors for criterion"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.itoa]
@@ -444,11 +424,6 @@ category = "runtime"
 reason = "SIMD byte search for parser line splitting and escape scanning"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.num-traits]
-category = "transitive:criterion"
-reason = "numeric traits for criterion statistics"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = true, proc_macro = false }
-
 [packages.once_cell]
 category = "transitive:wasm-bindgen"
 reason = "lazy statics for wasm-bindgen and pyo3"
@@ -457,11 +432,6 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 [packages.once_cell_polyfill]
 category = "transitive:clap"
 reason = "OnceLock polyfill for anstream"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
-[packages.oorandom]
-category = "transitive:criterion"
-reason = "small RNG for criterion resampling"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.polyval]
@@ -517,7 +487,7 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false,
 [packages.rayon]
 category = "runtime"
 reason = "data-parallel parsing, reasoning and scans; inline-sequential on wasm32"
-metrics = { direct = true, exclusive_closure = 5, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 6, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.rayon-core]
 category = "transitive:rayon"
@@ -527,7 +497,7 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 [packages.regex]
 category = "runtime"
 reason = "regex engine for SPARQL REGEX/REPLACE, XSD patterns and SHACL/ShEx pattern constraints"
-metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 3, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.regex-automata]
 category = "transitive:regex"
@@ -559,11 +529,6 @@ category = "transitive:serde_yaml_ng"
 reason = "float formatting for YAML output"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.same-file]
-category = "transitive:criterion"
-reason = "file identity for walkdir"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
 [packages.semver]
 category = "transitive:ed25519-dalek"
 reason = "version parsing for rustc_version"
@@ -587,7 +552,7 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 [packages.serde_json]
 category = "spec-codec"
 reason = "JSON (RFC 8259) encode/decode for JSON-LD, SPARQL JSON results and bindings"
-metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 2, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.serde_yaml_ng]
 category = "spec-codec"
@@ -629,11 +594,6 @@ category = "transitive:pyo3"
 reason = "target triple parsing for pyo3-build-config"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = true, proc_macro = false }
 
-[packages.tinytemplate]
-category = "transitive:criterion"
-reason = "report templating for criterion"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
 [packages.twox-hash]
 category = "transitive:structured-zstd"
 reason = "xxHash64 frame checksums for Zstandard"
@@ -669,11 +629,6 @@ category = "runtime"
 reason = "emojihash and randomart key fingerprints for GTS"
 metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.walkdir]
-category = "transitive:criterion"
-reason = "directory traversal for criterion reports"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
-
 [packages.wasip2]
 category = "transitive:getrandom"
 reason = "WASI preview 2 bindings for getrandom"
@@ -703,11 +658,6 @@ metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, 
 category = "spec-codec"
 reason = "WebAssembly instruction and section emission for the private host linker; native structural reads and the already-required Binaryen validator avoid the parser/reencoder dependency closure"
 metrics = { direct = true, exclusive_closure = 2, release = false, wasm = false, build_script = false, proc_macro = false }
-
-[packages.winapi-util]
-category = "transitive:criterion"
-reason = "Windows API helpers for same-file"
-metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.windows-link]
 category = "transitive:clap"

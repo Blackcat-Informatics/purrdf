@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Per-row cost of SPARQL `REGEX`/`REPLACE` after the shared XSD/XPath
@@ -38,11 +38,11 @@
 
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest, SparqlResult,
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
 
 const EX: &str = "https://example.org/";
 const ROW_COUNTS: &[usize] = &[1_000, 10_000];
@@ -111,7 +111,7 @@ fn run(engine: &NativeSparqlEngine, ds: &Arc<RdfDataset>, query: &str) -> usize 
     }
 }
 
-fn bench_regex_eval(c: &mut Criterion) {
+fn bench_regex_eval(c: &mut Bench) {
     // Pin rayon's global worker count once, before the first query: the
     // evaluator forks a per-chunk context whose geometry tracks
     // `rayon::current_num_threads()`, so an implicit pool would let the numbers
@@ -159,5 +159,5 @@ fn bench_regex_eval(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_regex_eval);
-criterion_main!(benches);
+bench_group!(benches, bench_regex_eval);
+bench_main!(benches);

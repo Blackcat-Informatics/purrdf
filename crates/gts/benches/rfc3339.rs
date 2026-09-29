@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! RFC 3339 `modified` stamps: parse and format.
@@ -12,7 +12,7 @@
 //! is a regression watch, not a hot-path claim. The module is crate-private,
 //! so the bench compiles the same source file directly.
 
-use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main, black_box};
 
 // `cargo clippy --all-targets` builds bench targets with `cfg(test)`, which
 // pulls the module's own unit tests in here as well; they run from the library,
@@ -21,7 +21,7 @@ use criterion::{BenchmarkId, Criterion, black_box, criterion_group, criterion_ma
 #[path = "../src/rfc3339.rs"]
 mod rfc3339;
 
-fn parse(c: &mut Criterion) {
+fn parse(c: &mut Bench) {
     let mut group = c.benchmark_group("rfc3339_parse");
     for (name, text) in [
         ("utc_whole_second", "2023-11-14T22:13:20Z"),
@@ -37,7 +37,7 @@ fn parse(c: &mut Criterion) {
     group.finish();
 }
 
-fn format(c: &mut Criterion) {
+fn format(c: &mut Bench) {
     let mut group = c.benchmark_group("rfc3339_format");
     for (name, seconds, nanos) in [
         ("whole_second", 1_700_000_000_i64, 0_u32),
@@ -55,5 +55,5 @@ fn format(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, parse, format);
-criterion_main!(benches);
+bench_group!(benches, parse, format);
+bench_main!(benches);

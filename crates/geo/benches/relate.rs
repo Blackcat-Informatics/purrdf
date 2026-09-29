@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Profiling harness for the two costs a geometry predicate actually has.
@@ -34,8 +34,8 @@
 
 use core::fmt::Write as _;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_geo::{Crs, GeometryLiteral, Rat, topology, wkt};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 /// The number of coordinate literals in the ingest fixture.
 const COORDINATES: u64 = 4096;
@@ -77,7 +77,7 @@ fn coordinate_lexicals(count: u64, fraction_digits: u32) -> Vec<String> {
         .collect()
 }
 
-fn benchmark(criterion: &mut Criterion) {
+fn benchmark(criterion: &mut Bench) {
     let mut group = criterion.benchmark_group("purrdf_geo");
     group.throughput(Throughput::Elements(COORDINATES));
 
@@ -186,5 +186,5 @@ fn ring(crs: &Crs, vertices: usize, offset: i64) -> GeometryLiteral {
     wkt::parse(&ring_wkt(vertices, offset), crs).expect("the generated ring is well formed")
 }
 
-criterion_group!(benches, benchmark);
-criterion_main!(benches);
+bench_group!(benches, benchmark);
+bench_main!(benches);

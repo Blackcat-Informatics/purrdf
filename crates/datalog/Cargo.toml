@@ -49,7 +49,6 @@ hashbrown = { workspace = true }
 rayon = { workspace = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
 purrdf-testkit = { workspace = true }
 
 [[bench]]

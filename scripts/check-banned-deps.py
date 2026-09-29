@@ -259,6 +259,24 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "unicode-segmentation": "purrdf_text::unicode::{word_bounds, word_indices} (UAX 29)",
     "tinyvec": "purrdf_text::unicode (no inline-buffer crate is needed)",
     "tinyvec_macros": "purrdf_text::unicode (no inline-buffer crate is needed)",
+    "criterion": "purrdf_testkit::bench (warm-up, flat sampling, median/MAD with a seeded bootstrap interval, baselines, estimates.json)",
+    # criterion's own closure: its plotting backend, terminal and statistics
+    # helpers, its report templating and its baseline-directory walker. The
+    # committed Cargo.lock listed criterion (or one of these) as the only
+    # dependent of each before they left.
+    "criterion-plot": "purrdf_testkit::bench (no plots are drawn)",
+    "anes": "purrdf_testkit::bench (plain console lines, no terminal control sequences)",
+    "is-terminal": "std::io::IsTerminal",
+    "hermit-abi": "std::io::IsTerminal (old is-terminal closure)",
+    "cast": "purrdf_testkit::bench::stats (plain numeric conversions)",
+    "num-traits": "purrdf_testkit::bench::stats (f64 statistics without numeric traits)",
+    "autocfg": "purrdf_testkit::bench::stats (old num-traits build probe)",
+    "itertools": "purrdf_testkit::bench (std iterators)",
+    "oorandom": "purrdf_testkit::bench::stats (the bootstrap draws from purrdf_testkit::rng, seeded through purrdf_hash::mix)",
+    "tinytemplate": "purrdf_testkit::bench (no HTML report)",
+    "walkdir": "purrdf_testkit::bench::store (one fixed path per record)",
+    "same-file": "purrdf_testkit::bench::store (one fixed path per record)",
+    "winapi-util": "purrdf_testkit::bench::store (old walkdir closure)",
 }
 
 # Reserved for a future direct-only removal, if one is ever authorized.

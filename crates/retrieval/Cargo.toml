@@ -60,8 +60,6 @@ serde.workspace = true
 purrdf-alloc-probe = { workspace = true }
 # A document format for the serde round-trip test.
 serde_json.workspace = true
-# The timed benches (`benches/on_demand_read.rs`). Report-only.
-criterion = { workspace = true }
 # The `harness = false` runner `tests/wasm_determinism.rs` runs on, natively and on
 # wasm32-unknown-unknown alike. Path-only and unpublished, so it is stripped from
 # the packaged manifest; wasm32-clean, so it needs no target gate.

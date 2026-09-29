@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! OWL-Direct CONSISTENCY benchmark over a SCHEMA-HEAVY ontology: many disjoint
@@ -67,7 +67,7 @@
 
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder};
 use purrdf_entail::reasoner::Reasoner;
@@ -126,7 +126,7 @@ fn ontology(pairs: usize) -> Arc<RdfDataset> {
     b.freeze().expect("freeze")
 }
 
-fn bench_schema_scan(c: &mut Criterion) {
+fn bench_schema_scan(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_schema_heavy");
     for &pairs in &[5_usize, 100, 400, 800] {
         let dataset = ontology(pairs);
@@ -142,5 +142,5 @@ fn bench_schema_scan(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_schema_scan);
-criterion_main!(benches);
+bench_group!(benches, bench_schema_scan);
+bench_main!(benches);

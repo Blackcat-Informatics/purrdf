@@ -125,16 +125,6 @@ purrdf-jsonschema = { workspace = true }
 # wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# Native-only, because `make wasm-test` builds a test target of this crate for
-# wasm32 (`tests/product_wasm.rs`) and cargo builds every declared dev-dependency
-# of the package for any test target it builds. Criterion reaches for wall-clock
-# timing and processes, and drives benches the wasm lane never runs. Same
-# target-gated shape, and the same reason, as `crates/sparql-eval`.
-#
-# Acceleration-program baselines; light feature set, see crates/logic.
-criterion = { workspace = true }
-
 # The two JSON Schema oracle fixtures carry a test of their `validates` entry
 # point (the draft 2020-12 meta-schemas registered, and not), so `cargo test`
 # builds them with the test harness and runs it.

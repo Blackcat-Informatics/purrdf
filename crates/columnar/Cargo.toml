@@ -30,7 +30,6 @@ purrdf-core = { workspace = true }
 structured-zstd = { workspace = true }
 
 [dev-dependencies]
-criterion = { workspace = true }
 purrdf-testkit = { workspace = true }
 
 [[bench]]

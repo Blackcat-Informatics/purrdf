@@ -149,10 +149,6 @@ purrdf-cdt = { workspace = true }
 # property harness. Path-only and unpublished, so it is stripped from the
 # packaged manifest.
 purrdf-testkit = { workspace = true }
-# Acceleration-program baselines; light feature set matching
-# the sibling crates (logic/shacl/validate): criterion's plotters/rayon defaults are
-# off so `make bench` builds fast and the cargo-bench stdout summary is all we need.
-criterion = { workspace = true }
 
 [[bench]]
 # One-pass selected GTS import against the two-reader path it replaces: the
@@ -169,13 +165,13 @@ harness = false
 
 [[bench]]
 # One-shot allocation/count/retained/peak-byte baseline for expanded JSON-LD parse and
-# serialization. Separate from Criterion so allocator atomics do not perturb timing.
+# serialization. Separate from the timed benches so allocator atomics do not perturb timing.
 name = "jsonld_alloc"
 harness = false
 
 [[bench]]
 # Peak-allocation evidence for the streaming line-oriented parse against the buffered
-# one. A plain `main` rather than Criterion: the quantity is a memory high-water mark,
+# one. A plain `main` rather than the timing harness: the quantity is a memory high-water mark,
 # not a duration, and the tracking allocator's atomics would perturb any timing beside
 # it. Report-only; asserts no bound.
 name = "stream_parse_alloc"
@@ -189,7 +185,7 @@ harness = false
 
 [[bench]]
 # Graph/tabular projection mapping plus deterministic carrier write/read paths.
-# Reports both Criterion throughput and one-shot allocation count/bytes.
+# Reports both timed throughput and one-shot allocation count/bytes.
 name = "projections"
 harness = false
 

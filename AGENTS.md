@@ -68,9 +68,9 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
 | `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
-| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, and the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property); its one first-party dependency is `purrdf-hash`, the root, whose own tests do not use testkit, so no member's tests close a cycle through it (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
+| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property), and the micro-benchmark harness every bench target runs on (`purrdf_testkit::bench`, `bench_group!`/`bench_main!`: warm-up, flat sampling, median with MAD and a seeded bootstrap interval, throughput, saved baselines compared with a bootstrapped change, a fixed-schema `estimates.json` per benchmark, natively and on wasm32); its one first-party dependency is `purrdf-hash`, the root, whose own tests do not use testkit, so no member's tests close a cycle through it (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
-| `purrdf-hash-conformance` (`crates/hash-conformance`) | The frozen-vector suites of `purrdf-hash` (digest differentials, BLAKE3 streaming boundaries, base16 rendering, the table hasher's self-vectors and quality) and the table hasher's latency bench, on testkit's runner natively and on wasm32; separate from `purrdf-hash` because testkit depends on it (`publish = false`) |
+| `purrdf-hash-conformance` (`crates/hash-conformance`) | The frozen-vector suites of `purrdf-hash` (digest differentials, BLAKE3 streaming boundaries, base16 rendering, the table hasher's self-vectors and quality), the digest, base16 and BLAKE3 throughput bench and the table hasher's latency bench, on testkit's runner and bench harness, natively and on wasm32; separate from `purrdf-hash` because testkit depends on it (`publish = false`) |
 | `helper-census` (`crates/helper-census`) | The structural helper census: normalises every shipping function body (local names renamed, literals abstracted) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml` (`publish = false`, host tool) |
 
 ## 2. Hard constraints (violating these fails CI or review)
@@ -173,7 +173,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 make check      # the full local gate: fmt, clippy, build, tests, hygiene
 make test       # cargo test --workspace
 make metadata   # regenerate + verify generated artifacts
-make bench      # criterion benchmarks (report-only; not a gate)
+make bench      # purrdf_testkit::bench benchmarks (report-only; not a gate)
 make scale-corpus  # generate the deterministic scale corpus (streams; stores nothing by default)
 make lubm       # the LUBM comparison workload, per entailment regime (report-only; network + JRE)
 make watdiv     # the WatDiv comparison workload over a frozen dataset (report-only; network)
@@ -231,8 +231,9 @@ dataset (`TermId` = niche-optimized `NonZeroU32`, string arena, store-once
 interner). When touching parse/serialize/eval paths:
 
 * **Measure first** — layout and algorithm choices are justified by the
-  criterion benches (`crates/rdf-core/benches/ir_layout.rs` et al.), not by
-  assertion. Add or extend a bench when you claim a win.
+  benches (`crates/rdf-core/benches/ir_layout.rs` et al., on the
+  `purrdf_testkit::bench` harness), not by assertion. Add or extend a bench
+  when you claim a win.
 * Avoid per-token/per-term `String` allocation; move values out of buffers
   instead of cloning; pre-size collections in parse loops.
 * Hot maps use the fixed-key `purrdf_hash::fixed::FixedHasher` (`FixedState`,

@@ -45,7 +45,7 @@ use crate::witness::RelationWitness;
 use crate::{DetHashMap, DetHashSet};
 
 /// Tunable evaluation behavior. Every flag defaults to the production-optimal
-/// value; the criterion benches and differential tests flip individual flags to
+/// value; the benches and differential tests flip individual flags to
 /// measure their effect (the flags are a measurement seam, never a degraded
 /// production mode).
 // Deliberate flag set: each bool is an independent opt-in measurement toggle, not a
@@ -75,7 +75,7 @@ pub struct EvalOptions {
     pub force_structural_bgp_order: bool,
     /// Keep evaluator fork sites on their sequential implementation.
     ///
-    /// This is a measurement seam for Criterion comparisons against the ordered
+    /// This is a measurement seam for bench comparisons against the ordered
     /// parallel fold, and for differential tests. Production leaves it `false`.
     pub force_sequential: bool,
 }
@@ -3347,7 +3347,7 @@ pub(crate) fn evaluate_query_evaluated_over<D: DatasetView + Sync>(
     kept: Option<&crate::plan::PlanCache>,
     ctx: &mut EvalCtx<'_, D>,
 ) -> Result<EvaluatedOutcome<D::Id>, EvalError> {
-    // Criterion and differential tests can hold the operation on the sequential branch
+    // Benches and differential tests can hold the operation on the sequential branch
     // (`EvalOptions::force_sequential`, read by every fork gate through
     // `EvalCtx::sequential_operation_required`); production keeps the ordered parallel fold.
     prepare_query_context_over(query, kept, ctx)?;

@@ -20,7 +20,7 @@
 //! threads `NoSpans`) the same as the code that existed before this feature. Recording is
 //! a RUNTIME option ([`ParseOptions::track_source_spans`]), never a Cargo feature.
 //!
-//! The `native_codecs_parse_span_tracking` group in the `native_codecs` criterion bench
+//! The `native_codecs_parse_span_tracking` group in the `native_codecs` bench
 //! is the REPORT-ONLY reference for observing the off path: it runs the tracking-off and
 //! tracking-on parses side by side so the disabled path can be watched in the report. It
 //! asserts nothing about timing (benches are report-only here). The behavioural guarantee

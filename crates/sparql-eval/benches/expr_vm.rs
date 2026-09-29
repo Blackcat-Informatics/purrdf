@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! The per-row cost of a `FILTER` or `BIND` expression, over 100 000 rows.
@@ -43,9 +43,9 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlResult};
 use purrdf_sparql_eval::{NativeSparqlEngine, PreparedQuery, QueryOptions};
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 /// Subjects in the dataset, and so rows per scan.
 const ROWS: usize = 100_000;
@@ -87,7 +87,7 @@ fn and_chain(terms: usize) -> String {
     format!("SELECT ?s WHERE {{ ?s <{EX}v> ?v FILTER({chain}) }}")
 }
 
-/// The measured cases as `(criterion id, query text, minimum expected rows)`. The
+/// The measured cases as `(bench id, query text, minimum expected rows)`. The
 /// floor proves each case does real work: an empty result would benchmark a no-op.
 fn cases() -> Vec<(&'static str, String, usize)> {
     let v = format!("<{EX}v>");
@@ -170,7 +170,7 @@ fn run(engine: &NativeSparqlEngine, data: &Arc<RdfDataset>, prepared: &PreparedQ
     }
 }
 
-fn bench_expr_vm(c: &mut Criterion) {
+fn bench_expr_vm(c: &mut Bench) {
     let data = dataset();
     let engine = NativeSparqlEngine::new();
     let prepared: Vec<_> = cases()
@@ -201,5 +201,5 @@ fn bench_expr_vm(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_expr_vm);
-criterion_main!(benches);
+bench_group!(benches, bench_expr_vm);
+bench_main!(benches);

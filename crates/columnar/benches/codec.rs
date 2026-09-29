@@ -1,17 +1,18 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only end-to-end measurements for the five-table columnar codec.
 
 use std::sync::Arc;
 
-use criterion::{BatchSize, BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_columnar::plain_bench::PlainInt64;
 use purrdf_columnar::{Compression, read, write};
 use purrdf_core::{BlankScope, ContentStore, RdfDataset, RdfDatasetBuilder, RdfLiteral};
+use purrdf_testkit::bench::{BatchSize, Bench, BenchmarkId, Throughput, bench_group, bench_main};
 use purrdf_testkit::rng::splitmix64_next as mix;
 
 const ROWS: u32 = 500;
@@ -40,7 +41,7 @@ fn fixture() -> (Arc<RdfDataset>, ContentStore) {
     )
 }
 
-fn bench_codec(c: &mut Criterion) {
+fn bench_codec(c: &mut Bench) {
     let (dataset, blobs) = fixture();
     let encoded = write(&*dataset, &blobs, Compression::Zstd)
         .expect("benchmark fixture encodes as ZSTD Parquet");
@@ -86,7 +87,7 @@ fn plain_column(nulls_per_ten: u64) -> PlainInt64 {
 /// encode is the copy of the dense present values into the body, decode the
 /// length check and the copy back, each at 0%, 10% and 90% nulls. The decode's
 /// definition levels are cloned outside the timed region.
-fn bench_plain_int64(c: &mut Criterion) {
+fn bench_plain_int64(c: &mut Bench) {
     let mut group = c.benchmark_group("columnar_plain_int64_65536_rows");
     group.throughput(Throughput::Elements(PLAIN_ROWS as u64));
     for (label, nulls_per_ten) in [("nulls_0pct", 0), ("nulls_10pct", 1), ("nulls_90pct", 9)] {
@@ -116,5 +117,5 @@ fn bench_plain_int64(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_codec, bench_plain_int64);
-criterion_main!(benches);
+bench_group!(benches, bench_codec, bench_plain_int64);
+bench_main!(benches);

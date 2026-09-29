@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! The fused read taken on demand against the same read materialised, over **real**
@@ -86,7 +86,7 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::task::{Context, Poll, Wake, Waker};
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf::hnsw::relation::{HnswRelation, HnswSpace};
 use purrdf::hnsw::{HnswIndex, Params, VectorMatrix};
@@ -482,7 +482,7 @@ fn text_pair_profile() -> FusionProfile {
     profile_over(&[ex("stratum/left"), ex("stratum/right")])
 }
 
-fn text_text_reads(c: &mut Criterion) {
+fn text_text_reads(c: &mut Bench) {
     for (shape, name) in SHAPES {
         let mut group = c.benchmark_group(format!("multimodal_on_demand_read/text_text/{name}"));
         for &rows in &SIZES {
@@ -691,7 +691,7 @@ fn hnsw_pair_profile() -> FusionProfile {
     profile_over(&[ex("stratum/text"), ex("stratum/vector")])
 }
 
-fn text_hnsw_reads(c: &mut Criterion) {
+fn text_hnsw_reads(c: &mut Bench) {
     for (shape, name) in SHAPES {
         let mut group = c.benchmark_group(format!("multimodal_on_demand_read/text_hnsw/{name}"));
         for &rows in &SIZES {
@@ -750,10 +750,10 @@ fn text_hnsw_reads(c: &mut Criterion) {
 // ---------------------------------------------------------------------------
 
 /// Bench one already-open stratum's `exclusion` call against `candidate`, under the
-/// given `id`. The stratum is prepared once, before this is called; every criterion
+/// given `id`. The stratum is prepared once, before this is called; every harness
 /// iteration re-times the same lookup.
 fn bench_single_lookup(
-    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    group: &mut purrdf_testkit::bench::BenchmarkGroup<'_>,
     id: &str,
     stream: &mut purrdf::retrieval::StratumStream<'_>,
     candidate: &Term,
@@ -765,7 +765,7 @@ fn bench_single_lookup(
     });
 }
 
-fn single_lookup(c: &mut Criterion) {
+fn single_lookup(c: &mut Bench) {
     let mut group = c.benchmark_group("multimodal_on_demand_read/single_lookup");
 
     // A real text index: the shared-block, disjoint text+text pair, so the right
@@ -871,5 +871,5 @@ fn single_lookup(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, text_text_reads, text_hnsw_reads, single_lookup);
-criterion_main!(benches);
+bench_group!(benches, text_text_reads, text_hnsw_reads, single_lookup);
+bench_main!(benches);

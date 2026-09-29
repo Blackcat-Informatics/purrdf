@@ -46,7 +46,7 @@ Node is absent.
 make doctor     # what this machine actually enforces (run when a gate prints SKIP)
 make metadata   # regenerate + verify generated artifacts (loss matrices, queries)
 make check      # fmt, build, tests, hygiene gates
-make bench      # criterion benchmarks
+make bench      # purrdf_testkit::bench benchmarks
 make wasm-pkg   # build the ESM/wasm package
 make capi-build # build libpurrdf via cargo-c
 ```

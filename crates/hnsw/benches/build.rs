@@ -15,9 +15,9 @@
 //! sample on a shared host is not a failure. The number's job is disclosure, not
 //! admission.
 //!
-//! # Why one-shot rather than criterion
+//! # Why one-shot rather than the sampling harness
 //!
-//! Criterion's method is to repeat a closure until the sampling distribution settles.
+//! The sampling harness's method is to repeat a closure until the sampling distribution settles.
 //! That is exactly wrong for a build whose cost grows with row count and dimension: ten
 //! samples at the largest scale would multiply an already-long build by ten and measure
 //! the host's thermal state rather than the code. A harness that times one build per scale

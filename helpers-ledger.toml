@@ -212,7 +212,7 @@ vectors = [
     "crates/hash-conformance/tests/vectors/blake3_differential_vectors.txt",
     "crates/hash-conformance/tests/vectors/blake3_random_vectors.txt",
 ]
-bench = ["purrdf-hash:digests"]
+bench = ["purrdf-hash-conformance:digests"]
 sites = ["blake3.hash-many-dispatch", "blake3.single-block"]
 replaces_external = ["blake3", "arrayref", "arrayvec", "constant_time_eq"]
 enforced = true
@@ -274,7 +274,7 @@ home = "purrdf_hash::md5::Md5"
 entry_points = []
 spec = "RFC 1321"
 vectors = ["crates/hash-conformance/tests/vectors/md5_differential_vectors.txt"]
-bench = ["purrdf-hash:digests"]
+bench = ["purrdf-hash-conformance:digests"]
 sites = []
 replaces_external = ["md-5"]
 enforced = true
@@ -291,7 +291,7 @@ home = "purrdf_hash::sha1::Sha1"
 entry_points = []
 spec = "FIPS 180-4 section 6.1"
 vectors = ["crates/hash-conformance/tests/vectors/sha1_differential_vectors.txt"]
-bench = ["purrdf-hash:digests"]
+bench = ["purrdf-hash-conformance:digests"]
 sites = ["hash.sha1-block"]
 replaces_external = ["sha1"]
 enforced = true
@@ -313,7 +313,7 @@ vectors = [
     "crates/hash-conformance/tests/vectors/sha3_384_differential_vectors.txt",
     "crates/hash-conformance/tests/vectors/sha3_512_differential_vectors.txt",
 ]
-bench = ["purrdf-hash:digests"]
+bench = ["purrdf-hash-conformance:digests"]
 sites = []
 replaces_external = ["sha3", "keccak"]
 enforced = true
@@ -330,7 +330,7 @@ home = "purrdf_hash::crc32::Crc32"
 entry_points = []
 spec = "CRC-32/ISO-HDLC (ISO 3309, ITU-T V.42): reflected polynomial 0x04C11DB7, initial and final XOR 0xFFFFFFFF"
 vectors = ["crates/hash-conformance/tests/vectors/crc32_differential_vectors.txt"]
-bench = ["purrdf-hash:digests"]
+bench = ["purrdf-hash-conformance:digests"]
 sites = ["hash.crc32-update"]
 replaces_external = ["crc32fast"]
 enforced = true
@@ -415,7 +415,7 @@ home = "purrdf_hash::hex::Lower"
 entry_points = ["purrdf_core::hex::lower"]
 spec = "RFC 4648 section 8 (base16), lowercase alphabet"
 vectors = []
-bench = ["purrdf-hash:digests"]
+bench = ["purrdf-hash-conformance:digests"]
 sites = ["hash.hex-encode"]
 replaces_external = ["hex"]
 enforced = false
@@ -475,3 +475,20 @@ enforced = true
 constants = []
 fingerprints = []
 names = []
+
+[[job]]
+id = "bench-harness"
+summary = "The micro-benchmark harness every harness = false bench target runs on: warm-up, flat sampling, the median with its MAD and a seeded bootstrap interval, baselines and a fixed-schema estimates file"
+home = "purrdf_testkit::bench"
+entry_points = ["purrdf_testkit::bench::Bench", "purrdf_testkit::bench_group", "purrdf_testkit::bench_main"]
+spec = "the purrdf_testkit::bench contract: type 7 quantiles, the unscaled MAD, a 95% percentile bootstrap of the median over 10000 resamples seeded from the benchmark id through purrdf_hash::mix, Tukey fences on the IQR, and the schema-1 estimates.json documented in docs/BENCHMARKS.md"
+vectors = []
+bench = []
+sites = []
+replaces_external = ["criterion"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^bootstrap_(median|change)$', '^classify_outliers$', '^median_absolute_deviation$']

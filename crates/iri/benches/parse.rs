@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! IRI/URI parse+validate hot-path benchmark.
@@ -27,13 +27,13 @@
 //! ASCII run (the chunked stop scan is the cost) and over mixed text dense in
 //! stops (the per-`char` escape table is).
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
 use purrdf_iri::parse;
 use purrdf_iri::terminals::{
     find_first_iri_body_special, find_first_json_string_special, find_first_trivia,
     find_first_xml_special,
 };
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 /// The representative corpus. Each entry is parsed+validated per iteration; the mix
 /// keeps every component validator (scheme, authority/host, path, query, fragment) on
@@ -72,7 +72,7 @@ const RESOLVE_REFS: &[&str] = &[
     "../",
 ];
 
-fn bench_resolve(c: &mut Criterion) {
+fn bench_resolve(c: &mut Bench) {
     let base = parse(RESOLVE_BASE).expect("resolve base is valid");
     let total_bytes: usize = RESOLVE_REFS.iter().map(|s| s.len()).sum();
     let mut group = c.benchmark_group("iri_resolve");
@@ -90,7 +90,7 @@ fn bench_resolve(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_parse(c: &mut Criterion) {
+fn bench_parse(c: &mut Bench) {
     let total_bytes: usize = CORPUS.iter().map(|s| s.len()).sum();
     let mut group = c.benchmark_group("iri_parse");
     group.throughput(Throughput::Bytes(total_bytes as u64));
@@ -108,7 +108,7 @@ fn bench_parse(c: &mut Criterion) {
 /// A scanner under measurement and the byte its input ends at.
 type ScanCase = (&'static str, fn(&[u8]) -> Option<usize>, u8, u8);
 
-fn bench_scan(c: &mut Criterion) {
+fn bench_scan(c: &mut Bench) {
     // (name, scanner, the clean byte a run is made of, the byte that ends it)
     let cases: [ScanCase; 4] = [
         ("trivia", find_first_trivia, b' ', b'?'),
@@ -133,7 +133,7 @@ fn bench_scan(c: &mut Criterion) {
     }
 }
 
-fn bench_json_escape(c: &mut Criterion) {
+fn bench_json_escape(c: &mut Bench) {
     let mut clean = "a".repeat(4096);
     clean.push('"');
     let mixed =
@@ -161,11 +161,11 @@ fn bench_json_escape(c: &mut Criterion) {
     }
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_parse,
     bench_resolve,
     bench_scan,
     bench_json_escape
 );
-criterion_main!(benches);
+bench_main!(benches);

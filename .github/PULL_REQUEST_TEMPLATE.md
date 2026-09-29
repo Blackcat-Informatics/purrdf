@@ -13,4 +13,4 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 - [ ] No hand-edits to `generated/` or `vectors/` (regenerate via `make metadata` instead)
 - [ ] If touching a release crate: wasm32 build stays clean (`make wasm`)
 - [ ] Docs / CHANGELOG updated where the change is user-visible
-- [ ] If claiming a performance improvement: criterion benches extended to cover it
+- [ ] If claiming a performance improvement: benches (`purrdf_testkit::bench`) extended to cover it

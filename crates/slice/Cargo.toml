@@ -64,7 +64,6 @@ serde_json = { workspace = true }
 [dev-dependencies]
 # Temporary slice trees under the target directory, for the tests and the bench.
 purrdf-testkit = { workspace = true }
-criterion = { workspace = true }
 
 [[bench]]
 name = "ownership"

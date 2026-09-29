@@ -27,12 +27,12 @@
 //! what the split adds is the column each half lands in.
 #![allow(missing_docs)]
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
 use purrdf::ir::ViewLimits;
 use purrdf::{
     DatasetMut, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue,
 };
 use purrdf_shapes::engine::{PreparedShapes, parse_shapes};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 use std::sync::Arc;
 
 fn data(rows: usize) -> Arc<RdfDataset> {
@@ -104,7 +104,7 @@ fn verify_views(prepared: &PreparedShapes, data: &Arc<RdfDataset>) {
     );
 }
 
-fn bench(c: &mut Criterion) {
+fn bench(c: &mut Bench) {
     let shapes = Arc::new(parse_shapes("@prefix sh: <http://www.w3.org/ns/shacl#> . <https://example.org/S> a sh:NodeShape; sh:targetSubjectsOf <https://example.org/value>; sh:property [ sh:path <https://example.org/value>; sh:minCount 1; sh:maxCount 1 ] .",None).expect("shapes"));
     let prepared = PreparedShapes::new(shapes);
     let mut group = c.benchmark_group("shacl_shared_carriers");
@@ -215,5 +215,5 @@ fn bench(c: &mut Criterion) {
     }
     group.finish();
 }
-criterion_group!(benches, bench);
-criterion_main!(benches);
+bench_group!(benches, bench);
+bench_main!(benches);

@@ -117,7 +117,9 @@ def self_test() -> int:
     if dest_root.exists():
         shutil.rmtree(dest_root)
     packages = lock_packages(REPO_ROOT, "HEAD")
-    registry = next(p for p in packages if p.get("checksum") and p.get("name") == "criterion")
+    # Any registry package the lock carries: the self-test is about the pin
+    # mechanics, not about one crate staying a dependency.
+    registry = next(p for p in packages if p.get("checksum"))
     crate, version = registry["name"], registry["version"]
     ok = True
 

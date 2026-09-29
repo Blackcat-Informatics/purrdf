@@ -1,10 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-#![allow(
-    missing_docs,
-    reason = "criterion_group! expands to a public harness function that is not library API"
-)]
+#![allow(missing_docs, reason = "a bench target is not library API")]
 
 //! Native SSSOM document-layout hot-path benchmark.
 //!
@@ -13,10 +10,10 @@
 
 use std::{collections::BTreeMap, time::Duration};
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_core::{
     SssomColumnLayout, SssomMapping, SssomMappingSet, SssomMeta, sssom::serialize_tsv,
 };
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 const ROWS: usize = 4_096;
 const LAYOUT_COLUMNS: [&str; 32] = [
@@ -77,7 +74,7 @@ fn sparse_mapping_set() -> SssomMappingSet {
     SssomMappingSet::new(SssomMeta::default(), mappings).with_column_layout(layout)
 }
 
-fn bench_layout_validation(c: &mut Criterion) {
+fn bench_layout_validation(c: &mut Bench) {
     let mut group = c.benchmark_group("sssom_layout");
     group.throughput(Throughput::Elements(LAYOUT_COLUMNS.len() as u64));
     group.bench_function("validated_32_columns", |bencher| {
@@ -90,7 +87,7 @@ fn bench_layout_validation(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_sparse_serialization(c: &mut Criterion) {
+fn bench_sparse_serialization(c: &mut Bench) {
     let set = sparse_mapping_set();
     let mut group = c.benchmark_group("sssom_serialize");
     group.sample_size(10);
@@ -106,5 +103,5 @@ fn bench_sparse_serialization(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_layout_validation, bench_sparse_serialization);
-criterion_main!(benches);
+bench_group!(benches, bench_layout_validation, bench_sparse_serialization);
+bench_main!(benches);

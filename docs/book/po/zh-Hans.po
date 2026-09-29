@@ -2449,13 +2449,13 @@ msgstr "为何如此设计"
 
 #: src/concepts/interned-dataset.md:86
 msgid ""
-"The layout is chosen by measurement, not assertion: the criterion bench "
+"The layout is chosen by measurement, not assertion: the bench "
 "`crates/rdf-core/benches/ir_layout.rs` compares array-of-structs, struct-of-"
 "arrays, and predicate-adjacency layouts on allocation counts, high-water "
 "memory, and end-to-end latency — the shipped layout is whichever wins. See "
 "[Performance](../project/performance.md)."
 msgstr ""
-"布局是通过测量而非断言选定的：criterion 基准 `crates/rdf-core/benches/"
+"布局是通过测量而非断言选定的：基准 `crates/rdf-core/benches/"
 "ir_layout.rs` 在分配次数、内存高水位以及端到端延迟上比较结构体数组、数组结构"
 "体与谓词邻接三种布局——最终发布的是胜出的那一种。参见[性能](../project/"
 "performance.md)。"
@@ -20454,10 +20454,10 @@ msgstr "辅助规则"
 
 #: src/project/design-rules.md:96
 msgid ""
-"**Measured performance** — perf claims require a criterion bench, not an "
+"**Measured performance** — perf claims require a bench, not an "
 "adjective ([Performance](performance.md))."
 msgstr ""
-"**经过测量的性能**——性能声称需要一个 criterion 基准测试，而不是一个形容词"
+"**经过测量的性能**——性能声称需要一个基准测试，而不是一个形容词"
 "（[性能](performance.md)）。"
 
 #: src/project/design-rules.md:98
@@ -20846,12 +20846,12 @@ msgstr ""
 #: src/project/performance.md:25
 msgid ""
 "Crucially, the _layout itself_ was chosen by benchmark: the `crates/rdf-core/"
-"benches/ir_layout.rs` criterion suite measures array-of-structs vs. struct-"
+"benches/ir_layout.rs` bench suite measures array-of-structs vs. struct-"
 "of-arrays vs. predicate-adjacency layouts on allocation counts, high-water "
 "memory, and end-to-end latency — and the shipped layout is whichever wins."
 msgstr ""
 "关键在于，*布局本身*是由基准测试选定的：`crates/rdf-core/benches/"
-"ir_layout.rs` criterion 套件在分配次数、内存峰值与端到端延迟上测量结构体数"
+"ir_layout.rs` 基准套件在分配次数、内存峰值与端到端延迟上测量结构体数"
 "组、数组结构体与谓词邻接三种布局——随库发布的布局就是胜出的那一种。"
 
 #: src/project/performance.md:31
@@ -20871,8 +20871,8 @@ msgid "How to run"
 msgstr "运行方式"
 
 #: src/project/performance.md:35
-msgid "**Rust criterion suites**"
-msgstr "**Rust criterion 套件**"
+msgid "**Rust bench suites**"
+msgstr "**Rust 基准套件**"
 
 #: src/project/performance.md:35
 msgid ""
@@ -20919,18 +20919,18 @@ msgstr "变更的纪律"
 
 #: src/project/performance.md:43
 msgid ""
-"Any change claiming a performance win must **extend the criterion benches** "
+"Any change claiming a performance win must **extend the benches** "
 "rather than asserting the speedup in prose. Where a planner or algorithm "
 "choice matters for correctness-adjacent behavior, it is gated by "
 "_deterministic_ tests instead of timings — for example, the cost-based BGP "
 "planner's win over the retired structural heuristic is asserted by unit "
 "tests that count real intermediate rows, and by a differential corpus test, "
-"while the criterion bench merely watches for regressions."
+"while the bench merely watches for regressions."
 msgstr ""
-"任何声称带来性能提升的变更都必须**扩展 criterion 基准测试**，而不是在行文中断"
+"任何声称带来性能提升的变更都必须**扩展基准测试**，而不是在行文中断"
 "言加速。当规划器或算法的选择对与正确性相关的行为有影响时，它由*确定性*测试而"
 "非计时来把关——例如，基于代价的 BGP 规划器优于已退役的结构性启发式方法，这一点"
-"由统计真实中间行数的单元测试以及一项差分语料测试来断言，而 criterion 基准测试"
+"由统计真实中间行数的单元测试以及一项差分语料测试来断言，而基准测试"
 "只负责监视性能回退。"
 
 #: src/project/performance.md:51
@@ -20967,8 +20967,8 @@ msgid "Reproducing locally"
 msgstr "在本地复现"
 
 #: src/project/performance.md:67
-msgid "# the default criterion set\n"
-msgstr "# 默认的 criterion 集合\n"
+msgid "# the default bench set\n"
+msgstr "# 默认的基准集合\n"
 
 #: src/project/performance.md:68
 msgid "# a single package's bench\n"

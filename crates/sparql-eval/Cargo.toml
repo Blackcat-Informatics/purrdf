@@ -109,17 +109,6 @@ purrdf-alloc-probe = { workspace = true }
 # from the packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# Criterion for the EXISTS-decorrelation perf bench. Defaults off
-# (no plotters/rayon) like the sibling crates, so `make bench` stays lean and no
-# oxigraph-family edge enters the dev tree (gated by `make rdf-core-hygiene`).
-#
-# Native-only because `make wasm-test` builds test targets of this crate for
-# wasm32 and cargo builds every declared dev-dependency for any test target.
-# Criterion drives benches, which the wasm lane never runs, and it is not
-# wasm32-clean (it reaches for processes, terminals and wall-clock timing).
-criterion = { workspace = true }
-
 # The tests in this crate that must EXECUTE on wasm32-unknown-unknown rather than
 # merely compile for it, because the embedding kNN surface ranks by binary64
 # arithmetic: "the same answer on every target" (exact) and "within the error

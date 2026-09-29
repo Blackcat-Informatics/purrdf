@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! CONSTRUCT-graph N-Triples serialization benchmark.
@@ -37,12 +37,12 @@
 
 use std::sync::Arc;
 
-use criterion::{Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
 use purrdf_sparql_results::{
     ResultProvenance, SparqlResult, SparqlResultsFormat, from_json, serialize_into, to_csv,
     to_json, to_tsv, to_xml,
 };
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main, black_box};
 
 /// Quad count. Large enough that the writer's amortized behavior (not fixture
 /// construction) dominates each sample.
@@ -107,7 +107,7 @@ fn build_select_result(rows: usize) -> SparqlResult {
 }
 
 /// SELECT table -> JSON / XML / CSV / TSV, and JSON -> parsed solutions.
-fn bench_results_serialize(c: &mut Criterion) {
+fn bench_results_serialize(c: &mut Bench) {
     let result = build_select_result(SELECT_ROWS);
     let provenance = ResultProvenance::default();
 
@@ -233,7 +233,7 @@ fn build_dataset(rows: usize, reified: usize) -> Arc<RdfDataset> {
     b.freeze().expect("bench dataset freezes")
 }
 
-fn bench_graph_serialize(c: &mut Criterion) {
+fn bench_graph_serialize(c: &mut Bench) {
     let dataset = build_dataset(ROWS, REIFIED);
     let result = SparqlResult::Graph(dataset);
     let provenance = ResultProvenance::default();
@@ -260,8 +260,8 @@ fn bench_graph_serialize(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_graph_serialize, bench_results_serialize);
-criterion_main!(benches);
+bench_group!(benches, bench_graph_serialize, bench_results_serialize);
+bench_main!(benches);
 
 /// A writer that keeps nothing, so a streamed arm measures the emitter rather than
 /// the bench's own accumulation of what it produced.

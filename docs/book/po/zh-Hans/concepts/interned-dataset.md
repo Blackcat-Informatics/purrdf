@@ -80,7 +80,7 @@ crate 边界上强制执行：没有 oxigraph，没有 PyO3（一道卫生门禁
 
 ## 为何如此设计
 
-布局由测量而非断言决定：criterion 基准
+布局由测量而非断言决定：基准
 `crates/rdf-core/benches/ir_layout.rs` 在分配次数、内存高水位与端到端延迟上比较
 结构数组、数组结构与谓词邻接三种布局——最终采用的布局就是胜出的那个。参见
 [性能](../project/performance.md)。

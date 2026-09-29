@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! SPARQL 1.2 RL transitive closure: the recursive rule every rules engine is judged
@@ -30,12 +30,12 @@
 use std::fmt::Write as _;
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf::RdfDataset;
 use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::engine::{self, parse_shapes};
 use purrdf_shapes::rules::{RuleOptions, infer};
 use purrdf_shapes::srl::{self, InferOptions};
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
 
 const RULES: &str = "PREFIX : <https://example.org/srl-bench/>
 RULE { ?x :connected ?y } WHERE { ?x :link ?y }
@@ -54,7 +54,7 @@ fn chain(len: usize) -> Arc<RdfDataset> {
     purrdf::parse_dataset(text.as_bytes(), "text/turtle", None).expect("the chain parses")
 }
 
-fn bench(c: &mut Criterion) {
+fn bench(c: &mut Bench) {
     c.bench_function("srl_closure/parse_and_check", |b| {
         b.iter(|| srl::parse_and_check(black_box(RULES), None).expect("checks"));
     });
@@ -84,7 +84,7 @@ RULE { ?x :connected ?z } WHERE { ?x :connected ?y . ?y :link ?z }
 /// Chain lengths for the linear closure.
 const LINEAR_CHAINS: &[usize] = &[128, 1_000];
 
-fn bench_linear(c: &mut Criterion) {
+fn bench_linear(c: &mut Bench) {
     let document = srl::parse_and_check(LINEAR_RULES, None).expect("checks");
     let mut group = c.benchmark_group("srl_closure/infer_linear");
     group.sample_size(10);
@@ -115,7 +115,7 @@ const PER_FOCUS_RULES: &str = r#"@prefix : <https://example.org/srl-bench/> .
 /// Chain lengths for the per-focus closure.
 const PER_FOCUS_CHAINS: &[usize] = &[64, 256];
 
-fn bench_per_focus(c: &mut Criterion) {
+fn bench_per_focus(c: &mut Bench) {
     let shapes = parse_shapes(PER_FOCUS_RULES, None).expect("the shapes parse");
     let mut group = c.benchmark_group("srl_closure/shacl_per_focus");
     group.sample_size(10);
@@ -135,5 +135,5 @@ fn bench_per_focus(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench, bench_linear, bench_per_focus);
-criterion_main!(benches);
+bench_group!(benches, bench, bench_linear, bench_per_focus);
+bench_main!(benches);

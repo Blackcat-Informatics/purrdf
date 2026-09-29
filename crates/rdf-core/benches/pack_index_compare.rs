@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only experiment comparing the shipped pack codec's FoQ posting-list
@@ -15,12 +15,12 @@ mod pack_index;
 
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
 use pack_index::{Adjacency, FoqIndexes, WaveletIndexes, reference_space, reference_triples};
 use purrdf_core::{
     DatasetView, GraphMatch, PackBuilder, PackId, PackView, RdfDataset, RdfDatasetBuilder,
     TermValue,
 };
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 const QUERY_ROWS: usize = 65_536;
 
@@ -115,7 +115,7 @@ fn report_space_curve() {
     );
 }
 
-fn bench_pack_index_hypothesis(c: &mut Criterion) {
+fn bench_pack_index_hypothesis(c: &mut Bench) {
     report_space_curve();
 
     let triples = reference_triples(QUERY_ROWS);
@@ -417,5 +417,5 @@ fn bench_pack_index_hypothesis(c: &mut Criterion) {
     query.finish();
 }
 
-criterion_group!(benches, bench_pack_index_hypothesis);
-criterion_main!(benches);
+bench_group!(benches, bench_pack_index_hypothesis);
+bench_main!(benches);

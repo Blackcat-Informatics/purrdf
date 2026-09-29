@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Micro-benchmark isolating the per-row machinery of a [`Solution`] — the
@@ -29,7 +29,7 @@
 //! `make bench` lane) — excluded from `make check`. It asserts no threshold: the
 //! machine is not quiet, so the numbers are evidence, never a pass/fail gate.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, bench_group, bench_main, black_box};
 
 use purrdf_core::TermId;
 use purrdf_sparql_eval::{Solution, SolutionTerm, compatible};
@@ -81,7 +81,7 @@ fn merge(left: &Solution, right: &Solution, right_to_out: &[usize], out_len: usi
 }
 
 /// Construction: build a fresh fully-bound row of `cols` terms, `BATCH` times.
-fn bench_construct(c: &mut Criterion, label: &str, cols: usize) {
+fn bench_construct(c: &mut Bench, label: &str, cols: usize) {
     c.bench_function(label, |bencher| {
         bencher.iter(|| {
             for i in 0..BATCH {
@@ -93,7 +93,7 @@ fn bench_construct(c: &mut Criterion, label: &str, cols: usize) {
 
 /// Clone an existing row without changing its width, for comparison with the
 /// Copy path used by BGP unification and expression evaluation.
-fn bench_clone(c: &mut Criterion, label: &str, cols: usize) {
+fn bench_clone(c: &mut Bench, label: &str, cols: usize) {
     let batch = rows(cols);
     c.bench_function(label, |bencher| {
         bencher.iter(|| {
@@ -106,7 +106,7 @@ fn bench_clone(c: &mut Criterion, label: &str, cols: usize) {
 
 /// Copy a row whose cells implement `Copy`, using the specialized slice path
 /// available to the evaluator's solution terms.
-fn bench_copy(c: &mut Criterion, label: &str, cols: usize) {
+fn bench_copy(c: &mut Bench, label: &str, cols: usize) {
     let batch = rows(cols);
     c.bench_function(label, |bencher| {
         bencher.iter(|| {
@@ -119,7 +119,7 @@ fn bench_copy(c: &mut Criterion, label: &str, cols: usize) {
 
 /// Clone/extend: clone an existing row, then push one more binding onto the
 /// copy. This also measures growth of a full inline buffer.
-fn bench_clone_extend(c: &mut Criterion, label: &str, cols: usize) {
+fn bench_clone_extend(c: &mut Bench, label: &str, cols: usize) {
     let batch = rows(cols);
     c.bench_function(label, |bencher| {
         bencher.iter(|| {
@@ -132,7 +132,7 @@ fn bench_clone_extend(c: &mut Criterion, label: &str, cols: usize) {
     });
 }
 
-fn bench_solution_row(c: &mut Criterion) {
+fn bench_solution_row(c: &mut Bench) {
     // Row construction — the two regimes the SmallVec change straddles.
     bench_construct(c, "construct_inline_4col", INLINE_COLS);
     bench_construct(c, "construct_spilled_9col", SPILLED_COLS);
@@ -212,5 +212,5 @@ fn bench_solution_row(c: &mut Criterion) {
     });
 }
 
-criterion_group!(benches, bench_solution_row);
-criterion_main!(benches);
+bench_group!(benches, bench_solution_row);
+bench_main!(benches);

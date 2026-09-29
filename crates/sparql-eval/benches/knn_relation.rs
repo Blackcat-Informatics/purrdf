@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Report-only latency harness for the embedding kNN relation's exhaustive search, under
@@ -29,7 +29,6 @@ use std::hint::black_box;
 use std::sync::Arc;
 use std::time::Duration;
 
-use criterion::{Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_core::{
     AppliedStage, ArtifactIdentity, ArtifactIdentityKind, CanonicalMetadataInput,
     CertifiedPurrpckSource, ContentDigest, DimensionalityPolicy, DistanceMetric, EmbeddingBuilder,
@@ -39,6 +38,7 @@ use purrdf_core::{
 use purrdf_sparql_eval::{
     EmbeddingKnnRelation, EmbeddingSpace, KnnGuard, PfArgs, PropertyFunction,
 };
+use purrdf_testkit::bench::{Bench, Throughput, bench_group, bench_main};
 use purrdf_testkit::rng::splitmix64_step;
 
 /// The rows in every space.
@@ -190,7 +190,7 @@ fn invoke(relation: &dyn PropertyFunction, seed: &TermValue, count: &TermValue) 
     emitted
 }
 
-fn bench_knn_relation(c: &mut Criterion) {
+fn bench_knn_relation(c: &mut Bench) {
     let seed = TermValue::iri(format!("{EX}r{}", ROWS / 3));
     let count = TermValue::typed_literal(K.to_string(), "http://www.w3.org/2001/XMLSchema#integer");
 
@@ -225,5 +225,5 @@ fn bench_knn_relation(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_knn_relation);
-criterion_main!(benches);
+bench_group!(benches, bench_knn_relation);
+bench_main!(benches);

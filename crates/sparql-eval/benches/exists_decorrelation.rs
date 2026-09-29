@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! `EXISTS` anti-join benchmark: naive per-row inner work vs the decorrelated path
@@ -48,7 +48,7 @@
 
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder};
 use purrdf_sparql_algebra::SparqlParser;
@@ -171,7 +171,7 @@ fn run(ds: &RdfDataset, query: &str, memo: bool) {
     let mut ctx = EvalCtx::new(ds);
     ctx.options.exists_memo = memo;
     let outcome = evaluate_query(&parsed, &mut ctx).expect("eval");
-    criterion::black_box(outcome);
+    std::hint::black_box(outcome);
 }
 
 /// Arm labels for the probe path's index-reuse win: memo off rebuilds the inner
@@ -189,7 +189,7 @@ const DEFINITION_MEMO_ARMS: (&str, &str) = (
 /// Bench one query/dataset twice (memo off vs on) under `group_name`, with arm
 /// labels describing what the pair actually measures for that shape.
 fn bench_pair_labeled(
-    c: &mut Criterion,
+    c: &mut Bench,
     group_name: &str,
     ds: &RdfDataset,
     query: &str,
@@ -208,11 +208,11 @@ fn bench_pair_labeled(
 
 /// Bench one query/dataset twice (memo off vs on) under `group_name`, using the
 /// probe path's index-reuse arm labels (the common case for these benches).
-fn bench_pair(c: &mut Criterion, group_name: &str, ds: &RdfDataset, query: &str) {
+fn bench_pair(c: &mut Bench, group_name: &str, ds: &RdfDataset, query: &str) {
     bench_pair_labeled(c, group_name, ds, query, PROBE_PATH_ARMS);
 }
 
-fn bench_exists_decorrelation(c: &mut Criterion) {
+fn bench_exists_decorrelation(c: &mut Bench) {
     // Single-row inner: isolates inner-eval caching (index is trivial).
     bench_pair(
         c,
@@ -241,7 +241,7 @@ fn bench_exists_decorrelation(c: &mut Criterion) {
     );
 }
 
-fn bench_nested_correlated_depth(c: &mut Criterion) {
+fn bench_nested_correlated_depth(c: &mut Bench) {
     // 100 outer rows, each restricting the outermost `EXISTS` differently, so its memo
     // shares nothing and every row descends every level.
     let ds = knows_dataset(100);
@@ -249,7 +249,7 @@ fn bench_nested_correlated_depth(c: &mut Criterion) {
     for depth in [8_usize, 16, 32, 64] {
         let query = nested_correlated_query(depth);
         group.bench_with_input(
-            criterion::BenchmarkId::from_parameter(depth),
+            purrdf_testkit::bench::BenchmarkId::from_parameter(depth),
             &query,
             |bencher, query| bencher.iter(|| run(&ds, query, true)),
         );
@@ -257,9 +257,9 @@ fn bench_nested_correlated_depth(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_exists_decorrelation,
     bench_nested_correlated_depth
 );
-criterion_main!(benches);
+bench_main!(benches);

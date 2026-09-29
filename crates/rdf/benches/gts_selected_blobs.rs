@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! One-pass selected GTS import against the two-reader path it replaces.
@@ -14,10 +14,10 @@
 //! recording is one fold against two over identical bytes, not a speedup claim.
 //! Machine noise dominates small deltas; read the two curves, not their ratio.
 
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use purrdf_gts::wire::digest_str;
 use purrdf_gts::writer::Writer;
 use purrdf_rdf::{GtsBlobLimits, GtsBlobSelector, import_gts_events, import_gts_events_with_blobs};
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
 
 /// A container holding `blobs` payloads of `size` bytes plus a little RDF, so
 /// both paths fold the same dataset and reach the same bodies.
@@ -35,7 +35,7 @@ fn container(blobs: usize, size: usize) -> (Vec<u8>, String) {
     (writer.into_bytes(), wanted)
 }
 
-fn selected_import(c: &mut Criterion) {
+fn selected_import(c: &mut Bench) {
     let mut group = c.benchmark_group("gts_selected_blobs");
     for (blobs, size) in [(4_usize, 4_096_usize), (32, 4_096), (4, 262_144)] {
         let (bytes, wanted) = container(blobs, size);
@@ -72,5 +72,5 @@ fn selected_import(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, selected_import);
-criterion_main!(benches);
+bench_group!(benches, selected_import);
+bench_main!(benches);

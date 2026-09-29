@@ -91,7 +91,7 @@ answer":
 
 An **ungoverned** query and `QueryGovernors::UNBOUNDED` take a direct evaluator path
 before any governor stop probe, counter, certificate ledger, or output re-wrap. The
-report-only `governed_eval` Criterion benchmark measures that path against the
+report-only `governed_eval` benchmark measures that path against the
 `UNBOUNDED` carrier; no timing equivalence is asserted. `QueryGovernors::METERED` is
 the opposite trade — every counter engaged at a ceiling nothing can reach — and is
 the intended way to *size* a budget: run under it, read the evidence off the

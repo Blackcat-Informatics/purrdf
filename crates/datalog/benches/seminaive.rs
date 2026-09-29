@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Semi-naive join benchmarks.
@@ -32,7 +32,7 @@
 //! Report-only, per this repository's rule: benches exist so a later change has a
 //! number to move, never so a speedup can be asserted. Nothing here fails a build.
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_datalog::clause::{ClauseAtom, ClauseTerm, DlClause};
 use purrdf_datalog::seminaive::{Evaluation, compile, evaluate};
@@ -148,7 +148,7 @@ fn closure_rules() -> Vec<DlClause> {
     ]
 }
 
-fn fanout(c: &mut Criterion) {
+fn fanout(c: &mut Bench) {
     let mut group = c.benchmark_group("seminaive_fanout");
     for width in [8_usize, 24, 48] {
         let store = fanout_store(width);
@@ -159,7 +159,7 @@ fn fanout(c: &mut Criterion) {
     group.finish();
 }
 
-fn frame_width(c: &mut Criterion) {
+fn frame_width(c: &mut Bench) {
     let mut group = c.benchmark_group("seminaive_frame_width");
     for pairs in [2_usize, 6, 12] {
         let store = frame_store(pairs);
@@ -170,7 +170,7 @@ fn frame_width(c: &mut Criterion) {
     group.finish();
 }
 
-fn recursion(c: &mut Criterion) {
+fn recursion(c: &mut Bench) {
     let mut group = c.benchmark_group("seminaive_recursion");
     for n in [16_usize, 48, 96] {
         let store = chain_store(n);
@@ -181,5 +181,5 @@ fn recursion(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, fanout, frame_width, recursion);
-criterion_main!(benches);
+bench_group!(benches, fanout, frame_width, recursion);
+bench_main!(benches);

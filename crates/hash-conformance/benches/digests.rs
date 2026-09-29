@@ -5,16 +5,16 @@
 //! host can run, and base16 encoding throughput per path, plus `hex::Lower`
 //! rendering a 32-byte digest. Report-only; not a gate.
 
-#![allow(missing_docs)] // criterion_main! generates an undocumented `main`
+#![allow(missing_docs)] // a bench target is not public API
 
 use std::hint::black_box;
 
-use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_hash::Backend as _;
 use purrdf_hash::backend::{Crc32Backend, HexBackend, Sha1Backend};
 use purrdf_hash::hex::Lower;
 use purrdf_hash::md5::Md5;
 use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
+use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main};
 
 const SIZES: [(usize, &str); 3] = [(64, "64B"), (1024, "1KiB"), (1 << 20, "1MiB")];
 
@@ -31,7 +31,7 @@ fn input(len: usize) -> Vec<u8> {
         .collect()
 }
 
-fn bench_one(c: &mut Criterion, group: &str, path: &str, digest: &dyn Fn(&[u8]) -> u8) {
+fn bench_one(c: &mut Bench, group: &str, path: &str, digest: &dyn Fn(&[u8]) -> u8) {
     let mut group = c.benchmark_group(group);
     for (len, label) in SIZES {
         let data = input(len);
@@ -43,7 +43,7 @@ fn bench_one(c: &mut Criterion, group: &str, path: &str, digest: &dyn Fn(&[u8]) 
     group.finish();
 }
 
-fn digests(c: &mut Criterion) {
+fn digests(c: &mut Bench) {
     bench_one(c, "md5", "portable", &|data| Md5::digest(data)[0]);
     for backend in Sha1Backend::all_available() {
         bench_one(c, "sha1", backend.name(), &|data| {
@@ -61,7 +61,7 @@ fn digests(c: &mut Criterion) {
     }
 }
 
-fn hex(c: &mut Criterion) {
+fn hex(c: &mut Bench) {
     let mut group = c.benchmark_group("hex");
     for backend in HexBackend::all_available() {
         for (len, label) in [(32, "32B"), (1024, "1KiB"), (1 << 20, "1MiB")] {
@@ -88,7 +88,7 @@ fn hex(c: &mut Criterion) {
     group.finish();
 }
 
-fn blake3(c: &mut Criterion) {
+fn blake3(c: &mut Bench) {
     let mut group = c.benchmark_group("blake3");
     for len in [0, 64, 1024, 4096, 16384, 65536, 1 << 20] {
         let data = input(len);
@@ -108,7 +108,7 @@ fn blake3(c: &mut Criterion) {
 }
 
 fn bench_stream<const BUFFER: usize>(
-    group: &mut criterion::BenchmarkGroup<'_, criterion::measurement::WallTime>,
+    group: &mut purrdf_testkit::bench::BenchmarkGroup<'_>,
     data: &[u8],
     width: usize,
     name: &str,
@@ -141,7 +141,7 @@ fn bench_stream<const BUFFER: usize>(
     );
 }
 
-fn blake3_backends(c: &mut Criterion) {
+fn blake3_backends(c: &mut Bench) {
     use purrdf_hash::backend::Blake3Backend;
     let mut group = c.benchmark_group("blake3-backends");
     for backend in Blake3Backend::all_available() {
@@ -173,5 +173,5 @@ fn blake3_backends(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, digests, hex, blake3, blake3_backends);
-criterion_main!(benches);
+bench_group!(benches, digests, hex, blake3, blake3_backends);
+bench_main!(benches);

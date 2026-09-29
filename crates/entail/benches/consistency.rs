@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! OWL-Direct CONSISTENCY benchmark over the shape whose search cost was the defect.
@@ -76,7 +76,7 @@
 
 use std::sync::Arc;
 
-use criterion::{BenchmarkId, Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, BenchmarkId, bench_group, bench_main};
 
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_entail::reasoner::Reasoner;
@@ -293,7 +293,7 @@ fn nn_ontology(bound: usize) -> Arc<RdfDataset> {
 }
 
 /// Report-only bench of the nominal-introduction path over spy-point ontologies of growing bound.
-fn bench_nominal_introduction(c: &mut Criterion) {
+fn bench_nominal_introduction(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_nominal_introduction");
     for &bound in &[1usize, 2, 4] {
         let dataset = nn_ontology(bound);
@@ -309,7 +309,7 @@ fn bench_nominal_introduction(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_consistency(c: &mut Criterion) {
+fn bench_consistency(c: &mut Bench) {
     for shape in [Shape::Equivalence, Shape::SubClass, Shape::Stacked] {
         let mut group = c.benchmark_group(shape.label());
         // The co-typed group stops at eight: past four blocks it reaches the work cap rather
@@ -346,7 +346,7 @@ fn bench_consistency(c: &mut Criterion) {
 /// Nothing is asserted. A saving is a number this prints, not a claim a test makes; the
 /// obligation the tests DO carry is that the two arms decide identically, which
 /// `a_proofs_off_service_answer_is_identical_to_a_proofs_on_one` pins.
-fn bench_proof_recording(c: &mut Criterion) {
+fn bench_proof_recording(c: &mut Bench) {
     let mut group = c.benchmark_group("owl_direct_consistency_proof_recording");
     for &blocks in &[1usize, 4, 16] {
         let dataset = ontology(blocks, Shape::SubClass);
@@ -376,10 +376,10 @@ fn bench_proof_recording(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_consistency,
     bench_nominal_introduction,
     bench_proof_recording
 );
-criterion_main!(benches);
+bench_main!(benches);

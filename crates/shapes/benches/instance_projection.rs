@@ -10,9 +10,9 @@
 
 use std::fmt::Write as _;
 
-use criterion::{Criterion, black_box, criterion_main};
 use purrdf_shapes::instance::project_graph;
 use purrdf_shapes::json_schema::Namespaces;
+use purrdf_testkit::bench::{Bench, bench_main, black_box};
 
 const PREFIXES: &str = r"
 @prefix ex: <https://example.org/instance-bench/> .
@@ -37,7 +37,7 @@ fn dataset(nodes: usize, lists: bool) -> std::sync::Arc<purrdf::RdfDataset> {
         .expect("benchmark data Turtle")
 }
 
-fn bench_instance_projection(criterion: &mut Criterion) {
+fn bench_instance_projection(criterion: &mut Bench) {
     let namespaces = Namespaces::new(
         "ex",
         &[(
@@ -60,8 +60,8 @@ fn bench_instance_projection(criterion: &mut Criterion) {
 
 /// Run the instance-projection benchmark group.
 pub fn benches() {
-    let mut criterion = Criterion::default().configure_from_args();
+    let mut criterion = Bench::default().configure_from_args();
     bench_instance_projection(&mut criterion);
 }
 
-criterion_main!(benches);
+bench_main!(benches);

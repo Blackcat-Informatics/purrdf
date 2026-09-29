@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Report-only streaming-sink throughput probe for the GTS writer; not a
-//! criterion gate — see `docs/BENCHMARKS.md` for the benchmarking policy.
+//! benchmark gate — see `docs/BENCHMARKS.md` for the benchmarking policy.
 
 use core::ops::ControlFlow;
 use std::env;

@@ -624,7 +624,7 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 
 IR 把每个词项在字符串存储区中**只存一次**，以可复制的 `NonZeroU32` id 寻址，在所有
 热点处用固定密钥的 `FixedHasher` 做哈希，并把数据集冻结为 `Box<[QuadRow]>` 表，带惰性的
-序数置换索引（每条四元组每个轴约 4 字节）。性能声称由 criterion 基准而非形容词
+序数置换索引（每条四元组每个轴约 4 字节）。性能声称由基准测试而非形容词
 支撑——`crates/rdf-core/benches/ir_layout.rs` 度量结构数组、数组结构与谓词邻接三种
 布局（分配次数、高水位、端到端延迟），最终采用的布局就是胜出的那个。用 `make bench`
 运行它们。
@@ -674,7 +674,7 @@ SPARQL 的广度经由以调用方为键的扩展点增长——标量函数、�
 ```sh
 make metadata   # regenerate + verify generated artifacts
 make check      # fmt, build, tests, hygiene gates
-make bench      # criterion benchmarks
+make bench      # purrdf_testkit::bench benchmarks
 make scale-corpus  # the deterministic scale corpus, across shards
 make lubm       # the LUBM comparison workload, per entailment regime
 make watdiv     # the WatDiv comparison workload over a frozen dataset

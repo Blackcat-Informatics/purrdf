@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! End-to-end SPARQL evaluation benchmark over a ~300k-quad synthetic dataset,
@@ -82,7 +82,7 @@
 //!   asserted. The per-row correlated evaluation `LATERAL` guards is
 //!   `lateral_substitution`'s subject.
 //!
-//! A second, separate criterion group — `value_dispatch` — isolates the value-space
+//! A second, separate bench group — `value_dispatch` — isolates the value-space
 //! operator dispatch (`value_add`/`value_sub`) from operand extraction, at ns
 //! resolution; see its own doc comment for why `m_arithmetic_dense_filter` above
 //! cannot do this.
@@ -101,7 +101,7 @@
 
 use std::sync::Arc;
 
-use criterion::{Criterion, criterion_group, criterion_main};
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 use purrdf_core::{
     BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, SparqlEngine, SparqlRequest,
@@ -420,7 +420,7 @@ fn city_regions() -> ExtensionEnv {
     ExtensionEnv::over_relations(registry).expect("the fixture declarations read cleanly")
 }
 
-/// The full case list as `(criterion id, query text, minimum expected rows)`.
+/// The full case list as `(bench id, query text, minimum expected rows)`.
 /// The row floor is a sanity check that every case does real work (an empty
 /// result would silently benchmark a no-op plan).
 const CASES: &[(&str, &str, usize)] = &[
@@ -490,7 +490,7 @@ fn count(result: SparqlResult) -> usize {
     }
 }
 
-fn bench_query_eval(c: &mut Criterion) {
+fn bench_query_eval(c: &mut Bench) {
     let ds = people_dataset();
     let engine = NativeSparqlEngine::new();
 
@@ -521,11 +521,11 @@ fn bench_query_eval(c: &mut Criterion) {
     group.sample_size(10);
     for &(label, query, _) in CASES {
         group.bench_function(label, |bencher| {
-            bencher.iter(|| criterion::black_box(run(&engine, &ds, query)));
+            bencher.iter(|| std::hint::black_box(run(&engine, &ds, query)));
         });
     }
     group.bench_function("k_property_function_join", |bencher| {
-        bencher.iter(|| criterion::black_box(run_with_relations(&engine, &ds, Q_K, &relations)));
+        bencher.iter(|| std::hint::black_box(run_with_relations(&engine, &ds, Q_K, &relations)));
     });
     group.finish();
 }
@@ -549,7 +549,7 @@ fn bench_query_eval(c: &mut Criterion) {
 /// constant, un-blackboxed operand's `XsdValue` discriminant would const-fold
 /// at compile time — the loop would then measure a compile-time constant, not
 /// a call.
-fn bench_value_dispatch(c: &mut Criterion) {
+fn bench_value_dispatch(c: &mut Bench) {
     use purrdf_xsd::{XsdDatatype, numeric_add, parse, value_add, value_sub};
 
     let int_a = parse("17", XsdDatatype::Integer).expect("parse int_a");
@@ -590,41 +590,41 @@ fn bench_value_dispatch(c: &mut Criterion) {
     let mut group = c.benchmark_group("value_dispatch");
     group.bench_function("int_plus_int_value_add", |bencher| {
         bencher.iter(|| {
-            criterion::black_box(value_add(
-                criterion::black_box(&int_a),
-                criterion::black_box(&int_b),
+            std::hint::black_box(value_add(
+                std::hint::black_box(&int_a),
+                std::hint::black_box(&int_b),
             ))
         });
     });
     group.bench_function("int_plus_int_numeric_add_control", |bencher| {
         bencher.iter(|| {
-            criterion::black_box(numeric_add(
-                criterion::black_box(&int_a),
-                criterion::black_box(&int_b),
+            std::hint::black_box(numeric_add(
+                std::hint::black_box(&int_a),
+                std::hint::black_box(&int_b),
             ))
         });
     });
     group.bench_function("dec_plus_dec_value_add", |bencher| {
         bencher.iter(|| {
-            criterion::black_box(value_add(
-                criterion::black_box(&dec_a),
-                criterion::black_box(&dec_b),
+            std::hint::black_box(value_add(
+                std::hint::black_box(&dec_a),
+                std::hint::black_box(&dec_b),
             ))
         });
     });
     group.bench_function("int_plus_dec_value_add", |bencher| {
         bencher.iter(|| {
-            criterion::black_box(value_add(
-                criterion::black_box(&mixed_int),
-                criterion::black_box(&mixed_dec),
+            std::hint::black_box(value_add(
+                std::hint::black_box(&mixed_int),
+                std::hint::black_box(&mixed_dec),
             ))
         });
     });
     group.bench_function("datetime_minus_datetime_value_sub", |bencher| {
         bencher.iter(|| {
-            criterion::black_box(value_sub(
-                criterion::black_box(&dt_a),
-                criterion::black_box(&dt_b),
+            std::hint::black_box(value_sub(
+                std::hint::black_box(&dt_a),
+                std::hint::black_box(&dt_b),
             ))
         });
     });
@@ -659,7 +659,7 @@ fn bench_value_dispatch(c: &mut Criterion) {
 ///
 /// Report-only, like every case in this file: no row asserts a bound on another.
 /// `black_box` on the inputs for the reason `bench_value_dispatch` documents.
-fn bench_sort_order(c: &mut Criterion) {
+fn bench_sort_order(c: &mut Bench) {
     use purrdf_xsd::{XsdDatatype, value_cmp, value_total_cmp};
 
     let int_a = parse_operand("17", XsdDatatype::Integer);
@@ -709,15 +709,15 @@ fn bench_sort_order(c: &mut Criterion) {
     ] {
         group.bench_function(format!("{label}_total"), |bencher| {
             bencher.iter(|| {
-                criterion::black_box(value_total_cmp(
-                    criterion::black_box(a),
-                    criterion::black_box(b),
+                std::hint::black_box(value_total_cmp(
+                    std::hint::black_box(a),
+                    std::hint::black_box(b),
                 ))
             });
         });
         group.bench_function(format!("{label}_promoted_control"), |bencher| {
             bencher.iter(|| {
-                criterion::black_box(value_cmp(criterion::black_box(a), criterion::black_box(b)))
+                std::hint::black_box(value_cmp(std::hint::black_box(a), std::hint::black_box(b)))
             });
         });
     }
@@ -729,10 +729,10 @@ fn parse_operand(lexical: &str, datatype: purrdf_xsd::XsdDatatype) -> purrdf_xsd
     purrdf_xsd::parse(lexical, datatype).expect("a benchmark operand must parse")
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_query_eval,
     bench_value_dispatch,
     bench_sort_order
 );
-criterion_main!(benches);
+bench_main!(benches);

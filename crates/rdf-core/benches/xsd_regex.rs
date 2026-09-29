@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! COLD cost of the shared XSD/XPath `regExp` translator,
@@ -26,7 +26,7 @@
 //!   splice a large enumerated XML-name set in place of two characters.
 //! * `xml_name_escape_i` — the same pattern under the `i` flag, which takes
 //!   the pre-folded `(?-i:…)` path (the process-wide
-//!   folded set is built on first use; criterion's warm-up absorbs that
+//!   folded set is built on first use; the harness's warm-up absorbs that
 //!   one-time construction).
 //! * `block_first` / `block_last` — `\p{IsBasicLatin}` and the LAST block in
 //!   the generated table, `\p{IsSupplementaryPrivateUseArea-B}`. The two
@@ -39,8 +39,8 @@
 //! Report-only, `cargo bench -p purrdf-core --bench xsd_regex` (the
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
 
-use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use purrdf_core::xsd_regex::compile;
+use purrdf_testkit::bench::{Bench, bench_group, bench_main, black_box};
 
 /// `(case name, pattern source, flag string)` for every measured shape.
 const CASES: &[(&str, &str, &str)] = &[
@@ -55,7 +55,7 @@ const CASES: &[(&str, &str, &str)] = &[
     ("q_flag", "a.c", "q"),
 ];
 
-fn bench_xsd_regex_compile(c: &mut Criterion) {
+fn bench_xsd_regex_compile(c: &mut Bench) {
     // Untimed sanity pass: every case must compile, or its timed closure would
     // measure the (much cheaper) error path and a correctness regression would
     // read as a speed win. This also initializes the `i`-flag folded sets, so
@@ -81,5 +81,5 @@ fn bench_xsd_regex_compile(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, bench_xsd_regex_compile);
-criterion_main!(benches);
+bench_group!(benches, bench_xsd_regex_compile);
+bench_main!(benches);

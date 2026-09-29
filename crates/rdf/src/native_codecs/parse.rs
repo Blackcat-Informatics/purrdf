@@ -385,7 +385,7 @@ pub fn parse_dataset_reporting_failure(
 /// regardless of input size (Turtle/TriG/RDF-XML are always sequential, so the mode
 /// is a no-op there).
 ///
-/// Bench/test-only surface: the criterion bench and the determinism-proof tests use
+/// Bench/test-only surface: the `native_codecs` bench and the determinism-proof tests use
 /// it as the baseline the chunk-parallel path must match byte-for-byte. NOT public
 /// API — hidden, unstable, and free to disappear.
 #[doc(hidden)]

@@ -161,10 +161,10 @@ const PULL_BUDGET: usize = 1 << 16;
 
 /// The stream length and row count `--test` mode runs every case shape at.
 ///
-/// This file has no `criterion` harness, so nothing in it already knows how to
-/// answer cargo's `--test` the way the crate's criterion-driven benches do
+/// This file has no `purrdf_testkit::bench` harness, so nothing in it already knows how to
+/// answer cargo's `--test` the way the crate's harness-driven benches do
 /// (`benches/on_demand_read.rs` gets that for free from
-/// `Criterion::default().configure_from_args()`, which is what makes `--test`
+/// `bench_group!`'s `Bench::configure_from_args`, which is what makes `--test`
 /// run one fast pass there). A smoke run has to shrink the *inputs*, not skip
 /// the measurement, and it has to shrink them past every phase's worst case,
 /// not just its typical one: [`shared_block_phase`] under

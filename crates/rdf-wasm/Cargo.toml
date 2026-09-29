@@ -81,7 +81,6 @@ wasm-bindgen = { workspace = true }
 
 [dev-dependencies]
 purrdf-testkit = { workspace = true }
-criterion = { workspace = true }
 
 [[bench]]
 name = "query_engine_reuse"

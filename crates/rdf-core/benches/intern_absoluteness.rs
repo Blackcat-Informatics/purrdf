@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Intern-time cost of the IR-boundary absoluteness invariant.
@@ -43,9 +43,9 @@
 //! Inputs are generated deterministically (no RNG, no time source), so the measured
 //! set is identical across runs.
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use purrdf_core::RdfDatasetBuilder;
 use purrdf_core::ir::{GlobalDictionary, TermValue};
+use purrdf_testkit::bench::{BatchSize, Bench, bench_group, bench_main, black_box};
 
 /// Number of intern calls per measured iteration.
 const N: u32 = 10_000;
@@ -62,7 +62,7 @@ fn distinct_iris() -> Vec<String> {
 }
 
 /// Group 1: worst case — N distinct IRIs, so the absoluteness parse runs N times.
-fn bench_distinct_iris_all_misses(c: &mut Criterion) {
+fn bench_distinct_iris_all_misses(c: &mut Bench) {
     let iris = distinct_iris();
     let mut group = c.benchmark_group("intern_absoluteness");
     group.bench_function("distinct_iris_all_misses", |b| {
@@ -83,7 +83,7 @@ fn bench_distinct_iris_all_misses(c: &mut Criterion) {
 
 /// Group 2: the hit path — ONE IRI interned N times, so exactly one parse happens and
 /// the remaining N-1 interns must not reach the check at all.
-fn bench_repeated_iri_all_hits(c: &mut Criterion) {
+fn bench_repeated_iri_all_hits(c: &mut Bench) {
     let iri = "http://example.org/resource/0".to_owned();
     let mut group = c.benchmark_group("intern_absoluteness");
     group.bench_function("repeated_iri_all_hits", |b| {
@@ -104,7 +104,7 @@ fn bench_repeated_iri_all_hits(c: &mut Criterion) {
 
 /// Group 3: the realistic shape — a small reused vocabulary plus one fresh subject per
 /// quad, which is what a parse of an ordinary document actually produces.
-fn bench_realistic_mixed_vocabulary(c: &mut Criterion) {
+fn bench_realistic_mixed_vocabulary(c: &mut Bench) {
     let subjects = distinct_iris();
     let predicates: Vec<String> = (0..VOCABULARY)
         .map(|i| format!("http://example.org/ns#p{i}"))
@@ -132,7 +132,7 @@ fn bench_realistic_mixed_vocabulary(c: &mut Criterion) {
 /// constructor, N distinct IRIs, all misses. This is the per-term parse cost that the
 /// paged seal and compaction avoid by routing through the crate-internal
 /// `reintern_validated` instead.
-fn bench_global_dictionary_all_misses(c: &mut Criterion) {
+fn bench_global_dictionary_all_misses(c: &mut Bench) {
     let values: Vec<TermValue> = distinct_iris().into_iter().map(TermValue::Iri).collect();
     let mut group = c.benchmark_group("intern_absoluteness");
     group.bench_function("global_dictionary_all_misses", |b| {
@@ -155,11 +155,11 @@ fn bench_global_dictionary_all_misses(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_distinct_iris_all_misses,
     bench_repeated_iri_all_hits,
     bench_realistic_mixed_vocabulary,
     bench_global_dictionary_all_misses
 );
-criterion_main!(benches);
+bench_main!(benches);

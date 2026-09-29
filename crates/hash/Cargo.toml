@@ -32,17 +32,9 @@ name = "purrdf_hash"
 [dev-dependencies]
 purrdf-alloc-probe = { workspace = true }
 
-[target.'cfg(not(target_arch = "wasm32"))'.dev-dependencies]
-# Digest throughput baselines. DEV-DEPENDENCY ONLY, and native-only: criterion
-# is not wasm32-clean.
-criterion = { workspace = true }
-
-[[bench]]
-name = "digests"
-harness = false
-
 # The frozen-vector suites (digest differentials, BLAKE3 streaming boundaries,
-# base16 rendering, the table hasher's self-vectors and quality) and the table
-# hasher's latency bench live in the unpublished `purrdf-hash-conformance`:
+# base16 rendering, the table hasher's self-vectors and quality), the digest and
+# base16 throughput bench and the table hasher's latency bench live in the
+# unpublished `purrdf-hash-conformance`:
 # they run on purrdf-testkit, which depends on this crate, so a dev-dependency
 # on it here would close a cycle.

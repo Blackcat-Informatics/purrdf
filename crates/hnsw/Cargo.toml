@@ -58,14 +58,14 @@ harness = false
 name = "determinism"
 harness = false
 
-# Both benches are one-shot, report-only measurement harnesses rather than criterion
+# Both benches are one-shot, report-only measurement harnesses rather than sampled
 # statistical targets, and deliberately so. The build-cost harness measures a build that
-# takes minutes to tens of minutes at the top scales; criterion's whole method is to
+# takes minutes to tens of minutes at the top scales; a sampling harness's whole method is to
 # repeat a closure until the sampling distribution settles, which for a 10^6-row build
 # would mean hours per point and a measurement of the machine's thermal state rather than
 # the code. A harness that times one build per scale and prints it is the honest
 # instrument for this quantity. The recall harness needs p50/p99 percentiles, an
-# exact-rank distribution and visited-work counts — none of which are criterion's output.
+# exact-rank distribution and visited-work counts — none of which is a sampling harness's output.
 [[bench]]
 name = "build"
 harness = false

@@ -83,7 +83,7 @@ file-IO-free IR layer.
 
 ## Why this design
 
-The layout is chosen by measurement, not assertion: the criterion bench
+The layout is chosen by measurement, not assertion: the bench
 `crates/rdf-core/benches/ir_layout.rs` compares array-of-structs,
 struct-of-arrays, and predicate-adjacency layouts on allocation counts,
 high-water memory, and end-to-end latency — the shipped layout is whichever

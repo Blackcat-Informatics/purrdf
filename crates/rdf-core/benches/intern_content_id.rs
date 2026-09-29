@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`,
-// which would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Intern-time content-id overhead bench.
@@ -36,8 +36,8 @@
 //! content-ids are built by tiling a hex encoding of `i` out to exactly 64
 //! lowercase hex characters.
 
-use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use purrdf_core::{ContentIdScheme, RdfDatasetBuilder};
+use purrdf_testkit::bench::{BatchSize, Bench, bench_group, bench_main, black_box};
 
 /// Number of IRIs interned per measured iteration.
 const N: u32 = 10_000;
@@ -69,7 +69,7 @@ fn content_id_iris() -> Vec<String> {
 
 /// Group 1: baseline — plain builder, ordinary IRIs, no content-addressing
 /// config at all (no recognition check runs on this path).
-fn bench_ordinary_scheme_inactive(c: &mut Criterion) {
+fn bench_ordinary_scheme_inactive(c: &mut Bench) {
     let iris = ordinary_iris();
     let mut group = c.benchmark_group("intern_content_id");
     group.bench_function("intern_ordinary_scheme_inactive", |b| {
@@ -91,7 +91,7 @@ fn bench_ordinary_scheme_inactive(c: &mut Criterion) {
 /// Group 2: the SAME ordinary IRIs, but the builder has content-addressing
 /// active — every intern pays a `blake3:` prefix-strip MISS. Expectation (not
 /// asserted): should read close to group 1's time.
-fn bench_ordinary_scheme_active(c: &mut Criterion) {
+fn bench_ordinary_scheme_active(c: &mut Bench) {
     let iris = ordinary_iris();
     let mut group = c.benchmark_group("intern_content_id");
     group.bench_function("intern_ordinary_scheme_active", |b| {
@@ -114,7 +114,7 @@ fn bench_ordinary_scheme_active(c: &mut Criterion) {
 /// Group 3: genuine `blake3:<64hex>` content-id IRIs interned into a
 /// content-addressing-active builder — every intern pays the prefix HIT +
 /// 64-hex decode + side-table insert.
-fn bench_content_ids_scheme_active(c: &mut Criterion) {
+fn bench_content_ids_scheme_active(c: &mut Bench) {
     let iris = content_id_iris();
     let mut group = c.benchmark_group("intern_content_id");
     group.bench_function("intern_content_ids_scheme_active", |b| {
@@ -134,10 +134,10 @@ fn bench_content_ids_scheme_active(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(
+bench_group!(
     benches,
     bench_ordinary_scheme_inactive,
     bench_ordinary_scheme_active,
     bench_content_ids_scheme_active
 );
-criterion_main!(benches);
+bench_main!(benches);

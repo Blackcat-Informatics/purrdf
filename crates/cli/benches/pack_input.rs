@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-// Bench targets are not public API: `criterion_group!` expands to a `pub fn`, which
-// would otherwise trip the workspace `missing_docs` lint.
+// Bench targets are not public API, so the workspace `missing_docs` lint is
+// not asked of their items.
 #![allow(missing_docs)]
 
 //! Timed benchmark of the real CLI pack path, broken into the THREE phases of a pack
@@ -23,17 +23,17 @@
 
 use std::hint::black_box;
 
-use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_cli::immutable::ImmutableInput;
 use purrdf_core::{PackView, dataset_from_view, verify_pack};
 use purrdf_entail::{Materialization, materialize};
+use purrdf_testkit::bench::{Bench, bench_group, bench_main};
 
 #[path = "support/pack.rs"]
 mod support;
 
 /// Phase 1: build an [`ImmutableInput`] from disk (Tier-1 sealed `memfd`) vs from an
 /// owned buffer (Tier 2).
-fn acquisition(c: &mut Criterion) {
+fn acquisition(c: &mut Bench) {
     // `file` is held for the whole benchmark so `path` stays valid; the acquisition
     // paths read the bytes themselves (Tier 1 maps the fd, Tier 2 reads the file).
     let (file, _bytes) = support::large_pack();
@@ -59,7 +59,7 @@ fn acquisition(c: &mut Criterion) {
 }
 
 /// Phase 2: the unconditional canonical `verify_pack` run on every pack open.
-fn verification(c: &mut Criterion) {
+fn verification(c: &mut Bench) {
     let (_file, bytes) = support::large_pack();
     let mut group = c.benchmark_group("pack_verification");
     group.bench_function("verify_pack", |b| {
@@ -70,7 +70,7 @@ fn verification(c: &mut Criterion) {
 
 /// Phase 3: materialize an RDFS closure over the zero-copy `PackView` vs over an owned
 /// `RdfDataset` rebuilt from it (the rebuild the DatasetView boundary now avoids).
-fn reasoning(c: &mut Criterion) {
+fn reasoning(c: &mut Bench) {
     let (_file, bytes) = support::large_pack();
     let view = PackView::from_bytes(&bytes).expect("open pack view");
 
@@ -89,5 +89,5 @@ fn reasoning(c: &mut Criterion) {
     group.finish();
 }
 
-criterion_group!(benches, acquisition, verification, reasoning);
-criterion_main!(benches);
+bench_group!(benches, acquisition, verification, reasoning);
+bench_main!(benches);

@@ -3,7 +3,7 @@
 
 //! One-shot allocation probes for deterministic PURREMB workloads.
 //!
-//! This executable is deliberately separate from the timed Criterion harness:
+//! This executable is deliberately separate from the timed harness:
 //! its global allocator accounts for every allocation, which would otherwise
 //! contaminate latency and throughput measurements.
 //!

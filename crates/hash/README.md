@@ -322,8 +322,8 @@ not constrain the surrounding compiler-generated code to SSE2. These runs
 still measure the host microarchitecture, not an older processor:
 
 ```sh
-cargo bench -p purrdf-hash --bench digests -- blake3
-cargo bench -p purrdf-hash --bench digests -- blake3-backends
+cargo bench -p purrdf-hash-conformance --bench digests -- blake3
+cargo bench -p purrdf-hash-conformance --bench digests -- blake3-backends
 cargo test -p purrdf-hash-conformance --test blake3
 ```
 
