@@ -26,6 +26,9 @@ and needs no such check.) This crate is that measurement, in one place:
 * `walk` and `walk_is_low` — a scope for a walk with no error channel: a level
   that finds the stack low stops descending, and the scope discards the
   half-built result and reports the refusal.
+* `on_stack` — run a computation on a stack of a stated size: a fresh thread
+  natively, and inline under a floor that many bytes down on `wasm32`, where a
+  request larger than the stack left is refused with a typed `StackError`.
 * `MARGIN_BYTES` — 128 KiB natively, 64 KiB on `wasm32`, with the measurements
   they are derived from in their documentation.
 

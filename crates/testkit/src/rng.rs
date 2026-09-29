@@ -9,6 +9,12 @@
 //! there is exactly one place that defines what "the stream" means.
 //! [`prop`](crate::prop) itself is built on this module.
 //!
+//! Two older recurrences live here too, because fixtures and frozen vectors
+//! were generated from them and must keep regenerating bit for bit: Marsaglia's
+//! xorshift64 ([`xorshift64_next`]) and the 64-bit linear congruential
+//! generator with Knuth's MMIX multiplier ([`lcg64_next`]). New tests draw
+//! from SplitMix64; these exist so an existing fixture's bytes do not move.
+//!
 //! Nothing here is cryptographically secure, and nothing here ships in a
 //! release artifact's data path: it exists only behind `[dev-dependencies]`.
 
@@ -16,14 +22,94 @@
 /// [`purrdf_hash::mix`], where the function and its pinned outputs live.
 pub use purrdf_hash::mix::{splitmix64_next, splitmix64_step};
 
+/// The value in `[-1, 1)` a 64-bit draw `bits` maps to: its top 53 bits as a
+/// fraction of 2^53, doubled and shifted down by one. Every step is exact in
+/// binary64 (`mul_add` is one correctly rounded operation on every target,
+/// wasm32 included, and the result is representable), so the value is the same
+/// everywhere.
+#[must_use]
+pub fn signed_unit(bits: u64) -> f64 {
+    ((bits >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
+}
+
+/// [`signed_unit`] of `bits`, with the one draw that maps to exactly `0.0`
+/// (top 53 bits equal to 2^52) replaced by `substitute`.
+///
+/// For fixtures whose coordinates must never be zero — a vector with a zero
+/// component can have a zero norm, which a norm-dividing distance refuses —
+/// while every other draw keeps its value.
+#[must_use]
+pub fn signed_unit_nonzero(bits: u64, substitute: f64) -> f64 {
+    let value = signed_unit(bits);
+    if value == 0.0 { substitute } else { value }
+}
+
 /// One value in `[-1, 1)` from the [`splitmix64_next`] counter stream: the
-/// top 53 bits of the next output as a fraction of 2^53, doubled and shifted
-/// down by one. Every step is exact in binary64, so the value is the same on
-/// every target.
+/// [`signed_unit`] of the next output.
 #[must_use]
 pub fn signed_unit_next(state: &mut u64) -> f64 {
-    let z = splitmix64_next(state);
-    ((z >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
+    signed_unit(splitmix64_next(state))
+}
+
+/// [`signed_unit_next`], with an exact `0.0` replaced by `substitute`; see
+/// [`signed_unit_nonzero`].
+#[must_use]
+pub fn signed_unit_next_nonzero(state: &mut u64, substitute: f64) -> f64 {
+    signed_unit_nonzero(splitmix64_next(state), substitute)
+}
+
+/// One value in `[-1, 1)` from the self-composed [`splitmix64_step`] stream:
+/// `state` becomes the next step, and the value is its [`signed_unit`].
+///
+/// A different stream from [`signed_unit_next`]'s for the same seed; the HNSW
+/// fixtures and their pinned digests are built on this one.
+#[must_use]
+pub fn signed_unit_step(state: &mut u64) -> f64 {
+    *state = splitmix64_step(*state);
+    signed_unit(*state)
+}
+
+/// [`signed_unit_step`], with an exact `0.0` replaced by `substitute`; see
+/// [`signed_unit_nonzero`].
+#[must_use]
+pub fn signed_unit_step_nonzero(state: &mut u64, substitute: f64) -> f64 {
+    *state = splitmix64_step(*state);
+    signed_unit_nonzero(*state, substitute)
+}
+
+/// One step of Marsaglia's xorshift64 with the shift triple `(13, 7, 17)`:
+/// `state` is advanced and the new state is the output.
+///
+/// Bit-exact with the recurrence the frozen BLAKE3 random vectors and several
+/// fixed-seed corpora were generated from, so they regenerate unchanged. A zero
+/// state stays zero; seed with a non-zero value.
+#[must_use]
+pub const fn xorshift64_next(state: &mut u64) -> u64 {
+    *state ^= *state << 13;
+    *state ^= *state >> 7;
+    *state ^= *state << 17;
+    *state
+}
+
+/// The multiplier of the 64-bit linear congruential generator: Knuth's MMIX
+/// constant, which passes the spectral test for modulus 2^64.
+pub const LCG64_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+
+/// The increment MMIX pairs with [`LCG64_MULTIPLIER`].
+pub const LCG64_MMIX_INCREMENT: u64 = 1_442_695_040_888_963_407;
+
+/// One step of the 64-bit linear congruential generator modulo 2^64:
+/// `state = state * LCG64_MULTIPLIER + increment`, returning the new state.
+///
+/// The fixtures built on it use two increments — [`LCG64_MMIX_INCREMENT`] and
+/// `1` — and take different bits of the state (the high 31 above bit 33, the
+/// high byte, the whole word), so the increment is the caller's and the
+/// projection is too. The low bits of an LCG modulo a power of two are weak;
+/// a caller drawing a small range takes the high bits.
+#[must_use]
+pub const fn lcg64_next(state: &mut u64, increment: u64) -> u64 {
+    *state = state.wrapping_mul(LCG64_MULTIPLIER).wrapping_add(increment);
+    *state
 }
 
 /// `len` values in `[-1, 1)` from the [`splitmix64_next`] counter stream
@@ -50,6 +136,32 @@ impl SplitMix64 {
     #[must_use]
     pub const fn next_u64(&mut self) -> u64 {
         splitmix64_next(&mut self.0)
+    }
+
+    /// The next output reduced modulo `bound`: a value in `0..bound`.
+    ///
+    /// Plain modulo reduction, bias and all, because the fixed-seed corpora
+    /// built on it are pinned to exactly these values; a caller that needs an
+    /// unbiased draw uses [`Xoshiro256::up_to`].
+    ///
+    /// # Panics
+    ///
+    /// When `bound` is zero: there is no value below it.
+    #[must_use]
+    pub const fn below(&mut self, bound: u64) -> u64 {
+        self.next_u64() % bound
+    }
+
+    /// [`Self::below`] for an index into a collection of `len` elements.
+    ///
+    /// # Panics
+    ///
+    /// When `len` is zero.
+    #[must_use]
+    pub const fn below_usize(&mut self, len: usize) -> usize {
+        // A `usize` widens losslessly to `u64` on every supported target, and a
+        // value below `len` narrows back.
+        (self.below(len as u64)) as usize
     }
 }
 
@@ -123,7 +235,194 @@ impl Xoshiro256 {
 
 #[cfg(test)]
 mod tests {
-    use super::{SplitMix64, Xoshiro256, signed_unit_stream};
+    use super::{
+        LCG64_MMIX_INCREMENT, SplitMix64, Xoshiro256, lcg64_next, signed_unit, signed_unit_next,
+        signed_unit_next_nonzero, signed_unit_nonzero, signed_unit_step, signed_unit_step_nonzero,
+        signed_unit_stream, xorshift64_next,
+    };
+
+    #[test]
+    fn below_reduces_the_splitmix64_stream_modulo_the_bound() {
+        // The first outputs from seed 0 (pinned below) modulo 10.
+        let mut generator = SplitMix64::new(0);
+        let drawn: Vec<u64> = (0..6).map(|_| generator.below(10)).collect();
+        assert_eq!(drawn, [5, 0, 9, 4, 7, 0]);
+        let mut generator = SplitMix64::new(0);
+        // The first output is below `u64::MAX`, so the widest bound returns it whole.
+        assert_eq!(generator.below(u64::MAX), 0xE220_A839_7B1D_CDAF);
+        assert_eq!(generator.below(1), 0);
+        let mut by_index = SplitMix64::new(0);
+        let indices: Vec<usize> = (0..6).map(|_| by_index.below_usize(10)).collect();
+        assert_eq!(indices, [5, 0, 9, 4, 7, 0]);
+    }
+
+    #[test]
+    #[should_panic(expected = "remainder with a divisor of zero")]
+    fn below_zero_has_no_value() {
+        let _ = SplitMix64::new(0).below(0);
+    }
+
+    #[test]
+    fn signed_unit_maps_the_top_53_bits_onto_minus_one_to_one() {
+        assert_eq!(signed_unit(0).to_bits(), (-1.0_f64).to_bits());
+        assert_eq!(
+            signed_unit(0x7FF).to_bits(),
+            (-1.0_f64).to_bits(),
+            "low 11 bits ignored"
+        );
+        assert_eq!(signed_unit(1 << 63).to_bits(), 0.0_f64.to_bits());
+        assert_eq!(signed_unit(u64::MAX), 1.0 - 2.0 / (1_u64 << 53) as f64);
+        assert_eq!(signed_unit(1 << 62), -0.5);
+    }
+
+    #[test]
+    fn the_zero_draw_alone_takes_the_substitute() {
+        assert_eq!(signed_unit_nonzero(1 << 63, 0.25), 0.25);
+        assert_eq!(signed_unit_nonzero(1 << 63, 0.125), 0.125);
+        // The neighbouring draws either side of zero keep their own values.
+        let above = (1 << 63) + (1 << 11);
+        let below = (1 << 63) - (1 << 11);
+        assert_eq!(signed_unit_nonzero(above, 0.25), signed_unit(above));
+        assert_eq!(signed_unit_nonzero(below, 0.25), signed_unit(below));
+        assert!(signed_unit(above) > 0.0 && signed_unit(below) < 0.0);
+    }
+
+    #[test]
+    fn the_nonzero_streams_match_their_plain_streams_away_from_zero() {
+        let (mut plain, mut nonzero) = (0x00C0_FFEE_u64, 0x00C0_FFEE_u64);
+        for _ in 0..1_000 {
+            assert_eq!(
+                signed_unit_next(&mut plain).to_bits(),
+                signed_unit_next_nonzero(&mut nonzero, 0.25).to_bits()
+            );
+        }
+        let (mut plain, mut nonzero) = (0x5EED_u64, 0x5EED_u64);
+        for _ in 0..1_000 {
+            assert_eq!(
+                signed_unit_step(&mut plain).to_bits(),
+                signed_unit_step_nonzero(&mut nonzero, 0.125).to_bits()
+            );
+        }
+    }
+
+    /// The self-composed stream from the HNSW determinism fixture's seed, and
+    /// from seed 0, whose first step is the first counter-stream output.
+    #[test]
+    fn signed_unit_step_matches_the_pinned_reference_outputs() {
+        let mut state = 0x5EED_F00D_7E57_0001_u64;
+        let observed: Vec<u64> = (0..4)
+            .map(|_| signed_unit_step(&mut state).to_bits())
+            .collect();
+        assert_eq!(
+            observed,
+            [
+                0xBFE3_2F3E_089E_410C,
+                0x3FD1_35DC_EFD8_9F24,
+                0xBFE8_5639_5966_F3E8,
+                0xBFE3_5941_0F7C_4B20,
+            ]
+        );
+        let mut state = 0;
+        assert_eq!(
+            signed_unit_step(&mut state).to_bits(),
+            0x3FE8_882A_0E5E_C772
+        );
+        assert_eq!(state, 0xE220_A839_7B1D_CDAF);
+    }
+
+    /// Marsaglia's xorshift64 `(13, 7, 17)` from the seeds the existing
+    /// fixtures use, and from 1, whose first output is the published one.
+    #[test]
+    fn xorshift64_matches_the_pinned_reference_outputs() {
+        for (seed, expected) in [
+            (
+                0x2545_F491_4F6C_DD1D_u64,
+                [
+                    0x7F6C_280B_EAA8_E3E7,
+                    0xE471_1987_1CF9_ABE0,
+                    0x3517_4A41_58B8_A0B7,
+                    0x62CE_1FFA_D85B_1C36,
+                ],
+            ),
+            (
+                0x9E37_79B9_7F4A_7C15,
+                [
+                    0xDC1B_77AE_0BF3_4DAD,
+                    0x64F0_EEB9_026E_6076,
+                    0x7B07_CE91_E590_6136,
+                    0x305F_050C_368D_CC74,
+                ],
+            ),
+            (
+                1,
+                [
+                    0x0000_0000_4082_2041,
+                    0x1000_4106_0C01_1441,
+                    0x9B1E_842F_6E86_2629,
+                    0xF554_F503_555D_8025,
+                ],
+            ),
+        ] {
+            let mut state = seed;
+            let observed: Vec<u64> = (0..4).map(|_| xorshift64_next(&mut state)).collect();
+            assert_eq!(observed, expected, "seed {seed:#x}");
+            assert_eq!(state, expected[3], "the output is the state");
+        }
+        let mut zero = 0;
+        assert_eq!(xorshift64_next(&mut zero), 0, "zero is a fixed point");
+    }
+
+    /// The 64-bit LCG under both increments the existing fixtures use.
+    #[test]
+    fn lcg64_matches_the_pinned_reference_outputs() {
+        for (seed, increment, expected) in [
+            (
+                0x2545_F491_4F6C_DD1D_u64,
+                LCG64_MMIX_INCREMENT,
+                [
+                    0x78DC_9D8B_3D1C_C268,
+                    0x3765_A806_006F_4597,
+                    0xE188_6FBB_935F_A5DA,
+                    0x9C3A_48CE_9260_CEA1,
+                ],
+            ),
+            (
+                0x9E37_79B9_7F4A_7C15,
+                LCG64_MMIX_INCREMENT,
+                [
+                    0x2CEA_EE21_BF46_BC00,
+                    0xAA80_754D_1A1A_8D4F,
+                    0xB3C4_904A_6D27_8932,
+                    0xBC69_CF42_7684_6D19,
+                ],
+            ),
+            (
+                0x2545_F491_4F6C_DD1D,
+                1,
+                [
+                    0x64D7_220C_45B5_411A,
+                    0x75AE_AE21_C84A_5793,
+                    0x0743_8468_B312_51D8,
+                    0x013A_242B_538A_8AF9,
+                ],
+            ),
+            (
+                0x9E37_79B9_7F4A_7C15,
+                1,
+                [
+                    0x18E5_72A2_C7DF_3AB2,
+                    0xE8C9_7B68_E1F5_9F4B,
+                    0xD97F_A4F7_8CDA_3530,
+                    0x2169_AA9F_37AE_2971,
+                ],
+            ),
+        ] {
+            let mut state = seed;
+            let observed: Vec<u64> = (0..4).map(|_| lcg64_next(&mut state, increment)).collect();
+            assert_eq!(observed, expected, "seed {seed:#x}, increment {increment}");
+            assert_eq!(state, expected[3], "the output is the state");
+        }
+    }
 
     #[test]
     fn splitmix64_matches_the_reference_outputs() {

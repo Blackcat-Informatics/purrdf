@@ -306,6 +306,8 @@ deps = [
     "purrdf-iri",
     "purrdf-rdf",
     "purrdf-shapes",
+    "purrdf-sparql-eval",
+    "purrdf-sparql-results",
 ]
 
 [[crate]]

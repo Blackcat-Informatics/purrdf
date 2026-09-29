@@ -52,6 +52,14 @@ purrdf-entail = { workspace = true }
 # The evaluation limits a materialization runs under (`EvalOptions`) and the limit
 # refusals `src/regime.rs` renders in each host's own spelling.
 purrdf-datalog = { workspace = true }
+# The evaluator's governor configuration, which `src/governors.rs` builds for every
+# host from one metered base. Also the `Arity` and `Volatility` a host declaring a
+# native SPARQL function names in a prepared-shapes-product restore.
+purrdf-sparql-eval = { workspace = true }
+# The SPARQL-results provenance carrier `src/query.rs` fills.
+purrdf-sparql-results = { workspace = true }
+# SHA-256 of the query text: the `sha256:` query identity `src/query.rs` carries.
+sha2 = { workspace = true }
 # Hand-rolled SARIF serde model (no heavyweight SARIF crate). serde_json's default
 # BTreeMap-backed object keeps key order stable for byte-deterministic output.
 serde = { workspace = true }
@@ -59,8 +67,3 @@ serde_json = { workspace = true }
 
 [dev-dependencies]
 purrdf-testkit = { workspace = true }
-# Declaring a native SPARQL function takes `Arity` and `Volatility`, which is what
-# a host wiring its own implementations into a prepared-shapes-product restore does.
-# Test-only: the product boundary itself names the three registry types through
-# `purrdf_shapes::product`, so the library builds without this edge.
-purrdf-sparql-eval = { workspace = true }

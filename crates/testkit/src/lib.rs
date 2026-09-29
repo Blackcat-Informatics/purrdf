@@ -36,7 +36,10 @@
 //!   benchmark, written with [`bench_group!`] and [`bench_main!`]. The same
 //!   targets run on `wasm32-unknown-unknown` under the test runner.
 //! * [`rng`] — the one deterministic SplitMix64 / xoshiro256** stream every
-//!   crate's fixed-seed tests draw from, including [`prop`] itself.
+//!   crate's fixed-seed tests draw from, including [`prop`] itself, and the
+//!   xorshift64 and 64-bit LCG recurrences pinned test fixtures are built on.
+//! * [`paths`] — the workspace root, resolved from the `[workspace]` manifest
+//!   rather than by counting `..`, and the Rust sources under a directory.
 //!
 //! Its one first-party dependency is `purrdf-hash`, the zero-dependency root,
 //! whose own tests and benches do not use this crate; `layers.toml` allows no
@@ -58,6 +61,7 @@ pub mod harness;
 #[allow(unsafe_code, reason = "the expansion of `#[wasm_bindgen]` imports")]
 mod host;
 pub mod jsonschema_metaschemas;
+pub mod paths;
 pub mod prop;
 pub mod rng;
 #[cfg(not(target_arch = "wasm32"))]

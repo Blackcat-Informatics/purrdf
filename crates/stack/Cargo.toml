@@ -41,3 +41,15 @@ libc = { workspace = true }
 # resolved against the platform SDK at link time: no bundled C source and no
 # build-time C toolchain.
 windows-sys = { workspace = true }
+
+# `on_stack` on both targets: natively under `cargo test`, and on
+# wasm32-unknown-unknown in Node through scripts/wasm-test-runner.sh, where the
+# inline path and its refusal are the ones that run.
+[[test]]
+name = "on_stack"
+harness = false
+
+[dev-dependencies]
+# The libtest-compatible runner the `on_stack` target hands its cases to, so the
+# same named cases run on wasm32. Test-only: no normal edge, no layering change.
+purrdf-testkit = { workspace = true }

@@ -43,6 +43,12 @@
 //!   is *not* the same thing as [`entail`]; that module's docs spell the
 //!   difference out.
 //!
+//! * [`query`] — what a SPARQL-results emission carries beside the answers
+//!   ([`query::provenance`]), identical for every host that answered it.
+//! * [`governors`] — a governed call's ceilings, as a host received them, turned
+//!   into the evaluator's configuration ([`governors::from_parts`]) from one
+//!   metered base, with "no ceiling" said explicitly.
+//!
 //! [`ReasoningReport`]: purrdf_entail::ReasoningReport
 //!
 //! # Portability
@@ -63,9 +69,11 @@
 pub mod build;
 pub mod entail;
 pub mod expr_selector;
+pub mod governors;
 pub mod model;
 pub mod path_syntax;
 pub mod product;
+pub mod query;
 pub mod regime;
 pub mod rules;
 pub mod shacl;
