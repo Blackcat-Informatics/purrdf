@@ -33,7 +33,7 @@
 //! sparql-algebra lexer, which decodes them in `IRIREF` position), so `test060`
 //! now parses.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 
 use purrdf_iri::langtag;
 use purrdf_iri::terminals::is_ws;
@@ -1306,7 +1306,7 @@ struct DocParser<'a, 'c, S: SpanCollector> {
     /// force when the `@prefix` was read (Turtle §4.4). Resolving at declaration time
     /// rather than at use time is what makes `p:x` denote one IRI for the whole
     /// document even if a later `@base` rebinds.
-    prefixes: HashMap<String, String>,
+    prefixes: crate::FastMap<String, String>,
     /// Every prefix a `@prefix` / `PREFIX` directive of THIS document declared, bound
     /// to the resolved namespace its LAST declaration gave it.
     ///
@@ -1349,7 +1349,7 @@ struct DocParser<'a, 'c, S: SpanCollector> {
 
 impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
     fn new(text: &'a str, base: BaseScope, allow_named_graphs: bool, collector: &'c mut S) -> Self {
-        let mut prefixes = HashMap::new();
+        let mut prefixes = crate::FastMap::default();
         prefixes.insert("rdf".to_owned(), RDF_NS.to_owned());
         // These are compile-time constants known to be well-formed absolute IRIs, so a
         // parse failure here is a programming error in this file, not bad input.
@@ -2413,7 +2413,7 @@ struct Interner {
     /// Index table over the atom rows of `terms` (store-once dedup).
     atoms: hashbrown::HashTable<u32>,
     /// Structural dedup for triple terms; the key is three term ids (no strings).
-    triples: HashMap<SerTriple3, usize>,
+    triples: crate::FastMap<SerTriple3, usize>,
     terms: Vec<SerTerm>,
 }
 
@@ -2421,7 +2421,7 @@ impl Interner {
     fn new() -> Self {
         Self {
             atoms: hashbrown::HashTable::new(),
-            triples: HashMap::new(),
+            triples: crate::FastMap::default(),
             terms: Vec::new(),
         }
     }

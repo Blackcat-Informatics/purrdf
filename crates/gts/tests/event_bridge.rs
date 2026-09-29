@@ -9,6 +9,7 @@
 //! them against the offline `reader::read` union graph, plus the id/scope,
 //! provenance, cancellation, and hard-failure contracts.
 
+use purrdf_hash::fixed::FixedState;
 use std::collections::HashMap;
 
 use core::ops::ControlFlow;
@@ -167,7 +168,7 @@ fn render_literal(
 /// forward reference into canonical `(s, p, o, g)` string tuples on `finish`.
 #[derive(Default)]
 struct CollectSink {
-    terms: HashMap<EventTermId, OwnedTerm>,
+    terms: HashMap<EventTermId, OwnedTerm, FixedState>,
     declaration_order: Vec<(EventTermId, OwnedTerm)>,
     quads: Vec<EventQuad>,
     reifiers: Vec<(EventTermId, EventTriple)>,
@@ -342,11 +343,12 @@ fn bridge_events_equal_offline_read() {
     assert!(result.diagnostics.is_empty(), "fixture must stream cleanly");
     assert_eq!(sink.finish_count, 1, "finish runs exactly once");
 
-    let bridge: std::collections::HashSet<String> = sink.resolved_quads.iter().cloned().collect();
+    let bridge: std::collections::HashSet<String, FixedState> =
+        sink.resolved_quads.iter().cloned().collect();
 
     let graph = read(&data, true, None);
     assert!(graph.diagnostics.is_empty(), "fixture must fold cleanly");
-    let offline: std::collections::HashSet<String> = graph
+    let offline: std::collections::HashSet<String, FixedState> = graph
         .quads
         .iter()
         .map(|&q| offline_quad_tuple(&graph, q))
@@ -402,7 +404,7 @@ fn per_segment_blank_scopes_are_distinct() {
 /// A `GtsEventSink` recording only `content_id -> byte-offset` from the frame hook.
 #[derive(Default)]
 struct IndexSink {
-    offsets: HashMap<Vec<u8>, usize>,
+    offsets: HashMap<Vec<u8>, usize, FixedState>,
     diagnostics: usize,
 }
 
@@ -482,7 +484,7 @@ fn claimid_offset_index_single_pass() {
 
     let inv = inventory(&data);
     assert!(!inv.has_problems(), "clean inventory");
-    let expected: HashMap<Vec<u8>, usize> = inv
+    let expected: HashMap<Vec<u8>, usize, FixedState> = inv
         .segments
         .iter()
         .flat_map(|s| s.frames.iter())
@@ -605,7 +607,7 @@ fn incremental_reindex_from_diff_fetch() {
         !inv_fetched.has_problems(),
         "fetched bytes inventory cleanly"
     );
-    let expected: HashMap<Vec<u8>, usize> = inv_fetched
+    let expected: HashMap<Vec<u8>, usize, FixedState> = inv_fetched
         .segments
         .iter()
         .flat_map(|s| s.frames.iter())

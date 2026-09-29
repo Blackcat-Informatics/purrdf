@@ -22,12 +22,12 @@
 //!   shared/cyclic blank gets a structural-signature-derived `_:bN` label.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use crate::iri_escape::is_iriref_escape_required;
 use crate::model::RdfTextDirection;
-use crate::{RdfDataset, TermId, TermRef};
+use crate::{FastMap, RdfDataset, TermId, TermRef};
 
 const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
 const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
@@ -55,11 +55,11 @@ struct Renderer<'a> {
     dataset: &'a RdfDataset,
     prefixes: Vec<(String, String)>,
     /// Each subject's properties.
-    by_subject: HashMap<TermId, Props>,
+    by_subject: FastMap<TermId, Props>,
     /// Times each blank `TermId` appears as an object.
-    object_refs: HashMap<TermId, usize>,
+    object_refs: FastMap<TermId, usize>,
     /// `_:bN` labels for shared/cyclic blanks that cannot inline.
-    shared_labels: HashMap<TermId, String>,
+    shared_labels: FastMap<TermId, String>,
     /// Prefixes actually used during rendering.
     used_prefixes: RefCell<BTreeSet<String>>,
     /// The well-known predicate ids, or `None` when the term table has no such IRI.
@@ -77,8 +77,8 @@ impl<'a> Renderer<'a> {
         // the ordering of blank/triple objects is a pure function of their subtree
         // CONTENT (computed in phase 2), never of `TermId` interning order — that is
         // what makes the render idempotent regardless of how the parser interned terms.
-        let mut raw: HashMap<TermId, BTreeMap<TermId, Vec<TermId>>> = HashMap::new();
-        let mut object_refs: HashMap<TermId, usize> = HashMap::new();
+        let mut raw: FastMap<TermId, BTreeMap<TermId, Vec<TermId>>> = FastMap::default();
+        let mut object_refs: FastMap<TermId, usize> = FastMap::default();
         // The RDF 1.2 statement layer (reifier bindings + annotations) lives in SIDE
         // TABLES, not `quads` — so the canonical renderer must fold in `reifier_quads`
         // (`<reifier> rdf:reifies << s p o >>`) and `annotation_quads`
@@ -110,7 +110,7 @@ impl<'a> Renderer<'a> {
 
         // Materialize the ordered `Props`: grounded objects keep their lexical key,
         // blank/triple objects sort by the content key computed above.
-        let by_subject: HashMap<TermId, Props> = raw
+        let by_subject: FastMap<TermId, Props> = raw
             .iter()
             .map(|(&s, preds)| {
                 let props: Props = preds
@@ -476,20 +476,20 @@ impl<'a> Renderer<'a> {
 /// pathological chains; ties under the budget are harmless because they only affect
 /// sort order between structurally indistinguishable subtrees.
 struct ContentKeys {
-    keys: HashMap<TermId, String>,
+    keys: FastMap<TermId, String>,
 }
 
 impl ContentKeys {
     const MAX_DEPTH: usize = 40;
 
-    fn new(dataset: &RdfDataset, raw: &HashMap<TermId, BTreeMap<TermId, Vec<TermId>>>) -> Self {
+    fn new(dataset: &RdfDataset, raw: &FastMap<TermId, BTreeMap<TermId, Vec<TermId>>>) -> Self {
         // `keys` doubles as the memoization cache: every acyclic blank/triple term
         // `compute_content_key` fully resolves is inserted, so a single traversal from
         // the top-level subjects/objects populates keys for ALL reachable nested
         // blank/triple terms (not just `q.s`/`q.o`) and never recomputes a shared
         // subtree. Cyclic / depth-capped subtrees are deliberately left out (see the
         // `cacheable` flag in `compute_content_key`).
-        let mut keys: HashMap<TermId, String> = HashMap::new();
+        let mut keys: FastMap<TermId, String> = FastMap::default();
         for q in dataset.quads() {
             for term in [q.s, q.o] {
                 if matches!(
@@ -524,11 +524,11 @@ impl ContentKeys {
 /// fall through to the `id.index()` tiebreak in [`ObjKey`], exactly as before this fix.
 fn compute_content_key(
     dataset: &RdfDataset,
-    raw: &HashMap<TermId, BTreeMap<TermId, Vec<TermId>>>,
+    raw: &FastMap<TermId, BTreeMap<TermId, Vec<TermId>>>,
     id: TermId,
     seen: &mut BTreeSet<TermId>,
     depth: usize,
-    cache: &mut HashMap<TermId, String>,
+    cache: &mut FastMap<TermId, String>,
 ) -> (String, bool) {
     // A memoized key is always a fully-resolved acyclic blank/triple key (leaf terms are
     // never cached), so reusing it is sound and cannot be a live back-edge: a node is
@@ -666,12 +666,12 @@ impl Ord for ObjKey {
 /// for the non-symmetric blank graphs the authored ontology sources contain.
 fn blank_signatures(
     dataset: &RdfDataset,
-    by_subject: &HashMap<TermId, Props>,
+    by_subject: &FastMap<TermId, Props>,
     shared: &[TermId],
-) -> HashMap<TermId, u64> {
+) -> FastMap<TermId, u64> {
     let ground = |id: TermId| -> u64 { ground_sig(dataset, id, 0) };
     let shared_set: BTreeSet<TermId> = shared.iter().copied().collect();
-    let mut sig: HashMap<TermId, u64> = shared.iter().map(|&b| (b, 1)).collect();
+    let mut sig: FastMap<TermId, u64> = shared.iter().map(|&b| (b, 1)).collect();
     for round in 0..2 {
         let mut next = sig.clone();
         for &b in shared {

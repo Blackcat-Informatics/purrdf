@@ -25,7 +25,7 @@
 //! serializer, while this test always derives the comparison from the frozen
 //! `.gts` bytes themselves.
 
-use std::collections::HashMap;
+use purrdf_core::FastMap;
 use std::path::{Path, PathBuf};
 
 use ciborium::value::Value;
@@ -53,8 +53,8 @@ fn read_expected(name: &str) -> String {
         .unwrap_or_else(|err| panic!("read {name}: {err}"))
 }
 
-fn keyring() -> HashMap<String, ed25519_dalek::VerifyingKey> {
-    HashMap::from([
+fn keyring() -> FastMap<String, ed25519_dalek::VerifyingKey> {
+    FastMap::from_iter([
         ("authorA".to_string(), authorship_key().verifying_key()),
         ("pack".to_string(), packaging_key().verifying_key()),
     ])
@@ -487,7 +487,7 @@ fn the_only_untransformed_frames_in_a_compacted_pack_are_the_deliberate_exclusio
 
 /// Each transformed frame's resolved codec chain as `(name, dict-name)` rows.
 fn frame_codec_chains(bytes: &[u8]) -> Vec<Vec<(String, Option<String>)>> {
-    let by_id: HashMap<i64, (String, Option<String>)> = catalog_rows(bytes)
+    let by_id: FastMap<i64, (String, Option<String>)> = catalog_rows(bytes)
         .into_iter()
         .map(|row| (row.id, (row.name, row.dct)))
         .collect();
@@ -611,7 +611,7 @@ fn multi_dict_vector_pins_two_distinct_dictionaries_and_selects_per_frame() {
 /// The set of dictionary names actually referenced by frames' `"x"` chains.
 fn used_dict_names(bytes: &[u8]) -> std::collections::BTreeSet<String> {
     let rows = catalog_rows(bytes);
-    let by_id: HashMap<i64, Option<String>> =
+    let by_id: FastMap<i64, Option<String>> =
         rows.into_iter().map(|row| (row.id, row.dct)).collect();
     let (items, _torn) = iter_items(bytes);
     let mut out = std::collections::BTreeSet::new();

@@ -747,7 +747,7 @@ impl DatasetView for PagedQueryView<'_> {
     }
 
     fn stats_fingerprint(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
         self.dataset.total_quads.hash(&mut hasher);
         self.dataset.dictionary.len().hash(&mut hasher);
         hasher.finish()

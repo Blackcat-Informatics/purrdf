@@ -45,12 +45,12 @@
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_RELEASE_CRATES=(
+  purrdf-hash
   purrdf-events
   purrdf-iri
   purrdf-xsd
   purrdf-cdt
   purrdf-jsonschema
-  purrdf-hash
   purrdf-deflate
   purrdf-stack
   purrdf-gts
@@ -98,8 +98,8 @@ PURRDF_RELEASE_CRATES=(
 
 # shellcheck disable=SC2034  # consumed by the sourcing script.
 PURRDF_UNBOOTSTRAPPED_CRATES=(
-  purrdf-jsonschema
   purrdf-hash
+  purrdf-jsonschema
   purrdf-deflate
   purrdf-stack
   purrdf-hnsw

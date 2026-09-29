@@ -33,8 +33,10 @@ mod triples;
 use machine::Machine;
 use triples::{PathLevel, TFrame};
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
+
+use purrdf_hash::fixed::FixedState;
 
 use crate::algebra::{
     AggregateFunction, Expression, Function, GraphPattern, GraphTarget, GraphUpdateOperation,
@@ -466,7 +468,7 @@ impl SparqlParser {
             pos: 0,
             src: text,
             end: text.len(),
-            prefixes: HashMap::new(),
+            prefixes: HashMap::with_hasher(FixedState::new()),
             base,
             version: None,
             agg_counter: 0,
@@ -484,7 +486,7 @@ impl SparqlParser {
             pending_exists_scope_checks: Vec::new(),
             #[cfg(debug_assertions)]
             scope_consultations: 0,
-            blank_label_bgps: HashMap::new(),
+            blank_label_bgps: HashMap::with_hasher(FixedState::new()),
             bgp_counter: 0,
             bgp_scope: None,
             machine: Machine::default(),
@@ -538,7 +540,7 @@ struct Parser<'a, 'o> {
     /// The line table is built on that path alone, never on the happy path.
     src: &'a str,
     end: usize,
-    prefixes: HashMap<String, String>,
+    prefixes: HashMap<String, String, FixedState>,
     /// The base IRIs in scope: the caller-supplied base (if any) at the bottom,
     /// rebound in place by every prologue `BASE` directive. Resolution itself is
     /// [`BaseScope`]'s — this parser owns no RFC-3986 arithmetic.
@@ -648,7 +650,7 @@ struct Parser<'a, 'o> {
     /// One map per query, so a label reused in a sub-`SELECT` or an `EXISTS`
     /// body is caught too; one map per UPDATE operation, whose `WHERE` clauses
     /// are separate patterns ([`Parser::parse_update`] clears it between them).
-    blank_label_bgps: HashMap<String, usize>,
+    blank_label_bgps: HashMap<String, usize, FixedState>,
     /// The next basic-graph-pattern ordinal a group's triples block is given.
     bgp_counter: usize,
     /// The basic graph pattern the triples block being parsed belongs to, or
@@ -768,7 +770,7 @@ impl<'a> Parser<'a, '_> {
             // A fork reads a template or quad-pattern block, which is not a basic
             // graph pattern of the query: nothing it reads is scoped to one, so it
             // starts with no scope and records nothing.
-            blank_label_bgps: HashMap::new(),
+            blank_label_bgps: HashMap::with_hasher(FixedState::new()),
             bgp_counter: 0,
             bgp_scope: None,
             machine: Machine::default(),
@@ -1529,11 +1531,11 @@ impl<'a> Parser<'a, '_> {
         // W3C `basic-update` `insert-where-same-bnode`). `DELETE DATA` / DELETE
         // templates are blank-free by invariant, and anonymous blanks carry
         // process-unique ids, so only author-written `_:label`s can collide.
-        let mut prior_bnode_labels: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut prior_bnode_labels: HashSet<String, FixedState> =
+            HashSet::with_hasher(FixedState::new());
         // Reused across iterations to avoid reallocating the set each loop.
-        let mut this_op_labels: std::collections::HashSet<String> =
-            std::collections::HashSet::new();
+        let mut this_op_labels: HashSet<String, FixedState> =
+            HashSet::with_hasher(FixedState::new());
         loop {
             if self.pos >= self.tokens.len() {
                 break;
@@ -3656,13 +3658,13 @@ fn find_group_extend_conflict<'a>(
 /// Collect the labels of every blank node in a run of quad patterns, descending
 /// into RDF-1.2 quoted triples. Used to enforce the §19.6 rule that a blank node
 /// label may not be shared across two operations of one update request.
-fn collect_quad_bnode_labels(quads: &[QuadPattern], out: &mut std::collections::HashSet<String>) {
+fn collect_quad_bnode_labels(quads: &[QuadPattern], out: &mut HashSet<String, FixedState>) {
     for q in quads {
         collect_triple_bnode_labels(&q.triple, out);
     }
 }
 
-fn collect_triple_bnode_labels(t: &TriplePattern, out: &mut std::collections::HashSet<String>) {
+fn collect_triple_bnode_labels(t: &TriplePattern, out: &mut HashSet<String, FixedState>) {
     let mut pending = vec![&t.object, &t.subject];
     while let Some(term) = pending.pop() {
         match term {

@@ -26,7 +26,8 @@
 //! CBOR round-trips so a certificate can be carried and replayed independent
 //! of this crate's in-memory shape.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 use ciborium::value::{Integer, Value};
 use ed25519_dalek::{SigningKey, VerifyingKey};
@@ -196,7 +197,7 @@ fn provenance_predicates_for_class(class_iri: &str) -> Option<&'static [&'static
 /// leaves a lookalike content node's quads untouched.
 fn provenance_subject_ids(g: &Graph) -> crate::FastSet<usize> {
     // Every reserved-class `rdf:type` object claimed by each subject.
-    let mut reserved_types: HashMap<usize, HashSet<&str>> = HashMap::new();
+    let mut reserved_types: crate::FastMap<usize, crate::FastSet<&str>> = crate::FastMap::default();
     for &(s, p, o, _) in &g.quads {
         if g.terms.get(p).and_then(|t| t.value.as_deref()) != Some(RDF_TYPE) {
             continue;
@@ -387,8 +388,8 @@ fn target_kind(target: &Value) -> Option<&str> {
 /// Term VALUES hidden by every `term`-kind suppression target in `g`
 /// (GTS-SPEC §11: a `term` target hides the term value AND every quad in
 /// which that value appears, in ANY position).
-fn term_suppressed_values(g: &Graph) -> HashSet<String> {
-    let mut hidden = HashSet::new();
+fn term_suppressed_values(g: &Graph) -> crate::FastSet<String> {
+    let mut hidden = crate::FastSet::default();
     for sup in &g.suppressions {
         for t in &sup.targets {
             if target_kind(t) != Some("term") {
@@ -413,8 +414,8 @@ fn term_suppressed_values(g: &Graph) -> HashSet<String> {
 type ValueQuad = (String, String, String, Option<String>);
 
 /// Every `quad`-kind suppression target in `g`, resolved to term VALUES.
-fn quad_suppressed_targets(g: &Graph) -> HashSet<ValueQuad> {
-    let mut hidden = HashSet::new();
+fn quad_suppressed_targets(g: &Graph) -> crate::FastSet<ValueQuad> {
+    let mut hidden = crate::FastSet::default();
     for sup in &g.suppressions {
         for t in &sup.targets {
             if target_kind(t) != Some("quad") {
@@ -638,7 +639,10 @@ fn signatures_bound_ok(pre: &Graph, post: &Graph) -> bool {
 
 /// Every carried `stream:DetachedSignature` in `post` cryptographically
 /// verifies against `keyring`.
-fn signatures_verify_ok(post: &Graph, keyring: &HashMap<String, VerifyingKey>) -> bool {
+fn signatures_verify_ok<S: BuildHasher>(
+    post: &Graph,
+    keyring: &HashMap<String, VerifyingKey, S>,
+) -> bool {
     let nodes = subjects_of_type(post, stream::DETACHED_SIGNATURE);
     for node in nodes {
         let Some(cose_b64) = literal_object(post, Some(node), stream::COSE) else {
@@ -796,13 +800,10 @@ fn suppressions_ok(pre: &Graph, post: &Graph) -> Result<bool, CertifyError> {
 /// canonicalized: the GTS→dataset bridge fails, the blank-count poison guard
 /// trips, or the RDFC-1.0 call budget is exhausted on a symmetric-poison
 /// graph.
-// The keyring mirrors the caller's key store, not a hot lookup path worth
-// generalizing over `BuildHasher` — matches `verify_file_with_keyring`.
-#[allow(clippy::implicit_hasher)]
-pub fn verify_compaction(
+pub fn verify_compaction<S: BuildHasher>(
     pre_bytes: &[u8],
     post_bytes: &[u8],
-    keyring: &HashMap<String, VerifyingKey>,
+    keyring: &HashMap<String, VerifyingKey, S>,
 ) -> Result<CompactionReport, CertifyError> {
     let pre = read(pre_bytes, true, None);
     let post = read(post_bytes, true, None);

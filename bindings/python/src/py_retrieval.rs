@@ -2085,8 +2085,12 @@ fn plan_dict<'py>(py: Python<'py>, planned: &Plan) -> PyResult<Bound<'py, PyDict
     }
     out.set_item("producer_decisions", decisions)?;
 
+    // A dict keeps insertion order, so the strata go in sorted by name rather
+    // than in the map's hash order.
     let depths = PyDict::new(py);
-    for (stratum, depth) in &planned.stratum_depths {
+    let mut sorted: Vec<_> = planned.stratum_depths.iter().collect();
+    sorted.sort_unstable_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
+    for (stratum, depth) in sorted {
         depths.set_item(stratum.as_str(), depth)?;
     }
     out.set_item("stratum_depths", depths)?;

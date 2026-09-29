@@ -29,7 +29,7 @@
 //!    cardinalities divide the result. The expression matches iff the root
 //!    interval contains 1.
 
-use std::collections::HashMap;
+use purrdf_core::FastMap;
 
 use crate::ast::{SemAct, ShapeExpr, TripleConstraint, TripleExpr};
 
@@ -94,7 +94,7 @@ pub(crate) struct Compiled<'a> {
 /// Compile a triple expression, inlining `TripleExprRef`s via `te_map`.
 pub(crate) fn compile<'a>(
     expr: &'a TripleExpr,
-    te_map: &HashMap<&'a str, &'a TripleExpr>,
+    te_map: &FastMap<&'a str, &'a TripleExpr>,
 ) -> Result<Compiled<'a>, String> {
     let mut slots = Vec::new();
     let mut stack: Vec<&'a str> = Vec::new();
@@ -104,7 +104,7 @@ pub(crate) fn compile<'a>(
 
 fn compile_node<'a>(
     expr: &'a TripleExpr,
-    te_map: &HashMap<&'a str, &'a TripleExpr>,
+    te_map: &FastMap<&'a str, &'a TripleExpr>,
     slots: &mut Vec<Slot<'a>>,
     stack: &mut Vec<&'a str>,
 ) -> Result<CNode<'a>, String> {
@@ -373,7 +373,7 @@ mod tests {
     }
 
     fn compile_simple(expr: &TripleExpr) -> Compiled<'_> {
-        compile(expr, &HashMap::new()).expect("compile")
+        compile(expr, &FastMap::default()).expect("compile")
     }
 
     #[test]

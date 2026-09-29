@@ -9,10 +9,12 @@
 //! CLIs. Trust-policy findings remain separate from cryptographic validity.
 
 use std::collections::HashMap;
+use std::hash::BuildHasher;
 
 use ciborium::value::Value;
 use ed25519_dalek::VerifyingKey;
 
+use crate::FastMap;
 use crate::cose::verify_signatures;
 use crate::emojihash::{emojihash, emojihash_labels, randomart};
 use crate::model::{Diagnostic, Graph};
@@ -242,7 +244,7 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
         errors.is_empty(),
         "every earlier error path returns before reaching the shared keyring core"
     );
-    let mut keyring = HashMap::with_capacity(1);
+    let mut keyring = FastMap::with_capacity_and_hasher(1, purrdf_hash::fixed::FixedState::new());
     keyring.insert(kid.clone(), public);
     let result = verify_against_keyring(&mut graph, &keyring, options);
 
@@ -272,12 +274,9 @@ pub fn verify_file_with_options(data: &[u8], options: &VerifyOptions) -> Verific
 /// over time (key rotation) verifies as long as each `kid` used is present.
 /// This is the core [`verify_file_with_options`] also uses internally, folded
 /// down to its single resolved key.
-// Pinned to the default hasher: the public surface here mirrors the caller's
-// key store, not a hot lookup path worth generalizing over `BuildHasher`.
-#[allow(clippy::implicit_hasher)]
-pub fn verify_file_with_keyring(
+pub fn verify_file_with_keyring<S: BuildHasher>(
     data: &[u8],
-    keyring: &HashMap<String, VerifyingKey>,
+    keyring: &HashMap<String, VerifyingKey, S>,
 ) -> VerificationResult {
     let mut graph = read(data, true, None);
     let options = VerifyOptions::default();
@@ -316,9 +315,9 @@ struct KeyringVerification {
     ok: bool,
 }
 
-fn verify_against_keyring(
+fn verify_against_keyring<S: BuildHasher>(
     graph: &mut Graph,
-    keyring: &HashMap<String, VerifyingKey>,
+    keyring: &HashMap<String, VerifyingKey, S>,
     options: &VerifyOptions,
 ) -> KeyringVerification {
     verify_signatures(&mut graph.signatures, |candidate| {

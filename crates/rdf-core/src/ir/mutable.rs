@@ -114,14 +114,14 @@ struct DeltaBuilder {
     /// instead of a linear scan. The hash only chooses a bucket and is never
     /// persisted; equal values always meet in one bucket and are then compared by
     /// `==`, so the hasher's choice affects speed, never results.
-    index: std::collections::HashMap<u64, Vec<DeltaTermId>>,
+    index: FastMap<u64, Vec<DeltaTermId>>,
 }
 
 impl DeltaBuilder {
     /// The bucket hash of a [`TermValue`]: equal values hash alike.
     fn hash_of(value: &TermValue) -> u64 {
         use std::hash::{Hash, Hasher};
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
         value.hash(&mut hasher);
         hasher.finish()
     }

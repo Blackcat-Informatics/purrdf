@@ -21,11 +21,10 @@
 //!
 //! [`check_structure`] reports **all** violations, not just the first.
 
-use std::collections::{HashMap, HashSet};
-
 use core::fmt;
 
 use purrdf_core::graph::tarjan_scc;
+use purrdf_core::{FastMap, FastSet};
 
 use crate::ast::{Schema, Shape, ShapeExpr, TripleExpr};
 
@@ -135,8 +134,8 @@ struct Edge {
 
 struct Checker<'a> {
     schema: &'a Schema,
-    shape_labels: HashMap<&'a str, usize>,
-    triple_exprs: HashMap<&'a str, &'a TripleExpr>,
+    shape_labels: FastMap<&'a str, usize>,
+    triple_exprs: FastMap<&'a str, &'a TripleExpr>,
     errors: &'a mut Vec<StructureError>,
     edges: Vec<Edge>,
 }
@@ -145,8 +144,8 @@ impl<'a> Checker<'a> {
     fn new(schema: &'a Schema, errors: &'a mut Vec<StructureError>) -> Self {
         Self {
             schema,
-            shape_labels: HashMap::new(),
-            triple_exprs: HashMap::new(),
+            shape_labels: FastMap::default(),
+            triple_exprs: FastMap::default(),
             errors,
             edges: Vec::new(),
         }
@@ -243,7 +242,7 @@ impl<'a> Checker<'a> {
             adjacency[edge.from].push(edge.to);
         }
         let components = tarjan_scc(&adjacency);
-        let mut flagged: HashSet<usize> = HashSet::new();
+        let mut flagged: FastSet<usize> = FastSet::default();
         for component in &components {
             if component.len() > 1 {
                 flagged.extend(component.iter().copied());
@@ -352,8 +351,8 @@ fn collect_triple_labels_triple_expr<'a>(
 
 /// Walks one declaration, recording dependency edges and dangling references.
 struct Walker<'a, 'b> {
-    shape_labels: &'b HashMap<&'a str, usize>,
-    triple_exprs: &'b HashMap<&'a str, &'a TripleExpr>,
+    shape_labels: &'b FastMap<&'a str, usize>,
+    triple_exprs: &'b FastMap<&'a str, &'a TripleExpr>,
     edges: &'b mut Vec<Edge>,
     dangling_shape: &'b mut Vec<String>,
     dangling_triple: &'b mut Vec<String>,

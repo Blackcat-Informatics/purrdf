@@ -57,16 +57,11 @@
 
 use ciborium::value::Value;
 
+use crate::FastMap;
 use crate::model::{
     Diagnostic, OpaqueNode, Quad, Signature, StreamableInfo, Suppression, Term, TermKind, Triple3,
 };
 use crate::reader::{BlobPayload, BlobRefusal, FrameContext, StreamingSink};
-
-/// A [`std::collections::HashMap`] keyed by the workspace's fixed-key
-/// `purrdf_hash::fixed::FixedHasher` (`purrdf-core`'s `FastHasher` policy) — no runtime RNG
-/// seeding, so it stays wasm-clean. Iteration order is unspecified; every
-/// order-sensitive read here goes through an explicit sort, never hash order.
-type FastMap<K, V> = std::collections::HashMap<K, V, purrdf_hash::fixed::FixedState>;
 
 /// Depth bound for resolving nested quoted-triple terms. A cyclic or absurdly
 /// nested triple term hard-fails rather than recursing without bound. Mirrors

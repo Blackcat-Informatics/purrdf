@@ -14,10 +14,11 @@
 //! validation re-hashes every stored blob and **hard-fails** on any mismatch
 //! (no silent repair).
 
-use std::collections::HashMap;
 use std::fmt;
 
 use sha2::{Digest, Sha256};
+
+use crate::FastMap;
 
 /// Owned blob payload bytes. A thin alias so the by-reference doctrine reads
 /// clearly at call sites: only the kernel's [`ContentStore`] ever owns a `Bytes`;
@@ -181,14 +182,14 @@ impl std::error::Error for ContentStoreError {}
 /// only the digest reference.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct ContentStore {
-    blobs: HashMap<ContentDigest, Bytes>,
+    blobs: FastMap<ContentDigest, Bytes>,
 }
 
 impl ContentStore {
     /// A fresh, empty store.
     pub fn new() -> Self {
         Self {
-            blobs: HashMap::new(),
+            blobs: FastMap::default(),
         }
     }
 

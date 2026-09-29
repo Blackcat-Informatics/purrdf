@@ -25,8 +25,7 @@
 //! absolute terms of the data it is validating, so it can only ever produce a
 //! wrong verdict.
 
-use std::collections::HashMap;
-
+use purrdf_core::FastMap;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope};
 
 use crate::ast::{
@@ -89,7 +88,7 @@ pub fn parse_shexc(input: &str, base: Option<&str>) -> Result<Schema> {
         src: input,
         tokens,
         pos: 0,
-        prefixes: HashMap::new(),
+        prefixes: FastMap::default(),
         base: scope,
         depth: 0,
     };
@@ -104,7 +103,7 @@ struct Parser<'a> {
     pos: usize,
     /// Declared prefix → its namespace, ALREADY RESOLVED against the base that was
     /// in force when the `PREFIX` directive was read (ShEx 2.1 §6, Turtle §4.4).
-    prefixes: HashMap<String, String>,
+    prefixes: FastMap<String, String>,
     base: BaseScope,
     depth: usize,
 }

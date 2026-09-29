@@ -565,7 +565,7 @@ fn plan_or_cached_order<D: DatasetView>(
 /// because a pattern's cardinality (hence its best order) is scope-dependent.
 fn bgp_shape_key<I: ViewTermId>(compiled: &[CompiledPattern<I>], scope: &GraphScope<I>) -> u64 {
     use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
+    let mut h = purrdf_hash::fixed::FixedHasher::default();
     compiled.len().hash(&mut h);
     for cp in compiled {
         hash_pos(&cp.s, &mut h);
@@ -3571,9 +3571,9 @@ mod term_walk_tests {
             let mut expected = Vec::new();
             reference_for_each_slot(&pos, &mut |c| expected.push(c));
             assert_eq!(visited, expected, "{context}");
-            let mut ours = std::collections::hash_map::DefaultHasher::new();
+            let mut ours = purrdf_hash::fixed::FixedHasher::default();
             hash_pos(&pos, &mut ours);
-            let mut theirs = std::collections::hash_map::DefaultHasher::new();
+            let mut theirs = purrdf_hash::fixed::FixedHasher::default();
             reference_hash_pos(&pos, &mut theirs);
             assert_eq!(ours.finish(), theirs.finish(), "{context}");
             // `constrained` is private to `structural_order`: with nothing bound yet
@@ -3755,10 +3755,10 @@ mod term_walk_tests {
             let mut slots = 0;
             for_each_slot(&deep, &mut |_| slots += 1);
             assert_eq!(slots, DEPTH + 1);
-            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            let mut hasher = purrdf_hash::fixed::FixedHasher::default();
             hash_pos(&deep, &mut hasher);
             let hash = hasher.finish();
-            let mut again = std::collections::hash_map::DefaultHasher::new();
+            let mut again = purrdf_hash::fixed::FixedHasher::default();
             hash_pos(&deep_position(DEPTH, leaf), &mut again);
             assert_eq!(hash, again.finish());
             assert_eq!(

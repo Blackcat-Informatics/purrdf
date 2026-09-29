@@ -9,7 +9,7 @@
 //! `purrdf:wasDerivedFrom` audit links. Tool calls are ordinary provenance quads
 //! in the same package.
 
-use std::collections::{HashMap, HashSet};
+use crate::{FastMap, FastSet};
 use std::fmt;
 use std::fs::{self, OpenOptions};
 use std::io::Write;
@@ -679,7 +679,7 @@ impl Memory {
                 Some(min) => claim.confidence.is_some_and(|got| got >= min),
             })
             .collect();
-        let tokens: HashSet<String> = options
+        let tokens: FastSet<String> = options
             .query
             .to_lowercase()
             .split_whitespace()
@@ -692,7 +692,7 @@ impl Memory {
                 .into_iter()
                 .enumerate()
                 .map(|(index, claim)| {
-                    let claim_tokens: HashSet<String> = claim
+                    let claim_tokens: FastSet<String> = claim
                         .text
                         .to_lowercase()
                         .split_whitespace()
@@ -747,8 +747,8 @@ impl Memory {
             return Ok(Vec::new());
         };
         let mut call_ids = Vec::new();
-        let mut props: HashMap<usize, HashMap<String, String>> = HashMap::new();
-        let mut backlinks: HashMap<usize, Vec<String>> = HashMap::new();
+        let mut props: FastMap<usize, FastMap<String, String>> = FastMap::default();
+        let mut backlinks: FastMap<usize, Vec<String>> = FastMap::default();
         for &(s, p, o, _) in &graph.quads {
             let pred = term_value(&graph, p);
             if pred == RDF_TYPE && term_value(&graph, o) == TOOL_CALL {
@@ -905,7 +905,7 @@ impl Memory {
 /// this, because each claim was its own segment and the cross-segment union
 /// merged the two rows by value before anything consulted them.
 struct SegmentIris {
-    by_value: HashMap<String, usize>,
+    by_value: FastMap<String, usize>,
     appended: Vec<Term>,
     base: usize,
 }
@@ -914,7 +914,7 @@ impl SegmentIris {
     /// Index the segment's IRI rows; the FIRST id wins, which is the one the
     /// segment's reifier and quad rows were authored against.
     fn new(terms: &[Term]) -> Self {
-        let mut by_value: HashMap<String, usize> = HashMap::new();
+        let mut by_value: FastMap<String, usize> = FastMap::default();
         for (id, term) in terms.iter().enumerate() {
             if term.kind == TermKind::Iri
                 && let Some(value) = term.value.as_deref()
@@ -1043,8 +1043,8 @@ fn inline_or_digest(payload: Option<&str>) -> Option<String> {
     }
 }
 
-fn annotations_by_reifier(graph: &Graph) -> HashMap<usize, HashMap<String, String>> {
-    let mut out: HashMap<usize, HashMap<String, String>> = HashMap::new();
+fn annotations_by_reifier(graph: &Graph) -> FastMap<usize, FastMap<String, String>> {
+    let mut out: FastMap<usize, FastMap<String, String>> = FastMap::default();
     for &(rid, p, v, _) in &graph.annotations {
         let pred = term_value(graph, p);
         let value = term_value(graph, v);
@@ -1057,8 +1057,8 @@ fn annotations_by_reifier(graph: &Graph) -> HashMap<usize, HashMap<String, Strin
     out
 }
 
-fn suppressed_terms(graph: &Graph) -> HashSet<usize> {
-    let mut out = HashSet::new();
+fn suppressed_terms(graph: &Graph) -> FastSet<usize> {
+    let mut out = FastSet::default();
     for suppression in &graph.suppressions {
         for target in &suppression.targets {
             let Value::Map(entries) = target else {

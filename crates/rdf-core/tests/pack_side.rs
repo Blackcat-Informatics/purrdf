@@ -8,7 +8,7 @@
 //! — before AND after a `to_bytes`/`from_bytes` round trip — and the computed
 //! capability flags must match `RdfDataset::capabilities()`.
 
-use std::collections::HashSet;
+use purrdf_core::FastSet;
 
 use purrdf_core::ir::pack::dict::PackDict;
 use purrdf_core::ir::pack::side::{self, SideTables, SideTablesRef};
@@ -110,7 +110,7 @@ fn build_fixture() -> Fixture {
 fn source_value_quads(
     dataset: &RdfDataset,
     rows: impl Iterator<Item = purrdf_core::QuadIds>,
-) -> HashSet<ValueQuad> {
+) -> FastSet<ValueQuad> {
     rows.map(|q| {
         (
             dataset.term_value(q.s),
@@ -126,7 +126,7 @@ fn source_value_quads(
 fn pack_value_quads(
     dict: &PackDict,
     rows: impl Iterator<Item = (u64, u64, u64, Option<u64>)>,
-) -> HashSet<ValueQuad> {
+) -> FastSet<ValueQuad> {
     rows.map(|(s, p, o, g)| {
         (
             dict.term_value(s),
@@ -173,7 +173,7 @@ fn annotations_of_with_graph_set_equals_source_for_every_reifier() {
             .or_else(|| fx.dict.predicate_id_by_value(&reifier_value))
             .expect("reifier present in dict");
 
-        let expected: HashSet<(TermValue, TermValue, Option<TermValue>)> = fx
+        let expected: FastSet<(TermValue, TermValue, Option<TermValue>)> = fx
             .dataset
             .annotations_of_with_graph(reifier)
             .map(|(p, o, g)| {
@@ -184,7 +184,7 @@ fn annotations_of_with_graph_set_equals_source_for_every_reifier() {
                 )
             })
             .collect();
-        let actual: HashSet<(TermValue, TermValue, Option<TermValue>)> = side
+        let actual: FastSet<(TermValue, TermValue, Option<TermValue>)> = side
             .annotations_of_with_graph(pack_reifier)
             .map(|(p, o, g)| {
                 (
@@ -236,7 +236,7 @@ fn to_bytes_from_bytes_round_trip_preserves_every_view() {
 
     for &reifier in &[fx.r1, fx.r2, fx.r3] {
         let reifier_value = fx.dataset.term_value(reifier);
-        let expected: HashSet<(TermValue, TermValue, Option<TermValue>)> = fx
+        let expected: FastSet<(TermValue, TermValue, Option<TermValue>)> = fx
             .dataset
             .annotations_of_with_graph(reifier)
             .map(|(p, o, g)| {
@@ -253,7 +253,7 @@ fn to_bytes_from_bytes_round_trip_preserves_every_view() {
                 .id_by_value(&reifier_value)
                 .or_else(|| dict.predicate_id_by_value(&reifier_value))
                 .expect("reifier present in dict");
-            let actual: HashSet<(TermValue, TermValue, Option<TermValue>)> = side
+            let actual: FastSet<(TermValue, TermValue, Option<TermValue>)> = side
                 .annotations_of_with_graph(pack_reifier)
                 .map(|(p, o, g)| {
                     (

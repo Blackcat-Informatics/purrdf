@@ -21,13 +21,12 @@
 //! It reports build / mutate / query time for both. It deliberately asserts NO winner
 //! — it just measures the two side-by-side so the COW choice is data, not assertion.
 
-use std::collections::HashSet;
 use std::sync::Arc;
 
 use criterion::{Criterion, criterion_group, criterion_main};
 use purrdf_core::{
-    DatasetMut, GraphMatchValue, MutableDataset, QuadValues, RdfDataset, RdfDatasetBuilder,
-    TermValue,
+    DatasetMut, FastHasher, FastSet, GraphMatchValue, MutableDataset, QuadValues, RdfDataset,
+    RdfDatasetBuilder, TermValue,
 };
 
 /// Number of base quads the COW base / simple store start from.
@@ -75,14 +74,14 @@ type QuadTuple = (TermValue, TermValue, TermValue, Option<TermValue>);
 /// delta, no base sharing — the simplest thing that could possibly work, and the
 /// thing COW must beat to earn its complexity.
 struct SimpleStore {
-    quads: HashSet<QuadTuple>,
+    quads: FastSet<QuadTuple>,
 }
 
 impl SimpleStore {
     /// Materialize the whole base into the set (the simple store has no sharing, so a
     /// branch is a full copy — the cost COW avoids).
     fn from_base(base: &RdfDataset) -> Self {
-        let mut quads = HashSet::with_capacity(base.quad_count());
+        let mut quads = FastSet::with_capacity_and_hasher(base.quad_count(), FastHasher::default());
         for q in base.quads() {
             quads.insert((
                 resolve(base, q.s),

@@ -8,8 +8,9 @@
 //! brute-force scan over the source `RdfDataset` would — before AND after a
 //! `to_bytes`/`from_bytes` round trip.
 
+use purrdf_core::FastSet;
 use purrdf_core::TermBox;
-use std::collections::{BTreeSet, HashSet};
+use std::collections::BTreeSet;
 
 use purrdf_core::ir::pack::bits::{IntVector, IntVectorRef, RankSelectRef};
 use purrdf_core::ir::pack::dict::{PackDict, PackTermId};
@@ -210,7 +211,7 @@ fn brute_force(
     p: Option<TermId>,
     o: Option<TermId>,
     g: GraphMatch<TermId>,
-) -> HashSet<ValueQuad> {
+) -> FastSet<ValueQuad> {
     dataset
         .quads()
         .filter(|q| {
@@ -239,7 +240,7 @@ fn codec_pattern(
     p: Option<PackTermId>,
     o: Option<PackTermId>,
     g: GraphMatch<PackTermId>,
-) -> HashSet<ValueQuad> {
+) -> FastSet<ValueQuad> {
     triples
         .pattern(s, p, o, g)
         .map(|(s, p, o, g)| {
@@ -343,7 +344,7 @@ fn full_scan_matches_dataset_quads() {
     let fx = build_fixture();
     let triples = TriplesRef::from_bytes(&fx.triples_bytes).expect("opens");
 
-    let expected: HashSet<ValueQuad> = fx
+    let expected: FastSet<ValueQuad> = fx
         .dataset
         .quads()
         .map(|q| {
@@ -355,7 +356,7 @@ fn full_scan_matches_dataset_quads() {
             )
         })
         .collect();
-    let actual: HashSet<ValueQuad> = triples
+    let actual: FastSet<ValueQuad> = triples
         .all_quads()
         .map(|(s, p, o, g)| {
             (

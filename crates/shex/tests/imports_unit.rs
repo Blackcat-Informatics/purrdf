@@ -7,7 +7,7 @@
 //! pure in-memory map — no filesystem, mirroring the wasm-clean injection
 //! contract.
 
-use std::collections::HashMap;
+use purrdf_core::FastMap;
 use std::sync::Arc;
 
 use purrdf_core::{RdfDataset, RdfDatasetBuilder, RdfLiteral, TermValue};
@@ -21,7 +21,7 @@ fn schema(src: &str) -> purrdf_shex::Schema {
 }
 
 /// A resolver over an in-memory `IRI -> ShExC source` map.
-fn resolver_map(docs: &[(&str, &str)]) -> HashMap<String, String> {
+fn resolver_map(docs: &[(&str, &str)]) -> FastMap<String, String> {
     docs.iter()
         .map(|(iri, src)| ((*iri).to_owned(), (*src).to_owned()))
         .collect()

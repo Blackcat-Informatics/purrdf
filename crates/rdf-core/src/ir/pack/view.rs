@@ -30,9 +30,10 @@
 //! [`GraphMatch<PackId>`] back down to the `u64` space the triples/side readers
 //! expect.
 
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::num::NonZeroU64;
+
+use purrdf_hash::fixed::FixedHasher;
 
 use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch, ViewTermId};
@@ -290,7 +291,7 @@ impl DatasetView for PackView<'_> {
     fn stats_fingerprint(&self) -> u64 {
         // Mirror `RdfDataset`/`PagedDataset`'s coarse fingerprint: hash (quad count,
         // distinct term count). A cache discriminator only, not a content digest.
-        let mut h = DefaultHasher::new();
+        let mut h = FixedHasher::default();
         self.len_hint().hash(&mut h);
         self.term_count().hash(&mut h);
         h.finish()

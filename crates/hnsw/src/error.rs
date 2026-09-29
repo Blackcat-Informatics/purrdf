@@ -449,7 +449,7 @@ mod tests {
             "{}",
             mismatches[2]
         );
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = purrdf_core::FastSet::default();
         for error in cases {
             let message = error.to_string();
             assert!(

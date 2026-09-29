@@ -23,7 +23,6 @@
 //!   / reifier / annotation events. This is the in-repo source that lets P6 be tested
 //!   end-to-end without the cross-repo GTS source (deferred).
 
-use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 use core::ops::ControlFlow;
@@ -36,7 +35,7 @@ use purrdf_events::{
 use super::builder::RdfDatasetBuilder;
 use super::dataset::{RdfDataset, TermRef};
 use super::term::{BlankScope, TermId};
-use crate::{RdfLiteral, RdfTextDirection};
+use crate::{FastMap, FastSet, RdfLiteral, RdfTextDirection};
 
 /// A buffered term declaration, owned so it survives until phase-2 resolution. The
 /// borrowed [`EventTerm`] strings are copied into owned form on receipt, because the
@@ -97,20 +96,20 @@ pub struct DatasetSink {
     /// RAW term declarations recorded during the streaming phase, keyed by
     /// [`EventTermId`]. A triple term stashes its component ids verbatim; resolution
     /// (which may follow a forward reference) is deferred to [`finish`](Self::finish).
-    raw_terms: HashMap<EventTermId, RawTerm>,
+    raw_terms: FastMap<EventTermId, RawTerm>,
     /// The scope each [`EventTermId`] was declared under, for the redeclaration check
     /// and the closed-scope guard.
-    declared_in: HashMap<EventTermId, ScopeId>,
+    declared_in: FastMap<EventTermId, ScopeId>,
     /// Phase-2 memo: EventTermId → the interned [`TermId`]. A successfully resolved id
     /// is recorded here so later references hit the memo instead of re-resolving.
-    remaps: HashMap<EventTermId, TermId>,
+    remaps: FastMap<EventTermId, TermId>,
     /// Phase-2 in-progress guard: the set of [`EventTermId`]s currently mid-resolution
     /// (their nested components are still being resolved). Re-entering an id already in
     /// this set is a cyclic triple term ([`EventError::CyclicTerm`]) — distinct from a
     /// genuinely never-declared id ([`EventError::Unresolved`]). A raw term is removed
     /// from `raw_terms` only AFTER its components resolve, so a self/transitive cycle
     /// trips this guard rather than reading as a (removed-therefore-)missing term.
-    resolving: HashSet<EventTermId>,
+    resolving: FastSet<EventTermId>,
     /// RAW quad rows, resolved in phase 2.
     raw_quads: Vec<EventQuad>,
     /// RAW reifier bindings `(reifier id, triple, graph)`, resolved in phase 2. The
@@ -144,10 +143,10 @@ impl Default for DatasetSink {
     /// ensures the two initial states can never diverge.
     fn default() -> Self {
         Self {
-            raw_terms: HashMap::new(),
-            declared_in: HashMap::new(),
-            remaps: HashMap::new(),
-            resolving: HashSet::new(),
+            raw_terms: FastMap::default(),
+            declared_in: FastMap::default(),
+            remaps: FastMap::default(),
+            resolving: FastSet::default(),
             raw_quads: Vec::new(),
             raw_reifiers: Vec::new(),
             raw_annotations: Vec::new(),
@@ -617,7 +616,6 @@ mod tests {
     use super::*;
     use crate::RdfLiteral;
     use crate::ir::compare::datasets_isomorphic;
-    use std::collections::HashSet;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}"))
@@ -672,7 +670,7 @@ mod tests {
 
     /// Quad/reifier/annotation value triples for an equality oracle that is robust to
     /// term-id renumbering.
-    fn quad_values(ds: &RdfDataset) -> HashSet<String> {
+    fn quad_values(ds: &RdfDataset) -> FastSet<String> {
         ds.quad_refs().map(|q| format!("{q:?}")).collect()
     }
 

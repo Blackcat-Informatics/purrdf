@@ -28,10 +28,10 @@
 //! enum has no `Unknown` variant: the caller must supply a concrete kind or the
 //! provenance gate fails.
 
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::fmt;
 
+use crate::FastMap;
 use crate::ir::QuadHandle;
 
 // ─── Opaque ID newtypes ───────────────────────────────────────────────────────
@@ -262,7 +262,7 @@ pub struct UnitInterner {
     /// Dense table of unit names, addressed by `UnitId::index`.
     names: Vec<String>,
     /// Value → id index.
-    index: HashMap<String, UnitId>,
+    index: FastMap<String, UnitId>,
 }
 
 impl UnitInterner {
@@ -270,7 +270,7 @@ impl UnitInterner {
     pub fn new() -> Self {
         Self {
             names: Vec::new(),
-            index: HashMap::new(),
+            index: FastMap::default(),
         }
     }
 
@@ -324,7 +324,7 @@ pub struct ArtifactInterner {
     /// Dense table of artifact logical paths.
     paths: Vec<String>,
     /// Value → id index.
-    index: HashMap<String, ArtifactId>,
+    index: FastMap<String, ArtifactId>,
 }
 
 impl ArtifactInterner {
@@ -332,7 +332,7 @@ impl ArtifactInterner {
     pub fn new() -> Self {
         Self {
             paths: Vec::new(),
-            index: HashMap::new(),
+            index: FastMap::default(),
         }
     }
 
@@ -386,7 +386,7 @@ pub struct OriginSetInterner {
     /// Dense table of interned origin sets, as sorted `Vec`s.
     sets: Vec<Vec<(UnitId, ArtifactId)>>,
     /// Value → id index, keyed by the sorted set.
-    index: HashMap<Vec<(UnitId, ArtifactId)>, OriginSetId>,
+    index: FastMap<Vec<(UnitId, ArtifactId)>, OriginSetId>,
 }
 
 impl OriginSetInterner {
@@ -394,7 +394,7 @@ impl OriginSetInterner {
     pub fn new() -> Self {
         Self {
             sets: Vec::new(),
-            index: HashMap::new(),
+            index: FastMap::default(),
         }
     }
 
@@ -721,8 +721,7 @@ pub fn check_provenance(
     // 3: every dataset quad has ≥1 occurrence. Runs unconditionally: an empty
     // dataset simply has nothing to cover, and rule 4 is what gives that case
     // teeth.
-    let covered: std::collections::HashSet<usize> =
-        prov.occurrences.iter().map(|o| o.quad.index()).collect();
+    let covered: crate::FastSet<usize> = prov.occurrences.iter().map(|o| o.quad.index()).collect();
     for handle in dataset_quads {
         if !covered.contains(&handle.index()) {
             errors.push(ProvenanceError::MissingOccurrence {
@@ -733,8 +732,7 @@ pub fn check_provenance(
 
     // 4: every occurrence references a dataset quad — the mirror of rule 3, and
     // the quad-axis twin of rules 1 and 2.
-    let dataset: std::collections::HashSet<usize> =
-        dataset_quads.iter().map(|h| h.index()).collect();
+    let dataset: crate::FastSet<usize> = dataset_quads.iter().map(|h| h.index()).collect();
     for (idx, occ) in prov.occurrences.iter().enumerate() {
         if !dataset.contains(&occ.quad.index()) {
             errors.push(ProvenanceError::DanglingQuad {

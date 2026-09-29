@@ -31,7 +31,9 @@
 //!   structurally-equal shapes dedup regardless of the source syntax
 //!   (ShExC vs ShExJ) they were written in.
 
-use std::collections::{HashSet, VecDeque};
+use std::collections::VecDeque;
+
+use purrdf_core::FastSet;
 
 use crate::ast::{Schema, ShapeDecl};
 use crate::error::{Result, ShexError};
@@ -66,13 +68,13 @@ pub fn resolve_imports(root: Schema, resolver: &ImportResolver<'_>) -> Result<Sc
     };
     // Track shapes already merged so identical re-declarations dedup and
     // conflicting ones hard-fail.
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: FastSet<String> = FastSet::default();
     for decl in root.shapes {
         merge_decl(&mut merged.shapes, &mut seen, decl)?;
     }
 
     // Breadth-first over import IRIs; `visited` bounds cycles/self-imports.
-    let mut visited: HashSet<String> = HashSet::new();
+    let mut visited: FastSet<String> = FastSet::default();
     let mut queue: VecDeque<String> = root.imports.into_iter().collect();
     while let Some(iri) = queue.pop_front() {
         if !visited.insert(iri.clone()) {
@@ -95,7 +97,7 @@ pub fn resolve_imports(root: Schema, resolver: &ImportResolver<'_>) -> Result<Sc
 /// conflicting ones.
 fn merge_decl(
     shapes: &mut Vec<ShapeDecl>,
-    seen: &mut HashSet<String>,
+    seen: &mut FastSet<String>,
     decl: ShapeDecl,
 ) -> Result<()> {
     if seen.contains(&decl.id) {

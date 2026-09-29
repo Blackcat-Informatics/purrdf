@@ -20,7 +20,6 @@
 //! absolute IRIs and ignore the base (N/A by syntax).
 
 use std::borrow::Cow;
-use std::collections::HashSet;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
@@ -90,7 +89,7 @@ where
     I: IntoIterator<Item = FoldRow>,
 {
     // Pass 1: bind reifiers; collect the rest as pending base/annotation rows.
-    let mut reifier_ids: HashSet<(Option<TermId>, TermId)> = HashSet::new();
+    let mut reifier_ids: crate::FastSet<(Option<TermId>, TermId)> = crate::FastSet::default();
     let mut pending: Vec<(TermId, TermId, TermId, Option<TermId>)> = Vec::new();
     for row in rows {
         let FoldRow {

@@ -1225,6 +1225,10 @@ fn push_loss_code(
 /// code and the resolved triple-term content. Identical drops (same triple term)
 /// produce the same label so the builder dedups them to ONE node; no counter, no
 /// randomness. Uses a fixed-seed hash of the term value for a compact, stable label.
+#[expect(
+    clippy::disallowed_types,
+    reason = "loss-node labels move to a specified FNV-1a hash together with their golden update"
+)]
 fn loss_node_label(code: &str, inner: &TermValue) -> String {
     use std::hash::{Hash, Hasher};
     let mut h = std::collections::hash_map::DefaultHasher::new();

@@ -11,7 +11,9 @@
 //! `"unverified"` and `encrypt`-class frames degrade to `missing-key` opaque
 //! nodes. Callers that hold content keys can use [`read_with_options`].
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+
+use crate::{FastMap, FastSet};
 use std::io::Read;
 
 use ciborium::value::Value;
@@ -118,7 +120,7 @@ fn term_depends_on_anchor(
     term_id: usize,
     anchor: usize,
     pending: (usize, Triple3),
-    seen: &mut HashSet<usize>,
+    seen: &mut FastSet<usize>,
 ) -> bool {
     if term_id == anchor {
         return true;
@@ -141,7 +143,7 @@ fn term_depends_on_anchor(
 /// `rf` implicit — the term whose own id IS `rid`. Miss an anchor and the loop
 /// is recorded rather than refused.
 fn reifier_binding_is_recursive(graph: &Graph, rid: usize, triple: Triple3) -> bool {
-    let mut seen: HashSet<usize> = HashSet::new();
+    let mut seen: FastSet<usize> = FastSet::default();
     graph
         .terms
         .iter()
@@ -530,14 +532,14 @@ struct Folder<'g, 's, 'k> {
     content_key: Option<&'k ContentKeyResolver<'k>>,
     segment_index: usize,
     materialize: bool,
-    catalog: HashMap<i128, Codec>,
+    catalog: FastMap<i128, Codec>,
     blob_index: DigestIndex,
     blob_meta_index: DigestIndex,
     // Layout-state bookkeeping (§3.3): intact index frames seen, digests the
     // graph has described via stream:digest so far, and each inline blob's
     // arrival (frame index, digest, was-it-described-at-arrival).
     index_records: Vec<IndexRecord>,
-    described: HashSet<String>,
+    described: FastSet<String>,
     blob_events: Vec<(usize, String, bool)>,
     // Reifier ids seen bound to more than one triple, with the frame index of
     // the rebinding row. Legitimate on its own (§7.1 `tt`); only ambiguous for a
@@ -1488,8 +1490,8 @@ fn is_header_item(item: &Value) -> bool {
 
 /// Parse the header `"dct"` map (§5): named, uncompressed in-band dictionary
 /// bytes that a catalog codec's `"dct"` param references by name.
-fn header_dict_table(header: &[(Value, Value)]) -> HashMap<&str, &[u8]> {
-    let mut out = HashMap::new();
+fn header_dict_table(header: &[(Value, Value)]) -> FastMap<&str, &[u8]> {
+    let mut out = FastMap::default();
     if let Some(Value::Map(entries)) = map_get(header, "dct") {
         for (name, bytes) in entries {
             if let (Value::Text(name), Value::Bytes(bytes)) = (name, bytes) {
@@ -1507,9 +1509,9 @@ fn header_dict_table(header: &[(Value, Value)]) -> HashMap<&str, &[u8]> {
 /// dropped from the map entirely, so any frame referencing it degrades to an
 /// `unknown-codec` opaque node during codec resolution rather than silently
 /// decoding without the dictionary (or against the wrong one).
-fn catalog_from(header: &[(Value, Value)]) -> HashMap<i128, Codec> {
+fn catalog_from(header: &[(Value, Value)]) -> FastMap<i128, Codec> {
     let dict_table = header_dict_table(header);
-    let mut out = HashMap::new();
+    let mut out = FastMap::default();
     if let Some(Value::Map(raw)) = map_get(header, "cat") {
         for (cid, entry) in raw {
             if let (Some(cid), Value::Map(fields)) = (as_i128(cid), entry) {
@@ -1831,11 +1833,11 @@ struct ActiveStreamingSegment {
     index_offset: usize,
     segment_index: usize,
     valid_header: bool,
-    catalog: HashMap<i128, Codec>,
+    catalog: FastMap<i128, Codec>,
     blob_index: DigestIndex,
     blob_meta_index: DigestIndex,
     index_records: Vec<IndexRecord>,
-    described: HashSet<String>,
+    described: FastSet<String>,
     blob_events: Vec<(usize, String, bool)>,
     // Carried across this segment's frames (each frame gets a fresh `Folder`)
     // so the ambiguity check runs once the whole segment has been seen.
@@ -1907,7 +1909,7 @@ impl ActiveStreamingSegment {
         let catalog = if valid_header {
             catalog_from(&header)
         } else {
-            HashMap::new()
+            FastMap::default()
         };
         Self {
             g,
@@ -1921,7 +1923,7 @@ impl ActiveStreamingSegment {
             blob_index: DigestIndex::default(),
             blob_meta_index: DigestIndex::default(),
             index_records: Vec::new(),
-            described: HashSet::new(),
+            described: FastSet::default(),
             blob_events: Vec::new(),
             rebound_reifiers: Vec::new(),
         }
@@ -2085,11 +2087,11 @@ impl ActiveStreamingSegment {
                     content_key: None,
                     segment_index: self.segment_index,
                     materialize: false,
-                    catalog: HashMap::new(),
+                    catalog: FastMap::default(),
                     blob_index: std::mem::take(&mut self.blob_index),
                     blob_meta_index: std::mem::take(&mut self.blob_meta_index),
                     index_records: Vec::new(),
-                    described: HashSet::new(),
+                    described: FastSet::default(),
                     blob_events: Vec::new(),
                     rebound_reifiers: std::mem::take(&mut self.rebound_reifiers),
                 };
@@ -2447,7 +2449,7 @@ fn read_segment_with_sink(
             blob_index: DigestIndex::default(),
             blob_meta_index: DigestIndex::default(),
             index_records: Vec::new(),
-            described: HashSet::new(),
+            described: FastSet::default(),
             blob_events: Vec::new(),
             rebound_reifiers: Vec::new(),
         };

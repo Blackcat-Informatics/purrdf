@@ -838,6 +838,7 @@ name = "purrdf-iri"
 version = "2.0.2"
 dependencies = [
  "criterion",
+ "purrdf-hash",
  "purrdf-testkit",
 ]
 
@@ -858,6 +859,7 @@ name = "purrdf-jsonschema"
 version = "2.0.2"
 dependencies = [
  "criterion",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-testkit",
  "regex",
@@ -1006,6 +1008,7 @@ dependencies = [
  "memchr",
  "purrdf-alloc-probe",
  "purrdf-cdt",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-testkit",
  "purrdf-xsd",

@@ -33,6 +33,7 @@
 //! - A cheap [`w3c_inventory`] test guards against fixture loss (incl. the carved
 //!   heavy stems) without running any canonicalization.
 
+use purrdf_core::FastSet;
 use std::path::{Path, PathBuf};
 
 use purrdf_rdf::{CanonHash, NativeRdfFormat, canonicalize_with, parse_dataset};
@@ -315,7 +316,7 @@ fn w3c_inventory() {
 
     // The carved off-gate stems must still exist — otherwise heavy-vector coverage
     // would silently vanish (the off-gate test would run zero fixtures unnoticed).
-    let present: std::collections::HashSet<String> = inputs.iter().map(|p| stem_of(p)).collect();
+    let present: FastSet<String> = inputs.iter().map(|p| stem_of(p)).collect();
     for stem in HEAVY_OFFGATE_STEMS {
         assert!(
             present.contains(*stem),

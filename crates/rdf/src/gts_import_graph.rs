@@ -21,8 +21,6 @@
 //! term id, a non-IRI predicate/datatype, an unbound or cyclic quoted-triple term)
 //! is an `Err`, never a silent skip.
 
-use std::collections::HashMap;
-
 use purrdf_core::cdt_blank::BlankBinding;
 use purrdf_gts::model::{Graph, Term, TermKind};
 
@@ -48,9 +46,9 @@ struct GraphInterner {
     /// Term table; leaf strings are MOVED out via `std::mem::take` as they intern.
     terms: Vec<Term>,
     /// Reifier-id → `(s, p, o)` component term ids.
-    reifier_bindings: HashMap<usize, (usize, usize, usize)>,
+    reifier_bindings: crate::FastMap<usize, (usize, usize, usize)>,
     /// GTS term id → interned [`TermId`]. A term interns at most once.
-    remap: HashMap<usize, TermId>,
+    remap: crate::FastMap<usize, TermId>,
 }
 
 impl GraphInterner {
@@ -247,7 +245,8 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
     // `rdf:reifies` being non-functional makes legal) through
     // `push_reifier_in_graph` / `push_annotation_in_graph`. Only this legacy lookup is
     // single-valued, and it keeps the FIRST binding to match `Graph::reifier`.
-    let mut reifier_bindings: HashMap<usize, (usize, usize, usize)> = HashMap::new();
+    let mut reifier_bindings: crate::FastMap<usize, (usize, usize, usize)> =
+        crate::FastMap::default();
     for &(reifier_id, triple, _graph) in &reifiers {
         reifier_bindings.entry(reifier_id).or_insert(triple);
     }
@@ -256,7 +255,7 @@ pub fn import_gts_graph(graph: Graph) -> Result<GtsBundle, RdfDiagnostic> {
         builder: RdfDatasetBuilder::new(),
         terms,
         reifier_bindings,
-        remap: HashMap::new(),
+        remap: crate::FastMap::default(),
     };
 
     // Intern every term up front (idempotent through the remap), so leaf strings are

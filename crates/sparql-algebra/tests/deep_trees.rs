@@ -23,7 +23,7 @@
 //! counting-allocator window leaves no live byte behind.
 
 use std::fmt::Write as _;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::sync::Mutex;
 
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
@@ -90,7 +90,7 @@ impl std::fmt::Write for Counted {
 }
 
 fn hash_of(pattern: &GraphPattern) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     pattern.hash(&mut hasher);
     hasher.finish()
 }

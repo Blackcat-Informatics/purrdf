@@ -13,8 +13,6 @@
 //! (GTS metadata, suppressions) is passed in explicitly as an [`RdfLookaside`]
 //! (C0.6: it lives in the bundle envelope, not the hot graph).
 
-use std::collections::HashMap;
-
 use ciborium::value::Value;
 use purrdf_gts::codec::CodecError;
 use purrdf_gts::model::{Graph, Suppression, Term, TermKind};
@@ -119,14 +117,14 @@ pub fn to_gts(
 
 struct InternState {
     terms: Vec<Term>,
-    index: HashMap<RdfTerm, usize>,
+    index: crate::FastMap<RdfTerm, usize>,
 }
 
 impl InternState {
     fn new() -> Self {
         Self {
             terms: Vec::new(),
-            index: HashMap::new(),
+            index: crate::FastMap::default(),
         }
     }
 }

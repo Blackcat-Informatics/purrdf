@@ -50,9 +50,8 @@
 //! In a rule body a blank node "behave[s] like variables"; in a rule head it is fresh per
 //! solution; in a data block it is a blank node of the data.
 
-use std::collections::HashMap;
-
 use ::purrdf::RdfTextDirection;
+use purrdf_core::FastMap;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, LineIndex, langtag};
 use purrdf_sparql_algebra::lexer::{Spanned, Token, tokenize};
 use purrdf_sparql_algebra::{
@@ -127,7 +126,7 @@ pub(crate) fn parse(text: &str, base: Option<&str>) -> Parse<Parsed> {
         tokens,
         pos: 0,
         base,
-        prefixes: HashMap::new(),
+        prefixes: FastMap::default(),
         anon_prefix,
         anon: 0,
     };
@@ -186,7 +185,7 @@ struct SrlParser<'t> {
     /// The base IRIs in scope.
     base: BaseScope,
     /// The declared prefixes.
-    prefixes: HashMap<String, String>,
+    prefixes: FastMap<String, String>,
     /// The label prefix of fresh blank nodes.
     anon_prefix: String,
     /// Fresh blank nodes minted so far.

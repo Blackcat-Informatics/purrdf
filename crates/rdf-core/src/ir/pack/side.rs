@@ -782,7 +782,6 @@ mod tests {
     use super::*;
     use crate::TermBox;
     use crate::{RdfDataset, RdfDatasetBuilder, TermId};
-    use std::collections::HashSet;
 
     fn iri(name: &str) -> TermValue {
         TermValue::iri(format!("http://example.org/{name}"))
@@ -844,7 +843,7 @@ mod tests {
     fn to_value_quads(
         dict: &PackDict,
         rows: impl Iterator<Item = (PackTermId, PackTermId, PackTermId, Option<PackTermId>)>,
-    ) -> HashSet<ValueQuad> {
+    ) -> crate::FastSet<ValueQuad> {
         rows.map(|(s, p, o, g)| {
             (
                 dict.term_value(s),
@@ -861,7 +860,7 @@ mod tests {
         let (dataset, dict, bytes) = build_fixture();
         let side = SideTablesRef::from_bytes(&bytes).expect("opens");
 
-        let expected: HashSet<ValueQuad> = dataset
+        let expected: crate::FastSet<ValueQuad> = dataset
             .reifier_quads()
             .map(|q| {
                 (
@@ -876,7 +875,7 @@ mod tests {
         assert_eq!(actual, expected);
         assert_eq!(
             actual,
-            HashSet::from([(
+            crate::FastSet::from_iter([(
                 iri("r"),
                 TermValue::Iri(RDF_REIFIES.to_owned()),
                 TermValue::Triple {
@@ -894,7 +893,7 @@ mod tests {
         let (dataset, dict, bytes) = build_fixture();
         let side = SideTablesRef::from_bytes(&bytes).expect("opens");
 
-        let expected: HashSet<ValueQuad> = dataset
+        let expected: crate::FastSet<ValueQuad> = dataset
             .annotation_quads()
             .map(|q| {
                 (
@@ -919,7 +918,7 @@ mod tests {
         let r_dataset_id = dataset.term_id_by_value(&r_value).expect("interned");
         let r_pack_id = dict.id_by_value(&r_value).expect("in dict");
 
-        let expected: HashSet<(TermValue, TermValue, Option<TermValue>)> = dataset
+        let expected: crate::FastSet<(TermValue, TermValue, Option<TermValue>)> = dataset
             .annotations_of_with_graph(r_dataset_id)
             .map(|(p, o, g)| {
                 (
@@ -929,7 +928,7 @@ mod tests {
                 )
             })
             .collect();
-        let actual: HashSet<(TermValue, TermValue, Option<TermValue>)> = side
+        let actual: crate::FastSet<(TermValue, TermValue, Option<TermValue>)> = side
             .annotations_of_with_graph(r_pack_id)
             .map(|(p, o, g)| {
                 (

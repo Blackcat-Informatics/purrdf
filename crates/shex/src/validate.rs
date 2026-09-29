@@ -37,10 +37,12 @@ mod matcher;
 mod node;
 mod pattern;
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use purrdf_core::{DatasetView, GraphMatch, RdfDataset, TermId, TermRef, TermValue};
+use purrdf_core::{
+    DatasetView, FastMap, FastSet, GraphMatch, RdfDataset, TermId, TermRef, TermValue,
+};
 
 use crate::ast::{Schema, SemAct, Shape, ShapeExpr, TripleExpr};
 use crate::semact::{SemActContext, SemActRegistry};
@@ -371,17 +373,17 @@ struct Engine<'a> {
     data: &'a RdfDataset,
     sem_acts: &'a SemActRegistry<'a>,
     start: Option<&'a ShapeExpr>,
-    shape_map: HashMap<&'a str, &'a ShapeExpr>,
-    prepared_shapes: HashMap<*const Shape, Result<Arc<PreparedShape<'a>>, String>>,
-    label_ids: HashMap<&'a str, u32>,
+    shape_map: FastMap<&'a str, &'a ShapeExpr>,
+    prepared_shapes: FastMap<*const Shape, Result<Arc<PreparedShape<'a>>, String>>,
+    label_ids: FastMap<&'a str, u32>,
     /// Settled `(node, shape)` verdicts for this validation call.
-    memo: HashMap<Pair, Result<(), String>>,
+    memo: FastMap<Pair, Result<(), String>>,
     /// Pairs currently being proven (the coinductive assumption set).
-    in_progress: HashSet<Pair>,
+    in_progress: FastSet<Pair>,
     /// In-progress pairs whose assumption the current proof relied on.
-    used_assumptions: HashSet<Pair>,
+    used_assumptions: FastSet<Pair>,
     /// Labels being proven for a detached focus (cycle guard).
-    detached_in_progress: HashSet<u32>,
+    detached_in_progress: FastSet<u32>,
     /// Compiled `PATTERN` facets for this validation call. The facet is
     /// checked per value node, so without the memo a `PATTERN` over a large
     /// neighbourhood recompiles the same regex once per value.
@@ -397,7 +399,7 @@ struct PreparedShape<'a> {
 
 fn prepare_shape<'a>(
     shape: &'a Shape,
-    te_map: &HashMap<&'a str, &'a TripleExpr>,
+    te_map: &FastMap<&'a str, &'a TripleExpr>,
 ) -> Result<PreparedShape<'a>, String> {
     let compiled = match &shape.expression {
         Some(expr) => matcher::compile(expr, te_map)?,
@@ -479,7 +481,7 @@ impl<'a> Engine<'a> {
         externals: &'a [(String, ShapeExpr)],
         sem_acts: &'a SemActRegistry<'a>,
     ) -> Self {
-        let mut shape_map: HashMap<&'a str, &'a ShapeExpr> = schema
+        let mut shape_map: FastMap<&'a str, &'a ShapeExpr> = schema
             .shapes
             .iter()
             .map(|decl| (decl.id.as_str(), &decl.expr))
@@ -494,7 +496,7 @@ impl<'a> Engine<'a> {
         if let Some(start) = &schema.start {
             crate::structure::collect_triple_labels_shape_expr(start, &mut te_labels);
         }
-        let te_map: HashMap<&'a str, &'a TripleExpr> = te_labels.into_iter().collect();
+        let te_map: FastMap<&'a str, &'a TripleExpr> = te_labels.into_iter().collect();
         let mut shapes = Vec::new();
         for expr in shape_map.values() {
             collect_shapes(expr, &mut shapes);
@@ -505,7 +507,7 @@ impl<'a> Engine<'a> {
         if let Some(start) = schema.start.as_deref() {
             collect_shapes(start, &mut shapes);
         }
-        let mut prepared_shapes = HashMap::new();
+        let mut prepared_shapes = FastMap::default();
         for shape in shapes {
             prepared_shapes
                 .entry(std::ptr::from_ref(shape))
@@ -517,11 +519,11 @@ impl<'a> Engine<'a> {
             start: schema.start.as_deref(),
             shape_map,
             prepared_shapes,
-            label_ids: HashMap::new(),
-            memo: HashMap::new(),
-            in_progress: HashSet::new(),
-            used_assumptions: HashSet::new(),
-            detached_in_progress: HashSet::new(),
+            label_ids: FastMap::default(),
+            memo: FastMap::default(),
+            in_progress: FastSet::default(),
+            used_assumptions: FastSet::default(),
+            detached_in_progress: FastSet::default(),
             patterns: pattern::PatternCache::default(),
         }
     }

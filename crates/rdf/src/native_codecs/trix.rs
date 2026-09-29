@@ -17,7 +17,6 @@
 //! loss.
 
 use purrdf_core::sink::{TextOut, TextSink};
-use std::collections::HashMap;
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
@@ -443,7 +442,8 @@ fn validate_blank_label(label: &str) -> Result<(), RdfDiagnostic> {
 fn write_trix<W: TextOut + ?Sized>(graph: &SerGraph, out: &mut W) -> Result<(), RdfDiagnostic> {
     // Group triples by graph slot, preserving first-appearance order.
     let mut order: Vec<Option<usize>> = Vec::new();
-    let mut groups: HashMap<Option<usize>, Vec<(usize, usize, usize)>> = HashMap::new();
+    let mut groups: crate::FastMap<Option<usize>, Vec<(usize, usize, usize)>> =
+        crate::FastMap::default();
     // A real reifier binding (`rid rdf:reifies <<triple>>`) is unrepresentable in TriX;
     // a self-reifier sentinel is an inline quoted-triple term already carried by its
     // parent quad, so it is skipped.

@@ -19,7 +19,7 @@
 //! variant, including shapes the parser never builds (hand-built algebra is public).
 
 use std::collections::HashMap;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
 
 use purrdf_sparql_algebra::{
@@ -456,7 +456,7 @@ fn m_ground(g: &GroundTerm) -> mirror::GroundTerm {
 }
 
 fn hash_of<T: Hash>(value: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     value.hash(&mut hasher);
     hasher.finish()
 }
@@ -480,7 +480,8 @@ fn assert_pairs(trees: &[GraphPattern]) {
     let hashes: Vec<_> = trees.iter().map(hash_of).collect();
     // Trees sharing a hash, then every pair compared: unequal hashes must mean
     // unequal trees, which the mirrors confirm.
-    let mut by_hash: HashMap<u64, Vec<usize>> = HashMap::new();
+    let mut by_hash: HashMap<u64, Vec<usize>, purrdf_hash::fixed::FixedState> =
+        HashMap::with_hasher(purrdf_hash::fixed::FixedState::new());
     for (i, hash) in hashes.iter().enumerate() {
         by_hash.entry(*hash).or_default().push(i);
     }

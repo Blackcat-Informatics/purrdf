@@ -24,7 +24,6 @@
 //!    [`purrdf_gts::mmr::verify_proof`]. The cheap blob/segment-head
 //!    membership test runs first; the MMR proof is only attempted on a miss.
 
-use std::collections::HashSet;
 use std::fmt::Write as _;
 
 use purrdf_gts::mmr::{prove_file, verify_proof};
@@ -121,8 +120,10 @@ pub fn verify_content_chain(
     // 3. Digest inclusion: cheap membership set first (blob ids, already
     //    `blake3:<hex>`, plus rendered segment-head ids), then on a miss fall
     //    back to an MMR leaf proof (the digest as a frame id).
-    let mut included: HashSet<String> =
-        HashSet::with_capacity(graph.blobs.len() + graph.segment_heads.len());
+    let mut included: crate::FastSet<String> = crate::FastSet::with_capacity_and_hasher(
+        graph.blobs.len() + graph.segment_heads.len(),
+        crate::FastHasher::default(),
+    );
     for (digest, _entry) in &graph.blobs {
         included.insert(digest.clone());
     }

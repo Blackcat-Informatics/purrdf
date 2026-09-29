@@ -24,7 +24,7 @@
 //! Output is available as the `flag`, `basic` and `detailed` formats. The
 //! crate is checked against the official JSON-Schema-Test-Suite for all three
 //! drafts, `optional/` and `optional/format/` included, with no case ignored.
-//! It depends on `serde_json`, `regex` and `purrdf-iri` only, runs on
+//! It depends on `serde_json`, `regex`, `purrdf-iri` and `purrdf-hash` only, runs on
 //! `wasm32-unknown-unknown`, and needs no network.
 //!
 //! # Meta-schemas are the caller's

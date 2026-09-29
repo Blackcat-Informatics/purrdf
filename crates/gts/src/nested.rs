@@ -3,7 +3,7 @@
 
 //! Bounded nested-GTS discovery for Full Reader callers.
 
-use std::collections::HashSet;
+use crate::FastSet;
 
 use ciborium::value::Value;
 
@@ -42,7 +42,7 @@ impl NestedReadResult {
 /// recursion and decoded-size budgets required by §12.1/§18.
 pub fn read_nested(data: &[u8], max_depth: usize, max_decoded_bytes: usize) -> NestedReadResult {
     let mut remaining = max_decoded_bytes;
-    let mut seen = HashSet::new();
+    let mut seen = FastSet::default();
     let mut subgraphs = Vec::new();
     let graph = visit(
         data,
@@ -68,7 +68,7 @@ fn visit(
     depth: usize,
     max_depth: usize,
     remaining: &mut usize,
-    seen: &mut HashSet<String>,
+    seen: &mut FastSet<String>,
     subgraphs: &mut Vec<(String, Graph)>,
 ) -> Graph {
     let mut graph = read(data, true, None);

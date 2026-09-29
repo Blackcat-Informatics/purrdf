@@ -15,7 +15,7 @@
 //! "Folds to the same graph" is asserted at canonical-graph identity, not at
 //! blob-bytes identity — a pinned dictionary must be a pure compression detail.
 
-use std::collections::HashMap;
+use purrdf_core::FastMap;
 
 use purrdf_gts::compact::{DictPlan, DictStrategy};
 use purrdf_gts::dict::raw_content_dict;
@@ -32,8 +32,8 @@ fn packaging_key() -> ed25519_dalek::SigningKey {
     ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
 }
 
-fn keyring() -> HashMap<String, ed25519_dalek::VerifyingKey> {
-    HashMap::from([
+fn keyring() -> FastMap<String, ed25519_dalek::VerifyingKey> {
+    FastMap::from_iter([
         ("authorA".to_string(), authorship_key().verifying_key()),
         ("pack".to_string(), packaging_key().verifying_key()),
     ])

@@ -112,7 +112,6 @@ mod tests {
     use super::*;
     use crate::RdfLiteral;
     use crate::ir::RdfDatasetBuilder;
-    use std::collections::HashSet;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}"))
@@ -123,7 +122,7 @@ mod tests {
     /// declared by an earlier `term` event.
     #[derive(Default)]
     struct CollectSink {
-        declared: HashSet<TermId>,
+        declared: crate::FastSet<TermId>,
         term_count: usize,
         quads: Vec<QuadIds>,
         reifiers: Vec<(TermId, TermId)>,

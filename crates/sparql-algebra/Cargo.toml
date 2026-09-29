@@ -41,6 +41,9 @@ purrdf-xsd = { workspace = true }
 # closed leaf over `purrdf-iri` + `purrdf-xsd` only, so it adds no edge this
 # crate does not already carry and keeps the front-end `purrdf-core`-free.
 purrdf-cdt = { workspace = true }
+# The fixed-key table hasher behind the parser's prefix and blank-label maps:
+# their iteration order is the same on every run.
+purrdf-hash = { workspace = true }
 # SIMD byte scanning on the tokenizer hot paths (string-literal body, IRIREF end,
 # comment/EOL). SIMD on x86/aarch64, portable SWAR fallback — wasm-clean, no feature
 # gate. NOT an oxigraph-family crate, so the front-end stays a clean native leaf.

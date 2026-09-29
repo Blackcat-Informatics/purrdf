@@ -22,7 +22,7 @@
 //! - `clone` — `Query::clone`, the copy dropped outside the sample;
 //! - `drop` — dropping a copy made outside the sample;
 //! - `eq` — `==` between the tree and an equal copy, which walks every node;
-//! - `hash` — `Hash` into a `DefaultHasher`, the same hasher on every revision so
+//! - `hash` — `Hash` into a `FixedHasher`, the same hasher on every revision so
 //!   only the walk moves;
 //! - `debug` — `format!("{:?}")`;
 //! - `serialize` — `pattern_to_select_query` over the pattern under the projection.
@@ -35,7 +35,7 @@
 //! `make bench` lane) — excluded from `make check`. No timing is asserted.
 
 use std::fmt::Write as _;
-use std::hash::{DefaultHasher, Hash, Hasher};
+use std::hash::{Hash, Hasher};
 
 use criterion::{BatchSize, Criterion, black_box, criterion_group, criterion_main};
 use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser, pattern_to_select_query};
@@ -117,7 +117,7 @@ fn serialized_pattern(query: &Query) -> &GraphPattern {
 }
 
 fn hash_of(query: &Query) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     query.hash(&mut hasher);
     hasher.finish()
 }

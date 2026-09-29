@@ -618,14 +618,14 @@ mod tests {
     /// in the test harness, is fine — it is not the hot streaming path.
     struct RecordingSink {
         inner: SinkImporter<'static>,
-        ids: std::collections::HashMap<(usize, usize), TermId>,
+        ids: crate::FastMap<(usize, usize), TermId>,
     }
 
     impl RecordingSink {
         fn new() -> Self {
             Self {
                 inner: SinkImporter::new(),
-                ids: std::collections::HashMap::new(),
+                ids: crate::FastMap::default(),
             }
         }
 

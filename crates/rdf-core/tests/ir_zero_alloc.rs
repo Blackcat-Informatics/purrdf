@@ -55,7 +55,7 @@ fn build_dataset() -> std::sync::Arc<purrdf_core::RdfDataset> {
 
 /// Fold a `Hash` value into a stack-allocated hasher — observes the value fully
 /// without copying any owned/heap data out of the dataset.
-fn fold<H: Hash>(hasher: &mut std::collections::hash_map::DefaultHasher, value: &H) {
+fn fold<H: Hash>(hasher: &mut purrdf_hash::fixed::FixedHasher, value: &H) {
     value.hash(hasher);
 }
 
@@ -66,14 +66,14 @@ fn quads_iteration_allocates_zero() {
 
     // Warm any lazy one-time state outside the measured window (there is none today,
     // but this keeps the measurement robust to future internal lazies).
-    let mut warm = std::collections::hash_map::DefaultHasher::new();
+    let mut warm = purrdf_hash::fixed::FixedHasher::default();
     for q in ds.quads() {
         fold(&mut warm, &q);
     }
     std::hint::black_box(warm.finish());
 
     let window = CurrentThreadWindow::open();
-    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     for q in ds.quads() {
         // Consume the Copy QuadIds purely by value — no formatting, no clone, no
         // heap. Hashing a Copy struct is entirely on the stack.

@@ -28,8 +28,6 @@
 //! by the `parse::tests` (`tracking_off_returns_no_table`, `dataset_is_identical_with_tracking`),
 //! not by the bench.
 
-use std::collections::HashMap;
-
 use purrdf_iri::Position;
 
 /// Sink for per-statement source positions, gated by an associated const so the
@@ -71,7 +69,7 @@ impl SpanCollector for NoSpans {
 #[derive(Debug, Default, Clone)]
 pub struct SpanTable {
     ordered: Vec<(String, Position)>,
-    by_subject: HashMap<String, Position>,
+    by_subject: purrdf_core::FastMap<String, Position>,
 }
 
 impl SpanCollector for SpanTable {

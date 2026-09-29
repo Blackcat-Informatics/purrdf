@@ -7,7 +7,6 @@
 //! over-aligned, variance, auto-trait and overflow cases.
 
 use std::cell::{Cell, RefCell};
-use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
@@ -36,7 +35,7 @@ fn op_sequences() -> impl Strategy<Value = Vec<Op>> {
 }
 
 fn hash_of<T: Hash + ?Sized>(value: &T) -> u64 {
-    let mut hasher = DefaultHasher::new();
+    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
     value.hash(&mut hasher);
     hasher.finish()
 }
@@ -895,7 +894,7 @@ fn id_rows_behave_as_slices() {
     let long: IdVec = ids.iter().copied().collect();
     assert!(long.spilled());
     assert!(row < long);
-    let mut set = std::collections::HashSet::new();
+    let mut set = crate::FastSet::default();
     set.insert(row);
     assert!(set.contains(&IdVec::from_slice(&ids[..3])));
     assert_eq!(IdVec::default(), IdVec::new());

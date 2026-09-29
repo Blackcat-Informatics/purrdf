@@ -139,11 +139,11 @@ pub(crate) fn first_duplicate(items: &[Value]) -> Option<(usize, usize)> {
         return None;
     }
     // Bucket by a hash consistent with `equal`, then confirm within a bucket.
-    // `DefaultHasher::new` is a fixed-key hasher, so the scan is deterministic.
+    // `FixedHasher` is a fixed-key hasher, so the scan is deterministic.
     let mut buckets: std::collections::BTreeMap<u64, Vec<usize>> =
         std::collections::BTreeMap::new();
     for (index, item) in items.iter().enumerate() {
-        let mut hasher = std::hash::DefaultHasher::new();
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
         hash_value(item, &mut hasher);
         let bucket = buckets.entry(hasher.finish()).or_default();
         if let Some(&first) = bucket.iter().find(|&&earlier| equal(&items[earlier], item)) {
@@ -178,7 +178,7 @@ mod tests {
     }
 
     fn hash_of(value: &Value) -> u64 {
-        let mut hasher = std::hash::DefaultHasher::new();
+        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
         hash_value(value, &mut hasher);
         hasher.finish()
     }

@@ -192,6 +192,7 @@
 //! whose period or whose absence was measured first — never by widening what
 //! counts as equal.
 
+use purrdf_core::FastSet;
 use std::fmt::Write as _;
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 
@@ -2985,9 +2986,8 @@ fn every_sibling_file_coverage_entry_names_a_real_case() {
 /// a [`CASES`] entry, an [`ALLOCATION_EXCLUSIONS`] entry, a
 /// [`KIND_NAME_ALIASES`] entry whose target names ARE a `CASES` entry, or a
 /// [`SIBLING_FILE_COVERAGE`] entry.
-fn covered_kind_names() -> std::collections::HashSet<String> {
-    let mut covered: std::collections::HashSet<String> =
-        CASES.iter().map(|case| case.name.to_owned()).collect();
+fn covered_kind_names() -> FastSet<String> {
+    let mut covered: FastSet<String> = CASES.iter().map(|case| case.name.to_owned()).collect();
     covered.extend(
         ALLOCATION_EXCLUSIONS
             .iter()

@@ -49,6 +49,8 @@ regex = { workspace = true }
 # `$id`/`$ref`/`$dynamicRef` resolution: the workspace's single RFC 3986 §5
 # resolver, never a second one.
 purrdf-iri = { workspace = true }
+# The fixed-key hasher that buckets `uniqueItems` candidates.
+purrdf-hash = { workspace = true }
 
 [dev-dependencies]
 # The `harness = false` suite runner and the frozen differential vectors.

@@ -93,7 +93,7 @@ fn portable_structured_fields_do_not_cancel() {
         0xaaaa_aaaa_aaaa_aaaa,
     ];
     for byte_field in [false, true] {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = std::collections::HashSet::with_hasher(FixedState::new());
         for first in edges {
             for second in edges {
                 for third in edges {

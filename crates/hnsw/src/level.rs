@@ -131,7 +131,7 @@ mod tests {
     fn splitmix64_is_a_bijection_onto_a_large_prefix() {
         // Distinct inputs must give distinct outputs over a prefix for the level mapping
         // to be meaningful at all.
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = purrdf_core::FastSet::default();
         for i in 0..4096_u64 {
             assert!(seen.insert(splitmix64(i)), "collision at {i}");
         }

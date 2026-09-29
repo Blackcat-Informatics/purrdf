@@ -455,7 +455,8 @@ fn scan_doc_lines(file: &Path, lines: &[(usize, String)], out: &mut Vec<Candidat
     // lines is recorded as CONSUMED so the individual-literal pass below does
     // not also emit one HALF of the same literal as its own (necessarily
     // incomplete, necessarily failing) candidate.
-    let mut consumed = std::collections::HashSet::new();
+    let mut consumed =
+        std::collections::HashSet::with_hasher(purrdf_hash::fixed::FixedState::new());
     let mut i = 0;
     while i < lines.len() {
         let (start_line, first) = &lines[i];

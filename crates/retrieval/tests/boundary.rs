@@ -29,13 +29,13 @@
 //! caller-owned value, and no composition layer is constructed where the test
 //! says a caller stopped below it.
 
-use std::collections::{BTreeMap, HashMap, VecDeque};
+use std::collections::{BTreeMap, VecDeque};
 use std::future::Future;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::task::{Context, Poll, Wake, Waker};
 
-use purrdf_core::{RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
+use purrdf_core::{FastMap, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf_retrieval::{
     AdmissionEnvironment, AdmissionError, CandidateDomains, CompiledRetrieval, DecayRule,
     DepthInputs, ExclusionVerdict, ExecutionError, ExecutionResult, Fixed, FusionError,
@@ -578,7 +578,7 @@ fn start_at_compile_hand_built_plan() {
     let request = RetrievalRequest::complete(vec![lexical_term()]);
     let stratum = iri(&ex("stratum/hand"));
 
-    let mut stratum_depths = HashMap::new();
+    let mut stratum_depths = FastMap::default();
     stratum_depths.insert(stratum.clone(), 10);
 
     // Built by hand, never through the planner. It is still a plan, so admission

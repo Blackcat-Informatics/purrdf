@@ -26,12 +26,12 @@
 //!   plain error strings, the same diagnostics the retired lint produced (but
 //!   physical-origin based, not directory-name derived).
 
-use std::collections::HashMap;
 use std::path::Path;
 
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 
+use purrdf_core::FastMap;
 use purrdf_slice::analysis::emit_analysis_graph;
 use purrdf_slice::artifact::{ArtifactRecord, ArtifactRole};
 use purrdf_slice::cache::ToolchainContext;
@@ -512,7 +512,7 @@ pub struct PyOwnershipAnalyzer {
     /// Per-slice numeric tier, resolved once from the catalog manifests, so the
     /// analysis-graph emitter's `tier_of` closure is a pure lookup (the emitter
     /// module stays PyO3-free; tier resolution happens here).
-    tier_of: HashMap<SliceIri, u8>,
+    tier_of: FastMap<SliceIri, u8>,
     /// The slice vocabulary inherited from the catalog at construction.
     vocab: SliceVocab,
     /// Every authored artifact raw digest in the catalog (drives the analysis
@@ -534,7 +534,7 @@ impl PyOwnershipAnalyzer {
             let report = OwnershipAnalyzer::new(&catalog.inner)
                 .analyze()
                 .map_err(|e| PyValueError::new_err(format!("ownership analysis failed: {e}")))?;
-            let mut tier_of: HashMap<SliceIri, u8> = HashMap::new();
+            let mut tier_of: FastMap<SliceIri, u8> = FastMap::default();
             let mut raw_digests: Vec<String> = Vec::new();
             for record in catalog.inner.records() {
                 tier_of.insert(

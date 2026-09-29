@@ -88,13 +88,13 @@ pub mod query;
 pub(crate) mod summary;
 pub mod translation;
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
-use crate::RdfStoreCapabilities;
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::{GlobalDictionary, GlobalTermId, QuadIds, QuadRef, RdfDataset, TermId, TermValue};
+use crate::{FastHasher, FastMap, RdfStoreCapabilities};
 use admission::PageAdmission;
 use graph_index::GraphPageIndex;
 use summary::{PageStream, PageSummary};
@@ -407,9 +407,9 @@ impl PagedDataset {
             GlobalTermId,
             Option<GlobalTermId>,
         );
-        let mut seen_primary: HashMap<GlobalQuad, PageId> = HashMap::new();
-        let mut seen_reifier: HashMap<GlobalQuad, PageId> = HashMap::new();
-        let mut seen_annotation: HashMap<GlobalQuad, PageId> = HashMap::new();
+        let mut seen_primary: FastMap<GlobalQuad, PageId> = FastMap::default();
+        let mut seen_reifier: FastMap<GlobalQuad, PageId> = FastMap::default();
+        let mut seen_annotation: FastMap<GlobalQuad, PageId> = FastMap::default();
         for i in 0..page_count {
             let id = PageId(u32::try_from(i).expect("page count fits u32"));
             let materialization = provider.materialize(id)?;
@@ -755,8 +755,8 @@ impl PagedDataset {
         live_values.sort_by(|(_, a), (_, b)| a.cmp(b));
         // Re-intern in canonical order into a fresh dictionary; record old→new.
         let mut dictionary = GlobalDictionary::new();
-        let mut remap: HashMap<GlobalTermId, GlobalTermId> =
-            HashMap::with_capacity(live_values.len());
+        let mut remap: FastMap<GlobalTermId, GlobalTermId> =
+            FastMap::with_capacity_and_hasher(live_values.len(), FastHasher::default());
         for (old, value) in &live_values {
             // Every value here was read out of `self.dictionary`, where it passed
             // `GlobalDictionary::intern_iri` on the way in, so compaction re-interns
@@ -1301,7 +1301,7 @@ impl DatasetView for PagedDataset {
 
     fn stats_fingerprint(&self) -> u64 {
         // Mirror RdfDataset's coarse fingerprint: hash (total quads, distinct terms).
-        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let mut h = purrdf_hash::fixed::FixedHasher::default();
         self.total_quads.hash(&mut h);
         self.dictionary.len().hash(&mut h);
         h.finish()

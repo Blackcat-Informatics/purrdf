@@ -17,7 +17,6 @@
 //! for canonical-CBOR byte-exactness; the tests here are the purrdf-local
 //! functional/drift guard on top of that (see `docs/GTS-CONFORMANCE.md` §2).
 
-use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use ciborium::value::Value;
@@ -25,6 +24,7 @@ use ed25519_dalek::SigningKey;
 use purrdf_gts::compact::DictPlan;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{iter_items, map_get};
+use purrdf_rdf::FastMap;
 use purrdf_rdf::gts_certify::{compact_and_certify, verify_compaction};
 
 const TIMESTAMP: &str = "2026-01-01T00:00:00Z";
@@ -102,7 +102,7 @@ fn frozen_vector_independently_verifies_the_facets_this_repo_can_check() {
     // `signatures_verify` can never independently verify here and is
     // deliberately not asserted. Every other §10.1 preservation facet is
     // checkable with only the packaging key this binary controls.
-    let mut keyring = HashMap::new();
+    let mut keyring = FastMap::default();
     keyring.insert("pack".to_string(), packaging_key().verifying_key());
 
     let report = verify_compaction(&source, &frozen, &keyring).expect("verify_compaction succeeds");

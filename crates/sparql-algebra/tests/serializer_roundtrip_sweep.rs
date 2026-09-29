@@ -620,13 +620,15 @@ fn corpus_round_trips_through_the_serializer() {
     // fixture convention.
     let parser = SparqlParser::new().with_base_iri("https://example.org/corpus/");
     let mut unparseable = 0usize;
-    let mut xfail_matched: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut xfail_matched: std::collections::HashSet<&str, purrdf_hash::fixed::FixedState> =
+        std::collections::HashSet::with_hasher(purrdf_hash::fixed::FixedState::new());
     let mut failures = Vec::new();
     // The `.ru` lane's counters, declared here rather than at that loop
     // because a doc example that parses as an UPDATE is routed into them
     // below, before the `.ru` files themselves are swept.
     let mut unparseable_ru = 0usize;
-    let mut ru_xfail_matched: std::collections::HashSet<&str> = std::collections::HashSet::new();
+    let mut ru_xfail_matched: std::collections::HashSet<&str, purrdf_hash::fixed::FixedState> =
+        std::collections::HashSet::with_hasher(purrdf_hash::fixed::FixedState::new());
 
     let mut items: Vec<(String, String)> = Vec::with_capacity(seen);
     for path in &rq_files {

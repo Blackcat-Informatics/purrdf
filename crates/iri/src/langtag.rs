@@ -3289,7 +3289,7 @@ mod tests {
 
         // `Borrow<str>` is what makes a tag usable as a map key probed by a
         // plain string, which is the whole reason the owning form exists.
-        let mut hashed = HashMap::new();
+        let mut hashed = HashMap::with_hasher(purrdf_hash::fixed::FixedState::new());
         hashed.insert(owned.clone(), 1_u8);
         assert_eq!(hashed.get("zh-Hans-CN-x-priv"), Some(&1));
         let mut ordered = BTreeMap::new();

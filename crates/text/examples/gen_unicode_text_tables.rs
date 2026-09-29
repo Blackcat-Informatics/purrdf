@@ -21,7 +21,7 @@
 //! Output goes to stdout; `scripts/check-generated.sh` pipes it through
 //! `rustfmt` and compares it with the committed file.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -80,8 +80,8 @@ struct Mapping {
 /// What the generator needs from `UnicodeData.txt`.
 #[derive(Default)]
 struct UnicodeData {
-    general_category: HashMap<u32, String>,
-    combining_class: HashMap<u32, u8>,
+    general_category: purrdf_core::FastMap<u32, String>,
+    combining_class: purrdf_core::FastMap<u32, u8>,
     mappings: BTreeMap<u32, Mapping>,
 }
 
@@ -219,7 +219,7 @@ struct TwoStage<T> {
 
 fn two_stage<T: Copy + Eq + std::hash::Hash>(values: &[T]) -> TwoStage<T> {
     let block_len = 1usize << BLOCK_SHIFT;
-    let mut seen: HashMap<&[T], u16> = HashMap::new();
+    let mut seen: purrdf_core::FastMap<&[T], u16> = purrdf_core::FastMap::default();
     let mut index = Vec::new();
     let mut blocks = Vec::new();
     for block in values.chunks(block_len) {

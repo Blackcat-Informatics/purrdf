@@ -17,9 +17,8 @@
 //! (`xsd:string` for a plain literal, `rdf:langString` for a language-tagged one),
 //! matching the oxigraph Python `Literal` API the codebase relies on.
 
-use std::collections::hash_map::DefaultHasher;
 use std::fmt::Write as _;
-use std::hash::{Hash, Hasher};
+use std::hash::BuildHasher;
 
 use pyo3::exceptions::{PyTypeError, PyValueError};
 use pyo3::prelude::*;
@@ -31,9 +30,7 @@ use crate::{
 // ── Term model ──────────────────────────────────────────────────────────────────
 
 fn hash_str(value: &str) -> u64 {
-    let mut hasher = DefaultHasher::new();
-    value.hash(&mut hasher);
-    hasher.finish()
+    purrdf_core::FastHasher::default().hash_one(value)
 }
 
 /// The native RDF 1.2 expanded datatype, shared by lookup, hashing and accessors.

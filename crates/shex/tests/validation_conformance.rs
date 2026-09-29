@@ -21,7 +21,8 @@
 //! * **XFAIL**: genuine engine gaps, listed exactly (name + reason). A
 //!   passing xfail fails the harness (a stale ledger is a test error).
 
-use std::collections::{BTreeMap, HashMap};
+use purrdf_core::FastMap;
+use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -243,8 +244,8 @@ fn read_entry(m: &Manifest, id: TermId) -> Entry {
 
 #[derive(Default)]
 struct Caches {
-    schemas: HashMap<String, Result<Arc<Schema>, String>>,
-    data: HashMap<String, Result<Arc<RdfDataset>, String>>,
+    schemas: FastMap<String, Result<Arc<Schema>, String>>,
+    data: FastMap<String, Result<Arc<RdfDataset>, String>>,
 }
 
 /// Read one schema document, choosing ShExC/ShExJ by the on-disk extension

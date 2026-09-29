@@ -231,7 +231,7 @@ impl Interner {
             terms: Vec::new(),
             index: HashTable::new(),
             content_scheme: None,
-            content_ids: HashMap::default(),
+            content_ids: crate::FastMap::default(),
             relative_iri: None,
             invalid_literal: None,
         }
@@ -2290,7 +2290,7 @@ mod tests {
         assert_eq!(subjects.len(), 2);
         // Collect the unique subject labels; standardize-apart gives them distinct
         // qualified labels via BlankScope::qualify_label.
-        let subject_labels: std::collections::HashSet<String> = subjects
+        let subject_labels: crate::FastSet<String> = subjects
             .iter()
             .filter_map(|t| {
                 if let RdfTerm::BlankNode(label) = t {
@@ -2333,14 +2333,12 @@ mod tests {
         /// itself plus its (shared) datatype term to the upper bound.
         #[test]
         fn property_idempotence_and_bounded_count(ops in prop::collection::vec(op_strategy(), 0..64)) {
-            use std::collections::HashSet;
-
             let mut b = RdfDatasetBuilder::new();
             // Map a value-key → the id it first produced, to assert idempotence.
-            let mut seen: HashMap<String, TermId> = HashMap::new();
+            let mut seen: crate::FastMap<String, TermId> = crate::FastMap::default();
             // The set of distinct *terms* (value keys, incl. datatype IRIs) that
             // SHOULD exist after the run — the exact upper bound for term_count.
-            let mut distinct_terms: HashSet<String> = HashSet::new();
+            let mut distinct_terms: crate::FastSet<String> = crate::FastSet::default();
 
             for op in ops {
                 let (call_key, id) = match op {

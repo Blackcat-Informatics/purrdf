@@ -1113,7 +1113,7 @@ fn subselect<'a>(s: &mut String, p: &'a GraphPattern, next: &mut Items<'a>) {
     // every branch below that has a real variable LIST to filter (a
     // reconstructed `no_project_vars` list, or a genuine `Project`'s own
     // `variables`) — `*` needs no filtering, it names nothing to duplicate.
-    let as_targets: std::collections::HashSet<&Variable> =
+    let as_targets: std::collections::HashSet<&Variable, purrdf_hash::fixed::FixedState> =
         select_exprs.iter().map(|(v, _)| *v).collect();
     let emit_filtered_vars = |s: &mut String, vars: &[Variable]| -> bool {
         let mut emitted = false;

@@ -3,7 +3,9 @@
 
 //! Files-profile pack/unpack/diff logic for GTS archives (§13.2, §14.2).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::BTreeMap;
+
+use crate::{FastMap, FastSet};
 use std::fs;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
@@ -229,7 +231,7 @@ struct TermKey {
 
 #[derive(Default)]
 struct TermBuilder {
-    ids: HashMap<TermKey, usize>,
+    ids: FastMap<TermKey, usize>,
     terms: Vec<Term>,
     quads: Vec<Quad>,
 }
@@ -389,7 +391,7 @@ fn walk_dir_sorted(dir: &Path) -> Result<Vec<PathBuf>, String> {
 
 fn resolve_sources(sources: &[&Path]) -> Result<Vec<(PathBuf, String)>, String> {
     let mut entries: Vec<(PathBuf, String)> = Vec::new();
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: FastSet<String> = FastSet::default();
     for src in sources {
         let meta = fs::symlink_metadata(src).map_err(|e| format!("{src:?}: {e}"))?;
         if meta.file_type().is_symlink() {
@@ -880,7 +882,7 @@ pub fn pack_to_writer<W: Write>(sources: &[&Path], mut output: W) -> Result<(), 
     output
         .write_all(&w.into_bytes())
         .map_err(|e| format!("write files-profile metadata: {e}"))?;
-    let mut seen: HashSet<String> = HashSet::new();
+    let mut seen: FastSet<String> = FastSet::default();
     for entry in &entries {
         if !seen.insert(entry.digest.clone()) {
             continue;
@@ -994,7 +996,7 @@ fn build_entries_v2_prefix(entries: &[FileEntry]) -> Result<(Writer, InlineBlobM
 
     let mut entries: Vec<&FileEntry> = entries.iter().collect();
     entries.sort_by(|a, b| a.path.cmp(&b.path));
-    let mut seen_paths = HashSet::new();
+    let mut seen_paths = FastSet::default();
     let mut builder = TermBuilder::default();
     let rdf_type = builder.iri(RDF_TYPE);
     let file_entry = builder.iri(FILE_ENTRY);
@@ -1206,9 +1208,9 @@ fn format_datetime(time: &std::time::SystemTime) -> Result<String, String> {
 /// Returns an error when the graph is not a files-profile archive, an entry
 /// carries an invalid field value, or two entries share the same path.
 pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String> {
-    let mut type_ids: HashSet<usize> = HashSet::new();
-    let mut file_entry_ids: HashSet<usize> = HashSet::new();
-    let mut field_name_by_id: HashMap<usize, String> = HashMap::new();
+    let mut type_ids: FastSet<usize> = FastSet::default();
+    let mut file_entry_ids: FastSet<usize> = FastSet::default();
+    let mut field_name_by_id: FastMap<usize, String> = FastMap::default();
     for (idx, term) in graph.terms.iter().enumerate() {
         if term.kind != TermKind::Iri {
             continue;
@@ -1234,7 +1236,7 @@ pub fn read_entries(graph: &Graph) -> Result<BTreeMap<String, FileEntry>, String
     let mut direct: BTreeMap<usize, BTreeMap<String, String>> = BTreeMap::new();
     let mut xattr_links: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
     let mut pax_links: BTreeMap<usize, Vec<usize>> = BTreeMap::new();
-    let mut file_entry_subjects: HashSet<usize> = HashSet::new();
+    let mut file_entry_subjects: FastSet<usize> = FastSet::default();
     for &(s, p, o, _g) in &graph.quads {
         if type_ids.contains(&p) && file_entry_ids.contains(&o) {
             file_entry_subjects.insert(s);
@@ -1455,8 +1457,8 @@ fn dest_path(dest: &Path, archive_path: &str) -> Result<PathBuf, String> {
     Ok(target)
 }
 
-fn suppressed_blob_digests(graph: &Graph) -> HashSet<String> {
-    let mut out: HashSet<String> = HashSet::new();
+fn suppressed_blob_digests(graph: &Graph) -> FastSet<String> {
+    let mut out: FastSet<String> = FastSet::default();
     for sup in &graph.suppressions {
         for target in &sup.targets {
             let Value::Map(entries) = target else {
@@ -1509,7 +1511,7 @@ pub fn unpack_with_options(
 ) -> Result<(), String> {
     let entries = read_entries(graph)?;
     let suppressed = if options.include_suppressed {
-        HashSet::new()
+        FastSet::default()
     } else {
         suppressed_blob_digests(graph)
     };
@@ -1883,8 +1885,8 @@ pub fn diff(graph: &Graph, directory: &Path) -> Result<Vec<String>, String> {
         disk_digests.insert(relpath, digest_string(&data));
     }
 
-    let archive_paths: HashSet<&String> = archive_digests.keys().collect();
-    let disk_paths: HashSet<&String> = disk_digests.keys().collect();
+    let archive_paths: FastSet<&String> = archive_digests.keys().collect();
+    let disk_paths: FastSet<&String> = disk_digests.keys().collect();
 
     let mut lines: Vec<String> = Vec::new();
     for path in archive_paths.difference(&disk_paths) {

@@ -30,8 +30,9 @@
 //! registry. Those two cases must be admitted on different terms, so the plan
 //! records which it is in [`PlanOrigin`] rather than leaving admission to guess.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 
+use purrdf_core::{FastHasher, FastMap};
 use purrdf_sparql_eval::RegistryId;
 use purrdf_text::Fixed;
 use serde::{Deserialize, Serialize, Serializer};
@@ -705,7 +706,10 @@ pub struct Plan {
     /// accessor reports what the plan in hand actually supports.
     pub unserved_terms: Vec<UnservedTerm>,
     /// Per-stratum maximum depth, keyed by stratum label.
-    pub stratum_depths: HashMap<Iri, u32>,
+    ///
+    /// Serialized in ascending stratum order, never in the map's hash order.
+    #[serde(serialize_with = "serialize_depths_sorted")]
+    pub stratum_depths: FastMap<Iri, u32>,
     /// What each of those depths was derived from, keyed by the same labels.
     ///
     /// One entry per stratum in [`Self::stratum_depths`], carrying every input
@@ -1545,14 +1549,26 @@ fn read_decisions(reader: &mut Reader<'_>) -> Result<Vec<ProducerDecision>, Plan
     Ok(decisions)
 }
 
+/// Serialize `depths` as a map in ascending stratum order, so a plan's
+/// serialized form is a function of its entries rather than of hash order.
+fn serialize_depths_sorted<S: Serializer>(
+    depths: &FastMap<Iri, u32>,
+    serializer: S,
+) -> Result<S::Ok, S::Error> {
+    let mut entries: Vec<(&Iri, &u32)> = depths.iter().collect();
+    entries.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
+    serializer.collect_map(entries)
+}
+
 /// Write the per-stratum depths, sorted by stratum IRI.
 ///
-/// This sort is where determinism is won. The field is a `HashMap`, whose
-/// iteration order is not a function of its contents, so encoding it in
+/// This sort is where determinism is won. The field is a hash map, whose
+/// iteration order is not a function of its contents alone (it follows the
+/// insertion history and the build's table hasher), so encoding it in
 /// iteration order would give one plan many identities. Sorting by the
 /// stratum's canonical text makes the bytes — and therefore the plan id — a
 /// pure function of the entries, on every target and in every process.
-fn write_depths(writer: &mut Writer, depths: &HashMap<Iri, u32>) {
+fn write_depths(writer: &mut Writer, depths: &FastMap<Iri, u32>) {
     let mut entries: Vec<(&Iri, u32)> = depths.iter().map(|(key, value)| (key, *value)).collect();
     entries.sort_by(|left, right| left.0.as_str().cmp(right.0.as_str()));
     writer.u64(entries.len() as u64);
@@ -1648,9 +1664,9 @@ fn require_ascending_terms(
 /// of one plan as the section has permutations, each digesting to that plan's
 /// single id. A repeated stratum is refused for a sharper reason still: the map
 /// would silently keep whichever depth arrived last.
-fn read_depths(reader: &mut Reader<'_>) -> Result<HashMap<Iri, u32>, PlanError> {
+fn read_depths(reader: &mut Reader<'_>) -> Result<FastMap<Iri, u32>, PlanError> {
     let count = reader.count()?;
-    let mut depths = HashMap::with_capacity(count.min(1024));
+    let mut depths = FastMap::with_capacity_and_hasher(count.min(1024), FastHasher::default());
     let mut previous: Option<Iri> = None;
     for _ in 0..count {
         let key = read_iri(reader, "stratum depth key")?;

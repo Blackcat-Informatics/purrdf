@@ -28,10 +28,11 @@
 //! text-searched) so that an IRI mentioned only inside a string literal never
 //! produces a dependency edge.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use purrdf::{RdfDataset, TermId, TermRef};
+use purrdf_core::FastMap;
 use purrdf_sparql_algebra::{ParserOptions, SparqlParser};
 
 use crate::artifact::{ArtifactRecord, ArtifactRole};
@@ -257,7 +258,7 @@ pub enum OwnershipDiagnostic {
 #[derive(Debug, Clone)]
 pub struct OwnershipReport {
     /// The validated ownership table, keyed by term IRI.
-    pub ownership: HashMap<NamedNode, TermOwnership>,
+    pub ownership: FastMap<NamedNode, TermOwnership>,
     /// All computed dependency edges, with evidence and reconciliation status.
     pub edges: Vec<DependencyEdge>,
     /// All diagnostics surfaced during analysis.
@@ -324,7 +325,7 @@ impl<'a> OwnershipAnalyzer<'a> {
     /// the evidence-bearing dependency graph from *validated* ownership only.
     pub fn analyze(&self) -> Result<OwnershipReport, SliceError> {
         let mut diagnostics = Vec::new();
-        let mut rdf_facts: HashMap<(usize, usize), RdfArtifactFacts> = HashMap::new();
+        let mut rdf_facts: FastMap<(usize, usize), RdfArtifactFacts> = FastMap::default();
 
         // ── Phase 1: declared ownership (rdfs:isDefinedBy), per slice ────────
         //
@@ -378,7 +379,7 @@ impl<'a> OwnershipAnalyzer<'a> {
         // Iterate over the UNION of `declared_terms` (typed as OWL/RDFS vocab
         // constructs) and `claims` (terms with rdfs:isDefinedBy).  Terms that
         // are declared but have no rdfs:isDefinedBy yield OwnershipStatus::Unowned.
-        let mut ownership: HashMap<NamedNode, TermOwnership> = HashMap::new();
+        let mut ownership: FastMap<NamedNode, TermOwnership> = FastMap::default();
         let all_terms: BTreeSet<NamedNode> = declared_terms
             .iter()
             .chain(claims.keys())
@@ -450,7 +451,7 @@ impl<'a> OwnershipAnalyzer<'a> {
         //
         // RFC §10 step 5: build dependencies only from *validated* ownership
         // data. A conflicted / mismatched / unowned term contributes no edge.
-        let mut validated_owner: HashMap<NamedNode, SliceIri> = HashMap::new();
+        let mut validated_owner: FastMap<NamedNode, SliceIri> = FastMap::default();
         for (term, rec) in &ownership {
             if matches!(rec.status, OwnershipStatus::Validated) {
                 validated_owner.insert(term.clone(), rec.declared_owner.clone());
@@ -614,7 +615,7 @@ impl<'a> OwnershipAnalyzer<'a> {
 
 fn collect_reference_evidence<'a>(
     referenced: impl Iterator<Item = &'a NamedNode>,
-    validated_owner: &HashMap<NamedNode, SliceIri>,
+    validated_owner: &FastMap<NamedNode, SliceIri>,
     from: &SliceIri,
     kind: EdgeKind,
     from_evidence: &ArtifactEvidence,

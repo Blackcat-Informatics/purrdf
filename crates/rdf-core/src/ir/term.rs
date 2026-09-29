@@ -676,7 +676,7 @@ mod tests {
             ("abc", BlankScope::DEFAULT),
             ("purrdfesc1_a", BlankScope::DEFAULT),
         ];
-        let mut seen = std::collections::HashMap::new();
+        let mut seen = crate::FastMap::default();
         for &(label, scope) in pairs {
             let qualified = scope.qualify_label(label).into_owned();
             if let Some(previous) = seen.insert(qualified.clone(), (label, scope)) {

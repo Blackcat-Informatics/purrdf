@@ -27,7 +27,7 @@
 //! how the evaluator uses the seam — returns precisely the expected quads
 //! in EVERY position the id occurs.
 
-use std::collections::HashSet;
+use purrdf_core::FastSet;
 
 use purrdf_core::ir::pack::dict::PackDict;
 use purrdf_core::ir::pack::triples::{Triples, TriplesRef};
@@ -50,7 +50,7 @@ fn brute_force_pattern(
     s: Option<&TermValue>,
     p: Option<&TermValue>,
     o: Option<&TermValue>,
-) -> HashSet<ValueQuad> {
+) -> FastSet<ValueQuad> {
     dataset
         .quads()
         .map(|q| {
@@ -77,7 +77,7 @@ fn pack_pattern(
     s: Option<&TermValue>,
     p: Option<&TermValue>,
     o: Option<&TermValue>,
-) -> HashSet<ValueQuad> {
+) -> FastSet<ValueQuad> {
     let s_id = s.map(|v| dict.id_by_value(v).expect("subject constant resolves"));
     let p_id = p.map(|v| dict.id_by_value(v).expect("predicate constant resolves"));
     let o_id = o.map(|v| dict.id_by_value(v).expect("object constant resolves"));

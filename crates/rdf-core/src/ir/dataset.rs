@@ -1997,7 +1997,7 @@ impl RdfDataset {
     /// never incorrect. For a content-exact identity use the RDFC-1.0 canonical digest.
     #[inline]
     pub fn stats_fingerprint(&self) -> u64 {
-        let mut h = std::collections::hash_map::DefaultHasher::new();
+        let mut h = purrdf_hash::fixed::FixedHasher::default();
         self.quads.len().hash(&mut h);
         self.terms.len().hash(&mut h);
         h.finish()
@@ -3061,7 +3061,7 @@ mod tests {
         );
 
         // The two distinct blank heads carry distinct qualified labels.
-        let heads: std::collections::HashSet<String> = u
+        let heads: crate::FastSet<String> = u
             .owned_quads()
             .filter_map(|q| match q.subject {
                 RdfTerm::BlankNode(label) => Some(label),
@@ -3250,8 +3250,6 @@ mod tests {
                 0..48,
             )
         ) {
-            use std::collections::HashSet;
-
             let mut b = RdfDatasetBuilder::new();
             // Intern a fixed pool of IRIs once so positional constraints always hold.
             let pool: Vec<TermId> = (0..5)
@@ -3261,7 +3259,8 @@ mod tests {
                 .map(|n| b.intern_iri(&format!("http://example.org/g{n}")))
                 .collect();
 
-            let mut distinct: HashSet<(TermId, TermId, TermId, Option<TermId>)> = HashSet::new();
+            let mut distinct: crate::FastSet<(TermId, TermId, TermId, Option<TermId>)> =
+                crate::FastSet::default();
             for (s, p, o, g) in rows {
                 let s = pool[s as usize];
                 let p = pool[p as usize];

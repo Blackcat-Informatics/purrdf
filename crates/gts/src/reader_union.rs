@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use std::collections::{HashMap, HashSet};
+use crate::{FastMap, FastSet};
 
 use ciborium::value::Value;
 
@@ -54,13 +54,13 @@ struct Unioner {
     out: Graph,
     blob_index: DigestIndex,
     blob_meta_index: DigestIndex,
-    intern: HashMap<InternKey, usize>,
+    intern: FastMap<InternKey, usize>,
     /// Union id of every segment term already mapped, by `(segment, term id)`. A term
     /// is mapped once: a later reference — a component shared by two triple terms, or
     /// the component a triple's key and its output both name — takes its id from here
     /// instead of walking the term's components again, so mapping a chain costs time
     /// linear in its length.
-    mapped: HashMap<(usize, usize), usize>,
+    mapped: FastMap<(usize, usize), usize>,
 }
 
 /// Where a term being mapped by [`Unioner::map_term`] stands: each stage waits for the
@@ -348,7 +348,7 @@ impl Unioner {
 /// Union per-segment folds into one value-interned [`Graph`].
 pub(crate) fn union_segments(segments: &[Graph]) -> Graph {
     let mut u = Unioner::default();
-    let mut seen: HashSet<Quad> = HashSet::new();
+    let mut seen: FastSet<Quad> = FastSet::default();
     for (seg_idx, seg) in segments.iter().enumerate() {
         for &(s, p, o, gq) in &seg.quads {
             let q: Quad = (

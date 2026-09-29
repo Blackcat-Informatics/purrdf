@@ -10,6 +10,7 @@
 //! construct a request that omits it — an unsigned pack cannot be
 //! represented, let alone emitted.
 
+use purrdf_hash::fixed::FixedState;
 use std::collections::HashMap;
 
 use ed25519_dalek::SigningKey;
@@ -236,7 +237,7 @@ fn the_packaging_head_signature_is_distinct_from_carried_authorship_signatures()
     );
 
     let public = fixed_key(7).verifying_key();
-    let mut keyring = HashMap::new();
+    let mut keyring = HashMap::with_hasher(FixedState::new());
     keyring.insert(packaging_kid.to_string(), public);
     let result = verify_file_with_keyring(&packed, &keyring);
     assert_eq!(
@@ -276,7 +277,7 @@ fn every_compacted_pack_carries_the_mandatory_packaging_signature_even_over_an_u
     );
 
     let public = fixed_key(13).verifying_key();
-    let keyring = HashMap::from([(packaging_kid.to_string(), public)]);
+    let keyring = HashMap::<_, _, FixedState>::from_iter([(packaging_kid.to_string(), public)]);
     let result = verify_file_with_keyring(&packed, &keyring);
     assert!(
         result.ok && result.valid == 1 && result.signed == 1,
@@ -294,8 +295,11 @@ fn keyring_rotation_flips_the_packaging_signature_from_unverified_to_valid() {
 
     // A keyring that has rotated PAST the packaging key (missing "pack-v2")
     // leaves the packaging signature unverified.
-    let stale_keyring: HashMap<String, ed25519_dalek::VerifyingKey> =
-        HashMap::from([("pack-v1".to_string(), fixed_key(1).verifying_key())]);
+    let stale_keyring: HashMap<String, ed25519_dalek::VerifyingKey, FixedState> =
+        HashMap::<_, _, FixedState>::from_iter([(
+            "pack-v1".to_string(),
+            fixed_key(1).verifying_key(),
+        )]);
     let stale = verify_file_with_keyring(&packed, &stale_keyring);
     assert!(
         !stale.ok,
@@ -306,10 +310,11 @@ fn keyring_rotation_flips_the_packaging_signature_from_unverified_to_valid() {
 
     // A keyring carrying both the retired and the current packaging key
     // (rotation-capable) resolves the signature.
-    let rotated_keyring: HashMap<String, ed25519_dalek::VerifyingKey> = HashMap::from([
-        ("pack-v1".to_string(), fixed_key(1).verifying_key()),
-        (packaging_kid.to_string(), fixed_key(9).verifying_key()),
-    ]);
+    let rotated_keyring: HashMap<String, ed25519_dalek::VerifyingKey, FixedState> =
+        HashMap::<_, _, FixedState>::from_iter([
+            ("pack-v1".to_string(), fixed_key(1).verifying_key()),
+            (packaging_kid.to_string(), fixed_key(9).verifying_key()),
+        ]);
     let rotated = verify_file_with_keyring(&packed, &rotated_keyring);
     assert!(
         rotated.ok,

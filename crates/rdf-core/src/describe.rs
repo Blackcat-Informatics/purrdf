@@ -52,13 +52,13 @@
 //! handed straight to the `native_codecs` serializers (Turtle / N-Triples / N-Quads /
 //! TriG / RDF-XML) and the JSON-LD serializer — the one serialization seam.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::convert::Infallible;
 use std::sync::Arc;
 
 use crate::{
-    DatasetView, QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTerm,
-    RdfTriple, TermId, TermRef, TermValue, fold_term,
+    DatasetView, FastSet, QuadIds, RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral,
+    RdfTerm, RdfTriple, TermId, TermRef, TermValue, fold_term,
 };
 
 /// Resolve a term id to the owned [`RdfTerm`] model through the [`DatasetView`] read
@@ -248,7 +248,7 @@ impl<'a, D: DatasetView> Describer<'a, D> {
             }
         }
 
-        let mut quads: HashSet<QuadIds<D::Id>> = HashSet::new();
+        let mut quads: FastSet<QuadIds<D::Id>> = FastSet::default();
         // The selected reifier DECLARATIONS, `(reifier, triple-term, graph)`.
         let mut reifiers: BTreeSet<ReifierDeclaration<D::Id>> = BTreeSet::new();
         // The harvested annotation rows, `(reifier, p, o, graph)`.
@@ -256,7 +256,7 @@ impl<'a, D: DatasetView> Describer<'a, D> {
         // Keyed by `(reifier, graph)`, not by the reifier alone: annotations are
         // harvested per DECLARATION, so a reifier declared in two graphs harvests each
         // graph's rows exactly once.
-        let mut visited_reifiers: HashSet<(D::Id, Option<D::Id>)> = HashSet::new();
+        let mut visited_reifiers: FastSet<(D::Id, Option<D::Id>)> = FastSet::default();
 
         // Expand a blank endpoint into the frontier; named nodes never expand (that
         // would drag in the entire neighbourhood of the graph).
@@ -314,8 +314,8 @@ impl<'a, D: DatasetView> Describer<'a, D> {
 
         // Re-intern the selected quads + statement layer into a fresh dataset. A remap
         // memoizes old-id → new-id so the owned-term round-trip runs once per term.
-        // `quads` is a `HashSet` (for dedup during the walk), whose iteration order is
-        // randomized — re-interning in that order would make the extracted subgraph's
+        // `quads` is a `FastSet` (for dedup during the walk), whose iteration order is
+        // unspecified — re-interning in that order would make the extracted subgraph's
         // bytes unstable across runs. Sort by the source `(g, s, p, o)` ids first so the
         // output is deterministic (byte-reproducibility).
         let mut ordered: Vec<QuadIds<D::Id>> = quads.into_iter().collect();

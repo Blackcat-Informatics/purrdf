@@ -1954,8 +1954,8 @@ pub fn jsonld_to_statement_metadata_nquads(
     let quads = crate::flat_rdf_quads_from_dataset(&dataset);
 
     // Identify reifiers and the quoted triple each one refers to.
-    let mut reifier_quotes: std::collections::HashMap<RdfTerm, (RdfTerm, String, RdfTerm)> =
-        std::collections::HashMap::new();
+    let mut reifier_quotes: FixedHashMap<RdfTerm, (RdfTerm, String, RdfTerm)> =
+        FixedHashMap::default();
     for quad in &quads {
         if quad.predicate == RDF_REIFIES
             && let RdfTerm::Triple(triple) = &quad.object

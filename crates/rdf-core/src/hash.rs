@@ -135,12 +135,14 @@ pub(crate) fn hash_triple_for_interner(s: u64, p: u64, o: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_blank_for_interner, hash_literal_for_interner, hash_triple_for_interner};
+    use super::{
+        FastSet, hash_blank_for_interner, hash_literal_for_interner, hash_triple_for_interner,
+    };
     use crate::RdfTextDirection::{Ltr, Rtl};
 
     #[test]
     fn packed_fields_preserve_boundaries_presence_and_high_id_bits() {
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = FastSet::default();
         for lexical in [
             "",
             "a",

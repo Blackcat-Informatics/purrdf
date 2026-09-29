@@ -2571,16 +2571,14 @@ mod tests {
 
     #[test]
     fn equal_values_hash_and_compare_identically() {
-        use std::collections::HashSet;
-
-        let mut set: HashSet<Rat> = HashSet::new();
+        let mut set: purrdf_core::FastSet<Rat> = purrdf_core::FastSet::default();
         set.insert(rat(1, 2));
         assert!(set.contains(&rat(3, 6)));
         assert!(set.contains(&rat(-1, -2)));
         assert!(!set.insert(rat(50, 100)), "an equal value must not be new");
         assert_eq!(set.len(), 1);
 
-        let mut ints: HashSet<Int> = HashSet::new();
+        let mut ints: purrdf_core::FastSet<Int> = purrdf_core::FastSet::default();
         ints.insert(Int::zero());
         assert!(ints.contains(&Int::zero().neg()));
         assert!(ints.contains(&int(5).sub(&int(5))));

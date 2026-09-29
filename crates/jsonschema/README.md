@@ -8,7 +8,7 @@ and **07**: every schema resource is evaluated in the dialect its `$schema`
 names, with every vocabulary, dynamic and recursive references, unevaluated
 keywords, and the standard output formats.
 
-It depends on `serde_json`, `regex` and `purrdf-iri` only, forbids `unsafe`,
+It depends on `serde_json`, `regex`, `purrdf-iri` and `purrdf-hash` only, forbids `unsafe`,
 and builds for `wasm32-unknown-unknown` like every other release crate in the
 workspace, so a schema PurRDF emits from SHACL can be checked in the browser
 by the same code that checks it natively. Nothing is fetched.

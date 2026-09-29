@@ -9,11 +9,9 @@
 //! compatibility, but both variants resolve to the one native canonicalizer
 //! (greenfield: a single canonicalization algorithm).
 
-use std::collections::HashMap;
-
 use pyo3::prelude::*;
 
-use purrdf_core::{CanonError, Canonicalized, TermRef, try_canonicalize};
+use purrdf_core::{CanonError, Canonicalized, FastHasher, FastMap, TermRef, try_canonicalize};
 
 use crate::{RdfDataset, RdfQuad, RdfTerm, RdfTriple, flat_dataset_from_quads};
 
@@ -62,8 +60,8 @@ pub(super) fn canonicalize_quads(
 }
 
 /// Map each original blank-node label to its canonical `c14nN` label.
-fn label_map(ds: &RdfDataset, c: &Canonicalized) -> HashMap<String, String> {
-    let mut map = HashMap::with_capacity(c.labels.len());
+fn label_map(ds: &RdfDataset, c: &Canonicalized) -> FastMap<String, String> {
+    let mut map = FastMap::with_capacity_and_hasher(c.labels.len(), FastHasher::default());
     for (&tid, label) in &c.labels {
         if let TermRef::Blank { label: orig, .. } = ds.resolve(tid) {
             map.insert(orig.to_owned(), label.to_string());
@@ -82,7 +80,7 @@ fn quad_sort_key(quad: &RdfQuad) -> String {
     }
 }
 
-fn relabel_quad(quad: &RdfQuad, map: &HashMap<String, String>) -> RdfQuad {
+fn relabel_quad(quad: &RdfQuad, map: &FastMap<String, String>) -> RdfQuad {
     let mut out = RdfQuad::new(
         relabel_term(&quad.subject, map),
         quad.predicate.clone(),
@@ -96,7 +94,7 @@ fn relabel_quad(quad: &RdfQuad, map: &HashMap<String, String>) -> RdfQuad {
 /// terms). Canonicalization assigns a label to *every* blank in the dataset, so an
 /// unmapped blank is a broken invariant — hard-fail rather than silently passing the
 /// original id through (no degraded fallback; `.goals`).
-fn relabel_term(term: &RdfTerm, map: &HashMap<String, String>) -> RdfTerm {
+fn relabel_term(term: &RdfTerm, map: &FastMap<String, String>) -> RdfTerm {
     match term {
         RdfTerm::Iri(_) | RdfTerm::Literal(_) => term.clone(),
         RdfTerm::BlankNode(label) => match map.get(label) {
