@@ -9,7 +9,7 @@
 //!
 //! Native backing: solution cells are `purrdf_core::TermValue`,
 //! CONSTRUCT triples are `RdfTriple` and CONSTRUCT quads are `RdfQuad`. The engine is
-//! `NativeSparqlEngine`; the oxigraph `QueryResults` type is gone from this surface.
+//! `NativeSparqlEngine`.
 //!
 //! # Two CONSTRUCT result types, chosen by what the result carries
 //!
@@ -714,7 +714,7 @@ pub(super) fn build_aggregates(namespace: Option<String>) -> Option<AggregateReg
     Some(registry)
 }
 
-/// SELECT results, materialized. Mirrors the oxigraph Python `QuerySolutions`.
+/// SELECT results, materialized (`QuerySolutions`).
 #[pyclass(name = "QuerySolutions")]
 #[derive(Debug)]
 pub struct PyQuerySolutions {
@@ -757,7 +757,7 @@ impl PyQuerySolutions {
     }
 }
 
-/// A single SELECT solution row. Mirrors the oxigraph Python `QuerySolution`.
+/// A single SELECT solution row (`QuerySolution`).
 #[pyclass(name = "QuerySolution")]
 #[derive(Debug)]
 pub struct PyQuerySolution {
@@ -769,7 +769,7 @@ pub struct PyQuerySolution {
 impl PyQuerySolution {
     /// Look a binding up by variable name (`str`), `Variable`, or position
     /// (`int`). An unbound variable yields `None`; an unknown name is a
-    /// `KeyError`, matching the oxigraph Python API.
+    /// `KeyError`.
     fn __getitem__(&self, py: Python<'_>, key: &Bound<'_, PyAny>) -> PyResult<Option<Py<PyAny>>> {
         let index = if let Ok(i) = key.extract::<usize>() {
             if i >= self.row.len() {
@@ -798,8 +798,7 @@ impl PyQuerySolution {
     }
 }
 
-/// Default-graph CONSTRUCT/DESCRIBE results, materialized. Mirrors the oxigraph
-/// Python `QueryTriples`.
+/// Default-graph CONSTRUCT/DESCRIBE results, materialized (`QueryTriples`).
 ///
 /// This is the result object for a CONSTRUCT/DESCRIBE whose statements ALL land in
 /// the default graph — the plain SPARQL 1.1 template, and every `DESCRIBE`. A
@@ -1065,7 +1064,7 @@ fn render_graph_name(term: &RdfTerm) -> String {
     }
 }
 
-/// An ASK result. Mirrors the oxigraph Python `QueryBoolean`.
+/// An ASK result (`QueryBoolean`).
 #[pyclass(name = "QueryBoolean")]
 #[derive(Debug)]
 pub struct PyQueryBoolean {

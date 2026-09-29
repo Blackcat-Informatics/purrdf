@@ -17,7 +17,7 @@
 //! must round-trip losslessly, verified by construction — never a silent drop.
 //!
 //! The RDF 1.2 triple-term form `<<( s p o )>>` is emitted (matching the SPARQL
-//! codecs and what oxigraph/Jena both parse), not the RDF-star `<< s p o >>`
+//! codecs and what RDF 1.2 parsers accept), not the RDF-star `<< s p o >>`
 //! shorthand the reasoning-closure emitter uses.
 
 use std::collections::BTreeMap;
@@ -53,10 +53,9 @@ fn parse_quads(ttl: &str) -> Result<Vec<RdfQuad>, RdfDiagnostic> {
 
 /// Drop a redundant `^^xsd:string` datatype so a simple literal serializes bare.
 ///
-/// oxigraph (RDF 1.1) types a bare `"x"` as `xsd:string`; the authored OWL graph
+/// RDF 1.1 types a bare `"x"` as `xsd:string`; the authored OWL graph
 /// (rdflib) keeps it as a plain literal, and rdflib's isomorphism treats the two
-/// as distinct. Jena and oxigraph both emit `xsd:string` literals bare — match
-/// that so the round-trip proof against the authored OWL holds. Triple-term
+/// as distinct. Emitting `xsd:string` literals bare keeps them equal, so the round-trip proof against the authored OWL holds. Triple-term
 /// components are normalized too.
 ///
 /// A triple term is rebuilt bottom-up over a work list: its subject, then its

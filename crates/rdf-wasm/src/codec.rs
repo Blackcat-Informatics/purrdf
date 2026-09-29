@@ -6,7 +6,7 @@
 //! Delegates to the ONE core registry (`purrdf::classify`), so the wasm surface accepts
 //! exactly the spellings every other first-party surface does — including JSON-LD and
 //! YAML-LD — and there is no second, drifting format table. The codecs ride purrdf's
-//! wasm-clean native codec stack — no oxigraph Store and no purrdf-gts RDF-codec feature.
+//! wasm-clean native codec stack — no persistent store and no purrdf-gts RDF-codec feature.
 
 /// Resolve a caller-supplied format string to a canonical media type.
 ///

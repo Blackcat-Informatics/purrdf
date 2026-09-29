@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Native **full W3C RDFC-1.0** RDF Dataset Canonicalization, oxigraph-free.
+//! Native **full W3C RDFC-1.0** RDF Dataset Canonicalization.
 //!
 //! This module is the canonicalization authority for the purrdf family. It
-//! replaces `oxrdf`'s `Dataset::canonicalize` ( oxigraph eviction) and
 //! supersedes the simplified FNV signature comparator that `compare.rs` used to
 //! carry: it implements the real algorithm — *Hash First Degree Quads* (§4.6),
 //! initial canonical assignment (§4.4), and *Hash N-Degree Quads* (§4.8) with
@@ -310,8 +309,7 @@ pub const CANON_PRESENTATION_FLAT_ASSERTION_ID: &str = "flat-assertion";
 pub const CANON_PRESENTATION_FLAT_ASSERTION_VERSION: u32 = 1;
 
 /// The RDFC-1.0 hash algorithm. SHA-256 is the default; SHA-384 is the spec's
-/// alternative (RDFC-1.0 §3, exercised by W3C suite `test075`). EXTEND beyond
-/// `oxrdf`, which only offered SHA-256.
+/// alternative (RDFC-1.0 §3, exercised by W3C suite `test075`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CanonHash {
     /// SHA-256 (the RDFC-1.0 default).
@@ -449,7 +447,7 @@ pub struct Canonicalized<Id = TermId> {
 /// Canonicalize `ds` under profile [`CANON_PROFILE_ID`] (RDFC-1.0 with SHA-256,
 /// extended by the RDF 1.2 overlay).
 ///
-/// Deterministic and oxigraph-free.
+/// Deterministic.
 ///
 /// # Panics
 /// **Trusted callers only.** Hard-`panic!`s on either refusal: an n-degree search
@@ -2715,8 +2713,8 @@ impl<'a, D: DatasetView> CanonState<'a, D> {
                     }
                 }
                 TermRef::Triple { s, p, o } => {
-                    // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the form
-                    // oxigraph/Jena parse).
+                    // RDF-1.2 triple term: `<<( <s> <p> <o> )>>` (the RDF 1.2
+                    // N-Quads form).
                     out.push_str("<<( ");
                     held.extend([
                         Step::Text(" )>>"),

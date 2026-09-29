@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-iri"
-description = "Native IRI/URI value space (RFC-3987 IRI + RFC-3986 URI parse/validate, reference resolution, syntax normalization, CURIE/prefix expansion) for the RDF 1.2 query stack — replaces oxiri"
+description = "Native IRI/URI value space (RFC-3987 IRI + RFC-3986 URI parse/validate, reference resolution, syntax normalization, CURIE/prefix expansion) for the RDF 1.2 query stack"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -22,8 +22,7 @@ workspace = true
 
 [lib]
 # rlib-only foundation whose runtime dependencies are the lexical layer
-# `purrdf-lex` and the zero-dependency root `purrdf-hash` (layers.toml). It must stay wasm-clean and must not
-# pull any oxigraph-family crate (it replaces `oxiri`). It does NOT depend on
+# `purrdf-lex` and the zero-dependency root `purrdf-hash` (layers.toml). It must stay wasm-clean. It does NOT depend on
 # `purrdf-core` — the dependency points the other way.
 crate-type = ["rlib"]
 path = "src/lib.rs"

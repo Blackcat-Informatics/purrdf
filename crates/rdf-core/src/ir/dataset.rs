@@ -778,7 +778,7 @@ impl RdfDataset {
 
     /// Resolve a term id to the owned [`RdfTerm`] model, triple terms included.
     /// This allocates owned strings at the explicit owned-model boundary
-    /// used by serializers, oxigraph materialization, the C-ABI (`purrdf-capi`
+    /// used by serializers, the C-ABI (`purrdf-capi`
     /// renders a cursor term to N-Triples through this), and tests.
     ///
     /// A triple term is assembled bottom-up over a work list: its subject, then its
@@ -1575,8 +1575,7 @@ impl RdfDataset {
     /// infallible. The triple-term resolves to [`TermRef::Triple`].
     ///
     /// The borrowed twin of [`reifiers`](Self::reifiers): consumers that read the
-    /// RDF 1.2 statement layer off the concrete IR (the GTS writer, the oxigraph
-    /// materializer) use this to read reifiers WITHOUT the owned `RdfReifier` model —
+    /// RDF 1.2 statement layer off the concrete IR (the GTS writer) use this to read reifiers WITHOUT the owned `RdfReifier` model —
     /// the id-based read surface for the purrdf consumer migration.
     #[inline]
     pub fn reifier_refs(&self) -> impl Iterator<Item = (TermRef<'_>, TermRef<'_>)> + '_ {
@@ -1764,9 +1763,7 @@ impl RdfDataset {
     /// names dropped), then the RDF 1.2 statement layer re-materialized as
     /// `<reifier> rdf:reifies <<( s p o )>>` rows and the annotation rows.
     ///
-    /// This is the oxigraph-free, value-model twin of the legacy
-    /// `flat_oxigraph_quads_from_dataset` under `GraphPolicy::FlattenToDefaultGraph`:
-    /// a consumer that needs a single merged default graph (the LOGIC reasoned-graph
+    /// A consumer that needs a single merged default graph (the LOGIC reasoned-graph
     /// verify) folds over these `QuadValues` directly. Deterministic: base quads in
     /// frozen order, then reifier rows, then annotation rows.
     pub fn flat_default_graph_quads(&self) -> impl Iterator<Item = crate::QuadValues> + '_ {

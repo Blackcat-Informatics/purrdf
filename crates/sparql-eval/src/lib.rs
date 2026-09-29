@@ -7,8 +7,7 @@
 //! [`purrdf_sparql_algebra`] front-end and evaluates it over the
 //! [`purrdf_core`] IR's [`DatasetView`](purrdf_core::DatasetView) read trait
 //! **entirely in interned [`TermId`](purrdf_core::TermId) space**. It is the
-//! native replacement for the oxigraph-family `spareval` on the query path and
-//! the single required impl of the
+//! query-path engine and the single required impl of the
 //! [`SparqlEngine`](purrdf_core::SparqlEngine) seam.
 //!
 //! ## Design pillars
@@ -63,9 +62,7 @@
 //!   direct evaluator path before any governor charge, ledger, or stop probe. See
 //!   [`governor`] and `docs/SPARQL-GOVERNOR-PROFILE.md`.
 //!
-//! The crate carries **zero oxigraph-family dependencies** and builds for
-//! `wasm32-unknown-unknown` (the wasm query path); both invariants are
-//! gated by `make rdf-core-hygiene`.
+//! The crate builds for `wasm32-unknown-unknown` (the wasm query path).
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]

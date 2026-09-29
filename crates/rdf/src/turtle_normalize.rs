@@ -4,7 +4,7 @@
 //! A canonical, review-friendly Turtle serializer over the **purrdf IR**.
 //!
 //! Replaces rdflib's `longturtle` as the on-disk normalizer (`purrdf normalize`).
-//! The IR ([`RdfDataset`]) — not oxigraph — is the representation that is read,
+//! The IR ([`RdfDataset`]) is the representation that is read,
 //! ordered, and rendered; the native [`parse_dataset`] codec
 //! appears only as the text *parser* at the ingest edge. Every triple is interned
 //! into the IR verbatim
@@ -13,11 +13,10 @@
 //! back to the un-folded flat quad stream before re-interning), so the rendered
 //! graph is identical to the input.
 //!
-//! The renderer itself ([`render`]) is the oxigraph-free half and lives in the
+//! The renderer itself ([`render`]) lives in the
 //! wasm-clean kernel ([`purrdf_core::turtle_render`]); it is re-exported here so
 //! existing `purrdf::turtle_normalize::render` callers resolve unchanged. The text
-//! *parser* edge ([`canonical_turtle`] / `ingest`) is the native codec — fully
-//! oxigraph-free.
+//! *parser* edge ([`canonical_turtle`] / `ingest`) is the native codec.
 
 use std::sync::Arc;
 
@@ -25,8 +24,8 @@ use crate::ir::{RdfDataset, RdfDatasetBuilder};
 use crate::native_quads::flat_rdf_quads_from_dataset;
 use crate::{NativeRdfFormat, parse_dataset};
 
-/// The canonical, review-friendly Turtle renderer — the oxigraph-free half, now in
-/// the wasm-clean kernel. Re-exported so `purrdf::turtle_normalize::render`
+/// The canonical, review-friendly Turtle renderer, which lives in the wasm-clean
+/// kernel. Re-exported so `purrdf::turtle_normalize::render`
 /// resolves unchanged for in-tree callers.
 pub use crate::turtle_render::render;
 
@@ -212,7 +211,7 @@ mod tests {
     #[test]
     fn directional_literal_round_trips() {
         // RDF 1.2 base direction must survive normalize: render `@lang--dir` and stay
-        // isomorphic to the input (oxigraph's Turtle parser round-trips the `--dir`
+        // isomorphic to the input (the native Turtle parser round-trips the `--dir`
         // form at ingest, so the isomorphism gate holds).
         let src = r#"
             @prefix ex: <http://example.org/> .

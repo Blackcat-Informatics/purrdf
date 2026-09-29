@@ -3,7 +3,7 @@
 
 //! Hand-rolled, zero-dependency codecs for `xsd:hexBinary` and `xsd:base64Binary`.
 //!
-//! Both are genuine **EXTEND** — not present in `oxsdatatypes`. The value space for
+//! The value space for
 //! both is a byte sequence; value-equality is byte equality. The two datatypes have
 //! DIFFERENT value spaces, so a hexBinary byte sequence and a base64Binary byte
 //! sequence with identical bytes are nonetheless INCOMPARABLE (different value spaces).

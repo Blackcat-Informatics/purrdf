@@ -1,16 +1,16 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! `purrdf-core` -- oxigraph-free, PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
+//! `purrdf-core` -- PyO3-free RDF 1.2 kernel for the PurRDF Rust workspace.
 //!
 //! This crate is the ring-fenced core extracted out of
 //! `purrdf`: the immutable value-interned IR, the owned value model, structured
 //! diagnostics, dataset capability flags, the loss ledger, and provenance. It
 //! models RDF 1.2 terms directly, preserves
 //! source/location context where adapters can provide it, and keeps reporting
-//! structured but SARIF-free. The oxigraph adapters and the PyO3 extension surface
-//! live in the sibling `purrdf` crate; **nothing here may pull oxigraph** — that
-//! is the acceptance gate.
+//! structured but SARIF-free. The concrete adapters live in the sibling `purrdf`
+//! crate and the PyO3 extension surface in `bindings/python`; **nothing here may
+//! pull PyO3** — that is the acceptance gate.
 //!
 //! # `no_std` readiness
 //!
@@ -51,7 +51,7 @@ pub mod binding_pattern;
 pub mod artifact;
 pub mod bundle;
 // Narrow purrdf backend traits (P2d): term interning, parser ingress,
-// SPARQL execution, and serializer egress. PyO3-free, oxigraph-free — pure
+// SPARQL execution, and serializer egress. PyO3-free — pure
 // contract only; concrete adapters live in `purrdf`.
 pub mod backend;
 // Fixed-width little-endian integers at an offset of a byte buffer, read and
@@ -69,7 +69,7 @@ pub mod content_store;
 // drift apart on it.
 pub mod cover;
 // The static, allocation-free read view over an RDF dataset:
-// `DatasetView` + `GraphMatch`. PyO3-free, oxigraph-free — pure kernel.
+// `DatasetView` + `GraphMatch`. PyO3-free — pure kernel.
 pub mod dataset_view;
 pub mod describe;
 /// Structured diagnostics: severity, source/GTS locations, conversion losses,
@@ -138,8 +138,8 @@ pub mod sssom;
 /// Dataset/import capability flags ([`RdfStoreCapabilities`]).
 pub mod store;
 pub mod turtle;
-// The canonical, review-friendly Turtle RENDERER over the IR — the oxigraph-free half
-// of the on-disk normalizer (the oxigraph-coupled text parser stays in `purrdf`).
+// The canonical, review-friendly Turtle RENDERER over the IR — the kernel half
+// of the on-disk normalizer (the text parser stays in `purrdf`).
 // The wasm-clean canonical-Turtle authority for the correspondence EDOAL lowering.
 pub mod turtle_render;
 // XSD/XPath regular-expression dialect translation shared by `sh:pattern`

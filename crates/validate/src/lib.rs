@@ -47,7 +47,7 @@
 //!
 //! # Portability
 //!
-//! Pure serde over the report types — no PyO3, no oxigraph-family edge, no ambient
+//! Pure serde over the report types — no PyO3, no ambient
 //! I/O — so the crate stays `wasm32-unknown-unknown`-clean like every release crate.
 //!
 //! [`RdfDiagnostic`]: purrdf_core::RdfDiagnostic

@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-sparql-eval"
-description = "Native, RDF-1.2-first multiset SPARQL evaluator over the DatasetView read trait in interned TermId space — the runtime that consumes purrdf-sparql-algebra and replaces the oxigraph-family spareval on the query path"
+description = "Native, RDF-1.2-first multiset SPARQL evaluator over the DatasetView read trait in interned TermId space — the runtime that consumes purrdf-sparql-algebra on the query path"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -22,8 +22,7 @@ workspace = true
 
 [lib]
 # rlib-only, wasm-clean: the SPARQL evaluation runtime of the native query stack.
-# It must NOT pull any oxigraph-family crate (it replaces the oxigraph-family
-# `spareval`). It consumes the wasm-clean `purrdf-sparql-algebra` front-end,
+# It consumes the wasm-clean `purrdf-sparql-algebra` front-end,
 # evaluates over the `purrdf-core` IR `DatasetView` in interned `TermId`
 # space and uses
 # `purrdf-xsd` for FILTER/BIND/ORDER value-space semantics.
@@ -52,8 +51,7 @@ purrdf-cdt = { workspace = true }
 # (value_cmp/value_eq), effective boolean value, and the numeric tower.
 purrdf-xsd = { workspace = true }
 # Pure-Rust, wasm-clean regex engine for the SPARQL REGEX/REPLACE built-ins. Already
-# in the workspace lock; pulls only regex-automata/regex-syntax/aho-corasick/memchr
-# (no oxigraph-family edge — gated by `make rdf-core-hygiene`).
+# in the workspace lock; pulls only regex-automata/regex-syntax/aho-corasick/memchr.
 regex = { workspace = true }
 # The SPARQL MD5()/SHA1() built-ins and the SEP-0008 SHA-3 built-ins
 # (SHA3-224/256/384/512), and the fixed-key `FixedHasher` behind every
@@ -65,7 +63,7 @@ purrdf-hash = { workspace = true }
 # stays wasm-clean.
 sha2 = { workspace = true }
 # SPARQL Results reader for decoding remote SERVICE responses. Wasm-clean
-# (hand-rolled, no serde). No oxigraph-family edge.
+# (hand-rolled, no serde).
 purrdf-sparql-results = { workspace = true }
 # RFC-3986 IRI parsing/resolution, for the IRI()/URI() built-in's relative-reference
 # resolution against the query's base IRI (SPARQL 1.1 §17.4.2.6), AND the language-tag

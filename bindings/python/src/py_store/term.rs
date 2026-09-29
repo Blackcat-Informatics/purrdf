@@ -8,14 +8,12 @@
 //!
 //! # Native backing
 //!
-//! Every pyclass is backed by the oxigraph-free `purrdf_core` owned model
+//! Every pyclass is backed by the `purrdf_core` owned model
 //! (`RdfTerm` / `RdfLiteral` / `RdfTriple` / `RdfQuad`) plus `String` for IRI
-//! predicates and variable names — never `oxigraph::model::*`. The Python-facing
-//! class names, attributes (`value` / `datatype` / `language` / `subject` …), and
-//! semantics are IDENTICAL to the prior oxigraph-backed surface (this is the
-//! rdflib drop-in): in particular `Literal.datatype` always returns an IRI
-//! (`xsd:string` for a plain literal, `rdf:langString` for a language-tagged one),
-//! matching the oxigraph Python `Literal` API the codebase relies on.
+//! predicates and variable names. The Python-facing class names, attributes
+//! (`value` / `datatype` / `language` / `subject` …), and semantics form the
+//! rdflib drop-in: in particular `Literal.datatype` always returns an IRI
+//! (`xsd:string` for a plain literal, `rdf:langString` for a language-tagged one).
 
 use std::fmt::Write as _;
 use std::hash::BuildHasher;
@@ -54,7 +52,7 @@ fn parse_direction(direction: Option<&str>) -> PyResult<Option<RdfTextDirection>
         .transpose()
 }
 
-/// An IRI node. Mirrors the oxigraph Python `NamedNode`.
+/// An IRI node (`NamedNode`).
 #[pyclass(name = "NamedNode", frozen, skip_from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyNamedNode {
@@ -98,7 +96,7 @@ impl PyNamedNode {
     }
 }
 
-/// A blank node. Mirrors the oxigraph Python `BlankNode`.
+/// A blank node (`BlankNode`).
 #[pyclass(name = "BlankNode", frozen, skip_from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyBlankNode {
@@ -142,7 +140,7 @@ impl PyBlankNode {
     }
 }
 
-/// An RDF literal. Mirrors the oxigraph Python `Literal`.
+/// An RDF literal (`Literal`).
 #[pyclass(name = "Literal", frozen, skip_from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyLiteral {
@@ -194,7 +192,7 @@ impl PyLiteral {
                 }
             } else {
                 // A plain literal: datatype-less in the native model, surfaced as
-                // `xsd:string` by the `datatype` getter (oxigraph Python parity).
+                // `xsd:string` by the `datatype` getter.
                 RdfLiteral {
                     lexical_form: value,
                     datatype: None,
@@ -250,8 +248,7 @@ impl PyLiteral {
     fn __eq__(&self, other: &Self) -> bool {
         // RDF term equality over the value-space-equivalent representation: a plain
         // literal and an explicit `xsd:string` literal of the same lexical form are
-        // the SAME term (matching the prior oxigraph `Literal` equality, where a
-        // plain literal's datatype IS `xsd:string`). The native model keeps a plain
+        // the SAME term (a plain literal's datatype IS `xsd:string`). The native model keeps a plain
         // literal datatype-less, so normalize both sides through the datatype IRI.
         let (lex, dt, lang, direction) = literal_key(&self.inner);
         let (other_lex, other_dt, other_lang, other_direction) = literal_key(&other.inner);
@@ -272,7 +269,7 @@ impl PyLiteral {
 
 /// The RDF-term-equality key: lexical form, datatype IRI, language and direction,
 /// with a plain literal's datatype normalized to `xsd:string`, so a plain literal and
-/// an explicit `xsd:string` literal compare equal (oxigraph `Literal` parity).
+/// an explicit `xsd:string` literal compare equal.
 fn literal_key(lit: &RdfLiteral) -> (&str, &str, Option<&str>, Option<RdfTextDirection>) {
     (
         &lit.lexical_form,
@@ -301,7 +298,7 @@ fn framed_key(parts: &[&str]) -> String {
     key
 }
 
-/// A quoted triple term (RDF 1.2 / RDF-star). Mirrors the oxigraph Python `Triple`.
+/// A quoted triple term (RDF 1.2 / RDF-star) (`Triple`).
 #[pyclass(name = "Triple", frozen, skip_from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyTriple {
@@ -365,7 +362,7 @@ impl PyTriple {
     }
 }
 
-/// An RDF quad. Mirrors the oxigraph Python `Quad`.
+/// An RDF quad (`Quad`).
 #[pyclass(name = "Quad", frozen, skip_from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyQuad {
@@ -434,7 +431,7 @@ impl PyQuad {
     }
 }
 
-/// A default-graph marker term. Mirrors the oxigraph Python `DefaultGraph`.
+/// A default-graph marker term (`DefaultGraph`).
 #[pyclass(name = "DefaultGraph", frozen, skip_from_py_object)]
 #[derive(Clone, Debug, Default)]
 pub struct PyDefaultGraph;
@@ -459,8 +456,7 @@ impl PyDefaultGraph {
     }
 }
 
-/// A SPARQL variable, used to key query substitutions. Mirrors
-/// the oxigraph Python `Variable`.
+/// A SPARQL variable, used to key query substitutions (`Variable`).
 #[pyclass(name = "Variable", frozen, skip_from_py_object)]
 #[derive(Clone, Debug)]
 pub struct PyVariable {
@@ -471,9 +467,8 @@ pub struct PyVariable {
 impl PyVariable {
     #[new]
     fn new(value: &str) -> PyResult<Self> {
-        // The bare variable name, without the leading `?`/`$` sigil (oxigraph
-        // `Variable::new` parity). Reject an empty name and a name still carrying a
-        // sigil, the two cases the oxigraph constructor rejected.
+        // The bare variable name, without the leading `?`/`$` sigil. Reject an
+        // empty name and a name still carrying a sigil.
         if value.is_empty() {
             return Err(PyValueError::new_err(
                 "invalid variable ``: a variable name must not be empty",
@@ -507,7 +502,7 @@ impl PyVariable {
     }
 }
 
-// ── string forms (oxigraph Display parity, single source via RdfTerm Display) ─────
+// ── string forms (single source via RdfTerm Display) ────────────────────────────
 
 fn triple_term_to_string(triple: &RdfTriple) -> String {
     RdfTerm::triple(triple.clone()).to_string()
@@ -574,10 +569,10 @@ pub(super) fn quad_to_py(py: Python<'_>, quad: &RdfQuad) -> PyResult<Py<PyAny>> 
 }
 
 /// Build the live `purrdf.Quad` list for every (flattened) quad of a native
-/// [`RdfDataset`](crate::RdfDataset) — the oxigraph-free cross-crate entry point for
+/// [`RdfDataset`](crate::RdfDataset) — the cross-crate entry point for
 /// engine crates (e.g. `purrdf-logic`'s RL closure) that produce a
 /// frozen IR dataset and must hand Python live quad objects without naming any
-/// oxigraph type themselves.
+/// binding type themselves.
 ///
 /// The dataset is flattened to the source-faithful flat quad stream (base quads plus
 /// the re-materialized RDF 1.2 statement layer), then each quad becomes a `PyQuad`.

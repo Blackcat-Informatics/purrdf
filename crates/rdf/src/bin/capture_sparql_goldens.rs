@@ -3,8 +3,7 @@
 
 //! Capture the native SPARQL engine as committed goldens.
 //!
-//! The native [`NativeSparqlEngine`] is the SOLE SPARQL authority (the cutover
-//! proved native ≡ oxigraph). This maintainer-only
+//! The native [`NativeSparqlEngine`] is the SOLE SPARQL authority. This maintainer-only
 //! binary captures the native engine's deterministic SPARQL outputs over OUR corpus
 //! (`queries/**` + `generated/queries/**`) and over the `$this`-substitution
 //! shapes, writing them as byte-stable golden files under
@@ -12,9 +11,8 @@
 //! the engine against these frozen goldens forever (native-vs-native = a regression
 //! gate).
 //!
-//! `crates/sparql-conformance` stays oxigraph-free: it merely RECEIVES these data
-//! files; this binary is oxigraph-free too (it loads purrdf.gts via the oxigraph-free
-//! `flattened_dataset_from_bytes` and runs only the native engine).
+//! `crates/sparql-conformance` merely RECEIVES these data files; this binary loads
+//! purrdf.gts via `flattened_dataset_from_bytes` and runs only the native engine.
 //!
 //! Determinism contract: every golden is byte-stable across runs. CONSTRUCT/DESCRIBE
 //! goldens are RDFC-1.0 canonical N-Quads; SELECT goldens are the SORTED multiset of
@@ -34,7 +32,7 @@ use purrdf_rdf::{
 };
 use purrdf_sparql_eval::NativeSparqlEngine;
 
-/// Where every golden tree roots. The conformance crate (oxigraph-free) reads these.
+/// Where every golden tree roots. The conformance crate reads these.
 fn goldens_root() -> PathBuf {
     corpus_repo_root()
         .join("crates")
@@ -108,7 +106,7 @@ fn main() {
 /// `.rq` file into a golden (or a classification marker).
 fn capture_corpus(goldens: &Path) -> Tally {
     // Load the merged ontology exactly as the corpus conformance gate does: the
-    // oxigraph-free flattened dataset (every named graph folded into the default
+    // flattened dataset (every named graph folded into the default
     // graph), so the goldens and the gate share one identical load view.
     let gts_path = corpus_repo_root()
         .join("generated")

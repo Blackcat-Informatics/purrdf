@@ -83,7 +83,7 @@ spec = "RFC 3986 section 5.1 (establishing a base) and section 5.2 (relative res
 vectors = []
 bench = ["purrdf-iri:parse"]
 sites = []
-replaces_external = ["fluent-uri", "oxiri", "url"]
+replaces_external = ["fluent-uri", "url"]
 enforced = true
 
 [job.forbidden]

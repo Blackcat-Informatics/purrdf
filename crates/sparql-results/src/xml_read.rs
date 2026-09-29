@@ -11,8 +11,7 @@
 //! # Wasm discipline
 //!
 //! A hand-rolled XML scanner over `&[u8]` building a minimal DOM tree — **no
-//! external XML crate, no `std::io`** — keeping the crate wasm-clean and
-//! oxigraph-free. The SRX grammar is shallow and fixed, so a tree-walk is enough.
+//! external XML crate, no `std::io`** — keeping the crate wasm-clean. The SRX grammar is shallow and fixed, so a tree-walk is enough.
 
 use purrdf_core::TermBox;
 use purrdf_core::terminals;

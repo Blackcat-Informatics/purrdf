@@ -11,16 +11,15 @@ use crate::datatype::XsdDatatype;
 use crate::ieee;
 use crate::value::{XsdError, XsdValue};
 
-/// An exact decimal: `value = mantissa × 10^(-scale)`. Mirrors `oxsdatatypes`'
-/// `i128`-backed design (scale bounded so the mantissa stays in `i128`).
+/// An exact decimal: `value = mantissa × 10^(-scale)`, `i128`-backed (scale
+/// bounded so the mantissa stays in `i128`).
 #[derive(Debug, Clone, Copy)]
 pub struct Decimal {
     mantissa: i128,
     scale: u8,
 }
 
-/// Max fractional digits we retain; keeps the mantissa within `i128` headroom and
-/// matches `oxsdatatypes`' precision.
+/// Max fractional digits we retain; keeps the mantissa within `i128` headroom.
 const MAX_DECIMAL_SCALE: u8 = 18;
 
 impl Decimal {
@@ -1241,8 +1240,7 @@ pub(crate) fn decimal_div_raw(dividend: &Decimal, divisor: &Decimal) -> Result<D
 ///
 /// `None` when the resulting MANTISSA does not fit `i128` — `xsd:decimal`'s
 /// [`Decimal`] representation is deliberately `i128`-mantissa-bounded (this
-/// crate's documented design, unchanged by this function; matches
-/// `oxsdatatypes`' precision). Scaling to `MAX_DECIMAL_SCALE` (18) fractional
+/// crate's documented design, unchanged by this function). Scaling to `MAX_DECIMAL_SCALE` (18) fractional
 /// digits BEFORE dividing multiplies the required headroom by 18 decimal
 /// digits, so this fails far more readily than the bare integer quotient
 /// would: an escaped-`i128` `dividend` needs a `count` on the order of

@@ -3,9 +3,7 @@
 
 //! Differential equivalence across the two native engine entry-paths (C4).
 //!
-//! Historically this proved the IR-native SHACL backend agreed with an oxigraph
-//! `Store` oracle. The engine is now IR-native end-to-end (no oxigraph backend), so
-//! the differential is reframed onto the two remaining INDEPENDENT entry-paths:
+//! The two independent entry-paths:
 //!
 //! - the text path — [`validate_graphs`], which natively parses N-Triples/Turtle to
 //!   a frozen dataset then validates; and
@@ -15,7 +13,7 @@
 //! For each `(shapes_ttl, data)` case both paths must produce byte-identical
 //! reports (same `conforms` flag, same deterministically-sorted results compared
 //! via the canonical `to_ntriples()` serialization). This keeps the cases as a
-//! native conformance safety net without a second (oxigraph) engine.
+//! native conformance safety net.
 
 use std::sync::Arc;
 

@@ -174,7 +174,7 @@ unsafe fn run_query(
         let query = cstr_to_str(query)?;
         let base_iri = opt_cstr_to_str(base_iri)?;
         // Evaluate over the frozen `Arc<RdfDataset>` directly via the native engine —
-        // no oxigraph `Store` round-trip. `NativeSparqlEngine::query` is the single
+        // no store round-trip. `NativeSparqlEngine::query` is the single
         // `SparqlEngine` impl; its `Dataset` IS the `Arc<RdfDataset>` the
         // handle already owns.
         engine()

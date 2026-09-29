@@ -77,8 +77,8 @@ Beyond the IR itself, `purrdf-core` owns:
 
 Text codecs are *not* in the kernel — parsing and serialization live one layer
 up in [`purrdf-rdf`](https://docs.rs/purrdf-rdf). The split keeps the kernel
-small and its invariants enforceable at the crate boundary: no oxigraph, no
-PyO3 (a hygiene gate asserts the dependency tree), `wasm32`-clean, and a
+small and its invariants enforceable at the crate boundary: no PyO3 (a
+hygiene gate asserts the dependency tree), `wasm32`-clean, and a
 file-IO-free IR layer.
 
 ## Why this design

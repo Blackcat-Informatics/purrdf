@@ -4,7 +4,7 @@
 //! `purrdf_from_gts` / `purrdf_to_gts`: lossless GTS container read/write.
 //!
 //! libpurrdf statically reuses the permissive `purrdf-gts` Rust crate (via the
-//! oxigraph-free `gts_write` / `import_gts_events` core), so a language shim
+//! `gts_write` / `import_gts_events` core), so a language shim
 //! links `libpurrdf` ALONE and still reads/writes `.gts` containers — the spec's
 //! "one shared library, not two" clause.
 //!

@@ -5,7 +5,7 @@
 # SHACL-AF sh:prefixes (spec §5.2.1): the sh:select query below uses the
 # prefixed names ex:Person / ex:email rather than full <IRI>s. The validator
 # must resolve the sh:prefixes → sh:declare map and prepend a PREFIX header
-# before the query reaches oxigraph's SPARQL parser (which has no SHACL
+# before the query reaches the SPARQL parser (which has no SHACL
 # awareness). Without that resolution the query is unparsable ("Prefix not
 # found") — this case is the regression guard for that resolution.
 #

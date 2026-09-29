@@ -3,8 +3,7 @@
 
 //! Variable **pre-binding** by algebra rewrite.
 //!
-//! This is the native replacement for the oxigraph-family
-//! `PreparedSparqlQuery::substitute_variable`, which SHACL-AF uses to inject the
+//! This is the query-variable substitution SHACL-AF uses to inject the
 //! focus node into a `sh:SPARQLConstraint` / `sh:SPARQLTarget` query as `$this`.
 //!
 //! ## Semantics: substitution = pre-binding (NOT term replacement)
@@ -39,7 +38,7 @@
 //! `TermValue::Blank` via the normal `VALUES` evaluation path, so blank focus nodes
 //! are pre-bound with exactly the same below-the-modifiers semantics as the others —
 //! no focus-node kind is dropped, and the rewrite stays a pure algebra transform
-//! (`purrdf-sparql-algebra` remains oxigraph-free and `TermValue`-free).
+//! (`purrdf-sparql-algebra` remains `TermValue`-free).
 
 use crate::algebra::{GraphPattern, Query};
 use crate::ast::{GroundTerm, Variable};

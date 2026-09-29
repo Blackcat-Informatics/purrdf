@@ -3,7 +3,7 @@
 
 //! RDF text/bytes ingress into the frozen [`RdfDataset`] IR.
 //!
-//! The text codec is the oxigraph-free native [`parse_dataset`]
+//! The text codec is the native [`parse_dataset`]
 //! path; the read model handed to PurRDF consumers is the
 //! concrete IR. This module is deliberately PyO3-free so logic, SHACL, and pipeline
 //! stages can route parsed inputs through the same `RdfDataset` path as the Python
@@ -62,8 +62,7 @@ mod tests {
 
     #[test]
     fn dataset_from_bytes_routes_each_native_format() {
-        // The codec selector is the native enum across every format — the sweep
-        // removed the temporary oxigraph::io::RdfFormat From shim entirely.
+        // The codec selector is the native enum across every format.
         let nq = "<https://e/s> <https://e/p> <https://e/o> <https://e/g> .\n";
         let ds = dataset_from_bytes(nq.as_bytes(), NativeRdfFormat::NQuads).expect("build nquads");
         assert_eq!(ds.quad_count(), 1);

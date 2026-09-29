@@ -11,7 +11,7 @@
 //! RDF/XML. The graph layout mirrors exactly what the parser produces, so parse and
 //! serialize are inverses.
 //!
-//! The [`SerializeGraph`] filter matches `oxigraph/backend.rs:333-391` exactly:
+//! The [`SerializeGraph`] filter:
 //! `DefaultGraph` emits the default-graph quads plus ALL statement rows
 //! (reifiers/annotations); `Named(g)` emits only that graph's quads as triples and NO
 //! statement rows; `Dataset` keeps graph names for TriG/N-Quads but falls back to the
@@ -729,7 +729,7 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
         SerGraphInterner::with_capacity(dataset.term_count(), blank_label_alphabet(format));
 
     // Which quad rows to emit, and whether the statement layer (reifiers/annotations)
-    // participates — matching the oxigraph backend's filter exactly.
+    // participates, per the [`SerializeGraph`] filter contract.
     let mut graph = SerGraph {
         terms: Vec::new(),
         quads: Vec::with_capacity(dataset.len_hint().unwrap_or(0)),
@@ -785,7 +785,7 @@ pub(crate) fn build_ser_graph<D: DatasetView>(
                 let o = interner.intern(dataset, quad.o)?;
                 graph.quads.push((s, p, o, None));
             }
-            // A named-graph selection emits NO statement rows (oxigraph parity).
+            // A named-graph selection emits NO statement rows.
         }
     }
 

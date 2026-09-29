@@ -4,8 +4,7 @@
 //! `purrdf-xsd` — the native XSD **value space** for the RDF 1.2 query stack.
 //!
 //! This is a pure-Rust, **zero-runtime-dependency**, wasm-clean leaf crate. It is
-//! the drop-in replacement for the oxigraph-family `oxsdatatypes`, and the
-//! foundation layer of the native SPARQL engine: the SPARQL evaluator evaluates
+//! the foundation layer of the native SPARQL engine: the SPARQL evaluator evaluates
 //! `FILTER`/`ORDER BY` over *typed values*, which this crate supplies. It is
 //! deliberately decoupled from `purrdf-core` (no dependency in
 //! either direction yet); the IR keeps literals **lexical-verbatim** (Constitution
@@ -68,7 +67,7 @@
 //!
 //! # Datatype coverage
 //!
-//! purrdf-xsd models — and value-compares — a **superset** of `oxsdatatypes`:
+//! purrdf-xsd models — and value-compares — these datatypes:
 //!
 //! * numeric: `integer` (i128), the twelve derived-integer facets (`long`/`int`/
 //!   `short`/`byte`, the `unsigned*` family, and `nonNegative`/`positive`/
@@ -80,8 +79,7 @@
 //!   `gYearMonth`/`gMonthDay` (tz-indeterminate partial order);
 //! * binary: `hexBinary`/`base64Binary` (hand-rolled codecs — still zero-dep).
 //!
-//! The derived-integer facets and the binary types are **not** modelled by
-//! `oxsdatatypes`; the gregorian family matches it. Integer and decimal are
+//! Integer and decimal are
 //! `i128`-bounded (decimal scale ≤ 18); lexicals beyond that domain hard-fail on
 //! range rather than promoting to arbitrary precision. [`bigint::BigInt`] is the
 //! one deliberate exception: not a literal value space at all, it exists purely
@@ -127,7 +125,7 @@
 //!
 //! Malformed lexical input is a hard error ([`XsdError`]), never a silent default.
 //! Out-of-range integer/decimal lexicals fail rather than saturate (this crate is
-//! `i128`-bounded — already exceeding `oxsdatatypes`' `i64`).
+//! `i128`-bounded).
 //!
 //! # Examples
 //!

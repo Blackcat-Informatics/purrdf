@@ -1407,7 +1407,7 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             ));
         }
         // Turtle/TriG admit a bare `/` in a prefixed-name local part (e.g.
-        // `purrdf:report/shacl/sarif`), matching oxigraph/purrdf-gts leniency.
+        // `purrdf:report/shacl/sarif`), matching purrdf-gts leniency.
         // Turtle has no `/` operator, so this is unambiguous in term position;
         // the SPARQL `tokenize` keeps `/` as the property-path operator.
         self.tokens = tokenize_turtle(self.src).map_err(|e| {
@@ -3720,7 +3720,7 @@ mod tests {
 
     /// A bare `/` in a prefixed-name local part (e.g. `ex:report/shacl/sarif`)
     /// must parse as ONE prefixed name and expand to the prefix namespace plus the
-    /// slash-bearing local, matching oxigraph/purrdf-gts (strict Turtle would need
+    /// slash-bearing local, matching purrdf-gts (strict Turtle would need
     /// `\/`, but real-world ontologies and fixtures use the bare form).
     #[test]
     fn turtle_prefixed_name_allows_bare_slash_in_local() {

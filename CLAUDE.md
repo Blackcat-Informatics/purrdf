@@ -14,7 +14,7 @@ Quick orientation:
 * **Never**: add Cargo features; hand-edit `generated/` or `vectors/`; pin a
   dependency version inside a member crate (root `[workspace.dependencies]`
   only); introduce nondeterminism into serializers or the GTS writer; add
-  oxigraph/PyO3 anywhere near `purrdf-core`; break the wasm32 build (every
+  PyO3 anywhere near `purrdf-core`; break the wasm32 build (every
   release crate must stay `wasm32-unknown-unknown`-clean — `make wasm`).
 * **Naming**: the project is **PurRDF** in prose, `purrdf` in identifiers.
 * **PurRDF is NOT an ontology**: it mints no vocabulary IRIs. Vocabularies are

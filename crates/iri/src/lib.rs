@@ -4,14 +4,13 @@
 //! `purrdf-iri` — the native **IRI/URI value space** for the RDF 1.2 query stack.
 //!
 //! A pure-Rust, wasm-clean crate whose one dependency is the zero-dependency
-//! lexical layer [`purrdf_lex`]: the drop-in
-//! replacement for the oxigraph-family `oxiri`, and the second foundation slice of
-//! the native SPARQL engine. It is deliberately decoupled
+//! lexical layer [`purrdf_lex`], and the second
+//! foundation slice of the native SPARQL engine. It is deliberately decoupled
 //! from `purrdf-core` (no dependency in either direction yet); the IR keeps
 //! IRIs **lexical-verbatim** (Constitution C0.1) and this crate is the
 //! validation/resolution layer beside it.
 //!
-//! # Coverage (a superset of `oxiri`)
+//! # Coverage
 //!
 //! * **Parse + validate** — RFC-3987 IRIs ([`parse`]) and the strict-ASCII RFC-3986
 //!   URI subset ([`parse_uri`]). Component spans (scheme/authority/path/query/
@@ -30,7 +29,6 @@
 //!   encoding, and dot-segment normalization. Idempotent.
 //! * **CURIE/prefix** — [`expand_curie`]/[`resolve`]/[`contract`] over a
 //!   [`PrefixMap`], subsuming the SSSOM serializer's hand-rolled prefix logic.
-//!   `oxiri` has none of this — it is the EXTEND deliverable for this slice.
 //! * **BCP 47 language tags** — [`langtag`], RFC 5646 `Language-Tag`
 //!   well-formedness against the §2.1 ABNF and the closed §2.2.8 grandfathered
 //!   list, shared by embedding metadata and CSVW validation. An accepted tag

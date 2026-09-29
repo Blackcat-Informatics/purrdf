@@ -3532,10 +3532,10 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
     }
 }
 
-/// Whether a literal that oxigraph stored as the canonical base type satisfies a
+/// Whether a literal stored as the canonical base type satisfies a
 /// shape's required XSD *derived* integer type, by validating the lexical value
 /// against the derived type's value space. Every XSD integer-derived type
-/// canonicalizes to `xsd:integer` in oxigraph; only that base is considered here.
+/// canonicalizes to `xsd:integer`; only that base is considered here.
 fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> bool {
     if stored_dt != XSD_INTEGER || !is_xsd_integer_lexical(lex) {
         return false;
@@ -3823,10 +3823,9 @@ fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
     // `instance.rs::numeric_or_bool_scalar`); the previous list omitted the
     // derived/unsigned integers (e.g. `xsd:nonNegativeInteger`), so a faithful
     // `"1"^^xsd:nonNegativeInteger` value read as non-numeric and spuriously
-    // violated every `sh:minInclusive`/`sh:maxInclusive` facet. (The omission was
-    // masked while data round-tripped through oxigraph's NT serializer, which
-    // value-space-normalized such literals to `xsd:integer`; the oxigraph-free
-    // path is the faithful one and exposes the gap.)
+    // violated every `sh:minInclusive`/`sh:maxInclusive` facet. (The omission is
+    // masked whenever data round-trips through a value-space-normalizing NT
+    // serializer that rewrites such literals to `xsd:integer`.)
     if XsdDatatype::from_iri(datatype).is_some_and(XsdDatatype::is_numeric) {
         // Every numeric datatype fixes `whiteSpace` = `collapse`, so the
         // lexical form is trimmed with the four code points that names — see
@@ -3920,7 +3919,7 @@ fn temporal_parts_cmp(
 }
 
 /// Term equality: two terms are equal iff their string representations match
-/// (oxigraph's `PartialEq` does the right thing for typed literals).
+/// (`PartialEq` does the right thing for typed literals).
 fn terms_equal(a: &Term, b: &Term) -> bool {
     a == b
 }
@@ -4466,7 +4465,7 @@ mod tests {
         // integers (e.g. xsd:nonNegativeInteger) made a faithful
         // `"1"^^xsd:nonNegativeInteger` value read as non-numeric and spuriously
         // violate sh:minInclusive/sh:maxInclusive — masked only while data
-        // round-tripped through oxigraph's value-space-normalizing NT serializer.
+        // round-trips through a value-space-normalizing NT serializer.
         for dt in [
             "integer",
             "decimal",
@@ -5234,11 +5233,11 @@ mod tests {
         assert!(component_iri(&results)[0].contains("Datatype"));
     }
 
-    // ── datatype derived-integer (oxigraph canonicalization) ────────────────────
+    // ── datatype derived-integer (canonical base type) ──────────────────────────
 
     #[test]
     fn datatype_derived_nonneg_integer_pass() {
-        // Oxigraph stores "5"^^xsd:nonNegativeInteger as "5"^^xsd:integer, but a
+        // A store may hold "5"^^xsd:nonNegativeInteger as "5"^^xsd:integer, but a
         // shape requiring xsd:nonNegativeInteger must still accept it (value 5 is
         // in range) — matching pySHACL. Pre-fix this produced a false violation.
         let store = load_store(&format!(

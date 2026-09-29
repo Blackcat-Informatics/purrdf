@@ -184,8 +184,8 @@ fn role_classification() {
 // ── (e) Semantic-digest blank-node determinism ────────────────────────────────
 
 /// A module that uses blank nodes (e.g. an OWL restriction) must produce a STABLE
-/// `semantic_digest` across repeated loads. Oxigraph assigns blank-node labels
-/// non-deterministically at parse time, so the digest must canonicalize blank
+/// `semantic_digest` across repeated loads. Blank-node labels are
+/// not stable across parses, so the digest must canonicalize blank
 /// nodes ( §12 — the semantic Merkle key must be deterministic). A
 /// comment-only edit must NOT change the semantic digest.
 #[test]

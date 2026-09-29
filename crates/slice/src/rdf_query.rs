@@ -1,10 +1,9 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Oxigraph-free RDF query surface for the slice emitters and linters.
+//! Native RDF query surface for the slice emitters and linters.
 //!
-//! The slice crate used to parse Turtle/N-Triples into an `oxigraph::store::Store`
-//! and pattern-match it. Every store/term type is now native: parsing folds the
+//! Every store/term type is native: parsing folds the
 //! RDF 1.2 statement layer into the frozen [`purrdf::RdfDataset`] IR via the
 //! native codecs ([`purrdf::parse_dataset`]), pattern queries route through the
 //! IR's [`purrdf::DatasetView::quads_for_pattern`] (an indexed lookup), and the
@@ -36,14 +35,12 @@ use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 // ── Native NamedNode ───────────────────────────────────────────────────────────
 
-/// An absolute IRI in term position — the oxigraph-free replacement for
-/// `oxigraph::model::NamedNode` across the slice crate.
+/// An absolute IRI in term position across the slice crate.
 ///
 /// `new` validates the IRI through the native `purrdf-iri` parser (via the
-/// `purrdf-sparql-algebra` validator, the same RFC-3987 check oxigraph applied), so
+/// `purrdf-sparql-algebra` RFC-3987 validator), so
 /// the `Ok`/`Err` discrimination at the slice's IRI-construction sites is preserved.
-/// `Ord`/`Hash` are lexical on the IRI string, matching oxigraph's `NamedNode`
-/// ordering (it orders by the IRI string), so every `BTreeMap`/`BTreeSet` keyed on a
+/// `Ord`/`Hash` are lexical on the IRI string, so every `BTreeMap`/`BTreeSet` keyed on a
 /// `NamedNode` keeps the same iteration order.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct NamedNode {
@@ -52,7 +49,7 @@ pub struct NamedNode {
 
 impl NamedNode {
     /// Validate and wrap an absolute IRI, returning `Err` on a malformed or relative
-    /// IRI (term-position IRIs must be absolute) — mirrors `oxigraph::model::NamedNode::new`.
+    /// IRI (term-position IRIs must be absolute).
     pub fn new(iri: impl Into<String>) -> Result<Self, SliceError> {
         let iri = iri.into();
         purrdf_sparql_algebra::NamedNode::new(iri.clone())
@@ -80,9 +77,9 @@ impl core::fmt::Debug for NamedNode {
 // ── Native object value model ───────────────────────────────────────────────────
 
 /// The kinds of RDF subject a quad can carry (named node, blank node, OR a quoted
-/// triple term in subject position, RDF 1.2), surfaced from the native IR. Mirrors
-/// the `oxigraph::model::NamedOrBlankNode` discrimination the slice linters relied
-/// on, extended with the RDF 1.2 triple-term arm.
+/// triple term in subject position, RDF 1.2), surfaced from the native IR — the
+/// named/blank discrimination the slice linters rely on, plus the RDF 1.2
+/// triple-term arm.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Subject {
     /// An IRI subject.
@@ -93,8 +90,7 @@ pub enum Subject {
     Triple(Box<TripleTerm>),
 }
 
-/// An RDF object term, surfaced from the native IR as an owned value — the
-/// oxigraph-free replacement for `oxigraph::model::Term` in object position.
+/// An RDF object term, surfaced from the native IR as an owned value, in object position.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Object {
     /// An IRI object.
@@ -104,7 +100,7 @@ pub enum Object {
     /// A literal, carried at full fidelity: its lexical form, its datatype IRI, an
     /// optional language tag, and an optional RDF 1.2 base direction.
     Literal {
-        /// The lexical form (the `.value()` of the old oxigraph literal).
+        /// The lexical form.
         value: String,
         /// The datatype IRI (e.g. `…#string`, `…#integer`).
         datatype: String,
@@ -136,7 +132,7 @@ pub struct TripleTerm {
 }
 
 impl Object {
-    /// The IRI, if this object is a named node (`oxigraph` `Term::NamedNode` arm).
+    /// The IRI, if this object is a named node.
     pub fn as_named(&self) -> Option<&str> {
         match self {
             Self::Named(iri) => Some(iri.as_str()),
@@ -539,8 +535,8 @@ impl Dataset {
     /// The canonical N-Quads document (full W3C RDFC-1.0) of this dataset's quads,
     /// **flattened** — the RDF 1.2 statement overlay (reifier bindings + annotations)
     /// is re-materialized back into plain `rdf:reifies` / annotation triples BEFORE
-    /// canonicalizing, with no overlay re-fold. This is byte-identical to the prior
-    /// `purrdf::canonical_nquads` over a flat oxigraph quad set: both canonicalize
+    /// canonicalizing, with no overlay re-fold. This is byte-identical to
+    /// `purrdf::canonical_nquads` over the flat quad set: both canonicalize
     /// the same flat triple set, so the semantic digest is preserved (the native
     /// folded `canonicalize` would instead emit reserved overlay sentinels).
     pub fn canonical_nquads_flat(&self) -> Result<String, SliceError> {
@@ -555,8 +551,7 @@ impl Dataset {
     }
 
     /// Flatten the dataset to the source-faithful plain-quad stream: base quads, then
-    /// the re-materialized `rdf:reifies` reifier rows, then the annotation rows. The
-    /// oxigraph-free twin of `purrdf::oxigraph::flat_rdf_quads_from_dataset`.
+    /// the re-materialized `rdf:reifies` reifier rows, then the annotation rows.
     fn flat_quads(&self) -> Vec<RdfQuad> {
         let mut quads: Vec<RdfQuad> = self.ds.owned_quads().collect();
         for reifier in self.ds.owned_reifiers() {

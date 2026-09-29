@@ -13,11 +13,10 @@
 //! This crate is the canonical authority for turning a `purrdf-core`
 //! [`SparqlResult`] (SELECT solutions, ASK boolean, or CONSTRUCT graph) into the
 //! four W3C SPARQL Results formats — JSON (SRJ), XML, CSV, and TSV — plus an
-//! additive, provenance-carrying `purrdf` extension. It replaces the
-//! oxigraph-family `sparesults` on the results path.
+//! additive, provenance-carrying `purrdf` extension.
 //!
 //! It depends **only** on `purrdf-core` (with `default-features = false`) so
-//! it stays oxigraph-free and wasm-clean. Term and N-Triples syntax are produced
+//! it stays wasm-clean. Term and N-Triples syntax are produced
 //! exclusively by the rdf-core kernel `emit_*` primitives (see `term`,
 //! `graph`); this crate adds no term-syntax of its own.
 //!

@@ -4,8 +4,7 @@
 //! The native [`SparqlEngine`] implementation and its parse-memoizing plan cache.
 //!
 //! [`NativeSparqlEngine`] is the single required impl of the `purrdf-core`
-//! `SparqlEngine` seam — the native replacement for the oxigraph-family
-//! `spareval` on the query path. Ordinary query entry points accept operationally
+//! `SparqlEngine` seam on the query path. Ordinary query entry points accept operationally
 //! infallible [`DatasetView`] backends such as [`RdfDataset`] and validated pack
 //! views. Lazy backends that can fail during execution use the distinct
 //! [`FallibleDatasetView`] entry points, which return a completeness certificate or

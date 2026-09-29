@@ -4,17 +4,14 @@
 //! The SHACL engine's native RDF 1.2 term value model.
 //!
 //! The engine, constraint evaluator, path evaluator, shape parser, and report all
-//! work over ONE term value type. Historically that type was
-//! `oxigraph::model::Term`; this module replaces it with an oxigraph-free native
-//! model built from `String` IRIs and [`purrdf::ir::TermRef`] resolution.
+//! work over ONE term value type: this module's native model, built from `String` IRIs and [`purrdf::ir::TermRef`] resolution.
 //!
 //! # Rendering contract (behavior-preserving)
 //!
-//! `Term::to_string` reproduces oxigraph's `Term::to_string()` **byte-for-byte**,
+//! `Term::to_string` renders a fixed, N-Triples-shaped form **byte-for-byte**,
 //! because the engine uses the string rendering as its deterministic sort key
 //! ([`crate::engine`]) and the report serialization / Python surface
-//! ([`crate::report`]) compare on it. The contract verified against
-//! oxigraph 0.5 is:
+//! ([`crate::report`]) compare on it. The contract is:
 //!
 //! - IRI → `<iri>`
 //! - blank node → `_:label`
@@ -24,7 +21,7 @@
 //! - quoted triple → `<<( <s> <p> <o> )>>`
 //!
 //! Literal lexical forms escape `\\ \" \n \r \t` plus C0 control chars as `\u00XX`,
-//! exactly as oxigraph's N-Triples literal writer.
+//! exactly as an N-Triples literal writer does.
 
 use crate::data_view::ShaclRead;
 use purrdf_core::{Nested, TermBox, try_fold_nested, visit_nested};
@@ -52,8 +49,8 @@ pub(crate) fn sort_terms_canonical(values: &mut [Term]) {
     values.sort_by(canonical_cmp);
 }
 
-/// A native RDF term IRI (named node). Wraps a `String`; mirrors the slice of the
-/// oxigraph `NamedNode` API the engine actually uses (`as_str`, `Ord`, `Display`).
+/// A native RDF term IRI (named node). Wraps a `String`; exposes the surface the
+/// engine actually uses (`as_str`, `Ord`, `Display`).
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct NamedNode(String);
 
@@ -224,8 +221,8 @@ impl Triple {
     }
 }
 
-/// A native RDF 1.2 term — the SHACL engine's value model. Variants mirror
-/// `oxigraph::model::Term` so the constraint/shape/path logic keeps its shape.
+/// A native RDF 1.2 term — the SHACL engine's value model. Variants cover
+/// IRIs, blank nodes, literals and quoted triple terms.
 #[derive(Clone, PartialEq, Eq, Hash, Debug)]
 pub enum Term {
     /// An IRI.
@@ -997,7 +994,7 @@ impl NamedNode {
 }
 
 impl std::fmt::Display for Term {
-    /// Render byte-for-byte as `oxigraph::model::Term::to_string()` — the engine's
+    /// Render byte-for-byte per the module's rendering contract — the engine's
     /// deterministic sort key and report identity depend on this.
     ///
     /// A quoted triple is written over a work list: its opening `<<( ` at once, then
@@ -1040,7 +1037,7 @@ enum TermNode<'t> {
     Predicate(&'t NamedNode),
 }
 
-/// Render a literal exactly as oxigraph's `Term::to_string()` does.
+/// Render a literal per the module's rendering contract.
 fn render_literal(l: &Literal) -> String {
     let lex = escape_literal(&l.lexical);
     if let Some(lang) = &l.language {
@@ -1050,14 +1047,14 @@ fn render_literal(l: &Literal) -> String {
         };
     }
     // Plain `xsd:string` (and the rare `rdf:langString` without a tag) render with
-    // NO datatype suffix, matching oxigraph.
+    // NO datatype suffix.
     if l.datatype == XSD_STRING || l.datatype == RDF_LANG_STRING {
         return format!("\"{lex}\"");
     }
     format!("\"{lex}\"^^<{}>", l.datatype)
 }
 
-/// Escape a literal lexical form exactly as oxigraph's N-Triples literal writer:
+/// Escape a literal lexical form as the N-Triples literal writer does:
 /// `\\ \" \n \r \t` plus C0 control characters as `\u00XX`.
 fn escape_literal(s: &str) -> String {
     use std::fmt::Write as _;
@@ -1197,7 +1194,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_iri_and_blank_like_oxigraph() {
+    fn renders_iri_and_blank_in_ntriples_form() {
         assert_eq!(nn("http://e/s").to_string(), "<http://e/s>");
         assert_eq!(Term::blank("b0").to_string(), "_:b0");
     }
@@ -1233,7 +1230,7 @@ mod tests {
     }
 
     #[test]
-    fn renders_quoted_triple_like_oxigraph() {
+    fn renders_quoted_triple_in_ntriples_form() {
         let t = Term::Triple(Box::new(Triple::new(
             NamedNode::new_unchecked("http://e/s").into_term(),
             NamedNode::new_unchecked("http://e/p"),
@@ -1246,7 +1243,7 @@ mod tests {
     }
 
     #[test]
-    fn escapes_special_chars_like_oxigraph() {
+    fn escapes_special_chars_in_literals() {
         let t = Term::Literal(Literal::new_simple_literal("a\"b\nc\td\\e\u{0007}f"));
         assert_eq!(t.to_string(), "\"a\\\"b\\nc\\td\\\\e\\u0007f\"");
     }

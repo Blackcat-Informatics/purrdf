@@ -11,7 +11,7 @@
 //! ## The seam
 //!
 //! Unlike the transitional design, the [`FnoCatalog`] is now BUILT IN RUST — the
-//! oxigraph-free FnO correspondence lowering
+//! FnO correspondence lowering
 //! (`crates/logic-compile/src/projections/fno.rs`) discovers the
 //! projection functions + cells from the slice framework + the repo DSL tree,
 //! reads each input predicate's ontology `rdfs:range` (the fail-closed untyped-param

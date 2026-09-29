@@ -4,8 +4,7 @@
 //! Shared mapping-DSL infrastructure for the surviving generated-artifact emitters.
 //!
 //! The four alignment dialects (SSSOM, FnO, EDOAL, SPARQL CONSTRUCT) are now
-//! produced by the oxigraph-free `purrdf-logic-compile` correspondence lowerings. The
-//! oxigraph-backed alignment rendering that used to live in this crate is gone, but
+//! produced by the `purrdf-logic-compile` correspondence lowerings, but
 //! several still-live emitters and lints share a small kernel of infrastructure that
 //! the alignment renderers used to host:
 //!

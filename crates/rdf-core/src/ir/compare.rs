@@ -10,13 +10,13 @@
 //! the IR** — on any [`DatasetView`], the frozen
 //! [`RdfDataset`](super::dataset::RdfDataset) and the composite/delta views alike,
 //! with the two sides independently typed so a view and a dataset compare without
-//! either being materialized — and **NEVER consults oxigraph**. That is deliberate
+//! either being materialized. That is deliberate
 //! and is the
-//! acceptance gate of (design doc *Appendix C0*, point 4): oxigraph
-//! canonicalizes typed-literal lexical forms (`0.70` → `0.7`, `+00:00` → `Z`) and
-//! drops the reifier/annotation overlay entirely — so two datasets that differ only
-//! in lexical spelling or in reifier COUNT would compare *equal* through oxigraph,
-//! exactly the differences this comparator must catch.
+//! acceptance gate of (design doc *Appendix C0*, point 4): a comparator that
+//! canonicalizes typed-literal lexical forms (`0.70` → `0.7`, `+00:00` → `Z`) or
+//! drops the reifier/annotation overlay would let two datasets that differ only
+//! in lexical spelling or in reifier COUNT compare *equal* — exactly the
+//! differences this comparator must catch.
 //!
 //! ## Identity contract
 //!
@@ -49,7 +49,7 @@ use crate::dataset_view::DatasetView;
 
 /// IR-direct structural comparison. Returns `true` iff the two views are
 /// RDF-structurally isomorphic: the same quads (under a blank-node bijection), the
-/// same reifier bindings, and the same annotations. **Oxigraph is NEVER consulted.**
+/// same reifier bindings, and the same annotations.
 ///
 /// Backed by full RDFC-1.0 canonicalization, this is an **exact** oracle: it never
 /// reports a false positive *or* a false negative (the simplified comparator's
@@ -153,7 +153,7 @@ mod tests {
     }
 
     /// HEADLINE GATE: differing only in reifier COUNT for the same triple →
-    /// NOT isomorphic. Oxigraph canonicalization would hide this.
+    /// NOT isomorphic. A lexical-canonicalizing comparison would hide this.
     #[test]
     fn reifier_count_difference_is_not_isomorphic() {
         let build = |reifiers: &[&str]| -> Arc<RdfDataset> {

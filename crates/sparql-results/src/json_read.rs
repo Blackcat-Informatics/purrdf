@@ -12,8 +12,7 @@
 //! # Wasm discipline
 //!
 //! A hand-rolled parser over `&[u8]` — **no `serde`, no `std::io`** — symmetric
-//! with the hand-rolled writers and keeping the crate wasm-clean and
-//! oxigraph-free.
+//! with the hand-rolled writers and keeping the crate wasm-clean.
 //!
 //! # Nesting depth
 //!

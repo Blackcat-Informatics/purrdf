@@ -258,7 +258,7 @@ fn check_id_in_range(
 /// annotation reifier — MUST be an IRI or a blank node. A literal there is illegal,
 /// and a triple term there is illegal too: an asserted statement cannot have a quoted
 /// triple as its subject (only an IRI/blank can be asserted about). This is also the
-/// downstream contract: the owned-model / oxigraph conversions assume an asserted
+/// downstream contract: the owned-model conversions assume an asserted
 /// subject is IRI/blank, so admitting a triple term here would let it reach an
 /// `unreachable!` panic. (The subject position *inside* a quoted triple carries the
 /// same rule — see [`require_triple_component_subject`].)
@@ -426,8 +426,8 @@ mod tests {
     }
 
     /// Gate 3: a triple term in subject position hard-fails. RDF 1.2 admits a triple
-    /// term only in object position; a triple subject would otherwise reach the owned
-    /// / oxigraph boundaries that assume an IRI/blank subject and panic there.
+    /// term only in object position; a triple subject would otherwise reach the owned-model
+    /// boundaries that assume an IRI/blank subject and panic there.
     #[test]
     fn freeze_err_on_triple_term_subject() {
         let mut b = RdfDatasetBuilder::new();

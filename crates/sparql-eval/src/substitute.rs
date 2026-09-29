@@ -6,8 +6,7 @@
 //! Bridges the engine's egress term model ([`TermValue`]) to the algebra's
 //! [`Query::substitute_variable`] rewrite. Each `(name, value)` of a
 //! [`SparqlRequest::substitutions`](purrdf_core::SparqlRequest) pre-binds the
-//! query variable `name` to `value` before evaluation, exactly mirroring oxigraph's
-//! `PreparedSparqlQuery::substitute_variable` (the SHACL `$this` focus-node path).
+//! query variable `name` to `value` before evaluation (the SHACL `$this` focus-node path).
 //!
 //! The substitution is applied to a **clone** of the cached (un-substituted) parse,
 //! so the plan cache is never poisoned by a focus-node-specific binding.

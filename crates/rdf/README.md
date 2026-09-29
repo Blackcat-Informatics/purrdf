@@ -54,7 +54,7 @@ loss ledger) and adds what the kernel deliberately leaves out:
   Package v1 over one caller-configured, resource-bounded archive API with an
   always-computed loss ledger.
 
-The crate is PyO3-free and oxigraph-free (like the whole workspace), keeps
+The crate is PyO3-free, keeps
 reporting structured but SARIF-free — callers translate `RdfDiagnostic`s into
 SARIF via [`purrdf-validate`](https://crates.io/crates/purrdf-validate) — and
 builds cleanly for `wasm32-unknown-unknown`.

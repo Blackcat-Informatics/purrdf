@@ -2,12 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The canonical, review-friendly Turtle **renderer** over the purrdf IR —
-//! the oxigraph-free half of the on-disk normalizer.
+//! the kernel half of the on-disk normalizer.
 //!
 //! [`render`] takes a frozen [`RdfDataset`] and a prefix set and produces canonical
 //! Turtle text. It is a pure function of the graph: blank/triple object ordering is
 //! derived from subtree CONTENT (never from `TermId` interning order), so the output
-//! is idempotent and independent of how the terms were interned. The oxigraph-coupled
+//! is idempotent and independent of how the terms were interned. The
 //! text *parser* (`canonical_turtle` / `ingest`) lives in `purrdf`; this kernel half
 //! depends only on the IR, so it builds for `wasm32` and is the canonical-Turtle
 //! authority for the wasm-clean compiler (the correspondence EDOAL lowering).

@@ -20,7 +20,6 @@ const PACKAGE_SPECS = [
   ["rdf-ext", "2.6.0"],
   ["graphy", "4.3.7"],
   ["@comunica/query-sparql", "5.2.4"],
-  ["oxigraph", "0.5.9"],
 ];
 const DEFAULT_COMMAND_TIMEOUT_MS = 120_000;
 const NPM_INSTALL_TIMEOUT_MS = 300_000;
@@ -253,18 +252,10 @@ const N3 = await import("n3");
 const rdfExt = (await import("rdf-ext")).default;
 const graphy = (await import("graphy")).default;
 const comunica = await import("@comunica/query-sparql");
-const oxigraph = await import("oxigraph");
 
 await purrdf.ready();
 const purrdfDataset = purrdf.Dataset.parse(SIMPLE_NT, "ntriples");
 const purrdfEngine = new purrdf.QueryEngine();
-
-const oxStore = () => {
-  const store = new oxigraph.Store();
-  store.load(SIMPLE_NT, { format: "nt" });
-  return store;
-};
-const oxQueryStore = oxStore();
 
 const comunicaEngine = new comunica.QueryEngine();
 const comunicaStore = new N3.Store(n3Quads());
@@ -345,19 +336,6 @@ const results = {
     }, (rows) => rows[0]?.get("count")?.value ?? "no count"),
     graphIdentity: unsupported("no RDFC/isomorphism API in query-sparql package"),
     rdf12: unsupported("RDF 1.2 parse support depends on the supplied source parser"),
-  },
-  oxigraph: {
-    parse: await measure(oxStore, (store) => String(store.size) + " quads"),
-    serialize: await measure(() => oxStore().dump({ format: "nq" }), (text) => String(text.length) + " chars"),
-    select: await measure(() => oxQueryStore.query(SELECT_SIMPLE), (rows) => String(rows.length) + " rows"),
-    propertyPath: await measure(() => oxQueryStore.query(SELECT_PATH), (rows) => String(rows.length) + " rows"),
-    aggregation: await measure(() => oxQueryStore.query(SELECT_AGG), (rows) => rows[0]?.get("count")?.value ?? "no count"),
-    graphIdentity: unsupported("no RDFC/isomorphism API exposed in oxigraph JS package"),
-    rdf12: await measure(() => {
-      const store = new oxigraph.Store();
-      store.load(RDF12_NQ, { format: "nq" });
-      return store;
-    }, (store) => String(store.size) + " quads"),
   },
 };
 

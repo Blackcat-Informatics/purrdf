@@ -1010,7 +1010,7 @@ class Graph:
         registry (:mod:`purrdf.compat.rdflib.plugin`) — the single source of truth
         for name → implementation. Turtle routes through the native
         ``canonicalize_turtle``; JSON-LD-star and RDF/XML route through the
-        purrdf-gts codecs; the rest dump directly via oxigraph. Every emitter is
+        purrdf-gts codecs; the rest dump directly via the native ``Store``. Every emitter is
         byte-deterministic.
         """
         from . import plugin

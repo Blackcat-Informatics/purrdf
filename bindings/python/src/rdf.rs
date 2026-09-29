@@ -87,8 +87,7 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_function(wrap_pyfunction!(rdf_gts_loss_matrix_json, m)?)?;
     m.add_function(wrap_pyfunction!(canonicalize_turtle, m)?)?;
     crate::py_jsonld::register(m)?;
-    // The native oxigraph Store / SPARQL / parse / canonicalize surface that
-    // replaces the external `pyoxigraph` package.
+    // The native Store / SPARQL / parse / canonicalize surface.
     crate::py_store::register(m)?;
     // Deterministic graph/tabular/research-object archive projection and lift surfaces.
     crate::py_projection::register(m)?;

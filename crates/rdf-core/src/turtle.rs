@@ -5,7 +5,7 @@
 //!
 //! This is a hand-written, full-IRI Turtle serializer over the purrdf model
 //! ([`RdfQuad`] / [`RdfReifier`] / [`RdfAnnotation`] / [`RdfTerm`]). It exists
-//! because oxigraph's `Store::dump` rewrites the RDF 1.2 reifier shorthand
+//! because a generic dump would rewrite the RDF 1.2 reifier shorthand
 //! `<< s p o >>` into an extra `rdf:reifies` indirection node with opaque blank
 //! labels — changing the *structure* of the document. The native reasoning lane
 //! commits artifacts whose structure (`[] rdf:reifies <<( … )>>`, triple-term

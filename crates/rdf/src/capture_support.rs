@@ -6,12 +6,11 @@
 //! These pure helpers — corpus enumeration, the nondeterministic / multi-query /
 //! deferred-construct classifiers, and the stable solution-row key — are used by the
 //! `capture_sparql_goldens` binary to freeze the native engine's outputs as the
-//! committed conformance goldens. They are oxigraph-free and ride the always-on `gts`
-//! feature.
+//! committed conformance goldens. They ride the always-on `gts` feature.
 
 use std::path::{Path, PathBuf};
 
-/// Nondeterministic SPARQL builtins: results vary per-call, so a frozen oxigraph
+/// Nondeterministic SPARQL builtins: results vary per-call, so a frozen
 /// golden is not meaningful. The capture writes a `.nondeterministic` marker (the
 /// Task-4 gate runs native for well-formedness only), and the parity sweep runs
 /// native only and asserts well-formed output.

@@ -6,7 +6,7 @@
 //! [`ProjectionDiagnostic`] is the `{severity, code, message, check, instance}` (+
 //! optional alignment-row CURIEs) shape every slice lint emits and the PyO3 binding
 //! packs into a Python dict. The correspondence-soundness checks moved to the
-//! oxigraph-free `purrdf-logic-compile` pass (which redeclares its own equivalent
+//! `purrdf-logic-compile` pass (which redeclares its own equivalent
 //! struct); the surviving [`crate::prefix_lint`] still emits this carrier, so it lives
 //! here in a small dedicated home.
 

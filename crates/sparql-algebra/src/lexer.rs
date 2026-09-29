@@ -1007,7 +1007,7 @@ impl<'a> Lexer<'a> {
             }
             if c == '/' && self.options.pn_local_allows_slash {
                 // Turtle-only leniency: a bare `/` is a PN_LOCAL char (strict
-                // grammar requires `\/`, but oxigraph/purrdf-gts accept the bare
+                // grammar requires `\/`, but purrdf-gts accepts the bare
                 // form, e.g. `purrdf:report/shacl/sarif`). Turtle has no `/`
                 // operator, so this is unambiguous in term position.
                 out.push(c);

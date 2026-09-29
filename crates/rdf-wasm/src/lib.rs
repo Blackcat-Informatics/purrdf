@@ -4,18 +4,18 @@
 //! # purrdf — a wasm32, in-memory RDF 1.2 engine with an idiomatic RDF/JS API
 //!
 //! Parcel **P10** of the purrdf program (`docs/design/PurRDF-PLAN.md`).
-//! This crate compiles the oxigraph-free, PyO3-free [`purrdf`] kernel to
+//! This crate compiles the PyO3-free [`purrdf`] kernel to
 //! `wasm32-unknown-unknown` and exposes it to JavaScript/TypeScript through the
 //! [RDF/JS](https://rdf.js.org/) community spec — `DataFactory`, `DatasetCore`, and
 //! `Stream`/`Sink` — packaged for npm/ESM as **`purrdf`**.
 //!
 //! ## Scope (by charter)
 //!
-//! - **In-memory only.** The oxigraph `Store` (RocksDB) and `crates/logic` do not
+//! - **In-memory only.** A persistent (RocksDB) store and `crates/logic` do not
 //!   compile to wasm and are deliberately excluded — this is the
 //!   value-interned IR + the COW [`MutableDataset`](purrdf::ir::MutableDataset),
 //!   not a persistent quad store.
-//! - **Two SPARQL lanes.** The native, oxigraph-free multiset evaluator
+//! - **Two SPARQL lanes.** The native multiset evaluator
 //!   ([`purrdf_sparql_eval`]) binds to the wasm [`Dataset`] (see the `query` module),
 //!   so SELECT / ASK / CONSTRUCT / DESCRIBE run client-side with no server. The
 //!   synchronous lane is offline: it installs no remote source, so `SERVICE` / `LOAD`

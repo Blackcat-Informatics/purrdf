@@ -140,7 +140,7 @@ impl BlankScope {
     /// Render a blank node's owned-model label, encoding the `(label, scope)` pair
     /// into the owned model's single string slot so two same-label blanks from
     /// DIFFERENT scopes never collapse into one owned blank for legacy consumers
-    /// (compat bridge / oxigraph / SHACL).
+    /// (compat bridge / SHACL).
     ///
     /// This is exactly
     /// [`encode_blank_label`](crate::blank_label::encode_blank_label) under the

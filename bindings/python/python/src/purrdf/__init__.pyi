@@ -263,8 +263,8 @@ class Variable:
     def __eq__(self, other: object) -> bool: ...
 
 # RDF 1.2 (unlike the obsolete RDF-star) permits triple terms in the OBJECT
-# position only: a subject is an IRI or blank node, never a quoted triple. This
-# mirrors oxigraph's `NamedOrBlankNode` subject type — see `extract_subject` in
+# position only: a subject is an IRI or blank node, never a quoted triple. See
+# `extract_subject` in
 # bindings/python/src/py_store.rs.
 _Subject = NamedNode | BlankNode
 _Term = NamedNode | BlankNode | Literal | Triple

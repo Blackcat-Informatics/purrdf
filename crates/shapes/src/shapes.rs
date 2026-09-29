@@ -3157,8 +3157,7 @@ mod tests {
     use crate::expression::FnCall;
     use purrdf_sparql_eval::UserFnBody;
 
-    /// Parse Turtle into a frozen dataset (the in-crate tests historically used an
-    /// oxigraph store; the name is kept so the call sites stay stable).
+    /// Parse Turtle into a frozen dataset.
     fn load_store(ttl: &str) -> Arc<RdfDataset> {
         crate::text_ingest::parse_turtle_to_dataset(ttl, None).expect("Turtle parse error")
     }

@@ -11,7 +11,7 @@
 msgid ""
 msgstr ""
 "Project-Id-Version: The PurRDF Book\n"
-"POT-Creation-Date: 2026-09-29T14:32:42-06:00\n"
+"POT-Creation-Date: 2026-09-29T14:41:08-06:00\n"
 "PO-Revision-Date: 2026-09-02T15:58:27-06:00\n"
 "Last-Translator: Automatically generated\n"
 "Language-Team: none\n"
@@ -852,7 +852,16 @@ msgid ""
 "dependencies are the first-party lexical layer `purrdf-lex` and the zero-"
 "dependency `purrdf-hash`. The crate map is in the [repository README]"
 "(https://github.com/Blackcat-Informatics/purrdf#crate-map)."
-msgstr "大多数应用只需依赖 `purrdf`。子 crate（`purrdf-core`、`purrdf-rdf`、`purrdf-columnar`、`purrdf-sparql-algebra`、`purrdf-sparql-eval`、`purrdf-sparql-results`、`purrdf-cdt`、`purrdf-shapes`、`purrdf-jsonschema`、`purrdf-shex`、`purrdf-gts`、`purrdf-datalog`、`purrdf-entail`、`purrdf-geo`、`purrdf-text`、`purrdf-validate`、`purrdf-slice`、`purrdf-iri`、`purrdf-lex`、`purrdf-xsd`、`purrdf-events`、`purrdf-hash`、`purrdf-wasm`）是为只想要恰好一个引擎的使用方准备的——例如，只需要 IRI 解析的工具可以仅依赖 `purrdf-iri`，它的依赖是第一方词法层 `purrdf-lex` 与零依赖的 `purrdf-hash`。crate 一览见[仓库 README](https://github.com/Blackcat-Informatics/purrdf#crate-map)。"
+msgstr ""
+"大多数应用只需依赖 `purrdf`。子 crate（`purrdf-core`、`purrdf-rdf`、`purrdf-"
+"columnar`、`purrdf-sparql-algebra`、`purrdf-sparql-eval`、`purrdf-sparql-"
+"results`、`purrdf-cdt`、`purrdf-shapes`、`purrdf-jsonschema`、`purrdf-shex`、"
+"`purrdf-gts`、`purrdf-datalog`、`purrdf-entail`、`purrdf-geo`、`purrdf-"
+"text`、`purrdf-validate`、`purrdf-slice`、`purrdf-iri`、`purrdf-lex`、"
+"`purrdf-xsd`、`purrdf-events`、`purrdf-hash`、`purrdf-wasm`）是为只想要恰好一"
+"个引擎的使用方准备的——例如，只需要 IRI 解析的工具可以仅依赖 `purrdf-iri`，它"
+"的依赖是第一方词法层 `purrdf-lex` 与零依赖的 `purrdf-hash`。crate 一览见[仓"
+"库 README](https://github.com/Blackcat-Informatics/purrdf#crate-map)。"
 
 #: src/getting-started/rust.md:97
 msgid ""
@@ -2427,13 +2436,13 @@ msgstr ""
 msgid ""
 "Text codecs are _not_ in the kernel — parsing and serialization live one "
 "layer up in [`purrdf-rdf`](https://docs.rs/purrdf-rdf). The split keeps the "
-"kernel small and its invariants enforceable at the crate boundary: no "
-"oxigraph, no PyO3 (a hygiene gate asserts the dependency tree), `wasm32`\\-"
-"clean, and a file-IO-free IR layer."
+"kernel small and its invariants enforceable at the crate boundary: no PyO3 "
+"(a hygiene gate asserts the dependency tree), `wasm32`\\-clean, and a file-"
+"IO-free IR layer."
 msgstr ""
 "文本编解码器*不*在内核中——解析与序列化位于上一层的 [`purrdf-rdf`](https://"
 "docs.rs/purrdf-rdf) 中。这种拆分让内核保持小巧，并让其不变量能在 crate 边界上"
-"强制执行：不含 oxigraph，不含 PyO3（一项卫生检查会对依赖树进行断言），"
+"强制执行：不含 PyO3（一项卫生检查会对依赖树进行断言），"
 "`wasm32`\\-clean（可干净构建到该目标），且 IR 层不涉及文件 IO。"
 
 #: src/concepts/interned-dataset.md:84
@@ -11554,13 +11563,13 @@ msgid ""
 "implements **SHACL 1.2**: Core, SPARQL Extensions, Node Expressions, "
 "Inference Rules and the SPARQL 1.2 RL rule language, plus the SHACL-AF 1.0 "
 "spellings those documents supersede. It runs entirely on PurRDF's own "
-"interned IR and native SPARQL engine (no oxigraph, no PyO3)."
+"interned IR and native SPARQL engine (no PyO3)."
 msgstr ""
 "[`purrdf-shapes`](https://docs.rs/purrdf-shapes)（重新导出为 "
 "`purrdf::shapes`）是 PurRDF 的原生 SHACL 验证器与规则引擎。它实现了 **SHACL "
 "1.2**：Core、SPARQL 扩展、节点表达式、推理规则以及 SPARQL 1.2 RL 规则语言，外"
 "加被这些文档取代的 SHACL-AF 1.0 拼写。它完全运行在 PurRDF 自己的驻留 IR 与原"
-"生 SPARQL 引擎之上（不含 oxigraph，不含 PyO3）。"
+"生 SPARQL 引擎之上（不含 PyO3）。"
 
 #: src/validation/shacl.md:15
 msgid ""
@@ -20345,20 +20354,25 @@ msgstr "内核隔离带"
 
 #: src/project/design-rules.md:48
 msgid ""
-"`purrdf-core` must never depend on oxigraph or PyO3 — the whole workspace is "
-"oxigraph-free, and a hygiene gate asserts the dependency tree. The root "
-"`purrdf-hash` keeps **zero runtime dependencies**, and the foundation leaves "
-"above it (`purrdf-lex`, `purrdf-iri`, `purrdf-xsd`, `purrdf-events`) depend "
-"only on the first-party crates their `layers.toml` rows allow and on no "
-"third-party crate. Diagnostics stay structured and SARIF-free in the kernel; "
-"the SARIF boundary is the `purrdf-validate` leaf."
-msgstr "`purrdf-core` 绝不能依赖 oxigraph 或 PyO3——整个工作区都不含 oxigraph，并有一道卫生关卡对依赖树进行断言。根 crate `purrdf-hash` 保持**零运行时依赖**，其上的基础叶子 crate（`purrdf-lex`、`purrdf-iri`、`purrdf-xsd`、`purrdf-events`）只依赖其 `layers.toml` 行所允许的第一方 crate，不依赖任何第三方 crate。诊断在内核中保持结构化且不含 SARIF；SARIF 边界是 `purrdf-validate` 这个叶子 crate。"
+"`purrdf-core` must never depend on PyO3, and a hygiene gate asserts the "
+"dependency tree. The root `purrdf-hash` keeps **zero runtime dependencies**, "
+"and the foundation leaves above it (`purrdf-lex`, `purrdf-iri`, `purrdf-"
+"xsd`, `purrdf-events`) depend only on the first-party crates their "
+"`layers.toml` rows allow and on no third-party crate. Diagnostics stay "
+"structured and SARIF-free in the kernel; the SARIF boundary is the `purrdf-"
+"validate` leaf."
+msgstr ""
+"`purrdf-core` 绝不能依赖 PyO3，并有一道卫生关卡对依赖树进行断言。根 crate "
+"`purrdf-hash` 保持**零运行时依赖**，其上的基础叶子 crate（`purrdf-lex`、"
+"`purrdf-iri`、`purrdf-xsd`、`purrdf-events`）只依赖其 `layers.toml` 行所允许的"
+"第一方 crate，不依赖任何第三方 crate。诊断在内核中保持结构化且不含 SARIF；"
+"SARIF 边界是 `purrdf-validate` 这个叶子 crate。"
 
-#: src/project/design-rules.md:56
+#: src/project/design-rules.md:55
 msgid "Everything is wasm-able"
 msgstr "一切皆可编译到 wasm"
 
-#: src/project/design-rules.md:58
+#: src/project/design-rules.md:57
 msgid ""
 "Every release crate must build for `wasm32-unknown-unknown`, and CI hard-"
 "fails otherwise. No dependency may drag in threads, the filesystem, C "
@@ -20371,11 +20385,11 @@ msgstr ""
 "密码学实现保持纯 Rust，正是出于这一原因。这正是 JavaScript 包之所以是*同一个"
 "引擎*、而不是移植版本的原因。"
 
-#: src/project/design-rules.md:64
+#: src/project/design-rules.md:63
 msgid "Hard-fail, never wrong"
 msgstr "宁可硬失败，绝不给错答案"
 
-#: src/project/design-rules.md:66
+#: src/project/design-rules.md:65
 msgid ""
 "Across the toolkit, out-of-scope input is a **typed error**, never a partial "
 "answer: malformed RDF is an `RdfDiagnostic`, an unsupported SPARQL builtin "
@@ -20392,7 +20406,7 @@ msgstr ""
 "格式错误。按设计有损的投影是允许的，但必须*显式报告*，经由[损失台账](../"
 "slices.md#损失台账)。"
 
-#: src/project/design-rules.md:74
+#: src/project/design-rules.md:73
 msgid ""
 "A hard-fail is owed to input the toolkit cannot handle — never to a value "
 "its own signature accepts. `purrdf-entail::materialize` used to refuse `OWL-"
@@ -20409,7 +20423,7 @@ msgstr ""
 "`Materialization`，其中携带每种蕴涵机制自身的输入，因而不再有任何「不支持的蕴"
 "涵机制」错误可以指称。"
 
-#: src/project/design-rules.md:82
+#: src/project/design-rules.md:81
 msgid ""
 "The reasoning side adds a second discipline on top of hard-fail: where a run "
 "_succeeds_ but is bounded, it says so. `materialize` returns a "
@@ -20424,11 +20438,11 @@ msgstr ""
 "演算的契约哈希。静默交付一个正确但不完备的答案，与交付一个错误答案属于同一种"
 "失效模式。"
 
-#: src/project/design-rules.md:89
+#: src/project/design-rules.md:88
 msgid "Conformance corpora are the contract"
 msgstr "一致性语料就是契约"
 
-#: src/project/design-rules.md:91
+#: src/project/design-rules.md:90
 msgid ""
 "The W3C and community test suites are vendored, **byte-frozen**, and SHA-256-"
 "verified; harnesses assert exact counts and enforce XPASS discipline on "
@@ -20438,11 +20452,11 @@ msgstr ""
 "试框架断言精确的计数，并在其预期失败台账上执行 XPASS 纪律。参见[一致性与测试]"
 "(conformance.md)。"
 
-#: src/project/design-rules.md:96
+#: src/project/design-rules.md:95
 msgid "Supporting rules"
 msgstr "辅助规则"
 
-#: src/project/design-rules.md:98
+#: src/project/design-rules.md:97
 msgid ""
 "**Measured performance** — perf claims require a bench, not an adjective "
 "([Performance](performance.md))."
@@ -20450,7 +20464,7 @@ msgstr ""
 "**经过测量的性能**——性能声称需要一个基准测试，而不是一个形容词（[性能]"
 "(performance.md)）。"
 
-#: src/project/design-rules.md:100
+#: src/project/design-rules.md:99
 msgid ""
 "**One version, lockstep releases** — crates.io, PyPI, and npm ship one "
 "workspace version ([Versioning & Releases](releases.md))."
@@ -20458,7 +20472,7 @@ msgstr ""
 "**同一版本，同步发布**——crates.io、PyPI 与 npm 发布同一个工作区版本（[版本与"
 "发布](releases.md)）。"
 
-#: src/project/design-rules.md:102
+#: src/project/design-rules.md:101
 msgid ""
 "**Zero nightly features, stable MSRV** — there are no `#![feature(...)]` "
 "attributes anywhere in the workspace and the MSRV floor (currently 1.98, on "
@@ -20473,7 +20487,7 @@ msgstr ""
 "toolchain.toml` 中指定的*浮动* nightly，以获得更锐利的 clippy 与 rustdoc "
 "lint 以及更强的默认借用检查器；发布工件在 stable 上构建。"
 
-#: src/project/design-rules.md:108
+#: src/project/design-rules.md:107
 msgid ""
 "**Brand** — the project is **PurRDF** in prose and `purrdf` in identifiers "
 "([`docs/BRAND.md`](https://github.com/Blackcat-Informatics/purrdf/blob/main/"

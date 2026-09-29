@@ -10,7 +10,7 @@
 //!
 //! # Crate boundary
 //!
-//! The oxigraph-free, PyO3-free kernel — the immutable IR, the owned value model,
+//! The PyO3-free kernel — the immutable IR, the owned value model,
 //! diagnostics, dataset capability flags, the loss ledger, provenance, the FnO and
 //! SSSOM codecs, the content store, and the GTS reader path — lives in the
 //! ring-fenced sibling crate [`purrdf_core`]. `purrdf` **re-exports** every one
@@ -19,8 +19,7 @@
 //! *here* is the native text/statement/normalize surface ([`native_codecs`],
 //! [`native_quads`], [`statements`], [`turtle_normalize`]), the [`gts_compose`]
 //! author, and the `flattened_dataset_from_bytes` GTS helper in [`gts`]. The
-//! Python bindings live in `bindings/python`, and the last oxigraph adapters
-//! have been removed, so the entire crate is oxigraph-free.
+//! Python bindings live in `bindings/python`.
 #![doc(
     html_logo_url = "https://raw.githubusercontent.com/Blackcat-Informatics/purrdf/main/docs/purrdf-logo.svg"
 )]
@@ -31,8 +30,8 @@
 // ---------------------------------------------------------------------------
 // Re-exported kernel modules (live in `purrdf-core`). The re-export keeps the
 // public `purrdf::ir::…` surface AND this crate's internal `crate::ir::…`
-// references resolving against the ring-fenced core, so the oxigraph/py adapters
-// below need no path edits.
+// references resolving against the ring-fenced core, so the modules below need
+// no path edits.
 // ---------------------------------------------------------------------------
 pub mod gts_write;
 pub use purrdf_core::{
@@ -64,26 +63,23 @@ pub use purrdf_core::embedding;
 pub use purrdf_core::embedding::*;
 pub mod gts_view;
 // The native RDF text codecs: the codec-only `GtsCodecBackend`
-// over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs, oxigraph-free.
+// over the `purrdf-gts` Turtle/TriG/NT/NQ/RDF-XML codecs.
 pub mod native_codecs;
 /// Deterministic graph/tabular/research-object projection foundations and codecs.
 pub mod projections;
-// Oxigraph-free `RdfQuad` ⇄ `RdfDataset` conversions: the native twins of
-// the oxigraph-quad helpers, available to every Rust consumer without pulling the
-// oxigraph Store adapter.
+// Native `RdfQuad` ⇄ `RdfDataset` conversions, available to every Rust consumer
+// without a store adapter.
 pub mod native_quads;
 // The PyO3-free GTS snapshot compose core: SnapshotBuilder + emit_gts +
 // BlobRow, lifted out of the Python binding surface so purrdf-pipeline can
-// author a full multi-named-graph snapshot without pulling pyo3. Oxigraph-free
-//.
+// author a full multi-named-graph snapshot without pulling pyo3.
 pub mod dataset_io;
 pub mod gts_compose;
-// The native OWL ↔ RDF 1.2 statement codec is fully oxigraph-free (it folds over the
-// native flat-quad stream).
+// The native OWL ↔ RDF 1.2 statement codec folds over the native flat-quad stream.
 pub mod statements;
 // Shared corpus-classification helpers: the pure corpus
 // enumeration / classification helpers the native golden-capture binary
-// (src/bin/capture_sparql_goldens.rs) uses. Oxigraph-free.
+// (src/bin/capture_sparql_goldens.rs) uses.
 pub mod capture_support;
 // The ONE definition of the frozen in-band-dictionary corpus vectors' fixed
 // sources and authoring recipes, shared by the maintainer freezing binary
@@ -96,7 +92,7 @@ pub mod gts_dict_vectors;
 #[doc(hidden)]
 pub mod gts_fixtures;
 // Canonical, review-friendly Turtle serializer over the IR: the
-// native replacement for rdflib `longturtle` in `purrdf normalize`. Oxigraph-free.
+// native replacement for rdflib `longturtle` in `purrdf normalize`.
 pub mod turtle_normalize;
 /// Statement-centric RDF 1.2 visualization projection and SVG export support.
 pub mod viz;
@@ -267,7 +263,7 @@ pub use purrdf_core::{
 
 // Shared USTAR (tar) codec: byte-deterministic writer + reader used by both the
 // snapshot stage (writer) and the validate path (reader). Unconditional — no
-// oxigraph or PyO3 dependency.
+// PyO3 dependency.
 pub mod ustar;
 
 /// The common purrdf surface, for `use purrdf::prelude::*;`.

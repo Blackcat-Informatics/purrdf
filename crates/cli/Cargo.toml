@@ -36,7 +36,7 @@ purrdf-rdf = { workspace = true }
 # shared with the slice catalogue and the shape-union loader, so the Windows/UNC
 # translation cannot diverge between surfaces.
 purrdf-iri = { workspace = true }
-# The oxigraph-free kernel: the frozen `RdfDataset`/`DatasetView` model, the
+# The kernel: the frozen `RdfDataset`/`DatasetView` model, the
 # pack container (`PackBuilder`/`PackView`/`verify_pack`/`dataset_from_view`),
 # the loss ledger, and the `SparqlResult` model.
 purrdf-core = { workspace = true }
