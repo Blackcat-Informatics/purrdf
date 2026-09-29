@@ -1131,6 +1131,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **rdf, python (BREAKING):** `GtsFoldView` compacts IRIs to CURIEs only under the W3C
+  namespaces it builds in — `rdf`, `rdfs`, `owl`, `xsd` and `skos`, taken from
+  `purrdf_iri::vocab` and `purrdf_xsd::datatype` — and under the prefixes the
+  caller supplies in `GtsFoldViewConfig::curie_prefixes`. The built-in
+  `schema:` prefix for `https://schema.org/` is gone: PurRDF supplies no
+  vocabulary that is not a W3C Recommendation's, so a schema.org IRI is now
+  returned in full by `GtsFoldView::curie` and `PublicValue::Iri` unless the
+  caller supplies `("schema", "https://schema.org/")`. `rdfs:label` and the
+  other W3C terms compact as before. Python's `GtsFoldViewNative.from_bytes`
+  and `from_parts` take the caller's prefixes as a new optional
+  `curie_prefixes` list of `(prefix, namespace)` pairs.
 - **rdf (BREAKING):** `JsonLdDirection` is a re-export of the one RDF 1.2
   base-direction type (`purrdf_core::RdfTextDirection`): its variants are
   `Ltr`/`Rtl` rather than `LeftToRight`/`RightToLeft`, and it gains
