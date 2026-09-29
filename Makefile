@@ -112,6 +112,7 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	python3 scripts/fetch-locked-deps.py
 	python3 scripts/check-banned-deps.py --self-test
 	python3 scripts/check-banned-deps.py
+	python3 scripts/check-banned-deps.py --ledger-complete
 	python3 scripts/check-layers.py --self-test
 	python3 scripts/check-layers.py
 	cargo run -q --locked -p helper-census -- --self-test

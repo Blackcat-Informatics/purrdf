@@ -3,7 +3,12 @@
 
 # The third-party dependency ledger, read by scripts/check-banned-deps.py:
 # which removed packages' names may still appear in prose and source
-# ([inhouse_names]), and which external packages may stay ([packages]).
+# ([inhouse_names]), and which external packages may stay ([packages]), each
+# with a census verdict: DISTINCT (`distinct`, no first-party code does its
+# job) or DUPLICATE (`duplicates_native`, the first-party home that does, with
+# `pending_native` while that home is still to be written), plus the `holder`
+# that keeps a package no workspace member names directly. The verdict keys are
+# described in full above the [packages] section.
 #
 # [inhouse_names]
 # ---------------
@@ -153,543 +158,778 @@ csv = [
 # category: spec-codec | crypto | runtime | oracle | bench | binding for a
 # direct dependency of a workspace member, transitive:<direct> for a package
 # only reached through that direct dependency.
+#
+# Every row carries exactly one verdict on whether PurRDF does its job natively:
+#   distinct          = DISTINCT: why no first-party code does this job.
+#   duplicates_native = DUPLICATE: the first-party home, `crate::path`, that does
+#                       this package's job. The home must resolve (a workspace
+#                       library, then each `mod` down to a module or an item it
+#                       declares), and the package may not be a direct
+#                       dependency of any workspace member.
+#   pending_native    = true on a DUPLICATE whose home does not exist yet; its
+#                       first-party edges may stay until the home lands. Once
+#                       the home resolves the flag is STALE and fails.
+#   holder            = the direct dependency whose closure keeps the package in
+#                       the graph; required when no workspace member depends on
+#                       it directly, refused when one does.
 
 [packages.aead]
 category = "transitive:aes-gcm"
 reason = "AEAD trait for AES-GCM"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.aes]
 category = "transitive:aes-gcm"
 reason = "AES block cipher"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.aes-gcm]
 category = "crypto"
 reason = "AES-256-GCM for GTS COSE_Encrypt0 envelopes"
+distinct = "AES-256-GCM authenticated encryption for GTS COSE_Encrypt0; PurRDF has no native block cipher or AEAD"
 metrics = { direct = true, exclusive_closure = 12, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.aho-corasick]
 category = "transitive:regex"
 reason = "multi-literal search inside regex"
+distinct = "internal to regex's literal prefilter; PurRDF has no multi-pattern literal search"
+holder = "regex"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.anstream]
 category = "transitive:clap"
 reason = "terminal colour stream for clap output"
+distinct = "internal to clap's terminal output; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.anstyle]
 category = "transitive:clap"
 reason = "terminal styling for clap output"
+distinct = "internal to clap's terminal output; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.anstyle-parse]
 category = "transitive:clap"
 reason = "ANSI parser for anstream"
+distinct = "internal to clap's terminal output; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.anstyle-query]
 category = "transitive:clap"
 reason = "terminal capability query for anstream"
+distinct = "internal to clap's terminal output; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.anstyle-wincon]
 category = "transitive:clap"
 reason = "Windows console styling for anstream"
+distinct = "internal to clap's terminal output; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.block-buffer]
 category = "transitive:sha2"
 reason = "block buffering for RustCrypto digests"
+distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
+holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.bumpalo]
 category = "transitive:wasm-bindgen"
 reason = "bump allocator for the wasm-bindgen macro backend"
+distinct = "internal to wasm-bindgen's JavaScript binding; PurRDF has no JavaScript FFI of its own"
+holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.cfg-if]
 category = "transitive:sha2"
 reason = "cfg dispatch helper used across RustCrypto and others"
+distinct = "a cfg dispatch macro inside sha2, getrandom, wasm-bindgen and the RustCrypto crates; no first-party code calls it"
+holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.ciborium]
 category = "spec-codec"
 reason = "CBOR (RFC 8949) encode/decode for GTS packs and envelopes"
+duplicates_native = "purrdf_lex::cbor"
+pending_native = true
 metrics = { direct = true, exclusive_closure = 7, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.ciborium-io]
 category = "transitive:ciborium"
 reason = "I/O traits for ciborium"
+duplicates_native = "purrdf_lex::cbor"
+pending_native = true
+holder = "ciborium"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.ciborium-ll]
 category = "transitive:ciborium"
 reason = "low-level CBOR codec for ciborium"
+duplicates_native = "purrdf_lex::cbor"
+pending_native = true
+holder = "ciborium"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.cipher]
 category = "transitive:aes-gcm"
 reason = "block/stream cipher traits for AES-GCM"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.clap]
 category = "runtime"
 reason = "command-line argument parsing for the purrdf CLI"
+distinct = "command-line argument parsing for the purrdf CLI; PurRDF has no command-line parser of its own"
 metrics = { direct = true, exclusive_closure = 14, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.clap_builder]
 category = "transitive:clap"
 reason = "clap argument builder"
+distinct = "clap's argument builder; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.clap_derive]
 category = "transitive:clap"
 reason = "clap derive macros"
+distinct = "clap's derive macros; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = true }
 
 [packages.clap_lex]
 category = "transitive:clap"
 reason = "clap lexer"
+distinct = "clap's argument lexer; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.cmov]
 category = "transitive:aes-gcm"
 reason = "constant-time conditional moves for RustCrypto"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.colorchoice]
 category = "transitive:clap"
 reason = "colour choice for anstream"
+distinct = "internal to clap's terminal output; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.const-oid]
 category = "transitive:sha2"
 reason = "ASN.1 OIDs for RustCrypto digest identifiers"
+distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
+holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.cpubits]
 category = "transitive:aes-gcm"
 reason = "target word-size detection for RustCrypto"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.cpufeatures]
 category = "transitive:sha2"
 reason = "runtime CPU feature detection for SIMD crypto"
+distinct = "runtime CPU detection inside sha2 and aes-gcm; purrdf_hash dispatches its own kernels, but this one serves only those two crates' internals"
+holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.crossbeam-deque]
 category = "transitive:rayon"
 reason = "work-stealing deques for rayon"
+distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of its own"
+holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.crossbeam-epoch]
 category = "transitive:rayon"
 reason = "epoch-based reclamation for rayon"
+distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of its own"
+holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.crossbeam-utils]
 category = "transitive:rayon"
 reason = "concurrency primitives for rayon"
+distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of its own"
+holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.crunchy]
 category = "transitive:ciborium"
 reason = "loop unrolling for half"
+duplicates_native = "purrdf_lex::cbor"
+pending_native = true
+holder = "ciborium"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
 
 [packages.crypto-common]
 category = "transitive:sha2"
 reason = "common RustCrypto traits"
+distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
+holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.ctr]
 category = "transitive:aes-gcm"
 reason = "CTR mode for AES-GCM"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.ctutils]
 category = "transitive:aes-gcm"
 reason = "constant-time utilities for RustCrypto"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.curve25519-dalek]
 category = "transitive:ed25519-dalek"
 reason = "Curve25519 group arithmetic for Ed25519"
+duplicates_native = "purrdf_ed25519"
+pending_native = true
+holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.curve25519-dalek-derive]
 category = "transitive:ed25519-dalek"
 reason = "SIMD backend derive macros for curve25519-dalek"
+duplicates_native = "purrdf_ed25519"
+pending_native = true
+holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = true }
 
 [packages.digest]
 category = "transitive:sha2"
 reason = "digest traits for RustCrypto hashes"
+distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
+holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.ed25519]
 category = "transitive:ed25519-dalek"
 reason = "Ed25519 signature types"
+duplicates_native = "purrdf_ed25519"
+pending_native = true
+holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.ed25519-dalek]
 category = "crypto"
 reason = "Ed25519 (RFC 8032) signatures for GTS COSE_Sign1 and RDF signing"
+duplicates_native = "purrdf_ed25519"
+pending_native = true
 metrics = { direct = true, exclusive_closure = 10, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.either]
 category = "transitive:rayon"
 reason = "Either type for rayon iterators"
+distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of its own"
+holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.equivalent]
 category = "transitive:serde_yaml_ng"
 reason = "key equivalence trait for indexmap"
+duplicates_native = "purrdf_lex::yaml"
+pending_native = true
+holder = "serde_yaml_ng"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.fastrand]
 category = "runtime"
 reason = "seeds structured-zstd FastCOVER dictionary training reproducibly in GTS"
+distinct = "the thread-local generator structured-zstd's FastCOVER sampler draws from; GTS only seeds and restores it, and no native generator can stand in for the one that crate calls"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.fiat-crypto]
 category = "transitive:ed25519-dalek"
 reason = "formally verified field arithmetic for curve25519-dalek"
+duplicates_native = "purrdf_ed25519"
+pending_native = true
+holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.getrandom]
 category = "runtime"
 reason = "native OS entropy for SPARQL RAND()/UUID() seeds and GTS test keys"
+distinct = "operating-system entropy for SPARQL RAND()/UUID() seeds and GTS test keys; PurRDF has no entropy source of its own"
 metrics = { direct = true, exclusive_closure = 4, release = true, wasm = false, build_script = true, proc_macro = false }
 
 [packages.ghash]
 category = "transitive:aes-gcm"
 reason = "GHASH universal hash for AES-GCM"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.half]
 category = "transitive:ciborium"
 reason = "half-precision floats for CBOR"
+duplicates_native = "purrdf_lex::cbor"
+pending_native = true
+holder = "ciborium"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.hashbrown]
 category = "runtime"
 reason = "raw HashTable for store-once interners and dedup maps"
+distinct = "the raw HashTable API behind hash-once, store-once interners, which std does not expose; PurRDF has hashers (purrdf_hash::fixed) but no hash table"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.heck]
 category = "transitive:pyo3"
 reason = "identifier case conversion for pyo3 and clap derive macros"
+distinct = "identifier case conversion inside the pyo3 and clap derive macros; no first-party code calls it"
+holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.hybrid-array]
 category = "transitive:sha2"
 reason = "const-generic arrays for RustCrypto"
+distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
+holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.indexmap]
 category = "transitive:serde_yaml_ng"
 reason = "insertion-ordered maps for YAML mappings"
+duplicates_native = "purrdf_lex::yaml"
+pending_native = true
+holder = "serde_yaml_ng"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.inout]
 category = "transitive:aes-gcm"
 reason = "in/out buffers for cipher"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.is_terminal_polyfill]
 category = "transitive:clap"
 reason = "terminal detection for anstream"
+distinct = "internal to clap's terminal output; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.itoa]
 category = "transitive:serde_json"
 reason = "integer formatting for serde_json"
+duplicates_native = "purrdf_lex::json"
+pending_native = true
+holder = "serde_json"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.leb128fmt]
 category = "transitive:wasm-encoder"
 reason = "LEB128 field emission for the private WASM post-link tool"
+distinct = "LEB128 emission inside wasm-encoder; the host linker reads LEB128 natively but emits only through wasm-encoder"
+holder = "wasm-encoder"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.libc]
 category = "runtime"
 reason = "Native pthread stack bounds for purrdf-stack and mmap/memfd_create/fcntl for the CLI immutable input authority; platform declarations only, absent from wasm; also reached through getrandom"
+distinct = "platform declarations for thread stack bounds and the CLI's mmap and memfd seals; bindings to the C library, not a job PurRDF implements"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
 
 [packages.memchr]
 category = "runtime"
 reason = "SIMD byte search for parser line splitting and escape scanning"
+duplicates_native = "purrdf_lex::scan::find_byte"
+pending_native = true
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.once_cell]
 category = "transitive:wasm-bindgen"
 reason = "lazy statics for wasm-bindgen and pyo3"
+distinct = "lazy statics inside wasm-bindgen and pyo3; no first-party code calls it"
+holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.once_cell_polyfill]
 category = "transitive:clap"
 reason = "OnceLock polyfill for anstream"
+distinct = "internal to clap's terminal output; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.polyval]
 category = "transitive:aes-gcm"
 reason = "POLYVAL universal hash for GHASH"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.portable-atomic]
 category = "transitive:pyo3"
 reason = "portable atomics for pyo3"
+distinct = "internal to pyo3's CPython binding; PurRDF has no Python FFI of its own"
+holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.proc-macro2]
 category = "oracle"
 reason = "token substrate for the syn-based source census tests and the unpublished helper-census tool"
+distinct = "the token substrate for the syn-based source census; PurRDF has no Rust parser of its own"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.pyo3]
 category = "binding"
 reason = "Python extension-module bindings (purrdf-python)"
+distinct = "the CPython extension-module boundary for purrdf-python; PurRDF has no Python FFI of its own"
 metrics = { direct = true, exclusive_closure = 7, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.pyo3-build-config]
 category = "transitive:pyo3"
 reason = "Python interpreter discovery for pyo3 builds"
+distinct = "internal to pyo3's CPython binding; PurRDF has no Python FFI of its own"
+holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.pyo3-ffi]
 category = "transitive:pyo3"
 reason = "raw CPython FFI for pyo3"
+distinct = "internal to pyo3's CPython binding; PurRDF has no Python FFI of its own"
+holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.pyo3-macros]
 category = "transitive:pyo3"
 reason = "pyo3 attribute macros"
+distinct = "internal to pyo3's CPython binding; PurRDF has no Python FFI of its own"
+holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = true }
 
 [packages.pyo3-macros-backend]
 category = "transitive:pyo3"
 reason = "pyo3 macro code generation"
+distinct = "internal to pyo3's CPython binding; PurRDF has no Python FFI of its own"
+holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.quote]
 category = "transitive:syn"
 reason = "quasi-quoting for proc-macro code generation"
+distinct = "quasi-quoting inside the proc-macro stack; no first-party code calls it"
+holder = "syn"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.r-efi]
 category = "transitive:getrandom"
 reason = "UEFI bindings for getrandom"
+distinct = "internal to getrandom's operating-system entropy bindings; PurRDF has no entropy source of its own"
+holder = "getrandom"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.rayon]
 category = "runtime"
 reason = "data-parallel parsing, reasoning and scans; inline-sequential on wasm32"
+distinct = "data-parallel parsing, reasoning and scans, inline-sequential on wasm32; PurRDF has no thread pool of its own"
 metrics = { direct = true, exclusive_closure = 6, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.rayon-core]
 category = "transitive:rayon"
 reason = "rayon thread pool"
+distinct = "internal to rayon's work-stealing pool; PurRDF has no thread pool of its own"
+holder = "rayon"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.regex]
 category = "runtime"
 reason = "regex engine for SPARQL REGEX/REPLACE, XSD patterns and SHACL/ShEx pattern constraints"
+distinct = "the matching engine purrdf_core::xsd_regex compiles XSD, XPath, SHACL and ShEx patterns to; PurRDF translates patterns but has no matcher of its own"
 metrics = { direct = true, exclusive_closure = 3, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.regex-automata]
 category = "transitive:regex"
 reason = "regex matching engines"
+distinct = "the matching engines inside regex, which PurRDF's pattern dialects compile to"
+holder = "regex"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.regex-syntax]
 category = "runtime"
 reason = "regex IR for ECMA-262 pattern emission and testkit string generators"
+distinct = "the pattern IR purrdf_core::xsd_regex reads to emit ECMA-262 and the testkit string generators walk; PurRDF has no regex IR of its own"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.roxmltree]
 category = "spec-codec"
 reason = "XML 1.0 parsing for RDF/XML, OWL/XML and SPARQL XML results"
+duplicates_native = "purrdf_lex::xml"
+pending_native = true
 metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.rustc_version]
 category = "transitive:ed25519-dalek"
 reason = "rustc version probe for curve25519-dalek builds"
+duplicates_native = "purrdf_ed25519"
+pending_native = true
+holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.rustversion]
 category = "transitive:wasm-bindgen"
 reason = "rustc version conditionals for wasm-bindgen"
+distinct = "internal to wasm-bindgen's JavaScript binding; PurRDF has no JavaScript FFI of its own"
+holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = true }
 
 [packages.ryu]
 category = "transitive:serde_yaml_ng"
 reason = "float formatting for YAML output"
+duplicates_native = "purrdf_lex::yaml"
+pending_native = true
+holder = "serde_yaml_ng"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.semver]
 category = "transitive:ed25519-dalek"
 reason = "version parsing for rustc_version"
+duplicates_native = "purrdf_ed25519"
+pending_native = true
+holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.serde]
 category = "runtime"
 reason = "serialization framework behind the JSON, YAML and CBOR codecs"
+duplicates_native = "purrdf_lex::json"
+pending_native = true
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.serde_core]
 category = "transitive:serde"
 reason = "serde core traits"
+duplicates_native = "purrdf_lex::json"
+pending_native = true
+holder = "serde"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.serde_derive]
 category = "transitive:serde"
 reason = "serde derive macros"
+duplicates_native = "purrdf_lex::json"
+pending_native = true
+holder = "serde"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = true }
 
 [packages.serde_json]
 category = "spec-codec"
 reason = "JSON (RFC 8259) encode/decode for JSON-LD, SPARQL JSON results and bindings"
+duplicates_native = "purrdf_lex::json"
+pending_native = true
 metrics = { direct = true, exclusive_closure = 2, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.serde_yaml_ng]
 category = "spec-codec"
 reason = "YAML parsing for YAML-LD, SSSOM headers and shape configs"
+duplicates_native = "purrdf_lex::yaml"
+pending_native = true
 metrics = { direct = true, exclusive_closure = 5, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.sha2]
 category = "crypto"
 reason = "SHA-2 family digests for SPARQL SHA256/384/512, RDF canonicalization and GTS"
+distinct = "the single SHA-2 implementation (a native build was benchmarked and did not beat it)"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.signature]
 category = "transitive:ed25519-dalek"
 reason = "signature traits for Ed25519"
+duplicates_native = "purrdf_ed25519"
+pending_native = true
+holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.strsim]
 category = "transitive:clap"
 reason = "string similarity for clap suggestions"
+distinct = "internal to clap's argument suggestions; no first-party code calls it"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.structured-zstd]
 category = "spec-codec"
 reason = "pure-Rust Zstandard (RFC 8878) with dictionary training for GTS and columnar"
+distinct = "Zstandard (RFC 8878) with dictionary training for GTS and columnar; PurRDF has no native Zstandard codec"
 metrics = { direct = true, exclusive_closure = 2, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.subtle]
 category = "transitive:ed25519-dalek"
 reason = "constant-time primitives for curve25519-dalek"
+duplicates_native = "purrdf_ed25519"
+pending_native = true
+holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.syn]
 category = "oracle"
 reason = "Rust source parser for the source-census tests in rdf and shapes and the unpublished helper-census tool"
+distinct = "the Rust source parser behind the source census tests and the helper census; PurRDF has no Rust parser of its own"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.target-lexicon]
 category = "transitive:pyo3"
 reason = "target triple parsing for pyo3-build-config"
+distinct = "internal to pyo3's CPython binding; PurRDF has no Python FFI of its own"
+holder = "pyo3"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = true, proc_macro = false }
 
 [packages.twox-hash]
 category = "transitive:structured-zstd"
 reason = "xxHash64 frame checksums for Zstandard"
+distinct = "xxHash64 frame checksums inside structured-zstd; purrdf-hash has no xxHash"
+holder = "structured-zstd"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.typenum]
 category = "transitive:sha2"
 reason = "type-level numbers for RustCrypto arrays"
+distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
+holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.unicode-ident]
 category = "transitive:proc-macro2"
 reason = "Unicode identifier tables for proc-macro2"
+distinct = "UAX 31 identifier tables inside proc-macro2; purrdf-jsonschema carries XID ranges for ECMA-262 property escapes, but only proc-macro2 calls this crate, from its own internals"
+holder = "proc-macro2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.universal-hash]
 category = "transitive:aes-gcm"
 reason = "universal hash traits for GHASH/POLYVAL"
+distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEAD of its own (purrdf_hash::fixed uses single AES rounds only as a hash mixer)"
+holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.unsafe-libyaml]
 category = "transitive:serde_yaml_ng"
 reason = "libyaml port behind serde_yaml_ng"
+duplicates_native = "purrdf_lex::yaml"
+pending_native = true
+holder = "serde_yaml_ng"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.utf8parse]
 category = "transitive:clap"
 reason = "UTF-8 parser for anstyle-parse"
+distinct = "internal to clap's terminal output; PurRDF has no command-line parser of its own"
+holder = "clap"
 metrics = { direct = false, exclusive_closure = 0, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.visual-hashing]
 category = "runtime"
 reason = "emojihash and randomart key fingerprints for GTS"
+distinct = "emojihash and randomart key-fingerprint rendering for GTS; its BLAKE3 is private to those renderers, PurRDF calls only the renderers, and PurRDF has no fingerprint renderer of its own"
 metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.wasip2]
 category = "transitive:getrandom"
 reason = "WASI preview 2 bindings for getrandom"
+distinct = "internal to getrandom's operating-system entropy bindings; PurRDF has no entropy source of its own"
+holder = "getrandom"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.wasm-bindgen]
 category = "binding"
 reason = "JavaScript bindings for purrdf-wasm, SPARQL host clock and entropy, and the testkit wasm runner"
+distinct = "the JavaScript boundary for purrdf-wasm, the SPARQL host clock and entropy, and the testkit wasm runner; PurRDF has no JavaScript FFI of its own"
 metrics = { direct = true, exclusive_closure = 6, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.wasm-bindgen-macro]
 category = "transitive:wasm-bindgen"
 reason = "wasm-bindgen attribute macro"
+distinct = "internal to wasm-bindgen's JavaScript binding; PurRDF has no JavaScript FFI of its own"
+holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = true }
 
 [packages.wasm-bindgen-macro-support]
 category = "transitive:wasm-bindgen"
 reason = "wasm-bindgen macro implementation"
+distinct = "internal to wasm-bindgen's JavaScript binding; PurRDF has no JavaScript FFI of its own"
+holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.wasm-bindgen-shared]
 category = "transitive:wasm-bindgen"
 reason = "shared ABI definitions for wasm-bindgen"
+distinct = "internal to wasm-bindgen's JavaScript binding; PurRDF has no JavaScript FFI of its own"
+holder = "wasm-bindgen"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.wasm-encoder]
 category = "spec-codec"
 reason = "WebAssembly instruction and section emission for the private host linker; native structural reads and the already-required Binaryen validator avoid the parser/reencoder dependency closure"
+distinct = "WebAssembly section and instruction emission for the private host linker; PurRDF reads modules natively but has no WebAssembly encoder"
 metrics = { direct = true, exclusive_closure = 2, release = false, wasm = false, build_script = false, proc_macro = false }
 
 [packages.windows-link]
 category = "transitive:clap"
 reason = "Windows import linking for windows-sys"
+distinct = "import-library linking for windows-sys; platform bindings, not a job PurRDF implements"
+holder = "windows-sys"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.windows-sys]
 category = "runtime"
 reason = "GetCurrentThreadStackLimits declarations for purrdf-stack on Windows; also terminal detection through anstream"
+distinct = "platform declarations for thread stack limits on Windows; bindings to the operating system, not a job PurRDF implements"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.wit-bindgen]
 category = "transitive:getrandom"
 reason = "WIT bindings for wasip2"
+distinct = "internal to getrandom's operating-system entropy bindings; PurRDF has no entropy source of its own"
+holder = "getrandom"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = true, proc_macro = false }
 
 [packages.zerocopy]
 category = "transitive:ciborium"
 reason = "safe transmutes for half"
+duplicates_native = "purrdf_lex::cbor"
+pending_native = true
+holder = "ciborium"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
 
 [packages.zerocopy-derive]
 category = "transitive:ciborium"
 reason = "zerocopy derive macros"
+duplicates_native = "purrdf_lex::cbor"
+pending_native = true
+holder = "ciborium"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = true }
 
 [packages.zeroize]
 category = "transitive:ed25519-dalek"
 reason = "secret-key wiping for Ed25519 and AES keys"
+duplicates_native = "purrdf_ed25519"
+pending_native = true
+holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.zmij]
 category = "transitive:serde_json"
 reason = "float formatting for serde_json"
+duplicates_native = "purrdf_lex::json"
+pending_native = true
+holder = "serde_json"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }

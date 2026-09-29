@@ -146,6 +146,9 @@ jobs:
       - name: Check no replaced dependency re-entered the lock
         run: python3 scripts/check-banned-deps.py
 
+      - name: Check every external dependency carries a census verdict
+        run: python3 scripts/check-banned-deps.py --ledger-complete
+
       - name: Check the layering gate can still fail
         run: python3 scripts/check-layers.py --self-test
 
