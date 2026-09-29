@@ -59,7 +59,9 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-jsonschema` (`crates/jsonschema`) | Native JSON Schema validation for drafts 2020-12, 2019-09 and 07, each schema resource in its own dialect: every vocabulary, `$dynamicRef`, `$recursiveRef`, `unevaluated*`, `$vocabulary`, the flag/basic/detailed output formats, exact decimal numbers, and ECMA-262 `/u` patterns using `regex` for regular expressions and a bounded explicit-stack matcher for lookaround, backreferences and scoped modifiers; `Schema::is_valid`/`evaluate` return typed errors on resource exhaustion; depends on `serde_json`, `regex`, `purrdf-iri` and `purrdf-hash` only |
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
 | `purrdf-hash` | The zero-dependency root |
-| `purrdf-iri`, `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
+| `purrdf-lex` (`crates/lex`) | Native, zero-dependency lexical foundations shared by every grammar: the exact Turtle/SPARQL/XML terminal classes (`terminals`), the chunked byte-class scanners and `ByteClass` kernel that lower to packed compares on SSE2/AVX2/AVX-512, NEON and wasm simd128 (`scan`), and the RFC 8259 JSON string escaper every JSON writer shares (`json_escape`); its scope is the workspace's lexical layer — byte-class scanning, terminals, term syntax, literal/IRI escaping, percent encoding, JSON strings and pointers, a JSON reader/writer, an XML reader and Unicode normalisation |
+| `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags, IDNA2008); sole runtime dependency is `purrdf-lex`, whose `terminals`, `scan` and `json_escape` it re-exports |
+| `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
 | `purrdf-deflate` | Leaf over `purrdf-hash` alone |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
 | `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, read via target-gated `libc`/`windows-sys` declarations with no C toolchain needed; wasm32 shadow stack against an installable floor) and the margin the SPARQL evaluator refuses at |
@@ -106,7 +108,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   the liberal and the conforming parser accept*. `?s<NBSP>?p` lexed as one
   variable, turning a join into a cross product with exit zero and no
   diagnostic. Every W3C terminal is spelled **once**, in
-  `purrdf_iri::terminals`, with its production cited and its ranges asserted at
+  `purrdf_lex::terminals` (re-exported as `purrdf_iri::terminals`), with its production cited and its ranges asserted at
   compile time; scanners call it rather than retyping a table.
   `scripts/check-terminal-predicates.py` (in `make check`, or
   `make terminal-hygiene`) refuses a Unicode-property test inside a file that
@@ -119,7 +121,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   emphasis flanking, while its blank line (§2.1), ATX heading, thematic break
   and GFM table cell all name space-or-tab; citing "CommonMark" alone settles
   nothing, and doing so once put a false exemption into this file.
-* **Everything is wasm-able.** Every release crate (all 29 publishable crates,
+* **Everything is wasm-able.** Every release crate (all 30 publishable crates,
   `purrdf-wasm` included) must build for `wasm32-unknown-unknown` — CI
   hard-fails otherwise (`make wasm` locally). Never add a dependency that
   drags in threads, the filesystem, C toolchains, or wall-clock/RNG syscalls
@@ -280,7 +282,7 @@ black-cat family system — `#cat-head-core` is shared verbatim; only the
 
 ## 6. Releases
 
-Tag-driven trusted publishing: `rust-v*` → crates.io (29 crates, ordered),
+Tag-driven trusted publishing: `rust-v*` → crates.io (30 crates, ordered),
 `py-v*` → PyPI (`purrdf`). See [`docs/RELEASE.md`](./docs/RELEASE.md). Version
 is single-sourced in `[workspace.package]`. Eleven members never reach
 crates.io: `purrdf-capi`, `purrdf-sparql-conformance`,

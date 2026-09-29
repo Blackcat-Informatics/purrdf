@@ -9,7 +9,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
   </a>
 </p>
 
-# `purrdf-iri` — Zero-Dependency IRI/URI Value Space
+# `purrdf-iri` — Native IRI/URI Value Space
 
 [![crates.io](https://img.shields.io/crates/v/purrdf-iri.svg)](https://crates.io/crates/purrdf-iri)
 [![docs.rs](https://docs.rs/purrdf-iri/badge.svg)](https://docs.rs/purrdf-iri)
@@ -17,7 +17,9 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 [![Repository](https://img.shields.io/badge/repo-Blackcat--Informatics%2Fpurrdf-181717.svg)](https://github.com/Blackcat-Informatics/purrdf)
 
 `purrdf-iri` is the IRI/URI foundation of the PurRDF toolkit: a pure-Rust,
-**zero-runtime-dependency**, wasm-clean crate implementing RFC 3987/3986
+wasm-clean crate with no third-party dependency — its one runtime dependency
+is the zero-dependency lexical layer
+[`purrdf-lex`](https://crates.io/crates/purrdf-lex) — implementing RFC 3987/3986
 parsing, validation, reference resolution, syntax normalization, and
 CURIE/prefix handling.
 
@@ -33,8 +35,9 @@ CURIE/prefix handling.
   derived property, contextual rules and the RFC 5893 Bidi rule, RFC 3492
   Punycode, and `Iri::to_uri` (RFC 3987 §3.1). Tables are generated from the
   vendored Unicode 17.0.0 database.
-- **JSON string escape law** — `json_escape`, the one RFC 8259 §7 string-body
-  escaper every PurRDF JSON writer shares, over a chunked clean-run scan.
+- **Grammar terminals, byte-class scanners and the JSON string escape law** —
+  `terminals`, `scan` and `json_escape`, re-exported from `purrdf-lex`, where
+  every grammar in the workspace shares them.
 - **Hard-fail** — malformed input is a typed `IriError`, never a degraded
   fallback or silent default.
 
@@ -72,8 +75,8 @@ workspace — an RDF 1.2 toolkit with native codecs, SPARQL, SHACL, ShEx,
 entailment, and the GTS graph transport, carried into Python, WebAssembly, and
 C (the GTS container itself reaches Python and C, not the wasm package). Most applications should depend on the umbrella
 [`purrdf`](https://crates.io/crates/purrdf) crate, which re-exports this crate
-as `purrdf::iri`; depend on `purrdf-iri` directly when you just want a small,
-dependency-free IRI library.
+as `purrdf::iri`; depend on `purrdf-iri` directly when you just want a small
+IRI library with no third-party dependency.
 
 There are deliberately no Cargo feature flags anywhere in the workspace. MSRV
 follows the workspace `rust-version` (currently 1.98, stable toolchain only).

@@ -440,10 +440,11 @@ ORDER BY ?rank
   RDF↔GTS **损失台账**（[`generated/rdf-loss-matrix.json`](./generated/rdf-loss-matrix.json)），
   SSSOM 映射 TSV 支持与一个 FnO 函数目录编解码器（二者都位于 `purrdf-core` 中，而非
   slice crate）。
-- **零依赖的基础层**——`purrdf-iri`（RFC 3987/3986）与 `purrdf-xsd`（XSD 1.1 值
-  空间）完全没有运行时依赖；`purrdf-events`（对象安全的摄入扩展点）与 `purrdf-hash`
-  （MD5、SHA-1、SHA-3 与 CRC-32 摘要）同样没有，而 `purrdf-cdt` 是恰好建立在前两者之上的
-  `no_std` 封闭叶。
+- **零依赖的基础层**——`purrdf-lex`（每种语法共享的语法终结符、字节类扫描器与 JSON
+  字符串转义器）与 `purrdf-xsd`（XSD 1.1 值空间）完全没有运行时依赖，而 `purrdf-iri`
+  （RFC 3987/3986）仅依赖 `purrdf-lex`；`purrdf-events`（对象安全的摄入扩展点）与
+  `purrdf-hash`（MD5、SHA-1、SHA-3 与 CRC-32 摘要）同样没有，而 `purrdf-cdt` 是恰好建立在
+  `purrdf-iri` 与 `purrdf-xsd` 之上的 `no_std` 封闭叶。
 
 ## 快速入门
 
@@ -583,7 +584,8 @@ CI 检查其漂移。用 cargo-c 构建：`make capi-build`。
 | [`purrdf-markdown`](./crates/markdown/) | Markdown → RDF 1.2 结构化编解码器，遵循一份随附规范（[SPEC](./crates/markdown/SPEC.md)）：一篇文档成为一张图，图中是它自身的各级标题、编号节与段落，带逐字对应的字节区间与对照表引用——全部在调用方提供的词汇表与内容寻址 Profile 之下——且这张图可逐字节解码还原为原文档，并以图中自带的源摘要（哈希）为证。由门面 crate 重新导出为 `purrdf::markdown`。 |
 | [`purrdf-jsonschema`](./crates/jsonschema/) | 原生 JSON Schema 校验，支持 draft 2020-12、2019-09 与 07，每个 schema 资源按其自身方言处理：全部词汇表、`$dynamicRef`、`$recursiveRef`、`unevaluated*`、`$vocabulary`，以及 flag/basic/detailed 三种标准输出格式。数字保留精确十进制值。ECMA-262 `/u` 模式的常规部分由 `regex` 执行，前后查找、反向引用和局部修饰符由有资源上限的显式栈匹配器执行，并使用 Unicode 17 属性范围；匹配耗尽预算时，校验返回带类型的错误。以官方 JSON-Schema-Test-Suite 对三个草案逐一检验；仅依赖 `serde_json`、`regex`、`purrdf-iri` 与 `purrdf-hash`，可构建到 wasm32。 |
 | [`purrdf-slice`](./crates/slice/) | 切片目录：清单、带类型的工件、所有权/依赖分析。 |
-| [`purrdf-iri`](./crates/iri/) | 零依赖的 IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
+| [`purrdf-lex`](./crates/lex/) | 零依赖的词法基础层，由每种语法共享：精确的 Turtle/SPARQL/XML 终结符字符类、降低为打包比较指令的分块字节类扫描器，以及 RFC 8259 JSON 字符串转义器。 |
+| [`purrdf-iri`](./crates/iri/) | IRI/URI 解析、规范化、CURIE，以及工作区唯一的 RFC 3986 基础解析层（`BaseIri`/`BaseScope`）。 |
 | [`purrdf-xsd`](./crates/xsd/) | 零依赖的 XSD 1.1 值空间，带 SPARQL 数值提升。 |
 | [`purrdf-events`](./crates/rdf-events/) | 零依赖、对象安全的 RDF 事件汇/源扩展点。 |
 | [`purrdf-hash`](./crates/hash/) | 零依赖的 MD5、SHA-1、SHA-3 与 CRC-32 摘要，支持流式与一次性计算；处理器具备 SHA 与 CRC 指令时，SHA-1 与 CRC-32 直接使用这些指令。 |

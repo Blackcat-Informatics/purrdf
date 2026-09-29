@@ -87,9 +87,10 @@ Most applications should stop at `purrdf`. The sub-crates
 `purrdf-sparql-eval`, `purrdf-sparql-results`, `purrdf-cdt`, `purrdf-shapes`,
 `purrdf-jsonschema`, `purrdf-shex`, `purrdf-gts`, `purrdf-datalog`,
 `purrdf-entail`, `purrdf-geo`, `purrdf-text`, `purrdf-validate`, `purrdf-slice`,
-`purrdf-iri`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash`, `purrdf-wasm`) exist for
+`purrdf-iri`, `purrdf-lex`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash`, `purrdf-wasm`) exist for
 consumers that want exactly one engine — for example, a tool that only needs
-IRI parsing can depend on the zero-dependency `purrdf-iri` alone. The crate
+IRI parsing can depend on `purrdf-iri` alone, whose one dependency is the
+zero-dependency `purrdf-lex`. The crate
 map is in the
 [repository README](https://github.com/Blackcat-Informatics/purrdf#crate-map).
 

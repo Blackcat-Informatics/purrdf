@@ -568,11 +568,13 @@ triple pattern.
   ([`generated/rdf-loss-matrix.json`](./generated/rdf-loss-matrix.json)), SSSOM
   mapping TSV support and an FnO function-catalog codec (both live in
   `purrdf-core`, not the slice crate).
-- **Zero-dependency foundations** — `purrdf-iri` (RFC 3987/3986) and `purrdf-xsd`
-  (XSD 1.1 value space) have no runtime dependencies at all; `purrdf-events` (the
+- **Zero-dependency foundations** — `purrdf-lex` (the grammar terminals, byte-class
+  scanners and JSON string escaper every grammar shares) and `purrdf-xsd` (XSD 1.1
+  value space) have no runtime dependencies at all, and `purrdf-iri` (RFC 3987/3986)
+  depends on `purrdf-lex` alone; `purrdf-events` (the
   object-safe ingestion seam) and `purrdf-hash` (BLAKE3, MD5, SHA-1, SHA-3 and CRC-32
   digests) have none either, and `purrdf-cdt` is a `no_std` closed leaf over
-  exactly the first two.
+  exactly `purrdf-iri` and `purrdf-xsd`.
 
 ## Quickstart
 
@@ -720,7 +722,8 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-markdown`](./crates/markdown/) | Structural Markdown-to-RDF 1.2 codec under a shipped specification ([SPEC](./crates/markdown/SPEC.md)): a document becomes a graph of its own headings, verses, and paragraphs with verbatim byte spans and concordance citations, under a caller-supplied vocabulary and a content-addressed profile — and the graph decodes back to the document byte for byte, proven against its own source digest. Re-exported by the umbrella as `purrdf::markdown`. |
 | [`purrdf-jsonschema`](./crates/jsonschema/) | Native JSON Schema validation for drafts 2020-12, 2019-09 and 07, each schema resource in its own dialect: every vocabulary, `$dynamicRef`, `$recursiveRef`, `unevaluated*`, `$vocabulary`, and the flag/basic/detailed output formats. Numbers retain exact decimal values. ECMA-262 `/u` patterns use `regex` for regular expressions and a bounded explicit-stack matcher for lookaround, backreferences and scoped modifiers, with Unicode 17 property ranges; validation returns typed errors if matching exhausts its budget. Checked against the official JSON-Schema-Test-Suite for all three drafts; depends on `serde_json`, `regex`, `purrdf-iri` and `purrdf-hash` only, and builds for wasm32. |
 | [`purrdf-slice`](./crates/slice/) | Slice catalog: manifests, typed artifacts, ownership/dependency analysis. |
-| [`purrdf-iri`](./crates/iri/) | Zero-dependency IRI/URI parsing, normalization, CURIEs, and the workspace's single RFC 3986 base-resolution layer (`BaseIri`/`BaseScope`). |
+| [`purrdf-lex`](./crates/lex/) | Zero-dependency lexical foundations shared by every grammar: the exact Turtle/SPARQL/XML terminal classes, chunked byte-class scanners that lower to packed compares, and the RFC 8259 JSON string escaper. |
+| [`purrdf-iri`](./crates/iri/) | IRI/URI parsing, normalization, CURIEs, and the workspace's single RFC 3986 base-resolution layer (`BaseIri`/`BaseScope`). |
 | [`purrdf-xsd`](./crates/xsd/) | Zero-dependency XSD 1.1 value space with SPARQL numeric promotion. |
 | [`purrdf-events`](./crates/rdf-events/) | Zero-dependency object-safe RDF event sink/source seam. |
 | [`purrdf-hash`](./crates/hash/) | Zero-dependency BLAKE3, MD5, SHA-1, SHA-3 and CRC-32 digests, streaming and one-shot; SHA-1 and CRC-32 run on the processor's SHA and CRC instructions when it has them. |

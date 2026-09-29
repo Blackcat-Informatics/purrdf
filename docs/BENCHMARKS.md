@@ -125,6 +125,9 @@ simply not narrated here:
   `QueryEngine` reuse vs. fresh-engine construction.
 - `crates/iri/benches/parse.rs` — IRI parse/validate hot path over a mixed
   character-class corpus.
+- `crates/lex/benches/scan.rs` — the chunked byte-class scanners over a long
+  clean run and a token-sized one, and the JSON string escaper in each of its
+  four spellings over clean and stop-dense text.
 
 `NativeSparqlEngine::explain_query` exposes the chosen BGP order as an ordered
 list of triple-pattern strings, so callers can audit planner decisions without
@@ -226,6 +229,7 @@ here.
 | `crates/gts/benches/authoring.rs` | GTS container authoring: append, hash, and CBOR-log construction throughput. |
 | `crates/rdf-wasm/benches/query_engine_reuse.rs` | Binding-level SELECT overhead for reused package-root `QueryEngine` instances vs. fresh construction. |
 | `crates/iri/benches/parse.rs` | `purrdf_iri::parse` component validation across scheme, authority, path, query, and fragment classes. |
+| `crates/lex/benches/scan.rs` | `purrdf_lex` byte-class scanners (`WS` trivia, `IRIREF` body, JSON string body, XML egress) over long and token-sized runs, and `purrdf_lex::json_escape` in its four spellings over clean and stop-dense text. |
 
 ### PURREMB companion format
 

@@ -88,9 +88,9 @@ let schema = purrdf::shex::parse_shexc(
 （`purrdf-core`、`purrdf-rdf`、`purrdf-columnar`、`purrdf-sparql-algebra`、
 `purrdf-sparql-eval`、`purrdf-sparql-results`、`purrdf-cdt`、`purrdf-shapes`、
 `purrdf-shex`、`purrdf-gts`、`purrdf-datalog`、`purrdf-entail`、`purrdf-geo`、
-`purrdf-text`、`purrdf-validate`、`purrdf-slice`、`purrdf-iri`、`purrdf-xsd`、
-`purrdf-events`、`purrdf-wasm`）是为只想要恰好一个引擎的消费者准备的——例如，
-一个只需要解析 IRI 的工具可以单独依赖零依赖的 `purrdf-iri`。crate 一览见
+`purrdf-text`、`purrdf-validate`、`purrdf-slice`、`purrdf-iri`、`purrdf-lex`、
+`purrdf-xsd`、`purrdf-events`、`purrdf-wasm`）是为只想要恰好一个引擎的消费者准备的——例如，
+一个只需要解析 IRI 的工具可以单独依赖 `purrdf-iri`，它唯一的依赖是零依赖的 `purrdf-lex`。crate 一览见
 [仓库 README](https://github.com/Blackcat-Informatics/purrdf#crate-map)。
 
 每个发布 crate 都能干净地构建到 `wasm32-unknown-unknown`，因此同一条 Rust 代码路径

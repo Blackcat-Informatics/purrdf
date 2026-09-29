@@ -5,7 +5,8 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 # Provenance of the `purrdf-iri` conformance vectors
 
-`purrdf-iri` is a **zero-dependency** crate (enforced by `make rdf-core-hygiene`).
+`purrdf-iri` takes **no third-party dependency** — its one runtime dependency is
+the zero-dependency `purrdf-lex` (enforced by `make rdf-core-hygiene`).
 It therefore cannot pull a test harness, parse Turtle/JSON manifests, or fetch a
 suite at test time — every conformance vector is **committed inline** and
 deterministic. This document is the single auditable record of where those

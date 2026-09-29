@@ -205,7 +205,7 @@ let schema = purrdf::shex::parse_shexc(
 | `datalog` | [`purrdf-datalog`](https://crates.io/crates/purrdf-datalog) (the semi-naive engine `entail`'s public types carry) |
 | `slice` | [`purrdf-slice`](https://crates.io/crates/purrdf-slice) (slice catalog) |
 | `viz` | RDF 1.2 semantic projection, deterministic layout, and SVG export |
-| `iri` / `xsd` / `events` | the zero-dependency foundation leaves |
+| `iri` / `xsd` / `events` | the foundation leaves (`xsd` and `events` with no dependencies, `iri` over the zero-dependency lexical layer `purrdf-lex` alone) |
 
 The same engine ships to [PyPI](https://pypi.org/project/purrdf/) (`pip install purrdf`)
 and [npm](https://www.npmjs.com/package/@blackcatinformatics/purrdf) as an RDF/JS-shaped

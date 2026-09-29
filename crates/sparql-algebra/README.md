@@ -21,7 +21,7 @@ toolkit: a pure-Rust, wasm-clean crate that parses query and update text into a
 PurRDF-owned, RDF 1.2-native query algebra (`Query`/`GraphPattern` and
 `Update`/`GraphUpdateOperation`). Parse and algebra **only** — evaluation lives
 in the downstream [`purrdf-sparql-eval`](https://crates.io/crates/purrdf-sparql-eval)
-crate. It builds on the zero-dependency foundation leaves
+crate. It builds on the first-party foundation leaves
 [`purrdf-iri`](https://crates.io/crates/purrdf-iri),
 [`purrdf-xsd`](https://crates.io/crates/purrdf-xsd) and
 [`purrdf-hash`](https://crates.io/crates/purrdf-hash), the composite-datatype

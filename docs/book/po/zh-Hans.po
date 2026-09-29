@@ -846,22 +846,24 @@ msgid ""
 "eval`, `purrdf-sparql-results`, `purrdf-cdt`, `purrdf-shapes`, `purrdf-"
 "jsonschema`, `purrdf-shex`, `purrdf-gts`, `purrdf-datalog`, `purrdf-entail`, "
 "`purrdf-geo`, `purrdf-text`, `purrdf-validate`, `purrdf-slice`, `purrdf-"
-"iri`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash`, `purrdf-wasm`) exist for "
-"consumers that want exactly one engine — for example, a tool that only needs "
-"IRI parsing can depend on the zero-dependency `purrdf-iri` alone. The crate "
-"map is in the [repository README](https://github.com/Blackcat-Informatics/"
-"purrdf#crate-map)."
+"iri`, `purrdf-lex`, `purrdf-xsd`, `purrdf-events`, `purrdf-hash`, `purrdf-"
+"wasm`) exist for consumers that want exactly one engine — for example, a "
+"tool that only needs IRI parsing can depend on `purrdf-iri` alone, whose one "
+"dependency is the zero-dependency `purrdf-lex`. The crate map is in the "
+"[repository README](https://github.com/Blackcat-Informatics/purrdf#crate-"
+"map)."
 msgstr ""
 "大多数应用只需依赖 `purrdf`。子 crate（`purrdf-core`、`purrdf-rdf`、`purrdf-"
 "columnar`、`purrdf-sparql-algebra`、`purrdf-sparql-eval`、`purrdf-sparql-"
 "results`、`purrdf-cdt`、`purrdf-shapes`、`purrdf-jsonschema`、`purrdf-shex`、"
 "`purrdf-gts`、`purrdf-datalog`、`purrdf-entail`、`purrdf-geo`、`purrdf-"
-"text`、`purrdf-validate`、`purrdf-slice`、`purrdf-iri`、`purrdf-xsd`、"
-"`purrdf-events`、`purrdf-hash`、`purrdf-wasm`）是为只想要恰好一个引擎的使用方"
-"准备的——例如，只需要 IRI 解析的工具可以仅依赖零依赖的 `purrdf-iri`。crate 一"
-"览见[仓库 README](https://github.com/Blackcat-Informatics/purrdf#crate-map)。"
+"text`、`purrdf-validate`、`purrdf-slice`、`purrdf-iri`、`purrdf-lex`、"
+"`purrdf-xsd`、`purrdf-events`、`purrdf-hash`、`purrdf-wasm`）是为只想要恰好一"
+"个引擎的使用方准备的——例如，只需要 IRI 解析的工具可以仅依赖 `purrdf-iri`，它"
+"唯一的依赖是零依赖的 `purrdf-lex`。crate 一览见[仓库 README]"
+"(https://github.com/Blackcat-Informatics/purrdf#crate-map)。"
 
-#: src/getting-started/rust.md:96
+#: src/getting-started/rust.md:97
 msgid ""
 "Every release crate builds cleanly for `wasm32-unknown-unknown`, so the same "
 "Rust code paths work in native and wasm hosts."
@@ -869,11 +871,11 @@ msgstr ""
 "每个发布的 crate 都能干净地构建到 `wasm32-unknown-unknown`，因此同样的 Rust "
 "代码路径在原生宿主与 wasm 宿主中都能工作。"
 
-#: src/getting-started/rust.md:99 src/getting-started/python.md:139
+#: src/getting-started/rust.md:100 src/getting-started/python.md:139
 msgid "Next steps"
 msgstr "后续步骤"
 
-#: src/getting-started/rust.md:101
+#: src/getting-started/rust.md:102
 msgid ""
 "[The Interned Dataset IR](../concepts/interned-dataset.md) — how the IR "
 "works and why it is fast."
@@ -881,7 +883,7 @@ msgstr ""
 "[驻留数据集 IR](../concepts/interned-dataset.md)——IR 如何工作，以及它为何快"
 "速。"
 
-#: src/getting-started/rust.md:103
+#: src/getting-started/rust.md:104
 msgid ""
 "[Graph, Tabular & Research-Object Projections](../concepts/projections.md) — "
 "deterministic LPG, CSVW, OBO Graphs, SKOS, and research-object carriers "
@@ -890,13 +892,13 @@ msgstr ""
 "[图、表格与 Research Object 投影](../concepts/projections.md)——通过总括 "
 "crate 获得确定性的 LPG、CSVW、OBO Graphs、SKOS 与 Research Object 载体。"
 
-#: src/getting-started/rust.md:105
+#: src/getting-started/rust.md:106
 msgid ""
 "[SPARQL: Querying](../sparql/querying.md) — running queries over a frozen "
 "dataset."
 msgstr "[SPARQL：查询](../sparql/querying.md)——在冻结的数据集上运行查询。"
 
-#: src/getting-started/rust.md:107
+#: src/getting-started/rust.md:108
 msgid "[docs.rs/purrdf](https://docs.rs/purrdf) — the full API reference."
 msgstr "[docs.rs/purrdf](https://docs.rs/purrdf)——完整的 API 参考。"
 
@@ -20354,14 +20356,16 @@ msgstr "内核隔离带"
 #: src/project/design-rules.md:48
 msgid ""
 "`purrdf-core` must never depend on oxigraph or PyO3 — the whole workspace is "
-"oxigraph-free, and a hygiene gate asserts the dependency tree. The three "
-"foundation leaves (`purrdf-iri`, `purrdf-xsd`, `purrdf-events`) keep **zero "
-"runtime dependencies**. Diagnostics stay structured and SARIF-free in the "
-"kernel; the SARIF boundary is the `purrdf-validate` leaf."
+"oxigraph-free, and a hygiene gate asserts the dependency tree. The "
+"foundation leaves `purrdf-lex`, `purrdf-xsd` and `purrdf-events` keep **zero "
+"runtime dependencies**, and `purrdf-iri` depends on `purrdf-lex` alone. "
+"Diagnostics stay structured and SARIF-free in the kernel; the SARIF boundary "
+"is the `purrdf-validate` leaf."
 msgstr ""
 "`purrdf-core` 绝不能依赖 oxigraph 或 PyO3——整个工作区都不含 oxigraph，并有一"
-"道卫生关卡对依赖树进行断言。三个基础叶子 crate（`purrdf-iri`、`purrdf-xsd`、"
-"`purrdf-events`）保持**零运行时依赖**。诊断在内核中保持结构化且不含 SARIF；"
+"道卫生关卡对依赖树进行断言。基础叶子 crate `purrdf-lex`、`purrdf-xsd` 与 "
+"`purrdf-events` 保持**零运行时依赖**，而 `purrdf-iri` 仅依赖 `purrdf-lex`。"
+"诊断在内核中保持结构化且不含 SARIF；"
 "SARIF 边界是 `purrdf-validate` 这个叶子 crate。"
 
 #: src/project/design-rules.md:54
@@ -21148,7 +21152,7 @@ msgstr "每个工作区 crate 的版本都必须与标签版本一致。"
 
 #: src/project/releases.md:63
 msgid ""
-"After its initial record bootstrap, every version of every crate in the 29-"
+"After its initial record bootstrap, every version of every crate in the 30-"
 "crate release set is published by that lane. Each existing crate record is "
 "locked on crates.io with _Require trusted publishing_ (`trustpub_only`), so "
 "an API token cannot publish a new version of any of them: crates.io answers "
@@ -21161,7 +21165,7 @@ msgid ""
 "cleanly, the token creates the new crate's record, Trusted Publishing is "
 "enabled on it, and the same run is resumed."
 msgstr ""
-"在各自最初的记录引导（bootstrap）之后，29 个 crate 的发布集合中每个 crate 的"
+"在各自最初的记录引导（bootstrap）之后，30 个 crate 的发布集合中每个 crate 的"
 "每个版本都由该通道发布。每个已有的 crate 记录都在 crates.io 上以 _Require "
 "trusted publishing_（`trustpub_only`）锁定，因此 API 令牌无法为其中任何一个发"
 "布新版本：crates.io 会回应 `403 Forbidden: New versions of this crate can "

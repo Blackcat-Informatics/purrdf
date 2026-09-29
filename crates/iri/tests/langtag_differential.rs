@@ -365,7 +365,7 @@ const ROUND_CONSTANTS: [u32; 64] = [
 
 /// The lowercase hex SHA-256 digest of `data`.
 ///
-/// First-party because `purrdf-iri` is a zero-dependency crate: a `sha2`
+/// First-party because `purrdf-iri` takes no third-party dependency: a `sha2`
 /// dev-dependency here would be the only third-party name in its manifest that
 /// the fixture gate needs, and the algorithm is 40 lines. Proven against the
 /// FIPS 180-4 known answers by `sha256_matches_fips_known_answers`.

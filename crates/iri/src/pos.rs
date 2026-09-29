@@ -20,7 +20,8 @@
 //! threading a live line counter through their hot loops (which would regress the
 //! parse-throughput baseline).
 //!
-//! Hosting this in the zero-dependency [`purrdf-iri`](crate) leaf lets every
+//! Hosting this in the [`purrdf-iri`](crate) foundation, which takes no
+//! third-party dependency, lets every
 //! parser above it (`sparql-algebra`, `shex`, `rdf`) share one tested primitive
 //! with no new dependency edge and no cycle.
 //!
@@ -60,8 +61,8 @@ pub struct LineIndex {
 impl LineIndex {
     /// Build the newline table for `src` with a single linear scan.
     ///
-    /// A plain byte loop (not `memchr`) is deliberate: this crate is a
-    /// zero-dependency leaf, and the scan only runs when a diagnostic is being
+    /// A plain byte loop (not `memchr`) is deliberate: this crate takes no
+    /// third-party dependency, and the scan only runs when a diagnostic is being
     /// constructed, so it is never on a hot path.
     #[must_use]
     pub fn new(src: &str) -> Self {
