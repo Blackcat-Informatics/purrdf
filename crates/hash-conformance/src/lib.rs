@@ -16,6 +16,7 @@
 //! | `tests/hex.rs` | the frozen base16 encoding and digit tables through every entry point and encoding path, RFC 4648 vectors, reader refusals, `Digest32` |
 //! | `tests/fixed_hasher.rs` | the table hasher's frozen self-vectors and its statistical quality |
 //! | `tests/splitmix_fnv.rs` | SplitMix64's three streams and FNV-1a over structured corpora |
+//! | `tests/frame_le.rs` | the little-endian `u64` length framing over structured corpora |
 //! | `benches/hasher.rs` | the table hasher's latency per key class |
 //!
 //! The vector files are in `tests/vectors/`. Every test target runs natively

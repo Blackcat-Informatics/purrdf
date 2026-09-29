@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-hash-conformance"
-description = "The frozen-vector conformance suites of purrdf-hash: digest differentials, BLAKE3 streaming boundaries, base16 rendering and the fixed-key table hasher's self-vectors and quality, replayed natively and on wasm32-unknown-unknown, plus the digest and base16 throughput bench and the table hasher's latency bench"
+description = "The frozen-vector conformance suites of purrdf-hash: digest differentials, BLAKE3 streaming boundaries, base16 rendering, length framing and the fixed-key table hasher's self-vectors and quality, replayed natively and on wasm32-unknown-unknown, plus the digest and base16 throughput bench and the table hasher's latency bench"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -76,4 +76,11 @@ harness = false
 # built from 32-bit halves.
 [[test]]
 name = "splitmix_fnv"
+harness = false
+
+# Length framing, u64_le(len) || field: the frozen prefixes and framed-field
+# digests over structured corpora, replayed natively and on wasm32, where
+# usize is 32 bits wide.
+[[test]]
+name = "frame_le"
 harness = false

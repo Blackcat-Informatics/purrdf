@@ -4161,6 +4161,58 @@ mod tests {
     use purrdf_sparql_algebra::Child;
     use purrdf_sparql_algebra::GraphPattern;
 
+    /// A plan-cache key's bytes, written out by hand: the base-IRI presence
+    /// byte, every text field as its length in eight little-endian bytes then
+    /// its UTF-8, each option list and the parameter list as their counts in
+    /// eight little-endian bytes then their members framed the same way, and
+    /// the rewrite byte. Two keys can only compare equal when every field
+    /// does, whatever separators a caller's configuration holds.
+    #[test]
+    fn a_plan_cache_key_is_every_field_length_framed() {
+        fn framed(out: &mut Vec<u8>, text: &str) {
+            out.extend_from_slice(&(text.len() as u64).to_le_bytes());
+            out.extend_from_slice(text.as_bytes());
+        }
+        let options = ParserOptions {
+            extension_fn_namespaces: vec!["http://example.org/fn#".to_owned()],
+            property_fn_namespaces: Vec::new(),
+            property_fn_iris: vec!["http://example.org/p".to_owned(), "\u{0}".to_owned()],
+        };
+        let parameters = ["?a", "?b"];
+        let mut key = Vec::new();
+        PlanCacheKey {
+            query: "SELECT * WHERE { ?s ?p ?o }",
+            base_iri: Some("http://example.org/base/"),
+            options: &options,
+            relations: "relations",
+            aggregates: "",
+            parameters: &parameters,
+            reach: ShaclPrebinding::Applied,
+        }
+        .write_into(&mut key);
+
+        let mut expected = vec![1];
+        framed(&mut expected, "http://example.org/base/");
+        for list in [
+            &options.extension_fn_namespaces,
+            &options.property_fn_namespaces,
+            &options.property_fn_iris,
+        ] {
+            expected.extend_from_slice(&(list.len() as u64).to_le_bytes());
+            for member in list {
+                framed(&mut expected, member);
+            }
+        }
+        expected.extend_from_slice(&2u64.to_le_bytes());
+        framed(&mut expected, "?a");
+        framed(&mut expected, "?b");
+        expected.push(1);
+        for field in ["relations", "", "SELECT * WHERE { ?s ?p ?o }"] {
+            framed(&mut expected, field);
+        }
+        assert_eq!(key, expected);
+    }
+
     /// Regression: `=` is RDFterm-equality, so `?a != ?b` over two *distinct IRIs*
     /// must be `true` (the row survives), NOT a type error. Routing `=` through the
     /// ordering comparator made every distinct-IRI `!=` evaluate to an error and drop

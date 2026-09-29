@@ -1799,3 +1799,63 @@ mod tests {
         assert_eq!(prepared.commitment.projections[0].content_digest, expected);
     }
 }
+
+/// The length framing in this module against the frozen framing vectors of
+/// `purrdf-hash-conformance`.
+#[cfg(test)]
+mod frozen_frame_differential {
+    use super::*;
+
+    /// Every input of the frozen length-framing vectors of
+    /// `purrdf-hash-conformance`, with its recorded eight-byte prefix and the
+    /// BLAKE3 digest of its framed field.
+    fn frozen_frames() -> Vec<(Vec<u8>, Vec<u8>, String)> {
+        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../hash-conformance/tests/vectors/frame_le_vectors.txt"
+        )))
+        .expect("the frozen framing vectors parse");
+        file.records()
+            .iter()
+            .map(|record| {
+                let fields = &record.fields;
+                let input = if fields[0] == "fill" {
+                    let (byte, length) = fields[1].split_once('*').expect("a BYTE*LENGTH fill");
+                    let byte = purrdf_hash::hex::decode(byte).expect("a hexadecimal byte")[0];
+                    vec![byte; length.parse().expect("a decimal length")]
+                } else {
+                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
+                };
+                let prefix = purrdf_hash::hex::decode(fields[2]).expect("a hexadecimal prefix");
+                (input, prefix, fields[3].to_owned())
+            })
+            .collect()
+    }
+
+    /// The SHA-256 of `domain`'s bytes followed by each input framed, as the
+    /// frozen vectors frame it.
+    fn specified(domain: Domain, prefix: &[u8], input: &[u8]) -> [u8; 32] {
+        let mut expected = domain.as_bytes().to_vec();
+        expected.extend_from_slice(prefix);
+        expected.extend_from_slice(input);
+        Sha256::digest(&expected).into()
+    }
+
+    #[test]
+    fn framed_hasher_reproduces_the_frozen_framing_vectors() {
+        for (input, prefix, _) in frozen_frames() {
+            let mut field = FramedHasher::new(D_TARGET_SET);
+            field.field(&input);
+            assert_eq!(field.finish(), specified(D_TARGET_SET, &prefix, &input));
+            let mut streamed = FramedHasher::new(D_MATRIX_CONTENT);
+            streamed.begin_field(u64::try_from(input.len()).expect("a slice length fits u64"));
+            let (head, tail) = input.split_at(input.len() / 2);
+            streamed.update(head);
+            streamed.update(tail);
+            assert_eq!(
+                streamed.finish(),
+                specified(D_MATRIX_CONTENT, &prefix, &input)
+            );
+        }
+    }
+}

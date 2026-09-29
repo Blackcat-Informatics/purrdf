@@ -7664,3 +7664,63 @@ mod tests {
         assert_eq!(ctx.clause_count(), ctx.clause_count());
     }
 }
+
+/// The length framing in this module against the frozen framing vectors of
+/// `purrdf-hash-conformance`.
+#[cfg(test)]
+mod frozen_frame_differential {
+    use super::*;
+
+    /// Every input of the frozen length-framing vectors of
+    /// `purrdf-hash-conformance`, with its recorded eight-byte prefix and the
+    /// BLAKE3 digest of its framed field.
+    fn frozen_frames() -> Vec<(Vec<u8>, Vec<u8>, String)> {
+        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../hash-conformance/tests/vectors/frame_le_vectors.txt"
+        )))
+        .expect("the frozen framing vectors parse");
+        file.records()
+            .iter()
+            .map(|record| {
+                let fields = &record.fields;
+                let input = if fields[0] == "fill" {
+                    let (byte, length) = fields[1].split_once('*').expect("a BYTE*LENGTH fill");
+                    let byte = purrdf_hash::hex::decode(byte).expect("a hexadecimal byte")[0];
+                    vec![byte; length.parse().expect("a decimal length")]
+                } else {
+                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
+                };
+                let prefix = purrdf_hash::hex::decode(fields[2]).expect("a hexadecimal prefix");
+                (input, prefix, fields[3].to_owned())
+            })
+            .collect()
+    }
+
+    #[test]
+    fn frame_reproduces_the_frozen_framing_vectors() {
+        for (input, prefix, _) in frozen_frames() {
+            let mut out = Vec::new();
+            frame(&mut out, &input);
+            assert_eq!(
+                out[..8],
+                prefix[..],
+                "the prefix of a {}-byte field",
+                input.len()
+            );
+            assert_eq!(out[8..], input[..]);
+        }
+    }
+
+    #[test]
+    fn frame_hash_reproduces_the_frozen_framing_vectors() {
+        for (input, _, digest) in frozen_frames() {
+            let mut hasher = purrdf_hash::blake3::RecordHasher::new();
+            frame_hash(&mut hasher, &input);
+            assert_eq!(
+                purrdf_hash::hex::encode(hasher.finalize().as_bytes()),
+                digest
+            );
+        }
+    }
+}

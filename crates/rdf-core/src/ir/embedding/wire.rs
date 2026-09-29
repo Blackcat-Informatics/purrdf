@@ -654,3 +654,23 @@ mod tests {
         assert!(checked_align_up(1, 3).is_err());
     }
 }
+
+/// The alignment arithmetic in this module against the standard library's
+/// `checked_next_multiple_of`, over every value up to 4096 and the top of the
+/// type's range.
+#[cfg(test)]
+mod align_differential {
+    use super::*;
+
+    #[test]
+    fn checked_align_up_is_checked_next_multiple_of() {
+        for alignment in [8, 64] {
+            for value in (0..=4096).chain(u64::MAX - 4096..=u64::MAX) {
+                assert_eq!(
+                    checked_align_up(value, alignment).ok(),
+                    value.checked_next_multiple_of(alignment)
+                );
+            }
+        }
+    }
+}

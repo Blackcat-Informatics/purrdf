@@ -1226,3 +1226,18 @@ mod tests {
         ));
     }
 }
+
+/// The alignment arithmetic in this module against the standard library's
+/// `checked_next_multiple_of`, over every value up to 4096 and the top of the
+/// type's range.
+#[cfg(test)]
+mod align_differential {
+    use super::*;
+
+    #[test]
+    fn align_up_usize_is_checked_next_multiple_of() {
+        for value in (0..=4096).chain(usize::MAX - 4096..=usize::MAX) {
+            assert_eq!(align_up_usize(value, 8), value.checked_next_multiple_of(8));
+        }
+    }
+}
