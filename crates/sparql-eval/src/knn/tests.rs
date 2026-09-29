@@ -2273,61 +2273,9 @@ fn reassociated_scan_matches_reassociated_kernel_bits() {
     assert_required_paths_ran(path);
 }
 
-/// The variable a CI job sets to name the dispatch paths its host must execute, as a
-/// comma-separated list of path names. Read by the test harness only.
-const REQUIRE_PATHS_VAR: &str = "PURRDF_REQUIRE_DISPATCH_PATHS";
-
-/// Every dispatch path, by which a required name is resolved.
-const ALL_PATHS: [purrdf_core::distance::Path; 8] = {
-    use purrdf_core::distance::Path;
-    [
-        Path::Portable,
-        Path::Avx2,
-        Path::Sse2,
-        Path::Avx2Fma,
-        Path::Avx512f,
-        Path::Neon,
-        Path::WasmSimd128,
-        Path::WasmScalar,
-    ]
-};
-
-/// The paths [`REQUIRE_PATHS_VAR`] names, or none when it is unset. A name that is no
-/// path, or a variable that names none, panics: a misspelt requirement must fail rather
-/// than require nothing.
-fn required_paths() -> Vec<purrdf_core::distance::Path> {
-    let Some(value) = std::env::var_os(REQUIRE_PATHS_VAR) else {
-        return Vec::new();
-    };
-    let value = value
-        .into_string()
-        .unwrap_or_else(|raw| panic!("{REQUIRE_PATHS_VAR} is not UTF-8: {raw:?}"));
-    let known = ALL_PATHS.map(purrdf_core::distance::Path::name).join(", ");
-    let mut paths = Vec::new();
-    for name in value
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        let path = ALL_PATHS
-            .into_iter()
-            .find(|path| path.name() == name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "{REQUIRE_PATHS_VAR} names `{name}`, which is not a dispatch path; the \
-                     paths are: {known}"
-                )
-            });
-        if !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
-    assert!(
-        !paths.is_empty(),
-        "{REQUIRE_PATHS_VAR} is set but names no path ({value:?}); the paths are: {known}"
-    );
-    paths
-}
+/// The variable naming the dispatch paths a host must execute; its `distance`
+/// entries are read by [`purrdf_core::distance::required_paths`].
+const REQUIRE_PATHS_VAR: &str = purrdf_hash::dispatch::REQUIRE_SIMD_PATHS;
 
 /// The reassociated relation runs the widest path the processor reports, `ran`. Every
 /// required reassociated path this build compiles must be one the host runs and none
@@ -2345,7 +2293,7 @@ fn assert_required_paths_ran(ran: purrdf_core::distance::Path) {
         path == Path::Portable
             || (cfg!(target_arch = "x86_64") && matches!(path, Path::Avx2 | Path::Avx512f))
     };
-    for path in required_paths() {
+    for path in purrdf_core::distance::required_paths() {
         let refusal = match Reassociated::image_code(path) {
             Some(code) => match Reassociated::resolve_recorded(code) {
                 Ok(_) => {

@@ -25,6 +25,7 @@ use core::fmt;
 use crate::arch::Crc32Update;
 use crate::backend::Crc32Backend;
 use crate::digest::Digest;
+use crate::dispatch::Backend as _;
 
 /// The generator polynomial with its `x^32` term: bit `d` is the coefficient
 /// of `x^d`.

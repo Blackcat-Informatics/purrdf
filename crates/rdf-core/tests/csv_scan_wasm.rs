@@ -21,7 +21,8 @@
 //! portable kernel and the live dispatch (there, the portable kernel again)
 //! still agree with the reference on that target.
 
-use purrdf_core::csv::backend::{kernels, reference, selected};
+use purrdf_core::csv::backend::{Backend, kernels, reference};
+use purrdf_hash::Backend as _;
 use purrdf_testkit::rng::SplitMix64;
 
 /// The byte sets the reader and writer actually stop at, plus edge cases: the
@@ -125,32 +126,31 @@ fn every_kernel_agrees_with_the_per_byte_scan_over_seeded_inputs() {
 fn the_target_explicit_kernel_is_among_those_compared() {
     let kernels = kernels();
     let names: Vec<&str> = kernels.iter().map(|(name, _)| *name).collect();
+    let selected = Backend::selected();
     purrdf_testkit::harness::print_line(&format!(
         "csv scan: {} checked; {} selected",
         names.join(", "),
-        selected()
+        selected.name()
     ));
     assert!(names.contains(&"portable"));
     assert!(names.contains(&"dispatch"));
+    assert!(names.contains(&selected.name()), "{names:?}");
     #[cfg(target_arch = "x86_64")]
-    {
-        assert!(names.contains(&"sse2"), "{names:?}");
-        assert!(names.contains(&selected()), "{names:?}");
-    }
+    assert!(names.contains(&"sse2"), "{names:?}");
     #[cfg(target_arch = "aarch64")]
     {
         assert!(names.contains(&"neon"), "{names:?}");
-        assert_eq!(selected(), "neon");
+        assert_eq!(selected, Backend::Neon);
     }
     #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
     {
         assert!(names.contains(&"simd128"), "{names:?}");
-        assert_eq!(selected(), "simd128");
+        assert_eq!(selected, Backend::Simd128);
     }
     #[cfg(all(target_arch = "wasm32", not(target_feature = "simd128")))]
     {
-        assert_eq!(names, vec!["portable", "dispatch"]);
-        assert_eq!(selected(), "portable");
+        assert_eq!(names, vec!["dispatch", "portable"]);
+        assert_eq!(selected, Backend::Portable);
     }
 }
 

@@ -349,6 +349,68 @@ impl fmt::Display for Path {
     }
 }
 
+/// Every dispatch path, in declaration order: the `distance` family of
+/// `PURRDF_REQUIRE_SIMD_PATHS`.
+const EVERY_PATH: [Path; 8] = [
+    Path::Portable,
+    Path::Avx2,
+    Path::Sse2,
+    Path::Avx2Fma,
+    Path::Avx512f,
+    Path::Neon,
+    Path::WasmSimd128,
+    Path::WasmScalar,
+];
+
+/// Whether this host is expected to run `path`: its architecture and build,
+/// and the processor features it advertises independently of the run-time
+/// detection the tests check.
+fn expected_here(path: Path) -> bool {
+    use purrdf_hash::dispatch::host_advertises;
+
+    let x86_64 = cfg!(target_arch = "x86_64");
+    match path {
+        Path::Portable => true,
+        Path::Sse2 => x86_64,
+        Path::Avx2 => x86_64 && host_advertises(&["avx2"]),
+        Path::Avx2Fma => x86_64 && host_advertises(&["avx2", "fma"]),
+        Path::Avx512f => x86_64 && host_advertises(&["avx512f", "avx2", "fma"]),
+        Path::Neon => cfg!(target_arch = "aarch64"),
+        Path::WasmSimd128 => cfg!(all(target_arch = "wasm32", target_feature = "simd128")),
+        Path::WasmScalar => cfg!(all(target_arch = "wasm32", not(target_feature = "simd128"))),
+    }
+}
+
+/// The dispatch paths [`purrdf_hash::dispatch::REQUIRE_SIMD_PATHS`] requires of
+/// the `distance` family, in declaration order, for the tests of every crate
+/// that runs the distance arithmetic (this one, the kNN relation and the HNSW
+/// index): none when it is unset; under `1`, every path this host is expected
+/// to run; otherwise the `distance:<path>` entries it names.
+///
+/// Not a stable interface: test-harness support, never reached by a
+/// distance computation.
+///
+/// # Panics
+///
+/// As [`purrdf_hash::dispatch::required_names`]: a misspelt requirement fails
+/// rather than requiring nothing.
+#[doc(hidden)]
+#[must_use]
+pub fn required_paths() -> Vec<Path> {
+    let by_name = |name: &str| {
+        EVERY_PATH
+            .into_iter()
+            .find(|path| path.name() == name)
+            .expect("a required name is a dispatch path")
+    };
+    purrdf_hash::dispatch::required_names("distance", &EVERY_PATH.map(Path::name), |name| {
+        expected_here(by_name(name))
+    })
+    .into_iter()
+    .map(by_name)
+    .collect()
+}
+
 /// Why this process cannot run a dispatch path an image recorded.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]

@@ -13,7 +13,7 @@
 
 use super::tests::{
     Executed, REQUIRE_PATHS_VAR, Store, Stream, at_offset, exact_compiled, paths_of, reference_dot,
-    required_paths, widened,
+    widened,
 };
 use super::*;
 

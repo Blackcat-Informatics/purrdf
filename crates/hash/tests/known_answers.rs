@@ -1,8 +1,8 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Published known answers, streaming at every split point, dispatch through
-//! `&mut dyn Digest`, and the `PURRDF_REQUIRE_HASH_PATHS` path requirement.
+//! Published known answers on every execution path the host runs, streaming
+//! at every split point, and dispatch through `&mut dyn Digest`.
 //!
 //! Sources of the expected values:
 //! * MD5: RFC 1321 §A.5, "test suite".
@@ -17,7 +17,7 @@ use purrdf_hash::crc32::Crc32;
 use purrdf_hash::md5::Md5;
 use purrdf_hash::sha1::Sha1;
 use purrdf_hash::sha3::{Sha3_224, Sha3_256, Sha3_384, Sha3_512};
-use purrdf_hash::{Digest, MAX_OUTPUT_LEN};
+use purrdf_hash::{Backend as _, Digest, MAX_OUTPUT_LEN};
 
 fn hex(bytes: &[u8]) -> String {
     use std::fmt::Write as _;
@@ -25,18 +25,6 @@ fn hex(bytes: &[u8]) -> String {
         let _ = write!(out, "{byte:02x}");
         out
     })
-}
-
-fn sha1_paths() -> impl Iterator<Item = Sha1Backend> {
-    Sha1Backend::ALL
-        .into_iter()
-        .filter(|backend| backend.is_available())
-}
-
-fn crc32_paths() -> impl Iterator<Item = Crc32Backend> {
-    Crc32Backend::ALL
-        .into_iter()
-        .filter(|backend| backend.is_available())
 }
 
 #[test]
@@ -79,7 +67,7 @@ fn kat_sha1_nist_examples_on_every_path() {
     ];
     for (message, expected) in examples {
         assert_eq!(hex(&Sha1::digest(message.as_bytes())), expected);
-        for backend in sha1_paths() {
+        for backend in Sha1Backend::all_available() {
             let digest = backend.digest(message.as_bytes()).expect("available");
             assert_eq!(hex(&digest), expected, "{} on {message:?}", backend.name());
         }
@@ -89,7 +77,7 @@ fn kat_sha1_nist_examples_on_every_path() {
 #[test]
 fn million_a_sha1_on_every_path() {
     let message = vec![b'a'; 1_000_000];
-    for backend in sha1_paths() {
+    for backend in Sha1Backend::all_available() {
         let digest = backend.digest(&message).expect("available");
         assert_eq!(
             hex(&digest),
@@ -144,7 +132,7 @@ fn kat_sha3_nist_examples() {
 #[test]
 fn kat_crc32_check_value_on_every_path() {
     assert_eq!(Crc32::checksum(b"123456789"), 0xCBF4_3926);
-    for backend in crc32_paths() {
+    for backend in Crc32Backend::all_available() {
         assert_eq!(
             backend.checksum(b"123456789"),
             Some(0xCBF4_3926),
@@ -193,7 +181,7 @@ fn split_sha1_every_point_on_every_path() {
     let expected = Sha1Backend::Portable
         .digest(&data)
         .expect("always available");
-    for backend in sha1_paths() {
+    for backend in Sha1Backend::all_available() {
         let mut hasher = backend.hasher().expect("available");
         assert_every_split(backend.name(), &mut hasher, &expected);
     }
@@ -215,7 +203,7 @@ fn split_crc32_every_point_on_every_path() {
         .checksum(&data)
         .expect("always available")
         .to_be_bytes();
-    for backend in crc32_paths() {
+    for backend in Crc32Backend::all_available() {
         let mut hasher = backend.hasher().expect("available");
         assert_every_split(backend.name(), &mut hasher, &expected);
     }
@@ -257,86 +245,4 @@ fn kat_dispatch_through_dyn_digest() {
         hex(&Md5::digest(b"abc")),
         "900150983cd24fb0d6963f7d28e17f72"
     );
-}
-
-// --- PURRDF_REQUIRE_HASH_PATHS ---------------------------------------------
-
-/// The `/proc/cpuinfo` flags a hardware path needs (x86 `flags`, Arm
-/// `Features`).
-fn advertising_flags(path: &str) -> &'static [&'static str] {
-    match path {
-        "x86-sha" => &["sha_ni", "ssse3", "sse4_1"],
-        "x86-pclmulqdq" => &["pclmulqdq", "sse4_1"],
-        "aarch64-sha1" => &["sha1"],
-        "aarch64-crc32" => &["crc32"],
-        "aarch64-pmull" => &["pmull", "crc32"],
-        other => panic!("PURRDF_REQUIRE_HASH_PATHS names an unknown path {other:?}"),
-    }
-}
-
-fn cpu_flags() -> Vec<String> {
-    let Ok(cpuinfo) = std::fs::read_to_string("/proc/cpuinfo") else {
-        return Vec::new();
-    };
-    cpuinfo
-        .lines()
-        .find(|line| line.starts_with("flags") || line.starts_with("Features"))
-        .and_then(|line| line.split_once(':'))
-        .map_or_default(|(_, flags)| flags.split_whitespace().map(str::to_owned).collect())
-}
-
-/// When `PURRDF_REQUIRE_HASH_PATHS` is set (comma-separated path names), each
-/// named hardware path whose flags this CPU advertises must be detected and,
-/// unless it is `aarch64-pmull` (available but never selected), be the path
-/// the public API selects. `portable` must always be available. The frozen
-/// vector replay (`tests/digest_differential.rs`) runs every available path,
-/// so a path required here is also a path that replay executed.
-#[test]
-fn required_hash_paths_are_selected() {
-    let Ok(required) = std::env::var("PURRDF_REQUIRE_HASH_PATHS") else {
-        return;
-    };
-    let flags = cpu_flags();
-    for path in required
-        .split(',')
-        .map(str::trim)
-        .filter(|path| !path.is_empty())
-    {
-        if path == "portable" {
-            assert!(Sha1Backend::Portable.is_available() && Crc32Backend::Portable.is_available());
-            continue;
-        }
-        let advertised = advertising_flags(path)
-            .iter()
-            .all(|flag| flags.iter().any(|have| have == flag));
-        if !advertised {
-            eprintln!("{path}: not advertised by this CPU's /proc/cpuinfo; not required here");
-            continue;
-        }
-        if let Some(backend) = Sha1Backend::ALL.into_iter().find(|b| b.name() == path) {
-            assert!(
-                backend.is_available(),
-                "{path} is advertised but was not detected"
-            );
-            assert_eq!(
-                Sha1Backend::selected(),
-                backend,
-                "{path} is advertised but not selected"
-            );
-        } else if let Some(backend) = Crc32Backend::ALL.into_iter().find(|b| b.name() == path) {
-            assert!(
-                backend.is_available(),
-                "{path} is advertised but was not detected"
-            );
-            if backend != Crc32Backend::Aarch64Pmull {
-                assert_eq!(
-                    Crc32Backend::selected(),
-                    backend,
-                    "{path} is advertised but not selected"
-                );
-            }
-        } else {
-            unreachable!("advertising_flags accepted {path}");
-        }
-    }
 }

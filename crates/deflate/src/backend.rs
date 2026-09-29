@@ -1,11 +1,15 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! The named kernel paths, for tests and benches.
+//! The named kernel paths, for tests and benches: the `deflate` family of
+//! [`purrdf_hash::Backend`], so `PURRDF_REQUIRE_SIMD_PATHS` names them as
+//! `deflate:<path>`.
 //!
 //! Not a stable interface. Every path produces the same bytes; this module
 //! exists so a test can run each path the host supports against the portable
 //! one, and a bench can time each.
+
+use purrdf_hash::Backend as _;
 
 use crate::arch::{self, VectorKernels};
 use crate::kernels::{
@@ -46,9 +50,8 @@ impl std::fmt::Debug for Kernels {
     }
 }
 
-impl Backend {
-    /// Every path, in order of preference (the last is always available).
-    pub const ALL: [Self; 5] = [
+impl purrdf_hash::Backend for Backend {
+    const ALL: &'static [Self] = &[
         Self::Avx2,
         Self::Sse2,
         Self::Neon,
@@ -56,8 +59,11 @@ impl Backend {
         Self::Portable,
     ];
 
-    /// The path's name.
-    pub const fn name(self) -> &'static str {
+    fn is_available(self) -> bool {
+        self.kernels().is_some()
+    }
+
+    fn name(self) -> &'static str {
         match self {
             Self::Portable => "portable",
             Self::Sse2 => "sse2",
@@ -66,20 +72,9 @@ impl Backend {
             Self::Simd128 => "simd128",
         }
     }
+}
 
-    /// Whether this processor and build can run the path.
-    pub fn is_available(self) -> bool {
-        self.kernels().is_some()
-    }
-
-    /// The path the decoder and encoder use by default here.
-    pub fn selected() -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|backend| backend.is_available())
-            .unwrap_or(Self::Portable)
-    }
-
+impl Backend {
     pub(crate) fn kernels(self) -> Option<Kernels> {
         let vector = |found: Option<VectorKernels>| {
             found.map(|v| Kernels {

@@ -25,6 +25,7 @@
 use core::fmt::{self, Alignment, Display, Formatter, Write as _};
 
 use crate::backend::HexBackend;
+use crate::dispatch::Backend as _;
 
 /// The lowercase base16 alphabet: RFC 4648 §8's, with `a`–`f` for 10–15.
 pub(crate) const ALPHABET: &[u8; 16] = b"0123456789abcdef";

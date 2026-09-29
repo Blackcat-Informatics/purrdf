@@ -9,12 +9,13 @@
 //! does not exist, so the compiled-in `simd128` kernel would otherwise never
 //! execute under `make wasm-test`. See `tests/csv_scan_wasm.rs`.
 //!
-//! Every function here is safe. [`kernels`] adapts [`super::arch::every_kernel`]'s
-//! `StopSet`-keyed [`super::scan::Kernel`]s (`StopSet` is `pub(crate)`, so it
-//! cannot appear in this module's public signatures) to plain byte slices by
-//! closing over an already-safe kernel value — the `unsafe` that makes a
-//! kernel possible stays confined to [`super::arch`], which alone constructs
-//! those safe values from unsafe target-feature calls.
+//! Every function here is safe. [`kernels`] adapts
+//! [`super::arch::kernel`]'s `StopSet`-keyed [`super::scan::Kernel`]s
+//! (`StopSet` is `pub(crate)`, so it cannot appear in this module's public
+//! signatures) to plain byte slices by closing over an already-safe kernel
+//! value — the `unsafe` that makes a kernel possible stays confined to
+//! [`super::arch`], which alone constructs those safe values from unsafe
+//! target-feature calls.
 
 // The kernels and the dispatcher this module adapts are `pub(crate)`, so the
 // links above and below are private-item links by construction — the same
@@ -24,7 +25,54 @@
     reason = "this doc-hidden module documents the crate-private kernels and dispatcher it adapts"
 )]
 
-use super::scan::{StopSet, find_portable};
+use super::scan::StopSet;
+
+/// A field-scanner kernel path: the `csv` family of [`purrdf_hash::Backend`],
+/// so `PURRDF_REQUIRE_SIMD_PATHS` names them as `csv:<path>`.
+///
+/// [`Backend::ALL`](purrdf_hash::Backend::ALL) is the order
+/// [`super::arch::find`] prefers them in, so
+/// [`Backend::selected`](purrdf_hash::Backend::selected) names the kernel the
+/// reader and writer run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Backend {
+    /// [`super::scan::find_portable`], sixteen-byte chunks answered lane by
+    /// lane; available everywhere, and the oracle every other path is tested
+    /// against.
+    Portable,
+    /// SSE2 on `x86_64` (the architecture baseline), 16-byte chunks.
+    Sse2,
+    /// AVX2 on `x86_64`, detected at run time, 32-byte chunks.
+    Avx2,
+    /// NEON on `aarch64` (the architecture baseline), 16-byte chunks.
+    Neon,
+    /// wasm `simd128`, in a build with `simd128` enabled, 16-byte chunks.
+    Simd128,
+}
+
+impl purrdf_hash::Backend for Backend {
+    const ALL: &'static [Self] = &[
+        Self::Avx2,
+        Self::Sse2,
+        Self::Neon,
+        Self::Simd128,
+        Self::Portable,
+    ];
+
+    fn is_available(self) -> bool {
+        super::arch::kernel(self).is_some()
+    }
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Portable => "portable",
+            Self::Sse2 => "sse2",
+            Self::Avx2 => "avx2",
+            Self::Neon => "neon",
+            Self::Simd128 => "simd128",
+        }
+    }
+}
 
 /// One named kernel run over plain byte slices: the member set and the
 /// haystack, rather than a pre-built [`super::scan::StopSet`].
@@ -38,68 +86,27 @@ pub fn reference(members: &[u8], haystack: &[u8]) -> Option<usize> {
     haystack.iter().position(|&b| set.contains(b))
 }
 
-/// Every kernel this build provides, by name, each answering the same
-/// question as [`reference`]:
+/// Every kernel this build and processor run, by name, each answering the
+/// same question as [`reference`]:
 ///
-/// * `"portable"` — [`find_portable`], the oracle every explicit kernel is
-///   tested against, and the only kernel on a target without one.
 /// * `"dispatch"` — the live [`super::scan::StopSet::find`], the entry point
 ///   the reader and writer actually call.
-/// * every explicit vector kernel this target compiles, or (for `avx2`) this
-///   processor reports at run time — see [`super::arch::every_kernel`]: `sse2`
-///   and, when available, `avx2` on `x86_64`; `neon` on `aarch64`; `simd128`
-///   on `wasm32` compiled with `simd128` enabled.
+/// * every available [`Backend`], by its name: `"portable"` everywhere, and
+///   `sse2` and, when the processor reports it, `avx2` on `x86_64`; `neon` on
+///   `aarch64`; `simd128` on `wasm32` compiled with `simd128` enabled.
 pub fn kernels() -> Vec<(&'static str, ScanKernel)> {
-    let mut kernels: Vec<(&'static str, ScanKernel)> = vec![
-        (
-            "portable",
-            Box::new(|members: &[u8], haystack: &[u8]| {
-                find_portable(&StopSet::new(members), haystack)
-            }),
-        ),
-        (
-            "dispatch",
-            Box::new(|members: &[u8], haystack: &[u8]| StopSet::new(members).find(haystack)),
-        ),
-    ];
-    for (name, kernel) in super::arch::every_kernel() {
+    let mut kernels: Vec<(&'static str, ScanKernel)> = vec![(
+        "dispatch",
+        Box::new(|members: &[u8], haystack: &[u8]| StopSet::new(members).find(haystack)),
+    )];
+    for backend in <Backend as purrdf_hash::Backend>::all_available() {
+        let kernel = super::arch::kernel(backend).expect("an available path has a kernel");
         kernels.push((
-            name,
+            purrdf_hash::Backend::name(backend),
             Box::new(move |members: &[u8], haystack: &[u8]| {
                 kernel(&StopSet::new(members), haystack)
             }),
         ));
     }
     kernels
-}
-
-/// The name of the kernel `"dispatch"` (equivalently, [`super::arch::find`])
-/// runs on this build and processor: `"avx2"` or `"sse2"` on `x86_64`,
-/// `"neon"` on `aarch64`, `"simd128"` on `wasm32` built with `simd128`
-/// enabled, `"portable"` otherwise. Mirrors [`super::arch::find`]'s own
-/// choice rather than calling it, so naming the choice never runs a kernel.
-pub fn selected() -> &'static str {
-    #[cfg(target_arch = "x86_64")]
-    {
-        if std::is_x86_feature_detected!("avx2") {
-            return "avx2";
-        }
-        "sse2"
-    }
-    #[cfg(target_arch = "aarch64")]
-    {
-        "neon"
-    }
-    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
-    {
-        "simd128"
-    }
-    #[cfg(not(any(
-        target_arch = "x86_64",
-        target_arch = "aarch64",
-        all(target_arch = "wasm32", target_feature = "simd128")
-    )))]
-    {
-        "portable"
-    }
 }

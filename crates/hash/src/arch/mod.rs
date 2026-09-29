@@ -241,6 +241,7 @@ pub(crate) fn blake3_compress_on(
     flags: u32,
 ) -> Option<[u32; 8]> {
     use crate::blake3::Backend;
+    use crate::dispatch::Backend as _;
     if !backend.is_available() {
         return None;
     }

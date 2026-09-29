@@ -314,12 +314,13 @@ jobs:
         uses: ./.github/actions/binaryen-toolchain
 
       - name: Run workspace tests (this shard; the six include the doc tests)
-        # A hosted x86_64 runner guarantees only the SSE2 baseline, so that is the one
-        # reassociated path this job requires; the distance, kNN and HNSW tests still
-        # assert they executed every path the runner reports. `avx512-sde` below
+        # A hosted x86_64 runner guarantees only the SSE2 baseline, so SSE2 is the one
+        # vector path of each family this job requires; the distance, kNN and HNSW
+        # tests still assert they executed every path the runner reports, and every
+        # other family's differentials run every path it detects. `avx512-sde` below
         # requires the rest.
         env:
-          PURRDF_REQUIRE_DISPATCH_PATHS: portable,sse2
+          PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:sse2,blake3:sse2,deflate:sse2,csv:sse2
         run: make test-shard SHARD=${{ matrix.shard }}
 
       - name: Test downstream preserve-order feature unification
@@ -806,12 +807,12 @@ jobs:
 
       - name: Run the distance arithmetic's path and reference-model tests on NEON
         env:
-          PURRDF_REQUIRE_DISPATCH_PATHS: portable,neon
+          PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:neon
         run: cargo test --locked -p purrdf-core --lib distance
 
       - name: Run the kNN kernels and their pinned cross-target answers on aarch64
         env:
-          PURRDF_REQUIRE_DISPATCH_PATHS: portable,neon
+          PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:neon
         run: |
           cargo test --locked -p purrdf-sparql-eval --lib knn
           cargo test --locked -p purrdf-sparql-eval --test knn_wasm_determinism
@@ -819,18 +820,17 @@ jobs:
 
       - name: Compare the HNSW image digests with the pinned goldens and run the reassociated index on aarch64
         env:
-          PURRDF_REQUIRE_DISPATCH_PATHS: portable,neon
+          PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:neon
         run: |
           cargo test --locked -p purrdf-hnsw --lib --test determinism --test conformance \
             --test wasm_reassociated
 
-      - name: Run the SHA-1, CRC-32 and BLAKE3 Arm kernels against frozen vectors
-        # The hash crate's own path requirement: both Armv8 kernels must be
-        # detected and executed here, beside the portable path, and reproduce
-        # every frozen vector bit for bit. No other job runs them.
+      - name: Run the SHA-1, CRC-32, base16 and BLAKE3 Arm kernels against frozen vectors
+        # The hash crate's own path requirement: the Armv8 SHA1 and CRC32 kernels
+        # must be detected, selected and executed here, beside the portable path,
+        # and reproduce every frozen vector bit for bit. No other job runs them.
         env:
-          PURRDF_REQUIRE_HASH_PATHS: portable,aarch64-sha1,aarch64-crc32
-          PURRDF_REQUIRE_BLAKE3_PATHS: portable,neon
+          PURRDF_REQUIRE_SIMD_PATHS: sha1:portable,sha1:aarch64-sha1,crc32:portable,crc32:aarch64-crc32,hex:aarch64-neon,blake3:portable,blake3:neon
         run: cargo test --locked -p purrdf-hash -p purrdf-hash-conformance
 
       - name: Run the AES-round FixedHasher path on Arm
@@ -847,7 +847,7 @@ jobs:
         # differentials and the encoder/decoder agreement cases must run on the
         # NEON path here, beside the portable one.
         env:
-          PURRDF_REQUIRE_DEFLATE_PATHS: portable,neon
+          PURRDF_REQUIRE_SIMD_PATHS: deflate:portable,deflate:neon
         run: cargo test --locked -p purrdf-deflate
 
 
@@ -856,6 +856,8 @@ jobs:
       # kernel is among those compared), then the reader, writer and frozen-vector
       # replay on the kernel aarch64 dispatches to.
       - name: Run the CSV field scanner's NEON kernel and the CSV reader and writer on aarch64
+        env:
+          PURRDF_REQUIRE_SIMD_PATHS: csv:portable,csv:neon
         run: |
           cargo test --locked -p purrdf-core --lib csv::
           cargo test --locked -p purrdf-core --test csv_differential
@@ -912,9 +914,9 @@ jobs:
 
       - name: Run BLAKE3, distance, kNN and HNSW suites on i686
         env:
-          PURRDF_REQUIRE_DISPATCH_PATHS: portable
+          PURRDF_REQUIRE_SIMD_PATHS: distance:portable,blake3:portable,blake3:sse2
         run: |
-          PURRDF_REQUIRE_BLAKE3_PATHS=portable,sse2 cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hash-conformance --test blake3
+          cargo test --locked --target i686-unknown-linux-gnu -p purrdf-hash-conformance --test blake3
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-core --lib distance
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval --lib knn
           cargo test --locked --target i686-unknown-linux-gnu -p purrdf-sparql-eval \
@@ -937,9 +939,9 @@ jobs:
       # against the same 32-bit C library as i686.
       - name: Run BLAKE3, arithmetic, distance, kNN and HNSW suites on i586 (x87)
         env:
-          PURRDF_REQUIRE_DISPATCH_PATHS: portable
+          PURRDF_REQUIRE_SIMD_PATHS: distance:portable,blake3:portable
         run: |
-          PURRDF_REQUIRE_BLAKE3_PATHS=portable cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hash-conformance --test blake3
+          cargo test --locked --target i586-unknown-linux-gnu -p purrdf-hash-conformance --test blake3
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-xsd --lib
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib distance
           cargo test --locked --target i586-unknown-linux-gnu -p purrdf-core --lib ir::embedding
@@ -1011,7 +1013,7 @@ jobs:
 
       - name: Run BLAKE3, distance, kNN and HNSW suites on riscv64 under emulation (this part)
         env:
-          PURRDF_REQUIRE_DISPATCH_PATHS: portable
+          PURRDF_REQUIRE_SIMD_PATHS: distance:portable,blake3:portable
           PART: ${{ matrix.part }}
         shell: bash
         run: |
@@ -1032,7 +1034,7 @@ jobs:
           # shellcheck disable=SC2086
           case "$PART" in
           suites)
-            PURRDF_REQUIRE_BLAKE3_PATHS=portable cargo test --locked --target "$target" -p purrdf-hash-conformance --test blake3
+            cargo test --locked --target "$target" -p purrdf-hash-conformance --test blake3
             cargo test --locked --target "$target" -p purrdf-core --lib distance
             cargo test --locked --target "$target" -p purrdf-sparql-eval --lib knn
             cargo test --locked --target "$target" -p purrdf-sparql-eval \
@@ -1057,7 +1059,7 @@ jobs:
   # reassociated avx512f compilation would ship having run only on whichever runner
   # happened to have it. Intel's Software Development Emulator runs the test binaries
   # as a Sapphire Rapids processor, which reports AVX2, FMA and AVX-512F, and
-  # PURRDF_REQUIRE_DISPATCH_PATHS makes every x86_64 path a requirement: a path the
+  # PURRDF_REQUIRE_SIMD_PATHS makes every x86_64 path a requirement: a path the
   # emulated processor does not report, or a test that did not execute it, fails the
   # job. The binaries are built natively first; only running them is emulated. The
   # HNSW digest suites stay on the native lanes: their worker-count sweep is minutes
@@ -1095,8 +1097,7 @@ jobs:
       - name: Run them on an emulated AVX-512F processor, requiring every x86_64 path
         env:
           CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_RUNNER: ${{ env.SDE_PATH }}/sde64 -spr --
-          PURRDF_REQUIRE_DISPATCH_PATHS: portable,avx2,sse2,avx2+fma,avx512f
-          PURRDF_REQUIRE_BLAKE3_PATHS: portable,sse2,ssse3,avx2,avx512
+          PURRDF_REQUIRE_SIMD_PATHS: distance:portable,distance:avx2,distance:sse2,distance:avx2+fma,distance:avx512f,blake3:portable,blake3:sse2,blake3:ssse3,blake3:avx2,blake3:avx512
         run: |
           cargo test --locked -p purrdf-hash-conformance --test blake3
           cargo test --locked -p purrdf-core --lib distance

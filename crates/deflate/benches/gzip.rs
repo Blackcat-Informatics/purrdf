@@ -15,6 +15,7 @@ use std::hint::black_box;
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use purrdf_deflate::backend::Backend;
 use purrdf_deflate::{Deflater, GzipDecoder, Level, gzip};
+use purrdf_hash::Backend as _;
 
 const SIZES: [(usize, &str); 3] = [(4 << 10, "4KiB"), (1 << 20, "1MiB"), (16 << 20, "16MiB")];
 
@@ -163,10 +164,7 @@ fn paths(c: &mut Criterion) {
     let data = text(1 << 20);
     let mut group = c.benchmark_group("deflate-paths");
     group.throughput(Throughput::Bytes(data.len() as u64));
-    for backend in Backend::ALL {
-        if !backend.is_available() {
-            continue;
-        }
+    for backend in Backend::all_available() {
         group.bench_function(BenchmarkId::new("encode", backend.name()), |b| {
             b.iter(|| {
                 let mut deflater = Deflater::with_backend(Level::DEFAULT, backend).expect("path");

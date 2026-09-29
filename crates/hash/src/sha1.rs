@@ -22,6 +22,7 @@ use crate::arch::Sha1Blocks;
 use crate::backend::Sha1Backend;
 use crate::block::BlockBuffer;
 use crate::digest::Digest;
+use crate::dispatch::Backend as _;
 
 /// The digest length in bytes.
 pub const OUTPUT_LEN: usize = 20;

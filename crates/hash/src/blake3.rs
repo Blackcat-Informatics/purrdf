@@ -7,6 +7,8 @@
 //! Input is limited by the specification to fewer than 2^64 bytes. Tree
 //! storage is bounded; neither streaming nor one-shot hashing allocates.
 
+use crate::dispatch::Backend as _;
+
 pub(crate) const IV: [u32; 8] = [
     0x6a09_e667,
     0xbb67_ae85,
@@ -37,9 +39,8 @@ pub enum Backend {
     /// Four chunks on wasm SIMD128.
     Wasm128,
 }
-impl Backend {
-    /// All backends in preference order. Availability is target dependent.
-    pub const ALL: [Self; 7] = [
+impl crate::dispatch::Backend for Backend {
+    const ALL: &'static [Self] = &[
         Self::Avx512,
         Self::Avx2,
         Self::Ssse3,
@@ -48,8 +49,8 @@ impl Backend {
         Self::Wasm128,
         Self::Portable,
     ];
-    /// Whether this build and processor can execute the path.
-    pub fn is_available(self) -> bool {
+
+    fn is_available(self) -> bool {
         match self {
             Self::Portable => true,
             #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -75,13 +76,21 @@ impl Backend {
             Self::Ssse3 | Self::Avx2 | Self::Avx512 => false,
         }
     }
-    /// The default backend on this target.
-    pub fn selected() -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|b| b.is_available())
-            .expect("portable always exists")
+
+    fn name(self) -> &'static str {
+        match self {
+            Self::Portable => "portable",
+            Self::Sse2 => "sse2",
+            Self::Ssse3 => "ssse3",
+            Self::Avx2 => "avx2",
+            Self::Avx512 => "avx512",
+            Self::Neon => "neon",
+            Self::Wasm128 => "simd128",
+        }
     }
+}
+
+impl Backend {
     /// Hash on this path, or return `None` if the path cannot execute here.
     #[inline]
     pub fn hash(self, data: &[u8]) -> Option<Hash> {

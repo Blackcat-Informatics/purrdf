@@ -846,6 +846,7 @@ name = "purrdf-hnsw"
 version = "2.0.2"
 dependencies = [
  "purrdf-core",
+ "purrdf-hash",
  "purrdf-sparql-eval",
  "purrdf-testkit",
  "purrdf-xsd",

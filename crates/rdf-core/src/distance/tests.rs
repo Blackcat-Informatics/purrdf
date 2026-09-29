@@ -52,66 +52,13 @@ pub(super) fn exact_compiled() -> &'static [Path] {
 
 // ---- the executed-path requirement -------------------------------------------------
 
-/// The variable a CI job sets to name the dispatch paths its host must execute, as a
-/// comma-separated list of [`Path::name`]s.
-///
-/// Read by the test harness only. Unset, every test still asserts it executed every path
-/// the host runs; set, a listed path the host cannot run, or that a test did not
-/// execute, fails the run -- which is how a job on an emulated or known processor
-/// proves a path ran rather than that it was merely compiled.
-pub(super) const REQUIRE_PATHS_VAR: &str = "PURRDF_REQUIRE_DISPATCH_PATHS";
-
-/// Every dispatch path, by which a required name is resolved.
-const ALL_PATHS: [Path; 8] = [
-    Path::Portable,
-    Path::Avx2,
-    Path::Sse2,
-    Path::Avx2Fma,
-    Path::Avx512f,
-    Path::Neon,
-    Path::WasmSimd128,
-    Path::WasmScalar,
-];
-
-/// The paths [`REQUIRE_PATHS_VAR`] names, in its order, or none when it is unset.
-///
-/// # Panics
-///
-/// When the variable is set but names no path, is not UTF-8, or names something that
-/// is not a path: a misspelt requirement must fail rather than require nothing.
-pub(super) fn required_paths() -> Vec<Path> {
-    let Some(value) = std::env::var_os(REQUIRE_PATHS_VAR) else {
-        return Vec::new();
-    };
-    let value = value
-        .into_string()
-        .unwrap_or_else(|raw| panic!("{REQUIRE_PATHS_VAR} is not UTF-8: {raw:?}"));
-    let known = ALL_PATHS.map(Path::name).join(", ");
-    let mut paths = Vec::new();
-    for name in value
-        .split(',')
-        .map(str::trim)
-        .filter(|name| !name.is_empty())
-    {
-        let path = ALL_PATHS
-            .into_iter()
-            .find(|path| path.name() == name)
-            .unwrap_or_else(|| {
-                panic!(
-                    "{REQUIRE_PATHS_VAR} names `{name}`, which is not a dispatch path; the \
-                     paths are: {known}"
-                )
-            });
-        if !paths.contains(&path) {
-            paths.push(path);
-        }
-    }
-    assert!(
-        !paths.is_empty(),
-        "{REQUIRE_PATHS_VAR} is set but names no path ({value:?}); the paths are: {known}"
-    );
-    paths
-}
+/// The variable naming the dispatch paths a host must execute
+/// (`distance:<path>` entries, or `1` for every path the host is expected to
+/// run). Unset, every test still asserts it executed every path the host runs;
+/// set, a required path the host cannot run, or that a test did not execute,
+/// fails the run -- which is how a job on an emulated or known processor proves
+/// a path ran rather than that it was merely compiled.
+pub(super) const REQUIRE_PATHS_VAR: &str = purrdf_hash::dispatch::REQUIRE_SIMD_PATHS;
 
 /// The dispatch paths a test actually ran a kernel on, recorded as it runs them.
 #[derive(Default)]

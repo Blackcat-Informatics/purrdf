@@ -46,11 +46,15 @@
 //! Pure integer arithmetic over caller-supplied bytes: no allocation, no
 //! threads, no filesystem, no clock and no entropy (the table hasher's keys
 //! are compile-time constants), so the crate builds for
-//! `wasm32-unknown-unknown`.
+//! `wasm32-unknown-unknown`. The one exception is test-harness support, never
+//! reached by a hashing path: [`dispatch`]'s requirement check reads the
+//! `PURRDF_REQUIRE_SIMD_PATHS` environment variable and Linux
+//! `/proc/cpuinfo`.
 //!
 //! The crate has zero dependencies and is the root of the workspace's crate
 //! layering: every crate may depend on it. Besides the digests it holds the
-//! small specified kernels shared across the workspace ([`fnv`], [`mix`]). MD5 and SHA-1 are provided because protocols
+//! small specified kernels shared across the workspace ([`fnv`], [`mix`]) and
+//! the [`Backend`] trait every family of named execution paths implements. MD5 and SHA-1 are provided because protocols
 //! name them (SPARQL's `MD5()`/`SHA1()`, OpenPGP v4 fingerprints), not as
 //! security primitives: both are broken for collision resistance.
 
@@ -68,6 +72,7 @@ mod arch;
 pub mod backend;
 pub mod blake3;
 pub mod crc32;
+pub mod dispatch;
 pub mod fixed;
 pub mod fnv;
 pub mod hex;
@@ -77,3 +82,4 @@ pub mod sha1;
 pub mod sha3;
 
 pub use digest::{Digest, MAX_OUTPUT_LEN};
+pub use dispatch::Backend;

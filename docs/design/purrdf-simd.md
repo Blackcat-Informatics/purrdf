@@ -174,6 +174,19 @@ a claim about emitted asm, and every site in §4 is measured.
   same count. The *proof mnemonics* are what tie a count to the audited loop, which
   is why every `covered` row requires them and no `leave` or `rewrite` row claims
   vector work from a bare count.
+- Asm proves a kernel was *compiled*, never that it *ran*. Every kernel family
+  with more than one path (BLAKE3, SHA-1, CRC-32, base16, DEFLATE, the CSV field
+  scanner, the distance arithmetic) names its paths through
+  `purrdf_hash::Backend`, and its tests run every available path against the
+  portable one and the frozen vectors. `PURRDF_REQUIRE_SIMD_PATHS` turns
+  "available" into a checked claim, read by the one check in
+  `purrdf_hash::dispatch`: set to `1`, every path the host is expected to run
+  (its architecture's baseline paths, and each path whose features Linux
+  `/proc/cpuinfo` advertises) must be available, and the families that promise it
+  also require it selected or executed; set to a list of `family:path` entries
+  (`distance:avx512f,blake3:avx512,deflate:neon`), exactly those are required, so
+  a job on a known or emulated processor proves what that processor ran. A
+  misspelt family or path, or any other value, fails the run.
 
 ---
 

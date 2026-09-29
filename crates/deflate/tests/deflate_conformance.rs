@@ -17,7 +17,9 @@ use purrdf_deflate::{
     Deflater, Error, GzipDecoder, GzipReader, GzipWriter, Inflater, Level, Status, deflate, gzip,
     inflate,
 };
+use purrdf_hash::Backend as _;
 use purrdf_hash::crc32::Crc32;
+use purrdf_hash::dispatch::{assert_required_available, host_advertises};
 use purrdf_testkit::rng::Xoshiro256;
 
 // --- Inputs ------------------------------------------------------------------
@@ -312,10 +314,8 @@ fn every_kernel_path_encodes_and_decodes_the_same_bytes() {
         out
     };
     let mut ran = 0;
-    for backend in Backend::ALL {
-        let Some(mut d) = Deflater::with_backend(Level::DEFAULT, backend) else {
-            continue;
-        };
+    for backend in Backend::all_available() {
+        let mut d = Deflater::with_backend(Level::DEFAULT, backend).expect("available");
         let mut out = Vec::new();
         d.write(&data, &mut out);
         d.finish(&mut out);
@@ -1204,10 +1204,7 @@ fn decompressed_limit_accepts_large_valid() {
 fn copy_kernels_match_portable() {
     let mut rng = Xoshiro256::from_seed(0xC0FF);
     let slack = Backend::COPY_SLACK;
-    for backend in Backend::ALL {
-        if !backend.is_available() {
-            continue;
-        }
+    for backend in Backend::all_available() {
         for dist in 1..=70usize {
             for len in (1..=300usize)
                 .step_by(7)
@@ -1235,10 +1232,7 @@ fn copy_kernels_match_portable() {
 
 fn match_length_kernels_match_portable() {
     let mut rng = Xoshiro256::from_seed(0x1E);
-    for backend in Backend::ALL {
-        if !backend.is_available() {
-            continue;
-        }
+    for backend in Backend::all_available() {
         for len in 0..=258usize {
             let a = random_bytes(len, rng.next_u64());
             for mismatch in [0, len / 3, len / 2, len.saturating_sub(1), len] {
@@ -1260,10 +1254,7 @@ fn match_length_kernels_match_portable() {
 }
 
 fn hash_kernels_match_portable() {
-    for backend in Backend::ALL {
-        if !backend.is_available() {
-            continue;
-        }
+    for backend in Backend::all_available() {
         for len in 4..300usize {
             let data = random_bytes(len, len as u64);
             for start in [0, 1, 5] {
@@ -1300,26 +1291,32 @@ fn selected_backend_is_reported() {
     assert_eq!(selected, Backend::Portable);
 }
 
-/// `PURRDF_REQUIRE_DEFLATE_PATHS` (comma-separated path names) makes a run
-/// fail unless every named path is available — and therefore exercised by
-/// every differential above, which iterates all available paths. CI sets it on
-/// the runners whose vector paths no other job executes.
-fn required_paths_are_available() {
-    let Ok(required) = std::env::var("PURRDF_REQUIRE_DEFLATE_PATHS") else {
-        return;
-    };
-    for name in required.split(',').map(str::trim).filter(|n| !n.is_empty()) {
-        let backend = Backend::ALL
-            .into_iter()
-            .find(|b| b.name() == name)
-            .unwrap_or_else(|| {
-                panic!("PURRDF_REQUIRE_DEFLATE_PATHS names an unknown path {name:?}")
-            });
-        assert!(
-            backend.is_available(),
-            "PURRDF_REQUIRE_DEFLATE_PATHS requires {name}, which this host cannot run"
-        );
+/// Whether this host is expected to run a kernel path: its architecture and
+/// build, and the processor features it advertises independently of the
+/// detection under test.
+fn expected_here(backend: Backend) -> bool {
+    match backend {
+        Backend::Portable => true,
+        Backend::Sse2 => cfg!(target_arch = "x86_64"),
+        Backend::Avx2 => cfg!(target_arch = "x86_64") && host_advertises(&["avx2"]),
+        Backend::Neon => cfg!(target_arch = "aarch64"),
+        Backend::Simd128 => cfg!(all(target_arch = "wasm32", target_feature = "simd128")),
     }
+}
+
+/// Every `deflate` path `PURRDF_REQUIRE_SIMD_PATHS` requires is available, and
+/// therefore exercised by every differential above, which iterates all
+/// available paths. CI names the paths of the runners whose vector paths no
+/// other job executes.
+fn required_paths_are_available() {
+    assert_required_available("deflate", expected_here);
+}
+
+/// Every available path is one of the family's, the selected path among them.
+fn the_selected_path_is_available() {
+    let available: Vec<Backend> = Backend::all_available().collect();
+    assert!(available.contains(&Backend::selected()), "{available:?}");
+    assert!(available.contains(&Backend::Portable), "{available:?}");
 }
 
 fn gzip_vector_sink_preserves_prefix_and_member_checks() {
@@ -1358,6 +1355,7 @@ fn gzip_vector_sink_preserves_prefix_and_member_checks() {
 purrdf_testkit::harness_main!(
     gzip_vector_sink_preserves_prefix_and_member_checks,
     required_paths_are_available,
+    the_selected_path_is_available,
     round_trips_across_levels_and_window_limits,
     encoder_output_is_independent_of_write_chunking,
     every_kernel_path_encodes_and_decodes_the_same_bytes,
