@@ -12,8 +12,9 @@
 use std::borrow::Cow;
 
 use purrdf_core::sink::TextOut;
-use purrdf_core::terminals::{ByteClass, byte_run_count};
 use purrdf_iri::BaseIri;
+use purrdf_lex::literal_escape::{self, Carrier};
+use purrdf_lex::term_syntax::{self, TRIPLE_TERM_CLOSE, TRIPLE_TERM_OPEN};
 
 use crate::{FastHasher, FastMap, RdfDiagnostic, RdfTextDirection};
 
@@ -239,32 +240,19 @@ impl ReifierIndex {
     }
 }
 
-/// Crockford Base32 alphabet (the ULID rendering alphabet): the ten decimal
-/// digits, then the letters without I, L, O and U.
-const CROCKFORD: &[u8; 32] = b"0123456789\
-ABCDEFGHJKMNPQRSTVWXYZ";
-/// A rendered ULID is 26 Crockford Base32 digits.
-const ULID_LEN: usize = 26;
-
 /// A deterministic blank-node label with the given `prefix`, byte-identical to the
 /// prior purrdf-gts `deterministic_label(prefix, counter)`: `prefix` plus the 26-digit
 /// Crockford Base32 rendering of a zero-timestamp ULID built from `counter`.
 ///
 /// With a zero timestamp the rendered ULID value equals `counter` for any
-/// `counter < 2^80`, so this renders the 128-bit big-endian value `counter as u128`
-/// as 26 Crockford Base32 digits, digit `i` being `(value >> (125 - i*5)) & 0x1f`.
+/// `counter < 2^80`, so this is [`purrdf_lex::crockford::write_u128`] of
+/// `counter as u128`.
 pub(crate) fn deterministic_blank_label_with_prefix(prefix: &str, counter: usize) -> String {
-    let value = counter as u128;
-    let mut buffer = [0u8; ULID_LEN];
-    for (index, byte) in buffer.iter_mut().enumerate() {
-        let shift = 125 - index * 5;
-        let digit = ((value >> shift) & 0x1f) as usize;
-        *byte = CROCKFORD[digit];
-    }
-    // The buffer is ASCII (every byte comes from the Crockford alphabet), so the
-    // UTF-8 conversion never fails.
-    let rendered = std::str::from_utf8(&buffer).expect("Crockford digits are ASCII");
-    format!("{prefix}{rendered}")
+    let mut label = String::with_capacity(prefix.len() + purrdf_lex::crockford::U128_DIGITS);
+    label.push_str(prefix);
+    // Writing into a `String` cannot fail.
+    let _ = purrdf_lex::crockford::write_u128(counter as u128, &mut label);
+    label
 }
 
 /// A deterministic blank-node label, byte-identical to the prior purrdf-gts
@@ -283,113 +271,6 @@ fn is_literal_direction(direction: &str) -> bool {
     RdfTextDirection::from_str_token(direction).is_some()
 }
 
-/// The bytes that can begin a scalar a literal lexical form escapes, as a class
-/// table: `"`, `\`, the C0 controls, DEL, and `0xC2`, the UTF-8 lead byte of
-/// U+0080-U+00BF, the block that holds the C1 controls. Every other byte belongs
-/// to a scalar that rides verbatim, so the scan copies it as part of a run.
-const LITERAL_ESCAPE_TABLE: [u8; 256] = {
-    let mut t = [0_u8; 256];
-    let mut i = 0;
-    while i < 0x20 {
-        t[i] = 1;
-        i += 1;
-    }
-    t[b'"' as usize] = 1;
-    t[b'\\' as usize] = 1;
-    t[0x7F] = 1;
-    t[0xC2] = 1;
-    t
-};
-
-const LITERAL_ESCAPES: ByteClass<{ byte_run_count(&LITERAL_ESCAPE_TABLE) }> =
-    ByteClass::from_table(LITERAL_ESCAPE_TABLE);
-
-/// The offset of the first byte of `bytes` that can begin an escaped literal
-/// scalar: a byte candidate, since at `0xC2` only a C1 control is escaped.
-#[inline(never)]
-fn find_first_literal_escape(bytes: &[u8]) -> Option<usize> {
-    LITERAL_ESCAPES.find_first(bytes)
-}
-
-/// Push the `\u00XX` UCHAR escape for a code point known to be `<= 0xFF`
-/// (every escapable byte here: C0/DEL/C1 controls). Byte-identical to
-/// `write!(out, "\\u{:04X}", v)` for `v <= 0xFF`, without the `fmt` machinery.
-#[inline]
-fn push_uchar_00<W: TextOut + ?Sized>(out: &mut W, v: u32) {
-    debug_assert!(v <= 0xFF);
-    let mut digits = [0u8; 2];
-    out.push_str("\\u00");
-    out.push_str(
-        purrdf_hash::hex::encode_upper_to_slice(&[v as u8], &mut digits).unwrap_or_default(),
-    );
-}
-
-/// Escape an IRI body for an N-Triples / Turtle / TriG `<…>` `IRIREF`.
-///
-/// Which scalars ride as a `\uXXXX` `UCHAR` (the text parser decodes them back), and
-/// how, is [`purrdf_core::iri_escape::escape`] and nothing written here — see that
-/// module for the production
-/// (`IRIREF ::= '<' ( [^#x00-#x20<>"{}|^`\] | UCHAR )* '>'`, Turtle 1.2 §6.5 `[18t]`) and
-/// for why egress escapes DEL and the C1 block, which the grammar permits raw. A value
-/// with nothing to escape (every production IRI, non-ASCII ones included) is borrowed
-/// byte-for-byte; one chunked scan finds each escape and copies the runs between.
-pub(crate) fn escape_iri(iri: &str) -> Cow<'_, str> {
-    purrdf_core::iri_escape::escape(iri)
-}
-
-/// Escape a literal lexical form for N-Triples. Escapes `\` and `"`, emits the readable ECHAR
-/// forms for `\n`/`\r`/`\t`, and rides EVERY other control character (C0, DEL, and the C1 block
-/// `0x80-0x9F`) as `\uXXXX`. This deliberately escapes MORE than the W3C-pinned canonical form
-/// (`purrdf_core::ir::canon::write_literal_escaped`, which keeps C1 raw): this serializer's
-/// output is embedded verbatim inside an XML text node by the CL-dialect carrier, and an XML
-/// parser normalizes/replaces raw C1 code points on read — so the payload only survives an XML
-/// round-trip if the full control range rides as ASCII `\uXXXX`. The canonical form answers to
-/// RDFC-1.0 byte-conformance; this one answers to XML transport.
-///
-/// One chunked scan ([`find_first_literal_escape`]) stops only where an escape can
-/// begin; the runs between are copied whole, and a value with nothing to escape —
-/// non-ASCII text included — is borrowed.
-pub(crate) fn escape_literal(lex: &str) -> Cow<'_, str> {
-    let bytes = lex.as_bytes();
-    let mut out: Option<String> = None;
-    let mut run_start = 0;
-    let mut at = 0;
-    while let Some(offset) = find_first_literal_escape(&bytes[at..]) {
-        let hit = at + offset;
-        let ch = lex[hit..]
-            .chars()
-            .next()
-            .expect("the literal scan stops on char boundaries");
-        at = hit + ch.len_utf8();
-        // `Some` is a readable ECHAR, `None` a `\u00XX` UCHAR.
-        let echar = match ch {
-            '\\' => Some("\\\\"),
-            '"' => Some("\\\""),
-            '\n' => Some("\\n"),
-            '\r' => Some("\\r"),
-            '\t' => Some("\\t"),
-            c if c.is_control() => None,
-            // A scalar led by 0xC2 that is not a C1 control rides in the run.
-            _ => continue,
-        };
-        let out = out.get_or_insert_with(|| String::with_capacity(lex.len() + 8));
-        out.push_str(&lex[run_start..hit]);
-        match echar {
-            Some(echar) => out.push_str(echar),
-            None => push_uchar_00(out, u32::from(ch)),
-        }
-        run_start = at;
-    }
-    match out {
-        Some(mut out) => {
-            out.push_str(&lex[run_start..]);
-            Cow::Owned(out)
-        }
-        None => Cow::Borrowed(lex),
-    }
-}
-
-/// Render a term-id as an N-Triples token.
 /// Compare two term-id sequences by their rendered text, position by position.
 ///
 /// The sequences are the same length at every call site. `left` and `right` are scratch
@@ -464,12 +345,10 @@ pub(super) fn spell_iri<'a>(iri: &'a str, base: Option<&BaseIri>) -> Cow<'a, str
         .map_or(Cow::Borrowed(iri), Cow::Owned)
 }
 
-/// Append an `IRIREF` token — `<…>` around the escaped reference — spelling the IRI
-/// against `base` per [`spell_iri`].
+/// Append an `IRIREF` token — [`term_syntax::write_iri`] — spelling the IRI against
+/// `base` per [`spell_iri`].
 fn write_iri_ref<W: TextOut + ?Sized>(out: &mut W, iri: &str, base: Option<&BaseIri>) {
-    out.push('<');
-    out.push_str(&escape_iri(&spell_iri(iri, base)));
-    out.push('>');
+    term_syntax::write_iri(&spell_iri(iri, base), out);
 }
 
 /// Append one term's N-Triples surface to `out`.
@@ -480,9 +359,8 @@ fn write_iri_ref<W: TextOut + ?Sized>(out: &mut W, iri: &str, base: Option<&Base
 /// output anyway. A literal with a datatype paid twice over, since the datatype's IRI
 /// was rendered into a `String` only to be `format!`ed into the literal's.
 ///
-/// `escape_iri` and `escape_literal` already return a [`Cow`], so an unescaped value —
-/// which is nearly all of them — is borrowed straight from the term table and reaches
-/// `out` without an intermediate of any kind.
+/// The escapers write straight into `out`, so an unescaped value — which is nearly all of
+/// them — is copied from the term table without an intermediate of any kind.
 ///
 /// IRIs are spelled against the graph's [`base`](SerGraph::base), which is `None` for
 /// every format whose registry row says it cannot express one. Use
@@ -505,7 +383,7 @@ fn write_iri_ref<W: TextOut + ?Sized>(out: &mut W, iri: &str, base: Option<&Base
 /// `ix` is the caller's one-per-document [`ReifierIndex`]: quoted-triple terms resolve
 /// through it rather than through a scan of the reifier table per term.
 fn write_term<W: TextOut + ?Sized>(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut W) {
-    write_term_in(g, ix, tid, out, g.base());
+    write_term_in(g, ix, tid, out, g.base(), false);
 }
 
 /// Append one term's N-Triples surface to `out` with every IRI spelled ABSOLUTELY,
@@ -517,10 +395,19 @@ fn write_term_absolute<W: TextOut + ?Sized>(
     tid: usize,
     out: &mut W,
 ) {
-    write_term_in(g, ix, tid, out, None);
+    write_term_in(g, ix, tid, out, None, false);
 }
 
-/// [`write_term`] against `base`.
+/// [`write_term`] against `base`, and [`write_trig_term`] when `trig` is set.
+///
+/// The term syntax is [`term_syntax`]'s: an IRI through [`term_syntax::write_iri`], a
+/// blank node through [`term_syntax::write_blank`], and a triple term between
+/// [`TRIPLE_TERM_OPEN`] and [`TRIPLE_TERM_CLOSE`]. A literal's body rides the
+/// [`Carrier::Xml`] escaper rather than the canonical one, because this serializer's
+/// output is also embedded verbatim in an XML text node by the CL-dialect carrier, and
+/// an XML reader rewrites or refuses the C1 controls, U+FFFE and U+FFFF; its datatype
+/// is a term of the table, spelled against `base` like every other IRI. TriG differs
+/// in exactly one place: `rdf:reifies` is written through its declared prefix.
 ///
 /// A quoted triple is written over a work list: its opening `<<( ` at once, then its
 /// subject next, with the separators, the predicate, the object and the closing ` )>>`
@@ -532,6 +419,7 @@ fn write_term_in<W: TextOut + ?Sized>(
     tid: usize,
     out: &mut W,
     base: Option<&BaseIri>,
+    trig: bool,
 ) {
     let mut held: Vec<TermPiece> = Vec::new();
     let mut next = Some(TermPiece::Term(tid));
@@ -545,19 +433,19 @@ fn write_term_in<W: TextOut + ?Sized>(
         };
         let t = &g.terms[tid];
         match t.kind {
+            SerTermKind::Iri if trig && t.value.as_deref() == Some(RDF_REIFIES) => {
+                out.push_str("rdf:reifies");
+            }
             SerTermKind::Iri => write_iri_ref(out, t.value.as_deref().unwrap_or(""), base),
             SerTermKind::Bnode => match &t.value {
-                Some(v) => {
-                    out.push_str("_:");
-                    out.push_str(v);
-                }
+                Some(v) => term_syntax::write_blank(v, out),
                 None => {
                     let _ = write!(out, "_:b{tid}");
                 }
             },
             SerTermKind::Literal => {
                 out.push('"');
-                out.push_str(&escape_literal(t.value.as_deref().unwrap_or("")));
+                literal_escape::write(t.value.as_deref().unwrap_or(""), Carrier::Xml, out);
                 out.push('"');
                 if let Some(lang) = &t.lang {
                     out.push('@');
@@ -577,7 +465,8 @@ fn write_term_in<W: TextOut + ?Sized>(
             // quoted triple (RDF 1.2 triple term), resolved through its reifier
             SerTermKind::Triple => match t.reifier.and_then(|rf| ix.get(rf)) {
                 Some((s, p, o)) => {
-                    out.push_str("<<( ");
+                    out.push_str(TRIPLE_TERM_OPEN);
+                    out.push(' ');
                     held.extend(TermPiece::triple_tail(p, o));
                     next = Some(TermPiece::Term(s));
                 }
@@ -599,9 +488,10 @@ enum TermPiece {
 impl TermPiece {
     /// What follows a quoted triple's subject, in the order it is popped: a space, the
     /// predicate, a space, the object, and the closing ` )>>`.
-    const fn triple_tail(p: usize, o: usize) -> [Self; 5] {
+    const fn triple_tail(p: usize, o: usize) -> [Self; 6] {
         [
-            Self::Text(" )>>"),
+            Self::Text(TRIPLE_TERM_CLOSE),
+            Self::Text(" "),
             Self::Term(o),
             Self::Text(" "),
             Self::Term(p),
@@ -643,13 +533,16 @@ pub(crate) fn write_nquads<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
         // Through the same speller as every other IRI, so one term cannot be written two
         // ways in one document when a base happens to cover the RDF namespace.
         write_iri_ref(out, RDF_REIFIES, g.base());
-        out.push_str(" <<( ");
+        out.push(' ');
+        out.push_str(TRIPLE_TERM_OPEN);
+        out.push(' ');
         write_term(g, &ix, s, out);
         out.push(' ');
         write_term(g, &ix, p, out);
         out.push(' ');
         write_term(g, &ix, o, out);
-        out.push_str(" )>>");
+        out.push(' ');
+        out.push_str(TRIPLE_TERM_CLOSE);
         write_graph_terminator(g, &ix, gname, out);
     }
 
@@ -776,72 +669,10 @@ pub(crate) fn emits_any_statement(g: &SerGraph) -> bool {
 
 // ── TriG ──────────────────────────────────────────────────────────────────────────
 
-/// Append one term's TriG surface to `out`.
-///
-/// TriG differs from N-Triples in exactly one place — `rdf:reifies` is written through
-/// the declared prefix rather than as a full IRI — so this mirrors [`write_term`] and
-/// appends for the same reason: a term built as its own `String` is an allocation whose
-/// every byte was going to be copied into the output regardless.
-///
-/// # Termination
-///
-/// It also mirrors [`write_term`]'s unguarded work list, and rests on the same
-/// invariant: a [`SerGraph`]'s term table terminates because every producer of one
-/// guarantees it.
+/// Append one term's TriG surface to `out`: [`write_term`] with `rdf:reifies` written
+/// through the declared prefix rather than as a full IRI.
 fn write_trig_term<W: TextOut + ?Sized>(g: &SerGraph, ix: &ReifierIndex, tid: usize, out: &mut W) {
-    let mut held: Vec<TermPiece> = Vec::new();
-    let mut next = Some(TermPiece::Term(tid));
-    while let Some(piece) = next.take().or_else(|| held.pop()) {
-        let tid = match piece {
-            TermPiece::Text(text) => {
-                out.push_str(text);
-                continue;
-            }
-            TermPiece::Term(tid) => tid,
-        };
-        let t = &g.terms[tid];
-        match t.kind {
-            SerTermKind::Iri if t.value.as_deref() == Some(RDF_REIFIES) => {
-                out.push_str("rdf:reifies");
-            }
-            SerTermKind::Iri => write_iri_ref(out, t.value.as_deref().unwrap_or(""), g.base()),
-            SerTermKind::Bnode => match &t.value {
-                Some(v) => {
-                    out.push_str("_:");
-                    out.push_str(v);
-                }
-                None => {
-                    let _ = write!(out, "_:b{tid}");
-                }
-            },
-            SerTermKind::Literal => {
-                out.push('"');
-                out.push_str(&escape_literal(t.value.as_deref().unwrap_or("")));
-                out.push('"');
-                if let Some(lang) = &t.lang {
-                    out.push('@');
-                    out.push_str(lang);
-                    if let Some(direction) =
-                        t.direction.as_deref().filter(|d| is_literal_direction(d))
-                    {
-                        out.push_str("--");
-                        out.push_str(direction);
-                    }
-                } else if let Some(dt) = t.datatype {
-                    out.push_str("^^");
-                    next = Some(TermPiece::Term(dt));
-                }
-            }
-            SerTermKind::Triple => match t.reifier.and_then(|rf| ix.get(rf)) {
-                Some((s, p, o)) => {
-                    out.push_str("<<( ");
-                    held.extend(TermPiece::triple_tail(p, o));
-                    next = Some(TermPiece::Term(s));
-                }
-                None => write_term(g, ix, tid, out),
-            },
-        }
-    }
+    write_term_in(g, ix, tid, out, g.base(), true);
 }
 
 /// Close the open `GRAPH { … }` block, if one is open.
@@ -937,13 +768,17 @@ pub(crate) fn write_trig<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
         }
         begin_statement(out, &mut open_graph, &mut scratch, g, &ix, gname);
         write_trig_term(g, &ix, rid, out);
-        out.push_str(" rdf:reifies <<( ");
+        out.push_str(" rdf:reifies ");
+        out.push_str(TRIPLE_TERM_OPEN);
+        out.push(' ');
         write_trig_term(g, &ix, s, out);
         out.push(' ');
         write_trig_term(g, &ix, p, out);
         out.push(' ');
         write_trig_term(g, &ix, o, out);
-        out.push_str(" )>> .\n");
+        out.push(' ');
+        out.push_str(TRIPLE_TERM_CLOSE);
+        out.push_str(" .\n");
     }
 
     for &(r, p, v, gname) in &g.annotations {
@@ -962,7 +797,6 @@ pub(crate) fn write_trig<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use purrdf_testkit::prop::prelude::*;
 
     // Collect-into-a-`String` shims. Production has no such function any more: every
     // caller reaches the writers through `RdfCodec::serialize_into` and supplies its own
@@ -1509,172 +1343,6 @@ mod tests {
         let nt = to_ntriples(&g).expect("ntriples");
         assert!(nt.contains("\"hi\"@en--ltr"), "got: {nt}");
     }
-
-    // ── serializer escape: byte-identity of the scan-first fast path ───────────────
-
-    /// The pre-optimization per-char `escape_iri`, frozen verbatim as a test oracle:
-    /// the scan-first implementation must match it byte-for-byte on every input.
-    fn escape_iri_oracle(iri: &str) -> String {
-        use std::fmt::Write as _;
-        let mut out = String::with_capacity(iri.len());
-        for ch in iri.chars() {
-            match ch {
-                '<' | '>' | '"' | '{' | '}' | '|' | '^' | '`' | '\\' => {
-                    let _ = write!(out, "\\u{:04X}", ch as u32);
-                }
-                c if c.is_control() || c == ' ' => {
-                    let _ = write!(out, "\\u{:04X}", c as u32);
-                }
-                c => out.push(c),
-            }
-        }
-        out
-    }
-
-    /// The pre-optimization per-char `escape_literal`, frozen verbatim as a test oracle.
-    fn escape_literal_oracle(lex: &str) -> String {
-        use std::fmt::Write as _;
-        let mut out = String::with_capacity(lex.len());
-        for ch in lex.chars() {
-            match ch {
-                '\\' => out.push_str("\\\\"),
-                '"' => out.push_str("\\\""),
-                '\n' => out.push_str("\\n"),
-                '\r' => out.push_str("\\r"),
-                '\t' => out.push_str("\\t"),
-                c if c.is_control() => {
-                    let _ = write!(out, "\\u{:04X}", c as u32);
-                }
-                c => out.push(c),
-            }
-        }
-        out
-    }
-
-    #[test]
-    fn escape_iri_fixed_adversarial_goldens() {
-        // Every IRIREF-forbidden delimiter rides as an uppercase 4-hex `\uXXXX`.
-        assert_eq!(escape_iri("a<b"), "a\\u003Cb");
-        assert_eq!(escape_iri("a>b"), "a\\u003Eb");
-        assert_eq!(escape_iri("a\"b"), "a\\u0022b");
-        assert_eq!(escape_iri("a{b"), "a\\u007Bb");
-        assert_eq!(escape_iri("a}b"), "a\\u007Db");
-        assert_eq!(escape_iri("a|b"), "a\\u007Cb");
-        assert_eq!(escape_iri("a^b"), "a\\u005Eb");
-        assert_eq!(escape_iri("a`b"), "a\\u0060b");
-        assert_eq!(escape_iri("a\\b"), "a\\u005Cb");
-        assert_eq!(escape_iri("a b"), "a\\u0020b"); // space
-        assert_eq!(escape_iri("a\u{01}b"), "a\\u0001b"); // C0
-        assert_eq!(escape_iri("a\u{7F}b"), "a\\u007Fb"); // DEL
-        assert_eq!(escape_iri("a\u{85}b"), "a\\u0085b"); // C1 (NEL)
-        assert_eq!(escape_iri("a\u{E9}b"), "a\u{E9}b"); // clean non-ASCII: verbatim
-        assert_eq!(
-            // A clean ASCII IRI passes byte-for-byte.
-            escape_iri("http://example.org/path"),
-            "http://example.org/path"
-        );
-    }
-
-    #[test]
-    fn escape_literal_fixed_adversarial_goldens() {
-        assert_eq!(escape_literal("a\"b"), "a\\\"b");
-        assert_eq!(escape_literal("a\\b"), "a\\\\b");
-        assert_eq!(escape_literal("a\nb"), "a\\nb");
-        assert_eq!(escape_literal("a\rb"), "a\\rb");
-        assert_eq!(escape_literal("a\tb"), "a\\tb");
-        assert_eq!(escape_literal("a\u{01}b"), "a\\u0001b"); // C0
-        assert_eq!(escape_literal("a\u{7F}b"), "a\\u007Fb"); // DEL
-        assert_eq!(escape_literal("a\u{85}b"), "a\\u0085b"); // C1
-        assert_eq!(escape_literal("a\u{E9}b"), "a\u{E9}b"); // clean unicode
-        assert_eq!(escape_literal("clean text 123"), "clean text 123");
-        assert_eq!(escape_literal("x\"y\\z\n"), "x\\\"y\\\\z\\n"); // mixed
-    }
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
-    /// The chunked escapers agree with the frozen per-char oracles on dense
-    /// fixed-seed inputs: every ASCII scalar (every special byte), the whole block
-    /// led by `0xC2` (the C1 controls and their verbatim neighbours), non-ASCII in
-    /// every UTF-8 width, at lengths 0-70 and past several chunks, from every
-    /// starting offset 0-3. A value is borrowed exactly when nothing changed.
-    #[test]
-    fn chunked_escapers_agree_with_the_per_char_oracles() {
-        let mut alphabet: Vec<char> = (0_u8..0x80).map(char::from).collect();
-        alphabet.extend(('\u{80}'..='\u{BF}').chain([
-            '\u{C0}',
-            '\u{E9}',
-            '\u{FF}',
-            '\u{2028}',
-            '\u{FFFD}',
-            '\u{1F408}',
-            '\u{10FFFF}',
-        ]));
-        let mut rng = SplitMix(0x05E2_0E5C_A9E0_0001);
-        let (mut borrowed, mut owned) = (0_usize, 0_usize);
-        for len in (0..=70).chain([127, 128, 129, 255, 1000, 4099]) {
-            for round in 0..40 {
-                let density = if round % 2 == 0 { 4 } else { 40 };
-                let value: String = (0..len)
-                    .map(|_| {
-                        if rng.below(density) == 0 {
-                            alphabet[rng.below(alphabet.len())]
-                        } else {
-                            'q'
-                        }
-                    })
-                    .collect();
-                for (skip, _) in value.char_indices().take(4) {
-                    let input = &value[skip..];
-                    for (got, expected) in [
-                        (escape_iri(input), escape_iri_oracle(input)),
-                        (escape_literal(input), escape_literal_oracle(input)),
-                    ] {
-                        assert_eq!(got.as_ref(), expected, "{input:?}");
-                        match got {
-                            Cow::Borrowed(_) => {
-                                assert_eq!(expected, input);
-                                borrowed += 1;
-                            }
-                            Cow::Owned(_) => {
-                                assert_ne!(expected, input);
-                                owned += 1;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-        assert!(borrowed > 0 && owned > 0, "{borrowed} {owned}");
-    }
-
-    prop_test! {
-        /// The scan-first `escape_iri` equals the frozen per-char oracle on every
-        /// arbitrary string (controls, C1, multi-byte unicode, and clean runs).
-        #[test]
-        fn escape_iri_matches_oracle(s in any::<String>()) {
-            let got = escape_iri(&s);
-            prop_assert_eq!(got.as_ref(), escape_iri_oracle(&s));
-        }
-
-        /// The scan-first `escape_literal` equals the frozen per-char oracle on every
-        /// arbitrary string.
-        #[test]
-        fn escape_literal_matches_oracle(s in any::<String>()) {
-            let got = escape_literal(&s);
-            prop_assert_eq!(got.as_ref(), escape_literal_oracle(&s));
-        }
-    }
 }
 
 #[cfg(test)]
@@ -1768,7 +1436,7 @@ pub(crate) mod term_walk_tests {
                 let _ = write!(
                     out,
                     "<{}>",
-                    super::escape_iri(t.value.as_deref().unwrap_or(""))
+                    purrdf_lex::iri_escape::escape(t.value.as_deref().unwrap_or(""))
                 );
             }
             SerTermKind::Bnode => {
@@ -1821,7 +1489,10 @@ pub(crate) mod term_walk_tests {
         let _ = write!(
             out,
             "\"{}\"",
-            super::escape_literal(t.value.as_deref().unwrap_or(""))
+            purrdf_lex::literal_escape::escape(
+                t.value.as_deref().unwrap_or(""),
+                purrdf_lex::literal_escape::Carrier::Xml
+            )
         );
         if let Some(lang) = &t.lang {
             let _ = write!(out, "@{lang}");

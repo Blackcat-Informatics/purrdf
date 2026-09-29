@@ -244,6 +244,7 @@ deps = [
     "purrdf-gts",
     "purrdf-hash",
     "purrdf-iri",
+    "purrdf-lex",
     "purrdf-sparql-algebra",
     "purrdf-sparql-eval",
     "purrdf-xsd",

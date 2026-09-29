@@ -9,7 +9,7 @@ use purrdf_core::loss::{
     LOSS_RESEARCH_UNSUPPORTED_VALUE_DROPPED,
 };
 use purrdf_core::{DatasetView, LossLedger, research_object_to_rdf_loss_ledger};
-use roxmltree::{Document, Node};
+use purrdf_lex::xml::Node;
 use serde::{Deserialize, Deserializer, Serialize};
 
 use super::super::{
@@ -397,16 +397,15 @@ fn parse_datacite(
         )
         .at_path(DATACITE_ARTIFACT));
     }
-    // `roxmltree`'s tokenizer recurses once per element, so a deeply nested document aborts
-    // the process rather than returning an error. The nesting is measured first and refused.
-    crate::nesting::guard_xml_nesting(text).map_err(|depth| {
-        ProjectionError::syntax(format!(
+    let document = crate::nesting::parse_xml(text).map_err(|error| match error {
+        crate::nesting::XmlReadError::TooDeep(depth) => ProjectionError::syntax(format!(
             "DataCite XML nests {depth} elements deep, past the parser limit"
         ))
-        .at_path(DATACITE_ARTIFACT)
-    })?;
-    let document = Document::parse(text).map_err(|error| {
-        ProjectionError::syntax(format!("parse DataCite XML: {error}")).at_path(DATACITE_ARTIFACT)
+        .at_path(DATACITE_ARTIFACT),
+        crate::nesting::XmlReadError::Malformed(error) => {
+            ProjectionError::syntax(format!("parse DataCite XML: {error}"))
+                .at_path(DATACITE_ARTIFACT)
+        }
     })?;
     let element_count = document.descendants().filter(Node::is_element).count();
     if element_count > config.common().policy().max_records() {
@@ -1204,9 +1203,7 @@ fn require_datacite_namespace(
 }
 
 fn namespaced_attribute<'a>(node: Node<'a, '_>, namespace: &str, local: &str) -> Option<&'a str> {
-    node.attributes()
-        .find(|attribute| attribute.namespace() == Some(namespace) && attribute.name() == local)
-        .map(|attribute| attribute.value())
+    node.attribute((namespace, local))
 }
 
 fn record_unknown_attributes(

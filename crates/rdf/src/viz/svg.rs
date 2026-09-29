@@ -1207,7 +1207,7 @@ mod tests {
             &VizRenderOptions::default(),
         )
         .expect("svg");
-        let xml = roxmltree::Document::parse(&document.svg).expect("valid XML");
+        let xml = purrdf_lex::xml::Document::parse(&document.svg).expect("valid XML");
         let metadata = xml
             .descendants()
             .find(|node| node.has_tag_name("metadata"))
@@ -1277,7 +1277,7 @@ mod tests {
         document.export.scene.nodes[0].id = value.to_owned();
         document.export.layout.nodes[0].id = value.to_owned();
         let svg = render_export_svg(&document.export, &VizSvgOptions::default()).unwrap();
-        let xml = roxmltree::Document::parse(&svg).unwrap();
+        let xml = purrdf_lex::xml::Document::parse(&svg).unwrap();
         assert_eq!(
             xml.root_element().attribute("data-purrdf-schema"),
             Some(value)
@@ -1297,7 +1297,7 @@ mod tests {
         options.svg.title = title.to_owned();
         let document =
             render_graph_input_svg(&input(true), &VizSpec::default(), &options).expect("valid SVG");
-        let xml = roxmltree::Document::parse(&document.svg).expect("read emitted SVG");
+        let xml = purrdf_lex::xml::Document::parse(&document.svg).expect("read emitted SVG");
         assert_eq!(
             xml.descendants()
                 .find(|node| node.attribute("id") == Some("purrdf-title"))

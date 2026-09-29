@@ -3129,12 +3129,11 @@ fn annotate_property_edge(mut ps: PropertyShape, annotated: Annotated) -> Option
     }
 }
 
-/// The local name of an IRI: the substring after the last `#` or `/`. Used to
-/// derive a `sh:SPARQLFunction` parameter's pre-bound SPARQL variable name from its
-/// predicate IRI (SHACL-AF §5.1).
+/// The local name of an IRI ([`purrdf_iri::local_name`]). Used to derive a
+/// `sh:SPARQLFunction` parameter's pre-bound SPARQL variable name from its predicate
+/// IRI (SHACL-AF §5.1).
 pub(crate) fn local_name(iri: &str) -> &str {
-    let cut = iri.rfind(['#', '/']).map_or(0, |i| i + 1);
-    &iri[cut..]
+    purrdf_iri::local_name(iri)
 }
 
 /// Parse an `xsd:integer` literal into a `u64`; `None` for any other term.

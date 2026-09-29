@@ -286,17 +286,13 @@ fn namespace_boundary(iri: &str) -> Option<&str> {
         return None;
     }
     let scheme_end = parsed.scheme()?.len().checked_add(1)?;
-    let boundary = iri
-        .rfind('#')
-        .filter(|index| *index >= scheme_end)
-        .or_else(|| iri.rfind('/').filter(|index| *index >= scheme_end))
-        .or_else(|| iri.rfind(':').filter(|index| *index >= scheme_end))?;
-    let split = boundary.checked_add(1)?;
-    let suffix = iri.get(split..)?;
-    if suffix.is_empty() || suffix.starts_with("//") || suffix.chars().any(char::is_whitespace) {
+    let (namespace, suffix) = purrdf_iri::split_local_name(iri);
+    // The namespace must end past the scheme's own `:`, so the split names a
+    // namespace rather than just the scheme.
+    if namespace.len() <= scheme_end || suffix.is_empty() || suffix.chars().any(char::is_whitespace)
+    {
         return None;
     }
-    let namespace = iri.get(..split)?;
     purrdf_iri::parse(namespace)
         .is_ok_and(|parsed| parsed.has_scheme())
         .then_some(namespace)

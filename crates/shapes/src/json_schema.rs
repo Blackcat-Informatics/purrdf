@@ -461,13 +461,9 @@ impl Namespaces {
     }
 }
 
-/// The bare local name of an IRI: the substring after the last `#` or `/`.
+/// The bare local name of an IRI ([`purrdf_iri::local_name`]).
 pub fn local_name(iri: &str) -> String {
-    let after_hash = iri.rsplit('#').next().unwrap_or(iri);
-    // `rsplit('#')` returns the whole string when there is no `#`, so split on
-    // `/` over that remainder.
-    let local = after_hash.rsplit('/').next().unwrap_or(after_hash);
-    local.to_owned()
+    purrdf_iri::local_name(iri).to_owned()
 }
 
 /// Build a runtime SHACL→JSON-Schema [`LossEntry`]: `from` is `"shacl"`, `to`

@@ -987,9 +987,7 @@ fn subject_local_name(subject: &ProjectionTerm) -> Result<String, ProjectionErro
             "OKF subject-local-name path strategy requires IRI concept subjects",
         ));
     };
-    let stem = value
-        .rsplit(['#', '/', ':'])
-        .next()
+    let stem = Some(purrdf_iri::local_name(value))
         .filter(|value| !value.is_empty())
         .ok_or_else(|| {
             ProjectionError::term(format!(

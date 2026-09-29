@@ -39,7 +39,7 @@ fn xml_writers_preserve_valid_scalars_and_line_endings() {
                 .unwrap()
                 .bytes;
             let xml = std::str::from_utf8(&bytes).unwrap();
-            roxmltree::Document::parse(xml).unwrap();
+            purrdf_lex::xml::Document::parse(xml).unwrap();
             assert!(!xml.contains('\r'), "raw CR in {format:?}");
             let reread = dataset_from_bytes(&bytes, format).unwrap();
             let actual = serialize_dataset_to_format(&*reread, NativeRdfFormat::NTriples, None)
@@ -102,7 +102,7 @@ fn projection_attributes_survive_xml_attribute_normalization() {
     let attribute = purrdf_rdf::escape_xml_attribute(value).unwrap();
     let text = purrdf_rdf::escape_xml_text(value).unwrap();
     let source = format!("<root value=\"{attribute}\">{text}</root>");
-    let parsed = roxmltree::Document::parse(&source).unwrap();
+    let parsed = purrdf_lex::xml::Document::parse(&source).unwrap();
     assert_eq!(parsed.root_element().attribute("value"), Some(value));
     assert_eq!(parsed.root_element().text(), Some(value));
 }

@@ -35,6 +35,7 @@
 
 use std::collections::BTreeMap;
 
+use purrdf_core::collections::{ListVocab, build_rdf_list};
 use purrdf_iri::langtag;
 use purrdf_iri::scan::find_byte2;
 use purrdf_iri::terminals;
@@ -1854,27 +1855,21 @@ impl<'a, 'c, S: SpanCollector> DocParser<'a, 'c, S> {
             }
             items.push(self.term(graph, depth)?);
         }
-        if items.is_empty() {
-            return Ok(Node::Iri(self.rdf_nil.clone()));
-        }
+        // Every cell is minted before any statement is written, so the labels are
+        // those of the collection's cells in order whatever the items hold.
         let cells: Vec<Node> = (0..items.len()).map(|_| self.next_bnode()).collect();
-        // The three vocabulary nodes are built once per collection, not once per item,
-        // and the cells are borrowed from the local `cells` rather than cloned — `emit`
-        // takes references and copies what it keeps.
-        let rdf_first = Node::Iri(self.rdf_first.clone());
-        let rdf_rest = Node::Iri(self.rdf_rest.clone());
-        let rdf_nil = Node::Iri(self.rdf_nil.clone());
-        for (index, item) in items.into_iter().enumerate() {
-            let current = &cells[index];
-            let rest = if index + 1 == cells.len() {
-                &rdf_nil
-            } else {
-                &cells[index + 1]
-            };
-            self.emit(current, &rdf_first, &item, graph);
-            self.emit(current, &rdf_rest, rest, graph);
-        }
-        Ok(cells.into_iter().next().expect("non-empty collection"))
+        // The three vocabulary nodes are built once per collection, not once per item.
+        let vocab = ListVocab {
+            first: Node::Iri(self.rdf_first.clone()),
+            rest: Node::Iri(self.rdf_rest.clone()),
+            nil: Node::Iri(self.rdf_nil.clone()),
+        };
+        Ok(build_rdf_list(
+            items,
+            &vocab,
+            |index| cells[index].clone(),
+            |subject, predicate, object| self.emit(&subject, &predicate, &object, graph),
+        ))
     }
 
     fn literal(&mut self) -> Result<Node, RdfDiagnostic> {
