@@ -20,7 +20,7 @@
 
 use std::borrow::Cow;
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::dict;
 use crate::mmr;

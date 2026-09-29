@@ -1,7 +1,7 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::mmr;
 use crate::model::{Diagnostic, Graph, StreamableInfo};

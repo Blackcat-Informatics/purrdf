@@ -12,12 +12,12 @@
 
 use std::collections::BTreeSet;
 
-use ciborium::value::Value;
 use purrdf_gts::codec::{Codec, zstd_block_layout};
 use purrdf_gts::dict::{dictionary_id, raw_content_dict};
 use purrdf_gts::reader::{read, segment_append_state};
 use purrdf_gts::wire::{SELF_DESCRIBE_TAG, append_canonical, canonical, content_id, header_id};
 use purrdf_gts::writer::{FrameOptions, Writer, WriterOptions};
+use purrdf_lex::cbor::Value;
 
 /// A corpus over one vocabulary; two different topics give two genuinely
 /// different dictionaries.

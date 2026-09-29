@@ -60,7 +60,7 @@ impl StreamingSink for CountingSink {
         &mut self,
         _segment_index: usize,
         _digest: &str,
-        _meta: Option<&ciborium::value::Value>,
+        _meta: Option<&purrdf_lex::cbor::Value>,
     ) {
         self.blobs += 1;
     }
@@ -155,7 +155,7 @@ impl GtsEventSink for CountingEventSink {
         &mut self,
         _ctx: Option<FrameContext<'_>>,
         _digest: &str,
-        _meta: Option<&ciborium::value::Value>,
+        _meta: Option<&purrdf_lex::cbor::Value>,
     ) -> Result<ControlFlow<()>, EventError> {
         self.blobs += 1;
         Ok(ControlFlow::Continue(()))

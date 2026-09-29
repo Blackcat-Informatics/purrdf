@@ -3,14 +3,14 @@
 
 //! Merkle-Mountain-Range commitments for `index.mmr` and detached proof JSON.
 //!
-//! This module deliberately stays dependency-light: detached proof JSON is parsed
-//! with a tiny schema-local parser instead of a general JSON library.
+//! Detached proof JSON is read by the workspace's one JSON reader,
+//! [`purrdf_lex::json`], under its default depth cap.
 
-use ciborium::value::Value;
 use purrdf_hash::Domain;
 use purrdf_hash::hex::Lower;
-use purrdf_iri::json_escape::{self, JsonEscapes, push_body};
-use purrdf_iri::terminals;
+use purrdf_iri::json_escape::{JsonEscapes, push_body};
+use purrdf_lex::cbor::Value;
+use purrdf_lex::json::{self, Object, Value as Json};
 
 use crate::wire::{
     MAGIC, VERSION, blake3_256, canonical, content_id, header_id, iter_items, map_get,
@@ -470,221 +470,39 @@ impl Proof {
     }
 }
 
-#[derive(Clone, Debug)]
-enum Json {
-    Null,
-    Bool,
-    Number(u64),
-    String(String),
-    Array(Vec<Self>),
-    Object(Vec<(String, Self)>),
-}
-
-struct JsonParser<'a> {
-    bytes: &'a [u8],
-    pos: usize,
-}
-
-impl<'a> JsonParser<'a> {
-    fn new(text: &'a str) -> Self {
-        Self {
-            bytes: text.as_bytes(),
-            pos: 0,
-        }
-    }
-
-    fn parse(mut self) -> Result<Json, String> {
-        let value = self.value()?;
-        self.ws();
-        if self.pos != self.bytes.len() {
-            return Err(format!("trailing JSON at byte {}", self.pos));
-        }
-        Ok(value)
-    }
-
-    fn ws(&mut self) {
-        self.pos = terminals::skip_ws(self.bytes, self.pos);
-    }
-
-    fn value(&mut self) -> Result<Json, String> {
-        self.ws();
-        match self.bytes.get(self.pos).copied() {
-            Some(b'{') => self.object(),
-            Some(b'[') => self.array(),
-            Some(b'"') => self.string().map(Json::String),
-            Some(b'0'..=b'9') => self.number().map(Json::Number),
-            Some(b't') => {
-                self.literal(b"true")?;
-                Ok(Json::Bool)
-            }
-            Some(b'f') => {
-                self.literal(b"false")?;
-                Ok(Json::Bool)
-            }
-            Some(b'n') => {
-                self.literal(b"null")?;
-                Ok(Json::Null)
-            }
-            Some(other) => Err(format!(
-                "unexpected JSON byte {other:?} at byte {}",
-                self.pos
-            )),
-            None => Err("unexpected end of JSON".to_string()),
-        }
-    }
-
-    fn literal(&mut self, literal: &[u8]) -> Result<(), String> {
-        if self.bytes.get(self.pos..self.pos + literal.len()) == Some(literal) {
-            self.pos += literal.len();
-            Ok(())
-        } else {
-            Err(format!("expected JSON literal at byte {}", self.pos))
-        }
-    }
-
-    fn object(&mut self) -> Result<Json, String> {
-        self.pos += 1;
-        let mut entries = Vec::new();
-        self.ws();
-        if self.bytes.get(self.pos) == Some(&b'}') {
-            self.pos += 1;
-            return Ok(Json::Object(entries));
-        }
-        loop {
-            self.ws();
-            let key = self.string()?;
-            self.ws();
-            if self.bytes.get(self.pos) != Some(&b':') {
-                return Err(format!("expected ':' at byte {}", self.pos));
-            }
-            self.pos += 1;
-            let value = self.value()?;
-            entries.push((key, value));
-            self.ws();
-            match self.bytes.get(self.pos) {
-                Some(b',') => self.pos += 1,
-                Some(b'}') => {
-                    self.pos += 1;
-                    break;
-                }
-                _ => return Err(format!("expected ',' or '}}' at byte {}", self.pos)),
-            }
-        }
-        Ok(Json::Object(entries))
-    }
-
-    fn array(&mut self) -> Result<Json, String> {
-        self.pos += 1;
-        let mut items = Vec::new();
-        self.ws();
-        if self.bytes.get(self.pos) == Some(&b']') {
-            self.pos += 1;
-            return Ok(Json::Array(items));
-        }
-        loop {
-            items.push(self.value()?);
-            self.ws();
-            match self.bytes.get(self.pos) {
-                Some(b',') => self.pos += 1,
-                Some(b']') => {
-                    self.pos += 1;
-                    break;
-                }
-                _ => return Err(format!("expected ',' or ']' at byte {}", self.pos)),
-            }
-        }
-        Ok(Json::Array(items))
-    }
-
-    fn string(&mut self) -> Result<String, String> {
-        if self.bytes.get(self.pos) != Some(&b'"') {
-            return Err(format!("expected string at byte {}", self.pos));
-        }
-        self.pos += 1;
-        // Raw bytes are gathered as bytes and checked as UTF-8 once, so a
-        // multi-byte scalar is kept whole rather than read byte by byte.
-        let mut out = Vec::new();
-        while let Some(byte) = self.bytes.get(self.pos).copied() {
-            match byte {
-                b'"' => {
-                    self.pos += 1;
-                    return String::from_utf8(out)
-                        .map_err(|_| "JSON string is not UTF-8".to_string());
-                }
-                b'\\' => {
-                    let (ch, width) = json_escape::decode_escape(&self.bytes[self.pos..])
-                        .map_err(|error| format!("invalid JSON escape: {error}"))?;
-                    let mut utf8 = [0_u8; 4];
-                    out.extend_from_slice(ch.encode_utf8(&mut utf8).as_bytes());
-                    self.pos += width;
-                }
-                0x00..=0x1f => return Err("control byte in JSON string".to_string()),
-                _ => {
-                    out.push(byte);
-                    self.pos += 1;
-                }
-            }
-        }
-        Err("unterminated JSON string".to_string())
-    }
-
-    fn number(&mut self) -> Result<u64, String> {
-        let start = self.pos;
-        if self.bytes.get(self.pos) == Some(&b'0') {
-            self.pos += 1;
-        } else {
-            while self.bytes.get(self.pos).is_some_and(u8::is_ascii_digit) {
-                self.pos += 1;
-            }
-        }
-        let text = std::str::from_utf8(&self.bytes[start..self.pos])
-            .map_err(|e| format!("invalid number bytes: {e}"))?;
-        text.parse::<u64>()
-            .map_err(|e| format!("invalid JSON integer {text:?}: {e}"))
-    }
-}
-
-fn object_entries<'a>(json: &'a Json, context: &str) -> Result<&'a [(String, Json)], String> {
-    match json {
-        Json::Object(entries) => Ok(entries),
-        _ => Err(format!("{context} must be a JSON object")),
-    }
+fn object<'a>(json: &'a Json, context: &str) -> Result<&'a Object, String> {
+    json.as_object()
+        .ok_or_else(|| format!("{context} must be a JSON object"))
 }
 
 fn array_items<'a>(json: &'a Json, context: &str) -> Result<&'a [Json], String> {
-    match json {
-        Json::Array(items) => Ok(items),
-        _ => Err(format!("{context} must be a JSON array")),
-    }
+    json.as_array()
+        .map(Vec::as_slice)
+        .ok_or_else(|| format!("{context} must be a JSON array"))
 }
 
-fn get<'a>(entries: &'a [(String, Json)], key: &str) -> Result<&'a Json, String> {
+fn get<'a>(entries: &'a Object, key: &str) -> Result<&'a Json, String> {
     entries
-        .iter()
-        .find(|(stored, _)| stored == key)
-        .map(|(_, value)| value)
+        .get(key)
         .ok_or_else(|| format!("proof JSON missing {key:?}"))
 }
 
-fn string_field(entries: &[(String, Json)], key: &str) -> Result<String, String> {
-    match get(entries, key)? {
-        Json::String(value) => Ok(value.clone()),
-        _ => Err(format!("{key:?} must be a string")),
-    }
+fn string_field<'a>(entries: &'a Object, key: &str) -> Result<&'a str, String> {
+    get(entries, key)?
+        .as_str()
+        .ok_or_else(|| format!("{key:?} must be a string"))
 }
 
-fn usize_field(entries: &[(String, Json)], key: &str) -> Result<usize, String> {
-    match get(entries, key)? {
-        Json::Number(value) => {
-            usize::try_from(*value).map_err(|_| format!("{key:?} is too large for this platform"))
-        }
-        _ => Err(format!("{key:?} must be an unsigned integer")),
-    }
+fn usize_field(entries: &Object, key: &str) -> Result<usize, String> {
+    let value = get(entries, key)?
+        .as_u64()
+        .ok_or_else(|| format!("{key:?} must be an unsigned integer"))?;
+    usize::try_from(value).map_err(|_| format!("{key:?} is too large for this platform"))
 }
 
 fn proof_from_json(text: &str) -> Result<Proof, String> {
-    let json = JsonParser::new(text).parse()?;
-    let entries = object_entries(&json, "proof")?;
+    let json = json::read(text).map_err(|error| format!("invalid proof JSON: {error}"))?;
+    let entries = object(&json, "proof")?;
     let schema = string_field(entries, "schema")?;
     if schema != PROOF_SCHEMA {
         return Err(format!("unsupported proof schema {schema:?}"));
@@ -700,18 +518,18 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
     let peaks = array_items(get(entries, "peaks")?, "peaks")?
         .iter()
         .map(|item| {
-            let item = object_entries(item, "peak")?;
+            let item = object(item, "peak")?;
             Ok(MmrPeak {
                 height: usize_field(item, "height")?,
-                hash: parse_hex_32(&string_field(item, "hash")?)?,
+                hash: parse_hex_32(string_field(item, "hash")?)?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
     let path = array_items(get(entries, "path")?, "path")?
         .iter()
         .map(|item| {
-            let item = object_entries(item, "path step")?;
-            let side = match string_field(item, "side")?.as_str() {
+            let item = object(item, "path step")?;
+            let side = match string_field(item, "side")? {
                 "left" => ProofSide::Left,
                 "right" => ProofSide::Right,
                 other => return Err(format!("unsupported proof side {other:?}")),
@@ -719,15 +537,15 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
             Ok(ProofStep {
                 parent_height: usize_field(item, "parent_height")?,
                 side,
-                hash: parse_hex_32(&string_field(item, "hash")?)?,
+                hash: parse_hex_32(string_field(item, "hash")?)?,
             })
         })
         .collect::<Result<Vec<_>, String>>()?;
     Ok(Proof {
         count: usize_field(entries, "count")?,
         leaf_index: usize_field(entries, "leaf_index")?,
-        frame_id: parse_hex_32(&string_field(entries, "frame_id")?)?,
-        root: parse_hex_32(&string_field(entries, "root")?)?,
+        frame_id: parse_hex_32(string_field(entries, "frame_id")?)?,
+        root: parse_hex_32(string_field(entries, "root")?)?,
         peak_index: usize_field(entries, "peak_index")?,
         peaks,
         path,
@@ -882,34 +700,69 @@ mod tests {
         vec![n; 32]
     }
 
-    fn json_string(text: &str) -> Result<String, String> {
-        JsonParser::new(text).string()
+    /// A valid proof and its JSON text.
+    fn proof_and_json() -> (Proof, String) {
+        let proof = prove(&[id(1), id(2), id(3), id(4), id(5)], 3).expect("proof exists");
+        let text = proof.to_json();
+        (proof, text)
+    }
+
+    /// The proof JSON with its schema string spelled as `spelling`.
+    fn with_schema(spelling: &str) -> String {
+        let (_, text) = proof_and_json();
+        let pinned = format!("\"{PROOF_SCHEMA}\"");
+        assert!(text.contains(&pinned));
+        text.replacen(&pinned, spelling, 1)
+    }
+
+    /// The proof JSON with an ignored member nested `depth` arrays deep.
+    fn with_nested_member(depth: usize) -> String {
+        let (_, text) = proof_and_json();
+        let nested = format!("{}{}", "[".repeat(depth), "]".repeat(depth));
+        text.replacen('{', &format!("{{\"extension\": {nested},"), 1)
     }
 
     #[test]
-    fn a_json_string_keeps_raw_non_ascii_scalars_whole() {
+    fn a_proof_string_keeps_raw_non_ascii_scalars_whole() {
+        let error = Proof::from_json(&with_schema("\"caf\u{e9} \u{1f431}\"")).unwrap_err();
+        assert!(error.contains("caf\u{e9} \u{1f431}"), "{error}");
+        let (proof, text) = proof_and_json();
+        assert_eq!(Proof::from_json(&text), Ok(proof));
+    }
+
+    #[test]
+    fn a_proof_string_decodes_escapes_and_surrogate_pairs() {
+        let error = Proof::from_json(&with_schema(r#""\ud83d\ude00""#)).unwrap_err();
+        assert!(error.contains('\u{1f600}'), "{error}");
+        let (proof, _) = proof_and_json();
         assert_eq!(
-            json_string("\"caf\u{e9} \u{1f431}\"").as_deref(),
-            Ok("caf\u{e9} \u{1f431}")
+            Proof::from_json(&with_schema(r#""\u0067ts-mmr-proof-v1""#)),
+            Ok(proof)
         );
     }
 
     #[test]
-    fn a_json_surrogate_pair_decodes_to_its_scalar() {
-        assert_eq!(json_string(r#""\ud83d\ude00""#).as_deref(), Ok("\u{1f600}"));
-        assert_eq!(json_string(r#""\u00e9""#).as_deref(), Ok("\u{e9}"));
-    }
-
-    #[test]
-    fn an_unpaired_json_surrogate_is_still_refused() {
-        for text in [
+    fn an_unpaired_surrogate_in_a_proof_is_refused() {
+        for spelling in [
             r#""\ud83d""#,
             r#""\ud83dx""#,
             r#""\ude00""#,
             r#""\ud83d\u0041""#,
         ] {
-            assert!(json_string(text).is_err(), "{text}");
+            let error = Proof::from_json(&with_schema(spelling)).unwrap_err();
+            assert!(
+                error.starts_with("invalid proof JSON"),
+                "{spelling}: {error}"
+            );
         }
+    }
+
+    #[test]
+    fn deep_proof_json_is_refused_and_shallow_nesting_parses() {
+        let (proof, _) = proof_and_json();
+        assert_eq!(Proof::from_json(&with_nested_member(32)), Ok(proof));
+        let error = Proof::from_json(&with_nested_member(10_000)).unwrap_err();
+        assert!(error.starts_with("invalid proof JSON"), "{error}");
     }
 
     #[test]

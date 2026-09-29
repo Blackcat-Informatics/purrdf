@@ -24,7 +24,6 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use ciborium::value::Value;
 use purrdf_ed25519::SigningKey;
 use purrdf_gts::codec::zstd_block_layout;
 use purrdf_gts::compact::{
@@ -35,6 +34,7 @@ use purrdf_gts::model::{Graph, Term, TermKind};
 use purrdf_gts::reader::{read, segment_append_state};
 use purrdf_gts::wire::{iter_items, map_get};
 use purrdf_gts::writer::Writer;
+use purrdf_lex::cbor::Value;
 
 /// The name the caller pins its shipped dictionary under.
 const PINNED_NAME: &str = "shipped-bundle-v1";

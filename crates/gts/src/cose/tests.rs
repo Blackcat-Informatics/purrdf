@@ -9,19 +9,21 @@ use std::cell::RefCell;
 use super::*;
 
 fn fixture() -> (Vec<u8>, [u8; 32]) {
-    let value: serde_json::Value =
-        serde_json::from_str(include_str!("../../../../vectors/encrypt0/basic.json")).unwrap();
+    let value =
+        purrdf_lex::json::read(include_str!("../../../../vectors/encrypt0/basic.json")).unwrap();
     let bytes = |field: &str| purrdf_hash::hex::decode(value[field].as_str().unwrap()).unwrap();
     (bytes("cose"), bytes("key").try_into().unwrap())
 }
 
 fn parts(blob: &[u8]) -> [Value; 3] {
-    let Value::Tag(_, value) = ciborium::de::from_reader(blob).unwrap() else {
+    let mut value = cbor::decode(blob, cbor::Limits::DEFAULT).unwrap();
+    let Value::Tag(_, value) = &mut value else {
         panic!("fixture must have an outer tag");
     };
-    let Value::Array(value) = *value else {
-        panic!("fixture must contain an array");
-    };
+    let value = value
+        .take()
+        .into_array()
+        .expect("fixture must contain an array");
     value.try_into().unwrap()
 }
 
@@ -351,12 +353,12 @@ fn protected_header_bytes_are_opaque_even_when_they_are_not_cbor() {
 
 /// `blob`, a COSE_Sign1, with its signature replaced by `signature`.
 fn with_signature(blob: &[u8], signature: [u8; 64]) -> Vec<u8> {
-    let Value::Tag(tag, value) = ciborium::de::from_reader(blob).unwrap() else {
+    let mut value = cbor::decode(blob, cbor::Limits::DEFAULT).unwrap();
+    let Value::Tag(tag, value) = &mut value else {
         panic!("a COSE_Sign1 has an outer tag");
     };
-    let Value::Array(mut fields) = *value else {
-        panic!("a COSE_Sign1 is an array");
-    };
+    let tag = *tag;
+    let mut fields = value.take().into_array().expect("a COSE_Sign1 is an array");
     fields[3] = Value::Bytes(signature.to_vec());
     wire::encode(&Value::Tag(tag, Box::new(Value::Array(fields))))
 }

@@ -48,7 +48,7 @@ fn write_blob_frame(writer: &mut Writer, data: Vec<u8>, dict: Option<&str>) {
                 raw: Some(data),
                 transform: vec!["zstd".to_string()],
                 dict: dict.map(str::to_string),
-                pub_meta: Some(ciborium::value::Value::Map(vec![(
+                pub_meta: Some(purrdf_lex::cbor::Value::Map(vec![(
                     "digest".into(),
                     digest.into(),
                 )])),

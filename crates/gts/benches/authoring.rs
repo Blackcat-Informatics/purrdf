@@ -23,9 +23,9 @@
 //! (`read_to_sink_with_options`) never reaches rayon: it walks frames one at a
 //! time on the calling thread, so its probes stay per-thread.
 
-use ciborium::value::Value;
 use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow, WholeProcessWindow};
 use purrdf_ed25519::SigningKey;
+use purrdf_lex::cbor::Value;
 use purrdf_testkit::bench::{Bench, BenchmarkId, Throughput, bench_group, bench_main, black_box};
 
 use purrdf_gts::codec::encode_chain;

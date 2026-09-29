@@ -16,7 +16,7 @@ use std::collections::BTreeMap;
 use crate::{FastMap, FastSet};
 use std::io::Read;
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::{self, Value};
 
 use crate::codec::{
     Codec, CodecError, decode_chain, decode_chain_bounded, decode_chain_with_decrypt_bounded,
@@ -303,7 +303,7 @@ impl FrameContext<'_> {
         let Some(bytes) = source.get(self.range.start..self.range.end) else {
             return false;
         };
-        let Ok(Value::Map(map)) = ciborium::de::from_reader::<Value, _>(bytes) else {
+        let Ok(Ok(map)) = cbor::decode(bytes, cbor::Limits::DEFAULT).map(Value::into_map) else {
             return false;
         };
         content_id(&map) == self.content_id
@@ -730,7 +730,7 @@ impl Folder<'_, '_, '_> {
             if blob {
                 return Ok(Value::Bytes(decoded));
             }
-            return ciborium::de::from_reader(&decoded[..])
+            return cbor::decode(&decoded, cbor::Limits::DEFAULT)
                 .map_err(|e| PayloadError::Damaged(e.to_string()));
         }
         if blob
@@ -1100,7 +1100,7 @@ impl Folder<'_, '_, '_> {
         let pub_meta = declared_metadata
             .filter(|value| matches!(value, Value::Map(_)))
             .cloned();
-        let encoded_len = d.and_then(Value::as_bytes).map_or(0, Vec::len);
+        let encoded_len = d.and_then(Value::as_bytes).map_or(0, <[u8]>::len);
         let chain = match map_get(frame, "x") {
             Some(Value::Array(ids)) if !ids.is_empty() => match self.resolve_codecs(ids) {
                 Ok(chain) => chain,
@@ -1125,8 +1125,8 @@ impl Folder<'_, '_, '_> {
         };
 
         if chain.iter().any(|codec| codec.cls == "encrypt") {
-            match self.payload(frame, true) {
-                Ok(Value::Bytes(bytes)) => {
+            match self.payload(frame, true).map(Value::into_bytes) {
+                Ok(Ok(bytes)) => {
                     let digest = digest_str(&bytes);
                     if let Some(meta) = pub_meta {
                         self.blob_meta_index
@@ -1190,7 +1190,7 @@ impl Folder<'_, '_, '_> {
             }
             self.emit_blob(
                 &digest,
-                d.and_then(Value::as_bytes).map(Vec::as_slice),
+                d.and_then(Value::as_bytes),
                 &chain,
                 declared_metadata,
                 d.is_some(),
@@ -1221,8 +1221,8 @@ impl Folder<'_, '_, '_> {
         let Some(Value::Bytes(_)) = d else {
             return;
         };
-        match self.payload(frame, true) {
-            Ok(Value::Bytes(bytes)) => {
+        match self.payload(frame, true).map(Value::into_bytes) {
+            Ok(Ok(bytes)) => {
                 let digest = digest_str(&bytes);
                 if let Some(meta) = pub_meta {
                     self.blob_meta_index
@@ -1819,9 +1819,9 @@ fn next_stream_item<R: Read>(
     reader: &mut StreamingCountingReader<R>,
 ) -> Result<Option<(Value, usize, usize)>, usize> {
     let start = reader.pos;
-    match ciborium::de::from_reader::<Value, _>(&mut *reader) {
-        Ok(item) => Ok(Some((item, start, reader.pos))),
-        Err(_) if reader.pos == start => Ok(None),
+    match cbor::read_from(&mut *reader, cbor::Limits::DEFAULT) {
+        Ok(Some(item)) => Ok(Some((item, start, reader.pos))),
+        Ok(None) => Ok(None),
         Err(_) => Err(start),
     }
 }
@@ -2541,4 +2541,61 @@ fn read_segment_with_sink(
     }
     g.segment_streamable.push(info);
     g
+}
+
+#[cfg(test)]
+mod transformed_payload_tests {
+    use purrdf_lex::cbor::Value;
+
+    use super::read;
+    use crate::wire::canonical;
+    use crate::writer::Writer;
+
+    /// A file whose one `terms` frame carries `bytes` through the `gzip`
+    /// transform, so the reader decodes them as the frame's payload item.
+    fn gzip_terms_file(bytes: Vec<u8>) -> Vec<u8> {
+        let mut writer = Writer::new("purrdf.gts");
+        writer.add_frame(
+            "terms",
+            None,
+            Some(bytes),
+            Some(&["gzip".to_string()]),
+            None,
+        );
+        writer.into_bytes()
+    }
+
+    fn one_iri_payload() -> Vec<u8> {
+        canonical(&Value::Array(vec![Value::Map(vec![
+            (Value::from("k"), Value::from(0_u8)),
+            (Value::from("v"), Value::from("https://example.org/s")),
+        ])]))
+    }
+
+    #[test]
+    fn a_transformed_payload_that_is_exactly_one_item_folds() {
+        let graph = read(&gzip_terms_file(one_iri_payload()), false, None);
+        assert_eq!(graph.diagnostics, Vec::new());
+        assert_eq!(graph.terms.len(), 1);
+        assert_eq!(
+            graph.terms[0].value.as_deref(),
+            Some("https://example.org/s")
+        );
+    }
+
+    #[test]
+    fn bytes_after_a_transformed_payload_item_damage_the_frame() {
+        let mut bytes = one_iri_payload();
+        bytes.push(0x00);
+        let graph = read(&gzip_terms_file(bytes), false, None);
+        assert_eq!(graph.terms, Vec::new());
+        assert!(
+            graph
+                .diagnostics
+                .iter()
+                .any(|diagnostic| diagnostic.code == "DamagedFrame"),
+            "{:?}",
+            graph.diagnostics
+        );
+    }
 }

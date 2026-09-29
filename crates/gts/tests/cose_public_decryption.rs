@@ -3,9 +3,9 @@
 
 //! Standalone COSE consumers must be able to open existing encrypted objects.
 
-use ciborium::Value;
 use purrdf_gts::cose::{Encrypt0Error, decrypt0, encrypt0};
 use purrdf_gts::wire;
+use purrdf_lex::cbor::Value;
 
 #[test]
 fn standalone_cose_decryption_authenticates_the_exact_plaintext() {
@@ -49,8 +49,8 @@ struct Fixture {
 }
 
 fn frozen_fixture() -> Fixture {
-    let vector: serde_json::Value =
-        serde_json::from_str(include_str!("../../../vectors/encrypt0/basic.json")).unwrap();
+    let vector =
+        purrdf_lex::json::read(include_str!("../../../vectors/encrypt0/basic.json")).unwrap();
     let bytes = |field: &str| purrdf_hash::hex::decode(vector[field].as_str().unwrap()).unwrap();
     Fixture {
         blob: bytes("cose"),
@@ -61,13 +61,14 @@ fn frozen_fixture() -> Fixture {
 }
 
 fn envelope_parts(blob: &[u8]) -> [Value; 3] {
-    let value: Value = ciborium::de::from_reader(blob).unwrap();
-    let Value::Tag(16, body) = value else {
+    let mut value = purrdf_lex::cbor::decode(blob, purrdf_lex::cbor::Limits::DEFAULT).unwrap();
+    let Value::Tag(16, body) = &mut value else {
         panic!("fixture must be tagged COSE_Encrypt0");
     };
-    let Value::Array(parts) = *body else {
-        panic!("fixture must contain an array");
-    };
+    let parts = body
+        .take()
+        .into_array()
+        .expect("fixture must contain an array");
     parts.try_into().unwrap()
 }
 

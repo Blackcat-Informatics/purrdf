@@ -152,7 +152,7 @@ impl StreamingSink for OrderingSink {
         &mut self,
         segment_index: usize,
         _digest: &str,
-        _meta: Option<&ciborium::value::Value>,
+        _meta: Option<&purrdf_lex::cbor::Value>,
     ) {
         self.log.push(format!("blob:{segment_index}"));
     }

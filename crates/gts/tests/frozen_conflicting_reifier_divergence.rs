@@ -73,7 +73,7 @@ use std::path::PathBuf;
 
 use purrdf_gts::model::{Graph, TermKind};
 use purrdf_gts::reader::read;
-use serde_json::Value as Json;
+use purrdf_lex::json::Value as Json;
 
 /// The frozen vector under test, without extension.
 const VECTOR: &str = "12-conflicting-reifier";
@@ -95,7 +95,8 @@ fn frozen_expectation() -> Json {
     let path = vectors_dir().join(format!("{VECTOR}.expected.json"));
     let text = std::fs::read_to_string(&path)
         .unwrap_or_else(|error| panic!("read frozen expectation {}: {error}", path.display()));
-    serde_json::from_str(&text).unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
+    purrdf_lex::json::read(&text)
+        .unwrap_or_else(|error| panic!("parse {}: {error}", path.display()))
 }
 
 /// Render one reifier row as `(reifier, subject, predicate, object, graph?)`

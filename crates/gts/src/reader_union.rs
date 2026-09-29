@@ -3,7 +3,7 @@
 
 use crate::{FastMap, FastSet};
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::model::{Graph, Quad, Suppression, Term, TermKind, Triple3};
 use crate::reader::{as_idx, as_text, text_or};

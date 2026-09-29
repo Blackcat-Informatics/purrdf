@@ -59,11 +59,11 @@
 
 use core::ops::ControlFlow;
 
-use ciborium::value::Value;
 use purrdf_events::{
     EventError, EventQuad, EventTerm, EventTermId, EventTriple, RdfEventSink, ScopeId,
     TextDirection,
 };
+use purrdf_lex::cbor::Value;
 
 use crate::FastMap;
 use crate::model::{ByteRange, Diagnostic, OpaqueNode, Signature, StreamableInfo, Suppression};

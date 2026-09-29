@@ -16,7 +16,7 @@ use std::borrow::Cow;
 use std::slice;
 use std::vec;
 
-use ciborium::value::Value;
+use purrdf_lex::cbor::Value;
 
 use crate::codec::{Codec, CodecError, decode_chain};
 

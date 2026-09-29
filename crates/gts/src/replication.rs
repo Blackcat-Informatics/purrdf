@@ -7,10 +7,10 @@
 //! sequence and hash primitives as the reader, without adding runtime JSON
 //! dependencies.
 
-use ciborium::value::Value;
 use purrdf_hash::Domain;
 use purrdf_hash::hex::Lower;
 use purrdf_iri::json_escape::{JsonEscapes, push_string};
+use purrdf_lex::cbor::Value;
 
 pub use crate::model::ByteRange;
 use crate::model::{Diagnostic, StreamableInfo};

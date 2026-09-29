@@ -11,8 +11,8 @@
 use std::collections::HashMap;
 use std::hash::BuildHasher;
 
-use ciborium::value::Value;
 use purrdf_ed25519::VerifyingKey;
+use purrdf_lex::cbor::Value;
 
 use crate::FastMap;
 use crate::cose::verify_signatures;

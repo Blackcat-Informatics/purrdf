@@ -16,8 +16,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use ciborium::value::Value;
 use purrdf_hash::Domain;
+use purrdf_lex::cbor::Value;
 
 use crate::model::{Graph, Term, TermKind};
 use crate::reader::{SegmentAppendState, read, read_file_segments, segment_append_state};
