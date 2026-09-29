@@ -473,27 +473,17 @@ build-profile-hygiene: ## Prove the gate really compiles at opt-level 3 with deb
 	python3 scripts/check-build-profiles.py --self-test
 	python3 scripts/check-build-profiles.py
 
-rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core, zero-dep leaves.
+rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core; the root and the ring-fenced crates depend only on what layers.toml lists.
 	@tree=$$(cargo tree --color never -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
 	if echo "$$tree" | grep -Eq '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; then \
 		echo "FAIL: purrdf-core pulls an oxigraph-family or PyO3 crate as a NORMAL dependency"; \
 		echo "$$tree" | grep -E '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; exit 1; \
 	fi; \
 	echo "OK: purrdf-core has no oxigraph/PyO3 normal dependency"
-	@for leaf in purrdf-iri purrdf-xsd purrdf-events purrdf-hash; do \
-		tree=$$(cargo tree --color never --prefix none -p $$leaf --edges normal --depth 1 -f "{p}") || { echo "FAIL: cargo tree errored for $$leaf"; exit 1; }; \
-		deps=$$(printf '%s\n' "$$tree" | tail -n +2); \
-		if [ -n "$$deps" ]; then \
-			echo "FAIL: $$leaf must stay zero-dependency but depends on:"; echo "$$deps"; exit 1; \
-		fi; \
-		echo "OK: $$leaf is zero-dependency"; \
-	done
-	@tree=$$(cargo tree --color never --prefix none -p purrdf-deflate --edges normal --depth 1 -f "{p}") || { echo "FAIL: cargo tree errored for purrdf-deflate"; exit 1; }; \
-	deps=$$(printf '%s\n' "$$tree" | tail -n +2 | sed 's/ v.*//'); \
-	if [ "$$deps" != "purrdf-hash" ]; then \
-		echo "FAIL: purrdf-deflate must depend on purrdf-hash alone but depends on:"; echo "$$deps"; exit 1; \
-	fi; \
-	echo "OK: purrdf-deflate depends on purrdf-hash alone"
+	@# The root (`root` in layers.toml) must have zero runtime dependencies, and
+	@# every crate whose row carries `external` may depend only on its row's
+	@# `deps` and `external`, counting every target's normal edges.
+	python3 scripts/check-layers.py --ring-fence
 
 cnschema-probe: ## Reproduce the pinned cnSchema 4.0 round-trip evidence (fetches by digest; not a CI gate).
 	python3 scripts/cnschema-probe.py --self-test

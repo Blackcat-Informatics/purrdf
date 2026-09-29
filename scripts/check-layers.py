@@ -20,6 +20,12 @@ compares it with the graph ``cargo metadata`` resolves, and fails on:
   is flipped to present in the change that adds it;
 * a cycle in the declared graph, pending edges included.
 
+``--ring-fence`` (``make rdf-core-hygiene``) holds the kernel ring-fence, which
+counts EVERY normal dependency, external crates included: the root has none at
+all, and a row carrying ``external`` is ring-fenced — each of its normal
+dependencies is one of its listed first-party ``deps`` or one of the external
+packages ``external`` names, and a listed external it no longer has is STALE.
+
 ``--home-for A B …`` answers the placement question: over the declared graph
 (pending edges included), the crates every one of ``A``, ``B``, … reaches,
 directly or transitively (each crate reaches itself), minus any that another of
@@ -70,6 +76,8 @@ class Layers:
     # crate -> {dependency -> pending}
     deps: dict[str, dict[str, bool]] = field(default_factory=dict)
     pending_crates: set[str] = field(default_factory=set)
+    # ring-fenced crate -> the external packages it may depend on
+    external: dict[str, set[str]] = field(default_factory=dict)
 
 
 def parse_layers(document: dict) -> Layers:
@@ -87,7 +95,7 @@ def parse_layers(document: dict) -> Layers:
     for row in rows:
         if not isinstance(row, dict):
             raise LayersError("a [[crate]] row must be a table")
-        extra = set(row) - {"name", "pending", "deps"}
+        extra = set(row) - {"name", "pending", "deps", "external"}
         if extra:
             raise LayersError(f"row {row.get('name')!r}: unknown keys {sorted(extra)}")
         name = row.get("name")
@@ -119,6 +127,15 @@ def parse_layers(document: dict) -> Layers:
                 raise LayersError(f"`{name}` lists itself")
             declared[dep] = dep_pending
         layers.deps[name] = declared
+        if "external" in row:
+            external = row["external"]
+            if not isinstance(external, list) or not all(isinstance(item, str) and item for item in external):
+                raise LayersError(f"`{name}`: `external` is an array of package names")
+            if len(set(external)) != len(external):
+                raise LayersError(f"`{name}`: `external` lists a package twice")
+            if name == root:
+                raise LayersError(f"the root `{name}` is ring-fenced to nothing; it takes no `external`")
+            layers.external[name] = set(external)
     if root not in layers.deps:
         raise LayersError(f"the root `{root}` needs a row")
     if layers.deps[root]:
@@ -213,6 +230,46 @@ def failures(layers: Layers, members: set[str], edges: set[tuple[str, str]]) -> 
     loop = cycle(layers)
     if loop:
         found.append(f"FAIL: the declared graph has a cycle: {' -> '.join(loop)}")
+    return found
+
+
+def normal_dependencies(graph) -> dict[str, set[str]]:
+    """member name -> the names of every package it depends on through a NORMAL
+    edge, on any target, first-party and external alike."""
+    return {
+        graph.names[pid]: {
+            graph.names[dep] for dep, kinds in graph.edges.get(pid, ()) if "normal" in kinds
+        }
+        for pid in graph.workspace
+    }
+
+
+def ring_fence_failures(layers: Layers, dependencies: dict[str, set[str]]) -> list[str]:
+    """Every breach of the kernel ring-fence: a normal dependency of the root, a
+    normal dependency of a ring-fenced crate its row does not list, and a listed
+    external dependency the crate no longer has."""
+    found: list[str] = []
+    for name in sorted(dependencies.get(layers.root, set())):
+        found.append(
+            f"FAIL: `{layers.root}` is the root and must have zero runtime dependencies, "
+            f"but depends on `{name}`"
+        )
+    for crate, external in sorted(layers.external.items()):
+        if crate not in dependencies:
+            if crate not in layers.pending_crates:
+                found.append(f"FAIL: ring-fenced `{crate}` is not a workspace member")
+            continue
+        allowed = set(layers.deps[crate]) | external
+        for name in sorted(dependencies[crate] - allowed):
+            found.append(
+                f"FAIL: ring-fenced `{crate}` depends on `{name}`, which its layers.toml row "
+                "lists neither in `deps` nor in `external`"
+            )
+        for name in sorted(external - dependencies[crate]):
+            found.append(
+                f"FAIL: ring-fenced `{crate}` lists `{name}` in `external` but no longer "
+                "depends on it (STALE); remove it"
+            )
     return found
 
 
@@ -343,7 +400,50 @@ def self_test() -> int:
     cases.append(("home-for two chained callers is the lower one", home_for(layers, ["c", "b"]) == ["b"]))
     cases.append(("home-for a caller alone is itself", home_for(layers, ["b"]) == ["b"]))
     cases.append(("home-for crates that share nothing else is the root", home_for(layers, ["p", "a"]) == ["r"]))
+    fenced = parse_layers(
+        tomllib.loads(
+            FIXTURE_LAYERS.replace('name = "a"\ndeps = ["r"]', 'name = "a"\ndeps = ["r"]\nexternal = ["ext"]')
+        )
+    )
+    held = {"r": set(), "a": {"r", "ext"}, "b": {"a"}, "c": {"b"}}
+    cases.append(("a ring-fenced crate whose every dependency is listed passes", ring_fence_failures(fenced, held) == []))
+    cases.append(
+        (
+            "a ring-fenced crate with an unlisted external dependency fails",
+            any("depends on `other`" in line for line in ring_fence_failures(fenced, {**held, "a": {"r", "ext", "other"}})),
+        )
+    )
+    cases.append(
+        (
+            "an unfenced crate may take an external dependency",
+            ring_fence_failures(fenced, {**held, "b": {"a", "other"}}) == [],
+        )
+    )
+    cases.append(
+        (
+            "a listed external the ring-fenced crate dropped is STALE",
+            any("STALE" in line for line in ring_fence_failures(fenced, {**held, "a": {"r"}})),
+        )
+    )
+    cases.append(
+        (
+            "a root with any runtime dependency fails the ring-fence",
+            any("zero runtime dependencies" in line for line in ring_fence_failures(fenced, {**held, "r": {"ext"}})),
+        )
+    )
+    with_dev_and_build = fixture_graph()
+    with_dev_and_build.edges["a"].append(("c", frozenset({"dev"})))
+    with_dev_and_build.edges["b"].append(("r", frozenset({"build"})))
+    with_dev_and_build.edges["c"].append(("a", frozenset({"normal", "dev"})))
+    cases.append(
+        (
+            "normal edges are counted, dev-only and build-only edges are not",
+            normal_dependencies(with_dev_and_build) == {"r": set(), "a": {"r"}, "b": {"a"}, "c": {"a", "b"}},
+        )
+    )
     for bad, why in [
+        ('root = "r"\n[[crate]]\nname = "r"\ndeps = []\nexternal = []\n', "an `external` on the root"),
+        ('root = "r"\n[[crate]]\nname = "r"\ndeps = []\n[[crate]]\nname = "a"\ndeps = []\nexternal = ["x", "x"]\n', "a doubled external"),
         ('root = "r"\n[[crate]]\nname = "r"\ndeps = ["a"]\n[[crate]]\nname = "a"\ndeps = []\n', "a root with dependencies"),
         ('root = "r"\n[[crate]]\nname = "r"\ndeps = []\n[[crate]]\nname = "a"\ndeps = ["z"]\n', "a dep with no row"),
         ('root = "r"\n[[crate]]\nname = "r"\ndeps = []\n[[crate]]\nname = "a"\ndeps = [{ name = "r", pending = false }]\n', "a pending = false entry"),
@@ -387,6 +487,23 @@ def main() -> int:
     except (OSError, tomllib.TOMLDecodeError, LayersError) as exc:
         print(f"FAIL: layers.toml: {exc}")
         return 1
+    if arguments == ["--ring-fence"]:
+        try:
+            graph = BANNED_DEPS.graph_from_metadata(BANNED_DEPS.cargo_metadata(REPO_ROOT / "Cargo.toml"))
+        except BANNED_DEPS.MetadataError as exc:
+            print(f"FAIL: {exc}")
+            return 1
+        found = ring_fence_failures(layers, normal_dependencies(graph))
+        if found:
+            for line in found:
+                print(line)
+            return 1
+        fenced = ", ".join(sorted(layers.external))
+        print(
+            f"OK: `{layers.root}` has zero runtime dependencies; every runtime dependency of "
+            f"{fenced} is listed in its layers.toml row"
+        )
+        return 0
     if arguments[:1] == ["--home-for"]:
         callers = arguments[1:]
         if not callers:
@@ -401,7 +518,7 @@ def main() -> int:
             print(name)
         return 0
     if arguments:
-        print("usage: check-layers.py [--self-test | --home-for CRATE [CRATE ...]]", file=sys.stderr)
+        print("usage: check-layers.py [--self-test | --ring-fence | --home-for CRATE [CRATE ...]]", file=sys.stderr)
         return 2
     try:
         graph = BANNED_DEPS.graph_from_metadata(BANNED_DEPS.cargo_metadata(REPO_ROOT / "Cargo.toml"))

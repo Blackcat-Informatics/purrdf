@@ -68,7 +68,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-envelope-probe` (`crates/envelope-probe`) | The micro-hardware envelope capture tool (`publish = false`) |
 | `purrdf-alloc-probe` (`crates/alloc-probe`) | The shared counting allocator + per-thread/whole-process measurement windows every allocation test and bench measures with (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `purrdf-bench` (`crates/bench`) | Benchmark tooling: the scale-corpus generator (`publish = false`) |
-| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, and the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property); depends on no `purrdf-*` crate (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
+| `purrdf-testkit` (`crates/testkit`) | Shared test support: byte-exact goldens (`assert_golden!`), temporary paths under the target directory (`temp_dir!`, `temp_file!`, `for_unit_test`), self-hashing frozen differential vectors, the libtest-compatible `harness = false` runner, and the property harness (`prop_test!`: choice-sequence shrinking, regex string generators, stateful model testing, a deterministic seed per property); its one first-party dependency is `purrdf-hash`, the root, whose own tests do not use testkit, so no member's tests close a cycle through it (`publish = false`, `[dev-dependencies]` only, path-only with no `version`) |
 | `wasm-link` (`crates/wasm-link`) | The wasm package's post-link step: links the suspend, run and poison guarantees into the optimized module (`publish = false`, host tool) |
 | `purrdf-hash-conformance` (`crates/hash-conformance`) | The frozen-vector suites of `purrdf-hash` (digest differentials, BLAKE3 streaming boundaries, base16 rendering, the table hasher's self-vectors and quality) and the table hasher's latency bench, on testkit's runner natively and on wasm32; separate from `purrdf-hash` because testkit depends on it (`publish = false`) |
 | `helper-census` (`crates/helper-census`) | The structural helper census: normalises every shipping function body (local names renamed, literals abstracted) and reports isomorphic bodies, repeated thin forwarders, constants by value and hex-digit tables against `helpers-ledger.toml` (`publish = false`, host tool) |
@@ -82,9 +82,11 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   semantics per consumer, which is forbidden. Do not add any other feature,
   optional dependency, or feature-gated behavior.
 * **Kernel ring-fence.** `purrdf-core` must never depend on oxigraph or PyO3.
-  `purrdf-iri`, `purrdf-xsd`, `purrdf-events`, and `purrdf-hash` must keep
-  **zero runtime dependencies**, and `purrdf-deflate`'s only runtime
-  dependency is `purrdf-hash` (`make rdf-core-hygiene` checks both).
+  `purrdf-hash` has **zero runtime dependencies**; `purrdf-lex`, `purrdf-iri`,
+  `purrdf-xsd`, `purrdf-events`, `purrdf-testkit` and `purrdf-deflate` depend
+  only on crates listed in their `layers.toml` rows (`make rdf-core-hygiene`
+  checks both, reading the ring-fenced crates and their rows from
+  `layers.toml`).
 * **One home per job.** `helpers-ledger.toml` names the single implementation
   of each job the workspace provides once, what it replaces, and each sanctioned
   second implementation with its criterion and documented reason;

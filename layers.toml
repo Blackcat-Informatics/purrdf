@@ -18,6 +18,12 @@
 #   deps    = every first-party crate it may depend on. An entry is the package
 #             name, or `{ name = "…", pending = true }` for a planned edge that
 #             is allowed but not yet present.
+#   external = present on a ring-fenced crate (the kernel ring-fence, checked
+#             by `make rdf-core-hygiene` through `check-layers.py --ring-fence`):
+#             every external package it may depend on, on any target. A
+#             ring-fenced crate's runtime dependencies are exactly its `deps`
+#             and its `external`; an empty `external` allows none. The root is
+#             always ring-fenced to nothing and takes no `external`.
 #
 # The gate fails on:
 #   * a first-party normal edge that no row allows, or an unlisted root edge;
@@ -59,15 +65,18 @@ deps = ["purrdf-hash"]
 [[crate]]
 name = "purrdf-deflate"
 deps = ["purrdf-hash"]
+external = []
 
 [[crate]]
 name = "purrdf-events"
 deps = [{ name = "purrdf-hash", pending = true }]
+external = []
 
 [[crate]]
 name = "purrdf-lex"
 pending = true
 deps = [{ name = "purrdf-hash", pending = true }]
+external = []
 
 [[crate]]
 name = "purrdf-iri"
@@ -75,6 +84,7 @@ deps = [
     { name = "purrdf-lex", pending = true },
     { name = "purrdf-hash", pending = true },
 ]
+external = []
 
 [[crate]]
 name = "purrdf-testkit"
@@ -82,6 +92,9 @@ deps = [
     "purrdf-hash",
     { name = "purrdf-lex", pending = true },
 ]
+# The string generators walk regex-syntax's IR; SHA-256 seals frozen vectors;
+# wasm-bindgen reaches Node's argv, env, console and clock on wasm32.
+external = ["regex-syntax", "sha2", "wasm-bindgen"]
 
 [[crate]]
 name = "purrdf-xsd"
@@ -89,6 +102,7 @@ deps = [
     { name = "purrdf-lex", pending = true },
     { name = "purrdf-hash", pending = true },
 ]
+external = []
 
 [[crate]]
 name = "purrdf-cdt"
