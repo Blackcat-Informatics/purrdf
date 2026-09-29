@@ -518,7 +518,7 @@ fn needs(root: Node<'_>) -> bool {
 // ---------------------------------------------------------------------------
 
 /// A child position of a node, mutably: where a rewritten child is put back.
-enum ChildMut<'a> {
+pub(crate) enum ChildMut<'a> {
     Pattern(&'a mut GraphPattern),
     Expression(&'a mut Expression),
 }
@@ -530,7 +530,10 @@ enum ChildMut<'a> {
 /// then its condition, an `ORDER BY`'s pattern before its keys, a `GROUP BY`'s
 /// pattern only (its aggregates' expressions are reached through
 /// [`take_aggregates`], after it). A `SERVICE` body is left as written.
-fn for_each_child_mut(node: &mut GraphPattern, visit: &mut impl FnMut(ChildMut<'_>)) {
+pub(crate) fn for_each_child_mut<'a>(
+    node: &'a mut GraphPattern,
+    visit: &mut impl FnMut(ChildMut<'a>),
+) {
     match node {
         GraphPattern::Bgp { .. }
         | GraphPattern::Path { .. }

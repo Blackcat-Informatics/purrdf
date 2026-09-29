@@ -359,7 +359,9 @@ pub(crate) fn is_parallel_safe(expr: &Expression, registries: SafetyRegistries<'
 
 /// A judgment of one `EXISTS` body the fork-safety walks consult before walking it:
 /// `Some(unsafe)` decides the body without entering it, `None` walks it as written. See
-/// [`is_parallel_safe_with`].
+/// [`is_parallel_safe_with`]. A lateral placeholder
+/// (`crate::deferred_exists::lateral_placeholder`) is offered to it too, and one it
+/// answers `None` for is unsafe: there is nothing behind a placeholder to walk.
 pub(crate) type ExistsVerdict<'h> = &'h dyn Fn(&GraphPattern) -> Option<bool>;
 
 /// [`is_parallel_safe`], with every `EXISTS` body first offered to `verdict`: a
@@ -530,6 +532,14 @@ fn reaches_unsafe_builtin(
             }
             Reach::Pattern(GraphPattern::PropertyFunction(call)) => {
                 if property_function_is_unsafe(&call.iri, registries.relations) {
+                    return true;
+                }
+            }
+            // A substituted copy's placeholder for a `LATERAL` right operand stands for an
+            // operand the walk cannot see: `verdict` answers for it, and one it cannot
+            // answer for is judged unsafe rather than safe by omission.
+            Reach::Pattern(pattern) if crate::deferred_exists::is_lateral_placeholder(pattern) => {
+                if verdict(pattern).unwrap_or(true) {
                     return true;
                 }
             }

@@ -188,10 +188,10 @@ pub(crate) fn eval_substituted<D: DatasetView + Sync>(
     let sites = crate::deferred_exists::nested_sites(pattern, source, ctx);
     let enclosing_placeholders = ctx.deferred_exists.clone();
     let mut deferral = crate::expr::Deferral::new(enclosing_placeholders.as_deref(), &sites);
-    // `pattern` is a real PLAN node exactly when it (or, for a `LATERAL` nested inside
-    // another `LATERAL`'s substituted RHS, its already-installed enclosing map) resolves
-    // to a ledger ordinal — a `LATERAL` right operand, or a correlated `EXISTS` inner
-    // whose preparation's map the caller pushed. Only then is the substitution walk worth
+    // `pattern` is a real PLAN node exactly when it (or, for a copy the caller pushed a
+    // map for — a deferred `EXISTS` body's preparation, a deferred `LATERAL` operand's
+    // site, or a `LATERAL` operand nested in an enclosing window's copy — that map)
+    // resolves to a ledger ordinal. Only then is the substitution walk worth
     // tracking: every node it copies 1:1 keeps its own ledger identity across the per-row
     // substituted copy instead of folding into the enclosing node.
     let source_addr = std::ptr::from_ref(pattern) as usize;
@@ -231,6 +231,76 @@ pub(crate) fn eval_substituted<D: DatasetView + Sync>(
     eval_evaluated(&substituted, &mut guard)
 }
 
+/// The right side of a copied `LATERAL` whose operand the substitution walk deferred
+/// (`slot`), for the left row `mu`: the operand's site substituted with the carried
+/// substitution and `mu` together, and evaluated — what [`eval_correlated`] computes for
+/// the operand the walk would have copied, up to redundant one-row `VALUES` joins (see
+/// `crate::deferred_exists`).
+///
+/// The substitution and the row are one row when they agree, which the parser's scope
+/// check makes the only case a parsed query reaches: the site's body is substituted once,
+/// in a window that tracks it to the plan nodes it copies. Where they disagree — a
+/// rebinding hand-built algebra can still reach — the layers are substituted one at a
+/// time and the last copy is evaluated, exactly as the full substitution did.
+///
+/// # Errors
+///
+/// As [`eval_correlated`].
+fn eval_deferred_lateral<D: DatasetView + Sync>(
+    slot: &crate::deferred_exists::DeferredLateral,
+    mu: &[Option<SolutionTerm<D::Id>>],
+    schema: &VarSchema,
+    ctx: &mut EvalCtx<'_, D>,
+) -> Result<Evaluated<D::Id>, EvalError> {
+    crate::stack::check("correlated evaluation (LATERAL or EXISTS)")?;
+    let site = &slot.site;
+    let current = crate::expr::outer_bindings_for_substitution(mu, schema, ctx);
+    let source = crate::deferred_exists::CorrelatedSource {
+        sites: crate::deferred_exists::SiteSlot::Lateral(site),
+        plan_map: Some(&site.plan_map),
+    };
+    let merged = match slot.env.state() {
+        crate::deferred_exists::EnvState::Empty => crate::deferred_exists::with_row(
+            &crate::expr::SubstitutionRow::default(),
+            &current,
+            &site.vars,
+        ),
+        crate::deferred_exists::EnvState::Merged(env) => {
+            crate::deferred_exists::with_row(env, &current, &site.vars)
+        }
+        crate::deferred_exists::EnvState::Layered => None,
+    };
+    if let Some(row) = merged {
+        // The site's map, pushed as the window the substitution resolves through, exactly
+        // as a deferred `EXISTS` pushes its site's.
+        let track_ledger = ctx.ledger.is_some() && !site.plan_map.is_empty();
+        if track_ledger {
+            ctx.correlated_node_maps.push(Arc::clone(&site.plan_map));
+        }
+        let evaluated = eval_substituted(&site.body, &row, source, ctx);
+        if track_ledger {
+            ctx.correlated_node_maps.pop();
+        }
+        return evaluated;
+    }
+    // Layers that disagree: each is substituted in turn, the row last, every nested
+    // placeholder carried from one copy to the next.
+    let sites = crate::deferred_exists::nested_sites(&site.body, source, ctx);
+    let mut copy: Option<Box<GraphPattern>> = None;
+    let mut placeholders: Option<Arc<crate::deferred_exists::DeferredMap>> = None;
+    for layer in slot.env.then(&current, &site.vars).layers() {
+        let from: &GraphPattern = copy.as_deref().unwrap_or(&site.body);
+        let mut deferral = crate::expr::Deferral::new(placeholders.as_deref(), &sites);
+        let next = crate::expr::substitute_pattern_deferring(from, layer, &mut deferral)?;
+        let next_placeholders = deferral.into_placeholders();
+        placeholders = next_placeholders;
+        copy = Some(next);
+    }
+    let body: &GraphPattern = copy.as_deref().unwrap_or(&site.body);
+    let mut guard = ctx.enter_substituted_exists(None, placeholders);
+    eval_evaluated(body, &mut guard)
+}
+
 /// Evaluate `LATERAL` (a correlated join): for each left solution μ, evaluate
 /// `right` with μ's bindings substituted in as ground constants, then merge each
 /// right solution ν with μ over the ordered-union schema.
@@ -240,7 +310,11 @@ pub(crate) fn eval_substituted<D: DatasetView + Sync>(
 /// μ, the sole case being a variable-endpoint `SERVICE ?g` whose endpoint IRI is
 /// bound by μ. Reuses the correlated-EXISTS substitution machinery via
 /// [`eval_correlated`], including the address-keyed-cache ABA guard
-/// (`in_substituted_exists`) around the inner eval.
+/// (`in_substituted_exists`) around the inner eval. A `LATERAL` inside such a copy finds
+/// its right operand deferred — a placeholder the substitution walk left, owed the
+/// enclosing rows — and substitutes the operand's site once per left row instead
+/// ([`eval_deferred_lateral`]), so `d` nested levels cost each level's own nodes per row
+/// rather than a copy of the whole chain below every level (see `crate::deferred_exists`).
 ///
 /// # What the compatibility merge below still discharges
 ///
@@ -332,6 +406,22 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     // first, whatever order its left rows come in.
     crate::service_endpoints::admit_lateral_endpoints(&l, right, ctx)?;
 
+    // Inside a substituted copy, `right` may be the placeholder the substitution walk left
+    // for this operand: its site is substituted per left row with the substitution the
+    // walk carried and the row together — see `crate::deferred_exists`.
+    let deferred = ctx
+        .deferred_exists
+        .as_ref()
+        .and_then(|placeholders| placeholders.get(&(std::ptr::from_ref(right) as usize)))
+        .and_then(crate::deferred_exists::Deferred::lateral)
+        .cloned();
+    if deferred.is_none() && crate::deferred_exists::is_lateral_placeholder(right) {
+        return Err(EvalError::internal(
+            "a nested LATERAL placeholder was evaluated outside the substituted copy that \
+             left it",
+        ));
+    }
+
     let left_schema = Arc::clone(&l.schema);
     let left_len = left_schema.len();
 
@@ -343,18 +433,22 @@ pub(crate) fn eval_lateral<D: DatasetView + Sync>(
     type LateralPerRow<I> = Vec<(Solution<I>, SolutionSeq<I>)>;
     let mut per_row: LateralPerRow<D::Id> = Vec::with_capacity(l.rows.len());
     for mu in &l.rows {
-        // `right` is a plan node unless this `LATERAL` is itself part of a substituted
-        // copy; only a plan node's nested `EXISTS` sites may be kept by its address.
-        let sites = if ctx.in_substituted_exists {
-            crate::deferred_exists::SiteSlot::Transient
+        let evaluated = if let Some(slot) = &deferred {
+            eval_deferred_lateral(slot, mu, &left_schema, ctx)?
         } else {
-            crate::deferred_exists::SiteSlot::Plan
+            // `right` is a plan node unless this `LATERAL` is itself part of a substituted
+            // copy; only a plan node's nested sites may be kept by its address.
+            let sites = if ctx.in_substituted_exists {
+                crate::deferred_exists::SiteSlot::Transient
+            } else {
+                crate::deferred_exists::SiteSlot::Plan
+            };
+            let source = crate::deferred_exists::CorrelatedSource {
+                sites,
+                plan_map: None,
+            };
+            eval_correlated(right, mu, &left_schema, source, ctx)?
         };
-        let source = crate::deferred_exists::CorrelatedSource {
-            sites,
-            plan_map: None,
-        };
-        let evaluated = eval_correlated(right, mu, &left_schema, source, ctx)?;
         let r = match evaluated {
             Evaluated::Complete(seq) => seq,
             truncated @ Evaluated::Truncated(_) => {

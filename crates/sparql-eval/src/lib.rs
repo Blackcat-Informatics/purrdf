@@ -113,6 +113,8 @@ mod modifier;
 #[cfg(test)]
 mod nested_exists_gate;
 #[cfg(test)]
+mod nested_lateral_gate;
+#[cfg(test)]
 mod op_count;
 pub(crate) mod parallel;
 #[cfg(test)]

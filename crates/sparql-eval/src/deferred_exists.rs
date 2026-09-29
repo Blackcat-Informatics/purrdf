@@ -58,11 +58,41 @@
 //! [`ExistsSite::service_uses`], and the substitution walk itself reads
 //! [`ExistsSite::vars`] where it used to walk the body for its variables. A `SERVICE` body
 //! is forwarded as text, so nothing below a `SERVICE` is ever left as a placeholder.
+//!
+//! # A nested `LATERAL` right operand is deferred the same way
+//!
+//! A `LATERAL` evaluates its right operand once per left row, substituted
+//! ([`crate::binop::eval_lateral`]), and a `LATERAL` nested in that right operand did the
+//! same inside every copy: `d` nested levels cost what `d` nested `EXISTS` cost above —
+//! each level copied the whole remaining chain, one more one-row `VALUES` join around
+//! every leaf below it, and every level's copy stayed alive while the innermost ran. Time
+//! and memory grew with the cube of `d`.
+//!
+//! So the substitution walk leaves a nested `LATERAL`'s right operand as a **lateral
+//! placeholder** too: a [`LateralSite`] names it, and the window's [`DeferredMap`] carries
+//! the [`SubstitutionEnv`] the walk would have applied to it. When the copied `LATERAL`
+//! evaluates its right side for a left row ν, the site's body is substituted with the
+//! environment and ν as one row, once — the same merge, under the same agreement
+//! condition and with the same layer-by-layer fallback, as a deferred `EXISTS` body.
+//!
+//! A site owns its body: the right operand as written, with each `LATERAL` right operand
+//! nested in it cut out into a site of its own (the site's `children`). A whole
+//! chain is cut from ONE copy of the outermost deferred operand, prepared once per
+//! evaluation and kept where the substitution source's sites are kept, so each of its
+//! nodes is copied once per evaluation and each level's own nodes once per left row.
+//!
+//! A lateral placeholder stands in a pattern position, where more of the evaluator can
+//! see it than an `EXISTS` placeholder's expression position: it is a `SELECT` of the
+//! operand's own columns over the `EXISTS` placeholder, so the schema read off the copy
+//! without evaluating it is the one the operand has, and the fork-safety walks judge it
+//! by [`LateralSite::parallel_unsafe`]. An operand the variable-endpoint `SERVICE`
+//! analysis reads as written — one holding a `SERVICE ?v` — and a property-function
+//! call, which `crate::binop::eval_lateral` drives itself, are never deferred.
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 
 use purrdf_core::DatasetView;
-use purrdf_sparql_algebra::{Expression, GraphPattern, NamedNodePattern, Variable};
+use purrdf_sparql_algebra::{Child, Expression, GraphPattern, NamedNodePattern, Variable};
 
 use crate::DetHashSet;
 use crate::eval::{EvalCtx, PreparedExists};
@@ -236,11 +266,101 @@ pub(crate) struct DeferredExists {
     pub(crate) env: SubstitutionEnv,
 }
 
-/// A substituted copy's placeholders, by address.
-pub(crate) type DeferredMap = crate::DetHashMap<usize, DeferredExists>;
+/// A lateral placeholder's site and the substitution it is owed.
+#[derive(Clone)]
+pub(crate) struct DeferredLateral {
+    /// The right operand.
+    pub(crate) site: Arc<LateralSite>,
+    /// What to substitute into it, before the left row it is evaluated for.
+    pub(crate) env: SubstitutionEnv,
+}
 
-/// The sites of the `EXISTS` bodies a substitution source holds, by the body's address.
-pub(crate) type NestedSites = crate::DetHashMap<usize, Arc<ExistsSite>>;
+/// What one placeholder of a substituted copy stands for.
+#[derive(Clone)]
+pub(crate) enum Deferred {
+    /// A nested `EXISTS` body, in an expression position.
+    Exists(DeferredExists),
+    /// A nested `LATERAL`'s right operand, in that operand's position.
+    Lateral(DeferredLateral),
+}
+
+impl Deferred {
+    /// The `EXISTS` body this placeholder stands for, if it stands for one.
+    pub(crate) const fn exists(&self) -> Option<&DeferredExists> {
+        match self {
+            Self::Exists(slot) => Some(slot),
+            Self::Lateral(_) => None,
+        }
+    }
+
+    /// The `LATERAL` right operand this placeholder stands for, if it stands for one.
+    pub(crate) const fn lateral(&self) -> Option<&DeferredLateral> {
+        match self {
+            Self::Lateral(slot) => Some(slot),
+            Self::Exists(_) => None,
+        }
+    }
+
+    /// Whether the body or operand reaches a builtin or callee a forked worker must not
+    /// run.
+    pub(crate) fn parallel_unsafe(&self) -> bool {
+        match self {
+            Self::Exists(slot) => slot.site.parallel_unsafe,
+            Self::Lateral(slot) => slot.site.parallel_unsafe,
+        }
+    }
+}
+
+/// A substituted copy's placeholders, by address.
+pub(crate) type DeferredMap = crate::DetHashMap<usize, Deferred>;
+
+/// The sites of the `EXISTS` bodies a substitution source holds, by the body's address —
+/// what the map dereferences to — and of its deferred `LATERAL` right operands, by the
+/// operand's address.
+#[derive(Default)]
+pub(crate) struct NestedSites {
+    exists: crate::DetHashMap<usize, Arc<ExistsSite>>,
+    pub(crate) lateral: crate::DetHashMap<usize, Arc<LateralSite>>,
+}
+
+impl std::ops::Deref for NestedSites {
+    type Target = crate::DetHashMap<usize, Arc<ExistsSite>>;
+    fn deref(&self) -> &Self::Target {
+        &self.exists
+    }
+}
+
+impl std::ops::DerefMut for NestedSites {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.exists
+    }
+}
+
+/// A nested `LATERAL`'s right operand, cut out of the pattern that holds it and prepared
+/// once per evaluation — see this module's doc.
+pub(crate) struct LateralSite {
+    /// The operand as written, each deferrable `LATERAL` right operand nested in it
+    /// replaced by a lateral placeholder whose site is in `children`. Boxed, so the
+    /// addresses [`Self::plan_map`] and `children` are keyed by never move.
+    pub(crate) body: Box<GraphPattern>,
+    /// The columns the uncut operand exposes, in its schema order: the columns its
+    /// placeholder exposes.
+    pub(crate) schema: Vec<Variable>,
+    /// Every variable the uncut operand mentions anywhere: the variables a substitution
+    /// can reach in it, and so the only ones an environment needs to carry for it.
+    pub(crate) vars: DetHashSet<Variable>,
+    /// Whether the uncut operand reaches a builtin or callee a forked worker must not run.
+    pub(crate) parallel_unsafe: bool,
+    /// Every node of the whole cut chain mapped one hop to the plan node it copies; empty
+    /// without a ledger. One map, shared by every site cut from the same copy.
+    pub(crate) plan_map: Arc<SubstitutionSourceMap>,
+    /// The sites of the operands cut out of [`Self::body`], by their placeholder's
+    /// address.
+    children: crate::DetHashMap<usize, Arc<Self>>,
+    /// The sites of the body's own nested `EXISTS` bodies and of `children`, prepared on
+    /// the body's first substitution.
+    sites: OnceLock<Arc<NestedSites>>,
+}
 
 /// The sites of the `EXISTS` bodies of the plan nodes a `LATERAL` substitutes, by the
 /// node's address, for one evaluation.
@@ -260,11 +380,13 @@ pub(crate) struct PlanSites {
 pub(crate) enum SiteSlot<'a> {
     /// The source belongs to this preparation, which owns the tree the bodies are in and
     /// keeps their sites for as long as it lives.
-    Prepared(&'a std::sync::OnceLock<Arc<NestedSites>>),
+    Prepared(&'a OnceLock<Arc<NestedSites>>),
     /// The source is a plan node: its sites are kept on the evaluation's [`PlanSites`].
     Plan,
     /// The source is part of a per-row copy: its sites are prepared for this use alone.
     Transient,
+    /// The source is this site's body, which keeps the sites for as long as it lives.
+    Lateral(&'a LateralSite),
 }
 
 /// Where a correlated substitution reads its pattern from.
@@ -326,12 +448,36 @@ pub(crate) fn is_placeholder(pattern: &GraphPattern) -> bool {
     )
 }
 
-/// The sites of every `EXISTS` body `pattern` holds outside a `SERVICE` body and outside
-/// another `EXISTS` body, other than the placeholders of the window being substituted
-/// from — the bodies a substitution of `pattern` will leave as placeholders. Prepared on
-/// the first substitution of `pattern` and kept where `source` says, so a later outer row
-/// reads them without taking a lock (a preparation's own) or with a shared read lock (a
-/// plan node's).
+/// The placeholder standing in a copy for a nested `LATERAL`'s right operand, whose
+/// columns are `schema`: a `SELECT` of those columns over a [`placeholder`], so the
+/// columns read off the copy without evaluating it are the operand's. Its address keys
+/// the window's [`DeferredMap`]; its shape lets [`is_lateral_placeholder`] tell one that
+/// lost its entry from an operand, so it is never evaluated as one.
+#[allow(
+    clippy::unnecessary_box_returns,
+    reason = "the box's heap address is the placeholder's identity: it keys the DeferredMap \
+              and must be fixed before the placeholder moves into the substituted copy \
+              (the lint fires only where GraphPattern is small, i.e. on wasm32)"
+)]
+pub(crate) fn lateral_placeholder(schema: &[Variable]) -> Box<GraphPattern> {
+    Box::new(GraphPattern::Project {
+        inner: Child::from(placeholder()),
+        variables: schema.to_vec(),
+    })
+}
+
+/// Whether `pattern` has the shape [`lateral_placeholder`] builds.
+pub(crate) fn is_lateral_placeholder(pattern: &GraphPattern) -> bool {
+    matches!(pattern, GraphPattern::Project { inner, .. } if is_placeholder(inner))
+}
+
+/// The sites of every `EXISTS` body and every deferrable `LATERAL` right operand
+/// `pattern` holds outside a `SERVICE` body, outside another `EXISTS` body and outside
+/// another deferred operand, other than the placeholders of the window being substituted
+/// from — the bodies and operands a substitution of `pattern` will leave as placeholders.
+/// Prepared on the first substitution of `pattern` and kept where `source` says, so a
+/// later outer row reads them without taking a lock (a preparation's or a site's own) or
+/// with a shared read lock (a plan node's).
 pub(crate) fn nested_sites<'a, D: DatasetView + Sync>(
     pattern: &GraphPattern,
     source: CorrelatedSource<'a>,
@@ -371,40 +517,99 @@ pub(crate) fn nested_sites<'a, D: DatasetView + Sync>(
             SitesRef::Owned(kept)
         }
         SiteSlot::Transient => SitesRef::Owned(Arc::new(prepare_sites(pattern, source, ctx))),
+        SiteSlot::Lateral(site) => {
+            let kept = site
+                .sites
+                .get_or_init(|| Arc::new(prepare_sites(pattern, source, ctx)));
+            SitesRef::Kept(kept)
+        }
     }
 }
 
-/// Prepare the site of every body [`nested_sites`] names.
+/// Prepare the site of every body and operand [`nested_sites`] names.
 fn prepare_sites<D: DatasetView + Sync>(
     pattern: &GraphPattern,
     source: CorrelatedSource<'_>,
     ctx: &EvalCtx<'_, D>,
 ) -> NestedSites {
     let mut sites = NestedSites::default();
-    for body in exists_bodies(pattern, ctx.deferred_exists.as_deref()) {
+    let deferrable = Deferrable::of(ctx);
+    let (bodies, operands) = nested_bodies(pattern, ctx.deferred_exists.as_deref(), deferrable);
+    for body in bodies {
         let site = build_site(body, source, ctx);
         sites.insert(std::ptr::from_ref(body) as usize, Arc::new(site));
+    }
+    for operand in operands {
+        let site = build_lateral_site(operand, source, deferrable, ctx);
+        sites
+            .lateral
+            .insert(std::ptr::from_ref(operand) as usize, site);
+    }
+    if let SiteSlot::Lateral(site) = source.sites {
+        sites.lateral.extend(
+            site.children
+                .iter()
+                .map(|(&address, child)| (address, Arc::clone(child))),
+        );
     }
     sites
 }
 
-/// The `EXISTS` bodies [`nested_sites`] prepares, in no particular order. A worklist
-/// rather than a recursion: a flat operator spine can be far deeper than the nesting of
-/// `EXISTS`.
-fn exists_bodies<'p>(
+/// Which `LATERAL` right operands the substitution walk leaves as placeholders.
+#[derive(Clone, Copy)]
+struct Deferrable {
+    /// The query holds no variable-endpoint `SERVICE`, so no operand needs the endpoint
+    /// analysis to read it as written.
+    no_variable_endpoint: bool,
+}
+
+impl Deferrable {
+    fn of<D: DatasetView + Sync>(ctx: &EvalCtx<'_, D>) -> Self {
+        Self {
+            no_variable_endpoint: ctx.endpoint_scan().is_absent(),
+        }
+    }
+
+    /// Whether `operand`, the right operand of a `LATERAL`, is deferred: not a
+    /// property-function call (`crate::binop::eval_lateral` drives one per left row
+    /// itself), not already a placeholder, and holding no variable-endpoint `SERVICE` the
+    /// endpoint analysis of an enclosing operator must read as written.
+    fn operand(self, operand: &GraphPattern) -> bool {
+        !matches!(operand, GraphPattern::PropertyFunction(_))
+            && !is_lateral_placeholder(operand)
+            && (self.no_variable_endpoint
+                || !crate::service_endpoints::mentions_variable_endpoint(operand))
+    }
+}
+
+/// The `EXISTS` bodies and the `LATERAL` right operands [`nested_sites`] prepares, in no
+/// particular order: neither is entered, and neither is a `SERVICE` body or a
+/// placeholder of the window being substituted from. A worklist rather than a recursion:
+/// a flat operator spine can be far deeper than the nesting of `EXISTS`.
+fn nested_bodies<'p>(
     pattern: &'p GraphPattern,
     placeholders: Option<&DeferredMap>,
-) -> Vec<&'p GraphPattern> {
+    deferrable: Deferrable,
+) -> (Vec<&'p GraphPattern>, Vec<&'p GraphPattern>) {
     enum Node<'p> {
         Pattern(&'p GraphPattern),
         Expression(&'p Expression),
     }
     let mut bodies = Vec::new();
+    let mut operands = Vec::new();
     let mut pending = vec![Node::Pattern(pattern)];
     while let Some(node) = pending.pop() {
         match node {
             // A `SERVICE` body is substituted in full: it is forwarded as text.
             Node::Pattern(GraphPattern::Service { .. }) => {}
+            Node::Pattern(GraphPattern::Lateral { left, right }) => {
+                if deferrable.operand(right) {
+                    operands.push(&**right);
+                } else if !is_lateral_placeholder(right) {
+                    pending.push(Node::Pattern(right));
+                }
+                pending.push(Node::Pattern(left));
+            }
             Node::Pattern(pattern) => {
                 crate::governor::soundness::visit_pattern_parts(pattern, &mut |part| {
                     pending.push(match part {
@@ -431,7 +636,146 @@ fn exists_bodies<'p>(
             }
         }
     }
-    bodies
+    (bodies, operands)
+}
+
+/// Call `visit` with the right operand of every `LATERAL` in `body` outside a `SERVICE`
+/// body and outside an expression, entering the operand when `visit` answers `true`. A
+/// worklist, so a body of any height costs heap and never stack.
+fn visit_lateral_operands_mut(
+    body: &mut GraphPattern,
+    visit: &mut impl FnMut(&mut Child<GraphPattern>) -> bool,
+) {
+    let mut pending: Vec<&mut GraphPattern> = vec![body];
+    while let Some(node) = pending.pop() {
+        match node {
+            GraphPattern::Lateral { left, right } => {
+                if visit(right) {
+                    pending.push(&mut **right);
+                }
+                pending.push(&mut **left);
+            }
+            node => crate::blank_scope::for_each_child_mut(node, &mut |child| {
+                if let crate::blank_scope::ChildMut::Pattern(child) = child {
+                    pending.push(child);
+                }
+            }),
+        }
+    }
+}
+
+/// Prepare the site of `operand`, the right operand of a `LATERAL`, read from `source`:
+/// one copy of it, cut into a site per nested deferrable operand — see this module's doc.
+///
+/// The copy is cut top-down, over a queue of the pieces still to cut, and the sites are
+/// assembled bottom-up, each once its children are: every step reads only its own
+/// piece, so the whole chain costs its size once, and no step recurses.
+fn build_lateral_site<D: DatasetView + Sync>(
+    operand: &GraphPattern,
+    source: CorrelatedSource<'_>,
+    deferrable: Deferrable,
+    ctx: &EvalCtx<'_, D>,
+) -> Arc<LateralSite> {
+    /// One cut piece: its body, and the piece and the placeholder it was cut out of.
+    struct Piece {
+        body: Box<GraphPattern>,
+        parent: Option<(usize, usize)>,
+    }
+
+    let copy = Box::new(operand.clone());
+    #[cfg(test)]
+    crate::op_count::count_copied(purrdf_sparql_algebra::NodeRef::Pattern(operand));
+    let plan_map = if ctx.ledger.is_some() {
+        let mut map = SubstitutionSourceMap::default();
+        crate::enf::map_clone(operand, &copy, &mut map);
+        Arc::new(to_plan(&map, source.plan_map))
+    } else {
+        Arc::default()
+    };
+
+    // Cut: each deferrable operand leaves its piece for a placeholder, and is cut in turn.
+    // A piece is numbered after the piece it was cut from, so children follow parents.
+    let mut pieces: Vec<Piece> = Vec::new();
+    let mut queue = vec![Piece {
+        body: copy,
+        parent: None,
+    }];
+    while let Some(Piece { mut body, parent }) = queue.pop() {
+        let index = pieces.len();
+        visit_lateral_operands_mut(&mut body, &mut |right| {
+            if !deferrable.operand(right) {
+                return true;
+            }
+            let cut = std::mem::replace(right, Child::from(lateral_placeholder(&[])));
+            queue.push(Piece {
+                body: cut.into_box(),
+                parent: Some((index, std::ptr::from_ref::<GraphPattern>(&**right) as usize)),
+            });
+            false
+        });
+        pieces.push(Piece { body, parent });
+    }
+
+    // Assemble, deepest piece first: a piece's children are built before it, so its
+    // placeholders take their columns and its site reads theirs.
+    let mut children_of: Vec<Vec<(usize, usize)>> = vec![Vec::new(); pieces.len()];
+    for (index, piece) in pieces.iter().enumerate() {
+        if let Some((parent, placeholder)) = piece.parent {
+            children_of[parent].push((placeholder, index));
+        }
+    }
+    let mut built: Vec<Option<Arc<LateralSite>>> = vec![None; pieces.len()];
+    while let Some(Piece { mut body, .. }) = pieces.pop() {
+        let index = pieces.len();
+        let children: crate::DetHashMap<usize, Arc<LateralSite>> = children_of[index]
+            .iter()
+            .map(|&(placeholder, child)| {
+                let site = built[child]
+                    .take()
+                    .expect("a piece is assembled before the piece it was cut from");
+                (placeholder, site)
+            })
+            .collect();
+        if !children.is_empty() {
+            visit_lateral_operands_mut(&mut body, &mut |right| {
+                let address = std::ptr::from_ref::<GraphPattern>(&**right) as usize;
+                match (children.get(&address), &mut **right) {
+                    (Some(child), GraphPattern::Project { variables, .. }) => {
+                        variables.clone_from(&child.schema);
+                        false
+                    }
+                    _ => true,
+                }
+            });
+        }
+        let schema = crate::eval::syntactic_schema(&body).vars().to_vec();
+        let mut vars = DetHashSet::default();
+        crate::expr::pattern_all_vars(&body, &mut vars);
+        for child in children.values() {
+            vars.extend(child.vars.iter().cloned());
+        }
+        let parallel_unsafe = !crate::parallel::is_parallel_safe_pattern_with(
+            &body,
+            ctx.safety_registries(),
+            &|pattern| {
+                children
+                    .get(&(std::ptr::from_ref(pattern) as usize))
+                    .map(|child| child.parallel_unsafe)
+            },
+        );
+        built[index] = Some(Arc::new(LateralSite {
+            body,
+            schema,
+            vars,
+            parallel_unsafe,
+            plan_map: Arc::clone(&plan_map),
+            children,
+            sites: OnceLock::new(),
+        }));
+    }
+    built[0]
+        .take()
+        .expect("the operand itself is the first piece")
 }
 
 /// Prepare the site of `body`, read from `source`.

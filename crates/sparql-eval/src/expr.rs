@@ -1401,6 +1401,7 @@ pub(crate) fn exists<D: DatasetView + Sync>(
         .deferred_exists
         .as_ref()
         .and_then(|placeholders| placeholders.get(&address))
+        .and_then(crate::deferred_exists::Deferred::exists)
         .cloned()
     {
         return exists_deferred(&slot, row, schema, ctx);
@@ -2204,7 +2205,11 @@ impl<'a> Deferral<'a> {
     )> {
         let sites = self.sites?;
         let address = std::ptr::from_ref(body) as usize;
-        if let Some(slot) = self.enclosing.and_then(|map| map.get(&address)) {
+        if let Some(slot) = self
+            .enclosing
+            .and_then(|map| map.get(&address))
+            .and_then(crate::deferred_exists::Deferred::exists)
+        {
             return Some((&slot.site, Some(&slot.env)));
         }
         if self.eager_depth > 0 {
@@ -2226,8 +2231,48 @@ impl<'a> Deferral<'a> {
             env,
         };
         let placeholder = crate::deferred_exists::placeholder();
-        self.placeholders
-            .insert(std::ptr::from_ref(placeholder.as_ref()) as usize, slot);
+        self.placeholders.insert(
+            std::ptr::from_ref(placeholder.as_ref()) as usize,
+            crate::deferred_exists::Deferred::Exists(slot),
+        );
+        Some(placeholder)
+    }
+
+    /// Leave `right`, a `LATERAL`'s right operand, as a lateral placeholder owed `row`,
+    /// returning the placeholder — or `None` when this walk substitutes `right` in full:
+    /// an eager walk, a walk inside a `SERVICE` body, and an operand
+    /// `crate::deferred_exists` does not defer. A placeholder of the window this walk
+    /// copies from carries its substitution on, with `row` after it.
+    fn defer_lateral(
+        &mut self,
+        right: &GraphPattern,
+        row: &SubstitutionRow,
+    ) -> Option<Box<GraphPattern>> {
+        let sites = self.sites?;
+        let address = std::ptr::from_ref(right) as usize;
+        let (site, env) = match self
+            .enclosing
+            .and_then(|map| map.get(&address))
+            .and_then(crate::deferred_exists::Deferred::lateral)
+        {
+            Some(slot) => (&slot.site, slot.env.then(row, &slot.site.vars)),
+            None if self.eager_depth > 0 => return None,
+            None => {
+                let site = sites.lateral.get(&address)?;
+                (
+                    site,
+                    crate::deferred_exists::SubstitutionEnv::default().then(row, &site.vars),
+                )
+            }
+        };
+        let placeholder = crate::deferred_exists::lateral_placeholder(&site.schema);
+        self.placeholders.insert(
+            std::ptr::from_ref(placeholder.as_ref()) as usize,
+            crate::deferred_exists::Deferred::Lateral(crate::deferred_exists::DeferredLateral {
+                site: Arc::clone(site),
+                env,
+            }),
+        );
         Some(placeholder)
     }
 
@@ -2334,9 +2379,10 @@ impl FreeVars {
 ///   estimate that predicts only `source`'s own — the miscalibration this type exists to
 ///   prevent.
 ///
-///   A `LATERAL` nested inside another `LATERAL`'s per-row substituted copy is where the
-///   local rule alone stops being enough: the INNER window's walk substitutes an already
-///   Values-Insertion-wrapped subtree (`Join(leaf, Values)`) the OUTER window built, and the
+///   A `LATERAL` nested inside another `LATERAL`'s per-row substituted copy, with a right
+///   operand the walk does not defer (one holding a variable-endpoint `SERVICE`, see
+///   `crate::deferred_exists`), is where the local rule alone stops being enough: the
+///   INNER window's walk substitutes an already Values-Insertion-wrapped subtree (`Join(leaf, Values)`) the OUTER window built, and the
 ///   inner walk's generic recursion re-copies every node in it — the leaf, the `Values`
 ///   table, AND the outer `Join` wrapper — exactly as if each were fresh, unrelated source
 ///   material. Left alone, EACH of those re-copies would independently satisfy the local
@@ -2698,6 +2744,10 @@ fn substitute_pattern_impl(
                     None => left_sub,
                 };
                 (left_sub, right_sub)
+            } else if let Some(placeholder) = defer.defer_lateral(right, row) {
+                // Substituted when the copied `LATERAL` evaluates it, once per left row,
+                // with this row and that one together: see `crate::deferred_exists`.
+                (left_sub, placeholder)
             } else {
                 (left_sub, substitute_pattern_impl(right, row, map, defer))
             };

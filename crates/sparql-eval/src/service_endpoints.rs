@@ -425,7 +425,10 @@ fn classify(
             // site lists the body's `SERVICE ?v` clauses, and the substitution it is owed
             // decides which of them are still variable endpoints.
             ClassifyStep::Exists(body) => {
-                match placeholders.and_then(|map| map.get(&(std::ptr::from_ref(body) as usize))) {
+                match placeholders
+                    .and_then(|map| map.get(&(std::ptr::from_ref(body) as usize)))
+                    .and_then(crate::deferred_exists::Deferred::exists)
+                {
                     Some(slot) => {
                         for variable in &slot.site.service_uses {
                             if !slot.env.resolves_endpoint(variable) {

@@ -279,14 +279,15 @@ thread_local! {
 }
 
 /// For the fork-safety walks: `Some(unsafe)` when `body` is a placeholder of `deferred`,
-/// judged by the body it stands for; `None` for a body to be walked as written.
+/// judged by the body or `LATERAL` operand it stands for; `None` for a body to be walked
+/// as written.
 fn placeholder_unsafe(
     deferred: &crate::deferred_exists::DeferredMap,
     body: &GraphPattern,
 ) -> Option<bool> {
     deferred
         .get(&(std::ptr::from_ref(body) as usize))
-        .map(|slot| slot.site.parallel_unsafe)
+        .map(crate::deferred_exists::Deferred::parallel_unsafe)
 }
 
 impl PreparedExists {

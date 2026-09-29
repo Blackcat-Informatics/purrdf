@@ -18,13 +18,17 @@
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
+use purrdf_alloc_probe::{CountingAllocator, CurrentThreadWindow};
 use purrdf_core::{
     RdfDataset, RdfDatasetBuilder, RdfDiagnostic, SparqlRequest, SparqlResult, TermValue,
 };
 use purrdf_sparql_eval::{
-    EvalError, GovernedOutcome, InProcessServiceResolver, NativeSparqlEngine, PreparedQuery,
-    QueryGovernors, QueryOptions, StopCause, StopSignal,
+    EvalError, EvalOptions, GovernedOutcome, InProcessServiceResolver, NativeSparqlEngine,
+    PreparedQuery, QueryGovernors, QueryOptions, StopCause, StopSignal,
 };
+
+#[global_allocator]
+static GLOBAL: CountingAllocator = CountingAllocator;
 
 const EX: &str = "http://example.org/";
 
@@ -777,4 +781,57 @@ fn every_stack_from_the_margin_up_answers_or_refuses_typed_far_past_the_removed_
             (floor + 39 * 160 * 1024) / 1024
         );
     }
+}
+
+/// The peak live heap a thousand nested `LATERAL` levels may use, parse and evaluation
+/// together. Measured at 6 MB. An evaluation that copied the whole chain below every
+/// level, for every left row, passed this at a few dozen levels: its peak grew with the
+/// cube of the depth, 80 MB at a hundred levels and 624 MB at two hundred.
+const THOUSAND_LATERALS_PEAK_BYTES: i64 = 24 * 1024 * 1024;
+
+/// The heap a thousand nested `LATERAL` levels may request in all. Measured at 33 MB; the
+/// copying evaluation requested 346 MB at a hundred levels and 2.6 GB at two hundred.
+const THOUSAND_LATERALS_REQUESTED_BYTES: u64 = 128 * 1024 * 1024;
+
+/// A thousand nested `LATERAL` levels, parsed and evaluated whole on a thread with room for
+/// them, answer the row the shape has, inside a heap ceiling linear in the depth — and on
+/// the small stack the same request answers or is the typed refusal, never an abort.
+#[test]
+fn a_thousand_nested_laterals_answer_inside_an_allocation_ceiling() {
+    let query = lateral(1000);
+    let text = query.clone();
+    let (answered, measured) = on_stack(LARGE, move || {
+        // Sequential, so every allocation the evaluation makes is this thread's own.
+        let engine = NativeSparqlEngine::new().with_eval_options(EvalOptions {
+            force_sequential: true,
+            ..EvalOptions::default()
+        });
+        let data = dataset();
+        let window = CurrentThreadWindow::open();
+        let answered = subjects(engine.query_with_options_view(
+            &*data,
+            SparqlRequest {
+                query: &text,
+                base_iri: None,
+                substitutions: &[],
+            },
+            QueryOptions::EMPTY,
+        ));
+        (answered, window.close())
+    });
+    assert_eq!(
+        answered.expect("a thousand nested LATERAL levels answer on a large stack"),
+        ["s1"]
+    );
+    assert!(
+        measured.peak_working_bytes < THOUSAND_LATERALS_PEAK_BYTES,
+        "a thousand nested LATERAL levels peaked at {} bytes: {measured:?}",
+        measured.peak_working_bytes
+    );
+    assert!(
+        measured.requested_bytes < THOUSAND_LATERALS_REQUESTED_BYTES,
+        "a thousand nested LATERAL levels requested {} bytes: {measured:?}",
+        measured.requested_bytes
+    );
+    assert_answer_or_stack_refusal(&request(&query, SMALL), &["s1"], "1000 nested LATERAL");
 }
