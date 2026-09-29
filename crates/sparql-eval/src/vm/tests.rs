@@ -20,6 +20,7 @@ use purrdf_sparql_algebra::{
     NamedNodePattern, NonEmpty, TermPattern, TriplePattern, Variable,
 };
 
+use super::compile::is_triple_constructor;
 use super::{ExprProgram, Linked};
 use crate::DetHashMap;
 use crate::error::EvalError;
@@ -273,6 +274,10 @@ impl Walker {
                     helpers::lang_matches(&tag, &range),
                 )));
             }
+            Function::Triple if args.len() == 3 && is_triple_constructor(&args[2]) => {
+                let value = self.triple_value(args, row, schema, ctx)?;
+                return Ok(value.and_then(|value| helpers::intern(ctx, value)));
+            }
             _ => {}
         }
         let mut vals: Vec<Option<TermValue>> = Vec::with_capacity(args.len());
@@ -283,6 +288,34 @@ impl Walker {
             );
         }
         helpers::apply_function(function, &vals, ctx, None)
+    }
+
+    /// The triple term a constructor over `args` builds, uninterned, its object built
+    /// the same way when it is a constructor too.
+    fn triple_value(
+        &mut self,
+        args: &[Expression],
+        row: &[Option<Term>],
+        schema: &VarSchema,
+        ctx: &mut Ctx<'_>,
+    ) -> Result<Option<TermValue>, EvalError> {
+        let subject = self
+            .term(&args[0], row, schema, ctx)?
+            .map(|t| helpers::value_of(ctx, t));
+        let predicate = self
+            .term(&args[1], row, schema, ctx)?
+            .map(|t| helpers::value_of(ctx, t));
+        let object = match &args[2] {
+            Expression::FunctionCall(Function::Triple, inner)
+                if is_triple_constructor(&args[2]) =>
+            {
+                self.triple_value(inner, row, schema, ctx)?
+            }
+            object => self
+                .term(object, row, schema, ctx)?
+                .map(|t| helpers::value_of(ctx, t)),
+        };
+        Ok(helpers::triple_value(subject, predicate, object))
     }
 
     fn string_arg(
@@ -786,6 +819,53 @@ fn generate(choices: &mut Choices, budget: &mut usize) -> Expression {
     }
 }
 
+/// A generated chain of triple term constructors, each level's object the level below:
+/// subjects and predicates that are IRIs, blank nodes, variables, literals (a type error,
+/// so unbound) and minted blank nodes; an innermost object that may be a language-tagged
+/// literal or unbound; and the chain read as a term, tested with `isTRIPLE`, compared, or
+/// taken apart with `OBJECT`.
+fn triple_chain(choices: &mut Choices) -> Expression {
+    let iri = |local: &str| Expression::NamedNode(NamedNode::new_unchecked(format!("{EX}{local}")));
+    let mut expr = match choices.next(4) {
+        0 => var("c"),
+        1 => Expression::Literal(Literal::new_lang("chat", "FR", None)),
+        2 => call(Function::BNode, Vec::new()),
+        _ => leaf(choices),
+    };
+    for _ in 0..=choices.next(5) {
+        let subject = match choices.next(6) {
+            0 => var("a"),
+            1 => call(Function::BNode, Vec::new()),
+            2 => Expression::Literal(Literal::new_simple("not a subject")),
+            _ => iri("s"),
+        };
+        let predicate = match choices.next(5) {
+            0 => var("b"),
+            1 => Expression::Literal(Literal::new_simple("not a predicate")),
+            _ => iri("p"),
+        };
+        expr = call(Function::Triple, vec![subject, predicate, expr]);
+    }
+    match choices.next(4) {
+        0 => call(Function::IsTriple, vec![expr]),
+        1 => Expression::SameTerm(Child::new(expr.clone()), Child::new(expr)),
+        2 => call(Function::Object, vec![expr]),
+        _ => expr,
+    }
+}
+
+/// **A nested triple term constructor evaluates as the tree walk evaluates it**: the same
+/// value or error, the same bytes minted — its outermost term alone — the same charges
+/// and the same blank-node state.
+#[test]
+fn the_vm_matches_the_tree_walk_over_nested_triple_constructors() {
+    let mut choices = Choices(0x7219_1E5E);
+    for index in 0..500 {
+        let expr = triple_chain(&mut choices);
+        assert_same(&expr, &format!("triple chain {index}"));
+    }
+}
+
 #[test]
 fn the_vm_matches_the_tree_walk_over_generated_expressions() {
     let mut choices = Choices(0x0DD5_EED5);
@@ -840,6 +920,50 @@ fn a_deep_arithmetic_chain_evaluates_on_a_small_stack() {
     // DEPTH additions of 1 onto the innermost 1.
     let expected = (DEPTH + 1).to_string();
     assert_eq!(value, Some(literal(&expected, "integer")));
+}
+
+/// **A hundred thousand nested triple term constructors build one term, interned once.**
+/// Interning every level's whole term — each up to the whole chain — cost the square of
+/// the depth in time and memory; the chain is built as one value, and the scratch holds
+/// its outermost term, the subject and predicate constants, and nothing else.
+#[test]
+fn a_deep_triple_constructor_chain_interns_its_outermost_term_once() {
+    let (value, computed) = on_small_stack(|| {
+        let iri =
+            |local: &str| Expression::NamedNode(NamedNode::new_unchecked(format!("{EX}{local}")));
+        let mut expr = int(7);
+        for _ in 0..DEPTH {
+            expr = call(Function::Triple, vec![iri("s"), iri("p"), expr]);
+        }
+        let ds = RdfDatasetBuilder::new().freeze().expect("an empty dataset");
+        let mut ctx = EvalCtx::new(&ds);
+        let schema = VarSchema::new();
+        let program = Arc::new(ExprProgram::compile(&expr));
+        let mut linked = Linked::link(program, &expr, &schema, &mut ctx);
+        let term = linked.term(&[], &schema, &mut ctx).expect("no hard error");
+        let value = term.map(|term| helpers::value_of(&ctx, term));
+        let computed = ctx.scratch.computed_count();
+        drop(linked);
+        drop(expr);
+        (value.map(|value| triple_depth_and_core(&value)), computed)
+    });
+    assert_eq!(value, Some((DEPTH, literal("7", "integer"))));
+    assert_eq!(
+        computed, 4,
+        "the scratch holds the two IRIs, the integer and the outermost triple term"
+    );
+}
+
+/// How many triple terms `value` nests, and the innermost object; the value is dropped
+/// over a work list, as the term's own drop takes it apart.
+fn triple_depth_and_core(value: &TermValue) -> (usize, TermValue) {
+    let mut depth = 0;
+    let mut at = value;
+    while let TermValue::Triple { o, .. } = at {
+        depth += 1;
+        at = o;
+    }
+    (depth, at.clone())
 }
 
 #[test]

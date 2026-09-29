@@ -5050,23 +5050,36 @@ fn eval_triple_ctor<D: DatasetView + Sync>(
     ctx: &mut EvalCtx<'_, D>,
     vals: &[Option<TermValue>],
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
-    let (Some(s), Some(p), Some(o)) = (arg(vals, 0), arg(vals, 1), arg(vals, 2)) else {
-        return Ok(None);
+    let triple = triple_value(
+        arg(vals, 0).cloned(),
+        arg(vals, 1).cloned(),
+        arg(vals, 2).cloned(),
+    );
+    Ok(triple.and_then(|triple| intern(ctx, triple)))
+}
+
+/// The triple term `TRIPLE(s, p, o)` builds from its operands' values, uninterned: unbound
+/// when an operand is. A triple term's subject must be an IRI or blank node and its
+/// predicate an IRI. Under RDF 1.2 a triple term may nest only in *object* position, so
+/// a triple term (or literal) in the subject/predicate slot is a type error, as is a
+/// literal predicate — all of which yield an unbound result.
+pub(crate) fn triple_value(
+    s: Option<TermValue>,
+    p: Option<TermValue>,
+    o: Option<TermValue>,
+) -> Option<TermValue> {
+    let (Some(s), Some(p), Some(o)) = (s, p, o) else {
+        return None;
     };
-    // A triple term's subject must be an IRI or blank node and its predicate an
-    // IRI. Under RDF 1.2 a triple term may nest only in *object* position, so a
-    // triple term (or literal) in the subject/predicate slot is a type error, as
-    // is a literal predicate — all of which yield an unbound result.
     if !matches!(s, TermValue::Iri(_) | TermValue::Blank { .. }) || !matches!(p, TermValue::Iri(_))
     {
-        return Ok(None);
+        return None;
     }
-    let triple = TermValue::Triple {
-        s: TermBox::new(s.clone()),
-        p: TermBox::new(p.clone()),
-        o: TermBox::new(o.clone()),
-    };
-    Ok(intern(ctx, triple))
+    Some(TermValue::Triple {
+        s: TermBox::new(s),
+        p: TermBox::new(p),
+        o: TermBox::new(o),
+    })
 }
 
 /// Extract a component of a triple term (`SUBJECT`/`PREDICATE`/`OBJECT`).
