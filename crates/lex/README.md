@@ -26,8 +26,8 @@ and builds for `wasm32-unknown-unknown`.
 
 Its scope is the workspace's lexical foundations: byte-class scanning,
 grammar terminals, term syntax, literal and IRI escaping, percent encoding,
-JSON strings, JSON pointers, a JSON reader and writer, an XML reader and
-Unicode normalisation.
+JSON strings, JSON pointers, a JSON reader and writer, a YAML reader and
+writer, a CBOR codec, an XML reader and Unicode normalisation.
 
 | Module | What it holds | Specification |
 |---|---|---|
@@ -36,6 +36,9 @@ Unicode normalisation.
 | `terminals` (escapes and `WS`) | `decode_uchar`, `echar_value`, `expand_uchars` and `decode_char_ref`, strict decoders of `UCHAR`, `ECHAR` and the XML `CharRef`; `skip_ws` and `trim_ws`, the four-scalar `WS` skip and trim; `is_ncname`; `in_ranges`, the one range-table search | RDF 1.2 Turtle §6.5, SPARQL 1.2 §19.8, XML 1.0 §4.1 `[66]`, Namespaces in XML 1.0 §3 |
 | `scan` (needles) | `find_byte` and `find_byte2`, the first occurrence of a byte known only at run time | — |
 | `json_escape` | The one JSON string-body escaper every PurRDF JSON writer shares, in the four spellings those writers pin (`JsonEscapes`), and the one decoder every reader shares (`unescape`, `decode_escape`, `decode_u_escape`), which refuses an unpaired surrogate | RFC 8259 §7 |
+| `json` | The one JSON reader, value and writer: the pull `Reader` (events with byte offsets, `next_key`/`next_item`, `skip_value`, `read_value`), `read`, `occurrences`, a `Value` whose `Number` keeps its lexeme and whose `Object` keeps every member in order, `Limits` with an explicit depth cap, and the deterministic `write_compact`/`write_pretty`; no walk recurses on the machine stack | RFC 8259; RFC 7493 §2.3 |
+| `yaml` | The one YAML reader (`read`, block and flow style, core-schema resolution and tags, anchors and aliases under a node bound) and deterministic block emitter (`write`), over the JSON data model | YAML 1.2.2 |
+| `cbor` | The one CBOR codec: the shortest-form `head`, `encode` and core deterministic `canonical`/`write_canonical_map`, and the well-formed, deterministic, streaming and sequence decoders | RFC 8949 §3, §4.2.1; RFC 8742 |
 | `json_pointer` | Reference-token escaping and unescaping, pointer parsing, the array-index token | RFC 6901 |
 | `percent` | `encode` over the specification-defined sets (`UNRESERVED`, `REG_NAME`, `PATH`, `FRAGMENT`, `URI_TEMPLATE_RESERVED`, `NON_ASCII`, …), strict `decode`, `decode_form`, `normalize` | RFC 3986 §2, §3, §6.2.2; RFC 3987 §3.1; RFC 6570 §3.2.3 |
 | `unicode` | The workspace's one normalization pipeline: `nfc`, `nfd`, `nfkc`, `nfkd`, `is_nfc` and `ccc`, and the streaming stages (`Decompose`, `Compose`, `drive`) a caller composes with its own stage, over tables generated from the vendored Unicode Character Database at `UNICODE_VERSION`, the version every Unicode table in the workspace is generated from | UAX 15; Unicode core specification §3.11–3.12 |
