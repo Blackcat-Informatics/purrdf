@@ -23,6 +23,7 @@ members = [
     "crates/iri",
     "crates/json",
     "crates/jsonschema",
+    "crates/lex",
     "crates/markdown",
     "crates/purrdf",
     "crates/rdf",
@@ -87,6 +88,7 @@ purrdf-hnsw = { path = "crates/hnsw", version = "2.0.2" }
 purrdf-iri = { path = "crates/iri", version = "2.0.2" }
 purrdf-json = { path = "crates/json", version = "2.0.2" }
 purrdf-jsonschema = { path = "crates/jsonschema", version = "2.0.2" }
+purrdf-lex = { path = "crates/lex", version = "2.0.2" }
 purrdf-markdown = { path = "crates/markdown", version = "2.0.2" }
 purrdf-rdf = { path = "crates/rdf", version = "2.0.2" }
 purrdf-retrieval = { path = "crates/retrieval", version = "2.0.2" }

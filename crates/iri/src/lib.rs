@@ -3,7 +3,8 @@
 
 //! `purrdf-iri` — the native **IRI/URI value space** for the RDF 1.2 query stack.
 //!
-//! A pure-Rust, **zero-runtime-dependency**, wasm-clean leaf crate: the drop-in
+//! A pure-Rust, wasm-clean crate whose one dependency is the zero-dependency
+//! lexical layer [`purrdf_lex`]: the drop-in
 //! replacement for the oxigraph-family `oxiri`, and the second foundation slice of
 //! the native SPARQL engine. It is deliberately decoupled
 //! from `purrdf-core` (no dependency in either direction yet); the IR keeps
@@ -42,17 +43,10 @@
 //!   checked against the IANA Language Subtag Registry, and RFC 4647
 //!   language-range matching is outside this crate's scope entirely.
 //! * **Grammar terminals** — [`terminals`], the exact Turtle/SPARQL character
-//!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`) that
-//!   every scanner above this leaf shares. They live here because a scanner's
-//!   character class decides token BOUNDARIES under maximal munch, so an
-//!   approximation misparses documents rather than merely widening the accepted
-//!   language, and one transcription is the only way to keep the scanners
-//!   agreeing with each other. The same module carries the byte-class
-//!   scanners built from those tables ([`terminals::find_first_trivia`],
-//!   [`terminals::find_first_iri_body_special`],
-//!   [`terminals::find_first_json_string_special`],
-//!   [`terminals::find_first_xml_special`]): portable chunked scans that find
-//!   the first byte of a class sixteen bytes at a time.
+//!   classes (`WS`, `PN_CHARS_BASE`, `PN_CHARS_U`, `PN_CHARS`, `VARNAME`) and
+//!   the byte-class scanners built from them, re-exported from their home in
+//!   [`purrdf_lex`], the lexical layer every grammar in the workspace shares.
+//!   This crate's parser validates every component with them.
 //! * **Host syntax** — [`host`], the RFC 3986 §3.2.2 `IPv4address`,
 //!   `IPv6address` and `reg-name` productions as predicates. Every authority
 //!   [`parse`] accepts has its host decided by them, and they are public so a
@@ -67,10 +61,8 @@
 //!   describes; [`parse`] never does, because RFC 3987 compares IRIs code point
 //!   by code point.
 //! * **JSON string escape law** — [`json_escape`], the one RFC 8259 §7 string
-//!   body escaper every PurRDF JSON writer shares, over the JSON string-body
-//!   scanner above. It lives in this leaf because it is the one crate every
-//!   JSON-emitting crate reaches; [`json_escape::JsonEscapes`] names the three
-//!   spellings those writers pin.
+//!   body escaper every PurRDF JSON writer shares, re-exported from
+//!   [`purrdf_lex`].
 //!
 //! # Hard-fail
 //!
@@ -156,14 +148,16 @@ mod error;
 pub mod host;
 pub mod idna;
 mod idna_tables;
-pub mod json_escape;
 pub mod langtag;
 mod normalize;
 mod parse;
 pub mod pos;
 mod resolve;
-mod scan;
-pub mod terminals;
+
+/// The lexical foundations this crate scans with, re-exported so the paths
+/// `purrdf_iri::terminals`, `purrdf_iri::scan` and `purrdf_iri::json_escape`
+/// name the same items as their home in [`purrdf_lex`].
+pub use purrdf_lex::{json_escape, scan, terminals};
 
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
 pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};

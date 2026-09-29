@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-iri"
-description = "Native, zero-dependency IRI/URI value space (RFC-3987 IRI + RFC-3986 URI parse/validate, reference resolution, syntax normalization, CURIE/prefix expansion) for the RDF 1.2 query stack — replaces oxiri"
+description = "Native IRI/URI value space (RFC-3987 IRI + RFC-3986 URI parse/validate, reference resolution, syntax normalization, CURIE/prefix expansion) for the RDF 1.2 query stack — replaces oxiri"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -21,21 +21,26 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only, ZERO runtime dependencies: this crate is a leaf foundation. It must
-# stay wasm-clean and must not pull any oxigraph-family crate (it replaces
-# `oxiri`). It does NOT depend on `purrdf-core` — the dependency points the
-# other way, later.
+# rlib-only foundation whose one runtime dependency is the zero-dependency
+# lexical layer `purrdf-lex` (layers.toml). It must stay wasm-clean and must not
+# pull any oxigraph-family crate (it replaces `oxiri`). It does NOT depend on
+# `purrdf-core` — the dependency points the other way.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_iri"
+
+[dependencies]
+# The grammar terminals, the byte-class scanners and the JSON string escaper,
+# re-exported as `purrdf_iri::{terminals, scan, json_escape}`.
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
 # Round-trip / idempotency property tests (parse -> serialize, normalize twice)
 # on the shared property harness. Path-only and unpublished, so it is stripped
 # from the packaged manifest.
 purrdf-testkit = { workspace = true }
-# The fixed-key table hasher for test-side maps. Dev-only, so the crate keeps
-# its zero-runtime-dependency contract.
+# The fixed-key table hasher for test-side maps. Dev-only: it is no runtime
+# dependency of this crate.
 purrdf-hash = { workspace = true }
 
 [[bench]]

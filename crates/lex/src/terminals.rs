@@ -80,10 +80,11 @@
 //! as a [`ByteClass`] over its own `const [u8; 256]` table and gets the same
 //! kernel rather than a retyped one.
 //!
-//! This module lives in the zero-dependency [`purrdf-iri`](crate) leaf because
-//! that is the one crate every parser in the workspace already depends on —
-//! `purrdf-sparql-algebra`, `purrdf-shex` and the RDF text codecs — so sharing
-//! one transcription costs no new dependency edge and cannot introduce a cycle.
+//! This module lives in the zero-dependency [`purrdf-lex`](crate) leaf because
+//! that is the one crate every grammar in the workspace reaches — the IRI
+//! parser, `purrdf-sparql-algebra`, `purrdf-shex` and the RDF text codecs — so
+//! sharing one transcription costs no new dependency edge and cannot introduce
+//! a cycle.
 //!
 //! # Sources
 //!

@@ -756,6 +756,7 @@ name = "purrdf-iri"
 version = "2.0.2"
 dependencies = [
  "purrdf-hash",
+ "purrdf-lex",
  "purrdf-testkit",
 ]
 
@@ -780,6 +781,13 @@ dependencies = [
  "purrdf-testkit",
  "regex",
  "serde_json",
+]
+
+[[package]]
+name = "purrdf-lex"
+version = "2.0.2"
+dependencies = [
+ "purrdf-testkit",
 ]
 
 [[package]]

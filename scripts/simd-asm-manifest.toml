@@ -34,7 +34,7 @@ packages = [
   "purrdf-sparql-eval", "purrdf-sparql-results", "purrdf-datalog", "purrdf-entail", "purrdf-shapes",
   "purrdf-shex", "purrdf-markdown", "purrdf-hnsw", "purrdf-text", "purrdf-retrieval",
   "purrdf-columnar", "purrdf-geo", "purrdf-gts", "purrdf-slice", "purrdf-deflate",
-  "purrdf-hash", "purrdf-jsonschema",
+  "purrdf-hash", "purrdf-jsonschema", "purrdf-lex",
 ]
 # purrdf-wasm is also a cdylib, and linking one needs a linker for the target, which the
 # cross configurations do not have and the asm does not need: it is built as an rlib.
@@ -478,14 +478,14 @@ summary = "Native BLAKE3 four-lane quarter rounds and portable compression"
 id = "sparql.lexer-trivia"
 summary = "`Lexer::skip_trivia`: one `terminals::find_first_trivia` call per `WS` run, `memchr` per comment tail"
 
-  # The whitespace run is skipped by the out-of-line scanner, one copy in `purrdf_iri`
+  # The whitespace run is skipped by the out-of-line scanner, one copy in `purrdf_lex`
   # that the lexer calls; its vector work is measured there.
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v10.
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 5
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -495,8 +495,8 @@ summary = "`Lexer::skip_trivia`: one `terminals::find_first_trivia` call per `WS
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 11
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -507,8 +507,8 @@ summary = "`Lexer::skip_trivia`: one `terminals::find_first_trivia` call per `WS
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 9
   require_mnemonics = ["vpcmpltub %k"]
   max_fma = 0
@@ -519,8 +519,8 @@ summary = "`Lexer::skip_trivia`: one `terminals::find_first_trivia` call per `WS
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 4
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -531,8 +531,8 @@ summary = "`Lexer::skip_trivia`: one `terminals::find_first_trivia` call per `WS
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -541,8 +541,8 @@ summary = "`Lexer::skip_trivia`: one `terminals::find_first_trivia` call per `WS
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.lt_u"]
   max_fma = 0
@@ -563,14 +563,14 @@ summary = "`Lexer::skip_trivia`: one `terminals::find_first_trivia` call per `WS
 id = "sparql.lexer-iri"
 summary = "`Lexer::lex_lt_or_iri`, a single `terminals::find_first_iri_body_special` pass over the `IRIREF` body"
 
-  # The body scan is the out-of-line scanner in `purrdf_iri`; its vector work is
+  # The body scan is the out-of-line scanner in `purrdf_lex`; its vector work is
   # measured there.
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v17.
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 8
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -580,8 +580,8 @@ summary = "`Lexer::lex_lt_or_iri`, a single `terminals::find_first_iri_body_spec
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 8
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -592,8 +592,8 @@ summary = "`Lexer::lex_lt_or_iri`, a single `terminals::find_first_iri_body_spec
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 4
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -603,8 +603,8 @@ summary = "`Lexer::lex_lt_or_iri`, a single `terminals::find_first_iri_body_spec
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 7
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -615,8 +615,8 @@ summary = "`Lexer::lex_lt_or_iri`, a single `terminals::find_first_iri_body_spec
   [[site.measure]]
   label = "scan sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 5
   require_mnemonics = ["cmpeq"]
   max_fma = 0
@@ -627,8 +627,8 @@ summary = "`Lexer::lex_lt_or_iri`, a single `terminals::find_first_iri_body_spec
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -637,8 +637,8 @@ summary = "`Lexer::lex_lt_or_iri`, a single `terminals::find_first_iri_body_spec
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 6
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -913,15 +913,15 @@ summary = "`parse::find_first_of`, the u64 SWAR delimiter scan, inlined into `pa
   forbid_relaxed = true
 
 [[site]]
-id = "iri.scan-trivia"
+id = "lex.scan-trivia"
 summary = "`terminals::find_first_trivia`, the chunked scan for the end of a `WS` run (sixteen byte lanes, run compares, an OR-fold, a `u128` trailing-zero count on the hit chunk)"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v10.
   [[site.measure]]
   label = "sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 5
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -931,8 +931,8 @@ summary = "`terminals::find_first_trivia`, the chunked scan for the end of a `WS
   [[site.measure]]
   label = "avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 11
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -943,8 +943,8 @@ summary = "`terminals::find_first_trivia`, the chunked scan for the end of a `WS
   [[site.measure]]
   label = "avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 9
   require_mnemonics = ["vpcmpltub %k"]
   max_fma = 0
@@ -955,8 +955,8 @@ summary = "`terminals::find_first_trivia`, the chunked scan for the end of a `WS
   [[site.measure]]
   label = "neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 4
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -967,8 +967,8 @@ summary = "`terminals::find_first_trivia`, the chunked scan for the end of a `WS
   [[site.measure]]
   label = "scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -977,23 +977,23 @@ summary = "`terminals::find_first_trivia`, the chunked scan for the end of a `WS
   [[site.measure]]
   label = "simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_trivia"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_trivia"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.lt_u"]
   max_fma = 0
   forbid_relaxed = true
 
 [[site]]
-id = "iri.scan-iri-body"
+id = "lex.scan-iri-body"
 summary = "`terminals::find_first_iri_body_special`, the chunked scan for the first `IRIREF`-forbidden byte (which includes the closing `>` and the `\\` of a `UCHAR`)"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v17.
   [[site.measure]]
   label = "sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 8
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -1003,8 +1003,8 @@ summary = "`terminals::find_first_iri_body_special`, the chunked scan for the fi
   [[site.measure]]
   label = "avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 8
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -1015,8 +1015,8 @@ summary = "`terminals::find_first_iri_body_special`, the chunked scan for the fi
   [[site.measure]]
   label = "avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 4
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -1026,8 +1026,8 @@ summary = "`terminals::find_first_iri_body_special`, the chunked scan for the fi
   [[site.measure]]
   label = "neon"
   configs = ["aarch64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 7
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -1038,8 +1038,8 @@ summary = "`terminals::find_first_iri_body_special`, the chunked scan for the fi
   [[site.measure]]
   label = "sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 5
   require_mnemonics = ["cmpeq"]
   max_fma = 0
@@ -1050,8 +1050,8 @@ summary = "`terminals::find_first_iri_body_special`, the chunked scan for the fi
   [[site.measure]]
   label = "scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -1060,23 +1060,23 @@ summary = "`terminals::find_first_iri_body_special`, the chunked scan for the fi
   [[site.measure]]
   label = "simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_iri_body_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_iri_body_special"
   min_vector_ops = 6
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
   forbid_relaxed = true
 
 [[site]]
-id = "iri.scan-json-string"
+id = "lex.scan-json-string"
 summary = "`terminals::find_first_json_string_special`, the chunked scan for the first `\"`, `\\` or C0 control of a JSON string body"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
   [[site.measure]]
   label = "sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 4
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -1086,8 +1086,8 @@ summary = "`terminals::find_first_json_string_special`, the chunked scan for the
   [[site.measure]]
   label = "avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 10
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -1098,8 +1098,8 @@ summary = "`terminals::find_first_json_string_special`, the chunked scan for the
   [[site.measure]]
   label = "avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 8
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -1110,8 +1110,8 @@ summary = "`terminals::find_first_json_string_special`, the chunked scan for the
   [[site.measure]]
   label = "neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -1122,8 +1122,8 @@ summary = "`terminals::find_first_json_string_special`, the chunked scan for the
   [[site.measure]]
   label = "scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -1132,8 +1132,8 @@ summary = "`terminals::find_first_json_string_special`, the chunked scan for the
   [[site.measure]]
   label = "simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -1141,15 +1141,15 @@ summary = "`terminals::find_first_json_string_special`, the chunked scan for the
 
 
 [[site]]
-id = "iri.json-escape-controls"
+id = "lex.json-escape-controls"
 summary = "`json_escape::find_first_json_controls_stop`, the clean-run scan of the JSON escape law's `Controls` spelling (the JSON string class plus DEL and `0xC2`)"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
   [[site.measure]]
   label = "sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 6
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -1159,8 +1159,8 @@ summary = "`json_escape::find_first_json_controls_stop`, the clean-run scan of t
   [[site.measure]]
   label = "avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 5
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -1170,8 +1170,8 @@ summary = "`json_escape::find_first_json_controls_stop`, the clean-run scan of t
   [[site.measure]]
   label = "avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 2
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -1181,8 +1181,8 @@ summary = "`json_escape::find_first_json_controls_stop`, the clean-run scan of t
   [[site.measure]]
   label = "neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 5
   require_mnemonics = ["cmeq .16b"]
   max_fma = 0
@@ -1192,8 +1192,8 @@ summary = "`json_escape::find_first_json_controls_stop`, the clean-run scan of t
   [[site.measure]]
   label = "scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -1202,8 +1202,8 @@ summary = "`json_escape::find_first_json_controls_stop`, the clean-run scan of t
   [[site.measure]]
   label = "simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.eq"]
   max_fma = 0
@@ -1211,15 +1211,15 @@ summary = "`json_escape::find_first_json_controls_stop`, the clean-run scan of t
 
 
 [[site]]
-id = "iri.json-escape-ascii"
+id = "lex.json-escape-ascii"
 summary = "`json_escape::find_first_json_ascii_stop`, the clean-run scan of the JSON escape law's `Ascii` spelling (the JSON string class plus DEL and every non-ASCII byte)"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
   [[site.measure]]
   label = "sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 6
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -1229,8 +1229,8 @@ summary = "`json_escape::find_first_json_ascii_stop`, the clean-run scan of the 
   [[site.measure]]
   label = "avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 12
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -1240,8 +1240,8 @@ summary = "`json_escape::find_first_json_ascii_stop`, the clean-run scan of the 
   [[site.measure]]
   label = "avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 9
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -1251,8 +1251,8 @@ summary = "`json_escape::find_first_json_ascii_stop`, the clean-run scan of the 
   [[site.measure]]
   label = "neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 4
   require_mnemonics = ["cmeq .16b"]
   max_fma = 0
@@ -1262,8 +1262,8 @@ summary = "`json_escape::find_first_json_ascii_stop`, the clean-run scan of the 
   [[site.measure]]
   label = "scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -1272,23 +1272,23 @@ summary = "`json_escape::find_first_json_ascii_stop`, the clean-run scan of the 
   [[site.measure]]
   label = "simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.eq"]
   max_fma = 0
   forbid_relaxed = true
 
 [[site]]
-id = "iri.scan-xml"
+id = "lex.scan-xml"
 summary = "`terminals::find_first_xml_special`, the chunked scan for the first byte XML 1.0 egress must replace or check"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v12.
   [[site.measure]]
   label = "sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 6
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -1298,8 +1298,8 @@ summary = "`terminals::find_first_xml_special`, the chunked scan for the first b
   [[site.measure]]
   label = "avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 5
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -1310,8 +1310,8 @@ summary = "`terminals::find_first_xml_special`, the chunked scan for the first b
   [[site.measure]]
   label = "avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 3
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -1321,8 +1321,8 @@ summary = "`terminals::find_first_xml_special`, the chunked scan for the first b
   [[site.measure]]
   label = "neon"
   configs = ["aarch64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 5
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -1333,8 +1333,8 @@ summary = "`terminals::find_first_xml_special`, the chunked scan for the first b
   [[site.measure]]
   label = "sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 4
   require_mnemonics = ["cmpeq"]
   max_fma = 0
@@ -1345,8 +1345,8 @@ summary = "`terminals::find_first_xml_special`, the chunked scan for the first b
   [[site.measure]]
   label = "scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -1355,8 +1355,8 @@ summary = "`terminals::find_first_xml_special`, the chunked scan for the first b
   [[site.measure]]
   label = "simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -1446,7 +1446,7 @@ summary = "`parse::validate_component`, the component validator with its eight-b
   forbid_relaxed = true
 
 [[site]]
-id = "iri.terminals-in-ranges"
+id = "lex.terminals-in-ranges"
 summary = "the class predicates, now a load from a `const [u8; 256]` class table below U+0100; they inline into every caller, measured in `parse::scan`, which inlines `is_ipvfuture_address_char`"
 
   # A class-table load is a scalar load by nature: the entry records what the caller
@@ -1622,8 +1622,8 @@ summary = "`Parser::string`, the JSON string body scan over `terminals::find_fir
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 4
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -1633,8 +1633,8 @@ summary = "`Parser::string`, the JSON string body scan over `terminals::find_fir
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 10
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -1644,8 +1644,8 @@ summary = "`Parser::string`, the JSON string body scan over `terminals::find_fir
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 8
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -1655,8 +1655,8 @@ summary = "`Parser::string`, the JSON string body scan over `terminals::find_fir
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -1666,8 +1666,8 @@ summary = "`Parser::string`, the JSON string body scan over `terminals::find_fir
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -1676,8 +1676,8 @@ summary = "`Parser::string`, the JSON string body scan over `terminals::find_fir
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -2567,8 +2567,8 @@ summary = "`loss::escape_json_into`, the loss ledger's JSON string body: the esc
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 4
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -2578,8 +2578,8 @@ summary = "`loss::escape_json_into`, the loss ledger's JSON string body: the esc
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 10
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -2589,8 +2589,8 @@ summary = "`loss::escape_json_into`, the loss ledger's JSON string body: the esc
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 8
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -2600,8 +2600,8 @@ summary = "`loss::escape_json_into`, the loss ledger's JSON string body: the esc
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -2611,8 +2611,8 @@ summary = "`loss::escape_json_into`, the loss ledger's JSON string body: the esc
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -2621,8 +2621,8 @@ summary = "`loss::escape_json_into`, the loss ledger's JSON string body: the esc
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -3225,8 +3225,8 @@ summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_e
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 6
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -3236,8 +3236,8 @@ summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_e
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 5
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -3247,8 +3247,8 @@ summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_e
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 3
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -3258,8 +3258,8 @@ summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_e
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 5
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -3269,8 +3269,8 @@ summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_e
   [[site.measure]]
   label = "scan sve"
   configs = ["aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 4
   require_mnemonics = ["cmpeq"]
   max_fma = 0
@@ -3280,8 +3280,8 @@ summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_e
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -3290,8 +3290,8 @@ summary = "`xml_escape::push_into` behind the SPARQL XML results writer's `xml_e
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_xml_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_xml_special"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -3434,14 +3434,14 @@ summary = "`purrdf_core::csv`'s field scanner: the first byte of a run-time stop
 
 [[site]]
 id = "results.json-escape"
-summary = "`json::json_escape_body`, the JSON results string escape: the escape law `purrdf_iri::json_escape` in its `Minimal` spelling, over `terminals::find_first_json_string_special`"
+summary = "`json::json_escape_body`, the JSON results string escape: the escape law `purrdf_lex::json_escape` in its `Minimal` spelling, over `terminals::find_first_json_string_special`"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 4
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -3451,8 +3451,8 @@ summary = "`json::json_escape_body`, the JSON results string escape: the escape 
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 10
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -3462,8 +3462,8 @@ summary = "`json::json_escape_body`, the JSON results string escape: the escape 
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 8
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -3473,8 +3473,8 @@ summary = "`json::json_escape_body`, the JSON results string escape: the escape 
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -3484,8 +3484,8 @@ summary = "`json::json_escape_body`, the JSON results string escape: the escape 
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -3494,8 +3494,8 @@ summary = "`json::json_escape_body`, the JSON results string escape: the escape 
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -3508,8 +3508,8 @@ summary = "`json::json_escape_body`, the JSON results string escape: the escape 
   [[site.measure]]
   label = "call site"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::escape_body::<purrdf_sparql_results::json::json_escape_body<purrdf_core::sink::TextSink>"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::escape_body::<purrdf_sparql_results::json::json_escape_body<purrdf_core::sink::TextSink>"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5530,8 +5530,8 @@ summary = "`json::write_string`, the GeoJSON writer's strings: the escape law in
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 4
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -5541,8 +5541,8 @@ summary = "`json::write_string`, the GeoJSON writer's strings: the escape law in
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 10
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -5552,8 +5552,8 @@ summary = "`json::write_string`, the GeoJSON writer's strings: the escape law in
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 8
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -5563,8 +5563,8 @@ summary = "`json::write_string`, the GeoJSON writer's strings: the escape law in
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -5574,8 +5574,8 @@ summary = "`json::write_string`, the GeoJSON writer's strings: the escape law in
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5584,8 +5584,8 @@ summary = "`json::write_string`, the GeoJSON writer's strings: the escape law in
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -5622,8 +5622,8 @@ summary = "`mmr::json_escape`, the proof report's JSON string body: the escape l
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 6
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -5633,8 +5633,8 @@ summary = "`mmr::json_escape`, the proof report's JSON string body: the escape l
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 5
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -5644,8 +5644,8 @@ summary = "`mmr::json_escape`, the proof report's JSON string body: the escape l
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 2
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -5655,8 +5655,8 @@ summary = "`mmr::json_escape`, the proof report's JSON string body: the escape l
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 5
   require_mnemonics = ["cmeq .16b"]
   max_fma = 0
@@ -5666,8 +5666,8 @@ summary = "`mmr::json_escape`, the proof report's JSON string body: the escape l
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5676,8 +5676,8 @@ summary = "`mmr::json_escape`, the proof report's JSON string body: the escape l
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.eq"]
   max_fma = 0
@@ -5702,8 +5702,8 @@ summary = "`replication::json_string`, the replication report's JSON strings: th
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 6
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -5713,8 +5713,8 @@ summary = "`replication::json_string`, the replication report's JSON strings: th
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 5
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -5724,8 +5724,8 @@ summary = "`replication::json_string`, the replication report's JSON strings: th
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 2
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -5735,8 +5735,8 @@ summary = "`replication::json_string`, the replication report's JSON strings: th
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 5
   require_mnemonics = ["cmeq .16b"]
   max_fma = 0
@@ -5746,8 +5746,8 @@ summary = "`replication::json_string`, the replication report's JSON strings: th
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5756,8 +5756,8 @@ summary = "`replication::json_string`, the replication report's JSON strings: th
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_controls_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_controls_stop"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.eq"]
   max_fma = 0
@@ -5816,8 +5816,8 @@ summary = "`prefix_emit::json_string`, the JSON-LD context emitter's strings: th
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 4
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -5827,8 +5827,8 @@ summary = "`prefix_emit::json_string`, the JSON-LD context emitter's strings: th
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 10
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -5838,8 +5838,8 @@ summary = "`prefix_emit::json_string`, the JSON-LD context emitter's strings: th
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 8
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -5849,8 +5849,8 @@ summary = "`prefix_emit::json_string`, the JSON-LD context emitter's strings: th
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["cmeq .16b", "cmhi .16b"]
   max_fma = 0
@@ -5860,8 +5860,8 @@ summary = "`prefix_emit::json_string`, the JSON-LD context emitter's strings: th
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5870,8 +5870,8 @@ summary = "`prefix_emit::json_string`, the JSON-LD context emitter's strings: th
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::scan::find_first_json_string_special"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::scan::find_first_json_string_special"
   min_vector_ops = 3
   require_mnemonics = ["i8x16.eq", "i8x16.lt_u"]
   max_fma = 0
@@ -5896,8 +5896,8 @@ summary = "`dsl_stats_emit::json_string`, the DSL stats emitter's file names: th
   [[site.measure]]
   label = "scan sse2"
   configs = ["x86_64"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 6
   require_mnemonics = ["pcmpeqb", "pmovmskb"]
   max_fma = 0
@@ -5907,8 +5907,8 @@ summary = "`dsl_stats_emit::json_string`, the DSL stats emitter's file names: th
   [[site.measure]]
   label = "scan avx2"
   configs = ["x86_64-v3"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 12
   require_mnemonics = ["vpcmpeqb", "vpmovmskb"]
   max_fma = 0
@@ -5918,8 +5918,8 @@ summary = "`dsl_stats_emit::json_string`, the DSL stats emitter's file names: th
   [[site.measure]]
   label = "scan avx512 masks"
   configs = ["x86_64-v4"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 9
   require_mnemonics = ["vpcmpeqb %k"]
   max_fma = 0
@@ -5929,8 +5929,8 @@ summary = "`dsl_stats_emit::json_string`, the DSL stats emitter's file names: th
   [[site.measure]]
   label = "scan neon"
   configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 4
   require_mnemonics = ["cmeq .16b"]
   max_fma = 0
@@ -5940,8 +5940,8 @@ summary = "`dsl_stats_emit::json_string`, the DSL stats emitter's file names: th
   [[site.measure]]
   label = "scan scalar"
   configs = ["wasm32"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
@@ -5950,8 +5950,8 @@ summary = "`dsl_stats_emit::json_string`, the DSL stats emitter's file names: th
   [[site.measure]]
   label = "scan simd128"
   configs = ["wasm32-simd128"]
-  crate = "purrdf_iri"
-  symbol = "purrdf_iri::json_escape::find_first_json_ascii_stop"
+  crate = "purrdf_lex"
+  symbol = "purrdf_lex::json_escape::find_first_json_ascii_stop"
   min_vector_ops = 4
   require_mnemonics = ["i8x16.eq"]
   max_fma = 0

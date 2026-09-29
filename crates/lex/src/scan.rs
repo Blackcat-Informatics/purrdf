@@ -9,7 +9,7 @@
 //! 1. The class is a range table in [`terminals`](crate::terminals) (or, for
 //!    [`find_first_xml_special`], a composition of one), projected at compile
 //!    time onto a `const [u8; 256]` class table by
-//!    [`class_table`](crate::terminals::class_table).
+//!    the `const fn` `class_table`.
 //! 2. The class table is projected again, at compile time, onto its maximal
 //!    runs of member bytes (`[lo, hi]` pairs). A byte is a member iff it falls
 //!    in a run, and that is tested with one wrapping subtraction and one
@@ -42,7 +42,7 @@ use crate::terminals::{
 const CHUNK: usize = 16;
 
 /// An inclusive run `[lo, hi]` of member bytes.
-pub(crate) type ByteRun = (u8, u8);
+pub type ByteRun = (u8, u8);
 
 /// Narrow a table index to its byte. Every caller passes an index below 256.
 #[allow(
@@ -58,7 +58,7 @@ const fn narrow(i: usize) -> u8 {
 ///
 /// The array length [`byte_runs`] needs, evaluated at compile time.
 #[must_use]
-pub(crate) const fn count_runs(table: &[u8; 256]) -> usize {
+pub const fn count_runs(table: &[u8; 256]) -> usize {
     let mut count = 0;
     let mut i = 0;
     while i < table.len() {
@@ -76,7 +76,7 @@ pub(crate) const fn count_runs(table: &[u8; 256]) -> usize {
 /// compile-time failure, so the runs are always the whole class and nothing
 /// but the class.
 #[must_use]
-pub(crate) const fn byte_runs<const N: usize>(table: &[u8; 256]) -> [ByteRun; N] {
+pub const fn byte_runs<const N: usize>(table: &[u8; 256]) -> [ByteRun; N] {
     let mut runs = [(0_u8, 0_u8); N];
     let mut n = 0;
     let mut i = 0;
@@ -109,7 +109,7 @@ pub(crate) const fn byte_runs<const N: usize>(table: &[u8; 256]) -> [ByteRun; N]
               so the class's runs fold in as constants and the lane loop vectorizes"
 )]
 #[inline(always)]
-pub(crate) fn in_runs(b: u8, runs: &[ByteRun]) -> bool {
+pub fn in_runs(b: u8, runs: &[ByteRun]) -> bool {
     let mut hit = false;
     for &(lo, hi) in runs {
         hit |= b.wrapping_sub(lo) <= hi - lo;
@@ -180,7 +180,7 @@ fn find_first(bytes: &[u8], runs: &[ByteRun], table: &[u8; 256], want: bool) -> 
 /// never written by hand:
 ///
 /// ```rust
-/// use purrdf_iri::terminals::{ByteClass, byte_run_count};
+/// use purrdf_lex::terminals::{ByteClass, byte_run_count};
 ///
 /// const QUOTES: [u8; 256] = {
 ///     let mut table = [0_u8; 256];
@@ -227,7 +227,7 @@ pub const fn byte_run_count(table: &[u8; 256]) -> usize {
 /// constants:
 ///
 /// ```rust
-/// use purrdf_iri::terminals::{ByteClass, byte_run_count};
+/// use purrdf_lex::terminals::{ByteClass, byte_run_count};
 ///
 /// const LINE_FEED: [u8; 256] = {
 ///     let mut table = [0_u8; 256];
@@ -360,7 +360,7 @@ const TRIVIA_RUNS: [ByteRun; count_runs(&TRIVIA_TABLE)] = byte_runs(&TRIVIA_TABL
 /// # Examples
 ///
 /// ```rust
-/// use purrdf_iri::terminals::find_first_trivia;
+/// use purrdf_lex::terminals::find_first_trivia;
 ///
 /// assert_eq!(find_first_trivia(b" \t\r\n?s"), Some(4));
 /// assert_eq!(find_first_trivia(b"?s"), Some(0));
@@ -397,7 +397,7 @@ const IRI_BODY_RUNS: [ByteRun; count_runs(&IRI_BODY_TABLE)] = byte_runs(&IRI_BOD
 /// # Examples
 ///
 /// ```rust
-/// use purrdf_iri::terminals::find_first_iri_body_special;
+/// use purrdf_lex::terminals::find_first_iri_body_special;
 ///
 /// assert_eq!(find_first_iri_body_special(b"urn:ex:a>"), Some(8)); // the close
 /// assert_eq!(find_first_iri_body_special(b"urn:\\u0041>"), Some(4)); // a UCHAR
@@ -429,7 +429,7 @@ const JSON_STRING_RUNS: [ByteRun; count_runs(&JSON_STRING_TABLE)] = byte_runs(&J
 /// # Examples
 ///
 /// ```rust
-/// use purrdf_iri::terminals::find_first_json_string_special;
+/// use purrdf_lex::terminals::find_first_json_string_special;
 ///
 /// assert_eq!(find_first_json_string_special(b"plain text\" tail"), Some(10));
 /// assert_eq!(find_first_json_string_special(b"a\\nb"), Some(1));
@@ -611,7 +611,7 @@ const _: () = {
 /// # Examples
 ///
 /// ```rust
-/// use purrdf_iri::terminals::find_first_xml_special;
+/// use purrdf_lex::terminals::find_first_xml_special;
 ///
 /// assert_eq!(find_first_xml_special(b"a < b"), Some(2));
 /// assert_eq!(find_first_xml_special(b"Tom's"), None);

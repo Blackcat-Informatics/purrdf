@@ -74,14 +74,13 @@ external = []
 
 [[crate]]
 name = "purrdf-lex"
-pending = true
 deps = [{ name = "purrdf-hash", pending = true }]
 external = []
 
 [[crate]]
 name = "purrdf-iri"
 deps = [
-    { name = "purrdf-lex", pending = true },
+    "purrdf-lex",
     { name = "purrdf-hash", pending = true },
 ]
 external = []

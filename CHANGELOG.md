@@ -10,6 +10,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **lex:** `purrdf-lex`, a new published, zero-dependency, wasm32-clean crate
+  holding the lexical foundations every grammar in the workspace shares: the
+  exact Turtle/SPARQL/XML terminal classes (`purrdf_lex::terminals`), the
+  chunked byte-class scanners and the `ByteClass` kernel (`purrdf_lex::scan`),
+  and the RFC 8259 JSON string escaper (`purrdf_lex::json_escape`). The three
+  modules moved here from `purrdf-iri` unchanged, and `purrdf-iri` re-exports
+  them, so every `purrdf_iri::terminals`, `purrdf_iri::json_escape` and
+  `purrdf_iri::scan` path still names the same items; `purrdf-iri` now depends
+  on `purrdf-lex` and nothing else. The scanner benchmarks moved with them to
+  `cargo bench -p purrdf-lex --bench scan` (groups `lex_scan_*` and
+  `lex_json_escape_*`), and the assembly audit measures the scanners in
+  `purrdf_lex` under the site ids `lex.scan-*`, `lex.json-escape-*` and
+  `lex.terminals-in-ranges`.
 - **hash:** `purrdf_hash::Domain`, a `const` newtype naming one hash preimage
   family. Every hash domain-separation string in the workspace is a registered
   `Domain` constant beside the construction it separates, byte-identical to the

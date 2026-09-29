@@ -108,6 +108,7 @@ jobs:
           cargo bench -p purrdf-geo --no-run --locked
           cargo bench -p purrdf-text --bench search --no-run --locked
           cargo bench -p purrdf-wasm --bench query_engine_reuse --no-run --locked
+          cargo bench -p purrdf-lex --no-run --locked
           cargo bench -p purrdf-iri --no-run --locked
           cargo bench -p purrdf-xsd --no-run --locked
           cargo bench -p purrdf-sparql-algebra --bench tokenize --no-run --locked
@@ -127,6 +128,7 @@ jobs:
           cargo bench -p purrdf-geo --locked
           cargo bench -p purrdf-text --bench search --locked
           cargo bench -p purrdf-wasm --bench query_engine_reuse --locked
+          cargo bench -p purrdf-lex --locked
           cargo bench -p purrdf-iri --locked
           cargo bench -p purrdf-xsd --locked
           cargo bench -p purrdf-sparql-algebra --bench tokenize --locked

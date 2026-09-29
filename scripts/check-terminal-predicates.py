@@ -107,8 +107,8 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 # The one place the W3C terminal productions are spelled out.
-HOME = "crates/iri/src/terminals.rs"
-HOME_IMPORT = "purrdf_iri::terminals"
+HOME = "crates/lex/src/terminals.rs"
+HOME_IMPORT = "purrdf_lex::terminals"
 
 # Trees that hold no first-party Rust we govern.
 IGNORED_DIRS = {".git", ".claude", "target", "node_modules", ".worktrees"}
@@ -288,12 +288,12 @@ TERMINAL_FN_MEANING = (
 # of its predicates called through it. Widening this cannot launder the defect —
 # NON_ASCII_CATCHALL and the scanner rules are unconditional and no delegation
 # clears them.
-DELEGATES = re.compile(r"\bpurrdf_iri::terminals\b|\bterminals::is_\w+")
+DELEGATES = re.compile(r"\bpurrdf_(?:lex|iri)::terminals\b|\bterminals::is_\w+")
 
 # A delegating call, for subtraction. Naming the shared predicate is not enough
 # on its own: `terminals::is_percent(c) || c == 'x'` mentions it and then widens
 # the terminal anyway, which is the defect wearing the fix's clothes.
-DELEGATED_CALL = re.compile(r"\b(?:purrdf_iri::)?terminals::is_\w+(?:\s*\([^()]*\))?")
+DELEGATED_CALL = re.compile(r"\b(?:purrdf_(?:lex|iri)::)?terminals::is_\w+(?:\s*\([^()]*\))?")
 # An alternation surviving that subtraction ADDS an acceptance branch the
 # production does not have. `&&` is deliberately not refused: narrowing a shared
 # class is how a real production is expressed — `NCNameChar ::= NameChar - ':'`

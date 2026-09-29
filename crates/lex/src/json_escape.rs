@@ -140,7 +140,7 @@ fn emit_u_escape(unit: u16, emit: &mut impl FnMut(&str)) {
 /// # Examples
 ///
 /// ```rust
-/// use purrdf_iri::json_escape::{JsonEscapes, escape_body};
+/// use purrdf_lex::json_escape::{JsonEscapes, escape_body};
 ///
 /// let mut out = String::new();
 /// escape_body("a\"b\u{8}\u{7f}", JsonEscapes::Minimal, |piece| out.push_str(piece));
@@ -193,7 +193,7 @@ pub fn escape_body(value: &str, escapes: JsonEscapes, mut emit: impl FnMut(&str)
 /// Append the JSON string body of `value` to `out`, spelled per `escapes`.
 ///
 /// ```rust
-/// use purrdf_iri::json_escape::{JsonEscapes, push_body};
+/// use purrdf_lex::json_escape::{JsonEscapes, push_body};
 ///
 /// let mut out = String::from("x=");
 /// push_body(&mut out, "tab\there\u{85}", JsonEscapes::Controls);
@@ -208,7 +208,7 @@ pub fn push_body(out: &mut String, value: &str, escapes: JsonEscapes) {
 /// `escapes`, between double quotes.
 ///
 /// ```rust
-/// use purrdf_iri::json_escape::{JsonEscapes, push_string};
+/// use purrdf_lex::json_escape::{JsonEscapes, push_string};
 ///
 /// let mut out = String::new();
 /// push_string(&mut out, "line\u{c}feed", JsonEscapes::ShortForms);

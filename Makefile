@@ -279,7 +279,7 @@ test-gts-selected-blobs: ## Check bounded selected-blob import and native scope 
 	cargo test -p purrdf-rdf --test gts_selected_blobs --locked
 	cargo test -p purrdf-shapes --test shared_shapes_dataset --locked
 
-doc: ## Build docs for the 29 publishable crates with rustdoc warnings denied.
+doc: ## Build docs for the 30 publishable crates with rustdoc warnings denied.
 	RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps --exclude purrdf-capi --exclude purrdf-python --exclude purrdf-sparql-conformance --exclude purrdf-cli
 
 book-samples: ## Regenerate deterministic SVG visualization samples embedded in The PurRDF Book.
@@ -319,7 +319,7 @@ bench-prepared-reuse: ## Measure cold/warm preparation and prepared execution on
 	cargo bench --locked --profile release -p purrdf-sparql-eval --bench prepared_reuse -- $(BENCH_ARGS)
 
 bench: ## Run the purrdf_testkit::bench suites (report-only; never a gate).
-	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
+	cargo bench -p purrdf-gts -p purrdf-core -p purrdf-columnar -p purrdf-rdf -p purrdf-json -p purrdf-sparql-eval -p purrdf-geo -p purrdf-text -p purrdf-shapes -p purrdf-wasm -p purrdf-entail -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-hash-conformance -p purrdf-deflate -p purrdf-jsonschema
 
 # HOW A LANE KNOB REACHES ITS SCRIPT: as environment bytes, unparsed.
 #
@@ -562,7 +562,7 @@ watdiv: ## Run the WatDiv comparison workload end to end - acquire the frozen da
 wasm: ## Build the release crates for wasm32-unknown-unknown (SKIP locally if target absent; CI hard-fails).
 	@if rustup target list --installed 2>/dev/null | grep -qx wasm32-unknown-unknown; then \
 		cargo build --locked --release --target wasm32-unknown-unknown --lib \
-			-p purrdf-events -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-hash -p purrdf-deflate -p purrdf-stack -p purrdf-gts -p purrdf-core -p purrdf-columnar \
+			-p purrdf-events -p purrdf-lex -p purrdf-iri -p purrdf-xsd -p purrdf-cdt -p purrdf-jsonschema -p purrdf-hash -p purrdf-deflate -p purrdf-stack -p purrdf-gts -p purrdf-core -p purrdf-columnar \
 			-p purrdf-datalog \
 			-p purrdf-sparql-algebra -p purrdf-sparql-results -p purrdf-sparql-eval -p purrdf-hnsw \
 			-p purrdf-rdf -p purrdf-markdown -p purrdf-json -p purrdf-slice -p purrdf-shapes -p purrdf-shex -p purrdf-entail \
