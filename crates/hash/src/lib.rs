@@ -14,6 +14,11 @@
 //! | [`fnv`] | FNV-1a, 64-bit | Fowler, Noll and Vo (`draft-eastlake-fnv`) | a `u64` |
 //! | [`mix`] | the SplitMix64 generator and finaliser | Steele, Lea and Flood (OOPSLA 2014) | a `u64` |
 //!
+//! [`frame`] is the workspace's length framing: a variable-length field as its
+//! length in eight little-endian bytes and then its bytes, appended to a
+//! buffer ([`frame::frame_le`]) or streamed into a [`Digest`]
+//! ([`frame::frame_le_into`]).
+//!
 //! [`Domain`] is the one spelling of a hash domain-separation string: every
 //! domain the workspace hashes under is a registered `Domain` constant, unique
 //! and prefix-free across the workspace, and never renamed once published.
@@ -64,8 +69,8 @@
 //!
 //! The crate has zero dependencies and is the root of the workspace's crate
 //! layering: every crate may depend on it. Besides the digests it holds the
-//! small specified kernels shared across the workspace ([`fnv`], [`mix`]) and
-//! the [`Backend`] trait every family of named execution paths implements. MD5 and SHA-1 are provided because protocols
+//! small specified kernels shared across the workspace ([`fnv`], [`mix`],
+//! [`frame`]) and the [`Backend`] trait every family of named execution paths implements. MD5 and SHA-1 are provided because protocols
 //! name them (SPARQL's `MD5()`/`SHA1()`, OpenPGP v4 fingerprints), not as
 //! security primitives: both are broken for collision resistance.
 
@@ -87,6 +92,7 @@ pub mod dispatch;
 mod domain;
 pub mod fixed;
 pub mod fnv;
+pub mod frame;
 pub mod hex;
 pub mod md5;
 pub mod mix;

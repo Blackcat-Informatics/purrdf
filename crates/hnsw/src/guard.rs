@@ -849,7 +849,7 @@ mod tests {
         );
     }
 
-    /// Re-encode an artifact identity's fields the way rdf-core does, for the helper test.
+    /// Encode an artifact identity's fields through rdf-core's TLV writer, for the helper test.
     fn identity_block_bytes(identity: &ArtifactIdentity) -> Vec<u8> {
         let mut out = Vec::new();
         put(
@@ -878,12 +878,6 @@ mod tests {
     }
 
     fn put(out: &mut Vec<u8>, tag: u16, wire: TlvWireType, value: &[u8]) {
-        out.extend_from_slice(&tag.to_le_bytes());
-        out.push(wire as u8);
-        out.push(1);
-        out.extend_from_slice(&(value.len() as u32).to_le_bytes());
-        out.extend_from_slice(value);
-        let aligned = (out.len() + 7) & !7;
-        out.resize(aligned, 0);
+        purrdf_core::push_tlv(out, tag, wire, true, value).expect("a canonical critical entry");
     }
 }

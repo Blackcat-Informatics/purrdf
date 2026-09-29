@@ -14,12 +14,14 @@ use crate::toml::{self, Value};
 /// Why a second implementation of a job may exist.
 pub(crate) const CRITERIA: [&str; 4] = ["a", "b", "c", "layering"];
 
-/// One sanctioned second implementation. Its `file`, `criterion` and `reason`
+/// One sanctioned second implementation. Its `criterion` and `reason`
 /// are validated here and checked against the tree by the engine.
 #[derive(Clone, Debug)]
 pub(crate) struct Variant {
     /// The variant's own symbol, `crate::path::item`.
     pub(crate) symbol: String,
+    /// The repo-relative file that defines it.
+    pub(crate) file: String,
     /// Which detector it is exempt from: `isomorphic` and `forbidden` are this
     /// census's; any other id names a rule of the gate that owns it.
     pub(crate) detector: String,
@@ -250,6 +252,7 @@ fn variant(table: &BTreeMap<String, Value>) -> Result<Variant, String> {
     string(table, "file")?;
     Ok(Variant {
         symbol: string(table, "symbol")?,
+        file: string(table, "file")?,
         detector: string(table, "detector")?,
         anchor: string(table, "anchor")?,
     })

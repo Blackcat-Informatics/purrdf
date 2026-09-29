@@ -66,6 +66,7 @@
 //! work and is charged none, and the count resets only when the engine takes it.
 
 use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_be_labelled;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1370,33 +1371,21 @@ pub use purrdf_sparql_eval::composed_order_fidelity;
 /// same graph, parameters and terms digest identically on every target.
 fn space_generation<A: Arithmetic>(index: &HnswIndex<A>, terms: &[TermValue]) -> Arc<str> {
     let mut bytes = Vec::new();
-    append_framed(&mut bytes, b"domain", SPACE_GENERATION_DOMAIN.as_bytes());
-    append_framed(&mut bytes, b"image", &index.canonical_image());
-    append_framed(
+    frame_be_labelled(&mut bytes, "domain", SPACE_GENERATION_DOMAIN.as_bytes());
+    frame_be_labelled(&mut bytes, "image", &index.canonical_image());
+    frame_be_labelled(
         &mut bytes,
-        b"parameters",
+        "parameters",
         &profile::parameters(index.params()),
     );
-    append_framed(
-        &mut bytes,
-        b"row-count",
-        &(terms.len() as u64).to_be_bytes(),
-    );
+    frame_be_labelled(&mut bytes, "row-count", &(terms.len() as u64).to_be_bytes());
     let mut term_bytes = Vec::new();
     for term in terms {
         term_bytes.clear();
         term.canonical_bytes(&mut term_bytes);
-        append_framed(&mut bytes, b"term", &term_bytes);
+        frame_be_labelled(&mut bytes, "term", &term_bytes);
     }
     Arc::from(ContentDigest::of(&bytes).to_hex().as_str())
-}
-
-/// Append `value` to `out` under `tag`, both length-framed.
-fn append_framed(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
-    out.extend_from_slice(&(tag.len() as u64).to_be_bytes());
-    out.extend_from_slice(tag);
-    out.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    out.extend_from_slice(value);
 }
 
 /// The domain separator every HNSW space generation opens with, so this digest
@@ -1634,55 +1623,5 @@ mod tests {
         let bound_count = [Some(&count)];
         let args = PfArgs::new(&free, &bound_count);
         assert!(relation.open(&args, None).is_err());
-    }
-}
-
-/// The labelled big-endian framing in this module against the frozen framing
-/// vectors of `purrdf-hash-conformance`: the eight-byte length each record
-/// holds, read big-endian, frames the label and the value alike.
-#[cfg(test)]
-mod frozen_frame_differential {
-    use super::*;
-
-    /// Every input of the frozen length-framing vectors of
-    /// `purrdf-hash-conformance`, with its recorded eight-byte prefix and the
-    /// BLAKE3 digest of its framed field.
-    fn frozen_frames() -> Vec<(Vec<u8>, Vec<u8>, String)> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/frame_le_vectors.txt"
-        )))
-        .expect("the frozen framing vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let input = if fields[0] == "fill" {
-                    let (byte, length) = fields[1].split_once('*').expect("a BYTE*LENGTH fill");
-                    let byte = purrdf_hash::hex::decode(byte).expect("a hexadecimal byte")[0];
-                    vec![byte; length.parse().expect("a decimal length")]
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let prefix = purrdf_hash::hex::decode(fields[2]).expect("a hexadecimal prefix");
-                (input, prefix, fields[3].to_owned())
-            })
-            .collect()
-    }
-
-    #[test]
-    fn append_framed_reproduces_the_frozen_framing_vectors() {
-        for (input, prefix, _) in frozen_frames() {
-            let mut be = prefix.clone();
-            be.reverse();
-            let value: Vec<u8> = input.iter().rev().copied().collect();
-            let mut out = Vec::new();
-            append_framed(&mut out, &input, &value);
-            let mut expected = be.clone();
-            expected.extend_from_slice(&input);
-            expected.extend_from_slice(&be);
-            expected.extend_from_slice(&value);
-            assert_eq!(out, expected, "a {}-byte label and value", input.len());
-        }
     }
 }

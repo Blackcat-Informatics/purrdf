@@ -186,7 +186,9 @@ impl FileLayout {
         let directory_end = u64::from(PURREMB_HEADER_LENGTH)
             .checked_add(directory_length)
             .ok_or(EmbeddingError::ArithmeticOverflow("directory end"))?;
-        let first_section_offset = checked_align_up(directory_end, PURREMB_FILE_ALIGNMENT)?;
+        let first_section_offset = directory_end
+            .checked_next_multiple_of(PURREMB_FILE_ALIGNMENT)
+            .ok_or(EmbeddingError::ArithmeticOverflow("alignment"))?;
 
         let mut cursor = first_section_offset;
         let mut entries = Vec::with_capacity(descriptors.len());
@@ -201,7 +203,9 @@ impl FileLayout {
             let end = cursor
                 .checked_add(descriptor.length)
                 .ok_or(EmbeddingError::ArithmeticOverflow("section end"))?;
-            cursor = checked_align_up(end, PURREMB_FILE_ALIGNMENT)?;
+            cursor = end
+                .checked_next_multiple_of(PURREMB_FILE_ALIGNMENT)
+                .ok_or(EmbeddingError::ArithmeticOverflow("alignment"))?;
         }
 
         let trailer_offset = cursor;
@@ -275,12 +279,12 @@ impl FileLayout {
             let digest = entry
                 .sha256
                 .ok_or(EmbeddingError::Missing("section digest"))?;
-            push_u32(&mut output, entry.key.kind);
-            push_u32(&mut output, entry.flags);
-            push_u32(&mut output, entry.key.instance);
-            push_u32(&mut output, 0);
-            push_u64(&mut output, entry.offset);
-            push_u64(&mut output, entry.length);
+            output.extend_from_slice(&entry.key.kind.to_le_bytes());
+            output.extend_from_slice(&entry.flags.to_le_bytes());
+            output.extend_from_slice(&entry.key.instance.to_le_bytes());
+            output.extend_from_slice(&0u32.to_le_bytes());
+            output.extend_from_slice(&entry.offset.to_le_bytes());
+            output.extend_from_slice(&entry.length.to_le_bytes());
             output.extend_from_slice(&digest);
         }
         if output.len() != capacity {
@@ -409,17 +413,6 @@ pub(super) fn encode_artifact(
         bytes: output,
         root,
     })
-}
-
-/// Checked `align_up` for the normative power-of-two alignments.
-pub(super) fn checked_align_up(value: u64, alignment: u64) -> Result<u64, EmbeddingError> {
-    if alignment == 0 || !alignment.is_power_of_two() {
-        return Err(EmbeddingError::Malformed("alignment is not a power of two"));
-    }
-    let biased = value
-        .checked_add(alignment - 1)
-        .ok_or(EmbeddingError::ArithmeticOverflow("alignment"))?;
-    Ok(biased & !(alignment - 1))
 }
 
 fn validate_source_section(
@@ -551,20 +544,18 @@ fn validate_descriptors(descriptors: &[SectionDescriptor]) -> Result<(), Embeddi
     Ok(())
 }
 
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
+/// Write a fixed `u32` field of an image this module's writers sized
+/// themselves, through [`crate::bytes::put_u32_le`]: an offset outside it is a
+/// writer defect, not an input to refuse.
+pub(super) fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
+    crate::bytes::put_u32_le(bytes, offset, value)
+        .expect("a field inside the image its writer sized");
 }
 
-fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
-}
-
-fn push_u32(bytes: &mut Vec<u8>, value: u32) {
-    bytes.extend_from_slice(&value.to_le_bytes());
-}
-
-fn push_u64(bytes: &mut Vec<u8>, value: u64) {
-    bytes.extend_from_slice(&value.to_le_bytes());
+/// Write a fixed `u64` field of a writer-sized image (see [`put_u32`]).
+pub(super) fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
+    crate::bytes::put_u64_le(bytes, offset, value)
+        .expect("a field inside the image its writer sized");
 }
 
 #[cfg(test)]
@@ -643,34 +634,5 @@ mod tests {
             encode_artifact(source_digest, sections),
             Err(EmbeddingError::NonCanonicalOrder(_))
         ));
-    }
-
-    #[test]
-    fn alignment_is_checked() {
-        assert_eq!(checked_align_up(0, 64).unwrap(), 0);
-        assert_eq!(checked_align_up(1, 64).unwrap(), 64);
-        assert_eq!(checked_align_up(64, 64).unwrap(), 64);
-        assert!(checked_align_up(u64::MAX, 64).is_err());
-        assert!(checked_align_up(1, 3).is_err());
-    }
-}
-
-/// The alignment arithmetic in this module against the standard library's
-/// `checked_next_multiple_of`, over every value up to 4096 and the top of the
-/// type's range.
-#[cfg(test)]
-mod align_differential {
-    use super::*;
-
-    #[test]
-    fn checked_align_up_is_checked_next_multiple_of() {
-        for alignment in [8, 64] {
-            for value in (0..=4096).chain(u64::MAX - 4096..=u64::MAX) {
-                assert_eq!(
-                    checked_align_up(value, alignment).ok(),
-                    value.checked_next_multiple_of(alignment)
-                );
-            }
-        }
     }
 }

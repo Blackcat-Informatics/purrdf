@@ -67,6 +67,7 @@
 
 use core::hash::Hasher;
 use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -761,7 +762,7 @@ impl ProofArena {
             .collect();
 
         let mut out = Vec::new();
-        frame(&mut out, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, PROOF_ENCODING_TAG.as_bytes());
         out.extend_from_slice(&(order.len() as u64).to_le_bytes());
         for &index in &order {
             match &self.terms[index] {
@@ -1116,16 +1117,10 @@ fn negated_atom_is_satisfied(
 
 // ── Wire primitives ─────────────────────────────────────────────────────────────
 
-/// Length-prefix `bytes` into `out`.
-fn frame(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    out.extend_from_slice(bytes);
-}
-
 /// Length-prefix a fact's four surfaces into `out`, in `(s, p, o, g)` order.
 fn frame_fact(out: &mut Vec<u8>, fact: &Fact) {
     for surface in [&fact.subject, &fact.predicate, &fact.object, &fact.graph] {
-        frame(out, surface.as_bytes());
+        frame_le(out, surface.as_bytes());
     }
 }
 
@@ -1170,10 +1165,12 @@ impl<'a> Reader<'a> {
 
     /// Read one little-endian `u64`.
     fn u64(&mut self) -> Result<u64, ProofError> {
-        let bytes = self.take(8)?;
-        let mut buffer = [0u8; 8];
-        buffer.copy_from_slice(bytes);
-        Ok(u64::from_le_bytes(buffer))
+        let (bytes, rest) = self
+            .rest
+            .split_first_chunk()
+            .ok_or_else(|| ProofArena::malformed("the proof encoding ends inside a field"))?;
+        self.rest = rest;
+        Ok(u64::from_le_bytes(*bytes))
     }
 
     /// Read one little-endian `u64` as a `usize`.
@@ -1936,7 +1933,7 @@ mod tests {
 
         // An empty proof.
         let mut empty = Vec::new();
-        frame(&mut empty, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut empty, PROOF_ENCODING_TAG.as_bytes());
         empty.extend_from_slice(&0u64.to_le_bytes());
         assert!(matches!(
             ProofArena::decode(&empty),
@@ -1945,12 +1942,12 @@ mod tests {
 
         // A non-UTF-8 surface.
         let mut bad_utf8 = Vec::new();
-        frame(&mut bad_utf8, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut bad_utf8, PROOF_ENCODING_TAG.as_bytes());
         bad_utf8.extend_from_slice(&1u64.to_le_bytes());
         bad_utf8.push(KIND_AXIOM);
-        frame(&mut bad_utf8, &[0xff, 0xfe]);
+        frame_le(&mut bad_utf8, &[0xff, 0xfe]);
         for _ in 0..3 {
-            frame(&mut bad_utf8, b"");
+            frame_le(&mut bad_utf8, b"");
         }
         assert!(matches!(
             ProofArena::decode(&bad_utf8),
@@ -2251,53 +2248,5 @@ mod tests {
         assert!(errors[1].to_string().contains("not in the seeded EDB"));
         assert!(errors[2].to_string().contains("clause 3"));
         assert!(errors[8].to_string().contains("not the stated"));
-    }
-}
-
-/// The length framing in this module against the frozen framing vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_frame_differential {
-    use super::*;
-
-    /// Every input of the frozen length-framing vectors of
-    /// `purrdf-hash-conformance`, with its recorded eight-byte prefix and the
-    /// BLAKE3 digest of its framed field.
-    fn frozen_frames() -> Vec<(Vec<u8>, Vec<u8>, String)> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/frame_le_vectors.txt"
-        )))
-        .expect("the frozen framing vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let input = if fields[0] == "fill" {
-                    let (byte, length) = fields[1].split_once('*').expect("a BYTE*LENGTH fill");
-                    let byte = purrdf_hash::hex::decode(byte).expect("a hexadecimal byte")[0];
-                    vec![byte; length.parse().expect("a decimal length")]
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let prefix = purrdf_hash::hex::decode(fields[2]).expect("a hexadecimal prefix");
-                (input, prefix, fields[3].to_owned())
-            })
-            .collect()
-    }
-
-    #[test]
-    fn frame_reproduces_the_frozen_framing_vectors() {
-        for (input, prefix, _) in frozen_frames() {
-            let mut out = Vec::new();
-            frame(&mut out, &input);
-            assert_eq!(
-                out[..8],
-                prefix[..],
-                "the prefix of a {}-byte field",
-                input.len()
-            );
-            assert_eq!(out[8..], input[..]);
-        }
     }
 }

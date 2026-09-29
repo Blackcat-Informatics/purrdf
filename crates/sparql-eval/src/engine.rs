@@ -649,8 +649,7 @@ impl PlanCacheKey<'_> {
             out.extend_from_slice(&(value as u64).to_le_bytes());
         }
         fn field(out: &mut Vec<u8>, value: &str) {
-            length(out, value.len());
-            out.extend_from_slice(value.as_bytes());
+            purrdf_hash::frame::frame_le(out, value.as_bytes());
         }
         let Self {
             query,

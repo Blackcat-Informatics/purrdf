@@ -88,7 +88,7 @@ use crate::dataset_view::DatasetView;
 use crate::ir::composite::owned_value;
 use crate::{RdfStoreCapabilities, TermValue};
 
-use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for};
+use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for, read_header_u64};
 use super::dict::{PackDict, PackTermId};
 
 /// The `rdf:reifies` predicate IRI — see the identical local constant (and its
@@ -137,19 +137,6 @@ impl From<PackBitsError> for PackSideError {
             PackBitsError::Malformed(reason) => Self::Malformed(reason),
         }
     }
-}
-
-/// Read an 8-byte little-endian header field at `*pos`, advancing `*pos` past it.
-/// A small local mirror of `bits::read_header_u64` (private to that module).
-fn read_u64_header(bytes: &[u8], pos: &mut usize) -> Result<u64, PackSideError> {
-    let end = *pos + 8;
-    let slice = bytes.get(*pos..end).ok_or(PackSideError::Truncated {
-        needed: end,
-        found: bytes.len(),
-    })?;
-    let value = u64::from_le_bytes(slice.try_into().expect("slice is exactly 8 bytes"));
-    *pos = end;
-    Ok(value)
 }
 
 /// Build a bit-packed [`IntVector`] wide enough for `values`' maximum element —
@@ -440,7 +427,7 @@ impl<'a> SideTablesRef<'a> {
             return Err(PackSideError::Malformed("side: unsupported format version"));
         }
         let mut pos = 1usize;
-        let reifies_predicate = read_u64_header(bytes, &mut pos)?;
+        let reifies_predicate = read_header_u64(bytes, &mut pos)?;
 
         let reifier_reifier = IntVectorRef::from_bytes(&bytes[pos..])?;
         pos += reifier_reifier.serialized_len();

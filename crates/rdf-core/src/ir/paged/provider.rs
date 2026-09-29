@@ -421,8 +421,12 @@ fn logical_rdf_byte_len(dataset: &RdfDataset) -> u64 {
     for index in 0..dataset.term_count() {
         let id = TermId::from_index(u32::try_from(index).expect("term count fits u32"));
         let term_len = match dataset.resolve(id) {
-            TermRef::Iri(iri) => 1_u64 + len_u64(iri.len()),
-            TermRef::Blank { label, .. } => 1_u64 + len_u64(label.len()) + 4,
+            TermRef::Iri(iri) => {
+                1_u64 + u64::try_from(iri.len()).expect("an in-memory count fits u64")
+            }
+            TermRef::Blank { label, .. } => {
+                1_u64 + u64::try_from(label.len()).expect("an in-memory count fits u64") + 4
+            }
             TermRef::Literal {
                 lexical,
                 language,
@@ -430,10 +434,12 @@ fn logical_rdf_byte_len(dataset: &RdfDataset) -> u64 {
                 ..
             } => {
                 1_u64
-                    + len_u64(lexical.len())
+                    + u64::try_from(lexical.len()).expect("an in-memory count fits u64")
                     + 4
                     + 1
-                    + language.map_or(0, |tag| len_u64(tag.len()))
+                    + language.map_or(0, |tag| {
+                        u64::try_from(tag.len()).expect("an in-memory count fits u64")
+                    })
                     + 1
                     + u64::from(direction.is_some())
             }
@@ -444,18 +450,21 @@ fn logical_rdf_byte_len(dataset: &RdfDataset) -> u64 {
             .expect("logical page size fits u64");
     }
 
-    let row_bytes = len_u64(dataset.quad_count())
+    let row_bytes = u64::try_from(dataset.quad_count())
+        .expect("an in-memory count fits u64")
         .checked_mul(16)
         .and_then(|bytes| {
             bytes.checked_add(
-                len_u64(dataset.reifier_quads().count())
+                u64::try_from(dataset.reifier_quads().count())
+                    .expect("an in-memory count fits u64")
                     .checked_mul(12)
                     .expect("reifier table size fits u64"),
             )
         })
         .and_then(|bytes| {
             bytes.checked_add(
-                len_u64(dataset.annotation_quads().count())
+                u64::try_from(dataset.annotation_quads().count())
+                    .expect("an in-memory count fits u64")
                     .checked_mul(16)
                     .expect("annotation table size fits u64"),
             )
@@ -464,8 +473,4 @@ fn logical_rdf_byte_len(dataset: &RdfDataset) -> u64 {
     total
         .checked_add(row_bytes)
         .expect("logical page size fits u64")
-}
-
-fn len_u64(value: usize) -> u64 {
-    u64::try_from(value).expect("logical page size fits u64")
 }

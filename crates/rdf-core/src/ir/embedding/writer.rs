@@ -10,7 +10,6 @@
 
 use std::io::{Seek, SeekFrom, Write};
 
-use purrdf_hash::Domain;
 use sha2::{Digest as _, Sha256};
 
 use crate::ContentDigest;
@@ -20,7 +19,7 @@ use crate::distance::{Arithmetic as _, Exact, Resolved, Scalar};
 use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError, EmbeddingWriteError};
 use super::identity::{
-    ArtifactRoot, D_MATRIX_CONTENT, D_PROJECTION_CONTENT, D_TARGET_SET, FamilyId,
+    ArtifactRoot, D_MATRIX_CONTENT, D_PROJECTION_CONTENT, D_TARGET_SET, FamilyId, FramedHasher,
     MatrixContentDigest, MatrixId, ProjectionContentDigest, ProjectionId, TargetId, TargetSetId,
     VectorSpaceId, derive_matrix_content_digest, derive_matrix_id, derive_projection_id,
     derive_target_set_id, derive_vector_space_id,
@@ -32,7 +31,7 @@ use super::wire::{
     SECTION_EXTENSION_MIN, SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD,
     SECTION_MATRICES, SECTION_MATRIX_DATA, SECTION_RELATIONS, SECTION_SOURCE, SECTION_TARGET_SETS,
     SECTION_TARGETS, SECTION_TOKEN_SPANS, SectionDescriptor, SectionKey, SectionPayload,
-    encode_artifact,
+    encode_artifact, put_u32, put_u64,
 };
 
 const MATRICES_HEADER_LENGTH: u64 = 160;
@@ -1315,36 +1314,6 @@ fn matrix_instance(index: usize) -> Result<u32, EmbeddingError> {
     })
 }
 
-struct FramedHasher {
-    hasher: Sha256,
-}
-
-impl FramedHasher {
-    fn new(domain: Domain) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(domain.as_bytes());
-        Self { hasher }
-    }
-
-    fn field(&mut self, bytes: &[u8]) {
-        let length = u64::try_from(bytes.len()).expect("an in-memory slice length fits u64");
-        self.begin_field(length);
-        self.update(bytes);
-    }
-
-    fn begin_field(&mut self, length: u64) {
-        self.hasher.update(length.to_le_bytes());
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        self.hasher.update(bytes);
-    }
-
-    fn finish(self) -> [u8; 32] {
-        self.hasher.finalize().into()
-    }
-}
-
 fn target_set_hasher(row_count: u64) -> FramedHasher {
     let mut hasher = FramedHasher::new(D_TARGET_SET);
     hasher.field(&row_count.to_le_bytes());
@@ -1584,7 +1553,7 @@ impl MatrixScalar for f32 {
 
     fn raw_bytes(self) -> ScalarBytes {
         let mut bytes = [0u8; 8];
-        bytes[..4].copy_from_slice(&self.to_le_bytes());
+        *bytes.first_chunk_mut().expect("eight bytes hold four") = self.to_le_bytes();
         ScalarBytes { bytes, length: 4 }
     }
 
@@ -1630,14 +1599,6 @@ fn check_digest(
         });
     }
     Ok(())
-}
-
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
 #[cfg(test)]
@@ -1797,65 +1758,5 @@ mod tests {
         let expected =
             super::super::identity::derive_projection_content_digest(1, 1, 2, 0, &prepared.bytes);
         assert_eq!(prepared.commitment.projections[0].content_digest, expected);
-    }
-}
-
-/// The length framing in this module against the frozen framing vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_frame_differential {
-    use super::*;
-
-    /// Every input of the frozen length-framing vectors of
-    /// `purrdf-hash-conformance`, with its recorded eight-byte prefix and the
-    /// BLAKE3 digest of its framed field.
-    fn frozen_frames() -> Vec<(Vec<u8>, Vec<u8>, String)> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/frame_le_vectors.txt"
-        )))
-        .expect("the frozen framing vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let input = if fields[0] == "fill" {
-                    let (byte, length) = fields[1].split_once('*').expect("a BYTE*LENGTH fill");
-                    let byte = purrdf_hash::hex::decode(byte).expect("a hexadecimal byte")[0];
-                    vec![byte; length.parse().expect("a decimal length")]
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let prefix = purrdf_hash::hex::decode(fields[2]).expect("a hexadecimal prefix");
-                (input, prefix, fields[3].to_owned())
-            })
-            .collect()
-    }
-
-    /// The SHA-256 of `domain`'s bytes followed by each input framed, as the
-    /// frozen vectors frame it.
-    fn specified(domain: Domain, prefix: &[u8], input: &[u8]) -> [u8; 32] {
-        let mut expected = domain.as_bytes().to_vec();
-        expected.extend_from_slice(prefix);
-        expected.extend_from_slice(input);
-        Sha256::digest(&expected).into()
-    }
-
-    #[test]
-    fn framed_hasher_reproduces_the_frozen_framing_vectors() {
-        for (input, prefix, _) in frozen_frames() {
-            let mut field = FramedHasher::new(D_TARGET_SET);
-            field.field(&input);
-            assert_eq!(field.finish(), specified(D_TARGET_SET, &prefix, &input));
-            let mut streamed = FramedHasher::new(D_MATRIX_CONTENT);
-            streamed.begin_field(u64::try_from(input.len()).expect("a slice length fits u64"));
-            let (head, tail) = input.split_at(input.len() / 2);
-            streamed.update(head);
-            streamed.update(tail);
-            assert_eq!(
-                streamed.finish(),
-                specified(D_MATRIX_CONTENT, &prefix, &input)
-            );
-        }
     }
 }

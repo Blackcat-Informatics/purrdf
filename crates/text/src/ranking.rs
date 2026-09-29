@@ -9,6 +9,7 @@
 //! the arithmetic, bound proof, and independent conformance reference.
 
 use purrdf_core::TermValue;
+use purrdf_hash::frame::frame_le;
 
 use crate::{B, FINGERPRINT_BYTES, Fixed, K1, SCALE_DIGITS, TextError};
 
@@ -217,10 +218,7 @@ impl RankingProfile {
     /// Canonical, length-framed bytes used to identify the profile.
     pub fn canonical_description(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
-        let mut text = |value: &str| {
-            bytes.extend_from_slice(&(value.len() as u64).to_le_bytes());
-            bytes.extend_from_slice(value.as_bytes());
-        };
+        let mut text = |value: &str| frame_le(&mut bytes, value.as_bytes());
         text(RANKING_PROFILE_ID);
         text(INDEX_CORPUS_PROFILE_ID);
         text(
@@ -243,8 +241,7 @@ impl RankingProfile {
             bytes.extend_from_slice(&number.to_le_bytes());
         }
         for field in &self.fields {
-            bytes.extend_from_slice(&(field.name.len() as u64).to_le_bytes());
-            bytes.extend_from_slice(field.name.as_bytes());
+            frame_le(&mut bytes, field.name.as_bytes());
             bytes.extend_from_slice(&field.weight.into_raw().to_le_bytes());
             bytes.extend_from_slice(&field.b.into_raw().to_le_bytes());
         }
@@ -253,8 +250,7 @@ impl RankingProfile {
             let TermValue::Iri(iri) = predicate else {
                 unreachable!("validated IRI mapping")
             };
-            bytes.extend_from_slice(&(iri.len() as u64).to_le_bytes());
-            bytes.extend_from_slice(iri.as_bytes());
+            frame_le(&mut bytes, iri.as_bytes());
             bytes.extend_from_slice(&(*field as u64).to_le_bytes());
         }
         bytes.extend_from_slice(

@@ -32,6 +32,7 @@ use purrdf_hash::hex::Lower;
 use sha2::{Digest, Sha256};
 
 use super::identity::Identity;
+use crate::bytes::{read_u32_le, read_u64_le};
 
 // ---------------------------------------------------------------------------
 // Fixed layout constants.
@@ -61,8 +62,7 @@ const ALIGNMENT: usize = 8;
 /// Round `value` up to the next multiple of [`ALIGNMENT`].
 fn align_up(value: usize) -> Result<usize, ArtifactError> {
     value
-        .checked_add(ALIGNMENT - 1)
-        .map(|biased| biased & !(ALIGNMENT - 1))
+        .checked_next_multiple_of(ALIGNMENT)
         .ok_or(ArtifactError::Malformed(
             "artifact: alignment overflows the address space",
         ))
@@ -181,67 +181,35 @@ impl fmt::Display for ArtifactError {
 impl std::error::Error for ArtifactError {}
 
 // ---------------------------------------------------------------------------
-// Small byte-header write/read helpers (explicit LE, no pointer casts).
+// Fixed-width fields
 // ---------------------------------------------------------------------------
 //
-// `ir::pack::bits` keeps its equivalents module-private and that file's byte
-// layouts are frozen by goldens, so these are transcribed rather than shared.
-// They follow the same alignment-agnostic law that module documents: every
-// multi-byte field is decoded through `from_le_bytes` over an explicit
-// byte-slice copy, never a pointer cast, so the caller's buffer may sit at any
-// address.
+// Every multi-byte field is little-endian and is read and written through
+// `crate::bytes` at its offset, never through a pointer cast, so the caller's
+// buffer may sit at any address. A read that would leave the buffer is
+// `ArtifactError::Truncated`.
 
-fn write_u32_le(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_le_bytes());
+/// The refusal of a length or offset too large for the format's 64-bit field.
+const LENGTH_FIELD: ArtifactError =
+    ArtifactError::Malformed("artifact: length exceeds the 64-bit field");
+
+/// The little-endian `u32` at `offset`.
+fn u32_at(bytes: &[u8], offset: usize) -> Result<u32, ArtifactError> {
+    read_u32_le(bytes, offset).ok_or(ArtifactError::Truncated)
 }
 
-fn write_u64_le(out: &mut Vec<u8>, value: u64) {
-    out.extend_from_slice(&value.to_le_bytes());
+/// The little-endian `u64` at `offset`.
+fn u64_at(bytes: &[u8], offset: usize) -> Result<u64, ArtifactError> {
+    read_u64_le(bytes, offset).ok_or(ArtifactError::Truncated)
 }
 
-/// Read a `u32` at `*pos`, advancing `*pos` past it. Every call site has already
-/// proven the buffer holds `*pos + 4` bytes.
-fn read_u32_le(bytes: &[u8], pos: &mut usize) -> u32 {
-    let value = u32::from_le_bytes(
-        bytes[*pos..*pos + 4]
-            .try_into()
-            .expect("slice is exactly 4 bytes"),
-    );
-    *pos += 4;
-    value
-}
-
-/// Read a `u64` at `*pos`, advancing `*pos` past it. See [`read_u32_le`]'s
-/// bounds note.
-fn read_u64_le(bytes: &[u8], pos: &mut usize) -> u64 {
-    let value = u64::from_le_bytes(
-        bytes[*pos..*pos + 8]
-            .try_into()
-            .expect("slice is exactly 8 bytes"),
-    );
-    *pos += 8;
-    value
-}
-
-/// Read a 32-byte digest at `*pos`, advancing `*pos` past it. See
-/// [`read_u32_le`]'s bounds note.
-fn read_digest(bytes: &[u8], pos: &mut usize) -> [u8; 32] {
-    let mut digest = [0u8; 32];
-    digest.copy_from_slice(&bytes[*pos..*pos + 32]);
-    *pos += 32;
-    digest
-}
-
-/// Convert a `usize` length into the `u64` the format stores.
-fn to_u64(value: usize) -> Result<u64, ArtifactError> {
-    u64::try_from(value)
-        .map_err(|_| ArtifactError::Malformed("artifact: length exceeds the 64-bit field"))
-}
-
-/// Convert a stored `u64` offset or length into a `usize` this process can
-/// index with.
-fn to_usize(value: u64, what: &'static str) -> Result<usize, ArtifactError> {
-    usize::try_from(value).map_err(|_| ArtifactError::Malformed(what))
+/// The 32-byte digest at `offset`.
+fn digest_at(bytes: &[u8], offset: usize) -> Result<[u8; 32], ArtifactError> {
+    bytes
+        .get(offset..)
+        .and_then(<[u8]>::first_chunk)
+        .copied()
+        .ok_or(ArtifactError::Truncated)
 }
 
 // ---------------------------------------------------------------------------
@@ -417,23 +385,40 @@ impl ArtifactBuilder {
 
         // -- Header -----------------------------------------------------------
         out.extend_from_slice(&spec.magic);
-        write_u32_le(&mut out, spec.format_version);
-        write_u32_le(
-            &mut out,
-            u32::try_from(spec.section_count).map_err(|_| {
-                ArtifactError::Malformed("artifact: section count exceeds the 32-bit field")
-            })?,
+        out.extend_from_slice(&spec.format_version.to_le_bytes());
+        out.extend_from_slice(
+            &u32::try_from(spec.section_count)
+                .map_err(|_| {
+                    ArtifactError::Malformed("artifact: section count exceeds the 32-bit field")
+                })?
+                .to_le_bytes(),
         );
-        write_u64_le(&mut out, to_u64(identity_offset)?);
-        write_u64_le(&mut out, to_u64(identity_bytes.len())?);
+        out.extend_from_slice(
+            &u64::try_from(identity_offset)
+                .map_err(|_| LENGTH_FIELD)?
+                .to_le_bytes(),
+        );
+        out.extend_from_slice(
+            &u64::try_from(identity_bytes.len())
+                .map_err(|_| LENGTH_FIELD)?
+                .to_le_bytes(),
+        );
         out.extend_from_slice(identity.digest());
         debug_assert_eq!(out.len(), HEADER_LEN);
 
         // -- Section directory -------------------------------------------------
         for (index, (kind, body)) in sections.iter().enumerate() {
-            write_u32_le(&mut out, *kind);
-            write_u64_le(&mut out, to_u64(offsets[index])?);
-            write_u64_le(&mut out, to_u64(body.len())?);
+            out.extend_from_slice(&kind.to_le_bytes());
+            out.extend_from_slice(
+                &u64::try_from(offsets[index])
+                    .map_err(|_| LENGTH_FIELD)?
+                    .to_le_bytes(),
+            );
+            out.extend_from_slice(
+                &u64::try_from(body.len())
+                    .map_err(|_| LENGTH_FIELD)?
+                    .to_le_bytes(),
+            );
             out.extend_from_slice(&digests[index]);
         }
         debug_assert_eq!(out.len(), directory_end);
@@ -451,9 +436,13 @@ impl ArtifactBuilder {
         // -- Trailer, sealing every byte ahead of it ---------------------------
         let container_digest: [u8; 32] = Sha256::digest(&out).into();
         out.extend_from_slice(&TRAILER_MAGIC);
-        write_u32_le(&mut out, spec.format_version);
-        write_u32_le(&mut out, 0); // reserved
-        write_u64_le(&mut out, to_u64(file_len)?);
+        out.extend_from_slice(&spec.format_version.to_le_bytes());
+        out.extend_from_slice(&0u32.to_le_bytes()); // reserved
+        out.extend_from_slice(
+            &u64::try_from(file_len)
+                .map_err(|_| LENGTH_FIELD)?
+                .to_le_bytes(),
+        );
         out.extend_from_slice(&container_digest);
         out.extend_from_slice(&[0u8; 8]); // reserved
         debug_assert_eq!(out.len(), file_len);
@@ -516,31 +505,23 @@ impl<'a> ArtifactView<'a> {
             return Err(ArtifactError::BadMagic);
         }
 
-        let mut pos = 8usize;
-        let version = read_u32_le(bytes, &mut pos);
+        let version = u32_at(bytes, 8)?;
         if version != spec.format_version {
             return Err(ArtifactError::UnsupportedVersion(version));
         }
-        let stored_count = to_usize(
-            u64::from(read_u32_le(bytes, &mut pos)),
-            "artifact: section count exceeds usize",
-        )?;
+        let stored_count = usize::try_from(u32_at(bytes, 12)?)
+            .map_err(|_| ArtifactError::Malformed("artifact: section count exceeds usize"))?;
         if stored_count != spec.section_count {
             return Err(ArtifactError::SectionCountMismatch {
                 expected: spec.section_count,
                 found: stored_count,
             });
         }
-        let identity_offset = to_usize(
-            read_u64_le(bytes, &mut pos),
-            "artifact: identity offset exceeds usize",
-        )?;
-        let identity_len = to_usize(
-            read_u64_le(bytes, &mut pos),
-            "artifact: identity length exceeds usize",
-        )?;
-        let identity_digest = read_digest(bytes, &mut pos);
-        debug_assert_eq!(pos, HEADER_LEN);
+        let identity_offset = usize::try_from(u64_at(bytes, 16)?)
+            .map_err(|_| ArtifactError::Malformed("artifact: identity offset exceeds usize"))?;
+        let identity_len = usize::try_from(u64_at(bytes, 24)?)
+            .map_err(|_| ArtifactError::Malformed("artifact: identity length exceeds usize"))?;
+        let identity_digest = digest_at(bytes, 32)?;
 
         // -- Directory bounds --------------------------------------------------
         let directory_len = stored_count
@@ -580,11 +561,12 @@ impl<'a> ArtifactView<'a> {
         let mut unpadded_end = identity_end;
         let mut sections: Vec<(u32, &'a [u8])> = Vec::with_capacity(stored_count);
         let mut previous: Option<u32> = None;
-        for _ in 0..stored_count {
-            let kind = read_u32_le(bytes, &mut pos);
-            let offset = read_u64_le(bytes, &mut pos);
-            let len = read_u64_le(bytes, &mut pos);
-            let stored_digest = read_digest(bytes, &mut pos);
+        for index in 0..stored_count {
+            let entry = HEADER_LEN + index * ENTRY_LEN;
+            let kind = u32_at(bytes, entry)?;
+            let offset = u64_at(bytes, entry + 4)?;
+            let len = u64_at(bytes, entry + 12)?;
+            let stored_digest = digest_at(bytes, entry + 20)?;
 
             if let Some(prev) = previous {
                 if kind == prev {
@@ -598,8 +580,10 @@ impl<'a> ArtifactView<'a> {
             }
             previous = Some(kind);
 
-            let offset = to_usize(offset, "artifact: section offset exceeds usize")?;
-            let len = to_usize(len, "artifact: section length exceeds usize")?;
+            let offset = usize::try_from(offset)
+                .map_err(|_| ArtifactError::Malformed("artifact: section offset exceeds usize"))?;
+            let len = usize::try_from(len)
+                .map_err(|_| ArtifactError::Malformed("artifact: section length exceeds usize"))?;
             if offset != cursor {
                 return Err(ArtifactError::Malformed(
                     "artifact: section is not at its canonical offset",
@@ -620,7 +604,6 @@ impl<'a> ArtifactView<'a> {
             unpadded_end = end;
             cursor = align_up(end)?;
         }
-        debug_assert_eq!(pos, directory_end);
 
         let trailer_offset = cursor;
         let file_len = trailer_offset
@@ -650,15 +633,13 @@ impl<'a> ArtifactView<'a> {
         if trailer[0..8] != TRAILER_MAGIC {
             return Err(ArtifactError::TrailerMismatch);
         }
-        let mut tpos = 8usize;
-        let trailer_version = read_u32_le(trailer, &mut tpos);
-        let trailer_reserved = read_u32_le(trailer, &mut tpos);
-        let trailer_file_len = read_u64_le(trailer, &mut tpos);
-        let trailer_digest = read_digest(trailer, &mut tpos);
-        debug_assert_eq!(tpos, 56);
+        let trailer_version = u32_at(trailer, 8)?;
+        let trailer_reserved = u32_at(trailer, 12)?;
+        let trailer_file_len = u64_at(trailer, 16)?;
+        let trailer_digest = digest_at(trailer, 24)?;
         if trailer_version != spec.format_version
             || trailer_reserved != 0
-            || trailer_file_len != to_u64(file_len)?
+            || trailer_file_len != u64::try_from(file_len).map_err(|_| LENGTH_FIELD)?
             || !all_zero(&trailer[56..TRAILER_LEN])
         {
             return Err(ArtifactError::TrailerMismatch);
@@ -936,10 +917,10 @@ mod tests {
     fn refuses_flipped_section_byte() {
         let bytes = sample_bytes();
         // KIND_A's body is the first section; find its offset from the directory.
-        let mut pos = entry_offset(0);
-        let kind = read_u32_le(&bytes, &mut pos);
+        let kind = u32_at(&bytes, entry_offset(0)).expect("an entry kind");
         assert_eq!(kind, KIND_A);
-        let offset = read_u64_le(&bytes, &mut pos) as usize;
+        let offset = usize::try_from(u64_at(&bytes, entry_offset(0) + 4).expect("an offset"))
+            .expect("a usize offset");
 
         let mut tampered = bytes;
         tampered[offset] ^= 0x01;
@@ -1040,10 +1021,14 @@ mod tests {
     fn refuses_non_zero_padding() {
         let bytes = sample_bytes();
         // KIND_B's body is 6 bytes, so the two bytes after it are padding.
-        let mut pos = entry_offset(1);
-        assert_eq!(read_u32_le(&bytes, &mut pos), KIND_B);
-        let offset = read_u64_le(&bytes, &mut pos) as usize;
-        let len = read_u64_le(&bytes, &mut pos) as usize;
+        assert_eq!(
+            u32_at(&bytes, entry_offset(1)).expect("an entry kind"),
+            KIND_B
+        );
+        let offset = usize::try_from(u64_at(&bytes, entry_offset(1) + 4).expect("an offset"))
+            .expect("a usize offset");
+        let len = usize::try_from(u64_at(&bytes, entry_offset(1) + 12).expect("a length"))
+            .expect("a usize length");
         assert_eq!(len, 6);
 
         let mut tampered = bytes;
@@ -1057,10 +1042,10 @@ mod tests {
     #[test]
     fn refuses_relocated_section() {
         let mut bytes = sample_bytes();
-        let mut pos = entry_offset(0);
-        let _kind = read_u32_le(&bytes, &mut pos);
-        let offset = read_u64_le(&bytes, &mut pos);
-        bytes[pos - 8..pos].copy_from_slice(&(offset + ALIGNMENT as u64).to_le_bytes());
+        let at = entry_offset(0) + 4;
+        let offset = u64_at(&bytes, at).expect("an offset");
+        crate::bytes::put_u64_le(&mut bytes, at, offset + ALIGNMENT as u64)
+            .expect("the entry is in the header");
         assert!(matches!(
             ArtifactView::from_bytes(spec(3), &bytes).unwrap_err(),
             ArtifactError::Malformed(_)
@@ -1070,8 +1055,8 @@ mod tests {
     #[test]
     fn refuses_tampered_identity_region() {
         let mut bytes = sample_bytes();
-        let mut pos = 16usize;
-        let identity_offset = read_u64_le(&bytes, &mut pos) as usize;
+        let identity_offset = usize::try_from(u64_at(&bytes, 16).expect("an identity offset"))
+            .expect("a usize offset");
         bytes[identity_offset] ^= 0x01;
         assert!(matches!(
             ArtifactView::from_bytes(spec(3), &bytes).unwrap_err(),
@@ -1163,9 +1148,8 @@ mod tests {
         // `refuses_tampered_container_digest`: flipping the bit BACK restores a
         // buffer that opens, so the refusal tracks the bit and not the test.
         let mut bytes = sample_bytes();
-        let mut pos = entry_offset(0);
-        let _kind = read_u32_le(&bytes, &mut pos);
-        let offset = read_u64_le(&bytes, &mut pos) as usize;
+        let offset = usize::try_from(u64_at(&bytes, entry_offset(0) + 4).expect("an offset"))
+            .expect("a usize offset");
 
         bytes[offset] ^= 0x01;
         assert!(ArtifactView::from_bytes(spec(3), &bytes).is_err());
@@ -1235,23 +1219,5 @@ mod tests {
         assert_eq!(align_up(8).expect("aligns"), 8);
         assert_eq!(align_up(9).expect("aligns"), 16);
         assert!(align_up(usize::MAX).is_err());
-    }
-}
-
-/// The alignment arithmetic in this module against the standard library's
-/// `checked_next_multiple_of`, over every value up to 4096 and the top of the
-/// type's range.
-#[cfg(test)]
-mod align_differential {
-    use super::*;
-
-    #[test]
-    fn align_up_is_checked_next_multiple_of() {
-        for value in (0..=4096).chain(usize::MAX - 4096..=usize::MAX) {
-            assert_eq!(
-                align_up(value).ok(),
-                value.checked_next_multiple_of(ALIGNMENT)
-            );
-        }
     }
 }

@@ -118,6 +118,7 @@
 //! `wasm32-unknown-unknown`-clean.
 
 use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le_into;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -576,19 +577,13 @@ impl WitnessAddress {
 /// collision-resistant function of the address alone — identical on every target, and
 /// independent of the order witnesses were minted in.
 fn witness_surface(address: &WitnessAddress) -> String {
-    /// Append `bytes` as its `u64` little-endian length followed by the bytes themselves.
-    fn frame(hasher: &mut purrdf_hash::blake3::RecordHasher, bytes: &[u8]) {
-        hasher.update(&(bytes.len() as u64).to_le_bytes());
-        hasher.update(bytes);
-    }
-
     let mut hasher = purrdf_hash::blake3::RecordHasher::new();
-    frame(&mut hasher, WITNESS_DIGEST_TAG.as_bytes());
+    frame_le_into(&mut hasher, WITNESS_DIGEST_TAG.as_bytes());
     hasher.update(&(address.clause as u64).to_le_bytes());
     hasher.update(&(address.ordinal as u64).to_le_bytes());
     hasher.update(&(address.frontier.len() as u64).to_le_bytes());
     for value in &address.frontier {
-        frame(&mut hasher, value.as_bytes());
+        frame_le_into(&mut hasher, value.as_bytes());
     }
     let digest = hasher.finalize();
 

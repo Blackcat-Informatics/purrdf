@@ -14,13 +14,17 @@
 //! lengths where a narrower length field would carry into its next byte.
 //!
 //! The file was recorded from the construction the framing specification
-//! states — `u64_le(len(field)) ‖ field` — before any implementation of it was
-//! consolidated, and every implementation answers from it. To re-record after a
-//! deliberate change of construction, run this target with
-//! `PURRDF_RECORD_FRAME_LE=1`.
+//! states — `u64_le(len(field)) ‖ field` — and [`purrdf_hash::frame`] answers
+//! from it through every entry point: [`frame_le`] into a buffer,
+//! [`frame_le_into`] into a streaming digest (statically and through
+//! `&mut dyn Digest`, whole and split across two frames), and
+//! [`frame_be_labelled`], whose lengths are the same eight bytes in the other
+//! order. To re-record after a deliberate change of construction, run this
+//! target with `PURRDF_RECORD_FRAME_LE=1`.
 
-use purrdf_hash::blake3;
+use purrdf_hash::frame::{frame_be_labelled, frame_le, frame_le_into};
 use purrdf_hash::mix::splitmix64_next;
+use purrdf_hash::{Digest, blake3};
 use purrdf_hash_conformance::iri_corpus;
 use purrdf_testkit::vectors::{VectorFile, decode_bytes, encode_bytes};
 
@@ -114,7 +118,11 @@ fn inputs() -> Vec<(&'static str, String, Vec<u8>)> {
     }
     for byte in FILL_BYTES {
         for length in FILL_LENGTHS {
-            inputs.push(("fill", format!("{byte:02x}*{length}"), vec![byte; length]));
+            inputs.push((
+                "fill",
+                format!("{}*{length}", purrdf_hash::hex::encode(&[byte])),
+                vec![byte; length],
+            ));
         }
     }
     inputs
@@ -158,6 +166,97 @@ fn the_vectors_are_the_specified_construction() {
             (record.fields[0], record.fields[1]),
             (*kind, input.as_str())
         );
+    }
+}
+
+/// [`frame_le`] appends exactly the frozen framed field, after whatever the
+/// buffer already holds.
+fn frame_le_reproduces_the_vectors() {
+    let file = VectorFile::parse(FRAME_VECTORS).unwrap_or_else(|error| panic!("frame_le: {error}"));
+    let replayed = file
+        .replay(2, |fields| {
+            let input = decode_input(fields[0], fields[1]);
+            let mut out = vec![0xA5];
+            frame_le(&mut out, &input);
+            assert_eq!(out[0], 0xA5, "the buffer's earlier bytes are kept");
+            assert_eq!(out[9..], input[..], "the field follows its prefix");
+            answers(&out[1..])
+        })
+        .unwrap_or_else(|mismatch| panic!("frame_le: {mismatch}"));
+    assert_eq!(replayed, inputs().len());
+}
+
+/// [`frame_le_into`] streams exactly the frozen framed field into a digest,
+/// through a generic and a `dyn` digest alike.
+fn frame_le_into_reproduces_the_vectors() {
+    let file =
+        VectorFile::parse(FRAME_VECTORS).unwrap_or_else(|error| panic!("frame_le_into: {error}"));
+    let replayed = file
+        .replay(2, |fields| {
+            let input = decode_input(fields[0], fields[1]);
+            let mut hasher = blake3::Hasher::new();
+            frame_le_into(&mut hasher, &input);
+            let mut through_dyn = blake3::RecordHasher::new();
+            frame_le_into(&mut through_dyn as &mut dyn Digest, &input);
+            let digest = hasher.finalize();
+            assert_eq!(
+                digest,
+                through_dyn.finalize(),
+                "a dyn digest absorbs the same bytes"
+            );
+            let mut framed = Vec::new();
+            frame_le(&mut framed, &input);
+            vec![
+                purrdf_hash::hex::encode(&framed[..8]),
+                purrdf_hash::hex::encode(digest.as_bytes()),
+            ]
+        })
+        .unwrap_or_else(|mismatch| panic!("frame_le_into: {mismatch}"));
+    assert_eq!(replayed, inputs().len());
+}
+
+/// Two streamed frames digest the two appended frames: the framing composes,
+/// and a split of the same bytes into two fields digests differently.
+fn streamed_frames_compose() {
+    for (_, _, input) in inputs().iter().filter(|(kind, _, _)| *kind != "fill") {
+        let split = input.len() / 2;
+        let (head, tail) = input.split_at(split);
+        let mut streamed = blake3::RecordHasher::new();
+        frame_le_into(&mut streamed, head);
+        frame_le_into(&mut streamed, tail);
+        let mut appended = Vec::new();
+        frame_le(&mut appended, head);
+        frame_le(&mut appended, tail);
+        assert_eq!(streamed.finalize(), blake3::hash(&appended));
+        if !input.is_empty() {
+            let mut whole = Vec::new();
+            frame_le(&mut whole, input);
+            frame_le(&mut whole, &[]);
+            assert_ne!(whole, appended, "a field boundary moves the framed bytes");
+        }
+    }
+}
+
+/// [`frame_be_labelled`] frames its label and its value with the frozen
+/// lengths, read big-endian.
+fn frame_be_labelled_reproduces_the_vectors() {
+    let file = VectorFile::parse(FRAME_VECTORS)
+        .unwrap_or_else(|error| panic!("frame_be_labelled: {error}"));
+    for record in file.records() {
+        let input = decode_input(record.fields[0], record.fields[1]);
+        let Ok(label) = core::str::from_utf8(&input) else {
+            continue;
+        };
+        let mut prefix = purrdf_hash::hex::decode(record.fields[2]).expect("a hexadecimal prefix");
+        prefix.reverse();
+        let value: Vec<u8> = input.iter().rev().copied().collect();
+        let mut out = Vec::new();
+        frame_be_labelled(&mut out, label, &value);
+        let mut expected = prefix.clone();
+        expected.extend_from_slice(&input);
+        expected.extend_from_slice(&prefix);
+        expected.extend_from_slice(&value);
+        assert_eq!(out, expected, "a {}-byte label and value", input.len());
     }
 }
 
@@ -209,4 +308,8 @@ purrdf_testkit::harness_main!(
     #[cfg(not(target_arch = "wasm32"))]
     record_vectors_when_asked,
     the_vectors_are_the_specified_construction,
+    frame_le_reproduces_the_vectors,
+    frame_le_into_reproduces_the_vectors,
+    streamed_frames_compose,
+    frame_be_labelled_reproduces_the_vectors,
 );

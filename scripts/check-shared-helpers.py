@@ -275,8 +275,16 @@ def ledger_findings(
             if detector == "isomorphic":
                 stale = resolved is None or resolved["symbol"] not in grouped
             elif detector == "forbidden":
+                # A census rule hit is named by its file and enclosing items; the
+                # variant it matches is the one defined in that file under that name.
+                item = variant["symbol"].rsplit("::", 1)[-1]
                 stale = not any(
-                    found["variant"] and (resolved is None or found["symbol"] == resolved["symbol"])
+                    found["variant"]
+                    and (
+                        resolved is None
+                        or found["symbol"] == resolved["symbol"]
+                        or (found["file"] == variant["file"] and found["symbol"].rsplit("::", 1)[-1] == item)
+                    )
                     for found in census["matches"]
                 )
             elif detector in iri_rules:
@@ -522,6 +530,152 @@ def hex_rule_fixture_cases() -> list[tuple[str, bool]]:
         ("a u32 code-point parse and a near-miss table are not reported", copies <= expected),
         ("the home's own digit table is the home's, not a copy", home == {("crates/hash/src/hex.rs", 1)}),
         ("each base16 hit is a copy of the enforced job", job["copies"] == len(expected)),
+    ]
+
+
+# A seeded workspace for the byte-layout rules, run through the real census:
+# every line marked POSITIVE must be reported and nothing else. Beside each
+# refusal sits a valid neighbour: a count written before a loop (not the field
+# itself), a varint length, a hasher's own integer writer, a framing inside the
+# home package, a read through first_chunk, a fixed-array conversion, a flag
+# mask, test code, and a forbidden variant row that sanctions its hit.
+LAYOUT_FIXTURE_LEDGER = """
+[[job]]
+id = "frame-le"
+summary = "s"
+home = "fixture_hash::frame::frame_le"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:length-prefix-frame"]
+names = []
+
+[[job.variant]]
+symbol = "fixture_user::decimal"
+file = "crates/user/src/lib.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "fixture_user::decimal"
+reason = "r"
+
+[[job]]
+id = "le-bytes"
+summary = "s"
+home = "fixture_hash::frame::frame_le"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:le-slice-int", "rule:align-up-mask", "rule:div-ceil-by-hand"]
+names = []
+"""
+
+LAYOUT_FIXTURE_FILES = {
+    "crates/hash/Cargo.toml": '[package]\nname = "fixture-hash"\n',
+    "crates/hash/src/lib.rs": "pub mod frame;\n",
+    "crates/hash/src/frame.rs": (
+        "/// The one framing.\n"
+        "pub fn frame_le(out: &mut Vec<u8>, bytes: &[u8]) {\n"
+        "    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());\n"
+        "    out.extend_from_slice(bytes);\n"
+        "}\n"
+    ),
+    "crates/user/Cargo.toml": '[package]\nname = "fixture-user"\n',
+    "crates/user/src/lib.rs": (
+        "pub fn framed(out: &mut Vec<u8>, bytes: &[u8]) {\n"
+        "    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes()); // POSITIVE\n"
+        "    out.extend_from_slice(bytes);\n"
+        "}\n"
+        "pub fn streamed(h: &mut H, field: &[u8]) {\n"
+        "    let length = u64::try_from(field.len()).expect(\"fits\");\n"
+        "    h.update(length.to_le_bytes()); // POSITIVE\n"
+        "    h.update(field);\n"
+        "}\n"
+        "pub fn counted(out: &mut Vec<u8>, items: &[u8]) {\n"
+        "    out.extend_from_slice(&(items.len() as u64).to_le_bytes());\n"
+        "    for item in items { out.push(*item); }\n"
+        "}\n"
+        "pub fn varint(out: &mut Vec<u8>, bytes: &[u8]) {\n"
+        "    write_varint(out, bytes.len() as u64);\n"
+        "    out.extend_from_slice(bytes);\n"
+        "}\n"
+        "pub fn hashed(h: &mut H, s: &str) {\n"
+        "    h.write_u64(s.len() as u64);\n"
+        "    h.write(s.as_bytes());\n"
+        "}\n"
+        "/// A decimal framing a variant row sanctions.\n"
+        "pub fn decimal(out: &mut String, s: &str) {\n"
+        "    let _ = write!(out, \"{}:{}\", s.len(), s);\n"
+        "}\n"
+        "pub fn read(b: &[u8], i: usize) -> u32 {\n"
+        "    u32::from_le_bytes(b[i..i + 4].try_into().unwrap()) // POSITIVE\n"
+        "}\n"
+        "pub fn read_chunk(b: &[u8], i: usize) -> u32 { u32::from_le_bytes(*b[i..].first_chunk().unwrap()) }\n"
+        "pub fn read_array(b: [u8; 4]) -> u32 { u32::from_le_bytes(b) }\n"
+        "pub fn put(b: &mut [u8], i: usize, v: u32) {\n"
+        "    b[i..i + 4].copy_from_slice(&v.to_le_bytes()); // POSITIVE\n"
+        "}\n"
+        "pub fn align(v: usize) -> usize { (v + 7) & !7 } // POSITIVE\n"
+        "pub fn up(n: i128, d: i128) -> i128 { (n + d - 1) / d } // POSITIVE\n"
+        "pub fn up_std(n: u64, d: u64) -> u64 { n.div_ceil(d) }\n"
+        "pub fn flags(f: u32) -> u32 { f & !(A | B) }\n"
+        "pub fn low(f: u64, n: u32) -> u64 { f.bits() & !((1 << n) - 1) }\n"
+        "#[cfg(test)]\n"
+        "mod tests { fn oracle(b: &[u8]) -> u32 { u32::from_le_bytes(b[0..4].try_into().unwrap()) } }\n"
+    ),
+    "crates/user/tests/it.rs": "fn oracle(b: &[u8]) -> u32 { u32::from_le_bytes(b[0..4].try_into().unwrap()) }\n",
+}
+
+
+def layout_rule_fixture_cases() -> list[tuple[str, bool]]:
+    """Run the census over the seeded byte-layout workspace and compare its hits
+    with the lines marked POSITIVE."""
+    with tempfile.TemporaryDirectory(prefix="helper-census-layout-fixture-") as directory:
+        root = Path(directory)
+        expected: set[tuple[str, int]] = set()
+        for relative, text in LAYOUT_FIXTURE_FILES.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            expected |= {
+                (relative, number)
+                for number, line in enumerate(text.splitlines(), start=1)
+                if line.endswith("// POSITIVE")
+            }
+        (root / "helpers-ledger.toml").write_text(LAYOUT_FIXTURE_LEDGER, encoding="utf-8")
+        try:
+            index = json.loads(run_census("--index", root=root))
+        except (CensusError, json.JSONDecodeError) as exc:
+            return [(f"the census runs over the seeded byte-layout workspace ({exc})", False)]
+    copies = {
+        (match["file"], match["line"])
+        for job in ("frame-le", "le-bytes")
+        for match in index["jobs"][job]["matches"]
+        if not match["in_home"] and not match["variant"]
+    }
+    variants = {match["symbol"] for match in index["jobs"]["frame-le"]["matches"] if match["variant"]}
+    home = [match for match in index["jobs"]["frame-le"]["matches"] if match["in_home"]]
+    return [
+        ("every seeded framing, slice-indexed integer, alignment mask and hand ceiling division is reported", expected <= copies),
+        (
+            "a count before a loop, a varint, a hasher's integer, a first_chunk read, a flag mask, std div_ceil and test code are not",
+            copies <= expected,
+        ),
+        ("the framing inside the home package is the home's", len(home) == 1),
+        ("a forbidden variant row sanctions its rule hit", variants == {"crates/user/src/lib.rs::decimal"}),
     ]
 
 
@@ -781,6 +935,7 @@ def self_test() -> int:
 
     cases.extend(rule_fixture_cases())
     cases.extend(hex_rule_fixture_cases())
+    cases.extend(layout_rule_fixture_cases())
 
     failed = 0
     for name, held in cases:

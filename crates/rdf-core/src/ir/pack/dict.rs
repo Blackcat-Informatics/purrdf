@@ -77,7 +77,9 @@ use crate::ir::term::{StrRange, arena_str};
 use crate::ir::term_walk::{Nested, try_fold_nested};
 use crate::{BlankScope, RdfTextDirection, TermRef, TermValue};
 
-use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for, read_varint, write_varint};
+use super::bits::{
+    IntVector, IntVectorRef, PackBitsError, bits_for, read_header_u64, read_varint, write_varint,
+};
 
 /// The `rdf:reifies` predicate IRI — the RDF 1.2 reification indirection edge
 /// (`reifier rdf:reifies <<( s p o )>>`). A local mirror of the same private
@@ -159,19 +161,6 @@ impl From<PackBitsError> for PackDictError {
             PackBitsError::Malformed(reason) => Self::Malformed(reason),
         }
     }
-}
-
-/// Read an 8-byte little-endian header field at `*pos`, advancing `*pos` past it.
-/// A small local mirror of `bits::read_header_u64` (private to that module).
-fn read_u64_header(bytes: &[u8], pos: &mut usize) -> Result<u64, PackDictError> {
-    let end = *pos + 8;
-    let slice = bytes.get(*pos..end).ok_or(PackDictError::Truncated {
-        needed: end,
-        found: bytes.len(),
-    })?;
-    let value = u64::from_le_bytes(slice.try_into().expect("slice is exactly 8 bytes"));
-    *pos = end;
-    Ok(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -472,8 +461,8 @@ fn encode_values(values: &[TermValue], value_to_id: &FastMap<TermValue, PackTerm
 /// order (`1..=n_terms`). Returns the term count.
 fn decode_values(bytes: &[u8], dict: &mut PackDict) -> Result<u64, PackDictError> {
     let mut pos = 0usize;
-    let term_count = read_u64_header(bytes, &mut pos)?;
-    let bucket_count = read_u64_header(bytes, &mut pos)?;
+    let term_count = read_header_u64(bytes, &mut pos)?;
+    let bucket_count = read_header_u64(bytes, &mut pos)?;
     let offsets = IntVectorRef::from_bytes(&bytes[pos..])?;
     if offsets.len() as u64 != bucket_count {
         return Err(PackDictError::Malformed(
@@ -772,7 +761,7 @@ fn decode_value_list(values_bytes: &[u8], expected_terms: u64) -> Result<PackDic
 /// decoding its records.
 fn peek_term_count(values_bytes: &[u8]) -> Result<u64, PackDictError> {
     let mut pos = 0usize;
-    read_u64_header(values_bytes, &mut pos)
+    Ok(read_header_u64(values_bytes, &mut pos)?)
 }
 
 // ---------------------------------------------------------------------------

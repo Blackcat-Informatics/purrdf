@@ -77,8 +77,8 @@ pub(crate) fn match_length_portable(a: &[u8], b: &[u8]) -> usize {
     let (a, b) = (&a[..n], &b[..n]);
     let mut i = 0;
     while i + 8 <= n {
-        let x = u64::from_le_bytes(a[i..i + 8].try_into().expect("eight bytes"));
-        let y = u64::from_le_bytes(b[i..i + 8].try_into().expect("eight bytes"));
+        let x = u64::from_le_bytes(*a[i..].first_chunk().expect("eight bytes"));
+        let y = u64::from_le_bytes(*b[i..].first_chunk().expect("eight bytes"));
         let diff = x ^ y;
         if diff != 0 {
             return i + (diff.trailing_zeros() / 8) as usize;
@@ -100,7 +100,7 @@ pub(crate) fn hash_windows_portable(data: &[u8], start: usize, out: &mut [u32]) 
     );
     for (i, slot) in out.iter_mut().enumerate() {
         let p = start + i;
-        let w = u32::from_le_bytes(data[p..p + 4].try_into().expect("four bytes"));
+        let w = u32::from_le_bytes(*data[p..].first_chunk().expect("four bytes"));
         *slot = hash4(w);
     }
 }

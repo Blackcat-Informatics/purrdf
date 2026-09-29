@@ -1021,7 +1021,7 @@ fn separation_at(decay: DecayRule, weight: i128, denominator: u64) -> Separation
             } else {
                 // ⌈(level + 1)·S / here⌉, formed without leaving the integers.
                 let target = (level + 1) * SCALE_RAW;
-                Separation::NextWeight((target + here - 1) / here)
+                Separation::NextWeight(ceil_div(target, here))
             }
         }
     }
@@ -1046,7 +1046,25 @@ fn shortfall_at(shortfall: i128, denominator: u64) -> i128 {
     let reciprocal = i128::from(SCALE_NARROW / denominator);
     // ⌈f·I / S⌉, formed without leaving the integers. `f ≤ S` and `I ≤ S/2`, so
     // the product stays far inside an `i128`.
-    (shortfall * reciprocal + SCALE_RAW - 1) / SCALE_RAW
+    ceil_div(shortfall * reciprocal, SCALE_RAW)
+}
+
+/// `⌈numerator / divisor⌉` for a positive `divisor`, formed without leaving the
+/// integers and without the overflow of `numerator + divisor`.
+///
+/// The one ceiling division of this module: the separation sweep's next
+/// weight, the shortfall's step and the counting bound all round up through it.
+/// It is written out because the standard library's signed `div_ceil` is not
+/// stable; truncating division already rounds a negative quotient up, so only a
+/// positive remainder moves the quotient.
+pub(crate) const fn ceil_div(numerator: i128, divisor: i128) -> i128 {
+    debug_assert!(divisor > 0, "a ceiling division by a positive divisor");
+    let quotient = numerator / divisor;
+    if numerator % divisor > 0 {
+        quotient + 1
+    } else {
+        quotient
+    }
 }
 
 /// What one sweep of the constraints over a weight found.
@@ -1214,7 +1232,7 @@ fn heaviest_counting_bound(decay: DecayRule, narrowest: u64, widest: u64) -> i12
             DecayRule::WeightedReciprocalRank { .. } => {
                 let numerator = narrow * (beyond * steps + 1);
                 let divisor = beyond - narrow;
-                (numerator + divisor - 1) / divisor
+                ceil_div(numerator, divisor)
             }
         };
         bound = bound.max(candidate);
@@ -1544,7 +1562,7 @@ fn weighted_guarantee(weight_raw: u128, k: u32) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::{
-        ClassWidth, MAX_DEPTH, MonotoneDepth, ToleratedDepth, class_width, contribution,
+        ClassWidth, MAX_DEPTH, MonotoneDepth, ToleratedDepth, ceil_div, class_width, contribution,
         contribution_under, deepest_rank_within_width, first_collision, minimum_weight_for_depth,
         monotone_depth, shortfall_at, weighted_contribution, weighted_guarantee,
     };
@@ -1554,6 +1572,31 @@ mod tests {
 
     /// `10^SCALE_DIGITS`, the raw value of a weight of exactly one.
     const SCALE: i128 = 10_i128.pow(SCALE_DIGITS);
+
+    /// Ceiling division at its boundaries: zero, an exact quotient, one either
+    /// side of it, a negative numerator, and the top of the range, where the
+    /// hand-written `n + d - 1` would overflow.
+    #[test]
+    fn ceil_div_rounds_up_at_every_boundary() {
+        assert_eq!(ceil_div(0, 7), 0);
+        assert_eq!(ceil_div(14, 7), 2);
+        assert_eq!(ceil_div(13, 7), 2);
+        assert_eq!(ceil_div(15, 7), 3);
+        assert_eq!(ceil_div(1, 7), 1);
+        assert_eq!(ceil_div(-1, 7), 0);
+        assert_eq!(ceil_div(-7, 7), -1);
+        assert_eq!(ceil_div(-8, 7), -1);
+        assert_eq!(ceil_div(-14, 7), -2);
+        assert_eq!(ceil_div(i128::MAX, 2), i128::MAX / 2 + 1);
+        assert_eq!(ceil_div(i128::MAX, 1), i128::MAX);
+        for numerator in -50_i128..=50 {
+            for divisor in 1_i128..=9 {
+                let up = ceil_div(numerator, divisor);
+                assert!(up * divisor >= numerator, "{numerator}/{divisor}");
+                assert!((up - 1) * divisor < numerator, "{numerator}/{divisor}");
+            }
+        }
+    }
 
     fn value(weight: Fixed, rank: u64, k: u32) -> Fixed {
         contribution(weight, rank, k).expect("a positive weight and a 1-based rank do not overflow")

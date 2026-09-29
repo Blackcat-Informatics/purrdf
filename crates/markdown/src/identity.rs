@@ -21,6 +21,7 @@
 use purrdf_core::ContentDigest;
 use purrdf_core::embedding::ChunkingContractId;
 use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le;
 
 use crate::profile::Vocabulary;
 
@@ -161,10 +162,10 @@ pub fn citation_iri(
     reified: &[String],
 ) -> String {
     let mut content = Vec::new();
-    push_field(&mut content, row_line);
-    push_field(&mut content, unit_node.as_bytes());
+    frame_le(&mut content, row_line);
+    frame_le(&mut content, unit_node.as_bytes());
     for term in reified {
-        push_field(&mut content, term.as_bytes());
+        frame_le(&mut content, term.as_bytes());
     }
     node_iri_of_digest(
         vocabulary,
@@ -244,13 +245,13 @@ pub(crate) fn node_iri_of_digest(
     digest: &ContentDigest,
 ) -> String {
     let mut preimage = Vec::new();
-    push_field(&mut preimage, kind.as_bytes());
-    push_field(&mut preimage, source_id.as_bytes());
-    push_field(&mut preimage, contract.as_bytes());
-    push_field(&mut preimage, &byte_start.to_le_bytes());
-    push_field(&mut preimage, &byte_end.to_le_bytes());
-    push_field(&mut preimage, crate::DIGEST_ALGORITHM.as_bytes());
-    push_field(&mut preimage, digest.as_bytes());
+    frame_le(&mut preimage, kind.as_bytes());
+    frame_le(&mut preimage, source_id.as_bytes());
+    frame_le(&mut preimage, contract.as_bytes());
+    frame_le(&mut preimage, &byte_start.to_le_bytes());
+    frame_le(&mut preimage, &byte_end.to_le_bytes());
+    frame_le(&mut preimage, crate::DIGEST_ALGORITHM.as_bytes());
+    frame_le(&mut preimage, digest.as_bytes());
     format!(
         "{}{}:{}:{}",
         vocabulary.node_base,
@@ -258,12 +259,6 @@ pub(crate) fn node_iri_of_digest(
         crate::DIGEST_ALGORITHM,
         ContentDigest::of(&preimage).to_hex()
     )
-}
-
-/// Length-prefixed field: no two field sequences share a preimage.
-fn push_field(out: &mut Vec<u8>, field: &[u8]) {
-    out.extend_from_slice(&(field.len() as u64).to_le_bytes());
-    out.extend_from_slice(field);
 }
 
 #[cfg(test)]
@@ -282,7 +277,7 @@ mod tests {
     /// digest algorithm tag, and the digest of the content — digested,
     /// and written `<node base><kind>:<alg>:<hex>`.
     ///
-    /// Nothing under test is called. [`push_field`] could lose its
+    /// Nothing under test is called. [`frame_le`] could lose its
     /// prefix, [`node_iri_of_digest`] could reorder its fields or drop
     /// the algorithm tag, and these vectors would fail — which is the
     /// whole reason to write the preimage out twice. Holding
@@ -426,53 +421,5 @@ mod tests {
             mint(&[&based, &literal]),
             "the row wrote its anchors in an order"
         );
-    }
-}
-
-/// The length framing in this module against the frozen framing vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_frame_differential {
-    use super::*;
-
-    /// Every input of the frozen length-framing vectors of
-    /// `purrdf-hash-conformance`, with its recorded eight-byte prefix and the
-    /// BLAKE3 digest of its framed field.
-    fn frozen_frames() -> Vec<(Vec<u8>, Vec<u8>, String)> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/frame_le_vectors.txt"
-        )))
-        .expect("the frozen framing vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let input = if fields[0] == "fill" {
-                    let (byte, length) = fields[1].split_once('*').expect("a BYTE*LENGTH fill");
-                    let byte = purrdf_hash::hex::decode(byte).expect("a hexadecimal byte")[0];
-                    vec![byte; length.parse().expect("a decimal length")]
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let prefix = purrdf_hash::hex::decode(fields[2]).expect("a hexadecimal prefix");
-                (input, prefix, fields[3].to_owned())
-            })
-            .collect()
-    }
-
-    #[test]
-    fn push_field_reproduces_the_frozen_framing_vectors() {
-        for (input, prefix, _) in frozen_frames() {
-            let mut out = Vec::new();
-            push_field(&mut out, &input);
-            assert_eq!(
-                out[..8],
-                prefix[..],
-                "the prefix of a {}-byte field",
-                input.len()
-            );
-            assert_eq!(out[8..], input[..]);
-        }
     }
 }

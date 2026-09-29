@@ -6,6 +6,7 @@
 use core::mem::size_of;
 
 use crate::ContentDigest;
+use crate::bytes::{read_u32_le, read_u64_le};
 use crate::distance::binary64::{Binary64, Precision};
 use crate::distance::{Exact, Resolved};
 
@@ -27,7 +28,7 @@ use super::wire::{
     SECTION_CONTRACTS, SECTION_CRITICAL, SECTION_DERIVED, SECTION_EXTENSION_MIN,
     SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD, SECTION_MATRICES,
     SECTION_MATRIX_DATA, SECTION_RELATIONS, SECTION_SOURCE, SECTION_TARGET_SETS, SECTION_TARGETS,
-    SECTION_TOKEN_SPANS, SectionKey, checked_align_up,
+    SECTION_TOKEN_SPANS, SectionKey,
 };
 
 const SOURCE_LENGTH: usize = 128;
@@ -2499,12 +2500,11 @@ fn open_framing(bytes: &[u8]) -> Result<(DirectoryView<'_>, ArtifactRoot), Embed
         .checked_mul(PURREMB_DIRECTORY_ENTRY_LENGTH)
         .ok_or(EmbeddingError::ArithmeticOverflow("directory length"))?;
     require_u64(bytes, 32, directory_length, "directory length")?;
-    let first_section_offset = checked_align_up(
-        u64::from(PURREMB_HEADER_LENGTH)
-            .checked_add(directory_length)
-            .ok_or(EmbeddingError::ArithmeticOverflow("directory end"))?,
-        PURREMB_FILE_ALIGNMENT,
-    )?;
+    let first_section_offset = u64::from(PURREMB_HEADER_LENGTH)
+        .checked_add(directory_length)
+        .ok_or(EmbeddingError::ArithmeticOverflow("directory end"))?
+        .checked_next_multiple_of(PURREMB_FILE_ALIGNMENT)
+        .ok_or(EmbeddingError::ArithmeticOverflow("alignment"))?;
     require_u64(bytes, 40, first_section_offset, "first section offset")?;
     let trailer_offset = read_u64(bytes, 48)?;
     let file_length = read_u64(bytes, 56)?;
@@ -2592,12 +2592,11 @@ fn validate_directory(
             });
         }
         borrowed_span(directory.file, offset, length, "section")?;
-        expected_offset = checked_align_up(
-            offset
-                .checked_add(length)
-                .ok_or(EmbeddingError::ArithmeticOverflow("section end"))?,
-            PURREMB_FILE_ALIGNMENT,
-        )?;
+        expected_offset = offset
+            .checked_add(length)
+            .ok_or(EmbeddingError::ArithmeticOverflow("section end"))?
+            .checked_next_multiple_of(PURREMB_FILE_ALIGNMENT)
+            .ok_or(EmbeddingError::ArithmeticOverflow("alignment"))?;
         validate_zero_padding(directory.file, offset + length, expected_offset)?;
 
         match key.kind {
@@ -4727,50 +4726,24 @@ fn fixed_record(
 }
 
 fn read_u32(bytes: &[u8], offset: usize) -> Result<u32, EmbeddingError> {
-    let end = offset
-        .checked_add(4)
-        .ok_or(EmbeddingError::ArithmeticOverflow("u32 read"))?;
-    Ok(u32::from_le_bytes(
-        bytes
-            .get(offset..end)
-            .ok_or(EmbeddingError::Truncated)?
-            .try_into()
-            .map_err(|_| EmbeddingError::Truncated)?,
-    ))
+    read_u32_le(bytes, offset).ok_or(EmbeddingError::Truncated)
 }
 
 fn read_u64(bytes: &[u8], offset: usize) -> Result<u64, EmbeddingError> {
-    let end = offset
-        .checked_add(8)
-        .ok_or(EmbeddingError::ArithmeticOverflow("u64 read"))?;
-    Ok(u64::from_le_bytes(
-        bytes
-            .get(offset..end)
-            .ok_or(EmbeddingError::Truncated)?
-            .try_into()
-            .map_err(|_| EmbeddingError::Truncated)?,
-    ))
+    read_u64_le(bytes, offset).ok_or(EmbeddingError::Truncated)
 }
 
 fn infallible_u32(bytes: &[u8], offset: usize) -> u32 {
-    u32::from_le_bytes(
-        bytes[offset..offset + 4]
-            .try_into()
-            .expect("structurally validated fixed u32 field"),
-    )
+    read_u32_le(bytes, offset).expect("structurally validated fixed u32 field")
 }
 
 fn infallible_u64(bytes: &[u8], offset: usize) -> u64 {
-    u64::from_le_bytes(
-        bytes[offset..offset + 8]
-            .try_into()
-            .expect("structurally validated fixed u64 field"),
-    )
+    read_u64_le(bytes, offset).expect("structurally validated fixed u64 field")
 }
 
 fn array32(bytes: &[u8], offset: usize) -> [u8; 32] {
-    bytes[offset..offset + 32]
-        .try_into()
+    *bytes[offset..]
+        .first_chunk()
         .expect("structurally validated 32-byte field")
 }
 
@@ -4857,8 +4830,7 @@ fn checked_table_end(offset: usize, count: usize, width: usize) -> Result<usize,
 
 fn align8(value: usize) -> Result<usize, EmbeddingError> {
     value
-        .checked_add(7)
-        .map(|biased| biased & !7)
+        .checked_next_multiple_of(8)
         .ok_or(EmbeddingError::ArithmeticOverflow("8-byte alignment"))
 }
 
@@ -5554,20 +5526,5 @@ mod tests {
             validate_index_guard(&guard),
             Err(EmbeddingError::DigestMismatch { .. })
         ));
-    }
-}
-
-/// The alignment arithmetic in this module against the standard library's
-/// `checked_next_multiple_of`, over every value up to 4096 and the top of the
-/// type's range.
-#[cfg(test)]
-mod align_differential {
-    use super::*;
-
-    #[test]
-    fn align8_is_checked_next_multiple_of() {
-        for value in (0..=4096).chain(usize::MAX - 4096..=usize::MAX) {
-            assert_eq!(align8(value).ok(), value.checked_next_multiple_of(8));
-        }
     }
 }

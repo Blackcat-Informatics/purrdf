@@ -10,6 +10,8 @@
 //! encoding is self-delimiting and map entries can be sorted without ambiguity.
 //! All integers are little-endian, so the bytes are identical on every target.
 
+use purrdf_hash::frame::frame_le;
+
 use crate::error::PlanError;
 
 /// Append-only canonical byte writer.
@@ -60,8 +62,7 @@ impl Writer {
 
     /// Write a length-framed byte string.
     pub(crate) fn bytes(&mut self, value: &[u8]) {
-        self.u64(value.len() as u64);
-        self.buf.extend_from_slice(value);
+        frame_le(&mut self.buf, value);
     }
 
     /// Write a length-framed UTF-8 string.
@@ -157,6 +158,20 @@ impl<'a> Reader<'a> {
         Ok(slice)
     }
 
+    /// Take the next `N` bytes as an array.
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], PlanError> {
+        let array = self
+            .bytes
+            .get(self.offset..)
+            .and_then(<[u8]>::first_chunk)
+            .copied()
+            .ok_or(PlanError::Truncated {
+                offset: self.offset,
+            })?;
+        self.offset += N;
+        Ok(array)
+    }
+
     /// Read one byte.
     pub(crate) fn u8(&mut self) -> Result<u8, PlanError> {
         Ok(self.take(1)?[0])
@@ -164,30 +179,22 @@ impl<'a> Reader<'a> {
 
     /// Read a little-endian `u16`.
     pub(crate) fn u16(&mut self) -> Result<u16, PlanError> {
-        let mut raw = [0u8; 2];
-        raw.copy_from_slice(self.take(2)?);
-        Ok(u16::from_le_bytes(raw))
+        Ok(u16::from_le_bytes(self.array()?))
     }
 
     /// Read a little-endian `u32`.
     pub(crate) fn u32(&mut self) -> Result<u32, PlanError> {
-        let mut raw = [0u8; 4];
-        raw.copy_from_slice(self.take(4)?);
-        Ok(u32::from_le_bytes(raw))
+        Ok(u32::from_le_bytes(self.array()?))
     }
 
     /// Read a little-endian `u64`.
     pub(crate) fn u64(&mut self) -> Result<u64, PlanError> {
-        let mut raw = [0u8; 8];
-        raw.copy_from_slice(self.take(8)?);
-        Ok(u64::from_le_bytes(raw))
+        Ok(u64::from_le_bytes(self.array()?))
     }
 
     /// Read a little-endian `i128`.
     pub(crate) fn i128(&mut self) -> Result<i128, PlanError> {
-        let mut raw = [0u8; 16];
-        raw.copy_from_slice(self.take(16)?);
-        Ok(i128::from_le_bytes(raw))
+        Ok(i128::from_le_bytes(self.array()?))
     }
 
     /// Read an `f32` from its exact bit pattern.

@@ -143,6 +143,7 @@
 //! a `$ref` to its enum `$def`, cardinality preserved.
 
 use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_be_labelled;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
@@ -913,22 +914,22 @@ fn schema_compilation_key(
     let mut bytes = Vec::with_capacity(
         shapes.nquads.len() + ontology.nquads.len() + request.namespaces.prefixes.len() * 64 + 256,
     );
-    append_key_part(&mut bytes, "key-salt", SCHEMA_KEY_SALT.as_bytes());
-    append_key_part(&mut bytes, "policy", SCHEMA_POLICY_SALT.as_bytes());
-    append_key_part(&mut bytes, "crate-version", crate::VERSION.as_bytes());
-    append_key_part(&mut bytes, "shapes-rdfc", shapes.nquads.as_bytes());
-    append_key_part(&mut bytes, "ontology-rdfc", ontology.nquads.as_bytes());
-    append_key_part(
+    frame_be_labelled(&mut bytes, "key-salt", SCHEMA_KEY_SALT.as_bytes());
+    frame_be_labelled(&mut bytes, "policy", SCHEMA_POLICY_SALT.as_bytes());
+    frame_be_labelled(&mut bytes, "crate-version", crate::VERSION.as_bytes());
+    frame_be_labelled(&mut bytes, "shapes-rdfc", shapes.nquads.as_bytes());
+    frame_be_labelled(&mut bytes, "ontology-rdfc", ontology.nquads.as_bytes());
+    frame_be_labelled(
         &mut bytes,
         "primary-prefix",
         request.namespaces.primary_prefix.as_bytes(),
     );
     for (prefix, namespace) in &request.namespaces.declared_prefixes {
-        append_key_part(&mut bytes, "namespace-prefix", prefix.as_bytes());
-        append_key_part(&mut bytes, "namespace-iri", namespace.as_bytes());
+        frame_be_labelled(&mut bytes, "namespace-prefix", prefix.as_bytes());
+        frame_be_labelled(&mut bytes, "namespace-iri", namespace.as_bytes());
     }
-    append_key_part(&mut bytes, "surface-mode", &[request.mode.key_byte()]);
-    append_key_part(
+    frame_be_labelled(&mut bytes, "surface-mode", &[request.mode.key_byte()]);
+    frame_be_labelled(
         &mut bytes,
         "value-vocab-marker",
         request
@@ -941,18 +942,11 @@ fn schema_compilation_key(
         MAX_SCHEMA_RELATIONS,
         MAX_OWL_EXPRESSION_DEPTH,
     ] {
-        append_key_part(&mut bytes, "fixed-limit", &limit.to_be_bytes());
+        frame_be_labelled(&mut bytes, "fixed-limit", &limit.to_be_bytes());
     }
     Ok(SchemaCompilationKey(
         ::purrdf::ContentDigest::of(&bytes).to_hex(),
     ))
-}
-
-fn append_key_part(bytes: &mut Vec<u8>, label: &str, value: &[u8]) {
-    bytes.extend_from_slice(&(label.len() as u64).to_be_bytes());
-    bytes.extend_from_slice(label.as_bytes());
-    bytes.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    bytes.extend_from_slice(value);
 }
 
 // ── Value-vocabulary projection config ───────────────────────────────────────
@@ -9151,58 +9145,5 @@ mod tests {
             !validates(&compiled.schema_json, &node),
             "the projection is closed: the non-anchor value fails the enum $ref"
         );
-    }
-}
-
-/// The labelled big-endian framing in this module against the frozen framing
-/// vectors of `purrdf-hash-conformance`: the eight-byte length each record
-/// holds, read big-endian, frames the label and the value alike.
-#[cfg(test)]
-mod frozen_frame_differential {
-    use super::*;
-
-    /// Every input of the frozen length-framing vectors of
-    /// `purrdf-hash-conformance`, with its recorded eight-byte prefix and the
-    /// BLAKE3 digest of its framed field.
-    fn frozen_frames() -> Vec<(Vec<u8>, Vec<u8>, String)> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/frame_le_vectors.txt"
-        )))
-        .expect("the frozen framing vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let input = if fields[0] == "fill" {
-                    let (byte, length) = fields[1].split_once('*').expect("a BYTE*LENGTH fill");
-                    let byte = purrdf_hash::hex::decode(byte).expect("a hexadecimal byte")[0];
-                    vec![byte; length.parse().expect("a decimal length")]
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let prefix = purrdf_hash::hex::decode(fields[2]).expect("a hexadecimal prefix");
-                (input, prefix, fields[3].to_owned())
-            })
-            .collect()
-    }
-
-    #[test]
-    fn append_key_part_reproduces_the_frozen_framing_vectors() {
-        for (input, prefix, _) in frozen_frames() {
-            let Ok(label) = core::str::from_utf8(&input) else {
-                continue;
-            };
-            let mut be = prefix.clone();
-            be.reverse();
-            let value: Vec<u8> = input.iter().rev().copied().collect();
-            let mut out = Vec::new();
-            append_key_part(&mut out, label, &value);
-            let mut expected = be.clone();
-            expected.extend_from_slice(&input);
-            expected.extend_from_slice(&be);
-            expected.extend_from_slice(&value);
-            assert_eq!(out, expected, "a {}-byte label and value", input.len());
-        }
     }
 }

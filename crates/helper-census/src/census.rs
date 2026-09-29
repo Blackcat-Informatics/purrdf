@@ -162,6 +162,20 @@ pub(crate) fn matches(job: &Job, workspace: &Workspace, home_package: &str) -> V
                 .unwrap_or_else(|| variant.symbol.clone())
         })
         .collect();
+    // A rule hit is named by its file and enclosing items, not by a resolved
+    // path, so a `forbidden` variant sanctions it by its file and item name.
+    let rule_variants: BTreeSet<(&str, &str)> = job
+        .variants
+        .iter()
+        .filter(|variant| variant.detector == "forbidden")
+        .map(|variant| {
+            let item = variant
+                .symbol
+                .rsplit_once("::")
+                .map_or(variant.symbol.as_str(), |(_, item)| item);
+            (variant.file.as_str(), item)
+        })
+        .collect();
     let mut found = Vec::new();
     for unit in &workspace.units {
         let reasons = unit_reasons(job, unit);
@@ -186,7 +200,10 @@ pub(crate) fn matches(job: &Job, workspace: &Workspace, home_package: &str) -> V
                 line: hit.line,
                 reasons: vec![format!("{}: {}", hit.rule, hit.detail)],
                 in_home: hit.home_exempt && hit.package == home_package,
-                variant: variants.contains(&hit.symbol),
+                variant: variants.contains(&hit.symbol)
+                    || hit.symbol.rsplit_once("::").is_some_and(|(_, item)| {
+                        rule_variants.contains(&(hit.file.as_str(), item))
+                    }),
             });
         }
     }

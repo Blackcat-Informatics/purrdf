@@ -72,6 +72,7 @@
 
 use purrdf_core::TermBox;
 use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le;
 use std::cmp::Ordering;
 
 use purrdf_core::{
@@ -82,7 +83,7 @@ use crate::analysis::{Analyzer, UnicodeVersions, unicode_versions};
 use crate::error::TextError;
 use crate::fixed::Fixed;
 use crate::ranking::{FIELD_LENGTH_MAX, FieldInput, MAX_FIELDS, PreparedCorpus, RankingProfile};
-use crate::term_bytes::{FINGERPRINT_BYTES, encode_term, push_str};
+use crate::term_bytes::{FINGERPRINT_BYTES, encode_term};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
 const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v2");
@@ -1869,7 +1870,7 @@ impl Digest {
     /// Absorb a length-prefixed string.
     fn text(&mut self, value: &str) {
         self.scratch.clear();
-        push_str(value, &mut self.scratch);
+        frame_le(&mut self.scratch, value.as_bytes());
         self.hasher.update(&self.scratch);
     }
 

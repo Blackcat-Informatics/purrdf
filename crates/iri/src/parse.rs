@@ -826,9 +826,9 @@ fn find_first_of<const N: usize>(bytes: &[u8], needles: [u8; N]) -> Option<usize
     let mut offset = 0usize;
     while offset + SCAN_WORD <= bytes.len() {
         let word = u64::from_le_bytes(
-            bytes[offset..offset + SCAN_WORD]
-                .try_into()
-                .expect("slice is exactly SCAN_WORD bytes"),
+            *bytes[offset..]
+                .first_chunk::<SCAN_WORD>()
+                .expect("the loop guard leaves SCAN_WORD bytes"),
         );
         let mut mask = 0u64;
         for &needle in &needles {

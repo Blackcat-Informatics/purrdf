@@ -128,10 +128,9 @@ const PRESENT: u8 = 0x21;
 
 /// An FNV-1a accumulator over [`purrdf_hash::fnv`].
 ///
-/// FNV-1a rather than `std::hash::DefaultHasher` or the workspace's `FixedHasher`
+/// FNV-1a rather than std's default SipHash hasher or the workspace's `FixedHasher`
 /// because a fingerprint is compared against one computed by a *different run* of
-/// this code: `DefaultHasher`'s algorithm is explicitly unspecified across
-/// releases, and `FixedHasher` computes a different function on a build whose
+/// this code: std's default hasher is explicitly unspecified across releases, and `FixedHasher` computes a different function on a build whose
 /// target enables AES than on one that does not. Either would make
 /// [`verify_binding`] answer "different dataset" for a dataset that is in fact
 /// identical, the moment a toolchain moved. FNV-1a is fully specified integer
@@ -169,9 +168,16 @@ impl Digest {
         self.bytes(&(count as u64).to_be_bytes());
     }
 
-    /// Absorb a length-prefixed string.
+    /// Absorb a length-prefixed string: its length as eight **big-endian** bytes,
+    /// then its bytes.
+    ///
+    /// Not `purrdf_hash::frame::frame_le`'s little-endian framing, and never to
+    /// become it: the source fingerprint this digest computes is a published
+    /// identity — `verify_binding` compares it against a fingerprint recorded by
+    /// an earlier run, and the geo determinism goldens pin it — so its byte order
+    /// is frozen with it.
     fn field(&mut self, text: &str) {
-        self.count(text.len());
+        self.bytes(&(text.len() as u64).to_be_bytes());
         self.bytes(text.as_bytes());
     }
 

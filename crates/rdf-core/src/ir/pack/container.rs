@@ -54,7 +54,7 @@
 //!
 //! ## Section bytes
 //!
-//! Starting at `align_up(HEADER_LEN + SECTION_COUNT * ENTRY_LEN, 8)` (offset
+//! Starting at `(HEADER_LEN + SECTION_COUNT * ENTRY_LEN).next_multiple_of(8)` (offset
 //! 224 in this format version), each section's raw bytes — respectively
 //! [`super::dict::EncodedDict::to_bytes`], [`super::triples::Triples::to_bytes`],
 //! [`super::side::SideTables::to_bytes`] — follow in fixed order, each
@@ -93,6 +93,7 @@
 
 use sha2::{Digest, Sha256};
 
+use crate::bytes::{read_u32_le, read_u64_le};
 use crate::dataset_view::{DatasetView, DrainCheckpoint, FallibleDatasetView, checkpointed_drain};
 use crate::ir::canon::try_canonicalize_view;
 use crate::{CanonError, CanonHash, RdfDataset, RdfStoreCapabilities};
@@ -147,11 +148,6 @@ const FLAG_ANNOTATIONS: u32 = 1 << 3;
 const FLAG_SOURCE_LOCATIONS: u32 = 1 << 4;
 const FLAG_LOSS_RECORDS: u32 = 1 << 5;
 const FLAG_LOOKASIDE: u32 = 1 << 6;
-
-/// Round `value` up to the next multiple of `align` (`align` a power of two).
-const fn align_up(value: u64, align: u64) -> u64 {
-    (value + align - 1) & !(align - 1)
-}
 
 /// Encode `caps` as the header's `flags` bitmask — see "Capability flags" in
 /// the [module docs](self).
@@ -397,53 +393,6 @@ impl From<PackSideError> for PackError {
 }
 
 // ---------------------------------------------------------------------------
-// Small byte-header write/read helpers (explicit LE, no pointer casts).
-// ---------------------------------------------------------------------------
-
-fn write_u32_le(out: &mut Vec<u8>, v: u32) {
-    out.extend_from_slice(&v.to_le_bytes());
-}
-
-fn write_u64_le(out: &mut Vec<u8>, v: u64) {
-    out.extend_from_slice(&v.to_le_bytes());
-}
-
-/// Read a `u32` at `*pos`, advancing `*pos` past it. The caller must already
-/// have checked `bytes.len() >= *pos + 4` (every call site here reads from
-/// within the fixed-length header/directory, whose total length is checked
-/// up front by [`PackView::from_bytes`]).
-fn read_u32_le(bytes: &[u8], pos: &mut usize) -> u32 {
-    let v = u32::from_le_bytes(
-        bytes[*pos..*pos + 4]
-            .try_into()
-            .expect("slice is exactly 4 bytes"),
-    );
-    *pos += 4;
-    v
-}
-
-/// Read a `u64` at `*pos`, advancing `*pos` past it. See [`read_u32_le`]'s
-/// bounds-checking note.
-fn read_u64_le(bytes: &[u8], pos: &mut usize) -> u64 {
-    let v = u64::from_le_bytes(
-        bytes[*pos..*pos + 8]
-            .try_into()
-            .expect("slice is exactly 8 bytes"),
-    );
-    *pos += 8;
-    v
-}
-
-/// Read a 32-byte digest at `*pos`, advancing `*pos` past it. See
-/// [`read_u32_le`]'s bounds-checking note.
-fn read_digest(bytes: &[u8], pos: &mut usize) -> [u8; 32] {
-    let mut digest = [0u8; 32];
-    digest.copy_from_slice(&bytes[*pos..*pos + 32]);
-    *pos += 32;
-    digest
-}
-
-// ---------------------------------------------------------------------------
 // PackBuilder — the offline factory writer.
 // ---------------------------------------------------------------------------
 
@@ -606,12 +555,15 @@ fn assemble(
 
     // First pass: compute every section's absolute, 8-byte-aligned offset.
     let mut offsets = [0u64; SECTION_COUNT];
-    let mut cursor = align_up((HEADER_LEN + SECTION_COUNT * ENTRY_LEN) as u64, 8);
+    // The sections are in memory, so no offset can outgrow a `u64`.
+    let mut cursor = ((HEADER_LEN + SECTION_COUNT * ENTRY_LEN) as u64).next_multiple_of(8);
     for (i, (_, bytes)) in sections.iter().enumerate() {
         offsets[i] = cursor;
         cursor += bytes.len() as u64;
         if i + 1 < SECTION_COUNT {
-            cursor = align_up(cursor, 8);
+            cursor = cursor
+                .checked_next_multiple_of(8)
+                .expect("an in-memory section's offset fits u64");
         }
     }
 
@@ -619,19 +571,19 @@ fn assemble(
 
     // -- Header ---------------------------------------------------------
     out.extend_from_slice(&MAGIC);
-    write_u32_le(&mut out, FORMAT_VERSION);
-    write_u32_le(&mut out, capabilities_to_flags(capabilities));
-    write_u64_le(&mut out, n_terms);
-    write_u32_le(&mut out, SECTION_COUNT as u32);
-    write_u32_le(&mut out, 0); // reserved
+    out.extend_from_slice(&FORMAT_VERSION.to_le_bytes());
+    out.extend_from_slice(&capabilities_to_flags(capabilities).to_le_bytes());
+    out.extend_from_slice(&n_terms.to_le_bytes());
+    out.extend_from_slice(&(SECTION_COUNT as u32).to_le_bytes());
+    out.extend_from_slice(&0u32.to_le_bytes()); // reserved
     out.extend_from_slice(&rdfc_digest);
     debug_assert_eq!(out.len(), HEADER_LEN);
 
     // -- Section directory ------------------------------------------------
     for (i, (kind, bytes)) in sections.iter().enumerate() {
-        write_u32_le(&mut out, *kind);
-        write_u64_le(&mut out, offsets[i]);
-        write_u64_le(&mut out, bytes.len() as u64);
+        out.extend_from_slice(&kind.to_le_bytes());
+        out.extend_from_slice(&offsets[i].to_le_bytes());
+        out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
         out.extend_from_slice(&digests[i]);
     }
     debug_assert_eq!(out.len(), HEADER_LEN + SECTION_COUNT * ENTRY_LEN);
@@ -689,17 +641,16 @@ impl<'a> PackView<'a> {
             return Err(PackError::BadMagic);
         }
 
-        let mut pos = 8usize;
-        let version = read_u32_le(bytes, &mut pos);
+        // Every field is little-endian at its offset (see the module docs'
+        // header table), read through `crate::bytes`.
+        let version = read_u32_le(bytes, 8).ok_or(PackError::Truncated)?;
         if version != FORMAT_VERSION {
             return Err(PackError::UnsupportedVersion(version));
         }
-        let flags = read_u32_le(bytes, &mut pos);
-        let n_terms = read_u64_le(bytes, &mut pos);
-        let section_count = read_u32_le(bytes, &mut pos);
-        let _reserved = read_u32_le(bytes, &mut pos);
-        let rdfc_digest = read_digest(bytes, &mut pos);
-        debug_assert_eq!(pos, HEADER_LEN);
+        let flags = read_u32_le(bytes, 12).ok_or(PackError::Truncated)?;
+        let n_terms = read_u64_le(bytes, 16).ok_or(PackError::Truncated)?;
+        let section_count = read_u32_le(bytes, 24).ok_or(PackError::Truncated)?;
+        let rdfc_digest: [u8; 32] = *bytes[32..].first_chunk().ok_or(PackError::Truncated)?;
 
         if section_count as usize != SECTION_COUNT {
             return Err(PackError::Malformed(
@@ -714,10 +665,13 @@ impl<'a> PackView<'a> {
 
         let mut section_bytes: [&'a [u8]; SECTION_COUNT] = [&[], &[], &[]];
         for (i, &expected_kind) in SECTION_KINDS.iter().enumerate() {
-            let kind = read_u32_le(bytes, &mut pos);
-            let offset = read_u64_le(bytes, &mut pos);
-            let len = read_u64_le(bytes, &mut pos);
-            let stored_digest = read_digest(bytes, &mut pos);
+            let entry = HEADER_LEN + i * ENTRY_LEN;
+            let kind = read_u32_le(bytes, entry).ok_or(PackError::Truncated)?;
+            let offset = read_u64_le(bytes, entry + 4).ok_or(PackError::Truncated)?;
+            let len = read_u64_le(bytes, entry + 12).ok_or(PackError::Truncated)?;
+            let stored_digest: [u8; 32] = *bytes[entry + 20..]
+                .first_chunk()
+                .ok_or(PackError::Truncated)?;
 
             if kind != expected_kind {
                 return Err(PackError::Malformed(
@@ -739,7 +693,6 @@ impl<'a> PackView<'a> {
             }
             section_bytes[i] = slice;
         }
-        debug_assert_eq!(pos, HEADER_LEN + dir_len);
 
         let dict = PackDict::open(section_bytes[0])?;
         let triples = TriplesRef::from_bytes(section_bytes[1])?;
@@ -813,16 +766,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn align_up_rounds_to_the_next_multiple() {
-        assert_eq!(align_up(0, 8), 0);
-        assert_eq!(align_up(1, 8), 8);
-        assert_eq!(align_up(7, 8), 8);
-        assert_eq!(align_up(8, 8), 8);
-        assert_eq!(align_up(9, 8), 16);
-        assert_eq!(align_up(220, 8), 224);
-    }
-
-    #[test]
     fn header_and_directory_constants_agree() {
         // HEADER_LEN and ENTRY_LEN are documented as fixed numbers in the
         // module docs' tables; pin them here so a future edit that changes
@@ -831,7 +774,7 @@ mod tests {
         assert_eq!(ENTRY_LEN, 52);
         assert_eq!(HEADER_LEN + SECTION_COUNT * ENTRY_LEN, 220);
         assert_eq!(
-            align_up((HEADER_LEN + SECTION_COUNT * ENTRY_LEN) as u64, 8),
+            (HEADER_LEN + SECTION_COUNT * ENTRY_LEN).next_multiple_of(8),
             224
         );
     }
@@ -879,29 +822,10 @@ mod tests {
         let side_bytes = vec![3u8; 1];
         let bytes = assemble(0, caps, [0u8; 32], &dict_bytes, &triples_bytes, &side_bytes);
 
-        let mut pos = HEADER_LEN;
-        for _ in 0..SECTION_COUNT {
-            let mut p = pos;
-            let _kind = read_u32_le(&bytes, &mut p);
-            let offset = read_u64_le(&bytes, &mut p);
-            let _len = read_u64_le(&bytes, &mut p);
+        for index in 0..SECTION_COUNT {
+            let offset =
+                read_u64_le(&bytes, HEADER_LEN + index * ENTRY_LEN + 4).expect("a directory entry");
             assert_eq!(offset % 8, 0, "section offset must be 8-byte aligned");
-            pos += ENTRY_LEN;
-        }
-    }
-}
-
-/// The alignment arithmetic in this module against the standard library's
-/// `checked_next_multiple_of`, over every value up to 4096 and the top of the
-/// type's range.
-#[cfg(test)]
-mod align_differential {
-    use super::*;
-
-    #[test]
-    fn align_up_is_next_multiple_of_below_the_overflow() {
-        for value in (0..=4096).chain(u64::MAX - 4096..=u64::MAX - 8) {
-            assert_eq!(Some(align_up(value, 8)), value.checked_next_multiple_of(8));
         }
     }
 }

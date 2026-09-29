@@ -6,7 +6,6 @@
 use core::fmt;
 use std::collections::BTreeMap;
 
-use purrdf_hash::Domain;
 use sha2::{Digest as _, Sha256};
 
 use crate::{
@@ -19,7 +18,7 @@ use crate::distance::{Arithmetic as _, Exact};
 use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
-    D_PROJECTION_CONTENT, D_TARGET_SET, ExternalBindingIdentity, IndexIdentity,
+    D_PROJECTION_CONTENT, D_TARGET_SET, ExternalBindingIdentity, FramedHasher, IndexIdentity,
     ProjectionContentDigest, RdfcDigest, TargetId, TargetSetId, derive_artifact_root,
     derive_external_binding_id, derive_external_contract_digest, derive_family_contract_digest,
     derive_family_id, derive_index_guard_digest, derive_index_id, derive_matrix_content_digest,
@@ -928,35 +927,6 @@ fn compare_digest(
     }
 }
 
-struct FramedHasher {
-    hasher: Sha256,
-}
-
-impl FramedHasher {
-    fn new(domain: Domain) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(domain.as_bytes());
-        Self { hasher }
-    }
-
-    fn field(&mut self, bytes: &[u8]) {
-        self.begin_field(u64::try_from(bytes.len()).expect("an in-memory slice length fits u64"));
-        self.update(bytes);
-    }
-
-    fn begin_field(&mut self, length: u64) {
-        self.hasher.update(length.to_le_bytes());
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        self.hasher.update(bytes);
-    }
-
-    fn finish(self) -> [u8; 32] {
-        self.hasher.finalize().into()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -988,65 +958,5 @@ mod tests {
             &bytes,
             super::super::identity::ArtifactRoot::from_raw([8; 32])
         ));
-    }
-}
-
-/// The length framing in this module against the frozen framing vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_frame_differential {
-    use super::*;
-
-    /// Every input of the frozen length-framing vectors of
-    /// `purrdf-hash-conformance`, with its recorded eight-byte prefix and the
-    /// BLAKE3 digest of its framed field.
-    fn frozen_frames() -> Vec<(Vec<u8>, Vec<u8>, String)> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/frame_le_vectors.txt"
-        )))
-        .expect("the frozen framing vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let input = if fields[0] == "fill" {
-                    let (byte, length) = fields[1].split_once('*').expect("a BYTE*LENGTH fill");
-                    let byte = purrdf_hash::hex::decode(byte).expect("a hexadecimal byte")[0];
-                    vec![byte; length.parse().expect("a decimal length")]
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let prefix = purrdf_hash::hex::decode(fields[2]).expect("a hexadecimal prefix");
-                (input, prefix, fields[3].to_owned())
-            })
-            .collect()
-    }
-
-    /// The SHA-256 of `domain`'s bytes followed by each input framed, as the
-    /// frozen vectors frame it.
-    fn specified(domain: Domain, prefix: &[u8], input: &[u8]) -> [u8; 32] {
-        let mut expected = domain.as_bytes().to_vec();
-        expected.extend_from_slice(prefix);
-        expected.extend_from_slice(input);
-        Sha256::digest(&expected).into()
-    }
-
-    #[test]
-    fn framed_hasher_reproduces_the_frozen_framing_vectors() {
-        for (input, prefix, _) in frozen_frames() {
-            let mut field = FramedHasher::new(D_TARGET_SET);
-            field.field(&input);
-            assert_eq!(field.finish(), specified(D_TARGET_SET, &prefix, &input));
-            let mut streamed = FramedHasher::new(D_PROJECTION_CONTENT);
-            streamed.begin_field(u64::try_from(input.len()).expect("a slice length fits u64"));
-            let (head, tail) = input.split_at(input.len() / 2);
-            streamed.update(head);
-            streamed.update(tail);
-            assert_eq!(
-                streamed.finish(),
-                specified(D_PROJECTION_CONTENT, &prefix, &input)
-            );
-        }
     }
 }

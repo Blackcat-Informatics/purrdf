@@ -22,7 +22,7 @@ use super::target::{
     EmbeddingTarget, RdfDatasetTarget, RelationKind, TargetKind, TargetRelation, TargetSet,
     TokenSpan,
 };
-use super::wire::checked_align_up;
+use super::wire::{put_u32, put_u64};
 use super::writer::{
     CanonicalMetadataSections, ExtensionSection, MatrixCommitment, ProjectionCommitment,
 };
@@ -2453,7 +2453,9 @@ fn append_pool_block(
 }
 
 fn align8(value: u64) -> Result<u64, EmbeddingError> {
-    checked_align_up(value, 8)
+    value
+        .checked_next_multiple_of(8)
+        .ok_or(EmbeddingError::ArithmeticOverflow("alignment"))
 }
 
 fn checked_add(left: u64, right: u64, context: &'static str) -> Result<u64, EmbeddingError> {
@@ -2527,14 +2529,6 @@ fn check_identity(
         });
     }
     Ok(())
-}
-
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
 #[cfg(test)]
@@ -2731,20 +2725,5 @@ mod tests {
             u32::from_le_bytes(section[64 + 312..64 + 316].try_into().unwrap()),
             1
         );
-    }
-}
-
-/// The alignment arithmetic in this module against the standard library's
-/// `checked_next_multiple_of`, over every value up to 4096 and the top of the
-/// type's range.
-#[cfg(test)]
-mod align_differential {
-    use super::*;
-
-    #[test]
-    fn align8_is_checked_next_multiple_of() {
-        for value in (0..=4096).chain(u64::MAX - 4096..=u64::MAX) {
-            assert_eq!(align8(value).ok(), value.checked_next_multiple_of(8));
-        }
     }
 }

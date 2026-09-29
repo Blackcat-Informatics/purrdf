@@ -98,12 +98,14 @@ use std::cmp::Ordering;
 use std::collections::BTreeMap;
 use std::fmt;
 
+use purrdf_hash::frame::frame_le;
+
 use crate::dataset_view::{DatasetView, GraphMatch};
 use crate::ir::composite::owned_value;
 
 use super::bits::{
     BitVec, DeltaListRef, IntVector, IntVectorRef, PackBitsError, RankSelectRef, bits_for,
-    write_delta_list,
+    read_header_u64, write_delta_list,
 };
 use super::dict::{PackDict, PackTermId};
 use crate::hash::FastMap;
@@ -150,19 +152,6 @@ impl From<PackBitsError> for PackTriplesError {
             PackBitsError::Malformed(reason) => Self::Malformed(reason),
         }
     }
-}
-
-/// Read an 8-byte little-endian header field at `*pos`, advancing `*pos` past it.
-/// A small local mirror of `bits::read_header_u64` (private to that module).
-fn read_u64_header(bytes: &[u8], pos: &mut usize) -> Result<u64, PackTriplesError> {
-    let end = *pos + 8;
-    let slice = bytes.get(*pos..end).ok_or(PackTriplesError::Truncated {
-        needed: end,
-        found: bytes.len(),
-    })?;
-    let value = u64::from_le_bytes(slice.try_into().expect("slice is exactly 8 bytes"));
-    *pos = end;
-    Ok(value)
 }
 
 // ---------------------------------------------------------------------------
@@ -337,12 +326,10 @@ fn encode_partition(graph_id: Option<PackTermId>, triples: &[(u64, u64, u64)]) -
     out.extend_from_slice(&build_int_vector(&pred_offsets).to_bytes());
     out.extend_from_slice(&build_int_vector(&pred_counts).to_bytes());
     out.extend_from_slice(&build_int_vector(&pred_totals).to_bytes());
-    out.extend_from_slice(&(pred_index_data.len() as u64).to_le_bytes());
-    out.extend_from_slice(&pred_index_data);
+    frame_le(&mut out, &pred_index_data);
     out.extend_from_slice(&build_int_vector(&obj_offsets).to_bytes());
     out.extend_from_slice(&build_int_vector(&obj_counts).to_bytes());
-    out.extend_from_slice(&(obj_index_data.len() as u64).to_le_bytes());
-    out.extend_from_slice(&obj_index_data);
+    frame_le(&mut out, &obj_index_data);
     out
 }
 
@@ -403,13 +390,11 @@ impl Triples {
         out.extend_from_slice(&(1 + named.len() as u64).to_le_bytes());
 
         let default_bytes = encode_partition(None, &default_triples);
-        out.extend_from_slice(&(default_bytes.len() as u64).to_le_bytes());
-        out.extend_from_slice(&default_bytes);
+        frame_le(&mut out, &default_bytes);
 
         for (&g_uni, triples) in &named {
             let bytes = encode_partition(Some(g_uni), triples);
-            out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-            out.extend_from_slice(&bytes);
+            frame_le(&mut out, &bytes);
         }
 
         Self { bytes: out }
@@ -595,13 +580,13 @@ impl<'a> PartitionRef<'a> {
     /// the [module docs](self) for what is validated).
     fn from_bytes(bytes: &'a [u8]) -> Result<(Self, usize), PackTriplesError> {
         let mut pos = 0usize;
-        let graph_id_raw = read_u64_header(bytes, &mut pos)?;
+        let graph_id_raw = read_header_u64(bytes, &mut pos)?;
         let graph_id = if graph_id_raw == 0 {
             None
         } else {
             Some(graph_id_raw)
         };
-        let n_triples = read_u64_header(bytes, &mut pos)?;
+        let n_triples = read_header_u64(bytes, &mut pos)?;
 
         let local_s = IntVectorRef::from_bytes(&bytes[pos..])?;
         pos += local_s.serialized_len();
@@ -623,7 +608,7 @@ impl<'a> PartitionRef<'a> {
         pos += pred_counts.serialized_len();
         let pred_totals = IntVectorRef::from_bytes(&bytes[pos..])?;
         pos += pred_totals.serialized_len();
-        let pred_data_len = read_u64_header(bytes, &mut pos)? as usize;
+        let pred_data_len = read_header_u64(bytes, &mut pos)? as usize;
         let pred_index_data =
             bytes
                 .get(pos..pos + pred_data_len)
@@ -636,7 +621,7 @@ impl<'a> PartitionRef<'a> {
         pos += obj_offsets.serialized_len();
         let obj_counts = IntVectorRef::from_bytes(&bytes[pos..])?;
         pos += obj_counts.serialized_len();
-        let obj_data_len = read_u64_header(bytes, &mut pos)? as usize;
+        let obj_data_len = read_header_u64(bytes, &mut pos)? as usize;
         let obj_index_data =
             bytes
                 .get(pos..pos + obj_data_len)
@@ -1091,7 +1076,7 @@ impl<'a> TriplesRef<'a> {
             ));
         }
         let mut pos = 1usize;
-        let partition_count = read_u64_header(bytes, &mut pos)? as usize;
+        let partition_count = read_header_u64(bytes, &mut pos)? as usize;
         if partition_count == 0 {
             return Err(PackTriplesError::Malformed(
                 "triples: missing the mandatory default-graph partition",
@@ -1099,7 +1084,7 @@ impl<'a> TriplesRef<'a> {
         }
         let mut partitions = Vec::with_capacity(partition_count);
         for idx in 0..partition_count {
-            let plen = read_u64_header(bytes, &mut pos)? as usize;
+            let plen = read_header_u64(bytes, &mut pos)? as usize;
             let pbytes = bytes
                 .get(pos..pos + plen)
                 .ok_or(PackTriplesError::Truncated {
