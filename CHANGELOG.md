@@ -10,6 +10,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **xsd:** `purrdf_xsd::rfc3339`, the workspace's one RFC 3339 reader and
+  writer: `parse` (`date-time`, to Unix seconds and nanoseconds in UTC),
+  `parse_date` (`full-date`), `parse_time` (`full-time`) and `format` (the
+  canonical UTC spelling). Two parameters carry the one place the citing
+  grammars differ: `Separator::{Rfc3339Abnf, GtsSpaceAllowed}` (a space
+  between date and time) and `LeapSecond::{MonthEnd, AnyDay}` (whether a leap
+  second must fall on a month's last day). `xsd:dateTime` stays its own
+  grammar.
+- **xsd:** `purrdf_xsd::wide::{wide_mul, div_wide, mul_div, gcd}`, exact `u128`
+  arithmetic past `u128`.
+- **xsd:** `BigInt::{from_digits, from_binary, mul_small, mul_pow5, mul, rem,
+  is_odd, negated}`; `BigInt` also implements `Hash`. `from_binary` writes
+  `numerator × 2^exponent` out as an exact decimal.
+- **xsd:** `purrdf_xsd::json_number::cmp`, the exact order of two JSON number
+  lexemes, however many digits or exponent digits they carry.
+- **xsd:** `temporal::{civil_from_days, is_leap}` are public, and they,
+  `days_from_civil` and `days_in_month` are `const fn`.
+- **xsd:** `XsdDatatype::{is_numeric, is_integer_family, from_local}`,
+  `XsdValue::is_numeric`, and `numeric::{is_integer_lexical,
+  is_decimal_lexical}`.
 - **iri:** `purrdf_iri::vocab`, the W3C vocabulary terms the workspace names,
   one module per namespace (`rdf`, `rdfs`, `owl`, `sh`, `shnex`, `sparql`,
   `sd`, `xpath`, `skos`, `prov`, `rif`, `its`, `xml`, `dcat`, `org`, `oa`,
@@ -1150,6 +1170,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **xsd:** `BigInt::to_decimal_lexical` takes its scale as `u32` (was `u8`).
+- **gts:** the files and tar profiles' `modified` stamps read and write
+  through `purrdf_xsd::rfc3339`; accepted spellings, instants and error
+  messages are unchanged.
+- **jsonschema:** the `date-time`, `date` and `time` formats check through
+  `purrdf_xsd::rfc3339`, and exact number comparison and `multipleOf` compute
+  on `purrdf_xsd::bigint::BigInt`; `purrdf-jsonschema` now depends on
+  `purrdf-xsd`. No verdict changed.
+- **text:** the fixed-point product and quotient compute through
+  `purrdf_xsd::wide::mul_div`; `purrdf-text` now depends on `purrdf-xsd`.
+- **gates:** ledger jobs `wide-arith`, `bigint`, `calendar`, `rfc3339` and
+  `numeric-predicate` are enforced; the SIMD manifest site
+  `gts.rfc3339-lexical` is now `xsd.rfc3339-lexical`, measuring
+  `purrdf_xsd::rfc3339::{parse, format}` with its floors unchanged.
 - **rdf, python (BREAKING):** `GtsFoldView` compacts IRIs to CURIEs only under the W3C
   namespaces it builds in — `rdf`, `rdfs`, `owl`, `xsd` and `skos`, taken from
   `purrdf_iri::vocab` and `purrdf_xsd::datatype` — and under the prefixes the

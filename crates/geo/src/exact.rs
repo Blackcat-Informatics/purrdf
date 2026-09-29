@@ -385,16 +385,6 @@ fn mag_div_rem(a: &[u64], b: &[u64]) -> (Mag, Mag) {
     (quotient, rem)
 }
 
-/// Euclidean greatest common divisor on `u128`.
-fn gcd_u128(mut a: u128, mut b: u128) -> u128 {
-    while b != 0 {
-        let t = a % b;
-        a = b;
-        b = t;
-    }
-    a
-}
-
 /// Stein's binary greatest common divisor on magnitudes.
 fn mag_gcd(a: &[u64], b: &[u64]) -> Mag {
     if a.is_empty() {
@@ -407,7 +397,7 @@ fn mag_gcd(a: &[u64], b: &[u64]) -> Mag {
         return smallvec![1];
     }
     if let (Some(x), Some(y)) = (mag_to_u128(a), mag_to_u128(b)) {
-        return mag_from_u128(gcd_u128(x, y));
+        return mag_from_u128(purrdf_xsd::wide::gcd(x, y));
     }
     let common = mag_trailing_zeros(a).min(mag_trailing_zeros(b));
     let mut u = mag_shr(a, mag_trailing_zeros(a));

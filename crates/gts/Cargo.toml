@@ -35,9 +35,9 @@ purrdf-events = { workspace = true }
 # contract) and is already wasm32-clean, so it drags nothing in and `make wasm`
 # stays green.
 purrdf-iri = { workspace = true }
-# Proleptic-Gregorian calendar arithmetic for the files/tar profiles' RFC 3339
-# `modified` timestamps (the grammar itself is `src/rfc3339.rs`). Another
-# zero-runtime-dependency, wasm32-clean leaf, so the edge adds nothing below it.
+# The RFC 3339 grammar and writer (`purrdf_xsd::rfc3339`) behind the files/tar
+# profiles' `modified` timestamps; `src/rfc3339.rs` names the profiles' reading
+# of it. A wasm32-clean leaf, so the edge adds nothing below it.
 purrdf-xsd = { workspace = true }
 # emojihash + randomart visual fingerprints, published from
 # Blackcat-Informatics/visual-hashing.

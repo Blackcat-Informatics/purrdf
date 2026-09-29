@@ -356,13 +356,14 @@ impl Gregorian {
 /// where it is actually used, so a result that is truly out of `i64` range is a
 /// typed `OutOfRange` error, never a silent wrap or a panic.
 #[must_use]
-pub fn days_from_civil(y: i64, m: u8, d: u8) -> i128 {
-    let y = i128::from(y);
+pub const fn days_from_civil(y: i64, m: u8, d: u8) -> i128 {
+    // Widening casts: `From` is not callable in a `const fn`.
+    let y = y as i128;
     let y = if m <= 2 { y - 1 } else { y };
     let era = (if y >= 0 { y } else { y - 399 }) / 400;
     let yoe = y - era * 400; // [0, 399]
-    let m = i128::from(m);
-    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + i128::from(d) - 1; // [0,365]
+    let m = m as i128;
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d as i128 - 1; // [0,365]
     let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
     era * 146_097 + doe - 719_468
 }
@@ -383,7 +384,8 @@ pub fn days_from_civil(y: i64, m: u8, d: u8) -> i128 {
 /// to fail and which cannot.
 ///
 /// Algorithm reference: <https://howardhinnant.github.io/date_algorithms.html>
-fn civil_from_days(days: i128) -> (i128, u8, u8) {
+#[must_use]
+pub const fn civil_from_days(days: i128) -> (i128, u8, u8) {
     let z = days + 719_468;
     let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
     let doe = z - era * 146_097;
@@ -499,20 +501,26 @@ fn all_ascii_digits(text: &str) -> bool {
     !text.is_empty() && text.bytes().all(|byte| byte.is_ascii_digit())
 }
 
+/// Whether `year` is a leap year of the proleptic Gregorian calendar: divisible
+/// by 4, except centuries unless also divisible by 400 (XSD 1.1 Part 2
+/// Appendix D.3, whose calendar every date grammar in the workspace uses).
+/// Negative years follow the same rule; year 0 (1 BCE) is a leap year.
+#[must_use]
+pub const fn is_leap(year: i64) -> bool {
+    year % 4 == 0 && (year % 100 != 0 || year % 400 == 0)
+}
+
 /// Number of days in a given month for a proleptic-Gregorian year.
 /// Uses the signed year directly; negative years follow the same leap-year rule as
-/// positive ones (proleptic Gregorian: leap iff divisible by 4, except centuries
-/// unless also divisible by 400). A `month` outside 1..=12 answers `0`, which no
+/// positive ones ([`is_leap`]). A `month` outside 1..=12 answers `0`, which no
 /// day number satisfies, so a caller range-checking a day against it refuses.
 #[must_use]
-pub fn days_in_month(year: i64, month: u8) -> u8 {
+pub const fn days_in_month(year: i64, month: u8) -> u8 {
     match month {
         1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
         4 | 6 | 9 | 11 => 30,
-        2 => {
-            let is_leap = year % 4 == 0 && (year % 100 != 0 || year % 400 == 0);
-            if is_leap { 29 } else { 28 }
-        }
+        2 if is_leap(year) => 29,
+        2 => 28,
         _ => 0, // invalid month — caught by caller before reaching here
     }
 }

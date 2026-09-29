@@ -706,7 +706,8 @@ impl Parser<'_> {
             return Ok(());
         }
         if let Some(dt) = &nc.datatype
-            && !is_numeric_datatype(dt)
+            && !purrdf_xsd::XsdDatatype::from_iri(dt)
+                .is_some_and(purrdf_xsd::XsdDatatype::is_numeric)
         {
             return Err(self.err(format!("numeric facet on non-numeric datatype <{dt}>")));
         }
@@ -1274,31 +1275,6 @@ fn numeric_from_lexical(lexical: &str) -> Option<NumericLiteral> {
         return Some(NumericLiteral::Integer(f as i64));
     }
     Some(NumericLiteral::Fractional(f))
-}
-
-/// The XSD numeric datatypes (decimal/double/float and the integer-derived
-/// family) admissible under a numeric facet.
-fn is_numeric_datatype(dt: &str) -> bool {
-    use purrdf_xsd::datatype as x;
-    [
-        x::XSD_INTEGER,
-        x::XSD_DECIMAL,
-        x::XSD_FLOAT,
-        x::XSD_DOUBLE,
-        x::XSD_LONG,
-        x::XSD_INT,
-        x::XSD_SHORT,
-        x::XSD_BYTE,
-        x::XSD_UNSIGNED_LONG,
-        x::XSD_UNSIGNED_INT,
-        x::XSD_UNSIGNED_SHORT,
-        x::XSD_UNSIGNED_BYTE,
-        x::XSD_NON_NEGATIVE_INTEGER,
-        x::XSD_NON_POSITIVE_INTEGER,
-        x::XSD_POSITIVE_INTEGER,
-        x::XSD_NEGATIVE_INTEGER,
-    ]
-    .contains(&dt)
 }
 
 #[cfg(test)]

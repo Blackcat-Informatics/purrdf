@@ -232,27 +232,7 @@ fn numeric_value(facts: &NodeFacts<'_>) -> Result<XsdValue, String> {
             "numeric facet requires a numeric datatype, got <{datatype}>"
         ));
     };
-    use XsdDatatype as D;
-    let numeric = matches!(
-        xsd,
-        D::Integer
-            | D::Long
-            | D::Int
-            | D::Short
-            | D::Byte
-            | D::UnsignedLong
-            | D::UnsignedInt
-            | D::UnsignedShort
-            | D::UnsignedByte
-            | D::NonNegativeInteger
-            | D::PositiveInteger
-            | D::NonPositiveInteger
-            | D::NegativeInteger
-            | D::Decimal
-            | D::Float
-            | D::Double
-    );
-    if !numeric {
+    if !xsd.is_numeric() {
         return Err(format!(
             "numeric facet requires a numeric datatype, got <{datatype}>"
         ));

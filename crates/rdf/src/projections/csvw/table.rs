@@ -569,10 +569,14 @@ fn normalize_lexical(
         (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern))) if temporal_datatype(local) => {
             parse_temporal_pattern(source, pattern, local)
         }
-        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern))) if numeric_datatype(local) => {
+        (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern)))
+            if XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric) =>
+        {
             normalize_number(source, Some(pattern), '.', None, local)
         }
-        (Some(local), Some(CsvwDatatypeFormat::Numeric(format))) if numeric_datatype(local) => {
+        (Some(local), Some(CsvwDatatypeFormat::Numeric(format)))
+            if XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric) =>
+        {
             normalize_number(
                 source,
                 format.pattern.as_deref(),
@@ -582,7 +586,8 @@ fn normalize_lexical(
             )
         }
         (Some(local), Some(CsvwDatatypeFormat::Pattern(pattern)))
-            if !numeric_datatype(local) && !temporal_datatype(local) =>
+            if !XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_numeric)
+                && !temporal_datatype(local) =>
         {
             let regex = Regex::new(&format!("^(?:{pattern})$"))
                 .map_err(|_| "invalid CSVW regular-expression format".to_owned())?;
@@ -917,28 +922,6 @@ fn valid_xml_name(value: &str, colon: bool) -> bool {
         && chars.all(|character| is_xml_name_char(character) && colon_ok(character))
 }
 
-fn numeric_datatype(local: &str) -> bool {
-    matches!(
-        local,
-        "integer"
-            | "long"
-            | "int"
-            | "short"
-            | "byte"
-            | "unsignedLong"
-            | "unsignedInt"
-            | "unsignedShort"
-            | "unsignedByte"
-            | "nonNegativeInteger"
-            | "positiveInteger"
-            | "nonPositiveInteger"
-            | "negativeInteger"
-            | "decimal"
-            | "float"
-            | "double"
-    )
-}
-
 fn temporal_datatype(local: &str) -> bool {
     matches!(local, "date" | "time" | "dateTime" | "dateTimeStamp")
 }
@@ -1020,7 +1003,7 @@ fn normalize_number(
 }
 
 fn integer_datatype(local: &str) -> bool {
-    numeric_datatype(local) && !matches!(local, "decimal" | "float" | "double")
+    XsdDatatype::from_local(local).is_some_and(XsdDatatype::is_integer_family)
 }
 
 fn validate_number_pattern(pattern: &str) -> Result<(), String> {

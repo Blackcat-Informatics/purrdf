@@ -38,6 +38,7 @@
 use std::fmt::Write as _;
 
 use purrdf_xsd::datatype::XSD_NS;
+use purrdf_xsd::temporal::{civil_from_days, days_from_civil};
 
 use super::numeric_order::{Decimal, Facet, Rel, Threshold, WS, frac_part, order_body};
 
@@ -185,45 +186,10 @@ fn civil_days(date: &str) -> Option<i128> {
         .map_or((false, date), |body| (true, body));
     let mut fields = body.splitn(3, '-');
     let year: i128 = fields.next()?.parse().ok()?;
-    let month: i128 = fields.next()?.parse().ok()?;
-    let day: i128 = fields.next()?.parse().ok()?;
-    Some(days_from_civil(
-        if negative { -year } else { year },
-        month,
-        day,
-    ))
-}
-
-/// Days since 1970-01-01 of a proleptic Gregorian date (H. Hinnant's
-/// `days_from_civil`, over `i128`).
-const fn days_from_civil(year: i128, month: i128, day: i128) -> i128 {
-    let year = if month <= 2 { year - 1 } else { year };
-    let era = year.div_euclid(400);
-    let year_of_era = year - era * 400;
-    let month_index = (month + 9) % 12;
-    let day_of_year = (153 * month_index + 2) / 5 + day - 1;
-    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
-    era * 146_097 + day_of_era - 719_468
-}
-
-/// The proleptic Gregorian date of a day number (H. Hinnant's
-/// `civil_from_days`, over `i128`): `(year, month, day)`.
-const fn civil_from_days(days: i128) -> (i128, i128, i128) {
-    let days = days + 719_468;
-    let era = days.div_euclid(146_097);
-    let day_of_era = days - era * 146_097;
-    let year_of_era =
-        (day_of_era - day_of_era / 1460 + day_of_era / 36_524 - day_of_era / 146_096) / 365;
-    let day_of_year = day_of_era - (365 * year_of_era + year_of_era / 4 - year_of_era / 100);
-    let month_index = (5 * day_of_year + 2) / 153;
-    let day = day_of_year - (153 * month_index + 2) / 5 + 1;
-    let month = if month_index < 10 {
-        month_index + 3
-    } else {
-        month_index - 9
-    };
-    let year = year_of_era + era * 400 + if month <= 2 { 1 } else { 0 };
-    (year, month, day)
+    let month: u8 = fields.next()?.parse().ok()?;
+    let day: u8 = fields.next()?.parse().ok()?;
+    let year = i64::try_from(if negative { -year } else { year }).ok()?;
+    Some(days_from_civil(year, month, day))
 }
 
 /// The patterns a lexical form of `kind` must match to be one the validator
@@ -399,6 +365,7 @@ fn years(rel: Option<Rel>, year: i128) -> Option<String> {
 /// to it with `None`.
 fn dates(rel: Option<Rel>, day: i128) -> Option<String> {
     let (year, month, day) = civil_from_days(day);
+    let (month, day) = (i128::from(month), i128::from(day));
     let exact = years(None, year)?;
     let Some(rel) = rel else {
         return Some(format!("{exact}-{month:02}-{day:02}"));
@@ -991,6 +958,7 @@ mod tests {
     fn calendar_arithmetic_round_trips() {
         for days in (-800_000..800_000).step_by(997) {
             let (year, month, day) = civil_from_days(days);
+            let year = i64::try_from(year).expect("a year near the epoch");
             assert_eq!(days_from_civil(year, month, day), days);
         }
         assert_eq!(days_from_civil(1970, 1, 1), 0);

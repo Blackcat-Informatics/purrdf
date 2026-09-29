@@ -234,7 +234,14 @@ impl XsdDatatype {
         // `XSD_*` constant is literally `XSD_NS ++ local`, so this is the same
         // predicate as 31 full-IRI compares without re-scanning the 33-byte
         // namespace per arm (a non-XSD IRI now fails on the first compare).
-        let local = iri.strip_prefix(XSD_NS)?;
+        Self::from_local(iri.strip_prefix(XSD_NS)?)
+    }
+
+    /// Resolve an XSD local name (`"integer"`, `"dateTime"`, …) to its
+    /// [`XsdDatatype`] — [`Self::from_iri`] after the namespace. `None` when the
+    /// name is not one of the value-space datatypes this crate models.
+    #[must_use]
+    pub fn from_local(local: &str) -> Option<Self> {
         Some(match local {
             "integer" => Self::Integer,
             "long" => Self::Long,
@@ -307,6 +314,22 @@ impl XsdDatatype {
             Self::HexBinary => XSD_HEX_BINARY,
             Self::Base64Binary => XSD_BASE64_BINARY,
         }
+    }
+
+    /// Whether this is `xsd:integer` or one of the twelve datatypes derived from
+    /// it (XSD 1.1 Part 2 §3.4.13–§3.4.25): the datatypes whose values are
+    /// integers.
+    #[must_use]
+    pub const fn is_integer_family(self) -> bool {
+        self.integer_range().is_some()
+    }
+
+    /// Whether this datatype is in the SPARQL numeric tower (SPARQL 1.1 §17.1,
+    /// "numeric"): the integer family, `xsd:decimal`, `xsd:float` and
+    /// `xsd:double`.
+    #[must_use]
+    pub const fn is_numeric(self) -> bool {
+        self.is_integer_family() || matches!(self, Self::Decimal | Self::Float | Self::Double)
     }
 
     /// The inclusive `(min, max)` integer bounds for this datatype, or `None` if it is

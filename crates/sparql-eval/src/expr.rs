@@ -3697,7 +3697,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
         ))),
         Function::IsNumeric => {
             let numeric =
-                matches!(arg(vals, 0), Some(v) if xsd_of(v).is_some_and(|xv| is_numeric(&xv)));
+                matches!(arg(vals, 0), Some(v) if xsd_of(v).is_some_and(|xv| xv.is_numeric()));
             Ok(Some(bool_term(ctx, numeric)))
         }
         Function::IsTriple => Ok(Some(bool_term(
@@ -4501,14 +4501,6 @@ pub(crate) fn lang_lexical_term<D: DatasetView + Sync>(
             _ => None,
         },
     }
-}
-
-/// Whether an XSD value is in the numeric tower.
-fn is_numeric(v: &XsdValue) -> bool {
-    matches!(
-        v,
-        XsdValue::Integer { .. } | XsdValue::Decimal(_) | XsdValue::Float(_) | XsdValue::Double(_)
-    )
 }
 
 /// Extract `(lexical, language)` from a plain/`xsd:string`/`rdf:langString` literal

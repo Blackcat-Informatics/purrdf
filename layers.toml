@@ -132,7 +132,7 @@ name = "purrdf-jsonschema"
 deps = [
     "purrdf-hash",
     "purrdf-iri",
-    { name = "purrdf-xsd", pending = true },
+    "purrdf-xsd",
     { name = "purrdf-lex", pending = true },
 ]
 
@@ -247,6 +247,7 @@ deps = [
     "purrdf-core",
     "purrdf-hash",
     "purrdf-sparql-eval",
+    "purrdf-xsd",
 ]
 
 [[crate]]

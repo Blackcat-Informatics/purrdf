@@ -1,13 +1,20 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Exact, dependency-free decimal arithmetic for JSON Schema numbers.
-//! Parsed number lexemes are retained by `serde_json/arbitrary_precision`.
+//! Exact decimal arithmetic for JSON Schema numbers.
+//! Parsed number lexemes are retained by `serde_json/arbitrary_precision`;
+//! digits and exponents past a machine word compute on
+//! [`purrdf_xsd::bigint::BigInt`].
 
+use purrdf_xsd::bigint::BigInt;
 use serde_json::Number;
 use std::cmp::Ordering;
 
 /// A normalized decimal coefficient and base-ten exponent.
+///
+/// The coefficient stays a digit string and the exponent is a machine word
+/// until it is not: JSON permits arbitrarily many exponent digits, and JSON
+/// Schema compares and divides numbers by their exact value.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Decimal {
     negative: bool,
@@ -15,11 +22,12 @@ pub(crate) struct Decimal {
     exponent: Exponent,
 }
 
-/// Signed base-ten exponent. JSON permits arbitrarily many exponent digits.
+/// Signed base-ten exponent. JSON permits arbitrarily many exponent digits;
+/// `Large` holds only values outside `i64`.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(crate) enum Exponent {
     Small(i64),
-    Large { negative: bool, digits: String },
+    Large(BigInt),
 }
 
 impl Exponent {
@@ -27,120 +35,52 @@ impl Exponent {
         if let Ok(value) = source.parse() {
             return Self::Small(value);
         }
-        let negative = source.starts_with('-');
-        let digits = source
-            .trim_start_matches(['+', '-'])
-            .trim_start_matches('0');
-        if digits.is_empty() {
-            return Self::Small(0);
-        }
-        let normalized = if negative {
-            format!("-{digits}")
-        } else {
-            digits.to_owned()
-        };
-        if let Ok(value) = normalized.parse() {
-            return Self::Small(value);
-        }
-        Self::Large {
-            negative,
-            digits: digits.to_owned(),
+        Self::from_big(BigInt::from_digits(source).unwrap_or_else(BigInt::zero))
+    }
+
+    fn from_big(value: BigInt) -> Self {
+        value
+            .to_i128()
+            .and_then(|value| i64::try_from(value).ok())
+            .map_or(Self::Large(value), Self::Small)
+    }
+
+    fn to_big(&self) -> BigInt {
+        match self {
+            Self::Small(value) => BigInt::from_i128(i128::from(*value)),
+            Self::Large(value) => value.clone(),
         }
     }
 
     fn offset(self, amount: i64) -> Self {
-        if let Self::Small(value) = self {
-            if let Some(sum) = value.checked_add(amount) {
-                return Self::Small(sum);
-            }
-            return Self::from_parts(
-                value.is_negative(),
-                &BigDec::from_digits(&value.unsigned_abs().to_string()),
-            )
-            .offset_big(amount);
+        if let Self::Small(value) = self
+            && let Some(sum) = value.checked_add(amount)
+        {
+            return Self::Small(sum);
         }
-        self.offset_big(amount)
-    }
-
-    fn offset_big(self, amount: i64) -> Self {
-        let (negative, mut magnitude) = self.parts();
-        let other_negative = amount.is_negative();
-        let other = BigDec::from_digits(&amount.unsigned_abs().to_string());
-        let (negative, magnitude) = if negative == other_negative {
-            magnitude.add(&other);
-            (negative, magnitude)
-        } else {
-            match magnitude.cmp(&other) {
-                Ordering::Greater | Ordering::Equal => {
-                    magnitude.subtract(&other);
-                    (negative, magnitude)
-                }
-                Ordering::Less => {
-                    let mut other = other;
-                    other.subtract(&magnitude);
-                    (other_negative, other)
-                }
-            }
-        };
-        Self::from_parts(negative, &magnitude)
-    }
-
-    fn from_parts(negative: bool, magnitude: &BigDec) -> Self {
-        let digits = magnitude.to_digits();
-        let signed = if negative {
-            format!("-{digits}")
-        } else {
-            digits.clone()
-        };
-        signed
-            .parse()
-            .map_or(Self::Large { negative, digits }, Self::Small)
-    }
-
-    fn parts(&self) -> (bool, BigDec) {
-        match self {
-            Self::Small(value) => (
-                value.is_negative(),
-                BigDec::from_digits(&value.unsigned_abs().to_string()),
-            ),
-            Self::Large { negative, digits } => (*negative, BigDec::from_digits(digits)),
-        }
+        let mut sum = self.to_big();
+        sum.add_i128(i128::from(amount));
+        Self::from_big(sum)
     }
 
     fn to_i64(&self) -> Option<i64> {
         match self {
             Self::Small(value) => Some(*value),
-            Self::Large { .. } => None,
+            Self::Large(_) => None,
         }
     }
 
     fn is_nonnegative(&self) -> bool {
         match self {
             Self::Small(value) => *value >= 0,
-            Self::Large { negative, .. } => !negative,
+            Self::Large(value) => !value.is_negative(),
         }
     }
 
     fn difference(&self, other: &Self) -> Self {
-        let (left_negative, mut left) = self.parts();
-        let (right_negative, right) = other.parts();
-        let (negative, magnitude) = if left_negative != right_negative {
-            left.add(&right);
-            (left_negative, left)
-        } else {
-            match left.cmp(&right) {
-                Ordering::Greater | Ordering::Equal => {
-                    left.subtract(&right);
-                    (left_negative, left)
-                }
-                Ordering::Less => {
-                    let mut right = right;
-                    right.subtract(&left);
-                    (!left_negative, right)
-                }
-            }
-        };
-        Self::from_parts(negative, &magnitude)
+        let mut difference = self.to_big();
+        difference.add_assign(&other.to_big().negated());
+        Self::from_big(difference)
     }
 }
 
@@ -148,16 +88,7 @@ impl Ord for Exponent {
     fn cmp(&self, other: &Self) -> Ordering {
         match (self, other) {
             (Self::Small(left), Self::Small(right)) => left.cmp(right),
-            _ => {
-                let (left_negative, left) = self.parts();
-                let (right_negative, right) = other.parts();
-                match (left_negative, right_negative) {
-                    (true, false) => Ordering::Less,
-                    (false, true) => Ordering::Greater,
-                    (true, true) => right.cmp(&left),
-                    (false, false) => left.cmp(&right),
-                }
-            }
+            _ => self.to_big().cmp(&other.to_big()),
         }
     }
 }
@@ -303,23 +234,19 @@ impl Decimal {
         if let (Ok(value), Ok(modulus)) = (numerator.parse::<u128>(), denominator.parse::<u128>()) {
             return mul_mod(value % modulus, pow_mod(10, &zeros, modulus), modulus) == 0;
         }
-        let modulus = BigDec::from_digits(denominator);
-        let mut remainder = BigDec::zero();
-        for digit in numerator.bytes() {
-            remainder.mul_small(10);
-            remainder.add_small(digit - b'0');
-            remainder.reduce(&modulus);
-        }
+        let modulus = BigInt::from_digits(denominator).expect("a coefficient is digits");
+        let reduce = |value: BigInt| value.rem(&modulus).expect("a nonzero coefficient");
+        let mut remainder =
+            reduce(BigInt::from_digits(numerator).expect("a coefficient is digits"));
         // Repeated squaring makes large exponents bounded by log(exponent).
-        let mut power = BigDec::from_digits("10");
-        power.reduce(&modulus);
-        let (_, mut exponent) = zeros.parts();
+        let mut power = reduce(BigInt::from_i128(10));
+        let mut exponent = zeros.to_big();
         while !exponent.is_zero() {
             if exponent.is_odd() {
-                remainder = remainder.mul(&power).modulo(&modulus);
+                remainder = reduce(remainder.mul(&power));
             }
-            power = power.mul(&power).modulo(&modulus);
-            exponent.div_two();
+            power = reduce(power.mul(&power));
+            exponent = exponent.div_rem_u64(2).expect("a nonzero divisor").0;
         }
         remainder.is_zero()
     }
@@ -354,145 +281,15 @@ fn mul_mod(left: u128, right: u128, modulus: u128) -> u128 {
 fn pow_mod(base: u128, exponent: &Exponent, modulus: u128) -> u128 {
     let mut result = 1 % modulus;
     let mut square = base % modulus;
-    let (_, mut exponent) = exponent.parts();
+    let mut exponent = exponent.to_big();
     while !exponent.is_zero() {
         if exponent.is_odd() {
             result = mul_mod(result, square, modulus);
         }
         square = mul_mod(square, square, modulus);
-        exponent.div_two();
+        exponent = exponent.div_rem_u64(2).expect("a nonzero divisor").0;
     }
     result
-}
-
-/// Little-endian decimal digits. Only divisibility needs arithmetic beyond
-/// comparison, and this avoids a runtime big-integer dependency.
-#[derive(Clone)]
-struct BigDec(Vec<u8>);
-impl BigDec {
-    fn zero() -> Self {
-        Self(vec![0])
-    }
-    fn from_digits(s: &str) -> Self {
-        let mut value = Self(s.bytes().rev().map(|b| b - b'0').collect());
-        value.trim();
-        value
-    }
-    fn to_digits(&self) -> String {
-        self.0
-            .iter()
-            .rev()
-            .map(|digit| char::from(b'0' + digit))
-            .collect()
-    }
-    fn is_zero(&self) -> bool {
-        self.0.len() == 1 && self.0[0] == 0
-    }
-    fn trim(&mut self) {
-        while self.0.len() > 1 && self.0.last() == Some(&0) {
-            self.0.pop();
-        }
-    }
-    fn cmp(&self, other: &Self) -> Ordering {
-        self.0
-            .len()
-            .cmp(&other.0.len())
-            .then_with(|| self.0.iter().rev().cmp(other.0.iter().rev()))
-    }
-    fn add_small(&mut self, n: u8) {
-        let mut carry = n;
-        for digit in &mut self.0 {
-            let sum = *digit + carry;
-            *digit = sum % 10;
-            carry = sum / 10;
-            if carry == 0 {
-                return;
-            }
-        }
-        if carry != 0 {
-            self.0.push(carry);
-        }
-    }
-    fn add(&mut self, other: &Self) {
-        let mut carry = 0_u8;
-        self.0.resize(self.0.len().max(other.0.len()), 0);
-        for (index, digit) in self.0.iter_mut().enumerate() {
-            let sum = *digit + other.0.get(index).copied().unwrap_or(0) + carry;
-            *digit = sum % 10;
-            carry = sum / 10;
-        }
-        if carry != 0 {
-            self.0.push(carry);
-        }
-    }
-    fn is_odd(&self) -> bool {
-        self.0[0] & 1 != 0
-    }
-    fn div_two(&mut self) {
-        let mut carry = 0_u8;
-        for digit in self.0.iter_mut().rev() {
-            let value = carry * 10 + *digit;
-            *digit = value / 2;
-            carry = value % 2;
-        }
-        self.trim();
-    }
-    fn mul_small(&mut self, n: u8) {
-        let mut carry = 0;
-        for digit in &mut self.0 {
-            let product = *digit * n + carry;
-            *digit = product % 10;
-            carry = product / 10;
-        }
-        while carry != 0 {
-            self.0.push(carry % 10);
-            carry /= 10;
-        }
-        self.trim();
-    }
-    fn subtract(&mut self, other: &Self) {
-        let mut borrow = 0_i8;
-        for (index, digit) in self.0.iter_mut().enumerate() {
-            let diff = *digit as i8 - other.0.get(index).copied().unwrap_or(0) as i8 - borrow;
-            if diff < 0 {
-                *digit = (diff + 10) as u8;
-                borrow = 1;
-            } else {
-                *digit = diff as u8;
-                borrow = 0;
-            }
-        }
-        self.trim();
-    }
-    fn reduce(&mut self, modulus: &Self) {
-        while self.cmp(modulus) != Ordering::Less {
-            self.subtract(modulus);
-        }
-    }
-    fn modulo(mut self, modulus: &Self) -> Self {
-        let mut result = Self::zero();
-        for digit in self.0.drain(..).rev() {
-            result.mul_small(10);
-            result.add_small(digit);
-            result.reduce(modulus);
-        }
-        result
-    }
-    fn mul(&self, other: &Self) -> Self {
-        let mut result = vec![0_u8; self.0.len() + other.0.len()];
-        for (i, &left) in self.0.iter().enumerate() {
-            let mut carry = 0_u8;
-            for (j, &right) in other.0.iter().enumerate() {
-                let value = result[i + j] + left * right + carry;
-                result[i + j] = value % 10;
-                carry = value / 10;
-            }
-            result[i + other.0.len()] += carry;
-        }
-        let mut out = Self(result);
-        out.trim();
-        out
-    }
 }
 
 impl PartialOrd for Decimal {

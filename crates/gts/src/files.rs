@@ -1783,7 +1783,7 @@ fn restore_path_metadata(
     // one before metadata is restored, so the only targets here are regular files,
     // hardlinks (which name a regular file) and directories.
     if let Some(modified) = &entry.modified {
-        let (seconds, nanos) = parse_datetime(modified)?;
+        let (seconds, nanos) = parse_modified(modified)?;
         let instant = system_time_from_unix(seconds, nanos)
             .ok_or_else(|| format!("mtime {modified} is not representable on this host"))?;
         set_modified_time(target, instant).map_err(|e| format!("set mtime for {target:?}: {e}"))?;
@@ -1854,7 +1854,7 @@ fn restore_owner(_target: &Path, entry: &FileEntry, options: &UnpackOptions) -> 
     Ok(())
 }
 
-fn parse_datetime(text: &str) -> Result<(i64, u32), String> {
+fn parse_modified(text: &str) -> Result<(i64, u32), String> {
     crate::rfc3339::parse(text).map_err(|e| format!("parse datetime {text}: {e}"))
 }
 

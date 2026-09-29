@@ -2046,15 +2046,6 @@ pub(crate) fn eval_custom_aggregate<D: DatasetView + Sync>(
     Ok(value.and_then(|v| ctx.scratch.intern_checked(ctx.dataset, v)))
 }
 
-/// Whether an [`XsdValue`] belongs to the SPARQL numeric tower (integer / decimal /
-/// float / double). Boolean, string, temporal, and binary values are NOT numeric.
-pub(crate) fn is_numeric_xsd(v: &XsdValue) -> bool {
-    matches!(
-        v,
-        XsdValue::Integer { .. } | XsdValue::Decimal(_) | XsdValue::Float(_) | XsdValue::Double(_)
-    )
-}
-
 /// The running numeric fold `SUM`/`AVG` share, wrapped `Option`-poisonable by
 /// [`fold_numeric`]'s chain (the poisoned state lives one level up, as `None`,
 /// rather than as a variant here).
@@ -2083,7 +2074,7 @@ pub(crate) fn is_numeric_xsd(v: &XsdValue) -> bool {
 /// SPARQL 1.1 §18.5.1.3 defines `SUM` as repeated `op:numeric-add`, whose domain
 /// is the numeric tower alone; F&O has no `SUM`/`AVG` for `xsd:duration` either.
 /// [`Self::Dur`] extends the aggregate algebra to the duration group, which
-/// `.goals`' MAXIMAL UTILITY line asks for once nothing in [`is_numeric_xsd`]'s
+/// `.goals`' MAXIMAL UTILITY line asks for once nothing in [`XsdValue::is_numeric`]'s
 /// gate has to move to reach it (see [`NumericFold::step_xsd`]'s doc for the exact
 /// gate). The RAW `(months, seconds)` pair is an abelian group under
 /// componentwise `+` unconditionally — see [`Self::Dur`]'s own doc for why the
@@ -2199,9 +2190,9 @@ impl NumericFold {
     ///
     /// The gate below accepts the numeric tower OR a duration, never both in
     /// the same group: the duration check sits entirely on
-    /// [`is_numeric_xsd`]'s **failure path** (short-circuit `&&`), so a numeric
+    /// [`XsdValue::is_numeric`]'s **failure path** (short-circuit `&&`), so a numeric
     /// value executes exactly the branches it executed before [`Self::Dur`]
-    /// existed — [`is_numeric_xsd`] itself is unchanged and untouched by this
+    /// existed — [`XsdValue::is_numeric`] itself is unchanged and untouched by this
     /// widening (see its own doc for why: widening THAT predicate, rather than
     /// gating here, would let a mixed numeric+duration group silently coerce
     /// through whichever other call site trusts it). A group that mixes the
@@ -2215,7 +2206,7 @@ impl NumericFold {
     /// [`NumericSummary`] relies on to stop an exact fold at a refused row and
     /// hand that row to the sequential chain instead.
     fn step_xsd(&mut self, xv: &XsdValue) -> bool {
-        if !is_numeric_xsd(xv) && !matches!(xv, XsdValue::Duration(_)) {
+        if !xv.is_numeric() && !matches!(xv, XsdValue::Duration(_)) {
             return false;
         }
         match self {

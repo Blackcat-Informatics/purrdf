@@ -72,14 +72,14 @@
 //! * `MODE`/`FIRST`/`LAST`/`TOPK` needed NO code change at all: they already
 //!   fold over a [`TermValue`] of ANY kind (see each member's own doc
 //!   section above), gated by nothing numeric-specific — none of their
-//!   `step` implementations ever call `is_numeric_xsd`. `MODE`'s tie-break
+//!   `step` implementations ever call `XsdValue::is_numeric`. `MODE`'s tie-break
 //!   and `TOPK`'s total order are both `crate::modifier`'s
 //!   `project`/`total_order` pair, which already orders duration literals
 //!   correctly (through its `parse_by_iri` + `value_cmp` path) — see the
 //!   ordering-policy paragraph below for the one difference between that
 //!   order and the one `MEDIAN`/`PERCENTILE` use.
 //! * `MEDIAN`/`PERCENTILE` (order statistics needing interpolation) widen
-//!   their gate from `is_numeric_xsd` alone to "numeric OR duration, never
+//!   their gate from `XsdValue::is_numeric` alone to "numeric OR duration, never
 //!   both in the same group" (see `is_numeric_or_duration_xsd`/
 //!   `same_value_family`) — a mixed numeric+duration group POISONS, the
 //!   same discipline `crate::modifier`'s duration `SUM`/`AVG` extension
@@ -133,7 +133,7 @@
 //! fall back to without inventing a value space this crate does not own, so
 //! this family is deliberately NOT extended — a duration input to
 //! `STDDEV`/`VARIANCE` poisons the fold exactly as any other non-numeric
-//! value does (the unchanged `is_numeric_xsd` gate in
+//! value does (the unchanged `XsdValue::is_numeric` gate in
 //! `MomentsAccumulator::step`).
 //!
 //! # `PERCENTILE`'s named scalarval
@@ -308,7 +308,7 @@ use crate::agg_fn::{
 };
 use crate::error::EvalError;
 use crate::expr::xsd_of;
-use crate::modifier::{ValueClass, is_numeric_xsd, lexical_of, project, total_order};
+use crate::modifier::{ValueClass, lexical_of, project, total_order};
 use crate::user_fn::{Arity, Volatility};
 
 // ---------------------------------------------------------------------------
@@ -348,7 +348,7 @@ fn numeric_scalarval(scalarvals: &[(String, TermValue)], name: &str) -> Option<X
         .iter()
         .find(|(k, _)| k == name)
         .and_then(|(_, v)| xsd_of(v))
-        .filter(is_numeric_xsd)
+        .filter(XsdValue::is_numeric)
 }
 
 /// `MEDIAN`/`PERCENTILE`'s widened gate — see the module docs' "The
@@ -357,7 +357,7 @@ fn numeric_scalarval(scalarvals: &[(String, TermValue)], name: &str) -> Option<X
 /// already in the group (that check is [`same_value_family`]'s job, applied
 /// separately in `step`/`combine`).
 fn is_numeric_or_duration_xsd(v: &XsdValue) -> bool {
-    is_numeric_xsd(v) || matches!(v, XsdValue::Duration(_))
+    v.is_numeric() || matches!(v, XsdValue::Duration(_))
 }
 
 /// Whether two values already passed through [`is_numeric_or_duration_xsd`]
@@ -367,7 +367,7 @@ fn is_numeric_or_duration_xsd(v: &XsdValue) -> bool {
 /// SUBTYPE duration values (`yearMonthDuration` beside `dayTimeDuration`)
 /// are the SAME family and never poison here.
 fn same_value_family(a: &XsdValue, b: &XsdValue) -> bool {
-    is_numeric_xsd(a) == is_numeric_xsd(b)
+    a.is_numeric() == b.is_numeric()
 }
 
 /// The running-moments (`(n, Σx, Σx²)`, deliberately NOT Welford — see the
@@ -828,7 +828,7 @@ impl AggregateAccumulator for MomentsAccumulator {
         if matches!(self.state, MomentsState::Poisoned) {
             return Ok(());
         }
-        let Some(x) = args.first().and_then(xsd_of).filter(is_numeric_xsd) else {
+        let Some(x) = args.first().and_then(xsd_of).filter(XsdValue::is_numeric) else {
             self.state = MomentsState::Poisoned;
             return Ok(());
         };
@@ -1862,7 +1862,7 @@ mod tests {
 
     /// `MODE` needed no code change to accept durations (see the module docs'
     /// "The `xsd:duration` extension" section: it folds over any [`TermValue`]
-    /// by RDF term identity, never gated on `is_numeric_xsd`).
+    /// by RDF term identity, never gated on `XsdValue::is_numeric`).
     #[test]
     fn mode_over_durations_picks_the_most_frequent_value() {
         let rows = [dt_dur("P1D"), dt_dur("P2D"), dt_dur("P2D")]

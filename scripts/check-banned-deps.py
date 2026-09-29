@@ -270,15 +270,15 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "csv": "purrdf_core::csv (the W3C CSVW dialect reader/writer)",
     # csv's own field-scanning engine; nothing else in the graph pulled it in.
     "csv-core": "purrdf_core::csv (the W3C CSVW dialect reader/writer)",
-    "time": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "time": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
     # time's own closure: its internal core types, its compile-time format-description
     # macros, and the ranged-integer/formatting crates its date validation used.
     # Nothing else in the graph pulled any of them in.
-    "time-core": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
-    "time-macros": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
-    "deranged": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
-    "num-conv": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
-    "powerfmt": "purrdf_gts::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "time-core": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "time-macros": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "deranged": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "num-conv": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
+    "powerfmt": "purrdf_xsd::rfc3339 (RFC 3339 §5.6-5.8 parsed and formatted directly)",
     # The analyzer's Unicode layer, generated from the vendored database in
     # crates/iri/unicode/; `cargo tree --locked --target all -i` showed each
     # held only by purrdf-text (tinyvec through unicode-normalization alone).

@@ -28,10 +28,11 @@ use crate::shapes::{
     PropertyShape, Shape, annotation_for,
 };
 use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids, term_id_to_native};
+use purrdf_xsd::XsdDatatype;
 use purrdf_xsd::datatype::{
     XSD_BOOLEAN, XSD_BYTE, XSD_DATE, XSD_DATE_TIME, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_INT,
     XSD_INTEGER, XSD_LONG, XSD_NEGATIVE_INTEGER, XSD_NON_NEGATIVE_INTEGER,
-    XSD_NON_POSITIVE_INTEGER, XSD_NS, XSD_POSITIVE_INTEGER, XSD_SHORT, XSD_STRING, XSD_TIME,
+    XSD_NON_POSITIVE_INTEGER, XSD_POSITIVE_INTEGER, XSD_SHORT, XSD_STRING, XSD_TIME,
     XSD_UNSIGNED_BYTE, XSD_UNSIGNED_INT, XSD_UNSIGNED_LONG, XSD_UNSIGNED_SHORT,
 };
 
@@ -3484,39 +3485,19 @@ fn collapse_trim(s: &str) -> &str {
     s.trim_matches(purrdf_iri::terminals::is_ws_char)
 }
 
-/// `xsd:integer` lexical space: optional sign then one-or-more ASCII digits.
-/// Unbounded — no native-int overflow.
-///
-/// `xsd:integer` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.4.13), so
-/// the lexical form is trimmed with [`collapse_trim`] and not with
-/// [`str::trim`].
+/// `xsd:integer`'s lexical space after its `whiteSpace` = `collapse` facet
+/// (XSD 1.1 Part 2 §3.4.13): [`collapse_trim`], then
+/// [`purrdf_xsd::numeric::is_integer_lexical`]. Unbounded — no native-int
+/// overflow.
 fn is_xsd_integer_lexical(s: &str) -> bool {
-    let s = collapse_trim(s);
-    let digits = s.strip_prefix(['+', '-']).unwrap_or(s);
-    !digits.is_empty() && digits.bytes().all(|b| b.is_ascii_digit())
+    purrdf_xsd::numeric::is_integer_lexical(collapse_trim(s))
 }
 
-/// `xsd:decimal` lexical space: optional sign then digits with an optional
-/// single '.' — NO exponent. At least one digit must be present.
-///
-/// `xsd:decimal` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.3), so the
-/// lexical form is trimmed with [`collapse_trim`] and not with [`str::trim`].
+/// `xsd:decimal`'s lexical space after its `whiteSpace` = `collapse` facet
+/// (XSD 1.1 Part 2 §3.3.3): [`collapse_trim`], then
+/// [`purrdf_xsd::numeric::is_decimal_lexical`] (no exponent).
 fn is_xsd_decimal_lexical(s: &str) -> bool {
-    let s = collapse_trim(s);
-    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
-    if body.is_empty() {
-        return false;
-    }
-    let mut seen_dot = false;
-    let mut seen_digit = false;
-    for b in body.bytes() {
-        match b {
-            b'0'..=b'9' => seen_digit = true,
-            b'.' if !seen_dot => seen_dot = true,
-            _ => return false, // rejects 'e'/'E' (scientific notation) and any other char
-        }
-    }
-    seen_digit
+    purrdf_xsd::numeric::is_decimal_lexical(collapse_trim(s))
 }
 
 /// Check that a `Term` satisfies `sh:datatype` requirements.
@@ -3563,21 +3544,7 @@ fn check_datatype_parts(lex: &str, stored_dt: &str, dt_iri: &NamedNode) -> bool 
 /// narrower than `xsd:integer` (so an exact datatype match still requires a range
 /// check).
 fn is_derived_integer_type(dt: &str) -> bool {
-    matches!(
-        dt,
-        XSD_NON_NEGATIVE_INTEGER
-            | XSD_POSITIVE_INTEGER
-            | XSD_NON_POSITIVE_INTEGER
-            | XSD_NEGATIVE_INTEGER
-            | XSD_LONG
-            | XSD_INT
-            | XSD_SHORT
-            | XSD_BYTE
-            | XSD_UNSIGNED_LONG
-            | XSD_UNSIGNED_INT
-            | XSD_UNSIGNED_SHORT
-            | XSD_UNSIGNED_BYTE
-    )
+    dt != XSD_INTEGER && XsdDatatype::from_iri(dt).is_some_and(XsdDatatype::is_integer_family)
 }
 
 /// Lexical-form validity for an exact datatype-IRI match. Unknown datatypes are
@@ -3894,27 +3861,8 @@ fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
     // masked while data round-tripped through oxigraph's NT serializer, which
     // value-space-normalized such literals to `xsd:integer`; the oxigraph-free
     // path is the faithful one and exposes the gap.)
-    let local = datatype.strip_prefix(XSD_NS)?;
-    if matches!(
-        local,
-        "integer"
-            | "decimal"
-            | "double"
-            | "float"
-            | "long"
-            | "int"
-            | "short"
-            | "byte"
-            | "nonNegativeInteger"
-            | "positiveInteger"
-            | "nonPositiveInteger"
-            | "negativeInteger"
-            | "unsignedLong"
-            | "unsignedInt"
-            | "unsignedShort"
-            | "unsignedByte"
-    ) {
-        // Every datatype listed above fixes `whiteSpace` = `collapse`, so the
+    if XsdDatatype::from_iri(datatype).is_some_and(XsdDatatype::is_numeric) {
+        // Every numeric datatype fixes `whiteSpace` = `collapse`, so the
         // lexical form is trimmed with the four code points that names — see
         // [`collapse_trim`].
         collapse_trim(lexical).parse::<f64>().ok()

@@ -10,11 +10,15 @@
 //! as required. Each check below is the grammar of the document the
 //! specification cites, implemented in full; host names go through
 //! `purrdf_iri::idna` (RFC 1123 / RFC 5890–5893) and addresses through
-//! `purrdf_iri::host`, the workspace's single implementation of each. A
+//! `purrdf_iri::host`, the workspace's single implementation of each; the
+//! RFC 3339 `date-time`, `date` and `time` formats go through
+//! `purrdf_xsd::rfc3339`, read by the §5.6 ABNF (`T` or `t`, no space) with a
+//! leap second at 23:59:60 UTC on any day, as the test suite requires. A
 //! format a dialect does not define (draft-07 has no `duration` or `uuid`)
 //! is unknown in that dialect.
 
 use purrdf_iri::{host, idna};
+use purrdf_xsd::rfc3339::{self, LeapSecond, Separator};
 
 use crate::dialect::Dialect;
 use crate::ecma;
@@ -73,9 +77,11 @@ impl Format {
     /// Whether `text` is a valid instance of the format.
     pub(crate) fn check(self, text: &str) -> bool {
         match self {
-            Self::DateTime => date_time(text),
-            Self::Date => full_date(text.as_bytes()),
-            Self::Time => full_time(text.as_bytes()),
+            Self::DateTime => {
+                rfc3339::parse(text, Separator::Rfc3339Abnf, LeapSecond::AnyDay).is_ok()
+            }
+            Self::Date => rfc3339::parse_date(text).is_ok(),
+            Self::Time => rfc3339::parse_time(text).is_ok(),
             Self::Duration => duration(text.as_bytes()),
             Self::Email => email(text),
             Self::IdnEmail => idn_email(text),
@@ -105,92 +111,6 @@ fn digits(bytes: &[u8]) -> Option<u32> {
             .saturating_mul(10)
             .saturating_add(u32::from(digit - b'0'))
     }))
-}
-
-const fn is_leap(year: u32) -> bool {
-    year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400))
-}
-
-/// RFC 3339 `full-date`: `YYYY-MM-DD` with a real calendar day.
-fn full_date(bytes: &[u8]) -> bool {
-    let [y0, y1, y2, y3, b'-', m0, m1, b'-', d0, d1] = *bytes else {
-        return false;
-    };
-    let (Some(year), Some(month), Some(day)) = (
-        digits(&[y0, y1, y2, y3]),
-        digits(&[m0, m1]),
-        digits(&[d0, d1]),
-    ) else {
-        return false;
-    };
-    let last = match month {
-        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
-        4 | 6 | 9 | 11 => 30,
-        2 if is_leap(year) => 29,
-        2 => 28,
-        _ => return false,
-    };
-    (1..=last).contains(&day)
-}
-
-/// RFC 3339 `full-time`: `partial-time time-offset`, where a leap second is
-/// only valid at 23:59:60 UTC.
-fn full_time(bytes: &[u8]) -> bool {
-    if bytes.len() < 9 {
-        return false;
-    }
-    let [h0, h1, b':', m0, m1, b':', s0, s1, ref rest @ ..] = *bytes else {
-        return false;
-    };
-    let (Some(hour), Some(minute), Some(second)) =
-        (digits(&[h0, h1]), digits(&[m0, m1]), digits(&[s0, s1]))
-    else {
-        return false;
-    };
-    if hour > 23 || minute > 59 || second > 60 {
-        return false;
-    }
-    let mut rest = rest;
-    if let [b'.', fraction @ ..] = rest {
-        let length = fraction
-            .iter()
-            .take_while(|byte| byte.is_ascii_digit())
-            .count();
-        if length == 0 {
-            return false;
-        }
-        rest = &fraction[length..];
-    }
-    let offset_minutes: i64 = match *rest {
-        [b'Z' | b'z'] => 0,
-        [sign @ (b'+' | b'-'), oh0, oh1, b':', om0, om1] => {
-            let (Some(offset_hour), Some(offset_minute)) =
-                (digits(&[oh0, oh1]), digits(&[om0, om1]))
-            else {
-                return false;
-            };
-            if offset_hour > 23 || offset_minute > 59 {
-                return false;
-            }
-            let magnitude = i64::from(offset_hour * 60 + offset_minute);
-            if sign == b'+' { magnitude } else { -magnitude }
-        }
-        _ => return false,
-    };
-    if second == 60 {
-        let utc = (i64::from(hour * 60 + minute) - offset_minutes).rem_euclid(24 * 60);
-        return utc == 23 * 60 + 59;
-    }
-    true
-}
-
-/// RFC 3339 `date-time`: `full-date "T" full-time` (`T` in either case).
-fn date_time(text: &str) -> bool {
-    let bytes = text.as_bytes();
-    bytes.len() > 11
-        && matches!(bytes[10], b'T' | b't')
-        && full_date(&bytes[..10])
-        && full_time(&bytes[11..])
 }
 
 /// RFC 3339 Appendix A `duration`.
@@ -524,6 +444,8 @@ mod tests {
             ("time", "08:30:06", "08:30:06Z"),
             ("time", "22:59:60Z", "23:59:60Z"),
             ("time", "15:59:60-08:01", "15:59:60-08:00"),
+            ("date-time", "2020-01-01 00:00:00Z", "2020-01-01t00:00:00z"),
+            ("date-time", "1998-12-15T22:59:60Z", "1998-12-15T23:59:60Z"),
             ("duration", "P1Y2D", "P1Y2M3D"),
             ("duration", "PT1H2S", "PT1H2M3S"),
             ("duration", "P", "P4W"),

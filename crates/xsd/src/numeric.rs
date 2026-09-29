@@ -217,13 +217,36 @@ fn invalid(dt: XsdDatatype, lexical: &str, reason: &'static str) -> XsdError {
     }
 }
 
+/// Whether `lexical` is in the `xsd:integer` lexical space (XSD 1.1 Part 2
+/// §3.4.13.1): an optional `+` or `-`, then one or more ASCII digits. Unbounded:
+/// this is the lexical space, not the `i128` this crate parses into. No
+/// whitespace is trimmed; a caller applying the datatype's `collapse` facet
+/// trims first.
+#[must_use]
+pub fn is_integer_lexical(lexical: &str) -> bool {
+    let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
+    !body.is_empty() && body.bytes().all(|b| b.is_ascii_digit())
+}
+
+/// Whether `lexical` is in the `xsd:decimal` lexical space (XSD 1.1 Part 2
+/// §3.3.3.1): an optional `+` or `-`, then digits with at most one `.`, and at
+/// least one digit (`.5`, `1.`, `1.5` and `12` all qualify; no exponent).
+/// Unbounded, and no whitespace is trimmed, as for [`is_integer_lexical`].
+#[must_use]
+pub fn is_decimal_lexical(lexical: &str) -> bool {
+    let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
+    let (int, frac) = body.split_once('.').unwrap_or((body, ""));
+    !(int.is_empty() && frac.is_empty())
+        && int.bytes().all(|b| b.is_ascii_digit())
+        && frac.bytes().all(|b| b.is_ascii_digit())
+}
+
 /// `xsd:integer`: optional leading `+`/`-`, then one or more ASCII digits.
 /// Returns the raw `i128` value without any subtype range check — for range-checked
 /// integer-family parsing use [`parse_integer_typed`].
 pub fn parse_integer(s: &str) -> Result<i128, XsdError> {
     let dt = XsdDatatype::Integer;
-    let body = s.strip_prefix(['+', '-']).unwrap_or(s);
-    if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
+    if !is_integer_lexical(s) {
         return Err(invalid(dt, s, "expected an optional sign then digits"));
     }
     s.parse::<i128>().map_err(|_| XsdError::OutOfRange {
@@ -243,8 +266,7 @@ pub fn parse_integer_typed(lexical: &str, datatype: XsdDatatype) -> Result<i128,
     // InvalidLexical for malformed input, or OutOfRange for beyond-i128).
     // We call parse_integer but report the error under `datatype` for non-Integer
     // subtypes, so callers see the correct IRI in the error.
-    let body = lexical.strip_prefix(['+', '-']).unwrap_or(lexical);
-    if body.is_empty() || !body.bytes().all(|b| b.is_ascii_digit()) {
+    if !is_integer_lexical(lexical) {
         return Err(XsdError::InvalidLexical {
             datatype,
             lexical: lexical.to_string(),
@@ -1293,7 +1315,7 @@ pub fn bigint_avg_decimal_lexical(dividend: &crate::bigint::BigInt, count: u64) 
     let (quotient, _remainder) = scaled
         .div_rem_u64(count)
         .expect("count != 0 was just asserted");
-    quotient.to_decimal_lexical(MAX_DECIMAL_SCALE)
+    quotient.to_decimal_lexical(u32::from(MAX_DECIMAL_SCALE))
 }
 
 /// `op:numeric-unary-minus` — the numeric-TIER unary `-` only. Negates the

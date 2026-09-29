@@ -175,13 +175,16 @@ pub mod binary;
 pub mod datatype;
 mod decimal_float;
 pub mod ieee;
+pub mod json_number;
 pub mod numeric;
 pub mod ops;
 pub mod range;
 pub mod rational;
+pub mod rfc3339;
 pub mod simple;
 pub mod temporal;
 pub mod value;
+pub mod wide;
 
 pub use bigint::BigInt;
 pub use binary::{canonical_base64, canonical_hex, parse_base64, parse_binary, parse_hex};
@@ -202,6 +205,7 @@ pub use range::{
 };
 pub use simple::{normalize_whitespace_collapse, normalize_whitespace_replace};
 pub use temporal::{
-    datetime_epoch, datetime_from_unix_seconds, days_from_civil, days_in_month, duration_equal,
+    civil_from_days, datetime_epoch, datetime_from_unix_seconds, days_from_civil, days_in_month,
+    duration_equal, is_leap,
 };
 pub use value::{XsdError, XsdValue, parse, parse_by_iri, parse_xsd10};

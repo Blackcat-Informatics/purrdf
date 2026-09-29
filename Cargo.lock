@@ -783,6 +783,7 @@ dependencies = [
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-testkit",
+ "purrdf-xsd",
  "regex",
  "serde_json",
 ]
@@ -1016,6 +1017,7 @@ dependencies = [
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-testkit",
+ "purrdf-xsd",
 ]
 
 [[package]]
