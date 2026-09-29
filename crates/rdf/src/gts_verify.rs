@@ -24,12 +24,10 @@
 //!    [`purrdf_gts::mmr::verify_proof`]. The cheap blob/segment-head
 //!    membership test runs first; the MMR proof is only attempted on a miss.
 
-use std::fmt::Write as _;
-
 use purrdf_gts::mmr::{prove_file, verify_proof};
 use purrdf_gts::reader;
 use purrdf_gts::verify::verify_file;
-use purrdf_gts::wire::hex;
+use purrdf_gts::wire::digest_label;
 
 use crate::gts_core::diagnostics_to_error;
 use crate::{RdfDataset, RdfDiagnostic};
@@ -128,9 +126,7 @@ pub fn verify_content_chain(
         included.insert(digest.clone());
     }
     for head in &graph.segment_heads {
-        let mut id = String::with_capacity(71);
-        let _ = write!(id, "blake3:{}", hex(head));
-        included.insert(id);
+        included.insert(digest_label(head));
     }
 
     // `content_ids()` yields sorted-by-`TermId` pairs, so both the match count
@@ -138,8 +134,7 @@ pub fn verify_content_chain(
     let mut digests_included = 0usize;
     let mut missing: Vec<String> = Vec::new();
     for (term_id, digest) in dataset.content_ids() {
-        let mut content_id = String::with_capacity(71);
-        let _ = write!(content_id, "blake3:{}", digest.to_hex());
+        let content_id = digest_label(digest.as_bytes());
         let is_included = included.contains(&content_id)
             || prove_file(gts_bytes, digest.as_bytes())
                 .and_then(|proof| verify_proof(&proof))
@@ -177,7 +172,7 @@ mod tests {
     use purrdf_core::ir::RdfDatasetBuilder;
     use purrdf_core::{ContentIdScheme, RdfLiteral};
     use purrdf_gts::openpgp::parse_secret_signing_key;
-    use purrdf_gts::wire::digest_str;
+    use purrdf_gts::wire::{digest_label, digest_str};
     use purrdf_gts::writer::Writer;
 
     use super::{RdfDataset, verify_content_chain};
@@ -290,7 +285,7 @@ mod tests {
             blob_frame_id, head,
             "the blob frame id must not equal the segment head"
         );
-        let content_iri = format!("blake3:{}", purrdf_gts::wire::hex(&blob_frame_id));
+        let content_iri = digest_label(&blob_frame_id);
         assert_ne!(
             content_iri,
             digest_str(BLOB_PAYLOAD),
@@ -311,7 +306,7 @@ mod tests {
         let (bytes, head, _blob_frame_id) = build_file_with_index();
         // A digest that is not a blob id, not the segment head, and not a
         // covered MMR leaf.
-        let absent = format!("blake3:{}", "cd".repeat(32));
+        let absent = digest_label(&[0xcd; 32]);
         let dataset = dataset_referencing(&absent);
 
         let err = verify_content_chain(&dataset, &bytes, &head)
@@ -340,7 +335,7 @@ mod tests {
     fn missing_digest_names_the_term() {
         let (bytes, head) = build_file(true);
         // A digest that is NOT the blob's and NOT a segment head.
-        let absent = format!("blake3:{}", "ab".repeat(32));
+        let absent = digest_label(&[0xab; 32]);
         let dataset = dataset_referencing(&absent);
 
         let err = verify_content_chain(&dataset, &bytes, &head)

@@ -204,12 +204,9 @@ fn render_value(value: &[u8]) -> String {
     match std::str::from_utf8(value) {
         Ok(text) if !text.chars().any(char::is_control) => format!("\"{text}\""),
         _ => {
-            use std::fmt::Write as _;
             let mut hex = String::with_capacity(value.len() * 2 + 2);
             hex.push_str("0x");
-            for byte in value {
-                let _ = write!(hex, "{byte:02x}");
-            }
+            purrdf_hash::hex::encode_into(value, &mut hex);
             hex
         }
     }

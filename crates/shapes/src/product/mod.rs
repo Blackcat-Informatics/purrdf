@@ -140,6 +140,7 @@ use std::sync::Arc;
 use purrdf_core::artifact::{ArtifactBuilder, ArtifactError, ArtifactSpec, ArtifactView, Identity};
 use purrdf_core::governor::{ResourceDimension, TrippedGovernor};
 use purrdf_core::ir::pack::bits::{read_varint, write_varint};
+use purrdf_hash::hex::Lower;
 /// The three registry types [`HostBindings::new`] binds, re-exported here.
 ///
 /// A caller wiring host implementations into a restore has to NAME these types, and
@@ -1521,8 +1522,8 @@ impl<'a> ShapesProductView<'a> {
                  the shapes graph you named, or read the binding of the product you meant off \
                  the artifact itself — `purrdf shacl explain` prints it on its `identity-digest` \
                  line, in exactly this spelling",
-                hex(declared),
-                hex(expected)
+                Lower(declared),
+                Lower(expected)
             ),
         ))
     }
@@ -1557,8 +1558,8 @@ impl<'a> ShapesProductView<'a> {
                  product, or restore it with `rebuild`, which re-derives the shapes graph from the \
                  dataset the product carries instead of trusting a memo written against a model \
                  this build no longer has",
-                hex(&self.stage_id),
-                hex(&STAGE_ID)
+                Lower(&self.stage_id),
+                Lower(&STAGE_ID)
             ),
         ))
     }
@@ -1623,17 +1624,4 @@ impl<'a> ShapesProductView<'a> {
             ),
         ))
     }
-}
-
-/// Lowercase-hex a 32-byte digest for a refusal message.
-///
-/// A local helper rather than a shared utility: this module owes nothing to any
-/// layer above it, and a digest renderer is four lines.
-fn hex(digest: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
 }

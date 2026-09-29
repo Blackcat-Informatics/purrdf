@@ -971,9 +971,9 @@ impl PathGraph {
              relation no dataset at evaluation time, so an unnoticed mismatch is answered \
              silently about the snapshot's edges; rebuild the snapshot from the dataset \
              being queried",
-            render_hex(&self.fingerprint.content_digest),
+            purrdf_hash::hex::encode(&self.fingerprint.content_digest),
             self.fingerprint.edge_count,
-            render_hex(&observed_digest),
+            purrdf_hash::hex::encode(&observed_digest),
             observed_edges.len(),
         )))
     }
@@ -1170,11 +1170,6 @@ fn edge_set_digest(edges: &[(TermValue, TermValue, TermValue)]) -> [u8; 32] {
     state.finalize().into()
 }
 
-/// Render bytes as lowercase hex, the one spelling this module renders a digest in.
-fn render_hex(bytes: &[u8]) -> String {
-    purrdf_core::hex::lower(bytes)
-}
-
 /// The dense index of `value` within an already-sorted, deduplicated table it is known to
 /// belong to.
 fn dense_index(table: &[TermValue], value: &TermValue) -> u32 {
@@ -1222,7 +1217,7 @@ fn seed_digest(graph: &PathGraph, node: u32) -> Sha256 {
 /// answer. All 32 bytes are rendered, as 64 lowercase hex characters.
 fn finish_digest(mut state: Sha256, hop_count: u64) -> String {
     state.update(hop_count.to_le_bytes());
-    render_hex(&state.finalize())
+    purrdf_hash::hex::encode(&state.finalize())
 }
 
 // ---------------------------------------------------------------------------
@@ -2386,7 +2381,7 @@ mod tests {
             assert!(
                 lexical_form
                     .bytes()
-                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+                    .all(|b| purrdf_hash::hex::nibble_canonical(b).is_some()),
                 "lowercase hex only: {lexical_form}"
             );
             assert_eq!(datatype, "http://www.w3.org/2001/XMLSchema#string");
@@ -2649,7 +2644,7 @@ mod tests {
             (iri("b"), iri("c"), iri("s2")),
         ];
         assert_eq!(
-            render_hex(&edge_set_digest(&edges)),
+            purrdf_hash::hex::encode(&edge_set_digest(&edges)),
             "3e8b56a6503ea1a5b185fc0011f104a49b809fba3e51f71e8f6cd466169781f1"
         );
     }
@@ -2890,12 +2885,14 @@ mod tests {
         let text = error.to_string();
         // Both sides, because "these do not match" is not actionable.
         assert!(
-            text.contains(&render_hex(&graph.snapshot_fingerprint().content_digest)),
+            text.contains(&purrdf_hash::hex::encode(
+                &graph.snapshot_fingerprint().content_digest
+            )),
             "the snapshot's own digest must be named: {text}"
         );
         let other_graph = snapshot(&other, &[("p", PathDirection::Forward)]);
         assert!(
-            text.contains(&render_hex(
+            text.contains(&purrdf_hash::hex::encode(
                 &other_graph.snapshot_fingerprint().content_digest
             )),
             "the presented dataset's digest must be named: {text}"
@@ -2979,7 +2976,8 @@ mod tests {
         // nodes, same encoding primitive.
         let data = dataset(&[("a", "p", "b")]);
         let graph = snapshot(&data, &[("p", PathDirection::Forward)]);
-        let snapshot_digest = render_hex(&graph.snapshot_fingerprint().content_digest);
+        let snapshot_digest =
+            purrdf_hash::hex::encode(&graph.snapshot_fingerprint().content_digest);
 
         let relation = PathWitnessRelation::new(Arc::clone(&graph), limits(1, 1));
         let rows = drained(&relation, &free());

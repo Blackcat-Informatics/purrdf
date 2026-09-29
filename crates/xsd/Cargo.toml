@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-xsd"
-description = "Native XSD value space, with no third-party dependency, (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack — replaces oxsdatatypes"
+description = "Native XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack — replaces oxsdatatypes"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -21,16 +21,18 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only foundation whose one runtime dependency is the zero-dependency root
-# `purrdf-hash` (layers.toml). It must stay wasm-clean and must not pull any
-# oxigraph-family crate (it replaces `oxsdatatypes`). It does NOT depend on
-# `purrdf-core` — the dependency points the other way, later.
+# rlib-only, and a foundation: its one runtime dependency is the
+# zero-dependency root `purrdf-hash`. It must stay wasm-clean and must not pull
+# any oxigraph-family crate (it replaces `oxsdatatypes`). It does NOT depend on
+# `purrdf-core` — the dependency points the other way.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_xsd"
 
 [dependencies]
-# The SplitMix64 stream `ieee::reference` draws its deterministic samples from.
+# The base16 codec behind `xsd:hexBinary` (the either-case reader and the
+# uppercase canonical writer), and the SplitMix64 stream `ieee::reference`
+# draws its deterministic samples from.
 purrdf-hash = { workspace = true }
 
 [dev-dependencies]

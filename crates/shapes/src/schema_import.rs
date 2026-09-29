@@ -423,15 +423,11 @@ fn pointer_escape(value: &str) -> Cow<'_, str> {
 /// This uses no shared counter, so adding a property does not renumber existing
 /// nested node shapes.
 fn property_shape_id(source: &Term, path: &str) -> Term {
-    use std::fmt::Write as _;
-
     let source = source.to_string();
     let mut label = String::from("schema-property");
     for part in [source.as_str(), path] {
         label.push('-');
-        for byte in part.bytes() {
-            write!(label, "{byte:02x}").expect("writing to a String cannot fail");
-        }
+        purrdf_hash::hex::encode_into(part.as_bytes(), &mut label);
     }
     Term::blank(label)
 }

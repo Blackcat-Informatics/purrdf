@@ -580,6 +580,7 @@ dependencies = [
 name = "purrdf-cdt"
 version = "2.0.2"
 dependencies = [
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-testkit",
  "purrdf-xsd",
@@ -981,6 +982,7 @@ version = "2.0.2"
 dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-testkit",
 ]
@@ -1022,6 +1024,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-datalog",
  "purrdf-entail",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-rdf",
  "purrdf-shapes",
@@ -1439,6 +1442,7 @@ dependencies = [
 name = "wasm-link"
 version = "2.0.2"
 dependencies = [
+ "purrdf-hash",
  "wasm-encoder",
 ]
 

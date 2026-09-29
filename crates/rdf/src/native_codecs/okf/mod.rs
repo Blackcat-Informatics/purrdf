@@ -510,10 +510,8 @@ fn percent_encode_path(path: &str) -> String {
                 out.push(char::from(byte));
             }
             _ => {
-                const HEX: &[u8; 16] = b"0123456789ABCDEF";
                 out.push('%');
-                out.push(char::from(HEX[usize::from(byte >> 4)]));
-                out.push(char::from(HEX[usize::from(byte & 0x0f)]));
+                purrdf_hash::hex::encode_upper_into(&[byte], &mut out);
             }
         }
     }

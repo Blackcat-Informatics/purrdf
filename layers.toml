@@ -81,7 +81,7 @@ external = []
 name = "purrdf-iri"
 deps = [
     "purrdf-lex",
-    { name = "purrdf-hash", pending = true },
+    "purrdf-hash",
 ]
 external = []
 
@@ -106,6 +106,7 @@ external = []
 [[crate]]
 name = "purrdf-cdt"
 deps = [
+    "purrdf-hash",
     "purrdf-iri",
     "purrdf-xsd",
     { name = "purrdf-lex", pending = true },
@@ -183,7 +184,7 @@ deps = [
 
 [[crate]]
 name = "purrdf-sparql-results"
-deps = ["purrdf-core", "purrdf-iri"]
+deps = ["purrdf-core", "purrdf-hash", "purrdf-iri"]
 
 [[crate]]
 name = "purrdf-entail"
@@ -299,6 +300,7 @@ deps = [
     "purrdf-core",
     "purrdf-datalog",
     "purrdf-entail",
+    "purrdf-hash",
     "purrdf-iri",
     "purrdf-rdf",
     "purrdf-shapes",

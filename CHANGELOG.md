@@ -10,6 +10,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **hash:** `purrdf_hash::hex` is the workspace's base16 (RFC 4648 §8) codec.
+  Rendering: `Lower` and `Upper` (`Display`, no allocation), `encode` /
+  `encode_upper` (an owned `String`), `encode_into` / `encode_upper_into`
+  (append to a `String`) and `encode_to_slice` / `encode_upper_to_slice`
+  (into a caller's buffer, returning the written `&str`). Reading: `decode`
+  (any even length, either case: the `xsd:hexBinary` lexical space),
+  `decode_canonical` (lowercase only), `decode_32` and `decode_32_canonical`
+  (exactly 64 digits), `nibble` and `nibble_canonical` (one digit), each
+  refusal a typed `HexError` naming the offset and byte of the first bad digit
+  or the odd length. `Digest32` is the 32-byte digest value (`Display`,
+  `from_hex`, `to_hex`, `as_bytes`) that every content identity now wraps.
+  Inputs up to `hex::SHORT_MAX` (32) bytes render inline through the
+  compare-select loop with no dispatch; longer ones run SSSE3 `pshufb` on
+  x86-64 below AVX-512BW (the loop itself at AVX-512BW), NEON `tbl` on
+  aarch64 and `i8x16.swizzle` in a `simd128` build. The frozen tables
+  `crates/hash-conformance/tests/vectors/hex_vectors.txt` and
+  `hex_digit_vectors.txt` pin every path, natively and on wasm32. The
+  `hex` group of `cargo bench -p purrdf-hash-conformance --bench digests`
+  times each path and entry point at 8 B to 4 KiB.
 - **lex:** `purrdf-lex`, a new published, zero-dependency, wasm32-clean crate
   holding the lexical foundations every grammar in the workspace shares: the
   exact Turtle/SPARQL/XML terminal classes (`purrdf_lex::terminals`), the
@@ -1099,6 +1118,26 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **core, gts:** base16 has one implementation, `purrdf_hash::hex`, and the
+  copies are gone. **Breaking API:** the `purrdf_core::hex` module is removed
+  (`purrdf_core::hex::lower(bytes)` is `purrdf_hash::hex::encode(bytes)`, the
+  same text), and `purrdf_gts::wire::hex` is removed (use
+  `purrdf_hash::hex::encode`). `purrdf_gts::wire::digest_label` spells an
+  already-computed BLAKE3 digest as `blake3:<hex>`, and `wire::digest_str` is
+  it over the digest of its input. Every rendered and parsed hex byte is
+  unchanged: lowercase sites stay lowercase, and the sites whose grammar
+  specifies uppercase (the `xsd:hexBinary` canonical form, `%XX` percent
+  triplets, `\u00XX` escapes) render through `hex::Upper` and its siblings.
+  No golden, fixture or vector moved.
+- **core, datalog, retrieval:** every 32-byte content identity wraps
+  `purrdf_hash::hex::Digest32`: `ContentDigest`, `Blake3ContentId`,
+  `PackDigest`, the seventeen PURREMB identities, `ContractHash`,
+  `PlanIdentity`, `PlanId`, `FusionProfileId` and `EvidenceId`. Their methods,
+  `Display`, `to_hex` and `from_hex` answer exactly as before
+  (`ContentDigest::from_hex` still reads either case; `Blake3ContentId::from_hex`
+  still reads canonical lowercase only). The derived `Debug` of `ContractHash`
+  and `PlanIdentity` now shows the digest as `Digest32(<hex>)` instead of a
+  list of byte values.
 - **retrieval:** `PLAN_ID_DOMAIN`, `FUSION_PROFILE_ID_DOMAIN` and
   `EVIDENCE_ID_DOMAIN` are `purrdf_hash::Domain` constants rather than `&str`;
   their bytes, and every `PlanId`, `FusionProfileId` and `EvidenceId`, are

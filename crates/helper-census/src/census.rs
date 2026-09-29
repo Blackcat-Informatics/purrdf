@@ -121,8 +121,9 @@ pub(crate) struct Match {
     pub(crate) line: usize,
     /// What matched.
     pub(crate) reasons: Vec<String>,
-    /// Whether the unit is in the job's home package. A rule hit never is: a
-    /// rule forbids its pattern everywhere, the home included.
+    /// Whether the unit is in the job's home package. A rule hit is only when
+    /// its rule exempts the home (a hex-digit table); every other rule forbids
+    /// its pattern everywhere, the home included.
     pub(crate) in_home: bool,
     /// Whether the unit is a `forbidden` variant of this job.
     pub(crate) variant: bool,
@@ -184,7 +185,7 @@ pub(crate) fn matches(job: &Job, workspace: &Workspace, home_package: &str) -> V
                 file: hit.file.clone(),
                 line: hit.line,
                 reasons: vec![format!("{}: {}", hit.rule, hit.detail)],
-                in_home: false,
+                in_home: hit.home_exempt && hit.package == home_package,
                 variant: variants.contains(&hit.symbol),
             });
         }

@@ -361,15 +361,8 @@ impl<'a> CanonicalBytes<'a> {
 
     #[inline]
     fn queue_control_escape(&mut self, byte: u8) {
-        self.pending_escape = [
-            b'\\',
-            b'u',
-            b'0',
-            b'0',
-            hex_digit(u32::from(byte) >> 4),
-            hex_digit(u32::from(byte) & 0x0f),
-            0,
-        ];
+        self.pending_escape = [b'\\', b'u', b'0', b'0', 0, 0, 0];
+        write_upper_hex(&[byte], &mut self.pending_escape[4..6]);
         self.pending_len = 6;
         self.pending_pos = 0;
     }
@@ -378,15 +371,9 @@ impl<'a> CanonicalBytes<'a> {
     /// body's encoding of a character that is not an ASCII letter or digit.
     #[inline]
     fn queue_envelope_escape(&mut self, scalar: u32) {
-        self.pending_escape = [
-            b'_',
-            hex_digit(scalar >> 20),
-            hex_digit((scalar >> 16) & 0xf),
-            hex_digit((scalar >> 12) & 0xf),
-            hex_digit((scalar >> 8) & 0xf),
-            hex_digit((scalar >> 4) & 0xf),
-            hex_digit(scalar & 0xf),
-        ];
+        self.pending_escape = [b'_', 0, 0, 0, 0, 0, 0];
+        // A scalar value is at most `0x10FFFF`: its low three bytes are all of it.
+        write_upper_hex(&scalar.to_be_bytes()[1..], &mut self.pending_escape[1..7]);
         self.pending_len = 7;
         self.pending_pos = 0;
     }
@@ -536,11 +523,12 @@ impl<'a> CanonicalBytes<'a> {
     }
 }
 
-/// One uppercase hex digit of `nibble`'s low four bits.
+/// Writes the uppercase hex digits of `bytes` into `out`, which is exactly
+/// twice as long.
 #[inline]
-fn hex_digit(nibble: u32) -> u8 {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    HEX[(nibble & 0xf) as usize]
+fn write_upper_hex(bytes: &[u8], out: &mut [u8]) {
+    purrdf_hash::hex::encode_upper_to_slice(bytes, out)
+        .expect("every escape slot is sized to two digits per byte");
 }
 
 impl Iterator for CanonicalBytes<'_> {

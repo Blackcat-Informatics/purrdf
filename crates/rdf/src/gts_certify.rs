@@ -316,7 +316,7 @@ fn canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
     }
     let canonical = canonicalize_with(&dataset, CanonHash::Sha256);
     let digest = Sha256::digest(canonical.nquads.as_bytes());
-    Ok(wire::hex(digest.as_slice()))
+    Ok(purrdf_hash::hex::encode(digest.as_slice()))
 }
 
 /// The fallible twin of [`canonical_digest`], for UNTRUSTED input
@@ -337,7 +337,7 @@ fn try_canonical_digest(projected: &Graph) -> Result<String, CertifyError> {
     let canonical =
         try_canonicalize_with(&dataset, CanonHash::Sha256).map_err(CertifyError::CanonRefused)?;
     let digest = Sha256::digest(canonical.nquads.as_bytes());
-    Ok(wire::hex(digest.as_slice()))
+    Ok(purrdf_hash::hex::encode(digest.as_slice()))
 }
 
 /// The fallible twin of [`refold_digest`], for UNTRUSTED input — see

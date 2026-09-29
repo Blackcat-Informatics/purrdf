@@ -8,10 +8,11 @@
 
 use ciborium::value::Value;
 use purrdf_hash::Domain;
+use purrdf_hash::hex::Lower;
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
 
 use crate::wire::{
-    MAGIC, VERSION, blake3_256, canonical, content_id, header_id, hex, iter_items, map_get,
+    MAGIC, VERSION, blake3_256, canonical, content_id, header_id, iter_items, map_get,
     unwrap_header,
 };
 
@@ -420,8 +421,8 @@ impl Proof {
         );
         let _ = writeln!(out, "  \"count\": {},", self.count);
         let _ = writeln!(out, "  \"leaf_index\": {},", self.leaf_index);
-        let _ = writeln!(out, "  \"frame_id\": \"{}\",", hex(&self.frame_id));
-        let _ = writeln!(out, "  \"root\": \"{}\",", hex(&self.root));
+        let _ = writeln!(out, "  \"frame_id\": \"{}\",", Lower(&self.frame_id));
+        let _ = writeln!(out, "  \"root\": \"{}\",", Lower(&self.root));
         let _ = writeln!(out, "  \"peak_index\": {},", self.peak_index);
         out.push_str("  \"peaks\": [\n");
         for (index, peak) in self.peaks.iter().enumerate() {
@@ -429,7 +430,7 @@ impl Proof {
                 out,
                 "    {{\"height\": {}, \"hash\": \"{}\"}}{}",
                 peak.height,
-                hex(&peak.hash),
+                Lower(&peak.hash),
                 if index + 1 == self.peaks.len() {
                     ""
                 } else {
@@ -449,7 +450,7 @@ impl Proof {
                 "    {{\"side\": \"{}\", \"parent_height\": {}, \"hash\": \"{}\"}}{}",
                 side,
                 step.parent_height,
-                hex(&step.hash),
+                Lower(&step.hash),
                 if index + 1 == self.path.len() {
                     ""
                 } else {
@@ -652,13 +653,9 @@ impl<'a> JsonParser<'a> {
                 .copied()
                 .ok_or_else(|| "short unicode escape".to_string())?;
             self.pos += 1;
-            value = (value << 4)
-                | match byte {
-                    b'0'..=b'9' => u32::from(byte - b'0'),
-                    b'a'..=b'f' => u32::from(byte - b'a' + 10),
-                    b'A'..=b'F' => u32::from(byte - b'A' + 10),
-                    _ => return Err(format!("invalid unicode escape at byte {start}")),
-                };
+            let digit = purrdf_hash::hex::nibble(byte)
+                .ok_or_else(|| format!("invalid unicode escape at byte {start}"))?;
+            value = (value << 4) | u32::from(digit);
         }
         Ok(value)
     }
@@ -769,24 +766,17 @@ fn proof_from_json(text: &str) -> Result<Proof, String> {
     })
 }
 
-/// Parse a raw 32-byte hex id, accepting an optional `blake3:` prefix.
+/// Parse a raw 32-byte hex id, accepting an optional `blake3:` prefix and
+/// digits of either case ([`purrdf_hash::hex::decode_32`]).
 pub fn parse_hex_32(input: &str) -> Result<Vec<u8>, String> {
     let trimmed = input.trim();
     let raw = trimmed.strip_prefix("blake3:").unwrap_or(trimmed);
     if raw.len() != 64 {
         return Err("expected a 32-byte hex value".to_string());
     }
-    let mut out = Vec::with_capacity(32);
-    for chunk in raw.as_bytes().as_chunks::<2>().0 {
-        let hi = (chunk[0] as char)
-            .to_digit(16)
-            .ok_or_else(|| "hex value contains a non-hex character".to_string())?;
-        let lo = (chunk[1] as char)
-            .to_digit(16)
-            .ok_or_else(|| "hex value contains a non-hex character".to_string())?;
-        out.push(((hi << 4) | lo) as u8);
-    }
-    Ok(out)
+    purrdf_hash::hex::decode_32(raw)
+        .map(Vec::from)
+        .ok_or_else(|| "hex value contains a non-hex character".to_string())
 }
 
 fn as_i128(v: &Value) -> Option<i128> {
@@ -913,7 +903,7 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
             item_index += 1;
         }
     }
-    candidate.ok_or_else(|| format!("no valid index mmr covers frame {}", hex(target_frame_id)))
+    candidate.ok_or_else(|| format!("no valid index mmr covers frame {}", Lower(target_frame_id)))
 }
 
 #[cfg(test)]

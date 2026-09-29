@@ -4,8 +4,8 @@
 use std::collections::BTreeMap;
 
 use ciborium::value::Value;
-use purrdf_core::hex;
 use purrdf_gts::model::Graph;
+use purrdf_hash::hex;
 
 use crate::{
     RdfBlobOrigin, RdfBlobRecord, RdfDiagnostic, RdfLocation, RdfLookaside, RdfLookasideKind,
@@ -62,7 +62,7 @@ pub fn lookaside_from_graph(graph: &Graph) -> RdfLookaside {
         .opaque
         .iter()
         .map(|opaque| RdfOpaqueNodeRecord {
-            id: hex::lower(&opaque.id),
+            id: hex::encode(&opaque.id),
             frame_type: opaque.frame_type.clone(),
             reason: opaque.reason.clone(),
             signature_status: opaque.sigstat.clone(),
@@ -73,7 +73,7 @@ pub fn lookaside_from_graph(graph: &Graph) -> RdfLookaside {
         .signatures
         .iter()
         .map(|signature| RdfSignatureRecord {
-            frame_id: hex::lower(&signature.frame_id),
+            frame_id: hex::encode(&signature.frame_id),
             key_id: signature.kid.clone(),
             status: signature.status.clone(),
             has_cose: signature.cose.is_some(),
@@ -102,7 +102,7 @@ fn segment_records(graph: &Graph) -> Vec<RdfSegmentRecord> {
             let streamable = graph.segment_streamable.get(index);
             RdfSegmentRecord {
                 index,
-                head: graph.segment_heads.get(index).map(|head| hex::lower(head)),
+                head: graph.segment_heads.get(index).map(|head| hex::encode(head)),
                 profile: graph.segment_profiles.get(index).cloned(),
                 claimed_streamable: streamable.is_some_and(|info| info.claimed),
                 covered: streamable.map_or(0, |info| info.covered),
@@ -150,7 +150,7 @@ fn blob_origin(graph: &Graph) -> Option<RdfBlobOrigin> {
         source_segments: graph
             .segment_heads
             .iter()
-            .map(|head| hex::lower(head))
+            .map(|head| hex::encode(head))
             .collect(),
     })
 }

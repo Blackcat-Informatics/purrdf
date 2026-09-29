@@ -318,9 +318,9 @@ impl Parser<'_> {
         for _ in 0..4 {
             let digit = self
                 .peek()
-                .and_then(|byte| char::from(byte).to_digit(16))
+                .and_then(purrdf_hash::hex::nibble)
                 .ok_or_else(|| self.syntax("four hexadecimal digits"))?;
-            result = result * 16 + digit;
+            result = result * 16 + u32::from(digit);
             self.at += 1;
         }
         Ok(result)
@@ -366,12 +366,12 @@ fn unescape(raw: &str, at: usize) -> Result<Cow<'_, str>, JsonError> {
             'r' => output.push('\r'),
             't' => output.push('\t'),
             'u' => {
-                let high = decode_hex(&mut chars, at)?;
+                let high = read_code_unit(&mut chars, at)?;
                 let codepoint = if (0xD800..0xDC00).contains(&high) {
                     if chars.next() != Some('\\') || chars.next() != Some('u') {
                         return Err(JsonError::LoneSurrogate { at });
                     }
-                    let low = decode_hex(&mut chars, at)?;
+                    let low = read_code_unit(&mut chars, at)?;
                     if !(0xDC00..0xE000).contains(&low) {
                         return Err(JsonError::LoneSurrogate { at });
                     }
@@ -392,17 +392,19 @@ fn unescape(raw: &str, at: usize) -> Result<Cow<'_, str>, JsonError> {
     Ok(Cow::Owned(output))
 }
 
-fn decode_hex(chars: &mut core::str::Chars<'_>, at: usize) -> Result<u32, JsonError> {
+/// The four hex digits of a `\uXXXX` escape as one UTF-16 code unit.
+fn read_code_unit(chars: &mut core::str::Chars<'_>, at: usize) -> Result<u32, JsonError> {
     let mut result = 0;
     for _ in 0..4 {
         let digit = chars
             .next()
-            .and_then(|character| character.to_digit(16))
+            .and_then(|character| u8::try_from(character).ok())
+            .and_then(purrdf_hash::hex::nibble)
             .ok_or(JsonError::Syntax {
                 at,
                 expected: "four hexadecimal digits",
             })?;
-        result = result * 16 + digit;
+        result = result * 16 + u32::from(digit);
     }
     Ok(result)
 }

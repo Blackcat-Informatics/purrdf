@@ -34,56 +34,26 @@ use crate::value::XsdError;
 /// - The string length must be even (two hex digits per byte).
 /// - The empty string is valid and decodes to an empty `Vec<u8>`.
 /// - Whitespace and any other non-hex character is a hard failure.
+///
+/// The lexical space is base16's either-case one, read by
+/// [`purrdf_hash::hex::decode`]; this function names the refusal in XSD terms.
 pub fn parse_hex(lexical: &str) -> Result<Vec<u8>, XsdError> {
-    let err = |reason| XsdError::InvalidLexical {
+    purrdf_hash::hex::decode(lexical).map_err(|error| XsdError::InvalidLexical {
         datatype: XsdDatatype::HexBinary,
         lexical: lexical.to_string(),
-        reason,
-    };
-
-    if !lexical.len().is_multiple_of(2) {
-        return Err(err("hexBinary lexical must have an even number of digits"));
-    }
-
-    let bytes_len = lexical.len() / 2;
-    let mut out = Vec::with_capacity(bytes_len);
-    let chars: &[u8] = lexical.as_bytes();
-
-    let mut i = 0;
-    while i < chars.len() {
-        let hi = hex_digit(chars[i])
-            .ok_or_else(|| err("non-hexadecimal character in hexBinary lexical"))?;
-        let lo = hex_digit(chars[i + 1])
-            .ok_or_else(|| err("non-hexadecimal character in hexBinary lexical"))?;
-        out.push((hi << 4) | lo);
-        i += 2;
-    }
-
-    Ok(out)
+        reason: match error {
+            purrdf_hash::hex::HexError::OddLength { .. } => {
+                "hexBinary lexical must have an even number of digits"
+            }
+            _ => "non-hexadecimal character in hexBinary lexical",
+        },
+    })
 }
 
-/// Decode a single ASCII hex character `[0-9A-Fa-f]` to its 4-bit nibble value,
-/// or `None` if the character is not a valid hex digit.
-#[inline]
-fn hex_digit(b: u8) -> Option<u8> {
-    match b {
-        b'0'..=b'9' => Some(b - b'0'),
-        b'A'..=b'F' => Some(b - b'A' + 10),
-        b'a'..=b'f' => Some(b - b'a' + 10),
-        _ => None,
-    }
-}
-
-/// Encode a byte slice to XSD canonical hexBinary form (UPPERCASE hex, two chars per byte).
+/// Encode a byte slice to XSD canonical hexBinary form (UPPERCASE hex, two chars per byte):
+/// [`purrdf_hash::hex::encode_upper`].
 pub fn canonical_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for &b in bytes {
-        // Both indices are masked to 0..15 so the table lookup is always in-range.
-        out.push(char::from(HEX[(b >> 4) as usize]));
-        out.push(char::from(HEX[(b & 0x0F) as usize]));
-    }
-    out
+    purrdf_hash::hex::encode_upper(bytes)
 }
 
 // ── base64 codec ──────────────────────────────────────────────────────────────────

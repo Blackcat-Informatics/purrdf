@@ -28,6 +28,7 @@
 
 use std::fmt;
 
+use purrdf_hash::hex::Lower;
 use sha2::{Digest, Sha256};
 
 use super::identity::Identity;
@@ -159,8 +160,8 @@ impl fmt::Display for ArtifactError {
             Self::ContainerDigestMismatch { expected, computed } => write!(
                 f,
                 "artifact: container digest mismatch: trailer claims {}, recomputed {}",
-                hex32(expected),
-                hex32(computed)
+                Lower(expected),
+                Lower(computed)
             ),
             Self::TrailerMismatch => write!(f, "artifact: trailer does not describe this buffer"),
             Self::DuplicateSection { kind } => {
@@ -178,18 +179,6 @@ impl fmt::Display for ArtifactError {
 }
 
 impl std::error::Error for ArtifactError {}
-
-/// Lowercase-hex a 32-byte digest for [`ArtifactError`]'s `Display`. A local
-/// helper rather than a shared utility: this module owes nothing to any layer
-/// above it, and a digest renderer is four lines.
-fn hex32(digest: &[u8; 32]) -> String {
-    use std::fmt::Write as _;
-    let mut out = String::with_capacity(64);
-    for byte in digest {
-        let _ = write!(out, "{byte:02x}");
-    }
-    out
-}
 
 // ---------------------------------------------------------------------------
 // Small byte-header write/read helpers (explicit LE, no pointer casts).

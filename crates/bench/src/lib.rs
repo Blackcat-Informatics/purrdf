@@ -1439,7 +1439,9 @@ mod tests {
             saw_lowercase_hex_letter |= lower.bytes().any(|b| b.is_ascii_lowercase());
 
             for hex in [upper, lower] {
-                let octet = u8::from_str_radix(hex, 16).expect("two hex digits");
+                let [octet] = purrdf_hash::hex::decode(hex).expect("two hex digits")[..] else {
+                    panic!("an escape spells one octet: {hex}");
+                };
                 assert!(
                     RESERVED_OCTETS.contains(&octet),
                     "escaped octet {octet:#04x} must be an RFC 3986 reserved octet"
@@ -2045,8 +2047,8 @@ mod tests {
                         saw_raw_han_iri = true;
                     }
                     for octet in RESERVED_OCTETS {
-                        let upper = format!("%{octet:02X}");
-                        let lower = format!("%{octet:02x}");
+                        let upper = format!("%{}", purrdf_hash::hex::Upper(&[octet]));
+                        let lower = format!("%{}", purrdf_hash::hex::Lower(&[octet]));
                         if iri.contains(&upper) || iri.contains(&lower) {
                             saw_intact_percent_escape = true;
                             percent_escape_example.get_or_insert_with(|| iri.to_string());

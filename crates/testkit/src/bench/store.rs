@@ -14,7 +14,6 @@
 //! options that need it are refused when the command line is parsed, and a
 //! measured run says once that it prints its estimates without writing them.
 
-use std::fmt::Write as _;
 #[cfg(not(target_arch = "wasm32"))]
 use std::path::{Path, PathBuf};
 
@@ -38,7 +37,8 @@ pub fn path_component(component: &str) -> String {
         if literal {
             out.push(char::from(byte));
         } else {
-            let _ = write!(out, "%{byte:02X}");
+            out.push('%');
+            purrdf_hash::hex::encode_upper_into(&[byte], &mut out);
         }
     }
     out

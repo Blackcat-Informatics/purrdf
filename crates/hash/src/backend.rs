@@ -143,11 +143,12 @@ impl Crc32Backend {
     }
 }
 
-/// A base16 encoding path, the one [`hex::Lower`](crate::hex::Lower) renders
-/// through.
+/// A base16 encoding path: the one [`hex`](crate::hex) renders inputs longer
+/// than [`hex::SHORT_MAX`](crate::hex::SHORT_MAX) through.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum HexBackend {
-    /// A sixteen-entry alphabet table; always available.
+    /// The compare-select loop, which the compiler packs on every vector
+    /// target; always available.
     Portable,
     /// SSSE3 `pshufb` nibble lookup, x86-64 with `ssse3`.
     X86Ssse3,
@@ -164,6 +165,18 @@ impl Backend for HexBackend {
         Self::Wasm32Simd128,
         Self::Portable,
     ];
+
+    /// The first available path, except that [`X86Ssse3`](Self::X86Ssse3)
+    /// is not selected in a build whose target has AVX-512BW: there the
+    /// compare-select loop packs 64 bytes per instruction and measured faster
+    /// than the 16-byte `pshufb` kernel, while on the x86-64 baseline and
+    /// x86-64-v3 the kernel measured faster than the loop (the `hex` group of
+    /// the `purrdf-hash-conformance` `digests` bench).
+    fn selected() -> Self {
+        Self::all_available()
+            .find(|backend| !(cfg!(target_feature = "avx512bw") && *backend == Self::X86Ssse3))
+            .unwrap_or(Self::Portable)
+    }
 
     fn is_available(self) -> bool {
         self.encode_fn_if_available().is_some()
@@ -184,11 +197,20 @@ impl HexBackend {
     /// path. `None`, writing nothing, when the processor cannot run the path
     /// or `output` is not exactly twice as long as `input`.
     pub fn encode(self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        self.encode_case(input, output, false)
+    }
+
+    /// [`encode`](Self::encode) with `A`-`F`.
+    pub fn encode_upper(self, input: &[u8], output: &mut [u8]) -> Option<()> {
+        self.encode_case(input, output, true)
+    }
+
+    fn encode_case(self, input: &[u8], output: &mut [u8], upper: bool) -> Option<()> {
         if Some(output.len()) != input.len().checked_mul(2) {
             return None;
         }
         self.encode_fn_if_available()
-            .map(|encode| encode(input, output))
+            .map(|encode| encode(input, output, upper))
     }
 
     /// This path's encoder, or the portable one when it is unavailable.

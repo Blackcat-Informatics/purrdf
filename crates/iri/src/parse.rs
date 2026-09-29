@@ -159,7 +159,6 @@ impl Iri {
 /// RFC 3987 §3.1 step 2 over one component: every non-ASCII code point becomes
 /// the upper-case `%HH` escapes of its UTF-8 octets.
 fn percent_encode_non_ascii(component: &str, out: &mut String) {
-    const HEX: &[u8; 16] = b"0123456789ABCDEF";
     for c in component.chars() {
         if c.is_ascii() {
             out.push(c);
@@ -168,8 +167,7 @@ fn percent_encode_non_ascii(component: &str, out: &mut String) {
         let mut utf8 = [0_u8; 4];
         for &octet in c.encode_utf8(&mut utf8).as_bytes() {
             out.push('%');
-            out.push(char::from(HEX[usize::from(octet >> 4)]));
-            out.push(char::from(HEX[usize::from(octet & 0x0F)]));
+            purrdf_hash::hex::encode_upper_into(&[octet], out);
         }
     }
 }
@@ -1138,7 +1136,7 @@ mod tests {
             assert_eq!(
                 cls & UNRESERVED != 0,
                 c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | '~'),
-                "UNRESERVED mismatch at 0x{b:02X}"
+                "UNRESERVED mismatch at {b:#04X}"
             );
             assert_eq!(
                 cls & SUB_DELIMS != 0,
@@ -1146,20 +1144,20 @@ mod tests {
                     c,
                     '!' | '$' | '&' | '\'' | '(' | ')' | '*' | '+' | ',' | ';' | '='
                 ),
-                "SUB_DELIMS mismatch at 0x{b:02X}"
+                "SUB_DELIMS mismatch at {b:#04X}"
             );
-            assert_eq!(cls & COLON != 0, c == ':', "COLON mismatch at 0x{b:02X}");
-            assert_eq!(cls & AT != 0, c == '@', "AT mismatch at 0x{b:02X}");
-            assert_eq!(cls & SLASH != 0, c == '/', "SLASH mismatch at 0x{b:02X}");
+            assert_eq!(cls & COLON != 0, c == ':', "COLON mismatch at {b:#04X}");
+            assert_eq!(cls & AT != 0, c == '@', "AT mismatch at {b:#04X}");
+            assert_eq!(cls & SLASH != 0, c == '/', "SLASH mismatch at {b:#04X}");
             assert_eq!(
                 cls & QUESTION != 0,
                 c == '?',
-                "QUESTION mismatch at 0x{b:02X}"
+                "QUESTION mismatch at {b:#04X}"
             );
             assert_eq!(
                 cls & SCHEME_TAIL != 0,
                 c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'),
-                "SCHEME_TAIL mismatch at 0x{b:02X}"
+                "SCHEME_TAIL mismatch at {b:#04X}"
             );
         }
     }

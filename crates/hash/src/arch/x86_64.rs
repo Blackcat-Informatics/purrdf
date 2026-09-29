@@ -19,7 +19,7 @@ use std::is_x86_feature_detected;
 
 use super::{Crc32Update, HexEncode, Sha1Blocks};
 use crate::crc32::{FOLD, update_portable};
-use crate::hex::{ALPHABET, encode_portable};
+use crate::hex::{ALPHABET, UPPER_ALPHABET, encode_portable};
 
 /// Sixteen bytes as a vector. Safe to call from any function compiled with
 /// SSE2, which every x86-64 processor has.
@@ -216,20 +216,20 @@ pub(crate) fn hex_x86_ssse3() -> Option<HexEncode> {
     is_x86_feature_detected!("ssse3").then_some(hex_encode as HexEncode)
 }
 
-fn hex_encode(input: &[u8], output: &mut [u8]) {
+fn hex_encode(input: &[u8], output: &mut [u8], upper: bool) {
     // SAFETY: this function escapes the module only through `hex_x86_ssse3`,
     // which returns it after detecting `ssse3`, the one feature the kernel is
     // compiled for beyond the SSE2 baseline.
-    unsafe { hex_kernel(input, output) }
+    unsafe { hex_kernel(input, output, upper) }
 }
 
 /// Sixteen input bytes per step: the high and low nibbles of every byte,
 /// each looked up in the alphabet with `pshufb`, then interleaved high-first
 /// into thirty-two characters. The tail after the last whole step is
-/// encoded by the portable table.
+/// encoded by the portable compare-select loop.
 #[target_feature(enable = "ssse3")]
-fn hex_kernel(input: &[u8], output: &mut [u8]) {
-    let alphabet = load(ALPHABET);
+fn hex_kernel(input: &[u8], output: &mut [u8], upper: bool) {
+    let alphabet = load(if upper { UPPER_ALPHABET } else { ALPHABET });
     let low_nibble = _mm_set1_epi8(0x0f);
     let (chunks, tail) = input.as_chunks::<16>();
     let (pairs, _) = output.as_chunks_mut::<32>();
@@ -246,7 +246,7 @@ fn hex_kernel(input: &[u8], output: &mut [u8]) {
         store(&mut halves[1], _mm_unpackhi_epi8(high, low));
     }
     let done = chunks.len() * 16;
-    encode_portable(tail, &mut output[2 * done..]);
+    encode_portable(tail, &mut output[2 * done..], upper);
 }
 
 // --- The fixed hasher's AES round ------------------------------------------

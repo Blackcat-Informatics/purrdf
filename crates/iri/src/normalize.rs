@@ -92,8 +92,10 @@ fn pct_normalize(s: &str) -> String {
         if bytes[i] == b'%' && i + 2 < bytes.len() {
             let hi = bytes[i + 1];
             let lo = bytes[i + 2];
-            if hi.is_ascii_hexdigit() && lo.is_ascii_hexdigit() {
-                let decoded = (hex_val(hi) << 4) | hex_val(lo);
+            if let (Some(high), Some(low)) =
+                (purrdf_hash::hex::nibble(hi), purrdf_hash::hex::nibble(lo))
+            {
+                let decoded = (high << 4) | low;
                 if is_unreserved_byte(decoded) {
                     out.push(decoded as char);
                 } else {
@@ -111,15 +113,6 @@ fn pct_normalize(s: &str) -> String {
         i += ch_len;
     }
     out
-}
-
-fn hex_val(b: u8) -> u8 {
-    match b {
-        b'0'..=b'9' => b - b'0',
-        b'a'..=b'f' => b - b'a' + 10,
-        b'A'..=b'F' => b - b'A' + 10,
-        _ => unreachable!("guarded by is_ascii_hexdigit"),
-    }
 }
 
 fn is_unreserved_byte(b: u8) -> bool {

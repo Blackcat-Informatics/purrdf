@@ -34,6 +34,22 @@
 //!
 //! Macro arguments are parsed as expressions where they are expressions
 //! (`assert_eq!(m, HashMap::from(…))`), so a constructor inside one is seen.
+//!
+//! Three rules hold base16 to its one home, `purrdf_hash::hex`:
+//!
+//! * `hex-format-loop`: a formatting macro (`format!`, `write!`, `writeln!`,
+//!   `format_args!` and the `print` family) whose format string renders an
+//!   argument as a two-digit hex pair (`{:02x}`, `{byte:02X}`, `{0:02x}`),
+//!   inside a loop body or a closure — the per-byte rendering loop the home's
+//!   encoders replace. A single pair formatted outside any loop, and a pair in
+//!   an assertion or panic message, are not renderings of a byte string.
+//! * `hex-pair-radix`: `u8::from_str_radix(_, 16)`, the per-pair decode the
+//!   home's readers replace. A wider radix-16 parse (`u32::from_str_radix`
+//!   over a code point's digits) is a grammar terminal's, not a byte pair's.
+//! * `hex-table`: a hex-digit table, in either case, spelt as a string or byte
+//!   string of the sixteen digits in order or as a bracketed array of them.
+//!   Unlike the other rules it is exempt inside the job's home package, which
+//!   holds the vector kernels' lookup tables.
 
 use std::collections::BTreeSet;
 
@@ -54,6 +70,33 @@ pub(crate) const STD_DEFAULT_HASHER: &str = "rule:std-default-hasher";
 /// that script alone.
 pub(crate) const DELEGATED_RULES: [&str; 2] = ["rule:raw-hash-domain", "rule:shared-hash-domain"];
 
+/// A two-digit hex format spec inside a loop or closure.
+pub(crate) const HEX_FORMAT_LOOP: &str = "rule:hex-format-loop";
+/// `u8::from_str_radix(_, 16)`.
+pub(crate) const HEX_PAIR_RADIX: &str = "rule:hex-pair-radix";
+/// A hex-digit table outside the home package.
+pub(crate) const HEX_TABLE: &str = "rule:hex-table";
+
+/// Every rule the census computes itself.
+pub(crate) const RULES: [&str; 4] = [
+    STD_DEFAULT_HASHER,
+    HEX_FORMAT_LOOP,
+    HEX_PAIR_RADIX,
+    HEX_TABLE,
+];
+
+/// The formatting macros whose format string `hex-format-loop` reads.
+const FORMAT_MACROS: [&str; 8] = [
+    "format",
+    "format_args",
+    "write",
+    "writeln",
+    "print",
+    "println",
+    "eprint",
+    "eprintln",
+];
+
 /// The constructors whose hasher is the default unless the type names one.
 const CONSTRUCTORS: [&str; 5] = ["default", "from", "from_iter", "new", "with_capacity"];
 
@@ -72,6 +115,9 @@ pub(crate) struct RuleHit {
     pub(crate) symbol: String,
     /// What was found.
     pub(crate) detail: String,
+    /// Whether a hit inside the job's home package is the home's own (the
+    /// rule forbids the pattern only outside it).
+    pub(crate) home_exempt: bool,
 }
 
 /// How many type arguments name the hasher explicitly.
@@ -250,6 +296,7 @@ impl DefaultHasher<'_> {
             line: span.start().line,
             symbol,
             detail,
+            home_exempt: false,
         });
     }
 
@@ -403,6 +450,247 @@ pub(crate) fn std_default_hasher(package: &str, file: &str, parsed: &syn::File) 
     visitor.hits
 }
 
+/// Whether a format string renders an argument as a two-digit hex pair: a
+/// `{…:02x}` or `{…:02X}` placeholder, `{{` escapes skipped.
+fn has_pair_spec(format: &str) -> bool {
+    let mut rest = format;
+    while let Some(open) = rest.find('{') {
+        rest = &rest[open + 1..];
+        if let Some(escaped) = rest.strip_prefix('{') {
+            rest = escaped;
+            continue;
+        }
+        let Some(close) = rest.find('}') else {
+            return false;
+        };
+        let placeholder = &rest[..close];
+        if placeholder
+            .split_once(':')
+            .is_some_and(|(_, spec)| spec == "02x" || spec == "02X")
+        {
+            return true;
+        }
+        rest = &rest[close + 1..];
+    }
+    false
+}
+
+/// The visitor for the three base16 rules.
+struct HexRules<'a> {
+    package: &'a str,
+    file: &'a str,
+    scope: Vec<String>,
+    /// How many loop bodies and closures enclose the current node.
+    repeated: usize,
+    hits: Vec<RuleHit>,
+}
+
+impl HexRules<'_> {
+    fn hit(&mut self, rule: &'static str, line: usize, detail: String) {
+        let mut symbol = self.file.to_owned();
+        for scope in &self.scope {
+            symbol.push_str("::");
+            symbol.push_str(scope);
+        }
+        self.hits.push(RuleHit {
+            rule,
+            package: self.package.to_owned(),
+            file: self.file.to_owned(),
+            line,
+            symbol,
+            detail,
+            home_exempt: rule == HEX_TABLE,
+        });
+    }
+
+    fn scoped(&mut self, name: String, walk: impl FnOnce(&mut Self)) {
+        self.scope.push(name);
+        walk(self);
+        self.scope.pop();
+    }
+
+    fn repeated(&mut self, walk: impl FnOnce(&mut Self)) {
+        self.repeated += 1;
+        walk(self);
+        self.repeated -= 1;
+    }
+
+    fn table(&mut self, digits: &str, line: usize) {
+        if let Some(table) = crate::normalize::classify_digits(digits) {
+            self.hit(
+                HEX_TABLE,
+                line,
+                format!("a `{table}` digit table; render and read base16 through the home"),
+            );
+        }
+    }
+}
+
+impl<'ast> Visit<'ast> for HexRules<'_> {
+    fn visit_expr_for_loop(&mut self, node: &'ast syn::ExprForLoop) {
+        self.visit_expr(&node.expr);
+        self.repeated(|this| this.visit_block(&node.body));
+    }
+
+    fn visit_expr_while(&mut self, node: &'ast syn::ExprWhile) {
+        self.visit_expr(&node.cond);
+        self.repeated(|this| this.visit_block(&node.body));
+    }
+
+    fn visit_expr_loop(&mut self, node: &'ast syn::ExprLoop) {
+        self.repeated(|this| this.visit_block(&node.body));
+    }
+
+    fn visit_expr_closure(&mut self, node: &'ast syn::ExprClosure) {
+        self.repeated(|this| syn::visit::visit_expr_closure(this, node));
+    }
+
+    fn visit_macro(&mut self, node: &'ast syn::Macro) {
+        let name = node
+            .path
+            .segments
+            .last()
+            .map(|segment| segment.ident.to_string())
+            .unwrap_or_default();
+        if self.repeated > 0 && FORMAT_MACROS.contains(&name.as_str()) {
+            for token in node.tokens.clone() {
+                if let proc_macro2::TokenTree::Literal(literal) = token
+                    && let Ok(syn::Lit::Str(text)) =
+                        syn::parse2::<syn::Lit>(proc_macro2::TokenTree::Literal(literal).into())
+                    && has_pair_spec(&text.value())
+                {
+                    self.hit(
+                        HEX_FORMAT_LOOP,
+                        text.span().start().line,
+                        format!(
+                            "`{name}!` renders a two-digit hex pair inside a loop; render the bytes \
+                             through purrdf_hash::hex"
+                        ),
+                    );
+                }
+            }
+        }
+        if let Ok(arguments) = node.parse_body_with(
+            syn::punctuated::Punctuated::<syn::Expr, syn::Token![,]>::parse_terminated,
+        ) {
+            for argument in &arguments {
+                self.visit_expr(argument);
+            }
+        } else if let Ok(block) = node.parse_body_with(syn::Block::parse_within) {
+            for statement in &block {
+                self.visit_stmt(statement);
+            }
+        }
+        syn::visit::visit_macro(self, node);
+    }
+
+    fn visit_expr_call(&mut self, node: &'ast syn::ExprCall) {
+        if let syn::Expr::Path(function) = node.func.as_ref() {
+            let segments: Vec<String> = function
+                .path
+                .segments
+                .iter()
+                .map(|segment| segment.ident.to_string())
+                .collect();
+            let names_u8 = segments.len() >= 2 && segments[segments.len() - 2] == "u8"
+                || function
+                    .qself
+                    .as_ref()
+                    .is_some_and(|qself| matches!(qself.ty.as_ref(), syn::Type::Path(path) if path.path.is_ident("u8")));
+            if names_u8
+                && segments.last().is_some_and(|last| last == "from_str_radix")
+                && node.args.len() == 2
+                && let Some(syn::Expr::Lit(radix)) = node.args.iter().nth(1)
+                && let syn::Lit::Int(radix) = &radix.lit
+                && radix.base10_digits() == "16"
+            {
+                self.hit(
+                    HEX_PAIR_RADIX,
+                    radix.span().start().line,
+                    "`u8::from_str_radix(_, 16)` decodes a hex pair; read base16 through purrdf_hash::hex".to_owned(),
+                );
+            }
+        }
+        syn::visit::visit_expr_call(self, node);
+    }
+
+    fn visit_lit_str(&mut self, node: &'ast syn::LitStr) {
+        self.table(&node.value(), node.span().start().line);
+    }
+
+    fn visit_lit_byte_str(&mut self, node: &'ast syn::LitByteStr) {
+        if let Ok(text) = String::from_utf8(node.value()) {
+            self.table(&text, node.span().start().line);
+        }
+    }
+
+    fn visit_expr_array(&mut self, node: &'ast syn::ExprArray) {
+        let digits: Option<String> = node
+            .elems
+            .iter()
+            .map(|element| match element {
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Char(c),
+                    ..
+                }) => Some(c.value()),
+                syn::Expr::Lit(syn::ExprLit {
+                    lit: syn::Lit::Byte(b),
+                    ..
+                }) => Some(char::from(b.value())),
+                _ => None,
+            })
+            .collect();
+        if let Some(digits) = digits {
+            self.table(&digits, node.bracket_token.span.open().start().line);
+        }
+        syn::visit::visit_expr_array(self, node);
+    }
+
+    fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
+        self.scoped(node.sig.ident.to_string(), |this| {
+            syn::visit::visit_item_fn(this, node);
+        });
+    }
+
+    fn visit_impl_item_fn(&mut self, node: &'ast syn::ImplItemFn) {
+        self.scoped(node.sig.ident.to_string(), |this| {
+            syn::visit::visit_impl_item_fn(this, node);
+        });
+    }
+
+    fn visit_item_mod(&mut self, node: &'ast syn::ItemMod) {
+        self.scoped(node.ident.to_string(), |this| {
+            syn::visit::visit_item_mod(this, node);
+        });
+    }
+
+    fn visit_item_const(&mut self, node: &'ast syn::ItemConst) {
+        self.scoped(node.ident.to_string(), |this| {
+            syn::visit::visit_item_const(this, node);
+        });
+    }
+
+    fn visit_item_static(&mut self, node: &'ast syn::ItemStatic) {
+        self.scoped(node.ident.to_string(), |this| {
+            syn::visit::visit_item_static(this, node);
+        });
+    }
+}
+
+/// Every `hex-format-loop`, `hex-pair-radix` and `hex-table` hit in one parsed
+/// file.
+pub(crate) fn hex_rules(package: &str, file: &str, parsed: &syn::File) -> Vec<RuleHit> {
+    let mut visitor = HexRules {
+        package,
+        file,
+        scope: Vec::new(),
+        repeated: 0,
+        hits: Vec::new(),
+    };
+    visitor.visit_file(parsed);
+    visitor.hits
+}
+
 #[cfg(test)]
 mod tests {
     use super::std_default_hasher;
@@ -463,6 +751,63 @@ fn g() {
         assert_eq!(
             lines("use std::collections::HashMap as Map;\nfn f(m: Map<u8, u8>) {}\n"),
             vec![2]
+        );
+    }
+
+    fn hex_lines(source: &str) -> Vec<(&'static str, usize)> {
+        let parsed = syn::parse_file(source).expect("fixture parses");
+        super::hex_rules("p", "f.rs", &parsed)
+            .iter()
+            .map(|hit| (hit.rule, hit.line))
+            .collect()
+    }
+
+    #[test]
+    #[allow(
+        clippy::literal_string_with_formatting_args,
+        reason = "the fixture is Rust source holding format strings, not a format string"
+    )]
+    fn a_pair_spec_in_a_loop_or_closure_is_found_and_nothing_else_is() {
+        let source = "\
+fn f(bytes: &[u8], out: &mut String) {
+    for byte in bytes { let _ = write!(out, \"{byte:02x}\"); }
+    let s: String = bytes.iter().map(|b| format!(\"{b:02X}\")).collect();
+    let t = bytes.iter().fold(String::new(), |mut o, b| { let _ = write!(o, \"{:02x}\", b); o });
+    let mut i = 0; while i < 2 { out.push_str(&format!(\"%{0:02X}\", i)); i += 1; }
+    let one = format!(\"{:02x}\", bytes[0]);
+    for b in bytes { assert!(true, \"{b:02x}\"); let _ = format!(\"{b:04X} {{:02x}}\"); }
+}
+";
+        assert_eq!(
+            hex_lines(source),
+            vec![
+                (super::HEX_FORMAT_LOOP, 2),
+                (super::HEX_FORMAT_LOOP, 3),
+                (super::HEX_FORMAT_LOOP, 4),
+                (super::HEX_FORMAT_LOOP, 5),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_byte_pair_radix_parse_and_a_digit_table_are_found() {
+        let lower = purrdf_hash::hex::encode(&[0x01, 0x23, 0x45, 0x67, 0x89, 0xab, 0xcd, 0xef]);
+        let upper = lower.to_ascii_uppercase();
+        let source = format!(
+            "fn f(p: &str) -> u8 {{ u8::from_str_radix(p, 16).unwrap() }}\n\
+             fn g(p: &str) -> u32 {{ u32::from_str_radix(p, 16).unwrap() }}\n\
+             const L: &[u8; 16] = b\"{lower}\";\n\
+             const U: &str = \"{upper}\";\n\
+             const N: &str = \"{lower}g\";\n"
+        );
+        let found = hex_lines(&source);
+        assert_eq!(
+            found,
+            vec![
+                (super::HEX_PAIR_RADIX, 1),
+                (super::HEX_TABLE, 3),
+                (super::HEX_TABLE, 4),
+            ]
         );
     }
 }

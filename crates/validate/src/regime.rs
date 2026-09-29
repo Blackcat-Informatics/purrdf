@@ -2024,24 +2024,16 @@ fn parse_proof_service(name: &str) -> Result<Service, String> {
     }
 }
 
-/// Parse lowercase hex back to bytes, refusing an odd length or a non-hex digit.
-fn unhex(text: &str) -> Result<Vec<u8>, String> {
-    if !text.len().is_multiple_of(2) {
-        return Err("a proof body line has an odd number of hex digits".to_owned());
-    }
-    let mut out = Vec::with_capacity(text.len() / 2);
-    for pair in text.as_bytes().as_chunks::<2>().0 {
-        let digit = |byte: u8| match byte {
-            b'0'..=b'9' => Ok(byte - b'0'),
-            b'a'..=b'f' => Ok(byte - b'a' + 10),
-            other => Err(format!(
-                "a proof body carries {:?}, which is not a lowercase hex digit",
-                char::from(other)
-            )),
-        };
-        out.push(digit(pair[0])? << 4 | digit(pair[1])?);
-    }
-    Ok(out)
+/// A proof body line's bytes: its canonical lowercase hex read by
+/// [`purrdf_hash::hex::decode_canonical`], refused in this grammar's words.
+fn proof_body_bytes(text: &str) -> Result<Vec<u8>, String> {
+    purrdf_hash::hex::decode_canonical(text).map_err(|error| match error {
+        purrdf_hash::hex::HexError::InvalidDigit { byte, .. } => format!(
+            "a proof body carries {:?}, which is not a lowercase hex digit",
+            char::from(byte)
+        ),
+        _ => "a proof body line has an odd number of hex digits".to_owned(),
+    })
 }
 
 /// Render a [`ServiceProof`] to the boundary's byte-stable textual form.
@@ -2105,7 +2097,7 @@ pub fn render_dl_proof(proof: &ServiceProof) -> String {
     out.push('\n');
     let _ = writeln!(out, "service {}", proof_service_name(proof.service()));
     out.push_str("availability recorded\n");
-    let _ = writeln!(out, "input {}", purrdf_core::hex::lower(&proof.input()));
+    let _ = writeln!(out, "input {}", purrdf_hash::hex::encode(&proof.input()));
     let _ = writeln!(out, "digest {}", proof.digest_hex());
     let _ = writeln!(
         out,
@@ -2137,7 +2129,7 @@ pub fn render_dl_proof(proof: &ServiceProof) -> String {
     }
     let _ = writeln!(out, "bytes {}", bytes.len());
     for chunk in bytes.chunks(PROOF_BODY_BYTES_PER_LINE) {
-        let _ = writeln!(out, "body {}", purrdf_core::hex::lower(chunk));
+        let _ = writeln!(out, "body {}", purrdf_hash::hex::encode(chunk));
     }
     out
 }
@@ -2182,7 +2174,7 @@ pub fn decode_dl_proof(document: &str) -> Result<ServiceProof, String> {
     let mut bytes = Vec::new();
     for line in lines {
         if let Some(hex) = line.strip_prefix("body ") {
-            bytes.extend_from_slice(&unhex(hex)?);
+            bytes.extend_from_slice(&proof_body_bytes(hex)?);
         }
     }
     if bytes.is_empty() {
@@ -4691,7 +4683,7 @@ pub fn check_dl_proof(
     let _ = writeln!(out, "service {}", proof_service_name(term.service()));
     out.push_str("availability recorded\n");
     let _ = writeln!(out, "digest {}", term.digest_hex());
-    let _ = writeln!(out, "input {}", purrdf_core::hex::lower(&term.input()));
+    let _ = writeln!(out, "input {}", purrdf_hash::hex::encode(&term.input()));
     let _ = writeln!(out, "runs {}", replay.runs());
     let _ = writeln!(out, "replayed {}", replay.replayed());
     let _ = writeln!(out, "claims {}", replay.claims());

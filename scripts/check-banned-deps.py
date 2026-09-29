@@ -225,7 +225,7 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "find-msvc-tools": "native Rust hashing kernels",
     "shlex": "native Rust hashing kernels (old cc build closure)",
     "md-5": "purrdf_hash::md5 (RFC 1321)",
-    "hex": "purrdf_hash::hex::Lower (lowercase base16 through Display) and purrdf_core::hex::lower",
+    "hex": "purrdf_hash::hex (base16 in either case, rendering and reading, and the Digest32 value)",
     "sha1": "purrdf_hash::sha1 (FIPS 180-4)",
     "sha3": "purrdf_hash::sha3 (FIPS 202)",
     # sha3's permutation crate; nothing else in the graph pulled it in.

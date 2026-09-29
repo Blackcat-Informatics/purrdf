@@ -97,11 +97,6 @@ pub mod governor;
 // FastMap/FastSet/IdSet lookup-table aliases (determinism comes from id-sorting,
 // never hash order).
 pub mod hash;
-// The workspace's one one-shot lowercase-hex renderer (`&[u8]` -> `String`).
-// `pub` because its consumers are other crates — `purrdf-rdf`'s GTS bridges and
-// `purrdf-datalog`'s proof keys — not `purrdf-core` internals. Pure
-// `core`/`alloc`, dependency-free and wasm-clean.
-pub mod hex;
 // The one graph-role classifier: which nodes declare an OWL 2 ontology header, a SHACL
 // shapes graph or a SHACL data graph. The import rule and SHACL-SPARQL's implicit prefixes
 // both select from it.

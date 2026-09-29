@@ -1073,8 +1073,6 @@ mod tests {
 
     use purrdf_core::artifact::identity::{Identity, IdentityComponent};
 
-    use std::fmt::Write as _;
-
     use super::{COMPONENTS, PROFILE_ID, build_identity, check_identity, class_catalog_digest};
     use crate::engine::{PreparedShapes, parse_shapes};
     use crate::model::BoxRoleVocab;
@@ -1949,14 +1947,7 @@ mod tests {
     #[test]
     fn class_catalog_digest_matches_committed_constant() {
         let digest = class_catalog_digest(&catalog_of(&shapes_of(PLAIN_SHAPES)));
-        let hex: String =
-            digest
-                .as_bytes()
-                .iter()
-                .fold(String::with_capacity(64), |mut out, byte| {
-                    let _ = write!(out, "{byte:02x}");
-                    out
-                });
+        let hex = purrdf_hash::hex::encode(digest.as_bytes());
         assert_eq!(
             hex, PLAIN_SHAPES_CLASS_CATALOG_DIGEST,
             "the class-catalog digest moved, so the class walk now reaches a different set of \

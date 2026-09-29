@@ -359,14 +359,12 @@ impl Ord for HashHex {
 /// Lowercase-hex a raw digest (32 bytes for SHA-256, 48 for SHA-384) into a [`HashHex`].
 fn hex_of(digest: &[u8]) -> HashHex {
     let mut buf = [0u8; 96];
-    const LUT: &[u8; 16] = b"0123456789abcdef";
-    for (i, byte) in digest.iter().enumerate() {
-        buf[2 * i] = LUT[(byte >> 4) as usize];
-        buf[2 * i + 1] = LUT[(byte & 0x0f) as usize];
-    }
+    let len = purrdf_hash::hex::encode_to_slice(digest, &mut buf)
+        .expect("a SHA-256 or SHA-384 digest renders in 96 digits")
+        .len();
     HashHex {
         buf,
-        len: (digest.len() * 2) as u8,
+        len: len as u8,
     }
 }
 
@@ -2863,9 +2861,6 @@ fn find_first_literal_escape(bytes: &[u8]) -> Option<usize> {
     LITERAL_ESCAPES.find_first(bytes)
 }
 
-/// Upper-case hex digits, for the `\u00XX` spelling.
-const HEX_UPPER: &[u8; 16] = b"0123456789ABCDEF";
-
 /// Append the escape of `b`, a member of [`LITERAL_ESCAPE_TABLE`].
 fn push_literal_escape(b: u8, out: &mut String) {
     match b {
@@ -2879,9 +2874,12 @@ fn push_literal_escape(b: u8, out: &mut String) {
         // The other C0 controls and DEL, as `\u00XX` in upper-case hex: the
         // bytes `write!(out, "\\u{:04X}", b)` produces.
         _ => {
+            let mut digits = [0u8; 2];
             out.push_str("\\u00");
-            out.push(char::from(HEX_UPPER[usize::from(b >> 4)]));
-            out.push(char::from(HEX_UPPER[usize::from(b & 0xF)]));
+            out.push_str(
+                purrdf_hash::hex::encode_upper_to_slice(&[b], &mut digits)
+                    .expect("one byte renders in two digits"),
+            );
         }
     }
 }

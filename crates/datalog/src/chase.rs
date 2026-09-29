@@ -527,18 +527,6 @@ const WITNESS_LABEL_BYTES: usize = 16;
 /// BLAKE3 digest this crate computes over a different kind of value.
 const WITNESS_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog restricted chase witness v1");
 
-/// Lowercase hex digits, for rendering a witness label without a formatter.
-///
-/// Deliberately NOT [`crate::resolve_fol::hex_lower`], this crate's other hex renderer:
-/// [`witness_surface`] runs once per invented witness inside the chase's fixpoint loop
-/// (every round, every firing that needs a fresh existential), so it is a hot path in a way
-/// a contract hash or a derivation id — computed once per result, not once per fact — is
-/// not. A lookup-table index avoids `hex_lower`'s per-byte `write!` formatting machinery on
-/// that path; consolidating the two would trade a measurable amount of per-firing work for
-/// uniformity alone, which this repository's performance discipline does not accept without
-/// a bench showing it is free.
-const HEX_DIGITS: [u8; 16] = *b"0123456789abcdef";
-
 /// The address a Skolem witness is minted against: the SKOLEM FUNCTION APPLICATION that
 /// produced it.
 ///
@@ -606,10 +594,7 @@ fn witness_surface(address: &WitnessAddress) -> String {
 
     let mut surface = format!("_:{WITNESS_SCOPE}.");
     surface.push(WITNESS_LABEL_PREFIX);
-    for &byte in &digest.as_bytes()[..WITNESS_LABEL_BYTES] {
-        surface.push(char::from(HEX_DIGITS[usize::from(byte >> 4)]));
-        surface.push(char::from(HEX_DIGITS[usize::from(byte & 0x0f)]));
-    }
+    purrdf_hash::hex::encode_into(&digest.as_bytes()[..WITNESS_LABEL_BYTES], &mut surface);
     surface
 }
 
