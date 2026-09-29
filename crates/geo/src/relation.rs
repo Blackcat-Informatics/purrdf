@@ -1789,6 +1789,18 @@ mod tests {
         );
     }
 
+    /// The source fingerprint is frozen over a fixed dataset: `verify_binding` compares
+    /// it across runs and releases, so a moved value reports an identical dataset as a
+    /// different one.
+    #[test]
+    fn the_source_fingerprint_is_frozen() {
+        let index = index_of(&four_branch_rows());
+        assert_eq!(
+            format!("{:#018x}", index.source_fingerprint()),
+            "0x21e852458fc234f7"
+        );
+    }
+
     /// The legacy `geo:defaultGeometry` is an `owl:equivalentProperty` of
     /// `geo:hasDefaultGeometry` in the shipped ontology, so it must dereference
     /// identically. Accepting only the current spelling would silently drop

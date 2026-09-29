@@ -1525,6 +1525,22 @@ mod tests {
         relation.open(&args, None).expect("opens")
     }
 
+    /// The space generation is frozen over a fixed index and fixed terms: it reaches
+    /// retrieval evidence, so a moved value is a changed persisted identity.
+    #[test]
+    fn the_space_generation_is_frozen() {
+        let index = HnswIndex::build(
+            matrix(6, 4),
+            &DistanceMetric::SquaredEuclidean,
+            Params::new(4, 8, 16, 8).expect("valid"),
+        )
+        .expect("builds");
+        assert_eq!(
+            &*space_generation(&index, &terms(6)),
+            "88d28fb13f55f3339a84a314e839558f471be39e9f715a371c8897cfa0dd7655"
+        );
+    }
+
     #[test]
     fn a_space_assembled_from_an_index_is_held_to_the_guards_candidate_bound() {
         let build = || {

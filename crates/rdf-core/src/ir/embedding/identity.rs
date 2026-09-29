@@ -421,6 +421,57 @@ mod tests {
         assert_ne!(left, right);
     }
 
+    /// The identities the checked-in PURREMB golden does not exercise, frozen over fixed
+    /// inputs: a relation role, an external contract and binding, an index guard and an
+    /// index. Each is persisted in an artifact, so a moved value is a changed identity.
+    #[test]
+    fn the_identities_outside_the_artifact_golden_are_frozen() {
+        let hex = |bytes: &[u8]| purrdf_hash::hex::Lower(bytes).to_string();
+        assert_eq!(
+            hex(&derive_relation_role_digest(b"https://example.org/role")),
+            "6f0a7fcae396ad75e599ecea1c4807948e480aba63594c4a51c3bfc636bdfca6"
+        );
+        let contract = derive_external_contract_digest(b"external contract");
+        assert_eq!(
+            hex(contract.as_bytes()),
+            "998bc47560e841615d067c98576b34459cfe426d7a942a71bc082ab7339f99e5"
+        );
+        let binding = derive_external_binding_id(ExternalBindingIdentity {
+            scope_kind: 1,
+            scope_id: &[0x31; 32],
+            artifact_sha256: ContentDigest::of(b"external artifact"),
+            artifact_length: 17,
+            certified_rdf_digest: [0x32; 32],
+            contract_digest: contract,
+        });
+        assert_eq!(
+            hex(binding.as_bytes()),
+            "56a18d2f143ea8c61f410986fb2344c652b5687b04dfca9e301cc96afd618c73"
+        );
+        let guard = derive_index_guard_digest(b"index guard");
+        assert_eq!(
+            hex(guard.as_bytes()),
+            "3eb1ad8a271b1a739b32cb3d4a47fa60064788d285275408c48ecde9106cd2df"
+        );
+        let index = derive_index_id(IndexIdentity {
+            source_exact_digest: ContentDigest::of(b"source"),
+            family_id: FamilyId::from_raw([0x41; 32]),
+            vector_space_id: VectorSpaceId::from_raw([0x42; 32]),
+            matrix_id: MatrixId::from_raw([0x43; 32]),
+            projection_id: ProjectionId::from_raw([0x44; 32]),
+            target_set_id: TargetSetId::from_raw([0x45; 32]),
+            prefix_dimension: 8,
+            payload_sha256: ContentDigest::of(b"payload"),
+            payload_length: 7,
+            determinism: 1,
+            guard_digest: guard,
+        });
+        assert_eq!(
+            hex(index.as_bytes()),
+            "acf422a8377bbd072aa3ab4f033e961006a0d24c16961d9c487e6f5663f37673"
+        );
+    }
+
     #[test]
     fn domains_separate_equal_payloads() {
         let payload = [0x42; 32];

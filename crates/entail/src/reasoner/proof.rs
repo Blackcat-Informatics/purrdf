@@ -3768,6 +3768,54 @@ mod tests {
         )
     }
 
+    /// Every service shape's proof digest is frozen: a moved digest is a changed published
+    /// proof identity.
+    #[test]
+    fn every_service_proof_digest_is_frozen() {
+        let digests: Vec<(&str, String)> = every_shape()
+            .into_iter()
+            .map(|(name, proof)| (name, proof.digest_hex()))
+            .collect();
+        let expected: Vec<(&str, String)> = [
+            (
+                "consistency",
+                "991a19126369287fb9e09e26216e8db6763ecbb199fdbf1f4d0426816ec94d76",
+            ),
+            (
+                "class-satisfiability",
+                "52e70203fc4cb012e147a0b85e888f81fdc7c7ab963354575d86b0199a633242",
+            ),
+            (
+                "instance-retrieval",
+                "e7c47de1c95e29d144ce16497a4088df7f6ad0a18b525bafc02f8ac7976eef06",
+            ),
+            (
+                "axiom-entailment",
+                "dca7ae3a2e4e56cb6d58d1b0af58639ee2db4a4a05ecd3166fa268264e69d1c9",
+            ),
+            (
+                "classification",
+                "808261f360bf323b98f1af49979d0ebcf12181284b2fe831e3bb8b8366baecc6",
+            ),
+            (
+                "realization",
+                "f8a004d9e81e361d0c4f69ad883b2d0a51c4a6e701443ec9d911b885a8c3e2cd",
+            ),
+            (
+                "module-extraction",
+                "dc76114a7d7b6a80d869d35e1103b3e60519d863dbd029c9c020d09b1e963cfa",
+            ),
+            (
+                "undecided",
+                "056c64076cc2db1b59f545d4fa5a333a9c707a3d40a1e52504d9aae0b5549a56",
+            ),
+        ]
+        .into_iter()
+        .map(|(name, digest)| (name, digest.to_owned()))
+        .collect();
+        assert_eq!(digests, expected);
+    }
+
     /// **THE ROUND TRIP.** `decode(encode(p))` is `p`, re-encodes to the identical bytes, and
     /// keeps the identical digest — for every shape the services produce and for the term
     /// kinds they do not.

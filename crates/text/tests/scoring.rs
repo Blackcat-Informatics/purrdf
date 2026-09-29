@@ -822,3 +822,36 @@ fn two_independently_built_indexes_rank_identically() {
         ranked
     );
 }
+
+/// Every identity a text index publishes is frozen over the golden fixture: the index
+/// fingerprint, the source fingerprint, the analyzer fingerprint and the term-sequence
+/// fingerprint. Each is recorded by callers, so a moved value is a changed identity.
+#[test]
+fn the_published_text_identities_are_frozen() {
+    let hex = |digest: [u8; 32]| purrdf_hash::hex::Lower(&digest).to_string();
+    let index = golden_index();
+    assert_eq!(
+        hex(index.fingerprint()),
+        "306c41a867ec5c307143a22c3b9333f442b90a88ecbf4fd8c0ea4fcd4fa9d85b",
+        "the index fingerprint"
+    );
+    assert_eq!(
+        hex(index.source_fingerprint()),
+        "2c37d830f3b191473d1ab73fc44bc417ef9d5d705c70a06d8baa1bf64b36c3f2",
+        "the source fingerprint"
+    );
+    assert_eq!(
+        hex(index.analyzer_fingerprint()),
+        "6e1a59a6f3920ed993b019ea436ce99a444b0a614c6a042fded8988a8c7b7b74",
+        "the analyzer fingerprint"
+    );
+    let terms = [
+        TermValue::iri("https://example.org/a"),
+        TermValue::simple_literal("alpha"),
+    ];
+    assert_eq!(
+        hex(purrdf_text::fingerprint_terms(&terms).expect("every term encodes")),
+        "8c96f9ceb8d5896ffd9a7c608b6b337c1e312192576ee4e69b7dd50a242e8550",
+        "the term-sequence fingerprint"
+    );
+}

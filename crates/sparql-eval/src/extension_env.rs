@@ -649,6 +649,17 @@ mod tests {
         );
     }
 
+    /// The content fingerprint is frozen over a fixed declaration: it crosses process
+    /// boundaries, so a moved value is a changed persisted identity.
+    #[test]
+    fn the_content_fingerprint_is_frozen() {
+        let env = env(ParserOptions::default(), &[A, B, C]);
+        assert_eq!(
+            env.content_fingerprint().expect("digest").to_hex(),
+            "fb1f135c2e76794621c48ee6084bc9999427bb9f59eb78bc99e2a9436ea29f42"
+        );
+    }
+
     #[test]
     fn different_relation_sets_produce_different_content_fingerprints() {
         let two = env(ParserOptions::default(), &[A, B]);

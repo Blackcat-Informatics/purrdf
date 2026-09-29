@@ -3082,3 +3082,32 @@ fn a_space_from_vectors_refuses_what_could_fail_a_query_and_admits_its_neighbour
     );
     assert!(matches!(error, EvalError::Config(_)), "got {error:?}");
 }
+
+/// Both generation constructions are frozen over fixed inputs: a moved generation is a
+/// changed identity every piece of retrieval evidence already recorded carries.
+#[test]
+fn both_space_generations_are_frozen() {
+    let terms = [
+        TermValue::iri(format!("{EX}a")),
+        TermValue::iri(format!("{EX}b")),
+    ];
+    let artifact = space_generation(
+        ProjectionContentDigest::from_raw([0x11; 32]),
+        FamilyContractDigest::from_raw([0x22; 32]),
+        &terms,
+    );
+    assert_eq!(
+        &*artifact,
+        "f5023470280500dc109e1a2c1030bdd4847e77fdb00259a00e2f847e0def0159"
+    );
+    let vectors = vectors_generation(
+        &DistanceMetric::SquaredEuclidean,
+        2,
+        &[0.5, -1.0, 2.0, 0.25],
+        &terms,
+    );
+    assert_eq!(
+        &*vectors,
+        "f30b674454f5457a2b749cae0e92a9aa5b62d12f3e0b100cd9a8b45c17f8dd66"
+    );
+}

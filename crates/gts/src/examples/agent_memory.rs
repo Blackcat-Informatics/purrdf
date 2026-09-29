@@ -1111,3 +1111,22 @@ fn now_rfc3339() -> String {
         })
         .unwrap_or_else(|| "1970-01-01T00:00:00Z".to_string())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{ASSERTION_KIND, Memory, TOOLCALL_KIND};
+
+    /// Both record ids are frozen over fixed inputs: a moved id is a changed identity
+    /// for every record already stored.
+    #[test]
+    fn both_record_ids_are_frozen() {
+        assert_eq!(
+            Memory::digest_id(ASSERTION_KIND, 64, ["a claim", "2026-01-01T00:00:00Z"]),
+            "urn:purrdf:assertion:blake3:d7ae440a2e99766f7638bf12172cc52e7d5e67f856b2598a59a1dc0b0ebc4dcb"
+        );
+        assert_eq!(
+            Memory::digest_id(TOOLCALL_KIND, 128, ["a tool", "2026-01-01T00:00:00Z"]),
+            "urn:purrdf:toolcall:blake3:d71edf30dc01bf295ca5535872be281ff771e1dd039358c1e97bd0460428779d"
+        );
+    }
+}

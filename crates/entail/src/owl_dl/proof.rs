@@ -5746,6 +5746,23 @@ mod tests {
         assert_eq!(first.digest_hex().len(), 64);
     }
 
+    /// The proof digest and the calculus contract are frozen over the fixture refutation: a
+    /// moved value is a changed published proof identity.
+    #[test]
+    fn the_proof_digest_and_contract_are_frozen() {
+        let (_, proof, _) = refutation();
+        assert_eq!(
+            proof.digest_hex(),
+            "ea40ad68088874796ccb64b6521d89d677a826858cc39cdef0dda82fb58b22a8",
+            "the proof digest moved"
+        );
+        assert_eq!(
+            purrdf_hash::hex::Lower(&proof.contract()).to_string(),
+            "521a1c7e7b2f6e27b2df2e16744077fa5df333aa5554d64b68e388d09bddb361",
+            "the calculus contract moved"
+        );
+    }
+
     /// `decode(encode(p))` is `p`, and re-encodes to the identical bytes.
     #[test]
     fn a_proof_term_round_trips_through_its_own_encoding() {

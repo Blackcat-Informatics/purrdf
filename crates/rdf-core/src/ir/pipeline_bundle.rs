@@ -2406,6 +2406,16 @@ mod core_tests {
         b.freeze().expect("valid")
     }
 
+    /// The pipeline root is frozen over the fixture carrier: a moved root is a changed
+    /// published carrier identity.
+    #[test]
+    fn the_pipeline_root_is_frozen() {
+        assert_eq!(
+            bundle(base()).pipeline_root().to_hex(),
+            "a04da97c5160a57a7a022ec256205bac9733b0840c65767144cc8240c33c4a98"
+        );
+    }
+
     #[test]
     fn the_pipeline_root_names_every_iri_graph_including_a_declared_empty_one() {
         let carrier = bundle(base());

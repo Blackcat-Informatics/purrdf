@@ -1864,6 +1864,16 @@ mod tests {
         assert_eq!(decoded.goal(decoded_root), &fact("a", T, "c"));
     }
 
+    /// The proof digest is frozen: a moved digest renames every proof term.
+    #[test]
+    fn the_proof_digest_is_frozen() {
+        let (arena, root) = chain_proof();
+        assert_eq!(
+            purrdf_hash::hex::Lower(&arena.digest(root)).to_string(),
+            "f0a9ff8c6ea22b070ff42b9cd0afbfb9517f4e88ad44913e1a093a51311642fb"
+        );
+    }
+
     /// A shared subproof is emitted ONCE and referenced twice, so the encoding is linear in
     /// the DAG rather than in its paths.
     #[test]

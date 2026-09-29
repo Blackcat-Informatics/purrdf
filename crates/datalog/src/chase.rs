@@ -2401,6 +2401,21 @@ mod tests {
         );
     }
 
+    /// The witness label is frozen: a moved label renames every invented blank node a
+    /// chase has ever emitted.
+    #[test]
+    fn a_witness_surface_is_frozen() {
+        let address = WitnessAddress {
+            clause: 1,
+            ordinal: 2,
+            frontier: vec![iri("a"), iri("b")],
+        };
+        assert_eq!(
+            witness_surface(&address),
+            "_:0.wbbdbca6f8eab62b90b50735b5a380b76"
+        );
+    }
+
     /// The witness surface is a pure function of the address: the same address always
     /// renders to the same blank node, and any component change renders to a different one.
     #[test]

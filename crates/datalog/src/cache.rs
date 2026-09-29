@@ -1401,6 +1401,59 @@ mod tests {
         assert_eq!(hash.digest(), contract_hash(&transitive_step(Q)).digest());
     }
 
+    /// Options stating every limit a contract hash folds, so a pinned digest is the same
+    /// on every target.
+    fn stated_options() -> EvalOptions {
+        EvalOptions::default()
+            .with_max_join_steps(1_000)
+            .with_max_stored_facts(2_000)
+            .with_max_term_generating_rounds(3)
+            .with_max_generated_terms(4_000)
+    }
+
+    /// `transitive_step`, guarded by a filter on its subject: a GUARDED program.
+    fn guarded_step(predicate: &str) -> Vec<DlClause> {
+        transitive_step(predicate)
+            .into_iter()
+            .map(|clause| clause.with_guards(vec![Guard::filter("even", vec!["?s".to_owned()])]))
+            .collect()
+    }
+
+    /// Every digest this module computes, frozen over fixed inputs: the clause digest of
+    /// a guard-free and of a guarded program (the two clause-IR domains), the guarded
+    /// contract re-fold, the scheduled contract, and the plan identity. A moved value is
+    /// a changed published identity.
+    #[test]
+    fn every_cache_digest_is_frozen() {
+        let hex = |digest: &[u8; 32]| purrdf_hash::hex::Lower(digest).to_string();
+        assert_eq!(
+            hex(&canonical_rule_hash(&transitive_step(Q))),
+            "a8d8438226d780583249aa985250add53f899547c92240a145c97c3de0f0d0a0",
+            "the guard-free clause digest moved"
+        );
+        assert_eq!(
+            hex(&canonical_rule_hash(&guarded_step(Q))),
+            "5eed3a4ad1b38cefe47fc830509b70ed0f5fe5bc2735e9911bbb1acd76b152f6",
+            "the guarded clause digest moved"
+        );
+        assert_eq!(
+            contract_hash_with(&guarded_step(Q), &stated_options()).to_hex(),
+            "73a8d071a93e87e3e8511e3884c7cc6b36d22762d156f554853eb623db655213",
+            "the guarded contract re-fold moved"
+        );
+        let schedule = Schedule::new(vec![crate::schedule::Layer::new(vec![vec![0]], Vec::new())]);
+        assert_eq!(
+            scheduled_contract_hash(&transitive_step(Q), &schedule, &stated_options()).to_hex(),
+            "22c7486553c1e727e8543fc7d9b412296c2e2e986d35edba6aeb949c72962ede",
+            "the scheduled contract hash moved"
+        );
+        assert_eq!(
+            hex(PlanIdentity::new(CONTRACT, &transitive_step(Q)).digest()),
+            "784ad1f59daf308d0ddb5b3f6e3b0187c77b61ee6810692b7804ebf9e4db18e4",
+            "the plan identity moved"
+        );
+    }
+
     /// The contract hash is not the clause digest and not the plan address: it is a third,
     /// separately domain-separated thing, and it is usable as `PlanIdentity`'s contract.
     #[test]

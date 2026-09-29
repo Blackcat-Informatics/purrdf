@@ -2640,6 +2640,20 @@ mod tests {
         );
     }
 
+    #[test]
+    fn the_snapshot_edge_set_digest_is_golden() {
+        // Pinned so any change to the domain separator, the term encoding or the edge
+        // order silently re-certifying a different snapshot is a loud failure.
+        let edges = [
+            (iri("a"), iri("b"), iri("s1")),
+            (iri("b"), iri("c"), iri("s2")),
+        ];
+        assert_eq!(
+            render_hex(&edge_set_digest(&edges)),
+            "3e8b56a6503ea1a5b185fc0011f104a49b809fba3e51f71e8f6cd466169781f1"
+        );
+    }
+
     /// The identifier of the walk `ex:a --ex:p--> ex:b --ex:p--> ex:c`.
     const GOLDEN_ABC_PATH_ID: &str =
         "3e4c617c5f08362717dfdbdaf9ced0e4db15c8253c13284e4ad7d6b7a8269c08";
