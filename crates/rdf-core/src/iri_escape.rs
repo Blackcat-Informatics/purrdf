@@ -457,3 +457,23 @@ mod tests {
         const { assert!(!is_iriref_escape_required('\u{A0}')) }
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    use super::push_uchar;
+
+    /// The `\u00XX` UCHAR against the uppercase field of every one-byte record
+    /// up to U+009F.
+    #[test]
+    fn uchar_matches_the_frozen_table() {
+        for (input, _, upper) in crate::hex_frozen_vectors::encodings() {
+            if let [byte] = input[..]
+                && byte <= 0x9f
+            {
+                let mut out = String::new();
+                push_uchar(char::from(byte), &mut out);
+                assert_eq!(out, format!("\\u00{upper}"));
+            }
+        }
+    }
+}

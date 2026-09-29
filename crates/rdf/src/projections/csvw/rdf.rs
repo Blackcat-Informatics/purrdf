@@ -644,6 +644,17 @@ fn expand_jsonld_iri(value: &str, config: &CsvwConfig) -> Result<String, Project
 }
 
 #[cfg(test)]
+mod hex_differential {
+    #[test]
+    fn percent_escapes_match_the_frozen_pairs() {
+        crate::hex_differential::assert_percent_escapes(super::percent_encode);
+        crate::hex_differential::assert_percent_escapes(|value| {
+            super::percent_encode_reserved(value).into_owned()
+        });
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::{
         RESERVED_ESCAPES, UNRESERVED_ESCAPES, percent_encode, percent_encode_reserved,

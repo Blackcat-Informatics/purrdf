@@ -27,6 +27,18 @@ fn hex(bytes: &[u8]) -> String {
     })
 }
 
+/// The helper renders every length 0..=64 from every first byte exactly as
+/// the crate's base16 encoder does.
+#[test]
+fn hex_helper_matches_the_crate_encoder() {
+    for len in 0..=64_usize {
+        for first in 0..=255_u8 {
+            let input: Vec<u8> = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+            assert_eq!(hex(&input), purrdf_hash::hex::Lower(&input).to_string());
+        }
+    }
+}
+
 #[test]
 fn kat_md5_rfc1321_test_suite() {
     let suite: [(&str, &str); 7] = [

@@ -1477,3 +1477,40 @@ pub const fn problem_for(code: FailureCode) -> Problem {
         detail,
     }
 }
+
+#[cfg(test)]
+mod hex_frozen_differential {
+    use super::hex_value;
+
+    const HEX_DIGIT_VECTORS: &str =
+        include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt");
+
+    /// A byte with its frozen any-case, lowercase and uppercase digit values.
+    type DigitRecord = (u8, Option<u8>, Option<u8>, Option<u8>);
+
+    /// Every byte's digit record.
+    fn frozen_digits() -> Vec<DigitRecord> {
+        let file = purrdf_testkit::vectors::VectorFile::parse(HEX_DIGIT_VECTORS)
+            .expect("hex_digit_vectors.txt");
+        file.records()
+            .iter()
+            .map(|record| {
+                let value = |field: &str| field.parse::<u8>().ok();
+                let byte: u8 = record.fields[0].parse().expect("a decimal byte");
+                (
+                    byte,
+                    value(record.fields[1]),
+                    value(record.fields[2]),
+                    value(record.fields[3]),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn percent_digit_reader_matches_the_frozen_digit_vectors() {
+        for (byte, any, _, _) in frozen_digits() {
+            assert_eq!(hex_value(byte), any, "{byte:#04x}");
+        }
+    }
+}

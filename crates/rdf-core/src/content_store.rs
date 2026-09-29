@@ -418,3 +418,45 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    use super::{ContentDigest, decode_hex_32, decode_hex_32_lower};
+
+    /// The two fixed-32 decoders and the digest's rendering against the
+    /// frozen table: either case for `decode_hex_32`, lowercase only for
+    /// `decode_hex_32_lower`, and every single-digit substitution.
+    #[test]
+    fn decoders_and_rendering_match_the_frozen_tables() {
+        for (input, lower, upper) in crate::hex_frozen_vectors::encodings() {
+            if input.len() != 32 {
+                continue;
+            }
+            let raw: [u8; 32] = input.clone().try_into().expect("32 bytes");
+            assert_eq!(ContentDigest::from_raw(raw).to_hex(), lower);
+            assert_eq!(ContentDigest::from_raw(raw).to_string(), lower);
+            assert_eq!(decode_hex_32(&lower), Some(raw));
+            assert_eq!(decode_hex_32(&upper), Some(raw));
+            assert_eq!(ContentDigest::from_hex(&upper), Some(ContentDigest::from_raw(raw)));
+            assert_eq!(decode_hex_32_lower(&lower), Some(raw));
+            assert_eq!(decode_hex_32_lower(&upper), (upper == lower).then_some(raw));
+        }
+        for (byte, any, canonical, _) in crate::hex_frozen_vectors::digits() {
+            let mut text = vec![b'0'; 64];
+            text[63] = byte;
+            let Ok(text) = String::from_utf8(text) else {
+                assert_eq!(any, None);
+                continue;
+            };
+            let expect = |value: Option<u8>| {
+                value.map(|v| {
+                    let mut out = [0u8; 32];
+                    out[31] = v;
+                    out
+                })
+            };
+            assert_eq!(decode_hex_32(&text), expect(any), "byte {byte}");
+            assert_eq!(decode_hex_32_lower(&text), expect(canonical), "byte {byte}");
+        }
+    }
+}

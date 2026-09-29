@@ -649,3 +649,21 @@ mod tests {
         assert_eq!(render_value(b""), "\"\"");
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    /// A value that is not printable text renders as `0x` and its lowercase
+    /// digits, against the frozen table.
+    #[test]
+    fn binary_values_match_the_frozen_table() {
+        for (input, lower, _) in crate::hex_frozen_vectors::encodings() {
+            let rendered = super::render_value(&input);
+            match std::str::from_utf8(&input) {
+                Ok(text) if !text.chars().any(char::is_control) => {
+                    assert_eq!(rendered, format!("\"{text}\""));
+                }
+                _ => assert_eq!(rendered, format!("0x{lower}")),
+            }
+        }
+    }
+}

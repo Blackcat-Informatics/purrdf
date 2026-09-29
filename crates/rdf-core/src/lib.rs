@@ -35,6 +35,8 @@
 
 // Blank-node label syntax shared by parser and serializer egress contracts.
 pub mod blank_label;
+#[cfg(test)]
+mod hex_frozen_vectors;
 pub mod cdt_blank;
 // The ONE transcription of which scalars an `IRIREF` writer must escape — the
 // egress mirror of the ingress production in `purrdf_iri::terminals`.

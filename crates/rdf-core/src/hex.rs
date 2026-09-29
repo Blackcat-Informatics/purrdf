@@ -183,3 +183,14 @@ mod tests {
         assert_eq!(lower(&bytes), expected);
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    /// `lower` renders every frozen record as its lowercase field.
+    #[test]
+    fn lower_matches_the_frozen_table() {
+        for (input, lower, _) in crate::hex_frozen_vectors::encodings() {
+            assert_eq!(super::lower(&input), lower);
+        }
+    }
+}

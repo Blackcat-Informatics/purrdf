@@ -1369,3 +1369,78 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod hex_frozen_differential {
+    use super::Parser;
+
+    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
+
+    /// Every frozen record: its input bytes, lowercase and uppercase digits.
+    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
+        let file =
+            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
+        file.records()
+            .iter()
+            .map(|record| {
+                let len: usize = record.fields[0].parse().expect("a decimal length");
+                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
+                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
+                    .expect("lowercase digits");
+                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
+                    .expect("uppercase digits");
+                (input, lower, upper)
+            })
+            .collect()
+    }
+
+    const HEX_DIGIT_VECTORS: &str =
+        include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt");
+
+    /// A byte with its frozen any-case, lowercase and uppercase digit values.
+    type DigitRecord = (u8, Option<u8>, Option<u8>, Option<u8>);
+
+    /// Every byte's digit record.
+    fn frozen_digits() -> Vec<DigitRecord> {
+        let file = purrdf_testkit::vectors::VectorFile::parse(HEX_DIGIT_VECTORS)
+            .expect("hex_digit_vectors.txt");
+        file.records()
+            .iter()
+            .map(|record| {
+                let value = |field: &str| field.parse::<u8>().ok();
+                let byte: u8 = record.fields[0].parse().expect("a decimal byte");
+                (
+                    byte,
+                    value(record.fields[1]),
+                    value(record.fields[2]),
+                    value(record.fields[3]),
+                )
+            })
+            .collect()
+    }
+
+    fn hex4(text: &str) -> Option<u16> {
+        let mut parser = Parser {
+            text,
+            bytes: text.as_bytes(),
+            pos: 0,
+        };
+        parser.hex4().ok()
+    }
+
+    #[test]
+    fn unicode_escape_digits_match_the_frozen_vectors() {
+        for (byte, any, _, _) in frozen_digits() {
+            let text = format!("004{}", char::from(byte));
+            assert_eq!(hex4(&text), any.map(|v| 0x40 + u16::from(v)), "{byte:#04x}");
+        }
+        for (input, lower, upper) in frozen_encodings() {
+            if let [high, low] = input[..] {
+                let value = u16::from_be_bytes([high, low]);
+                assert_eq!(hex4(&lower), Some(value));
+                assert_eq!(hex4(&upper), Some(value));
+            }
+        }
+    }
+}

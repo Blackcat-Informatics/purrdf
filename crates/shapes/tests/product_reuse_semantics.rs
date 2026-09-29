@@ -658,3 +658,18 @@ fn provenance_survives_cloning_and_binding() {
     .expect("the data graph binds");
     assert_eq!(parsed.provenance(), &ValidatorProvenance::Parsed);
 }
+
+/// The digest helper against the frozen base16 table.
+#[test]
+fn digest_hex_helper_replays_the_frozen_vectors() {
+    let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(
+        "../../hash-conformance/tests/vectors/hex_vectors.txt"
+    ))
+    .expect("frozen hex vectors");
+    for record in file.records().iter().filter(|r| r.fields[0] == "32") {
+        let first: u8 = record.fields[1].parse().expect("first");
+        let digest: [u8; 32] = std::array::from_fn(|i| first.wrapping_add(i as u8));
+        let lower = purrdf_testkit::vectors::decode_str(record.fields[2]).expect("lower");
+        assert_eq!(hex(&digest), lower);
+    }
+}

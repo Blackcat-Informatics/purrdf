@@ -917,6 +917,94 @@ pub fn prove_file(data: &[u8], target_frame_id: &[u8]) -> Result<Proof, String> 
 }
 
 #[cfg(test)]
+mod hex_differential {
+    use super::*;
+    use purrdf_testkit::vectors::{VectorFile, decode_str};
+
+    const ENCODINGS: &str =
+        include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
+    const DIGITS: &str = include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt");
+
+    fn encodings() -> Vec<(Vec<u8>, String, String)> {
+        let file = VectorFile::parse(ENCODINGS).expect("hex vectors");
+        file.records()
+            .iter()
+            .map(|r| {
+                let len: usize = r.fields[0].parse().unwrap();
+                let first: u8 = r.fields[1].parse().unwrap();
+                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+                (input, decode_str(r.fields[2]).unwrap(), decode_str(r.fields[3]).unwrap())
+            })
+            .collect()
+    }
+
+    fn any_case_digits() -> Vec<Option<u32>> {
+        let file = VectorFile::parse(DIGITS).expect("digit vectors");
+        file.records().iter().map(|r| r.fields[1].parse().ok()).collect()
+    }
+
+    #[test]
+    fn wire_hex_matches_the_frozen_encodings() {
+        for (input, lower, _) in encodings() {
+            assert_eq!(hex(&input), lower, "{input:?}");
+        }
+    }
+
+    #[test]
+    fn parse_hex_32_matches_the_frozen_encodings() {
+        for (input, lower, upper) in encodings() {
+            if input.len() != 32 {
+                if !lower.is_empty() {
+                    assert!(parse_hex_32(&lower).is_err());
+                }
+                continue;
+            }
+            assert_eq!(parse_hex_32(&lower).as_deref(), Ok(&input[..]));
+            assert_eq!(parse_hex_32(&upper).as_deref(), Ok(&input[..]));
+            assert_eq!(parse_hex_32(&format!("blake3:{lower}")).as_deref(), Ok(&input[..]));
+        }
+        let digits = any_case_digits();
+        let base = "0".repeat(64);
+        for byte in 0..0x80u8 {
+            let mut text = base.clone().into_bytes();
+            text[63] = byte;
+            let text = String::from_utf8(text).unwrap();
+            let expected = digits[usize::from(byte)].is_some() && !byte.is_ascii_whitespace();
+            assert_eq!(parse_hex_32(&text).is_ok(), expected, "{byte:#04x}");
+            if let (Ok(bytes), Some(value)) = (parse_hex_32(&text), digits[usize::from(byte)]) {
+                assert_eq!(u32::from(bytes[31]), value);
+            }
+        }
+    }
+
+    #[test]
+    fn json_unicode_escape_digits_match_the_frozen_digit_table() {
+        let digits = any_case_digits();
+        let probes = (0u32..0x800)
+            .chain((0x800..=0xFFFF).step_by(0x1000))
+            .chain((0x10000..=0x10_FFFF).step_by(0x40000))
+            .filter_map(char::from_u32);
+        for probe in probes {
+            if probe == '"' || probe == '\\' {
+                continue;
+            }
+            let text = format!("\"\\u004{probe}\"");
+            let first = probe.to_string().as_bytes()[0];
+            let parsed = JsonParser::new(&text).parse();
+            match digits[usize::from(first)] {
+                Some(value) if probe.is_ascii() => match parsed {
+                    Ok(Json::String(s)) => {
+                        assert_eq!(s, char::from_u32(0x40 + value).unwrap().to_string());
+                    }
+                    other => panic!("{probe:?}: {other:?}"),
+                },
+                _ => assert!(parsed.is_err(), "{probe:?}"),
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

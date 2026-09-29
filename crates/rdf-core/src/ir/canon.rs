@@ -5349,3 +5349,27 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    use super::{hex_of, push_literal_escape};
+
+    /// `hex_of` over every frozen record up to 48 bytes, and the `\u00XX`
+    /// literal escape against the uppercase field of the one-byte records.
+    #[test]
+    fn digest_rendering_and_escape_match_the_frozen_table() {
+        for (input, lower, upper) in crate::hex_frozen_vectors::encodings() {
+            if input.len() <= 48 {
+                assert_eq!(hex_of(&input).as_str(), lower);
+            }
+            if let [byte] = input[..]
+                && (byte < 0x20 || byte == 0x7f)
+                && !matches!(byte, b'\n' | b'\r' | b'\t' | 0x08 | 0x0c)
+            {
+                let mut out = String::new();
+                push_literal_escape(byte, &mut out);
+                assert_eq!(out, format!("\\u00{upper}"));
+            }
+        }
+    }
+}

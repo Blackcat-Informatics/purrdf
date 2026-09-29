@@ -1461,3 +1461,27 @@ mod term_walk_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    use super::{encode_blank, lower_hex_value};
+    use crate::ir::term::BlankScope;
+
+    /// The `-xx` escape of every non-alphanumeric ASCII byte, and the escape's
+    /// digit reader, against the frozen tables.
+    #[test]
+    fn escape_and_digit_reader_match_the_frozen_tables() {
+        for (input, lower, _) in crate::hex_frozen_vectors::encodings() {
+            if let [byte] = input[..]
+                && byte.is_ascii()
+                && !byte.is_ascii_alphanumeric()
+            {
+                let label = char::from(byte).to_string();
+                assert_eq!(encode_blank(&label, BlankScope::DEFAULT), format!("s0--{lower}"));
+            }
+        }
+        for (byte, _, canonical, _) in crate::hex_frozen_vectors::digits() {
+            assert_eq!(lower_hex_value(byte), canonical, "byte {byte}");
+        }
+    }
+}

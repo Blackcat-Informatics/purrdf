@@ -15,6 +15,44 @@ use purrdf_hash::backend::HexBackend;
 use purrdf_hash::dispatch::{assert_required_available, host_advertises};
 use purrdf_hash::hex::Lower;
 use purrdf_testkit::rng::Xoshiro256;
+use purrdf_testkit::vectors::{VectorFile, decode_str};
+
+/// The frozen encoding table: every length 0..=64 from every first byte.
+const HEX_VECTORS: &str = include_str!("vectors/hex_vectors.txt");
+
+/// Each frozen record as its input bytes and its lowercase and uppercase
+/// renderings.
+fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
+    let file = VectorFile::parse(HEX_VECTORS).unwrap_or_else(|error| panic!("hex_vectors.txt: {error}"));
+    file.records()
+        .iter()
+        .map(|record| {
+            let len: usize = record.fields[0].parse().expect("a decimal length");
+            let first: u8 = record.fields[1].parse().expect("a decimal first byte");
+            let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+            let lower = decode_str(record.fields[2]).expect("encoded lowercase digits");
+            let upper = decode_str(record.fields[3]).expect("encoded uppercase digits");
+            (input, lower, upper)
+        })
+        .collect()
+}
+
+/// Every frozen record renders as its lowercase digits through [`Lower`] and
+/// on every encoding path this host runs, and its two frozen renderings agree
+/// with each other up to case.
+fn frozen_vectors_replay_on_every_path() {
+    let records = frozen_encodings();
+    assert_eq!(records.len(), 65 * 256);
+    for (input, lower, upper) in &records {
+        assert_eq!(&Lower(input).to_string(), lower, "{input:?}");
+        assert_eq!(&lower.to_ascii_uppercase(), upper, "{input:?}");
+        for backend in HexBackend::all_available() {
+            let mut out = vec![0u8; 2 * input.len()];
+            backend.encode(input, &mut out).expect("an available path");
+            assert_eq!(out, lower.as_bytes(), "{input:?} on {}", backend.name());
+        }
+    }
+}
 
 /// RFC 4648 §10's BASE16 vectors. The RFC prints them in upper case; §8
 /// calls base16 case-insensitive, and `Lower` renders the lower-case form.
@@ -193,6 +231,7 @@ fn input(length: usize, seed: u64) -> Vec<u8> {
 
 purrdf_testkit::harness_main!(
     rfc4648_base16_vectors,
+    frozen_vectors_replay_on_every_path,
     every_byte_value_matches_lower_hex,
     multi_chunk_inputs_match_portable,
     formatter_options_match_str,

@@ -2794,6 +2794,14 @@ fn normalize_annotation_value(value: &Value, context: &DocumentContext) -> Value
 }
 
 #[cfg(test)]
+mod hex_differential {
+    #[test]
+    fn percent_escapes_match_the_frozen_pairs() {
+        crate::hex_differential::assert_percent_escapes(super::percent_encode_variable);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

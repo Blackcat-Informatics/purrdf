@@ -1567,6 +1567,14 @@ fn key_tuple(row: &CsvwRow, indices: &[usize]) -> Option<Vec<String>> {
 }
 
 #[cfg(test)]
+mod hex_differential {
+    #[test]
+    fn percent_escapes_match_the_frozen_pairs() {
+        crate::hex_differential::assert_percent_escapes(super::percent_encode);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 

@@ -277,3 +277,22 @@ mod tests {
         assert!(format!("{digest:?}").contains(&digest.to_hex()));
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    use super::PackDigest;
+
+    /// The pack digest rendering against the frozen table.
+    #[test]
+    fn pack_digest_rendering_matches_the_frozen_table() {
+        for (input, lower, _) in crate::hex_frozen_vectors::encodings() {
+            if input.len() != 32 {
+                continue;
+            }
+            let digest = PackDigest(input.clone().try_into().expect("32 bytes"));
+            assert_eq!(digest.to_hex(), lower);
+            assert_eq!(digest.to_string(), lower);
+            assert_eq!(format!("{digest:?}"), format!("PackDigest({lower:?})"));
+        }
+    }
+}

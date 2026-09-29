@@ -1426,3 +1426,24 @@ mod tests {
         }
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    use super::{hex6_digit, push_hex6};
+
+    /// The six-digit escape body over every three-byte frozen record, and its
+    /// uppercase-only digit reader over every byte.
+    #[test]
+    fn escape_body_and_digit_reader_match_the_frozen_tables() {
+        for (input, _, upper) in crate::hex_frozen_vectors::encodings() {
+            if let [a, b, c] = input[..] {
+                let mut out = String::new();
+                push_hex6(u32::from_be_bytes([0, a, b, c]), &mut out);
+                assert_eq!(out, upper);
+            }
+        }
+        for (byte, _, _, uppercase) in crate::hex_frozen_vectors::digits() {
+            assert_eq!(hex6_digit(char::from(byte)), uppercase.map(u32::from), "byte {byte}");
+        }
+    }
+}

@@ -448,3 +448,25 @@ fn compress(state: &mut [u32; 8], block: &[u8; 64]) {
         *slot = slot.wrapping_add(value);
     }
 }
+
+/// The fixture escapes against the frozen base16 table.
+#[test]
+fn fixture_escapes_replay_the_frozen_hex_vectors() {
+    let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(
+        "../../hash-conformance/tests/vectors/hex_vectors.txt"
+    ))
+    .expect("frozen hex vectors");
+    for record in file.records().iter().filter(|r| r.fields[0] == "1") {
+        let byte: u8 = record.fields[1].parse().expect("byte");
+        let lower = purrdf_testkit::vectors::decode_str(record.fields[2]).expect("lower");
+        let upper = purrdf_testkit::vectors::decode_str(record.fields[3]).expect("upper");
+        if byte < 0x80 {
+            let c = char::from(byte);
+            if c.is_control() {
+                assert_eq!(encode(&c.to_string()), format!("\\x{lower}"));
+            }
+            assert_eq!(decode(&format!("\\x{lower}")), c.to_string());
+            assert_eq!(decode(&format!("\\x{upper}")), c.to_string());
+        }
+    }
+}

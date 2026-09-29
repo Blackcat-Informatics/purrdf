@@ -513,3 +513,22 @@ mod tests {
         assert_ne!(root, changed_directory);
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    use super::FamilyId;
+
+    /// The identity rendering against the frozen table.
+    #[test]
+    fn identity_rendering_matches_the_frozen_table() {
+        for (input, lower, _) in crate::hex_frozen_vectors::encodings() {
+            if input.len() != 32 {
+                continue;
+            }
+            let id = FamilyId::from_raw(input.clone().try_into().expect("32 bytes"));
+            assert_eq!(id.to_hex(), lower);
+            assert_eq!(id.to_string(), lower);
+            assert_eq!(format!("{id:?}"), format!("FamilyId({lower:?})"));
+        }
+    }
+}

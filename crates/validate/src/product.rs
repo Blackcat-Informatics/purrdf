@@ -1682,3 +1682,57 @@ mod tests {
         assert_eq!(direct, padded);
     }
 }
+
+#[cfg(test)]
+#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
+mod hex_frozen_vectors {
+
+
+    use purrdf_testkit::vectors::{VectorFile, decode_str};
+
+    /// Every frozen record: input bytes, lowercase and uppercase renderings.
+    fn records() -> Vec<(Vec<u8>, String, String)> {
+        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
+        file.records()
+            .iter()
+            .map(|r| {
+                let len: usize = r.fields[0].parse().expect("length");
+                let first: u8 = r.fields[1].parse().expect("first");
+                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
+            })
+            .collect()
+    }
+
+    /// Every byte with its any-case, lowercase and uppercase digit values.
+    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
+        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
+        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
+        file.records()
+            .iter()
+            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
+            .collect()
+    }
+
+    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
+    fn pairs() -> Vec<(String, String)> {
+        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
+    }
+
+
+    #[test]
+    fn digest_hex_codecs_replay_the_frozen_vectors() {
+        for (input, lower, upper) in records() {
+            if input.len() == 32 {
+                let digest: [u8; 32] = input.as_slice().try_into().expect("32 bytes");
+                assert_eq!(super::hex(&digest), lower);
+                assert_eq!(super::parse_identity_digest(&lower), Ok(digest));
+                assert_eq!(super::parse_identity_digest(&upper), Ok(digest));
+            }
+            if std::str::from_utf8(&input).is_err() || input.is_empty() || std::str::from_utf8(&input).is_ok_and(|t| t.chars().any(char::is_control)) {
+                assert_eq!(super::render_component(&input), format!("0x{lower}"));
+            }
+        }
+    }
+
+}

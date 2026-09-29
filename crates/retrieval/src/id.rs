@@ -329,3 +329,47 @@ impl fmt::Display for EvidenceId {
         f.write_str(&self.to_hex())
     }
 }
+
+#[cfg(test)]
+mod hex_frozen_differential {
+    use super::{EvidenceId, FusionProfileId, PlanId};
+
+    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
+
+    /// Every frozen record: its input bytes, lowercase and uppercase digits.
+    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
+        let file =
+            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
+        file.records()
+            .iter()
+            .map(|record| {
+                let len: usize = record.fields[0].parse().expect("a decimal length");
+                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
+                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
+                    .expect("lowercase digits");
+                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
+                    .expect("uppercase digits");
+                (input, lower, upper)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn digest_ids_render_as_the_frozen_vectors() {
+        let mut checked = 0;
+        for (input, lower, _) in frozen_encodings() {
+            let Ok(bytes) = <[u8; 32]>::try_from(input.as_slice()) else {
+                continue;
+            };
+            assert_eq!(PlanId(bytes).to_hex(), lower);
+            assert_eq!(PlanId(bytes).to_string(), lower);
+            assert_eq!(FusionProfileId(bytes).to_hex(), lower);
+            assert_eq!(FusionProfileId(bytes).to_string(), lower);
+            assert_eq!(EvidenceId(bytes).to_hex(), lower);
+            assert_eq!(EvidenceId(bytes).to_string(), lower);
+            checked += 1;
+        }
+        assert_eq!(checked, 256);
+    }
+}

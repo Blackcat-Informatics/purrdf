@@ -1096,3 +1096,26 @@ mod tests {
             .expect("no writer overflowed the thread's stack");
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    /// `%XX` against the uppercase field of every one-byte record the
+    /// encoder escapes, and every byte of a two-byte UTF-8 character.
+    #[test]
+    fn percent_encoding_matches_the_frozen_table() {
+        for (input, _, upper) in crate::hex_frozen_vectors::encodings() {
+            match input[..] {
+                [byte] if byte.is_ascii()
+                    && !(byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~')) =>
+                {
+                    assert_eq!(super::percent_encode(&char::from(byte).to_string()), format!("%{upper}"));
+                }
+                [lead, trail] if (0xc2..=0xdf).contains(&lead) && (0x80..=0xbf).contains(&trail) => {
+                    let text = std::str::from_utf8(&input).expect("a two-byte character");
+                    assert_eq!(super::percent_encode(text), format!("%{}%{}", &upper[..2], &upper[2..]));
+                }
+                _ => {}
+            }
+        }
+    }
+}

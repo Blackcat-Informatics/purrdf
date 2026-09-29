@@ -521,6 +521,14 @@ fn percent_encode_path(path: &str) -> String {
 }
 
 #[cfg(test)]
+mod hex_differential {
+    #[test]
+    fn path_percent_escapes_match_the_frozen_pairs() {
+        crate::hex_differential::assert_percent_escapes(super::percent_encode_path);
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::expand_decimal_exponent;
 

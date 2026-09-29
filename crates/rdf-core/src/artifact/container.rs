@@ -1248,3 +1248,16 @@ mod tests {
         assert!(align_up(usize::MAX).is_err());
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    /// `hex32` against the frozen table.
+    #[test]
+    fn hex32_matches_the_frozen_table() {
+        for (input, lower, _) in crate::hex_frozen_vectors::encodings() {
+            if let Ok(digest) = <[u8; 32]>::try_from(input.as_slice()) {
+                assert_eq!(super::hex32(&digest), lower);
+            }
+        }
+    }
+}

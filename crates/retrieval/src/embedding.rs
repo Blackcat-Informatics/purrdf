@@ -257,3 +257,76 @@ mod tests {
         assert_eq!(decode_embedding(&encode_embedding(&long)), Ok(long));
     }
 }
+
+#[cfg(test)]
+mod hex_frozen_differential {
+    use super::{decode_embedding, encode_embedding};
+
+    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
+
+    /// Every frozen record: its input bytes, lowercase and uppercase digits.
+    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
+        let file =
+            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
+        file.records()
+            .iter()
+            .map(|record| {
+                let len: usize = record.fields[0].parse().expect("a decimal length");
+                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
+                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
+                    .expect("lowercase digits");
+                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
+                    .expect("uppercase digits");
+                (input, lower, upper)
+            })
+            .collect()
+    }
+
+    const HEX_DIGIT_VECTORS: &str =
+        include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt");
+
+    /// A byte with its frozen any-case, lowercase and uppercase digit values.
+    type DigitRecord = (u8, Option<u8>, Option<u8>, Option<u8>);
+
+    /// Every byte's digit record.
+    fn frozen_digits() -> Vec<DigitRecord> {
+        let file = purrdf_testkit::vectors::VectorFile::parse(HEX_DIGIT_VECTORS)
+            .expect("hex_digit_vectors.txt");
+        file.records()
+            .iter()
+            .map(|record| {
+                let value = |field: &str| field.parse::<u8>().ok();
+                let byte: u8 = record.fields[0].parse().expect("a decimal byte");
+                (
+                    byte,
+                    value(record.fields[1]),
+                    value(record.fields[2]),
+                    value(record.fields[3]),
+                )
+            })
+            .collect()
+    }
+
+    #[test]
+    fn embedding_components_read_and_write_as_the_frozen_vectors() {
+        for (input, lower, upper) in frozen_encodings() {
+            let Ok(bytes) = <[u8; 4]>::try_from(input.as_slice()) else {
+                continue;
+            };
+            let bits = u32::from_be_bytes(bytes);
+            assert_eq!(encode_embedding(&[f32::from_bits(bits)]), upper);
+            let read = decode_embedding(&upper).expect("the uppercase form is canonical");
+            assert_eq!(
+                read.iter().map(|c| c.to_bits()).collect::<Vec<_>>(),
+                vec![bits]
+            );
+            assert_eq!(decode_embedding(&lower).is_ok(), lower == upper, "{lower}");
+        }
+        for (byte, _, _, upper) in frozen_digits() {
+            let token = format!("0000000{}", char::from(byte));
+            let read = decode_embedding(&token).ok().map(|c| c[0].to_bits());
+            assert_eq!(read, upper.map(u32::from), "{byte:#04x}");
+        }
+    }
+}

@@ -1703,3 +1703,50 @@ pub(crate) mod term_walk_tests {
             .expect("no walk overflowed the thread's stack");
     }
 }
+
+#[cfg(test)]
+#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
+mod hex_frozen_vectors {
+
+
+    use purrdf_testkit::vectors::{VectorFile, decode_str};
+
+    /// Every frozen record: input bytes, lowercase and uppercase renderings.
+    fn records() -> Vec<(Vec<u8>, String, String)> {
+        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
+        file.records()
+            .iter()
+            .map(|r| {
+                let len: usize = r.fields[0].parse().expect("length");
+                let first: u8 = r.fields[1].parse().expect("first");
+                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
+            })
+            .collect()
+    }
+
+    /// Every byte with its any-case, lowercase and uppercase digit values.
+    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
+        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
+        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
+        file.records()
+            .iter()
+            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
+            .collect()
+    }
+
+    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
+    fn pairs() -> Vec<(String, String)> {
+        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
+    }
+
+
+    #[test]
+    fn uppercase_digit_replays_the_frozen_vectors() {
+        for (byte, (_, upper)) in (0..=255u8).zip(pairs()) {
+            let got = [super::hex_digit(u32::from(byte) >> 4), super::hex_digit(u32::from(byte) & 0x0f)];
+            assert_eq!(got, upper.as_bytes(), "{byte}");
+        }
+    }
+
+}

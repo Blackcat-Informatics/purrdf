@@ -211,3 +211,24 @@ mod tests {
         assert!(ContentIdScheme::new("abc").is_err());
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    use super::Blake3ContentId;
+
+    /// Rendering and the lowercase-only reading against the frozen table.
+    #[test]
+    fn rendering_and_reading_match_the_frozen_table() {
+        for (input, lower, upper) in crate::hex_frozen_vectors::encodings() {
+            if input.len() != 32 {
+                continue;
+            }
+            let id = Blake3ContentId::from_raw(input.clone().try_into().expect("32 bytes"));
+            assert_eq!(id.to_hex(), lower);
+            assert_eq!(id.to_string(), lower);
+            assert_eq!(format!("{id:?}"), format!("Blake3ContentId({lower})"));
+            assert_eq!(Blake3ContentId::from_hex(&lower), Some(id));
+            assert_eq!(Blake3ContentId::from_hex(&upper), (upper == lower).then_some(id));
+        }
+    }
+}

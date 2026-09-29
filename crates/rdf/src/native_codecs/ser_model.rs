@@ -959,6 +959,21 @@ pub(crate) fn write_trig<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
 }
 
 #[cfg(test)]
+mod hex_differential {
+    use super::push_uchar_00;
+    use crate::hex_differential::upper_pairs;
+
+    #[test]
+    fn uchar_00_matches_the_frozen_pairs() {
+        for (byte, pair) in upper_pairs().into_iter().enumerate() {
+            let mut out = String::new();
+            push_uchar_00(&mut out, byte as u32);
+            assert_eq!(out, format!("\\u00{pair}"));
+        }
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use purrdf_testkit::prop::prelude::*;

@@ -226,7 +226,20 @@ fn required_sha1_and_crc32_paths_are_available_and_selected() {
     }
 }
 
+/// The helper renders every frozen base16 record as its lowercase field.
+fn hex_helper_matches_the_frozen_base16_vectors() {
+    let file = VectorFile::parse(include_str!("vectors/hex_vectors.txt")).expect("hex_vectors.txt");
+    for record in file.records() {
+        let len: usize = record.fields[0].parse().expect("a decimal length");
+        let first: u8 = record.fields[1].parse().expect("a decimal first byte");
+        let input: Vec<u8> = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+        let lower = purrdf_testkit::vectors::decode_str(record.fields[2]).expect("digits");
+        assert_eq!(hex(&input), lower);
+    }
+}
+
 purrdf_testkit::harness_main!(
+    hex_helper_matches_the_frozen_base16_vectors,
     md5_vectors_are_reproduced,
     required_sha1_and_crc32_paths_are_available_and_selected,
     sha1_vectors_are_reproduced_on_every_path,

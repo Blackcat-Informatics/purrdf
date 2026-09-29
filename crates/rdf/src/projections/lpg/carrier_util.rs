@@ -292,3 +292,27 @@ const fn hex_nibble(byte: u8) -> Option<u8> {
         _ => None,
     }
 }
+
+#[cfg(test)]
+mod hex_differential {
+    use super::{hex_decode, hex_nibble, render_hex_blocks};
+    use crate::hex_differential::{digits, encodings};
+
+    #[test]
+    fn hex_blocks_and_decode_match_the_frozen_tables() {
+        for (input, lower, upper) in encodings() {
+            let mut out = Vec::new();
+            render_hex_blocks(&input, |block| {
+                out.extend_from_slice(block);
+                Ok(())
+            })
+            .unwrap();
+            assert_eq!(out, lower.as_bytes());
+            assert_eq!(hex_decode(&lower, "d", "p").unwrap(), input);
+            assert_eq!(hex_decode(&upper, "d", "p").is_ok(), upper == lower);
+        }
+        for (byte, (_, canonical)) in digits().into_iter().enumerate() {
+            assert_eq!(hex_nibble(byte as u8), canonical, "{byte:#04x}");
+        }
+    }
+}

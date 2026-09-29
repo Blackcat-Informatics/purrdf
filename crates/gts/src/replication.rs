@@ -993,6 +993,29 @@ pub fn diff_json(result: &DiffResult) -> String {
 }
 
 #[cfg(test)]
+mod hex_differential {
+    use super::{json_hex, json_optional_hex};
+    use purrdf_testkit::vectors::{VectorFile, decode_str};
+
+    const ENCODINGS: &str =
+        include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
+
+    #[test]
+    fn json_hex_matches_the_frozen_encodings() {
+        let file = VectorFile::parse(ENCODINGS).expect("hex vectors");
+        for r in file.records() {
+            let len: usize = r.fields[0].parse().unwrap();
+            let first: u8 = r.fields[1].parse().unwrap();
+            let input: Vec<u8> = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+            let lower = decode_str(r.fields[2]).unwrap();
+            assert_eq!(json_hex(&input), format!("\"{lower}\""));
+            assert_eq!(json_optional_hex(Some(&input)), format!("\"{lower}\""));
+        }
+        assert_eq!(json_optional_hex(None), "null");
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
     use crate::writer::Writer;

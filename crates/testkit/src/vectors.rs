@@ -548,3 +548,67 @@ pub fn sha256_hex(data: &[u8]) -> String {
             hex
         })
 }
+
+#[cfg(test)]
+#[allow(dead_code, clippy::all, clippy::pedantic, clippy::nursery)]
+mod hex_frozen_vectors {
+
+
+    use crate::vectors::{VectorFile, decode_str};
+
+    /// Every frozen record: input bytes, lowercase and uppercase renderings.
+    fn records() -> Vec<(Vec<u8>, String, String)> {
+        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt")).expect("frozen hex vectors");
+        file.records()
+            .iter()
+            .map(|r| {
+                let len: usize = r.fields[0].parse().expect("length");
+                let first: u8 = r.fields[1].parse().expect("first");
+                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+                (input, decode_str(r.fields[2]).expect("lower"), decode_str(r.fields[3]).expect("upper"))
+            })
+            .collect()
+    }
+
+    /// Every byte with its any-case, lowercase and uppercase digit values.
+    fn digits() -> Vec<(u8, Option<u8>, Option<u8>, Option<u8>)> {
+        let file = VectorFile::parse(include_str!("../../hash-conformance/tests/vectors/hex_digit_vectors.txt")).expect("frozen digit vectors");
+        let value = |f: &str| if f == "-" { None } else { Some(f.parse::<u8>().expect("value")) };
+        file.records()
+            .iter()
+            .map(|r| (r.fields[0].parse().expect("byte"), value(r.fields[1]), value(r.fields[2]), value(r.fields[3])))
+            .collect()
+    }
+
+    /// The frozen two-digit renderings of every byte, indexed by byte: (lower, upper).
+    fn pairs() -> Vec<(String, String)> {
+        records().into_iter().filter(|(input, _, _)| input.len() == 1).map(|(_, l, u)| (l, u)).collect()
+    }
+
+
+    #[test]
+    fn field_escapes_replay_the_frozen_vectors() {
+        let table = pairs();
+        for (byte, _, lower, _) in digits() {
+            assert_eq!(super::hex_value(byte), lower, "{byte}");
+        }
+        for byte in 0..=255u8 {
+            let encoded = super::encode_bytes(&[byte]);
+            if encoded.starts_with("\\x") {
+                assert_eq!(encoded, format!("\\x{}", table[usize::from(byte)].0));
+            }
+            if byte < 0x80 {
+                let text = super::encode_str(&char::from(byte).to_string());
+                if text.starts_with("\\x") {
+                    assert_eq!(text, format!("\\x{}", table[usize::from(byte)].0));
+                }
+            }
+        }
+        for data in [&b""[..], b"abc", &[0xff; 100]] {
+            use sha2::Digest as _;
+            let expected: String = sha2::Sha256::digest(data).iter().map(|&b| table[usize::from(b)].0.clone()).collect();
+            assert_eq!(super::sha256_hex(data), expected);
+        }
+    }
+
+}

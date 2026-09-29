@@ -345,3 +345,46 @@ fn push_hex<S: Sink>(out: &mut S, value: u32, digits: u32) {
         out.put_char(HEX_UPPER[nibble as usize] as char);
     }
 }
+
+#[cfg(test)]
+mod hex_frozen_differential {
+    use alloc::string::String;
+    use alloc::vec::Vec;
+
+    use super::push_hex;
+
+    const HEX_VECTORS: &str = include_str!("../../hash-conformance/tests/vectors/hex_vectors.txt");
+
+    /// Every frozen record: its input bytes, lowercase and uppercase digits.
+    fn frozen_encodings() -> Vec<(Vec<u8>, String, String)> {
+        let file =
+            purrdf_testkit::vectors::VectorFile::parse(HEX_VECTORS).expect("hex_vectors.txt");
+        file.records()
+            .iter()
+            .map(|record| {
+                let len: usize = record.fields[0].parse().expect("a decimal length");
+                let first: u8 = record.fields[1].parse().expect("a decimal first byte");
+                let input = (0..len).map(|i| first.wrapping_add(i as u8)).collect();
+                let lower = purrdf_testkit::vectors::decode_str(record.fields[2])
+                    .expect("lowercase digits");
+                let upper = purrdf_testkit::vectors::decode_str(record.fields[3])
+                    .expect("uppercase digits");
+                (input, lower, upper)
+            })
+            .collect()
+    }
+
+    #[test]
+    fn escape_digits_match_the_frozen_vectors() {
+        for (input, _, upper) in frozen_encodings() {
+            let (value, digits) = match input[..] {
+                [a, b] => (u32::from(u16::from_be_bytes([a, b])), 4),
+                [a, b, c, d] => (u32::from_be_bytes([a, b, c, d]), 8),
+                _ => continue,
+            };
+            let mut out = String::new();
+            push_hex(&mut out, value, digits);
+            assert_eq!(out, upper);
+        }
+    }
+}
