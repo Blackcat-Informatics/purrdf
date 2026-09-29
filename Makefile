@@ -117,6 +117,8 @@ check: node-prerequisite binaryen-prerequisite ## The full local gate: fmt, clip
 	cargo run -q --locked -p helper-census -- --self-test
 	python3 scripts/check-shared-helpers.py --self-test
 	python3 scripts/check-shared-helpers.py
+	python3 scripts/check-hash-domains.py --self-test
+	python3 scripts/check-hash-domains.py
 	python3 scripts/check-corpus-frozen.py
 	bash scripts/check-generated.sh
 	python3 scripts/check-issue-refs.py
@@ -448,10 +450,12 @@ layer-hygiene: ## Prove every first-party crate edge is one layers.toml allows, 
 	python3 scripts/check-layers.py --self-test
 	python3 scripts/check-layers.py
 
-helpers-hygiene: ## Prove helpers-ledger.toml holds: one home per job, no forbidden copy, no stale exemption, no cross-crate #[path].
+helpers-hygiene: ## Prove helpers-ledger.toml holds (one home per job, no forbidden copy, no stale exemption, no cross-crate #[path]) and every hash domain is a unique, prefix-free purrdf_hash::Domain.
 	cargo run -q --locked -p helper-census -- --self-test
 	python3 scripts/check-shared-helpers.py --self-test
 	python3 scripts/check-shared-helpers.py
+	python3 scripts/check-hash-domains.py --self-test
+	python3 scripts/check-hash-domains.py
 
 serializer-rewind-hygiene: ## Prove no serializer takes back output it already produced.
 	python3 scripts/check-serializer-rewinds.py --self-test

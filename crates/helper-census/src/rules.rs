@@ -42,6 +42,18 @@ use syn::visit::Visit;
 /// The rule id a ledger job's `forbidden.fingerprints` names to take the hits.
 pub(crate) const STD_DEFAULT_HASHER: &str = "rule:std-default-hasher";
 
+/// Rule ids a ledger job may name whose hits another gate computes: the census
+/// accepts the id and reports no hit of its own, and `check-shared-helpers.py`
+/// adds that gate's hits to the job before judging it.
+///
+/// Both are `scripts/check-hash-domains.py`'s rules: `raw-hash-domain`, a
+/// domain-shaped literal handed to a hasher, or declared as a domain constant,
+/// without going through `purrdf_hash::Domain`; and `shared-hash-domain`, one
+/// registered domain opening hashers in two functions of its file. Their reading
+/// of Rust — string escapes, `#[cfg(test)]` items, test-only modules — lives in
+/// that script alone.
+pub(crate) const DELEGATED_RULES: [&str; 2] = ["rule:raw-hash-domain", "rule:shared-hash-domain"];
+
 /// The constructors whose hasher is the default unless the type names one.
 const CONSTRUCTORS: [&str; 5] = ["default", "from", "from_iter", "new", "with_capacity"];
 

@@ -98,6 +98,12 @@ pub(crate) fn encode_term(value: &TermValue, out: &mut Vec<u8>) {
 /// unseeded, and the encoding depends on no ambient state, so the same sequence
 /// yields the same bytes on every target and in every process.
 ///
+/// It opens with no hash domain. The digest is its own kind — a term-sequence
+/// fingerprint — and is compared only against another fingerprint of the same
+/// kind, never against a digest of another preimage family; and it is a
+/// published identity that callers record, so prefixing a domain now would
+/// change every recorded value.
+///
 /// # Errors
 ///
 /// None: every term has an encoding, at any nesting depth.

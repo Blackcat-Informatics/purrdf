@@ -655,6 +655,12 @@ impl TextIndex {
 
     /// Tokenization identity, independent of ranking and predicate routing.
     /// Includes the complete Unicode table versions.
+    ///
+    /// It opens with no registered hash domain: [`crate::ANALYZER_PROFILE_ID`] is
+    /// the first field absorbed, and already names the preimage family. The
+    /// fingerprint is its own kind, compared only against another analyzer
+    /// fingerprint, and it is a published identity, so opening it under a
+    /// `Domain` now would change every recorded value.
     pub fn analyzer_fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
         let mut digest = Digest::bare();
         digest.text(crate::ANALYZER_PROFILE_ID);
@@ -1823,7 +1829,8 @@ struct Digest {
 
 impl Digest {
     /// A digest opened under `domain`, so two digests of different things over
-    /// the same bytes cannot coincide.
+    /// the same bytes cannot coincide. The domain is absorbed as the first
+    /// length-prefixed string.
     fn new(domain: Domain) -> Self {
         let mut digest = Self::bare();
         digest.text(domain.as_str());

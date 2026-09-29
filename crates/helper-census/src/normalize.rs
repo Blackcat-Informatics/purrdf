@@ -62,6 +62,7 @@ pub(crate) fn is_fingerprint_id(id: &str) -> bool {
                 rest == "hex-lower" || rest == "hex-upper"
             } else if kind == "rule" {
                 id == crate::rules::STD_DEFAULT_HASHER
+                    || crate::rules::DELEGATED_RULES.contains(&id)
             } else {
                 rest.len() == 16
                     && rest
@@ -427,6 +428,18 @@ mod tests {
         let mut out = Vec::new();
         structural_form(&tokens(source), &mut BTreeMap::new(), &mut out);
         out
+    }
+
+    /// A rule id is one the census runs or one another gate computes; any
+    /// other `rule:` id is refused, so a misspelt rule cannot silently match
+    /// nothing.
+    #[test]
+    fn a_rule_id_is_a_census_rule_or_a_delegated_one() {
+        assert!(super::is_fingerprint_id("rule:std-default-hasher"));
+        assert!(super::is_fingerprint_id("rule:raw-hash-domain"));
+        assert!(super::is_fingerprint_id("rule:shared-hash-domain"));
+        assert!(!super::is_fingerprint_id("rule:raw-hash-domains"));
+        assert!(!super::is_fingerprint_id("rule:"));
     }
 
     const LOOP_A: &str = "let mut total = 0u64; for byte in bytes { total = total.wrapping_mul(31).wrapping_add(u64::from(*byte)); } total";

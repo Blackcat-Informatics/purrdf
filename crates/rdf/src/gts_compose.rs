@@ -997,6 +997,13 @@ impl SnapshotBuilder {
     /// A stable content id over complete content in every reachable state,
     /// poisoned included — see [`Self::snapshot_payload`] for why, and for why
     /// that is not permission to publish a poisoned builder.
+    ///
+    /// The BLAKE3 opens with no hash domain: the preimage is the canonical CBOR
+    /// snapshot payload alone. The id is its own kind, a snapshot content id,
+    /// compared only against another snapshot content id; and it is a
+    /// published identity recorded against the GTS archives it attests, so a
+    /// domain cannot be added without breaking every recorded id for an
+    /// existing archive.
     pub fn snapshot_content_id(&self) -> String {
         let bytes = canonical(&self.snapshot_payload());
         format!("blake3:{}", hex(&blake3_256(&bytes)))

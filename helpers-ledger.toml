@@ -36,8 +36,12 @@
 #                  `table:hex-upper` (a hex-digit table), or a census rule over
 #                  every first-party file, tests and benches included
 #                  (`rule:std-default-hasher`: a std HashMap/HashSet left on
-#                  its random default hasher). A body or shim fingerprint must
-#                  still match some unit.
+#                  its random default hasher), or a rule another gate computes
+#                  over shipping code (from scripts/check-hash-domains.py:
+#                  `rule:raw-hash-domain`, a domain-shaped literal handed to a
+#                  hasher without a purrdf_hash::Domain; `rule:shared-hash-domain`,
+#                  one domain opening hashers in two functions of its file). A
+#                  body or shim fingerprint must still match some unit.
 #   names        = regular expressions over function names.
 #
 # [[job.variant]] — a sanctioned second implementation; each is re-checked on
@@ -46,7 +50,10 @@
 #   file      = the repo-relative file that defines it.
 #   detector  = what it is exempt from: `isomorphic` (it may share a body shape
 #               with the home), `forbidden` (it may hold a forbidden pattern),
-#               or a rule id of the IRI resolver gate.
+#               a rule id of the IRI resolver gate, or a rule of
+#               scripts/check-hash-domains.py: `shared-hash-domain` (the named
+#               domain may open two constructions) or `undomained-digest` (the
+#               named function may compute a digest with no domain).
 #   criterion = why it may exist: `a` (a specification or conformance suite
 #               requires the difference), `b` (a tangible benefit its
 #               documentation states), `c` (a measured, significant speedup that
@@ -137,6 +144,63 @@ enforced = true
 constants = []
 fingerprints = ["rule:std-default-hasher"]
 names = []
+
+[[job]]
+id = "hash-domain"
+summary = "Every hash domain-separation string is a registered purrdf_hash::Domain constant, unique and prefix-free across the workspace"
+home = "purrdf_hash::Domain"
+entry_points = []
+spec = "scripts/check-hash-domains.py: one preimage family per domain, no domain a byte-prefix of another, no domain-shaped literal handed to a hasher outside a Domain; the registry table in crates/hash/README.md"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:raw-hash-domain", "rule:shared-hash-domain"]
+names = []
+
+[[job.variant]]
+symbol = "purrdf_datalog::cache::CONTRACT_DIGEST_TAG"
+file = "crates/datalog/src/cache.rs"
+detector = "shared-hash-domain"
+criterion = "a"
+anchor = "purrdf_datalog::cache::CONTRACT_DIGEST_TAG"
+reason = "One ContractHash kind at two refinement levels: the guarded re-fold hashes a 32-byte BLAKE3 contract digest where the other layout frames the calculus version, so a cross-layout collision is computationally infeasible, and a new domain would move every guarded program's published contract hash."
+
+[[job.variant]]
+symbol = "purrdf_text::term_bytes::fingerprint_terms"
+file = "crates/text/src/term_bytes.rs"
+detector = "undomained-digest"
+criterion = "a"
+anchor = "purrdf_text::term_bytes::fingerprint_terms"
+reason = "A term-sequence fingerprint is its own kind, compared only with another fingerprint, and a published identity callers record; a domain prefix would change every recorded value."
+
+[[job.variant]]
+symbol = "purrdf_text::index::TextIndex::analyzer_fingerprint"
+file = "crates/text/src/index.rs"
+detector = "undomained-digest"
+criterion = "a"
+anchor = "purrdf_text::index::TextIndex::analyzer_fingerprint"
+reason = "The analyzer profile id is absorbed first and already names the family; the fingerprint is its own kind and a published identity, so a registered domain would change every recorded value."
+
+[[job.variant]]
+symbol = "purrdf_core::artifact::identity::Identity::refresh"
+file = "crates/rdf-core/src/artifact/identity.rs"
+detector = "undomained-digest"
+criterion = "a"
+anchor = "purrdf_core::artifact::identity::Identity::refresh"
+reason = "An artifact identity digest is its own kind, compared only with another identity digest, and is sealed into every artifact header; a domain would break every artifact already written."
+
+[[job.variant]]
+symbol = "purrdf_rdf::gts_compose::SnapshotBuilder::snapshot_content_id"
+file = "crates/rdf/src/gts_compose.rs"
+detector = "undomained-digest"
+criterion = "a"
+anchor = "purrdf_rdf::gts_compose::SnapshotBuilder::snapshot_content_id"
+reason = "A snapshot content id is its own kind, compared only with another snapshot content id, and is recorded against the GTS archives it attests; a domain would break every recorded id for an existing archive."
 
 [[job]]
 id = "blake3"

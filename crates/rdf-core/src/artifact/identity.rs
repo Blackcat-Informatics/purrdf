@@ -408,6 +408,12 @@ impl Identity {
     }
 
     /// Recompute the cached digest from the current components.
+    ///
+    /// The SHA-256 opens with no hash domain: the preimage is the canonical
+    /// encoding alone. The digest is its own kind, an [`Identity`] digest,
+    /// compared only against another identity's digest; and it is a published
+    /// identity sealed into every artifact header, so a domain cannot be added
+    /// without breaking every artifact already written.
     fn refresh(&mut self) {
         self.digest = Sha256::digest(self.to_bytes()).into();
     }

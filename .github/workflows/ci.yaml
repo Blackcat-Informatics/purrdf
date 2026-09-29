@@ -161,6 +161,12 @@ jobs:
       - name: Check helpers-ledger.toml holds (one home per job, no stale exemption)
         run: python3 scripts/check-shared-helpers.py
 
+      - name: Check the hash-domain gate can still fail
+        run: python3 scripts/check-hash-domains.py --self-test
+
+      - name: Check every hash domain is a unique, prefix-free purrdf_hash::Domain
+        run: python3 scripts/check-hash-domains.py
+
       - name: Check vendored-corpus byte-freeze
         run: python3 scripts/check-corpus-frozen.py
 

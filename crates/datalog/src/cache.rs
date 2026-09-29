@@ -293,6 +293,15 @@ fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard]) {
 pub const CALCULUS_VERSION: &str = "purrdf-datalog-calculus-v1";
 
 /// Domain-separation tag for [`contract_hash`].
+///
+/// It opens two preimage layouts, both yielding a [`ContractHash`]: `contract_digest`
+/// frames the calculus version after it, and the guarded re-fold in [`contract_hash_with`]
+/// hashes a prior contract digest — a 32-byte BLAKE3 output — in that position instead.
+/// The tag therefore names one identity kind at two refinement levels. A preimage of one
+/// layout can equal a preimage of the other only if a BLAKE3 digest's leading bytes spell
+/// the framed calculus version, which is computationally infeasible. The tag is a
+/// published identity: giving the re-fold its own domain would move every guarded
+/// program's published contract hash, so the shared tag stays.
 const CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-contract-v1");
 
 /// The identity of the calculus that produced a result.

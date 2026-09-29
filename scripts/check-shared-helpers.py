@@ -22,6 +22,14 @@ replaces, and the sanctioned second implementations (variants). This gate runs
 * for an ``enforced`` job, a forbidden match outside the home crate that is not a
   variant.
 
+A job may also forbid a rule another gate computes (``DELEGATED_RULES``):
+``rule:raw-hash-domain`` and ``rule:shared-hash-domain`` are
+``check-hash-domains.py``'s. The census accepts the ids and reports nothing for
+them; this gate adds that script's hits to the job as matches outside the home
+before judging it. A variant row whose detector is one of that script's rules
+(``shared-hash-domain``, ``undomained-digest``) sanctions the hit it names and is
+STALE when the script no longer matches it.
+
 It also enforces the cross-package include rule over every first-party ``.rs``
 file, tests and benches included: a ``#[path = "…"]`` attribute whose resolved
 path leaves the declaring crate's own directory compiles one crate's source into
@@ -68,6 +76,11 @@ def load_script(file_name: str, module_name: str) -> ModuleType:
 
 BANNED_DEPS = load_script("check-banned-deps.py", "check_banned_deps")
 IRI_GATE = load_script("check-iri-resolver-singleton.py", "check_iri_resolver_singleton")
+HASH_DOMAINS = load_script("check-hash-domains.py", "check_hash_domains")
+
+# Census rule ids another gate computes (crates/helper-census accepts them and
+# reports nothing of its own for them).
+DELEGATED_RULES = (f"rule:{HASH_DOMAINS.RULE_ID}", f"rule:{HASH_DOMAINS.SHARED_RULE_ID}")
 
 
 class CensusError(RuntimeError):
@@ -205,6 +218,8 @@ def ledger_findings(
     banned: set[str],
     iri_matched: set[tuple[str, str]],
     iri_rules: set[str],
+    hash_matched: set[tuple[str, str, str]] = frozenset(),
+    hash_rules: set[str] = frozenset(),
 ) -> list[str]:
     """Every ledger rule's failures."""
     findings: list[str] = [f"FAIL: helper-census could not read {error}" for error in index.get("errors", [])]
@@ -266,6 +281,8 @@ def ledger_findings(
                 )
             elif detector in iri_rules:
                 stale = (variant["file"], detector) not in iri_matched
+            elif detector in hash_rules:
+                stale = (variant["file"], detector, HASH_DOMAINS.item_name(variant["symbol"])) not in hash_matched
             else:
                 findings.append(f"FAIL: {where}: unknown detector `{detector}`")
                 continue
@@ -293,11 +310,42 @@ def ledger_findings(
     return findings
 
 
+def merge_delegated(ledger: dict, index: dict, hits: dict[str, list[tuple[str, int, str, str]]]) -> None:
+    """Add each delegated rule's ``(file, line, item, detail)`` hits to every job
+    naming the rule, as matches outside the home (a rule forbids its pattern
+    everywhere, as the census's own rules do) and as copies. A hit a variant row
+    of the job names — detector the rule's id, same file and item — is that
+    variant's."""
+    for job in ledger.get("job", []):
+        census = index["jobs"].get(job["id"])
+        if census is None:
+            continue
+        sanctioned = {
+            (f"rule:{variant['detector']}", variant["file"], HASH_DOMAINS.item_name(variant["symbol"]))
+            for variant in job.get("variant", [])
+        }
+        for rule in job["forbidden"]["fingerprints"]:
+            for file, line, item, detail in hits.get(rule, []):
+                census["matches"].append(
+                    {
+                        "symbol": f"{file}::{item}" if item else file,
+                        "file": file,
+                        "line": line,
+                        "reasons": [f"{rule}: {detail}"],
+                        "in_home": False,
+                        "variant": (rule, file, item) in sanctioned,
+                    }
+                )
+                census["copies"] += 1
+
+
 # ---------------------------------------------------------------------------
 # Self-test.
 
 # A seeded workspace for the `rule:std-default-hasher` job, run through the real
-# census: every line marked POSITIVE must be reported and nothing else.
+# census: every line marked POSITIVE must be reported and nothing else. The job
+# also names every delegated rule, so the census is shown to accept each id and
+# to report nothing of its own for it.
 RULE_FIXTURE_LEDGER = """
 [[job]]
 id = "fixed-hasher-everywhere"
@@ -313,7 +361,7 @@ enforced = true
 
 [job.forbidden]
 constants = []
-fingerprints = ["rule:std-default-hasher"]
+fingerprints = ["rule:std-default-hasher", "rule:raw-hash-domain", "rule:shared-hash-domain"]
 names = []
 """
 
@@ -549,6 +597,86 @@ def self_test() -> int:
     escaping = path_include_findings({"crates/a/src/lib.rs": '#[path = "../../../../x.rs"]\nmod x;\n'}, manifests)
     cases.append(("a #[path] include that climbs above the repository is a finding", len(escaping) == 1))
 
+    def delegated(hits: list[tuple[str, int, str, str]], enforced: bool = True) -> list[str]:
+        ledger, index = fixture_ledger(), fixture_index()
+        ledger["job"][0]["forbidden"]["fingerprints"].append("rule:raw-hash-domain")
+        ledger["job"][0]["enforced"] = enforced
+        merge_delegated(ledger, index, {"rule:raw-hash-domain": hits})
+        return run_fixture(ledger, index)
+
+    hit = ("crates/third/src/lib.rs", 4, "", 'b"purrdf-third/raw/v1" is handed to `.update(…)` without a `Domain`')
+    expect("a delegated rule's hit fails the enforced job naming it", delegated([hit]), "crates/third/src/lib.rs:4")
+    expect("the same job with no delegated hit passes", delegated([]), None)
+    expect("a delegated hit in an unenforced job is reported only by --census", delegated([hit], enforced=False), None)
+
+    # A ledger-declared hash-domain exception: a variant row whose detector is
+    # one of check-hash-domains.py's rules.
+    shared_hit = ("crates/other/src/lib.rs", 7, "v", "`v` opens hashers in 2 functions (a, b)")
+
+    def declared(
+        detector: str, hits: list[tuple[str, int, str, str]], matched: set[tuple[str, str, str]]
+    ) -> list[str]:
+        ledger, index = fixture_ledger(), fixture_index()
+        ledger["job"][0]["forbidden"]["fingerprints"].append("rule:shared-hash-domain")
+        ledger["job"][0]["variant"][0]["detector"] = detector
+        index["jobs"]["demo"]["matches"].pop()
+        merge_delegated(ledger, index, {"rule:shared-hash-domain": hits})
+        return run_fixture(
+            ledger, index, hash_matched=matched, hash_rules={"shared-hash-domain", "undomained-digest"}
+        )
+
+    shared_match = {("crates/other/src/lib.rs", "shared-hash-domain", "v")}
+    expect(
+        "a declared shared-domain exception passes",
+        declared("shared-hash-domain", [shared_hit], shared_match),
+        None,
+    )
+    expect(
+        "an undeclared shared domain fails the job",
+        declared("undomained-digest", [shared_hit], {("crates/other/src/lib.rs", "undomained-digest", "v")}),
+        "crates/other/src/lib.rs:7",
+    )
+    expect(
+        "a declared shared-domain exception the gate no longer matches is STALE",
+        declared("shared-hash-domain", [], set()),
+        "STALE",
+    )
+    expect(
+        "a declared undomained digest the gate still matches passes",
+        declared("undomained-digest", [], {("crates/other/src/lib.rs", "undomained-digest", "v")}),
+        None,
+    )
+    expect(
+        "a declared undomained digest that now opens under a Domain is STALE",
+        declared("undomained-digest", [], set()),
+        "STALE",
+    )
+
+    empty_scan = HASH_DOMAINS.Scan([], [], [], [], set())
+    cases.append(
+        (
+            "every rule check-hash-domains.py reports is a delegated rule id",
+            set(HASH_DOMAINS.rule_hits(empty_scan)) == set(DELEGATED_RULES),
+        )
+    )
+
+    def undocumented(_ledger, i):
+        i["symbols"]["other::v"]["documented"] = False
+
+    ledger, index = mutated(undocumented)
+    ledger["job"][0]["variant"][0]["detector"] = "undomained-digest"
+    index["jobs"]["demo"]["matches"].pop()
+    expect(
+        "a declared exception whose anchor carries no documentation fails",
+        run_fixture(
+            ledger,
+            index,
+            hash_matched={("crates/other/src/lib.rs", "undomained-digest", "v")},
+            hash_rules={"undomained-digest"},
+        ),
+        "carries no documentation",
+    )
+
     cases.extend(rule_fixture_cases())
 
     failed = 0
@@ -597,6 +725,8 @@ def main() -> int:
             "FAIL: helper-census and tomllib read helpers-ledger.toml differently; keep the file "
             "inside the subset crates/helper-census/src/toml.rs documents"
         )
+    hash_scan = HASH_DOMAINS.scan_workspace(HASH_DOMAINS.shipping_files(REPO_ROOT))
+    merge_delegated(ledger, index, HASH_DOMAINS.rule_hits(hash_scan))
     _, iri_matched = IRI_GATE.scan()
     findings.extend(
         ledger_findings(
@@ -608,6 +738,8 @@ def main() -> int:
             banned=set(BANNED_DEPS.BANNED_ANY_EDGE) | set(BANNED_DEPS.BANNED_DIRECT_ONLY),
             iri_matched=iri_matched,
             iri_rules=IRI_GATE.rule_ids(),
+            hash_matched=HASH_DOMAINS.exception_matches(hash_scan),
+            hash_rules=set(HASH_DOMAINS.EXCEPTION_RULES),
         )
     )
     files, manifests = tracked_rust_files()
