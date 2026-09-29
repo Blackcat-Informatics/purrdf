@@ -553,7 +553,7 @@ impl Deflater {
         let count = limit - self.inserted;
         if count < SCALAR_INSERT {
             for q in self.inserted..limit {
-                let window = u32::from_le_bytes(self.win[q..q + 4].try_into().expect("four bytes"));
+                let window = u32::from_le_bytes(*self.win[q..].first_chunk().expect("four bytes"));
                 self.insert_one(q, hash4(window) as usize);
             }
             return;
@@ -592,7 +592,7 @@ impl Deflater {
         if self.inserted < p {
             self.insert_through(p);
         }
-        let window = u32::from_le_bytes(self.win[p..p + 4].try_into().expect("four bytes"));
+        let window = u32::from_le_bytes(*self.win[p..].first_chunk().expect("four bytes"));
         let h = hash4(window) as usize;
         let mut candidate = self.head[h] as usize;
         let oldest = p.saturating_sub(WINDOW);

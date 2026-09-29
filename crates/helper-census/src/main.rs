@@ -12,6 +12,7 @@
 //! [`USAGE`] for the modes.
 
 mod census;
+mod layout;
 mod ledger;
 mod normalize;
 mod rules;

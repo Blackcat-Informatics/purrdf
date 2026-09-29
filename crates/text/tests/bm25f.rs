@@ -366,3 +366,30 @@ fn canonical_ranking_identity_binds_the_index_corpus_construction_law() {
         "purrdf-text-corpus-graph-language-v1"
     );
 }
+
+/// The ranking profile identity is a published fingerprint: its bytes are the
+/// BLAKE3 digest of the profile's length-framed canonical description, and a
+/// moved value is a different profile. Frozen over the single-field law and
+/// over a two-field profile with predicate routing, so every framed field of
+/// the description — names and routed IRIs — is covered.
+#[test]
+fn the_ranking_profile_fingerprint_is_frozen() {
+    let hex = |profile: &RankingProfile| purrdf_hash::hex::encode(&profile.fingerprint());
+    assert_eq!(
+        hex(&RankingProfile::single_field()),
+        "bf2c2c0e1388e3b350b61fa16dab981f11623792465600964da3351aa6303b75"
+    );
+    let routed = RankingProfile::new(
+        vec![field("title", Fixed::ONE, B), field("body", Fixed::ONE, B)],
+        vec![
+            (TermValue::iri("https://example.org/title"), 0),
+            (TermValue::iri("https://example.org/body"), 1),
+        ],
+        Some(1),
+    )
+    .expect("a routed profile");
+    assert_eq!(
+        hex(&routed),
+        "ea96772c8390ba67068b726dc8cc269ff5ec46bc728976b78b0c356564eb15cf"
+    );
+}

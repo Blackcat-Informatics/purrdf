@@ -6,7 +6,6 @@
 use core::fmt;
 use std::collections::BTreeMap;
 
-use purrdf_hash::Domain;
 use sha2::{Digest as _, Sha256};
 
 use crate::{
@@ -19,7 +18,7 @@ use crate::distance::{Arithmetic as _, Exact};
 use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
-    D_PROJECTION_CONTENT, D_TARGET_SET, ExternalBindingIdentity, IndexIdentity,
+    D_PROJECTION_CONTENT, D_TARGET_SET, ExternalBindingIdentity, FramedHasher, IndexIdentity,
     ProjectionContentDigest, RdfcDigest, TargetId, TargetSetId, derive_artifact_root,
     derive_external_binding_id, derive_external_contract_digest, derive_family_contract_digest,
     derive_family_id, derive_index_guard_digest, derive_index_id, derive_matrix_content_digest,
@@ -925,35 +924,6 @@ fn compare_digest(
             expected: *expected,
             actual: *actual,
         })
-    }
-}
-
-struct FramedHasher {
-    hasher: Sha256,
-}
-
-impl FramedHasher {
-    fn new(domain: Domain) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(domain.as_bytes());
-        Self { hasher }
-    }
-
-    fn field(&mut self, bytes: &[u8]) {
-        self.begin_field(u64::try_from(bytes.len()).expect("an in-memory slice length fits u64"));
-        self.update(bytes);
-    }
-
-    fn begin_field(&mut self, length: u64) {
-        self.hasher.update(length.to_le_bytes());
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        self.hasher.update(bytes);
-    }
-
-    fn finish(self) -> [u8; 32] {
-        self.hasher.finalize().into()
     }
 }
 

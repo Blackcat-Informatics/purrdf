@@ -5,7 +5,7 @@
 //! tests, benches and examples included.
 //!
 //! `std-default-hasher` finds every place a `std` hash map or set is left on its
-//! default hasher, `RandomState`, whose per-process random keys randomise
+//! default hasher state, whose per-process random keys randomise
 //! iteration order. The clippy bans on `HashMap::new`/`with_capacity` cannot reach
 //! the rest: `HashMap::default()`, `HashMap::from(…)`, `FromIterator` through
 //! `.collect()`, and a field or binding typed `HashMap<K, V>` that `Default`
@@ -365,7 +365,7 @@ impl<'ast> Visit<'ast> for Names {
 }
 
 /// The visitor that reports hits.
-struct DefaultHasher<'a> {
+struct StdHashMapRule<'a> {
     names: &'a Names,
     package: &'a str,
     file: &'a str,
@@ -386,7 +386,7 @@ fn type_arguments(segment: &syn::PathSegment) -> usize {
     }
 }
 
-impl DefaultHasher<'_> {
+impl StdHashMapRule<'_> {
     fn hit(&mut self, span: proc_macro2::Span, detail: String) {
         let mut symbol = self.file.to_owned();
         for scope in &self.scope {
@@ -419,7 +419,7 @@ impl DefaultHasher<'_> {
                 if given < required {
                     self.hit(
                         segment.ident.span(),
-                        format!("`{std_name}` with {given} type argument(s) leaves its hasher as `RandomState`"),
+                        format!("`{std_name}` with {given} type argument(s) leaves its hasher as std's random default"),
                     );
                 }
             } else if !is_last {
@@ -428,7 +428,7 @@ impl DefaultHasher<'_> {
                     self.hit(
                         segment.ident.span(),
                         format!(
-                            "`{std_name}::{method}` builds a `RandomState` {}; name the hasher's alias instead",
+                            "`{std_name}::{method}` builds std's random default hasher state {}; name the hasher's alias instead",
                             if std_name == "HashMap" { "map" } else { "set" }
                         ),
                     );
@@ -459,7 +459,7 @@ impl DefaultHasher<'_> {
     }
 }
 
-impl<'ast> Visit<'ast> for DefaultHasher<'_> {
+impl<'ast> Visit<'ast> for StdHashMapRule<'_> {
     fn visit_type_path(&mut self, node: &'ast syn::TypePath) {
         self.check_path(&node.path, true);
         syn::visit::visit_type_path(self, node);
@@ -542,7 +542,7 @@ impl<'ast> Visit<'ast> for DefaultHasher<'_> {
 /// Every `std-default-hasher` hit in one parsed file.
 pub(crate) fn std_default_hasher(package: &str, file: &str, parsed: &syn::File) -> Vec<RuleHit> {
     let names = Names::collect(parsed);
-    let mut visitor = DefaultHasher {
+    let mut visitor = StdHashMapRule {
         names: &names,
         package,
         file,

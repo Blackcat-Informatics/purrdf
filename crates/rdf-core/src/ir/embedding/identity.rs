@@ -17,8 +17,8 @@ use sha2::{Digest as _, Sha256};
 use crate::ContentDigest;
 
 // The hash domains of the PURREMB identities: `docs/PURREMB.md` names each one,
-// and each is the prefix `hash_fold` opens its preimage with. The writer and the
-// verifier stream three of them through their own framed hashers.
+// and each is the prefix `FramedHasher` opens its preimage with. The writer and
+// the verifier stream three of them through `FramedHasher` directly.
 const D_ARTIFACT: Domain = Domain::new(b"purrdf.purremb.v1.artifact\0");
 const D_FAMILY_CONTRACT: Domain = Domain::new(b"purrdf.purremb.v1.family-contract\0");
 const D_FAMILY: Domain = Domain::new(b"purrdf.purremb.v1.family\0");
@@ -401,14 +401,82 @@ pub fn derive_artifact_root(header_zero_root: &[u8], directory: &[u8]) -> Artifa
 }
 
 fn hash_fold(domain: Domain, fields: &[&[u8]]) -> Digest32 {
-    let mut hasher = Sha256::new();
-    hasher.update(domain.as_bytes());
+    let mut hasher = FramedHasher::new(domain);
     for field in fields {
-        let length = u64::try_from(field.len()).expect("an in-memory slice length fits u64");
-        hasher.update(length.to_le_bytes());
-        hasher.update(field);
+        hasher.field(field);
     }
-    Digest32::new(hasher.finalize().into())
+    Digest32::new(hasher.finish())
+}
+
+/// SHA-256 as a [`purrdf_hash::Digest`], so the framing of
+/// [`purrdf_hash::frame`] streams into it.
+///
+/// `sha2` is the workspace's one SHA-256 implementation; this newtype is the
+/// adapter the orphan rule requires between its type and `purrdf-hash`'s
+/// trait, and adds nothing else.
+#[derive(Clone, Default)]
+pub(super) struct Sha256Digest(Sha256);
+
+impl purrdf_hash::Digest for Sha256Digest {
+    fn output_len(&self) -> usize {
+        32
+    }
+
+    fn update(&mut self, data: &[u8]) {
+        self.0.update(data);
+    }
+
+    fn finalize_reset(&mut self, out: &mut [u8]) -> usize {
+        out[..32].copy_from_slice(&self.0.finalize_reset());
+        32
+    }
+
+    fn reset(&mut self) {
+        self.0 = Sha256::new();
+    }
+}
+
+/// The normative PURREMB identity fold of `docs/PURREMB.md`, streamed: the
+/// domain's bytes, then every field framed by [`purrdf_hash::frame`] — its
+/// length in eight little-endian bytes, then its bytes — under SHA-256.
+///
+/// [`hash_fold`] folds fields it holds; the writer and the verifier stream
+/// the matrix and projection contents and a target set's rows through the same
+/// fold, opening a long field with [`begin_field`](Self::begin_field) and
+/// absorbing its bytes in pieces with [`update`](Self::update).
+#[derive(Clone)]
+pub(super) struct FramedHasher {
+    hasher: Sha256Digest,
+}
+
+impl FramedHasher {
+    /// A fold under `domain`, its bytes absorbed.
+    pub(super) fn new(domain: Domain) -> Self {
+        let mut hasher = Sha256Digest::default();
+        purrdf_hash::Digest::update(&mut hasher, domain.as_bytes());
+        Self { hasher }
+    }
+
+    /// Absorb one whole field, framed.
+    pub(super) fn field(&mut self, bytes: &[u8]) {
+        purrdf_hash::frame::frame_le_into(&mut self.hasher, bytes);
+    }
+
+    /// Open a field of `length` bytes whose bytes follow through
+    /// [`update`](Self::update): the frame's length prefix alone.
+    pub(super) fn begin_field(&mut self, length: u64) {
+        purrdf_hash::Digest::update(&mut self.hasher, &length.to_le_bytes());
+    }
+
+    /// Absorb bytes of the field [`begin_field`](Self::begin_field) opened.
+    pub(super) fn update(&mut self, bytes: &[u8]) {
+        purrdf_hash::Digest::update(&mut self.hasher, bytes);
+    }
+
+    /// The fold's digest.
+    pub(super) fn finish(self) -> [u8; 32] {
+        self.hasher.0.finalize().into()
+    }
 }
 
 #[cfg(test)]

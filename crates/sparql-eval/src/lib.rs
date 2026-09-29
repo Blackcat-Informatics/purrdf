@@ -313,7 +313,7 @@ pub use witness::{RelationAttestations, RelationWitness};
 ///    seeded hasher could reorder hash-iteration-driven steps and leak into the
 ///    result. We always drive *output* order from `Vec`s, but fixed-key hashing
 ///    removes the hazard entirely (cf. the repo `mappings-determinism` lesson).
-/// 2. **wasm-cleanliness.** `std`'s default `RandomState` would pull a random
+/// 2. **wasm-cleanliness.** `std`'s default random hasher state would pull a random
 ///    source; the fixed-key `FixedHasher` needs none, keeping the crate clean on
 ///    `wasm32-unknown-unknown`.
 ///

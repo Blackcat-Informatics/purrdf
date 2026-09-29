@@ -54,6 +54,9 @@ pub mod bundle;
 // SPARQL execution, and serializer egress. PyO3-free, oxigraph-free — pure
 // contract only; concrete adapters live in `purrdf`.
 pub mod backend;
+// Fixed-width little-endian integers at an offset of a byte buffer, read and
+// written bounds-checked: the one accessor set every binary container uses.
+pub mod bytes;
 // RDF Collection (rdf:first/rest/nil) and Container (rdf:Seq/Bag/Alt) traversal:
 // the malformed-list taxonomy and standard-`rdf:` const set backing the
 // `DatasetView` walker methods.

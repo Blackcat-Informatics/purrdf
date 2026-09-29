@@ -21,6 +21,7 @@
 use purrdf_core::ContentDigest;
 use purrdf_core::embedding::ChunkingContractId;
 use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le;
 
 use crate::profile::Vocabulary;
 
@@ -161,10 +162,10 @@ pub fn citation_iri(
     reified: &[String],
 ) -> String {
     let mut content = Vec::new();
-    push_field(&mut content, row_line);
-    push_field(&mut content, unit_node.as_bytes());
+    frame_le(&mut content, row_line);
+    frame_le(&mut content, unit_node.as_bytes());
     for term in reified {
-        push_field(&mut content, term.as_bytes());
+        frame_le(&mut content, term.as_bytes());
     }
     node_iri_of_digest(
         vocabulary,
@@ -244,13 +245,13 @@ pub(crate) fn node_iri_of_digest(
     digest: &ContentDigest,
 ) -> String {
     let mut preimage = Vec::new();
-    push_field(&mut preimage, kind.as_bytes());
-    push_field(&mut preimage, source_id.as_bytes());
-    push_field(&mut preimage, contract.as_bytes());
-    push_field(&mut preimage, &byte_start.to_le_bytes());
-    push_field(&mut preimage, &byte_end.to_le_bytes());
-    push_field(&mut preimage, crate::DIGEST_ALGORITHM.as_bytes());
-    push_field(&mut preimage, digest.as_bytes());
+    frame_le(&mut preimage, kind.as_bytes());
+    frame_le(&mut preimage, source_id.as_bytes());
+    frame_le(&mut preimage, contract.as_bytes());
+    frame_le(&mut preimage, &byte_start.to_le_bytes());
+    frame_le(&mut preimage, &byte_end.to_le_bytes());
+    frame_le(&mut preimage, crate::DIGEST_ALGORITHM.as_bytes());
+    frame_le(&mut preimage, digest.as_bytes());
     format!(
         "{}{}:{}:{}",
         vocabulary.node_base,
@@ -258,12 +259,6 @@ pub(crate) fn node_iri_of_digest(
         crate::DIGEST_ALGORITHM,
         ContentDigest::of(&preimage).to_hex()
     )
-}
-
-/// Length-prefixed field: no two field sequences share a preimage.
-fn push_field(out: &mut Vec<u8>, field: &[u8]) {
-    out.extend_from_slice(&(field.len() as u64).to_le_bytes());
-    out.extend_from_slice(field);
 }
 
 #[cfg(test)]
@@ -282,7 +277,7 @@ mod tests {
     /// digest algorithm tag, and the digest of the content — digested,
     /// and written `<node base><kind>:<alg>:<hex>`.
     ///
-    /// Nothing under test is called. [`push_field`] could lose its
+    /// Nothing under test is called. [`frame_le`] could lose its
     /// prefix, [`node_iri_of_digest`] could reorder its fields or drop
     /// the algorithm tag, and these vectors would fail — which is the
     /// whole reason to write the preimage out twice. Holding

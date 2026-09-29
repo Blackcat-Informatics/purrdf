@@ -2025,7 +2025,7 @@ struct EmittedRecord {
 /// the lookup is paid at hash speed rather than at `log n` comparisons over
 /// whole candidate terms.
 ///
-/// Fixed-key rather than `RandomState` for the reason every interner in this
+/// Fixed-key rather than std's randomly keyed default for the reason every interner in this
 /// workspace is: `wasm32-unknown-unknown` has no random source to seed one
 /// from, and a per-process seed would put nondeterminism into a crate whose
 /// entire claim is the same answer on every target. See `purrdf-core`'s

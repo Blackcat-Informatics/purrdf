@@ -1168,20 +1168,23 @@ fn required_target_text<'a>(
     core::str::from_utf8(entry.value).map_err(|_| EmbeddingError::InvalidUtf8(context))
 }
 
+/// A `U32` value is exactly four bytes: a longer value is malformed, not
+/// truncated to its first four.
 fn target_u32(entry: TlvEntryRef<'_>) -> Result<u32, EmbeddingError> {
-    let bytes: [u8; 4] = entry
+    entry
         .value
         .try_into()
-        .map_err(|_| EmbeddingError::MalformedTlv("invalid target u32"))?;
-    Ok(u32::from_le_bytes(bytes))
+        .map(u32::from_le_bytes)
+        .map_err(|_| EmbeddingError::MalformedTlv("invalid target u32"))
 }
 
+/// A `U64` value is exactly eight bytes (see [`target_u32`]).
 fn target_u64(entry: TlvEntryRef<'_>) -> Result<u64, EmbeddingError> {
-    let bytes: [u8; 8] = entry
+    entry
         .value
         .try_into()
-        .map_err(|_| EmbeddingError::MalformedTlv("invalid target u64"))?;
-    Ok(u64::from_le_bytes(bytes))
+        .map(u64::from_le_bytes)
+        .map_err(|_| EmbeddingError::MalformedTlv("invalid target u64"))
 }
 
 fn validate_ordinal(kind: TargetKind, ordinal: Option<u64>) -> Result<(), EmbeddingError> {

@@ -30,6 +30,13 @@ allocates nothing, and builds for `wasm32-unknown-unknown`.
 | `sha3` | SHA3-224 / 256 / 384 / 512, Keccak-f[1600] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
 | `crc32` | CRC-32/ISO-HDLC | reflected `0xEDB88320`, init and xorout `0xFFFFFFFF` | `u32` |
 
+`frame` is the workspace's length framing: `frame_le` appends a field as its
+length in eight little-endian bytes followed by its bytes, `frame_le_into`
+streams exactly those bytes into any `Digest`, and `frame_be_labelled` is the
+big-endian label-and-value framing three published identities were minted
+with. Every preimage and wire encoding in the workspace frames through it, and
+`purrdf-hash-conformance` replays its frozen answers on every target.
+
 ## Usage
 
 ```rust

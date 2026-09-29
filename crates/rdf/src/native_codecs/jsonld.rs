@@ -100,7 +100,7 @@ impl ByteLimit {
     }
 
     fn from_usize(bytes: usize) -> Self {
-        Self(usize_to_u64(bytes))
+        Self(u64::try_from(bytes).unwrap_or(u64::MAX))
     }
 
     const fn bytes(self) -> u64 {
@@ -108,7 +108,7 @@ impl ByteLimit {
     }
 
     fn admits_usize(self, bytes: usize) -> bool {
-        usize_to_u64(bytes) <= self.bytes()
+        u64::try_from(bytes).unwrap_or(u64::MAX) <= self.bytes()
     }
 
     const fn admits_u64(self, bytes: u64) -> bool {
@@ -120,10 +120,6 @@ impl std::fmt::Display for ByteLimit {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.bytes().fmt(formatter)
     }
-}
-
-fn usize_to_u64(value: usize) -> u64 {
-    u64::try_from(value).unwrap_or(u64::MAX)
 }
 
 /// RDF 1.2 reifier predicate.
@@ -557,7 +553,7 @@ impl IoWrite for BoundedJsonOutput<'_, '_> {
     fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
         let next = self
             .written
-            .checked_add(usize_to_u64(bytes.len()))
+            .checked_add(u64::try_from(bytes.len()).unwrap_or(u64::MAX))
             .ok_or_else(|| std::io::Error::other("JSON-LD output length overflow"))?;
         if !self.limit.admits_u64(next) {
             return Err(std::io::Error::other(format!(
@@ -934,7 +930,9 @@ fn validate_source_carrier_budget(graph: &SerGraph) -> Result<(), RdfDiagnostic>
         graph.annotations.len(),
     ]
     .into_iter()
-    .try_fold(0_u64, |total, count| total.checked_add(usize_to_u64(count)))
+    .try_fold(0_u64, |total, count| {
+        total.checked_add(u64::try_from(count).unwrap_or(u64::MAX))
+    })
     .ok_or_else(|| decode("JSON-LD carrier row count overflow"))?;
     if rows > MAX_JSON_LD_CARRIER_ROWS {
         return Err(decode(format!(
@@ -950,7 +948,7 @@ fn validate_source_carrier_budget(graph: &SerGraph) -> Result<(), RdfDiagnostic>
         .into_iter()
         .flatten()
         .try_fold(total, |total, value| {
-            total.checked_add(usize_to_u64(value.len()))
+            total.checked_add(u64::try_from(value.len()).unwrap_or(u64::MAX))
         })
     });
     let retained_text =
@@ -1171,7 +1169,7 @@ fn carrier_term_footprint(
         .into_iter()
         .flatten()
         .try_fold(0_u64, |total, value| {
-            total.checked_add(usize_to_u64(value.len()))
+            total.checked_add(u64::try_from(value.len()).unwrap_or(u64::MAX))
         })
         .ok_or_else(|| decode("JSON-LD materialized carrier text count overflow"))?,
     };

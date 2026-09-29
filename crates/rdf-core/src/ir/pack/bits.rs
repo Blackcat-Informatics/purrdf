@@ -56,52 +56,47 @@ impl fmt::Display for PackBitsError {
 impl std::error::Error for PackBitsError {}
 
 // ---------------------------------------------------------------------------
-// Small byte-header helpers shared by every codec in this file.
+// Small byte-header helpers shared by every pack codec.
 // ---------------------------------------------------------------------------
 
 /// Read an 8-byte little-endian header field at `*pos`, advancing `*pos` past it.
-fn read_header_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, PackBitsError> {
-    let end = *pos + 8;
-    let slice = bytes.get(*pos..end).ok_or(PackBitsError::Truncated {
-        needed: end,
+///
+/// The one header reader of every pack codec: each section's error type
+/// converts a [`PackBitsError::Truncated`] into its own, field for field.
+pub(super) fn read_header_u64(bytes: &[u8], pos: &mut usize) -> Result<u64, PackBitsError> {
+    let value = crate::bytes::read_u64_le(bytes, *pos).ok_or_else(|| PackBitsError::Truncated {
+        needed: pos.saturating_add(8),
         found: bytes.len(),
     })?;
-    let value = u64::from_le_bytes(slice.try_into().expect("slice is exactly 8 bytes"));
-    *pos = end;
+    *pos += 8;
     Ok(value)
 }
 
 /// Read a 4-byte little-endian header field at `*pos`, advancing `*pos` past it.
 fn read_header_u32(bytes: &[u8], pos: &mut usize) -> Result<u32, PackBitsError> {
-    let end = *pos + 4;
-    let slice = bytes.get(*pos..end).ok_or(PackBitsError::Truncated {
-        needed: end,
+    let value = crate::bytes::read_u32_le(bytes, *pos).ok_or_else(|| PackBitsError::Truncated {
+        needed: pos.saturating_add(4),
         found: bytes.len(),
     })?;
-    let value = u32::from_le_bytes(slice.try_into().expect("slice is exactly 4 bytes"));
-    *pos = end;
+    *pos += 4;
     Ok(value)
 }
 
 /// Read the `idx`-th little-endian `u64` word from a byte slice known to hold at
 /// least `(idx + 1) * 8` bytes. Alignment-agnostic (see the [module docs](self)).
+#[inline]
 fn read_u64_le(bytes: &[u8], idx: usize) -> u64 {
-    let start = idx * 8;
-    u64::from_le_bytes(
-        bytes[start..start + 8]
-            .try_into()
-            .expect("slice is exactly 8 bytes"),
-    )
+    crate::bytes::read_u64_le(bytes, idx * 8).expect("a validated word index")
 }
 
 /// Read the `idx`-th little-endian `u16` from a byte slice, alignment-agnostic
 /// (see [`read_u64_le`]).
+#[inline]
 fn read_u16_le(bytes: &[u8], idx: usize) -> u16 {
-    let start = idx * 2;
     u16::from_le_bytes(
-        bytes[start..start + 2]
-            .try_into()
-            .expect("slice is exactly 2 bytes"),
+        *bytes[idx * 2..]
+            .first_chunk()
+            .expect("a validated block index"),
     )
 }
 

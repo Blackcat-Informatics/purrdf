@@ -10,7 +10,6 @@
 
 use std::io::{Seek, SeekFrom, Write};
 
-use purrdf_hash::Domain;
 use sha2::{Digest as _, Sha256};
 
 use crate::ContentDigest;
@@ -20,7 +19,7 @@ use crate::distance::{Arithmetic as _, Exact, Resolved, Scalar};
 use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError, EmbeddingWriteError};
 use super::identity::{
-    ArtifactRoot, D_MATRIX_CONTENT, D_PROJECTION_CONTENT, D_TARGET_SET, FamilyId,
+    ArtifactRoot, D_MATRIX_CONTENT, D_PROJECTION_CONTENT, D_TARGET_SET, FamilyId, FramedHasher,
     MatrixContentDigest, MatrixId, ProjectionContentDigest, ProjectionId, TargetId, TargetSetId,
     VectorSpaceId, derive_matrix_content_digest, derive_matrix_id, derive_projection_id,
     derive_target_set_id, derive_vector_space_id,
@@ -32,7 +31,7 @@ use super::wire::{
     SECTION_EXTENSION_MIN, SECTION_EXTERNAL_BINDINGS, SECTION_INDEX_GUARDS, SECTION_INDEX_PAYLOAD,
     SECTION_MATRICES, SECTION_MATRIX_DATA, SECTION_RELATIONS, SECTION_SOURCE, SECTION_TARGET_SETS,
     SECTION_TARGETS, SECTION_TOKEN_SPANS, SectionDescriptor, SectionKey, SectionPayload,
-    encode_artifact,
+    encode_artifact, put_u32, put_u64,
 };
 
 const MATRICES_HEADER_LENGTH: u64 = 160;
@@ -1315,36 +1314,6 @@ fn matrix_instance(index: usize) -> Result<u32, EmbeddingError> {
     })
 }
 
-struct FramedHasher {
-    hasher: Sha256,
-}
-
-impl FramedHasher {
-    fn new(domain: Domain) -> Self {
-        let mut hasher = Sha256::new();
-        hasher.update(domain.as_bytes());
-        Self { hasher }
-    }
-
-    fn field(&mut self, bytes: &[u8]) {
-        let length = u64::try_from(bytes.len()).expect("an in-memory slice length fits u64");
-        self.begin_field(length);
-        self.update(bytes);
-    }
-
-    fn begin_field(&mut self, length: u64) {
-        self.hasher.update(length.to_le_bytes());
-    }
-
-    fn update(&mut self, bytes: &[u8]) {
-        self.hasher.update(bytes);
-    }
-
-    fn finish(self) -> [u8; 32] {
-        self.hasher.finalize().into()
-    }
-}
-
 fn target_set_hasher(row_count: u64) -> FramedHasher {
     let mut hasher = FramedHasher::new(D_TARGET_SET);
     hasher.field(&row_count.to_le_bytes());
@@ -1584,7 +1553,7 @@ impl MatrixScalar for f32 {
 
     fn raw_bytes(self) -> ScalarBytes {
         let mut bytes = [0u8; 8];
-        bytes[..4].copy_from_slice(&self.to_le_bytes());
+        *bytes.first_chunk_mut().expect("eight bytes hold four") = self.to_le_bytes();
         ScalarBytes { bytes, length: 4 }
     }
 
@@ -1630,14 +1599,6 @@ fn check_digest(
         });
     }
     Ok(())
-}
-
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
 #[cfg(test)]

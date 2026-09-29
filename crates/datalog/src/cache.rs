@@ -50,6 +50,7 @@
 //! output.
 
 use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le_into;
 use purrdf_hash::hex::Digest32;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -96,34 +97,22 @@ const SCHEDULED_CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog-sched
 /// Domain-separation tag for [`PlanIdentity`].
 const PLAN_IDENTITY_TAG: Domain = Domain::new(b"purrdf-datalog-plan-identity-v1");
 
-/// Length-prefix `bytes` into `hasher`.
-///
-/// Every variable-length field is framed, so no concatenation of two fields can be
-/// confused with a different split of the same bytes.
-fn frame(hasher: &mut purrdf_hash::blake3::Hasher, bytes: &[u8]) {
-    hasher.update(&(bytes.len() as u64).to_le_bytes());
-    hasher.update(bytes);
-}
-
-/// Length-prefix `value`'s UTF-8 bytes into `hasher`.
-fn frame_str(hasher: &mut purrdf_hash::blake3::Hasher, value: &str) {
-    frame(hasher, value.as_bytes());
-}
-
-/// Hash one clause term under an explicit variant tag.
+/// Hash one clause term under an explicit variant tag, its text framed by
+/// [`frame_le_into`]: every variable-length field is length-prefixed, so no
+/// concatenation of two fields can be confused with a different split of the same bytes.
 fn hash_term(hasher: &mut purrdf_hash::blake3::Hasher, term: &ClauseTerm) {
     match term {
         ClauseTerm::Var(name) => {
             hasher.update(&[0]);
-            frame_str(hasher, name);
+            frame_le_into(hasher, name.as_bytes());
         }
         ClauseTerm::Iri(iri) => {
             hasher.update(&[1]);
-            frame_str(hasher, iri);
+            frame_le_into(hasher, iri.as_bytes());
         }
         ClauseTerm::Literal(surface) => {
             hasher.update(&[2]);
-            frame_str(hasher, surface);
+            frame_le_into(hasher, surface.as_bytes());
         }
         ClauseTerm::DefaultGraph => {
             hasher.update(&[3]);
@@ -195,7 +184,7 @@ pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
     } else {
         CLAUSE_IR_DIGEST_TAG
     };
-    frame(&mut hasher, domain.as_bytes());
+    frame_le_into(&mut hasher, domain.as_bytes());
     hasher.update(&(rules.len() as u64).to_le_bytes());
     for rule in rules {
         hasher.update(&(rule.body().len() as u64).to_le_bytes());
@@ -204,7 +193,7 @@ pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
         }
         hasher.update(&(rule.existentials().len() as u64).to_le_bytes());
         for name in rule.existentials() {
-            frame_str(&mut hasher, name);
+            frame_le_into(&mut hasher, name.as_bytes());
         }
         hasher.update(&(rule.head_disjuncts().len() as u64).to_le_bytes());
         for disjunct in rule.head_disjuncts() {
@@ -232,14 +221,14 @@ pub fn canonical_rule_hash(rules: &[DlClause]) -> [u8; 32] {
 fn hash_guards(hasher: &mut purrdf_hash::blake3::Hasher, guards: &[Guard]) {
     hasher.update(&(guards.len() as u64).to_le_bytes());
     for guard in guards {
-        frame_str(hasher, guard.name());
+        frame_le_into(hasher, guard.name().as_bytes());
         hasher.update(&(guard.inputs().len() as u64).to_le_bytes());
         for input in guard.inputs() {
-            frame_str(hasher, input);
+            frame_le_into(hasher, input.as_bytes());
         }
         hasher.update(&(guard.outputs().len() as u64).to_le_bytes());
         for output in guard.outputs() {
-            frame_str(hasher, output);
+            frame_le_into(hasher, output.as_bytes());
         }
         hasher.update(&[match guard.reads() {
             GuardReads::Bindings => 0,
@@ -400,7 +389,7 @@ pub fn contract_hash_with(rules: &[DlClause], options: &EvalOptions) -> Contract
         return digest;
     }
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    frame(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
+    frame_le_into(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
     hasher.update(digest.digest());
     fold_term_generating_limit(&mut hasher, options);
     ContractHash {
@@ -450,8 +439,8 @@ pub fn scheduled_contract_hash(
     options: &EvalOptions,
 ) -> ContractHash {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    frame(&mut hasher, SCHEDULED_CONTRACT_DIGEST_TAG.as_bytes());
-    frame_str(&mut hasher, CALCULUS_VERSION);
+    frame_le_into(&mut hasher, SCHEDULED_CONTRACT_DIGEST_TAG.as_bytes());
+    frame_le_into(&mut hasher, CALCULUS_VERSION.as_bytes());
     hasher.update(&options.max_join_steps().to_le_bytes());
     hasher.update(&options.max_stored_facts().to_le_bytes());
     hasher.update(&(MAX_TERM_ARENA_BYTES as u64).to_le_bytes());
@@ -489,8 +478,8 @@ fn contract_digest(
     max_term_arena_bytes: u64,
 ) -> ContractHash {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
-    frame(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
-    frame_str(&mut hasher, calculus_version);
+    frame_le_into(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
+    frame_le_into(&mut hasher, calculus_version.as_bytes());
     hasher.update(&max_join_steps.to_le_bytes());
     hasher.update(&max_stored_facts.to_le_bytes());
     hasher.update(&max_term_arena_bytes.to_le_bytes());
@@ -520,9 +509,9 @@ impl PlanIdentity {
     /// hashed, never interpreted: this crate mints no vocabulary of its own.
     pub fn new(contract_hash: &str, rules: &[DlClause]) -> Self {
         let mut hasher = purrdf_hash::blake3::Hasher::new();
-        frame(&mut hasher, PLAN_IDENTITY_TAG.as_bytes());
-        frame_str(&mut hasher, PLAN_SOLVER_VERSION);
-        frame_str(&mut hasher, contract_hash);
+        frame_le_into(&mut hasher, PLAN_IDENTITY_TAG.as_bytes());
+        frame_le_into(&mut hasher, PLAN_SOLVER_VERSION.as_bytes());
+        frame_le_into(&mut hasher, contract_hash.as_bytes());
         hasher.update(&canonical_rule_hash(rules));
         Self {
             digest: Digest32::new(*hasher.finalize().as_bytes()),

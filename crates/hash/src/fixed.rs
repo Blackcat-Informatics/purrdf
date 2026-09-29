@@ -91,13 +91,12 @@ pub fn pack_short_bytes(bytes: &[u8]) -> u128 {
         1 => u128::from(bytes[0]),
         2 => u128::from(u16::from_le_bytes(bytes.try_into().expect("two bytes"))),
         3 => {
-            u128::from(u16::from_le_bytes(
-                bytes[..2].try_into().expect("two bytes"),
-            )) | (u128::from(bytes[2]) << 16)
+            u128::from(u16::from_le_bytes(*bytes.first_chunk().expect("two bytes")))
+                | (u128::from(bytes[2]) << 16)
         }
         4..=7 => {
-            let first = u32::from_le_bytes(bytes[..4].try_into().expect("four bytes"));
-            let last = u32::from_le_bytes(bytes[len - 4..].try_into().expect("four bytes"));
+            let first = u32::from_le_bytes(*bytes.first_chunk().expect("four bytes"));
+            let last = u32::from_le_bytes(*bytes.last_chunk().expect("four bytes"));
             if len == 4 {
                 u128::from(first)
             } else {

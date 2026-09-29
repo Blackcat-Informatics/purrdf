@@ -17,6 +17,8 @@
 
 use std::num::NonZeroU32;
 
+use purrdf_hash::frame::frame_le;
+
 use super::term_walk::TermBox;
 use crate::RdfTextDirection;
 
@@ -418,22 +420,6 @@ impl TermValue {
     }
 }
 
-/// Append `bytes` to `out` behind its length, so the field can be read back
-/// without a terminator and without knowing anything about its contents.
-///
-/// The length is a `u64` little-endian prefix rather than a separator byte or an
-/// escape scheme: RDF strings are arbitrary UTF-8 (a lexical form may contain NUL,
-/// a blank label may contain the marker, an IRI may contain anything the producer
-/// wrote), so NO byte value is available as a delimiter. A fixed-width count is the
-/// only framing that is oblivious to the payload. Little-endian and a fixed 8 bytes
-/// make the encoding byte-identical on every target, including the 32-bit
-/// `wasm32-unknown-unknown` build where `usize` is narrower.
-#[inline]
-fn push_framed(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    out.extend_from_slice(bytes);
-}
-
 impl TermValue {
     /// Append this term's canonical byte encoding to `out`.
     ///
@@ -460,7 +446,7 @@ impl TermValue {
     ///
     /// - Every variant opens with a distinct `u8` tag, so a byte string can be
     ///   attributed to at most one variant before any field is read.
-    /// - Every variable-length field is written framed by `push_framed`: an eight-byte
+    /// - Every variable-length field is written framed by [`frame_le`]: an eight-byte
     ///   little-endian length, then exactly that many bytes. The reader therefore
     ///   always knows where a field ends without scanning for a delimiter — which
     ///   matters because RDF strings are arbitrary UTF-8 and no byte is reserved.
@@ -522,11 +508,11 @@ impl TermValue {
         match self {
             Self::Iri(iri) => {
                 out.push(0u8);
-                push_framed(out, iri.as_bytes());
+                frame_le(out, iri.as_bytes());
             }
             Self::Blank { label, scope } => {
                 out.push(1u8);
-                push_framed(out, label.as_bytes());
+                frame_le(out, label.as_bytes());
                 // `BlankScope` is a `u32` newtype, not an enum, so its whole value
                 // space is covered by writing the ordinal at fixed width. Four
                 // little-endian bytes, unconditionally, keeps the field trivially
@@ -540,13 +526,13 @@ impl TermValue {
                 direction,
             } => {
                 out.push(2u8);
-                push_framed(out, lexical_form.as_bytes());
-                push_framed(out, datatype.as_bytes());
+                frame_le(out, lexical_form.as_bytes());
+                frame_le(out, datatype.as_bytes());
                 match language {
                     None => out.push(0u8),
                     Some(language) => {
                         out.push(1u8);
-                        push_framed(out, language.as_bytes());
+                        frame_le(out, language.as_bytes());
                     }
                 }
                 match direction {

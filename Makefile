@@ -787,7 +787,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			-p purrdf-hash-conformance --test digest_differential --test hex --test blake3 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash-conformance --test fixed_hasher --test splitmix_fnv \
+			-p purrdf-hash-conformance --test fixed_hasher --test splitmix_fnv --test frame_le \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-testkit --test bench \

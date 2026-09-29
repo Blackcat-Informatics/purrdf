@@ -700,3 +700,87 @@ detector = "forbidden"
 criterion = "layering"
 anchor = "purrdf_events::TextDirection"
 reason = "The event protocol sits below purrdf-cdt and may depend on nothing but purrdf-hash, so it keeps its own direction enum and its own reading of the token for the producers below purrdf-cdt; purrdf-core's ingest maps the two enums in one place."
+
+[[job]]
+id = "frame-le"
+summary = "Length framing: a variable-length field as its u64 little-endian length then its bytes, appended to a buffer or streamed into a digest, and the big-endian label-and-value framing of three published identities"
+home = "purrdf_hash::frame::frame_le"
+entry_points = ["purrdf_hash::frame::frame_le_into", "purrdf_hash::frame::frame_be_labelled"]
+spec = "the framing contract of purrdf_hash::frame: frame(field) = u64_le(len(field)) || field, byte-identical on every target; the frozen answers in frame_le_vectors.txt"
+vectors = ["crates/hash-conformance/tests/vectors/frame_le_vectors.txt"]
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:length-prefix-frame"]
+names = []
+
+[[job.variant]]
+symbol = "purrdf_geo::relation::Digest::field"
+file = "crates/geo/src/relation.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_geo::relation::Digest::field"
+reason = "The geo index source fingerprint frames its strings behind big-endian lengths into FNV-1a; it is a published identity that verify_binding compares with fingerprints recorded by earlier runs and the geo determinism goldens pin, so its byte order is frozen."
+
+[[job.variant]]
+symbol = "purrdf_datalog::resolve_fol::frame"
+file = "crates/datalog/src/resolve_fol.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_datalog::resolve_fol::frame"
+reason = "The tabling call-pattern key is text: a decimal length and a colon before each field, rendered into a String whose frozen spellings the canonical-key tests hold, so its notation cannot become a binary frame."
+
+[[job]]
+id = "le-bytes"
+summary = "Fixed-width little-endian integers read from and written into byte buffers at an offset, bounds-checked"
+home = "purrdf_core::bytes::read_u32_le"
+entry_points = ["purrdf_core::bytes::read_u64_le", "purrdf_core::bytes::put_u32_le", "purrdf_core::bytes::put_u64_le"]
+spec = "little-endian integers of the type's own width, read through first_chunk and written through first_chunk_mut; an offset where the integer does not fit is None, never a panic"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:le-slice-int"]
+names = []
+
+[[job]]
+id = "align-up"
+summary = "Rounding an offset up to an alignment through the standard library's checked form"
+home = "purrdf_core::bytes"
+entry_points = []
+spec = "checked_next_multiple_of on u64 and usize: the rounded offset, or None where it would overflow"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:align-up-mask"]
+names = []
+
+[[job]]
+id = "div-ceil"
+summary = "Ceiling division without the overflow of the hand-written n + d - 1: std div_ceil on unsigned integers, retrieval's ceil_div on i128"
+home = "purrdf_retrieval::reciprocal_rank::ceil_div"
+entry_points = []
+spec = "the quotient rounded toward positive infinity for a positive divisor; the unsigned integers' stable div_ceil, and ceil_div where the signed div_ceil is not stable"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:div-ceil-by-hand"]
+names = []

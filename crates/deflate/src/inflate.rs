@@ -748,7 +748,7 @@ impl Inflater {
             if ip + 8 > input.len() || pos > fast_end {
                 break Ok(());
             }
-            let chunk = u64::from_le_bytes(input[ip..ip + 8].try_into().expect("eight bytes"));
+            let chunk = u64::from_le_bytes(*input[ip..].first_chunk().expect("eight bytes"));
             bitbuf |= chunk << nbits;
             let whole = (63 - nbits) >> 3;
             ip += whole as usize;

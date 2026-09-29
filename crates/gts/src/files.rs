@@ -440,21 +440,6 @@ fn guess_media_type(path: &Path) -> String {
     }
 }
 
-struct HashingWriter<'a> {
-    hasher: &'a mut purrdf_hash::blake3::Hasher,
-}
-
-impl Write for HashingWriter<'_> {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.hasher.update(buf);
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
 fn write_cbor_type_len<W: Write>(writer: &mut W, major: u8, len: u64) -> std::io::Result<()> {
     let prefix = major << 5;
     if len < 24 {
@@ -607,11 +592,8 @@ fn append_blob_path<W: Write>(
         fs::File::open(&source.path).map_err(|e| format!("read {:?}: {e}", source.path))?;
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
-        let mut sink = HashingWriter {
-            hasher: &mut hasher,
-        };
         write_blob_preimage(
-            &mut sink,
+            &mut hasher,
             &mut file,
             source.size,
             media_type,
@@ -651,11 +633,8 @@ fn append_blob_bytes<W: Write>(
 ) -> Result<(), String> {
     let mut hasher = purrdf_hash::blake3::Hasher::new();
     let digest = {
-        let mut sink = HashingWriter {
-            hasher: &mut hasher,
-        };
         write_blob_preimage(
-            &mut sink,
+            &mut hasher,
             source.data,
             source.data.len() as u64,
             source.media_type,
@@ -695,11 +674,8 @@ fn append_blob_range<R: Read + Seek, W: Write>(
         reader
             .seek(SeekFrom::Start(source.offset))
             .map_err(|e| format!("seek inline blob: {e}"))?;
-        let mut sink = HashingWriter {
-            hasher: &mut hasher,
-        };
         write_blob_preimage(
-            &mut sink,
+            &mut hasher,
             reader.take(source.size),
             source.size,
             source.media_type,

@@ -610,7 +610,7 @@ fn build_construct_graph<D: DatasetView + Sync>(
             // graph half is constant and the key degenerates to the reifier id,
             // which is exactly the previous behavior.
             // Membership-only (insert/contains, never iterated), so the fixed-key
-            // `DetHashSet` is used: no `RandomState` seeding per row.
+            // `DetHashSet` is used: no per-process random seeding per row.
             let mut reifier_ids: DetHashSet<(GraphId, TermId)> = DetHashSet::default();
             for &idx in plan.reifier_decl_indices {
                 if let Some(e) = instantiated[idx] {
@@ -1224,17 +1224,18 @@ fn push_loss_code(
 /// A deterministic blank-node label for a loss node, derived PURELY from the loss
 /// code and the resolved triple-term content. Identical drops (same triple term)
 /// produce the same label so the builder dedups them to ONE node; no counter, no
-/// randomness. Uses a fixed-seed hash of the term value for a compact, stable label.
-#[expect(
-    clippy::disallowed_types,
-    reason = "loss-node labels move to a specified FNV-1a hash together with their golden update"
-)]
+/// randomness.
+///
+/// The label is `loss-` and sixteen lowercase hex digits of FNV-1a 64
+/// ([`purrdf_hash::fnv::fnv1a64`]) over the loss code framed by
+/// [`purrdf_hash::frame::frame_le`] followed by the term's canonical bytes
+/// ([`TermValue::canonical_bytes`]). Both halves are specified and injective,
+/// so the label is the same on every target, build and toolchain release.
 fn loss_node_label(code: &str, inner: &TermValue) -> String {
-    use std::hash::{Hash, Hasher};
-    let mut h = std::collections::hash_map::DefaultHasher::new();
-    code.hash(&mut h);
-    inner.hash(&mut h);
-    format!("loss-{:016x}", h.finish())
+    let mut preimage = Vec::new();
+    purrdf_hash::frame::frame_le(&mut preimage, code.as_bytes());
+    inner.canonical_bytes(&mut preimage);
+    format!("loss-{:016x}", purrdf_hash::fnv::fnv1a64(&preimage))
 }
 
 /// Instantiate one template triple for `row`, interning into `builder`. Returns
@@ -1325,6 +1326,57 @@ fn term_pattern_has_blank_node(term: &TermPattern) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The loss-node label is FNV-1a 64 over the framed loss code and the
+    /// inner triple term's canonical bytes: frozen here, so a change of either
+    /// half is a visible edit of a published label.
+    #[test]
+    fn the_loss_node_label_is_frozen() {
+        let inner = TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://ex/alice")),
+            p: TermBox::new(TermValue::iri("http://ex/age")),
+            o: TermBox::new(TermValue::Literal {
+                lexical_form: "42".to_owned(),
+                datatype: "http://www.w3.org/2001/XMLSchema#integer".to_owned(),
+                language: None,
+                direction: None,
+            }),
+        };
+        let label = loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &inner);
+        assert_eq!(label, "loss-53ade2f793c76fe0");
+        let mut preimage = Vec::new();
+        preimage.extend_from_slice(&21u64.to_le_bytes());
+        preimage.extend_from_slice(b"reifier-layer-dropped");
+        inner.canonical_bytes(&mut preimage);
+        assert_eq!(
+            label,
+            format!("loss-{:016x}", purrdf_hash::fnv::fnv1a64(&preimage))
+        );
+    }
+
+    /// Its neighbours: a different object, and the same term under a different
+    /// code, each get a different label.
+    #[test]
+    fn a_distinct_loss_gets_a_distinct_label() {
+        let triple = |object: &str| TermValue::Triple {
+            s: TermBox::new(TermValue::iri("http://ex/alice")),
+            p: TermBox::new(TermValue::iri("http://ex/age")),
+            o: TermBox::new(TermValue::iri(object)),
+        };
+        let base = loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &triple("http://ex/a"));
+        assert_eq!(
+            base,
+            loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &triple("http://ex/a"))
+        );
+        assert_ne!(
+            base,
+            loss_node_label(LOSS_REIFIER_LAYER_DROPPED, &triple("http://ex/b"))
+        );
+        assert_ne!(
+            base,
+            loss_node_label(LOSS_ANNOTATION_LAYER_DROPPED, &triple("http://ex/a"))
+        );
+    }
     use purrdf_sparql_algebra::Child;
 
     /// The ungoverned triple-producing `CONSTRUCT`: an UNSCOPED template (every

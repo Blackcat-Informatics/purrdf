@@ -22,7 +22,7 @@ use super::target::{
     EmbeddingTarget, RdfDatasetTarget, RelationKind, TargetKind, TargetRelation, TargetSet,
     TokenSpan,
 };
-use super::wire::checked_align_up;
+use super::wire::{put_u32, put_u64};
 use super::writer::{
     CanonicalMetadataSections, ExtensionSection, MatrixCommitment, ProjectionCommitment,
 };
@@ -2453,7 +2453,9 @@ fn append_pool_block(
 }
 
 fn align8(value: u64) -> Result<u64, EmbeddingError> {
-    checked_align_up(value, 8)
+    value
+        .checked_next_multiple_of(8)
+        .ok_or(EmbeddingError::ArithmeticOverflow("alignment"))
 }
 
 fn checked_add(left: u64, right: u64, context: &'static str) -> Result<u64, EmbeddingError> {
@@ -2527,14 +2529,6 @@ fn check_identity(
         });
     }
     Ok(())
-}
-
-fn put_u32(bytes: &mut [u8], offset: usize, value: u32) {
-    bytes[offset..offset + 4].copy_from_slice(&value.to_le_bytes());
-}
-
-fn put_u64(bytes: &mut [u8], offset: usize, value: u64) {
-    bytes[offset..offset + 8].copy_from_slice(&value.to_le_bytes());
 }
 
 #[cfg(test)]

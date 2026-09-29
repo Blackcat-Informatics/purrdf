@@ -212,7 +212,7 @@ impl Workspace {
             // A virtual manifest has no source of its own.
             return;
         };
-        self.scan_rules(tree, &package, package_dir);
+        self.scan_rules(tree, &package, package_dir, package_dir);
         for (ident, root) in manifest.roots(tree, package_dir, &package) {
             self.crates.insert(ident.clone());
             let context = Context {
@@ -227,13 +227,15 @@ impl Workspace {
 
     /// Run the census rules over every `.rs` file under `directory`, whatever
     /// compiles it: a test's randomly seeded map is as nondeterministic as a
-    /// library's.
-    fn scan_rules(&mut self, tree: &dyn Tree, package: &str, directory: &str) {
+    /// library's. The byte-layout rules read shipping code only: a file under
+    /// one of the package's test, bench, example or generated directories is a
+    /// test's independent oracle, not a second implementation.
+    fn scan_rules(&mut self, tree: &dyn Tree, package: &str, package_dir: &str, directory: &str) {
         for (name, is_dir) in tree.list(directory) {
             let path = format!("{directory}/{name}");
             if is_dir {
                 if name != "target" && !name.starts_with('.') {
-                    self.scan_rules(tree, package, &path);
+                    self.scan_rules(tree, package, package_dir, &path);
                 }
                 continue;
             }
@@ -254,6 +256,10 @@ impl Workspace {
                         .extend(crate::rules::hex_rules(package, &path, &parsed));
                     self.rule_hits
                         .extend(crate::rules::lex_rules(package, &path, &parsed));
+                    if !is_excluded(package_dir, &path) {
+                        self.rule_hits
+                            .extend(crate::layout::layout_rules(package, &path, &parsed));
+                    }
                 }
                 Err(error) => self.errors.push(format!("{path}: {error}")),
             }

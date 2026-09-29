@@ -3,6 +3,7 @@
 
 use purrdf_core::{BaseIri, ContentDigest};
 use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_le;
 
 use crate::JsonError;
 
@@ -209,7 +210,7 @@ impl Profile {
             &self.name,
             self.vocabulary.base(),
         ] {
-            frame(&mut bytes, field.as_bytes());
+            frame_le(&mut bytes, field.as_bytes());
         }
         bytes.extend_from_slice(&self.version.to_le_bytes());
         bytes.extend_from_slice(&self.bounds.max_source_bytes.to_le_bytes());
@@ -217,15 +218,15 @@ impl Profile {
         bytes.extend_from_slice(&self.bounds.max_depth.to_le_bytes());
         bytes.extend_from_slice(&self.bounds.max_pointer_bytes.to_le_bytes());
         for term in TERMS {
-            frame(&mut bytes, term.as_bytes());
+            frame_le(&mut bytes, term.as_bytes());
         }
         bytes
     }
 
     pub(crate) fn document_id(&self, source: &str, digest: &ContentDigest) -> String {
         let mut bytes = Vec::new();
-        frame(&mut bytes, DOCUMENT_DOMAIN.as_bytes());
-        frame(&mut bytes, source.as_bytes());
+        frame_le(&mut bytes, DOCUMENT_DOMAIN.as_bytes());
+        frame_le(&mut bytes, source.as_bytes());
         bytes.extend_from_slice(self.identity.as_bytes());
         bytes.extend_from_slice(digest.as_bytes());
         let namespace = self.vocabulary.base();
@@ -246,8 +247,3 @@ const PROFILE_DOMAIN: Domain = Domain::new(b"purrdf-json-profile-v1");
 
 /// The hash domain leading a document identifier's preimage.
 const DOCUMENT_DOMAIN: Domain = Domain::new(b"purrdf-json-document-v1");
-
-fn frame(output: &mut Vec<u8>, bytes: &[u8]) {
-    output.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    output.extend_from_slice(bytes);
-}

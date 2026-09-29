@@ -220,7 +220,7 @@ fn words(block: &[u8]) -> [u32; 16] {
     let mut padded = [0; 64];
     padded[..block.len()].copy_from_slice(block);
     core::array::from_fn(|i| {
-        u32::from_le_bytes(padded[i * 4..i * 4 + 4].try_into().expect("four bytes"))
+        u32::from_le_bytes(*padded[i * 4..].first_chunk().expect("four bytes"))
     })
 }
 

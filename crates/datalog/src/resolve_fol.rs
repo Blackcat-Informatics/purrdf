@@ -391,6 +391,11 @@ pub fn render(dag: &TermDag, node: NodeId) -> String {
 
 /// Length-prefix `s` into `out`, so no concatenation of two variable-length
 /// fields can be confused with a different split of the same bytes.
+///
+/// The prefix is the length in decimal followed by `:`, not
+/// `purrdf_hash::frame::frame_le`'s eight little-endian bytes: the key is text —
+/// the tabling engine's call-pattern key, rendered into a `String` and compared
+/// against keys recorded by [`canon`]'s tests — so its notation is frozen with it.
 fn frame(out: &mut String, s: &str) {
     write!(out, "{}:{}", s.len(), s).expect("writing to a String never fails");
 }

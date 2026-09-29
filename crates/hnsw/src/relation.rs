@@ -66,6 +66,7 @@
 //! work and is charged none, and the count resets only when the engine takes it.
 
 use purrdf_hash::Domain;
+use purrdf_hash::frame::frame_be_labelled;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1369,33 +1370,21 @@ pub use purrdf_sparql_eval::composed_order_fidelity;
 /// same graph, parameters and terms digest identically on every target.
 fn space_generation<A: Arithmetic>(index: &HnswIndex<A>, terms: &[TermValue]) -> Arc<str> {
     let mut bytes = Vec::new();
-    append_framed(&mut bytes, b"domain", SPACE_GENERATION_DOMAIN.as_bytes());
-    append_framed(&mut bytes, b"image", &index.canonical_image());
-    append_framed(
+    frame_be_labelled(&mut bytes, "domain", SPACE_GENERATION_DOMAIN.as_bytes());
+    frame_be_labelled(&mut bytes, "image", &index.canonical_image());
+    frame_be_labelled(
         &mut bytes,
-        b"parameters",
+        "parameters",
         &profile::parameters(index.params()),
     );
-    append_framed(
-        &mut bytes,
-        b"row-count",
-        &(terms.len() as u64).to_be_bytes(),
-    );
+    frame_be_labelled(&mut bytes, "row-count", &(terms.len() as u64).to_be_bytes());
     let mut term_bytes = Vec::new();
     for term in terms {
         term_bytes.clear();
         term.canonical_bytes(&mut term_bytes);
-        append_framed(&mut bytes, b"term", &term_bytes);
+        frame_be_labelled(&mut bytes, "term", &term_bytes);
     }
     Arc::from(ContentDigest::of(&bytes).to_hex().as_str())
-}
-
-/// Append `value` to `out` under `tag`, both length-framed.
-fn append_framed(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
-    out.extend_from_slice(&(tag.len() as u64).to_be_bytes());
-    out.extend_from_slice(tag);
-    out.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    out.extend_from_slice(value);
 }
 
 /// The domain separator every HNSW space generation opens with, so this digest

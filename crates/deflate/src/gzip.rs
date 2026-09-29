@@ -410,8 +410,9 @@ impl GzipDecoder {
     }
 
     fn end_member(&mut self) -> Result<(), Error> {
-        let stored_crc = u32::from_le_bytes(self.small[..4].try_into().expect("four bytes"));
-        let stored_size = u32::from_le_bytes(self.small[4..].try_into().expect("four bytes"));
+        let [c0, c1, c2, c3, s0, s1, s2, s3] = self.small;
+        let stored_crc = u32::from_le_bytes([c0, c1, c2, c3]);
+        let stored_size = u32::from_le_bytes([s0, s1, s2, s3]);
         let computed_crc = self.crc.finalize();
         let computed_size = self.member_out as u32;
         if stored_crc != computed_crc {

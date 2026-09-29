@@ -61,7 +61,9 @@ pub(crate) fn is_fingerprint_id(id: &str) -> bool {
             && if kind == "table" {
                 rest == "hex-lower" || rest == "hex-upper"
             } else if kind == "rule" {
-                crate::rules::RULES.contains(&id) || crate::rules::DELEGATED_RULES.contains(&id)
+                crate::rules::RULES.contains(&id)
+                    || crate::layout::RULES.contains(&id)
+                    || crate::rules::DELEGATED_RULES.contains(&id)
             } else {
                 rest.len() == 16
                     && rest

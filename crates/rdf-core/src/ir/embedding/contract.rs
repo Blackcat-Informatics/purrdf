@@ -4,6 +4,7 @@
 //! Canonical vector-family, pipeline, and Matryoshka contracts.
 
 use crate::ContentDigest;
+use crate::bytes::{read_u32_le, read_u64_le};
 
 use super::error::{DigestKind, EmbeddingError};
 use super::identity::{
@@ -120,14 +121,14 @@ impl<'a> Iterator for TlvIter<'a> {
             return None;
         }
         let start = self.position;
-        let tag = u16::from_le_bytes(self.bytes[start..start + 2].try_into().ok()?);
-        let wire_type = TlvWireType::try_from(self.bytes[start + 2]).ok()?;
-        let flags = self.bytes[start + 3];
-        let length = u32::from_le_bytes(self.bytes[start + 4..start + 8].try_into().ok()?);
+        let [tag_low, tag_high, wire, flags] = *self.bytes.get(start..)?.first_chunk()?;
+        let tag = u16::from_le_bytes([tag_low, tag_high]);
+        let wire_type = TlvWireType::try_from(wire).ok()?;
+        let length = read_u32_le(self.bytes, start + 4)?;
         let length = usize::try_from(length).ok()?;
         let value_start = start + 8;
         let value_end = value_start.checked_add(length)?;
-        self.position = align_up_usize(value_end, 8)?;
+        self.position = value_end.checked_next_multiple_of(8)?;
         Some(TlvEntryRef {
             tag,
             wire_type,
@@ -881,7 +882,22 @@ fn validate_identifier(value: &str, context: &'static str) -> Result<(), Embeddi
     Ok(())
 }
 
-pub(crate) fn push_tlv(
+/// Append one canonical PURREMB TLV entry to `output`: the tag as two
+/// little-endian bytes, the wire type, the flags byte (the critical bit), the
+/// value length as four little-endian bytes, the value, and zero padding to the
+/// next multiple of eight.
+///
+/// The one TLV writer: the embedding contracts and any crate that stores a
+/// canonical TLV block (an index's parameter block) write through it, and
+/// [`canonical_tlv`] reads what it writes. Entries must be appended in strictly
+/// ascending tag order for the block to be canonical.
+///
+/// # Errors
+///
+/// [`EmbeddingError`] when `value` is not a valid value of `wire_type`, when it
+/// is longer than a four-byte length can state, or when the block would grow
+/// past [`MAX_TLV_BLOCK_LEN`].
+pub fn push_tlv(
     output: &mut Vec<u8>,
     tag: u16,
     wire_type: TlvWireType,
@@ -898,8 +914,10 @@ pub(crate) fn push_tlv(
     output.push(u8::from(critical));
     output.extend_from_slice(&value_length.to_le_bytes());
     output.extend_from_slice(value);
-    let padded =
-        align_up_usize(output.len(), 8).ok_or(EmbeddingError::ArithmeticOverflow("TLV padding"))?;
+    let padded = output
+        .len()
+        .checked_next_multiple_of(8)
+        .ok_or(EmbeddingError::ArithmeticOverflow("TLV padding"))?;
     output.resize(padded, 0);
     if output.len() > MAX_TLV_BLOCK_LEN {
         return Err(EmbeddingError::CountLimit {
@@ -920,13 +938,10 @@ fn encode_block_list(blocks: &[Vec<u8>]) -> Result<Vec<u8>, EmbeddingError> {
     output.extend_from_slice(&0u32.to_le_bytes());
     for block in blocks {
         validate_tlv_block(block, 1)?;
-        output.extend_from_slice(
-            &u64::try_from(block.len())
-                .expect("validated TLV block length fits u64")
-                .to_le_bytes(),
-        );
-        output.extend_from_slice(block);
-        let padded = align_up_usize(output.len(), 8)
+        purrdf_hash::frame::frame_le(&mut output, block);
+        let padded = output
+            .len()
+            .checked_next_multiple_of(8)
             .ok_or(EmbeddingError::ArithmeticOverflow("TLV block-list padding"))?;
         output.resize(padded, 0);
     }
@@ -962,7 +977,8 @@ pub(crate) fn validate_tlv_block(bytes: &[u8], depth: u8) -> Result<(), Embeddin
         if header[3] & !TLV_CRITICAL != 0 {
             return Err(EmbeddingError::ReservedNonzero("TLV flags"));
         }
-        let value_length = u32::from_le_bytes(header[4..8].try_into().expect("fixed slice"));
+        let value_length =
+            read_u32_le(header, 4).ok_or(EmbeddingError::MalformedTlv("truncated entry header"))?;
         let value_length = usize::try_from(value_length)
             .map_err(|_| EmbeddingError::ArithmeticOverflow("TLV value length"))?;
         let value_end = header_end
@@ -972,7 +988,8 @@ pub(crate) fn validate_tlv_block(bytes: &[u8], depth: u8) -> Result<(), Embeddin
             .get(header_end..value_end)
             .ok_or(EmbeddingError::MalformedTlv("truncated entry value"))?;
         validate_tlv_value(wire_type, value, depth.saturating_add(1))?;
-        let next = align_up_usize(value_end, 8)
+        let next = value_end
+            .checked_next_multiple_of(8)
             .ok_or(EmbeddingError::ArithmeticOverflow("TLV entry padding"))?;
         let padding = bytes
             .get(value_end..next)
@@ -1018,7 +1035,8 @@ fn validate_block_list(value: &[u8], depth: u8) -> Result<(), EmbeddingError> {
     let header = value
         .get(..8)
         .ok_or(EmbeddingError::MalformedTlv("truncated block-list header"))?;
-    let count = u32::from_le_bytes(header[..4].try_into().expect("fixed slice"));
+    let count = read_u32_le(header, 0)
+        .ok_or(EmbeddingError::MalformedTlv("truncated block-list header"))?;
     if header[4..8] != [0; 4] {
         return Err(EmbeddingError::ReservedNonzero("TLV block-list header"));
     }
@@ -1027,10 +1045,8 @@ fn validate_block_list(value: &[u8], depth: u8) -> Result<(), EmbeddingError> {
         let length_end = position
             .checked_add(8)
             .ok_or(EmbeddingError::ArithmeticOverflow("block-list length"))?;
-        let length_bytes = value
-            .get(position..length_end)
+        let length = read_u64_le(value, position)
             .ok_or(EmbeddingError::MalformedTlv("truncated block-list length"))?;
-        let length = u64::from_le_bytes(length_bytes.try_into().expect("fixed slice"));
         let length = usize::try_from(length)
             .map_err(|_| EmbeddingError::ArithmeticOverflow("block-list item length"))?;
         let block_end = length_end
@@ -1040,7 +1056,8 @@ fn validate_block_list(value: &[u8], depth: u8) -> Result<(), EmbeddingError> {
             .get(length_end..block_end)
             .ok_or(EmbeddingError::MalformedTlv("truncated block-list item"))?;
         validate_tlv_block(block, depth)?;
-        let next = align_up_usize(block_end, 8)
+        let next = block_end
+            .checked_next_multiple_of(8)
             .ok_or(EmbeddingError::ArithmeticOverflow("block-list padding"))?;
         let padding = value
             .get(block_end..next)
@@ -1064,7 +1081,8 @@ fn validate_u32_list(value: &[u8]) -> Result<(), EmbeddingError> {
     let header = value
         .get(..8)
         .ok_or(EmbeddingError::MalformedTlv("truncated u32-list header"))?;
-    let count = u32::from_le_bytes(header[..4].try_into().expect("fixed slice"));
+    let count =
+        read_u32_le(header, 0).ok_or(EmbeddingError::MalformedTlv("truncated u32-list header"))?;
     if header[4..8] != [0; 4] {
         return Err(EmbeddingError::ReservedNonzero("TLV u32-list header"));
     }
@@ -1076,13 +1094,6 @@ fn validate_u32_list(value: &[u8]) -> Result<(), EmbeddingError> {
         return Err(EmbeddingError::MalformedTlv("u32-list length mismatch"));
     }
     Ok(())
-}
-
-const fn align_up_usize(value: usize, alignment: usize) -> Option<usize> {
-    match value.checked_add(alignment - 1) {
-        Some(sum) => Some(sum & !(alignment - 1)),
-        None => None,
-    }
 }
 
 #[cfg(test)]

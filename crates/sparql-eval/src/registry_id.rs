@@ -170,10 +170,10 @@ impl Default for RegistryId {
 
 /// Append one `label`/`value` pair to a content fingerprint's byte buffer under an
 /// **injective** framing: each half is written as its length (big-endian `u64`)
-/// followed by its bytes.
+/// followed by its bytes — [`purrdf_hash::frame::frame_be_labelled`].
 ///
 /// Every `content_fingerprint` in this crate builds its pre-digest bytes solely
-/// through this function, so the encoding of a registry's declarations can never be
+/// through this framing, so the encoding of a registry's declarations can never be
 /// ambiguous: length-prefixing both halves means no combination of field values can
 /// forge the byte sequence another combination produces. Without it, a delimiter- or
 /// concatenation-based encoding lets two different registries digest identically the
@@ -181,20 +181,11 @@ impl Default for RegistryId {
 /// registries that answer differently, which is precisely what a fingerprint exists
 /// to make impossible.
 ///
-/// This is the same framing `append_key_part` uses in `purrdf-shapes`' JSON-Schema
-/// compilation key; it is duplicated rather than shared because `purrdf-sparql-eval`
-/// does not depend on that crate (and must not: the dependency runs the other way).
-///
-/// It lives here, with [`RegistryId`], because this module owns registry identity:
-/// the instance tier and the content tier are two encodings of the same question,
-/// and keeping both spellings in one file is what stops them drifting into two
-/// different answers.
-pub(crate) fn append_framed_part(out: &mut Vec<u8>, label: &str, value: &[u8]) {
-    out.extend_from_slice(&(label.len() as u64).to_be_bytes());
-    out.extend_from_slice(label.as_bytes());
-    out.extend_from_slice(&(value.len() as u64).to_be_bytes());
-    out.extend_from_slice(value);
-}
+/// It is named here, with [`RegistryId`], because this module owns registry
+/// identity: the instance tier and the content tier are two encodings of the same
+/// question, and keeping both spellings in one file is what stops them drifting into
+/// two different answers.
+pub(crate) use purrdf_hash::frame::frame_be_labelled as append_framed_part;
 
 #[cfg(test)]
 mod tests {

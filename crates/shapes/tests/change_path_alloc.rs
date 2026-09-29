@@ -445,6 +445,16 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// The property this test is about is untouched: the figure is still identical for
 /// both seam datasets, which is the assertion above this one.
 ///
+/// # Why it moved from 304
+///
+/// Because the labelled framing every registry fingerprint and the compilation
+/// key write through (`purrdf_hash::frame::frame_be_labelled`) now reserves the
+/// label's and the value's bytes before it writes them, so a description built
+/// part by part reaches its final capacity without walking the doubling ladder
+/// one part at a time: 27 fewer allocations on this once-per-restore path, and
+/// the same bytes. Measured by removing the reservation alone, which restores
+/// 304.
+///
 /// # Why it moved from 282
 ///
 /// Because admission's *input* grew, not because admission started doing more
@@ -483,7 +493,7 @@ const BIND_ALLOC_CONST: u64 = 59;
 /// value of either may be a SHACL list, read as a disjunction — so the decoder
 /// reads each as a sequence into its own vector. The seam shapes graph carries one
 /// of each: two allocations, once per restore, whatever the data.
-const ADMIT_ALLOC_CONST: u64 = 304;
+const ADMIT_ALLOC_CONST: u64 = 277;
 
 /// Conforming focus nodes per case in the golden fixture.
 const GOLDEN_CONFORMING: usize = 2;

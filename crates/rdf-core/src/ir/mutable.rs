@@ -1391,7 +1391,7 @@ mod tests {
     /// Regression pin for the process-nondeterministic scan order defect: `freeze()`
     /// must replay delta-added quads in CALL order, never `added`'s hash-iteration
     /// order — because a bare `std::collections::HashSet<QuadKey>` (the pre-fix
-    /// `added`/`suppressed` type) draws a fresh, process-random `RandomState` key
+    /// `added`/`suppressed` type) draws a fresh, process-random hasher key
     /// EVERY time `HashSet::new()` runs (a per-call counter seeded once per thread
     /// from OS randomness), so two `MutableDataset`s built from the identical
     /// insertion sequence — even in the SAME process — could iterate `added` in

@@ -165,7 +165,10 @@
 //! code its guard's revision does not name, is a profile failure.
 
 use purrdf_core::distance::{Arithmetic, BuildShape, Exact, Path, Reassociated};
-use purrdf_core::{ArtifactIdentity, ArtifactIdentityKind, ContentDigest, IndexLossContract};
+use purrdf_core::{
+    ArtifactIdentity, ArtifactIdentityKind, ContentDigest, IndexLossContract, TlvWireType,
+    canonical_tlv, push_tlv,
+};
 
 use crate::error::{HnswError, Result};
 use crate::params::Params;
@@ -353,11 +356,6 @@ pub const PAYLOAD_MAGIC: [u8; 8] = crate::graph::IMAGE_MAGIC;
 /// The canonical image's format version.
 pub const PAYLOAD_VERSION: u32 = crate::graph::IMAGE_VERSION;
 
-/// The TLV value wire type for a little-endian `u64`.
-const WIRE_U64: u8 = 4;
-/// The critical-field flag bit.
-const FLAG_CRITICAL: u8 = 1;
-
 /// The implementation identity this profile binds into every guard over an exact index.
 ///
 /// The digest is a domain-separated SHA-256 over the profile declaration, and the revision
@@ -465,14 +463,18 @@ pub const fn loss_contract() -> IndexLossContract {
 #[must_use]
 pub fn parameters(params: Params) -> Vec<u8> {
     let mut out = Vec::new();
-    put_u64(&mut out, PARAM_M, params.m() as u64);
-    put_u64(&mut out, PARAM_M0, params.m0() as u64);
-    put_u64(
-        &mut out,
-        PARAM_EF_CONSTRUCTION,
-        params.ef_construction() as u64,
-    );
-    put_u64(&mut out, PARAM_EF_SEARCH, params.ef_search() as u64);
+    for (tag, value) in [
+        (PARAM_M, params.m()),
+        (PARAM_M0, params.m0()),
+        (PARAM_EF_CONSTRUCTION, params.ef_construction()),
+        (PARAM_EF_SEARCH, params.ef_search()),
+    ] {
+        put_u64(
+            &mut out,
+            tag,
+            u64::try_from(value).expect("an in-memory parameter fits u64"),
+        );
+    }
     out
 }
 
@@ -484,27 +486,29 @@ pub fn parameters(params: Params) -> Vec<u8> {
 /// field, a non-zero padding byte, or a value that [`Params::new`] refuses (including a
 /// negative parameter smuggled in as a two's-complement `u64`).
 pub fn parse_parameters(bytes: &[u8]) -> Result<Params> {
-    let mut reader = Reader::new(bytes);
+    let entries = canonical_tlv(bytes).map_err(|error| {
+        profile_error(format!(
+            "the parameter block is not a canonical TLV block: {error}"
+        ))
+    })?;
     let mut m = None;
     let mut m0 = None;
     let mut ef_construction = None;
     let mut ef_search = None;
-    let mut previous_tag = 0_u16;
-    while !reader.is_empty() {
-        let (tag, wire, value) = reader.entry()?;
-        if tag <= previous_tag {
-            return Err(profile_error(format!(
-                "parameter tags must be strictly ascending, got {tag} after {previous_tag}"
-            )));
+    for entry in entries {
+        let tag = entry.tag;
+        if !entry.critical {
+            return Err(profile_error(format!("parameter {tag} is not critical")));
         }
-        previous_tag = tag;
-        if wire != WIRE_U64 {
+        if entry.wire_type != TlvWireType::U64 {
             return Err(profile_error(format!(
-                "parameter {tag} has wire type {wire}, not a u64"
+                "parameter {tag} has wire type {:?}, not a u64",
+                entry.wire_type
             )));
         }
         let value = u64::from_le_bytes(
-            value
+            entry
+                .value
                 .try_into()
                 .map_err(|_| profile_error(format!("parameter {tag} is not eight bytes")))?,
         );
@@ -544,77 +548,11 @@ fn profile_error(description: impl Into<String>) -> HnswError {
     }
 }
 
-/// Append one canonical TLV entry (critical, padded to an 8-byte boundary).
+/// Append one critical `u64` entry to the canonical parameter block, through
+/// rdf-core's TLV writer — the block is a PURREMB canonical TLV block.
 fn put_u64(out: &mut Vec<u8>, tag: u16, value: u64) {
-    put_entry(out, tag, WIRE_U64, &value.to_le_bytes());
-}
-
-/// Append one canonical TLV entry with the given wire type and value.
-fn put_entry(out: &mut Vec<u8>, tag: u16, wire: u8, value: &[u8]) {
-    out.extend_from_slice(&tag.to_le_bytes());
-    out.push(wire);
-    out.push(FLAG_CRITICAL);
-    out.extend_from_slice(&(value.len() as u32).to_le_bytes());
-    out.extend_from_slice(value);
-    let aligned = (out.len() + 7) & !7;
-    out.resize(aligned, 0);
-}
-
-/// A bounds-checked reader over a canonical TLV block.
-///
-/// Deliberately rejects the same shapes rdf-core's codec does — non-ascending tags, a
-/// non-critical-flag bit, wrong wire types, non-zero padding, and trailing bytes — so a
-/// parameter block this crate accepts is one a canonical reader would too.
-struct Reader<'a> {
-    bytes: &'a [u8],
-    at: usize,
-}
-
-impl<'a> Reader<'a> {
-    const fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, at: 0 }
-    }
-
-    const fn is_empty(&self) -> bool {
-        self.at == self.bytes.len()
-    }
-
-    /// One `(tag, wire, value)` triple, advancing past its padding.
-    fn entry(&mut self) -> Result<(u16, u8, &'a [u8])> {
-        let header_end = self.at + 8;
-        let header = self
-            .bytes
-            .get(self.at..header_end)
-            .ok_or_else(|| profile_error("a parameter entry is truncated"))?;
-        let tag = u16::from_le_bytes([header[0], header[1]]);
-        let wire = header[2];
-        if header[3] & !FLAG_CRITICAL != 0 {
-            return Err(profile_error("a parameter entry sets a reserved flag"));
-        }
-        if header[3] & FLAG_CRITICAL == 0 {
-            return Err(profile_error("a parameter entry is not critical"));
-        }
-        let length = u32::from_le_bytes(header[4..8].try_into().expect("fixed slice"));
-        let length = usize::try_from(length)
-            .map_err(|_| profile_error("a parameter entry length does not fit usize"))?;
-        let value_end = header_end
-            .checked_add(length)
-            .ok_or_else(|| profile_error("a parameter entry length overflows"))?;
-        let value = self
-            .bytes
-            .get(header_end..value_end)
-            .ok_or_else(|| profile_error("a parameter entry value is truncated"))?;
-        let padded = (value_end + 7) & !7;
-        let padding = self
-            .bytes
-            .get(value_end..padded)
-            .ok_or_else(|| profile_error("a parameter entry padding is truncated"))?;
-        if padding.iter().any(|byte| *byte != 0) {
-            return Err(profile_error("a parameter entry has non-zero padding"));
-        }
-        self.at = padded;
-        Ok((tag, wire, value))
-    }
+    push_tlv(out, tag, TlvWireType::U64, true, &value.to_le_bytes())
+        .expect("a u64 parameter is a canonical TLV entry");
 }
 
 #[cfg(test)]
@@ -648,22 +586,60 @@ mod tests {
         assert!(parse_parameters(&bytes).is_err());
     }
 
-    #[test]
-    fn non_zero_padding_is_refused() {
-        // A four-`u64` block is already 8-byte aligned, so the padding case is exercised
-        // on the reader directly: one aligned entry, then a one-byte value whose seven
-        // padding bytes are non-zero.
+    /// One aligned entry, then a one-byte UTF-8 value whose seven padding bytes
+    /// are non-zero: the block is not canonical.
+    fn padded_block(padding: u8) -> Vec<u8> {
         let mut block = Vec::new();
         put_u64(&mut block, PARAM_M, 16);
         block.extend_from_slice(&PARAM_M0.to_le_bytes());
-        block.push(2); // the UTF-8 wire type, whose value here is one byte
-        block.push(FLAG_CRITICAL);
+        block.push(TlvWireType::Utf8 as u8);
+        block.push(1); // critical
         block.extend_from_slice(&1u32.to_le_bytes());
         block.push(b'x');
-        block.extend_from_slice(&[9; 7]);
-        let mut reader = Reader::new(&block);
-        reader.entry().expect("the aligned entry parses");
-        assert!(reader.entry().is_err(), "non-zero padding must be refused");
+        block.extend_from_slice(&[padding; 7]);
+        block
+    }
+
+    fn refusal(bytes: &[u8]) -> String {
+        match parse_parameters(bytes) {
+            Err(HnswError::GuardProfile { description }) => description,
+            other => panic!("expected a guard-profile refusal, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn non_zero_padding_is_refused() {
+        assert!(
+            refusal(&padded_block(9)).contains("not a canonical TLV block"),
+            "non-zero padding must be refused as a non-canonical block"
+        );
+    }
+
+    /// The neighbour: the same block with its padding zeroed is canonical, so it
+    /// gets past the block check and is refused only for its wire type.
+    #[test]
+    fn zeroed_padding_passes_the_block_check() {
+        let description = refusal(&padded_block(0));
+        assert!(
+            !description.contains("not a canonical TLV block"),
+            "{description}"
+        );
+        assert!(description.contains("wire type"), "{description}");
+    }
+
+    /// A non-critical entry is refused; its critical twin round-trips above.
+    #[test]
+    fn a_non_critical_parameter_is_refused() {
+        let mut bytes = Vec::new();
+        push_tlv(
+            &mut bytes,
+            PARAM_M,
+            TlvWireType::U64,
+            false,
+            &16u64.to_le_bytes(),
+        )
+        .expect("a canonical entry");
+        assert!(refusal(&bytes).contains("is not critical"));
     }
 
     #[test]

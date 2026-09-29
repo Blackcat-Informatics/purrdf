@@ -131,6 +131,7 @@
 //! the `Decision` it accompanies is.
 
 use purrdf_hash::Domain;
+use purrdf_hash::frame::{frame_le, frame_le_into};
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -3578,7 +3579,7 @@ impl DlProof {
     #[must_use]
     pub fn encode(&self) -> Vec<u8> {
         let mut out = Vec::new();
-        frame(&mut out, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, PROOF_ENCODING_TAG.as_bytes());
         out.extend_from_slice(&self.input);
         out.extend_from_slice(&self.contract);
         out.push(self.answer.ordinal());
@@ -4835,8 +4836,8 @@ pub fn try_ontology_identity(ontology: &RdfDataset) -> Result<[u8; 32], purrdf_c
 /// for the caller's data.
 fn contract_digest(clauses: &ClauseSet) -> [u8; 32] {
     let mut hasher = purrdf_hash::blake3::RecordHasher::new();
-    frame_hash(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
-    frame_hash(&mut hasher, CALCULUS_VERSION.as_bytes());
+    frame_le_into(&mut hasher, CONTRACT_DIGEST_TAG.as_bytes());
+    frame_le_into(&mut hasher, CALCULUS_VERSION.as_bytes());
     hasher.update(&(clauses.count() as u64).to_le_bytes());
     for index in 0..clauses.count() {
         let clause = clauses.clause(index);
@@ -4933,18 +4934,6 @@ pub(crate) fn malformed(detail: &str) -> DlProofError {
     DlProofError::Malformed {
         detail: detail.to_owned(),
     }
-}
-
-/// Append a length-prefixed byte string.
-fn frame(out: &mut Vec<u8>, bytes: &[u8]) {
-    out.extend_from_slice(&(bytes.len() as u64).to_le_bytes());
-    out.extend_from_slice(bytes);
-}
-
-/// Fold a length-prefixed byte string into a hasher.
-fn frame_hash(hasher: &mut purrdf_hash::blake3::RecordHasher, bytes: &[u8]) {
-    hasher.update(&(bytes.len() as u64).to_le_bytes());
-    hasher.update(bytes);
 }
 
 /// Append a [`NodeRef`].
@@ -5199,20 +5188,22 @@ impl<'a> Reader<'a> {
 
     /// Take a little-endian `u32`.
     pub(crate) fn u32(&mut self) -> Result<u32, DlProofError> {
-        let bytes: [u8; 4] = self
-            .take(4)?
-            .try_into()
-            .map_err(|_| malformed("a u32 field is four bytes"))?;
-        Ok(u32::from_le_bytes(bytes))
+        Ok(u32::from_le_bytes(self.array()?))
+    }
+
+    /// Take the next `N` bytes as an array.
+    fn array<const N: usize>(&mut self) -> Result<[u8; N], DlProofError> {
+        let (head, rest) = self
+            .bytes
+            .split_first_chunk()
+            .ok_or_else(|| malformed("the proof stream ended mid-field"))?;
+        self.bytes = rest;
+        Ok(*head)
     }
 
     /// Take a little-endian `u64` as a `usize`, refusing one this target cannot hold.
     pub(crate) fn length(&mut self) -> Result<usize, DlProofError> {
-        let bytes: [u8; 8] = self
-            .take(8)?
-            .try_into()
-            .map_err(|_| malformed("a length field is eight bytes"))?;
-        usize::try_from(u64::from_le_bytes(bytes))
+        usize::try_from(u64::from_le_bytes(self.array()?))
             .map_err(|_| malformed("a length field exceeds this target's usize"))
     }
 
@@ -5224,18 +5215,12 @@ impl<'a> Reader<'a> {
     /// perfectly well formed — a host-dependent rejection, which is the one thing a shared
     /// wire format must never have.
     pub(crate) fn u64(&mut self) -> Result<u64, DlProofError> {
-        let bytes: [u8; 8] = self
-            .take(8)?
-            .try_into()
-            .map_err(|_| malformed("a counter field is eight bytes"))?;
-        Ok(u64::from_le_bytes(bytes))
+        Ok(u64::from_le_bytes(self.array()?))
     }
 
     /// Take 32 digest bytes.
     pub(crate) fn digest(&mut self) -> Result<[u8; 32], DlProofError> {
-        self.take(32)?
-            .try_into()
-            .map_err(|_| malformed("a digest field is thirty-two bytes"))
+        self.array()
     }
 
     /// Take a length-prefixed byte string.
@@ -6563,7 +6548,7 @@ mod tests {
     #[test]
     fn an_unknown_node_kind_is_rejected() {
         let mut out = Vec::new();
-        frame(&mut out, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, PROOF_ENCODING_TAG.as_bytes());
         out.extend_from_slice(&[0_u8; 32]);
         out.extend_from_slice(&[0_u8; 32]);
         out.push(ProofAnswer::Inconsistent.ordinal());
@@ -6582,7 +6567,7 @@ mod tests {
     #[test]
     fn an_out_of_range_boundary_ordinal_is_rejected() {
         let mut out = Vec::new();
-        frame(&mut out, PROOF_ENCODING_TAG.as_bytes());
+        frame_le(&mut out, PROOF_ENCODING_TAG.as_bytes());
         out.extend_from_slice(&[0_u8; 32]);
         out.extend_from_slice(&[0_u8; 32]);
         out.push(ProofAnswer::Consistent.ordinal());

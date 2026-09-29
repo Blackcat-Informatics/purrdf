@@ -793,8 +793,8 @@ fn split_parquet_file(bytes: &[u8]) -> Result<(usize, &[u8]), ColumnarError> {
         ));
     }
     let footer_len = u32::from_le_bytes(
-        bytes[bytes.len() - 8..bytes.len() - 4]
-            .try_into()
+        *bytes[bytes.len() - 8..]
+            .first_chunk()
             .expect("four-byte footer length"),
     ) as usize;
     let footer_start = bytes
