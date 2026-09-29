@@ -772,7 +772,7 @@ impl<'a> CeExtractor<'a> {
             FacetSlot::Length | FacetSlot::MinLength | FacetSlot::MaxLength => {
                 // `xsd:length`/`minLength`/`maxLength` take an `xsd:nonNegativeInteger`
                 // (XSD 1.1 Part 2 §4.3.1), which fixes `whiteSpace` = `collapse` — see
-                // `collapse_trim`. `None` here makes the whole range opaque rather than
+                // `purrdf_iri::terminals::trim_ws`. `None` here makes the whole range opaque rather than
                 // dropping the facet, so an ill-typed bound cannot shrink a range.
                 let length = purrdf_iri::terminals::trim_ws(lexical_form)
                     .parse::<u64>()
@@ -880,7 +880,7 @@ impl<'a> CeExtractor<'a> {
         let truth = match self.interner.value(lit) {
             // `owl:hasSelf` takes an `xsd:boolean`, whose lexical space is
             // "`{true, false, 1, 0}`" and which fixes `whiteSpace` = `collapse`
-            // (XSD 1.1 Part 2 §3.3.2) — see `collapse_trim`. A value the datatype
+            // (XSD 1.1 Part 2 §3.3.2) — see `purrdf_iri::terminals::trim_ws`. A value the datatype
             // refuses is `None`, which is the opaque reading, not a guessed truth.
             TermValue::Literal { lexical_form, .. } => {
                 match purrdf_iri::terminals::trim_ws(lexical_form) {
@@ -944,7 +944,7 @@ impl<'a> CeExtractor<'a> {
                 // The OWL-2-RDF mapping types a cardinality as
                 // `xsd:nonNegativeInteger`, which fixes `whiteSpace` = `collapse`
                 // (XSD 1.1 Part 2 §3.4.13 `xsd:integer`, from which it derives) — see
-                // `collapse_trim`. A lexical form the datatype refuses is a malformed
+                // `purrdf_iri::terminals::trim_ws`. A lexical form the datatype refuses is a malformed
                 // graph and a hard error, never a bound guessed from it.
                 let n = purrdf_iri::terminals::trim_ws(lexical_form)
                     .parse::<u32>()
@@ -1753,7 +1753,7 @@ mod tests {
         .expect("owl:hasSelf never refuses the whole run")
     }
 
-    /// `collapse_trim` strips a scalar from an edge if and only if the `whiteSpace` =
+    /// `purrdf_iri::terminals::trim_ws` strips a scalar from an edge if and only if the `whiteSpace` =
     /// `collapse` facet names it — stated as a total function over every Unicode scalar, so
     /// the class cannot drift toward either the Unicode property or the ASCII one.
     ///
@@ -1762,7 +1762,7 @@ mod tests {
     /// cardinality bounds), so pinning it here pins the facet site that has no cheap
     /// end-to-end fixture of its own.
     #[test]
-    fn collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
+    fn whitespace_collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
         for cp in 0..=0x0010_FFFF_u32 {
             let Some(c) = char::from_u32(cp) else {
                 continue;

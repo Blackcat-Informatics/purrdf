@@ -3449,7 +3449,7 @@ pub(crate) fn substitute_path_placeholder<'q>(
 /// Unbounded — no native-int overflow.
 ///
 /// `xsd:integer` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.4.13), so
-/// the lexical form is trimmed with [`collapse_trim`] and not with
+/// the lexical form is trimmed with [`trim_ws`](purrdf_iri::terminals::trim_ws) and not with
 /// [`str::trim`].
 fn is_xsd_integer_lexical(s: &str) -> bool {
     let s = purrdf_iri::terminals::trim_ws(s);
@@ -3461,7 +3461,7 @@ fn is_xsd_integer_lexical(s: &str) -> bool {
 /// single '.' — NO exponent. At least one digit must be present.
 ///
 /// `xsd:decimal` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.3), so the
-/// lexical form is trimmed with [`collapse_trim`] and not with [`str::trim`].
+/// lexical form is trimmed with [`trim_ws`](purrdf_iri::terminals::trim_ws) and not with [`str::trim`].
 fn is_xsd_decimal_lexical(s: &str) -> bool {
     let s = purrdf_iri::terminals::trim_ws(s);
     let body = s.strip_prefix(['+', '-']).unwrap_or(s);
@@ -3880,7 +3880,7 @@ fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
     ) {
         // Every datatype listed above fixes `whiteSpace` = `collapse`, so the
         // lexical form is trimmed with the four code points that names — see
-        // [`collapse_trim`].
+        // [`trim_ws`](purrdf_iri::terminals::trim_ws).
         purrdf_iri::terminals::trim_ws(lexical).parse::<f64>().ok()
     } else {
         None
@@ -4304,7 +4304,7 @@ fn compare_literal_views(
     }
     if da == XSD_BOOLEAN && db == XSD_BOOLEAN {
         // `xsd:boolean` fixes `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.2),
-        // so the lexical form is trimmed with [`collapse_trim`].
+        // so the lexical form is trimmed with [`trim_ws`](purrdf_iri::terminals::trim_ws).
         let bool_of = |lex: &str| match purrdf_iri::terminals::trim_ws(lex) {
             "true" | "1" => Some(true),
             "false" | "0" => Some(false),
@@ -5800,12 +5800,12 @@ mod tests {
         assert!(!matches("ab", r"a[\] ]b", "x"));
     }
 
-    /// `collapse_trim` strips a scalar from an edge if and only if the
+    /// `purrdf_iri::terminals::trim_ws` strips a scalar from an edge if and only if the
     /// `whiteSpace` = `collapse` facet names it — stated as a total function
     /// over every Unicode scalar, so the class cannot drift toward either the
     /// Unicode `White_Space` property or the ASCII one.
     #[test]
-    fn collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
+    fn whitespace_collapse_trim_strips_exactly_the_four_code_points_the_facet_names() {
         for cp in 0..=0x0010_FFFF_u32 {
             let Some(c) = char::from_u32(cp) else {
                 continue;
