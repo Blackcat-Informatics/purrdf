@@ -945,6 +945,7 @@ dependencies = [
  "purrdf-cdt",
  "purrdf-core",
  "purrdf-entail",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",

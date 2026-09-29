@@ -569,9 +569,9 @@ triple pattern.
   mapping TSV support and an FnO function-catalog codec (both live in
   `purrdf-core`, not the slice crate).
 - **Zero-dependency foundations** — `purrdf-lex` (the grammar terminals, byte-class
-  scanners and JSON string escaper every grammar shares) and `purrdf-xsd` (XSD 1.1
-  value space) have no runtime dependencies at all, and `purrdf-iri` (RFC 3987/3986)
-  depends on `purrdf-lex` alone; `purrdf-events` (the
+  scanners and JSON string escaper every grammar shares) has no runtime dependencies
+  at all, `purrdf-iri` (RFC 3987/3986) depends on `purrdf-lex` alone, and `purrdf-xsd`
+  (XSD 1.1 value space) on `purrdf-hash` alone; `purrdf-events` (the
   object-safe ingestion seam) and `purrdf-hash` (BLAKE3, MD5, SHA-1, SHA-3 and CRC-32
   digests) have none either, and `purrdf-cdt` is a `no_std` closed leaf over
   exactly `purrdf-iri` and `purrdf-xsd`.
@@ -724,7 +724,7 @@ for drift. Built with cargo-c: `make capi-build`.
 | [`purrdf-slice`](./crates/slice/) | Slice catalog: manifests, typed artifacts, ownership/dependency analysis. |
 | [`purrdf-lex`](./crates/lex/) | Zero-dependency lexical foundations shared by every grammar: the exact Turtle/SPARQL/XML terminal classes, chunked byte-class scanners that lower to packed compares, and the RFC 8259 JSON string escaper. |
 | [`purrdf-iri`](./crates/iri/) | IRI/URI parsing, normalization, CURIEs, and the workspace's single RFC 3986 base-resolution layer (`BaseIri`/`BaseScope`). |
-| [`purrdf-xsd`](./crates/xsd/) | Zero-dependency XSD 1.1 value space with SPARQL numeric promotion. |
+| [`purrdf-xsd`](./crates/xsd/) | XSD 1.1 value space with SPARQL numeric promotion; sole runtime dependency is `purrdf-hash`. |
 | [`purrdf-events`](./crates/rdf-events/) | Zero-dependency object-safe RDF event sink/source seam. |
 | [`purrdf-hash`](./crates/hash/) | Zero-dependency BLAKE3, MD5, SHA-1, SHA-3 and CRC-32 digests, streaming and one-shot; SHA-1 and CRC-32 run on the processor's SHA and CRC instructions when it has them. |
 | [`purrdf-deflate`](./crates/deflate/) | Native DEFLATE and gzip: a push-based streaming decoder that decodes every gzip member, verifies each trailer and refuses trailing garbage or output past a caller's limit, and a deterministic encoder whose bytes depend only on the input and level. Vector match copies and compares on SSE2/AVX2, NEON and wasm simd128; depends on `purrdf-hash` alone. |

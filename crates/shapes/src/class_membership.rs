@@ -19,6 +19,7 @@
 //! exactly the data graph.
 
 use crate::data_view::{ShaclDatasetView, ShaclRead};
+use std::hash::Hasher as _;
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf::ir::QuadProbePlan;
@@ -957,15 +958,18 @@ fn build_index(
     let mut typed_classes = Vec::new();
     let mut position = 0usize;
     let mut virtual_upper_bound = 0usize;
-    let mut fingerprint = 0xcbf2_9ce4_8422_2325u64;
+    // The index's contribution to `stats_fingerprint`, a cache discriminator: every
+    // class, subject and ancestor id in build order, through the fixed-key table
+    // hasher (one fold per id, never persisted).
+    let mut fingerprint = purrdf_hash::fixed::FixedHasher::default();
 
     while position < rows.len() {
         let class = rows[position].class;
-        fingerprint = fingerprint_mix(fingerprint, class.index());
+        fingerprint.write_usize(class.index());
         let subject_start = subjects.len();
         while position < rows.len() && rows[position].class == class {
             subjects.push(rows[position].subject);
-            fingerprint = fingerprint_mix(fingerprint, rows[position].subject.index());
+            fingerprint.write_usize(rows[position].subject.index());
             position += 1;
         }
         let subject_end = subjects.len();
@@ -976,7 +980,7 @@ fn build_index(
         }
         let ancestor_end = ancestors.len();
         for &ancestor in &ancestors[ancestor_start..ancestor_end] {
-            fingerprint = fingerprint_mix(fingerprint, ancestor.index());
+            fingerprint.write_usize(ancestor.index());
         }
         virtual_upper_bound = virtual_upper_bound.saturating_add(
             (subject_end - subject_start).saturating_mul(ancestor_end - ancestor_start),
@@ -1028,15 +1032,8 @@ fn build_index(
         superclasses: superclasses.into_boxed_slice(),
         source_classes: source_classes.into_boxed_slice(),
         virtual_upper_bound,
-        fingerprint,
+        fingerprint: fingerprint.finish(),
     })
-}
-
-#[inline]
-fn fingerprint_mix(state: u64, value: usize) -> u64 {
-    state
-        .wrapping_mul(0x0000_0100_0000_01b3)
-        .wrapping_add(value as u64)
 }
 
 #[cfg(test)]

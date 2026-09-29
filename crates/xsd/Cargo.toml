@@ -30,8 +30,9 @@ path = "src/lib.rs"
 name = "purrdf_xsd"
 
 [dependencies]
-# The base16 codec behind `xsd:hexBinary`: the either-case reader and the
-# uppercase canonical writer.
+# The base16 codec behind `xsd:hexBinary` (the either-case reader and the
+# uppercase canonical writer), and the SplitMix64 stream `ieee::reference`
+# draws its deterministic samples from.
 purrdf-hash = { workspace = true }
 
 [dev-dependencies]

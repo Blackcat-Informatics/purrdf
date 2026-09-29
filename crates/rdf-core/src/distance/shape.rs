@@ -9,6 +9,8 @@
 
 use core::fmt;
 
+use purrdf_hash::fnv::fnv1a64;
+
 use super::build_identity::{self, BuildInputs};
 
 /// One architecture's row of the layout table.
@@ -464,19 +466,6 @@ const HERE_TEXT: &str = concat!(env!("PURRDF_BUILD_IDENTITY"), "; debug-assertio
 #[cfg(not(debug_assertions))]
 const HERE_TEXT: &str = concat!(env!("PURRDF_BUILD_IDENTITY"), "; debug-assertions=off");
 
-/// The 64-bit FNV-1a digest of `bytes`: fixed-key, deterministic on every target, and
-/// computable at compile time.
-const fn fnv1a64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    let mut at = 0;
-    while at < bytes.len() {
-        hash ^= bytes[at] as u64;
-        hash = hash.wrapping_mul(0x0100_0000_01b3);
-        at += 1;
-    }
-    hash
-}
-
 /// The identity of the compilation that built the reassociated body, beyond what its
 /// `cfg` exposes: the part of a [`BuildShape`] the source cannot see, as a digest.
 ///
@@ -850,9 +839,7 @@ mod tests {
         others.dedup();
         assert_eq!(others.len(), count + 1, "every input is its own identity");
 
-        // The digest is FNV-1a over the text, pinned so it cannot drift.
-        assert_eq!(fnv1a64(b""), 0xcbf2_9ce4_8422_2325);
-        assert_eq!(fnv1a64(b"a"), 0xaf63_dc4c_8601_ec8c);
+        // The digest is FNV-1a over the text.
         assert_eq!(
             base.digest(),
             fnv1a64(BuildIdentity::describe(&inputs(&[]), true).as_bytes())

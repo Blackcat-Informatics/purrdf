@@ -27,7 +27,7 @@ use crate::TermBox;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::Infallible;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::{Arc, OnceLock};
 
 use hashbrown::HashTable;
@@ -1997,10 +1997,7 @@ impl RdfDataset {
     /// never incorrect. For a content-exact identity use the RDFC-1.0 canonical digest.
     #[inline]
     pub fn stats_fingerprint(&self) -> u64 {
-        let mut h = purrdf_hash::fixed::FixedHasher::default();
-        self.quads.len().hash(&mut h);
-        self.terms.len().hash(&mut h);
-        h.finish()
+        crate::hash::stats_fingerprint(self.quads.len(), self.terms.len())
     }
 
     /// The caller-configured content-id recognition scheme (see

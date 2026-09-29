@@ -701,6 +701,8 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 	@#
 	@# The fixed-key table hasher's portable path computes its folded multiplies
 	@# from 32-bit halves on wasm32; its frozen answers are replayed there too.
+	@# SplitMix64's streams and FNV-1a's digests replay their frozen answers
+	@# there as well, where every 64-bit multiply is lowered for wasm32.
 	@#
 	@# The bench harness (purrdf_testkit::bench) runs there too: its own suite
 	@# (statistics, command line, estimates file, whole in-process runs, and the
@@ -785,7 +787,7 @@ wasm-test: ## EXECUTE the cross-target determinism tests on wasm32 in Node (own 
 			-p purrdf-hash-conformance --test digest_differential --test hex --test blake3 \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
-			-p purrdf-hash-conformance --test fixed_hasher \
+			-p purrdf-hash-conformance --test fixed_hasher --test splitmix_fnv \
 		&& CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUNNER=$(CURDIR)/scripts/wasm-test-runner.sh \
 			cargo test --locked --target wasm32-unknown-unknown \
 			-p purrdf-testkit --test bench \

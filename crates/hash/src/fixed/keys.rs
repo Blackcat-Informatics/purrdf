@@ -13,8 +13,9 @@
 
 use super::fold::fold;
 
-/// `⌊2^64/φ⌋` where `φ = (1 + √5)/2`.
-pub(crate) const PHI: u64 = 0x9E37_79B9_7F4A_7C15;
+/// `⌊2^64/φ⌋` where `φ = (1 + √5)/2`: SplitMix64's golden-ratio increment,
+/// [`GOLDEN_GAMMA`](crate::mix::GOLDEN_GAMMA).
+pub(crate) const PHI: u64 = crate::mix::GOLDEN_GAMMA;
 
 /// How many keys the schedule derives.
 pub(crate) const KEY_COUNT: usize = 44;

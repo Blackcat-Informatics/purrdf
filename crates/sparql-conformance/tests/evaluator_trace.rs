@@ -119,14 +119,9 @@ fn is_volatile(query_text: &str) -> bool {
         .any(|call| lower.contains(call))
 }
 
-/// FNV-1a, 64-bit: a fixed, dependency-free digest for the sweep's partial rows.
+/// FNV-1a, 64-bit ([`purrdf_hash::fnv`]): a fixed digest for the sweep's partial rows.
 fn digest(text: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    format!("{:016x}", purrdf_hash::fnv::fnv1a64(text.as_bytes()))
 }
 
 /// Everything one case's evaluations share.

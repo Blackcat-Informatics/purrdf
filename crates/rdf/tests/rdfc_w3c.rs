@@ -69,15 +69,10 @@ fn hash_for(stem: &str) -> CanonHash {
     }
 }
 
-/// Stable FNV-1a hash of a test stem → shard id. Identical algorithm to
-/// `sparql_eval_parity.rs` so the sharding pattern is uniform across the codebase.
+/// A test stem's shard id: its stable FNV-1a digest ([`purrdf_hash::fnv`]) modulo
+/// the shard count.
 fn shard_of(stem: &str) -> usize {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for b in stem.as_bytes() {
-        h ^= u64::from(*b);
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    (h % NUM_SHARDS as u64) as usize
+    (purrdf_hash::fnv::fnv1a64(stem.as_bytes()) % NUM_SHARDS as u64) as usize
 }
 
 fn fixtures_dir() -> PathBuf {

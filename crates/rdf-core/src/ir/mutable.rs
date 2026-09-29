@@ -118,14 +118,6 @@ struct DeltaBuilder {
 }
 
 impl DeltaBuilder {
-    /// The bucket hash of a [`TermValue`]: equal values hash alike.
-    fn hash_of(value: &TermValue) -> u64 {
-        use std::hash::{Hash, Hasher};
-        let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-        value.hash(&mut hasher);
-        hasher.finish()
-    }
-
     /// Intern a delta term BY VALUE, returning its [`DeltaTermId`]. Idempotent: equal
     /// values dedup to one id (probe the hash bucket, compare candidates by `==`).
     ///
@@ -141,7 +133,7 @@ impl DeltaBuilder {
     /// [`IriError`] when the value carries a non-absolute IRI — its own, a literal's
     /// datatype, or one nested in a triple term.
     fn intern(&mut self, value: TermValue) -> Result<DeltaTermId, IriError> {
-        let h = Self::hash_of(&value);
+        let h = crate::hash::hash_of(&value);
         // Probe read-only (as `find` does): a hash miss must not mint an empty
         // bucket — least of all for a value that then fails the check below.
         if let Some(bucket) = self.index.get(&h) {
@@ -164,7 +156,7 @@ impl DeltaBuilder {
 
     /// Find an already-interned [`TermValue`] WITHOUT minting; `None` if absent.
     fn find(&self, value: &TermValue) -> Option<DeltaTermId> {
-        let bucket = self.index.get(&Self::hash_of(value))?;
+        let bucket = self.index.get(&crate::hash::hash_of(value))?;
         bucket
             .iter()
             .copied()

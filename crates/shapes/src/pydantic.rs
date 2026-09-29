@@ -42,6 +42,7 @@ use std::fmt::{self, Write as _};
 
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
+use purrdf_hash::fnv::fnv1a64;
 use serde_json::{Map, Value};
 
 use crate::json_schema::CompiledSchema;
@@ -720,7 +721,7 @@ pub fn emit_pydantic(
         model_paths,
         losses: renderer.ledger,
         source_schema_json: compiled.schema_json.clone(),
-        source_schema_fingerprint: fnv1a(compiled.schema_json.as_bytes()),
+        source_schema_fingerprint: fnv1a64(compiled.schema_json.as_bytes()),
         config: config.clone(),
     })
 }
@@ -748,7 +749,7 @@ pub fn import_pydantic_package(
             package.dialect
         )));
     }
-    if fnv1a(package.source_schema_json.as_bytes()) != package.source_schema_fingerprint {
+    if fnv1a64(package.source_schema_json.as_bytes()) != package.source_schema_fingerprint {
         return Err(PydanticError::new(
             "Pydantic package retained source schema differs from its emission fingerprint",
         ));
@@ -1367,7 +1368,7 @@ impl<'a> Renderer<'a> {
         let raw = format!("Inline {path} Object");
         let mut stem = format!("_{}", python_type_name(&raw, "InlineObject"));
         if stem.len() > 112 {
-            stem = format!("_InlineObject{:016x}", fnv1a(path.as_bytes()));
+            stem = format!("_InlineObject{:016x}", fnv1a64(path.as_bytes()));
         }
         let mut candidate = stem.clone();
         let mut suffix = 2_u32;
@@ -2436,15 +2437,6 @@ fn finish_text(mut text: String) -> String {
         text.push('\n');
     }
     text
-}
-
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 fn known_schema_keyword(keyword: &str) -> bool {

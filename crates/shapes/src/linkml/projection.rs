@@ -8,6 +8,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger};
+use purrdf_hash::fnv::fnv1a64;
 use serde_json::{Map, Value};
 
 use super::{
@@ -304,7 +305,7 @@ pub(super) fn element_name(raw: &str) -> String {
         output.insert(0, 'N');
     }
     if output.len() > 120 {
-        output = format!("SchemaElement{:016x}", fnv1a(raw.as_bytes()));
+        output = format!("SchemaElement{:016x}", fnv1a64(raw.as_bytes()));
     }
     debug_assert!(is_linkml_identifier(&output));
     output
@@ -332,15 +333,6 @@ fn reserved_element_names() -> &'static [&'static str] {
         "Uri",
         "Uriorcurie",
     ]
-}
-
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -576,7 +568,7 @@ fn bounded_curie(
         return Ok(direct);
     }
     push_reason(reasons, LinkmlSlotReason::LengthBound);
-    let hashed = format!("{prefix}:Slot{:016x}", fnv1a(source.as_bytes()));
+    let hashed = format!("{prefix}:Slot{:016x}", fnv1a64(source.as_bytes()));
     if hashed.len() > MAX_GENERATED_SLOT_NAME_BYTES {
         return Err(LinkmlError::new(format!(
             "LinkML prefix {prefix:?} leaves no room within the {MAX_GENERATED_SLOT_NAME_BYTES}-byte generated slot-name limit"
@@ -592,9 +584,9 @@ fn collision_name(base: &str, source: &str, ordinal: usize) -> Result<String, Li
         ))
     })?;
     let suffix = if ordinal == 0 {
-        format!("_{:016x}", fnv1a(source.as_bytes()))
+        format!("_{:016x}", fnv1a64(source.as_bytes()))
     } else {
-        format!("_{:016x}_{ordinal}", fnv1a(source.as_bytes()))
+        format!("_{:016x}_{ordinal}", fnv1a64(source.as_bytes()))
     };
     let fixed = prefix
         .len()

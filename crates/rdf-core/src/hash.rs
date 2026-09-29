@@ -33,6 +33,30 @@ pub type FastSet<T> = std::collections::HashSet<T, FastHasher>;
 /// A [`FastSet`] of interned [`TermId`](crate::TermId)s — the common id-membership set.
 pub type IdSet = FastSet<crate::TermId>;
 
+/// The [`FastHasher`] hash of `value`: the bucket hash of the IR's store-once
+/// tables and interners. Equal values hash alike within one build; the hash only
+/// chooses a bucket, is never persisted, and never orders an output.
+#[inline]
+pub(crate) fn hash_of<T: core::hash::Hash + ?Sized>(value: &T) -> u64 {
+    use core::hash::BuildHasher as _;
+    FastHasher::new().hash_one(value)
+}
+
+/// The coarse size fingerprint of a dataset holding `quads` quads over `terms`
+/// distinct terms: the answer every counted backend gives to
+/// [`DatasetView::stats_fingerprint`](crate::DatasetView::stats_fingerprint).
+///
+/// A *cache discriminator* for a dataset-aware cache key (a join-order cache),
+/// not a content digest: a collision can only make a cache reuse an order
+/// computed for a same-size dataset, which is at worst suboptimal. It is a
+/// [`FixedState`](purrdf_hash::fixed::FixedState) hash, so it is stable within
+/// one build and never persisted.
+#[inline]
+pub(crate) fn stats_fingerprint(quads: usize, terms: usize) -> u64 {
+    use core::hash::BuildHasher as _;
+    FastHasher::new().hash_one((quads, terms))
+}
+
 /// Hash an IRI for the primary term index, including its variant tag.
 ///
 /// The builder, global dictionary and frozen dataset must use this exact

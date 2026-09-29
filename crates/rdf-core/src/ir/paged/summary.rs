@@ -35,6 +35,8 @@
 
 use std::fmt;
 
+use purrdf_hash::mix::{GOLDEN_GAMMA, splitmix64_finalize};
+
 use crate::ir::pack::bits::{IntVector, bits_for};
 
 use crate::ir::{RdfDataset, TermId};
@@ -76,32 +78,22 @@ impl fmt::Display for SummaryDefect {
     }
 }
 
-/// The 64-bit mixing constant seeding [`Digest`] and re-added after every word. Two
-/// of the three constants below are the SplitMix64 finalizer's; this one is the
-/// golden-ratio odd constant. All three are fixed literals — the digest must be the
-/// same number on every run, every platform, and `wasm32-unknown-unknown`.
-const DIGEST_SEED: u64 = 0x9e37_79b9_7f4a_7c15;
-
-/// The SplitMix64 finalizer: a BIJECTION on `u64` built from fixed constants.
-///
-/// Bijectivity is the property the digest's guarantee rests on. Each step of
-/// [`Digest::write`] is `state -> mix(state ^ word) + SEED`, a composition of three
-/// bijections, so for a fixed word the state map is injective and for a fixed state
-/// the word map is injective. Two count sequences that differ in exactly ONE position
-/// and agree everywhere else therefore ALWAYS finish at different digests — they
-/// diverge at that word and then evolve under identical injective steps. Sequences
-/// differing in several positions collide only at the `2^-64` rate any 64-bit digest
-/// carries.
-const fn mix(mut z: u64) -> u64 {
-    z ^= z >> 30;
-    z = z.wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    z ^= z >> 27;
-    z = z.wrapping_mul(0x94d0_49bb_1331_11eb);
-    z ^= z >> 31;
-    z
-}
+/// The 64-bit constant seeding [`Digest`] and re-added after every word: the
+/// SplitMix64 golden-ratio increment, a fixed odd constant, so the digest is the same
+/// number on every run, every platform, and `wasm32-unknown-unknown`.
+const DIGEST_SEED: u64 = GOLDEN_GAMMA;
 
 /// A running, order-SENSITIVE digest over a sequence of `u64` words.
+///
+/// Every step mixes through the SplitMix64 finalizer, [`splitmix64_finalize`], a
+/// BIJECTION on `u64` built from fixed constants, and bijectivity is the property the
+/// digest's guarantee rests on. Each step of [`Digest::write`] is
+/// `state -> finalize(state ^ word) + SEED`, a composition of three bijections, so for
+/// a fixed word the state map is injective and for a fixed state the word map is
+/// injective. Two count sequences that differ in exactly ONE position and agree
+/// everywhere else therefore ALWAYS finish at different digests — they diverge at that
+/// word and then evolve under identical injective steps. Sequences differing in
+/// several positions collide only at the `2^-64` rate any 64-bit digest carries.
 #[derive(Debug)]
 struct Digest(u64);
 
@@ -111,10 +103,10 @@ impl Digest {
         Self(DIGEST_SEED)
     }
 
-    /// Absorb one word. See [`mix`] for why this step is injective in both arguments.
+    /// Absorb one word. See [`Digest`] for why this step is injective in both arguments.
     #[inline]
     fn write(&mut self, word: u64) {
-        self.0 = mix(self.0 ^ word).wrapping_add(DIGEST_SEED);
+        self.0 = splitmix64_finalize(self.0 ^ word).wrapping_add(DIGEST_SEED);
     }
 
     /// Absorb a whole count vector: its field tag, then its LENGTH, then every value
@@ -133,7 +125,7 @@ impl Digest {
     /// Finalize with one more mixing round, so the last word absorbed is diffused
     /// across all 64 output bits rather than sitting in the state's low end.
     const fn finish(self) -> u64 {
-        mix(self.0)
+        splitmix64_finalize(self.0)
     }
 }
 

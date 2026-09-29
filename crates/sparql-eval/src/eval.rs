@@ -377,17 +377,17 @@ impl PreparedExists {
 /// for [`ExistsCacheKey`]. Two schemas with the same ordered variable list hash equal,
 /// so the cached probe index is only reused against a matching outer-row layout.
 pub(crate) fn schema_fingerprint(schema: &VarSchema) -> u64 {
-    let mut h: u64 = 0xcbf2_9ce4_8422_2325;
-    for v in schema.vars() {
-        for b in v.as_str().as_bytes() {
-            h ^= u64::from(*b);
-            h = h.wrapping_mul(0x0000_0100_0000_01b3);
-        }
-        // Separator so ["ab","c"] and ["a","bc"] do not collide.
-        h ^= 0xff;
-        h = h.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    h
+    schema
+        .vars()
+        .iter()
+        .fold(purrdf_hash::fnv::BASIS, |state, v| {
+            // A 0xFF separator after each name (never a UTF-8 byte), so ["ab","c"] and
+            // ["a","bc"] do not collide.
+            purrdf_hash::fnv::fold(
+                purrdf_hash::fnv::fold(state, v.as_str().as_bytes()),
+                &[0xFF],
+            )
+        })
 }
 
 /// Spell one minted blank-node label: `stem` followed by the decimal counter value

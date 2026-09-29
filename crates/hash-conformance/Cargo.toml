@@ -70,3 +70,10 @@ harness = false
 [[test]]
 name = "blake3"
 harness = false
+
+# SplitMix64's three streams and FNV-1a over structured corpora: frozen
+# answers replayed natively and on wasm32, where the 64-bit multiplies are
+# built from 32-bit halves.
+[[test]]
+name = "splitmix_fnv"
+harness = false

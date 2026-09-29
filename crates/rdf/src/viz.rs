@@ -1854,14 +1854,11 @@ fn compact_iri(iri: &str) -> String {
         .to_owned()
 }
 
-/// Compute a deterministic non-cryptographic hash over text.
+/// Compute a deterministic non-cryptographic hash over text: the FNV-1a 64-bit
+/// digest ([`purrdf_hash::fnv::fnv1a64`]) of its UTF-8 bytes, as sixteen
+/// lowercase hexadecimal digits.
 pub fn stable_hash_hex(input: &str) -> String {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in input.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    format!("{:016x}", purrdf_hash::fnv::fnv1a64(input.as_bytes()))
 }
 
 #[cfg(test)]

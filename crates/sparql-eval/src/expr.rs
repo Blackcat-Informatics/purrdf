@@ -5207,14 +5207,10 @@ fn unary_numeric_fn<D: DatasetView + Sync>(
 // extraction, NOW, RAND, and UUID/STRUUID
 // ---------------------------------------------------------------------------
 
-/// Splitmix64 step: advance the PRNG state and return the next pseudo-random u64.
-/// Algorithm: <https://prng.di.unimi.it/splitmix64.c>
-fn next_u64<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> u64 {
-    ctx.rng_state = ctx.rng_state.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    let mut z = ctx.rng_state;
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    z ^ (z >> 31)
+/// The next draw of the context's SplitMix64 generator
+/// ([`purrdf_hash::mix::splitmix64_next`] over `rng_state` as its counter).
+const fn next_u64<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>) -> u64 {
+    purrdf_hash::mix::splitmix64_next(&mut ctx.rng_state)
 }
 
 /// Mint a fresh blank node (`BNODE()`/`BNODE(strExpr)`'s cache-miss path).

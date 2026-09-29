@@ -20,9 +20,9 @@
 //! and fails unless every named case reports the same digest on every build and those
 //! digests are the goldens. The digests are computed inside [`without_host_clock_or_entropy`],
 //! so on wasm32 a build that reached a host clock or entropy source fails by that source's
-//! name. The digest itself is hand-rolled FNV-1a over the canonical payload bytes — see
-//! [`purrdf_hnsw::determinism`] — so a moved golden is a serialization defect and never a
-//! hasher change.
+//! name. The digest itself is FNV-1a ([`purrdf_hash::fnv`]) over the canonical payload
+//! bytes — see [`purrdf_hnsw::determinism`] — so a moved golden is a serialization defect
+//! and never a hasher change.
 //!
 //! # Why a serial insert must differ
 //!
@@ -166,7 +166,8 @@ fn the_digest_is_not_vacuous() {
         "an all-zero golden would be satisfied by a digest that folded nothing"
     );
     assert_ne!(
-        GOLDEN_DIGEST, 0xcbf2_9ce4_8422_2325,
+        GOLDEN_DIGEST,
+        purrdf_hash::fnv::BASIS,
         "the golden must differ from FNV-1a's unfolded offset basis"
     );
 }

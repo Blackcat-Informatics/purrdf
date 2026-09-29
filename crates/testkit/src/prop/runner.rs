@@ -69,12 +69,7 @@ pub fn cases_from_env(default: u32) -> u32 {
 /// The deterministic default seed of the property named `name`: FNV-1a over
 /// the name, finalised by SplitMix64. No property ever reads OS entropy.
 pub fn seed_for(name: &str) -> u64 {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in name.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    SplitMix64::new(hash).next_u64()
+    SplitMix64::new(purrdf_hash::fnv::fnv1a64(name.as_bytes())).next_u64()
 }
 
 /// Whether `digits` is one or more digits of `radix` and nothing else. The

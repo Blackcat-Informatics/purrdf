@@ -412,15 +412,10 @@ mod tags {
     pub(super) const BLANK: u64 = 0xB1A4_0009;
 }
 
-/// `splitmix64` — the classic public-domain mixing step: deterministic,
-/// allocation-free, and identical on every target.
-#[must_use]
-pub const fn splitmix64(state: u64) -> u64 {
-    let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
+/// `splitmix64` — one self-composed SplitMix64 step,
+/// [`purrdf_hash::mix::splitmix64_step`]: deterministic, allocation-free, and
+/// identical on every target.
+pub use purrdf_hash::mix::splitmix64_step as splitmix64;
 
 /// Mixes the seed with a stream tag and an index into one draw.
 const fn draw(seed: u64, tag: u64, index: u64) -> u64 {
@@ -1585,10 +1580,7 @@ mod tests {
              itself may hold fewer: identical rows deduplicate under set
              semantics)"
         );
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for byte in text.bytes() {
-            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01B3);
-        }
+        let hash = purrdf_hash::fnv::fnv1a64(text.as_bytes());
         assert_eq!(
             hash, 0xEA2E_E654_BA6F_44D3,
             "byte-level FNV pin moved: {CORPUS_PROFILE_ID} must be bumped"

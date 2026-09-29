@@ -18,6 +18,7 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
+use purrdf_hash::fnv::fnv1a64;
 use purrdf_xsd::ieee::Binary64Scope;
 use serde_json::{Map, Number, Value};
 
@@ -388,7 +389,10 @@ impl<'a> ImportContext<'a> {
     fn nested_shape_id(&mut self, path: &str) -> Term {
         let id = self.nested_shape_counter;
         self.nested_shape_counter += 1;
-        Term::blank(format!("schema-import-{id:08x}-{}", fnv1a(path.as_bytes())))
+        Term::blank(format!(
+            "schema-import-{id:08x}-{}",
+            fnv1a64(path.as_bytes())
+        ))
     }
 }
 
@@ -405,15 +409,6 @@ fn validate_absolute_iri(label: &str, value: &str) -> Result<(), SchemaImportErr
 
 fn definition_path(key: &str) -> String {
     format!("#/$defs/{}", json_pointer::escape_token(key))
-}
-
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 /// An imported property has no source RDF node. Preserve its source shape and

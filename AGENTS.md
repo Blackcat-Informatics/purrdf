@@ -61,7 +61,8 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-hash` | The zero-dependency root |
 | `purrdf-lex` (`crates/lex`) | Native lexical foundations shared by every grammar, over the zero-dependency `purrdf-hash` root: the exact Turtle/SPARQL/XML terminal classes and escape decoders (`terminals`: `decode_uchar`, `echar_value`, `decode_char_ref`, `skip_ws`/`trim_ws`, `is_ncname`, `in_ranges`), the chunked byte-class scanners and `ByteClass` kernel that lower to packed compares on SSE2/AVX2/AVX-512, NEON and wasm simd128, with `find_byte`/`find_byte2` for needles known at run time (`scan`), the RFC 8259 JSON string escaper and decoder every JSON writer and reader shares (`json_escape`), RFC 6901 JSON Pointer tokens (`json_pointer`) and RFC 3986 percent-encoding (`percent`); its scope is the workspace's lexical layer — byte-class scanning, terminals, term syntax, literal/IRI escaping, percent encoding, JSON strings and pointers, a JSON reader/writer, an XML reader and Unicode normalisation |
 | `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags, IDNA2008); runtime dependencies are `purrdf-lex`, whose `terminals`, `scan`, `json_escape`, `json_pointer` and `percent` it re-exports, and the `purrdf-hash` root |
-| `purrdf-xsd`, `purrdf-events` | Zero-dependency foundations |
+| `purrdf-xsd` | Foundation over `purrdf-hash` alone |
+| `purrdf-events` | Zero-dependency foundation |
 | `purrdf-deflate` | Leaf over `purrdf-hash` alone |
 | `purrdf-cdt` (`crates/cdt`) | SPARQL composite datatypes (SEP-0009 `cdt:List`/`cdt:Map`): closed leaf over `purrdf-iri` + `purrdf-xsd` only |
 | `purrdf-stack` (`crates/stack`) | How much stack the thread has left (native OS limit, read via target-gated `libc`/`windows-sys` declarations with no C toolchain needed; wasm32 shadow stack against an installable floor) and the margin the SPARQL evaluator refuses at |

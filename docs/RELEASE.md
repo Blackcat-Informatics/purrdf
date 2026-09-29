@@ -201,8 +201,8 @@ dev-dependency, and `cargo publish` resolves dev-dependencies when it verifies a
 package, so neither can be verified until `purrdf-jsonschema` has a record. Its
 token bootstrap therefore comes first, before the tag.
 
-`purrdf-hash` is a normal dependency of `purrdf-jsonschema`, `purrdf-deflate`,
-`purrdf-gts`, `purrdf-datalog`, `purrdf-sparql-algebra` and `purrdf-sparql-eval`
+`purrdf-hash` is a normal dependency of `purrdf-xsd`, `purrdf-jsonschema`,
+`purrdf-deflate`, `purrdf-gts`, `purrdf-datalog`, `purrdf-sparql-algebra` and `purrdf-sparql-eval`
 (and a dev-dependency of `purrdf-iri`), and through them of most of the release
 set, so none of those can even be packaged until it has a record. Its
 token bootstrap comes first as well, before the tag. `purrdf-deflate` is a

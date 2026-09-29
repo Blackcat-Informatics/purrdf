@@ -18,7 +18,7 @@
 //! silent default.
 
 use std::collections::HashMap;
-use std::hash::{Hash, Hasher};
+use std::hash::Hash;
 use std::sync::Arc;
 
 use hashbrown::HashTable;
@@ -33,15 +33,11 @@ use crate::{
 use super::dataset::{FastHasher, QuadHandle, QuadIds, QuadRow, RdfDataset, TermRef};
 use super::term::{BlankScope, InternedLiteral, InternedTerm, StrRange, TermId, arena_str};
 use crate::RdfLocation;
-
-/// A fixed-key hash of a value, so the store-once tables are deterministic across
-/// runs. The frozen output is sorted by id, not hash-iteration order, so any hash
-/// would do; the fixed-key `FixedHasher` just avoids SipHash on the hot interning path.
-fn hash_of<T: Hash>(value: &T) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
-}
+// The store-once tables hash with the fixed-key `hash_of`, so they are
+// deterministic across runs. The frozen output is sorted by id, not
+// hash-iteration order, so any hash would do; the fixed key avoids SipHash on the
+// hot interning path.
+use crate::hash::hash_of;
 
 fn hash_lookup_value(lookup: &TermLookup<'_>) -> u64 {
     match lookup {

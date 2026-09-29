@@ -20,8 +20,10 @@
 //! Nothing here is cryptographically secure; it is a seed expander, a
 //! deterministic test-input stream and a strong 64-bit finaliser.
 
-/// The golden-ratio increment: `⌊2^64 / φ⌋`, which is odd.
-const GOLDEN_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
+/// The golden-ratio increment: `⌊2^64 / φ⌋`, which is odd. Besides advancing
+/// both streams here, it is the fixed odd constant a caller composing its own
+/// digest from [`splitmix64_finalize`] seeds and re-adds.
+pub const GOLDEN_GAMMA: u64 = 0x9E37_79B9_7F4A_7C15;
 
 /// The SplitMix64 finaliser of `z`, without the golden-ratio increment: two
 /// xor-shift-multiply rounds and a final xor-shift. A bijection on `u64`.
@@ -55,7 +57,10 @@ pub const fn splitmix64_step(state: u64) -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use super::{splitmix64_finalize, splitmix64_next, splitmix64_step};
+    use std::collections::HashSet;
+
+    use super::{GOLDEN_GAMMA, splitmix64_finalize, splitmix64_next, splitmix64_step};
+    use crate::fixed::FixedState;
 
     /// The first sixteen outputs of the published generator from seed 0 and
     /// from seed `0x9E3779B97F4A7C15` (the second stream is the first shifted
@@ -135,6 +140,36 @@ mod tests {
             state
         });
         assert_eq!(observed, FROM_0XC057);
+    }
+
+    /// One step from each of the first four states: a pure function of the
+    /// state, which is how a caller that keys a draw by an index uses it.
+    #[test]
+    fn splitmix64_step_from_the_first_states() {
+        assert_eq!(splitmix64_step(0), 0xE220_A839_7B1D_CDAF);
+        assert_eq!(splitmix64_step(1), 0x910A_2DEC_8902_5CC1);
+        assert_eq!(splitmix64_step(2), 0x9758_35DE_1C97_56CE);
+        assert_eq!(splitmix64_step(3), 0x1D0B_14E4_DB01_8FED);
+    }
+
+    /// The step is a bijection (an added constant, then the finaliser's
+    /// bijective rounds), so distinct states never share a draw: checked over
+    /// the first 4,096 states.
+    #[test]
+    fn splitmix64_step_is_injective_over_a_prefix() {
+        let mut seen = HashSet::with_hasher(FixedState::new());
+        for state in 0..4096_u64 {
+            assert!(seen.insert(splitmix64_step(state)), "collision at {state}");
+        }
+    }
+
+    /// The increment is `⌊2^64 / φ⌋` and odd, so adding it walks every `u64`.
+    #[test]
+    fn the_increment_is_the_odd_golden_ratio_constant() {
+        assert_eq!(GOLDEN_GAMMA % 2, 1);
+        let inverse_phi = (5.0_f64.sqrt() - 1.0) * 0.5;
+        let approx = (2.0_f64.powi(64) * inverse_phi) as u64;
+        assert!(GOLDEN_GAMMA.abs_diff(approx) < 1 << 12, "{approx:#x}");
     }
 
     /// The finaliser is the generator's output function: the first output

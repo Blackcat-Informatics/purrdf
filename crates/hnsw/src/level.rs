@@ -33,21 +33,16 @@
 //! unbounded layer; the index identity stays exactly `M`, `M0`, `ef_construction`,
 //! `ef_search`.
 
-/// The SplitMix64 finalizer: a bijective integer mix with no state and no entropy.
+/// The level hash: one self-composed SplitMix64 step,
+/// [`purrdf_hash::mix::splitmix64_step`], a bijective integer mix with no state and
+/// no entropy.
 ///
-/// This is `seed` mapped directly through the finalizer (the reference implementation's
-/// `next()` with its counter folded in), not SplitMix64's stateful generator — a level is
-/// a pure function of the row index, so there is no generator state to advance.
-///
-/// The constants are the published SplitMix64 constants; the shifts and multiplies are
-/// wrapping so the function is total over `u64`.
-#[must_use]
-pub const fn splitmix64(seed: u64) -> u64 {
-    let mut z = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    z ^ (z >> 31)
-}
+/// It is `seed` plus the golden-ratio increment mapped through the finalizer (the
+/// reference implementation's `next()` with its counter folded in), not SplitMix64's
+/// stateful generator: a level is a pure function of the row index, so there is no
+/// generator state to advance. Wrapping arithmetic only, so it is total over `u64`
+/// and the same on every target.
+pub use purrdf_hash::mix::splitmix64_step as splitmix64;
 
 /// Bits of hash consumed per level: the largest `k` with `2^k <= m`, i.e.
 /// `floor(log2(m))`.
@@ -116,26 +111,6 @@ pub fn level_from_index(row_index: u64, m: usize, cap: u32) -> u32 {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn splitmix64_matches_known_answers() {
-        // Published SplitMix64 finalizer outputs; pinned by bits so a drift is a failure
-        // rather than an approximation.
-        assert_eq!(splitmix64(0), 0xe220_a839_7b1d_cdaf);
-        assert_eq!(splitmix64(1), 0x910a_2dec_8902_5cc1);
-        assert_eq!(splitmix64(2), 0x9758_35de_1c97_56ce);
-        assert_eq!(splitmix64(3), 0x1d0b_14e4_db01_8fed);
-    }
-
-    #[test]
-    fn splitmix64_is_a_bijection_onto_a_large_prefix() {
-        // Distinct inputs must give distinct outputs over a prefix for the level mapping
-        // to be meaningful at all.
-        let mut seen = purrdf_core::FastSet::default();
-        for i in 0..4096_u64 {
-            assert!(seen.insert(splitmix64(i)), "collision at {i}");
-        }
-    }
 
     #[test]
     fn bits_per_level_is_floor_log2() {

@@ -226,20 +226,23 @@ entry_points = [
     "purrdf_hash::mix::splitmix64_next",
     "purrdf_hash::mix::splitmix64_step",
     "purrdf_hash::mix::splitmix64_finalize",
+    "purrdf_hash::mix::GOLDEN_GAMMA",
     "purrdf_testkit::rng::splitmix64_next",
     "purrdf_testkit::rng::splitmix64_step",
+    "purrdf_hnsw::level::splitmix64",
+    "purrdf_bench::splitmix64",
 ]
 spec = "SplitMix64 (Steele, Lea and Flood, OOPSLA 2014): golden-ratio increment 0x9E3779B97F4A7C15, finaliser multipliers 0xBF58476D1CE4E5B9 and 0x94D049BB133111EB with shifts 30, 27 and 31"
-vectors = []
+vectors = ["crates/hash-conformance/tests/vectors/splitmix64_differential_vectors.txt"]
 bench = []
 sites = []
 replaces_external = []
-enforced = false
+enforced = true
 
 [job.forbidden]
 constants = ["0x9e37_79b9_7f4a_7c15", "0xbf58_476d_1ce4_e5b9", "0x94d0_49bb_1331_11eb"]
 fingerprints = []
-names = []
+names = ['^splitmix(64)?(_next|_step|_finali[sz]e)?$']
 
 [[job]]
 id = "fnv1a64"
@@ -252,16 +255,16 @@ entry_points = [
     "purrdf_hash::fnv::PRIME",
 ]
 spec = "FNV-1a 64-bit (Fowler, Noll and Vo; draft-eastlake-fnv): offset basis 0xCBF29CE484222325, prime 0x100000001B3, XOR then multiply modulo 2^64"
-vectors = []
+vectors = ["crates/hash-conformance/tests/vectors/fnv1a64_differential_vectors.txt"]
 bench = []
 sites = []
 replaces_external = []
-enforced = false
+enforced = true
 
 [job.forbidden]
 constants = ["0xcbf2_9ce4_8422_2325", "0x100_0000_01b3"]
 fingerprints = []
-names = []
+names = ['^fnv(1a?)?(_?64)?$']
 
 [[job]]
 id = "md5"
