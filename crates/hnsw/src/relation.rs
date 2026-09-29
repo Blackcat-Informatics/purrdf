@@ -1045,7 +1045,7 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
                     .fetch_add(1, Ordering::Relaxed);
                 (
                     Answer::Membership(query_row.zip(self.space.row_of(candidate))),
-                    universe_size(self.space.row_count()),
+                    purrdf_sparql_eval::knn::universe_size(self.space.row_count()),
                 )
             }
         };
@@ -1063,29 +1063,6 @@ impl<A: Arithmetic> PropertyFunction for HnswRelation<A> {
             unreported_work: 0,
         }))
     }
-}
-
-/// The value the count position carries in a **membership** answer: the number of rows
-/// the space holds, as an `xsd:integer`.
-///
-/// # Why the position needs a value at all, and why this is the one
-///
-/// A [`PfRow`] carries a value for every flattened position, so a mode that leaves the
-/// count free must still fill it. In [`HNSW_MODE`] that position is an *input* — the
-/// request — and is echoed back verbatim. In [`HNSW_MEMBERSHIP_MODE`] there is no request
-/// to echo: the caller asked *do you hold this term*, a question no `k` is part of.
-///
-/// So under that mode the position is an **output**, and what it outputs is a fact about
-/// the producer rather than a request it was never given: the size of its term universe.
-/// That is exactly the quantity a membership answer is about — the lookup says *this term
-/// is one of my rows*, and this says *how many rows there are* — it is single-valued, so
-/// the mode's declared row bound of one is exact, and it costs a length read.
-///
-/// It is emphatically **not** a fabricated `k`. Inventing a request the caller did not
-/// make would put a claim about rank into a row that traversed nothing, which is the one
-/// thing a point lookup must never do.
-fn universe_size(rows: usize) -> TermValue {
-    TermValue::typed_literal(rows.to_string(), XSD_INTEGER)
 }
 
 /// Read `k` off the invocation's neighbour-count argument.

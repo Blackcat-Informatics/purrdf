@@ -31,7 +31,7 @@ use purrdf_core::{DatasetView, FastMap, FastSet, RdfDataset, RdfDatasetBuilder, 
 use purrdf_datalog::StopSignal;
 use purrdf_datalog::seminaive::BudgetReport;
 
-use crate::engine::{copy_into, resolve_value, surface_of};
+use crate::engine::{copy_into, surface_of};
 use crate::interner::{Interner, intern_into};
 use crate::report::{Boundary, Construct, ReasoningReport};
 use crate::rif::model::{Atom, RifTerm, RuleSet};
@@ -263,9 +263,9 @@ pub fn materialize_rif_until<D: DatasetView>(
             named_graph = true;
             continue; // entailment operates over the default graph
         }
-        let s = terms.intern(resolve_value(ds, q.s));
-        let p = terms.intern(resolve_value(ds, q.p));
-        let o = terms.intern(resolve_value(ds, q.o));
+        let s = terms.intern(ds.term_value(q.s)?);
+        let p = terms.intern(ds.term_value(q.p)?);
+        let o = terms.intern(ds.term_value(q.o)?);
         push_fact(&mut facts, &mut seed, [s, p, o]);
     }
     let original: FastSet<[u32; 3]> = facts.clone();
@@ -295,7 +295,7 @@ pub fn materialize_rif_until<D: DatasetView>(
     // The original quads are copied verbatim, preserving blank-node scopes, so a derived
     // fact naming one of the input's blank nodes lands on the SAME term the copy carries —
     // `push_dataset` would have re-scoped the input and split the two apart.
-    copy_into(&mut b, ds);
+    copy_into(&mut b, ds)?;
     // Set iteration order is not stable across runs, so sort the accumulated
     // facts by their interned term ids to get a deterministic (not insertion-order)
     // emission order.
@@ -844,7 +844,7 @@ mod tests {
         // The quad itself is still in the answer: the boundary is about premises.
         assert!(
             out.quads()
-                .any(|q| q.g.is_some() && out.term_value(q.p) == iri("brother")),
+                .any(|q| q.g.is_some() && out.term_value(q.p).unwrap() == iri("brother")),
             "the named-graph quad is carried through"
         );
         // Determinism: the same input renders the same report, field for field.

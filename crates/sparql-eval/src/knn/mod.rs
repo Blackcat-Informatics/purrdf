@@ -186,11 +186,6 @@ const KNN_MEMBERSHIP_MODE: &str = "bbff";
 /// `xsd:double`, the datatype every emitted distance carries.
 const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
 
-/// `xsd:integer`, the datatype the count position carries in a membership answer. The
-/// ranked path never mints one: it echoes the caller's own count term verbatim, datatype
-/// and all. See [`universe_size`].
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-
 /// The domain separator every [`EmbeddingSpace`] generation opens with, so this
 /// digest can never equal a digest of another kind that happens to fold a
 /// structurally identical field sequence — the same discipline
@@ -1816,8 +1811,9 @@ impl<A: Arithmetic> PropertyFunction for EmbeddingKnnRelation<A> {
 /// It is emphatically **not** a fabricated `k`. Inventing a request the caller did not
 /// make would put a claim about rank into a row that ranked nothing, which is the one
 /// thing a point lookup must never do.
-fn universe_size(rows: usize) -> TermValue {
-    TermValue::typed_literal(rows.to_string(), XSD_INTEGER)
+#[must_use]
+pub fn universe_size(rows: usize) -> TermValue {
+    TermValue::integer(rows as u64)
 }
 
 /// Read `k` off the invocation's neighbour-count argument.

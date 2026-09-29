@@ -367,6 +367,10 @@ pub enum EntailError {
     /// silently. The message names the collection's head, the cell the walk stopped at,
     /// and the fault.
     MalformedList(String),
+    /// A term id of the input view did not resolve to a value: the view handed back a
+    /// literal whose datatype is not an IRI, so the id is foreign to it. Nothing is
+    /// reasoned over a term the input does not actually hold.
+    ForeignTerm(purrdf_core::TermLookupError),
     /// The knowledge base is inconsistent: every query would be entailed, so no
     /// meaningful answer set exists. A hard failure rather than a silent default.
     ///
@@ -522,6 +526,7 @@ impl std::fmt::Display for EntailError {
             Self::Evaluate(error) => write!(f, "entailment evaluation error: {error}"),
             Self::Chase(error) => write!(f, "entailment chase error: {error}"),
             Self::MalformedList(msg) => write!(f, "entailment collection error: {msg}"),
+            Self::ForeignTerm(error) => write!(f, "entailment input error: {error}"),
             Self::Inconsistent(run) => write!(
                 f,
                 "knowledge base is inconsistent: {} was satisfied by {} asserted {}",
@@ -609,6 +614,12 @@ impl std::fmt::Display for EntailError {
     }
 }
 
+impl From<purrdf_core::TermLookupError> for EntailError {
+    fn from(error: purrdf_core::TermLookupError) -> Self {
+        Self::ForeignTerm(error)
+    }
+}
+
 impl std::error::Error for EntailError {
     /// The wrapped cause, for the variants that carry one.
     ///
@@ -635,6 +646,7 @@ impl std::error::Error for EntailError {
             Self::Evaluate(inner) => Some(inner),
             Self::Chase(inner) => Some(inner),
             Self::Canonicalization(inner) => Some(inner),
+            Self::ForeignTerm(inner) => Some(inner),
             Self::Build(_)
             | Self::Parse(_)
             | Self::MalformedList(_)
@@ -2253,8 +2265,8 @@ mod tests {
         assert!(report.inconsistency().is_none());
         assert!(
             closed.quads().any(|q| {
-                closed.term_value(q.s) == TermValue::iri(X)
-                    && closed.term_value(q.o) == TermValue::typed_literal("01", integer)
+                closed.term_value(q.s).unwrap() == TermValue::iri(X)
+                    && closed.term_value(q.o).unwrap() == TermValue::typed_literal("01", integer)
             }),
             "dt-eq and eq-rep-o must keep the equal-valued spelling on the subject"
         );
@@ -2412,10 +2424,10 @@ mod tests {
         let typed: Vec<TermValue> = closed
             .quads()
             .filter(|q| {
-                closed.term_value(q.p) == TermValue::iri(RDF_TYPE)
-                    && closed.term_value(q.o) == TermValue::iri(B)
+                closed.term_value(q.p).unwrap() == TermValue::iri(RDF_TYPE)
+                    && closed.term_value(q.o).unwrap() == TermValue::iri(B)
             })
-            .map(|q| closed.term_value(q.s))
+            .map(|q| closed.term_value(q.s).unwrap())
             .collect();
         assert_eq!(
             typed.len(),
@@ -2430,8 +2442,8 @@ mod tests {
         // The blank OBJECT position round-trips too: `_:class ⊑ B` is still about `_:class`.
         assert!(
             closed.quads().any(|q| {
-                closed.term_value(q.p) == TermValue::iri(RDFS_SUBCLASSOF)
-                    && closed.term_value(q.s).as_blank().map(|(l, _)| l) == Some("class")
+                closed.term_value(q.p).unwrap() == TermValue::iri(RDFS_SUBCLASSOF)
+                    && closed.term_value(q.s).unwrap().as_blank().map(|(l, _)| l) == Some("class")
             }),
             "the blank subject of the schema triple was not carried through"
         );
@@ -2747,7 +2759,7 @@ mod tests {
             assert!(
                 !closed
                     .quads()
-                    .any(|q| matches!(closed.term_value(q.s), TermValue::Triple { .. })),
+                    .any(|q| matches!(closed.term_value(q.s).unwrap(), TermValue::Triple { .. })),
                 "{regime:?}: a triple term reached subject position"
             );
             // …and no stand-in was minted to carry the abandoned conclusion.

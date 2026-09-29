@@ -1110,10 +1110,10 @@ pub(crate) fn materialize_results(py: Python<'_>, result: SparqlResult) -> PyRes
                 .into_iter()
                 .map(|row| {
                     row.into_iter()
-                        .map(|cell| cell.map(term_value_to_rdf))
-                        .collect()
+                        .map(|cell| cell.map(term_value_to_rdf).transpose())
+                        .collect::<PyResult<_>>()
                 })
-                .collect();
+                .collect::<PyResult<_>>()?;
             Ok(Py::new(
                 py,
                 PyQuerySolutions {
@@ -1163,59 +1163,16 @@ fn materialize_graph(py: Python<'_>, graph: &RdfDataset) -> PyResult<Py<PyAny>> 
 }
 
 /// Lower a dataset-independent [`TermValue`] (the SPARQL egress cell type) into the
-/// owned [`RdfTerm`] the Python term layer wraps.
-pub(crate) fn term_value_to_rdf(value: TermValue) -> RdfTerm {
-    match value {
-        TermValue::Iri(iri) => RdfTerm::Iri(iri),
-        TermValue::Blank { label, scope } => {
-            RdfTerm::BlankNode(scope.qualify_label(&label).into_owned())
-        }
-        TermValue::Literal {
-            lexical_form,
-            datatype,
-            language,
-            direction,
-        } => RdfTerm::Literal(crate::RdfLiteral {
-            // The native IR carries the datatype IRI by value (always present); the
-            // owned model keeps a plain or language-tagged literal
-            // datatype-less, so collapse those back to `None` for term parity.
-            datatype: collapse_synthetic_datatype(&datatype, language.as_ref(), direction),
-            lexical_form,
-            language,
-            direction,
-        }),
-        TermValue::Triple { s, p, o } => RdfTerm::triple(RdfTriple::new(
-            term_value_to_rdf(s.into_inner()),
-            term_value_predicate(p.into_inner()),
-            term_value_to_rdf(o.into_inner()),
-        )),
-    }
-}
-
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-
-/// Drop the `TermValue` synthetic datatype IRI when it is the one the owned model
-/// leaves implicit: `xsd:string` for a plain literal, and the language datatype
-/// selected by base direction for a tagged literal. Other datatypes stay verbatim.
-fn collapse_synthetic_datatype(
-    datatype: &str,
-    language: Option<&String>,
-    direction: Option<purrdf_core::model::RdfTextDirection>,
-) -> Option<String> {
-    if language.is_some() {
-        return (datatype != crate::RdfLiteral::language_datatype_iri(direction))
-            .then(|| datatype.to_owned());
-    }
-    (datatype != XSD_STRING).then(|| datatype.to_owned())
-}
-
-/// A triple-term predicate `TermValue` must be an IRI; fall back to its lexical form
-/// for any other (ill-formed) shape so the conversion is total.
-fn term_value_predicate(value: TermValue) -> String {
-    match value {
-        TermValue::Iri(iri) => iri,
-        other => term_value_to_rdf(other).to_string(),
-    }
+/// owned [`RdfTerm`] the Python term layer wraps, through [`TermValue::into_rdf_term`].
+///
+/// # Errors
+///
+/// `ValueError` for a triple term whose predicate is not an IRI: RDF 1.2 has no such
+/// term, and none is fabricated for it.
+pub(crate) fn term_value_to_rdf(value: TermValue) -> PyResult<RdfTerm> {
+    value
+        .into_rdf_term()
+        .map_err(|error| PyValueError::new_err(error.to_string()))
 }
 
 // ---------------------------------------------------------------------------

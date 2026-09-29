@@ -2099,7 +2099,7 @@ mod tests {
 
             // Ground truth: every value the dataset itself ever interned.
             let truth: HashSet<TermValue> = (0..dataset.term_count())
-                .map(|i| dataset.term_value(TermId::from_index(i as u32)))
+                .map(|i| dataset.term_value(TermId::from_index(i as u32)).unwrap())
                 .collect();
 
             for id in 1..=dict.n_terms() {

@@ -534,8 +534,8 @@ impl<'dataset> PagedQueryView<'dataset> {
             let local =
                 TermId::from_index(u32::try_from(local_index).expect("page term index fits u32"));
             let global = slot.translation.to_global(local);
-            if materialization.dataset.term_value(local)
-                != self.dataset.dictionary.term_value(global)
+            if materialization.dataset.term_value(local).ok()
+                != Some(self.dataset.dictionary.term_value(global))
             {
                 return Err(PagedQueryError::InvalidData {
                     page: id,

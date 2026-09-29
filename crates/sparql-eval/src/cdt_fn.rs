@@ -78,10 +78,8 @@ use purrdf_sparql_algebra::CdtFn;
 
 use crate::error::EvalError;
 use crate::eval::EvalCtx;
+use crate::expr::{intern_boolean, intern_integer};
 use crate::scratch::SolutionTerm;
-
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
 /// Evaluate a SEP-0009 composite-datatype function call.
 ///
@@ -131,7 +129,7 @@ pub(crate) fn dispatch<D: DatasetView + Sync>(
         },
 
         CdtFn::Size => match composite_argument(vals, 0)? {
-            Some(value) => Ok(Some(integer_term(ctx, purrdf_cdt::size(&value)))),
+            Some(value) => Ok(Some(intern_integer(ctx, purrdf_cdt::size(&value) as u64))),
             None => Ok(None),
         },
         CdtFn::Head => match composite_argument(vals, 0)? {
@@ -261,7 +259,7 @@ fn bool_result<D: DatasetView + Sync>(
     outcome: CdtOutcome<bool>,
 ) -> Result<Option<SolutionTerm<D::Id>>, EvalError> {
     match outcome {
-        CdtOutcome::Value(answer) => Ok(Some(bool_term(ctx, answer))),
+        CdtOutcome::Value(answer) => Ok(Some(intern_boolean(ctx, answer))),
         CdtOutcome::Error(_) => Ok(None),
         CdtOutcome::Bound(error) => Err(bound(&error)),
     }
@@ -706,32 +704,6 @@ fn intern<D: DatasetView + Sync>(
     ctx.scratch.intern_checked(ctx.dataset, value)
 }
 
-/// Intern a typed (no-language) literal. Infallible: there is no tag to judge.
-fn typed_term<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    lexical: String,
-    datatype: &str,
-) -> SolutionTerm<D::Id> {
-    ctx.scratch
-        .intern_datatyped(ctx.dataset, lexical, datatype.to_owned())
-}
-
-/// Intern an `xsd:integer` literal.
-fn integer_term<D: DatasetView + Sync>(
-    ctx: &mut EvalCtx<'_, D>,
-    value: usize,
-) -> SolutionTerm<D::Id> {
-    typed_term(ctx, value.to_string(), XSD_INTEGER)
-}
-
-/// Intern an `xsd:boolean` literal.
-fn bool_term<D: DatasetView + Sync>(ctx: &mut EvalCtx<'_, D>, answer: bool) -> SolutionTerm<D::Id> {
-    typed_term(
-        ctx,
-        if answer { "true" } else { "false" }.to_owned(),
-        XSD_BOOLEAN,
-    )
-}
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;

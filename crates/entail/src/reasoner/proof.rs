@@ -1595,16 +1595,12 @@ const fn answer_ordinal(answer: ProofAnswer) -> u8 {
 /// Append a term STRUCTURALLY — a kind byte and then that kind's own components, every
 /// variable-length one length-prefixed.
 ///
-/// Not the sort key [`term_key`] builds, and the difference is load-bearing twice over. The key
-/// joins a term's coordinates with separator scalars, so a triple term whose parts contain
-/// those scalars has the same key as a different term — an ambiguity a claim's identity must
-/// not rest on — and it is a PROJECTION, so no decoder can invert it. This encoding is
-/// injective and invertible, which is what lets [`ServiceProof::decode`] exist at all, and it
-/// is still a total order over terms: [`ServiceProof::covers`] sorts by these bytes, and two
-/// terms encode equal exactly when they ARE equal.
-///
-/// The kind byte's ordering agrees with [`term_key`]'s discriminant, so the four term kinds
-/// still do not interleave.
+/// Not [`TermValue`]'s own order, which sorts every sequence a reasoner service answers with:
+/// that order compares terms and writes nothing down, so no decoder could recover a term from
+/// it. This encoding is injective and invertible, which is what lets
+/// [`ServiceProof::decode`] exist at all, and it is still a total order over terms:
+/// [`ServiceProof::covers`] sorts by these bytes, and two terms encode equal exactly when they
+/// ARE equal. The leading kind byte keeps the four term kinds from interleaving.
 ///
 /// The terms are appended in [`TermValue::visit_terms`]'s pre-order: a triple term's kind
 /// byte, then its subject's whole encoding, then its predicate's, then its object's.

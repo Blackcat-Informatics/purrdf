@@ -70,7 +70,6 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use purrdf_core::{DatasetView, TermValue};
 
-use crate::engine::resolve_value;
 use purrdf_datalog::StopSignal;
 use purrdf_xsd::XsdDatatype;
 use purrdf_xsd::range::{DataRange, Facet};
@@ -1045,9 +1044,9 @@ pub(crate) fn build_until<D: DatasetView>(
         if q.g.is_some() {
             continue;
         }
-        let s = interner.intern(resolve_value(ds, q.s));
-        let p = interner.intern(resolve_value(ds, q.p));
-        let o = interner.intern(resolve_value(ds, q.o));
+        let s = interner.intern(ds.term_value(q.s)?);
+        let p = interner.intern(ds.term_value(q.p)?);
+        let o = interner.intern(ds.term_value(q.o)?);
         triples.push((s, p, o));
         index_insert(&mut index, s, p, o);
     }

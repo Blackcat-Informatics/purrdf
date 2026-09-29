@@ -52,8 +52,6 @@ const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
 const DCTERMS_IS_PART_OF: &str = "http://purl.org/dc/terms/isPartOf";
 const DCTERMS_FORMAT: &str = "http://purl.org/dc/terms/format";
 
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-
 /// The `https://w3id.org/function/ontology#` (fno) namespace.
 const FNO: &str = "https://w3id.org/function/ontology#";
 /// The `https://w3id.org/function/vocabulary/mapping#` (fnom) namespace.
@@ -260,15 +258,6 @@ fn plain(text: &str) -> RdfTerm {
     RdfTerm::literal(RdfLiteral::simple(text.to_owned()))
 }
 
-/// An `xsd:boolean` literal term (`"true"`/`"false"`), matching rdflib's
-/// `Literal(bool)` lexical form.
-fn boolean(value: bool) -> RdfTerm {
-    RdfTerm::literal(RdfLiteral::typed(
-        if value { "true" } else { "false" },
-        XSD_BOOLEAN,
-    ))
-}
-
 /// Build the typed model's quads in the EXACT shape `emit_fno` / `_emit_fnom`
 /// produced — the same triple set, datatypes, and language tags.
 ///
@@ -392,7 +381,9 @@ pub fn to_quads(catalog: &FnoCatalog) -> Vec<RdfQuad> {
         quads.push(RdfQuad::new(
             p.clone(),
             format!("{FNO}required"),
-            boolean(param.required),
+            crate::TermValue::boolean(param.required)
+                .into_rdf_term()
+                .expect("a boolean literal is no triple term"),
         ));
         if let Some(label) = &param.label {
             quads.push(RdfQuad::new(p.clone(), RDFS_LABEL, en(label)));
@@ -652,8 +643,11 @@ mod tests {
     #[test]
     fn required_is_an_xsd_boolean_literal() {
         let quads = to_quads(&sample_catalog());
-        let t = RdfTerm::literal(RdfLiteral::typed("true", XSD_BOOLEAN));
-        let f = RdfTerm::literal(RdfLiteral::typed("false", XSD_BOOLEAN));
+        let t = RdfTerm::literal(RdfLiteral::typed("true", purrdf_xsd::datatype::XSD_BOOLEAN));
+        let f = RdfTerm::literal(RdfLiteral::typed(
+            "false",
+            purrdf_xsd::datatype::XSD_BOOLEAN,
+        ));
         assert!(
             has_obj(&quads, &format!("{FNO}required"), &t),
             "required true"

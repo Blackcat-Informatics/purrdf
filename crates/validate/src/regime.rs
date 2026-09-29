@@ -83,7 +83,7 @@ use core::fmt;
 use core::fmt::Write as _;
 use purrdf_core::TermBox;
 
-use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, display_term};
+use purrdf_core::{TermValue, display_term};
 use purrdf_datalog::chase::ChaseError;
 use purrdf_datalog::seminaive::{BudgetResource, EvalError, EvalOptions, render_capacity_refusal};
 use purrdf_entail::{
@@ -1608,7 +1608,7 @@ fn emit(term: &TermValue) -> String {
             out.push_str(&emit_leaf(term));
             continue;
         };
-        match to_owned_term(term) {
+        match term.to_rdf_term().ok() {
             Some(owned) => out.push_str(&display_term(&owned)),
             // A triple term whose predicate is not an IRI — at THIS nesting level or
             // any level nested inside `s`/`o` — is not a well-formed RDF triple, so
@@ -1634,53 +1634,10 @@ fn emit(term: &TermValue) -> String {
 
 /// [`emit`] for a term that is not a triple term.
 fn emit_leaf(term: &TermValue) -> String {
-    match to_owned_term(term) {
+    match term.to_rdf_term().ok() {
         Some(owned) => display_term(&owned),
         None => unreachable!("a term that is not a triple term has an owned twin"),
     }
-}
-
-/// The owned-model twin of a [`TermValue`], for [`emit`].
-///
-/// `None` iff `term` — or any triple term nested inside it, at any depth — has a
-/// predicate that is not an IRI. The owned model ([`RdfTriple`]) requires an IRI
-/// predicate by construction, so there is no owned value to return for such a
-/// term; callers fall back to [`emit`]'s structural `<<( … )>>` rendering, which
-/// shows the real offending term instead of a fabricated placeholder.
-///
-/// A triple term is assembled bottom-up over [`TermValue::try_fold`]'s work list.
-fn to_owned_term(term: &TermValue) -> Option<RdfTerm> {
-    term.try_fold(
-        |leaf| {
-            Ok(match leaf {
-                TermValue::Iri(iri) => RdfTerm::iri(iri.clone()),
-                TermValue::Blank { label, scope } => {
-                    RdfTerm::blank_node(scope.qualify_label(label).into_owned())
-                }
-                TermValue::Literal {
-                    lexical_form,
-                    datatype,
-                    language,
-                    direction,
-                } => RdfTerm::literal(RdfLiteral {
-                    lexical_form: lexical_form.clone(),
-                    datatype: Some(datatype.clone()),
-                    language: language.clone(),
-                    direction: *direction,
-                }),
-                TermValue::Triple { .. } => {
-                    unreachable!("a triple term is folded from its parts")
-                }
-            })
-        },
-        |subject, predicate, object| match predicate {
-            RdfTerm::Iri(predicate) => {
-                Ok(RdfTerm::triple(RdfTriple::new(subject, predicate, object)))
-            }
-            RdfTerm::BlankNode(_) | RdfTerm::Literal(_) | RdfTerm::Triple(_) => Err(()),
-        },
-    )
-    .ok()
 }
 
 /// Parse ONE N-Triples term — an IRI or a blank node — from `text`.
@@ -8606,43 +8563,13 @@ mod term_walk_tests {
     //! against their recursive references, and deep on a 128 KiB thread where the result
     //! holds no owned-model term.
 
-    use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermBox, TermValue, display_term};
+    use purrdf_core::{TermBox, TermValue, display_term};
 
-    use super::{emit, restore_query_vars, to_owned_term};
-
-    fn reference_owned(term: &TermValue) -> Option<RdfTerm> {
-        match term {
-            TermValue::Triple { s, p, o } => {
-                let TermValue::Iri(predicate) = &**p else {
-                    return None;
-                };
-                Some(RdfTerm::triple(RdfTriple::new(
-                    reference_owned(s)?,
-                    predicate.clone(),
-                    reference_owned(o)?,
-                )))
-            }
-            TermValue::Iri(iri) => Some(RdfTerm::iri(iri.clone())),
-            TermValue::Blank { label, scope } => {
-                Some(RdfTerm::blank_node(scope.qualify_label(label).into_owned()))
-            }
-            TermValue::Literal {
-                lexical_form,
-                datatype,
-                language,
-                direction,
-            } => Some(RdfTerm::literal(RdfLiteral {
-                lexical_form: lexical_form.clone(),
-                datatype: Some(datatype.clone()),
-                language: language.clone(),
-                direction: *direction,
-            })),
-        }
-    }
+    use super::{emit, restore_query_vars};
 
     fn reference_emit(term: &TermValue) -> String {
         match term {
-            TermValue::Triple { s, p, o } => match reference_owned(term) {
+            TermValue::Triple { s, p, o } => match term.to_rdf_term().ok() {
                 Some(owned) => display_term(&owned),
                 None => format!(
                     "<<( {} {} {} )>>",
@@ -8651,7 +8578,7 @@ mod term_walk_tests {
                     reference_emit(o)
                 ),
             },
-            leaf => display_term(&reference_owned(leaf).expect("a leaf has an owned twin")),
+            leaf => display_term(&leaf.to_rdf_term().expect("a leaf has an owned twin")),
         }
     }
 
@@ -8726,9 +8653,7 @@ mod term_walk_tests {
                 &mut budget,
                 purrdf_core::term_fixture::TermShape::Any,
             );
-            let owned = to_owned_term(&value);
-            assert_eq!(owned, reference_owned(&value), "seed {seed}");
-            malformed += usize::from(owned.is_none());
+            malformed += usize::from(value.to_rdf_term().is_err());
             assert_eq!(emit(&value), reference_emit(&value), "seed {seed}");
             let restored = restore_query_vars(value.clone(), &slot, &names);
             refused += usize::from(restored.is_err());
@@ -8764,7 +8689,7 @@ mod term_walk_tests {
                 }
                 let rendered = emit(&value);
                 assert_eq!(rendered.matches("<<( ").count(), LEVELS);
-                assert!(to_owned_term(&value).is_none());
+                assert!(value.to_rdf_term().is_err());
             })
             .expect("the thread starts")
             .join()

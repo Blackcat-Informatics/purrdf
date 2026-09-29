@@ -329,15 +329,16 @@ fn push_step(
 /// (`--base` is the DATA and QUERY base, and silently borrowing it for a registration
 /// key would make the relation's name depend on which file was loaded).
 fn absolute_iri(key: &str, value: &str) -> Result<String, String> {
-    let parsed = purrdf_iri::parse(value)
-        .map_err(|e| format!("--path-relation `{key}={value}` is not a valid IRI: {e}"))?;
-    if !parsed.has_scheme() {
-        return Err(format!(
+    match purrdf_iri::BaseIri::parse(value) {
+        Ok(_) => Ok(value.to_owned()),
+        Err(purrdf_iri::IriError::NonAbsoluteBase(_)) => Err(format!(
             "--path-relation `{key}={value}` is a relative IRI reference (no scheme); every IRI \
              position here must be absolute"
-        ));
+        )),
+        Err(e) => Err(format!(
+            "--path-relation `{key}={value}` is not a valid IRI: {e}"
+        )),
     }
-    Ok(value.to_owned())
 }
 
 /// Read one count key as a non-negative integer of its own width.

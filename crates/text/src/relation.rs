@@ -293,11 +293,6 @@ fn language_term(language: Option<&str>) -> TermValue {
     TermValue::simple_literal(language.unwrap_or(""))
 }
 
-/// An `xsd:integer` cell.
-fn integer_term(value: u32) -> TermValue {
-    TermValue::typed_literal(value.to_string(), XSD_INTEGER)
-}
-
 /// Refuse an invocation whose argument vectors do not match `declared`.
 ///
 /// `open_contained` already checked this for every engine-driven call; a direct
@@ -1463,9 +1458,9 @@ impl SearchCursor {
             // the engine discards unread. Zero is outside the 1-based rank domain,
             // so it could never be mistaken for a rank even by a reader that
             // ignored that contract.
-            integer_term(hit.rank.unwrap_or(0)),
+            TermValue::integer(hit.rank.unwrap_or(0)),
             language_term(document.language()),
-            integer_term(hit.matched),
+            TermValue::integer(hit.matched),
         ])
     }
 }
@@ -1886,7 +1881,7 @@ impl OccurrenceCursor {
             held.subject().clone(),
             self.needle.clone(),
             language_term(held.language()),
-            integer_term(position),
+            TermValue::integer(position),
         ])
     }
 
@@ -2082,7 +2077,7 @@ mod tests {
     }
 
     fn integer(value: u32) -> TermValue {
-        TermValue::typed_literal(value.to_string(), XSD_INTEGER)
+        TermValue::integer(value)
     }
 
     fn decimal(value: &str) -> TermValue {

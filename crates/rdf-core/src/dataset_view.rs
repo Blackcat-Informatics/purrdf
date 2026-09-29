@@ -28,6 +28,28 @@ mod sealed {
     impl Sealed for crate::ir::MutableDataset {}
 }
 
+/// Why [`DatasetView::term_value`] could not resolve an id to a value.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TermLookupError {
+    /// The id does not name a well-formed term of the view it was handed to: a literal
+    /// it resolves to has a datatype that is not an IRI, which no view mints for its
+    /// own ids (C0.1), so the id belongs to another view (C0.8).
+    ForeignId,
+}
+
+impl core::fmt::Display for TermLookupError {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        match self {
+            Self::ForeignId => f.write_str(
+                "the term id does not name a term of this view: a literal's datatype does not \
+                 resolve to an IRI",
+            ),
+        }
+    }
+}
+
+impl std::error::Error for TermLookupError {}
+
 /// The associated id type of a [`DatasetView`]. An id is meaningful only within the
 /// view that minted it (C0.8); these bounds are exactly what the evaluator's
 /// join/index machinery needs of an id (`Copy` to pass by value, `Eq`/`Ord`/`Hash`
@@ -226,6 +248,66 @@ pub trait DatasetView {
 
     /// Resolve a dataset-local id to its borrowed [`TermRef`].
     fn resolve(&self, id: Self::Id) -> TermRef<'_, Self::Id>;
+
+    /// Resolve a dataset-local id to its dataset-independent [`TermValue`], through a
+    /// literal's datatype and a triple term's `(s, p, o)` components: the literal
+    /// datatype is expanded to its IRI string, the blank node keeps its
+    /// `(label, scope)` pair, and a triple term is carried by value (C0.1/C0.2/C0.3).
+    ///
+    /// This is the one resolution from an id to a value; every view, and every
+    /// consumer that reasons over values rather than ids, reads through it. A triple
+    /// term is assembled bottom-up over [`fold_term`](crate::fold_term)'s work list: its
+    /// subject, predicate and object are resolved in that order, each fully before the
+    /// next, so a term of any depth costs no more machine stack.
+    ///
+    /// # Errors
+    ///
+    /// [`TermLookupError::ForeignId`] when the id does not name a well-formed term of
+    /// this view: a literal whose datatype resolves to anything but an IRI. A view
+    /// never mints such a literal (the IR expands every datatype to an interned IRI at
+    /// intern time), so the id was minted by another view. No part of the value is
+    /// invented in its place.
+    fn term_value(&self, id: Self::Id) -> Result<TermValue, TermLookupError> {
+        crate::fold_term(
+            self,
+            id,
+            |_, term| {
+                Ok(match term {
+                    TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
+                    TermRef::Blank { label, scope } => TermValue::Blank {
+                        label: label.to_owned(),
+                        scope,
+                    },
+                    TermRef::Literal {
+                        lexical,
+                        datatype,
+                        language,
+                        direction,
+                    } => {
+                        let TermRef::Iri(datatype) = self.resolve(datatype) else {
+                            return Err(TermLookupError::ForeignId);
+                        };
+                        TermValue::Literal {
+                            lexical_form: lexical.to_owned(),
+                            datatype: datatype.to_owned(),
+                            language: language.map(str::to_owned),
+                            direction,
+                        }
+                    }
+                    TermRef::Triple { .. } => {
+                        unreachable!("a triple term is assembled from its components")
+                    }
+                })
+            },
+            |_, s, p, o| {
+                Ok(TermValue::Triple {
+                    s: crate::TermBox::new(s),
+                    p: crate::TermBox::new(p),
+                    o: crate::TermBox::new(o),
+                })
+            },
+        )
+    }
 
     /// Quads matching an optional `(s, p, o)` id pattern and a [`GraphMatch`].
     ///
@@ -1376,6 +1458,113 @@ mod tests {
         assert_eq!(
             failure.error,
             ProbeFault("the probe view was told to fault")
+        );
+    }
+}
+
+#[cfg(test)]
+mod term_value_tests {
+    //! [`DatasetView::term_value`]: the one resolution from an id to a value.
+
+    use std::sync::Arc;
+
+    use super::{DatasetView, TermLookupError};
+    use crate::TermBox;
+    use crate::backend::TermFactory as _;
+    use crate::ir::{RdfDataset, RdfDatasetBuilder, TermId, TermValue};
+    use crate::term_fixture::ForeignDatatypeView;
+
+    const EX: &str = "http://example.org/";
+
+    /// A dataset holding an empty plain literal, a quoted triple term carrying it, and a
+    /// blank node, with their ids.
+    fn fixture() -> (Arc<RdfDataset>, TermId, TermId, TermId) {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let empty = builder.intern_value(&TermValue::simple_literal(""));
+        let quoted = builder.intern_value(&TermValue::Triple {
+            s: TermBox::new(TermValue::iri(format!("{EX}s"))),
+            p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+            o: TermBox::new(TermValue::simple_literal("")),
+        });
+        let blank = builder.intern_value(&TermValue::blank("b"));
+        builder.push_quad(s, p, empty, None);
+        builder.push_quad(s, p, quoted, None);
+        builder.push_quad(blank, p, s, None);
+        let dataset = builder.freeze().expect("the fixture freezes");
+        (dataset, empty, quoted, blank)
+    }
+
+    #[test]
+    fn an_id_whose_literal_datatype_is_not_an_iri_is_foreign() {
+        let (inner, empty, quoted, blank) = fixture();
+        let view = ForeignDatatypeView {
+            inner,
+            datatype: blank,
+            foreign: true,
+        };
+        assert_eq!(view.term_value(empty), Err(TermLookupError::ForeignId));
+        assert_eq!(view.term_value(quoted), Err(TermLookupError::ForeignId));
+        // A term with no literal in it still resolves through the same view.
+        assert_eq!(view.term_value(blank), Ok(TermValue::blank("b")));
+    }
+
+    #[test]
+    fn a_present_empty_literal_resolves_to_the_empty_string() {
+        let (inner, empty, quoted, blank) = fixture();
+        let view = ForeignDatatypeView {
+            inner: Arc::clone(&inner),
+            datatype: blank,
+            foreign: false,
+        };
+        assert_eq!(view.term_value(empty), Ok(TermValue::simple_literal("")));
+        assert_eq!(
+            view.term_value(quoted),
+            Ok(TermValue::Triple {
+                s: TermBox::new(TermValue::iri(format!("{EX}s"))),
+                p: TermBox::new(TermValue::iri(format!("{EX}p"))),
+                o: TermBox::new(TermValue::simple_literal("")),
+            })
+        );
+        assert_eq!(
+            DatasetView::term_value(&inner, empty),
+            view.term_value(empty)
+        );
+    }
+
+    /// Every generated term resolves to exactly the value it was interned from.
+    #[test]
+    fn every_interned_value_resolves_to_itself() {
+        let mut builder = RdfDatasetBuilder::new();
+        let s = builder.intern_iri(&format!("{EX}s"));
+        let p = builder.intern_iri(&format!("{EX}p"));
+        let mut values = Vec::new();
+        for seed in 0..200_u64 {
+            let mut state = seed;
+            let mut budget = 6;
+            let value = crate::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                crate::term_fixture::TermShape::WellFormed,
+            );
+            let id = builder.intern_value(&value);
+            builder.push_quad(s, p, id, None);
+            values.push((value, id));
+        }
+        let dataset = builder.freeze().expect("the generated values freeze");
+        for (value, id) in values {
+            assert_eq!(DatasetView::term_value(&dataset, id), Ok(value));
+        }
+    }
+
+    #[test]
+    fn the_lookup_error_names_the_foreign_id() {
+        assert!(
+            TermLookupError::ForeignId
+                .to_string()
+                .contains("does not name a term of this view")
         );
     }
 }

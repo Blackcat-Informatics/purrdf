@@ -43,8 +43,7 @@
 //! `RdfLiteral::language_tagged` build one. Both are public; see their docs for
 //! which is which and for the SPARQL 1.1 §17.2 reading of the [`None`].
 
-use purrdf_core::TermBox;
-use purrdf_core::{DatasetView, TermId, TermRef, TermValue, ViewTermId};
+use purrdf_core::{DatasetView, TermId, TermValue, ViewTermId};
 
 use std::hash::{Hash, Hasher};
 
@@ -553,74 +552,19 @@ impl ScratchInterner {
     }
 }
 
-/// Resolve a dataset-local [`TermId`] to an owned, dataset-independent
-/// [`TermValue`].
+/// Resolve a dataset-local id to an owned, dataset-independent [`TermValue`]
+/// through [`DatasetView::term_value`] (the C0.8 boundary), for an id the view
+/// itself handed to the evaluator.
 ///
-/// Walks through RDF-1.2 triple terms and expands a literal's datatype id to its
-/// IRI string, so the result carries no dataset-local ids (the C0.8 boundary).
+/// # Panics
 ///
-/// The value is assembled bottom-up over a work list: a triple term's components
-/// are resolved subject, predicate, object — each fully before the next — and the
-/// triple is built once all three exist, so a term of any nesting costs no more
-/// machine stack.
+/// On an id the view did not mint: a literal whose datatype does not resolve to an
+/// IRI. Every id the evaluator holds was read out of the view it is resolved
+/// against.
 pub(crate) fn term_id_to_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
-    enum Step<I> {
-        Resolve(I),
-        Assemble,
-    }
-    // Inline until a term nests deeper than a quoted triple of quoted triples, so a
-    // plain term costs only its own value.
-    let mut steps: purrdf_core::SmallVec<[Step<D::Id>; 8]> =
-        purrdf_core::smallvec![Step::Resolve(id)];
-    let mut values: purrdf_core::SmallVec<[TermValue; 3]> = purrdf_core::SmallVec::new();
-    while let Some(step) = steps.pop() {
-        match step {
-            Step::Resolve(id) => match dataset.resolve(id) {
-                TermRef::Iri(iri) => values.push(TermValue::Iri(iri.to_owned())),
-                TermRef::Blank { label, scope } => values.push(TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                }),
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => {
-                    let datatype = match dataset.resolve(datatype) {
-                        TermRef::Iri(iri) => iri.to_owned(),
-                        // A literal's datatype is always an interned IRI (C0.1).
-                        other => unreachable!("literal datatype must be an IRI, got {other:?}"),
-                    };
-                    values.push(TermValue::Literal {
-                        lexical_form: lexical.to_owned(),
-                        datatype,
-                        language: language.map(str::to_owned),
-                        direction,
-                    });
-                }
-                TermRef::Triple { s, p, o } => steps.extend([
-                    Step::Assemble,
-                    Step::Resolve(o),
-                    Step::Resolve(p),
-                    Step::Resolve(s),
-                ]),
-            },
-            Step::Assemble => {
-                let o = values.pop().expect("a triple term's object is resolved");
-                let p = values.pop().expect("a triple term's predicate is resolved");
-                let s = values.pop().expect("a triple term's subject is resolved");
-                values.push(TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                });
-            }
-        }
-    }
-    values
-        .pop()
-        .expect("the root term's value is the last one assembled")
+    dataset
+        .term_value(id)
+        .expect("an id the view handed the evaluator resolves to a value")
 }
 
 #[cfg(test)]

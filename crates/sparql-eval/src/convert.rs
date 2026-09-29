@@ -20,17 +20,33 @@ use purrdf_sparql_algebra::{
 use crate::error::EvalError;
 
 /// Map the algebra's RDF-1.2 base direction to the IR's.
+///
+/// The two enums are the same two-value RDF 1.2 base direction in two crates that
+/// cannot see each other's types; this and [`base_direction`] are the one mapping
+/// between them.
 #[inline]
-pub(crate) fn map_direction(direction: BaseDirection) -> RdfTextDirection {
+#[must_use]
+pub fn map_direction(direction: BaseDirection) -> RdfTextDirection {
     match direction {
         BaseDirection::Ltr => RdfTextDirection::Ltr,
         BaseDirection::Rtl => RdfTextDirection::Rtl,
     }
 }
 
+/// Map the IR's RDF-1.2 base direction to the algebra's: the inverse of
+/// [`map_direction`].
+#[inline]
+#[must_use]
+pub fn base_direction(direction: RdfTextDirection) -> BaseDirection {
+    match direction {
+        RdfTextDirection::Ltr => BaseDirection::Ltr,
+        RdfTextDirection::Rtl => BaseDirection::Rtl,
+    }
+}
+
 /// An IRI term value.
 #[inline]
-pub(crate) fn named_node_to_value(node: &NamedNode) -> TermValue {
+pub fn named_node_to_value(node: &NamedNode) -> TermValue {
     TermValue::Iri(node.as_str().to_owned())
 }
 
@@ -61,7 +77,7 @@ pub(crate) fn named_node_to_value(node: &NamedNode) -> TermValue {
 /// enforces the query half of that reservation directly — a value at this scope is
 /// never promoted to a dataset term — so the separation does not rest on the
 /// dataset merely happening not to hold the label.
-pub(crate) const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::BlankScope(u32::MAX);
+pub const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::BlankScope(u32::MAX);
 
 /// A literal term value, with the language tag lowercased to match the IR's C0.1
 /// interned identity (so a query literal resolves to the dataset's stored form).
@@ -79,7 +95,7 @@ pub(crate) const QUERY_BLANK_SCOPE: purrdf_core::BlankScope = purrdf_core::Blank
 /// (`_unchecked`) form because an ill-formed composite lexical form in a query is
 /// diagnosed by the evaluator's own CDT parse, which reports it against the query
 /// rather than refusing a document.
-pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
+pub fn literal_to_value(lit: &Literal) -> TermValue {
     let datatype = lit.datatype().as_str();
     // C0.1: a language tag determines a string datatype, so the literal is never
     // composite — so the binding is only ever reached for an untagged literal.
@@ -111,7 +127,7 @@ pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
 /// Returns [`EvalError::Unsupported`] if any component is a variable: matching a
 /// quoted triple term whose components *bind* variables (structural triple-term
 /// matching) is not supported for any caller of this helper, not only BGPs; only fully-ground quoted triples resolve to a single interned id.
-pub(crate) fn ground_triple_pattern_to_value(
+pub fn ground_triple_pattern_to_value(
     pattern: &TriplePattern,
     site: &str,
 ) -> Result<TermValue, EvalError> {
@@ -135,7 +151,7 @@ pub(crate) fn ground_triple_pattern_to_value(
 ///
 /// [`EvalError::Unsupported`] naming `site` when a variable stands anywhere in the
 /// pattern: in a quoted triple's subject, predicate or object, or as the whole term.
-pub(crate) fn ground_term_pattern_to_value(
+pub fn ground_term_pattern_to_value(
     pattern: &TermPattern,
     site: &str,
 ) -> Result<TermValue, EvalError> {
@@ -205,7 +221,7 @@ pub(crate) fn ground_term_pattern_to_value(
 /// A quoted triple is assembled bottom-up over a work list — its subject, predicate and
 /// object each converted fully in that order — so a term nested to any depth costs no
 /// machine stack.
-pub(crate) fn ground_term_to_value(term: &GroundTerm) -> TermValue {
+pub fn ground_term_to_value(term: &GroundTerm) -> TermValue {
     /// One pending step: convert a term, or assemble the triple whose three
     /// components were converted last.
     enum Step<'a> {

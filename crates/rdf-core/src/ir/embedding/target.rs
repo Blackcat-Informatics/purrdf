@@ -1255,12 +1255,13 @@ fn validate_language_tag(language: &str) -> Result<(), EmbeddingError> {
 }
 
 fn validate_absolute_iri(iri: &str) -> Result<(), EmbeddingError> {
-    let parsed =
-        purrdf_iri::parse(iri).map_err(|_| EmbeddingError::Malformed("invalid RDF IRI"))?;
-    if parsed.scheme().is_none() {
-        return Err(EmbeddingError::Malformed("RDF IRI is not absolute"));
+    match purrdf_iri::BaseIri::parse(iri) {
+        Ok(_) => Ok(()),
+        Err(purrdf_iri::IriError::NonAbsoluteBase(_)) => {
+            Err(EmbeddingError::Malformed("RDF IRI is not absolute"))
+        }
+        Err(_) => Err(EmbeddingError::Malformed("invalid RDF IRI")),
     }
-    Ok(())
 }
 
 fn ensure_nonempty(value: &str, field: &'static str) -> Result<(), EmbeddingError> {

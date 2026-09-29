@@ -28,9 +28,9 @@
 use purrdf_core::{DatasetView, RdfDiagnostic, RdfTextDirection, TermRef, TermValue};
 use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
-    AggregateExpression, AggregateParts, BaseDirection, BlankNode, Expression, GraphPattern,
-    GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression,
-    PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    AggregateExpression, AggregateParts, BlankNode, Expression, GraphPattern, GroundTerm,
+    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, PropertyFunctionCall,
+    Query, TermPattern, TriplePattern, Variable,
 };
 
 /// The pre-binding list, in whichever of the two shapes the caller has.
@@ -3106,10 +3106,7 @@ fn literal_from_value(
         (Some(language), dir) => Ok(Literal::new_lang(
             lexical_form,
             lang(language)?,
-            dir.map(|d| match d {
-                RdfTextDirection::Ltr => BaseDirection::Ltr,
-                RdfTextDirection::Rtl => BaseDirection::Rtl,
-            }),
+            dir.map(crate::convert::base_direction),
         )),
         (None, _) => Ok(Literal::new_typed(lexical_form, node(datatype)?)),
     }
@@ -4394,7 +4391,7 @@ mod walk_tests {
             0 => Literal::new_simple(format!("v{}", choices.choose(4))),
             1 => Literal::new_typed("42", NamedNode::new_unchecked(XSD_INTEGER)),
             2 => Literal::new_lang("hi", "en", None),
-            _ => Literal::new_lang("hi", "en", Some(BaseDirection::Rtl)),
+            _ => Literal::new_lang("hi", "en", Some(purrdf_sparql_algebra::BaseDirection::Rtl)),
         }
     }
 

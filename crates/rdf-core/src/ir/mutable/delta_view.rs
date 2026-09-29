@@ -929,7 +929,7 @@ mod tests {
         assert_eq!(
             materialized
                 .named_graphs()
-                .map(|id| materialized.term_value(id))
+                .map(|id| materialized.term_value(id).unwrap())
                 .collect::<FastSet<_>>(),
             frozen
                 .named_graphs()
@@ -1277,10 +1277,10 @@ mod tests {
         for q in base.reifier_quads().chain(base.annotation_quads()) {
             mutation
                 .insert(QuadValues {
-                    s: base.term_value(q.s),
-                    p: base.term_value(q.p),
-                    o: base.term_value(q.o),
-                    g: q.g.map(|id| base.term_value(id)),
+                    s: base.term_value(q.s).unwrap(),
+                    p: base.term_value(q.p).unwrap(),
+                    o: base.term_value(q.o).unwrap(),
+                    g: q.g.map(|id| base.term_value(id).unwrap()),
                 })
                 .unwrap();
         }

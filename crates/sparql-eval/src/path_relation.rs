@@ -1247,16 +1247,6 @@ fn path_arity() -> PfArity {
     PfArity::new(1, ROW_WIDTH - 1)
 }
 
-/// `n` as an `xsd:integer`-typed literal.
-///
-/// Typed, never simple: `?step` and `?len` exist to be compared and ordered
-/// numerically, and `ORDER BY` over simple literals is codepoint order, which puts
-/// `"10"` before `"2"` and scrambles every reconstruction of a walk longer than nine
-/// hops.
-fn integer_literal(n: u64) -> TermValue {
-    TermValue::typed_literal(n.to_string(), purrdf_xsd::datatype::XSD_INTEGER)
-}
-
 /// Read a bound argument as a hop count for pushdown purposes.
 ///
 /// Returns `None` when the term is not a literal, or its lexical form does not parse as a
@@ -1501,7 +1491,7 @@ impl Prepared {
             return;
         }
         let length = hops.len() as u64;
-        let len_term = integer_literal(length);
+        let len_term = TermValue::integer(length);
         if !self.agrees(POS_LEN, &len_term) {
             return;
         }
@@ -1511,7 +1501,7 @@ impl Prepared {
         }
 
         for (index, &hop) in hops.iter().enumerate() {
-            let step_term = integer_literal(index as u64 + 1);
+            let step_term = TermValue::integer(index as u64 + 1);
             if !self.agrees(POS_STEP, &step_term) {
                 continue;
             }
@@ -2303,7 +2293,7 @@ mod tests {
     }
 
     fn int(n: u64) -> TermValue {
-        integer_literal(n)
+        TermValue::integer(n)
     }
 
     /// An all-free argument vector, to be filled position by position.

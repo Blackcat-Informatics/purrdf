@@ -864,10 +864,10 @@ mod tests {
             .reifier_quads()
             .map(|q| {
                 (
-                    dataset.term_value(q.s),
-                    dataset.term_value(q.p),
-                    dataset.term_value(q.o),
-                    q.g.map(|g| dataset.term_value(g)),
+                    dataset.term_value(q.s).unwrap(),
+                    dataset.term_value(q.p).unwrap(),
+                    dataset.term_value(q.o).unwrap(),
+                    q.g.map(|g| dataset.term_value(g).unwrap()),
                 )
             })
             .collect();
@@ -897,10 +897,10 @@ mod tests {
             .annotation_quads()
             .map(|q| {
                 (
-                    dataset.term_value(q.s),
-                    dataset.term_value(q.p),
-                    dataset.term_value(q.o),
-                    q.g.map(|g| dataset.term_value(g)),
+                    dataset.term_value(q.s).unwrap(),
+                    dataset.term_value(q.p).unwrap(),
+                    dataset.term_value(q.o).unwrap(),
+                    q.g.map(|g| dataset.term_value(g).unwrap()),
                 )
             })
             .collect();
@@ -922,9 +922,9 @@ mod tests {
             .annotations_of_with_graph(r_dataset_id)
             .map(|(p, o, g)| {
                 (
-                    dataset.term_value(p),
-                    dataset.term_value(o),
-                    g.map(|g| dataset.term_value(g)),
+                    dataset.term_value(p).unwrap(),
+                    dataset.term_value(o).unwrap(),
+                    g.map(|g| dataset.term_value(g).unwrap()),
                 )
             })
             .collect();

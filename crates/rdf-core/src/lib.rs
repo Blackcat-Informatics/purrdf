@@ -160,7 +160,7 @@ pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{
     DatasetMut, DatasetView, DrainCheckpoint, DrainFailure, FallibleDatasetView, GraphMatch,
-    GraphMatchValue, ViewOperationStatus, ViewTermId, checkpointed_drain,
+    GraphMatchValue, TermLookupError, ViewOperationStatus, ViewTermId, checkpointed_drain,
 };
 pub use describe::{Describer, describe};
 pub use diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
@@ -184,20 +184,21 @@ pub use ir::{
     CanonicalRelabeling, Canonicalized, CountingDemandProvider, DatasetDiff, DatasetSink,
     DeltaDatasetView, DeltaViewId, FrozenDatasetSource, GENID_WELL_KNOWN_PATH, GlobalDictionary,
     GlobalTermId, GraphLayer, GtsBundle, HandleEntry, HandleKey, InMemoryPageProvider,
-    MutableDataset, Nested, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind, PageGeneration, PageId,
-    PageMaterialization, PagePart, PageProvider, PageTranslation, PagedDataset, PagedFreezeError,
-    PagedQuadOverlap, PagedQuadTable, PagedQueryError, PagedQueryEvidence, PagedQueryLimits,
-    PagedQueryView, PipelineBundle, PipelineBundleError, PipelineViewBundle, QuadHandle, QuadIds,
-    QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues, RDFC_CALL_LIMIT, RESERVED_NAMESPACE,
-    RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor, RdfEnvelope, ReservedVocabulary, SkolemError,
-    SubsetPageProvider, TermBox, TermId, TermPosition, TermRef, TermValue, TermVisit,
-    ValidatedRdfDatasetBuilder, ViewCanonError, blank_count_view, canonical_relabel,
-    canonical_relabel_with_mapping, canonicalize, canonicalize_graph_view, canonicalize_view,
-    canonicalize_with, check_admissible, check_admissible_flat_view, check_admissible_view,
-    dataset_diff, datasets_isomorphic, deskolemize, fold_term, graph_digest_view, skolemize,
-    try_canonicalize, try_canonicalize_flat_graph_view, try_canonicalize_flat_view,
-    try_canonicalize_graph_view, try_canonicalize_view, try_canonicalize_with,
-    try_flat_digest_view, try_fold_nested, try_graph_digest_view, visit_nested,
+    MutableDataset, Nested, NonIriPredicate, PIPELINE_ROOT_DOMAIN, PageFault, PageFaultKind,
+    PageGeneration, PageId, PageMaterialization, PagePart, PageProvider, PageTranslation,
+    PagedDataset, PagedFreezeError, PagedQuadOverlap, PagedQuadTable, PagedQueryError,
+    PagedQueryEvidence, PagedQueryLimits, PagedQueryView, PipelineBundle, PipelineBundleError,
+    PipelineViewBundle, QuadHandle, QuadIds, QuadPatternCursor, QuadProbePlan, QuadRef, QuadValues,
+    RDFC_CALL_LIMIT, RESERVED_NAMESPACE, RdfDataset, RdfDatasetBuilder, RdfDatasetVisitor,
+    RdfEnvelope, ReservedVocabulary, SkolemError, SubsetPageProvider, TermBox, TermId,
+    TermPosition, TermRef, TermValue, TermVisit, ValidatedRdfDatasetBuilder, ViewCanonError,
+    blank_count_view, canonical_relabel, canonical_relabel_with_mapping, canonicalize,
+    canonicalize_graph_view, canonicalize_view, canonicalize_with, check_admissible,
+    check_admissible_flat_view, check_admissible_view, dataset_diff, datasets_isomorphic,
+    deskolemize, fold_term, graph_digest_view, skolemize, try_canonicalize,
+    try_canonicalize_flat_graph_view, try_canonicalize_flat_view, try_canonicalize_graph_view,
+    try_canonicalize_view, try_canonicalize_with, try_flat_digest_view, try_fold_nested,
+    try_graph_digest_view, visit_nested,
 };
 pub use ir::{
     PackBuilder, PackCheckpoint, PackDigest, PackError, PackId, PackView, dataset_from_view,
@@ -280,7 +281,7 @@ pub mod prelude {
         RdfParseRequest, RdfParserBackend, RdfSerializeRequest, RdfSerializer, SerializeGraph,
         SparqlEngine, SparqlRequest, SparqlResult, TermFactory,
     };
-    pub use crate::dataset_view::{DatasetView, GraphMatch};
+    pub use crate::dataset_view::{DatasetView, GraphMatch, TermLookupError};
     pub use crate::diagnostic::{RdfDiagnostic, RdfLocation, RdfSeverity};
     pub use crate::ir::{
         QuadIds, QuadPatternCursor, QuadRef, RdfDataset, RdfDatasetBuilder, TermId, TermRef,

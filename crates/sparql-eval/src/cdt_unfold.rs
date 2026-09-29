@@ -106,8 +106,6 @@ use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::row_ingest::{GovernedRowIngest, IngestVerdict};
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-
 /// Evaluate `UNFOLD(expression AS ?element[, ?companion])` over `inner`.
 ///
 /// # Errors
@@ -312,7 +310,10 @@ fn expansion(value: &CdtValue) -> Vec<(Option<TermValue>, Option<TermValue>)> {
                 // `SAMETERM(?elmt, cdt:get(?list, ?idx))` for the index this binds
                 // (`unfold-get-list-2vars-05.rq`, `-06.rq`), which a 0-based index
                 // would fail on every element.
-                (crate::cdt_fn::from_cdt_term(item), Some(index_term(i + 1)))
+                (
+                    crate::cdt_fn::from_cdt_term(item),
+                    Some(TermValue::integer((i + 1) as u64)),
+                )
             })
             .collect(),
         CdtContents::Map(entries) => entries
@@ -327,16 +328,6 @@ fn expansion(value: &CdtValue) -> Vec<(Option<TermValue>, Option<TermValue>)> {
                 )
             })
             .collect(),
-    }
-}
-
-/// A 1-based list index as an `xsd:integer` term.
-fn index_term(index: usize) -> TermValue {
-    TermValue::Literal {
-        lexical_form: index.to_string(),
-        datatype: XSD_INTEGER.to_owned(),
-        language: None,
-        direction: None,
     }
 }
 

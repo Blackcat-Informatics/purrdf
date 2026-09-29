@@ -69,15 +69,12 @@
 use core::convert::Infallible;
 use core::ops::ControlFlow;
 use core::slice;
-use purrdf_core::TermBox;
 use purrdf_hash::Domain;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use purrdf_core::binding_pattern::BindingPattern;
-use purrdf_core::{
-    BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermRef, TermValue, fold_term,
-};
+use purrdf_core::{BlankScope, DatasetView, GraphMatch, RdfTextDirection, TermValue};
 use purrdf_sparql_eval::{
     EvalError, PfArgs, PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry,
     Volatility,
@@ -530,7 +527,7 @@ impl GeoIndex {
                 continue;
             };
             for quad in dataset.quads_for_pattern(None, Some(predicate), None, graph) {
-                let object = resolve_value(dataset, quad.o);
+                let object = resolve_value(dataset, quad.o)?;
                 let literal = parse_serialization(&object, property, &datatypes, vocab)?;
                 by_node
                     .entry(quad.s)
@@ -555,8 +552,8 @@ impl GeoIndex {
             }
         }
 
-        let entries = finish_entries(dataset, by_subject);
-        let asserted = collect_asserted(dataset, vocab, graph);
+        let entries = finish_entries(dataset, by_subject)?;
+        let asserted = collect_asserted(dataset, vocab, graph)?;
         let source_fingerprint = fingerprint(config, &entries, &asserted);
         Ok(Self {
             config: config.clone(),
@@ -837,58 +834,19 @@ fn resolve_graph<D: DatasetView>(
     })
 }
 
-/// Resolve a dataset-local id to its dataset-independent [`TermValue`].
+/// Resolve a dataset-local id to its dataset-independent [`TermValue`] through
+/// [`DatasetView::term_value`].
 ///
-/// Follows a literal's datatype and a triple term's components; the walk carries no
-/// depth cap, for the reason `Digest::term` gives. A triple term is assembled
-/// bottom-up over [`fold_term`]'s work list: its subject, predicate and object are
-/// resolved in that order, each fully before the next.
+/// # Errors
 ///
-/// A literal whose datatype does not resolve to an IRI cannot occur in a
-/// well-formed dataset — the IR expands the datatype at intern time — so that
-/// branch falls back to the empty IRI rather than raising a refusal for a state
-/// no [`DatasetView`] implementor in this workspace can produce.
-fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
-    let value = fold_term(
-        dataset,
-        id,
-        |_, term| {
-            Ok::<_, Infallible>(match term {
-                TermRef::Iri(iri) => TermValue::iri(iri),
-                TermRef::Blank { label, scope } => TermValue::Blank {
-                    label: label.to_owned(),
-                    scope,
-                },
-                TermRef::Literal {
-                    lexical,
-                    datatype,
-                    language,
-                    direction,
-                } => TermValue::Literal {
-                    lexical_form: lexical.to_owned(),
-                    datatype: match dataset.resolve(datatype) {
-                        TermRef::Iri(iri) => iri.to_owned(),
-                        TermRef::Blank { .. }
-                        | TermRef::Literal { .. }
-                        | TermRef::Triple { .. } => String::new(),
-                    },
-                    language: language.map(str::to_owned),
-                    direction,
-                },
-                TermRef::Triple { .. } => unreachable!("a triple term is folded from its parts"),
-            })
-        },
-        |_, s, p, o| {
-            Ok(TermValue::Triple {
-                s: TermBox::new(s),
-                p: TermBox::new(p),
-                o: TermBox::new(o),
-            })
-        },
-    );
-    match value {
-        Ok(value) => value,
-    }
+/// [`GeoError::Config`] when the view hands back an id that is not its own — a
+/// literal whose datatype does not resolve to an IRI. The view is the host's
+/// wiring, so the refusal names it rather than indexing a term with an invented
+/// datatype.
+fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> Result<TermValue, GeoError> {
+    dataset
+        .term_value(id)
+        .map_err(|error| GeoError::config(format!("the dataset view is inconsistent: {error}")))
 }
 
 /// Turn the id-keyed accumulation into the sorted, deduplicated entry table.
@@ -901,11 +859,11 @@ fn resolve_value<D: DatasetView>(dataset: &D, id: D::Id) -> TermValue {
 fn finish_entries<D: DatasetView>(
     dataset: &D,
     by_subject: BTreeMap<D::Id, Vec<Keyed>>,
-) -> Vec<GeoEntry> {
+) -> Result<Vec<GeoEntry>, GeoError> {
     let mut rows: Vec<(TermValue, Vec<Keyed>)> = by_subject
         .into_iter()
-        .map(|(id, geometries)| (resolve_value(dataset, id), geometries))
-        .collect();
+        .map(|(id, geometries)| Ok((resolve_value(dataset, id)?, geometries)))
+        .collect::<Result<_, GeoError>>()?;
     rows.sort_by(|left, right| left.0.cmp(&right.0));
 
     let mut entries: Vec<GeoEntry> = Vec::with_capacity(rows.len());
@@ -930,7 +888,7 @@ fn finish_entries<D: DatasetView>(
     if let Some(last) = current {
         push_entry(&mut entries, last);
     }
-    entries
+    Ok(entries)
 }
 
 /// Canonicalize one subject's geometries and push it, unless it has none.
@@ -992,7 +950,7 @@ fn collect_asserted<D: DatasetView>(
     dataset: &D,
     vocab: &GeoVocab,
     graph: GraphMatch<D::Id>,
-) -> Vec<Vec<(TermValue, TermValue)>> {
+) -> Result<Vec<Vec<(TermValue, TermValue)>>, GeoError> {
     let mut out: Vec<Vec<(TermValue, TermValue)>> = Vec::with_capacity(SpatialRelation::ALL.len());
     for relation in SpatialRelation::ALL {
         let iri = TermValue::iri(format!(
@@ -1004,8 +962,8 @@ fn collect_asserted<D: DatasetView>(
         if let Some(predicate) = dataset.term_id_by_value(&iri) {
             for quad in dataset.quads_for_pattern(None, Some(predicate), None, graph) {
                 pairs.push((
-                    resolve_value(dataset, quad.s),
-                    resolve_value(dataset, quad.o),
+                    resolve_value(dataset, quad.s)?,
+                    resolve_value(dataset, quad.o)?,
                 ));
             }
         }
@@ -1013,7 +971,7 @@ fn collect_asserted<D: DatasetView>(
         pairs.dedup();
         out.push(pairs);
     }
-    out
+    Ok(out)
 }
 
 /// The source digest of a built index.
@@ -1682,6 +1640,48 @@ mod tests {
 
     fn index_of(rows: &[Row]) -> GeoIndex {
         GeoIndex::from_dataset(&*dataset_of(rows), &vocab(), &config()).expect("a clean fixture")
+    }
+
+    /// A view whose geometry literals name a non-IRI datatype — ids foreign to it —
+    /// refuses the build; the same dataset through a view that answers its own
+    /// datatypes builds.
+    #[test]
+    fn a_view_handing_back_a_foreign_id_refuses_the_build() {
+        let dataset = dataset_of(&four_branch_rows());
+        let not_an_iri = dataset
+            .quads()
+            .map(|quad| quad.o)
+            .find(|&id| matches!(dataset.resolve(id), purrdf_core::TermRef::Literal { .. }))
+            .expect("the fixture holds a literal");
+        let view = |foreign| purrdf_core::term_fixture::ForeignDatatypeView {
+            inner: Arc::clone(&dataset),
+            datatype: not_an_iri,
+            foreign,
+        };
+        let refused = GeoIndex::from_dataset(&view(true), &vocab(), &config());
+        assert!(
+            matches!(refused, Err(GeoError::Config(ref message)) if message.contains("does not name a term")),
+            "{refused:?}"
+        );
+        let built = GeoIndex::from_dataset(&view(false), &vocab(), &config())
+            .expect("the view answers its own ids");
+        assert_eq!(built.len(), index_of(&four_branch_rows()).len());
+    }
+
+    /// A present literal whose lexical form is empty resolves to the empty string, not to
+    /// a refusal.
+    #[test]
+    fn a_present_empty_literal_resolves_to_the_empty_string() {
+        let dataset = dataset_of(&[row(
+            "s",
+            geo("asWKT"),
+            Obj::Lit(String::new(), geo("wktLiteral")),
+        )]);
+        let object = dataset.quads().next().expect("one quad").o;
+        assert_eq!(
+            super::resolve_value(&*dataset, object),
+            Ok(TermValue::typed_literal("", geo("wktLiteral")))
+        );
     }
 
     fn relation_of(rows: &[Row], relation: SpatialRelation) -> GeoRelation {
@@ -2920,7 +2920,7 @@ mod term_walk_tests {
             let ds = builder.freeze().expect("a generated term freezes");
             let object = ds.quads().next().expect("one quad").o;
             assert_eq!(
-                resolve_value(&*ds, object),
+                resolve_value(&*ds, object).unwrap(),
                 reference_value(&ds, object),
                 "seed {seed}"
             );

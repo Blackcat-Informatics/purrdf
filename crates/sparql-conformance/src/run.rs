@@ -6,14 +6,9 @@
 use std::sync::{Arc, OnceLock};
 
 use purrdf::{SerializeGraph, serialize_dataset};
-use purrdf_core::{
-    GraphMatch, RdfDataset, RdfTextDirection, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
-};
-use purrdf_entail::{QNode, QTriple};
-use purrdf_sparql_algebra::{
-    BaseDirection, GraphPattern, Literal, NamedNodePattern, Query, SparqlParser, TermPattern,
-    TriplePattern,
-};
+use purrdf_core::{GraphMatch, RdfDataset, SparqlEngine, SparqlRequest, SparqlResult, TermValue};
+use purrdf_entail::QTriple;
+use purrdf_sparql_algebra::{GraphPattern, Query, SparqlParser};
 use purrdf_sparql_eval::{
     LossVocabulary, MemoryRelation, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry,
     QueryOptions, ServiceResolver, StandpointPredicates,
@@ -847,102 +842,8 @@ fn build_rif_ruleset(
 /// error. RDF-1.2 quoted-triple term positions (absent from the entailment fixtures)
 /// are skipped — they are never a class-expression scaffold.
 fn collect_query_bgp(base: &str, query_text: &str) -> Vec<QTriple> {
-    let Ok(query) = SparqlParser::new()
+    SparqlParser::new()
         .with_base_iri(base)
         .parse_query(query_text)
-    else {
-        return Vec::new();
-    };
-    let pattern = match &query {
-        Query::Select { pattern, .. }
-        | Query::Construct { pattern, .. }
-        | Query::Describe { pattern, .. }
-        | Query::Ask { pattern, .. } => pattern,
-    };
-    let mut triples: Vec<&TriplePattern> = Vec::new();
-    collect_bgp(pattern, &mut triples);
-    triples
-        .into_iter()
-        .filter_map(|tp| {
-            Some(QTriple {
-                s: term_to_qnode(&tp.subject)?,
-                p: named_node_pattern_to_qnode(&tp.predicate),
-                o: term_to_qnode(&tp.object)?,
-            })
-        })
-        .collect()
-}
-
-/// Gather every [`TriplePattern`] out of `p`, in written order over a work list (from `Bgp` nodes, descending
-/// through every join / filter / graph / optional / union / modifier wrapper).
-fn collect_bgp<'a>(p: &'a GraphPattern, out: &mut Vec<&'a TriplePattern>) {
-    let mut pending = vec![p];
-    while let Some(p) = pending.pop() {
-        match p {
-            GraphPattern::Bgp { patterns } => out.extend(patterns.iter()),
-            GraphPattern::Join { left, right }
-            | GraphPattern::Minus { left, right }
-            | GraphPattern::Lateral { left, right }
-            | GraphPattern::LeftJoin { left, right, .. } => {
-                pending.extend([&**right, &**left]);
-            }
-            GraphPattern::Union { arms } => pending.extend(arms.iter().rev()),
-            GraphPattern::Filter { inner, .. }
-            | GraphPattern::Graph { inner, .. }
-            | GraphPattern::Extend { inner, .. }
-            // `UNFOLD` expands a composite value the solution already carries and
-            // matches no triple in any graph, so it is transparent to this walk.
-            | GraphPattern::Unfold { inner, .. }
-            | GraphPattern::Service { inner, .. }
-            | GraphPattern::OrderBy { inner, .. }
-            | GraphPattern::Project { inner, .. }
-            | GraphPattern::Distinct { inner }
-            | GraphPattern::Reduced { inner }
-            | GraphPattern::Slice { inner, .. }
-            | GraphPattern::Group { inner, .. } => pending.push(inner),
-            // Leaves that hold no triple pattern. A property-function call matches no
-            // triple in any graph — its rows come from the injected relation table — so
-            // it scaffolds no class expression for the OWL-Direct augmentation, exactly
-            // as a path or an inline `VALUES` scaffolds none.
-            GraphPattern::Path { .. }
-            | GraphPattern::Values { .. }
-            | GraphPattern::PropertyFunction(_) => {}
-        }
-    }
-}
-
-/// Translate a subject/object [`TermPattern`] into a [`QNode`] (`None` for an RDF-1.2
-/// quoted-triple term, which cannot scaffold a class expression).
-fn term_to_qnode(t: &TermPattern) -> Option<QNode> {
-    Some(match t {
-        TermPattern::Variable(v) => QNode::Var(v.as_str().to_owned()),
-        TermPattern::NamedNode(n) => QNode::Term(TermValue::iri(n.as_str())),
-        TermPattern::BlankNode(b) => QNode::Term(TermValue::blank(b.as_str())),
-        TermPattern::Literal(l) => QNode::Term(literal_to_term_value(l)),
-        TermPattern::Triple(_) => return None,
-    })
-}
-
-/// Translate a predicate [`NamedNodePattern`] into a [`QNode`].
-fn named_node_pattern_to_qnode(p: &NamedNodePattern) -> QNode {
-    match p {
-        NamedNodePattern::NamedNode(n) => QNode::Term(TermValue::iri(n.as_str())),
-        NamedNodePattern::Variable(v) => QNode::Var(v.as_str().to_owned()),
-    }
-}
-
-/// Translate an algebra [`Literal`] into a [`TermValue`] (language lowercased per C0.1).
-fn literal_to_term_value(l: &Literal) -> TermValue {
-    match l.language() {
-        Some(lang) => TermValue::Literal {
-            lexical_form: l.value().to_owned(),
-            datatype: l.datatype().as_str().to_owned(),
-            language: Some(lang.to_ascii_lowercase()),
-            direction: l.direction().map(|d| match d {
-                BaseDirection::Ltr => RdfTextDirection::Ltr,
-                BaseDirection::Rtl => RdfTextDirection::Rtl,
-            }),
-        },
-        None => TermValue::typed_literal(l.value(), l.datatype().as_str()),
-    }
+        .map_or_else(|_| Vec::new(), |query| purrdf::reasoning::query_bgp(&query))
 }

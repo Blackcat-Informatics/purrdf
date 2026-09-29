@@ -19,6 +19,7 @@ use std::num::NonZeroU32;
 
 use super::term_walk::TermBox;
 use crate::RdfTextDirection;
+use crate::model::{RdfLiteral, RdfTerm, RdfTriple};
 
 /// The `xsd:string` datatype IRI — the default datatype of a plain literal (C0.1).
 pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
@@ -417,6 +418,182 @@ impl TermValue {
             Self::Triple { .. } => 3,
         }
     }
+}
+
+impl TermValue {
+    /// An `xsd:integer` literal whose lexical form is `value`'s decimal spelling.
+    ///
+    /// `xsd:integer` is unbounded, so any machine integer that widens losslessly to
+    /// `i128` is written as its own canonical decimal text (XSD 1.1 Part 2, section
+    /// 3.4.13.2): no sign on a non-negative value and no leading zeros. This is the one
+    /// constructor for a computed count, index or integer answer.
+    #[must_use]
+    pub fn integer(value: impl Into<i128>) -> Self {
+        Self::typed_literal(value.into().to_string(), purrdf_xsd::datatype::XSD_INTEGER)
+    }
+
+    /// The canonical `xsd:boolean` literal for `value`: `"true"` or `"false"` (XSD 1.1
+    /// Part 2, section 3.3.2.2). This is the one constructor for a computed truth value.
+    #[must_use]
+    pub fn boolean(value: bool) -> Self {
+        Self::typed_literal(
+            if value { "true" } else { "false" },
+            purrdf_xsd::datatype::XSD_BOOLEAN,
+        )
+    }
+
+    /// The value of an owned [`RdfTerm`], its blank nodes decoded at the default scope.
+    ///
+    /// Exactly [`from_rdf_term_in_scope`](Self::from_rdf_term_in_scope) with
+    /// [`BlankScope::DEFAULT`]; see there for the conversion.
+    #[must_use]
+    pub fn from_rdf_term(term: &RdfTerm) -> Self {
+        Self::from_rdf_term_in_scope(term, BlankScope::DEFAULT)
+    }
+
+    /// The value of an owned [`RdfTerm`], the inverse of
+    /// [`to_rdf_term`](Self::to_rdf_term).
+    ///
+    /// - A literal's datatype is expanded by [`RdfLiteral::datatype_iri`] and its
+    ///   language tag lowercased, which is the identity key the IR interns (C0.1).
+    /// - A blank node's single string slot is read back into its `(label, scope)` pair.
+    ///   Under [`BlankScope::DEFAULT`] the label is decoded by
+    ///   [`BlankScope::unqualify_label`], the exact inverse of the encoding
+    ///   [`to_rdf_term`](Self::to_rdf_term) writes, so a blank node that left the IR
+    ///   comes back as the same node; a label that was never encoded decodes to itself.
+    ///   Under any other `scope` the label is taken verbatim in that scope — the
+    ///   isolation a caller asks for when it loads one document's blanks apart from
+    ///   every other's (C0.2).
+    ///
+    /// A triple term is converted bottom-up over [`RdfTerm::try_fold`]'s work list.
+    #[must_use]
+    pub fn from_rdf_term_in_scope(term: &RdfTerm, scope: BlankScope) -> Self {
+        let value = term.try_fold(
+            |leaf| {
+                Ok::<_, std::convert::Infallible>(match leaf {
+                    RdfTerm::Iri(iri) => Self::Iri(iri.clone()),
+                    RdfTerm::BlankNode(label) if scope == BlankScope::DEFAULT => {
+                        let (label, scope) = BlankScope::unqualify_label(label);
+                        Self::Blank {
+                            label: label.into_owned(),
+                            scope,
+                        }
+                    }
+                    RdfTerm::BlankNode(label) => Self::Blank {
+                        label: label.clone(),
+                        scope,
+                    },
+                    RdfTerm::Literal(literal) => Self::Literal {
+                        lexical_form: literal.lexical_form.clone(),
+                        datatype: literal.datatype_iri().to_owned(),
+                        language: literal.language.as_deref().map(str::to_lowercase),
+                        direction: literal.direction,
+                    },
+                    RdfTerm::Triple(_) => unreachable!("a triple term is folded from its parts"),
+                })
+            },
+            |predicate| Ok(Self::Iri(predicate.to_owned())),
+            |s, p, o| {
+                Ok(Self::Triple {
+                    s: TermBox::new(s),
+                    p: TermBox::new(p),
+                    o: TermBox::new(o),
+                })
+            },
+        );
+        match value {
+            Ok(value) => value,
+        }
+    }
+
+    /// This value as an owned [`RdfTerm`].
+    ///
+    /// - A blank node's `(label, scope)` pair is written into the owned model's single
+    ///   string slot by [`BlankScope::qualify_label`]: a default-scope label is itself,
+    ///   and a scoped one becomes a deterministic envelope, so two blank nodes that share
+    ///   a label in different scopes stay two nodes (C0.2), and
+    ///   [`from_rdf_term`](Self::from_rdf_term) reads the pair back exactly.
+    /// - A literal's datatype is left implicit (`None`) exactly when it is the one the
+    ///   owned model implies — `xsd:string` for a literal with no language tag, and the
+    ///   language datatype its base direction selects for a tagged one — so a plain
+    ///   literal is written `"lex"` rather than `"lex"^^xsd:string`, the form RDF 1.2
+    ///   N-Triples requires. Any other datatype is kept.
+    ///
+    /// A triple term is converted bottom-up over [`TermValue::try_fold`]'s work list.
+    ///
+    /// # Errors
+    ///
+    /// [`NonIriPredicate`] when a triple term, at any depth, has a predicate that is not
+    /// an IRI: the owned [`RdfTriple`] holds an IRI predicate by construction, so such a
+    /// term has no owned form, and none is fabricated for it.
+    pub fn to_rdf_term(&self) -> Result<RdfTerm, NonIriPredicate> {
+        self.try_fold(|leaf| Ok(owned_leaf(leaf.clone())), owned_triple)
+    }
+
+    /// [`to_rdf_term`](Self::to_rdf_term), consuming the value so every string moves
+    /// into the owned term rather than being copied.
+    ///
+    /// # Errors
+    ///
+    /// [`NonIriPredicate`], as for [`to_rdf_term`](Self::to_rdf_term).
+    pub fn into_rdf_term(self) -> Result<RdfTerm, NonIriPredicate> {
+        self.try_fold_owned(|leaf| Ok(owned_leaf(leaf)), owned_triple)
+    }
+}
+
+/// A triple term whose predicate is not an IRI, met by [`TermValue::to_rdf_term`]:
+/// RDF 1.2 requires a triple term's predicate to be an IRI, and the owned model
+/// cannot hold anything else there.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct NonIriPredicate;
+
+impl std::fmt::Display for NonIriPredicate {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("a triple-term predicate must be an IRI")
+    }
+}
+
+impl std::error::Error for NonIriPredicate {}
+
+/// The owned form of a value that is not a triple term.
+fn owned_leaf(value: TermValue) -> RdfTerm {
+    match value {
+        TermValue::Iri(iri) => RdfTerm::Iri(iri),
+        TermValue::Blank { label, scope } => {
+            RdfTerm::BlankNode(scope.qualify_label(&label).into_owned())
+        }
+        TermValue::Literal {
+            lexical_form,
+            datatype,
+            language,
+            direction,
+        } => {
+            let implied = if language.is_some() {
+                RdfLiteral::language_datatype_iri(direction)
+            } else {
+                XSD_STRING
+            };
+            RdfTerm::Literal(RdfLiteral {
+                datatype: (datatype != implied).then_some(datatype),
+                lexical_form,
+                language,
+                direction,
+            })
+        }
+        TermValue::Triple { .. } => unreachable!("a triple term is folded from its parts"),
+    }
+}
+
+/// An owned triple term, refusing a predicate that is not an IRI.
+fn owned_triple(
+    subject: RdfTerm,
+    predicate: RdfTerm,
+    object: RdfTerm,
+) -> Result<RdfTerm, NonIriPredicate> {
+    let RdfTerm::Iri(predicate) = predicate else {
+        return Err(NonIriPredicate);
+    };
+    Ok(RdfTerm::triple(RdfTriple::new(subject, predicate, object)))
 }
 
 /// Append `bytes` to `out` behind its length, so the field can be read back
@@ -1140,5 +1317,377 @@ mod tests {
             purrdf_testkit::prop_assert_eq!(&out[..split], prefix_bytes.as_slice());
             purrdf_testkit::prop_assert_eq!(&out[split..], term_bytes.as_slice());
         }
+    }
+}
+
+#[cfg(test)]
+mod conversion_tests {
+    //! The value ⇄ owned-model conversions, the computed-literal constructors and the
+    //! total order, against their recursive references and at their boundaries.
+
+    use std::cmp::Ordering;
+
+    use super::{
+        BlankScope, NonIriPredicate, RDF_DIR_LANG_STRING, RDF_LANG_STRING, TermBox, TermValue,
+        XSD_STRING,
+    };
+    use crate::RdfTextDirection;
+    use crate::model::{RdfLiteral, RdfTerm, RdfTriple};
+
+    const EX: &str = "http://example.org/";
+
+    fn literal(
+        lexical: &str,
+        datatype: &str,
+        language: Option<&str>,
+        direction: Option<RdfTextDirection>,
+    ) -> TermValue {
+        TermValue::Literal {
+            lexical_form: lexical.to_owned(),
+            datatype: datatype.to_owned(),
+            language: language.map(str::to_owned),
+            direction,
+        }
+    }
+
+    fn scoped(label: &str, scope: u32) -> TermValue {
+        TermValue::Blank {
+            label: label.to_owned(),
+            scope: BlankScope(scope),
+        }
+    }
+
+    fn triple(s: TermValue, p: TermValue, o: TermValue) -> TermValue {
+        TermValue::Triple {
+            s: TermBox::new(s),
+            p: TermBox::new(p),
+            o: TermBox::new(o),
+        }
+    }
+
+    /// The recursive reference of [`TermValue::to_rdf_term`].
+    fn reference_lift(value: &TermValue) -> Result<RdfTerm, NonIriPredicate> {
+        Ok(match value {
+            TermValue::Triple { s, p, o } => {
+                let TermValue::Iri(predicate) = &**p else {
+                    return Err(NonIriPredicate);
+                };
+                RdfTerm::triple(RdfTriple::new(
+                    reference_lift(s)?,
+                    predicate.clone(),
+                    reference_lift(o)?,
+                ))
+            }
+            TermValue::Iri(iri) => RdfTerm::iri(iri.clone()),
+            TermValue::Blank { label, scope } => {
+                RdfTerm::blank_node(scope.qualify_label(label).into_owned())
+            }
+            TermValue::Literal {
+                lexical_form,
+                datatype,
+                language,
+                direction,
+            } => {
+                let implied = match language {
+                    Some(_) => RdfLiteral::language_datatype_iri(*direction),
+                    None => XSD_STRING,
+                };
+                RdfTerm::literal(RdfLiteral {
+                    lexical_form: lexical_form.clone(),
+                    datatype: (datatype != implied).then(|| datatype.clone()),
+                    language: language.clone(),
+                    direction: *direction,
+                })
+            }
+        })
+    }
+
+    /// The recursive reference of [`TermValue::from_rdf_term`].
+    fn reference_lower(term: &RdfTerm) -> TermValue {
+        match term {
+            RdfTerm::Triple(t) => triple(
+                reference_lower(&t.subject),
+                TermValue::Iri(t.predicate.clone()),
+                reference_lower(&t.object),
+            ),
+            RdfTerm::Iri(iri) => TermValue::Iri(iri.clone()),
+            RdfTerm::BlankNode(label) => {
+                let (label, scope) = BlankScope::unqualify_label(label);
+                TermValue::Blank {
+                    label: label.into_owned(),
+                    scope,
+                }
+            }
+            RdfTerm::Literal(lit) => TermValue::Literal {
+                lexical_form: lit.lexical_form.clone(),
+                datatype: lit.datatype_iri().to_owned(),
+                language: lit.language.as_deref().map(str::to_lowercase),
+                direction: lit.direction,
+            },
+        }
+    }
+
+    /// Every generated term lifts — by reference and by value — and lowers back exactly
+    /// as the recursive references do, a non-IRI predicate's refusal included; and a
+    /// lifted term lowers back to the very value it came from.
+    #[test]
+    fn the_conversions_agree_with_their_recursive_references_on_generated_terms() {
+        let (mut refused, mut lifted_count) = (0, 0);
+        for seed in 0..400_u64 {
+            let mut state = seed;
+            let mut budget = 8;
+            let value = crate::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                crate::term_fixture::TermShape::Any,
+            );
+            let lifted = value.to_rdf_term();
+            assert_eq!(lifted, reference_lift(&value), "seed {seed}");
+            assert_eq!(value.clone().into_rdf_term(), lifted, "seed {seed}");
+            match lifted {
+                Ok(term) => {
+                    lifted_count += 1;
+                    let lowered = TermValue::from_rdf_term(&term);
+                    assert_eq!(lowered, reference_lower(&term), "seed {seed}");
+                    assert_eq!(lowered, value, "seed {seed}: the round trip is exact");
+                }
+                Err(_) => refused += 1,
+            }
+        }
+        assert!(refused > 0, "some generated term has a non-IRI predicate");
+        assert!(lifted_count > 0, "some generated term has an owned form");
+    }
+
+    /// A triple term whose predicate is not an IRI — at the top or nested — has no owned
+    /// form; the same term with an IRI predicate does.
+    #[test]
+    fn a_non_iri_predicate_is_refused_and_an_iri_predicate_is_not() {
+        let s = TermValue::iri(format!("{EX}s"));
+        let o = TermValue::iri(format!("{EX}o"));
+        for bad in [
+            scoped("p", 0),
+            TermValue::simple_literal("p"),
+            triple(s.clone(), TermValue::iri(format!("{EX}p")), o.clone()),
+        ] {
+            let top = triple(s.clone(), bad, o.clone());
+            assert_eq!(top.to_rdf_term(), Err(NonIriPredicate), "{top:?}");
+            let nested = triple(s.clone(), TermValue::iri(format!("{EX}q")), top);
+            assert_eq!(nested.into_rdf_term(), Err(NonIriPredicate));
+        }
+        let good = triple(s, TermValue::iri(format!("{EX}p")), o);
+        assert_eq!(
+            good.to_rdf_term(),
+            Ok(RdfTerm::triple(RdfTriple::new(
+                RdfTerm::iri(format!("{EX}s")),
+                format!("{EX}p"),
+                RdfTerm::iri(format!("{EX}o")),
+            )))
+        );
+        assert_eq!(
+            NonIriPredicate.to_string(),
+            "a triple-term predicate must be an IRI"
+        );
+    }
+
+    /// Exactly the implied datatype is left implicit; any other stays explicit.
+    #[test]
+    fn only_the_implied_datatype_is_left_implicit() {
+        let datatype_of = |value: TermValue| match value.to_rdf_term() {
+            Ok(RdfTerm::Literal(lit)) => lit.datatype,
+            other => panic!("expected a literal, got {other:?}"),
+        };
+        let integer = "http://www.w3.org/2001/XMLSchema#integer";
+        assert_eq!(datatype_of(literal("x", XSD_STRING, None, None)), None);
+        assert_eq!(
+            datatype_of(literal("x", RDF_LANG_STRING, Some("en"), None)),
+            None
+        );
+        assert_eq!(
+            datatype_of(literal(
+                "x",
+                RDF_DIR_LANG_STRING,
+                Some("en"),
+                Some(RdfTextDirection::Rtl)
+            )),
+            None
+        );
+        assert_eq!(
+            datatype_of(literal("1", integer, None, None)).as_deref(),
+            Some(integer)
+        );
+        // A tagged literal whose datatype is not the one its direction selects keeps it,
+        // so the value it came from is not rewritten.
+        assert_eq!(
+            datatype_of(literal(
+                "x",
+                RDF_LANG_STRING,
+                Some("en"),
+                Some(RdfTextDirection::Ltr)
+            ))
+            .as_deref(),
+            Some(RDF_LANG_STRING)
+        );
+        assert_eq!(
+            datatype_of(literal("x", XSD_STRING, Some("en"), None)).as_deref(),
+            Some(XSD_STRING)
+        );
+    }
+
+    /// Two blank nodes sharing a label in different scopes stay two owned blank nodes,
+    /// deterministically; a default-scope blank keeps its label; both read back exactly.
+    #[test]
+    fn a_blank_node_keeps_its_scope_through_the_owned_model() {
+        let label_of = |value: &TermValue| match value.to_rdf_term() {
+            Ok(RdfTerm::BlankNode(label)) => label,
+            other => panic!("expected a blank node, got {other:?}"),
+        };
+        let (a, b, unscoped) = (scoped("b", 1), scoped("b", 2), scoped("b", 0));
+        assert_ne!(label_of(&a), label_of(&b));
+        assert_ne!(label_of(&a), label_of(&unscoped));
+        assert_eq!(label_of(&a), label_of(&scoped("b", 1)));
+        assert_eq!(label_of(&unscoped), "b");
+        for value in [a, b, unscoped] {
+            let term = value.to_rdf_term().expect("a blank node has an owned form");
+            assert_eq!(TermValue::from_rdf_term(&term), value);
+        }
+    }
+
+    /// A caller-chosen scope tags every blank node of the term with its label verbatim;
+    /// the default scope decodes an envelope instead.
+    #[test]
+    fn a_non_default_scope_takes_every_label_verbatim() {
+        let term = RdfTerm::triple(RdfTriple::new(
+            RdfTerm::blank_node("purrdfesc1_a"),
+            format!("{EX}p"),
+            RdfTerm::blank_node("c"),
+        ));
+        assert_eq!(
+            TermValue::from_rdf_term_in_scope(&term, BlankScope(7)),
+            triple(
+                scoped("purrdfesc1_a", 7),
+                TermValue::iri(format!("{EX}p")),
+                scoped("c", 7)
+            )
+        );
+        assert_eq!(
+            TermValue::from_rdf_term(&term),
+            triple(
+                scoped("a", 1),
+                TermValue::iri(format!("{EX}p")),
+                scoped("c", 0)
+            )
+        );
+    }
+
+    /// The owned literal's implied datatype is expanded and its tag lowercased, which is
+    /// the identity the IR interns.
+    #[test]
+    fn an_owned_literal_lowers_to_its_interned_identity() {
+        assert_eq!(
+            TermValue::from_rdf_term(&RdfTerm::literal(RdfLiteral::simple("x"))),
+            literal("x", XSD_STRING, None, None)
+        );
+        assert_eq!(
+            TermValue::from_rdf_term(&RdfTerm::literal(RdfLiteral::language_tagged("x", "EN-gb"))),
+            literal("x", RDF_LANG_STRING, Some("en-gb"), None)
+        );
+        let mut directional = RdfLiteral::language_tagged("x", "ar");
+        directional.direction = Some(RdfTextDirection::Rtl);
+        assert_eq!(
+            TermValue::from_rdf_term(&RdfTerm::literal(directional)),
+            literal(
+                "x",
+                RDF_DIR_LANG_STRING,
+                Some("ar"),
+                Some(RdfTextDirection::Rtl)
+            )
+        );
+    }
+
+    /// A hundred thousand nested triple terms lift and lower on a 128 KiB thread.
+    #[test]
+    fn a_hundred_thousand_level_term_converts_on_a_128_kib_thread() {
+        const LEVELS: usize = 100_000;
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                let value = crate::term_fixture::triple_chain(LEVELS);
+                let mut term = value.to_rdf_term().expect("IRI predicates throughout");
+                assert_eq!(TermValue::from_rdf_term(&term), value);
+                // The owned model's derived drop descends once per level, so the chain
+                // is taken apart one level at a time.
+                while let RdfTerm::Triple(triple) = term {
+                    term = triple.object;
+                }
+            })
+            .expect("the thread starts")
+            .join()
+            .expect("the conversions did not overflow the thread's stack");
+    }
+
+    /// `xsd:integer` literals are the canonical decimal spelling across the widths callers
+    /// hand in, and `xsd:boolean` literals are `true` and `false`.
+    #[test]
+    fn computed_literals_are_canonical() {
+        let integer = "http://www.w3.org/2001/XMLSchema#integer";
+        let boolean = "http://www.w3.org/2001/XMLSchema#boolean";
+        assert_eq!(
+            TermValue::integer(0_u32),
+            TermValue::typed_literal("0", integer)
+        );
+        assert_eq!(
+            TermValue::integer(-1_i64),
+            TermValue::typed_literal("-1", integer)
+        );
+        assert_eq!(
+            TermValue::integer(i64::MIN),
+            TermValue::typed_literal("-9223372036854775808", integer)
+        );
+        assert_eq!(
+            TermValue::integer(u64::MAX),
+            TermValue::typed_literal("18446744073709551615", integer)
+        );
+        assert_eq!(
+            TermValue::boolean(true),
+            TermValue::typed_literal("true", boolean)
+        );
+        assert_eq!(
+            TermValue::boolean(false),
+            TermValue::typed_literal("false", boolean)
+        );
+    }
+
+    /// The total order tells apart what identity tells apart — base direction and
+    /// blank-node scope included — and ties exactly the equal terms.
+    #[test]
+    fn the_order_distinguishes_direction_and_scope_and_ties_equal_terms() {
+        let ltr = literal(
+            "x",
+            RDF_DIR_LANG_STRING,
+            Some("en"),
+            Some(RdfTextDirection::Ltr),
+        );
+        let rtl = literal(
+            "x",
+            RDF_DIR_LANG_STRING,
+            Some("en"),
+            Some(RdfTextDirection::Rtl),
+        );
+        assert_ne!(ltr.cmp(&rtl), Ordering::Equal);
+        assert_eq!(ltr.cmp(&rtl), rtl.cmp(&ltr).reverse());
+        assert_ne!(scoped("b", 1).cmp(&scoped("b", 2)), Ordering::Equal);
+        assert_ne!(scoped("b", 0).cmp(&scoped("b", 1)), Ordering::Equal);
+        for value in [
+            ltr.clone(),
+            scoped("b", 1),
+            triple(scoped("b", 1), TermValue::iri(EX), rtl),
+        ] {
+            assert_eq!(value.cmp(&value.clone()), Ordering::Equal, "{value:?}");
+        }
+        let mut sorted = vec![scoped("b", 2), ltr.clone(), scoped("b", 1), scoped("b", 2)];
+        sorted.sort();
+        sorted.dedup();
+        assert_eq!(sorted, vec![ltr, scoped("b", 1), scoped("b", 2)]);
     }
 }

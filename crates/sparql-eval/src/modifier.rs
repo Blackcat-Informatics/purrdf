@@ -2328,7 +2328,7 @@ impl NumericFold {
     /// see [`fold_numeric`]) can make one of those three unrepresentable.
     fn finish_sum(self) -> Option<TermValue> {
         match self {
-            Self::Empty => Some(integer_value(0)),
+            Self::Empty => Some(TermValue::integer(0)),
             Self::Int { sum, datatype, .. } => Some(int_sum_value(&sum, datatype)),
             Self::Ok { acc, .. } => Some(crate::expr::xsd_literal_value(&acc)),
             Self::Dur {
@@ -2372,7 +2372,7 @@ impl NumericFold {
     /// overflow — see `purrdf_xsd::numeric::decimal_div_raw`).
     fn finish_avg(self) -> Option<TermValue> {
         match self {
-            Self::Empty => Some(integer_value(0)),
+            Self::Empty => Some(TermValue::integer(0)),
             Self::Int { sum, count, .. } => {
                 Some(purrdf_xsd::bigint_avg_decimal(&sum, count).map_or_else(
                     || TermValue::Literal {
@@ -2712,7 +2712,7 @@ impl crate::agg_fn::AggregateAccumulator for CountAccumulator {
     }
 
     fn finish(self: Box<Self>) -> Result<Option<TermValue>, EvalError> {
-        Ok(Some(integer_value(self.0)))
+        Ok(Some(TermValue::integer(self.0)))
     }
 }
 
@@ -3309,16 +3309,6 @@ pub(crate) fn lexical_of(value: &TermValue) -> Option<String> {
         TermValue::Literal { lexical_form, .. } => Some(lexical_form.clone()),
         TermValue::Iri(iri) => Some(iri.clone()),
         TermValue::Blank { .. } | TermValue::Triple { .. } => None,
-    }
-}
-
-/// Build an `xsd:integer` literal value (not interned — see [`fold_builtin`]).
-fn integer_value(value: i64) -> TermValue {
-    TermValue::Literal {
-        lexical_form: value.to_string(),
-        datatype: XSD_INTEGER.to_owned(),
-        language: None,
-        direction: None,
     }
 }
 

@@ -23,10 +23,8 @@
 //!   [`QuadPatternCursor`] that pins an [`Arc`] and lazily follows the selected
 //!   quad index without collecting matching rows.
 //!
-use crate::TermBox;
 use std::cmp::Ordering;
 use std::collections::HashMap;
-use std::convert::Infallible;
 use std::hash::{Hash, Hasher};
 use std::sync::{Arc, OnceLock};
 
@@ -43,7 +41,6 @@ use crate::{
 };
 
 use super::term::{BlankScope, InternedTerm, TermId, TermValue, arena_str};
-use super::term_walk::fold_term;
 
 /// The `rdf:reifies` predicate IRI — the indirection edge of the RDF 1.2 reification
 /// layer (`reifier rdf:reifies <<( s p o )>>`). Used to expose the reifier side-table
@@ -781,129 +778,28 @@ impl RdfDataset {
     /// used by serializers, the C-ABI (`purrdf-capi`
     /// renders a cursor term to N-Triples through this), and tests.
     ///
-    /// A triple term is assembled bottom-up over a work list: its subject, then its
-    /// predicate IRI, then its object, each resolved fully before the next, and the
-    /// owned triple once all three exist.
+    /// The id's [`TermValue`] lifted by [`TermValue::into_rdf_term`]: a scoped blank
+    /// label is qualified, and a plain or language-tagged literal's implied datatype
+    /// is left implicit.
     pub fn to_owned_term(&self, id: TermId) -> RdfTerm {
-        enum Step {
-            Term(TermId),
-            Predicate(TermId),
-            Assemble,
-        }
-        let mut steps: Vec<Step> = vec![Step::Term(id)];
-        let mut terms: Vec<RdfTerm> = Vec::new();
-        let mut predicates: Vec<String> = Vec::new();
-        while let Some(step) = steps.pop() {
-            match step {
-                Step::Term(id) => match self.resolve(id) {
-                    TermRef::Iri(iri) => terms.push(RdfTerm::iri(iri)),
-                    TermRef::Blank { label, scope } => {
-                        terms.push(RdfTerm::blank_node(scope.qualify_label(label)));
-                    }
-                    TermRef::Literal {
-                        lexical,
-                        datatype,
-                        language,
-                        direction,
-                    } => {
-                        let datatype_iri = match self.resolve(datatype) {
-                            TermRef::Iri(iri) => iri.to_owned(),
-                            other => {
-                                unreachable!(
-                                    "literal datatype must resolve to an IRI, got {other:?}"
-                                )
-                            }
-                        };
-                        terms.push(RdfTerm::literal(RdfLiteral {
-                            lexical_form: lexical.to_owned(),
-                            datatype: Some(datatype_iri),
-                            language: language.map(str::to_owned),
-                            direction,
-                        }));
-                    }
-                    TermRef::Triple { s, p, o } => steps.extend([
-                        Step::Assemble,
-                        Step::Term(o),
-                        Step::Predicate(p),
-                        Step::Term(s),
-                    ]),
-                },
-                Step::Predicate(id) => predicates.push(self.iri_string(id)),
-                Step::Assemble => {
-                    let object = terms.pop().expect("a triple term's object is resolved");
-                    let predicate = predicates
-                        .pop()
-                        .expect("a triple term's predicate is resolved");
-                    let subject = terms.pop().expect("a triple term's subject is resolved");
-                    terms.push(RdfTerm::triple(RdfTriple::new(subject, predicate, object)));
-                }
-            }
-        }
-        terms
-            .pop()
-            .expect("the term's own owned form is the last one assembled")
+        self.term_value(id)
+            .into_rdf_term()
+            .expect("a frozen dataset's triple terms have IRI predicates")
     }
 
-    /// Resolve a term id to its dataset-independent [`TermValue`], through the
-    /// literal datatype and triple components. The inverse of interning a value:
-    /// the literal datatype is expanded to its IRI string, the blank label is
-    /// scope-qualified, and triple terms are taken by value (C0.1/C0.2/C0.3).
+    /// Resolve a term id to its dataset-independent [`TermValue`] (C0.1/C0.2/C0.3).
     ///
-    /// This is the value-model companion to [`to_owned_term`](Self::to_owned_term):
-    /// consumers that key on the dataset-independent value identity (LOGIC's
-    /// world-store, the SPARQL egress) resolve through this rather than the
-    /// `RdfTerm` owned model.
+    /// [`DatasetView::term_value`] for an id this dataset minted, which always
+    /// resolves: every literal it interns has an IRI datatype. Consumers that key on
+    /// the dataset-independent value identity (the SPARQL egress, the reasoners)
+    /// resolve through this rather than the `RdfTerm` owned model.
     ///
-    /// A triple term is assembled bottom-up over [`fold_term`]'s work list: its
-    /// subject, predicate and object are resolved in that order, each fully before
-    /// the next.
+    /// # Panics
+    ///
+    /// On an id this dataset did not mint.
     pub fn term_value(&self, id: TermId) -> TermValue {
-        match fold_term(
-            self,
-            id,
-            |_, term| {
-                Ok::<_, Infallible>(match term {
-                    TermRef::Iri(iri) => TermValue::Iri(iri.to_owned()),
-                    TermRef::Blank { label, scope } => TermValue::Blank {
-                        label: label.to_owned(),
-                        scope,
-                    },
-                    TermRef::Literal {
-                        lexical,
-                        datatype,
-                        language,
-                        direction,
-                    } => {
-                        let datatype = match self.resolve(datatype) {
-                            TermRef::Iri(dt) => dt.to_owned(),
-                            other => {
-                                unreachable!(
-                                    "literal datatype must resolve to an IRI, got {other:?}"
-                                )
-                            }
-                        };
-                        TermValue::Literal {
-                            lexical_form: lexical.to_owned(),
-                            datatype,
-                            language: language.map(str::to_owned),
-                            direction,
-                        }
-                    }
-                    TermRef::Triple { .. } => {
-                        unreachable!("a triple term is assembled from its components")
-                    }
-                })
-            },
-            |_, s, p, o| {
-                Ok(TermValue::Triple {
-                    s: TermBox::new(s),
-                    p: TermBox::new(p),
-                    o: TermBox::new(o),
-                })
-            },
-        ) {
-            Ok(value) => value,
-        }
+        crate::DatasetView::term_value(self, id)
+            .expect("every literal this dataset interns has an IRI datatype")
     }
 
     /// Resolve a term id that must be an IRI (a predicate / triple-predicate

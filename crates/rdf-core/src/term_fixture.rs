@@ -11,7 +11,12 @@
 //! pseudo-random stream is the caller's, so the library takes no test-only
 //! dependency.
 
-use crate::{BlankScope, RdfTextDirection, TermBox, TermValue};
+use std::sync::Arc;
+
+use crate::ir::{QuadIds, QuadRef, RdfDataset, TermId, TermRef};
+use crate::{
+    BlankScope, DatasetView, GraphMatch, RdfStoreCapabilities, RdfTextDirection, TermBox, TermValue,
+};
 
 /// Which positions of a generated triple term [`term_value`] may fill with which terms.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -114,4 +119,72 @@ pub fn triple_chain(levels: usize) -> TermValue {
         };
     }
     term
+}
+
+/// A view over a real dataset that, when `foreign` is set, answers every literal with
+/// `datatype` as its datatype id — pointed at a term that is not an IRI, that is what a
+/// view hands back for an id another view minted. Every other answer is the dataset's.
+#[derive(Debug)]
+pub struct ForeignDatatypeView {
+    /// The dataset every answer comes from.
+    pub inner: Arc<RdfDataset>,
+    /// The id every literal names as its datatype while `foreign` is set.
+    pub datatype: TermId,
+    /// Whether literals name `datatype` rather than their own datatype.
+    pub foreign: bool,
+}
+
+impl DatasetView for ForeignDatatypeView {
+    type Id = TermId;
+    type ProbePlan = ();
+
+    fn quads(&self) -> impl Iterator<Item = QuadIds> + '_ {
+        self.inner.quads()
+    }
+
+    fn quad_refs(&self) -> impl Iterator<Item = QuadRef<'_>> + '_ {
+        DatasetView::quad_refs(&*self.inner)
+    }
+
+    fn resolve(&self, id: TermId) -> TermRef<'_> {
+        match self.inner.resolve(id) {
+            TermRef::Literal {
+                lexical,
+                language,
+                direction,
+                ..
+            } if self.foreign => TermRef::Literal {
+                lexical,
+                datatype: self.datatype,
+                language,
+                direction,
+            },
+            other => other,
+        }
+    }
+
+    fn term_id_by_value(&self, value: &TermValue) -> Option<TermId> {
+        self.inner.term_id_by_value(value)
+    }
+
+    fn capabilities(&self) -> RdfStoreCapabilities {
+        self.inner.capabilities()
+    }
+
+    fn probe_plan(&self, _s: bool, _p: bool, _o: bool, _g: GraphMatch) {}
+
+    fn quads_for_pattern_with_plan(
+        &self,
+        _plan: &(),
+        s: Option<TermId>,
+        p: Option<TermId>,
+        o: Option<TermId>,
+        g: GraphMatch,
+    ) -> impl Iterator<Item = QuadIds> + '_ {
+        self.quads_for_pattern(s, p, o, g)
+    }
+
+    fn term_count(&self) -> usize {
+        self.inner.term_count()
+    }
 }

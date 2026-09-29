@@ -2159,7 +2159,7 @@ mod tests {
             "the nested triple-term subject is skipped; its well-formed sibling is not"
         );
         for quad in out.quads() {
-            let object = out.term_value(quad.o);
+            let object = out.term_value(quad.o).unwrap();
             assert!(
                 object_term_model_holds(&object),
                 "an emitted object breaks the RDF 1.2 term model: {object:?}"

@@ -10,6 +10,34 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **core:** `TermValue::to_rdf_term` / `into_rdf_term` and
+  `TermValue::from_rdf_term` / `from_rdf_term_in_scope` are the one conversion
+  between the dataset-independent value and the owned `RdfTerm` model. A blank
+  node's `(label, scope)` pair crosses as `BlankScope::qualify_label` writes it
+  and is read back by `BlankScope::unqualify_label`, so the round trip is exact;
+  a literal's implied datatype (`xsd:string`, or the language datatype its base
+  direction selects) is left implicit on the way out and expanded on the way
+  in, with the language tag lowercased. A triple term whose predicate is not an
+  IRI has no owned form and is refused with `NonIriPredicate`.
+- **core:** `DatasetView::term_value(id) -> Result<TermValue, TermLookupError>`
+  is the one resolution from a view's id to its value, through a literal's
+  datatype and a triple term's components at any depth.
+  `TermLookupError::ForeignId` reports an id whose literal datatype does not
+  resolve to an IRI; no part of a value is invented in its place.
+- **core:** `TermValue::integer` (any integer that widens to `i128`, written in
+  its canonical decimal form) and `TermValue::boolean` are the one constructor
+  for a computed `xsd:integer` and `xsd:boolean` literal.
+- **sparql-eval:** `purrdf_sparql_eval::convert` is public: the query-text
+  conversions from the algebra's terms to `TermValue`, and `map_direction` /
+  `base_direction` between the algebra's and the IR's base direction.
+- **purrdf:** `purrdf::reasoning::query_bgp`, every basic-graph-pattern triple
+  of a parsed query as the `QTriple`s OWL 2 Direct-Semantics augmentation reads.
+- **entail:** `EntailError::ForeignTerm`, for an input view that hands back an
+  id that is not its own.
+- **helpers:** the `term-conversion` and `term-constructor` jobs of
+  `helpers-ledger.toml` are enforced, each driven by a seeded fixture in
+  `scripts/check-shared-helpers.py --self-test`.
+
 - **lex:** `purrdf_lex` holds the workspace's escape decoders and lexical
   laws that grammar readers had each spelled for themselves:
   `terminals::decode_uchar` / `decode_uchar_at` (`UCHAR`), `echar_value`
@@ -1142,6 +1170,32 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **owned model:** a plain literal resolved from a dataset into the owned
+  `RdfTerm` model now carries no datatype (`datatype: None`) and a
+  language-tagged one no `rdf:langString` / `rdf:dirLangString`, instead of
+  the expanded IRI; any other datatype is kept. `RdfDataset::to_owned_term`,
+  `to_owned_quad` and every owned-model export read through
+  `TermValue::into_rdf_term`, so an owned term read out of a dataset now
+  equals the one a caller builds with `RdfLiteral::simple` or
+  `RdfLiteral::language_tagged`. Golden changes: the C API's
+  `purrdf_term_to_ntriples` writes a plain literal as `"lex"` rather than
+  `"lex"^^<http://www.w3.org/2001/XMLSchema#string>` (the form RDF 1.2
+  N-Triples requires), a language-tagged one without the `rdf:langString`
+  datatype, and a scoped blank node as its scope envelope rather than its bare
+  label; `Display` of such an owned term (Python's `str()` of a term a parsed
+  document yields) and the regime diagnostics that display a literal
+  (`purrdf_validate::regime`) spell it the same way.
+- **order:** the answers of the OWL 2 Direct-Semantics reasoning services
+  (instance retrieval, realization, classification, module extraction and
+  profile violations) and the node sets a ShEx shape-map selector expands to
+  are sorted by `TermValue`'s total order, in which base direction and
+  blank-node scope distinguish terms and equal terms tie. Golden change: the
+  report order changes where it differs from the retired string sort key —
+  literals now sort before blank nodes, and two blank nodes that share a label
+  sort by scope.
+- **absolute IRIs:** the embedding target, the JSON-LD context compiler, the
+  JSON Schema and LinkML importers and the CLI's `--path-relation` decide an
+  absolute IRI with `purrdf_iri::BaseIri::parse`; their messages are unchanged.
 - **deps:** `memchr` is no longer a dependency of any workspace member: the SPARQL
   tokenizer, the line-oriented codecs, the XML nesting guard and the IRI
   component splitter search with `purrdf_lex::scan::find_byte` / `find_byte2`
@@ -1703,6 +1757,17 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **wasm:** two blank nodes that share a label in different scopes are two
+  blank nodes in JS. Query results and dataset iteration used to hand both to
+  JS under the bare label, collapsing them; each now crosses as its
+  deterministic scope envelope, and a JS term carrying one is read back as the
+  same scoped node. A default-scope blank node keeps its label.
+- **python:** a SPARQL result cell that is a triple term with a non-IRI
+  predicate raises `ValueError` instead of being rendered with a fabricated
+  predicate string.
+- **geo, text:** building an index over a view that hands back an id whose
+  literal datatype is not an IRI is refused (`GeoError::Config`, `TextError`)
+  rather than indexing the literal under an empty datatype.
 - **escapes:** a signed escape is refused. `\u+041` and `\U+0000041` were read
   as `A` by the retrieval term decoder and by the composite-literal blank-node
   rewriter (whose decoder used `u32::from_str_radix`, which accepts a leading
