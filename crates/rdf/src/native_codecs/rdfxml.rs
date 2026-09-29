@@ -6,7 +6,7 @@
 //! This module REPLACES the external purrdf-gts `rdf_codecs::{from_rdf_xml,
 //! to_rdf_xml}` codecs (the first-party mandate: RDF/XML must NOT be parsed or
 //! serialized via the external crate). It implements the RDF/XML production rules
-//! in-repo on top of a pure-Rust XML DOM (`roxmltree`), parsing straight into the
+//! in-repo on top of the workspace's one XML reader ([`purrdf_lex::xml`]), parsing straight into the
 //! frozen [`RdfDataset`](crate::RdfDataset) IR (via the shared
 //! [`fold_statement_layer`](super::parse::fold_statement_layer)) and serializing from
 //! the first-party [`SerGraph`](super::ser_model::SerGraph). It is fully purrdf-gts
@@ -41,7 +41,8 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use roxmltree::{Document, Node};
+use purrdf_core::collections::{ListVocab, build_rdf_list};
+use purrdf_lex::xml::{Attribute, Node};
 
 use super::codec::RdfCodec;
 use super::parse::{FoldNode, FoldRow, RDF_REIFIES as RDF_REIFIES_IRI, fold_statement_layer};
@@ -49,7 +50,7 @@ use super::ser_model::{
     ReifierIndex, SerGraph, SerTerm, SerTermKind, deterministic_blank_label_with_prefix,
 };
 use super::text_parse::LineParseMode;
-use crate::nesting::guard_xml_nesting;
+use crate::nesting::{XmlReadError, parse_xml};
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, RdfTextDirection, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::cdt_blank::BlankBinding;
@@ -188,16 +189,15 @@ pub(super) fn parse_rdfxml_document(
     base: &mut purrdf_iri::BaseScope,
     namespaces: Option<&mut Vec<(String, String)>>,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    // `roxmltree`'s tokenizer recurses once per element and aborts the process on a deeply
-    // nested document, so the nesting is measured on the SOURCE and refused here. This is
-    // also what bounds the walk below: the tree it descends came from this very call, so its
-    // element nesting is bounded and it needs no depth counter of its own.
-    guard_xml_nesting(text).map_err(|depth| {
-        parse_err(format!(
+    // The reader refuses element nesting past the parser limit, and that is also what
+    // bounds the walk below: the tree it descends came from this very call, so its element
+    // nesting is bounded and it needs no depth counter of its own.
+    let document = parse_xml(text).map_err(|error| match error {
+        XmlReadError::TooDeep(depth) => parse_err(format!(
             "element nesting reaches {depth} levels, past the parser limit"
-        ))
+        )),
+        XmlReadError::Malformed(error) => parse_err(error.to_string()),
     })?;
-    let document = Document::parse(text).map_err(|e| parse_err(e.to_string()))?;
     let mut parser = RdfXmlParser {
         rows: Vec::new(),
         bnode_counter: 0,
@@ -593,44 +593,38 @@ impl RdfXmlParser {
         context: &ParseContext,
     ) -> Result<XmlTerm, RdfDiagnostic> {
         let items: Vec<Node<'_, '_>> = element_children(element).collect();
-        if items.is_empty() {
-            return Ok(XmlTerm::Iri(rdf_iri(RDF_NIL)?));
-        }
-        let nodes = (0..items.len())
+        // Every cell is minted before any member is parsed, so the cells are labelled in
+        // list order whatever the members nest.
+        let cells = (0..items.len())
             .map(|_| self.fresh_collection_bnode())
             .collect::<Result<Vec<_>, _>>()?;
+        let members = items
+            .iter()
+            .map(|item| self.parse_node_element(*item, context).map(XmlTerm::from))
+            .collect::<Result<Vec<_>, _>>()?;
         // The three RDF vocabulary IRIs are constants: build (format + validate) each
-        // once here rather than once per collection item, and clone the string below.
-        let rdf_first = rdf_iri(RDF_FIRST)?;
-        let rdf_rest = rdf_iri(RDF_REST)?;
-        let rdf_nil = rdf_iri(RDF_NIL)?;
-        for (index, item) in items.iter().enumerate() {
-            let object = self.parse_node_element(*item, context)?;
-            self.insert_statement(
-                nodes[index].clone().into(),
-                rdf_first.clone(),
-                object.into(),
-                None,
-                None,
-            )?;
-            let rest: XmlTerm = if let Some(next) = nodes.get(index + 1) {
-                next.clone().into()
-            } else {
-                XmlTerm::Iri(rdf_nil.clone())
-            };
-            self.insert_statement(
-                nodes[index].clone().into(),
-                rdf_rest.clone(),
-                rest,
-                None,
-                None,
-            )?;
-        }
-        Ok(nodes
-            .first()
-            .expect("non-empty collection has a head node")
-            .clone()
-            .into())
+        // once here rather than once per collection item.
+        let vocab = ListVocab {
+            first: XmlTerm::Iri(rdf_iri(RDF_FIRST)?),
+            rest: XmlTerm::Iri(rdf_iri(RDF_REST)?),
+            nil: XmlTerm::Iri(rdf_iri(RDF_NIL)?),
+        };
+        let rows = &mut self.rows;
+        Ok(build_rdf_list(
+            members,
+            &vocab,
+            |index| cells[index].clone().into(),
+            |subject, predicate, object| {
+                let XmlTerm::Iri(predicate) = predicate else {
+                    unreachable!("the list vocabulary is rdf:first and rdf:rest, both IRIs")
+                };
+                rows.push(XmlRow {
+                    subject,
+                    predicate,
+                    object,
+                });
+            },
+        ))
     }
 
     fn parse_triple_element(
@@ -651,7 +645,7 @@ impl RdfXmlParser {
         // The single predicate/object may come from a child property element, a
         // `rdf:type` attribute, or another property attribute (literal-valued).
         let type_attr = attr_rdf(node, RDF_TYPE);
-        let prop_attrs: Vec<roxmltree::Attribute<'_, '_>> = property_attrs(node).collect();
+        let prop_attrs: Vec<&Attribute<'_>> = property_attrs(node).collect();
         let child_props: Vec<Node<'_, '_>> = element_children(node).collect();
         if usize::from(type_attr.is_some()) + prop_attrs.len() + child_props.len() != 1 {
             return Err(parse_err(
@@ -912,7 +906,7 @@ fn intern_node(builder: &mut RdfDatasetBuilder, term: &XmlTerm) -> Result<FoldNo
     }
 }
 
-// ── roxmltree element/attribute helpers (RDF/XML name matching) ─────────────────
+// ── XML tree element/attribute helpers (RDF/XML name matching) ─────────────────
 
 fn is_rdf(element: Node<'_, '_>, local: &str) -> bool {
     element.tag_name().namespace() == Some(RDF_NS) && element.tag_name().name() == local
@@ -953,10 +947,7 @@ fn attr_its<'a>(element: Node<'a, '_>, local: &str) -> Option<&'a str> {
 }
 
 fn attr_in_ns<'a>(element: Node<'a, '_>, namespace: &str, local: &str) -> Option<&'a str> {
-    element
-        .attributes()
-        .find(|attr| attr.namespace() == Some(namespace) && attr.name() == local)
-        .map(|attr| attr.value())
+    element.attribute((namespace, local))
 }
 
 /// Property attributes: every attribute that is NOT an `xml:`/`its:` attribute or one
@@ -964,9 +955,10 @@ fn attr_in_ns<'a>(element: Node<'a, '_>, namespace: &str, local: &str) -> Option
 /// filter.
 fn property_attrs<'a, 'input>(
     element: Node<'a, 'input>,
-) -> impl Iterator<Item = roxmltree::Attribute<'a, 'input>> {
+) -> impl Iterator<Item = &'a Attribute<'input>> {
     element
         .attributes()
+        .iter()
         .filter(|attr| attr.namespace() != Some(XML_NS))
         .filter(|attr| attr.namespace() != Some(ITS_NS))
         .filter(|attr| {
@@ -1155,10 +1147,9 @@ enum XmlLiteralStep<'a, 'input> {
 /// below makes the depth a heap cost instead, so THIS WALK adds no bound of its own.
 ///
 /// It is not the only thing between the input and here, and the distinction matters to
-/// anyone reading this for the codec's real limit. [`guard_xml_nesting`] measures element
-/// nesting on the SOURCE TEXT, in front of the XML tokenizer that would otherwise overflow
-/// on its own, and text is all it has — it cannot tell an element that is literal content
-/// from one that is structure. So a deep literal IS refused, by that guard rather than by
+/// anyone reading this for the codec's real limit. [`parse_xml`] caps element nesting as
+/// the document is read, and the reader cannot tell an element that is literal content
+/// from one that is structure. So a deep literal IS refused, by that cap rather than by
 /// this function.
 ///
 /// Pre-order with an owed end tag reproduces the recursive walk's bytes exactly: children are
@@ -1233,7 +1224,7 @@ fn raw_name(node: Node<'_, '_>) -> String {
 }
 
 /// The raw (prefixed) attribute name. An unprefixed attribute carries no namespace.
-fn raw_attr_name(node: Node<'_, '_>, attr: roxmltree::Attribute<'_, '_>) -> String {
+fn raw_attr_name(node: Node<'_, '_>, attr: &Attribute<'_>) -> String {
     match attr.namespace() {
         Some(ns) => qualify(node, Some(ns), attr.name()),
         None => attr.name().to_string(),
@@ -2093,16 +2084,14 @@ mod tests {
 
     /// A DEEP DOCUMENT IS A DIAGNOSTIC, NOT A DEAD PROCESS.
     ///
-    /// Twenty thousand nested `rdf:Description` elements aborted the `purrdf` binary with
-    /// `SIGABRT`, and the overflow was inside `roxmltree`'s own `parse_content` ⇄
-    /// `parse_element` recursion — before any first-party code held a tree, and past what
-    /// `catch_unwind` can see. The guard therefore sits in front of `Document::parse`, and
-    /// this is the end-to-end proof that it does.
+    /// Twenty thousand nested `rdf:Description` elements once aborted the `purrdf` binary
+    /// with `SIGABRT`, past what `catch_unwind` can see. The XML reader's depth cap is what
+    /// refuses them now, and this is the end-to-end proof that it does.
     ///
     /// An `rdf:parseType="Literal"` whose CONTENT is deeply nested is the second shape: its
     /// canonicalization walked the subtree recursively, so it overflowed on XML the RDF
-    /// grammar never descends into. That walk is iterative now, and the same door guards the
-    /// tokenizer underneath it.
+    /// grammar never descends into. That walk is iterative now, and the same cap bounds the
+    /// reader underneath it.
     #[test]
     fn a_deeply_nested_document_is_refused_rather_than_overflowing_the_stack() {
         const DEPTH: usize = 20_000;

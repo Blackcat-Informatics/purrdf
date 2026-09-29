@@ -16,6 +16,7 @@ use super::{
     RdfDiagnostic, RdfQuad, RdfTerm, XSD_STRING, decode, parse, validated_iri_term,
 };
 use crate::{RdfLiteral, RdfTextDirection, RdfTriple};
+use purrdf_core::collections::{ListVocab, build_rdf_list};
 use purrdf_iri::langtag;
 
 use purrdf_xsd::datatype::XSD_BOOLEAN;
@@ -1497,27 +1498,39 @@ impl Lowerer {
         }
     }
 
+    /// JSON-LD 1.1 Processing Algorithms and API §8.4 List Conversion: a fresh blank
+    /// node for every entry of the list first, then each entry converted to its object,
+    /// then the `rdf:first`/`rdf:rest` cells ([`build_rdf_list`]). An entry's
+    /// annotations annotate its `rdf:first` statement.
     fn lower_list(
         &mut self,
         values: &[Value],
         graph: Option<&RdfTerm>,
     ) -> Result<RdfTerm, RdfDiagnostic> {
-        if values.is_empty() {
-            return validated_iri_term(RDF_NIL);
-        }
-        let head = self.fresh_list_node();
-        let mut current = head.clone();
-        for (index, value) in values.iter().enumerate() {
-            let item = self.lower_term(&value.term, graph)?;
-            self.push(current.clone(), RDF_FIRST, item.clone(), graph);
-            self.lower_annotations(&current, RDF_FIRST, &item, &value.annotations, graph)?;
-            let rest = if index + 1 == values.len() {
-                validated_iri_term(RDF_NIL)?
-            } else {
-                self.fresh_list_node()
-            };
-            self.push(current, RDF_REST, rest.clone(), graph);
-            current = rest;
+        let cells: Vec<RdfTerm> = values.iter().map(|_| self.fresh_list_node()).collect();
+        let items = values
+            .iter()
+            .map(|value| self.lower_term(&value.term, graph))
+            .collect::<Result<Vec<_>, _>>()?;
+        let vocab = ListVocab {
+            first: validated_iri_term(RDF_FIRST)?,
+            rest: validated_iri_term(RDF_REST)?,
+            nil: validated_iri_term(RDF_NIL)?,
+        };
+        let quads = &mut self.quads;
+        let head = build_rdf_list(
+            items.iter().cloned(),
+            &vocab,
+            |index| cells[index].clone(),
+            |subject, predicate, object| {
+                let RdfTerm::Iri(predicate) = predicate else {
+                    unreachable!("the list vocabulary is rdf:first and rdf:rest, both IRIs")
+                };
+                quads.push(graph_quad(subject, &predicate, object, graph));
+            },
+        );
+        for ((cell, item), value) in cells.iter().zip(&items).zip(values) {
+            self.lower_annotations(cell, RDF_FIRST, item, &value.annotations, graph)?;
         }
         Ok(head)
     }
@@ -1529,11 +1542,22 @@ impl Lowerer {
         object: RdfTerm,
         graph: Option<&RdfTerm>,
     ) {
-        let mut quad = RdfQuad::new(subject, predicate, object);
-        if let Some(graph) = graph {
-            quad = quad.in_graph(graph.clone());
-        }
-        self.quads.push(quad);
+        self.quads
+            .push(graph_quad(subject, predicate, object, graph));
+    }
+}
+
+/// The quad `(subject, predicate, object)`, in `graph` when one is given.
+fn graph_quad(
+    subject: RdfTerm,
+    predicate: &str,
+    object: RdfTerm,
+    graph: Option<&RdfTerm>,
+) -> RdfQuad {
+    let quad = RdfQuad::new(subject, predicate, object);
+    match graph {
+        Some(graph) => quad.in_graph(graph.clone()),
+        None => quad,
     }
 }
 

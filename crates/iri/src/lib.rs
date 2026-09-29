@@ -28,7 +28,8 @@
 //! * **Syntax normalization** — RFC-3986 §6.2.2 ([`Iri::normalize`]): case, percent-
 //!   encoding, and dot-segment normalization. Idempotent.
 //! * **CURIE/prefix** — [`expand_curie`]/[`resolve`]/[`contract`] over a
-//!   [`PrefixMap`], subsuming the SSSOM serializer's hand-rolled prefix logic.
+//!   [`PrefixMap`], and the namespace/local-name split
+//!   [`split_local_name`]/[`local_name`].
 //! * **BCP 47 language tags** — [`langtag`], RFC 5646 `Language-Tag`
 //!   well-formedness against the §2.1 ABNF and the closed §2.2.8 grandfathered
 //!   list, shared by embedding metadata and CSVW validation. An accepted tag
@@ -167,7 +168,9 @@ pub mod vocab;
 pub use purrdf_lex::{json_escape, json_pointer, percent, scan, terminals};
 
 pub use base::{BaseInScope, BaseIri, BaseOrigin, BaseScope, ScopedBase};
-pub use curie::{PrefixMap, contract, curie_prefix, expand_curie, resolve};
+pub use curie::{
+    PrefixMap, contract, curie_prefix, expand_curie, local_name, resolve, split_local_name,
+};
 pub use error::{IriError, Result};
 pub use parse::{Iri, is_absolute, parse, parse_uri};
 pub use pos::{LineIndex, Position};

@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+use purrdf_core::collections::{ListVocab, build_rdf_list};
 use purrdf_core::{BlankScope, RdfDataset, RdfDatasetBuilder, RdfLiteral, TermId};
 use purrdf_iri::percent;
 use serde_json::Value;
@@ -184,25 +185,27 @@ impl Converter<'_> {
     }
 
     fn emit_list(&mut self, cell: &CsvwCell, table: usize, row: usize, column: usize) -> TermId {
-        let nil = self
-            .builder
-            .intern_iri(&self.config.vocabulary().rdf("nil"));
-        let first_predicate = self.rdf("first");
-        let rest_predicate = self.rdf("rest");
-        let mut nodes = Vec::with_capacity(cell.values.len());
-        for index in 0..cell.values.len() {
-            nodes.push(self.blank(&format!("list-{table}-{row}-{column}-{index}")));
-        }
-        for (index, value) in cell.values.iter().enumerate() {
-            let object = self.value_literal(value);
-            self.quad(nodes[index], first_predicate, object);
-            self.quad(
-                nodes[index],
-                rest_predicate,
-                nodes.get(index + 1).copied().unwrap_or(nil),
-            );
-        }
-        nodes[0]
+        let nil = self.rdf("nil");
+        let vocab = ListVocab {
+            first: self.rdf("first"),
+            rest: self.rdf("rest"),
+            nil,
+        };
+        let cells: Vec<TermId> = (0..cell.values.len())
+            .map(|index| self.blank(&format!("list-{table}-{row}-{column}-{index}")))
+            .collect();
+        let members: Vec<TermId> = cell
+            .values
+            .iter()
+            .map(|value| self.value_literal(value))
+            .collect();
+        let builder = &mut self.builder;
+        build_rdf_list(
+            members,
+            &vocab,
+            |index| cells[index],
+            |subject, predicate, object| builder.push_quad(subject, predicate, object, None),
+        )
     }
 
     fn emit_annotations(

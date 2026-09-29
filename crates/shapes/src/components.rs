@@ -809,14 +809,7 @@ pub(crate) fn eval_select_validator<D: DatasetView + Sync + crate::sparql::Focus
 /// ```
 #[must_use]
 pub(crate) fn sparql_local_name(iri: &str) -> String {
-    let mut idx = iri.rfind('/').map_or(0, |i| i + 1);
-    if let Some(i) = iri.rfind('#') {
-        idx = idx.max(i + 1);
-    }
-    if let Some(i) = iri.rfind(':') {
-        idx = idx.max(i + 1);
-    }
-    iri[idx..].to_owned()
+    purrdf_iri::local_name(iri).to_owned()
 }
 
 // ── Internal helpers ─────────────────────────────────────────────────────────

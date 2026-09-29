@@ -43,13 +43,13 @@ pub mod okf;
 // purrdf-gts text codecs for the line/Turtle family.
 mod text_parse;
 // First-party RDF/XML codec: implements the W3C RDF/XML grammar in-repo on
-// a pure-Rust XML DOM (`roxmltree`), parsing straight into the frozen IR through the
+// the workspace's one XML reader (`purrdf_lex::xml`), parsing straight into the frozen IR through the
 // shared statement-layer fold and serializing from the first-party `SerGraph` —
 // replacing the external purrdf-gts `rdf_codecs::{from_rdf_xml, to_rdf_xml}` codec
 // entry points (the first-party mandate). It is fully purrdf-gts free.
 mod rdfxml;
 // First-party TriX codec ("Triples in XML"): a quads/named-graph XML serialization
-// parsed on the same pure-Rust XML DOM (`roxmltree`) as `rdfxml` and serialized by
+// parsed on the same XML reader (`purrdf_lex::xml`) as `rdfxml` and serialized by
 // hand-rolled deterministic XML emission from the first-party `SerGraph`.
 mod trix;
 // First-party HexTuples codec: a line-oriented NDJSON quads serialization, encoded and

@@ -9,8 +9,8 @@
 //! (IRI), `<id>` (blank node), `<plainLiteral>` (plain / language-tagged), and
 //! `<typedLiteral datatype="…">` (typed).
 //!
-//! Like [`rdfxml`](super::rdfxml), the reader runs on the pure-Rust XML DOM
-//! (`roxmltree`, already a dep) and the writer hand-rolls deterministic XML string
+//! Like [`rdfxml`](super::rdfxml), the reader runs on the workspace's one XML reader
+//! ([`purrdf_lex::xml`]) and the writer hand-rolls deterministic XML string
 //! emission (stable graph/term order, canonical escaping) — no new dependency, so the
 //! crate stays wasm-clean. TriX is a CLASSIC quad syntax with no RDF-1.2 triple-term
 //! surface: a triple term in a serialize request is a HARD error rather than silent
@@ -20,14 +20,14 @@ use purrdf_core::sink::{TextOut, TextSink};
 use std::collections::hash_map::Entry;
 use std::sync::Arc;
 
-use roxmltree::{Document, Node};
+use purrdf_lex::xml::Node;
 
 use super::codec::RdfCodec;
 use super::media_type::NativeRdfFormat;
 use super::parse::{FoldNode, FoldRow, RDF_REIFIES, fold_statement_layer};
 use super::ser_model::{SerGraph, SerTerm, SerTermKind};
 use super::text_parse::LineParseMode;
-use crate::nesting::guard_xml_nesting;
+use crate::nesting::{XmlReadError, parse_xml};
 use crate::{RdfDataset, RdfDatasetBuilder, RdfDiagnostic, RdfLiteral, TermId};
 use purrdf_core::blank_label::{LabelAlphabet, is_valid_label};
 use purrdf_core::cdt_blank::BlankBinding;
@@ -95,14 +95,12 @@ pub(super) fn parse_trix_to_dataset(
     text: &str,
     base: &purrdf_iri::BaseScope,
 ) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
-    // TriX's own shape is flat, but `roxmltree`'s tokenizer recursion is not: it aborts the
-    // process on a deeply nested document before this function sees a tree.
-    guard_xml_nesting(text).map_err(|depth| {
-        parse_err(format!(
+    let document = parse_xml(text).map_err(|error| match error {
+        XmlReadError::TooDeep(depth) => parse_err(format!(
             "element nesting reaches {depth} levels, past the parser limit"
-        ))
+        )),
+        XmlReadError::Malformed(error) => parse_err(error.to_string()),
     })?;
-    let document = Document::parse(text).map_err(|e| parse_err(e.to_string()))?;
     let root = document.root_element();
     if !is_trix(root, "TriX") {
         return Err(parse_err("document root is not a <TriX> element"));
@@ -272,7 +270,7 @@ fn intern_term(builder: &mut RdfDatasetBuilder, term: &TrixTerm) -> Result<TermI
     }
 }
 
-// ── roxmltree helpers ───────────────────────────────────────────────────────────
+// ── XML tree helpers ───────────────────────────────────────────────────────────
 
 /// Whether `element` is the TriX-namespace element `local`. A namespace-less document
 /// (no `xmlns`) is accepted leniently by matching on the local name alone.
@@ -320,7 +318,7 @@ fn element_text(element: Node<'_, '_>) -> String {
 ///
 /// The bytes the XML layer has already normalized are still handled: XML line-end
 /// normalization has turned every `#xD#xA` and lone `#xD` in the text into `#xA` before
-/// `roxmltree` hands it over, and `#xA` is `S`, so pretty-printed indentation around a
+/// the reader hands it over, and `#xA` is `S`, so pretty-printed indentation around a
 /// `<uri>` is removed exactly as it always was.
 fn trim_xml_s(text: &str) -> &str {
     purrdf_iri::terminals::trim_ws(text)
@@ -335,15 +333,17 @@ fn trimmed_text(element: Node<'_, '_>) -> String {
 fn attr_local<'a>(element: Node<'a, '_>, local: &str) -> Option<&'a str> {
     element
         .attributes()
+        .iter()
         .find(|attr| attr.name() == local && attr.namespace().is_none())
-        .map(|attr| attr.value())
+        .map(purrdf_lex::xml::Attribute::value)
 }
 
 fn attr_xml_lang<'a>(element: Node<'a, '_>) -> Option<&'a str> {
     element
         .attributes()
+        .iter()
         .find(|attr| attr.name() == "lang" && attr.namespace() == Some(purrdf_iri::vocab::xml::NS))
-        .map(|attr| attr.value())
+        .map(purrdf_lex::xml::Attribute::value)
 }
 
 /// The `xml:lang` contract on `<plainLiteral>`: the concrete syntaxes' `LANGTAG`
@@ -367,7 +367,7 @@ fn attr_xml_lang<'a>(element: Node<'a, '_>) -> Option<&'a str> {
 /// The failure reports the module's
 /// [`langtag::LanguageTagError::diagnostic_code`], so the user learns which
 /// production refused. TriX parse diagnostics carry no line/column — the
-/// `roxmltree` DOM this walks is not a span-recording tokenizer, as this
+/// XML tree this walks is not a span-recording tokenizer, as this
 /// module's header says — which this does not change.
 fn validate_language_tag(language: &str) -> Result<(), RdfDiagnostic> {
     match langtag::parse_with(language, langtag::Profile::ConcreteSyntaxLangtagBounded) {

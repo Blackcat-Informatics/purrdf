@@ -428,16 +428,6 @@ fn opaque_recipient_findings(
     findings
 }
 
-fn namespace(iri: &str) -> &str {
-    if let Some(i) = iri.rfind('#') {
-        &iri[..=i]
-    } else if let Some(i) = iri.rfind('/') {
-        &iri[..=i]
-    } else {
-        iri
-    }
-}
-
 fn term_iri_value(graph: &Graph, tid: usize) -> Option<&str> {
     graph
         .terms
@@ -455,7 +445,7 @@ fn used_vocabs(graph: &Graph) -> FastSet<&'static str> {
         .iter()
         .map(|term| match (term.kind, term.value.as_deref()) {
             (TermKind::Iri, Some(iri)) => {
-                let ns = namespace(iri);
+                let (ns, _) = purrdf_iri::split_local_name(iri);
                 PROFILE_VOCABS
                     .iter()
                     .find(|&&(_, vocab)| ns == vocab)

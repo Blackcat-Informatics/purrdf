@@ -34,6 +34,7 @@ use purrdf_iri::vocab::owl::ANNOTATED_TARGET as OWL_ANNOTATED_TARGET;
 use purrdf_iri::vocab::owl::AXIOM as OWL_AXIOM;
 use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_lex::term_syntax;
 use purrdf_xsd::datatype::XSD_STRING;
 
 /// Parse a Turtle document (incl. RDF 1.2 triple terms) into model quads.
@@ -118,9 +119,19 @@ fn display(term: &RdfTerm) -> String {
     crate::display_term(&simplify_term(term))
 }
 
-/// Emit an RDF 1.2 triple term `<<( <s> <p> <o> )>>`.
+/// Emit an RDF 1.2 triple term `<<( s p o )>>` in the [`term_syntax`] spelling, the
+/// predicate an escaped `IRIREF`.
 fn emit_triple_term(subject: &RdfTerm, predicate: &str, object: &RdfTerm) -> String {
-    format!("<<( {} <{}> {} )>>", emit(subject), predicate, emit(object))
+    let mut out = String::from(term_syntax::TRIPLE_TERM_OPEN);
+    out.push(' ');
+    out.push_str(&emit(subject));
+    out.push(' ');
+    term_syntax::write_iri(predicate, &mut out);
+    out.push(' ');
+    out.push_str(&emit(object));
+    out.push(' ');
+    out.push_str(term_syntax::TRIPLE_TERM_CLOSE);
+    out
 }
 
 /// Require an IRI term (predicates must be IRIs).
@@ -374,6 +385,23 @@ pub fn normalize_rdf12_to_owl(rdf12_ttl: &str) -> Result<String, RdfDiagnostic> 
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    /// The triple term's predicate is an escaped `IRIREF`: a scalar `IRIREF` forbids
+    /// rides as `UCHAR`, and an ordinary predicate is written byte for byte.
+    #[test]
+    fn a_triple_term_predicate_is_an_escaped_iriref() {
+        let s = RdfTerm::iri("https://example.org/s");
+        let o = RdfTerm::iri("https://example.org/o");
+        assert_eq!(
+            emit_triple_term(&s, "https://example.org/p q>", &o),
+            "<<( <https://example.org/s> <https://example.org/p\\u0020q\\u003E> \
+             <https://example.org/o> )>>"
+        );
+        assert_eq!(
+            emit_triple_term(&s, "https://example.org/p", &o),
+            "<<( <https://example.org/s> <https://example.org/p> <https://example.org/o> )>>"
+        );
+    }
 
     const OWL: &str = r#"
 @prefix owl: <http://www.w3.org/2002/07/owl#> .

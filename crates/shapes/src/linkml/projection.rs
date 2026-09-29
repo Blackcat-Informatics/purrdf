@@ -520,7 +520,7 @@ fn longest_namespace_match<'a>(
 }
 
 fn trailing_local(source: &str) -> &str {
-    source.rsplit(['#', '/', ':']).next().unwrap_or(source)
+    purrdf_iri::local_name(source)
 }
 
 fn sanitized_local<'a>(source: &'a str, reasons: &mut Vec<LinkmlSlotReason>) -> Cow<'a, str> {

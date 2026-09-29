@@ -7,7 +7,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io;
 
 use purrdf_core::DatasetView;
-use roxmltree::{Document, Node};
+use purrdf_lex::xml::Node;
 
 use super::super::{
     ProjectionArtifactSink, ProjectionError, ProjectionPackage, ProjectionPackageSink,
@@ -188,16 +188,14 @@ pub fn read_lpg_graphml(
                 .at_path(GRAPHML_PATH),
         );
     }
-    // `roxmltree`'s tokenizer recurses once per element, so a deeply nested document aborts
-    // the process rather than returning an error. The nesting is measured first and refused.
-    crate::nesting::guard_xml_nesting(text).map_err(|depth| {
-        ProjectionError::syntax(format!(
+    let document = crate::nesting::parse_xml(text).map_err(|error| match error {
+        crate::nesting::XmlReadError::TooDeep(depth) => ProjectionError::syntax(format!(
             "GraphML XML nests {depth} elements deep, past the parser limit"
         ))
-        .at_path(GRAPHML_PATH)
-    })?;
-    let document = Document::parse(text).map_err(|error| {
-        ProjectionError::syntax(format!("parse GraphML XML: {error}")).at_path(GRAPHML_PATH)
+        .at_path(GRAPHML_PATH),
+        crate::nesting::XmlReadError::Malformed(error) => {
+            ProjectionError::syntax(format!("parse GraphML XML: {error}")).at_path(GRAPHML_PATH)
+        }
     })?;
     let root = document.root_element();
     require_element(root, "graphml")?;
@@ -550,9 +548,7 @@ fn required_attribute<'a>(node: Node<'a, '_>, name: &str) -> Result<&'a str, Pro
 }
 
 fn namespaced_attribute<'a>(node: Node<'a, '_>, namespace: &str, local: &str) -> Option<&'a str> {
-    node.attributes()
-        .find(|attribute| attribute.namespace() == Some(namespace) && attribute.name() == local)
-        .map(|attribute| attribute.value())
+    node.attribute((namespace, local))
 }
 
 fn element_text<'a>(node: Node<'a, '_>) -> Result<&'a str, ProjectionError> {
@@ -651,7 +647,7 @@ mod tests {
         assert!(xml.contains("edgedefault=\"directed\""));
         assert!(xml.contains("RdfProp_"));
         assert!(!xml.contains('\u{ffff}'));
-        let document = Document::parse(xml).expect("XML oracle");
+        let document = purrdf_lex::xml::Document::parse(xml).expect("XML oracle");
         assert_eq!(
             document.root_element().tag_name().namespace(),
             Some(GRAPHML_NS)

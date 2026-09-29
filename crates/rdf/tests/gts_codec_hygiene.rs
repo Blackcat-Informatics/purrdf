@@ -472,7 +472,7 @@ purrdf-gts = { version = "0.9.11", features = ["duckdb"] }
 # historically this enabled purrdf-gts/rdf-codecs; the codec is native now.
 
 [features]
-gts = ["dep:purrdf-gts", "dep:roxmltree"]
+gts = ["dep:purrdf-gts", "dep:regex"]
 "#;
         let v = scan_gts_codec_feature_edges("crates/x/Cargo.toml", manifest);
         assert!(

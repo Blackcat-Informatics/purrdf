@@ -12,9 +12,11 @@ use purrdf_core::TermBox;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::{self, Write as _};
 
+use purrdf_iri::PrefixMap;
+use purrdf_lex::literal_escape::{self, Carrier};
+use purrdf_lex::term_syntax;
 use serde::{Deserialize, Serialize};
 
-use crate::native_codecs::ser_model::{escape_iri, escape_literal};
 use crate::{QuadIds, RdfDataset, RdfTextDirection, TermRef, TermValue};
 
 mod layout;
@@ -828,6 +830,8 @@ struct GraphDraft {
 #[derive(Debug)]
 struct ProjectionBuilder<'a> {
     spec: &'a VizSpec,
+    /// The spec's vocabulary as a prefix map, for label compaction.
+    prefixes: PrefixMap,
     terms: BTreeMap<VizTermId, TermDraft>,
     term_by_key: BTreeMap<String, VizTermId>,
     statements: BTreeMap<VizStatementId, StatementDraft>,
@@ -846,6 +850,11 @@ impl<'a> ProjectionBuilder<'a> {
     fn new(spec: &'a VizSpec) -> Self {
         Self {
             spec,
+            prefixes: spec
+                .vocabulary
+                .iter()
+                .map(|mapping| (mapping.prefix.as_str(), mapping.namespace.as_str()))
+                .collect(),
             terms: BTreeMap::new(),
             term_by_key: BTreeMap::new(),
             statements: BTreeMap::new(),
@@ -1199,11 +1208,7 @@ impl<'a> ProjectionBuilder<'a> {
             });
         }
         let id = VizTermId(self.mint_id("term", &key)?);
-        let label = label_for_term(
-            &value,
-            self.spec.label_policy.clone(),
-            &self.spec.vocabulary,
-        );
+        let label = label_for_term(&value, self.spec.label_policy.clone(), &self.prefixes);
         let value = viz_term_value(value)?;
         self.terms.insert(
             id.clone(),
@@ -1318,7 +1323,7 @@ impl<'a> ProjectionBuilder<'a> {
                 match value {
                     TermValue::Iri(iri) => {
                         candidates.push(iri.clone());
-                        candidates.push(compact_iri(iri));
+                        candidates.push(compact_iri(iri).to_owned());
                     }
                     TermValue::Blank { label, .. } => {
                         candidates.push(label.clone());
@@ -1760,46 +1765,40 @@ fn write_json_string(value: &str, out: &mut String) -> fmt::Result {
     out.write_str(&encoded)
 }
 
-fn label_for_term(
-    value: &TermValue,
-    policy: VizLabelPolicy,
-    vocabulary: &[VizVocabularyMapping],
-) -> String {
+fn label_for_term(value: &TermValue, policy: VizLabelPolicy, prefixes: &PrefixMap) -> String {
     match (policy, value) {
         (VizLabelPolicy::Full, _) => full_term_label(value),
-        (_, TermValue::Iri(value)) => vocabulary
-            .iter()
-            .filter(|mapping| value.starts_with(&mapping.namespace))
-            .max_by(|left, right| {
-                left.namespace
-                    .len()
-                    .cmp(&right.namespace.len())
-                    .then_with(|| right.prefix.cmp(&left.prefix))
-            })
-            .map_or_else(
-                || compact_iri(value),
-                |mapping| format!("{}:{}", mapping.prefix, &value[mapping.namespace.len()..]),
-            ),
+        (_, TermValue::Iri(value)) => {
+            purrdf_iri::contract(value, prefixes).unwrap_or_else(|| compact_iri(value).to_owned())
+        }
         // Visualization label only (rendered node text, not Turtle): the scope
         // qualification is shown for node identity, but label syntax is not
         // enforced here — egress validation lives in the codec serializers.
         (_, TermValue::Blank { label, scope }) => format!("_:{}", scope.qualify_label(label)),
-        (_, TermValue::Literal { lexical_form, .. }) => format!("\"{lexical_form}\""),
+        // The lexical form between quotes, escaped as a literal body is, so a `"`
+        // or a line break inside it cannot end the label's quoted text early.
+        (_, TermValue::Literal { lexical_form, .. }) => {
+            let mut label = String::with_capacity(lexical_form.len() + 2);
+            label.push('"');
+            literal_escape::write(lexical_form, Carrier::Canonical, &mut label);
+            label.push('"');
+            label
+        }
         (_, TermValue::Triple { .. }) => "quoted triple".to_owned(),
     }
 }
 
-/// The full label of `value`, each triple term spelled `<<( s p o )>>` over
-/// [`TermValue::try_write_nested`]'s work list.
+/// The full label of `value`: its RDF 1.2 term syntax ([`term_syntax`]), each triple
+/// term spelled `<<( s p o )>>` over [`TermValue::try_write_nested`]'s work list.
 fn full_term_label(value: &TermValue) -> String {
     let mut out = String::new();
     let written = value.try_write_nested(
         &mut out,
-        "<<( ",
+        FULL_LABEL_TRIPLE_OPEN,
         " ",
-        " )>>",
+        FULL_LABEL_TRIPLE_CLOSE,
         |out, leaf| {
-            out.push_str(&full_leaf_label(leaf));
+            write_full_leaf_label(leaf, out);
             Ok::<(), core::convert::Infallible>(())
         },
         |out, text| {
@@ -1812,30 +1811,33 @@ fn full_term_label(value: &TermValue) -> String {
     }
 }
 
-/// The full label of a term that is not a triple term.
-fn full_leaf_label(value: &TermValue) -> String {
+/// [`term_syntax::TRIPLE_TERM_OPEN`] and the space inside it.
+const FULL_LABEL_TRIPLE_OPEN: &str = "<<( ";
+/// The space inside [`term_syntax::TRIPLE_TERM_CLOSE`], and the delimiter.
+const FULL_LABEL_TRIPLE_CLOSE: &str = " )>>";
+
+/// Append the full label of a term that is not a triple term.
+fn write_full_leaf_label(value: &TermValue, out: &mut String) {
     match value {
-        TermValue::Iri(iri) => format!("<{}>", escape_iri(iri)),
-        // Visualization string, not Turtle — label syntax is deliberately not
-        // enforced on this display-only surface (literals render as bare quoted
-        // text here for the same reason).
-        TermValue::Blank { label, scope } => format!("_:{}", scope.qualify_label(label)),
+        TermValue::Iri(iri) => term_syntax::write_iri(iri, out),
+        // Visualization string, not Turtle — the scope-qualified label is shown for
+        // node identity and its syntax is deliberately not enforced on this
+        // display-only surface.
+        TermValue::Blank { label, scope } => {
+            term_syntax::write_blank(&scope.qualify_label(label), out);
+        }
         TermValue::Literal {
             lexical_form,
             datatype,
             language,
             direction,
-        } => {
-            let literal = format!("\"{}\"", escape_literal(lexical_form));
-            if let Some(language) = language {
-                direction.as_ref().map_or_else(
-                    || format!("{literal}@{language}"),
-                    |direction| format!("{literal}@{language}--{}", direction.as_str()),
-                )
-            } else {
-                format!("{literal}^^<{}>", escape_iri(datatype))
-            }
-        }
+        } => term_syntax::write_literal(
+            lexical_form,
+            datatype,
+            language.as_deref(),
+            direction.map(RdfTextDirection::as_str),
+            out,
+        ),
         TermValue::Triple { .. } => unreachable!("a triple term is written from its components"),
     }
 }
@@ -1857,12 +1859,12 @@ fn short_id(id: &str) -> String {
         .map_or_else(|| id.to_owned(), |suffix| suffix.chars().take(8).collect())
 }
 
-fn compact_iri(iri: &str) -> String {
-    iri.rsplit(['#', '/'])
-        .next()
-        .filter(|s| !s.is_empty())
+/// The IRI's local name ([`purrdf_iri::local_name`]), or the whole IRI when it ends in
+/// a delimiter and so has none to show.
+fn compact_iri(iri: &str) -> &str {
+    Some(purrdf_iri::local_name(iri))
+        .filter(|local| !local.is_empty())
         .unwrap_or(iri)
-        .to_owned()
 }
 
 /// Compute a deterministic non-cryptographic hash over text: the FNV-1a 64-bit
@@ -2407,7 +2409,7 @@ mod tests {
     fn full_labels_are_rdf_lexical_terms() {
         let full = VizLabelPolicy::Full;
         assert_eq!(
-            label_for_term(&iri("alice"), full.clone(), &[]),
+            label_for_term(&iri("alice"), full.clone(), &PrefixMap::new()),
             "<https://example.org/alice>"
         );
         assert_eq!(
@@ -2419,9 +2421,9 @@ mod tests {
                     direction: None,
                 },
                 full.clone(),
-                &[],
+                &PrefixMap::new(),
             ),
-            "\"a\\\"b\\n\"^^<http://www.w3.org/2001/XMLSchema#string>"
+            "\"a\\\"b\\n\""
         );
         assert_eq!(
             label_for_term(
@@ -2432,9 +2434,63 @@ mod tests {
                     direction: Some(RdfTextDirection::Rtl),
                 },
                 full,
-                &[],
+                &PrefixMap::new(),
             ),
             "\"مرحبا\"@ar--rtl"
+        );
+    }
+
+    /// A compact literal label escapes its lexical form as a literal body, so a quote
+    /// or a line break inside it cannot end the quoted text early; a plain lexical
+    /// form is labelled byte for byte as before.
+    #[test]
+    fn compact_literal_labels_escape_the_lexical_form() {
+        let literal = |lexical_form: &str| TermValue::Literal {
+            lexical_form: lexical_form.to_owned(),
+            datatype: "http://www.w3.org/2001/XMLSchema#string".to_owned(),
+            language: None,
+            direction: None,
+        };
+        let compact = VizLabelPolicy::Compact;
+        let prefixes = PrefixMap::new();
+        assert_eq!(
+            label_for_term(&literal("say \"hi\"\n\\"), compact.clone(), &prefixes),
+            "\"say \\\"hi\\\"\\n\\\\\""
+        );
+        assert_eq!(
+            label_for_term(&literal("plain text"), compact, &prefixes),
+            "\"plain text\""
+        );
+    }
+
+    /// Compact IRI labels use the longest matching vocabulary namespace, and fall back
+    /// to the local name, or to the whole IRI when it ends in a delimiter.
+    #[test]
+    fn compact_iri_labels_use_the_longest_namespace_then_the_local_name() {
+        let prefixes: PrefixMap = [("ex", EX), ("exv", "https://example.org/vocab/")]
+            .into_iter()
+            .collect();
+        let compact = VizLabelPolicy::Compact;
+        let label =
+            |iri: &str| label_for_term(&TermValue::Iri(iri.to_owned()), compact.clone(), &prefixes);
+        assert_eq!(label("https://example.org/vocab/knows"), "exv:knows");
+        assert_eq!(label("https://example.org/alice"), "ex:alice");
+        assert_eq!(label("https://other.example/ns#Thing"), "Thing");
+        assert_eq!(
+            label("https://other.example/ns/"),
+            "https://other.example/ns/"
+        );
+    }
+
+    #[test]
+    fn the_full_label_triple_delimiters_are_the_term_syntax_ones() {
+        assert_eq!(
+            FULL_LABEL_TRIPLE_OPEN,
+            format!("{} ", term_syntax::TRIPLE_TERM_OPEN)
+        );
+        assert_eq!(
+            FULL_LABEL_TRIPLE_CLOSE,
+            format!(" {}", term_syntax::TRIPLE_TERM_CLOSE)
         );
     }
 
