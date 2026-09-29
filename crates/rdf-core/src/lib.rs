@@ -36,9 +36,9 @@
 // Blank-node label syntax shared by parser and serializer egress contracts.
 pub mod blank_label;
 pub mod cdt_blank;
-// The ONE transcription of which scalars an `IRIREF` writer must escape — the
-// egress mirror of the ingress production in `purrdf_iri::terminals`.
-pub mod iri_escape;
+// Which scalars an `IRIREF` writer must escape, and the emission: the lexical
+// layer's one implementation, re-exported at its long-standing path.
+pub use purrdf_lex::iri_escape;
 pub mod xml_escape;
 // The arity-generic binding-pattern adornment lattice shared by the Datalog
 // evaluator's demand keying and the SPARQL property-function access-pattern
@@ -137,6 +137,7 @@ pub mod small;
 pub mod sssom;
 /// Dataset/import capability flags ([`RdfStoreCapabilities`]).
 pub mod store;
+pub mod term_writer;
 pub mod turtle;
 // The canonical, review-friendly Turtle RENDERER over the IR — the kernel half
 // of the on-disk normalizer (the text parser stays in `purrdf`).
@@ -158,7 +159,7 @@ pub use bundle::{
     ArtifactIndex, ArtifactRecord, BundleError, RdfBundle, SegmentUnitMap, UnitCatalog,
     UnitMetadata,
 };
-pub use collections::RdfListError;
+pub use collections::{ListError, ListErrorKind, ListVocab, RdfListError, build_rdf_list};
 pub use content_id::{Blake3ContentId, ContentIdScheme};
 pub use content_store::{Bytes, ContentDigest, ContentStore, ContentStoreError};
 pub use dataset_view::{
@@ -278,6 +279,7 @@ pub use sssom::{
     SssomMeta, SssomSetComment,
 };
 pub use store::RdfStoreCapabilities;
+pub use term_writer::write_term_value;
 pub use turtle::{
     display_term, emit_annotation, emit_quad, emit_reifier, emit_resource, emit_term, rule_iri,
     write_dataset_annotation, write_dataset_annotation_nquad, write_dataset_nquad,

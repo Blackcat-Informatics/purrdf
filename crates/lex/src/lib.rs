@@ -54,6 +54,17 @@
 //!   scanner ([`json_escape::JsonEscapes`] names the spellings those writers
 //!   pin), and the one decoder every reader shares ([`json_escape::unescape`]),
 //!   which refuses an unpaired surrogate.
+//! * **Term syntax and escaping** — [`term_syntax`], the RDF 1.2 canonical
+//!   spelling of an IRI, a literal, a blank node and the triple-term
+//!   delimiters; [`iri_escape`], which scalars an `IRIREF` writer escapes and
+//!   the emission; and [`literal_escape`], the one literal-body escaper, over
+//!   the carriers a literal travels in ([`literal_escape::Carrier`]). Each
+//!   writes into a [`text_out::TextOut`], the append target every serializer
+//!   shares.
+//! * **XML** — [`xml`], the one XML 1.0 + Namespaces reader: a pull reader and
+//!   a document tree, with DOCTYPE and external entities refused, an explicit
+//!   depth cap, no machine-stack recursion, and byte offsets in every error.
+//! * **Crockford Base32** — [`crockford`], the text form of a 128-bit ULID.
 //! * **JSON Pointer** — [`json_pointer`], RFC 6901 reference tokens.
 //! * **Percent-encoding** — [`percent`], the RFC 3986 encoder over the sets
 //!   the specifications define, the strict and form-urlencoded decoders, and
@@ -91,10 +102,16 @@
 )]
 #![forbid(unsafe_code)]
 
+pub mod crockford;
+pub mod iri_escape;
 pub mod json_escape;
 pub mod json_pointer;
+pub mod literal_escape;
 pub mod percent;
 pub mod scan;
+pub mod term_syntax;
 pub mod terminals;
+pub mod text_out;
 pub mod unicode;
 mod unicode_tables;
+pub mod xml;

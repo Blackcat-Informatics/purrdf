@@ -29,6 +29,10 @@ path = "src/lib.rs"
 name = "purrdf_core"
 
 [dependencies]
+# The lexical layer: the one `TextOut` append target, the `IRIREF` and literal
+# escapers, the RDF 1.2 term syntax and the XML reader. A leaf over
+# `purrdf-hash` only, with no edge back to the core, and wasm-clean.
+purrdf-lex = { workspace = true }
 # Zero-dependency RFC 3987 validation for canonical RDF-term targets. The IRI
 # leaf has no edge back to the core, remains wasm-clean, and prevents malformed
 # or relative identifiers from entering persistent PURREMB target identity.

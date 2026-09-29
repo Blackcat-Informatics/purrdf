@@ -496,7 +496,6 @@ AMBIGUOUS_BRANCH_PHRASES: frozenset[str] = frozenset(
         "bindings/python/python/src/purrdf/compat/rdflib/term.py",
         "bindings/python/tests/test_entail_reasoning.py",
         "crates/gts/tests/replication_diff.rs",
-        "crates/rdf-core/src/dataset_view.rs",
         "crates/rdf-core/src/turtle_render.rs",
         "crates/validate/src/regime.rs",
     }

@@ -75,6 +75,66 @@
 /// assert_eq!(components, vec![vec![0, 1], vec![2]]);
 /// ```
 pub fn tarjan_scc(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
+    let mut components: Vec<Vec<usize>> = Vec::new();
+    // Members in the order they unwind off the Tarjan stack.
+    tarjan(adjacency, |component| {
+        components.push(component.iter().rev().copied().collect());
+    });
+    components
+}
+
+/// The strongly connected component of every node, as a dense component id:
+/// `index[n]` is the id of `n`'s component, and the ids are `0..k` for `k`
+/// components.
+///
+/// The same Tarjan walk as [`tarjan_scc`], over any adjacency whose rows
+/// iterate node indices (`Vec<usize>`, `BTreeSet<usize>`, a slice), for a
+/// caller that wants a node's component rather than each component's nodes.
+///
+/// The ids are a **reverse topological order of the condensation**: for every
+/// edge `u → v` between two components, `index[v] < index[u]`. That is a
+/// property of Tarjan's algorithm (a component is numbered when its root
+/// finishes, after everything it reaches), so a caller propagating along edges
+/// visits components in descending id order, and against them in ascending.
+///
+/// # Panics
+///
+/// As [`tarjan_scc`]: when an adjacency entry names a node outside
+/// `0..adjacency.len()`.
+///
+/// ```
+/// use std::collections::BTreeSet;
+/// use purrdf_core::graph::scc_component_index;
+///
+/// // {0, 1} is a cycle that reaches 2.
+/// let adjacency: Vec<BTreeSet<usize>> =
+///     vec![BTreeSet::from([1]), BTreeSet::from([0, 2]), BTreeSet::new()];
+/// let index = scc_component_index(&adjacency);
+/// assert_eq!(index[0], index[1]);
+/// assert!(index[2] < index[0]);
+/// ```
+pub fn scc_component_index<E>(adjacency: &[E]) -> Vec<usize>
+where
+    for<'e> &'e E: IntoIterator<Item = &'e usize>,
+{
+    let mut index = vec![usize::MAX; adjacency.len()];
+    let mut next = 0;
+    tarjan(adjacency, |component| {
+        for &member in component {
+            index[member] = next;
+        }
+        next += 1;
+    });
+    index
+}
+
+/// Iterative Tarjan over any adjacency, handing each component to `emit` as
+/// the slice of the Tarjan stack it occupies (its root first), in the order
+/// the components finish.
+fn tarjan<'g, E>(adjacency: &'g [E], mut emit: impl FnMut(&[usize]))
+where
+    &'g E: IntoIterator<Item = &'g usize>,
+{
     const UNSET: usize = usize::MAX;
     let n = adjacency.len();
     let mut index = vec![UNSET; n];
@@ -82,37 +142,37 @@ pub fn tarjan_scc(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
     let mut on_stack = vec![false; n];
     let mut stack: Vec<usize> = Vec::new();
     let mut next_index = 0usize;
-    let mut components: Vec<Vec<usize>> = Vec::new();
-    // Work frames: (node, next child position).
-    let mut work: Vec<(usize, usize)> = Vec::new();
+    // Work frames: a node and the rest of its out-edges.
+    let mut work: Vec<(usize, <&'g E as IntoIterator>::IntoIter)> = Vec::new();
 
     for root in 0..n {
         if index[root] != UNSET {
             continue;
         }
-        work.push((root, 0));
-        while let Some(&mut (node, ref mut child_pos)) = work.last_mut() {
-            if *child_pos == 0 {
+        let mut enter = Some(root);
+        loop {
+            if let Some(node) = enter.take() {
                 index[node] = next_index;
                 low[node] = next_index;
                 next_index += 1;
                 stack.push(node);
                 on_stack[node] = true;
+                work.push((node, adjacency[node].into_iter()));
             }
-            let mut advanced = false;
-            while *child_pos < adjacency[node].len() {
-                let child = adjacency[node][*child_pos];
-                *child_pos += 1;
+            let Some((node, edges)) = work.last_mut() else {
+                break;
+            };
+            let node = *node;
+            for &child in edges.by_ref() {
                 if index[child] == UNSET {
-                    work.push((child, 0));
-                    advanced = true;
+                    enter = Some(child);
                     break;
                 }
                 if on_stack[child] {
                     low[node] = low[node].min(index[child]);
                 }
             }
-            if advanced {
+            if enter.is_some() {
                 continue;
             }
             // Node finished.
@@ -121,26 +181,25 @@ pub fn tarjan_scc(adjacency: &[Vec<usize>]) -> Vec<Vec<usize>> {
                 low[parent] = low[parent].min(low[node]);
             }
             if low[node] == index[node] {
-                let mut component = Vec::new();
-                while let Some(member) = stack.pop() {
+                let start = stack
+                    .iter()
+                    .rposition(|&member| member == node)
+                    .expect("a finishing root is on the stack");
+                for &member in &stack[start..] {
                     on_stack[member] = false;
-                    component.push(member);
-                    if member == node {
-                        break;
-                    }
                 }
-                components.push(component);
+                emit(&stack[start..]);
+                stack.truncate(start);
             }
         }
     }
-    components
 }
 
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
 
-    use super::tarjan_scc;
+    use super::{scc_component_index, tarjan_scc};
 
     /// Normalize to the one shape assertions can compare: members ascending,
     /// components ordered by their smallest member. The function guarantees
@@ -292,5 +351,66 @@ mod tests {
         assert_eq!(components.len(), 1);
         assert_eq!(components[0].len(), N);
         assert_partitions(&adjacency, &components);
+    }
+
+    /// Whether `to` is reachable from `from` (a path of zero or more edges).
+    fn reaches(adjacency: &[Vec<usize>], from: usize, to: usize) -> bool {
+        let mut seen = vec![false; adjacency.len()];
+        let mut pending = vec![from];
+        while let Some(node) = pending.pop() {
+            if node == to {
+                return true;
+            }
+            if !std::mem::replace(&mut seen[node], true) {
+                pending.extend(&adjacency[node]);
+            }
+        }
+        false
+    }
+
+    #[test]
+    fn the_component_index_is_mutual_reachability_in_reverse_topological_order() {
+        let mut state = 0x5CC0_0000_0000_0001_u64;
+        for n in 0..24_usize {
+            for _ in 0..20 {
+                let adjacency: Vec<Vec<usize>> = (0..n)
+                    .map(|_| {
+                        (0..n)
+                            .filter(|_| {
+                                purrdf_testkit::rng::splitmix64_next(&mut state).is_multiple_of(7)
+                            })
+                            .collect()
+                    })
+                    .collect();
+                let index = scc_component_index(&adjacency);
+                let count = tarjan_scc(&adjacency).len();
+                assert!(index.iter().all(|&c| c < count));
+                for u in 0..n {
+                    for v in 0..n {
+                        let mutual = reaches(&adjacency, u, v) && reaches(&adjacency, v, u);
+                        assert_eq!(index[u] == index[v], mutual, "{adjacency:?} {u} {v}");
+                    }
+                    for &v in &adjacency[u] {
+                        assert!(index[v] <= index[u], "{adjacency:?} {u} -> {v}");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_component_index_reads_set_rows_and_deep_paths() {
+        let sets: Vec<BTreeSet<usize>> =
+            vec![BTreeSet::from([1]), BTreeSet::from([0, 2]), BTreeSet::new()];
+        let index = scc_component_index(&sets);
+        assert_eq!(index, [1, 1, 0]);
+        const N: usize = 100_000;
+        let path: Vec<Vec<usize>> = (0..N)
+            .map(|n| if n + 1 < N { vec![n + 1] } else { vec![] })
+            .collect();
+        let index = scc_component_index(&path);
+        // The tail finishes first.
+        assert_eq!(index[N - 1], 0);
+        assert_eq!(index[0], N - 1);
     }
 }
