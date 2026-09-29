@@ -278,7 +278,9 @@ import sys
 from collections.abc import Iterator
 from pathlib import Path
 
-ISSUE_PATTERN = r"#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)"
+# ``&#NN;`` is an XML/HTML numeric character reference, never a tracker shorthand,
+# and so is one behind an escaped ampersand (``&#38;#NN;``, ``&amp;#NN;``).
+ISSUE_PATTERN = r"(?<!&)(?<!&#38;)(?<!&amp;)#\d{1,5}(?![\dA-Fa-f-])(?!\.\d)"
 
 # A tracker reference spelled as a URL. ``#NNN`` is the SHORTHAND for this, and a
 # lint that saw only the shorthand had a hole exactly one paste wide: a doc
@@ -1776,6 +1778,18 @@ _DETECTION_CASES: tuple[tuple[str, str, str, str | None], ...] = (
         ".rs",
         f'const NOTE: &str = "see {_SHIPPED_URL}";\n',
         _SHIPPED_URL_TOKEN,
+    ),
+    (
+        "an XML numeric character reference in a Rust string (spared)",
+        ".rs",
+        'const DOC: &str = "<r a=\'&#13;&#10;\'>&#38;#60;</r>";\n',
+        None,
+    ),
+    (
+        "an issue shorthand beside a character reference (fires)",
+        ".rs",
+        'const DOC: &str = "&#13; see #38";\n',
+        "#38",
     ),
     (
         "a pull-request URL in Markdown prose",
