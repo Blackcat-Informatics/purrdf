@@ -77,6 +77,7 @@ use std::path::{Path, PathBuf};
 
 use purrdf_cdt::{LexicalSpace, lexical_space, parse_cdt_by_iri};
 use purrdf_sparql_algebra::lexer::{Token, tokenize, tokenize_turtle};
+use purrdf_testkit::paths::workspace_root;
 
 /// The two SEP-0009 datatype IRIs, spelled exactly as the spec fixes them.
 const CDT_LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
@@ -103,15 +104,6 @@ const CORPUS_ROOTS: &[&str] = &[
     "crates/sparql-conformance/corpus",
     "crates/sparql-conformance/entailment-suite",
 ];
-
-/// The workspace root, from this crate's manifest directory.
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("..")
-        .join("..")
-        .canonicalize()
-        .expect("the workspace root resolves")
-}
 
 /// Every file under `root`, recursively, in a deterministic order.
 fn walk(root: &Path, out: &mut Vec<PathBuf>) {

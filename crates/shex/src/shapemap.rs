@@ -1235,20 +1235,16 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_parses_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let open = "<< <http://example.org/s> <http://example.org/p> ";
-                let text = format!(
-                    "{}<http://example.org/o>{}",
-                    open.repeat(LEVELS),
-                    " >>".repeat(LEVELS)
-                );
-                let parsed = parser(&text).parse_term().expect("the spelling parses");
-                assert_eq!(parsed, purrdf_core::term_fixture::triple_chain(LEVELS));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the parser did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let open = "<< <http://example.org/s> <http://example.org/p> ";
+            let text = format!(
+                "{}<http://example.org/o>{}",
+                open.repeat(LEVELS),
+                " >>".repeat(LEVELS)
+            );
+            let parsed = parser(&text).parse_term().expect("the spelling parses");
+            assert_eq!(parsed, purrdf_core::term_fixture::triple_chain(LEVELS));
+        })
+        .expect("the thread starts");
     }
 }

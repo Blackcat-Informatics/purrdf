@@ -2599,24 +2599,20 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_walked_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                assert_eq!(term_key(&value).matches("triple(").count(), LEVELS);
-                assert_eq!(full_term_label(&value).matches("<<( ").count(), LEVELS);
-                let spec = VizSpec {
-                    max_statements: 2 * LEVELS,
-                    max_terms: 6 * LEVELS,
-                    ..VizSpec::default()
-                };
-                let mut builder = ProjectionBuilder::new(&spec);
-                let reference = builder.value_ref(value).expect("every predicate is an IRI");
-                assert!(matches!(reference, VizValueRef::Statement { .. }));
-                assert_eq!(builder.statements.len(), LEVELS);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            assert_eq!(term_key(&value).matches("triple(").count(), LEVELS);
+            assert_eq!(full_term_label(&value).matches("<<( ").count(), LEVELS);
+            let spec = VizSpec {
+                max_statements: 2 * LEVELS,
+                max_terms: 6 * LEVELS,
+                ..VizSpec::default()
+            };
+            let mut builder = ProjectionBuilder::new(&spec);
+            let reference = builder.value_ref(value).expect("every predicate is an IRI");
+            assert!(matches!(reference, VizValueRef::Statement { .. }));
+            assert_eq!(builder.statements.len(), LEVELS);
+        })
+        .expect("the thread starts");
     }
 }

@@ -1450,16 +1450,15 @@ mod tests {
     use purrdf_core::DistanceMetric;
 
     use super::*;
-    use crate::{Params, VectorMatrix, level::splitmix64};
+    use crate::{Params, VectorMatrix};
 
     fn matrix(rows: usize, dims: usize) -> VectorMatrix {
         let mut state = 0x5151_5151_5151_5151_u64;
         let mut data = Vec::with_capacity(rows * dims);
         for _ in 0..rows * dims {
-            state = splitmix64(state);
-            let unit = (state >> 11) as f64 / (1_u64 << 53) as f64;
-            let value = unit.mul_add(2.0, -1.0);
-            data.push(if value == 0.0 { 0.25 } else { value });
+            data.push(purrdf_testkit::rng::signed_unit_step_nonzero(
+                &mut state, 0.25,
+            ));
         }
         VectorMatrix::new(rows, dims, data).expect("valid fixture")
     }

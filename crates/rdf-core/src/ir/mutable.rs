@@ -1770,25 +1770,21 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_checked_and_interned_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::term_fixture::triple_chain(LEVELS);
-                assert!(check_value_absolute(&value).is_ok());
-                let mut builder = RdfDatasetBuilder::new();
-                assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);
-                let mut relative = TermValue::iri("o");
-                for _ in 0..LEVELS {
-                    relative = TermValue::Triple {
-                        s: TermBox::new(TermValue::iri("http://example.org/s")),
-                        p: TermBox::new(TermValue::iri("http://example.org/p")),
-                        o: TermBox::new(relative),
-                    };
-                }
-                assert!(check_value_absolute(&relative).is_err());
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = crate::term_fixture::triple_chain(LEVELS);
+            assert!(check_value_absolute(&value).is_ok());
+            let mut builder = RdfDatasetBuilder::new();
+            assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);
+            let mut relative = TermValue::iri("o");
+            for _ in 0..LEVELS {
+                relative = TermValue::Triple {
+                    s: TermBox::new(TermValue::iri("http://example.org/s")),
+                    p: TermBox::new(TermValue::iri("http://example.org/p")),
+                    o: TermBox::new(relative),
+                };
+            }
+            assert!(check_value_absolute(&relative).is_err());
+        })
+        .expect("the thread starts");
     }
 }

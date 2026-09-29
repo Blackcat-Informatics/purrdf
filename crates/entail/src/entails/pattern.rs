@@ -400,37 +400,33 @@ pub(crate) mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_pattern_is_walked_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let pat = conclusion_node(purrdf_core::term_fixture::triple_chain(LEVELS));
-                assert_eq!(var_count(&pat), 0, "a chain of IRIs has no blank node");
-                dismantle(pat);
-                let pat = pattern_chain(LEVELS);
-                assert_eq!(var_count(&pat), LEVELS + 1);
-                // The pattern's derived copy descends once per level, so the chain is
-                // moved into the triple and back out rather than copied.
-                let triples = [[pat, pattern_chain(0), pattern_chain(0)]];
-                assert_eq!(projected_vars(&triples), ["x"]);
-                let [[pat, _, _]] = triples;
-                let mut visited = 0_usize;
-                let ControlFlow::Continue(()) = pat.visit(|_| -> ControlFlow<Infallible> {
-                    visited += 1;
-                    ControlFlow::Continue(())
-                });
-                // Each level is its triple term, its variable subject and its ground
-                // predicate — its object is the next level — and the innermost object is
-                // the one blank-node variable.
-                assert_eq!(visited, 3 * LEVELS + 1);
-                let depth = pat.try_fold(
-                    |_| Ok::<_, Infallible>(0_usize),
-                    |s, p, o| Ok(1 + s.max(p).max(o)),
-                );
-                assert_eq!(depth, Ok(LEVELS));
-                dismantle(pat);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let pat = conclusion_node(purrdf_core::term_fixture::triple_chain(LEVELS));
+            assert_eq!(var_count(&pat), 0, "a chain of IRIs has no blank node");
+            dismantle(pat);
+            let pat = pattern_chain(LEVELS);
+            assert_eq!(var_count(&pat), LEVELS + 1);
+            // The pattern's derived copy descends once per level, so the chain is
+            // moved into the triple and back out rather than copied.
+            let triples = [[pat, pattern_chain(0), pattern_chain(0)]];
+            assert_eq!(projected_vars(&triples), ["x"]);
+            let [[pat, _, _]] = triples;
+            let mut visited = 0_usize;
+            let ControlFlow::Continue(()) = pat.visit(|_| -> ControlFlow<Infallible> {
+                visited += 1;
+                ControlFlow::Continue(())
+            });
+            // Each level is its triple term, its variable subject and its ground
+            // predicate — its object is the next level — and the innermost object is
+            // the one blank-node variable.
+            assert_eq!(visited, 3 * LEVELS + 1);
+            let depth = pat.try_fold(
+                |_| Ok::<_, Infallible>(0_usize),
+                |s, p, o| Ok(1 + s.max(p).max(o)),
+            );
+            assert_eq!(depth, Ok(LEVELS));
+            dismantle(pat);
+        })
+        .expect("the thread starts");
     }
 }

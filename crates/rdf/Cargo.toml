@@ -122,6 +122,9 @@ name = "gen-streamable-vectors"
 path = "src/bin/gen_streamable_vectors.rs"
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # The workspace's shared counting allocator, for the `stream_parse_alloc`,
 # `jsonld_alloc` and `projections` bench probes. Path-only and unpublished, so it
 # is stripped from the packaged manifest; std-only and dependency-free, so it is

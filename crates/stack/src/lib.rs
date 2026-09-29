@@ -761,17 +761,6 @@ fn on_current_stack<R>(bytes: usize, f: impl FnOnce() -> R) -> Result<R, StackEr
 mod tests {
     use super::*;
 
-    /// Run `body` on a fresh thread with `bytes` of stack, so the thread-local floor is
-    /// read for that thread alone.
-    fn on_thread<T: Send + 'static>(bytes: usize, body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(bytes)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    }
-
     /// `levels` frames of 4 KiB below the caller, then `at_bottom`.
     fn deeper<T>(levels: usize, at_bottom: &dyn Fn() -> T) -> T {
         if levels == 0 {
@@ -789,7 +778,8 @@ mod tests {
     #[test]
     fn remaining_measures_the_thread_s_own_stack() {
         const BYTES: usize = 4 * 1024 * 1024;
-        let (top, below) = on_thread(BYTES, || (remaining(), deeper(16, &remaining)));
+        let (top, below) =
+            on_stack(BYTES, || (remaining(), deeper(16, &remaining))).expect("spawn");
         // At least what was asked for, less the frames already live. (The C library may
         // hand a thread more than it asked for, never less.)
         assert!(
@@ -808,7 +798,7 @@ mod tests {
     /// unwind.
     #[test]
     fn a_small_thread_runs_low_as_its_stack_is_consumed() {
-        let (top, low_at_top, reports) = on_thread(512 * 1024, || {
+        let (top, low_at_top, reports) = on_stack(512 * 1024, || {
             let top = remaining();
             let low_at_top = is_low();
             let mut reports = Vec::new();
@@ -822,7 +812,8 @@ mod tests {
                 levels += 4;
             }
             (top, low_at_top, reports)
-        });
+        })
+        .expect("spawn");
         assert!(
             !low_at_top,
             "{top} bytes left at the top of a 512 KiB thread"
@@ -850,7 +841,7 @@ mod tests {
             "the thread had room for several steps before the margin: {reports:?}"
         );
         assert!(
-            on_thread(512 * 1024, || !is_low()),
+            on_stack(512 * 1024, || !is_low()).expect("spawn"),
             "a fresh thread is not low"
         );
     }
@@ -859,13 +850,14 @@ mod tests {
     /// putting the previous floor back) is read again rather than reporting nothing left.
     #[test]
     fn a_floor_above_the_frame_is_read_again() {
-        let (low, left) = on_thread(1024 * 1024, || {
+        let (low, left) = on_stack(1024 * 1024, || {
             let previous = replace_floor(stack_pointer() + 4096);
             let low = is_low();
             let left = remaining();
             replace_floor(previous);
             (low, left)
-        });
+        })
+        .expect("spawn");
         assert!(!low);
         assert!(left > MARGIN_BYTES, "{left} bytes left");
     }
@@ -874,7 +866,7 @@ mod tests {
     /// installed floor is the one measured against.
     #[test]
     fn replace_floor_sets_and_returns_the_floor() {
-        on_thread(256 * 1024, || {
+        on_stack(256 * 1024, || {
             let original = replace_floor(1);
             assert_eq!(replace_floor(2), 1);
             let sp = stack_pointer();
@@ -887,14 +879,15 @@ mod tests {
             assert!(is_low(), "8 KiB is inside the margin");
             assert_eq!(replace_floor(original), sp - 8192);
             assert!(!is_low(), "the thread's own floor is back");
-        });
+        })
+        .expect("spawn");
     }
 
     /// While [`EXHAUSTED`] is installed nothing is left, whatever the stack pointer, and
     /// putting the previous floor back restores the measurement.
     #[test]
     fn the_exhausted_floor_leaves_nothing() {
-        on_thread(1024 * 1024, || {
+        on_stack(1024 * 1024, || {
             assert!(!is_low());
             let previous = replace_floor(EXHAUSTED);
             assert_eq!(remaining(), 0);
@@ -902,7 +895,8 @@ mod tests {
             assert_eq!(replace_floor(previous), EXHAUSTED);
             assert!(!is_low());
             assert!(remaining() > MARGIN_BYTES);
-        });
+        })
+        .expect("spawn");
     }
 
     /// A floor 1 KiB below the calling frame: inside the margin, so [`is_low`] is `true`.
@@ -915,7 +909,7 @@ mod tests {
     /// Outside any scope the same low stack is not a refusal, and nothing is latched.
     #[test]
     fn a_scope_latches_a_low_walk_and_an_unscoped_walk_carries_on() {
-        on_thread(1024 * 1024, || {
+        on_stack(1024 * 1024, || {
             assert!(!is_low(), "the thread's own floor, read");
             let real = FLOOR.with(Cell::get);
             let low = low_floor();
@@ -938,7 +932,8 @@ mod tests {
             replace_floor(real);
             assert!(!is_low(), "the thread's own floor is back");
             assert_eq!(walk(|| walk_is_low("roomy walk")), Ok(false));
-        });
+        })
+        .expect("spawn");
     }
 
     /// A computation suspended inside a scope takes the scope with it: the context that
@@ -950,7 +945,7 @@ mod tests {
     /// and the suspended computation is refused for a walk it never ran.
     #[test]
     fn a_suspended_scope_stays_with_its_context() {
-        on_thread(1024 * 1024, || {
+        on_stack(1024 * 1024, || {
             assert!(!is_low(), "the thread's own floor, read");
             let real = FLOOR.with(Cell::get);
             let mut observed = None;
@@ -1011,7 +1006,8 @@ mod tests {
                 "and refuses the job for the waiting context's walk"
             );
             replace_floor(real);
-        });
+        })
+        .expect("spawn");
     }
 
     /// A reserve takes its bytes off what every check sees, and gives them back when it
@@ -1019,7 +1015,7 @@ mod tests {
     /// than the margin is not low, one that eats into the margin is.
     #[test]
     fn a_reserve_is_kept_out_of_reach_until_dropped() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let before = remaining();
             let outer = reserve(512 * 1024);
             assert_eq!(outer.bytes(), 512 * 1024);
@@ -1042,14 +1038,15 @@ mod tests {
                 (before - 1024..before + 1024).contains(&after),
                 "{before} bytes before, {after} after the reserve is dropped"
             );
-        });
+        })
+        .expect("spawn");
     }
 
     /// A floor read again inside a reserve — a native thread whose frame is found below
     /// the cached floor — is raised by what is reserved, so the reserve survives it.
     #[test]
     fn a_floor_read_again_keeps_the_reserve() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let before = remaining();
             let kept = reserve(1024 * 1024);
             let raised = FLOOR.with(Cell::get);
@@ -1067,14 +1064,15 @@ mod tests {
             );
             drop(kept);
             assert!(remaining() + 1024 > before);
-        });
+        })
+        .expect("spawn");
     }
 
     /// A reserve travels with its context: the computation that runs while it waits sees
     /// its own stack whole, and the reserve is still in force when it resumes.
     #[test]
     fn a_reserve_stays_with_its_context() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let before = remaining();
             let kept = reserve(1024 * 1024);
             let real = FLOOR.with(Cell::get) - 1024 * 1024;
@@ -1096,7 +1094,8 @@ mod tests {
             );
             drop(kept);
             assert!(remaining() + 1024 > before);
-        });
+        })
+        .expect("spawn");
     }
 
     /// Widening needs an open scope, keeps its bytes until the OUTERMOST scope closes
@@ -1105,7 +1104,7 @@ mod tests {
     /// neighbouring widening that leaves more is kept.
     #[test]
     fn a_widening_lasts_until_the_outermost_scope_closes() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let before = remaining();
             assert!(!scoped());
             assert!(!widen(4096), "no scope: nothing would give the bytes back");
@@ -1146,13 +1145,14 @@ mod tests {
                 (before - 1024..before + 1024).contains(&after),
                 "{before} bytes before, {after} after"
             );
-        });
+        })
+        .expect("spawn");
     }
 
     /// A widening travels with its context, like the scope it belongs to.
     #[test]
     fn a_widening_stays_with_its_context() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let before = remaining();
             let scope = reserve(0);
             assert!(widen(1024 * 1024));
@@ -1168,14 +1168,15 @@ mod tests {
             drop(scope);
             assert!(remaining() + 1024 > before);
             assert_eq!(reserved(), 0);
-        });
+        })
+        .expect("spawn");
     }
 
     /// A walk scope that refuses inside a reserve and closes after the reserve is dropped
     /// puts back the real floor, not the raised one.
     #[test]
     fn a_refusal_latched_inside_a_reserve_restores_the_real_floor() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let _ = remaining();
             let real = FLOOR.with(Cell::get);
             let refused = walk(|| {
@@ -1195,21 +1196,30 @@ mod tests {
             assert_eq!(refused, Err("reserved walk"));
             assert_eq!(FLOOR.with(Cell::get), real, "the real floor is back");
             assert!(!is_low());
-        });
+        })
+        .expect("spawn");
     }
 
-    /// `on_stack` runs its computation on a thread of the size asked for: what the
-    /// computation measures is that thread's stack, not the caller's, and its value comes
-    /// back.
+    /// `on_stack` runs its computation on a stack of its own, at least the size asked
+    /// for: what the computation measures is that stack, not the caller's, and its value
+    /// comes back.
     #[test]
     fn on_stack_runs_the_computation_on_a_stack_of_the_requested_size() {
         const BYTES: usize = 512 * 1024;
-        let left = on_stack(BYTES, remaining).expect("a 512 KiB thread starts");
-        // The operating system may round a thread's stack up to a page or its minimum,
-        // never down; 64 KiB covers the rounding and the frames already live.
+        let caller_sp = stack_pointer();
+        let caller_floor = caller_sp - remaining();
+        let (sp, left) =
+            on_stack(BYTES, || (stack_pointer(), remaining())).expect("a 512 KiB thread starts");
+        // The operating system may round a thread's stack up to a page or its minimum, and
+        // the C library may hand a thread a cached stack several times the request, never
+        // less; 64 KiB covers the frames already live.
         assert!(
-            (BYTES - 64 * 1024..=BYTES + 64 * 1024).contains(&left),
+            left >= BYTES - 64 * 1024,
             "{left} bytes left on a {BYTES}-byte stack"
+        );
+        assert!(
+            !(caller_floor..=caller_sp).contains(&sp),
+            "the computation ran on the caller's stack ({sp:#x} in {caller_floor:#x}..={caller_sp:#x})"
         );
         assert_eq!(on_stack(BYTES, || 7_u8).expect("runs"), 7);
     }
@@ -1236,7 +1246,7 @@ mod tests {
     /// floor installed a known distance below the frame.
     #[test]
     fn an_over_floor_request_is_refused_and_an_in_floor_request_runs() {
-        on_thread(2 * 1024 * 1024, || {
+        on_stack(2 * 1024 * 1024, || {
             let previous = replace_floor(stack_pointer() - 512 * 1024);
             let available = remaining();
 
@@ -1264,7 +1274,8 @@ mod tests {
             assert!(inside <= available - 4096, "{inside} of {available}");
 
             replace_floor(previous);
-        });
+        })
+        .expect("spawn");
     }
 
     /// The inline path gives its computation a fresh context of the requested size — a
@@ -1272,7 +1283,7 @@ mod tests {
     /// caller's is visible — and puts the caller's context back afterwards.
     #[test]
     fn the_inline_path_runs_under_a_fresh_context_and_restores_the_caller_s() {
-        on_thread(4 * 1024 * 1024, || {
+        on_stack(4 * 1024 * 1024, || {
             let _ = remaining();
             let kept = reserve(0);
             let floor = FLOOR.with(Cell::get);
@@ -1293,7 +1304,8 @@ mod tests {
             assert!(scoped(), "the caller's scope is back");
             assert_eq!(FLOOR.with(Cell::get), floor, "the caller's floor is back");
             drop(kept);
-        });
+        })
+        .expect("spawn");
     }
 
     /// The typed refusal says what was asked for and what was left.

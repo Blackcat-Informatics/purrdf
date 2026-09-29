@@ -149,6 +149,8 @@ use purrdf_sparql_eval::{
     PfArity, PfCursor, PfRow, PropertyFunction, PropertyFunctionRegistry, QueryGovernors,
     QueryOptions, RemoteError, StopSignal, Volatility, WallDeadline,
 };
+use purrdf_testkit::golden::regenerating;
+use purrdf_testkit::paths::workspace_root;
 
 /// The dimensions a case may set a ceiling on, in the order every pinned consumption
 /// record lists them.
@@ -196,12 +198,11 @@ const PARALLEL_FORK_MIN_ROWS: usize = 1024;
 // Corpus locations
 // ---------------------------------------------------------------------------
 
-fn corpus_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/sparql-governors")
-}
+/// The switch that rewrites the corpus's expectations instead of comparing them.
+const UPDATE_ENV: &str = "PURRDF_UPDATE_GOVERNOR_CORPUS";
 
-fn updating() -> bool {
-    std::env::var_os("PURRDF_UPDATE_GOVERNOR_CORPUS").is_some()
+fn corpus_root() -> PathBuf {
+    workspace_root().join("vectors/sparql-governors")
 }
 
 // ---------------------------------------------------------------------------
@@ -1879,7 +1880,7 @@ fn the_corpus_matches_its_pinned_expectations() {
     let specs = load_transport();
     let relations = load_relations();
 
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         regenerate(&cases, &specs, &relations);
         return;
     }
@@ -1987,7 +1988,7 @@ fn the_corpus_matches_its_pinned_expectations() {
 /// cannot leave a stale boundary sitting in the manifest looking authoritative.
 #[test]
 fn every_boundary_is_derived_from_a_metered_run() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2108,7 +2109,7 @@ fn every_boundary_is_derived_from_a_metered_run() {
 /// A count alone would pass on fifteen cases that all governed fuel.
 #[test]
 fn every_governor_carries_a_zero_a_boundary_and_an_over_bound_case() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2175,7 +2176,7 @@ fn every_governor_carries_a_zero_a_boundary_and_an_over_bound_case() {
 /// layer.
 #[test]
 fn the_rdf12_statement_layer_is_governed() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2235,7 +2236,7 @@ fn the_rdf12_statement_layer_is_governed() {
 /// flight, and reaches an outcome indistinguishable from an honouring transport's.
 #[test]
 fn a_transport_that_ignores_the_stop_signal_is_bounded_per_request() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2317,7 +2318,7 @@ fn a_transport_that_ignores_the_stop_signal_is_bounded_per_request() {
 /// that makes the query bounded" means, stated as evidence instead of as prose.
 #[test]
 fn a_relation_that_ignores_the_stop_signal_is_bounded_per_invocation() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2444,7 +2445,7 @@ fn pinned_row_count(case: &Case) -> usize {
 /// thing this test exists to rule out.
 #[test]
 fn the_two_property_function_charge_points_are_banded_separately() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2547,7 +2548,7 @@ fn the_two_property_function_charge_points_are_banded_separately() {
 /// ever reached.
 #[test]
 fn the_two_aggregate_charge_points_are_banded_separately() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2666,7 +2667,7 @@ fn the_two_aggregate_charge_points_are_banded_separately() {
 /// only the custom path's cost cannot hide behind a green in-crate unit test alone.
 #[test]
 fn a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shape() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2705,7 +2706,7 @@ fn a_custom_aggregate_costs_the_same_fuel_as_a_built_in_over_the_same_group_shap
 /// the host that happened to build it.
 #[test]
 fn the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2738,7 +2739,7 @@ fn the_custom_aggregate_scratch_bytes_band_exercises_the_folds_retained_state() 
 /// threshold makes this test fail loudly instead of leaving the lane silently inert.
 #[test]
 fn the_parallel_drive_is_actually_above_the_fork_threshold() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2776,7 +2777,7 @@ fn the_parallel_drive_is_actually_above_the_fork_threshold() {
 /// fold charged the same items in the same order.
 #[test]
 fn the_parallel_drive_spends_what_the_sequential_measurement_spent() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2827,7 +2828,7 @@ fn the_parallel_drive_spends_what_the_sequential_measurement_spent() {
 /// exactly one admitted row.
 #[test]
 fn a_fuel_ceiling_between_an_invocation_and_its_first_row_truncates_deterministically() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -2898,7 +2899,7 @@ fn a_fuel_ceiling_between_an_invocation_and_its_first_row_truncates_deterministi
 /// to reach the same trip point — on any worker count, in any completion order.
 #[test]
 fn the_corpus_is_reproducible_within_a_run() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let cases = load_manifest();
@@ -3178,7 +3179,7 @@ fn fuel_sweep_trace() -> String {
 /// --ignored regenerate_fuel_sweep_trace`.
 #[test]
 fn the_fuel_sweep_over_the_corpus_matches_its_trace() {
-    if updating() {
+    if regenerating(UPDATE_ENV) {
         return;
     }
     let actual = fuel_sweep_trace();

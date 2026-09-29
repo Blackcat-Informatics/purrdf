@@ -81,7 +81,7 @@ pub(crate) fn run(
     let query_options = QueryOptions::new().with_env(&env);
 
     if options.governors.is_engaged() {
-        let governors = options.governors.to_governors();
+        let governors = options.governors.to_governors()?;
         match engine.update_governed(&mut dataset, request, query_options, &governors)? {
             GovernedUpdateOutcome::Applied { .. } => {}
             GovernedUpdateOutcome::BudgetExhausted {

@@ -628,36 +628,31 @@ fn a_recursive_schema_validates_a_thousand_deep_instance_on_a_small_stack() {
     .expect("schema");
     // 256 KiB of stack: the evaluator keeps its subschemas in progress on the
     // heap, so an instance's depth must not demand machine stack.
-    let evaluation = std::thread::Builder::new()
-        .stack_size(256 * 1024)
-        .spawn(move || {
-            let deep = tree(1_000);
-            assert!(schema.is_valid(&deep).expect("evaluation"));
-            let output = schema.evaluate(&deep).expect("evaluation");
-            assert!(output.is_valid());
-            drop(output);
+    purrdf_stack::on_stack(256 * 1024, move || {
+        let deep = tree(1_000);
+        assert!(schema.is_valid(&deep).expect("evaluation"));
+        let output = schema.evaluate(&deep).expect("evaluation");
+        assert!(output.is_valid());
+        drop(output);
 
-            // The verdict is real, not a default: a wrong leaf a thousand levels
-            // down fails the whole instance, and says where.
-            let mut bad = json!({"child": 1});
-            for _ in 0..999 {
-                let mut node = serde_json::Map::new();
-                node.insert("child".to_owned(), bad);
-                bad = Value::Object(node);
-            }
-            assert!(!schema.is_valid(&bad).expect("evaluation"));
-            let output = schema.evaluate(&bad).expect("evaluation");
-            let deepest = output
-                .errors()
-                .map(|unit| unit.instance_location.len())
-                .max()
-                .expect("errors");
-            assert_eq!(deepest, "/child".len() * 1_000);
-        });
-    evaluation
-        .expect("thread")
-        .join()
-        .expect("the evaluation completes on a small stack");
+        // The verdict is real, not a default: a wrong leaf a thousand levels
+        // down fails the whole instance, and says where.
+        let mut bad = json!({"child": 1});
+        for _ in 0..999 {
+            let mut node = serde_json::Map::new();
+            node.insert("child".to_owned(), bad);
+            bad = Value::Object(node);
+        }
+        assert!(!schema.is_valid(&bad).expect("evaluation"));
+        let output = schema.evaluate(&bad).expect("evaluation");
+        let deepest = output
+            .errors()
+            .map(|unit| unit.instance_location.len())
+            .max()
+            .expect("errors");
+        assert_eq!(deepest, "/child".len() * 1_000);
+    })
+    .expect("thread");
 }
 
 /// `depth` arrays nested inside one another around `1`.

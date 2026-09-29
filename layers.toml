@@ -60,7 +60,7 @@ deps = []
 
 [[crate]]
 name = "helper-census"
-deps = ["purrdf-hash"]
+deps = ["purrdf-hash", "purrdf-testkit"]
 
 [[crate]]
 name = "purrdf-deflate"
@@ -341,7 +341,6 @@ name = "purrdf-capi"
 deps = [
     "purrdf",
     "purrdf-core",
-    "purrdf-hash",
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
     "purrdf-validate",
@@ -353,7 +352,6 @@ deps = [
     "purrdf",
     "purrdf-core",
     "purrdf-entail",
-    "purrdf-hash",
     "purrdf-iri",
     "purrdf-rdf",
     "purrdf-sparql-eval",
@@ -386,6 +384,7 @@ deps = [
     "purrdf-sparql-algebra",
     "purrdf-sparql-eval",
     "purrdf-sparql-results",
+    "purrdf-testkit",
 ]
 
 [[crate]]
@@ -394,7 +393,6 @@ deps = [
     "purrdf",
     "purrdf-core",
     "purrdf-events",
-    "purrdf-hash",
     "purrdf-shapes",
     "purrdf-sparql-algebra",
     "purrdf-sparql-eval",

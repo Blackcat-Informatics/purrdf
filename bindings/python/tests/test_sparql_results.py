@@ -433,6 +433,20 @@ def test_an_unknown_results_format_id_is_refused_and_the_four_known_ones_answer(
     row = [purrdf.NamedNode("https://example.org/s")]
     for fmt in ("json", "xml", "csv", "tsv"):
         assert purrdf.serialize_sparql_solutions(fmt, ["s"], [row]), fmt
+    # A format is also named by its media type or an alias, in any ASCII case, and
+    # each such name produces exactly the document its short id does.
+    for alias, fmt in (
+        ("JSON", "json"),
+        ("srj", "json"),
+        ("application/sparql-results+json", "json"),
+        ("sparql-xml", "xml"),
+        ("Application/SPARQL-Results+XML", "xml"),
+        ("text/csv", "csv"),
+        ("text/tab-separated-values", "tsv"),
+    ):
+        assert purrdf.serialize_sparql_solutions(
+            alias, ["s"], [row]
+        ) == purrdf.serialize_sparql_solutions(fmt, ["s"], [row]), alias
     # CSV and TSV are defined for variable bindings only, so an ASK is refused
     # there for a reason of its own — a distinct message, not the unknown-id one.
     for fmt in ("json", "xml"):

@@ -600,7 +600,7 @@ mod walk_tests {
     /// A choice sequence: every decision is drawn from one SplitMix64 stream, so a seed
     /// names one shape.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         /// How many more nodes the shape may hold.
         budget: usize,
     }
@@ -608,14 +608,13 @@ mod walk_tests {
     impl Choices {
         fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 40,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn spend(&mut self) -> bool {
@@ -896,26 +895,22 @@ mod walk_tests {
     /// answers on that stack.
     #[test]
     fn a_hundred_thousand_level_pattern_is_admitted_or_refused_on_a_128_kib_thread() {
-        let outcomes = std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let admitted = deep_filters(100_000, TermPattern::Variable(Variable::new("o")));
-                let refused = deep_filters(
-                    100_000,
-                    TermPattern::Triple(Child::new(TriplePattern {
-                        subject: TermPattern::Variable(Variable::new("a")),
-                        predicate: NamedNodePattern::NamedNode(iri("q")),
-                        object: TermPattern::Variable(Variable::new("b")),
-                    })),
-                );
-                (
-                    verdict(check_pattern(&admitted)),
-                    verdict(check_pattern(&refused)),
-                )
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+        let outcomes = purrdf_stack::on_stack(128 * 1024, || {
+            let admitted = deep_filters(100_000, TermPattern::Variable(Variable::new("o")));
+            let refused = deep_filters(
+                100_000,
+                TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("a")),
+                    predicate: NamedNodePattern::NamedNode(iri("q")),
+                    object: TermPattern::Variable(Variable::new("b")),
+                })),
+            );
+            (
+                verdict(check_pattern(&admitted)),
+                verdict(check_pattern(&refused)),
+            )
+        })
+        .expect("spawn");
         assert_eq!(outcomes.0, Ok(()));
         let refusal = outcomes
             .1

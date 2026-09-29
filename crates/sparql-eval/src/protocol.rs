@@ -53,6 +53,7 @@ use std::fmt;
 
 use purrdf_sparql_algebra::lexer::{Token, tokenize};
 use purrdf_sparql_algebra::{ParserOptions, SparqlParser, UpdateDatasetSlot};
+use purrdf_sparql_results::SparqlResultsFormat;
 
 use crate::error::{EvalError, UnsupportedKind};
 use crate::remote::RemoteError;
@@ -893,15 +894,24 @@ fn form_component(text: &str) -> Result<String, ProtocolError> {
         })
 }
 
-/// The formats a solutions result is offered in, in server preference order: the token
-/// the engine's result serializer takes, and its media type. The first is the default
+/// A SPARQL results format as a `(token, media type)` pair: the token the engine's result
+/// serializer takes, and its registered media type, both as the results crate names them.
+const fn results_pair(format: SparqlResultsFormat) -> (&'static str, &'static str) {
+    (format.token(), format.media_type())
+}
+
+/// The formats a solutions result is offered in, in server preference order: every SPARQL
+/// results format, in [`SparqlResultsFormat::ALL`]'s order. The first is the default
 /// (SPARQL 1.1 Query Results JSON).
-const SOLUTION_FORMATS: [(&str, &str); 4] = [
-    ("json", "application/sparql-results+json"),
-    ("xml", "application/sparql-results+xml"),
-    ("csv", "text/csv"),
-    ("tsv", "text/tab-separated-values"),
-];
+const SOLUTION_FORMATS: [(&str, &str); 4] = {
+    let all = SparqlResultsFormat::ALL;
+    [
+        results_pair(all[0]),
+        results_pair(all[1]),
+        results_pair(all[2]),
+        results_pair(all[3]),
+    ]
+};
 
 /// The formats a graph result is offered in, in server preference order. The first is the
 /// default (Turtle).
@@ -925,8 +935,8 @@ const DATASET_FORMATS: [(&str, &str); 3] = [
 /// The formats an `ASK` boolean is offered in: the SPARQL results formats that define a
 /// boolean result, in the same relative order. The first is the default (JSON).
 const BOOLEAN_FORMATS: [(&str, &str); 2] = [
-    ("json", "application/sparql-results+json"),
-    ("xml", "application/sparql-results+xml"),
+    results_pair(SparqlResultsFormat::Json),
+    results_pair(SparqlResultsFormat::Xml),
 ];
 
 const fn formats(kind: ResultKind) -> &'static [(&'static str, &'static str)] {

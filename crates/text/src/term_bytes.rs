@@ -457,28 +457,24 @@ mod tests {
     #[test]
     fn a_hundred_thousand_level_term_encodes_on_a_128_kib_thread() {
         const LEVELS: u32 = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let innermost = TermValue::iri("https://example.org/x");
-                let deep = nest(innermost.clone(), LEVELS);
-                let level = 1
-                    + encode(&TermValue::iri("https://example.org/p")).len()
-                    + encode(&TermValue::iri("https://example.org/o")).len();
-                let bytes = encode(&deep);
-                assert_eq!(
-                    bytes.len(),
-                    LEVELS as usize * level + encode(&innermost).len()
-                );
-                assert!(
-                    bytes[..LEVELS as usize]
-                        .iter()
-                        .all(|&tag| tag == TAG_TRIPLE)
-                );
-                drop(deep);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the encoder did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let innermost = TermValue::iri("https://example.org/x");
+            let deep = nest(innermost.clone(), LEVELS);
+            let level = 1
+                + encode(&TermValue::iri("https://example.org/p")).len()
+                + encode(&TermValue::iri("https://example.org/o")).len();
+            let bytes = encode(&deep);
+            assert_eq!(
+                bytes.len(),
+                LEVELS as usize * level + encode(&innermost).len()
+            );
+            assert!(
+                bytes[..LEVELS as usize]
+                    .iter()
+                    .all(|&tag| tag == TAG_TRIPLE)
+            );
+            drop(deep);
+        })
+        .expect("the thread starts");
     }
 }

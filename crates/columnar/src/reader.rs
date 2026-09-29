@@ -953,21 +953,14 @@ mod term_walk_tests {
         }
     }
 
-    /// A SplitMix64 draw below `n` from the counter at `state`.
-    fn draw(state: &mut u64, n: usize) -> usize {
-        let n = u64::try_from(n).expect("a small bound fits");
-        usize::try_from(purrdf_testkit::rng::splitmix64_next(state) % n)
-            .expect("a draw below a small bound fits")
-    }
-
     /// A generated term-record table: records naming any record — cycles included — and
     /// literals whose datatype, tag and direction are sometimes inconsistent, so every
     /// refusal is met.
     fn generated(seed: u64) -> Vec<TermRecord> {
-        let mut state = seed;
-        let len = 1 + draw(&mut state, 9);
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
+        let len = 1 + rng.below_usize(9);
         (0..len)
-            .map(|index| match draw(&mut state, 6) {
+            .map(|index| match rng.below_usize(6) {
                 0 => TermRecord::Iri(
                     [
                         "http://example.org/i",
@@ -982,15 +975,14 @@ mod term_walk_tests {
                 },
                 2 | 3 => TermRecord::Literal {
                     lexical: "x".to_owned(),
-                    datatype: draw(&mut state, len),
-                    language: [None, Some("en"), Some("EN")][draw(&mut state, 3)]
-                        .map(str::to_owned),
-                    direction: [None, Some(RdfTextDirection::Ltr)][draw(&mut state, 2)],
+                    datatype: rng.below_usize(len),
+                    language: [None, Some("en"), Some("EN")][rng.below_usize(3)].map(str::to_owned),
+                    direction: [None, Some(RdfTextDirection::Ltr)][rng.below_usize(2)],
                 },
                 _ => TermRecord::Triple {
-                    s: draw(&mut state, len),
-                    p: draw(&mut state, len),
-                    o: draw(&mut state, len),
+                    s: rng.below_usize(len),
+                    p: rng.below_usize(len),
+                    o: rng.below_usize(len),
                 },
             })
             .collect()
@@ -1114,31 +1106,26 @@ mod term_walk_tests {
     #[test]
     fn a_deep_record_chain_resolves_on_a_128_kib_thread() {
         const LEVELS: usize = 1_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut records = vec![
-                    TermRecord::Iri("http://example.org/s".to_owned()),
-                    TermRecord::Iri("http://example.org/p".to_owned()),
-                    TermRecord::Iri("http://example.org/o".to_owned()),
-                ];
-                for level in 0..LEVELS {
-                    records.push(TermRecord::Triple {
-                        s: 0,
-                        p: 1,
-                        o: level + 2,
-                    });
-                }
-                let root = records.len() - 1;
-                let (mut states, mut values) =
-                    (vec![0u8; records.len()], vec![None; records.len()]);
-                let value = resolve_term_record(root, &records, &mut states, &mut values)
-                    .expect("the chain resolves");
-                assert_eq!(value, purrdf_core::term_fixture::triple_chain(LEVELS));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the resolution did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut records = vec![
+                TermRecord::Iri("http://example.org/s".to_owned()),
+                TermRecord::Iri("http://example.org/p".to_owned()),
+                TermRecord::Iri("http://example.org/o".to_owned()),
+            ];
+            for level in 0..LEVELS {
+                records.push(TermRecord::Triple {
+                    s: 0,
+                    p: 1,
+                    o: level + 2,
+                });
+            }
+            let root = records.len() - 1;
+            let (mut states, mut values) = (vec![0u8; records.len()], vec![None; records.len()]);
+            let value = resolve_term_record(root, &records, &mut states, &mut values)
+                .expect("the chain resolves");
+            assert_eq!(value, purrdf_core::term_fixture::triple_chain(LEVELS));
+        })
+        .expect("the thread starts");
     }
 
     /// A triple term a hundred thousand levels deep re-interns on a thread whose whole
@@ -1146,15 +1133,11 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_interns_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                let mut builder = RdfDatasetBuilder::new();
-                assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("interning did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut builder = RdfDatasetBuilder::new();
+            assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);
+        })
+        .expect("the thread starts");
     }
 }

@@ -160,25 +160,21 @@ fn malformed_ranges_targets_and_nested_expressions_are_refused() {
     // stack is refused, typed. On an 8 MiB thread — which the C library may hand up to
     // 32 MiB — eighty thousand levels need 41 MB of walks at the parser's 512-byte
     // charge, while dropping the refused chain there needs under 5 MB.
-    let refused = std::thread::Builder::new()
-        .stack_size(8 * 1024 * 1024)
-        .spawn(move || {
-            let mut expression = Expression::Literal(Literal::new_simple("leaf"));
-            for _ in 0..80_000 {
-                expression = Expression::Not(Child::new(expression));
-            }
-            NativeSparqlEngine::new().prepare_algebra(
-                ask(GraphPattern::Filter {
-                    expr: expression,
-                    inner: empty().into(),
-                }),
-                QueryOptions::EMPTY,
-            )
-        })
-        .expect("spawn")
-        .join()
-        .expect("the preparing thread returned rather than aborting")
-        .expect_err("a chain too tall for the stack is refused");
+    let refused = purrdf_stack::on_stack(8 * 1024 * 1024, move || {
+        let mut expression = Expression::Literal(Literal::new_simple("leaf"));
+        for _ in 0..80_000 {
+            expression = Expression::Not(Child::new(expression));
+        }
+        NativeSparqlEngine::new().prepare_algebra(
+            ask(GraphPattern::Filter {
+                expr: expression,
+                inner: empty().into(),
+            }),
+            QueryOptions::EMPTY,
+        )
+    })
+    .expect("spawn")
+    .expect_err("a chain too tall for the stack is refused");
     assert_eq!(
         refused.code,
         purrdf_sparql_eval::EvalError::STACK_EXHAUSTED_CODE,

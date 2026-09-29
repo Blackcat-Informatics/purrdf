@@ -1052,32 +1052,28 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_pattern_unifies_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let pat = pattern_chain(LEVELS);
-                let mut bound = Binding::new();
-                bound.insert(
-                    VarKey::Projected("x".to_owned()),
-                    TermValue::iri("http://example.org/s"),
-                );
-                bound.insert(
-                    VarKey::Blank {
-                        label: "b".to_owned(),
-                        scope: purrdf_core::BlankScope::DEFAULT,
-                    },
-                    TermValue::iri("http://example.org/o"),
-                );
-                let ground = substitute(&pat, &bound).expect("every variable is bound");
-                assert_eq!(ground, purrdf_core::term_fixture::triple_chain(LEVELS));
-                let (mut fresh, mut trail) = (Binding::new(), Vec::new());
-                assert!(try_unify(&pat, &ground, &mut fresh, &mut trail));
-                assert_eq!(fresh, bound);
-                assert_eq!(trail.len(), 2);
-                dismantle(pat);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let pat = pattern_chain(LEVELS);
+            let mut bound = Binding::new();
+            bound.insert(
+                VarKey::Projected("x".to_owned()),
+                TermValue::iri("http://example.org/s"),
+            );
+            bound.insert(
+                VarKey::Blank {
+                    label: "b".to_owned(),
+                    scope: purrdf_core::BlankScope::DEFAULT,
+                },
+                TermValue::iri("http://example.org/o"),
+            );
+            let ground = substitute(&pat, &bound).expect("every variable is bound");
+            assert_eq!(ground, purrdf_core::term_fixture::triple_chain(LEVELS));
+            let (mut fresh, mut trail) = (Binding::new(), Vec::new());
+            assert!(try_unify(&pat, &ground, &mut fresh, &mut trail));
+            assert_eq!(fresh, bound);
+            assert_eq!(trail.len(), 2);
+            dismantle(pat);
+        })
+        .expect("the thread starts");
     }
 }

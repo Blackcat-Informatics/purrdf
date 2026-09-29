@@ -2280,8 +2280,8 @@ mod tests {
     fn the_depth_search_agrees_with_its_recursive_reference_on_generated_graphs() {
         let mut refusals = 0;
         for seed in 0..500_u64 {
-            let mut state = seed;
-            let mut draw = |n: u64| purrdf_testkit::rng::splitmix64_next(&mut state) % n;
+            let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
+            let mut draw = |n: u64| rng.below(n);
             let len = 1 + draw(10);
             let entries: Vec<DictEntry> = (0..len)
                 .map(|_| {

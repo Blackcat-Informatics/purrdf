@@ -963,6 +963,7 @@ pub(crate) fn write_trig<W: TextOut + ?Sized>(g: &SerGraph, out: &mut W) {
 mod tests {
     use super::*;
     use purrdf_testkit::prop::prelude::*;
+    use purrdf_testkit::rng::SplitMix64;
 
     // Collect-into-a-`String` shims. Production has no such function any more: every
     // caller reaches the writers through `RdfCodec::serialize_into` and supplies its own
@@ -1590,19 +1591,6 @@ mod tests {
         assert_eq!(escape_literal("x\"y\\z\n"), "x\\\"y\\\\z\\n"); // mixed
     }
 
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
     /// The chunked escapers agree with the frozen per-char oracles on dense
     /// fixed-seed inputs: every ASCII scalar (every special byte), the whole block
     /// led by `0xC2` (the C1 controls and their verbatim neighbours), non-ASCII in
@@ -1620,15 +1608,15 @@ mod tests {
             '\u{1F408}',
             '\u{10FFFF}',
         ]));
-        let mut rng = SplitMix(0x05E2_0E5C_A9E0_0001);
+        let mut rng = SplitMix64::new(0x05E2_0E5C_A9E0_0001);
         let (mut borrowed, mut owned) = (0_usize, 0_usize);
         for len in (0..=70).chain([127, 128, 129, 255, 1000, 4099]) {
             for round in 0..40 {
                 let density = if round % 2 == 0 { 4 } else { 40 };
                 let value: String = (0..len)
                     .map(|_| {
-                        if rng.below(density) == 0 {
-                            alphabet[rng.below(alphabet.len())]
+                        if rng.below_usize(density) == 0 {
+                            alphabet[rng.below_usize(alphabet.len())]
                         } else {
                             'q'
                         }
@@ -1869,26 +1857,21 @@ pub(crate) mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_written_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                let mut graph = SerGraph::default();
-                let id = lower(&mut graph, &value);
-                drop(value);
-                let ix = graph.reifier_index();
-                let level =
-                    "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
-                let innermost = "<http://example.org/o>".len();
-                let mut written = String::new();
-                write_term(&graph, &ix, id, &mut written);
-                assert_eq!(written.len(), LEVELS * level + innermost);
-                let mut written = String::new();
-                write_trig_term(&graph, &ix, id, &mut written);
-                assert_eq!(written.len(), LEVELS * level + innermost);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no writer overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut graph = SerGraph::default();
+            let id = lower(&mut graph, &value);
+            drop(value);
+            let ix = graph.reifier_index();
+            let level = "<<( <http://example.org/s> <http://example.org/p> ".len() + " )>>".len();
+            let innermost = "<http://example.org/o>".len();
+            let mut written = String::new();
+            write_term(&graph, &ix, id, &mut written);
+            assert_eq!(written.len(), LEVELS * level + innermost);
+            let mut written = String::new();
+            write_trig_term(&graph, &ix, id, &mut written);
+            assert_eq!(written.len(), LEVELS * level + innermost);
+        })
+        .expect("the thread starts");
     }
 }

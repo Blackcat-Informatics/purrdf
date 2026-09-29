@@ -2916,6 +2916,7 @@ pub fn write_literal_escaped(value: &str, out: &mut String) {
 mod escape_tests {
     use super::{find_first_literal_escape, write_iri_escaped, write_literal_escaped};
     use crate::iri_escape::is_iriref_escape_required;
+    use purrdf_testkit::rng::SplitMix64;
     use std::fmt::Write as _;
 
     /// The per-`char` writers the clean-run forms replaced, kept verbatim as the
@@ -2955,19 +2956,6 @@ mod escape_tests {
         }
     }
 
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
     /// Every ASCII scalar (so every special byte), the whole `0xC2` block (the
     /// C1 controls), and non-ASCII neighbours in every UTF-8 width.
     fn alphabet() -> Vec<char> {
@@ -2987,14 +2975,14 @@ mod escape_tests {
     #[test]
     fn clean_run_writers_agree_with_the_per_char_writers() {
         let alphabet = alphabet();
-        let mut rng = SplitMix(0x00CA_0010_E5CA_9E00);
+        let mut rng = SplitMix64::new(0x00CA_0010_E5CA_9E00);
         let mut escaped_past_first_chunk = 0_usize;
         for len in (0..=70).chain([127, 128, 129, 255, 1000, 4099]) {
             for _ in 0..40 {
                 let value: String = (0..len)
                     .map(|_| {
-                        if rng.below(5) == 0 {
-                            alphabet[rng.below(alphabet.len())]
+                        if rng.below_usize(5) == 0 {
+                            alphabet[rng.below_usize(alphabet.len())]
                         } else {
                             'q'
                         }

@@ -1479,29 +1479,25 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_interns_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                let mut graph = SerGraph::default();
-                let root = lower(&mut graph, &value);
-                drop(value);
-                let interner = SerInterner {
-                    graph: &graph,
-                    blanks: BlankIngress::Opaque,
-                };
-                let mut builder = RdfDatasetBuilder::new();
-                interner
-                    .intern(&mut builder, root)
-                    .expect("a lowered chain interns");
-                // Ids are dense, so one more term's id counts the terms before it.
-                assert_eq!(
-                    builder.intern_iri("http://example.org/sentinel").index(),
-                    LEVELS + 3
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the interner did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut graph = SerGraph::default();
+            let root = lower(&mut graph, &value);
+            drop(value);
+            let interner = SerInterner {
+                graph: &graph,
+                blanks: BlankIngress::Opaque,
+            };
+            let mut builder = RdfDatasetBuilder::new();
+            interner
+                .intern(&mut builder, root)
+                .expect("a lowered chain interns");
+            // Ids are dense, so one more term's id counts the terms before it.
+            assert_eq!(
+                builder.intern_iri("http://example.org/sentinel").index(),
+                LEVELS + 3
+            );
+        })
+        .expect("the thread starts");
     }
 }

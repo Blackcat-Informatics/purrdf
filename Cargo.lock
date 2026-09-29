@@ -420,6 +420,7 @@ version = "2.0.2"
 dependencies = [
  "proc-macro2",
  "purrdf-hash",
+ "purrdf-testkit",
  "regex",
  "serde_json",
  "syn",
@@ -543,6 +544,7 @@ dependencies = [
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-text",
  "purrdf-validate",
@@ -560,6 +562,7 @@ dependencies = [
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-rdf",
+ "purrdf-testkit",
  "purrdf-xsd",
  "serde_json",
 ]
@@ -584,6 +587,7 @@ version = "2.0.2"
 dependencies = [
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
 ]
@@ -618,6 +622,7 @@ name = "purrdf-columnar"
 version = "2.0.2"
 dependencies = [
  "purrdf-core",
+ "purrdf-stack",
  "purrdf-testkit",
  "structured-zstd",
 ]
@@ -633,6 +638,7 @@ dependencies = [
  "purrdf-events",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
  "regex",
@@ -669,6 +675,7 @@ dependencies = [
  "purrdf-datalog",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
  "roxmltree",
@@ -701,6 +708,7 @@ dependencies = [
  "purrdf-shapes",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
 ]
@@ -719,6 +727,7 @@ dependencies = [
  "purrdf-events",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
@@ -785,6 +794,7 @@ dependencies = [
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-lex",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
  "regex",
@@ -844,6 +854,7 @@ dependencies = [
  "purrdf-jsonschema",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
@@ -865,6 +876,7 @@ dependencies = [
  "purrdf-hash",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-text",
  "serde",
@@ -887,6 +899,7 @@ dependencies = [
  "purrdf-slice",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
@@ -904,6 +917,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-iri",
  "purrdf-rdf",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
  "regex",
@@ -937,6 +951,7 @@ dependencies = [
  "purrdf-hash",
  "purrdf-iri",
  "purrdf-lex",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
  "regex",
@@ -955,6 +970,7 @@ dependencies = [
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-validate",
  "roxmltree",
@@ -990,6 +1006,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-stack",
  "purrdf-testkit",
 ]
 
@@ -1022,6 +1039,7 @@ dependencies = [
  "purrdf-lex",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-stack",
  "purrdf-testkit",
  "purrdf-xsd",
 ]
@@ -1039,6 +1057,7 @@ dependencies = [
  "purrdf-shapes",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
+ "purrdf-stack",
  "purrdf-testkit",
  "serde",
  "serde_json",
@@ -1052,7 +1071,6 @@ dependencies = [
  "purrdf",
  "purrdf-core",
  "purrdf-events",
- "purrdf-hash",
  "purrdf-shapes",
  "purrdf-sparql-algebra",
  "purrdf-sparql-eval",
@@ -1062,7 +1080,6 @@ dependencies = [
  "purrdf-validate",
  "serde",
  "serde_json",
- "sha2",
  "wasm-bindgen",
 ]
 

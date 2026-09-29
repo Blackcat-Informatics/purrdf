@@ -40,12 +40,7 @@ const BIG_STACK: usize = 512 * 1024 * 1024;
 
 /// Run `body` on a fresh thread with [`BIG_STACK`] of stack.
 fn on_big_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(BIG_STACK)
-        .spawn(body)
-        .expect("spawn")
-        .join()
-        .expect("the evaluation thread returned")
+    purrdf_stack::on_stack(BIG_STACK, body).expect("spawn")
 }
 
 /// An engine that evaluates on the calling thread, so the thread-local counters and the
@@ -466,11 +461,11 @@ fn mixed_graph() -> Arc<RdfDataset> {
 }
 
 /// A deterministic choice source: SplitMix64 over a seed.
-struct Choices(u64);
+struct Choices(purrdf_testkit::rng::SplitMix64);
 
 impl Choices {
     fn pick(&mut self, n: u64) -> u64 {
-        purrdf_hash::mix::splitmix64_next(&mut self.0) % n
+        self.0.below(n)
     }
 }
 
@@ -527,7 +522,7 @@ fn level(choices: &mut Choices, k: usize, below: &str) -> String {
 
 /// A generated chain `depth` levels deep, below [`outer`].
 fn generated(seed: u64, depth: usize) -> String {
-    let mut choices = Choices(seed);
+    let mut choices = Choices(purrdf_testkit::rng::SplitMix64::new(seed));
     let outer = outer(&mut choices);
     let mut body = String::new();
     for k in (1..=depth).rev() {

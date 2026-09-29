@@ -80,6 +80,9 @@ purrdf-markdown = { workspace = true }
 purrdf-json.workspace = true
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # The timed bench (`benches/multimodal_on_demand_read.rs`). Report-only: it
 # compares the on-demand read against the materialised one over real text and
 # HNSW producers, which only the umbrella can wire together in one fixture

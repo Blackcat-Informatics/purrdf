@@ -569,7 +569,11 @@ impl OperationInput<'_> {
             }
             AsyncOperationKind::Governed => {
                 let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
+                let governors = run.governors(
+                    ceilings
+                        .ceilings()
+                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                );
                 let outcome = run
                     .evaluate(|| {
                         engine.query_governed(&frozen, request, run.options(&env), &governors)
@@ -580,7 +584,11 @@ impl OperationInput<'_> {
             }
             AsyncOperationKind::Negotiated => {
                 let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
+                let governors = run.governors(
+                    ceilings
+                        .ceilings()
+                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                );
                 let outcome = run
                     .evaluate(|| {
                         engine.query_governed(&frozen, request, run.options(&env), &governors)
@@ -628,7 +636,11 @@ impl OperationInput<'_> {
                 let limits =
                     crate::entail::wasm_limits(closure.max_stored_facts, closure.max_join_steps);
                 let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
+                let governors = run.governors(
+                    ceilings
+                        .ceilings()
+                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                );
                 let outcome = run
                     .evaluate(|| {
                         query_with_entailment_closure_governed(
@@ -729,7 +741,11 @@ impl OperationInput<'_> {
             )),
             AsyncOperationKind::UpdateGoverned => {
                 let env = governed_env(aggregate_namespace)?;
-                let governors = run.governors(ceilings.ceilings());
+                let governors = run.governors(
+                    ceilings
+                        .update_ceilings()
+                        .map_err(|message| JobError::message(OPTIONS_CODE, message))?,
+                );
                 let mut target = Arc::clone(&frozen);
                 let outcome = run
                     .evaluate(|| {

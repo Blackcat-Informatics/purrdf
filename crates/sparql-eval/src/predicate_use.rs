@@ -401,21 +401,20 @@ mod walk_tests {
     // ── A deterministic shape generator ────────────────────────────────────────────
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 40,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn spend(&mut self) -> bool {
@@ -558,38 +557,34 @@ mod walk_tests {
     /// both reported on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_query_is_classified_on_a_128_kib_thread() {
-        let used = std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut shape = GraphPattern::PropertyFunction(PropertyFunctionCall {
-                    iri: "http://example.org/rel".to_owned(),
-                    subject_args: vec![TermPattern::Variable(Variable::new("s"))],
-                    object_args: vec![],
-                });
-                for _ in 0..100_000 {
-                    shape = GraphPattern::Filter {
-                        expr: Expression::Exists(Child::new(shape)),
-                        inner: Child::new(GraphPattern::Bgp {
-                            patterns: vec![TriplePattern {
-                                subject: TermPattern::Variable(Variable::new("s")),
-                                predicate: NamedNodePattern::NamedNode(iri(1)),
-                                object: TermPattern::Variable(Variable::new("o")),
-                            }],
-                        }),
-                    };
-                }
-                let mut deep_path = P::NamedNode(iri(2));
-                for _ in 0..100_000 {
-                    deep_path = P::Reverse(Child::new(deep_path));
-                }
-                let mut used = PredicateUse::default();
-                walk(&shape, &mut used);
-                record_path(&deep_path, &mut used);
-                used
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+        let used = purrdf_stack::on_stack(128 * 1024, || {
+            let mut shape = GraphPattern::PropertyFunction(PropertyFunctionCall {
+                iri: "http://example.org/rel".to_owned(),
+                subject_args: vec![TermPattern::Variable(Variable::new("s"))],
+                object_args: vec![],
+            });
+            for _ in 0..100_000 {
+                shape = GraphPattern::Filter {
+                    expr: Expression::Exists(Child::new(shape)),
+                    inner: Child::new(GraphPattern::Bgp {
+                        patterns: vec![TriplePattern {
+                            subject: TermPattern::Variable(Variable::new("s")),
+                            predicate: NamedNodePattern::NamedNode(iri(1)),
+                            object: TermPattern::Variable(Variable::new("o")),
+                        }],
+                    }),
+                };
+            }
+            let mut deep_path = P::NamedNode(iri(2));
+            for _ in 0..100_000 {
+                deep_path = P::Reverse(Child::new(deep_path));
+            }
+            let mut used = PredicateUse::default();
+            walk(&shape, &mut used);
+            record_path(&deep_path, &mut used);
+            used
+        })
+        .expect("spawn");
         assert_eq!(
             used.calls.iter().collect::<Vec<_>>(),
             vec!["http://example.org/rel"]

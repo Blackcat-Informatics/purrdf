@@ -39,6 +39,9 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # Byte-exact golden files for the scanner boundary sweep. Path-only and
 # unpublished, so it is stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }

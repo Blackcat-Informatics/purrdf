@@ -2244,12 +2244,15 @@ mod tests {
 
     /// A tail of `len` rows over a small id space (so keys collide across rows
     /// in either column), with the tuples it was built from.
-    fn random_tail(len: usize, state: &mut u64) -> (Tail, Vec<(TermId, TermId, RowId)>) {
+    fn random_tail(
+        len: usize,
+        rng: &mut purrdf_testkit::rng::SplitMix64,
+    ) -> (Tail, Vec<(TermId, TermId, RowId)>) {
         let mut tail = Tail::default();
         let mut rows = Vec::with_capacity(len);
         for i in 0..len {
-            let s = TermId::from_index((purrdf_testkit::rng::splitmix64_next(state) % 24) as usize);
-            let o = TermId::from_index((purrdf_testkit::rng::splitmix64_next(state) % 24) as usize);
+            let s = TermId::from_index(rng.below_usize(24));
+            let o = TermId::from_index(rng.below_usize(24));
             let r = RowId::from_index(i);
             tail.push(s, o, r);
             rows.push((s, o, r));
@@ -2264,11 +2267,11 @@ mod tests {
     /// miss everywhere).
     #[test]
     fn tail_contains_matches_the_tuple_scan() {
-        let mut state = 0x5EED_0F7A_11C0_u64;
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0x5EED_0F7A_11C0);
         let outside = TermId::from_index(1_000);
         for len in 0..=TAIL_SEAL_THRESHOLD {
             for _ in 0..4 {
-                let (tail, rows) = random_tail(len, &mut state);
+                let (tail, rows) = random_tail(len, &mut rng);
                 assert_eq!(tail.len(), len);
                 assert_eq!(tail.is_empty(), len == 0);
                 let mut probes = vec![(outside, outside)];
@@ -2342,9 +2345,9 @@ mod tests {
     /// in that order and leaves it empty.
     #[test]
     fn tail_columns_round_trip_rows_in_insertion_order() {
-        let mut state = 0xC011_u64;
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0xC011);
         for len in [0, 1, 7, 8, 9, TAIL_SEAL_THRESHOLD - 1, TAIL_SEAL_THRESHOLD] {
-            let (mut tail, rows) = random_tail(len, &mut state);
+            let (mut tail, rows) = random_tail(len, &mut rng);
             let by_position: Vec<_> = (0..tail.len()).map(|i| tail.row(i)).collect();
             assert_eq!(by_position, rows);
             assert_eq!(tail.iter().collect::<Vec<_>>(), rows);

@@ -486,6 +486,7 @@ mod tests {
     use purrdf_core::TermBox;
     use purrdf_core::terminals::find_first_json_string_special;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
+    use purrdf_testkit::rng::SplitMix64;
 
     use purrdf_core::datatype::XSD_INTEGER;
     use purrdf_core::vocab::rdf::LANG_STRING as RDF_LANGSTRING;
@@ -523,19 +524,6 @@ mod tests {
         }
     }
 
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
     /// The chunked escaper agrees with the per-`char` reference on fixed-seed
     /// values holding every ASCII scalar (so every trigger byte), DEL and the
     /// C1 block (which ride verbatim), and non-ASCII in every UTF-8 width, at
@@ -562,15 +550,15 @@ mod tests {
             '\u{1F431}',
             '\u{10FFFF}',
         ]);
-        let mut rng = SplitMix(0x0150_0E5C_A9E0_0001);
+        let mut rng = SplitMix64::new(0x0150_0E5C_A9E0_0001);
         let mut escaped = 0_usize;
         for len in (0..=70).chain([127, 128, 129, 1000, 4099]) {
             for round in 0..40 {
                 let density = if round % 2 == 0 { 4 } else { 50 };
                 let value: String = (0..len)
                     .map(|_| {
-                        if rng.below(density) == 0 {
-                            alphabet[rng.below(alphabet.len())]
+                        if rng.below_usize(density) == 0 {
+                            alphabet[rng.below_usize(alphabet.len())]
                         } else {
                             'j'
                         }
@@ -1104,20 +1092,16 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_written_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut written = String::new();
-                json_binding(
-                    &purrdf_core::term_fixture::triple_chain(LEVELS),
-                    &mut written,
-                )
-                .expect("every predicate is an IRI");
-                assert_eq!(written.matches("\"type\":\"triple\"").count(), LEVELS);
-                assert!(written.ends_with(&"}}".repeat(LEVELS)));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the writer did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut written = String::new();
+            json_binding(
+                &purrdf_core::term_fixture::triple_chain(LEVELS),
+                &mut written,
+            )
+            .expect("every predicate is an IRI");
+            assert_eq!(written.matches("\"type\":\"triple\"").count(), LEVELS);
+            assert!(written.ends_with(&"}}".repeat(LEVELS)));
+        })
+        .expect("the thread starts");
     }
 }

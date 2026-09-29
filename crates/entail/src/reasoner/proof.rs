@@ -4301,18 +4301,14 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_encodes_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut leaf = Vec::new();
-                encode_term(&mut leaf, &TermValue::iri("http://example.org/s"));
-                let mut out = Vec::new();
-                encode_term(&mut out, &purrdf_core::term_fixture::triple_chain(LEVELS));
-                assert_eq!(out.len(), LEVELS * (1 + 2 * leaf.len()) + leaf.len());
-                assert_eq!(out.first(), Some(&TERM_TRIPLE));
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the encoding did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut leaf = Vec::new();
+            encode_term(&mut leaf, &TermValue::iri("http://example.org/s"));
+            let mut out = Vec::new();
+            encode_term(&mut out, &purrdf_core::term_fixture::triple_chain(LEVELS));
+            assert_eq!(out.len(), LEVELS * (1 + 2 * leaf.len()) + leaf.len());
+            assert_eq!(out.first(), Some(&TERM_TRIPLE));
+        })
+        .expect("the thread starts");
     }
 }

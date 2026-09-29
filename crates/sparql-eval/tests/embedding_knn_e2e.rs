@@ -10,6 +10,7 @@
 //! into the crate's internals: a surface whose stages only line up from inside is a
 //! surface a host cannot use.
 
+use purrdf_testkit::rng::{LCG64_MMIX_INCREMENT, lcg64_next};
 use std::collections::BTreeSet;
 use std::sync::Arc;
 
@@ -573,10 +574,8 @@ fn crowd() -> Vec<(String, Vec<f64>)> {
     for i in 0..192_u32 {
         let mut vector = Vec::with_capacity(8);
         for _ in 0..8 {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            vector.push(f64::from((state >> 33) as u32 % 32) - 16.0);
+            let drawn = lcg64_next(&mut state, LCG64_MMIX_INCREMENT);
+            vector.push(f64::from((drawn >> 33) as u32 % 32) - 16.0);
         }
         rows.push((format!("q{i:03}"), vector));
     }

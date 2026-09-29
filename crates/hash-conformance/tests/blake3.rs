@@ -152,10 +152,7 @@ fn random_inputs_cover_irregular_trees_and_alignment() {
             let mut buffer = vec![0; offset + len];
             let mut state = seed;
             for byte in &mut buffer[offset..] {
-                state ^= state << 13;
-                state ^= state >> 7;
-                state ^= state << 17;
-                *byte = state as u8;
+                *byte = purrdf_testkit::rng::xorshift64_next(&mut state) as u8;
             }
             let data = &buffer[offset..];
             let expected = Backend::Portable

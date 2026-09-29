@@ -230,6 +230,7 @@ fn is_collapsed(bytes: &[u8]) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_testkit::rng::SplitMix64;
 
     /// The pre-byte-scan per-char `replace` facet, kept as the oracle.
     fn replace_char_reference(s: &str) -> String {
@@ -299,16 +300,6 @@ mod tests {
         out
     }
 
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        fn below(&mut self, n: usize) -> usize {
-            let z = purrdf_testkit::rng::splitmix64_next(&mut self.0);
-            usize::try_from(z % 1_000_003).expect("small") % n
-        }
-    }
-
     /// Every byte on either side of the facet's classes (`#x9-#xA`, `#xD`,
     /// `#x20`), and non-ASCII scalars of every UTF-8 length including the Unicode
     /// whitespace the facet must leave alone.
@@ -337,16 +328,16 @@ mod tests {
     /// Fixed-seed random values at lengths 0..=70 and beyond, mostly clean so the
     /// precheck's clean path, and hits at every chunk offset, are both reached.
     fn facet_corpus() -> Vec<String> {
-        let mut rng = SplitMix(0x05DF_ACE7_5EED);
+        let mut rng = SplitMix64::new(0x05DF_ACE7_5EED);
         let mut out = Vec::new();
         for len in (0..=70).chain([127, 128, 129, 1000]) {
             for density in [0, 1, 4] {
                 for _ in 0..12 {
                     let value: String = (0..len)
                         .map(|_| {
-                            if density != 0 && rng.below(16) < density {
-                                FACET_SCALARS[rng.below(FACET_SCALARS.len())]
-                            } else if rng.below(6) == 0 {
+                            if density != 0 && rng.below_usize(16) < density {
+                                FACET_SCALARS[rng.below_usize(FACET_SCALARS.len())]
+                            } else if rng.below_usize(6) == 0 {
                                 // Single spaces keep collapse's clean path reachable.
                                 ' '
                             } else {

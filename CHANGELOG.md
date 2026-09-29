@@ -1236,6 +1236,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **cli (BREAKING):** a governed `query`, `update` or `validate` run starts from
+  `QueryGovernors::METERED` instead of `QueryGovernors::UNBOUNDED`, through
+  `purrdf_validate::governors::from_parts`, the decoder the C ABI, the wasm
+  package and the Python binding already share. A dimension no flag names is
+  charged against a ceiling no run can reach rather than left unaccounted, so a
+  `--deadline` is polled inside a long-running operator as well as between
+  operators, and the trip report still prints it as `limit … unbounded`. The
+  new `--no-ceiling` flag asks for `UNBOUNDED` (no ceiling and no accounting);
+  it combines with `--deadline`, and is refused (exit 2) beside `--fuel`,
+  `--max-answers`, `--max-intermediate-cells`, `--max-scratch-bytes` or
+  `--max-remote-requests`, naming both flags, and beside `--explain`, which
+  meters by definition. A run that names no governor flag still takes the
+  ungoverned path unchanged.
 - **owned model:** a plain literal resolved from a dataset into the owned
   `RdfTerm` model now carries no datatype (`datatype: None`) and a
   language-tagged one no `rdf:langString` / `rdf:dirLangString`, instead of

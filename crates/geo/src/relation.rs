@@ -2929,16 +2929,12 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_digested_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let (mut deep, mut shallower) = (Digest::new(), Digest::new());
-                deep.term(&purrdf_core::term_fixture::triple_chain(LEVELS));
-                shallower.term(&purrdf_core::term_fixture::triple_chain(LEVELS - 1));
-                assert_ne!(deep.finish(), shallower.finish());
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the digest did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let (mut deep, mut shallower) = (Digest::new(), Digest::new());
+            deep.term(&purrdf_core::term_fixture::triple_chain(LEVELS));
+            shallower.term(&purrdf_core::term_fixture::triple_chain(LEVELS - 1));
+            assert_ne!(deep.finish(), shallower.finish());
+        })
+        .expect("the thread starts");
     }
 }

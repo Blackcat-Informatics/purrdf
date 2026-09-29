@@ -526,12 +526,7 @@ fn evaluate(text: &str, service: bool) -> Result<Answer, RdfDiagnostic> {
 
 /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
 fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(SMALL_STACK)
-        .spawn(body)
-        .expect("spawn")
-        .join()
-        .expect("the 128 KiB thread returned")
+    purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
 }
 
 /// Evaluate the vector named `name` at `depth` on the 128 KiB thread and assert its

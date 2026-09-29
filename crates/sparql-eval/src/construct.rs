@@ -2794,19 +2794,19 @@ mod term_walk_tests {
 
     /// A deterministic choice sequence.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
-            Self { state: seed }
+            Self {
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
+            }
         }
 
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
     }
 
@@ -2946,12 +2946,7 @@ mod term_walk_tests {
 
     /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
+        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
     }
 
     /// How many triple terms `value`'s object chain nests, and its innermost object.
@@ -3056,22 +3051,20 @@ mod where_walk_tests {
     const SMALL_STACK: usize = 128 * 1024;
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 30,
             }
         }
 
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
 
         fn spend(&mut self) -> bool {
@@ -3237,29 +3230,25 @@ mod where_walk_tests {
     /// in pre-order — outermost first — on a 128 KiB stack.
     #[test]
     fn a_hundred_thousand_level_pattern_is_collected_on_a_128_kib_stack() {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(|| {
-                let mut shape = GraphPattern::Bgp {
-                    patterns: vec![triple(0)],
+        purrdf_stack::on_stack(SMALL_STACK, || {
+            let mut shape = GraphPattern::Bgp {
+                patterns: vec![triple(0)],
+            };
+            for level in 1..=DEPTH {
+                shape = GraphPattern::Join {
+                    left: Child::new(GraphPattern::Bgp {
+                        patterns: vec![triple(level)],
+                    }),
+                    right: Child::new(shape),
                 };
-                for level in 1..=DEPTH {
-                    shape = GraphPattern::Join {
-                        left: Child::new(GraphPattern::Bgp {
-                            patterns: vec![triple(level)],
-                        }),
-                        right: Child::new(shape),
-                    };
-                }
-                let mut collected = Vec::new();
-                collect_where_triples(&shape, &mut collected);
-                assert_eq!(collected.len(), DEPTH + 1);
-                assert_eq!(collected[0], &triple(DEPTH));
-                assert_eq!(collected[1], &triple(DEPTH - 1));
-                assert_eq!(collected[DEPTH], &triple(0));
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+            }
+            let mut collected = Vec::new();
+            collect_where_triples(&shape, &mut collected);
+            assert_eq!(collected.len(), DEPTH + 1);
+            assert_eq!(collected[0], &triple(DEPTH));
+            assert_eq!(collected[1], &triple(DEPTH - 1));
+            assert_eq!(collected[DEPTH], &triple(0));
+        })
+        .expect("spawn");
     }
 }

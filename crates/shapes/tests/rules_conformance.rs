@@ -58,7 +58,10 @@ use purrdf_shapes::data::ShaclData;
 use purrdf_shapes::shapes::from_dataset_with_prefixes;
 use purrdf_shapes::{apply_rules, engine, text_ingest};
 
-const RULES_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/shacl/af/rules");
+/// The rules corpus, under the workspace root.
+fn rules_dir() -> PathBuf {
+    purrdf_testkit::paths::workspace_root().join("vectors/shacl/af/rules")
+}
 
 /// The EXACT number of case directories the corpus must hold, so a removed or
 /// renamed case fails fast. Bump this deliberately when adding a case.
@@ -173,9 +176,13 @@ fn run_case(case: &Case) -> Result<(), String> {
 // ── Discovery ──────────────────────────────────────────────────────────────────
 
 fn discover() -> Vec<Case> {
-    let root = Path::new(RULES_DIR);
-    assert!(root.is_dir(), "rules corpus not found at {RULES_DIR}");
-    let mut cases: Vec<Case> = fs::read_dir(root)
+    let root = rules_dir();
+    assert!(
+        root.is_dir(),
+        "rules corpus not found at {}",
+        root.display()
+    );
+    let mut cases: Vec<Case> = fs::read_dir(&root)
         .expect("read rules corpus dir")
         .filter_map(|entry| {
             let path = entry.ok()?.path();

@@ -1395,39 +1395,31 @@ pub(super) struct GovernorArgs {
 
 impl GovernorArgs {
     /// Engage these ceilings, plus `cancel` and the interpreter's signal flag, as one
-    /// call's [`QueryGovernors`].
+    /// call's [`QueryGovernors`], through [`purrdf_validate::governors::from_parts`]: the
+    /// `METERED` base with each named ceiling engaged, so every outcome carries evidence
+    /// to size the next budget from and the stop signal is polled inside long-running
+    /// operators as well as between them.
     ///
-    /// # Why the base is `METERED` rather than `UNBOUNDED`
+    /// # Errors
     ///
-    /// Two reasons, and both are about what a governed call promises. First, every
-    /// outcome — including a complete one — carries evidence a caller can size the next
-    /// budget from; `UNBOUNDED` reports nothing, because it charges nothing. Second, the
-    /// evaluator polls the stop signal every `STOP_POLL_FUEL` units of fuel *and* at each
-    /// algebra node it enters; with fuel disengaged only the second of those runs, so a
-    /// query spending a long time inside one operator would notice a cancellation or a
-    /// Ctrl-C late. Metering costs a saturating add per charge point and buys prompt
-    /// interruption on every query shape, which is the trade a caller who asked for
-    /// governors has already chosen.
-    fn engage(self, cancel: Option<&PyCancellationToken>) -> (QueryGovernors, Arc<PyStopWatch>) {
+    /// `ValueError` when the parts do not describe a configuration.
+    fn engage(
+        self,
+        cancel: Option<&PyCancellationToken>,
+    ) -> PyResult<(QueryGovernors, Arc<PyStopWatch>)> {
         let watch = Arc::new(PyStopWatch::new(self.deadline_ms, cancel));
-        let mut governors = QueryGovernors::METERED;
-        if let Some(fuel) = self.fuel {
-            governors = governors.with_fuel(fuel);
-        }
-        if let Some(rows) = self.max_answers {
-            governors = governors.with_max_answers(rows);
-        }
-        if let Some(cells) = self.max_intermediate_cells {
-            governors = governors.with_max_intermediate_cells(cells);
-        }
-        if let Some(bytes) = self.max_scratch_bytes {
-            governors = governors.with_max_scratch_bytes(bytes);
-        }
-        if let Some(requests) = self.max_remote_requests {
-            governors = governors.with_max_remote_requests(requests);
-        }
+        let parts = purrdf_validate::governors::GovernorParts {
+            fuel: self.fuel,
+            max_answers: self.max_answers,
+            max_intermediate_cells: self.max_intermediate_cells,
+            max_scratch_bytes: self.max_scratch_bytes,
+            max_remote_requests: self.max_remote_requests,
+            no_ceiling: false,
+        };
         let signal: Arc<dyn StopSignal> = Arc::<PyStopWatch>::clone(&watch);
-        (governors.with_stop_signal(signal), watch)
+        let governors = purrdf_validate::governors::from_parts(&parts, Some(signal))
+            .map_err(|error| PyValueError::new_err(error.to_string()))?;
+        Ok((governors, watch))
     }
 }
 
@@ -1456,7 +1448,7 @@ pub(super) fn run_governed<T: Send>(
     cancel: Option<&PyCancellationToken>,
     run: impl FnOnce(&QueryGovernors) -> PyResult<T> + Send,
 ) -> PyResult<T> {
-    let (governors, watch) = args.engage(cancel);
+    let (governors, watch) = args.engage(cancel)?;
     let outcome = py.detach(|| run(&governors));
     if let Some(raised) = watch.take_interrupt() {
         return Err(raised);

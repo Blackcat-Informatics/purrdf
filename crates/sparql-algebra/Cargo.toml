@@ -46,6 +46,9 @@ purrdf-hash = { workspace = true }
 purrdf-lex = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # Byte-exact golden files for the algebra snapshots, and the property harness
 # (lexer round-trips, parser robustness). Path-only and unpublished, so it is
 # stripped from the packaged manifest.

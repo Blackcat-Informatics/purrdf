@@ -69,7 +69,7 @@ const MUST_ROUND_TRIP: &[&str] = &[
 const XFAIL_ROUND_TRIP: &[(&str, &str)] = &[];
 
 fn corpus() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/shexTest/schemas")
+    purrdf_testkit::paths::workspace_root().join("vectors/shexTest/schemas")
 }
 
 fn shex_files(dir: &Path) -> Vec<PathBuf> {

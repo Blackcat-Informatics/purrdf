@@ -1112,6 +1112,7 @@ mod tests {
     use purrdf_core::vocab::rdf::{
         DIR_LANG_STRING as RDF_DIR_LANGSTRING, LANG_STRING as RDF_LANGSTRING,
     };
+    use purrdf_testkit::rng::SplitMix64;
 
     fn parse_string_at(input: &[u8]) -> Result<(String, usize), Error> {
         let mut parser = JsonParser::new(input);
@@ -1123,19 +1124,6 @@ mod tests {
         let mut parser = JsonParser::new(input);
         let value = parser.parse_string_reference()?;
         Ok((value, parser.pos))
-    }
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
     }
 
     /// The chunked string parser agrees with the per-byte one it replaced —
@@ -1173,15 +1161,15 @@ mod tests {
             b"\xc3",
             b"\xe0\x80\x80",
         ];
-        let mut rng = SplitMix(0x0150_0DEC_0DE0_0001);
+        let mut rng = SplitMix64::new(0x0150_0DEC_0DE0_0001);
         let (mut agreed_ok, mut agreed_err, mut refused) = (0_usize, 0_usize, 0_usize);
         for len in (0..=70).chain([127, 128, 129, 1000]) {
             for round in 0..40 {
                 let density = if round % 2 == 0 { 3 } else { 40 };
                 let mut input = vec![b'"'];
                 for _ in 0..len {
-                    if rng.below(density) == 0 {
-                        input.extend_from_slice(PIECES[rng.below(PIECES.len())]);
+                    if rng.below_usize(density) == 0 {
+                        input.extend_from_slice(PIECES[rng.below_usize(PIECES.len())]);
                     } else {
                         input.push(b's');
                     }
@@ -1780,12 +1768,7 @@ mod tests {
     /// Run `body` on a thread with a 128 KiB machine stack: a walk that recursed once
     /// per nesting level would overflow it after a few hundred levels.
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(body)
-            .expect("spawn a small-stack thread")
-            .join()
-            .expect("the small-stack thread finished without overflowing")
+        purrdf_stack::on_stack(128 * 1024, body).expect("spawn a small-stack thread")
     }
 
     /// `depth` nested JSON arrays around nothing: `[[…[]…]]`.

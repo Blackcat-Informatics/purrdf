@@ -264,8 +264,8 @@ pub fn project_down(axes: &StandpointAxes) -> ProjectionVerdict {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_testkit::paths::workspace_root;
     use std::collections::BTreeSet;
-    use std::path::{Path, PathBuf};
 
     /// The namespace the committed `slices/core/standpoint/module.ttl` bundle
     /// was authored under — used ONLY by the committed-Turtle cross-check
@@ -282,15 +282,6 @@ mod tests {
         "refuted",
         "bullshit",
     ];
-
-    /// The repo root, anchored at this crate's manifest dir (`crates/slice/../..`).
-    fn repo_root() -> PathBuf {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .canonicalize()
-            .expect("repo root (crates/slice/../..) must exist")
-    }
 
     #[test]
     fn round_trip_identity_holds_for_all_five() {
@@ -320,7 +311,7 @@ mod tests {
         // (local names are globally unique per axis, so set equality ⟺ field-wise).
         use crate::rdf_query::{Dataset, Object};
 
-        let module = repo_root().join("slices/core/standpoint/module.ttl");
+        let module = workspace_root().join("slices/core/standpoint/module.ttl");
         if !module.exists() {
             eprintln!(
                 "skipping committed standpoint-modality comparison; {} is absent",

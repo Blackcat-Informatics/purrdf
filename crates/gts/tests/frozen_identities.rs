@@ -12,8 +12,8 @@ use purrdf_gts::mmr::{Proof, prove, root, verify_proof};
 use purrdf_gts::replication::{heads_json, inventory};
 
 fn vector(relative: &str) -> PathBuf {
-    PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../vectors")
+    purrdf_testkit::paths::workspace_root()
+        .join("vectors")
         .join(relative)
 }
 

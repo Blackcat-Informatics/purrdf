@@ -352,6 +352,7 @@ fn unescape(raw: &str, at: usize) -> Result<Cow<'_, str>, JsonError> {
 mod tests {
     use super::Parser;
     use crate::Bounds;
+    use purrdf_testkit::rng::SplitMix64;
 
     fn parser(text: &str) -> Parser<'_> {
         Parser {
@@ -361,19 +362,6 @@ mod tests {
             values: Vec::new(),
             bounds: Bounds::standard(),
             pointer_bytes: 0,
-        }
-    }
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
         }
     }
 
@@ -408,15 +396,15 @@ mod tests {
             "\u{4e2d}",
             "\u{1f600}",
         ];
-        let mut rng = SplitMix(0x0150_05CA_9000_0001);
+        let mut rng = SplitMix64::new(0x0150_05CA_9000_0001);
         let (mut ok, mut refused) = (0_usize, 0_usize);
         for len in (0..=70).chain([127, 128, 129, 1000, 4099]) {
             for round in 0..40 {
                 let density = if round % 2 == 0 { 4 } else { 60 };
                 let mut text = String::from("\"");
                 for _ in 0..len {
-                    if rng.below(density) == 0 {
-                        text.push_str(PIECES[rng.below(PIECES.len())]);
+                    if rng.below_usize(density) == 0 {
+                        text.push_str(PIECES[rng.below_usize(PIECES.len())]);
                     } else {
                         text.push('s');
                     }

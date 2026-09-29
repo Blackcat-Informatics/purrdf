@@ -10396,10 +10396,11 @@ mod tests {
         // A fixed linear congruential sequence: the cases are the same on every run.
         let mut state: u64 = 0x2545_f491_4f6c_dd1d;
         let mut next = |bound: usize| {
-            state = state
-                .wrapping_mul(6_364_136_223_846_793_005)
-                .wrapping_add(1_442_695_040_888_963_407);
-            usize::try_from(state >> 33).expect("31 bits fit") % bound
+            let drawn = purrdf_testkit::rng::lcg64_next(
+                &mut state,
+                purrdf_testkit::rng::LCG64_MMIX_INCREMENT,
+            );
+            usize::try_from(drawn >> 33).expect("31 bits fit") % bound
         };
         let mut values = 0;
         for _ in 0..400 {
@@ -10766,22 +10767,20 @@ mod walk_tests {
     // ── A deterministic shape generator ────────────────────────────────────────────
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 48,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let bound = u64::try_from(options).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(options)
         }
 
         /// Whether one more compound node fits the budget.
@@ -11082,12 +11081,7 @@ mod walk_tests {
     }
 
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
+        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
     }
 
     fn a_triple(choices: &mut Choices) -> TriplePattern {
@@ -11438,22 +11432,20 @@ mod rdf_equal_tests {
 
     /// A deterministic choice sequence.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 12,
             }
         }
 
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
 
         fn spend(&mut self) -> bool {
@@ -11600,23 +11592,19 @@ mod rdf_equal_tests {
     /// only in the innermost object compare unequal, on a 128 KiB thread.
     #[test]
     fn a_hundred_thousand_level_pair_compares_on_a_128_kib_thread() {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(|| {
-                let a = chain(DEPTH, "http://example.org/o");
-                let same = chain(DEPTH, "http://example.org/o");
-                let other = chain(DEPTH, "http://example.org/x");
-                let shorter = chain(DEPTH - 1, "http://example.org/o");
-                assert_eq!(rdf_equal(&a, &same), Some(true));
-                assert_eq!(rdf_equal(&a, &other), Some(false));
-                assert_eq!(rdf_equal(&a, &shorter), Some(false));
-                drop(shorter);
-                drop(other);
-                drop(same);
-                drop(a);
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+        purrdf_stack::on_stack(SMALL_STACK, || {
+            let a = chain(DEPTH, "http://example.org/o");
+            let same = chain(DEPTH, "http://example.org/o");
+            let other = chain(DEPTH, "http://example.org/x");
+            let shorter = chain(DEPTH - 1, "http://example.org/o");
+            assert_eq!(rdf_equal(&a, &same), Some(true));
+            assert_eq!(rdf_equal(&a, &other), Some(false));
+            assert_eq!(rdf_equal(&a, &shorter), Some(false));
+            drop(shorter);
+            drop(other);
+            drop(same);
+            drop(a);
+        })
+        .expect("spawn");
     }
 }

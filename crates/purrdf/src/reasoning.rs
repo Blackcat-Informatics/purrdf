@@ -2973,27 +2973,23 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_searched_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let surrogates = BTreeSet::from(["w".to_owned()]);
-                let mut term = RdfTerm::blank_node("w");
-                for _ in 0..LEVELS {
-                    term = RdfTerm::triple(RdfTriple::new(
-                        RdfTerm::iri("http://example.org/s"),
-                        "http://example.org/p",
-                        term,
-                    ));
-                }
-                assert!(term_mentions_surrogate(&term, &surrogates));
-                // The owned model's derived drop descends once per level, so the chain
-                // is taken apart one level at a time.
-                while let RdfTerm::Triple(triple) = term {
-                    term = triple.object;
-                }
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the search did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let surrogates = BTreeSet::from(["w".to_owned()]);
+            let mut term = RdfTerm::blank_node("w");
+            for _ in 0..LEVELS {
+                term = RdfTerm::triple(RdfTriple::new(
+                    RdfTerm::iri("http://example.org/s"),
+                    "http://example.org/p",
+                    term,
+                ));
+            }
+            assert!(term_mentions_surrogate(&term, &surrogates));
+            // The owned model's derived drop descends once per level, so the chain
+            // is taken apart one level at a time.
+            while let RdfTerm::Triple(triple) = term {
+                term = triple.object;
+            }
+        })
+        .expect("the thread starts");
     }
 }

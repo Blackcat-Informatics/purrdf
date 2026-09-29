@@ -218,9 +218,8 @@ fn an_aggregator_named_manifest_ttl_is_refused() {
 /// This is corpus-loading only: no case is evaluated here.
 #[test]
 fn the_vendored_cdt_aggregator_loads_every_group() {
-    let aggregator = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("vectors/sparql-cdt/manifest-all.ttl");
+    let aggregator =
+        purrdf_testkit::paths::workspace_root().join("vectors/sparql-cdt/manifest-all.ttl");
     let cases =
         manifest::load(&aggregator).expect("the vendored CDT aggregator manifest must load");
 

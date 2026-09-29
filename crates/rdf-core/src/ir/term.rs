@@ -1601,21 +1601,17 @@ mod conversion_tests {
     #[test]
     fn a_hundred_thousand_level_term_converts_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = crate::term_fixture::triple_chain(LEVELS);
-                let mut term = value.to_rdf_term().expect("IRI predicates throughout");
-                assert_eq!(TermValue::from_rdf_term(&term), value);
-                // The owned model's derived drop descends once per level, so the chain
-                // is taken apart one level at a time.
-                while let RdfTerm::Triple(triple) = term {
-                    term = triple.object;
-                }
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("the conversions did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = crate::term_fixture::triple_chain(LEVELS);
+            let mut term = value.to_rdf_term().expect("IRI predicates throughout");
+            assert_eq!(TermValue::from_rdf_term(&term), value);
+            // The owned model's derived drop descends once per level, so the chain
+            // is taken apart one level at a time.
+            while let RdfTerm::Triple(triple) = term {
+                term = triple.object;
+            }
+        })
+        .expect("the thread starts");
     }
 
     /// `xsd:integer` literals are the canonical decimal spelling across the widths callers

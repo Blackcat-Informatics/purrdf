@@ -35,12 +35,7 @@ const PF_NS: &str = "http://example.org/pf/";
 /// Run `body` on a thread spawned with a [`SMALL_STACK`] stack, and hand back what it
 /// returned.
 fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-    std::thread::Builder::new()
-        .stack_size(SMALL_STACK)
-        .spawn(body)
-        .expect("spawn a small-stack thread")
-        .join()
-        .expect("the small-stack thread returned rather than aborting")
+    purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn a small-stack thread")
 }
 
 /// `open`, repeated `levels` times, around `core`, closed by `close` as often.

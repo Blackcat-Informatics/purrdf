@@ -6686,19 +6686,19 @@ mod sort_key_walk_tests {
 
     /// A deterministic choice sequence.
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
-            Self { state: seed }
+            Self {
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
+            }
         }
 
         /// One choice below `n`.
         fn choose(&mut self, n: usize) -> usize {
-            let bound = u64::try_from(n).expect("a choice count fits");
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut self.state) % bound)
-                .expect("a draw below the count fits")
+            self.state.below_usize(n)
         }
     }
 
@@ -6763,12 +6763,7 @@ mod sort_key_walk_tests {
 
     /// Run `body` on a fresh thread with [`SMALL_STACK`] of stack.
     fn on_small_stack<T: Send + 'static>(body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(SMALL_STACK)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned")
+        purrdf_stack::on_stack(SMALL_STACK, body).expect("spawn")
     }
 
     /// A triple-term chain `depth` levels deep whose innermost object is the string
@@ -6889,21 +6884,20 @@ mod emptiness_proof_tests {
     // ── A deterministic shape generator ────────────────────────────────────────────
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 30,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn spend(&mut self) -> bool {
@@ -7090,47 +7084,43 @@ mod emptiness_proof_tests {
     #[test]
     fn a_hundred_thousand_level_shape_is_proven_on_a_128_kib_thread() {
         const DEPTH: usize = 100_000;
-        let answers = std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut hop = P::NamedNode(iri("p"));
-                let mut zero = P::ZeroOrMore(Child::new(P::NamedNode(iri("p"))));
-                for _ in 0..DEPTH {
-                    hop = P::Reverse(Child::new(hop));
-                    zero = P::OneOrMore(Child::new(zero));
-                }
-                let mut distinct = GraphPattern::Bgp {
-                    patterns: vec![TriplePattern {
-                        subject: var("s"),
-                        predicate: NamedNodePattern::NamedNode(iri("p")),
-                        object: var("o"),
-                    }],
+        let answers = purrdf_stack::on_stack(128 * 1024, || {
+            let mut hop = P::NamedNode(iri("p"));
+            let mut zero = P::ZeroOrMore(Child::new(P::NamedNode(iri("p"))));
+            for _ in 0..DEPTH {
+                hop = P::Reverse(Child::new(hop));
+                zero = P::OneOrMore(Child::new(zero));
+            }
+            let mut distinct = GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: var("s"),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: var("o"),
+                }],
+            };
+            let mut spine = GraphPattern::Values {
+                variables: vec![Variable::new("s")],
+                bindings: vec![vec![None]],
+            };
+            for _ in 0..DEPTH {
+                distinct = GraphPattern::Distinct {
+                    inner: Child::new(distinct),
                 };
-                let mut spine = GraphPattern::Values {
-                    variables: vec![Variable::new("s")],
-                    bindings: vec![vec![None]],
+                spine = GraphPattern::Join {
+                    left: Child::new(spine),
+                    right: Child::new(GraphPattern::Bgp {
+                        patterns: Vec::new(),
+                    }),
                 };
-                for _ in 0..DEPTH {
-                    distinct = GraphPattern::Distinct {
-                        inner: Child::new(distinct),
-                    };
-                    spine = GraphPattern::Join {
-                        left: Child::new(spine),
-                        right: Child::new(GraphPattern::Bgp {
-                            patterns: Vec::new(),
-                        }),
-                    };
-                }
-                [
-                    path_needs_an_edge(&hop),
-                    path_needs_an_edge(&zero),
-                    yields_nothing_without_rows_in_the_active_graph(&distinct),
-                    yields_nothing_without_rows_in_the_active_graph(&spine),
-                ]
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+            }
+            [
+                path_needs_an_edge(&hop),
+                path_needs_an_edge(&zero),
+                yields_nothing_without_rows_in_the_active_graph(&distinct),
+                yields_nothing_without_rows_in_the_active_graph(&spine),
+            ]
+        })
+        .expect("spawn");
         assert_eq!(answers, [true, false, true, false]);
     }
 }

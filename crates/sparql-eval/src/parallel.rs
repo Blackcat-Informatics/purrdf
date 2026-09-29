@@ -2653,21 +2653,20 @@ mod walk_tests {
     // ── A deterministic shape generator ────────────────────────────────────────────
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 30,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn spend(&mut self) -> bool {
@@ -2863,33 +2862,29 @@ mod walk_tests {
             }
             pattern
         }
-        let answers = std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let functions = functions();
-                let relations = relations();
-                let registries = configured(&functions, &relations);
-                let minting = negated(call(Function::Rand, Vec::new()));
-                let pure = negated(call(
-                    Function::Str,
-                    vec![Expression::Variable(Variable::new("v"))],
-                ));
-                let probing = negated(Expression::Exists(Child::new(bgp())));
-                let unknown_relation = filtered(relation_call(RELATION_UNKNOWN));
-                let stable_relation = filtered(relation_call(RELATION_STABLE));
-                [
-                    expr_reaches_unsafe_builtin(&minting, registries, &|_| None),
-                    expr_reaches_unsafe_builtin(&pure, registries, &|_| None),
-                    expression_re_enters_evaluation(&probing),
-                    expression_re_enters_evaluation(&pure),
-                    pattern_reaches_unsafe_builtin(&unknown_relation, registries, &|_| None),
-                    pattern_reaches_unsafe_builtin(&stable_relation, registries, &|_| None),
-                    expr_reaches_unsafe_builtin(&probing, registries, &deciding_verdict),
-                ]
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+        let answers = purrdf_stack::on_stack(128 * 1024, || {
+            let functions = functions();
+            let relations = relations();
+            let registries = configured(&functions, &relations);
+            let minting = negated(call(Function::Rand, Vec::new()));
+            let pure = negated(call(
+                Function::Str,
+                vec![Expression::Variable(Variable::new("v"))],
+            ));
+            let probing = negated(Expression::Exists(Child::new(bgp())));
+            let unknown_relation = filtered(relation_call(RELATION_UNKNOWN));
+            let stable_relation = filtered(relation_call(RELATION_STABLE));
+            [
+                expr_reaches_unsafe_builtin(&minting, registries, &|_| None),
+                expr_reaches_unsafe_builtin(&pure, registries, &|_| None),
+                expression_re_enters_evaluation(&probing),
+                expression_re_enters_evaluation(&pure),
+                pattern_reaches_unsafe_builtin(&unknown_relation, registries, &|_| None),
+                pattern_reaches_unsafe_builtin(&stable_relation, registries, &|_| None),
+                expr_reaches_unsafe_builtin(&probing, registries, &deciding_verdict),
+            ]
+        })
+        .expect("spawn");
         assert_eq!(answers, [true, false, true, false, true, false, false]);
     }
 }

@@ -1028,22 +1028,18 @@ mod tests {
             "\u{f0000}",
             "\u{10fffd}",
         ];
-        let mut state = 0x01B1_C0DE_5EED_u64;
-        let mut next = move || {
-            usize::try_from(purrdf_testkit::rng::splitmix64_next(&mut state) % 1_000_003)
-                .expect("small")
-        };
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(0x01B1_C0DE_5EED);
         let mut verdicts = [0_usize; 3];
         for len in (0..=70).chain([128, 400]) {
             for _ in 0..30 {
                 let mut s = String::new();
                 while s.len() < len {
                     // Mostly clean bytes, so the refusals land at every offset.
-                    if next() % 5 == 0 {
-                        s.push_str(PIECES[next() % PIECES.len()]);
+                    if rng.below_usize(5) == 0 {
+                        s.push_str(PIECES[rng.below_usize(PIECES.len())]);
                     } else {
                         s.push(
-                            "abcXYZ019-._~!$&'()*+,;="[next() % 24..]
+                            "abcXYZ019-._~!$&'()*+,;="[rng.below_usize(24)..]
                                 .chars()
                                 .next()
                                 .expect("ascii"),

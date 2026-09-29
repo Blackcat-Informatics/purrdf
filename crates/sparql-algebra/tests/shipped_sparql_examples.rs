@@ -151,16 +151,8 @@ use std::path::{Path, PathBuf};
 use std::sync::LazyLock;
 
 use purrdf_sparql_algebra::SparqlParser;
+use purrdf_testkit::paths::workspace_root;
 use regex::Regex;
-
-/// The workspace root, resolved from this crate's own manifest directory so the
-/// test works regardless of the caller's current directory.
-fn workspace_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("workspace root resolves")
-}
 
 /// One shipped example this gate found and must parse successfully.
 #[derive(Debug)]

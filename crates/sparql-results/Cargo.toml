@@ -41,6 +41,9 @@ purrdf-core = { workspace = true }
 purrdf-iri = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # Byte-exact golden files for the results corpus, CRLF record ends included.
 # Path-only and unpublished, so it is stripped from the packaged manifest.
 purrdf-testkit = { workspace = true }

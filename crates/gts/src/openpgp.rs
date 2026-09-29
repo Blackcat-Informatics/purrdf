@@ -479,7 +479,7 @@ mod tests {
     use std::path::PathBuf;
 
     fn vectors_dir() -> PathBuf {
-        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../vectors/openpgp")
+        purrdf_testkit::paths::workspace_root().join("vectors/openpgp")
     }
 
     fn fixture(name: &str) -> String {

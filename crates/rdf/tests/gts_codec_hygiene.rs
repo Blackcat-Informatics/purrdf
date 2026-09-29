@@ -34,6 +34,8 @@
 
 use std::path::{Path, PathBuf};
 
+use purrdf_testkit::paths::workspace_root;
+
 /// The `purrdf_gts::` RDF-codec ENTRYPOINTS banned in production. These are the codec call
 /// surfaces (text RDF serialize/parse + the purrdf-gts RDF-dataset model/adapters). Each is
 /// a `purrdf_gts::`-qualified path prefix, so a CONTAINER symbol like `purrdf_gts::reader`
@@ -73,22 +75,6 @@ const ALLOWED_GTS_CONTAINER_PREFIXES: [&str; 11] = [
 /// forbidden. RULE 3 fails closed if a manifest re-introduces one (the source-token RULE 2 is
 /// blind to a dead-but-linked Cargo feature).
 const FORBIDDEN_GTS_CODEC_FEATURES: [&str; 2] = ["rdf-codecs", "yaml-ld"];
-
-/// The workspace root: walk up from this crate's manifest dir until a `crates/` directory
-/// is found alongside a `Cargo.toml`. The test's CWD/`CARGO_MANIFEST_DIR` is the crate dir
-/// (`crates/rdf`), so we ascend to the directory that CONTAINS `crates/`.
-fn workspace_root() -> PathBuf {
-    let mut dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    loop {
-        if dir.join("crates").is_dir() && dir.join("Cargo.toml").is_file() {
-            return dir;
-        }
-        assert!(
-            dir.pop(),
-            "gts-codec-hygiene: could not locate the workspace root (no ancestor with a `crates/` dir)"
-        );
-    }
-}
 
 /// Every `.rs` file under each `crates/*/src` directory, as `(crate-relative label, path)`.
 /// The label is workspace-root-relative for legible violation messages.
@@ -478,16 +464,6 @@ gts = ["dep:purrdf-gts", "dep:roxmltree"]
         assert!(
             v.is_empty(),
             "RULE 3 must NOT flag a container-only purrdf-gts dependency nor a comment, got {v:?}"
-        );
-    }
-
-    #[test]
-    fn workspace_root_is_locatable_and_carries_the_crates_dir() {
-        let root = workspace_root();
-        assert!(
-            root.join("crates").join("rdf").join("src").is_dir(),
-            "workspace root {} must contain crates/rdf/src",
-            root.display()
         );
     }
 }

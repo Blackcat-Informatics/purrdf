@@ -19,7 +19,6 @@ use purrdf_core::DistanceMetric;
 mod corpus;
 
 use corpus::CorpusShape;
-use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswIndex, Params, Ranked, VectorMatrix};
 use purrdf_sparql_eval::knn::{Arithmetic as _, Exact, Kernel, best};
 
@@ -60,10 +59,7 @@ fn exact_top_k(matrix: &VectorMatrix, query: &[f64], k: usize) -> Vec<usize> {
 fn held_out(matrix: &VectorMatrix, count: usize, seed: u64) -> Vec<Vec<f64>> {
     let dims = matrix.dims();
     let mut state = seed;
-    let mut next = || {
-        state = splitmix64(state);
-        ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
-    };
+    let mut next = || purrdf_testkit::rng::signed_unit_step(&mut state);
     (0..count)
         .map(|index| {
             if index % 2 == 0 {

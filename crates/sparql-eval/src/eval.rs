@@ -4508,21 +4508,20 @@ mod syntactic_schema_tests {
     const NAMES: [&str; 6] = ["a", "b", "c", "d", "e", "f"];
 
     struct Choices {
-        state: u64,
+        state: purrdf_testkit::rng::SplitMix64,
         budget: usize,
     }
 
     impl Choices {
         const fn new(seed: u64) -> Self {
             Self {
-                state: seed,
+                state: purrdf_testkit::rng::SplitMix64::new(seed),
                 budget: 30,
             }
         }
 
         fn choose(&mut self, options: usize) -> usize {
-            let draw = purrdf_testkit::rng::splitmix64_next(&mut self.state);
-            usize::try_from(draw % options as u64).expect("a choice fits usize")
+            self.state.below_usize(options)
         }
 
         fn spend(&mut self) -> bool {
@@ -4716,53 +4715,49 @@ mod syntactic_schema_tests {
     #[test]
     fn a_hundred_thousand_level_shape_is_derived_on_a_128_kib_thread() {
         const DEPTH: usize = 100_000;
-        let (shallow, wide, quoted) = std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let leaf = || GraphPattern::Bgp {
-                    patterns: vec![TriplePattern {
-                        subject: TermPattern::Variable(Variable::new("s")),
-                        predicate: NamedNodePattern::NamedNode(iri("p")),
-                        object: TermPattern::Variable(Variable::new("o")),
-                    }],
+        let (shallow, wide, quoted) = purrdf_stack::on_stack(128 * 1024, || {
+            let leaf = || GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: TermPattern::Variable(Variable::new("o")),
+                }],
+            };
+            let mut distinct = leaf();
+            let mut spine = leaf();
+            let mut term = TermPattern::Variable(Variable::new("deep"));
+            for level in 0..DEPTH {
+                distinct = GraphPattern::Distinct {
+                    inner: Child::new(distinct),
                 };
-                let mut distinct = leaf();
-                let mut spine = leaf();
-                let mut term = TermPattern::Variable(Variable::new("deep"));
-                for level in 0..DEPTH {
-                    distinct = GraphPattern::Distinct {
-                        inner: Child::new(distinct),
-                    };
-                    spine = GraphPattern::Join {
-                        left: Child::new(spine),
-                        right: Child::new(GraphPattern::Extend {
-                            inner: Child::new(leaf()),
-                            variable: Variable::new(format!("x{level}")),
-                            expression: Expression::Variable(Variable::new("s")),
-                        }),
-                    };
-                    term = TermPattern::Triple(Child::new(TriplePattern {
-                        subject: TermPattern::NamedNode(iri("n")),
-                        predicate: NamedNodePattern::NamedNode(iri("p")),
-                        object: term,
-                    }));
-                }
-                let quoted = GraphPattern::Bgp {
-                    patterns: vec![TriplePattern {
-                        subject: TermPattern::Variable(Variable::new("s")),
-                        predicate: NamedNodePattern::Variable(Variable::new("p")),
-                        object: term,
-                    }],
+                spine = GraphPattern::Join {
+                    left: Child::new(spine),
+                    right: Child::new(GraphPattern::Extend {
+                        inner: Child::new(leaf()),
+                        variable: Variable::new(format!("x{level}")),
+                        expression: Expression::Variable(Variable::new("s")),
+                    }),
                 };
-                (
-                    syntactic_schema(&distinct).vars().to_vec(),
-                    syntactic_schema(&spine).len(),
-                    syntactic_schema(&quoted).vars().to_vec(),
-                )
-            })
-            .expect("spawn")
-            .join()
-            .expect("the 128 KiB thread returned");
+                term = TermPattern::Triple(Child::new(TriplePattern {
+                    subject: TermPattern::NamedNode(iri("n")),
+                    predicate: NamedNodePattern::NamedNode(iri("p")),
+                    object: term,
+                }));
+            }
+            let quoted = GraphPattern::Bgp {
+                patterns: vec![TriplePattern {
+                    subject: TermPattern::Variable(Variable::new("s")),
+                    predicate: NamedNodePattern::Variable(Variable::new("p")),
+                    object: term,
+                }],
+            };
+            (
+                syntactic_schema(&distinct).vars().to_vec(),
+                syntactic_schema(&spine).len(),
+                syntactic_schema(&quoted).vars().to_vec(),
+            )
+        })
+        .expect("spawn");
         assert_eq!(shallow, [Variable::new("s"), Variable::new("o")]);
         assert_eq!(wide, 2 + DEPTH);
         assert_eq!(

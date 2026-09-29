@@ -183,6 +183,7 @@ mod tests {
     use crate::model::SolutionProvenance;
     use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm};
+    use purrdf_testkit::rng::SplitMix64;
 
     use purrdf_core::datatype::XSD_INTEGER;
     use purrdf_core::vocab::rdf::LANG_STRING as RDF_LANGSTRING;
@@ -201,19 +202,6 @@ mod tests {
             datatype: datatype.to_string(),
             language: None,
             direction: None,
-        }
-    }
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
         }
     }
 
@@ -240,15 +228,15 @@ mod tests {
             '\u{FFFD}',
             '\u{1F408}',
         ];
-        let mut rng = SplitMix(0x0C5F_1E1D_0000_0001);
+        let mut rng = SplitMix64::new(0x0C5F_1E1D_0000_0001);
         let (mut quoted, mut raw) = (0_usize, 0_usize);
         for len in (0..=70).chain([127, 128, 129, 1000, 4099]) {
             for round in 0..40 {
                 let density = if round % 2 == 0 { 3 } else { 60 };
                 let value: String = (0..len)
                     .map(|_| {
-                        if rng.below(density) == 0 {
-                            SCALARS[rng.below(SCALARS.len())]
+                        if rng.below_usize(density) == 0 {
+                            SCALARS[rng.below_usize(SCALARS.len())]
                         } else {
                             'v'
                         }

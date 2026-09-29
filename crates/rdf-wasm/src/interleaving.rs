@@ -426,17 +426,10 @@ pub const fn swapped_count() -> usize {
 #[cfg(test)]
 mod tests {
     use std::collections::BTreeSet;
-    use std::path::Path;
+
+    use purrdf_testkit::paths::workspace_root;
 
     use super::{LEDGER, Safety, ThreadLocal};
-
-    /// The repository root, two directories above this crate's manifest.
-    fn repo_root() -> &'static Path {
-        Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .and_then(Path::parent)
-            .expect("the crate lives two levels below the repository root")
-    }
 
     /// No `(file, name)` pair is listed twice.
     #[test]
@@ -456,7 +449,7 @@ mod tests {
     #[test]
     fn every_entry_names_a_declared_static() {
         for ThreadLocal { file, name, .. } in LEDGER {
-            let source = std::fs::read_to_string(repo_root().join(file))
+            let source = std::fs::read_to_string(workspace_root().join(file))
                 .unwrap_or_else(|error| panic!("{file} is listed but cannot be read: {error}"));
             let declared = source.lines().any(|line| {
                 let trimmed = line.trim_start();

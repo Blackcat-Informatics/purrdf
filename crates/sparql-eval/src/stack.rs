@@ -132,17 +132,6 @@ pub(crate) fn walk_is_low(construct: &'static str) -> bool {
 mod tests {
     use super::*;
 
-    /// Run `body` on a fresh thread with `bytes` of stack, so the thread-local floor is
-    /// read for that thread alone.
-    fn on_thread<T: Send + 'static>(bytes: usize, body: impl FnOnce() -> T + Send + 'static) -> T {
-        std::thread::Builder::new()
-            .stack_size(bytes)
-            .spawn(body)
-            .expect("spawn")
-            .join()
-            .expect("join")
-    }
-
     /// A check passes on a roomy stack and refuses, typed, once a recursion has eaten
     /// into the margin — and the thread keeps running afterwards.
     #[test]
@@ -153,7 +142,8 @@ mod tests {
             let frame = core::hint::black_box([0u8; 4096]);
             descend(level + 1).map(|deepest| deepest.max(level + usize::from(frame[0])))
         }
-        let refused = on_thread(1024 * 1024, || (descend(0), check("after")));
+        let refused =
+            purrdf_stack::on_stack(1024 * 1024, || (descend(0), check("after"))).expect("spawn");
         assert_eq!(
             refused.0,
             Err(EvalError::StackExhausted {

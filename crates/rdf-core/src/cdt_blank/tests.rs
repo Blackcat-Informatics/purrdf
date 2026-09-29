@@ -291,9 +291,8 @@ fn a_hundred_thousand_deep_label_is_bound_exactly_as_a_shallow_one() {
     let scope = BlankScope(7);
     let expected_token = encode_blank_label("b", scope, LabelAlphabet::BlankNodeLabel);
     let expected_ambient: String = "[".repeat(depth) + "_:" + &expected_token + &"]".repeat(depth);
-    let (text_identity, found, ambient, read_back) = std::thread::Builder::new()
-        .stack_size(256 * 1024)
-        .spawn(move || {
+    let (text_identity, found, ambient, read_back) =
+        purrdf_stack::on_stack(256 * 1024, move || {
             let text =
                 bind_cdt_blank_labels(&lexical, LIST, TEXT).expect("a deep literal is a value");
             let text_identity = matches!(text, std::borrow::Cow::Borrowed(_)) && text == lexical;
@@ -302,9 +301,7 @@ fn a_hundred_thousand_deep_label_is_bound_exactly_as_a_shallow_one() {
             let read_back = cdt_embedded_blanks(&ambient, LIST);
             (text_identity, found, ambient, read_back)
         })
-        .expect("the thread starts")
-        .join()
-        .expect("the walks did not abort");
+        .expect("the thread starts");
     assert!(
         text_identity,
         "the text binding is a byte identity at any depth"

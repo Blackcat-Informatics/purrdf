@@ -385,15 +385,11 @@ mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_interns_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                let mut builder = RdfDatasetBuilder::new();
-                assert_eq!(intern_into(&mut builder, &value).index(), LEVELS + 2);
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("interning did not overflow the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut builder = RdfDatasetBuilder::new();
+            assert_eq!(intern_into(&mut builder, &value).index(), LEVELS + 2);
+        })
+        .expect("the thread starts");
     }
 }

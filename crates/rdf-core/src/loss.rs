@@ -2393,7 +2393,6 @@ fn escape_json_into(out: &mut String, value: &str) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::PathBuf;
 
     /// The intentional loss codes this ledger is required to enumerate.
     /// `direction-dropped` was retired once `Term.direction` round-tripped
@@ -2563,11 +2562,7 @@ mod tests {
     /// changes.
     #[test]
     fn generated_artifact_has_not_drifted() {
-        let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-            .join("..")
-            .join("..")
-            .join("generated")
-            .join("rdf-loss-matrix.json");
+        let path = purrdf_testkit::paths::workspace_root().join("generated/rdf-loss-matrix.json");
         let committed = std::fs::read_to_string(&path)
             .unwrap_or_else(|e| panic!("read {}: {e}", path.display()));
         assert_eq!(
@@ -2584,8 +2579,8 @@ mod tests {
 
     #[test]
     fn transcode_matrix_has_not_drifted() {
-        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../generated/transcode-loss-matrix.json");
+        let path =
+            purrdf_testkit::paths::workspace_root().join("generated/transcode-loss-matrix.json");
         let on_disk = std::fs::read_to_string(&path)
             .unwrap_or_else(|_| panic!("generated file missing: {}", path.display()));
         assert_eq!(

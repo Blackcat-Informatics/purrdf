@@ -258,6 +258,7 @@ mod tests {
     use super::{
         CANDIDATE_TABLE, escape, find_first_candidate, is_iriref_escape_required, push_escaped,
     };
+    use purrdf_testkit::rng::SplitMix64;
     use std::borrow::Cow;
     use std::fmt::Write as _;
 
@@ -350,19 +351,6 @@ mod tests {
         out
     }
 
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
     /// Every ASCII scalar, every scalar with a `0xC2` lead, and non-ASCII
     /// neighbours in every UTF-8 width.
     fn alphabet() -> Vec<char> {
@@ -402,15 +390,15 @@ mod tests {
     #[test]
     fn push_escaped_and_escape_agree_with_the_per_scalar_writer() {
         let alphabet = alphabet();
-        let mut rng = SplitMix(0x001E_1E5C_A9E0_0001);
+        let mut rng = SplitMix64::new(0x001E_1E5C_A9E0_0001);
         let mut borrowed = 0_usize;
         let mut owned = 0_usize;
         for len in (0..=70).chain([127, 128, 129, 255, 1000]) {
             for _ in 0..40 {
                 let iri: String = (0..len)
                     .map(|_| {
-                        if rng.below(6) == 0 {
-                            alphabet[rng.below(alphabet.len())]
+                        if rng.below_usize(6) == 0 {
+                            alphabet[rng.below_usize(alphabet.len())]
                         } else {
                             'a'
                         }

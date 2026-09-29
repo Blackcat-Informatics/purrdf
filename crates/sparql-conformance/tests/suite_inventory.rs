@@ -231,10 +231,7 @@ fn suite_root() -> std::path::PathBuf {
 /// aggregator resolves, and `tests/manifest_include.rs` pins the include
 /// closure, so no one of the three can go quiet on its own.
 fn sparql_cdt_root() -> std::path::PathBuf {
-    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join("vectors")
-        .join("sparql-cdt")
+    purrdf_testkit::paths::workspace_root().join("vectors/sparql-cdt")
 }
 
 /// Exact pinned totals for the vendored SEP-0009 SPARQL Composite Datatypes (CDT)

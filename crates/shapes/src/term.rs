@@ -1606,48 +1606,43 @@ pub(crate) mod term_walk_tests {
     #[test]
     fn a_hundred_thousand_level_term_is_walked_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
-                let mut term = Term::NamedNode(NamedNode::new_unchecked("http://example.org/o"));
-                for _ in 0..LEVELS {
-                    term = Term::Triple(Box::new(Triple::new(
-                        term,
-                        NamedNode::new_unchecked("http://example.org/p"),
-                        Term::NamedNode(NamedNode::new_unchecked("http://example.org/s")),
-                    )));
-                }
-                let level =
-                    "<<( ".len() + " <http://example.org/p> <http://example.org/s> )>>".len();
-                assert_eq!(
-                    term.to_string().len(),
-                    LEVELS * level + "<http://example.org/o>".len()
-                );
-                let mut visited = 0_usize;
-                let ControlFlow::Continue(()) = term.visit_nested(|_| -> ControlFlow<Infallible> {
-                    visited += 1;
-                    ControlFlow::Continue(())
-                });
-                assert_eq!(visited, 2 * LEVELS + 1);
-                let depth = term
-                    .to_term_value()
-                    .fold(|_| 0_usize, |s, p, o| 1 + s.max(p).max(o));
-                assert_eq!(depth, LEVELS);
-                let mut owned = term.to_rdf_term();
-                while let RdfTerm::Triple(triple) = owned {
-                    owned = triple.subject;
-                }
-                dismantle(term);
-                let converted = term_value_to_native(&value);
-                assert!(matches!(&converted, Term::Triple(_)));
-                let mut object_chain = converted;
-                while let Term::Triple(triple) = object_chain {
-                    object_chain = triple.object;
-                }
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let value = purrdf_core::term_fixture::triple_chain(LEVELS);
+            let mut term = Term::NamedNode(NamedNode::new_unchecked("http://example.org/o"));
+            for _ in 0..LEVELS {
+                term = Term::Triple(Box::new(Triple::new(
+                    term,
+                    NamedNode::new_unchecked("http://example.org/p"),
+                    Term::NamedNode(NamedNode::new_unchecked("http://example.org/s")),
+                )));
+            }
+            let level = "<<( ".len() + " <http://example.org/p> <http://example.org/s> )>>".len();
+            assert_eq!(
+                term.to_string().len(),
+                LEVELS * level + "<http://example.org/o>".len()
+            );
+            let mut visited = 0_usize;
+            let ControlFlow::Continue(()) = term.visit_nested(|_| -> ControlFlow<Infallible> {
+                visited += 1;
+                ControlFlow::Continue(())
+            });
+            assert_eq!(visited, 2 * LEVELS + 1);
+            let depth = term
+                .to_term_value()
+                .fold(|_| 0_usize, |s, p, o| 1 + s.max(p).max(o));
+            assert_eq!(depth, LEVELS);
+            let mut owned = term.to_rdf_term();
+            while let RdfTerm::Triple(triple) = owned {
+                owned = triple.subject;
+            }
+            dismantle(term);
+            let converted = term_value_to_native(&value);
+            assert!(matches!(&converted, Term::Triple(_)));
+            let mut object_chain = converted;
+            while let Term::Triple(triple) = object_chain {
+                object_chain = triple.object;
+            }
+        })
+        .expect("the thread starts");
     }
 }

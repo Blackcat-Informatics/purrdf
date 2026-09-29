@@ -1844,15 +1844,6 @@ mod term_walk_tests {
         value
     }
 
-    /// A SplitMix64 draw from the counter at `state`.
-    const fn splitmix64(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = *state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
-
     fn term(kind: TermKind, value: Option<&str>) -> Term {
         Term {
             kind,
@@ -1868,8 +1859,8 @@ mod term_walk_tests {
     /// A generated term table: every kind, triple terms naming any id — themselves,
     /// each other in cycles, or one past the end — and some unbound.
     fn generated(seed: u64) -> Graph {
-        let mut state = seed;
-        let mut draw = |n: u64| splitmix64(&mut state) % n;
+        let mut rng = purrdf_testkit::rng::SplitMix64::new(seed);
+        let mut draw = |n: u64| rng.below(n);
         let len = 1 + draw(9);
         let mut graph = Graph::default();
         for _ in 0..len {
@@ -1930,42 +1921,38 @@ mod term_walk_tests {
     #[test]
     fn a_deep_chain_is_measured_and_keyed_on_a_128_kib_thread() {
         const LEVELS: usize = 3_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut graph = Graph::default();
-                graph
-                    .terms
-                    .push(term(TermKind::Iri, Some("http://example.org/s")));
-                graph
-                    .terms
-                    .push(term(TermKind::Iri, Some("http://example.org/p")));
-                graph
-                    .terms
-                    .push(term(TermKind::Iri, Some("http://example.org/o")));
-                let mut below = 2;
-                for _ in 0..LEVELS {
-                    let mut triple = term(TermKind::Triple, None);
-                    triple.triple = Some((0, 1, below));
-                    graph.terms.push(triple);
-                    below = graph.terms.len() - 1;
-                }
-                let mut stack = Vec::new();
-                assert_eq!(term_nesting_depth(&graph, below, &mut stack), LEVELS);
-                let key = term_identity_key(&graph, below, &mut stack);
-                assert_eq!(stack, Vec::<usize>::new());
-                let iri = |value: &str| canonical(&Value::Array(vec!["iri".into(), value.into()]));
-                let level = 1
-                    + canonical(&Value::Text("triple".into())).len()
-                    + iri("http://example.org/s").len()
-                    + iri("http://example.org/p").len();
-                assert_eq!(
-                    key.len(),
-                    LEVELS * level + iri("http://example.org/o").len()
-                );
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no walk overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut graph = Graph::default();
+            graph
+                .terms
+                .push(term(TermKind::Iri, Some("http://example.org/s")));
+            graph
+                .terms
+                .push(term(TermKind::Iri, Some("http://example.org/p")));
+            graph
+                .terms
+                .push(term(TermKind::Iri, Some("http://example.org/o")));
+            let mut below = 2;
+            for _ in 0..LEVELS {
+                let mut triple = term(TermKind::Triple, None);
+                triple.triple = Some((0, 1, below));
+                graph.terms.push(triple);
+                below = graph.terms.len() - 1;
+            }
+            let mut stack = Vec::new();
+            assert_eq!(term_nesting_depth(&graph, below, &mut stack), LEVELS);
+            let key = term_identity_key(&graph, below, &mut stack);
+            assert_eq!(stack, Vec::<usize>::new());
+            let iri = |value: &str| canonical(&Value::Array(vec!["iri".into(), value.into()]));
+            let level = 1
+                + canonical(&Value::Text("triple".into())).len()
+                + iri("http://example.org/s").len()
+                + iri("http://example.org/p").len();
+            assert_eq!(
+                key.len(),
+                LEVELS * level + iri("http://example.org/o").len()
+            );
+        })
+        .expect("the thread starts");
     }
 }

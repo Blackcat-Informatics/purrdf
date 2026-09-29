@@ -26,7 +26,7 @@
 //! `.gts` bytes themselves.
 
 use purrdf_core::FastMap;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use ciborium::value::Value;
 use purrdf_gts::compact::{DEFAULT_DICT_NAME, DictPlan, DictStrategy};
@@ -41,7 +41,7 @@ use purrdf_rdf::gts_dict_vectors::{
 };
 
 fn vectors_dir() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors")
+    purrdf_testkit::paths::workspace_root().join("vectors")
 }
 
 fn read_vector(name: &str) -> Vec<u8> {

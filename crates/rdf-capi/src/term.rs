@@ -17,7 +17,6 @@
 //! This module owns BOTH directions (view → owned `TermValue` for inputs;
 //! `TermRef`/id → view for outputs) so the mapping lives in exactly one place.
 
-use purrdf_core::datatype::XSD_STRING;
 use purrdf_core::langtag::identity_fold;
 use purrdf_core::model::{RdfLiteral, RdfTerm, RdfTextDirection};
 use purrdf_core::{BlankScope, RdfDataset, TermId, TermRef, TermValue, emit_term};

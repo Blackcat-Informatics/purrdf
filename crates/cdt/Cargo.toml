@@ -38,6 +38,9 @@ purrdf-iri = { workspace = true }
 purrdf-xsd = { workspace = true }
 
 [dev-dependencies]
+# Runs the deep-structure tests on a stack of a stated size: a fresh thread
+# natively, the running stack under a fresh floor on wasm32.
+purrdf-stack = { workspace = true }
 # Round-trip / injectivity property tests (canonical -> value -> canonical) on
 # the shared property harness. Path-only and unpublished, so it is stripped from
 # the packaged manifest.

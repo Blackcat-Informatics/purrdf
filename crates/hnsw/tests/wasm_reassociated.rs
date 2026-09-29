@@ -43,7 +43,6 @@
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{Arithmetic, BuildIdentity, BuildShape, Path, Reassociated, Resolved};
-use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{HnswError, HnswIndex, Kernel, Params, Ranked, VectorMatrix};
 
 /// Rows in the fixture.
@@ -69,10 +68,7 @@ const FIRST_DISTANCE_AT: usize = 88 + 8 + 4 + 4 + 4 + 4 + 8 + 8;
 fn stream(len: usize, seed: u64) -> Vec<f64> {
     let mut state = seed;
     (0..len)
-        .map(|_| {
-            state = splitmix64(state);
-            ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0)
-        })
+        .map(|_| purrdf_testkit::rng::signed_unit_step(&mut state))
         .collect()
 }
 

@@ -36,6 +36,8 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use purrdf_testkit::paths::workspace_root;
+
 /// The path to the built `bench-corpus` binary, reused as `SCALE_BIN` so `make scale-corpus`
 /// never triggers its own release build.
 const BENCH: &str = env!("CARGO_BIN_EXE_bench-corpus");
@@ -51,16 +53,6 @@ fn unique_tag() -> String {
         std::process::id(),
         UNIQUE.fetch_add(1, Ordering::Relaxed)
     )
-}
-
-/// The repository root, resolved from `CARGO_MANIFEST_DIR` (`crates/bench`) rather than the
-/// process's current directory, so this test is independent of how `cargo test` was invoked.
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .and_then(Path::parent)
-        .expect("crates/bench has two ancestors: crates/ and the repository root")
-        .to_path_buf()
 }
 
 /// Runs `make <args>` from the repository root with `SCALE_BIN` pinned to the already-built
@@ -97,7 +89,9 @@ fn run_make_at_level_one(args: &[&str]) -> (i32, Vec<u8>, String) {
 
 fn run_make_with(args: &[&str], scrub_recursion_state: bool) -> (i32, Vec<u8>, String) {
     let mut command = Command::new("make");
-    command.current_dir(repo_root()).env("SCALE_BIN", BENCH);
+    command
+        .current_dir(workspace_root())
+        .env("SCALE_BIN", BENCH);
     if scrub_recursion_state {
         command
             .env_remove("MAKEFLAGS")
@@ -145,7 +139,7 @@ fn run_make_retrying_etxtbsy(args: &[&str]) -> (i32, Vec<u8>, String) {
 fn run_lane_script(knobs: &[(&str, &str)], wrapper_make: Option<&str>) -> (i32, Vec<u8>, String) {
     let mut command = Command::new("bash");
     command
-        .current_dir(repo_root())
+        .current_dir(workspace_root())
         .arg("scripts/scale-corpus.sh")
         .env("SCALE_BIN", BENCH);
     match wrapper_make {
@@ -1055,18 +1049,18 @@ fn make_scale_corpus_accepts_a_scale_bin_reached_by_symlink_or_a_relative_path()
 /// unchanged. `/tmp` is not under the repository root on most machines, so the "relative path"
 /// case is exercised by way of a second symlink placed inside `target/`.
 fn pathdiff_to_repo_root(path: &Path) -> String {
-    if let Ok(relative) = path.strip_prefix(repo_root()) {
+    if let Ok(relative) = path.strip_prefix(workspace_root()) {
         return relative.display().to_string();
     }
     // Place a symlink under `target/` (build output, ignored) so a genuinely RELATIVE value can
     // be handed to the lane.
-    let anchor = repo_root().join("target");
+    let anchor = workspace_root().join("target");
     std::fs::create_dir_all(&anchor).expect("target/ exists");
     let relative_link = anchor.join(format!("purrdf-bench-relative-{}", unique_tag()));
     let _ = std::fs::remove_file(&relative_link);
     std::os::unix::fs::symlink(path, &relative_link).expect("symlink under target/");
     relative_link
-        .strip_prefix(repo_root())
+        .strip_prefix(workspace_root())
         .expect("the anchor is under the repository root")
         .display()
         .to_string()

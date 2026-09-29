@@ -51,14 +51,13 @@ purrdf-sparql-results = { workspace = true }
 # directly. Path-depends on the SAME
 # ../rdf-core so `SparqlRequest`/`SparqlResult` unify.
 purrdf-sparql-eval = { workspace = true }
-# `purrdf_query_json`'s `provenance_prefix`/`provenance_iri`: a content hash of the
-# query text for `ResultProvenance::query_hash` (see `query::build_query_provenance`).
-sha2 = { workspace = true }
-# Lowercase hex rendering of those SHA-256 digests.
-purrdf-hash = { workspace = true }
 
 [dev-dependencies]
 serde_json = { workspace = true }
+# The ABI tests recompute the SHA-256 identities the library returns, in lowercase
+# hex.
+sha2 = { workspace = true }
+purrdf-hash = { workspace = true }
 
 # The lone feature the whole workspace is permitted to declare. `cargo capi`
 # (cargo-c >= 0.10) unconditionally enables a feature literally named `capi`

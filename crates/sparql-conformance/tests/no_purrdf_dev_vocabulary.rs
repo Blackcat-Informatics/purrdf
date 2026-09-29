@@ -38,8 +38,10 @@
 //! (`target/`, `bindings/python/.venv`, …) are never scanned, matching
 //! `scripts/check-issue-refs.py`'s rationale for the same choice.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
+
+use purrdf_testkit::paths::workspace_root;
 
 /// The closed set of project-branded vocabulary hosts this gate refuses. Each
 /// is a plain substring match against a tracked line — no regex, so the
@@ -83,13 +85,6 @@ const EXEMPT_SITES: &[(&str, &str)] = &[
     ),
 ];
 
-fn repo_root() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .canonicalize()
-        .expect("the workspace root resolves")
-}
-
 /// This file's own path, relative to the workspace root. The scan below must
 /// skip it: this file's doc comment, [`BANNED_HOSTS`]/[`EXEMPT_SITES`]
 /// literals, and predicate strings all legitimately spell every banned host
@@ -102,7 +97,7 @@ fn own_relative_path() -> String {
         .join("no_purrdf_dev_vocabulary.rs")
         .canonicalize()
         .expect("this test's own source file resolves")
-        .strip_prefix(repo_root())
+        .strip_prefix(workspace_root())
         .expect("this test file lives under the workspace root")
         .to_string_lossy()
         .replace('\\', "/")
@@ -132,7 +127,7 @@ fn tracked_files(root: &Path) -> Vec<String> {
 
 #[test]
 fn no_branded_vocabulary_iri_is_minted_outside_the_closed_exemption_list() {
-    let root = repo_root();
+    let root = workspace_root();
     let files = tracked_files(&root);
     assert!(
         files.len() > 500,

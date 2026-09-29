@@ -3583,30 +3583,24 @@ mod tests {
         // match) is sizeable, so run on a generous stack: the point of the test
         // is that the DEPTH GUARD — not a stack overflow — is what terminates
         // the walk. Dropping the tree is also recursive, hence the same thread.
-        let handle = std::thread::Builder::new()
-            .stack_size(64 * 1024 * 1024)
-            .spawn(|| {
-                let data = load_data(DATA);
-                let mut expr = NodeExpr::This;
-                for i in 0..MAX_NODE_EXPR_DEPTH + 8 {
-                    expr = if i % 2 == 0 {
-                        NodeExpr::Union(vec![expr])
-                    } else {
-                        NodeExpr::Limit {
-                            of: Box::new(expr),
-                            n: 10,
-                        }
-                    };
-                }
-                let mut guard = RecursionGuard::new();
-                eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
-            })
-            .expect("spawn deep-stack thread");
-
-        let err = handle
-            .join()
-            .expect("deep-stack thread must not overflow — the depth guard terminates it")
-            .expect_err("an expression nested past the structural ceiling must be a hard error");
+        let err = purrdf_stack::on_stack(64 * 1024 * 1024, || {
+            let data = load_data(DATA);
+            let mut expr = NodeExpr::This;
+            for i in 0..MAX_NODE_EXPR_DEPTH + 8 {
+                expr = if i % 2 == 0 {
+                    NodeExpr::Union(vec![expr])
+                } else {
+                    NodeExpr::Limit {
+                        of: Box::new(expr),
+                        n: 10,
+                    }
+                };
+            }
+            let mut guard = RecursionGuard::new();
+            eval_node_expr(&data.data(), &ex("a"), &expr, &mut guard)
+        })
+        .expect("spawn deep-stack thread")
+        .expect_err("an expression nested past the structural ceiling must be a hard error");
         assert!(
             err.contains("node expression nesting depth exceeded"),
             "error should name the structural limit, got: {err}"
@@ -3675,51 +3669,45 @@ mod tests {
         // thread's default 2 MiB stack. Run on a generous stack so the DEPTH
         // GUARD — not a stack overflow — is what terminates the recursion; the
         // guard is what protects the (larger) production stack in the same way.
-        let handle = std::thread::Builder::new()
-            .stack_size(64 * 1024 * 1024)
-            .spawn(|| {
-                let data = load_data(DATA);
+        let err = purrdf_stack::on_stack(64 * 1024 * 1024, || {
+            let data = load_data(DATA);
 
-                let make_shape = |id: Term, constraints: Vec<Constraint>| Shape {
-                    id,
-                    targets: vec![],
-                    constraints,
-                    property_shapes: vec![],
-                    severity: Severity::Violation,
-                    messages: vec![],
-                    constraint_annotations: vec![],
-                    deactivated: false,
-                    box_roles: vec![],
-                    rules: vec![],
+            let make_shape = |id: Term, constraints: Vec<Constraint>| Shape {
+                id,
+                targets: vec![],
+                constraints,
+                property_shapes: vec![],
+                severity: Severity::Violation,
+                messages: vec![],
+                constraint_annotations: vec![],
+                deactivated: false,
+                box_roles: vec![],
+                rules: vec![],
+            };
+
+            // Innermost shape: no constraints ⇒ every node trivially conforms.
+            let mut shape = make_shape(ex("leaf"), vec![]);
+            // Wrap one filter-through-inner layer per level, past the ceiling.
+            let levels = MAX_RECURSION_DEPTH + 5;
+            for i in 0..levels {
+                let expr = NodeExpr::Filter {
+                    nodes: Box::new(NodeExpr::This),
+                    shape: Box::new(shape),
                 };
+                shape = make_shape(
+                    ex(&format!("s{i}")),
+                    vec![Constraint::Expression {
+                        expr,
+                        messages: vec![],
+                        severity: None,
+                    }],
+                );
+            }
 
-                // Innermost shape: no constraints ⇒ every node trivially conforms.
-                let mut shape = make_shape(ex("leaf"), vec![]);
-                // Wrap one filter-through-inner layer per level, past the ceiling.
-                let levels = MAX_RECURSION_DEPTH + 5;
-                for i in 0..levels {
-                    let expr = NodeExpr::Filter {
-                        nodes: Box::new(NodeExpr::This),
-                        shape: Box::new(shape),
-                    };
-                    shape = make_shape(
-                        ex(&format!("s{i}")),
-                        vec![Constraint::Expression {
-                            expr,
-                            messages: vec![],
-                            severity: None,
-                        }],
-                    );
-                }
-
-                crate::constraints::conforms(&data.data(), &ex("a"), &shape)
-            })
-            .expect("spawn deep-stack thread");
-
-        let err = handle
-            .join()
-            .expect("deep-stack thread must not overflow — the depth guard terminates it")
-            .expect_err("a filter chain past the depth ceiling must be a hard error");
+            crate::constraints::conforms(&data.data(), &ex("a"), &shape)
+        })
+        .expect("spawn deep-stack thread")
+        .expect_err("a filter chain past the depth ceiling must be a hard error");
         assert!(
             err.contains("recursion depth"),
             "error should name the recursion depth, got: {err}"

@@ -505,10 +505,9 @@ mod tests {
         let mut state = 0x1234_5678_9abc_def0_u64;
         let mut data = Vec::with_capacity(rows * dims);
         for _ in 0..rows * dims {
-            state = crate::level::splitmix64(state);
-            // A value in [-1, 1) that is never exactly zero, so cosine norms are positive.
-            let value = ((state >> 11) as f64 / (1_u64 << 53) as f64).mul_add(2.0, -1.0);
-            data.push(if value == 0.0 { 0.5 } else { value });
+            data.push(purrdf_testkit::rng::signed_unit_step_nonzero(
+                &mut state, 0.5,
+            ));
         }
         VectorMatrix::new(rows, dims, data).expect("valid fixture")
     }

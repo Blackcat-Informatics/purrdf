@@ -1054,32 +1054,27 @@ mod tests {
     #[test]
     fn a_hundred_thousand_level_owned_term_is_written_on_a_128_kib_thread() {
         const LEVELS: usize = 100_000;
-        std::thread::Builder::new()
-            .stack_size(128 * 1024)
-            .spawn(|| {
-                let mut term = iri("http://example.org/o");
-                for _ in 0..LEVELS {
-                    term = RdfTerm::triple(RdfTriple::new(
-                        term,
-                        "http://example.org/p",
-                        iri("http://example.org/o"),
-                    ));
-                }
-                let level =
-                    "<<( ".len() + " <http://example.org/p> <http://example.org/o> )>>".len();
-                let innermost = "<http://example.org/o>".len();
-                for written in [display_term(&term), emit_term(&term)] {
-                    assert_eq!(written.len(), LEVELS * level + innermost);
-                    assert!(written.starts_with("<<( <<( "));
-                }
-                // The owned model's derived drop descends once per level, so the chain
-                // is taken apart one level at a time.
-                while let RdfTerm::Triple(triple) = term {
-                    term = triple.subject;
-                }
-            })
-            .expect("the thread starts")
-            .join()
-            .expect("no writer overflowed the thread's stack");
+        purrdf_stack::on_stack(128 * 1024, || {
+            let mut term = iri("http://example.org/o");
+            for _ in 0..LEVELS {
+                term = RdfTerm::triple(RdfTriple::new(
+                    term,
+                    "http://example.org/p",
+                    iri("http://example.org/o"),
+                ));
+            }
+            let level = "<<( ".len() + " <http://example.org/p> <http://example.org/o> )>>".len();
+            let innermost = "<http://example.org/o>".len();
+            for written in [display_term(&term), emit_term(&term)] {
+                assert_eq!(written.len(), LEVELS * level + innermost);
+                assert!(written.starts_with("<<( <<( "));
+            }
+            // The owned model's derived drop descends once per level, so the chain
+            // is taken apart one level at a time.
+            while let RdfTerm::Triple(triple) = term {
+                term = triple.subject;
+            }
+        })
+        .expect("the thread starts");
     }
 }
