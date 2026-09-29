@@ -128,7 +128,6 @@ ciborium = "0.2"
 # builds `--lib` on an explicit `-p` allowlist that omits `purrdf-cli`) is
 # unaffected.
 clap = { version = "4", features = ["derive"] }
-ed25519-dalek = { version = "3", default-features = false, features = ["fast", "zeroize"] }
 # OS entropy for the SPARQL RAND()/UUID()/STRUUID() seed on native targets (see
 # crates/sparql-eval's target-gated dependency section).
 getrandom = "0.3"

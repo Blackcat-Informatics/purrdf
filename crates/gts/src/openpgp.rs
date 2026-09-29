@@ -11,7 +11,7 @@
 //! algorithms, encrypted secret keys, v5/v6 packets) is rejected with a clear
 //! error.
 
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::SigningKey;
 use purrdf_hash::sha1::Sha1;
 
 /// OpenPGP public-key algorithm id for EdDSA (RFC 9580 §9.1).

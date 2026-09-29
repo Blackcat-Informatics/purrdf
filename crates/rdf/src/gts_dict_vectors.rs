@@ -22,7 +22,7 @@
 
 use std::collections::BTreeMap;
 
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::SigningKey;
 use purrdf_gts::compact::{DEFAULT_DICT_NAME, DictPlan, DictStrategy};
 use purrdf_gts::dict::raw_content_dict;
 use purrdf_gts::model::Graph;

@@ -973,7 +973,7 @@ pub struct CompactionParams<'a> {
     /// unrepresentable through this API rather than merely discouraged — the
     /// field is a plain tuple, not an `Option`, precisely so an unsigned pack
     /// cannot be constructed by a caller that forgets to supply a signer.
-    pub packaging_signer: (ed25519_dalek::SigningKey, String),
+    pub packaging_signer: (purrdf_ed25519::SigningKey, String),
 }
 
 /// Rewrite a GTS file into one streamable segment (§10.1).
@@ -1173,7 +1173,7 @@ pub fn compact_streamable(
 
 #[cfg(test)]
 mod tests {
-    use ed25519_dalek::SigningKey;
+    use purrdf_ed25519::SigningKey;
 
     use super::*;
     use crate::reader::read;

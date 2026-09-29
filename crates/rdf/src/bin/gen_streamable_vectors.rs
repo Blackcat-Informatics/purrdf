@@ -44,7 +44,7 @@
 
 use std::path::Path;
 
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::SigningKey;
 use purrdf_gts::compact::DictPlan;
 use purrdf_rdf::capture_support::corpus_repo_root;
 use purrdf_rdf::gts_certify::compact_and_certify;

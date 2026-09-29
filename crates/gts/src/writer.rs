@@ -301,7 +301,7 @@ pub fn snapshot_from_graph(
 
     if let Some(signer) = signer {
         writer.sign_with(
-            ed25519_dalek::SigningKey::from_bytes(&signer.secret),
+            purrdf_ed25519::SigningKey::from_bytes(&signer.secret),
             &signer.kid,
         );
         writer.add_meta(Value::Map(vec![(
@@ -485,7 +485,7 @@ pub struct Writer {
     types: Vec<String>,
     frame_ids: Vec<Vec<u8>>,
     // When set, every appended frame is COSE_Sign1-signed over its id (§9.2).
-    signer: Option<(ed25519_dalek::SigningKey, String)>,
+    signer: Option<(purrdf_ed25519::SigningKey, String)>,
     // The pinned in-band pack dictionaries by name (§5 header `"dct"`), which a
     // frame selects through `FrameOptions::dict`.
     dicts: BTreeMap<String, Vec<u8>>,
@@ -920,7 +920,7 @@ impl Writer {
     }
 
     /// Sign every subsequently appended frame's id with this Ed25519 key (§9.2).
-    pub fn sign_with(&mut self, key: ed25519_dalek::SigningKey, kid: &str) {
+    pub fn sign_with(&mut self, key: purrdf_ed25519::SigningKey, kid: &str) {
         self.signer = Some((key, kid.to_string()));
     }
 

@@ -232,14 +232,29 @@ BANNED_ANY_EDGE: dict[str, str] = {
     "allocator-api2": "current hashbrown resolution (no allocator-api2 edge)",
     "foldhash": "purrdf_hash::fixed::FixedHasher (old hashbrown 0.15 closure)",
     "version_check": "const and build-time declarations (old ahash/generic-array version probe)",
-    # RustCrypto 0.11 and ed25519-dalek 3 removed the older 0.10/0.7 crypto
-    # trait and key-encoding closure from the published graph.
+    # RustCrypto 0.11 removed the older 0.10/0.7 crypto trait closure, and
+    # Ed25519 keys are raw 32-byte values with no key-encoding closure.
     "generic-array": "RustCrypto 0.11 hybrid-array-backed traits",
     "opaque-debug": "current RustCrypto GHash/POLYVAL implementation",
-    "pkcs8": "ed25519-dalek 3 native key handling (no PKCS#8 import path)",
-    "spki": "ed25519-dalek 3 native key handling (no SPKI import path)",
-    "der": "ed25519-dalek 3 native key handling (no DER import path)",
-    "base64ct": "ed25519-dalek 3 native key handling (old SPKI closure)",
+    "pkcs8": "purrdf-ed25519 raw 32-byte keys (no PKCS#8 import path)",
+    "spki": "purrdf-ed25519 raw 32-byte keys (no SPKI import path)",
+    "der": "purrdf-ed25519 raw 32-byte keys (no DER import path)",
+    "base64ct": "purrdf-ed25519 raw 32-byte keys (no SPKI closure)",
+    "ed25519-dalek": "purrdf-ed25519 (RFC 8032 signing and strict cofactorless verification)",
+    # ed25519-dalek's own closure: its curve arithmetic and that crate's
+    # derive macros and field backend, the signature-type and trait crates,
+    # its constant-time and zeroizing helpers, and the compiler-version probe
+    # its build script ran. The committed Cargo.lock listed ed25519-dalek (or
+    # one of these) as the only dependent of each before they left.
+    "curve25519-dalek": "purrdf-ed25519 (radix-2^51 field and Edwards point arithmetic)",
+    "curve25519-dalek-derive": "purrdf-ed25519 (no SIMD backend macros)",
+    "fiat-crypto": "purrdf-ed25519 (radix-2^51 field arithmetic)",
+    "ed25519": "purrdf_ed25519::Signature",
+    "signature": "purrdf_ed25519 inherent sign and verify_strict (no signer/verifier traits)",
+    "subtle": "purrdf-ed25519 masked selection (no constant-time helper crate)",
+    "zeroize": "purrdf_ed25519::SigningKey overwrites its secrets on drop",
+    "rustc_version": "purrdf-ed25519 (no build script)",
+    "semver": "purrdf-ed25519 (no build script; old rustc_version closure)",
     # These old optional resolutions vanished along with the replaced test
     # and RNG stacks. They remain forbidden even on target-specific edges.
     "libm": "current num-traits configuration and purrdf_testkit wasm harness",

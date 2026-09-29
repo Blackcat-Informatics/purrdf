@@ -60,8 +60,8 @@ hashbrown = { workspace = true }
 purrdf-gts = { workspace = true }
 purrdf-events = { workspace = true }
 # The snapshot signing path constructs a SigningKey from 32 raw Ed25519 bytes;
-# same major as purrdf-gts links.
-ed25519-dalek = { workspace = true }
+# the same implementation purrdf-gts signs and verifies with.
+purrdf-ed25519 = { workspace = true }
 # The native SPARQL evaluator — the SOLE SPARQL authority. It is the engine the maintainer-only golden-capture
 # binary (`src/bin/capture_sparql_goldens.rs`) runs to freeze the conformance
 # goldens (native-vs-native regression gate).

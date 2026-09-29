@@ -122,7 +122,7 @@ deps = [
 name = "purrdf-gts"
 deps = [
     "purrdf-deflate",
-    { name = "purrdf-ed25519", pending = true },
+    "purrdf-ed25519",
     "purrdf-events",
     "purrdf-hash",
     "purrdf-iri",
@@ -239,7 +239,7 @@ deps = [
 name = "purrdf-rdf"
 deps = [
     "purrdf-core",
-    { name = "purrdf-ed25519", pending = true },
+    "purrdf-ed25519",
     "purrdf-events",
     "purrdf-gts",
     "purrdf-hash",

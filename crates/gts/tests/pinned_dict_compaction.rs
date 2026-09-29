@@ -25,7 +25,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ciborium::value::Value;
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::SigningKey;
 use purrdf_gts::codec::zstd_block_layout;
 use purrdf_gts::compact::{
     CompactionParams, DictPlan, DictSelection, DictStrategy, compact_streamable,

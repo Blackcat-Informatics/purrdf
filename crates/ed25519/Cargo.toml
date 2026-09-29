@@ -36,8 +36,6 @@ purrdf-hash = { workspace = true }
 sha2 = { workspace = true }
 
 [dev-dependencies]
-# The frozen reference the differential suites compare keys, signatures and
-# verdicts against. A test-only edge: nothing in the library calls it.
-ed25519-dalek = { workspace = true }
-# The SplitMix64 stream the seeded differential and arithmetic tests draw from.
+# The SplitMix64 stream the seeded tests draw from, and the frozen-vector
+# reader the reference vectors replay through.
 purrdf-testkit = { workspace = true }

@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 
 use ciborium::value::Value;
-use ed25519_dalek::VerifyingKey;
+use purrdf_ed25519::VerifyingKey;
 
 use crate::FastMap;
 use crate::cose::verify_signatures;

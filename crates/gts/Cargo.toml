@@ -61,8 +61,9 @@ purrdf-deflate = { workspace = true }
 structured-zstd = { workspace = true, features = ["dict_builder"] }
 # Seeds structured-zstd's ambient FastCOVER reservoir RNG for reproducible dicts.
 fastrand = { workspace = true }
-# pure-Rust Ed25519 (COSE_Sign1, §9.2) — deterministic per RFC 8032, wasm-friendly
-ed25519-dalek = { workspace = true }
+# Ed25519 (COSE_Sign1, §9.2; OpenPGP key import; packaging signatures):
+# deterministic RFC 8032 signing and strict verification, wasm-clean.
+purrdf-ed25519 = { workspace = true }
 # SHA-1 — only for OpenPGP v4 key fingerprints (RFC 4880 §12.2), not used as a
 # general-purpose hash — and the fixed-key `FixedHasher` (no runtime seeding,
 # wasm-clean) for the segment-decode / event-bridge dedup maps and the digest

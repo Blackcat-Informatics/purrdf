@@ -30,7 +30,7 @@ use std::collections::HashMap;
 use std::hash::BuildHasher;
 
 use ciborium::value::{Integer, Value};
-use ed25519_dalek::{SigningKey, VerifyingKey};
+use purrdf_ed25519::{SigningKey, VerifyingKey};
 use sha2::{Digest, Sha256};
 
 use purrdf_gts::compact::{self, CompactionParams, DictPlan};

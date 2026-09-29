@@ -192,9 +192,9 @@ before a `rust-v*` tag can publish the set. `PURRDF_UNBOOTSTRAPPED_CRATES` in
 the registry preflight verifies the ledger in both directions before packaging.
 An entry leaves once its record exists.
 
-`purrdf-ed25519`, `purrdf-hnsw` and `purrdf-retrieval` are depended on by no
+`purrdf-hnsw` and `purrdf-retrieval` are depended on by no
 other crate in the release set, so the lane publishes the crates ahead of each,
-skips it visibly, and continues through every later crate; only the three
+skips it visibly, and continues through every later crate; only the two
 themselves wait for the
 token step described in
 [New crates: set up publishing before tagging](#new-crates-set-up-publishing-before-tagging).
@@ -209,7 +209,9 @@ token bootstrap therefore comes first, before the tag.
 set, so none of those can even be packaged until it has a record. Its
 token bootstrap comes first as well, before the tag. `purrdf-deflate` is a
 normal dependency of `purrdf-gts` and so blocks the same crates; its token
-bootstrap follows `purrdf-hash`'s, before the tag.
+bootstrap follows `purrdf-hash`'s, before the tag. `purrdf-ed25519` is a normal
+dependency of `purrdf-gts` and `purrdf-rdf` and blocks the same crates for the
+same reason; its token bootstrap also precedes the tag.
 
 `purrdf-lex` is a normal dependency of `purrdf-iri`, and through it of every
 crate that parses an IRI, so it blocks nearly the whole release set the same

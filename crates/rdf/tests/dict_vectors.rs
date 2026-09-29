@@ -53,7 +53,7 @@ fn read_expected(name: &str) -> String {
         .unwrap_or_else(|err| panic!("read {name}: {err}"))
 }
 
-fn keyring() -> FastMap<String, ed25519_dalek::VerifyingKey> {
+fn keyring() -> FastMap<String, purrdf_ed25519::VerifyingKey> {
     FastMap::from_iter([
         ("authorA".to_string(), authorship_key().verifying_key()),
         ("pack".to_string(), packaging_key().verifying_key()),

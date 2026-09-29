@@ -20,7 +20,7 @@
 use std::path::{Path, PathBuf};
 
 use ciborium::value::Value;
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::SigningKey;
 use purrdf_gts::compact::DictPlan;
 use purrdf_gts::reader::read;
 use purrdf_gts::wire::{iter_items, map_get};

@@ -2,11 +2,12 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Torsion and mixed-order cases, which need the group internals to build,
-//! checked against the frozen `ed25519-dalek` reference and paired with the
+//! checked against the verdicts `ed25519-dalek` gave on the same triples
+//! (frozen in `tests/vectors/strictness_vectors.txt`) and paired with the
 //! valid neighbour each refusal borders.
 
-use ed25519_dalek::Verifier as _;
 use purrdf_testkit::rng::SplitMix64;
+use purrdf_testkit::vectors::{VectorFile, encode_str};
 use sha2::{Digest as _, Sha512};
 
 use crate::point::Point;
@@ -56,15 +57,47 @@ fn torsion_points() -> Vec<[u8; 32]> {
     found.into_iter().collect()
 }
 
-fn dalek_verdict(key: &[u8; 32], message: &[u8], signature: &Signature) -> (bool, bool) {
-    let Ok(key) = ed25519_dalek::VerifyingKey::from_bytes(key) else {
-        return (false, false);
+/// The frozen reference verdicts for the constructed signatures below.
+const REFERENCE_VERDICTS: &str = include_str!("../tests/vectors/strictness_vectors.txt");
+
+/// The reference's (strict, permissive) verdicts on the triple frozen under
+/// `label`, after checking the triple built here is the one it was frozen
+/// for.
+fn reference_verdict(
+    label: &str,
+    key: &[u8; 32],
+    message: &[u8],
+    signature: &Signature,
+) -> (bool, bool) {
+    let file = VectorFile::parse(REFERENCE_VERDICTS).expect("strictness vectors");
+    let record = file
+        .records()
+        .iter()
+        .find(|record| record.fields.first() == Some(&label))
+        .unwrap_or_else(|| panic!("no frozen verdict for {label}"));
+    let [
+        _,
+        frozen_key,
+        frozen_message,
+        frozen_signature,
+        strict,
+        loose,
+    ] = record.fields[..]
+    else {
+        panic!("line {}: six fields expected", record.line);
     };
-    let signature = ed25519_dalek::Signature::from_bytes(&signature.to_bytes());
-    (
-        key.verify_strict(message, &signature).is_ok(),
-        key.verify(message, &signature).is_ok(),
-    )
+    let hex = |bytes: &[u8]| encode_str(&purrdf_hash::hex::encode(bytes));
+    assert_eq!(
+        [hex(key), hex(message), hex(&signature.to_bytes())],
+        [frozen_key, frozen_message, frozen_signature],
+        "{label}: the constructed triple differs from the frozen one"
+    );
+    let verdict = |field: &str| match field {
+        "accept" => true,
+        "refuse" => false,
+        other => panic!("line {}: unknown verdict {other:?}", record.line),
+    };
+    (verdict(strict), verdict(loose))
 }
 
 fn ours(key: &[u8; 32], message: &[u8], signature: &Signature) -> Result<(), SignatureError> {
@@ -83,11 +116,18 @@ fn challenge(r: &[u8; 32], a: &[u8; 32], message: &[u8]) -> Scalar {
 fn the_eight_torsion_points_are_weak_keys_for_both_implementations() {
     let torsion = torsion_points();
     assert_eq!(torsion.len(), 8);
+    let decoding = VectorFile::parse(include_str!("../tests/vectors/key_decoding_vectors.txt"))
+        .expect("key decoding vectors");
     for encoding in &torsion {
         let key = VerifyingKey::from_bytes(encoding).expect("torsion points decode");
         assert!(key.is_weak(), "{encoding:02x?}");
-        let dalek = ed25519_dalek::VerifyingKey::from_bytes(encoding).expect("dalek decodes");
-        assert!(dalek.is_weak());
+        let hex = encode_str(&purrdf_hash::hex::encode(encoding));
+        let record = decoding
+            .records()
+            .iter()
+            .find(|record| record.fields[0] == hex)
+            .unwrap_or_else(|| panic!("{hex} is not a frozen key encoding"));
+        assert_eq!(record.fields[1..], [hex.as_str(), "weak"], "{hex}");
     }
     // Neighbour: a prime-order key is not weak.
     assert!(!SigningKey::from_bytes(&[1; 32]).verifying_key().is_weak());
@@ -106,7 +146,15 @@ fn a_small_order_key_is_refused_even_when_the_equation_holds() {
             Err(SignatureError::SmallOrder)
         );
         // The loose rule accepts it; the strict one refuses it.
-        assert_eq!(dalek_verdict(&identity, message, &forged), (false, true));
+        assert_eq!(
+            reference_verdict(
+                &format!("small-order-key-{}", message.len()),
+                &identity,
+                message,
+                &forged
+            ),
+            (false, true)
+        );
     }
     // Neighbour: the same construction under a prime-order key it does not
     // fit is a plain mismatch, and a real signature from that key verifies.
@@ -133,7 +181,12 @@ fn a_small_order_r_is_refused_even_when_the_equation_holds() {
             ours(&public, message, &signature),
             Err(SignatureError::SmallOrder)
         );
-        let (strict, loose) = dalek_verdict(&public, message, &signature);
+        let (strict, loose) = reference_verdict(
+            &format!("small-order-r-{}", purrdf_hash::hex::encode(&encoding)),
+            &public,
+            message,
+            &signature,
+        );
         assert!(!strict);
         assert_eq!(loose, encoding == Point::IDENTITY.encode());
         // Neighbour: an honest signature under the same key verifies.
@@ -179,7 +232,13 @@ fn mixed_order_keys_follow_the_cofactorless_equation_like_the_reference() {
             refused += 1;
         }
         assert_eq!(
-            dalek_verdict(&mixed, &message, &signature).0,
+            reference_verdict(
+                &format!("mixed-order-key-{i}"),
+                &mixed,
+                &message,
+                &signature
+            )
+            .0,
             verdict.is_ok()
         );
     }
@@ -205,7 +264,13 @@ fn mixed_order_r_never_satisfies_the_cofactorless_equation() {
         };
         assert_eq!(ours(&public, message, &signature), expected);
         assert_eq!(
-            dalek_verdict(&public, message, &signature).0,
+            reference_verdict(
+                &format!("mixed-order-r-{}", purrdf_hash::hex::encode(&torsion)),
+                &public,
+                message,
+                &signature
+            )
+            .0,
             expected.is_ok()
         );
     }

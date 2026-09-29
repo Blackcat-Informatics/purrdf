@@ -13,7 +13,7 @@
 use purrdf_hash::fixed::FixedState;
 use std::collections::HashMap;
 
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::SigningKey;
 use purrdf_gts::compact::{
     CompactionParams, DictPlan, compact_streamable, detached_signature_leaves,
     detached_signature_proof,
@@ -295,7 +295,7 @@ fn keyring_rotation_flips_the_packaging_signature_from_unverified_to_valid() {
 
     // A keyring that has rotated PAST the packaging key (missing "pack-v2")
     // leaves the packaging signature unverified.
-    let stale_keyring: HashMap<String, ed25519_dalek::VerifyingKey, FixedState> =
+    let stale_keyring: HashMap<String, purrdf_ed25519::VerifyingKey, FixedState> =
         HashMap::<_, _, FixedState>::from_iter([(
             "pack-v1".to_string(),
             fixed_key(1).verifying_key(),
@@ -310,7 +310,7 @@ fn keyring_rotation_flips_the_packaging_signature_from_unverified_to_valid() {
 
     // A keyring carrying both the retired and the current packaging key
     // (rotation-capable) resolves the signature.
-    let rotated_keyring: HashMap<String, ed25519_dalek::VerifyingKey, FixedState> =
+    let rotated_keyring: HashMap<String, purrdf_ed25519::VerifyingKey, FixedState> =
         HashMap::<_, _, FixedState>::from_iter([
             ("pack-v1".to_string(), fixed_key(1).verifying_key()),
             (packaging_kid.to_string(), fixed_key(9).verifying_key()),

@@ -398,39 +398,12 @@ distinct = "internal to aes-gcm's AES-256-GCM; PurRDF has no block cipher or AEA
 holder = "aes-gcm"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.curve25519-dalek]
-category = "transitive:ed25519-dalek"
-reason = "Curve25519 group arithmetic for Ed25519"
-duplicates_native = "purrdf_ed25519"
-holder = "ed25519-dalek"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = true, proc_macro = false }
-
-[packages.curve25519-dalek-derive]
-category = "transitive:ed25519-dalek"
-reason = "SIMD backend derive macros for curve25519-dalek"
-duplicates_native = "purrdf_ed25519"
-holder = "ed25519-dalek"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = true }
-
 [packages.digest]
 category = "transitive:sha2"
 reason = "digest traits for RustCrypto hashes"
 distinct = "RustCrypto plumbing inside sha2, the single SHA-2 implementation; no first-party code calls it"
 holder = "sha2"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.ed25519]
-category = "transitive:ed25519-dalek"
-reason = "Ed25519 signature types"
-duplicates_native = "purrdf_ed25519"
-holder = "ed25519-dalek"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.ed25519-dalek]
-category = "crypto"
-reason = "Ed25519 (RFC 8032) signatures for GTS COSE_Sign1 and RDF signing"
-duplicates_native = "purrdf_ed25519"
-metrics = { direct = true, exclusive_closure = 10, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.either]
 category = "transitive:rayon"
@@ -452,13 +425,6 @@ category = "runtime"
 reason = "seeds structured-zstd FastCOVER dictionary training reproducibly in GTS"
 distinct = "the thread-local generator structured-zstd's FastCOVER sampler draws from; GTS only seeds and restores it, and no native generator can stand in for the one that crate calls"
 metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.fiat-crypto]
-category = "transitive:ed25519-dalek"
-reason = "formally verified field arithmetic for curve25519-dalek"
-duplicates_native = "purrdf_ed25519"
-holder = "ed25519-dalek"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = false, build_script = false, proc_macro = false }
 
 [packages.getrandom]
 category = "runtime"
@@ -672,13 +638,6 @@ duplicates_native = "purrdf_lex::xml"
 pending_native = true
 metrics = { direct = true, exclusive_closure = 1, release = true, wasm = true, build_script = false, proc_macro = false }
 
-[packages.rustc_version]
-category = "transitive:ed25519-dalek"
-reason = "rustc version probe for curve25519-dalek builds"
-duplicates_native = "purrdf_ed25519"
-holder = "ed25519-dalek"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
 [packages.rustversion]
 category = "transitive:wasm-bindgen"
 reason = "rustc version conditionals for wasm-bindgen"
@@ -692,13 +651,6 @@ reason = "float formatting for YAML output"
 duplicates_native = "purrdf_lex::yaml"
 pending_native = true
 holder = "serde_yaml_ng"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.semver]
-category = "transitive:ed25519-dalek"
-reason = "version parsing for rustc_version"
-duplicates_native = "purrdf_ed25519"
-holder = "ed25519-dalek"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.serde]
@@ -742,14 +694,7 @@ metrics = { direct = true, exclusive_closure = 5, release = true, wasm = true, b
 category = "crypto"
 reason = "SHA-2 family digests for SPARQL SHA256/384/512, RDF canonicalization and GTS"
 distinct = "the single SHA-2 implementation (a native build was benchmarked and did not beat it)"
-metrics = { direct = true, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.signature]
-category = "transitive:ed25519-dalek"
-reason = "signature traits for Ed25519"
-duplicates_native = "purrdf_ed25519"
-holder = "ed25519-dalek"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
+metrics = { direct = true, exclusive_closure = 3, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.strsim]
 category = "transitive:clap"
@@ -763,13 +708,6 @@ category = "spec-codec"
 reason = "pure-Rust Zstandard (RFC 8878) with dictionary training for GTS and columnar"
 distinct = "Zstandard (RFC 8878) with dictionary training for GTS and columnar; PurRDF has no native Zstandard codec"
 metrics = { direct = true, exclusive_closure = 2, release = true, wasm = true, build_script = false, proc_macro = false }
-
-[packages.subtle]
-category = "transitive:ed25519-dalek"
-reason = "constant-time primitives for curve25519-dalek"
-duplicates_native = "purrdf_ed25519"
-holder = "ed25519-dalek"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.syn]
 category = "oracle"
@@ -908,13 +846,6 @@ duplicates_native = "purrdf_lex::cbor"
 pending_native = true
 holder = "ciborium"
 metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = true }
-
-[packages.zeroize]
-category = "transitive:ed25519-dalek"
-reason = "secret-key wiping for Ed25519 and AES keys"
-duplicates_native = "purrdf_ed25519"
-holder = "ed25519-dalek"
-metrics = { direct = false, exclusive_closure = 0, release = true, wasm = true, build_script = false, proc_macro = false }
 
 [packages.zmij]
 category = "transitive:serde_json"

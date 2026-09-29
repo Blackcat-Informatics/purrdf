@@ -10,7 +10,7 @@
 use aes_gcm::aead::{Aead, AeadInOut, KeyInit, Payload};
 use aes_gcm::{Aes256Gcm, Nonce, Tag};
 use ciborium::value::{Integer, Value};
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use purrdf_ed25519::{Signature, SigningKey, VerifyingKey};
 use serde::{Serialize, Serializer};
 use std::borrow::Cow;
 
@@ -106,12 +106,18 @@ pub fn signature_kid(sig: &[u8]) -> Option<String> {
 }
 
 /// Verify a detached COSE_Sign1 over `frame_id` against `public`.
+///
+/// Verification is strict (RFC 8032 cofactorless, as
+/// [`VerifyingKey::verify_strict`] defines it): a non-canonical S, an R that
+/// does not decode, and a small-order key or R are [`SigStatus::Invalid`]
+/// even where the verification equation would hold, so no signature verifies
+/// under a key that vouches for every message.
 pub fn verify_sig(sig: &[u8], frame_id: &[u8], public: &VerifyingKey) -> SigStatus {
     let Some((_kid, protected, signature)) = parse(sig) else {
         return SigStatus::Invalid;
     };
     let signature = Signature::from_bytes(&signature);
-    match public.verify(&sig_structure(&protected, frame_id), &signature) {
+    match public.verify_strict(&sig_structure(&protected, frame_id), &signature) {
         Ok(()) => SigStatus::Valid,
         Err(_) => SigStatus::Invalid,
     }

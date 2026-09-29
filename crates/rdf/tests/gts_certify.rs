@@ -8,7 +8,7 @@
 use purrdf_core::FastMap;
 
 use ciborium::value::Value;
-use ed25519_dalek::SigningKey;
+use purrdf_ed25519::SigningKey;
 use purrdf_gts::compact::{DictPlan, DictStrategy, detached_signature_proof};
 use purrdf_gts::mmr;
 use purrdf_gts::model::{Term, TermKind};
@@ -128,7 +128,7 @@ fn source_with_content_and_blobs(byte: u8, kid: &str, quad_n: u32, blob_n: u32) 
     w.into_bytes()
 }
 
-fn keyring(pairs: &[(&str, u8)]) -> FastMap<String, ed25519_dalek::VerifyingKey> {
+fn keyring(pairs: &[(&str, u8)]) -> FastMap<String, purrdf_ed25519::VerifyingKey> {
     pairs
         .iter()
         .map(|&(kid, byte)| (kid.to_string(), fixed_key(byte).verifying_key()))

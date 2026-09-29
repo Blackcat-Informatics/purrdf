@@ -28,11 +28,11 @@ use purrdf_rdf::gts_dict_vectors::{TIMESTAMP, VECTOR_ZSTD_LEVEL, authorship_key,
 /// The name the caller pins its shipped dictionary under.
 const PINNED_NAME: &str = "shipped-bundle-v1";
 
-fn packaging_key() -> ed25519_dalek::SigningKey {
-    ed25519_dalek::SigningKey::from_bytes(&[7u8; 32])
+fn packaging_key() -> purrdf_ed25519::SigningKey {
+    purrdf_ed25519::SigningKey::from_bytes(&[7u8; 32])
 }
 
-fn keyring() -> FastMap<String, ed25519_dalek::VerifyingKey> {
+fn keyring() -> FastMap<String, purrdf_ed25519::VerifyingKey> {
     FastMap::from_iter([
         ("authorA".to_string(), authorship_key().verifying_key()),
         ("pack".to_string(), packaging_key().verifying_key()),

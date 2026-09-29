@@ -1464,7 +1464,7 @@ pub fn emit_gts(
     if signing {
         let secret = signer_secret.expect("signing implies a secret");
         let kid = signer_kid.ok_or("signing requires a kid")?;
-        writer.sign_with(ed25519_dalek::SigningKey::from_bytes(&secret), &kid);
+        writer.sign_with(purrdf_ed25519::SigningKey::from_bytes(&secret), &kid);
         // The transport-key meta frame, signed along with every later frame.
         let armor = public_key_armor.expect("signing implies a public key");
         let meta = Value::Map(vec![(
