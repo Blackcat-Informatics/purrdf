@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-testkit"
-description = "The workspace's shared test support: byte-exact golden files, temporary files and directories under the cargo target directory, self-hashing frozen differential vectors, a libtest-compatible runner for harness = false targets, and property-based testing on a recorded choice sequence"
+description = "The workspace's shared test support: byte-exact golden files, temporary files and directories under the cargo target directory, self-hashing frozen differential vectors, a libtest-compatible runner for harness = false targets, and property-based testing on a recorded choice sequence, and a statistically sound micro-benchmark harness"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -42,12 +42,20 @@ path = "src/bin/wasm_host_fixture.rs"
 test = false
 doc = false
 
+# The bench harness's own suite: statistics against hand-computed values, the
+# command line, the estimates file round trip and whole runs in-process. It is
+# on the harness = false runner so `make wasm-test` runs it on wasm32 too.
+[[test]]
+name = "bench"
+harness = false
+
 [dependencies]
 # The one first-party dependency, and the only one layers.toml allows besides
 # the lexical kernels: `purrdf-hash`, the zero-dependency root, whose own tests
 # do not use this crate (its vector suites live in `purrdf-hash-conformance`),
 # so no member's tests close a cycle through it. It supplies the SplitMix64
-# function the deterministic stream is built on.
+# function the deterministic stream is built on, and the FNV-1a hash that
+# seeds each benchmark's bootstrap from its id.
 purrdf-hash = { workspace = true }
 # SHA-256 for the frozen-vector tamper evidence.
 sha2 = { workspace = true }

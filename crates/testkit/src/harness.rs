@@ -1008,29 +1008,29 @@ use platform::Console;
 /// The command line, environment, console and clock: the process's natively,
 /// the runner's host on wasm32.
 #[cfg(not(target_arch = "wasm32"))]
-mod platform {
+pub(crate) mod platform {
     use std::io::{self, IsTerminal as _, Write};
     use std::time::Instant;
 
     use super::Report;
 
     /// The arguments after the program name.
-    pub(super) fn args() -> Vec<String> {
+    pub(crate) fn args() -> Vec<String> {
         std::env::args().skip(1).collect()
     }
 
     /// An environment variable, lossily decoded.
-    pub(super) fn env_var(name: &str) -> Option<String> {
+    pub(crate) fn env_var(name: &str) -> Option<String> {
         std::env::var_os(name).map(|value| value.to_string_lossy().into_owned())
     }
 
     /// Write `text` to standard error.
-    pub(super) fn print_error(text: &str) {
+    pub(crate) fn print_error(text: &str) {
         eprint!("{text}");
     }
 
     /// Write `text` to standard output under one lock, and flush it.
-    pub(super) fn print_raw(text: &str) {
+    pub(crate) fn print_raw(text: &str) {
         let mut out = io::stdout().lock();
         if let Err(error) = out.write_all(text.as_bytes()).and_then(|()| out.flush()) {
             panic!("failed printing to stdout: {error}");
@@ -1047,7 +1047,7 @@ mod platform {
     }
 
     /// Nothing to report: the process's exit status is `main`'s.
-    pub(super) const fn report_exit(_status: u8) {}
+    pub(crate) const fn report_exit(_status: u8) {}
 
     /// Natively a panicking case unwinds and the run goes on: nothing to arm.
     pub(super) const fn arm(
@@ -1063,14 +1063,14 @@ mod platform {
 
     pub(super) const fn fail_armed(_message: &str) {}
 
-    pub(super) struct Stopwatch(Instant);
+    pub(crate) struct Stopwatch(Instant);
 
     impl Stopwatch {
-        pub(super) fn start() -> Self {
+        pub(crate) fn start() -> Self {
             Self(Instant::now())
         }
 
-        pub(super) fn seconds(&self) -> f64 {
+        pub(crate) fn seconds(&self) -> f64 {
             self.0.elapsed().as_secs_f64()
         }
     }
@@ -1101,25 +1101,25 @@ mod platform {
 }
 
 #[cfg(target_arch = "wasm32")]
-mod platform {
+pub(crate) mod platform {
     use std::io::{self, Write};
 
     use super::{Outcome, Report};
     use crate::host;
 
-    pub(super) fn args() -> Vec<String> {
+    pub(crate) fn args() -> Vec<String> {
         (0..host::arg_count()).map(host::arg).collect()
     }
 
-    pub(super) fn env_var(name: &str) -> Option<String> {
+    pub(crate) fn env_var(name: &str) -> Option<String> {
         host::env_var(name)
     }
 
-    pub(super) fn print_error(text: &str) {
+    pub(crate) fn print_error(text: &str) {
         host::write_stderr(text);
     }
 
-    pub(super) fn print_raw(text: &str) {
+    pub(crate) fn print_raw(text: &str) {
         host::write_stdout(text);
     }
 
@@ -1132,7 +1132,7 @@ mod platform {
         1
     }
 
-    pub(super) fn report_exit(status: u8) {
+    pub(crate) fn report_exit(status: u8) {
         host::exit(status);
     }
 
@@ -1166,14 +1166,14 @@ mod platform {
     }
 
     /// The run's start, in the host's milliseconds.
-    pub(super) struct Stopwatch(f64);
+    pub(crate) struct Stopwatch(f64);
 
     impl Stopwatch {
-        pub(super) fn start() -> Self {
+        pub(crate) fn start() -> Self {
             Self(host::now_millis())
         }
 
-        pub(super) fn seconds(&self) -> f64 {
+        pub(crate) fn seconds(&self) -> f64 {
             (host::now_millis() - self.0) / 1000.0
         }
     }

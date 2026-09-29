@@ -29,19 +29,29 @@
 //! * [`jsonschema_metaschemas`] — the published JSON Schema meta-schemas as
 //!   test data, for every test and example that registers them with
 //!   `purrdf-jsonschema` (which carries none).
+//! * [`bench`] — the micro-benchmark harness for `harness = false` bench
+//!   targets: warm-up, flat sampling, the median with its MAD and a seeded
+//!   bootstrap interval, throughput, saved baselines compared with a
+//!   bootstrapped change, and a fixed-schema JSON estimates file per
+//!   benchmark, written with [`bench_group!`] and [`bench_main!`]. The same
+//!   targets run on `wasm32-unknown-unknown` under the test runner.
 //! * [`rng`] — the one deterministic SplitMix64 / xoshiro256** stream every
 //!   crate's fixed-seed tests draw from, including [`prop`] itself.
 //!
-//! The crate depends on no `purrdf-*` crate, and must not: every crate in the
-//! workspace may take it as a dev-dependency, so a first-party edge from here
-//! would close a cycle through that crate's tests. It is never published and
-//! appears only in `[dev-dependencies]`.
+//! Its one first-party dependency is `purrdf-hash`, the zero-dependency root,
+//! whose own tests and benches do not use this crate; `layers.toml` allows no
+//! other. Every crate in the workspace may take this one as a dev-dependency,
+//! so any further first-party edge from here would close a cycle through that
+//! crate's tests. It is never published and appears only in
+//! `[dev-dependencies]` (and in `purrdf-hash-conformance`, the unpublished
+//! home of the root's suites).
 
 // The wasm32 host's imports are `#[wasm_bindgen]` declarations, whose
 // expansion is `unsafe`; `host` is the one module allowed it, and only there.
 #![cfg_attr(not(target_arch = "wasm32"), forbid(unsafe_code))]
 #![cfg_attr(target_arch = "wasm32", deny(unsafe_code))]
 
+pub mod bench;
 pub mod golden;
 pub mod harness;
 #[cfg(target_arch = "wasm32")]
