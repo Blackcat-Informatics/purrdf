@@ -242,7 +242,7 @@ jobs:
       - name: Verify BM25F goldens against the independent integer reference
         run: python3 crates/text/tests/reference/bm25f.py --check
 
-      - name: Check the kernel ring-fence (no oxigraph/PyO3 in purrdf-core, zero-dep leaves)
+      - name: Check the kernel ring-fence (no PyO3 in purrdf-core, zero-dep leaves)
         run: make rdf-core-hygiene
 
   # `cargo test --workspace --locked` (`make test`), as six parallel shards. As one

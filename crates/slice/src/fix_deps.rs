@@ -22,7 +22,7 @@
 //!   set before it is returned (HIGH-7: never emit malformed Turtle).
 //!
 //! Why surgical-validated rather than full re-serialization: re-serializing the
-//! whole manifest via oxigraph would reorder/reformat the entire file (losing the
+//! whole manifest would reorder/reformat the entire file (losing the
 //! author's comments and ordering), producing an enormous diff and risking the
 //! producer/CITATION projections and `make validate`. The surgical edit keeps the
 //! diff minimal while the re-parse gives full RDF correctness.
@@ -637,8 +637,8 @@ mod tests {
         assert!(patched.contains("vocab:sliceTier vocab:tierCore ."));
     }
 
-    /// An UNDECLARED edge add must produce well-formed Turtle parseable by
-    /// oxigraph, declaring the new dependency.
+    /// An UNDECLARED edge add must produce well-formed Turtle that re-parses,
+    /// declaring the new dependency.
     #[test]
     fn add_undeclared_dependency_is_well_formed() {
         let manifest = "\

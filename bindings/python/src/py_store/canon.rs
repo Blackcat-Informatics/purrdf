@@ -5,7 +5,7 @@
 //! `CanonicalizationAlgorithm` pyclass and the `canonicalize_quads` wrapper.
 //!
 //! All canonicalization runs the **native full W3C RDFC-1.0** engine
-//! (`purrdf_core::ir::canon`); there is no oxigraph on this path. The `CanonicalizationAlgorithm` pyclass is retained for Python API
+//! (`purrdf_core::ir::canon`). The `CanonicalizationAlgorithm` pyclass is retained for Python API
 //! compatibility, but both variants resolve to the one native canonicalizer
 //! (greenfield: a single canonicalization algorithm).
 
@@ -15,14 +15,14 @@ use purrdf_core::{CanonError, Canonicalized, FastHasher, FastMap, TermRef, try_c
 
 use crate::{RdfDataset, RdfQuad, RdfTerm, RdfTriple, flat_dataset_from_quads};
 
-/// The graph canonicalization algorithms. Mirrors the oxigraph Python
-/// `CanonicalizationAlgorithm` so the Python surface is unchanged.
+/// The graph canonicalization algorithms, exposed to Python as
+/// `CanonicalizationAlgorithm`.
 #[pyclass(name = "CanonicalizationAlgorithm", eq, eq_int, skip_from_py_object)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[allow(non_camel_case_types)]
 #[allow(
     clippy::upper_case_acronyms,
-    reason = "the variant spellings ARE the Python-visible enum members (oxigraph API parity), so they must not be renamed"
+    reason = "the variant spellings ARE the Python-visible enum members, so they must not be renamed"
 )]
 pub(super) enum PyCanonicalizationAlgorithm {
     /// The standard RDF Canonicalization 1.0 algorithm (SHA-256).
@@ -70,8 +70,7 @@ fn label_map(ds: &RdfDataset, c: &Canonicalized) -> FastMap<String, String> {
     map
 }
 
-/// The N-Quads-string sort key for a native quad (deterministic ordering parity with
-/// the prior oxigraph `Quad::to_string` sort).
+/// The N-Quads-string sort key for a native quad (a deterministic ordering).
 fn quad_sort_key(quad: &RdfQuad) -> String {
     let triple = format!("{} <{}> {}", quad.subject, quad.predicate, quad.object);
     match &quad.graph_name {

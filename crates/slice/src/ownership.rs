@@ -774,7 +774,7 @@ fn collect_slice_depends_on(record: &SliceRecord) -> BTreeSet<SliceIri> {
 /// datatype IRI (the lexical form is NOT mined), and a quoted triple's components.
 /// A blank node contributes no IRI. The frozen IR always expands a literal's
 /// datatype (C0.1), so a plain `xsd:string` / `rdf:langString` literal mines the
-/// expanded datatype exactly as oxigraph's `lit.datatype()` did.
+/// expanded datatype IRI.
 ///
 /// The walk runs over a work list in depth-first order: a literal's datatype is visited
 /// next, and a quoted triple's subject is visited next with its predicate and object held
@@ -856,7 +856,7 @@ fn extract_query_iris(
     Ok(out)
 }
 
-fn insert_oxiri(node: &purrdf_sparql_algebra::NamedNode, out: &mut BTreeSet<NamedNode>) {
+fn insert_iri(node: &purrdf_sparql_algebra::NamedNode, out: &mut BTreeSet<NamedNode>) {
     if let Ok(nn) = NamedNode::new(node.as_str()) {
         out.insert(nn);
     }
@@ -867,7 +867,7 @@ fn walk_named_node_pattern(
     out: &mut BTreeSet<NamedNode>,
 ) {
     if let purrdf_sparql_algebra::NamedNodePattern::NamedNode(n) = p {
-        insert_oxiri(n, out);
+        insert_iri(n, out);
     }
 }
 
@@ -911,9 +911,9 @@ fn collect_iris(root: Reach<'_>, out: &mut BTreeSet<NamedNode>) {
             Reach::Term(t) => {
                 use purrdf_sparql_algebra::TermPattern as T;
                 match t {
-                    T::NamedNode(n) => insert_oxiri(n, out),
+                    T::NamedNode(n) => insert_iri(n, out),
                     // Only the datatype IRI counts, never the lexical form.
-                    T::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
+                    T::Literal(lit) => insert_iri(&literal_datatype(lit), out),
                     T::Triple(t) => pending.push(Reach::Triple(t)),
                     T::BlankNode(_) | T::Variable(_) => {}
                 }
@@ -923,10 +923,10 @@ fn collect_iris(root: Reach<'_>, out: &mut BTreeSet<NamedNode>) {
             Reach::Ground(t) => {
                 use purrdf_sparql_algebra::GroundTerm as GT;
                 match t {
-                    GT::NamedNode(n) => insert_oxiri(n, out),
-                    GT::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
+                    GT::NamedNode(n) => insert_iri(n, out),
+                    GT::Literal(lit) => insert_iri(&literal_datatype(lit), out),
                     GT::Triple(tri) => {
-                        insert_oxiri(&tri.predicate, out);
+                        insert_iri(&tri.predicate, out);
                         pending.extend([Reach::Ground(&tri.subject), Reach::Ground(&tri.object)]);
                     }
                     // Injection-only variant (native `$this` substitution): never
@@ -946,7 +946,7 @@ fn path_iris<'a>(
 ) {
     use purrdf_sparql_algebra::PropertyPathExpression as P;
     match p {
-        P::NamedNode(n) => insert_oxiri(n, out),
+        P::NamedNode(n) => insert_iri(n, out),
         P::Reverse(a) | P::ZeroOrMore(a) | P::OneOrMore(a) | P::ZeroOrOne(a) => {
             pending.push(Reach::Path(a));
         }
@@ -956,7 +956,7 @@ fn path_iris<'a>(
         }
         P::NegatedPropertySet(elems) => {
             for e in elems {
-                insert_oxiri(&e.predicate, out);
+                insert_iri(&e.predicate, out);
             }
         }
         // A predicate wildcard references no named predicate to collect.
@@ -971,10 +971,10 @@ fn expression_iris<'a>(
 ) {
     use purrdf_sparql_algebra::Expression as E;
     match e {
-        E::NamedNode(n) => insert_oxiri(n, out),
+        E::NamedNode(n) => insert_iri(n, out),
         // A literal in an expression (e.g. a FILTER comparison string) is NOT a
         // term reference; only its datatype IRI is.
-        E::Literal(lit) => insert_oxiri(&literal_datatype(lit), out),
+        E::Literal(lit) => insert_iri(&literal_datatype(lit), out),
         E::Variable(_) | E::Bound(_) => {}
         E::Or(operands) | E::And(operands) => pending.extend(operands.iter().map(Reach::Expr)),
         E::Arithmetic(first, steps) => {
@@ -997,7 +997,7 @@ fn expression_iris<'a>(
         E::FunctionCall(func, args) => {
             match func {
                 // An IRI-named external function references the slice defining it.
-                purrdf_sparql_algebra::Function::Custom(n) => insert_oxiri(n, out),
+                purrdf_sparql_algebra::Function::Custom(n) => insert_iri(n, out),
                 // A recognized extension function (e.g. heldIn) depends on the
                 // slice that declares its vocabulary term. The parsed call keeps
                 // the ORIGINAL IRI from the query text (the extension namespace
@@ -1090,7 +1090,7 @@ fn pattern_iris<'a>(
             for (_var, agg_expr) in aggregates {
                 use purrdf_sparql_algebra::AggregateFunction as AF;
                 if let AF::Custom(n) = agg_expr.function() {
-                    insert_oxiri(n, out);
+                    insert_iri(n, out);
                 }
                 pending.extend(agg_expr.args().iter().map(Reach::Expr));
             }

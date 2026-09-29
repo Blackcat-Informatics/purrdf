@@ -290,7 +290,7 @@ fn find_slice_iri(ds: &Dataset, vocab: &SliceVocab) -> Result<String, SliceError
 }
 
 /// The string projection of an object term (a literal's lexical value; an IRI/blank
-/// rendered the way rdflib/oxigraph surfaced them through `.value()`).
+/// rendered as its IRI string or `_:label`).
 fn literal_value(term: &Object) -> String {
     match term {
         Object::Literal { value, .. } => value.clone(),
@@ -413,7 +413,7 @@ fn compute_semantic_digest(bytes: &[u8], path: &Path) -> Result<String, SliceErr
     //
     // Native full RDFC-1.0: the `canonical_nquads_flat` projection flattens the
     // RDF 1.2 statement overlay back to plain `rdf:reifies`/annotation triples and
-    // canonicalizes that flat set, byte-identical to the prior oxigraph-quad path.
+    // canonicalizes that flat set.
     let canonical = dataset.canonical_nquads_flat().map_err(|error| {
         SliceError::Parse(format!(
             "canonicalize {} for its semantic digest: {error}",

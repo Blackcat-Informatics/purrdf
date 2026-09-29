@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-xsd"
-description = "Native XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack — replaces oxsdatatypes"
+description = "Native XSD value space (parse, value-space equality/ordering, canonical lexical mapping, SPARQL numeric promotion) for the RDF 1.2 query stack"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -22,8 +22,7 @@ workspace = true
 
 [lib]
 # rlib-only, and a foundation: its one runtime dependency is the
-# zero-dependency root `purrdf-hash`. It must stay wasm-clean and must not pull
-# any oxigraph-family crate (it replaces `oxsdatatypes`). It does NOT depend on
+# zero-dependency root `purrdf-hash`. It must stay wasm-clean. It does NOT depend on
 # `purrdf-core` — the dependency points the other way.
 crate-type = ["rlib"]
 path = "src/lib.rs"

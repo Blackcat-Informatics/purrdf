@@ -10,12 +10,11 @@
 //! longer route through the external `purrdf-gts` text/RDF-XML codecs. It implements
 //! the narrow
 //! [`RdfParserBackend`]/[`RdfSerializer`] traits and is **codec-only** — it never
-//! touches the oxigraph Store, so it compiles under `--no-default-features --features
-//! gts` (no oxigraph). That is the  end-state: the text path needs no Store.
+//! touches a store, so it compiles under `--no-default-features --features gts`: the
+//! text path needs no Store.
 //!
-//! [`GtsCodecBackend`] is the always-on native replacement for `OxigraphBackend`'s
-//! codec role; the workspace-wide sweep (Tasks 2–5) routes every
-//! `oxigraph::io` text parse/serialize call site through it.
+//! [`GtsCodecBackend`] is the always-on native codec backend; every text
+//! parse/serialize call site in the workspace routes through it.
 
 mod media_type;
 // The shared source/container routing identity that subsumes `media_type::classify`
@@ -27,8 +26,8 @@ mod source_format;
 // `pub(crate)` so the container bridge (`crate::gts::gts_to_ser`) can construct a
 // `SerGraph` from a real purrdf-gts model graph read out of a bundle.
 pub(crate) mod ser_model;
-// `pub(crate)` so the legacy `dataset_io` oxigraph path can reuse the SHARED
-// `fold_statement_layer` (one fold, no drift) — Task 1.
+// `pub(crate)` so sibling ingest paths can reuse the SHARED
+// `fold_statement_layer` (one fold, no drift).
 pub(crate) mod parse;
 mod serialize;
 // First-party JSON-LD-star / YAML-LD-star codec: serializes the frozen IR to the PurRDF
@@ -137,7 +136,7 @@ pub fn transcode_under_document_base(
 }
 
 /// The native codec backend: a codec-only [`RdfParserBackend`] + [`RdfSerializer`] over
-/// the `purrdf-gts` text codecs. Holds no state and references no oxigraph Store.
+/// the `purrdf-gts` text codecs. Holds no state and references no store.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GtsCodecBackend;
 
@@ -776,8 +775,8 @@ mod tests {
 
     #[test]
     fn lexical_form_is_preserved_verbatim() {
-        // B2 fidelity: the native path must NOT canonicalize typed literals the way the
-        // oxigraph Store does. "0.70", a "+00:00" dateTime, and "1.0E0" survive
+        // B2 fidelity: the native path must NOT value-space-canonicalize typed literals.
+        // "0.70", a "+00:00" dateTime, and "1.0E0" survive
         // parse → serialize → re-parse with their lexical form UNCHANGED.
         let cases = [
             ("0.70", "http://www.w3.org/2001/XMLSchema#decimal"),

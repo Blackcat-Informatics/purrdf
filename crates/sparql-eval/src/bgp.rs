@@ -629,8 +629,7 @@ fn hash_pos<I: ViewTermId, H: std::hash::Hasher>(pos: &Pos<I>, h: &mut H) {
     }
 }
 
-/// Order compiled BGP patterns cheapest-first with a cost-based join planner — the
-/// native `sparopt` role. Unlike a structural heuristic, this probes the dataset's
+/// Order compiled BGP patterns cheapest-first with a cost-based join planner. Unlike a structural heuristic, this probes the dataset's
 /// real per-pattern cardinalities (the lazy permutation index, via
 /// [`RdfDataset::cardinality_estimate`]) and searches join orders to minimise the
 /// estimated total intermediate cardinality.

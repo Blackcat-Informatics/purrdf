@@ -3,9 +3,9 @@
 
 //! GTS adapter surface for `purrdf`.
 //!
-//! The oxigraph-free reader half (`read_graph`, `read_all_segments`,
+//! The reader half (`read_graph`, `read_all_segments`,
 //! `lookaside_from_graph`, …) lives in this adapter crate so `purrdf-core`
-//! remains independent of transport. The oxigraph-FREE
+//! remains independent of transport. The
 //! [`flattened_dataset_from_bytes`] ( Task 4) is the load path the native
 //! SPARQL conformance gate replays against the frozen goldens.
 
@@ -126,7 +126,7 @@ pub fn dataset_from_gts_graph(
 /// named graph folded into the default graph. This is the load path the native SPARQL
 /// conformance gate (`crates/sparql-conformance`) replays against the frozen goldens,
 /// which were captured over the same flatten-to-default-graph view. Implemented
-/// entirely on the oxigraph-free `gts` reader path: `read_all_segments` (re-exported
+/// entirely on the `gts` reader path: `read_all_segments` (re-exported
 /// from the `purrdf-core` kernel) → `gts_to_ser` → the native statement-layer
 /// fold (`flattened_dataset_from_ser_graph`), which re-homes each base quad's graph
 /// component to the default graph (`None`) before `freeze()`.
@@ -199,7 +199,7 @@ mod tests {
         graph
     }
 
-    /// The oxigraph-free [`flattened_dataset_from_bytes`] folds the one named-graph
+    /// The [`flattened_dataset_from_bytes`] folds the one named-graph
     /// quad into the DEFAULT graph (graph component `None`). This is the load contract
     /// the  Task-4 native conformance gate relies on, and it accepts a
     /// private (`x-purrdf-…`) language tag.

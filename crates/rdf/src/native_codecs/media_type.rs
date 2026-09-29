@@ -3,8 +3,7 @@
 
 //! Media-type → native RDF text format routing.
 //!
-//! [`NativeRdfFormat`] is the single chokepoint the eventual `oxigraph::io::RdfFormat`
-//! removal retargets: every codec consumer names a format by media type at the
+//! [`NativeRdfFormat`] is the single format chokepoint: every codec consumer names a format by media type at the
 //! contract boundary and [`classify`] resolves it once. Unknown media types HARD-fail
 //! (`native-codec-unsupported-format`) rather than degrading — no optional fallback
 //! codec (`.goals` no-optionality).
@@ -14,8 +13,8 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::RdfDiagnostic;
 
 /// The RDF text serializations the native codec backend parses and serializes via the
-/// `purrdf-gts` codecs. This is the codec-selector enum that replaces
-/// `oxigraph::io::RdfFormat`'s *use as a router* across the workspace.
+/// `purrdf-gts` codecs. This is the codec-selector enum used as the format router
+/// across the workspace.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum NativeRdfFormat {
     /// Turtle (`text/turtle`).

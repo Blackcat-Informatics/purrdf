@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-sparql-algebra"
-description = "Native, wasm-clean SPARQL 1.1/1.2 parser → RDF 1.2-native query algebra AST (quoted triple terms, property paths, FILTER/BIND/VALUES, solution modifiers, GROUP BY) for the RDF 1.2 query stack — replaces the direct oxigraph-family SPARQL-parser dependency"
+description = "Native, wasm-clean SPARQL 1.1/1.2 parser → RDF 1.2-native query algebra AST (quoted triple terms, property paths, FILTER/BIND/VALUES, solution modifiers, GROUP BY) for the RDF 1.2 query stack"
 version.workspace = true
 edition.workspace = true
 repository.workspace = true
@@ -22,8 +22,7 @@ workspace = true
 
 [lib]
 # rlib-only, wasm-clean leaf: the SPARQL front-end of the native query stack. It
-# must NOT pull any oxigraph-family crate (it replaces the oxigraph-family SPARQL
-# parser). It builds on the foundation leaves `purrdf-lex`, `purrdf-iri` and
+# builds on the foundation leaves `purrdf-lex`, `purrdf-iri` and
 # `purrdf-xsd`; it deliberately does NOT depend on `purrdf-core`
 # (whose terms are dataset-interned `TermId` and which pulls a `gts` default feature).
 crate-type = ["rlib"]

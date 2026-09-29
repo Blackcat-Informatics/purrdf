@@ -2,16 +2,11 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Native Store / SPARQL / parse / canonicalize surface for the `purrdf` Python
-//! extension — the in-repo replacement for the external `pyoxigraph` package
-//!. Backed entirely by the oxigraph-free `purrdf-core` IR + the native
-//! SPARQL engine: no `oxigraph` types cross this surface.
+//! extension, backed entirely by the `purrdf-core` IR + the native SPARQL engine.
 //!
 //! # Why this exists
 //!
-//! `pyoxigraph` is *literally the Python binding to oxigraph*, the same engine
-//! every purrdf-* crate already links (`oxigraph 0.5`, `rdf-12`). Depending on it
-//! is depending on an externally-versioned copy of an engine we own. This module
-//! exposes the Store + SPARQL (SELECT / ASK / CONSTRUCT, variable substitution) +
+//! This module exposes the Store + SPARQL (SELECT / ASK / CONSTRUCT, variable substitution) +
 //! `parse` / `serialize` + RDFC-1.0 canonicalization surface our Python layer
 //! needs, so `make check` / CI / the build run with **no external RDF runtime**
 //! (CONSTITUTION Principle 18).
@@ -27,7 +22,7 @@
 //! P2 backend-trait seams so the trait extraction is a clean lift:
 //!
 //! * [`term`] — the term object model (`NamedNode` … `Quad`, `Variable`) and the
-//!   Python ⇄ oxigraph term converters/extractors (`TermFactory` seam).
+//!   Python ⇄ native term converters/extractors (`TermFactory` seam).
 //! * [`io`] — `parse` / `serialize` + the pure-Rust `parse_quads` /
 //!   `serialize_triples` cores (`RdfParserBackend` / `RdfSerializer` seams).
 //! * [`query`] — the materialized SPARQL result model (`SparqlEngine` seam).
@@ -46,9 +41,8 @@
 //!   crate builds no Rust test target: it is a PyO3 `extension-module`, so an
 //!   ordinary test executable has no interpreter to resolve the CPython API
 //!   against and fails at link (see this crate's `Cargo.toml`).
-//! * **Faithful object model** — the term/result classes mirror the slice of the
-//!   `pyoxigraph` API the codebase relies on, so the Python migration is a
-//!   mechanical import swap rather than a rewrite of ~150 call sites.
+//! * **Stable object model** — the term/result classes expose the slice of the
+//!   Python API the codebase relies on (`NamedNode`, `Literal`, `Store`, …).
 
 mod canon;
 mod env;

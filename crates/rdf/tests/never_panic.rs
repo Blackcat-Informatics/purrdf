@@ -15,7 +15,7 @@
 //! turn a pathological input into a spurious timeout — a panic is a real find, a
 //! timeout would be a false red.
 //!
-//! The parser under test is the native, oxigraph-free [`purrdf_rdf::parse_dataset`]
+//! The parser under test is the native [`purrdf_rdf::parse_dataset`]
 //! codec: it must return `Ok`/`Err` and NEVER panic on arbitrary input
 //! across every text format it accepts (N-Quads / Turtle / TriG / N-Triples).
 

@@ -22,7 +22,7 @@ workspace = true
 
 [lib]
 # rlib-only, wasm-clean boundary crate: consumes the report/diagnostic types and
-# emits SARIF JSON. NO PyO3, NO oxigraph-family edge, NO ambient I/O — so it stays
+# emits SARIF JSON. NO PyO3, NO ambient I/O — so it stays
 # wasm32-unknown-unknown-clean like every release crate.
 crate-type = ["rlib"]
 path = "src/lib.rs"

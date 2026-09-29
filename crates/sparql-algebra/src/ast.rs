@@ -3,8 +3,7 @@
 
 //! RDF 1.2 term-level types for the SPARQL algebra.
 //!
-//! These mirror the *structure* of the W3C SPARQL term model (and the surface
-//! the consumers of the prior oxigraph-family parser walk) but are purrdf-owned: a [`NamedNode`]
+//! These mirror the *structure* of the W3C SPARQL term model but are purrdf-owned: a [`NamedNode`]
 //! wraps a lexical IRI validated by [`purrdf_iri`], and a [`Literal`] carries a
 //! lexical form + datatype (optionally validated by [`purrdf_xsd`]). They carry
 //! **no variables** at the term level except through the `*Pattern` types, which

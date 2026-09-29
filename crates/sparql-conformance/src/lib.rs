@@ -5,7 +5,7 @@
 //! Native W3C SPARQL 1.1 conformance harness.
 //!
 //! Discovers `mf:` test manifests, runs each case against the native
-//! [`purrdf_sparql_eval`] engine (zero oxigraph Store), and diffs the result
+//! [`purrdf_sparql_eval`] engine, and diffs the result
 //! against the expected SPARQL Results (SRX/SRJ) or canonical N-Quads. The
 //! `harness = false` test target `tests/sparql_conformance.rs` runs one case per
 //! `manifest.ttl` that [`paths::suite_manifests`] discovers under `suite/`; each

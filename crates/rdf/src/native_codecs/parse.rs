@@ -10,9 +10,8 @@
 //! [`RdfDatasetBuilder`] applying the RDF 1.2 statement-layer fold.
 //!
 //! The fold is factored into [`fold_statement_layer`], a source-agnostic two-pass
-//! classifier over `(subject, predicate, object, graph)` rows that BOTH this native
-//! path and the legacy `dataset_io::dataset_from_oxigraph_quads` feed — one fold, no
-//! drift (the must-pass RDF 1.2 fixture parity is the guard).
+//! classifier over `(subject, predicate, object, graph)` rows — one fold, no drift
+//! (the must-pass RDF 1.2 fixture parity is the guard).
 //!
 //! Base IRI is handled per the plan: Turtle/TriG resolve relative IRIs against the
 //! supplied base; RDF/XML threads the base through the first-party
@@ -51,7 +50,7 @@ pub(crate) enum FoldNode {
     Triple { s: TermId, p: TermId, o: TermId },
 }
 
-/// One `(subject, predicate, object, graph)` row, source-agnostic over oxigraph quads
+/// One `(subject, predicate, object, graph)` row, source-agnostic over flat quads
 /// and folded GTS graphs. Every component id is already interned in the SAME builder
 /// the fold pushes into; `is_reifies` carries the source-side `rdf:reifies`
 /// classification without cloning the predicate IRI into every row.
@@ -63,8 +62,8 @@ pub(crate) struct FoldRow {
     pub graph: Option<TermId>,
 }
 
-/// The RDF 1.2 statement-layer fold, shared by the native codec path and the legacy
-/// oxigraph-quads path so the two can never drift (the parity fixture is the guard).
+/// The RDF 1.2 statement-layer fold, shared by every row source so they can never
+/// drift (the parity fixture is the guard).
 ///
 /// Pass 1 binds reifiers: a row whose predicate is `rdf:reifies` with a triple-term
 /// object becomes a `push_reifier_in_graph(subject, triple, graph)` binding and the
@@ -531,13 +530,13 @@ pub(super) fn panic_payload_message(payload: &(dyn std::any::Any + Send)) -> Str
 /// The first-party parse path folds `rdf:reifies` triples into the graph's `reifiers`
 /// table (they never appear in `quads`) AND classifies a reifier's sibling triples into
 /// the `annotations` table — the parser owns reifier identity, including anonymous `[]`
-/// reifiers. To feed the SAME two-pass fold the oxigraph path uses — and reach the SAME
+/// reifiers. To feed the SAME two-pass fold flat quads use — and reach the SAME
 /// IR — this re-materializes each reifier binding as a synthetic
 /// `<reifier> rdf:reifies <<( s p o )>>` row and each annotation as a
 /// `<reifier> <predicate> <value>` row alongside the plain quads, so pass 1 re-binds
 /// reifiers and pass 2 classifies the reifier subjects' rows as annotations. Term
 /// interning is shared across all rows, so identical terms collapse to one id exactly as
-/// on the oxigraph path.
+/// on the flat-quad path.
 pub(crate) fn dataset_from_ser_graph(graph: &SerGraph) -> Result<Arc<RdfDataset>, RdfDiagnostic> {
     dataset_from_ser_graph_impl(graph, false, BlankIngress::Opaque)
 }
@@ -567,10 +566,9 @@ pub(crate) fn dataset_from_text_ser_graph(
 }
 
 /// Like [`dataset_from_ser_graph`], but folds **every** named graph into the default
-/// graph (drops each base quad's graph component) — the oxigraph-free twin of
-/// `store_from_dataset(.., GraphPolicy::FlattenToDefaultGraph)`. This is the load
-/// path the native conformance gate replays against the frozen oxigraph goldens
-/// (which were captured over a flattened store). The statement layer (`rdf:reifies`
+/// graph (drops each base quad's graph component). This is the load path the native
+/// conformance gate replays against the frozen goldens (which were captured over a
+/// flattened dataset). The statement layer (`rdf:reifies`
 /// reifiers + annotations) is flattened with everything else, so a reifier and its
 /// annotations all land at `graph == None` and the fold's per-graph reifier key
 /// degenerates to the reifier id.
@@ -621,7 +619,7 @@ fn dataset_from_ser_graph_impl(
         Vec::with_capacity(graph.quads.len() + graph.reifiers.len() + graph.annotations.len());
 
     // Synthetic `rdf:reifies` rows reconstructed from the GTS reifier table, so the
-    // shared fold re-binds them identically to the oxigraph path (pass 1). A
+    // shared fold re-binds them identically to the flat-quad path (pass 1). A
     // self-reifier sentinel — a `Triple` term whose `reifier` is its OWN id — is the
     // binding of an inline quoted-triple term used as a quad object, NOT a statement-
     // layer reifier; it carries no `<reifier> rdf:reifies <<…>>` row (the N-Quads

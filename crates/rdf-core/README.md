@@ -43,8 +43,7 @@ crate everything else in the workspace builds on. It owns:
   frozen IR and the machine-readable RDF↔GTS loss matrix, plus native FnO and
   SSSOM codecs.
 
-The crate is deliberately dependency-strict: **no oxigraph, no PyO3** — the
-whole workspace is oxigraph-free, and this crate is where that guarantee is
+The crate is deliberately dependency-strict: **no PyO3** — this crate is where that guarantee is
 structural (a hygiene gate asserts the dependency tree). It is also
 `wasm32-unknown-unknown`-clean, and its IR layer is file-IO-free.
 

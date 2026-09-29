@@ -5,7 +5,7 @@
 //!
 //! The canonical mutation semantics live in `purrdf-core::MutableDataset`.
 //! This adapter keeps Python on that COW surface; query / update run on the native
-//! `NativeSparqlEngine` over a frozen snapshot ( — no oxigraph).
+//! `NativeSparqlEngine` over a frozen snapshot.
 
 use super::env::extension_env;
 use std::sync::Arc;

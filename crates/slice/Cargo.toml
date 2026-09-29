@@ -25,7 +25,7 @@ crate-type = ["rlib"]
 path = "src/lib.rs"
 
 [dependencies]
-# Oxigraph-free: the slice catalog/emitters/linters parse via the native
+# The slice catalog/emitters/linters parse via the native
 # `gts` text codecs (`parse_dataset`) into the `RdfDataset` IR and query it directly.
 # NOT workspace-inherited: renamed deps (`package = ...`) cannot be expressed
 # at an inheriting use site, and the workspace key `purrdf` is the umbrella.
@@ -39,8 +39,8 @@ purrdf = { package = "purrdf-rdf", path = "../rdf", version = "2.0.2" }
 # publish order, so the release lane is unchanged.
 purrdf-core = { workspace = true }
 # Native SPARQL parser — competency/verify queries are PARSED
-# (RFC §10), never text-searched, to extract referenced term IRIs. Replaces the
-# oxigraph-family SPARQL parser; RDF-1.2 quoted triple terms are first-class.
+# (RFC §10), never text-searched, to extract referenced term IRIs.
+# RDF-1.2 quoted triple terms are first-class.
 purrdf-sparql-algebra = { workspace = true }
 # The IRI value space. `BaseIri` validates the RFC-8089 `file://` retrieval IRI this
 # crate derives for every on-disk document it parses (RFC-3986 5.1.3) — the one

@@ -21,7 +21,7 @@ the evented ingestion/output adapters used by the wider Rust workspace.
 
 ## Boundaries
 
-- This kernel must remain independent of oxigraph as a normal dependency.
+- This kernel must remain independent of PyO3 as a normal dependency.
 - Public handles are stable typed IDs; avoid leaking implementation indices into
   caller-visible strings.
 - Validation happens before freeze. Once frozen, iteration should be infallible

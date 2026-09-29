@@ -230,7 +230,7 @@ fn parse_rdf(data: &[u8], format: PyRdfFormat, base: Option<&str>) -> PyResult<V
 /// Parse RDF bytes into a frozen native [`RdfDataset`] for `SnapshotBuilder`
 /// ingestion (the native carrier path). The native parse folds the RDF 1.2
 /// statement layer into the dataset's reifier/annotation side-tables and preserves
-/// named graphs, so `add_dataset_scoped` reproduces the legacy oxigraph ingestion
+/// named graphs, so `add_dataset_scoped` ingests it
 /// byte-for-byte. The blank-node `scope` is applied at INGESTION (by
 /// `add_dataset_scoped`), not here — `parse_dataset`'s third argument is the base
 /// IRI, never a blank scope. Private-use language tags (`@x-purrdf-*`) survive.
@@ -770,7 +770,7 @@ fn compile_gts_core(
         // are NOT passed here and STAY by-reference (blob-by-reference doctrine).
         let mut all_doc_blobs = doc_blob_rows;
         if !slice_rows.is_empty() {
-            // The bundle assembler still consumes a flat oxigraph quad list for its hot
+            // The bundle assembler still consumes a flat quad list for its hot
             // dataset; re-parse the base here (only when slice artifacts are present).
             let flat_base = parse_rdf(base_bytes, base_format, sources.document_base)?;
             let bundle_blobs =

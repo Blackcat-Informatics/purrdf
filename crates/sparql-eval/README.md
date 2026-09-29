@@ -157,7 +157,7 @@ The mechanisms are measured, not asserted: `benches/expr_vm.rs`,
 (report-only).
 
 The engine is gated by the W3C SPARQL 1.1 and 1.2 conformance suites (run
-through the workspace harness), carries zero oxigraph-family dependencies, and
+through the workspace harness) and
 builds for `wasm32-unknown-unknown`.
 
 ## Usage

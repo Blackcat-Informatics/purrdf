@@ -20,7 +20,7 @@ document under a regime's own rule table; the second applies the rules a shapes
 graph declares. They compose, but neither is the other.
 
 The hand-written `__init__.pyi` stub + PEP 561 `py.typed` marker beside this file
-keep mypy type-checking every `purrdf` call site (the native oxigraph
+keep mypy type-checking every `purrdf` call site (the native
 Store/SPARQL/parse/canonicalize surface).
 """
 

@@ -36,7 +36,7 @@
 //!   [`purrdf_sparql_results`].
 //! - CONSTRUCT / DESCRIBE → **Turtle**, or **TriG** when the result carries a named
 //!   graph, via the `native_codecs` serializer (the one serialization seam; never
-//!   `oxigraph::io`, never the `purrdf-gts` crate). See [`default_graph_format`]: a
+//!   the `purrdf-gts` crate). See [`default_graph_format`]: a
 //!   quad-template CONSTRUCT would serialize to an EMPTY Turtle document, so the
 //!   no-format default widens to Turtle's dataset superset rather than answering with
 //!   nothing. An EXPLICIT single-graph format for such a result throws instead — see

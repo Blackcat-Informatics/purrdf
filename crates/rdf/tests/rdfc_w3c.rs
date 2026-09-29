@@ -5,8 +5,8 @@
 //!
 //! The vendored W3C `rdf-canon` test suite (`tests/fixtures/rdfc/`, see
 //! `SOURCE.md`) is the acceptance gate for the native canonicalizer. Each
-//! `testNNN-in.nq` input is parsed with the native [`purrdf_rdf::parse_dataset`] codec
-//! (oxigraph-free), canonicalized graph-preservingly by
+//! `testNNN-in.nq` input is parsed with the native [`purrdf_rdf::parse_dataset`] codec,
+//! canonicalized graph-preservingly by
 //! [`purrdf_rdf::canonicalize_with`], and its canonical N-Quads compared to
 //! the expected `testNNN-rdfc10.nq`. Inputs WITHOUT an expected output are
 //! **negative** (poison / complexity-limit) tests that must abort rather than

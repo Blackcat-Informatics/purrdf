@@ -7,8 +7,8 @@
 //!
 //! # Native backing
 //!
-//! `Store` wraps a copy-on-write [`MutableDataset`] over the oxigraph-free
-//! `purrdf-core` IR — never `oxigraph::store::Store`. Mutation (`add` / `remove`
+//! `Store` wraps a copy-on-write [`MutableDataset`] over the
+//! `purrdf-core` IR. Mutation (`add` / `remove`
 //! / `load`) edits the COW delta; `query` freezes a snapshot and runs the native
 //! `NativeSparqlEngine`; `update` runs the engine's COW-atomic UPDATE. The
 //! `_store_capsule` hands `purrdf_shapes` / `purrdf_validate` a stable
@@ -47,7 +47,7 @@ use crate::{
     query_with_entailment_closure_governed, serialize_dataset_with,
 };
 
-/// An in-memory RDF 1.2 quad store with SPARQL. Mirrors the oxigraph Python `Store`.
+/// An in-memory RDF 1.2 quad store with SPARQL (`Store`).
 #[pyclass(name = "Store")]
 #[derive(Debug)]
 pub struct PyStore {
@@ -89,10 +89,9 @@ impl PyStore {
         //
         // Blank-node labels in a serialized document are document-local: two distinct
         // documents may reuse the same label (`_:b0`) for *different* nodes, and the same
-        // store loaded from many files must keep those distinct. oxigraph's prior per-load
-        // blank scope gave each load call a fresh blank scope; the native codec preserves
-        // labels verbatim, so we restore that isolation by tagging every parsed blank
-        // node's label with a per-load-call-unique `BlankScope` before insertion.
+        // store loaded from many files must keep those distinct: each load call gets a fresh
+        // blank scope. The native codec preserves labels verbatim, so we provide that
+        // isolation by tagging every parsed blank node's label with a per-load-call-unique `BlankScope` before insertion.
         // `parse` / `parse_quads` keep labels verbatim — that path round-trips a single
         // document, where verbatim labels are correct and canonicalization needs them.
         let scope = BlankScope(self.next_load_scope() as u32);
@@ -113,8 +112,8 @@ impl PyStore {
         })
     }
 
-    /// Alias of [`load`] — oxigraph's bulk loader is a throughput optimization,
-    /// not a different semantics, so the in-memory store path is identical.
+    /// Alias of [`load`] — bulk loading is not a different semantics, so the
+    /// in-memory store path is identical.
     #[pyo3(signature = (input=None, format=None, *, path=None, base=None))]
     fn bulk_load(
         &mut self,
@@ -910,9 +909,8 @@ impl PyStore {
         materialize_update_outcome(py, &outcome)
     }
 
-    /// Dump the whole store (or one graph, via `from_graph`) in `format`. Mirrors
-    /// the oxigraph Python `Store.dump`: when `output` (a file-like with `.write`) is given
-    /// the bytes are written to it and `None` is returned; otherwise the bytes are
+    /// Dump the whole store (or one graph, via `from_graph`) in `format`. When `output` (a file-like
+    /// with `.write`) is given the bytes are written to it and `None` is returned; otherwise the bytes are
     /// returned directly.
     ///
     /// `base` is the document base the output is written under — the egress MIRROR of
@@ -1148,7 +1146,7 @@ impl PyStore {
 
     /// The quads of ONE graph, re-homed to the default graph (so a single-graph dump
     /// serializes as triples). `graph` is the selected graph term, or `None` for the
-    /// default graph — matching the oxigraph `Store.dump(from_graph=…)` projection.
+    /// default graph — the `Store.dump(from_graph=…)` projection.
     fn collect_graph_quads(&self, graph: Option<&RdfTerm>) -> Vec<RdfQuad> {
         self.inner
             .quads_for_pattern(None, None, None, GraphMatchValue::Any)
@@ -1165,8 +1163,7 @@ impl PyStore {
     }
 }
 
-/// An in-memory quad set supporting RDFC-1.0 canonicalization. Mirrors
-/// the oxigraph Python `Dataset`.
+/// An in-memory quad set supporting RDFC-1.0 canonicalization (`Dataset`).
 ///
 /// # Absoluteness holds here too
 ///
@@ -1356,7 +1353,7 @@ fn rdf_quad_to_values_scoped(quad: &RdfQuad, scope: BlankScope) -> QuadValues {
 
 /// Convert a [`QuadValues`] back into the native owned [`RdfQuad`] model. Blank labels
 /// are scope-qualified so a per-load scope is reflected in the surfaced label
-/// (matching the prior oxigraph store's scoped blanks).
+/// (per-load scoped blanks).
 fn values_to_rdf_quad(values: &QuadValues) -> RdfQuad {
     let mut quad = RdfQuad::new(
         value_to_rdf_term(&values.s),

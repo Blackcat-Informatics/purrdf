@@ -20,7 +20,7 @@
 //! literal — a genuine spelling divergence from the spec, now fixed (see
 //! `simple_literal_serializes_bare_per_spec` below for the pin). The
 //! CONSTRUCT (`Graph`) branch, meanwhile, uses the wasm-clean [`crate::graph`]
-//! N-QUADS writer (no oxigraph) and therefore additionally carries
+//! N-QUADS writer and therefore additionally carries
 //! RDF-1.2-star reifier/annotation lines AND every row's named graph (maximal
 //! information flow). `{"graph": …}` is PurRDF's own envelope member, not a W3C
 //! SRJ one, and a quad-template `CONSTRUCT { GRAPH ?g { … } }` result rendered
@@ -196,7 +196,7 @@ fn write_base_body<W: TextOut + ?Sized>(result: &SparqlResult, out: &mut W) -> R
         }
         SparqlResult::Graph(graph) => {
             // Wasm-clean deviation from rdf-capi: render N-Quads directly from
-            // the rdf-core kernel (no oxigraph), additionally carrying
+            // the rdf-core kernel, additionally carrying
             // reifier/annotation lines and every row's graph slot (see
             // [`crate::graph`] for why this envelope widens rather than refuses).
             //

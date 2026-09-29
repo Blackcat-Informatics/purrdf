@@ -30,11 +30,9 @@ path = "src/lib.rs"
 # Native SPARQL parser. Used at shape-load to reject non-SELECT
 # SHACL-SPARQL queries (ASK/CONSTRUCT/DESCRIBE) — they parse but cannot bind ?this
 # and would panic at eval. Use SparqlParser to parse and match Query::Select.
-# Replaces the oxigraph-family SPARQL parser.
 purrdf-sparql-algebra = { workspace = true }
 # Native SPARQL engine (crates/sparql-eval): the single SparqlEngine impl over the
-# frozen IR. Replaces oxigraph's SPARQL 1.1 engine for SHACL-AF sh:sparql /
-# sh:SPARQLTarget evaluation.
+# frozen IR, used for SHACL-AF sh:sparql / sh:SPARQLTarget evaluation.
 purrdf-sparql-eval = { workspace = true }
 # The one rules engine: SHACL rules and SPARQL 1.2 RL lower to this crate's rule-set
 # IR (`srl::ir`), which lowers onto purrdf-datalog's clause IR and is evaluated by its

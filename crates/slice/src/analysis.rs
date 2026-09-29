@@ -454,7 +454,7 @@ mod tests {
     }
 
     /// Verify that the Turtle body emitted by `emit_analysis_graph` is
-    /// syntactically valid Turtle by driving it through oxigraph's streaming
+    /// syntactically valid Turtle by re-parsing it with the native Turtle
     /// parser.  This catches any `^^`-suffix bugs where the lexical form is
     /// not quoted (e.g. `7^^xsd:integer` instead of `"7"^^xsd:integer`).
     #[test]

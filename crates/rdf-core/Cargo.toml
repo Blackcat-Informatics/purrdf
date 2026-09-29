@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-core"
-description = "PurRDF RDF 1.2 oxigraph-free kernel: model, diagnostics, IR, store traits, and event ingestion"
+description = "PurRDF RDF 1.2 kernel: model, diagnostics, IR, store traits, and event ingestion"
 version.workspace = true
 edition.workspace = true
 license = "(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0"
@@ -21,9 +21,9 @@ all-features = true
 workspace = true
 
 [lib]
-# rlib-only oxigraph-free / PyO3-free kernel. Python bindings live under
+# rlib-only PyO3-free kernel. Python bindings live under
 # `bindings/python`; this crate is the ring-fenced core that MUST NOT pull
-# oxigraph or PyO3 into its dependency tree.
+# PyO3 into its dependency tree.
 crate-type = ["rlib"]
 path = "src/lib.rs"
 name = "purrdf_core"

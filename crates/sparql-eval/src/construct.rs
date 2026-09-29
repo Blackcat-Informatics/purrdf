@@ -15,9 +15,9 @@
 //!    predicate) is skipped.
 //!
 //! Each position is instantiated to a [`TermValue`](purrdf_core::TermValue) first so its term *kind* can be
-//! validated before interning into the output builder. Byte-identical parity with
-//! the oxigraph baseline is decided downstream at the RDFC-1.0 canonicalization
-//! layer, so blank-node labels and quad ordering here need not match oxigraph's —
+//! validated before interning into the output builder. Byte-identical output is
+//! decided downstream at the RDFC-1.0 canonicalization
+//! layer, so blank-node labels and quad ordering here need not be stable —
 //! `freeze` sorts and de-duplicates, and canonicalization relabels blanks.
 
 use purrdf_core::TermBox;

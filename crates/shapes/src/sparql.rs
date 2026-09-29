@@ -9,9 +9,8 @@
 //! solution row to a [`ValidationResult`].
 //!
 //! Both run the [`NativeSparqlEngine`] over the borrowed `Arc<RdfDataset>` — there is
-//! no oxigraph SPARQL engine and no materialized `Store`. Focus-node substitution
-//! uses [`Prebinding`] (the native replacement for oxigraph's
-//! `PreparedSparqlQuery::substitute_variable`) — the borrowed-name
+//! no materialized `Store`. Focus-node substitution
+//! uses [`Prebinding`] — the borrowed-name
 //! pre-binding list the evaluator's interned entry points take, so a validation
 //! does not re-allocate the shape's variable names once per focus node.
 
@@ -189,8 +188,7 @@ pub(crate) fn eval_sparql_constraint_view<D: DatasetView + Sync + FocusGraphSour
     shapes_graph_iri: Option<&str>,
     current_shape: Option<&Term>,
 ) -> Result<Vec<ValidationResult>, String> {
-    // Pre-bind `$this` to THIS focus node (the native replacement for oxigraph's
-    // per-focus `PreparedSparqlQuery::substitute_variable`).
+    // Pre-bind `$this` to THIS focus node.
     // This MUST be per-focus substitution, not an unsubstituted run grouped by a free
     // `$this`: a constraint whose `$this` appears only inside a `FILTER NOT EXISTS`/
     // negation has no positive binding for `$this` when run unsubstituted, so the
@@ -631,9 +629,8 @@ pub(crate) fn eval_order_view<D: DatasetView + Sync + FocusGraphSource>(
 thread_local! {
     /// A per-thread [`NativeSparqlEngine`] reused across SHACL-AF evaluations so its
     /// query plan cache memoizes each `sh:select`/`sh:SPARQLTarget` parse across the
-    /// many focus-node calls of one validation (the oxigraph path kept a pre-parsed
-    /// `PreparedSparqlQuery`; a fresh engine per call would re-parse every time — a
-    /// per-focus blowup on the whole-ontology conformance shapes). Each focus worker
+    /// many focus-node calls of one validation (a fresh engine per call would re-parse
+    /// every time — a per-focus blowup on the whole-ontology conformance shapes). Each focus worker
     /// reuses its own cache.
     ///
     /// That cache is keyed on more than the query text, and the difference is

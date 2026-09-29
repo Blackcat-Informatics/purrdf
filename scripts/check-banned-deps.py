@@ -31,7 +31,7 @@ blocks and ``replace = "name:version"`` lines in ``Cargo.lock`` are matched
 against ``BANNED_ANY_EDGE`` the same as a normally resolved package.
 
 What this CANNOT see: a fork published under a DIFFERENT package name (for
-example a ``[patch]`` table remapping ``package = "my-oxigraph-fork"``).
+example a ``[patch]`` table remapping ``package = "my-petgraph-fork"``).
 Cargo.lock would then record that fork under its own name, indistinguishable
 from any other unrelated crate to a name-based scan. Catching that requires a
 source-URL allowlist or a checksum/provenance check, neither of which this
@@ -117,11 +117,6 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 # dev/test, transitive) because a first-party replacement exists for every
 # edge kind; reintroduction anywhere in the resolved Cargo.lock closure fails.
 BANNED_ANY_EDGE: dict[str, str] = {
-    "oxilangtag": "purrdf_iri::langtag (RFC 5646 well-formedness)",
-    "oxiri": "purrdf-iri",
-    "oxsdatatypes": "purrdf-xsd",
-    "oxrdf": "purrdf-core",
-    "oxigraph": "the native purrdf engine",
     "petgraph": "purrdf_core::graph::tarjan_scc (the first-party iterative Tarjan SCC)",
     "thiserror": "plain error types and std::error::Error implementations",
     "thiserror-impl": "plain error types and std::error::Error implementations (thiserror macro backend)",
@@ -1762,9 +1757,9 @@ def self_test() -> int:
     failures: list[str] = []
 
     # --- pre-existing real behavior: exact-name tier-1 match in a plain lock.
-    dirty = 'name = "serde"\nname = "oxilangtag"\nversion = "0.1.6"\n'
+    dirty = 'name = "serde"\nname = "thiserror"\nversion = "2.0.12"\n'
     clean = 'name = "serde"\nname = "purrdf-iri"\n'
-    if any_edge_offenders(dirty) != ["oxilangtag"]:
+    if any_edge_offenders(dirty) != ["thiserror"]:
         failures.append("a banned package in the lock was not flagged")
     if any_edge_offenders(clean):
         failures.append("a clean lock was flagged")
@@ -1853,12 +1848,12 @@ def self_test() -> int:
     #     since the name sits inside a value string, not a `name = "..."`
     #     line).
     replace_lock = (
-        'name = "oxigraph"\n'
-        'version = "0.3.0"\n'
+        'name = "petgraph"\n'
+        'version = "0.6.4"\n'
         'source = "registry+https://github.com/rust-lang/crates.io-index"\n'
-        'replace = "oxigraph:0.4.0"\n'
+        'replace = "petgraph:0.6.5"\n'
     )
-    if substitution_offenders(replace_lock) != ["oxigraph"]:
+    if substitution_offenders(replace_lock) != ["petgraph"]:
         failures.append("a replace= override of a banned package was not flagged")
 
     # --- (B) substitution scan stays quiet on an unrelated patch/replace.
@@ -1902,11 +1897,10 @@ def self_test() -> int:
 
     # --- (C) THE OVER-REFUSAL CHECK for the widened scan: matching on the
     #     basename means the wider scan reads lockfiles and ONLY lockfiles. The
-    #     repository legitimately names `oxilangtag` in prose and in a frozen
-    #     differential-vector corpus (`crates/iri/tests/PROVENANCE.md`,
-    #     `crates/iri/tests/langtag_differential_vectors.txt`), which record
-    #     which engine a vector came from. Those are not `Cargo.lock`, so
-    #     scanning every committed lock must never reach them.
+    #     repository legitimately names banned crates in prose and in frozen
+    #     test corpora (for example `crates/iri/tests/PROVENANCE.md` and
+    #     `crates/iri/tests/langtag_differential_vectors.txt`). Those are not
+    #     `Cargo.lock`, so scanning every committed lock must never reach them.
     prose_paths = "\0".join(
         [
             "crates/iri/tests/PROVENANCE.md",
@@ -1923,7 +1917,7 @@ def self_test() -> int:
     #     in a non-root lock points at the right file.
     nested_failures = lock_failures(
         "crates/excluded-root/Cargo.lock",
-        'name = "oxilangtag"\nversion = "0.1.6"\n',
+        'name = "thiserror"\nversion = "2.0.12"\n',
     )
     if len(nested_failures) != 1 or "crates/excluded-root/Cargo.lock" not in (
         nested_failures[0]

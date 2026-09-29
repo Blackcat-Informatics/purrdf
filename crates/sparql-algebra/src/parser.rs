@@ -266,8 +266,7 @@ pub enum UpdateDatasetSlot {
 
 /// A reusable SPARQL query parser.
 ///
-/// Mirrors the prior oxigraph-family `SparqlParser` surface the existing
-/// consumers call so the port is mechanical: `SparqlParser::new().parse_query(text)`.
+/// Consumers call `SparqlParser::new().parse_query(text)`.
 /// Parse-time configuration (the extension-function namespace set) is passed per
 /// call via [`SparqlParser::parse_query_with`] / [`SparqlParser::parse_update_with`];
 /// the plain `parse_*` entries use [`ParserOptions::default`].

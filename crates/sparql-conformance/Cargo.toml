@@ -3,7 +3,7 @@
 
 [package]
 name = "purrdf-sparql-conformance"
-description = "Native W3C SPARQL 1.1 conformance harness: discovers mf: test manifests, runs the native purrdf-sparql-eval engine, and diffs against expected SPARQL Results (SRX/SRJ) / canonical N-Quads. Federated SERVICE tests resolve through an in-memory RemoteQuerySource (no network). Zero oxigraph Store."
+description = "Native W3C SPARQL 1.1 conformance harness: discovers mf: test manifests, runs the native purrdf-sparql-eval engine, and diffs against expected SPARQL Results (SRX/SRJ) / canonical N-Quads. Federated SERVICE tests resolve through an in-memory RemoteQuerySource (no network)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -23,7 +23,7 @@ path = "src/lib.rs"
 purrdf-sparql-eval = { workspace = true }
 purrdf-sparql-algebra = { workspace = true }
 # Native Turtle/TriG/N-Quads loader (parse_dataset) + RDFC-1.0 canonicalization,
-# both oxigraph-Store-free.
+# both native.
 purrdf = { workspace = true }
 purrdf-core = { workspace = true }
 # The SEP-0009 composite value space: the lexical-space grader the divergence

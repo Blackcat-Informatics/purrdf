@@ -4,10 +4,10 @@
 //! Narrow purrdf backend traits (P2d).
 //!
 //! These are the dependency-inversion seams that remain after `DatasetView`
-//! the oxigraph crate ring-fence, and `DatasetMut`: term
+//! and `DatasetMut`: term
 //! interning, parser ingress, SPARQL execution, and serializer egress. They live in
 //! `purrdf-core` so consumers can depend on the contract without depending on
-//! oxigraph. Concrete oxigraph adapters live in the sibling `purrdf` crate.
+//! an engine. Concrete adapters live in the sibling `purrdf` crate.
 
 use std::convert::Infallible;
 use std::io::Write;
@@ -92,7 +92,7 @@ impl TermFactory for RdfDatasetBuilder {
 }
 
 /// RDF parser request. Formats are named by media type or local format id at the
-/// contract boundary so the core trait does not leak an oxigraph enum.
+/// contract boundary so the core trait does not leak an engine-specific enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfParseRequest<'a> {
     /// The raw RDF bytes to parse.
@@ -126,8 +126,7 @@ pub trait RdfParserBackend {
 /// `substitutions` carries variable **pre-bindings**:
 /// each `(name, value)` pre-binds the query variable `name` to `value` before
 /// evaluation, as if the `WHERE` had been joined with a single-row
-/// `VALUES { ?name value }`. This is the native replacement for oxigraph's
-/// `PreparedSparqlQuery::substitute_variable`, used by SHACL-AF to inject the focus
+/// `VALUES { ?name value }`. It is used by SHACL-AF to inject the focus
 /// node as `$this`. A slice (rather than a `Vec`) keeps the request `Copy` and
 /// borrow-only; the empty slice (`&[]`) is "no pre-binding". `value` is a
 /// [`TermValue`], so a blank-node focus node is representable (unlike a `VALUES`
@@ -165,7 +164,7 @@ pub enum SparqlResult {
     Boolean(bool),
 }
 
-/// SPARQL query/update seam. The dataset type is associated so an oxigraph-backed
+/// SPARQL query/update seam. The dataset type is associated so a store-backed
 /// engine can operate on its store while a future native engine can operate on the
 /// IR/native query store.
 pub trait SparqlEngine {
@@ -207,7 +206,7 @@ pub enum SerializeGraph<'a> {
 }
 
 /// RDF serializer request. Formats are media types/local ids for the same reason
-/// as [`RdfParseRequest`]: the core trait must not expose an oxigraph enum.
+/// as [`RdfParseRequest`]: the core trait must not expose an engine-specific enum.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RdfSerializeRequest<'a> {
     /// The output format's media type (or local format id).

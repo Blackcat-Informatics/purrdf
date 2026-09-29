@@ -379,7 +379,7 @@ impl SnapshotBuilder {
 
     /// Ingest a native [`RdfDataset`](crate::RdfDataset) carrier DIRECTLY — interning
     /// its quads and its folded RDF-1.2 reifier/annotation side-tables — without the
-    /// oxigraph quad round-trip. This is how the in-memory carrier is serialized at the
+    /// flat-quad round-trip. This is how the in-memory carrier is serialized at the
     /// single exit: the dataset is already canonical (frozen, blank-nodes standardized
     /// apart by union), so every named graph and the statement layer fold in as-is. The
     /// reifier/annotation side-tables map straight onto `reifies`/`annot` — there is no
@@ -395,7 +395,7 @@ impl SnapshotBuilder {
     }
 
     /// Ingest a native [`RdfDataset`](crate::RdfDataset) with the same source-partitioning
-    /// hooks the legacy oxigraph ingestion exposed: `default_graph_name` assigns base
+    /// hooks as flat-quad ingestion: `default_graph_name` assigns base
     /// quads, reifiers and annotations carrying no graph of their own to a named graph,
     /// and `scope` prefixes
     /// blank-node labels (`"{scope}-{label}"`) so two equal labels in different ingest

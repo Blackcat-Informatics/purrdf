@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 #
 # The PurRDF EXTEND conformance suite: eight RDF-1.2 / PurRDF
-# capabilities that incumbent SPARQL engines (rdflib, oxigraph) cannot express,
+# capabilities that incumbent SPARQL engines (e.g. rdflib) cannot express,
 # all PASSING on the native NativeSparqlEngine.
 #
 #   1. triple-term binding   — a quoted triple flows as a first-class solution value

@@ -478,13 +478,13 @@ build-profile-hygiene: ## Prove the gate really compiles at opt-level 3 with deb
 	python3 scripts/check-build-profiles.py --self-test
 	python3 scripts/check-build-profiles.py
 
-rdf-core-hygiene: ## Prove the kernel ring-fence: no oxigraph/PyO3 in purrdf-core; the root and the ring-fenced crates depend only on what layers.toml lists.
+rdf-core-hygiene: ## Prove the kernel ring-fence: no PyO3 in purrdf-core; the root and the ring-fenced crates depend only on what layers.toml lists.
 	@tree=$$(cargo tree --color never -p purrdf-core --edges normal -f "{p}") || { echo "FAIL: cargo tree errored"; exit 1; }; \
-	if echo "$$tree" | grep -Eq '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; then \
-		echo "FAIL: purrdf-core pulls an oxigraph-family or PyO3 crate as a NORMAL dependency"; \
-		echo "$$tree" | grep -E '(oxigraph|oxrdf|oxsdatatypes|oxiri|pyo3) v'; exit 1; \
+	if echo "$$tree" | grep -q 'pyo3 v'; then \
+		echo "FAIL: purrdf-core pulls PyO3 as a NORMAL dependency"; \
+		echo "$$tree" | grep 'pyo3 v'; exit 1; \
 	fi; \
-	echo "OK: purrdf-core has no oxigraph/PyO3 normal dependency"
+	echo "OK: purrdf-core has no PyO3 normal dependency"
 	@# The root (`root` in layers.toml) must have zero runtime dependencies, and
 	@# every crate whose row carries `external` may depend only on its row's
 	@# `deps` and `external`, counting every target's normal edges.

@@ -4,7 +4,7 @@
 //! W3C RDF 1.2 syntax-suite **round-trip** conformance gate for the native
 //! `purrdf` text codecs (acceptance: "W3C syntax test suites round-trip").
 //!
-//! This harness is deliberately **oxigraph-free**: a green run proves the native Turtle /
+//! A green run of this harness proves the native Turtle /
 //! TriG / N-Triples / N-Quads / RDF-XML codecs parse and round-trip the official W3C
 //! suites with no Store dependency ( end-state).
 //!
@@ -50,8 +50,7 @@ use purrdf_rdf::{
 ///   triple-term entry is no longer rendered as a reifier statement.
 /// - The former **G3** lenient-lexical trade-off is gone: the native language-tag
 ///   validator accepts PurRDF's long private-use subtags (`x-purrdf-norwegiannynorsk`)
-///   while still REJECTING the genuinely-malformed W3C negative cases — strictly better
-///   than the old oxttl `.lenient()` path.
+///   while still REJECTING the genuinely-malformed W3C negative cases.
 ///
 /// Keep this empty; add an entry only with a documented, approved codec-level reason.
 const KNOWN_GAPS: &[(&str, &str)] = &[];
@@ -380,7 +379,7 @@ fn w3c_rdf12_syntax_suites_round_trip() {
 
     // Inline lexical-form preservation cases (B2 fidelity): a full parse → serialize →
     // re-parse must preserve the literal lexical form byte-for-byte. The native path
-    // must NOT canonicalize the way the oxigraph Store does.
+    // must NOT value-space-canonicalize literals.
     lexical_form_preserved_verbatim();
 
     let mut problems = Vec::new();

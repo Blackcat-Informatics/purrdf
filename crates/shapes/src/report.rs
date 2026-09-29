@@ -353,7 +353,7 @@ impl ValidationResult {
     /// for a blank node, the lexical form for a literal, and the canonical rendering for
     /// a triple term.
     ///
-    /// This lets a consumer render the focus without naming the (oxigraph) [`Term`] type
+    /// This lets a consumer render the focus without naming the [`Term`] type
     /// in its own surface — it is the exact value-extraction the PurRDF
     /// scoreboard's `shacl_term_to_str` performed.
     #[must_use]
@@ -827,10 +827,9 @@ impl ValidationReport {
     ///
     /// The report graph is materialized by [`ValidationReport::to_dataset`] and
     /// serialized from there, so the text and the dataset are the same graph by
-    /// construction. This avoids hand-rolling literal escaping and carries no
-    /// oxigraph `io` dependency. The `DefaultGraph` selection on the
+    /// construction. This avoids hand-rolling literal escaping. The `DefaultGraph` selection on the
     /// `application/n-quads` codec emits graphless rows (i.e. N-Triples) and is
-    /// byte-lenient on language tags, matching the legacy oxigraph serializer.
+    /// byte-lenient on language tags.
     #[must_use]
     pub fn to_ntriples(&self) -> String {
         let dataset = self.to_dataset();
@@ -1314,7 +1313,7 @@ pub fn tuples_from_ntriples(nt: &str) -> Result<BTreeSet<ResultTuple>, String> {
 }
 
 /// Parse a SHACL report N-Triples string into a query-able frozen [`RdfDataset`]
-/// via the native purrdf codec — no oxigraph.
+/// via the native purrdf codec.
 fn dataset_from_ntriples(nt: &str) -> Result<Arc<RdfDataset>, String> {
     ::purrdf::parse_dataset(nt.as_bytes(), "application/n-triples", None)
         .map_err(|e| format!("N-Triples parse error: {e}"))

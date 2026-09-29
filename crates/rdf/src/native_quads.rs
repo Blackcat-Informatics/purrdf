@@ -170,8 +170,7 @@ pub fn flat_dataset_from_quad_sources(sources: &[&[RdfQuad]]) -> Result<Arc<RdfD
 /// The complement of [`dataset_from_quads`] (which DOES fold): a caller that already
 /// holds the un-folded flat stream and wants it canonicalized as a flat triple set (not
 /// the folded overlay) re-freezes through here so [`crate::canonicalize`] emits the flat
-/// `rdf:reifies` / annotation triples, byte-matching the prior oxigraph-flat canonical
-/// path.
+/// `rdf:reifies` / annotation triples as ordinary quads.
 ///
 /// # Errors
 /// Returns the diagnostic string if the quads fail dataset validation.
@@ -315,9 +314,8 @@ mod tests {
     /// (b) be DETERMINISTIC — the canonical line set is identical when an isomorphic
     ///     copy (blank labels renamed) is parsed.
     ///
-    /// This is the native-only successor of the prior oxigraph byte-match gate (the
-    /// oxigraph oracle is removed): the native engine is now the sole authority, so the
-    /// gate asserts the canonical contract directly rather than against oxigraph.
+    /// The native engine is the sole authority, so the gate asserts the canonical
+    /// contract directly.
     #[test]
     fn canonical_flat_nquads_is_deterministic_and_flattens_statement_layer() {
         // TriG with BOTH a default graph and a NAMED graph (the carrier composes named

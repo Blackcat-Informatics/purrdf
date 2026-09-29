@@ -3999,7 +3999,7 @@ mod tests {
     #[test]
     fn parse_shapes_reports_all_syntax_errors() {
         // Two independently-malformed Turtle STATEMENTS, separated by a valid one.
-        // oxttl recovers at statement granularity (resync on the `.` terminator),
+        // The Turtle parser recovers at statement granularity (resync on the `.` terminator),
         // so BOTH errors must surface in one report — proving the accumulator is
         // real, not a one-element surface. (A lexer-level break such as an
         // unterminated string literal instead consumes to EOF and yields a single

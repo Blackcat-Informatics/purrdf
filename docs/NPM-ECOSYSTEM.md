@@ -31,7 +31,6 @@ the installed package surface used by this probe.
 | rdf-ext | 2.6.0 | none declared | 19 | 43,103 B | 9,272 B | 43,103 B |
 | graphy | 4.3.7 | {"node":">=8.4.0"} | 29 | 671,427 B | 32,183 B | 210,048 B |
 | @comunica/query-sparql | 5.2.4 | none declared | 260 | 262,474 B | 26,760 B | 262,474 B |
-| oxigraph | 0.5.9 | none declared | 0 | 8,275,583 B | 2,916,920 B | 8,275,583 B |
 
 ## Capability Probe
 
@@ -42,7 +41,6 @@ the installed package surface used by this probe.
 | rdf-ext | 2.6.0 | unsupported: rdf-ext core package has no parser without extra format packages | unsupported: rdf-ext core package has no serializer without extra format packages | unsupported: no SPARQL engine in rdf-ext package | unsupported: no SPARQL engine in rdf-ext package | unsupported: no SPARQL engine in rdf-ext package | ok (1.015 ms; dataset.equals=true) | unsupported: rdf-ext core package has no parser without extra format packages |
 | graphy | 4.3.7 | ok (4.683 ms; 240 quads) | ok (2.286 ms; 22363 chars) | unsupported: no SPARQL engine in graphy package | unsupported: no SPARQL engine in graphy package | unsupported: no SPARQL engine in graphy package | unsupported: no RDFC/isomorphism API in graphy package | error: Invalid literal language tag: ar--rtl |
 | @comunica/query-sparql | 5.2.4 | unsupported: query package consumes RDF/JS sources; parsing supplied by source package | unsupported: query package does not expose graph serializer | ok (10.409 ms; 1 rows) | ok (33.123 ms; 1 rows) | ok (5.214 ms; 80) | unsupported: no RDFC/isomorphism API in query-sparql package | unsupported: RDF 1.2 parse support depends on the supplied source parser |
-| oxigraph | 0.5.9 | ok (0.927 ms; 240 quads) | ok (1.833 ms; 22320 chars) | ok (5.509 ms; 1 rows) | ok (1.874 ms; 1 rows) | ok (2.366 ms; 80) | unsupported: no RDFC/isomorphism API exposed in oxigraph JS package | ok (0.243 ms; 2 quads) |
 
 ## Raw JSON
 
@@ -56,7 +54,7 @@ the installed package surface used by this probe.
   },
   "commands": [
     "npm pack --json --pack-destination <tmp>",
-    "npm install --ignore-scripts --no-audit --no-fund <local-purrdf.tgz> n3@2.1.1 rdf-ext@2.6.0 graphy@4.3.7 @comunica/query-sparql@5.2.4 oxigraph@0.5.9",
+    "npm install --ignore-scripts --no-audit --no-fund <local-purrdf.tgz> n3@2.1.1 rdf-ext@2.6.0 graphy@4.3.7 @comunica/query-sparql@5.2.4",
     "node <tmp>/project/probe-runner.mjs"
   ],
   "corpus": {
@@ -118,16 +116,6 @@ the installed package surface used by this probe.
       "installedBytes": 262474,
       "tarballBytes": 26760,
       "unpackedBytes": 262474
-    },
-    "oxigraph": {
-      "key": "oxigraph",
-      "name": "oxigraph",
-      "version": "0.5.9",
-      "engines": null,
-      "dependencyCount": 0,
-      "installedBytes": 8275583,
-      "tarballBytes": 2916920,
-      "unpackedBytes": 8275583
     }
   },
   "results": {
@@ -295,42 +283,6 @@ the installed package surface used by this probe.
       "rdf12": {
         "status": "unsupported",
         "reason": "RDF 1.2 parse support depends on the supplied source parser"
-      }
-    },
-    "oxigraph": {
-      "parse": {
-        "status": "ok",
-        "ms": 0.927,
-        "detail": "240 quads"
-      },
-      "serialize": {
-        "status": "ok",
-        "ms": 1.833,
-        "detail": "22320 chars"
-      },
-      "select": {
-        "status": "ok",
-        "ms": 5.509,
-        "detail": "1 rows"
-      },
-      "propertyPath": {
-        "status": "ok",
-        "ms": 1.874,
-        "detail": "1 rows"
-      },
-      "aggregation": {
-        "status": "ok",
-        "ms": 2.366,
-        "detail": "80"
-      },
-      "graphIdentity": {
-        "status": "unsupported",
-        "reason": "no RDFC/isomorphism API exposed in oxigraph JS package"
-      },
-      "rdf12": {
-        "status": "ok",
-        "ms": 0.243,
-        "detail": "2 quads"
       }
     }
   }

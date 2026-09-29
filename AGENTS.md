@@ -83,7 +83,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   with `scripts/check-no-features.py`. PurRDF is a carrier; optionality changes
   semantics per consumer, which is forbidden. Do not add any other feature,
   optional dependency, or feature-gated behavior.
-* **Kernel ring-fence.** `purrdf-core` must never depend on oxigraph or PyO3.
+* **Kernel ring-fence.** `purrdf-core` must never depend on PyO3.
   `purrdf-hash` has **zero runtime dependencies**; `purrdf-lex`, `purrdf-iri`,
   `purrdf-xsd`, `purrdf-events`, `purrdf-testkit` and `purrdf-deflate` depend
   only on crates listed in their `layers.toml` rows (`make rdf-core-hygiene`

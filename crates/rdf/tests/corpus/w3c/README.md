@@ -8,7 +8,7 @@ SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 This directory is a **vendored subset** of the official W3C RDF 1.2 test suites,
 used by `crates/rdf/tests/native_codec_conformance.rs` to prove the native
 `purrdf` text codecs (Turtle / TriG / N-Triples / N-Quads / RDF-XML) parse the
-W3C syntax suites and **round-trip** them with no oxigraph dependency.
+W3C syntax suites and **round-trip** them.
 
 ## Provenance
 

@@ -27,7 +27,7 @@
 //! The kernel owns the bundle SHAPE but NOT the concrete handle payloads. The
 //! payload type `H` is generic so that pipeline-side types (logic programs,
 //! rendered docs, reasoning results) never enter `purrdf-core` — the
-//! oxigraph-free / PyO3-free ring-fence stays intact. A handle bundles its payload
+//! PyO3-free ring-fence stays intact. A handle bundles its payload
 //! with a PINNED [`ContentDigest`] of the named graph it projects.
 //!
 //! ## Content addressing
