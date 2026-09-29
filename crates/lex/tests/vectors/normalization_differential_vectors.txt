@@ -6,7 +6,7 @@
 # Answers of the `unicode-normalization` 0.1.25 crate (Unicode 17.0.0),
 # recorded before it was replaced by purrdf-text's generated tables.
 # Fields: code point (hex), NFD, NFC, NFKD, NFKC.
-# Answers only, not code. See crates/text/PROVENANCE.md.
+# Answers only, not code. See crates/lex/PROVENANCE.md.
 # vector-count: 17086
 # body-sha256: ff6197033eb8db5c747d7bcea8a6b3de11cb86362ab265f8bfbafcc232ed316d
 00A0	 	 	\x20	\x20

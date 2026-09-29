@@ -59,13 +59,16 @@
 //! assert!(idna::is_idn_hostname("B\u{fc}cher.example"));
 //! ```
 
+use purrdf_lex::unicode::{ccc, is_nfc, nfc};
+
 use crate::idna_tables::{
-    BIDI, Bidi, CANONICAL_DECOMPOSITION, CCC, COMPOSITION, DERIVED, Derived, JOINING, JoiningType,
-    MARK, NFKC_CASEFOLD, SCRIPT, Script,
+    BIDI, Bidi, DERIVED, Derived, JOINING, JoiningType, MARK, NFKC_CASEFOLD, SCRIPT, Script,
 };
 
-/// The Unicode version of every table this module consults.
-pub const UNICODE_VERSION: (u8, u8, u8) = crate::idna_tables::UNICODE_VERSION;
+/// The Unicode version of every table this module consults, and of the
+/// normalization it applies: the workspace's one,
+/// [`purrdf_lex::unicode::UNICODE_VERSION`].
+pub const UNICODE_VERSION: (u8, u8, u8) = purrdf_lex::unicode::UNICODE_VERSION;
 
 /// The longest label, in octets of its ASCII form (RFC 5890 §2.3.1).
 const MAX_LABEL: usize = 63;
@@ -152,7 +155,7 @@ pub fn map(text: &str) -> String {
     if text.is_ascii() {
         return text.to_ascii_lowercase();
     }
-    let mut mapped: Vec<char> = Vec::with_capacity(text.len());
+    let mut mapped = String::with_capacity(text.len());
     for c in text.chars() {
         // Only a DISALLOWED code point is mapped. One the protocol already
         // admits is its own image: folding it would erase a distinction
@@ -170,7 +173,7 @@ pub fn map(text: &str) -> String {
             None => mapped.push(full_stop(c)),
         }
     }
-    nfc(&mapped).into_iter().collect()
+    nfc(&mapped)
 }
 
 /// [`to_ascii`] of [`map`]: the ASCII form of a host name as a user might type
@@ -405,7 +408,7 @@ fn u_label(chars: &[char]) -> bool {
         }
     }
     // §5.4: the label is in NFC.
-    is_nfc(chars)
+    is_nfc(&chars.iter().collect::<String>())
 }
 
 /// RFC 5892 Appendix A.1 (ZERO WIDTH NON-JOINER) and A.2 (ZERO WIDTH JOINER).
@@ -544,109 +547,6 @@ fn lookup_mapping(table: &'static [(char, &'static [char])], c: char) -> Option<
 
 fn full_stop(c: char) -> char {
     if c == '\u{3002}' { '.' } else { c }
-}
-
-fn ccc(c: char) -> u8 {
-    lookup(CCC, c)
-}
-
-// ---- Normalization Form C (Unicode Standard §3.11) ------------------------------
-
-const S_BASE: u32 = 0xAC00;
-const L_BASE: u32 = 0x1100;
-const V_BASE: u32 = 0x1161;
-const T_BASE: u32 = 0x11A7;
-const L_COUNT: u32 = 19;
-const V_COUNT: u32 = 21;
-const T_COUNT: u32 = 28;
-const N_COUNT: u32 = V_COUNT * T_COUNT;
-const S_COUNT: u32 = L_COUNT * N_COUNT;
-
-/// Append the full canonical decomposition of `c`.
-fn decompose(c: char, out: &mut Vec<char>) {
-    let cp = u32::from(c);
-    if (S_BASE..S_BASE + S_COUNT).contains(&cp) {
-        let s = cp - S_BASE;
-        let jamo = [
-            L_BASE + s / N_COUNT,
-            V_BASE + (s % N_COUNT) / T_COUNT,
-            T_BASE + s % T_COUNT,
-        ];
-        let count = if s.is_multiple_of(T_COUNT) { 2 } else { 3 };
-        out.extend(jamo[..count].iter().filter_map(|&j| char::from_u32(j)));
-        return;
-    }
-    match lookup_mapping(CANONICAL_DECOMPOSITION, c) {
-        Some(parts) => out.extend_from_slice(parts),
-        None => out.push(c),
-    }
-}
-
-fn compose_pair(first: char, second: char) -> Option<char> {
-    let (a, b) = (u32::from(first), u32::from(second));
-    if (L_BASE..L_BASE + L_COUNT).contains(&a) && (V_BASE..V_BASE + V_COUNT).contains(&b) {
-        return char::from_u32(S_BASE + ((a - L_BASE) * V_COUNT + (b - V_BASE)) * T_COUNT);
-    }
-    if (S_BASE..S_BASE + S_COUNT).contains(&a)
-        && (a - S_BASE).is_multiple_of(T_COUNT)
-        && (T_BASE + 1..T_BASE + T_COUNT).contains(&b)
-    {
-        return char::from_u32(a + (b - T_BASE));
-    }
-    COMPOSITION
-        .binary_search_by(|&(x, y, _)| (x, y).cmp(&(first, second)))
-        .ok()
-        .map(|i| COMPOSITION[i].2)
-}
-
-/// The NFC form of `text`: full canonical decomposition, canonical ordering,
-/// canonical composition.
-fn nfc(text: &[char]) -> Vec<char> {
-    let mut decomposed = Vec::with_capacity(text.len());
-    for &c in text {
-        decompose(c, &mut decomposed);
-    }
-    // Canonical ordering: a stable sort of each run of non-starters.
-    let mut start = 0;
-    while start < decomposed.len() {
-        if ccc(decomposed[start]) == 0 {
-            start += 1;
-            continue;
-        }
-        let mut end = start;
-        while end < decomposed.len() && ccc(decomposed[end]) != 0 {
-            end += 1;
-        }
-        decomposed[start..end].sort_by_key(|&c| ccc(c));
-        start = end;
-    }
-    // Canonical composition: a character composes with the last starter unless
-    // a character between them blocks it.
-    let mut out: Vec<char> = Vec::with_capacity(decomposed.len());
-    let mut starter: Option<usize> = None;
-    let mut last_class: Option<u8> = None;
-    for c in decomposed {
-        let class = ccc(c);
-        if let Some(at) = starter {
-            let blocked = last_class.is_some_and(|last| last == 0 || last >= class);
-            if !blocked && let Some(composite) = compose_pair(out[at], c) {
-                out[at] = composite;
-                continue;
-            }
-        }
-        if class == 0 {
-            starter = Some(out.len());
-            last_class = None;
-        } else {
-            last_class = Some(class);
-        }
-        out.push(c);
-    }
-    out
-}
-
-fn is_nfc(chars: &[char]) -> bool {
-    nfc(chars) == chars
 }
 
 // ---- Punycode (RFC 3492 §5, §6) -------------------------------------------------
@@ -813,14 +713,7 @@ mod tests {
         check("BIDI", BIDI);
         check("SCRIPT", SCRIPT);
         check("MARK", MARK);
-        check("CCC", CCC);
-        assert!(CANONICAL_DECOMPOSITION.windows(2).all(|w| w[0].0 < w[1].0));
         assert!(NFKC_CASEFOLD.windows(2).all(|w| w[0].0 < w[1].0));
-        assert!(
-            COMPOSITION
-                .windows(2)
-                .all(|w| (w[0].0, w[0].1) < (w[1].0, w[1].1))
-        );
     }
 
     #[test]
@@ -842,23 +735,6 @@ mod tests {
         }
         assert_eq!(lookup(DERIVED, ZWNJ), Derived::ContextJ);
         assert_eq!(lookup(DERIVED, '\u{200D}'), Derived::ContextJ);
-    }
-
-    #[test]
-    fn nfc_composes_decomposes_and_orders() {
-        assert_eq!(nfc(&['e', '\u{301}']), ['\u{E9}']);
-        assert_eq!(nfc(&['\u{E9}']), ['\u{E9}']);
-        // Hangul L + V + T composes to one syllable.
-        assert_eq!(nfc(&['\u{1100}', '\u{1161}', '\u{11A8}']), ['\u{AC01}']);
-        // Canonical ordering: dot below (220) before acute (230).
-        assert_eq!(
-            nfc(&['a', '\u{301}', '\u{323}']),
-            nfc(&['a', '\u{323}', '\u{301}'])
-        );
-        // A singleton decomposition never recomposes: U+212B ANGSTROM SIGN.
-        assert_eq!(nfc(&['\u{212B}']), ['\u{C5}']);
-        assert!(is_nfc(&['\u{C5}']));
-        assert!(!is_nfc(&['\u{212B}']));
     }
 
     #[test]

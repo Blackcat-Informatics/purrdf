@@ -680,6 +680,96 @@ def hex_rule_fixture_cases() -> list[tuple[str, bool]]:
     ]
 
 
+# A seeded workspace for the `unicode-normalization` job, run through the real
+# census: a normalization entry point, the combining-class lookup, the pair
+# composer or a second Unicode-version authority defined outside the home is a
+# copy (POSITIVE); a longer name, a constant, a test-only helper and the pinned
+# variant are not.
+UNICODE_FIXTURE_LEDGER = """
+[[job]]
+id = "unicode-normalization"
+summary = "s"
+home = "fixture_lex::unicode::nfc"
+entry_points = ["fixture_lex::unicode::ccc"]
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(nfc|nfd|nfkc|nfkd|is_nfc|is_nfd|is_nfkc|is_nfkd|to_nfc|to_nfd|ccc|combining_class|canonical_combining_class|compose_pair|unicode_version)$']
+
+[[job.variant]]
+symbol = "fixture_core::blocks::unicode_version"
+file = "crates/core/src/blocks.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "fixture_core::blocks::unicode_version"
+reason = "r"
+"""
+
+UNICODE_FIXTURE_FILES = {
+    "crates/lex/Cargo.toml": '[package]\nname = "fixture-lex"\n',
+    "crates/lex/src/lib.rs": "pub mod unicode;\n",
+    "crates/lex/src/unicode.rs": (
+        "/// NFC.\npub fn nfc(text: &str) -> String { text.to_owned() }\n"
+        "/// The combining class.\npub fn ccc(c: char) -> u8 { 0 }\n"
+    ),
+    "crates/core/Cargo.toml": '[package]\nname = "fixture-core"\n',
+    "crates/core/src/lib.rs": "mod blocks;\n",
+    "crates/core/src/blocks.rs": "/// The pinned version.\npub const fn unicode_version() -> (u8, u8, u8) { (16, 0, 0) }\n",
+    "crates/user/Cargo.toml": '[package]\nname = "fixture-user"\n',
+    "crates/user/src/lib.rs": (
+        "fn nfc(chars: &[char]) -> Vec<char> { chars.to_vec() } // POSITIVE\n"
+        "fn is_nfc(chars: &[char]) -> bool { true } // POSITIVE\n"
+        "fn combining_class(c: char) -> u8 { 0 } // POSITIVE\n"
+        "fn compose_pair(a: char, b: char) -> Option<char> { None } // POSITIVE\n"
+        "pub fn unicode_version() -> (u8, u8, u8) { (15, 1, 0) } // POSITIVE\n"
+        "pub fn nfc_len(text: &str) -> usize { text.len() }\n"
+        "pub fn unicode_versions() -> [(u8, u8, u8); 1] { [(17, 0, 0)] }\n"
+        "pub const NFC: &str = \"nfc\";\n"
+    ),
+    "crates/user/tests/it.rs": "fn nfc(text: &str) -> String { text.to_owned() }\n",
+}
+
+
+def unicode_fixture_cases() -> list[tuple[str, bool]]:
+    """Run the census over the seeded normalization workspace and compare its
+    copies with the lines marked POSITIVE."""
+    with tempfile.TemporaryDirectory(prefix="helper-census-unicode-") as directory:
+        root = Path(directory)
+        expected: set[tuple[str, int]] = set()
+        for relative, text in UNICODE_FIXTURE_FILES.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            expected |= {
+                (relative, number)
+                for number, line in enumerate(text.splitlines(), start=1)
+                if line.endswith("// POSITIVE")
+            }
+        (root / "helpers-ledger.toml").write_text(UNICODE_FIXTURE_LEDGER, encoding="utf-8")
+        try:
+            index = json.loads(run_census("--index", root=root))
+        except (CensusError, json.JSONDecodeError) as exc:
+            return [(f"the census runs over the seeded unicode-normalization workspace ({exc})", False)]
+    job = index["jobs"]["unicode-normalization"]
+    copies = {(match["file"], match["line"]) for match in job["matches"] if not match["in_home"] and not match["variant"]}
+    variants = {match["symbol"] for match in job["matches"] if match["variant"]}
+    home = {match["symbol"] for match in job["matches"] if match["in_home"]}
+    return [
+        ("every seeded normalization copy and second Unicode-version authority is reported", expected <= copies),
+        ("a longer name, a plural, a constant and a test-only helper are not", copies <= expected),
+        ("the pinned Unicode version is the sanctioned variant, not a copy", variants == {"fixture_core::blocks::unicode_version"}),
+        ("the home's own entry points are the home's", home == {"fixture_lex::unicode::nfc", "fixture_lex::unicode::ccc"}),
+        ("each copy counts against the enforced job", job["copies"] == len(expected)),
+    ]
+
+
 def fixture_ledger() -> dict:
     return {
         "job": [
@@ -937,6 +1027,7 @@ def self_test() -> int:
     cases.extend(rule_fixture_cases())
     cases.extend(literal_fixture_cases())
     cases.extend(hex_rule_fixture_cases())
+    cases.extend(unicode_fixture_cases())
 
     failed = 0
     for name, held in cases:

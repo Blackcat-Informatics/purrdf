@@ -241,6 +241,45 @@ fn main() {
     )
     .unwrap();
     writeln!(out).unwrap();
+    // The pinned version, read from the vendored file's own header rather
+    // than restated, so the function cannot disagree with the table.
+    let version = text
+        .lines()
+        .next()
+        .and_then(|line| line.strip_prefix("# Blocks-"))
+        .and_then(|rest| rest.strip_suffix(".txt"))
+        .unwrap_or_else(|| {
+            panic!(
+                "{} has no `# Blocks-X.Y.Z.txt` header",
+                blocks_txt_path.display()
+            )
+        });
+    let parts: Vec<u8> = version
+        .split('.')
+        .map(|part| {
+            part.parse()
+                .unwrap_or_else(|err| panic!("Blocks.txt version {version:?}: {err}"))
+        })
+        .collect();
+    let [major, minor, patch] = parts[..] else {
+        panic!("Blocks.txt version {version:?} is not X.Y.Z");
+    };
+    for line in [
+        "/// The Unicode version this block table is pinned to, read from the header of",
+        "/// the vendored `Blocks.txt`: the version of the Unicode tables embedded in the",
+        "/// locked `regex-syntax`, which the `regex` engine every translated pattern runs",
+        "/// on matches with, so a block escape and the engine's own classes agree at",
+        "/// every boundary code point. It is the one Unicode table in the workspace not",
+        "/// generated at `purrdf_lex::unicode::UNICODE_VERSION`; `scripts/check-generated.sh`",
+        "/// holds the pin and fails when `regex-syntax` moves without it.",
+        "#[must_use]",
+        "pub const fn unicode_version() -> (u8, u8, u8) {",
+    ] {
+        writeln!(out, "{line}").unwrap();
+    }
+    writeln!(out, "    ({major}, {minor}, {patch})").unwrap();
+    writeln!(out, "}}").unwrap();
+    writeln!(out).unwrap();
     writeln!(
         out,
         "pub(crate) const UNICODE_BLOCKS: &[(&str, u32, u32)] = &["

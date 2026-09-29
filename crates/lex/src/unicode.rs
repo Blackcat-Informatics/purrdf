@@ -1,0 +1,794 @@
+// SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
+// SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
+
+//! Unicode normalization: the four forms of `UAX #15`, the canonical combining
+//! class, and the streaming stages they are built from, over tables generated
+//! from the vendored Unicode Character Database.
+//!
+//! * [`nfd`], [`nfc`], [`nfkd`], [`nfkc`] — full decomposition (canonical, or
+//!   compatibility), the canonical ordering algorithm, and the canonical
+//!   composition algorithm over the primary composites (core specification
+//!   §3.11), with Hangul syllables by the arithmetic of §3.12.
+//! * [`is_nfc`] — whether a string is its own NFC, decided without building
+//!   the NFC.
+//! * [`ccc`] — `Canonical_Combining_Class`.
+//! * The stage API — [`Stage`], [`Decompose`], [`Compose`], [`Out`],
+//!   [`Collect`], [`Sink`], [`Compare`] and [`drive`] — for a caller that
+//!   composes normalization with its own streaming stage (a case fold, say)
+//!   without materialising the string between them.
+//!
+//! This is the workspace's one normalization pipeline. Every consumer — the
+//! IDNA mapping and U-label check of `purrdf-iri`, the full-text analyzer of
+//! `purrdf-text` — normalizes through it, so two crates can never disagree on
+//! whether a string is in NFC. Its tables are generated with every other
+//! Unicode table in the workspace by one generator
+//! (`crates/lex/examples/gen_unicode_tables.rs`) from one database version,
+//! [`UNICODE_VERSION`], so the answers do not depend on the toolchain the
+//! crate is built with.
+//!
+//! # The ASCII fast path
+//!
+//! An ASCII run is its own NFD, NFKD and NFC. [`drive`] scans the input eight
+//! bytes at a time as one `u64` (a word whose bytes all have the high bit clear
+//! is ASCII), and hands such runs to the pipeline whole through
+//! [`Stage::push_ascii`], bypassing the per-character path. The last ASCII
+//! character before a non-ASCII byte is not bypassed, because a combining mark
+//! after it may compose with it. Bypassing at an ASCII character is exact: it
+//! has combining class 0 in every stage, so it ends every held run of
+//! non-starters, and no primary composite has an ASCII second character (the
+//! generator refuses to emit tables in which one does), so nothing before it
+//! can compose with it.
+//!
+//! # Examples
+//!
+//! ```rust
+//! use purrdf_lex::unicode::{ccc, is_nfc, nfc, nfd, nfkc};
+//!
+//! assert_eq!(nfc("cafe\u{301}"), "caf\u{e9}");
+//! assert_eq!(nfd("caf\u{e9}"), "cafe\u{301}");
+//! assert_eq!(nfkc("\u{fb01}"), "fi");
+//! assert!(is_nfc("caf\u{e9}"));
+//! assert!(!is_nfc("\u{212b}"), "ANGSTROM SIGN decomposes to a singleton");
+//! assert_eq!(ccc('\u{301}'), 230);
+//! ```
+
+use crate::unicode_tables as tables;
+
+/// The Unicode version every generated Unicode table in the workspace comes
+/// from. The tables of `purrdf-iri`, `purrdf-text` and `purrdf-jsonschema`
+/// assert at compile time that they were generated from this version.
+pub const UNICODE_VERSION: (u8, u8, u8) = tables::UNICODE_VERSION;
+
+/// Code points per second-stage block of a generated two-stage table, as a
+/// shift: the block size [`lookup_two_stage`] reads every such table with.
+pub const BLOCK_SHIFT: u32 = tables::BLOCK_SHIFT;
+
+/// Hangul syllable arithmetic, core specification §3.12.
+const S_BASE: u32 = 0xAC00;
+const L_BASE: u32 = 0x1100;
+const V_BASE: u32 = 0x1161;
+const T_BASE: u32 = 0x11A7;
+const L_COUNT: u32 = 19;
+const V_COUNT: u32 = 21;
+const T_COUNT: u32 = 28;
+const N_COUNT: u32 = V_COUNT * T_COUNT;
+const S_COUNT: u32 = L_COUNT * N_COUNT;
+
+/// Every byte's high bit, for the eight-byte ASCII scan.
+const HIGH_BITS: u64 = 0x8080_8080_8080_8080;
+
+/// One lookup in a generated two-stage table: `index` holds one block number
+/// per `1 << BLOCK_SHIFT` code points, and `blocks` the deduplicated blocks.
+///
+/// # Panics
+///
+/// Only if `index` and `blocks` are not a two-stage table over the whole code
+/// space with [`BLOCK_SHIFT`]; every generated table is one.
+#[inline]
+#[must_use]
+pub fn lookup_two_stage<T: Copy>(index: &[u16], blocks: &[T], c: char) -> T {
+    let point = c as u32;
+    let block = usize::from(index[(point >> BLOCK_SHIFT) as usize]);
+    let low = (point & ((1 << BLOCK_SHIFT) - 1)) as usize;
+    blocks[(block << BLOCK_SHIFT) | low]
+}
+
+/// `Canonical_Combining_Class` (UAX 44 §5.7.4): 0 for a starter, the class
+/// the canonical ordering algorithm sorts a non-starter by otherwise.
+///
+/// ```rust
+/// use purrdf_lex::unicode::ccc;
+///
+/// assert_eq!(ccc('a'), 0);
+/// assert_eq!(ccc('\u{323}'), 220);
+/// assert_eq!(ccc('\u{94d}'), 9, "DEVANAGARI SIGN VIRAMA");
+/// ```
+#[inline]
+#[must_use]
+pub fn ccc(c: char) -> u8 {
+    if c < '\u{300}' {
+        0
+    } else {
+        lookup_two_stage(
+            &tables::COMBINING_CLASS_INDEX,
+            &tables::COMBINING_CLASS_BLOCKS,
+            c,
+        )
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Output sinks.
+
+/// Where a pipeline's [`Out`] stage writes.
+///
+/// Implemented for [`String`] (append) and for [`Compare`] (compare against an
+/// expected string without allocating).
+pub trait Sink {
+    /// Append one character.
+    fn push_char(&mut self, c: char);
+
+    /// Append the ASCII lowercase of `ascii`, which is all ASCII.
+    fn push_ascii_lowercase(&mut self, ascii: &str);
+}
+
+impl Sink for String {
+    #[inline]
+    fn push_char(&mut self, c: char) {
+        self.push(c);
+    }
+
+    #[inline]
+    fn push_ascii_lowercase(&mut self, ascii: &str) {
+        let start = self.len();
+        self.push_str(ascii);
+        self[start..].make_ascii_lowercase();
+    }
+}
+
+/// A [`Sink`] that decides whether the streamed output equals an expected
+/// string, without building the output.
+#[derive(Clone, Debug)]
+pub struct Compare<'a> {
+    expected: &'a [u8],
+    offset: usize,
+    equal: bool,
+}
+
+impl<'a> Compare<'a> {
+    /// A comparison against `expected`.
+    #[must_use]
+    pub const fn new(expected: &'a str) -> Self {
+        Self {
+            expected: expected.as_bytes(),
+            offset: 0,
+            equal: true,
+        }
+    }
+
+    /// Whether everything streamed into this sink equals the expected string.
+    #[must_use]
+    pub const fn finish(self) -> bool {
+        self.equal && self.offset == self.expected.len()
+    }
+
+    #[inline]
+    fn advance(&mut self, bytes: &[u8], lowercase: bool) {
+        if !self.equal {
+            return;
+        }
+        let end = self.offset + bytes.len();
+        let matches = self.expected.get(self.offset..end).is_some_and(|window| {
+            if lowercase {
+                window
+                    .iter()
+                    .zip(bytes)
+                    .all(|(want, got)| *want == got.to_ascii_lowercase())
+            } else {
+                window == bytes
+            }
+        });
+        self.equal = matches;
+        self.offset = end;
+    }
+}
+
+impl Sink for Compare<'_> {
+    #[inline]
+    fn push_char(&mut self, c: char) {
+        let mut buffer = [0u8; 4];
+        self.advance(c.encode_utf8(&mut buffer).as_bytes(), false);
+    }
+
+    #[inline]
+    fn push_ascii_lowercase(&mut self, ascii: &str) {
+        self.advance(ascii.as_bytes(), true);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Pipeline stages.
+
+/// One stage of a streaming normalization or folding pipeline. Each stage
+/// holds the next and hands it characters as they are released.
+pub trait Stage {
+    /// Accept the next character.
+    fn push(&mut self, c: char);
+    /// Release everything held, then pass `ascii` (all ASCII) through,
+    /// lowercased if `lowercase` or if this stage folds.
+    fn push_ascii(&mut self, ascii: &str, lowercase: bool);
+    /// Release everything held: end of input.
+    fn flush(&mut self);
+}
+
+/// The last stage of a pipeline that writes to a [`Sink`].
+#[derive(Debug)]
+pub struct Out<'s, O: ?Sized + Sink>(pub &'s mut O);
+
+impl<O: ?Sized + Sink> Stage for Out<'_, O> {
+    #[inline]
+    fn push(&mut self, c: char) {
+        self.0.push_char(c);
+    }
+
+    #[inline]
+    fn push_ascii(&mut self, ascii: &str, lowercase: bool) {
+        if lowercase {
+            self.0.push_ascii_lowercase(ascii);
+        } else {
+            ascii.chars().for_each(|c| self.0.push_char(c));
+        }
+    }
+
+    fn flush(&mut self) {}
+}
+
+/// The last stage of a pipeline that builds a [`String`]; [`collect`] runs a
+/// pipeline ending in one.
+#[derive(Debug, Default)]
+pub struct Collect(pub String);
+
+impl Stage for Collect {
+    #[inline]
+    fn push(&mut self, c: char) {
+        self.0.push(c);
+    }
+
+    #[inline]
+    fn push_ascii(&mut self, ascii: &str, lowercase: bool) {
+        if lowercase {
+            self.0.push_ascii_lowercase(ascii);
+        } else {
+            self.0.push_str(ascii);
+        }
+    }
+
+    fn flush(&mut self) {}
+}
+
+/// Characters held with their combining classes: inline for ordinary text,
+/// spilling to the heap only for a run longer than the inline capacity.
+#[derive(Debug)]
+struct Held {
+    inline: [(u8, char); Self::INLINE],
+    len: usize,
+    spill: Vec<(u8, char)>,
+}
+
+impl Held {
+    const INLINE: usize = 32;
+
+    const fn new() -> Self {
+        Self {
+            inline: [(0, '\0'); Self::INLINE],
+            len: 0,
+            spill: Vec::new(),
+        }
+    }
+
+    #[inline]
+    const fn is_empty(&self) -> bool {
+        self.len == 0 && self.spill.is_empty()
+    }
+
+    #[inline]
+    fn push(&mut self, entry: (u8, char)) {
+        if self.spill.is_empty() && self.len < Self::INLINE {
+            self.inline[self.len] = entry;
+            self.len += 1;
+        } else {
+            if self.spill.is_empty() {
+                self.spill.extend_from_slice(&self.inline[..self.len]);
+                self.len = 0;
+            }
+            self.spill.push(entry);
+        }
+    }
+
+    #[inline]
+    fn as_mut_slice(&mut self) -> &mut [(u8, char)] {
+        if self.spill.is_empty() {
+            &mut self.inline[..self.len]
+        } else {
+            &mut self.spill
+        }
+    }
+
+    #[inline]
+    fn clear(&mut self) {
+        self.len = 0;
+        self.spill.clear();
+    }
+
+    /// Stably sort by combining class — the canonical ordering algorithm
+    /// (§3.11) over one run of non-starters — and hand each to `next`.
+    fn release_ordered<N: Stage>(&mut self, next: &mut N) {
+        let run = self.as_mut_slice();
+        // Insertion sort: stable, allocation-free, and the runs are short.
+        for i in 1..run.len() {
+            let mut j = i;
+            while j > 0 && run[j - 1].0 > run[j].0 {
+                run.swap(j - 1, j);
+                j -= 1;
+            }
+        }
+        for &(_, c) in run.iter() {
+            next.push(c);
+        }
+        self.clear();
+    }
+
+    /// Hand each held character to `next` as it stands.
+    fn release<N: Stage>(&mut self, next: &mut N) {
+        for &(_, c) in self.as_mut_slice().iter() {
+            next.push(c);
+        }
+        self.clear();
+    }
+}
+
+/// Full decomposition (canonical, or compatibility if `COMPAT`), then the
+/// canonical ordering algorithm: the NFD (NFKD) stage.
+#[derive(Debug)]
+pub struct Decompose<const COMPAT: bool, N> {
+    next: N,
+    held: Held,
+}
+
+impl<const COMPAT: bool, N: Stage> Decompose<COMPAT, N> {
+    /// A decomposition stage feeding `next`.
+    pub const fn new(next: N) -> Self {
+        Self {
+            next,
+            held: Held::new(),
+        }
+    }
+
+    /// The next stage, once the input has been flushed through.
+    pub fn into_next(self) -> N {
+        self.next
+    }
+
+    #[inline]
+    fn emit(&mut self, c: char) {
+        let class = ccc(c);
+        if class == 0 {
+            self.held.release_ordered(&mut self.next);
+            self.next.push(c);
+        } else {
+            self.held.push((class, c));
+        }
+    }
+}
+
+impl<const COMPAT: bool, N: Stage> Stage for Decompose<COMPAT, N> {
+    #[inline]
+    fn push(&mut self, c: char) {
+        if c < '\u{A0}' {
+            self.emit(c);
+            return;
+        }
+        let point = c as u32;
+        if (S_BASE..S_BASE + S_COUNT).contains(&point) {
+            let index = point - S_BASE;
+            for part in [
+                L_BASE + index / N_COUNT,
+                V_BASE + (index % N_COUNT) / T_COUNT,
+                T_BASE + index % T_COUNT,
+            ] {
+                if part != T_BASE
+                    && let Some(jamo) = char::from_u32(part)
+                {
+                    self.emit(jamo);
+                }
+            }
+            return;
+        }
+        let record = lookup_two_stage(
+            &tables::DECOMPOSITION_INDEX,
+            &tables::DECOMPOSITION_BLOCKS,
+            c,
+        );
+        if record == 0 {
+            self.emit(c);
+            return;
+        }
+        let (canonical_start, canonical_len, compat_start, compat_len) =
+            tables::DECOMPOSITION_RECORDS[usize::from(record)];
+        let (start, len) = if COMPAT {
+            (compat_start, compat_len)
+        } else {
+            (canonical_start, canonical_len)
+        };
+        if len == 0 {
+            self.emit(c);
+            return;
+        }
+        let start = usize::from(start);
+        for &part in &tables::DECOMPOSITION_CHARS[start..start + usize::from(len)] {
+            self.emit(part);
+        }
+    }
+
+    fn push_ascii(&mut self, ascii: &str, lowercase: bool) {
+        self.held.release_ordered(&mut self.next);
+        self.next.push_ascii(ascii, lowercase);
+    }
+
+    fn flush(&mut self) {
+        self.held.release_ordered(&mut self.next);
+        self.next.flush();
+    }
+}
+
+/// The primary composite of `first` and `second`, if there is one.
+#[inline]
+fn compose_pair(first: char, second: char) -> Option<char> {
+    let (a, b) = (first as u32, second as u32);
+    if (L_BASE..L_BASE + L_COUNT).contains(&a) && (V_BASE..V_BASE + V_COUNT).contains(&b) {
+        let index = (a - L_BASE) * N_COUNT + (b - V_BASE) * T_COUNT;
+        return char::from_u32(S_BASE + index);
+    }
+    if (S_BASE..S_BASE + S_COUNT).contains(&a)
+        && (a - S_BASE).is_multiple_of(T_COUNT)
+        && (T_BASE + 1..T_BASE + T_COUNT).contains(&b)
+    {
+        return char::from_u32(a + (b - T_BASE));
+    }
+    tables::COMPOSITIONS
+        .binary_search_by(|&(x, y, _)| (x, y).cmp(&(first, second)))
+        .ok()
+        .map(|found| tables::COMPOSITIONS[found].2)
+}
+
+/// Whether `c`, of combining class `class`, can be the second character of a
+/// primary composite at all: a quick check that spares a starter the pair
+/// table search, since almost no starter composes with what precedes it.
+#[inline]
+fn may_compose_second(c: char, class: u8) -> bool {
+    if class != 0 {
+        return true;
+    }
+    let point = c as u32;
+    (V_BASE..V_BASE + V_COUNT).contains(&point)
+        || (T_BASE + 1..T_BASE + T_COUNT).contains(&point)
+        || (point >= 0x300 && tables::COMPOSING_STARTERS.binary_search(&c).is_ok())
+}
+
+/// The canonical composition algorithm (§3.11) over decomposed, canonically
+/// ordered input: the stage that turns an NFD (NFKD) stream into NFC (NFKC).
+#[derive(Debug)]
+pub struct Compose<N> {
+    next: N,
+    /// The last starter, still open to composition.
+    starter: Option<char>,
+    /// The uncomposed characters after it, all non-starters, in order.
+    pending: Held,
+    /// The combining class of the last entry of `pending`.
+    last_class: u8,
+}
+
+impl<N: Stage> Compose<N> {
+    /// A composition stage feeding `next`.
+    pub const fn new(next: N) -> Self {
+        Self {
+            next,
+            starter: None,
+            pending: Held::new(),
+            last_class: 0,
+        }
+    }
+
+    /// The next stage, once the input has been flushed through.
+    pub fn into_next(self) -> N {
+        self.next
+    }
+
+    fn release(&mut self) {
+        if let Some(starter) = self.starter.take() {
+            self.next.push(starter);
+        }
+        self.pending.release(&mut self.next);
+        self.last_class = 0;
+    }
+}
+
+impl<N: Stage> Stage for Compose<N> {
+    #[inline]
+    fn push(&mut self, c: char) {
+        let class = ccc(c);
+        let Some(starter) = self.starter else {
+            if class == 0 {
+                self.starter = Some(c);
+            } else {
+                self.next.push(c);
+            }
+            return;
+        };
+        // `c` is blocked from the starter when some character between them
+        // has class 0 or a class not below its own. The pending characters are
+        // non-starters in canonical order, so the last has the greatest class.
+        let blocked = !self.pending.is_empty() && self.last_class >= class;
+        if !blocked
+            && may_compose_second(c, class)
+            && let Some(composite) = compose_pair(starter, c)
+        {
+            self.starter = Some(composite);
+            return;
+        }
+        if class == 0 {
+            self.release();
+            self.starter = Some(c);
+        } else {
+            self.pending.push((class, c));
+            self.last_class = class;
+        }
+    }
+
+    fn push_ascii(&mut self, ascii: &str, lowercase: bool) {
+        self.release();
+        self.next.push_ascii(ascii, lowercase);
+    }
+
+    fn flush(&mut self) {
+        self.release();
+        self.next.flush();
+    }
+}
+
+/// The length of the prefix of `bytes` whose bytes all have the high bit
+/// `high` (set: non-ASCII) or not (clear: ASCII), eight bytes at a time: a
+/// `u64` word is tested with one mask instead of eight comparisons.
+#[inline]
+fn prefix_len(bytes: &[u8], high: bool) -> usize {
+    let (words, tail) = bytes.as_chunks::<8>();
+    let mut len = 0;
+    for word in words {
+        let bits = u64::from_le_bytes(*word);
+        // The high bits of the bytes that end the prefix.
+        let enders = if high { !bits } else { bits } & HIGH_BITS;
+        if enders != 0 {
+            return len + enders.trailing_zeros() as usize / 8;
+        }
+        len += 8;
+    }
+    len + tail
+        .iter()
+        .position(|byte| byte.is_ascii() == high)
+        .unwrap_or(tail.len())
+}
+
+/// The length of the ASCII prefix of `bytes`.
+#[inline]
+fn ascii_prefix_len(bytes: &[u8]) -> usize {
+    prefix_len(bytes, false)
+}
+
+/// The length of the non-ASCII prefix of `bytes`.
+#[inline]
+fn non_ascii_prefix_len(bytes: &[u8]) -> usize {
+    prefix_len(bytes, true)
+}
+
+/// Run `input` through `pipeline` and flush it, bypassing the per-character
+/// path for ASCII runs as the [module documentation](self) describes.
+pub fn drive<P: Stage>(input: &str, pipeline: &mut P) {
+    let bytes = input.as_bytes();
+    let mut at = 0;
+    while at < bytes.len() {
+        let ascii_end = at + ascii_prefix_len(&bytes[at..]);
+        if ascii_end == bytes.len() {
+            pipeline.push_ascii(&input[at..], false);
+            break;
+        }
+        // Hold back the last ASCII character: a combining mark may follow.
+        let slow_start = if ascii_end > at {
+            if ascii_end - 1 > at {
+                pipeline.push_ascii(&input[at..ascii_end - 1], false);
+            }
+            ascii_end - 1
+        } else {
+            at
+        };
+        // A non-ASCII run ends at an ASCII byte, which is always a character
+        // boundary in UTF-8.
+        let slow_end = ascii_end + non_ascii_prefix_len(&bytes[ascii_end..]);
+        input[slow_start..slow_end]
+            .chars()
+            .for_each(|c| pipeline.push(c));
+        at = slow_end;
+    }
+    pipeline.flush();
+}
+
+/// Run `input` through the pipeline `build` makes around a [`Collect`], and
+/// return what `take` hands back of it.
+pub fn collect<P: Stage>(
+    input: &str,
+    build: impl FnOnce(Collect) -> P,
+    take: impl FnOnce(P) -> Collect,
+) -> String {
+    let mut pipeline = build(Collect(String::with_capacity(input.len())));
+    drive(input, &mut pipeline);
+    take(pipeline).0
+}
+
+/// Normalization Form D (`UAX #15`): canonical decomposition.
+#[must_use]
+pub fn nfd(text: &str) -> String {
+    collect(text, Decompose::<false, _>::new, Decompose::into_next)
+}
+
+/// Normalization Form KD (`UAX #15`): compatibility decomposition.
+#[must_use]
+pub fn nfkd(text: &str) -> String {
+    collect(text, Decompose::<true, _>::new, Decompose::into_next)
+}
+
+/// Normalization Form C (`UAX #15`): canonical decomposition, then canonical
+/// composition.
+#[must_use]
+pub fn nfc(text: &str) -> String {
+    collect(
+        text,
+        |next| Decompose::<false, _>::new(Compose::new(next)),
+        |stage| stage.into_next().into_next(),
+    )
+}
+
+/// Normalization Form KC (`UAX #15`): compatibility decomposition, then
+/// canonical composition.
+#[must_use]
+pub fn nfkc(text: &str) -> String {
+    collect(
+        text,
+        |next| Decompose::<true, _>::new(Compose::new(next)),
+        |stage| stage.into_next().into_next(),
+    )
+}
+
+/// Whether `text` is in Normalization Form C: `nfc(text) == text`, decided by
+/// streaming the NFC against `text` rather than building it.
+#[must_use]
+pub fn is_nfc(text: &str) -> bool {
+    let mut compare = Compare::new(text);
+    let mut pipeline = Decompose::<false, _>::new(Compose::new(Out(&mut compare)));
+    drive(text, &mut pipeline);
+    compare.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{
+        Compose, Decompose, Out, Stage, ascii_prefix_len, ccc, is_nfc, nfc, nfd, nfkc, nfkd,
+        non_ascii_prefix_len, tables,
+    };
+
+    /// NFC or NFKC with no ASCII bypass: every character through the pipeline.
+    fn composed_without_bypass<const COMPAT: bool>(input: &str) -> String {
+        let mut out = String::new();
+        let mut pipeline = Decompose::<COMPAT, _>::new(Compose::new(Out(&mut out)));
+        input.chars().for_each(|c| pipeline.push(c));
+        pipeline.flush();
+        out
+    }
+
+    /// The ASCII bypass is exact: every ASCII character, alone and before and
+    /// after every character of a primary composite and every character that
+    /// decomposes or composes by arithmetic, normalizes the same with and
+    /// without it.
+    #[test]
+    fn the_ascii_bypass_agrees_with_the_pipeline() {
+        let mut interesting: Vec<char> = tables::COMPOSITIONS
+            .iter()
+            .flat_map(|&triple| <[char; 3]>::from(triple))
+            .collect();
+        interesting.extend([
+            '\u{345}', '\u{212A}', '\u{FB01}', '\u{1E9E}', '\u{130}', '\u{AC00}', '\u{1161}',
+            '\u{11A8}',
+        ]);
+        interesting.sort_unstable();
+        interesting.dedup();
+        for ascii in (0u8..0x80).map(char::from) {
+            for &other in &interesting {
+                for input in [
+                    format!("{ascii}{other}"),
+                    format!("{other}{ascii}"),
+                    format!("ABCDEFGH{ascii}{other}{ascii}xyzXYZ12"),
+                    format!("{other}{other}{ascii}{ascii}{other}"),
+                ] {
+                    assert_eq!(nfc(&input), composed_without_bypass::<false>(&input));
+                    assert_eq!(nfkc(&input), composed_without_bypass::<true>(&input));
+                    assert_eq!(is_nfc(&input), nfc(&input) == input, "{input:?}");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn the_word_scans_agree_with_a_byte_scan() {
+        let samples: [&[u8]; 6] = [
+            b"",
+            b"abcdefgh",
+            b"abcdefghi\xC3\xA9",
+            b"\xC3\xA9abc",
+            b"abcdefgh12345678\xE4\xB8\xADxyz",
+            b"\xE4\xB8\xAD\xE4\xB8\xAD\xE4\xB8\xAD\xE4\xB8\xAD!",
+        ];
+        for bytes in samples {
+            for start in 0..bytes.len() {
+                let tail = &bytes[start..];
+                assert_eq!(
+                    ascii_prefix_len(tail),
+                    tail.iter()
+                        .position(|b| !b.is_ascii())
+                        .unwrap_or(tail.len())
+                );
+                assert_eq!(
+                    non_ascii_prefix_len(tail),
+                    tail.iter().position(u8::is_ascii).unwrap_or(tail.len())
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn nfc_composes_decomposes_and_orders() {
+        assert_eq!(nfc("e\u{301}"), "\u{E9}");
+        assert_eq!(nfc("\u{E9}"), "\u{E9}");
+        // Hangul L + V + T composes to one syllable, and decomposes back.
+        assert_eq!(nfc("\u{1100}\u{1161}\u{11A8}"), "\u{AC01}");
+        assert_eq!(nfd("\u{AC01}"), "\u{1100}\u{1161}\u{11A8}");
+        // Canonical ordering: dot below (220) before acute (230).
+        assert_eq!(nfc("a\u{301}\u{323}"), nfc("a\u{323}\u{301}"));
+        assert_eq!(nfd("a\u{301}\u{323}"), "a\u{323}\u{301}");
+        // A singleton decomposition never recomposes: U+212B ANGSTROM SIGN.
+        assert_eq!(nfc("\u{212B}"), "\u{C5}");
+        assert!(is_nfc("\u{C5}"));
+        assert!(!is_nfc("\u{212B}"));
+        // The compatibility forms fold what the canonical forms keep.
+        assert_eq!(nfkd("\u{FB01}"), "fi");
+        assert_eq!(nfd("\u{FB01}"), "\u{FB01}");
+    }
+
+    /// A run of non-starters longer than the inline capacity spills to the
+    /// heap and is still ordered and composed exactly.
+    #[test]
+    fn a_long_run_of_non_starters_is_ordered_past_the_inline_capacity() {
+        let marks: String = "\u{301}\u{323}".repeat(40);
+        let decomposed = nfd(&format!("a{marks}"));
+        let classes: Vec<u8> = decomposed.chars().map(ccc).collect();
+        assert!(classes.windows(2).skip(1).all(|pair| pair[0] <= pair[1]));
+        assert_eq!(nfc(&decomposed), nfc(&format!("a{marks}")));
+        assert!(nfc(&decomposed).starts_with('\u{1EA1}'));
+    }
+
+    #[test]
+    fn is_nfc_refuses_a_decomposed_string_and_accepts_its_composition() {
+        assert!(!is_nfc("cafe\u{301}"));
+        assert!(is_nfc("caf\u{e9}"));
+        assert!(is_nfc(""));
+        assert!(!is_nfc("\u{1100}\u{1161}"));
+        assert!(is_nfc("\u{AC00}"));
+    }
+}

@@ -142,6 +142,7 @@ version = "2.0.2"
 dependencies = [
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-xsd",
  "regex",
  "serde_json",

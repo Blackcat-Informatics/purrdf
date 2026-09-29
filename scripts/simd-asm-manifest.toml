@@ -6674,7 +6674,7 @@ summary = "schema compilation and instance validation: `regex` matching and `ser
 
 [[site]]
 id = "text.unicode-ascii-lower"
-summary = "the analyzer's ASCII-bypass driver over the `Fold` stage (measured in `unicode::case_fold`): `push_ascii_lowercase`'s bulk `[u8]::make_ascii_lowercase` over the held-back ASCII run, which LLVM compiles to a packed range-clamp-and-add on every SIMD-capable target measured here, not the SWAR prefix scan (`unicode::prefix_len`) that bounds the run, which stays scalar throughout"
+summary = "the ASCII-bypass driver `purrdf_lex::unicode::drive` over the analyzer's `Fold` stage (measured in `purrdf_text::unicode::case_fold`, where the inlined lex stages are instantiated): `purrdf_lex::unicode`'s `push_ascii_lowercase` bulk `[u8]::make_ascii_lowercase` over the held-back ASCII run, which LLVM compiles to a packed range-clamp-and-add on every SIMD-capable target measured here, not the SWAR prefix scan (`purrdf_lex::unicode::prefix_len`) that bounds the run, which stays scalar throughout"
 
   # Measured v30 (`pcmpeqb`x6, `pminub`x4, `pmaxub`x2, `paddb`x6, `pand`x4, `pandn`x2,
   # `por`x6).

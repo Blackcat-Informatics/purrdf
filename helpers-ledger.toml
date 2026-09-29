@@ -708,3 +708,42 @@ enforced = true
 constants = []
 fingerprints = []
 names = ['^(is_numeric_xsd|is_numeric_datatype|numeric_datatype|numeric_datatype_name|is_integer_datatype|is_integer_lexical|is_decimal_lexical)$']
+
+[[job]]
+id = "unicode-normalization"
+summary = "Unicode normalization: NFC, NFD, NFKC and NFKD, the NFC verdict and the canonical combining class, as streaming stages over the one generated table set, at the one Unicode version every Unicode table is generated from"
+home = "purrdf_lex::unicode::nfc"
+entry_points = [
+    "purrdf_lex::unicode::nfd",
+    "purrdf_lex::unicode::nfkc",
+    "purrdf_lex::unicode::nfkd",
+    "purrdf_lex::unicode::is_nfc",
+    "purrdf_lex::unicode::ccc",
+    "purrdf_lex::unicode::Decompose",
+    "purrdf_lex::unicode::Compose",
+    "purrdf_lex::unicode::drive",
+    "purrdf_lex::unicode::UNICODE_VERSION",
+    "purrdf_text::unicode::nfc",
+]
+spec = "UAX 15 (Unicode Normalization Forms) and the Unicode core specification sections 3.11 and 3.12, over the Unicode Character Database named by purrdf_lex::unicode::UNICODE_VERSION"
+vectors = [
+    "crates/lex/tests/vectors/unicode_normalization_vectors.txt",
+    "crates/lex/tests/vectors/normalization_differential_vectors.txt",
+]
+bench = ["purrdf-text:analysis"]
+sites = []
+replaces_external = ["unicode-normalization"]
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = []
+names = ['^(nfc|nfd|nfkc|nfkd|is_nfc|is_nfd|is_nfkc|is_nfkd|to_nfc|to_nfd|ccc|combining_class|canonical_combining_class|compose_pair|unicode_version)$']
+
+[[job.variant]]
+symbol = "purrdf_core::xsd_regex::blocks::unicode_version"
+file = "crates/rdf-core/src/xsd_regex/blocks.rs"
+detector = "forbidden"
+criterion = "a"
+anchor = "purrdf_core::xsd_regex::blocks::unicode_version"
+reason = "The XSD block-escape table must agree with the Unicode tables of the regex engine every translated pattern runs on, so it is pinned to the version the locked regex-syntax embeds rather than to purrdf_lex::unicode::UNICODE_VERSION; scripts/check-generated.sh fails when regex-syntax moves without it."

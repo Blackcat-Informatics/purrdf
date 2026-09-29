@@ -782,6 +782,7 @@ version = "2.0.2"
 dependencies = [
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-testkit",
  "purrdf-xsd",
  "regex",
@@ -1014,6 +1015,7 @@ version = "2.0.2"
 dependencies = [
  "purrdf-core",
  "purrdf-hash",
+ "purrdf-lex",
  "purrdf-sparql-eval",
  "purrdf-sparql-results",
  "purrdf-testkit",

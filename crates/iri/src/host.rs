@@ -101,6 +101,108 @@ pub fn is_reg_name(s: &str, mode: Mode) -> bool {
     reg_name(s, 0, mode).is_ok()
 }
 
+/// Whether `s` is an RFC 5321 §4.1.3 `address-literal`, brackets included:
+/// `"[" ( IPv4-address-literal / IPv6-address-literal ) "]"`, the form a mail
+/// domain takes when it is an address rather than a name. (The third form,
+/// `General-address-literal`, needs an IANA-registered tag, and the only one
+/// registered is `IPv6`.)
+///
+/// This is not [`is_ipv4_address`] or [`is_ipv6_address`] in brackets: RFC
+/// 5321's `Snum` admits leading zeros (`[127.000.0.1]`), its `IPv6` tag is an
+/// ABNF string literal and so matches in any case, and an embedded IPv4 part
+/// is read as `Snum`s too.
+///
+/// ```rust
+/// use purrdf_iri::host::is_smtp_address_literal;
+///
+/// assert!(is_smtp_address_literal("[192.0.2.1]"));
+/// assert!(is_smtp_address_literal("[127.000.0.1]"));
+/// assert!(is_smtp_address_literal("[IPv6:2001:db8::1]"));
+/// assert!(is_smtp_address_literal("[ipv6:::ffff:192.0.2.1]"));
+/// assert!(!is_smtp_address_literal("192.0.2.1"), "no brackets");
+/// assert!(!is_smtp_address_literal("[127.0.0.300]"));
+/// assert!(!is_smtp_address_literal("[2001:db8::1]"), "no IPv6 tag");
+/// ```
+#[must_use]
+pub fn is_smtp_address_literal(s: &str) -> bool {
+    let Some(inner) = s.strip_prefix('[').and_then(|rest| rest.strip_suffix(']')) else {
+        return false;
+    };
+    // The `IPv6` tag is an ABNF string literal, so it is case-insensitive.
+    match inner.get(..5) {
+        Some(tag) if tag.eq_ignore_ascii_case("IPv6:") => smtp_ipv6(&inner[5..]),
+        _ => smtp_ipv4(inner),
+    }
+}
+
+/// RFC 5321 `Snum = 1*3DIGIT`, "representing a decimal integer value in the
+/// range 0 through 255": leading zeros are allowed.
+fn is_snum(bytes: &[u8]) -> bool {
+    (1..=3).contains(&bytes.len())
+        && bytes.iter().all(u8::is_ascii_digit)
+        && bytes
+            .iter()
+            .fold(0_u32, |value, digit| value * 10 + u32::from(digit - b'0'))
+            <= 255
+}
+
+/// RFC 5321 `IPv4-address-literal = Snum 3("."  Snum)`.
+fn smtp_ipv4(text: &str) -> bool {
+    let mut parts = 0;
+    for part in text.split('.') {
+        parts += 1;
+        if parts > 4 || !is_snum(part.as_bytes()) {
+            return false;
+        }
+    }
+    parts == 4
+}
+
+/// RFC 5321 `IPv6-addr = IPv6-full / IPv6-comp / IPv6v4-full / IPv6v4-comp`:
+/// eight (or six, before an IPv4 literal) groups of 1–4 hex digits, where a
+/// `::` stands for at least two groups, so at most six (four) others may
+/// appear.
+fn smtp_ipv6(text: &str) -> bool {
+    let (hex, v4) = match text.rsplit_once(':') {
+        Some((head, tail)) if tail.contains('.') => {
+            if !smtp_ipv4(tail) {
+                return false;
+            }
+            // Keep the separating colon when it is half of a `::`.
+            let head = if head.ends_with(':') {
+                &text[..=head.len()]
+            } else {
+                head
+            };
+            (head, true)
+        }
+        _ => (text, false),
+    };
+    let full = if v4 { 6 } else { 8 };
+    let group = |piece: &str| {
+        (1..=4).contains(&piece.len()) && piece.bytes().all(|byte| byte.is_ascii_hexdigit())
+    };
+    let groups = |part: &str| -> Option<usize> {
+        if part.is_empty() {
+            return Some(0);
+        }
+        let pieces: Vec<&str> = part.split(':').collect();
+        pieces
+            .iter()
+            .all(|piece| group(piece))
+            .then_some(pieces.len())
+    };
+    match hex.split_once("::") {
+        None => groups(hex) == Some(full),
+        Some((head, tail)) => {
+            let (Some(head), Some(tail)) = (groups(head), groups(tail)) else {
+                return false;
+            };
+            head + tail <= full - 2
+        }
+    }
+}
+
 /// [`is_reg_name`] with the typed diagnostic of the first refused byte,
 /// offsets counted from `base_off`.
 fn reg_name(s: &str, base_off: usize, mode: Mode) -> Result<()> {
@@ -162,6 +264,29 @@ fn validate_ip_literal(inner: &str, base_off: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn smtp_address_literals_refuse_beside_accepting_neighbours() {
+        let cases: &[(&str, &str)] = &[
+            ("[127.0.0.300]", "[127.0.0.255]"),
+            ("[127.0.0]", "[127.0.0.1]"),
+            ("[127.0.0.1.2]", "[127.000.000.001]"),
+            ("[1270.0.0.1]", "[127.0.0.1]"),
+            ("127.0.0.1", "[127.0.0.1]"),
+            ("[IPv6:1::2::3]", "[IPv6:1::2]"),
+            ("[IPv6:1:2:3:4:5:6:7::]", "[IPv6:1:2:3:4:5:6::]"),
+            ("[IPv6:1:2:3:4:5::1.2.3.4]", "[IPv6:1:2:3:4::1.2.3.4]"),
+            ("[IPv6:1:2:3:4:5:6:7:8:9]", "[IPv6:1:2:3:4:5:6:7:8]"),
+            ("[IPv6:12345::1]", "[IPv6:1234::1]"),
+            ("[IPv6:::1.2.3.256]", "[IPv6:::1.2.3.4]"),
+            ("[::1]", "[IPv6:::1]"),
+            ("[IPv4:127.0.0.1]", "[ipv6:::1]"),
+        ];
+        for (invalid, valid) in cases {
+            assert!(!is_smtp_address_literal(invalid), "{invalid}");
+            assert!(is_smtp_address_literal(valid), "{valid}");
+        }
+    }
 
     #[test]
     fn dec_octet_is_exactly_zero_to_255_without_leading_zeros() {

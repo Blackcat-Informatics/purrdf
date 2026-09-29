@@ -11,25 +11,13 @@ use std::fmt::Write as _;
 
 use super::{Ast, Class, ClassItem, MAX_GROUP_NESTING, PatternError, Property, property_ranges};
 
-/// ECMA-262 `LineTerminator` (§12.3): LF, CR, LS, PS.
-const LINE_TERMINATORS: &[(u32, u32)] = &[(0x0A, 0x0A), (0x0D, 0x0D), (0x2028, 0x2029)];
+/// ECMA-262 `LineTerminator` (§12.3): LF, CR, LS, PS — `.` matches every
+/// other code point.
+const LINE_TERMINATORS: &[(u32, u32)] = purrdf_lex::terminals::ecma_line_terminator_ranges();
 
 /// ECMA-262 `\s` (§22.2.2.9 `CharacterClassEscape :: s`): `WhiteSpace` (§12.2)
-/// ∪ `LineTerminator` (§12.3). `WhiteSpace` is TAB, VT, FF, ZWNBSP and every
-/// `Space_Separator` (`Zs`) code point: U+0020, U+00A0, U+1680,
-/// U+2000..=U+200A, U+202F, U+205F and U+3000.
-pub(super) const SPACE: &[(u32, u32)] = &[
-    (0x09, 0x0D),
-    (0x20, 0x20),
-    (0xA0, 0xA0),
-    (0x1680, 0x1680),
-    (0x2000, 0x200A),
-    (0x2028, 0x2029),
-    (0x202F, 0x202F),
-    (0x205F, 0x205F),
-    (0x3000, 0x3000),
-    (0xFEFF, 0xFEFF),
-];
+/// ∪ `LineTerminator` (§12.3).
+pub(super) const SPACE: &[(u32, u32)] = purrdf_lex::terminals::ecma_class_space_ranges();
 
 /// ECMA-262 `\d`: `0-9`.
 pub(super) const DIGIT: &[(u32, u32)] = &[(0x30, 0x39)];

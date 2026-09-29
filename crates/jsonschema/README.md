@@ -8,7 +8,7 @@ and **07**: every schema resource is evaluated in the dialect its `$schema`
 names, with every vocabulary, dynamic and recursive references, unevaluated
 keywords, and the standard output formats.
 
-It depends on `serde_json`, `regex`, `purrdf-iri`, `purrdf-xsd` and `purrdf-hash` only, forbids `unsafe`,
+It depends on `serde_json`, `regex`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash` only, forbids `unsafe`,
 and builds for `wasm32-unknown-unknown` like every other release crate in the
 workspace, so a schema PurRDF emits from SHACL can be checked in the browser
 by the same code that checks it natively. Nothing is fetched.
@@ -72,7 +72,8 @@ shorthand.
 * **Formats**: an annotation by default; `Registry::set_format_assertion`
   (or a meta-schema declaring format assertion) checks every format the
   dialect defines in full — `hostname`, `idn-hostname` and `idn-email` through
-  IDNA2008 in `purrdf_iri::idna`, `ipv4`/`ipv6` through `purrdf_iri::host`.
+  IDNA2008 in `purrdf_iri::idna`, `ipv4`/`ipv6` and the address literals of
+  `email`/`idn-email` through `purrdf_iri::host`.
 * **Output**: `flag`, `basic` and `detailed`.
 
 Numbers are compared and divided exactly, in decimal: `0.0075` is a multiple of

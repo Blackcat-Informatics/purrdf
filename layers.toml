@@ -133,7 +133,7 @@ deps = [
     "purrdf-hash",
     "purrdf-iri",
     "purrdf-xsd",
-    { name = "purrdf-lex", pending = true },
+    "purrdf-lex",
 ]
 
 [[crate]]
@@ -246,6 +246,7 @@ name = "purrdf-text"
 deps = [
     "purrdf-core",
     "purrdf-hash",
+    "purrdf-lex",
     "purrdf-sparql-eval",
     "purrdf-xsd",
 ]

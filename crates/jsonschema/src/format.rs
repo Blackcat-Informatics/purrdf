@@ -176,7 +176,8 @@ fn email(text: &str) -> bool {
     let Some((local, domain)) = text.rsplit_once('@') else {
         return false;
     };
-    local_part(local.as_bytes(), false) && (idna::is_hostname(domain) || address_literal(domain))
+    local_part(local.as_bytes(), false)
+        && (idna::is_hostname(domain) || host::is_smtp_address_literal(domain))
 }
 
 /// RFC 6531 §3.3: `Mailbox` with `UTF8-non-ascii` admitted in the local
@@ -185,7 +186,8 @@ fn idn_email(text: &str) -> bool {
     let Some((local, domain)) = text.rsplit_once('@') else {
         return false;
     };
-    local_part(local.as_bytes(), true) && (idna::is_idn_hostname(domain) || address_literal(domain))
+    local_part(local.as_bytes(), true)
+        && (idna::is_idn_hostname(domain) || host::is_smtp_address_literal(domain))
 }
 
 /// `Dot-string / Quoted-string`, with RFC 6531's `UTF8-non-ascii` in both
@@ -221,85 +223,6 @@ fn local_part(bytes: &[u8], utf8: bool) -> bool {
                         || non_ascii(byte)
                 })
         })
-}
-
-/// RFC 5321 §4.1.3 `address-literal`:
-/// `"[" ( IPv4-address-literal / IPv6-address-literal ) "]"`. (Its third
-/// form, `General-address-literal`, needs an IANA-registered tag, and the
-/// only one registered is `IPv6`.)
-fn address_literal(text: &str) -> bool {
-    let Some(inner) = text
-        .strip_prefix('[')
-        .and_then(|rest| rest.strip_suffix(']'))
-    else {
-        return false;
-    };
-    // The `IPv6` tag is an ABNF string literal, so it is case-insensitive.
-    match inner.get(..5) {
-        Some(tag) if tag.eq_ignore_ascii_case("IPv6:") => smtp_ipv6(&inner[5..]),
-        _ => smtp_ipv4(inner),
-    }
-}
-
-/// `IPv4-address-literal = Snum 3("."  Snum)`, `Snum = 1*3DIGIT` with a
-/// value 0–255: leading zeros are allowed.
-fn smtp_ipv4(text: &str) -> bool {
-    let mut parts = 0;
-    for part in text.split('.') {
-        parts += 1;
-        let bytes = part.as_bytes();
-        if parts > 4
-            || !(1..=3).contains(&bytes.len())
-            || digits(bytes).is_none_or(|value| value > 255)
-        {
-            return false;
-        }
-    }
-    parts == 4
-}
-
-/// `IPv6-addr = IPv6-full / IPv6-comp / IPv6v4-full / IPv6v4-comp`: eight
-/// (or six, before an IPv4 literal) groups of 1–4 hex digits, where a `::`
-/// stands for at least two groups, so at most six (four) others may appear.
-fn smtp_ipv6(text: &str) -> bool {
-    let (hex, v4) = match text.rsplit_once(':') {
-        Some((head, tail)) if tail.contains('.') => {
-            if !smtp_ipv4(tail) {
-                return false;
-            }
-            // Keep the separating colon when it is half of a `::`.
-            let head = if head.ends_with(':') {
-                &text[..=head.len()]
-            } else {
-                head
-            };
-            (head, true)
-        }
-        _ => (text, false),
-    };
-    let full = if v4 { 6 } else { 8 };
-    let group = |piece: &str| {
-        (1..=4).contains(&piece.len()) && piece.bytes().all(|byte| byte.is_ascii_hexdigit())
-    };
-    let groups = |part: &str| -> Option<usize> {
-        if part.is_empty() {
-            return Some(0);
-        }
-        let pieces: Vec<&str> = part.split(':').collect();
-        pieces
-            .iter()
-            .all(|piece| group(piece))
-            .then_some(pieces.len())
-    };
-    match hex.split_once("::") {
-        None => groups(hex) == Some(full),
-        Some((head, tail)) => {
-            let (Some(head), Some(tail)) = (groups(head), groups(tail)) else {
-                return false;
-            };
-            head + tail <= full - 2
-        }
-    }
 }
 
 /// RFC 6901 JSON Pointer.

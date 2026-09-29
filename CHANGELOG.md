@@ -10,6 +10,20 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **lex:** `purrdf_lex::unicode`, the workspace's one Unicode normalization
+  pipeline: `nfc`, `nfd`, `nfkc`, `nfkd`, `is_nfc` (decided by streaming, with
+  no allocation of the form), `ccc` (`Canonical_Combining_Class`), and the
+  stage API — `Stage`, `Decompose`, `Compose`, `Out`, `Collect`, `Sink`,
+  `Compare`, `drive`, `collect` and `lookup_two_stage` — for a caller that
+  composes normalization with a stage of its own. `UNICODE_VERSION` is the
+  version every Unicode table in the workspace is generated from.
+- **lex:** `terminals::{is_ecma_line_terminator, ecma_line_terminator_ranges,
+  is_ecma_class_space, ecma_class_space_ranges}`: ECMA-262 `LineTerminator`
+  and `\s` (`WhiteSpace` ∪ `LineTerminator`).
+- **iri:** `host::is_smtp_address_literal`, the RFC 5321 §4.1.3
+  `address-literal` (`[192.0.2.1]`, `[IPv6:2001:db8::1]`).
+- **core:** `xsd_regex::block_escape_unicode_version`, the Unicode version the
+  XSD block-escape table is pinned to (that of the locked `regex-syntax`).
 - **xsd:** `purrdf_xsd::rfc3339`, the workspace's one RFC 3339 reader and
   writer: `parse` (`date-time`, to Unix seconds and nanoseconds in UTC),
   `parse_date` (`full-date`), `parse_time` (`full-time`) and `format` (the
@@ -1171,6 +1185,33 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 ### Changed
 
 - **xsd:** `BigInt::to_decimal_lexical` takes its scale as `u32` (was `u8`).
+- **unicode:** one generator, `cargo run -p purrdf-lex --example
+  gen_unicode_tables -- <set>`, writes every Unicode table in the workspace
+  from the vendored Unicode Character Database at one version, and refuses
+  files of another release; each consumer's table set asserts that version at
+  compile time. The XSD block-escape table of `purrdf-core` is the one table
+  at another version, pinned to the locked `regex-syntax`, and
+  `scripts/check-generated.sh` fails when the two part. No table's data
+  changed.
+- **text:** `purrdf_text::unicode::{nfc, nfd, nfkc, nfkd, Sink, Compare}`
+  re-export `purrdf_lex::unicode`; the analysis form composes the lex stages
+  with the text case fold. `purrdf-text` now depends on `purrdf-lex`. Every
+  form, fold and word boundary is unchanged, over every scalar value,
+  `NormalizationTest.txt` and the frozen vectors.
+- **iri:** `idna::map` and the U-label NFC check normalize through
+  `purrdf_lex::unicode`; `idna::UNICODE_VERSION` is
+  `purrdf_lex::unicode::UNICODE_VERSION`. No verdict changed.
+- **jsonschema:** `\s` and `.` read ECMA-262 `WhiteSpace` and
+  `LineTerminator` from `purrdf_lex::terminals`, and the `email`/`idn-email`
+  address literals check through `purrdf_iri::host::is_smtp_address_literal`;
+  `purrdf-jsonschema` now depends on `purrdf-lex`. No verdict changed.
+- **lex:** the crate's licence expression is
+  `(MIT OR Apache-2.0 OR MulanPSL-2.0) AND Unicode-3.0`: it ships the
+  normalization tables.
+- **gates:** ledger job `unicode-normalization` is enforced: outside
+  `purrdf_lex::unicode`, no function may be named for a normalization form,
+  the NFC verdict, the combining class, the pair composer or a Unicode
+  version, the pinned block table excepted as a criterion-(a) variant.
 - **gts:** the files and tar profiles' `modified` stamps read and write
   through `purrdf_xsd::rfc3339`; accepted spellings, instants and error
   messages are unchanged.

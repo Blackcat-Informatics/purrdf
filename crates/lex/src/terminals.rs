@@ -643,6 +643,59 @@ terminal! {
 }
 
 terminal! {
+    /// ECMA-262 `LineTerminator` (§12.3): U+000A LINE FEED, U+000D CARRIAGE
+    /// RETURN, U+2028 LINE SEPARATOR and U+2029 PARAGRAPH SEPARATOR — the four
+    /// code points a pattern's `.` does not match without the `s` flag
+    /// (§22.2.2, `Atom :: .`).
+    ///
+    /// Not [`is_ws`] and not [`is_unicode_white_space`]: U+0085 NEXT LINE is a
+    /// Unicode line break and white space but is no ECMA-262 line terminator.
+    tables ECMA_LINE_TERMINATOR_ASCII, ECMA_LINE_TERMINATOR_NON_ASCII;
+    pub const fn is_ecma_line_terminator(char);
+    base_ranges: &[];
+    ranges_fn: ecma_line_terminator_ranges;
+    ascii: [
+        (0x0A, 0x0A), // LINE FEED
+        (0x0D, 0x0D), // CARRIAGE RETURN
+    ];
+    non_ascii: [
+        (0x2028, 0x2029), // LINE SEPARATOR, PARAGRAPH SEPARATOR
+    ];
+    cardinality: 4;
+}
+
+terminal! {
+    /// ECMA-262 `\s` (§22.2.2.9 `CharacterClassEscape :: s`): `WhiteSpace`
+    /// (§12.2) ∪ `LineTerminator` (§12.3). `WhiteSpace` is U+0009 TAB, U+000B
+    /// VT, U+000C FF, U+FEFF ZWNBSP and every `Space_Separator` (`Zs`) code
+    /// point — U+0020, U+00A0, U+1680, U+2000..=U+200A, U+202F, U+205F and
+    /// U+3000 — and `LineTerminator` is [`is_ecma_line_terminator`]'s four.
+    ///
+    /// Not [`is_unicode_white_space`]: U+0085 NEXT LINE carries the Unicode
+    /// `White_Space` property and is not `\s`, and U+FEFF ZERO WIDTH NO-BREAK
+    /// SPACE is `\s` without carrying the property.
+    tables ECMA_CLASS_SPACE_ASCII, ECMA_CLASS_SPACE_NON_ASCII;
+    pub const fn is_ecma_class_space(char);
+    base_ranges: &[];
+    ranges_fn: ecma_class_space_ranges;
+    ascii: [
+        (0x09, 0x0D), // TAB, LINE FEED, VT, FF, CARRIAGE RETURN
+        (0x20, 0x20), // SPACE
+    ];
+    non_ascii: [
+        (0xA0, 0xA0),     // NO-BREAK SPACE
+        (0x1680, 0x1680), // OGHAM SPACE MARK
+        (0x2000, 0x200A), // EN QUAD .. HAIR SPACE
+        (0x2028, 0x2029), // LINE SEPARATOR, PARAGRAPH SEPARATOR
+        (0x202F, 0x202F), // NARROW NO-BREAK SPACE
+        (0x205F, 0x205F), // MEDIUM MATHEMATICAL SPACE
+        (0x3000, 0x3000), // IDEOGRAPHIC SPACE
+        (0xFEFF, 0xFEFF), // ZERO WIDTH NO-BREAK SPACE
+    ];
+    cardinality: 25;
+}
+
+terminal! {
     /// XML 1.0 Fifth Edition §2.2 production `[2]`, `Char`.
     ///
     /// <https://www.w3.org/TR/xml/#NT-Char>. Surrogates cannot inhabit a
@@ -1120,16 +1173,18 @@ terminal! {
 #[cfg(test)]
 mod tests {
     use super::{
-        ScalarRange, blank_node_label_start_ranges, in_ranges, ipvfuture_address_char_ranges,
-        iriref_forbidden_ranges, is_blank_node_label_start, is_ipvfuture_address_char,
-        is_iriref_forbidden, is_iriref_forbidden_byte, is_json_string_forbidden_byte, is_pn_chars,
-        is_pn_chars_base, is_pn_chars_u, is_pn_local_esc, is_pn_local_start,
-        is_unicode_white_space, is_varname_continue, is_varname_start, is_ws, is_ws_char,
-        is_xml_char, is_xml_name_char, is_xml_name_start_char, json_string_forbidden_ranges,
-        pn_chars_base_ranges, pn_chars_ranges, pn_chars_u_ranges, pn_local_esc_ranges,
-        pn_local_start_ranges, ranges_sorted_disjoint, unicode_white_space_ranges,
-        varname_continue_ranges, varname_start_ranges, ws_ranges, xml_char_ranges,
-        xml_name_char_ranges, xml_name_start_char_ranges,
+        ScalarRange, blank_node_label_start_ranges, ecma_class_space_ranges,
+        ecma_line_terminator_ranges, in_ranges, ipvfuture_address_char_ranges,
+        iriref_forbidden_ranges, is_blank_node_label_start, is_ecma_class_space,
+        is_ecma_line_terminator, is_ipvfuture_address_char, is_iriref_forbidden,
+        is_iriref_forbidden_byte, is_json_string_forbidden_byte, is_pn_chars, is_pn_chars_base,
+        is_pn_chars_u, is_pn_local_esc, is_pn_local_start, is_unicode_white_space,
+        is_varname_continue, is_varname_start, is_ws, is_ws_char, is_xml_char, is_xml_name_char,
+        is_xml_name_start_char, json_string_forbidden_ranges, pn_chars_base_ranges,
+        pn_chars_ranges, pn_chars_u_ranges, pn_local_esc_ranges, pn_local_start_ranges,
+        ranges_sorted_disjoint, unicode_white_space_ranges, varname_continue_ranges,
+        varname_start_ranges, ws_ranges, xml_char_ranges, xml_name_char_ranges,
+        xml_name_start_char_ranges,
     };
 
     /// Every Unicode scalar value, in order.
@@ -1372,6 +1427,16 @@ mod tests {
                 unicode_white_space_ranges(),
                 is_unicode_white_space,
             ),
+            (
+                "ecma_line_terminator",
+                ecma_line_terminator_ranges(),
+                is_ecma_line_terminator,
+            ),
+            (
+                "ecma_class_space",
+                ecma_class_space_ranges(),
+                is_ecma_class_space,
+            ),
         ];
         for (name, ranges, predicate) in scalars {
             for b in 0..=u8::MAX {
@@ -1402,6 +1467,30 @@ mod tests {
         // DELETE is `unescaped`, although both control predicates say otherwise.
         assert!(0x7F_u8.is_ascii_control());
         assert!(!is_json_string_forbidden_byte(0x7F));
+    }
+
+    /// ECMA-262 `\s` is `WhiteSpace` ∪ `LineTerminator`: it holds every line
+    /// terminator, departs from the Unicode `White_Space` property on exactly
+    /// U+0085 and U+FEFF, and refuses the neighbours of its members.
+    #[test]
+    fn ecma_class_space_is_white_space_and_line_terminators() {
+        let mut members = 0;
+        for c in all_scalars() {
+            members += u32::from(is_ecma_class_space(c));
+            if is_ecma_line_terminator(c) {
+                assert!(is_ecma_class_space(c), "{c:?}");
+            }
+            if c != '\u{85}' && c != '\u{FEFF}' {
+                assert_eq!(is_ecma_class_space(c), is_unicode_white_space(c), "{c:?}");
+            }
+        }
+        assert_eq!(members, 25);
+        assert!(is_ecma_class_space('\u{FEFF}') && !is_unicode_white_space('\u{FEFF}'));
+        assert!(!is_ecma_class_space('\u{85}') && is_unicode_white_space('\u{85}'));
+        assert!(!is_ecma_line_terminator('\u{85}') && !is_ecma_line_terminator('\t'));
+        assert!(is_ecma_line_terminator('\u{2029}') && !is_ecma_line_terminator('\u{202A}'));
+        // The valid neighbours: the letter and the zero-width space beside them.
+        assert!(!is_ecma_class_space('a') && !is_ecma_class_space('\u{200B}'));
     }
 
     #[test]
@@ -1454,6 +1543,16 @@ mod tests {
                 "unicode_white_space",
                 unicode_white_space_ranges(),
                 is_unicode_white_space,
+            ),
+            (
+                "ecma_line_terminator",
+                ecma_line_terminator_ranges(),
+                is_ecma_line_terminator,
+            ),
+            (
+                "ecma_class_space",
+                ecma_class_space_ranges(),
+                is_ecma_class_space,
             ),
         ];
         for (name, ranges, predicate) in cases {
