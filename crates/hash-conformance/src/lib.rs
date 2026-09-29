@@ -15,6 +15,7 @@
 //! | `tests/blake3.rs` | BLAKE3 streaming boundaries and random lengths, on every backend |
 //! | `tests/hex.rs` | RFC 4648 base16 vectors, every encoding path against the portable one |
 //! | `tests/fixed_hasher.rs` | the table hasher's frozen self-vectors and its statistical quality |
+//! | `tests/splitmix_fnv.rs` | SplitMix64's three streams and FNV-1a over structured corpora |
 //! | `benches/hasher.rs` | the table hasher's latency per key class |
 //!
 //! The vector files are in `tests/vectors/`. Every test target runs natively

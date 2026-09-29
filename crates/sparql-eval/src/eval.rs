@@ -5018,3 +5018,53 @@ mod syntactic_schema_tests {
         );
     }
 }
+
+/// The copy in this module against the frozen differential vectors of
+/// `purrdf-hash-conformance`.
+#[cfg(test)]
+mod frozen_differential {
+    use super::*;
+
+    /// The frozen FNV-1a differential vectors of `purrdf-hash-conformance`: every
+    /// input's bytes and its three answers (plain, folded from `0x10000001`, and
+    /// with one `0xFF` separator appended).
+    fn frozen_fnv_vectors() -> Vec<(Vec<u8>, [u64; 3])> {
+        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../hash-conformance/tests/vectors/fnv1a64_differential_vectors.txt"
+        )))
+        .expect("the frozen FNV-1a vectors parse");
+        file.records()
+            .iter()
+            .map(|record| {
+                let fields = &record.fields;
+                let data = if fields[0] == "scalars" {
+                    let (first, last) = fields[1].split_once('-').expect("a scalar range");
+                    let first = u32::from_str_radix(first, 16).expect("a hexadecimal scalar");
+                    let last = u32::from_str_radix(last, 16).expect("a hexadecimal scalar");
+                    (first..=last)
+                        .filter_map(char::from_u32)
+                        .collect::<String>()
+                        .into_bytes()
+                } else {
+                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
+                };
+                let answer =
+                    |index: usize| u64::from_str_radix(fields[index], 16).expect("a hex answer");
+                (data, [answer(2), answer(3), answer(4)])
+            })
+            .collect()
+    }
+
+    #[test]
+    fn schema_fingerprint_reproduces_the_frozen_vectors() {
+        assert_eq!(schema_fingerprint(&VarSchema::new()), 0xcbf2_9ce4_8422_2325);
+        for (data, [_, _, separated]) in frozen_fnv_vectors() {
+            if let Ok(text) = std::str::from_utf8(&data) {
+                let mut schema = VarSchema::new();
+                schema.push(Variable::new(text));
+                assert_eq!(schema_fingerprint(&schema), separated);
+            }
+        }
+    }
+}

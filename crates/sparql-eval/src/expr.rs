@@ -11672,3 +11672,53 @@ mod rdf_equal_tests {
             .expect("the 128 KiB thread returned");
     }
 }
+
+/// The copy in this module against the frozen differential vectors of
+/// `purrdf-hash-conformance`.
+#[cfg(test)]
+mod frozen_differential {
+    use super::*;
+
+    /// The frozen SplitMix64 differential vectors of `purrdf-hash-conformance`
+    /// for `stream`: each seed and its 10,000 draws, in file order.
+    fn frozen_splitmix_vectors(stream: &str) -> Vec<(u64, Vec<u64>)> {
+        let text = include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../hash-conformance/tests/vectors/splitmix64_differential_vectors.txt"
+        ));
+        let mut seeds: Vec<(u64, Vec<u64>)> = Vec::new();
+        for line in text.lines().filter(|line| !line.starts_with('#')) {
+            let fields: Vec<&str> = line.split('\t').collect();
+            if fields[0] != stream {
+                continue;
+            }
+            let seed = u64::from_str_radix(fields[1], 16).expect("a hexadecimal seed");
+            if seeds.last().is_none_or(|(last, _)| *last != seed) {
+                seeds.push((seed, Vec::new()));
+            }
+            let draws = &mut seeds.last_mut().expect("a seed").1;
+            assert_eq!(draws.len().to_string(), fields[2], "records are in order");
+            draws.extend(
+                fields[3..]
+                    .iter()
+                    .map(|draw| u64::from_str_radix(draw, 16).expect("a hexadecimal draw")),
+            );
+        }
+        assert!(seeds.iter().all(|(_, draws)| draws.len() == 10_000));
+        seeds
+    }
+
+    #[test]
+    fn next_u64_reproduces_the_frozen_next_vectors() {
+        let dataset = purrdf_core::RdfDatasetBuilder::new()
+            .freeze()
+            .expect("freeze");
+        let mut ctx = EvalCtx::new(&dataset);
+        for (seed, draws) in frozen_splitmix_vectors("next") {
+            ctx.rng_state = seed;
+            for draw in draws {
+                assert_eq!(next_u64(&mut ctx), draw);
+            }
+        }
+    }
+}
