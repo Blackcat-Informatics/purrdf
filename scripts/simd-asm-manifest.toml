@@ -1618,7 +1618,7 @@ summary = "`numeric::canonical_double`, the xsd:double canonical lexical form"
 
 [[site]]
 id = "json.parser-string"
-summary = "`Parser::string`, the JSON string body scan over `terminals::find_first_json_string_special`"
+summary = "`Reader::string`, the JSON string body scan over `scan::find_first_json_string_special`"
 
   # Packed byte compares, `pmovmskb` extracts the lane mask. Measured v9.
   [[site.measure]]
@@ -1689,20 +1689,20 @@ summary = "`Parser::string`, the JSON string body scan over `terminals::find_fir
   [[site.measure]]
   label = "call site"
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_json"
-  symbol = "<purrdf_json::parse::Parser>::string"
+  crate = "purrdf_lex"
+  symbol = "<purrdf_lex::json::read::Reader>::string"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true
 
 [[site]]
 id = "json.parser-whitespace"
-summary = "`Parser::whitespace`, inlined into `Parser::value`"
+summary = "`Reader::skip_whitespace`, inlined into `Reader::next_event`"
 
   [[site.measure]]
   configs = ["x86_64", "x86_64-v3", "x86_64-v4", "aarch64", "aarch64-neoverse-v1", "wasm32", "wasm32-simd128"]
-  crate = "purrdf_json"
-  symbol = "<purrdf_json::parse::Parser>::value"
+  crate = "purrdf_lex"
+  symbol = "<purrdf_lex::json::read::Reader>::next_event"
   min_vector_ops = 0
   max_fma = 0
   forbid_relaxed = true

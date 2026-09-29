@@ -29,8 +29,7 @@
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use serde_json::Value;
-use serde_json::map::{Iter as MapIter, Keys as MapKeys};
+use purrdf_lex::json::{Object, Value};
 
 use crate::ecma::{self, CompiledPattern, MatchLimits, PatternError};
 use crate::equal;
@@ -41,6 +40,9 @@ use crate::output::{Output, OutputUnit};
 use crate::pointer;
 use crate::schema::{Body, JsonType, Keyword, Kind, Node, NodeId, Pattern, Schema};
 use purrdf_iri::percent;
+
+/// An object's members, in document order, as an evaluation walks them.
+type Members<'v> = core::slice::Iter<'v, (String, Value)>;
 
 /// The longest chain of `$ref`, `$dynamicRef` and `$recursiveRef`
 /// resolutions an evaluation follows in a row at one instance location.
@@ -197,7 +199,7 @@ impl<'v> Instance<'v> {
     }
 
     /// The object, when the value is one.
-    fn object(&self) -> Option<&'v serde_json::Map<String, Value>> {
+    fn object(&self) -> Option<&'v Object> {
         match self {
             Self::Borrowed(Value::Object(map)) => Some(map),
             _ => None,
@@ -304,7 +306,7 @@ enum Cursor<'s, 'v> {
     Not(NodeId),
     DependentSchemas {
         dependencies: &'s [(String, NodeId)],
-        map: &'v serde_json::Map<String, Value>,
+        map: &'v Object,
         index: usize,
         failed: Vec<&'s str>,
     },
@@ -333,14 +335,14 @@ enum Cursor<'s, 'v> {
     },
     Properties {
         schemas: &'s BTreeMap<String, NodeId>,
-        entries: std::iter::Enumerate<MapIter<'v>>,
+        entries: std::iter::Enumerate<Members<'v>>,
         current: Option<(usize, &'v String)>,
         applied: Vec<Value>,
         failed: Vec<&'v str>,
     },
     PatternProperties {
         patterns: &'s [(Pattern, NodeId)],
-        entries: std::iter::Enumerate<MapIter<'v>>,
+        entries: std::iter::Enumerate<Members<'v>>,
         current: Option<(usize, &'v String, &'v Value)>,
         pattern: usize,
         matched: bool,
@@ -351,14 +353,14 @@ enum Cursor<'s, 'v> {
         schema: NodeId,
         properties: &'s [String],
         patterns: &'s [CompiledPattern],
-        entries: std::iter::Enumerate<MapIter<'v>>,
+        entries: std::iter::Enumerate<Members<'v>>,
         current: Option<(usize, &'v String)>,
         applied: Vec<Value>,
         failed: Vec<&'v str>,
     },
     PropertyNames {
         schema: NodeId,
-        names: MapKeys<'v>,
+        names: Members<'v>,
         current: Option<&'v str>,
         failed: Vec<&'v str>,
     },
@@ -371,8 +373,8 @@ enum Cursor<'s, 'v> {
     },
     UnevaluatedProperties {
         schema: NodeId,
-        map: &'v serde_json::Map<String, Value>,
-        entries: std::iter::Enumerate<MapIter<'v>>,
+        map: &'v Object,
+        entries: std::iter::Enumerate<Members<'v>>,
         current: Option<&'v String>,
         applied: Vec<Value>,
         failed: Vec<&'v str>,
@@ -452,7 +454,7 @@ fn type_name(value: &Value) -> &'static str {
         Value::Null => "null",
         Value::Bool(_) => "boolean",
         Value::Number(number) => {
-            if Decimal::from_number(number).is_integer() {
+            if crate::number::exact(number).is_integer() {
                 "integer"
             } else {
                 "number"
@@ -472,7 +474,7 @@ fn has_type(value: &Value, wanted: JsonType) -> bool {
         | (JsonType::Array, Value::Array(_))
         | (JsonType::Number, Value::Number(_))
         | (JsonType::String, Value::String(_)) => true,
-        (JsonType::Integer, Value::Number(number)) => Decimal::from_number(number).is_integer(),
+        (JsonType::Integer, Value::Number(number)) => crate::number::exact(number).is_integer(),
         _ => false,
     }
 }
@@ -950,14 +952,14 @@ impl<'s> Evaluator<'s> {
             },
             Kind::Properties(schemas) => Cursor::Properties {
                 schemas,
-                entries: instance.object()?.iter().enumerate(),
+                entries: instance.object()?.members().iter().enumerate(),
                 current: None,
                 applied: Vec::new(),
                 failed: Vec::new(),
             },
             Kind::PatternProperties(patterns) => Cursor::PatternProperties {
                 patterns,
-                entries: instance.object()?.iter().enumerate(),
+                entries: instance.object()?.members().iter().enumerate(),
                 current: None,
                 pattern: 0,
                 matched: false,
@@ -972,14 +974,14 @@ impl<'s> Evaluator<'s> {
                 schema: *schema,
                 properties,
                 patterns,
-                entries: instance.object()?.iter().enumerate(),
+                entries: instance.object()?.members().iter().enumerate(),
                 current: None,
                 applied: Vec::new(),
                 failed: Vec::new(),
             },
             Kind::PropertyNames(schema) => Cursor::PropertyNames {
                 schema: *schema,
-                names: instance.object()?.keys(),
+                names: instance.object()?.members().iter(),
                 current: None,
                 failed: Vec::new(),
             },
@@ -995,7 +997,7 @@ impl<'s> Evaluator<'s> {
                 Cursor::UnevaluatedProperties {
                     schema: *schema,
                     map,
-                    entries: map.iter().enumerate(),
+                    entries: map.members().iter().enumerate(),
                     current: None,
                     applied: Vec::new(),
                     failed: Vec::new(),
@@ -1526,7 +1528,7 @@ impl<'s> Evaluator<'s> {
                         }
                     }
                 }
-                if let Some(name) = names.next() {
+                if let Some((name, _)) = names.next() {
                     *current = Some(name);
                     return Resume::Apply(Request {
                         id: *schema,
@@ -1856,7 +1858,7 @@ impl<'s> Evaluator<'s> {
 
 fn number_check(instance: &Value, check: impl FnOnce(Decimal) -> Result<(), String>) -> Verdict {
     match instance {
-        Value::Number(number) => check(Decimal::from_number(number)).map(|()| None),
+        Value::Number(number) => check(crate::number::exact(number)).map(|()| None),
         _ => Ok(None),
     }
 }

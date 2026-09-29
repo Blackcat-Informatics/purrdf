@@ -6,13 +6,23 @@
 //! Two values are equal when they are the same type and the same value, where
 //! numbers compare by mathematical value (`1` equals `1.0`), strings by code
 //! points, arrays item by item, and objects by key set and per-key value. Key
-//! order and number spelling never matter.
+//! order and number spelling never matter. An instance object that repeats a
+//! name (which RFC 8259 §4 leaves undefined) compares that name's occurrences
+//! in document order.
 
 use std::hash::{Hash, Hasher};
 
-use serde_json::Value;
+use purrdf_lex::json::{Object, Value};
 
-use crate::number::Decimal;
+use crate::number::exact;
+
+/// An object's members ordered by name, repeats in document order: the order
+/// [`equal`] pairs members in and [`hash_value`] feeds them in.
+fn by_name(object: &Object) -> Vec<&(String, Value)> {
+    let mut members: Vec<_> = object.members().iter().collect();
+    members.sort_by(|(left, _), (right, _)| left.cmp(right));
+    members
+}
 
 /// JSON Schema equality.
 ///
@@ -27,9 +37,7 @@ pub(crate) fn equal(left: &Value, right: &Value) -> bool {
         let same = match (left, right) {
             (Value::Null, Value::Null) => true,
             (Value::Bool(a), Value::Bool(b)) => a == b,
-            (Value::Number(a), Value::Number(b)) => {
-                Decimal::from_number(a) == Decimal::from_number(b)
-            }
+            (Value::Number(a), Value::Number(b)) => exact(a) == exact(b),
             (Value::String(a), Value::String(b)) => a == b,
             (Value::Array(a), Value::Array(b)) => {
                 a.len() == b.len() && {
@@ -39,12 +47,14 @@ pub(crate) fn equal(left: &Value, right: &Value) -> bool {
             }
             (Value::Object(a), Value::Object(b)) => {
                 a.len() == b.len()
-                    && a.iter().all(|(key, value)| {
-                        b.get(key).is_some_and(|other| {
-                            pending.push((value, other));
-                            true
-                        })
-                    })
+                    && by_name(a).into_iter().zip(by_name(b)).all(
+                        |((name, value), (other_name, other))| {
+                            name == other_name && {
+                                pending.push((value, other));
+                                true
+                            }
+                        },
+                    )
             }
             _ => false,
         };
@@ -66,9 +76,9 @@ enum Hashing<'v> {
 }
 
 /// Feed `value` into `state` so that [`equal`] values hash alike: numbers hash
-/// their exact [`Decimal`], and object members hash in key order (the value
-/// irrespective of the consumer's `serde_json/preserve_order` feature). Like
-/// [`equal`], it walks on a heap stack, so any nesting depth hashes.
+/// their exact value, and object members hash in name order whatever order
+/// the document wrote them in. Like [`equal`], it walks on a heap stack, so
+/// any nesting depth hashes.
 pub(crate) fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
     let mut pending = vec![Hashing::Value(value)];
     while let Some(step) = pending.pop() {
@@ -87,7 +97,7 @@ pub(crate) fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
             }
             Value::Number(number) => {
                 state.write_u8(2);
-                Decimal::from_number(number).hash(state);
+                exact(number).hash(state);
             }
             Value::String(text) => {
                 state.write_u8(3);
@@ -102,24 +112,12 @@ pub(crate) fn hash_value<H: Hasher>(value: &Value, state: &mut H) {
             Value::Object(map) => {
                 state.write_u8(5);
                 state.write_usize(map.len());
-                let mut members: Vec<_> = map.iter().collect();
-                members.sort_unstable_by_key(|(left, _)| *left);
-                for (key, member) in members.into_iter().rev() {
+                for (key, member) in by_name(map).into_iter().rev() {
                     pending.push(Hashing::Value(member));
                     pending.push(Hashing::Key(key));
                 }
             }
         }
-    }
-}
-
-impl Hash for Decimal {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        // `Decimal` is normalized, so equal values have equal fields.
-        let (negative, coefficient, exponent) = self.parts();
-        negative.hash(state);
-        coefficient.hash(state);
-        exponent.hash(state);
     }
 }
 
@@ -157,7 +155,10 @@ pub(crate) fn first_duplicate(items: &[Value]) -> Option<(usize, usize)> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use serde_json::json;
+
+    fn json(text: &str) -> Value {
+        purrdf_lex::json::read(text).expect("JSON")
+    }
 
     /// `depth` arrays nested inside one another around `leaf`.
     fn nested(depth: usize, leaf: Value) -> Value {
@@ -168,15 +169,6 @@ mod tests {
         value
     }
 
-    /// Drop a nested array one level at a time: `Value`'s own drop recurses
-    /// once per level.
-    fn dismantle(mut value: Value) {
-        while let Value::Array(items) = &mut value {
-            let Some(inner) = items.pop() else { break };
-            value = inner;
-        }
-    }
-
     fn hash_of(value: &Value) -> u64 {
         let mut hasher = purrdf_hash::fixed::FixedHasher::default();
         hash_value(value, &mut hasher);
@@ -185,31 +177,49 @@ mod tests {
 
     #[test]
     fn numbers_compare_by_value_and_structures_recurse() {
-        assert!(equal(&json!(1), &json!(1.0)));
+        assert!(equal(&json("1"), &json("1.0")));
         assert!(equal(
-            &json!({"a": [1, {"b": 2.0}]}),
-            &json!({"a": [1.0, {"b": 2}]})
+            &json(r#"{"a": [1, {"b": 2.0}]}"#),
+            &json(r#"{"a": [1.0, {"b": 2}]}"#)
         ));
-        assert!(!equal(&json!([1]), &json!([true])));
-        assert!(!equal(&json!({"a": 1}), &json!({"a": 1, "b": 1})));
-        assert!(!equal(&json!({"a": 1}), &json!({"b": 1})));
-        assert!(!equal(&json!(0), &json!(false)));
-        assert!(!equal(&json!([1, 2]), &json!([2, 1])));
+        assert!(!equal(&json("[1]"), &json("[true]")));
+        assert!(!equal(&json(r#"{"a": 1}"#), &json(r#"{"a": 1, "b": 1}"#)));
+        assert!(!equal(&json(r#"{"a": 1}"#), &json(r#"{"b": 1}"#)));
+        assert!(!equal(&json("0"), &json("false")));
+        assert!(!equal(&json("[1, 2]"), &json("[2, 1]")));
+    }
+
+    #[test]
+    fn a_repeated_name_is_compared_occurrence_by_occurrence() {
+        // Same length, and every name of the left is present on the right.
+        assert!(!equal(
+            &json(r#"{"a": 1, "a": 1}"#),
+            &json(r#"{"a": 1, "b": 1}"#)
+        ));
+        assert!(equal(
+            &json(r#"{"a": 1, "b": 0, "a": 2}"#),
+            &json(r#"{"b": 0.0, "a": 1, "a": 2}"#)
+        ));
+        assert_eq!(
+            hash_of(&json(r#"{"a": 1, "b": 0, "a": 2}"#)),
+            hash_of(&json(r#"{"b": 0.0, "a": 1, "a": 2}"#))
+        );
     }
 
     #[test]
     fn equal_values_hash_alike_whatever_their_spelling_or_member_order() {
-        assert_eq!(hash_of(&json!(1)), hash_of(&json!(1.0)));
-        let forward: Value =
-            serde_json::from_str(r#"{"a": [1, {"x": 2, "y": 3}], "b": null}"#).expect("JSON");
-        let backward: Value =
-            serde_json::from_str(r#"{"b": null, "a": [1.0, {"y": 3, "x": 2.0}]}"#).expect("JSON");
+        assert_eq!(hash_of(&json("1")), hash_of(&json("1.0")));
+        let forward = json(r#"{"a": [1, {"x": 2, "y": 3}], "b": null}"#);
+        let backward = json(r#"{"b": null, "a": [1.0, {"y": 3, "x": 2.0}]}"#);
         assert!(equal(&forward, &backward));
         assert_eq!(hash_of(&forward), hash_of(&backward));
         // Structure is part of the hash: the same leaves nested differently
         // are neither equal nor, here, hashed alike.
-        assert_ne!(hash_of(&json!([[1], 2])), hash_of(&json!([1, [2]])));
-        assert_ne!(hash_of(&json!({"a": "b"})), hash_of(&json!({"ab": ""})));
+        assert_ne!(hash_of(&json("[[1], 2]")), hash_of(&json("[1, [2]]")));
+        assert_ne!(
+            hash_of(&json(r#"{"a": "b"}"#)),
+            hash_of(&json(r#"{"ab": ""}"#))
+        );
     }
 
     #[test]
@@ -219,16 +229,13 @@ mod tests {
             .stack_size(256 * 1024)
             .spawn(|| {
                 const DEPTH: usize = 100_000;
-                let left = nested(DEPTH, json!(1));
-                let same = nested(DEPTH, json!(1.0));
-                let differs = nested(DEPTH, json!(2));
+                let left = nested(DEPTH, json("1"));
+                let same = nested(DEPTH, json("1.0"));
+                let differs = nested(DEPTH, json("2"));
                 assert!(equal(&left, &same));
                 assert_eq!(hash_of(&left), hash_of(&same));
                 assert!(!equal(&left, &differs));
                 assert_ne!(hash_of(&left), hash_of(&differs));
-                for value in [left, same, differs] {
-                    dismantle(value);
-                }
             })
             .expect("thread")
             .join()
@@ -238,13 +245,15 @@ mod tests {
     #[test]
     fn duplicates_are_found_in_small_and_large_arrays() {
         assert_eq!(
-            first_duplicate(&[json!(1), json!(2), json!(1.0)]),
+            first_duplicate(&[json("1"), json("2"), json("1.0")]),
             Some((0, 2))
         );
-        assert_eq!(first_duplicate(&[json!(1), json!(true)]), None);
-        let mut large: Vec<Value> = (0..40).map(|n| json!({"n": n})).collect();
+        assert_eq!(first_duplicate(&[json("1"), json("true")]), None);
+        let mut large: Vec<Value> = (0..40_u8)
+            .map(|n| Value::from(Object::new().with("n", n)))
+            .collect();
         assert_eq!(first_duplicate(&large), None);
-        large.push(json!({"n": 7.0}));
+        large.push(json(r#"{"n": 7.0}"#));
         assert_eq!(first_duplicate(&large), Some((7, 40)));
     }
 }

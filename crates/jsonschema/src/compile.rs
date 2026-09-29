@@ -22,7 +22,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
-use serde_json::{Map, Value};
+use purrdf_lex::json::{Object, Value};
 
 use crate::content::Content;
 use crate::dialect::{self, Dialect, Vocabularies, Vocabulary};
@@ -431,11 +431,7 @@ impl Compiler<'_> {
     }
 
     #[allow(clippy::too_many_lines)]
-    fn keywords(
-        &mut self,
-        context: &Context<'_>,
-        map: &Map<String, Value>,
-    ) -> Result<Body, SchemaError> {
+    fn keywords(&mut self, context: &Context<'_>, map: &Object) -> Result<Body, SchemaError> {
         let dialect = context.dialect;
         let vocabularies = context.vocabularies;
         let draft07 = dialect == Dialect::Draft07;
@@ -460,7 +456,10 @@ impl Compiler<'_> {
         }
         let validation = vocabularies.has(Vocabulary::Validation);
         let applicator = vocabularies.has(Vocabulary::Applicator);
-        let array_items = !modern && map.get("items").is_some_and(Value::is_array);
+        let array_items = !modern
+            && map
+                .get("items")
+                .is_some_and(|items| items.as_array().is_some());
         for (name, value) in map {
             let keyword = name.as_str();
             let kind = match keyword {
@@ -647,7 +646,7 @@ impl Compiler<'_> {
                     let mut required = Vec::new();
                     let mut schemas = Vec::new();
                     for (property, member) in members {
-                        if member.is_array() {
+                        if member.as_array().is_some() {
                             if validation {
                                 required
                                     .push((property.clone(), strings(context, keyword, member)?));
@@ -834,14 +833,14 @@ struct Context<'a> {
 fn number(context: &Context<'_>, keyword: &str, value: &Value) -> Result<Decimal, SchemaError> {
     value
         .as_number()
-        .map(Decimal::from_number)
+        .map(crate::number::exact)
         .ok_or_else(|| invalid(context.absolute, keyword, "must be a number"))
 }
 
 fn count(context: &Context<'_>, keyword: &str, value: &Value) -> Result<u64, SchemaError> {
     value
         .as_number()
-        .and_then(|number| Decimal::from_number(number).to_u64_saturating())
+        .and_then(|number| crate::number::exact(number).to_u64_saturating())
         .ok_or_else(|| invalid(context.absolute, keyword, "must be a non-negative integer"))
 }
 

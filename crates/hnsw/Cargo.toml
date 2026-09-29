@@ -30,8 +30,8 @@ purrdf-hash = { workspace = true }
 # The conformance gate emits a machine-checkable receipt, and a receipt is JSON because
 # its whole purpose is to be read by something other than the process that wrote it. The
 # crate's runtime surface is untouched: a dev-dependency never reaches the wasm32 `--lib`
-# build, and the receipt schema (not serde) is what fixes the record's shape.
-serde_json = { workspace = true }
+# build, and the receipt schema is what fixes the record's shape.
+purrdf-lex = { workspace = true }
 # The shared `harness = false` runner the two cross-target targets below run on,
 # natively and on wasm32-unknown-unknown alike. Path-only and unpublished, so it is
 # stripped from the packaged manifest; wasm32-clean, so it needs no target gate.

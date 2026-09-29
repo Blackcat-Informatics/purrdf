@@ -54,7 +54,7 @@ use purrdf_hnsw::{
 use purrdf_sparql_eval::knn::{Kernel, Ranked, best};
 use std::fmt::Write as _;
 
-use serde_json::{Value, json};
+use purrdf_lex::json::{self, Object, Value};
 
 /// The one kernel both the index and the oracle rank by.
 const KERNEL: Kernel = Kernel::SquaredEuclidean;
@@ -375,45 +375,54 @@ fn run_regime_under<A: Arithmetic>(
             fixture.name
         );
 
-        observations.push(json!({
-            "query": query,
-            "offered": offered_rows.len(),
-            "visited": visited,
-            "hits": this_hits,
-            "offered_rows": offered_rows,
-            "exact_rows": exact_rows,
-        }));
+        observations.push(Value::from(
+            Object::new()
+                .with("query", query)
+                .with("offered", offered_rows.len())
+                .with("visited", visited)
+                .with("hits", this_hits)
+                .with("offered_rows", offered_rows)
+                .with("exact_rows", exact_rows),
+        ));
     }
 
     let recall = hits as f64 / (rows * k) as f64;
     let digest = fnv1a64(&index.canonical_image());
-    let run = json!({
-        "fixture": fixture.name,
-        "index_identity": {
-            "implementation": profile::implementation_id_for::<A>(),
-            "parameter_encoding": profile::PARAMETER_ENCODING,
-            "payload_media_type": INDEX_MEDIA_TYPE,
-            "loss_evidence": profile::loss_evidence_for::<A>(index.arithmetic().path()),
-            "canonical_image_digest": format!("{digest:016x}"),
-        },
-        "metric": "squared-euclidean",
-        "parameters": {
-            "M": params.m(),
-            "M0": params.m0(),
-            "ef_construction": params.ef_construction(),
-            "ef_search": params.ef_search(),
-        },
-        "rows": rows,
-        "dims": fixture.matrix.dims(),
-        "k": k,
-        "queries": rows,
-        "offered_total": offered_total,
-        "visited_total": visited_total,
-        "visited_mean": visited_total as f64 / rows as f64,
-        "recall_at_k": recall,
-        "complete": false,
-        "queries_detail": observations,
-    });
+    let run = Value::from(
+        Object::new()
+            .with("fixture", fixture.name)
+            .with(
+                "index_identity",
+                Object::new()
+                    .with("implementation", profile::implementation_id_for::<A>())
+                    .with("parameter_encoding", profile::PARAMETER_ENCODING)
+                    .with("payload_media_type", INDEX_MEDIA_TYPE)
+                    .with(
+                        "loss_evidence",
+                        profile::loss_evidence_for::<A>(index.arithmetic().path()),
+                    )
+                    .with("canonical_image_digest", format!("{digest:016x}")),
+            )
+            .with("metric", "squared-euclidean")
+            .with(
+                "parameters",
+                Object::new()
+                    .with("M", params.m())
+                    .with("M0", params.m0())
+                    .with("ef_construction", params.ef_construction())
+                    .with("ef_search", params.ef_search()),
+            )
+            .with("rows", rows)
+            .with("dims", fixture.matrix.dims())
+            .with("k", k)
+            .with("queries", rows)
+            .with("offered_total", offered_total)
+            .with("visited_total", visited_total)
+            .with("visited_mean", visited_total as f64 / rows as f64)
+            .with("recall_at_k", recall)
+            .with("complete", false)
+            .with("queries_detail", observations),
+    );
     Run {
         json: run,
         missed,
@@ -438,15 +447,19 @@ fn receipt(name: &str, runs: &[Value]) -> Value {
 
 /// A receipt document for the implementation `implementation` publishing `evidence`.
 fn receipt_for(name: &str, implementation: &str, evidence: &str, runs: &[Value]) -> Value {
-    json!({
-        "schema": "purrdf-hnsw-conformance-receipt-v1",
-        "receipt": name,
-        "implementation": implementation,
-        "parameter_encoding": profile::PARAMETER_ENCODING,
-        "payload_media_type": INDEX_MEDIA_TYPE,
-        "loss_evidence": evidence,
-        "runs": runs,
-    })
+    let mut document = Value::from(
+        Object::new()
+            .with("schema", "purrdf-hnsw-conformance-receipt-v1")
+            .with("receipt", name)
+            .with("implementation", implementation)
+            .with("parameter_encoding", profile::PARAMETER_ENCODING)
+            .with("payload_media_type", INDEX_MEDIA_TYPE)
+            .with("loss_evidence", evidence)
+            .with("runs", runs),
+    );
+    // Members by name, at every level: the receipt's published layout.
+    document.sort_keys();
+    document
 }
 
 /// Write a receipt and read it back, proving the artifact was emitted and parses.
@@ -454,7 +467,7 @@ fn emit(name: &str, document: &Value) -> PathBuf {
     let dir = receipt_dir();
     std::fs::create_dir_all(&dir).expect("the receipt directory is creatable");
     let path = dir.join(format!("{name}.json"));
-    let text = serde_json::to_string_pretty(document).expect("the receipt serializes");
+    let text = json::write_pretty(document);
     std::fs::write(&path, &text).expect("the receipt is writable");
     assert!(
         path.is_file(),
@@ -472,23 +485,21 @@ fn reread(path: &Path) -> Value {
 /// [`reread`] for a receipt of the implementation `implementation`.
 fn reread_for(path: &Path, implementation: &str) -> Value {
     let text = std::fs::read_to_string(path).expect("the emitted receipt reads back");
-    let value: Value = serde_json::from_str(&text).expect("the emitted receipt is valid JSON");
+    let value = json::read(&text).expect("the emitted receipt is valid JSON");
     let runs = value["runs"]
         .as_array()
         .expect("the receipt holds a runs array");
     assert!(!runs.is_empty(), "a conformance receipt records its runs");
     for run in runs {
         assert_eq!(
-            run["complete"],
-            json!(false),
+            run["complete"], false,
             "complete must be false on every run: an approximate offer never certifies absence"
         );
-        assert_eq!(
-            run["index_identity"]["implementation"],
-            json!(implementation)
-        );
+        assert_eq!(run["index_identity"]["implementation"], implementation);
         assert!(
-            run["index_identity"]["canonical_image_digest"].is_string(),
+            run["index_identity"]["canonical_image_digest"]
+                .as_str()
+                .is_some(),
             "every run records the index identity digest"
         );
         let ef = run["parameters"]["ef_search"]
@@ -873,7 +884,7 @@ fn reassociated_distances_match_reassociated_kernel() {
     );
     let value = reread_for(&path, IMPLEMENTATION_ID_REASSOCIATED);
     assert_eq!(value["runs"].as_array().expect("runs").len(), runs.len());
-    assert_eq!(value["loss_evidence"], json!(evidence));
+    assert_eq!(value["loss_evidence"], evidence);
 }
 
 /// The reassociated index's recall, graded against the exact oracle exactly as the exact

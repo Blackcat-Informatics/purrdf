@@ -60,7 +60,7 @@ deps = []
 
 [[crate]]
 name = "helper-census"
-deps = ["purrdf-hash"]
+deps = ["purrdf-hash", "purrdf-lex"]
 
 [[crate]]
 name = "purrdf-deflate"
@@ -191,7 +191,7 @@ deps = [
 
 [[crate]]
 name = "purrdf-sparql-results"
-deps = ["purrdf-core", "purrdf-hash", "purrdf-iri"]
+deps = ["purrdf-core", "purrdf-iri", "purrdf-lex"]
 
 [[crate]]
 name = "purrdf-entail"
@@ -222,6 +222,7 @@ deps = [
     "purrdf-core",
     "purrdf-hash",
     "purrdf-iri",
+    "purrdf-lex",
     "purrdf-sparql-eval",
     "purrdf-xsd",
 ]

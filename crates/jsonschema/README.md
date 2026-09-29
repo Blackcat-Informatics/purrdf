@@ -8,7 +8,8 @@ and **07**: every schema resource is evaluated in the dialect its `$schema`
 names, with every vocabulary, dynamic and recursive references, unevaluated
 keywords, and the standard output formats.
 
-It depends on `serde_json`, `regex`, `purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash` only, forbids `unsafe`,
+Schemas and instances are `purrdf_lex::json::Value`s. It depends on `regex`,
+`purrdf-iri`, `purrdf-xsd`, `purrdf-lex` and `purrdf-hash` only, forbids `unsafe`,
 and builds for `wasm32-unknown-unknown` like every other release crate in the
 workspace, so a schema PurRDF emits from SHACL can be checked in the browser
 by the same code that checks it natively. Nothing is fetched.
@@ -25,7 +26,7 @@ meta-schema that is needed and not registered is
 
 ```rust
 use purrdf_jsonschema::{Metaschemas, OutputFormat, Registry, SchemaError};
-use serde_json::{Value, json};
+use purrdf_lex::json::{self, Value};
 
 fn check(draft_2020_12: Vec<(&str, Value)>) -> Result<(), SchemaError> {
     // The nine published draft 2020-12 meta-schema documents, `(URI, document)`.
@@ -34,18 +35,25 @@ fn check(draft_2020_12: Vec<(&str, Value)>) -> Result<(), SchemaError> {
     let mut registry = Registry::with_metaschemas(&metaschemas);
     registry.add_resource(
         "https://example.org/person.json",
-        json!({
-            "$schema": "https://json-schema.org/draft/2020-12/schema",
-            "type": "object",
-            "properties": {"name": {"type": "string"}},
-            "required": ["name"],
-            "unevaluatedProperties": false
-        }),
+        json::read(
+            r#"{
+                "$schema": "https://json-schema.org/draft/2020-12/schema",
+                "type": "object",
+                "properties": {"name": {"type": "string"}},
+                "required": ["name"],
+                "unevaluatedProperties": false
+            }"#,
+        )
+        .expect("JSON"),
     )?;
     let schema = registry.compile("https://example.org/person.json")?;
-    assert!(schema.is_valid(&json!({"name": "Ada"})).expect("evaluation"));
+    let instance = |text: &str| json::read(text).expect("JSON");
+    assert!(schema.is_valid(&instance(r#"{"name": "Ada"}"#)).expect("evaluation"));
 
-    let basic = schema.evaluate(&json!({"age": 36})).expect("evaluation").to_json(OutputFormat::Basic);
+    let basic = schema
+        .evaluate(&instance(r#"{"age": 36}"#))
+        .expect("evaluation")
+        .to_json(OutputFormat::Basic);
     assert_eq!(basic["valid"], false);
     Ok(())
 }
@@ -76,8 +84,14 @@ shorthand.
   `email`/`idn-email` through `purrdf_iri::host`.
 * **Output**: `flag`, `basic` and `detailed`.
 
-Numbers are compared and divided exactly, in decimal: `0.0075` is a multiple of
+Numbers are compared and divided exactly, in decimal, from the lexeme the
+document wrote (`purrdf_xsd::json_number`): `0.0075` is a multiple of
 `0.0001`, and `1e308` is a multiple of `0.5`.
+
+A registered schema document in which an object repeats a member name is
+refused (`SchemaError::InvalidKeyword`, naming the object): RFC 8259 leaves a
+repeat's meaning open, and reading one occurrence would drop the other. The
+output formats write every object's members in name order.
 
 ## Patterns
 

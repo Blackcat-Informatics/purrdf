@@ -31,8 +31,8 @@ use std::process::ExitCode;
 use std::sync::Arc;
 
 use purrdf_jsonschema::{Dialect, Metaschemas, OutputFormat, Registry, Schema, SchemaError};
+use purrdf_lex::json::{self, Value};
 use purrdf_testkit::harness::{self, Failed, Trial};
-use serde_json::Value;
 
 const SUITE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/tests/suite");
 
@@ -79,7 +79,7 @@ pub(crate) struct Draft {
 fn read_json(path: &Path) -> Value {
     let text =
         fs::read_to_string(path).unwrap_or_else(|error| panic!("{}: {error}", path.display()));
-    serde_json::from_str(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
+    json::read(&text).unwrap_or_else(|error| panic!("{}: {error}", path.display()))
 }
 
 fn json_files(root: &Path) -> Vec<PathBuf> {
@@ -117,7 +117,7 @@ fn relative(path: &Path, root: &Path) -> String {
 pub(crate) fn metaschemas() -> Metaschemas {
     Metaschemas::new(
         purrdf_testkit::jsonschema_metaschemas::all().map(|(uri, text)| {
-            let document: Value = serde_json::from_str(text).expect("meta-schema JSON");
+            let document = json::read(text).expect("meta-schema JSON");
             (uri, document)
         }),
     )
@@ -183,7 +183,8 @@ pub(crate) fn run(draft: Draft) -> ExitCode {
         inventory.files += 1;
         let file = relative(&path, &tests_root);
         let format_assertion = file.starts_with("optional/format/");
-        let Value::Array(file_groups) = read_json(&path) else {
+        let document = read_json(&path);
+        let Some(file_groups) = document.as_array() else {
             panic!("{file}: a suite file is an array of groups");
         };
         for (group_index, group) in file_groups.iter().enumerate() {
@@ -273,10 +274,11 @@ fn output_trials(base: &Registry, directory: &str, trials: &mut Vec<Trial>) -> u
     let mut count = 0;
     for path in json_files(&content) {
         let file = relative(&path, &content);
-        let Value::Array(groups) = read_json(&path) else {
+        let document = read_json(&path);
+        let Some(groups) = document.as_array() else {
             panic!("{file}: an output test file is an array of groups");
         };
-        for (group_index, group) in groups.into_iter().enumerate() {
+        for (group_index, group) in groups.iter().enumerate() {
             let tests = group["tests"].as_array().cloned().unwrap_or_default();
             for (test_index, test) in tests.into_iter().enumerate() {
                 count += 1;

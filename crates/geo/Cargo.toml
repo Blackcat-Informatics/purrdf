@@ -45,6 +45,10 @@ purrdf-xsd = { workspace = true }
 # folds its output bytes through. The zero-dependency root, already under
 # purrdf-core, so this edge adds nothing to the build.
 purrdf-hash = { workspace = true }
+# The workspace's one RFC 8259 JSON reader, value and writer: a GeoJSON literal
+# is read with every number kept as its source lexeme, and written back
+# deterministically.
+purrdf-lex = { workspace = true }
 
 [dev-dependencies]
 purrdf-sparql-algebra = { workspace = true }

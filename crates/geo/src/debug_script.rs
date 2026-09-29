@@ -11,8 +11,7 @@
 //! the derive's exactly: the separators, the brackets and the pretty form's four
 //! spaces of indentation per open container are the rules of the standard library's
 //! `DebugStruct`, `DebugTuple` and `DebugList` builders and of the `PadAdapter` they
-//! nest once per level, spelled here once for [`crate::geom::Geometry`] and
-//! [`crate::json::JsonValue`].
+//! nest once per level, spelled here once for [`crate::geom::Geometry`].
 
 use core::fmt::{self, Write as _};
 

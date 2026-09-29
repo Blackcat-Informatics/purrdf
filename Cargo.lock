@@ -365,8 +365,8 @@ version = "2.0.2"
 dependencies = [
  "proc-macro2",
  "purrdf-hash",
+ "purrdf-lex",
  "regex",
- "serde_json",
  "syn",
 ]
 
@@ -652,6 +652,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-rdf",
  "purrdf-shapes",
  "purrdf-sparql-algebra",
@@ -702,11 +703,11 @@ version = "2.0.2"
 dependencies = [
  "purrdf-core",
  "purrdf-hash",
+ "purrdf-lex",
  "purrdf-sparql-eval",
  "purrdf-testkit",
  "purrdf-xsd",
  "rayon",
- "serde_json",
 ]
 
 [[package]]
@@ -741,7 +742,6 @@ dependencies = [
  "purrdf-testkit",
  "purrdf-xsd",
  "regex",
- "serde_json",
 ]
 
 [[package]]
@@ -941,8 +941,8 @@ version = "2.0.2"
 dependencies = [
  "purrdf-alloc-probe",
  "purrdf-core",
- "purrdf-hash",
  "purrdf-iri",
+ "purrdf-lex",
  "purrdf-testkit",
 ]
 

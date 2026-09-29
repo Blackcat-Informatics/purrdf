@@ -11,22 +11,27 @@
 //!
 //! # Wasm discipline
 //!
-//! A hand-rolled parser over `&[u8]` — **no `serde`, no `std::io`** — symmetric
-//! with the hand-rolled writers and keeping the crate wasm-clean.
+//! The JSON grammar is the workspace's one reader, [`purrdf_lex::json`]: the
+//! tree readers build its [`Value`], and the bounded reader drives its pull
+//! [`Reader`] so a skipped member is syntax-checked without being built. No
+//! `std::io`, so the crate stays wasm-clean.
 //!
 //! # Nesting depth
 //!
-//! Every walk over input nesting — parsing a JSON value, skipping one, dropping a
-//! parsed value, and decoding an RDF 1.2 triple-term binding — runs over an
-//! explicit heap stack rather than the machine stack. A document nested to any
+//! Every walk over input nesting — reading a JSON value, skipping one, dropping a
+//! read value, and decoding an RDF 1.2 triple-term binding — runs over an
+//! explicit heap stack rather than the machine stack, and the reader sets no
+//! container-depth cap. A document nested to any
 //! depth is therefore parsed (or refused for a syntax or shape error) with a
 //! machine-stack footprint independent of that depth, which is what keeps a remote
 //! `SERVICE` endpoint's deeply nested answer from overflowing the stack.
 
+use std::borrow::Cow;
+
 use purrdf_core::TermBox;
-use purrdf_core::terminals::{self, find_first_json_string_special};
 use purrdf_core::{BlankScope, RdfTextDirection, TermValue};
-use purrdf_iri::json_escape;
+use purrdf_lex::json::{self, Event, Limits, Object, Reader, Value};
+use purrdf_lex::terminals::skip_ws;
 
 use crate::error::Error;
 use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
@@ -93,20 +98,21 @@ pub struct BoundedParsedSolutions {
 /// (`boolean`) document (use [`from_json_boolean`]), or a binding object whose
 /// `type`/`value` shape is invalid.
 pub fn from_json(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
-    let doc = JsonParser::new(bytes).parse_document()?;
+    let doc = read_document(bytes)?;
     let obj = doc
         .as_object()
         .ok_or_else(|| fmt("top level is not an object"))?;
-    if obj_get(obj, "boolean").is_some() {
+    if obj.get("boolean").is_some() {
         return Err(fmt(
             "expected SELECT results, got an ASK (boolean) document",
         ));
     }
-    let head = obj_get(obj, "head")
-        .and_then(Json::as_object)
+    let head = obj
+        .get("head")
+        .and_then(Value::as_object)
         .ok_or_else(|| fmt("missing `head` object"))?;
-    let variables = match obj_get(head, "vars") {
-        Some(Json::Array(items)) => items
+    let variables = match head.get("vars") {
+        Some(Value::Array(items)) => items
             .iter()
             .map(|v| {
                 v.as_str()
@@ -118,27 +124,19 @@ pub fn from_json(bytes: &[u8]) -> Result<ParsedSolutions, Error> {
         _ => Vec::new(),
     };
 
-    let results = obj_get(obj, "results")
-        .and_then(Json::as_object)
+    let results = obj
+        .get("results")
+        .and_then(Value::as_object)
         .ok_or_else(|| fmt("missing `results` object"))?;
-    let bindings = match obj_get(results, "bindings") {
-        Some(Json::Array(items)) => items.as_slice(),
+    let bindings = match results.get("bindings") {
+        Some(Value::Array(items)) => items.as_slice(),
         _ => return Err(fmt("missing `results.bindings` array")),
     };
 
-    let mut rows = Vec::with_capacity(bindings.len());
-    for binding in bindings {
-        let row_obj = binding
-            .as_object()
-            .ok_or_else(|| fmt("`results.bindings` entry is not an object"))?;
-        let mut row = vec![None; variables.len()];
-        for (j, var) in variables.iter().enumerate() {
-            if let Some(cell) = obj_get(row_obj, var) {
-                row[j] = Some(decode_binding(cell)?);
-            }
-        }
-        rows.push(row);
-    }
+    let rows = bindings
+        .iter()
+        .map(|binding| decode_row(binding, &variables))
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(ParsedSolutions { variables, rows })
 }
 
@@ -177,27 +175,17 @@ pub fn from_json_bounded(bytes: &[u8], max_cells: u64) -> Result<BoundedParsedSo
 /// First bounded-decoder pass: locate and decode `head.vars`, skipping every other value
 /// without building a JSON tree.
 fn scan_variables(bytes: &[u8]) -> Result<Vec<String>, Error> {
-    let mut parser = JsonParser::new(bytes);
-    parser.skip_ws();
-    parser.expect(b'{', "top level is not an object")?;
+    let mut reader = Reader::from_slice(bytes, LIMITS).map_err(syntax)?;
+    open_object(&mut reader, "top level is not an object")?;
     let mut variables = None;
-    parser.skip_ws();
-    if parser.peek() != Some(b'}') {
-        loop {
-            let key = parser.parse_object_key()?;
-            if key == "head" && variables.is_none() {
-                variables = Some(parser.parse_head_variables()?);
-            } else {
-                parser.skip_value()?;
-            }
-            if parser.finish_entry(b'}', "expected `,` or `}` in object")? {
-                break;
-            }
+    while let Some(key) = next_key(&mut reader)? {
+        if key == "head" && variables.is_none() {
+            variables = Some(head_variables(&mut reader)?);
+        } else {
+            reader.skip_value().map_err(syntax)?;
         }
-    } else {
-        parser.pos += 1;
     }
-    parser.finish_document()?;
+    reader.finish().map_err(syntax)?;
     variables.ok_or_else(|| fmt("missing `head` object"))
 }
 
@@ -208,33 +196,25 @@ fn scan_bindings(
     variables: &[String],
     row_limit: Option<usize>,
 ) -> BoundedRowsResult {
-    let mut parser = JsonParser::new(bytes);
-    parser.skip_ws();
-    parser.expect(b'{', "top level is not an object")?;
+    let mut reader = Reader::from_slice(bytes, LIMITS).map_err(syntax)?;
+    open_object(&mut reader, "top level is not an object")?;
     let mut result = None;
     let mut saw_boolean = false;
-    parser.skip_ws();
-    if parser.peek() != Some(b'}') {
-        loop {
-            let key = parser.parse_object_key()?;
-            match key.as_str() {
-                "boolean" => {
-                    saw_boolean = true;
-                    parser.skip_value()?;
-                }
-                "results" if result.is_none() => {
-                    result = Some(parser.parse_bounded_results(variables, row_limit)?);
-                }
-                _ => parser.skip_value()?,
+    while let Some(key) = next_key(&mut reader)? {
+        match &*key {
+            "boolean" => {
+                saw_boolean = true;
+                reader.skip_value().map_err(syntax)?;
             }
-            if parser.finish_entry(b'}', "expected `,` or `}` in object")? {
-                break;
+            "results" if result.is_none() => {
+                result = Some(bounded_results(&mut reader, variables, row_limit)?);
+            }
+            _ => {
+                reader.skip_value().map_err(syntax)?;
             }
         }
-    } else {
-        parser.pos += 1;
     }
-    parser.finish_document()?;
+    reader.finish().map_err(syntax)?;
     if saw_boolean {
         return Err(fmt(
             "expected SELECT results, got an ASK (boolean) document",
@@ -260,12 +240,12 @@ fn scan_bindings(
 /// Returns [`Error::Format`] on malformed JSON or a document without a boolean
 /// `boolean` field.
 pub fn from_json_boolean(bytes: &[u8]) -> Result<bool, Error> {
-    let doc = JsonParser::new(bytes).parse_document()?;
+    let doc = read_document(bytes)?;
     let obj = doc
         .as_object()
         .ok_or_else(|| fmt("top level is not an object"))?;
-    match obj_get(obj, "boolean") {
-        Some(Json::Bool(b)) => Ok(*b),
+    match obj.get("boolean") {
+        Some(Value::Bool(b)) => Ok(*b),
         _ => Err(fmt("missing boolean `boolean` field")),
     }
 }
@@ -308,33 +288,35 @@ pub fn provenance_from_json(
     bytes: &[u8],
     namespace: &ProvenanceNamespace,
 ) -> Result<ResultProvenance, Error> {
-    let doc = JsonParser::new(bytes).parse_document()?;
+    let doc = read_document(bytes)?;
     let obj = doc
         .as_object()
         .ok_or_else(|| fmt("top level is not an object"))?;
     let iri = namespace.iri();
     let Some(member_obj) = obj.iter().find_map(|(_, value)| {
         let candidate = value.as_object()?;
-        let recorded = obj_get(candidate, "namespace").and_then(Json::as_str)?;
+        let recorded = candidate.get("namespace").and_then(Value::as_str)?;
         (recorded == iri).then_some(candidate)
     }) else {
         return Ok(ResultProvenance::default());
     };
-    let query_hash = obj_get(member_obj, "queryHash")
-        .and_then(Json::as_str)
+    let query_hash = member_obj
+        .get("queryHash")
+        .and_then(Value::as_str)
         .map(str::to_owned);
-    let engine = obj_get(member_obj, "engine")
-        .and_then(Json::as_str)
+    let engine = member_obj
+        .get("engine")
+        .and_then(Value::as_str)
         .map(str::to_owned);
-    let solutions = match obj_get(member_obj, "solutions") {
-        Some(Json::Array(items)) => items
+    let solutions = match member_obj.get("solutions") {
+        Some(Value::Array(items)) => items
             .iter()
             .map(|item| {
                 let item_obj = item
                     .as_object()
                     .ok_or_else(|| fmt("provenance solution is not an object"))?;
-                let sources = match obj_get(item_obj, "sources") {
-                    Some(Json::Array(values)) => values
+                let sources = match item_obj.get("sources") {
+                    Some(Value::Array(values)) => values
                         .iter()
                         .map(|v| {
                             v.as_str()
@@ -365,14 +347,16 @@ pub fn provenance_from_json(
 /// `predicate`, `object`, and a triple term's predicate is checked to be an IRI only
 /// after its object has been decoded, so the first error reported for a malformed
 /// document is the one a depth-first descent in that order meets first.
-fn decode_binding(value: &Json) -> Result<TermValue, Error> {
+fn decode_binding(value: &Value) -> Result<TermValue, Error> {
     let mut open: Vec<OpenTriple<'_>> = Vec::new();
     let mut next = value;
     loop {
         let mut term = match decode_binding_node(next)? {
             BindingNode::Term(term) => term,
             BindingNode::Triple(inner) => {
-                next = obj_get(inner, "subject").ok_or_else(|| fmt("triple has no subject"))?;
+                next = inner
+                    .get("subject")
+                    .ok_or_else(|| fmt("triple has no subject"))?;
                 open.push(OpenTriple {
                     inner,
                     subject: None,
@@ -389,14 +373,18 @@ fn decode_binding(value: &Json) -> Result<TermValue, Error> {
             };
             if triple.subject.is_none() {
                 triple.subject = Some(term);
-                next = obj_get(triple.inner, "predicate")
+                next = triple
+                    .inner
+                    .get("predicate")
                     .ok_or_else(|| fmt("triple has no predicate"))?;
                 break;
             }
             if triple.predicate.is_none() {
                 triple.predicate = Some(term);
-                next =
-                    obj_get(triple.inner, "object").ok_or_else(|| fmt("triple has no object"))?;
+                next = triple
+                    .inner
+                    .get("object")
+                    .ok_or_else(|| fmt("triple has no object"))?;
                 break;
             }
             let innermost = open.pop();
@@ -423,7 +411,7 @@ fn decode_binding(value: &Json) -> Result<TermValue, Error> {
 /// A triple-term binding whose components are still being decoded: its `value`
 /// object and the components decoded so far, in `subject`, `predicate` order.
 struct OpenTriple<'a> {
-    inner: &'a [(String, Json)],
+    inner: &'a Object,
     subject: Option<TermValue>,
     predicate: Option<TermValue>,
 }
@@ -432,17 +420,18 @@ struct OpenTriple<'a> {
 /// object of a triple term whose components remain to be decoded.
 enum BindingNode<'a> {
     Term(TermValue),
-    Triple(&'a [(String, Json)]),
+    Triple(&'a Object),
 }
 
 /// Decode the binding object `value` down to, but not into, the components of a
 /// triple term.
-fn decode_binding_node(value: &Json) -> Result<BindingNode<'_>, Error> {
+fn decode_binding_node(value: &Value) -> Result<BindingNode<'_>, Error> {
     let obj = value
         .as_object()
         .ok_or_else(|| fmt("binding is not an object"))?;
-    let ty = obj_get(obj, "type")
-        .and_then(Json::as_str)
+    let ty = obj
+        .get("type")
+        .and_then(Value::as_str)
         .ok_or_else(|| fmt("binding has no string `type`"))?;
     match ty {
         "uri" => {
@@ -458,7 +447,7 @@ fn decode_binding_node(value: &Json) -> Result<BindingNode<'_>, Error> {
         }
         "literal" | "typed-literal" => {
             let v = binding_value(obj)?;
-            let language = obj_get(obj, "xml:lang").and_then(Json::as_str);
+            let language = obj.get("xml:lang").and_then(Value::as_str);
             // A tag arriving in a DOCUMENT is parsed input, held to the same
             // grammar as every other parsed tag in the workspace. Refusing here
             // is what stops a federated `SERVICE` response from laundering an
@@ -472,9 +461,10 @@ fn decode_binding_node(value: &Json) -> Result<BindingNode<'_>, Error> {
             // [`crate::json`]'s module docs for the fixture evidence. The bare
             // `dir` spelling is tolerated too, for interop with producers that
             // predate the SPARQL 1.2 spelling.
-            let direction = match obj_get(obj, "its:dir")
-                .or_else(|| obj_get(obj, "dir"))
-                .and_then(Json::as_str)
+            let direction = match obj
+                .get("its:dir")
+                .or_else(|| obj.get("dir"))
+                .and_then(Value::as_str)
             {
                 Some(token) => Some(
                     RdfTextDirection::from_str_token(token)
@@ -482,7 +472,7 @@ fn decode_binding_node(value: &Json) -> Result<BindingNode<'_>, Error> {
                 ),
                 None => None,
             };
-            let datatype = obj_get(obj, "datatype").and_then(Json::as_str);
+            let datatype = obj.get("datatype").and_then(Value::as_str);
             let datatype = resolve_datatype(datatype, language.is_some(), direction.is_some());
             Ok(BindingNode::Term(TermValue::Literal {
                 lexical_form: v.to_owned(),
@@ -491,8 +481,9 @@ fn decode_binding_node(value: &Json) -> Result<BindingNode<'_>, Error> {
                 direction,
             }))
         }
-        "triple" => obj_get(obj, "value")
-            .and_then(Json::as_object)
+        "triple" => obj
+            .get("value")
+            .and_then(Value::as_object)
             .map(BindingNode::Triple)
             .ok_or_else(|| fmt("triple binding has no object `value`")),
         other => Err(fmt(&format!("unknown binding type `{other}`"))),
@@ -500,9 +491,9 @@ fn decode_binding_node(value: &Json) -> Result<BindingNode<'_>, Error> {
 }
 
 /// Read the required string `value` field of a binding object.
-fn binding_value(obj: &[(String, Json)]) -> Result<&str, Error> {
-    obj_get(obj, "value")
-        .and_then(Json::as_str)
+fn binding_value(obj: &Object) -> Result<&str, Error> {
+    obj.get("value")
+        .and_then(Value::as_str)
         .ok_or_else(|| fmt("binding has no string `value`"))
 }
 
@@ -518,589 +509,137 @@ fn resolve_datatype(datatype: Option<&str>, has_lang: bool, has_dir: bool) -> St
 }
 
 /// Build a `Format` error.
+/// Build a `Format` error.
 fn fmt(msg: &str) -> Error {
     Error::Format(format!("SPARQL-JSON: {msg}"))
 }
 
-/// Look up a key in an object's `(key, value)` pairs (first match).
-fn obj_get<'a>(obj: &'a [(String, Json)], key: &str) -> Option<&'a Json> {
-    obj.iter().find(|(k, _)| k == key).map(|(_, v)| v)
+/// A refusal from the JSON reader, named with its byte offset.
+fn syntax(error: json::Error) -> Error {
+    fmt(&error.to_string())
 }
 
-/// A minimal JSON value. A number is syntax-scanned and kept only as the fact of
-/// being a number: no SPARQL-JSON member this reader decodes holds one.
-///
-/// Its drop takes nested arrays and objects apart over a heap work list, so dropping
-/// a value of any nesting depth uses a fixed amount of machine stack.
-enum Json {
-    Null,
-    Bool(bool),
-    Number,
-    String(String),
-    Array(Vec<Self>),
-    Object(Vec<(String, Self)>),
+/// The reader's bounds: no container-depth cap. Every walk over the document —
+/// the reader's own, the tree's drop, [`decode_binding`] — runs over a heap
+/// stack, so nesting costs memory proportional to the input and never machine
+/// stack, and a triple term may nest as deep as the endpoint wrote it.
+const LIMITS: Limits = Limits::with_depth(usize::MAX);
+
+/// The whole document as a JSON tree.
+fn read_document(bytes: &[u8]) -> Result<Value, Error> {
+    json::read_slice(bytes, LIMITS).map_err(syntax)
 }
 
-impl Drop for Json {
-    fn drop(&mut self) {
-        if !self.has_children() {
-            return;
-        }
-        let mut pending = Vec::new();
-        self.move_children_into(&mut pending);
-        while let Some(mut node) = pending.pop() {
-            node.move_children_into(&mut pending);
-            // `node` now holds no children, so its own drop returns at once.
+/// Decode one `results.bindings` entry into a dense row over `variables`.
+fn decode_row(binding: &Value, variables: &[String]) -> Result<BindingRow, Error> {
+    let row_obj = binding
+        .as_object()
+        .ok_or_else(|| fmt("`results.bindings` entry is not an object"))?;
+    let mut row = vec![None; variables.len()];
+    for (index, variable) in variables.iter().enumerate() {
+        if let Some(cell) = row_obj.get(variable) {
+            row[index] = Some(decode_binding(cell)?);
         }
     }
+    Ok(row)
 }
 
-impl Json {
-    /// Whether this is a non-empty array or object.
-    fn has_children(&self) -> bool {
-        match self {
-            Self::Array(items) => !items.is_empty(),
-            Self::Object(entries) => !entries.is_empty(),
-            _ => false,
-        }
-    }
-
-    /// Move every child array or object that itself has children onto `pending`,
-    /// leaving this value's own array or object empty; every other child is dropped
-    /// here.
-    fn move_children_into(&mut self, pending: &mut Vec<Self>) {
-        match self {
-            Self::Array(items) => {
-                pending.extend(items.drain(..).filter(Self::has_children));
-            }
-            Self::Object(entries) => {
-                pending.extend(
-                    entries
-                        .drain(..)
-                        .map(|(_, value)| value)
-                        .filter(Self::has_children),
-                );
-            }
-            _ => {}
-        }
-    }
-
-    fn as_str(&self) -> Option<&str> {
-        match self {
-            Self::String(s) => Some(s),
-            _ => None,
-        }
-    }
-    fn as_object(&self) -> Option<&[(String, Self)]> {
-        match self {
-            Self::Object(o) => Some(o),
-            _ => None,
-        }
+/// Read the next value, requiring it to open an object; `message` otherwise.
+fn open_object(reader: &mut Reader<'_>, message: &str) -> Result<(), Error> {
+    match reader.next_event().map_err(syntax)? {
+        Event::BeginObject { .. } => Ok(()),
+        _ => Err(fmt(message)),
     }
 }
 
-/// An array or object [`JsonParser::parse_value`] has opened and not yet closed: the
-/// entries parsed into it so far and, for an object, the key of the entry whose value
-/// is being parsed.
-enum OpenContainer {
-    Array(Vec<Json>),
-    Object(Vec<(String, Json)>, String),
+/// Read the next value, requiring it to open an array; `message` otherwise.
+fn open_array(reader: &mut Reader<'_>, message: &str) -> Result<(), Error> {
+    match reader.next_event().map_err(syntax)? {
+        Event::BeginArray { .. } => Ok(()),
+        _ => Err(fmt(message)),
+    }
 }
 
-/// A hand-rolled JSON parser over `&[u8]`; nested values are tracked on heap stacks.
-struct JsonParser<'a> {
-    bytes: &'a [u8],
-    pos: usize,
+/// The next member name of the open object, decoded, or `None` at its `}`.
+fn next_key<'a>(reader: &mut Reader<'a>) -> Result<Option<Cow<'a, str>>, Error> {
+    reader
+        .next_key()
+        .map_err(syntax)?
+        .map(|name| name.decode().map_err(syntax))
+        .transpose()
 }
 
-impl<'a> JsonParser<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { bytes, pos: 0 }
-    }
+/// Whether the next value, past insignificant whitespace, starts with `byte`.
+fn next_starts_with(reader: &Reader<'_>, byte: u8) -> bool {
+    let text = reader.text().as_bytes();
+    text.get(skip_ws(text, reader.offset())) == Some(&byte)
+}
 
-    /// Parse the whole document; trailing non-whitespace is an error.
-    fn parse_document(&mut self) -> Result<Json, Error> {
-        self.skip_ws();
-        let value = self.parse_value()?;
-        self.skip_ws();
-        if self.pos != self.bytes.len() {
-            return Err(fmt("trailing data after JSON value"));
-        }
-        Ok(value)
-    }
-
-    fn peek(&self) -> Option<u8> {
-        self.bytes.get(self.pos).copied()
-    }
-
-    /// Skip JSON `ws = *( %x20 / %x09 / %x0A / %x0D )`.
-    fn skip_ws(&mut self) {
-        self.pos = terminals::skip_ws(self.bytes, self.pos);
-    }
-
-    /// Consume `byte` after whitespace, or return a format error with `message`.
-    fn expect(&mut self, byte: u8, message: &str) -> Result<(), Error> {
-        self.skip_ws();
-        if self.peek() != Some(byte) {
-            return Err(fmt(message));
-        }
-        self.pos += 1;
-        Ok(())
-    }
-
-    /// Finish a streaming object/array entry. Returns `true` when `closing` was consumed.
-    fn finish_entry(&mut self, closing: u8, message: &str) -> Result<bool, Error> {
-        self.skip_ws();
-        match self.peek() {
-            Some(b',') => {
-                self.pos += 1;
-                Ok(false)
-            }
-            Some(found) if found == closing => {
-                self.pos += 1;
-                Ok(true)
-            }
-            _ => Err(fmt(message)),
-        }
-    }
-
-    /// Validate that the streaming pass consumed the whole document.
-    fn finish_document(&mut self) -> Result<(), Error> {
-        self.skip_ws();
-        if self.pos == self.bytes.len() {
-            Ok(())
+/// Decode the first `vars` array in a `head` object, skipping other fields.
+fn head_variables(reader: &mut Reader<'_>) -> Result<Vec<String>, Error> {
+    open_object(reader, "missing `head` object")?;
+    let mut variables = None;
+    while let Some(key) = next_key(reader)? {
+        if key == "vars" && variables.is_none() && next_starts_with(reader, b'[') {
+            variables = Some(string_array(reader, "`head.vars` entry is not a string")?);
         } else {
-            Err(fmt("trailing data after JSON value"))
+            reader.skip_value().map_err(syntax)?;
         }
     }
+    Ok(variables.unwrap_or_default())
+}
 
-    /// Parse one object key and its following colon.
-    fn parse_object_key(&mut self) -> Result<String, Error> {
-        self.skip_ws();
-        if self.peek() != Some(b'"') {
-            return Err(fmt("expected string key in object"));
-        }
-        let key = self.parse_string()?;
-        self.expect(b':', "expected `:` after object key")?;
-        Ok(key)
-    }
-
-    /// Decode the first `vars` array in a `head` object, skipping other fields.
-    fn parse_head_variables(&mut self) -> Result<Vec<String>, Error> {
-        self.expect(b'{', "missing `head` object")?;
-        let mut variables = None;
-        self.skip_ws();
-        if self.peek() == Some(b'}') {
-            self.pos += 1;
-            return Ok(Vec::new());
-        }
-        loop {
-            let key = self.parse_object_key()?;
-            if key == "vars" && variables.is_none() && self.peek_after_ws() == Some(b'[') {
-                variables = Some(self.parse_string_array("`head.vars` entry is not a string")?);
-            } else {
-                self.skip_value()?;
-            }
-            if self.finish_entry(b'}', "expected `,` or `}` in object")? {
-                break;
-            }
-        }
-        Ok(variables.unwrap_or_default())
-    }
-
-    /// Parse a string-only JSON array.
-    fn parse_string_array(&mut self, item_error: &str) -> Result<Vec<String>, Error> {
-        self.expect(b'[', "expected array")?;
-        let mut items = Vec::new();
-        self.skip_ws();
-        if self.peek() == Some(b']') {
-            self.pos += 1;
-            return Ok(items);
-        }
-        loop {
-            self.skip_ws();
-            if self.peek() != Some(b'"') {
-                return Err(fmt(item_error));
-            }
-            items.push(self.parse_string()?);
-            if self.finish_entry(b']', "expected `,` or `]` in array")? {
-                break;
-            }
-        }
-        Ok(items)
-    }
-
-    /// Parse the first `bindings` array in a `results` object through a bounded sink.
-    fn parse_bounded_results(
-        &mut self,
-        variables: &[String],
-        row_limit: Option<usize>,
-    ) -> BoundedRowsResult {
-        self.expect(b'{', "missing `results` object")?;
-        let mut result = None;
-        self.skip_ws();
-        if self.peek() == Some(b'}') {
-            self.pos += 1;
-            return Err(fmt("missing `results.bindings` array"));
-        }
-        loop {
-            let key = self.parse_object_key()?;
-            if key == "bindings" && result.is_none() {
-                result = Some(self.parse_bounded_binding_array(variables, row_limit)?);
-            } else {
-                self.skip_value()?;
-            }
-            if self.finish_entry(b'}', "expected `,` or `}` in object")? {
-                break;
-            }
-        }
-        result.ok_or_else(|| fmt("missing `results.bindings` array"))
-    }
-
-    /// Decode the prefix of a bindings array that fits `row_limit`, then syntax-scan the
-    /// suffix without constructing its tree.
-    fn parse_bounded_binding_array(
-        &mut self,
-        variables: &[String],
-        row_limit: Option<usize>,
-    ) -> BoundedRowsResult {
-        self.expect(b'[', "missing `results.bindings` array")?;
-        let mut rows = Vec::new();
-        let mut truncated = false;
-        self.skip_ws();
-        if self.peek() == Some(b']') {
-            self.pos += 1;
-            return Ok((rows, false));
-        }
-        loop {
-            if row_limit.is_none_or(|limit| rows.len() < limit) {
-                let binding = self.parse_value()?;
-                let row_obj = binding
-                    .as_object()
-                    .ok_or_else(|| fmt("`results.bindings` entry is not an object"))?;
-                let mut row = vec![None; variables.len()];
-                for (index, variable) in variables.iter().enumerate() {
-                    if let Some(cell) = obj_get(row_obj, variable) {
-                        row[index] = Some(decode_binding(cell)?);
-                    }
-                }
-                rows.push(row);
-            } else {
-                truncated = true;
-                self.skip_value()?;
-            }
-            if self.finish_entry(b']', "expected `,` or `]` in array")? {
-                break;
-            }
-        }
-        Ok((rows, truncated))
-    }
-
-    /// Peek after insignificant whitespace without changing the parser's final position.
-    fn peek_after_ws(&mut self) -> Option<u8> {
-        self.skip_ws();
-        self.peek()
-    }
-
-    /// Syntax-validate and discard one JSON value without building its tree.
-    ///
-    /// The closing bracket of every array and object still open is held on a heap
-    /// stack, so the machine stack used does not grow with the value's nesting depth.
-    fn skip_value(&mut self) -> Result<(), Error> {
-        let mut open: Vec<u8> = Vec::new();
-        loop {
-            self.skip_ws();
-            match self.peek() {
-                Some(b'{') => {
-                    self.pos += 1;
-                    self.skip_ws();
-                    if self.peek() == Some(b'}') {
-                        self.pos += 1;
-                    } else {
-                        drop(self.parse_object_key()?);
-                        open.push(b'}');
-                        continue;
-                    }
-                }
-                Some(b'[') => {
-                    self.pos += 1;
-                    self.skip_ws();
-                    if self.peek() == Some(b']') {
-                        self.pos += 1;
-                    } else {
-                        open.push(b']');
-                        continue;
-                    }
-                }
-                Some(b'"') => drop(self.parse_string()?),
-                Some(b't') => self.parse_lit("true", Json::Bool(true)).map(drop)?,
-                Some(b'f') => self.parse_lit("false", Json::Bool(false)).map(drop)?,
-                Some(b'n') => self.parse_lit("null", Json::Null).map(drop)?,
-                Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number().map(drop)?,
-                _ => return Err(fmt("unexpected token while parsing a value")),
-            }
-            // A value is complete: close every array or object it completes, then
-            // step to the next entry of the innermost one still open.
-            loop {
-                let Some(&closing) = open.last() else {
-                    return Ok(());
-                };
-                let message = if closing == b'}' {
-                    "expected `,` or `}` in object"
-                } else {
-                    "expected `,` or `]` in array"
-                };
-                if self.finish_entry(closing, message)? {
-                    open.pop();
-                } else {
-                    if closing == b'}' {
-                        drop(self.parse_object_key()?);
-                    }
-                    break;
-                }
-            }
+/// Read a string-only JSON array.
+fn string_array(reader: &mut Reader<'_>, item_error: &str) -> Result<Vec<String>, Error> {
+    open_array(reader, "expected array")?;
+    let mut items = Vec::new();
+    while reader.next_item().map_err(syntax)? {
+        match reader.next_event().map_err(syntax)? {
+            Event::String(item) => items.push(item.decode().map_err(syntax)?.into_owned()),
+            _ => return Err(fmt(item_error)),
         }
     }
+    Ok(items)
+}
 
-    /// Parse one JSON value into a tree.
-    ///
-    /// Every array and object still open is held on a heap stack together with the
-    /// entries parsed into it so far, so the machine stack used does not grow with
-    /// the value's nesting depth.
-    fn parse_value(&mut self) -> Result<Json, Error> {
-        let mut open: Vec<OpenContainer> = Vec::new();
-        loop {
-            self.skip_ws();
-            let mut value = match self.peek() {
-                Some(b'{') => {
-                    self.pos += 1;
-                    self.skip_ws();
-                    if self.peek() == Some(b'}') {
-                        self.pos += 1;
-                        Json::Object(Vec::new())
-                    } else {
-                        let key = self.parse_object_key()?;
-                        open.push(OpenContainer::Object(Vec::new(), key));
-                        continue;
-                    }
-                }
-                Some(b'[') => {
-                    self.pos += 1;
-                    self.skip_ws();
-                    if self.peek() == Some(b']') {
-                        self.pos += 1;
-                        Json::Array(Vec::new())
-                    } else {
-                        open.push(OpenContainer::Array(Vec::new()));
-                        continue;
-                    }
-                }
-                Some(b'"') => Json::String(self.parse_string()?),
-                Some(b't') => self.parse_lit("true", Json::Bool(true))?,
-                Some(b'f') => self.parse_lit("false", Json::Bool(false))?,
-                Some(b'n') => self.parse_lit("null", Json::Null)?,
-                Some(c) if c == b'-' || c.is_ascii_digit() => self.parse_number()?,
-                _ => return Err(fmt("unexpected token while parsing a value")),
-            };
-            // A value is complete: add it to the innermost open array or object,
-            // closing each one it completes, then step to that container's next entry.
-            loop {
-                match open.last_mut() {
-                    None => return Ok(value),
-                    Some(OpenContainer::Array(items)) => {
-                        items.push(value);
-                        if !self.finish_entry(b']', "expected `,` or `]` in array")? {
-                            break;
-                        }
-                        let Some(OpenContainer::Array(items)) = open.pop() else {
-                            unreachable!("the innermost open container was just read as an array");
-                        };
-                        value = Json::Array(items);
-                    }
-                    Some(OpenContainer::Object(entries, key)) => {
-                        entries.push((core::mem::take(key), value));
-                        if !self.finish_entry(b'}', "expected `,` or `}` in object")? {
-                            *key = self.parse_object_key()?;
-                            break;
-                        }
-                        let Some(OpenContainer::Object(entries, _)) = open.pop() else {
-                            unreachable!("the innermost open container was just read as an object");
-                        };
-                        value = Json::Object(entries);
-                    }
-                }
-            }
-        }
-    }
-
-    fn parse_lit(&mut self, word: &str, value: Json) -> Result<Json, Error> {
-        if self.bytes[self.pos..].starts_with(word.as_bytes()) {
-            self.pos += word.len();
-            Ok(value)
+/// Read the first `bindings` array in a `results` object through a bounded sink.
+fn bounded_results(
+    reader: &mut Reader<'_>,
+    variables: &[String],
+    row_limit: Option<usize>,
+) -> BoundedRowsResult {
+    open_object(reader, "missing `results` object")?;
+    let mut result = None;
+    while let Some(key) = next_key(reader)? {
+        if key == "bindings" && result.is_none() {
+            result = Some(bounded_binding_array(reader, variables, row_limit)?);
         } else {
-            Err(fmt(&format!("expected `{word}`")))
+            reader.skip_value().map_err(syntax)?;
         }
     }
+    result.ok_or_else(|| fmt("missing `results.bindings` array"))
+}
 
-    fn parse_number(&mut self) -> Result<Json, Error> {
-        while let Some(c) = self.peek() {
-            if c.is_ascii_digit() || matches!(c, b'-' | b'+' | b'.' | b'e' | b'E') {
-                self.pos += 1;
-            } else {
-                break;
-            }
-        }
-        Ok(Json::Number)
-    }
-
-    /// Parse one JSON string, positioned at its opening quote.
-    ///
-    /// RFC 8259 §7: a string body is `unescaped` scalars and escapes, and
-    /// `unescaped` excludes the quotation mark, the reverse solidus and every C0
-    /// control (U+0000-U+001F). A raw control is refused, never copied into the
-    /// value; the same scalar written as an escape (`\u0001`, `\t`) is lawful.
-    ///
-    /// Each clean run up to the next `"`, `\\` or C0 control is found by one
-    /// chunked scan of exactly that class, validated as UTF-8 once, and copied
-    /// whole. Invalid UTF-8 inside a run is reported by the per-scalar decoder at
-    /// the first invalid sequence, with the same message as before.
-    fn parse_string(&mut self) -> Result<String, Error> {
-        self.pos += 1; // consume opening '"'
-        let mut s = String::new();
-        loop {
-            let rest = &self.bytes[self.pos..];
-            let run = find_first_json_string_special(rest).unwrap_or(rest.len());
-            if run > 0 {
-                match core::str::from_utf8(&rest[..run]) {
-                    Ok(text) => {
-                        s.push_str(text);
-                        self.pos += run;
-                    }
-                    Err(error) => {
-                        let valid = error.valid_up_to();
-                        s.push_str(
-                            core::str::from_utf8(&rest[..valid])
-                                .expect("the prefix before the first invalid sequence is UTF-8"),
-                        );
-                        self.pos += valid;
-                        let ch = self.next_utf8_char()?;
-                        s.push(ch);
-                        continue;
-                    }
-                }
-            }
-            let Some(c) = self.peek() else {
-                return Err(fmt("unterminated string"));
-            };
-            match c {
-                b'"' => {
-                    self.pos += 1;
-                    return Ok(s);
-                }
-                b'\\' => {
-                    self.pos += 1;
-                    self.parse_escape(&mut s)?;
-                }
-                control => {
-                    return Err(fmt(&format!(
-                        "unescaped control character U+{control:04X} in string"
-                    )));
-                }
-            }
-        }
-    }
-
-    /// Decode the escape after a `\\` into `s`.
-    fn parse_escape(&mut self, s: &mut String) -> Result<(), Error> {
-        let (decoded, width) = json_escape::decode_escape(&self.bytes[self.pos - 1..])
-            .map_err(|error| fmt(&format!("bad string escape: {error}")))?;
-        s.push(decoded);
-        self.pos += width - 1;
-        Ok(())
-    }
-
-    /// The string parser [`parse_string`](Self::parse_string) replaced, kept
-    /// verbatim as the oracle: identical on every input that holds no raw C0
-    /// control, which it copied into the value instead of refusing.
-    #[cfg(test)]
-    fn parse_string_reference(&mut self) -> Result<String, Error> {
-        self.pos += 1; // consume opening '"'
-        let mut s = String::new();
-        loop {
-            // Fast path: a run of plain ASCII (no quote, no backslash) is one
-            // `push_str` instead of one `next_utf8_char` + `push` per byte.
-            // The escape / terminator / non-ASCII cases below are untouched.
-            let start = self.pos;
-            while self
-                .bytes
-                .get(self.pos)
-                .is_some_and(|&b| b < 0x80 && b != b'"' && b != b'\\')
-            {
-                self.pos += 1;
-            }
-            if self.pos > start {
-                // A run of bytes all `< 0x80` is ASCII, hence valid UTF-8; the
-                // `expect` documents that invariant rather than trusting it.
-                s.push_str(
-                    std::str::from_utf8(&self.bytes[start..self.pos])
-                        .expect("a pure-ASCII byte run is valid UTF-8"),
-                );
-            }
-            let Some(c) = self.peek() else {
-                return Err(fmt("unterminated string"));
-            };
-            match c {
-                b'"' => {
-                    self.pos += 1;
-                    return Ok(s);
-                }
-                b'\\' => {
-                    self.pos += 1;
-                    self.parse_escape(&mut s)?;
-                }
-                // A raw multibyte UTF-8 sequence: copy the whole code point.
-                _ => {
-                    let ch = self.next_utf8_char()?;
-                    s.push(ch);
-                }
-            }
-        }
-    }
-
-    /// Consume one UTF-8 code point starting at `pos` in O(1).
-    ///
-    /// Determines the code-point width from the lead byte's bit pattern, slices
-    /// exactly those 1–4 bytes, and validates only that small slice — avoiding
-    /// the O(N²) cost of validating the entire remaining buffer on every call.
-    fn next_utf8_char(&mut self) -> Result<char, Error> {
-        let lead = self
-            .bytes
-            .get(self.pos)
-            .copied()
-            .ok_or_else(|| fmt("unterminated string"))?;
-        // Determine the encoded width from the lead byte.
-        let width = if lead < 0x80 {
-            1usize
-        } else if lead & 0xE0 == 0xC0 {
-            2
-        } else if lead & 0xF0 == 0xE0 {
-            3
-        } else if lead & 0xF8 == 0xF0 {
-            4
+/// Decode the prefix of a bindings array that fits `row_limit`, then syntax-scan the
+/// suffix without constructing its tree.
+fn bounded_binding_array(
+    reader: &mut Reader<'_>,
+    variables: &[String],
+    row_limit: Option<usize>,
+) -> BoundedRowsResult {
+    open_array(reader, "missing `results.bindings` array")?;
+    let mut rows = Vec::new();
+    let mut truncated = false;
+    while reader.next_item().map_err(syntax)? {
+        if row_limit.is_none_or(|limit| rows.len() < limit) {
+            let binding = reader.read_value().map_err(syntax)?;
+            rows.push(decode_row(&binding, variables)?);
         } else {
-            return Err(fmt("invalid UTF-8 lead byte in string"));
-        };
-        let end = self.pos + width;
-        if end > self.bytes.len() {
-            return Err(fmt("truncated UTF-8 sequence in string"));
+            truncated = true;
+            reader.skip_value().map_err(syntax)?;
         }
-        // Validate and decode only the exact code-point slice.
-        let slice = &self.bytes[self.pos..end];
-        let s = core::str::from_utf8(slice).map_err(|_| fmt("invalid UTF-8 sequence in string"))?;
-        let ch = s.chars().next().ok_or_else(|| fmt("empty UTF-8 slice"))?;
-        self.pos = end;
-        Ok(ch)
     }
+    Ok((rows, truncated))
 }
 
 #[cfg(test)]
@@ -1113,142 +652,24 @@ mod tests {
         DIR_LANG_STRING as RDF_DIR_LANGSTRING, LANG_STRING as RDF_LANGSTRING,
     };
 
-    fn parse_string_at(input: &[u8]) -> Result<(String, usize), Error> {
-        let mut parser = JsonParser::new(input);
-        let value = parser.parse_string()?;
-        Ok((value, parser.pos))
+    /// A `SELECT` document binding `?x` to a literal whose `value` member is
+    /// the JSON string `string` (quotes included, escapes as written).
+    fn literal_document(string: &[u8]) -> Vec<u8> {
+        let mut document =
+            br#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":{"type":"literal","value":"#
+                .to_vec();
+        document.extend_from_slice(string);
+        document.extend_from_slice(b"}}]}}");
+        document
     }
 
-    fn parse_string_reference_at(input: &[u8]) -> Result<(String, usize), Error> {
-        let mut parser = JsonParser::new(input);
-        let value = parser.parse_string_reference()?;
-        Ok((value, parser.pos))
-    }
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
-    /// The chunked string parser agrees with the per-byte one it replaced —
-    /// value, end position, or error message — on every fixed-seed input that
-    /// holds no raw C0 control, and refuses every input whose string body does.
-    /// The alphabet carries every special byte, whole escapes (surrogate pairs
-    /// among them), valid non-ASCII in every UTF-8 width, and invalid UTF-8
-    /// (a bare continuation, a truncated lead, an overlong form).
-    #[test]
-    fn chunked_string_parser_agrees_with_the_per_byte_parser() {
-        const PIECES: &[&[u8]] = &[
-            b"\"",
-            b"\\",
-            b"\\\"",
-            b"\\\\",
-            b"\\/",
-            b"\\n",
-            b"\\t",
-            b"\\u0001",
-            b"\\u00e9",
-            b"\\ud83d\\ude00",
-            b"\\ud83d",
-            b"\\x",
-            b"\x01",
-            b"\t",
-            b"\n",
-            b"\x1f",
-            b"\x7f",
-            b" ",
-            "\u{e9}".as_bytes(),
-            "\u{85}".as_bytes(),
-            "\u{4e2d}".as_bytes(),
-            "\u{1f600}".as_bytes(),
-            b"\x80",
-            b"\xc3",
-            b"\xe0\x80\x80",
-        ];
-        let mut rng = SplitMix(0x0150_0DEC_0DE0_0001);
-        let (mut agreed_ok, mut agreed_err, mut refused) = (0_usize, 0_usize, 0_usize);
-        for len in (0..=70).chain([127, 128, 129, 1000]) {
-            for round in 0..40 {
-                let density = if round % 2 == 0 { 3 } else { 40 };
-                let mut input = vec![b'"'];
-                for _ in 0..len {
-                    if rng.below(density) == 0 {
-                        input.extend_from_slice(PIECES[rng.below(PIECES.len())]);
-                    } else {
-                        input.push(b's');
-                    }
-                }
-                if round % 5 != 0 {
-                    input.push(b'"');
-                }
-                input.extend_from_slice(b",1]");
-                let got = parse_string_at(&input);
-                let expected = parse_string_reference_at(&input);
-                // Where the reference stopped: its end on success, else nowhere
-                // it reached a raw control is known, so find the body's first
-                // raw control directly by walking the reference's own grammar.
-                let raw_control_first = first_raw_control(&input);
-                match (&got, &expected, raw_control_first) {
-                    (Err(Error::Format(message)), _, Some(at)) => {
-                        assert!(
-                            message.contains("unescaped control character") || expected.is_err(),
-                            "{input:02X?}: {message} (raw control at {at})"
-                        );
-                        refused += 1;
-                    }
-                    (_, _, Some(at)) => panic!("{input:02X?}: raw control at {at} accepted"),
-                    (Ok(got), Ok(expected), None) => {
-                        assert_eq!(got, expected, "{input:02X?}");
-                        agreed_ok += 1;
-                    }
-                    (Err(Error::Format(got)), Err(Error::Format(expected)), None) => {
-                        assert_eq!(got, expected, "{input:02X?}");
-                        agreed_err += 1;
-                    }
-                    (got, expected, None) => {
-                        panic!("{input:02X?}: {got:?} vs {expected:?}");
-                    }
-                }
-            }
-        }
-        assert!(
-            agreed_ok > 0 && agreed_err > 0 && refused > 0,
-            "{agreed_ok} {agreed_err} {refused}"
-        );
-    }
-
-    /// The offset of the first raw C0 control inside the string body that
-    /// starts at `input[0]`, before the reference parser would have stopped at
-    /// its closing quote or at an error it reports first; `None` when there is
-    /// none. Escapes are skipped whole, so the `0x01` of a `\u0001` is never a
-    /// raw control.
-    fn first_raw_control(input: &[u8]) -> Option<usize> {
-        let mut at = 1;
-        while let Some(&b) = input.get(at) {
-            match b {
-                b'"' => return None,
-                b'\\' => {
-                    // A malformed escape is an error the reference reports
-                    // first; a well-formed one is skipped whole.
-                    match input.get(at + 1) {
-                        Some(b'u') => at += 6,
-                        Some(b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't') => at += 2,
-                        _ => return None,
-                    }
-                }
-                b if b < 0x20 => return Some(at),
-                _ => at += 1,
-            }
-        }
-        None
+    /// The lexical form `from_json` reads for [`literal_document`].
+    fn literal_value(string: &[u8]) -> Result<String, Error> {
+        let parsed = from_json(&literal_document(string))?;
+        let Some(TermValue::Literal { lexical_form, .. }) = parsed.rows[0][0].clone() else {
+            panic!("expected a literal");
+        };
+        Ok(lexical_form)
     }
 
     /// A raw C0 control inside a JSON string is refused (RFC 8259 §7), both in a
@@ -1256,25 +677,25 @@ mod tests {
     #[test]
     fn a_raw_control_character_in_a_string_is_refused() {
         for raw in [0x01_u8, b'\t', b'\n', 0x1F] {
-            let mut input = b"\"a".to_vec();
-            input.push(raw);
-            input.extend_from_slice(b"b\"");
-            let error = parse_string_at(&input).expect_err("a raw control is refused");
+            let mut string = b"\"a".to_vec();
+            string.push(raw);
+            string.extend_from_slice(b"b\"");
+            let error = literal_value(&string).expect_err("a raw control is refused");
             assert!(
                 matches!(&error, Error::Format(message)
-                    if message.contains("unescaped control character")),
+                    if message.contains("a control character in a string must be escaped")),
                 "{raw:#04X}: {error:?}"
             );
-            // Through the whole reader, in a binding value.
-            let mut document = br#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":{"type":"literal","value":"a"#.to_vec();
-            document.push(raw);
-            document.extend_from_slice(br#"b"}}]}}"#);
-            assert!(from_json(&document).is_err(), "{raw:#04X}");
+            assert!(
+                from_json_bounded(&literal_document(&string), u64::MAX).is_err(),
+                "{raw:#04X}"
+            );
             // And in a member the reader only skips.
             let mut skipped = br#"{"head":{"vars":[],"note":"a"#.to_vec();
             skipped.push(raw);
             skipped.extend_from_slice(br#"b"},"boolean":true}"#);
             assert!(from_json_boolean(&skipped).is_err(), "{raw:#04X}");
+            assert!(from_json_bounded(&skipped, u64::MAX).is_err(), "{raw:#04X}");
         }
     }
 
@@ -1283,33 +704,23 @@ mod tests {
     #[test]
     fn an_escaped_control_character_still_parses() {
         assert_eq!(
-            parse_string_at(br#""a\u0001b",1"#).expect("escaped U+0001"),
-            ("a\u{1}b".to_owned(), 10)
+            literal_value(br#""a\u0001b""#).expect("escaped U+0001"),
+            "a\u{1}b"
         );
         assert_eq!(
-            parse_string_at(br#""a\tb\nc\u001f""#).expect("escaped controls"),
-            ("a\tb\nc\u{1f}".to_owned(), 15)
+            literal_value(br#""a\tb\nc\u001f""#).expect("escaped controls"),
+            "a\tb\nc\u{1f}"
         );
-        assert_eq!(
-            parse_string_at(b"\"a\x7fb\"").expect("raw DEL"),
-            ("a\u{7f}b".to_owned(), 5)
-        );
-        let document = br#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":{"type":"literal","value":"a\u0001b"}}]}}"#;
-        let parsed = from_json(document).expect("an escaped control parses");
-        let Some(TermValue::Literal { lexical_form, .. }) = parsed.rows[0][0].clone() else {
-            panic!("expected a literal");
-        };
-        assert_eq!(lexical_form, "a\u{1}b");
+        assert_eq!(literal_value(b"\"a\x7fb\"").expect("raw DEL"), "a\u{7f}b");
         let skipped = br#"{"head":{"vars":[],"note":"a\u0001b"},"boolean":true}"#;
         assert!(from_json_boolean(skipped).expect("an escaped control in a skipped member"));
     }
 
-    /// The ASCII bulk-copy fast path must splice correctly around escapes,
-    /// raw multibyte UTF-8, and the terminator, leaving `pos` just past the
-    /// closing quote so the enclosing parser resumes at the right byte.
+    /// Strings decode across escapes, raw multibyte UTF-8 and surrogate pairs,
+    /// in the tree reader and the bounded reader alike.
     #[test]
-    fn parse_string_mixed_ascii_escape_multibyte() {
-        let cases: [(&[u8], &str); 9] = [
+    fn strings_decode_escapes_and_multibyte_text() {
+        let cases: [(&[u8], &str); 8] = [
             (b"\"\"", ""),
             (b"\"plain ascii\"", "plain ascii"),
             (b"\"a\\\"b\"", "a\"b"),
@@ -1326,33 +737,70 @@ mod tests {
                 "\"ascii \u{e9} \\\" more \\u0041 \u{1f431}\\n tail\"".as_bytes(),
                 "ascii \u{e9} \" more A \u{1f431}\n tail",
             ),
-            // RFC 8259 §7: a control rides as an escape; raw, it is refused
-            // (`a_raw_control_character_in_a_string_is_refused`).
             (b"\"raw\\u0001control\"", "raw\u{1}control"),
-            (b"\"end\" trailing", "end"),
         ];
-        for (input, expected) in cases {
-            let (value, pos) = parse_string_at(input).expect("string parses");
-            assert_eq!(value, expected, "{input:?}");
-            let close = input
-                .iter()
-                .rposition(|&b| b == b'"')
-                .expect("closing quote");
-            assert!(
-                pos == close + 1 || input.ends_with(b" trailing"),
-                "pos {pos} for {input:?}"
+        for (string, expected) in cases {
+            assert_eq!(
+                literal_value(string).expect("parses"),
+                expected,
+                "{string:?}"
+            );
+            let bounded = from_json_bounded(&literal_document(string), u64::MAX).expect("parses");
+            assert_eq!(
+                bounded.solutions,
+                from_json(&literal_document(string)).expect("parses"),
+                "{string:?}"
             );
         }
-        assert_eq!(parse_string_at(b"\"end\" trailing").expect("parses").1, 5);
     }
 
+    /// A malformed string is refused: unterminated, a bad escape, a lone
+    /// surrogate, invalid UTF-8.
     #[test]
-    fn parse_string_errors_unchanged_after_ascii_run() {
-        assert!(parse_string_at(b"\"no terminator").is_err());
-        assert!(parse_string_at(b"\"ascii then bad escape \\q\"").is_err());
-        assert!(parse_string_at(b"\"ascii then \\").is_err());
-        assert!(parse_string_at(b"\"ascii then \xff\"").is_err());
-        assert!(parse_string_at(b"\"ascii then truncated \xe4\xb8").is_err());
+    fn malformed_strings_are_refused() {
+        for string in [
+            &b"\"no terminator"[..],
+            b"\"ascii then bad escape \\q\"",
+            b"\"ascii then \\",
+            b"\"lone high \\ud83d\"",
+            b"\"ascii then \xff\"",
+            b"\"ascii then truncated \xe4\xb8\"",
+        ] {
+            assert!(literal_value(string).is_err(), "{string:?}");
+            assert!(
+                from_json_bounded(&literal_document(string), u64::MAX).is_err(),
+                "{string:?}"
+            );
+        }
+    }
+
+    /// RFC 8259 §6: a number is `[-] int [frac] [exp]`. A run of number
+    /// characters outside that grammar is refused wherever it stands, in a
+    /// skipped member included.
+    #[test]
+    fn a_number_outside_the_grammar_is_refused() {
+        let document = br#"{"head":{"vars":[]},"extra":1-2+e,"boolean":true}"#;
+        assert!(from_json_boolean(document).is_err());
+        let select = br#"{"head":{"vars":[]},"extra":1-2+e,"results":{"bindings":[]}}"#;
+        assert!(from_json(select).is_err());
+        assert!(from_json_bounded(select, u64::MAX).is_err());
+    }
+
+    /// The valid neighbour: a signed fraction with a signed exponent is a number.
+    #[test]
+    fn a_number_inside_the_grammar_is_accepted() {
+        let document = br#"{"head":{"vars":[]},"extra":-1.2e+3,"boolean":true}"#;
+        assert!(from_json_boolean(document).expect("a lawful number"));
+        let select = br#"{"head":{"vars":[]},"extra":-1.2e+3,"results":{"bindings":[]}}"#;
+        let empty = ParsedSolutions {
+            variables: Vec::new(),
+            rows: Vec::new(),
+        };
+        assert_eq!(from_json(select), Ok(empty.clone()));
+        assert_eq!(
+            from_json_bounded(select, u64::MAX).map(|bounded| bounded.solutions),
+            Ok(empty)
+        );
     }
 
     /// Provenance round-trip: what [`crate::json::to_json`] writes under a namespace,
@@ -1821,7 +1269,10 @@ mod tests {
         assert_eq!(bounded, Err(not_an_object));
         assert_eq!(
             truncated,
-            Err(format_error("unexpected token while parsing a value"))
+            Err(format_error(&format!(
+                "JSON byte {}: expected a JSON value",
+                r#"{"head":{"vars":["x"]},"results":{"bindings":[{"x":"#.len() + DEEP
+            )))
         );
     }
 
@@ -1947,12 +1398,27 @@ mod tests {
     #[test]
     fn malformed_nesting_reports_the_same_errors() {
         for (doc, message) in [
-            (r#"{"a":[1,2}"#, "expected `,` or `]` in array"),
-            (r#"{"a":{"b":1]}"#, "expected `,` or `}` in object"),
-            (r#"{"a":{"b" 1}}"#, "expected `:` after object key"),
-            (r#"{"a":[{ 7 }]}"#, "expected string key in object"),
-            (r#"{"a":[1,]}"#, "unexpected token while parsing a value"),
-            (r#"{"a":[[[]]]} x"#, "trailing data after JSON value"),
+            (
+                r#"{"a":[1,2}"#,
+                "JSON byte 9: expected `,` or `]` in an array",
+            ),
+            (
+                r#"{"a":{"b":1]}"#,
+                "JSON byte 11: expected `,` or `}` in an object",
+            ),
+            (
+                r#"{"a":{"b" 1}}"#,
+                "JSON byte 10: expected `:` after a member name",
+            ),
+            (
+                r#"{"a":[{ 7 }]}"#,
+                "JSON byte 8: expected a `\"`-quoted member name",
+            ),
+            (r#"{"a":[1,]}"#, "JSON byte 8: expected a JSON value"),
+            (
+                r#"{"a":[[[]]]} x"#,
+                "JSON byte 13: trailing data after the top-level value",
+            ),
         ] {
             assert_eq!(
                 from_json(doc.as_bytes()),

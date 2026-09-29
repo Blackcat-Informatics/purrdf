@@ -7,7 +7,7 @@
 use std::collections::BTreeMap;
 use std::fmt;
 
-use serde_json::Value;
+use purrdf_lex::json::Value;
 
 use crate::content::Content;
 use crate::format::Format;

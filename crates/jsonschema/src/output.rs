@@ -20,7 +20,7 @@
 //! both projections descend only into units whose validity matches the
 //! result they explain.
 
-use serde_json::{Map, Value};
+use purrdf_lex::json::{Object, Value};
 
 /// Which output format [`Output::to_json`] writes.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -53,6 +53,19 @@ pub struct OutputUnit {
     pub annotation: Option<Value>,
     /// The units of the keywords or subschemas beneath this one.
     pub children: Vec<Self>,
+}
+
+impl Drop for OutputUnit {
+    /// Units nest once per subschema and keyword applied, so an instance
+    /// thousands of levels deep yields a unit tree as deep; it is taken apart
+    /// over a heap work list rather than one stack frame per level.
+    fn drop(&mut self) {
+        let mut work = std::mem::take(&mut self.children);
+        while let Some(mut unit) = work.pop() {
+            work.append(&mut unit.children);
+            // `unit` now holds no children, so its own drop returns at once.
+        }
+    }
 }
 
 /// The result of evaluating an instance with output: the verdict and the
@@ -93,11 +106,12 @@ impl Output {
         found.into_iter()
     }
 
-    /// The output in `format`, as JSON.
+    /// The output in `format`, as JSON, every object's members in name order
+    /// so the output's serialization is one fixed spelling.
     pub fn to_json(&self, format: OutputFormat) -> Value {
-        match format {
+        let mut json = match format {
             OutputFormat::Flag => {
-                let mut object = Map::new();
+                let mut object = Object::new();
                 object.insert("valid".to_owned(), Value::Bool(self.root.valid));
                 Value::Object(object)
             }
@@ -115,31 +129,35 @@ impl Output {
             }
             OutputFormat::Detailed => detailed(&self.root, self.root.valid)
                 .unwrap_or_else(|| Value::Object(header(&self.root))),
-        }
+        };
+        json.sort_keys();
+        json
     }
 }
 
 /// Every unit beneath `unit` (inclusive) on paths whose validity is `valid`
-/// that carries an annotation (`valid`) or an error (`!valid`).
+/// that carries an annotation (`valid`) or an error (`!valid`), depth first,
+/// over a heap work list.
 fn collect<'u>(unit: &'u OutputUnit, valid: bool, found: &mut Vec<&'u OutputUnit>) {
-    if unit.valid != valid {
-        return;
-    }
-    let carries = if valid {
-        unit.annotation.is_some()
-    } else {
-        unit.error.is_some()
-    };
-    if carries {
-        found.push(unit);
-    }
-    for child in &unit.children {
-        collect(child, valid, found);
+    let mut work = vec![unit];
+    while let Some(unit) = work.pop() {
+        if unit.valid != valid {
+            continue;
+        }
+        let carries = if valid {
+            unit.annotation.is_some()
+        } else {
+            unit.error.is_some()
+        };
+        if carries {
+            found.push(unit);
+        }
+        work.extend(unit.children.iter().rev());
     }
 }
 
-fn header(unit: &OutputUnit) -> Map<String, Value> {
-    let mut object = Map::new();
+fn header(unit: &OutputUnit) -> Object {
+    let mut object = Object::new();
     object.insert("valid".to_owned(), Value::Bool(unit.valid));
     object.insert(
         "keywordLocation".to_owned(),
@@ -168,16 +186,37 @@ fn leaf(unit: &OutputUnit) -> Value {
 }
 
 /// The condensed hierarchy beneath `unit` along paths whose validity is
-/// `valid`; `None` when nothing there reports anything.
+/// `valid`; `None` when nothing there reports anything. Built bottom up over
+/// heap work lists, so the unit tree's depth costs no stack.
 fn detailed(unit: &OutputUnit, valid: bool) -> Option<Value> {
-    if unit.valid != valid {
-        return None;
+    enum Step<'u> {
+        Enter(&'u OutputUnit),
+        Exit(&'u OutputUnit),
     }
-    let children: Vec<Value> = unit
-        .children
-        .iter()
-        .filter_map(|child| detailed(child, valid))
-        .collect();
+    let mut steps = vec![Step::Enter(unit)];
+    // One entry per unit entered, in order: its condensed hierarchy.
+    let mut built: Vec<Option<Value>> = Vec::new();
+    while let Some(step) = steps.pop() {
+        match step {
+            Step::Enter(unit) if unit.valid != valid => built.push(None),
+            Step::Enter(unit) => {
+                steps.push(Step::Exit(unit));
+                steps.extend(unit.children.iter().rev().map(Step::Enter));
+            }
+            Step::Exit(unit) => {
+                let first = built.len() - unit.children.len();
+                let children: Vec<Value> = built.drain(first..).flatten().collect();
+                built.push(condense(unit, valid, children));
+            }
+        }
+    }
+    built.pop().flatten()
+}
+
+/// One unit of the detailed format, given its children's condensed
+/// hierarchies: `None` when it and they report nothing, its one child when it
+/// reports nothing itself, and otherwise its own unit over them.
+fn condense(unit: &OutputUnit, valid: bool, mut children: Vec<Value>) -> Option<Value> {
     let own = if valid {
         unit.annotation.is_some()
     } else {
@@ -186,7 +225,7 @@ fn detailed(unit: &OutputUnit, valid: bool) -> Option<Value> {
     if !own {
         match children.len() {
             0 => return None,
-            1 => return children.into_iter().next(),
+            1 => return children.pop(),
             _ => {}
         }
     }

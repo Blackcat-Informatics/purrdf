@@ -8,12 +8,12 @@
 //! declares and that the decoded bytes are a document of the media type it
 //! declares. This crate checks the one encoding and the one media type it can
 //! decode completely: `base64` (RFC 2045 §6.8 over the RFC 4648 §4 alphabet)
-//! and `application/json` (RFC 8259, parsed by `serde_json`). Any other
+//! and `application/json` (RFC 8259, checked by [`purrdf_lex::json::Reader`]). Any other
 //! encoding or media type stays an annotation — never guessed at. In 2019-09
 //! and 2020-12 these keywords are annotations only, and this module is not
 //! used.
 
-use serde_json::{Map, Value};
+use purrdf_lex::json::{Limits, Object, Reader, Value};
 
 /// A content check a schema object asks for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -28,7 +28,7 @@ impl Content {
     /// The check the object's `contentEncoding` and `contentMediaType`
     /// describe; `None` when there is nothing this crate can check (an
     /// unknown encoding makes the bytes, and so the media type, unknowable).
-    pub(crate) fn from_keywords(map: &Map<String, Value>) -> Option<Self> {
+    pub(crate) fn from_keywords(map: &Object) -> Option<Self> {
         let base64 = match map.get("contentEncoding") {
             None => false,
             Some(encoding) => {
@@ -58,11 +58,19 @@ impl Content {
         } else {
             text.as_bytes()
         };
-        if self.json && serde_json::from_slice::<Value>(bytes).is_err() {
+        if self.json && !is_json_text(bytes) {
             return Err("the content is not a JSON document".to_owned());
         }
         Ok(())
     }
+}
+
+/// Whether `bytes` are one UTF-8 JSON text. The check is syntax only, and the
+/// reader's container stack lives on the heap, so no nesting depth is refused
+/// that the grammar admits.
+fn is_json_text(bytes: &[u8]) -> bool {
+    Reader::from_slice(bytes, Limits::with_depth(usize::MAX))
+        .is_ok_and(|mut reader| reader.skip_value().is_ok() && reader.finish().is_ok())
 }
 
 /// `application/json`, in any case, with or without parameters (RFC 2045
@@ -138,7 +146,7 @@ mod tests {
         assert!(is_json_media_type("application/json"));
         assert!(is_json_media_type("Application/JSON; charset=utf-8"));
         assert!(!is_json_media_type("text/plain"));
-        let mut map = Map::new();
+        let mut map = Object::new();
         map.insert("contentMediaType".to_owned(), Value::from("text/plain"));
         assert_eq!(Content::from_keywords(&map), None);
         map.insert(
@@ -150,5 +158,19 @@ mod tests {
         let content = Content::from_keywords(&map).expect("base64 is checked");
         assert!(content.check("Zm9v").is_ok());
         assert!(content.check("{}").is_err());
+    }
+
+    #[test]
+    fn json_content_is_checked_whole_and_at_any_depth() {
+        let content = Content {
+            base64: false,
+            json: true,
+        };
+        assert!(content.check("[1, {\"a\": null}]").is_ok());
+        assert!(content.check("[1] 2").is_err());
+        assert!(content.check("[1,]").is_err());
+        let deep = format!("{}{}", "[".repeat(10_000), "]".repeat(10_000));
+        assert!(content.check(&deep).is_ok());
+        assert!(content.check(&deep[1..]).is_err());
     }
 }

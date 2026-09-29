@@ -5,7 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde_json::{Value as Json, json};
+use purrdf_lex::json::{Object, Value as Json};
 
 use crate::ledger::{Job, Ledger};
 use crate::normalize::MIN_TOKENS;
@@ -405,25 +405,33 @@ pub(crate) fn copies(found: &[Match]) -> usize {
 }
 
 fn unit_json(unit: &Unit) -> Json {
-    json!({
-        "symbol": unit.symbol,
-        "package": unit.package,
-        "file": unit.file,
-        "line": unit.line,
-    })
+    Json::from(
+        Object::new()
+            .with("symbol", &unit.symbol)
+            .with("package", &unit.package)
+            .with("file", &unit.file)
+            .with("line", unit.line),
+    )
 }
 
 fn group_json(group: &Group, workspace: &Workspace, variants: &BTreeSet<String>) -> Json {
-    json!({
-        "fingerprint": group.fingerprint,
-        "tokens": group.tokens,
-        "sanctioned": group_is_sanctioned(group, workspace, variants),
-        "members": group
-            .members
-            .iter()
-            .map(|&index| unit_json(&workspace.units[index]))
-            .collect::<Vec<_>>(),
-    })
+    Json::from(
+        Object::new()
+            .with("fingerprint", &group.fingerprint)
+            .with("tokens", group.tokens)
+            .with(
+                "sanctioned",
+                group_is_sanctioned(group, workspace, variants),
+            )
+            .with(
+                "members",
+                group
+                    .members
+                    .iter()
+                    .map(|&index| unit_json(&workspace.units[index]))
+                    .collect::<Json>(),
+            ),
+    )
 }
 
 /// The baseline document: every group, every hex table, and every large integer
@@ -438,7 +446,7 @@ pub(crate) fn baseline(workspace: &Workspace, ledger: &Ledger) -> Json {
         .filter(|unit| !unit.tables.is_empty())
         .map(|unit| {
             let mut entry = unit_json(unit);
-            entry["tables"] = json!(unit.tables.iter().collect::<Vec<_>>());
+            entry["tables"] = unit.tables.iter().copied().collect();
             entry
         })
         .collect();
@@ -459,31 +467,51 @@ pub(crate) fn baseline(workspace: &Workspace, ledger: &Ledger) -> Json {
         .into_iter()
         .filter(|(_, packages)| packages.len() >= 2)
         .map(|(value, packages)| {
-            json!({
-                "value": format!("{value:#x}"),
-                "packages": packages.len(),
-                "units": packages
-                    .values()
-                    .flatten()
-                    .map(|unit| unit_json(unit))
-                    .collect::<Vec<_>>(),
-            })
+            Json::from(
+                Object::new()
+                    .with("value", format!("{value:#x}"))
+                    .with("packages", packages.len())
+                    .with(
+                        "units",
+                        packages
+                            .values()
+                            .flatten()
+                            .map(|unit| unit_json(unit))
+                            .collect::<Json>(),
+                    ),
+            )
         })
         .collect();
-    json!({
-        "min_tokens": MIN_TOKENS,
-        "units": workspace.units.len(),
-        "isomorphic_groups": groups.iter().map(|group| group_json(group, workspace, &variants)).collect::<Vec<_>>(),
-        "shim_groups": shims.iter().map(|group| group_json(group, workspace, &variants)).collect::<Vec<_>>(),
-        "hex_tables": tables,
-        "shared_constants": shared,
-    })
+    let mut document = Json::from(
+        Object::new()
+            .with("min_tokens", MIN_TOKENS)
+            .with("units", workspace.units.len())
+            .with(
+                "isomorphic_groups",
+                groups
+                    .iter()
+                    .map(|group| group_json(group, workspace, &variants))
+                    .collect::<Json>(),
+            )
+            .with(
+                "shim_groups",
+                shims
+                    .iter()
+                    .map(|group| group_json(group, workspace, &variants))
+                    .collect::<Json>(),
+            )
+            .with("hex_tables", tables)
+            .with("shared_constants", shared),
+    );
+    // Members by name, at every level: the document's published layout.
+    document.sort_keys();
+    document
 }
 
 /// The document `scripts/check-shared-helpers.py` reads.
 pub(crate) fn index(workspace: &Workspace, ledger: &Ledger) -> Json {
-    let mut symbols = serde_json::Map::new();
-    let mut jobs = serde_json::Map::new();
+    let mut symbols = Object::new();
+    let mut jobs = Object::new();
     for job in &ledger.jobs {
         let referenced = std::iter::once(&job.home).chain(&job.entry_points).chain(
             job.variants
@@ -493,14 +521,15 @@ pub(crate) fn index(workspace: &Workspace, ledger: &Ledger) -> Json {
         for path in referenced {
             let entry = workspace.resolve(path).map_or(Json::Null, |symbol| {
                 let definition = &workspace.definitions[&symbol];
-                json!({
-                    "symbol": symbol,
-                    "package": definition.package,
-                    "file": definition.file,
-                    "line": definition.line,
-                    "module": definition.module,
-                    "documented": definition.documented,
-                })
+                Json::from(
+                    Object::new()
+                        .with("symbol", symbol)
+                        .with("package", &definition.package)
+                        .with("file", &definition.file)
+                        .with("line", definition.line)
+                        .with("module", &definition.module)
+                        .with("documented", definition.documented),
+                )
             });
             symbols.insert(path.clone(), entry);
         }
@@ -511,25 +540,26 @@ pub(crate) fn index(workspace: &Workspace, ledger: &Ledger) -> Json {
         let found = matches(job, workspace, &resolved.package);
         jobs.insert(
             job.id.clone(),
-            json!({
-                "home": resolved.symbol,
-                "home_package": resolved.package,
-                "copies": copies(&found),
-                "matches": found
-                    .iter()
-                    .map(|found| {
-                        json!({
-                            "symbol": found.symbol,
-                            "package": found.package,
-                            "file": found.file,
-                            "line": found.line,
-                            "reasons": found.reasons,
-                            "in_home": found.in_home,
-                            "variant": found.variant,
+            Object::new()
+                .with("home", resolved.symbol)
+                .with("home_package", resolved.package)
+                .with("copies", copies(&found))
+                .with(
+                    "matches",
+                    found
+                        .iter()
+                        .map(|found| {
+                            Object::new()
+                                .with("symbol", &found.symbol)
+                                .with("package", &found.package)
+                                .with("file", &found.file)
+                                .with("line", found.line)
+                                .with("reasons", found.reasons.as_slice())
+                                .with("in_home", found.in_home)
+                                .with("variant", found.variant)
                         })
-                    })
-                    .collect::<Vec<_>>(),
-            }),
+                        .collect::<Json>(),
+                ),
         );
     }
     let variants = variant_symbols(ledger, workspace, "isomorphic");
@@ -543,12 +573,22 @@ pub(crate) fn index(workspace: &Workspace, ledger: &Ledger) -> Json {
                 .map(|&index| workspace.units[index].symbol.as_str())
         })
         .collect();
-    json!({
-        "symbols": symbols,
-        "jobs": jobs,
-        "grouped_variants": variants.iter().filter(|symbol| grouped.contains(symbol.as_str())).collect::<Vec<_>>(),
-        "errors": workspace.errors,
-    })
+    let mut document = Json::from(
+        Object::new()
+            .with("symbols", symbols)
+            .with("jobs", jobs)
+            .with(
+                "grouped_variants",
+                variants
+                    .iter()
+                    .filter(|symbol| grouped.contains(symbol.as_str()))
+                    .collect::<Json>(),
+            )
+            .with("errors", workspace.errors.as_slice()),
+    );
+    // Members by name, at every level: the document's published layout.
+    document.sort_keys();
+    document
 }
 
 /// Every `--check` finding, one line each.

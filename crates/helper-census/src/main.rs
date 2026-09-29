@@ -179,8 +179,7 @@ fn run(arguments: &Arguments) -> Result<ExitCode, String> {
                 std::fs::create_dir_all(parent)
                     .map_err(|error| format!("{}: {error}", parent.display()))?;
             }
-            let text =
-                serde_json::to_string_pretty(&document).map_err(|error| error.to_string())?;
+            let text = purrdf_lex::json::write_pretty(&document);
             std::fs::write(&path, text + "\n")
                 .map_err(|error| format!("{}: {error}", path.display()))?;
             println!(

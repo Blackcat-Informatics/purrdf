@@ -54,7 +54,7 @@ use crate::model::{ProvenanceNamespace, ResultProvenance};
 use purrdf_core::blank_label::{LabelAlphabet, encode_blank_label};
 use purrdf_core::sink::TextOut;
 use purrdf_core::{SparqlResult, TermValue};
-use purrdf_iri::json_escape::{JsonEscapes, escape_body};
+use purrdf_lex::json_escape::{JsonEscapes, escape_body};
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
 /// BARE — no `"datatype"` member — per the SPARQL 1.2 Query Results JSON
@@ -293,18 +293,6 @@ fn query_form(result: &SparqlResult) -> &'static str {
     }
 }
 
-/// A byte the JSON escaper must act on: the two metacharacters and the C0
-/// controls. All triggers are ASCII, so non-ASCII bytes (`>= 0x80`) never match
-/// and a run split here always lands on a char boundary.
-///
-/// The predicate the escaper tested per byte before it used
-/// [`find_first_json_string_special`]; kept as the oracle that the scan's class
-/// is this set exactly.
-#[cfg(test)]
-const fn json_trigger_byte(b: u8) -> bool {
-    b < 0x20 || b == b'"' || b == b'\\'
-}
-
 /// Append a JSON-escaped string literal (including the surrounding quotes).
 fn json_string<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     out.push('"');
@@ -356,31 +344,11 @@ impl<W: TextOut + ?Sized> TextOut for JsonEscaping<'_, W> {
 /// escaping the pieces and escaping the concatenation give the same bytes.
 ///
 /// The spelling is the workspace's one JSON escape law,
-/// [`purrdf_iri::json_escape`], in its [`JsonEscapes::Minimal`] form: clean runs
+/// [`purrdf_lex::json_escape`], in its [`JsonEscapes::Minimal`] form: clean runs
 /// end at the first `"`, `\` or C0 control, found by the chunked scan of that
 /// exact class, and are handed to the sink whole.
 fn json_escape_body<W: TextOut + ?Sized>(value: &str, out: &mut W) {
     escape_body(value, JsonEscapes::Minimal, |piece| out.push_str(piece));
-}
-
-/// The original per-`char` escaper, kept as the oracle for [`json_string`].
-#[cfg(test)]
-fn json_string_reference<W: TextOut + ?Sized>(value: &str, out: &mut W) {
-    out.push('"');
-    for ch in value.chars() {
-        match ch {
-            '"' => out.push_str("\\\""),
-            '\\' => out.push_str("\\\\"),
-            '\n' => out.push_str("\\n"),
-            '\r' => out.push_str("\\r"),
-            '\t' => out.push_str("\\t"),
-            c if (c as u32) < 0x20 => {
-                let _ = write!(out, "\\u{:04x}", c as u32);
-            }
-            c => out.push(c),
-        }
-    }
-    out.push('"');
 }
 
 /// Append a SPARQL-JSON binding object for a term value (recursive for triples).
@@ -484,7 +452,6 @@ mod tests {
     use super::*;
     use crate::model::SolutionProvenance;
     use purrdf_core::TermBox;
-    use purrdf_core::terminals::find_first_json_string_special;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
     use purrdf_core::datatype::XSD_INTEGER;
@@ -495,97 +462,68 @@ mod tests {
         String::from_utf8(outcome.bytes).expect("UTF-8 output")
     }
 
+    /// The SRJ string spelling, byte for byte: `"` and `\` escaped, LF, CR
+    /// and TAB as their short forms, every other C0 control as a lowercase
+    /// `\u00XX`, and everything else (DEL, C1, U+2028, non-ASCII) verbatim.
     #[test]
-    fn json_string_matches_reference_escaper() {
-        let cases: [&str; 15] = [
-            "",
-            "plain ascii text 0123456789 ~!@#$%^&*()_+-=[]{};':,./<>?",
-            "\"",
-            "\\",
-            "\n",
-            "\r",
-            "\t",
-            "\u{0}\u{1}\u{8}\u{c}\u{1f}",
-            "\u{7f}",
-            "\u{80}\u{85}\u{9f}",
-            "caf\u{e9} \u{4e2d}\u{6587} \u{1f431}",
-            "mixed \"quoted\" \\ back\\slash\n\ttab \u{e9}\u{1}end",
-            "\u{2028}\u{feff}\u{e9}\"",
-            "trailing quote\"",
-            "\"leading quote",
+    fn json_string_spells_the_minimal_escape_law() {
+        let cases: [(&str, &str); 15] = [
+            ("", r#""""#),
+            (
+                "plain ascii text 0123456789 ~!@#$%^&*()_+-=[]{};':,./<>?",
+                r#""plain ascii text 0123456789 ~!@#$%^&*()_+-=[]{};':,./<>?""#,
+            ),
+            ("\"", r#""\"""#),
+            ("\\", r#""\\""#),
+            ("\n", r#""\n""#),
+            ("\r", r#""\r""#),
+            ("\t", r#""\t""#),
+            (
+                "\u{0}\u{1}\u{8}\u{c}\u{1f}",
+                r#""\u0000\u0001\u0008\u000c\u001f""#,
+            ),
+            ("\u{7f}", "\"\u{7f}\""),
+            ("\u{80}\u{85}\u{9f}", "\"\u{80}\u{85}\u{9f}\""),
+            (
+                "caf\u{e9} \u{4e2d}\u{6587} \u{1f431}",
+                "\"caf\u{e9} \u{4e2d}\u{6587} \u{1f431}\"",
+            ),
+            (
+                "mixed \"quoted\" \\ back\\slash\n\ttab \u{e9}\u{1}end",
+                "\"mixed \\\"quoted\\\" \\\\ back\\\\slash\\n\\ttab \u{e9}\\u0001end\"",
+            ),
+            ("\u{2028}\u{feff}\u{e9}\"", "\"\u{2028}\u{feff}\u{e9}\\\"\""),
+            ("trailing quote\"", r#""trailing quote\"""#),
+            ("\"leading quote", r#""\"leading quote""#),
         ];
-        for case in cases {
-            let mut fast = String::from("prefix");
-            let mut reference = String::from("prefix");
-            json_string(case, &mut fast);
-            json_string_reference(case, &mut reference);
-            assert_eq!(fast, reference, "{case:?}");
-        }
-    }
-
-    /// A fixed-seed generator (SplitMix64), so every run draws the same inputs.
-    struct SplitMix(u64);
-
-    impl SplitMix {
-        const fn next(&mut self) -> u64 {
-            purrdf_testkit::rng::splitmix64_next(&mut self.0)
-        }
-
-        fn below(&mut self, n: usize) -> usize {
-            usize::try_from(self.next() % n as u64).expect("below n")
-        }
-    }
-
-    /// The chunked escaper agrees with the per-`char` reference on fixed-seed
-    /// values holding every ASCII scalar (so every trigger byte), DEL and the
-    /// C1 block (which ride verbatim), and non-ASCII in every UTF-8 width, at
-    /// lengths 0-70 and past several chunks; and the scan's class is the
-    /// trigger predicate on every byte.
-    #[test]
-    fn chunked_escaper_agrees_with_the_reference_on_random_values() {
-        for b in 0..=u8::MAX {
+        for (value, expected) in cases {
+            let mut out = String::from("prefix");
+            json_string(value, &mut out);
+            assert_eq!(out, format!("prefix{expected}"), "{value:?}");
+            // And it reads back as the value it spells.
             assert_eq!(
-                find_first_json_string_special(&[b]).is_some(),
-                json_trigger_byte(b),
-                "{b:#04X}"
+                purrdf_lex::json::read(expected).expect("a JSON string"),
+                value,
+                "{value:?}"
             );
         }
-        let mut alphabet: Vec<char> = (0_u8..0x80).map(char::from).collect();
-        alphabet.extend([
-            '\u{80}',
-            '\u{85}',
-            '\u{9F}',
-            '\u{E9}',
-            '\u{2028}',
-            '\u{FEFF}',
-            '\u{FFFD}',
-            '\u{1F431}',
-            '\u{10FFFF}',
-        ]);
-        let mut rng = SplitMix(0x0150_0E5C_A9E0_0001);
-        let mut escaped = 0_usize;
-        for len in (0..=70).chain([127, 128, 129, 1000, 4099]) {
-            for round in 0..40 {
-                let density = if round % 2 == 0 { 4 } else { 50 };
-                let value: String = (0..len)
-                    .map(|_| {
-                        if rng.below(density) == 0 {
-                            alphabet[rng.below(alphabet.len())]
-                        } else {
-                            'j'
-                        }
-                    })
-                    .collect();
-                let mut fast = String::from("prefix");
-                let mut reference = String::from("prefix");
-                json_string(&value, &mut fast);
-                json_string_reference(&value, &mut reference);
-                assert_eq!(fast, reference, "{value:?}");
-                // An escape makes the output longer than the quoted value.
-                escaped += usize::from(fast.len() > "prefix".len() + value.len() + 2);
+    }
+
+    /// Escaping fragment by fragment through [`JsonEscaping`] gives the bytes
+    /// escaping the whole value gives.
+    #[test]
+    fn fragment_wise_escaping_matches_whole_value_escaping() {
+        let value = "a\"b\\c\nd\u{1}e\u{e9}f\u{1f431}";
+        let mut whole = String::new();
+        json_escape_body(value, &mut whole);
+        let mut pieces = String::new();
+        {
+            let mut escaping = JsonEscaping(&mut pieces);
+            for ch in value.chars() {
+                escaping.push(ch);
             }
         }
-        assert!(escaped > 0);
+        assert_eq!(pieces, whole);
     }
 
     fn json_text_ns(
@@ -914,7 +852,7 @@ mod tests {
             text.starts_with('{') && text.ends_with('}'),
             "envelope: {text}"
         );
-        assert!(braces_balanced(&text), "unbalanced braces: {text}");
+        assert!(well_formed(&text), "malformed JSON: {text}");
     }
 
     #[test]
@@ -934,7 +872,7 @@ mod tests {
         // No queryHash/solutions present (absent fields omitted).
         assert!(!text.contains("queryHash"), "no queryHash expected: {text}");
         assert!(!text.contains("solutions"), "no solutions expected: {text}");
-        assert!(braces_balanced(&text), "unbalanced braces: {text}");
+        assert!(well_formed(&text), "malformed JSON: {text}");
     }
 
     /// DE-MINTING — populated provenance with NO namespace supplied emits no
@@ -1014,36 +952,9 @@ mod tests {
         );
     }
 
-    /// Tiny brace-balance check (no serde dep): every `{`/`}` outside a JSON
-    /// string literal must nest to zero, never going negative.
-    fn braces_balanced(text: &str) -> bool {
-        let mut depth: i32 = 0;
-        let mut in_string = false;
-        let mut escaped = false;
-        for ch in text.chars() {
-            if in_string {
-                if escaped {
-                    escaped = false;
-                } else if ch == '\\' {
-                    escaped = true;
-                } else if ch == '"' {
-                    in_string = false;
-                }
-                continue;
-            }
-            match ch {
-                '"' => in_string = true,
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth < 0 {
-                        return false;
-                    }
-                }
-                _ => {}
-            }
-        }
-        depth == 0 && !in_string
+    /// Whether `text` is one well-formed JSON document.
+    fn well_formed(text: &str) -> bool {
+        purrdf_lex::json::read(text).is_ok()
     }
 }
 

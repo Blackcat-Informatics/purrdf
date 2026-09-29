@@ -21,7 +21,7 @@ use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::Arc;
 
-use serde_json::Value;
+use purrdf_lex::json::{Object, Value};
 
 use crate::dialect::{self, Dialect, Vocabularies};
 use crate::error::SchemaError;
@@ -205,7 +205,7 @@ impl Registry {
     pub(crate) fn insert(
         &mut self,
         uri: &str,
-        document: Value,
+        mut document: Value,
         meta: bool,
         dialect: Dialect,
     ) -> Result<(), SchemaError> {
@@ -213,6 +213,13 @@ impl Registry {
         if self.by_uri.contains_key(&uri) {
             return Err(SchemaError::DuplicateResource { uri });
         }
+        refuse_repeated_members(&uri, &document)?;
+        // A schema object is a set of keywords (2020-12 Core §4.3.1): its
+        // member order carries nothing, so the document is held in name order
+        // and every walk over it — compilation, identifier scanning,
+        // meta-validation, annotations copied into output — is deterministic
+        // whatever order the caller wrote.
+        document.sort_keys();
         let doc = self.docs.len();
         let Scan {
             resources,
@@ -258,13 +265,11 @@ impl Registry {
             Some(fragment) => percent::decode(fragment).ok()?.into_owned(),
         };
         let pointer = if fragment.starts_with('/') {
-            let tokens = pointer::tokens(&fragment)?;
-            let root = pointer::lookup_str(&self.docs[resource.doc].value, &resource.pointer)?;
-            pointer::lookup(root, &tokens)?;
+            // An escaped pointer has one spelling per token sequence, so the
+            // fragment appends to the resource's location as written.
             let mut joined = resource.pointer.clone();
-            for token in &tokens {
-                joined = pointer::push_token(&joined, token);
-            }
+            joined.push_str(&fragment);
+            self.docs[resource.doc].value.pointer(&joined)?;
             joined
         } else {
             resource.anchors.get(&fragment)?.clone()
@@ -298,7 +303,7 @@ impl Registry {
 
     /// The value at `location`.
     pub(crate) fn value(&self, location: &Location) -> Option<&Value> {
-        pointer::lookup_str(&self.docs[location.doc].value, &location.pointer)
+        self.docs[location.doc].value.pointer(&location.pointer)
     }
 
     /// The location of the `$dynamicAnchor` named `name` in `resource`, if it
@@ -369,6 +374,83 @@ impl Registry {
         }
         Ok((dialect, vocabularies))
     }
+}
+
+/// Refuse a document in which some object repeats a member name: JSON leaves
+/// the meaning of a repeat open (RFC 8259 §4), and a schema read by one of the
+/// two occurrences would silently drop the other. The walk is over a heap
+/// stack, so any nesting depth is checked, and a value's location is spelled
+/// out only for the refusal.
+fn refuse_repeated_members(uri: &str, document: &Value) -> Result<(), SchemaError> {
+    // Every container reached: its parent's entry and the step from it.
+    let mut steps: Vec<(usize, Step<'_>)> = vec![(0, Step::Root)];
+    let mut stack = vec![(0_usize, document)];
+    while let Some((at, value)) = stack.pop() {
+        match value {
+            Value::Object(object) => {
+                if let Some(name) = object.first_duplicate() {
+                    return Err(SchemaError::InvalidKeyword {
+                        location: format!("{uri}#{}", location(&steps, at)),
+                        reason: format!("the object repeats the member name {name:?}"),
+                    });
+                }
+                for (name, member) in object.iter() {
+                    descend(&mut steps, &mut stack, at, Step::Member(name), member);
+                }
+            }
+            Value::Array(items) => {
+                for (index, item) in items.iter().enumerate() {
+                    descend(&mut steps, &mut stack, at, Step::Item(index), item);
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
+/// One step from a container to a child, as the repeated-member walk records
+/// it.
+enum Step<'v> {
+    Root,
+    Member(&'v str),
+    Item(usize),
+}
+
+/// Record `child` of the container at `at` for the walk, when it is itself a
+/// container.
+fn descend<'v>(
+    steps: &mut Vec<(usize, Step<'v>)>,
+    stack: &mut Vec<(usize, &'v Value)>,
+    at: usize,
+    step: Step<'v>,
+    child: &'v Value,
+) {
+    if matches!(child, Value::Object(_) | Value::Array(_)) {
+        stack.push((steps.len(), child));
+        steps.push((at, step));
+    }
+}
+
+/// The escaped JSON Pointer of the container recorded at `at`.
+fn location(steps: &[(usize, Step<'_>)], mut at: usize) -> String {
+    let mut tokens = Vec::new();
+    loop {
+        match &steps[at] {
+            (_, Step::Root) => break,
+            (parent, Step::Member(name)) => {
+                tokens.push((*name).to_owned());
+                at = *parent;
+            }
+            (parent, Step::Item(index)) => {
+                tokens.push(index.to_string());
+                at = *parent;
+            }
+        }
+    }
+    tokens.iter().rev().fold(String::new(), |here, token| {
+        pointer::push_token(&here, token)
+    })
 }
 
 fn declared_schema(document: &Value) -> Option<&str> {
@@ -480,7 +562,7 @@ impl<'r> Scan<'r> {
             }
             scan.anchors(dialect, object, &pointer, resource)?;
             for (child_pointer, child) in children(dialect, object, &pointer) {
-                if !(child.is_object() || child.is_boolean()) {
+                if !matches!(child, Value::Object(_) | Value::Bool(_)) {
                     continue;
                 }
                 let child_resource = scan.child(dialect, resource, &child_pointer, child)?;
@@ -629,7 +711,7 @@ impl<'r> Scan<'r> {
     fn anchors(
         &mut self,
         dialect: Dialect,
-        object: &serde_json::Map<String, Value>,
+        object: &Object,
         pointer: &str,
         resource: usize,
     ) -> Result<(), SchemaError> {
@@ -666,11 +748,7 @@ fn ref_hides_siblings(dialect: Dialect, value: &Value) -> bool {
 }
 
 /// The subschemas directly beneath `object`, as `(pointer, value)`.
-fn children<'v>(
-    dialect: Dialect,
-    object: &'v serde_json::Map<String, Value>,
-    pointer: &str,
-) -> Vec<(String, &'v Value)> {
+fn children<'v>(dialect: Dialect, object: &'v Object, pointer: &str) -> Vec<(String, &'v Value)> {
     let keywords = dialect.subschemas();
     let mut children = Vec::new();
     for &keyword in keywords.maps {

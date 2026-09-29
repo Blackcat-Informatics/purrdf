@@ -33,4 +33,4 @@ proc-macro2 = { workspace = true }
 # Forbidden-name patterns in the ledger are regular expressions.
 regex = { workspace = true }
 # The baseline and the machine-readable index are JSON documents.
-serde_json = { workspace = true }
+purrdf-lex = { workspace = true }
