@@ -1,19 +1,21 @@
 // SPDX-FileCopyrightText: 2026 Blackcat Informatics® Inc. <paudley@blackcatinformatics.ca>
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
-//! Shared generated RDF terms for traversal regression tests. Included only by test builds.
+//! Generated RDF terms for the traversal regression tests of every crate that
+//! walks a [`TermValue`]: arbitrarily shaped terms from a caller's
+//! deterministic stream, and triple terms nested to any depth.
+//!
+//! This is test support, not API: it is hidden from the documentation and
+//! carries no stability promise. It lives in the library so that each crate's
+//! tests import one definition rather than compiling a copy of it; the
+//! pseudo-random stream is the caller's, so the library takes no test-only
+//! dependency.
 
-#![allow(
-    dead_code,
-    reason = "shared traversal fixtures expose shapes used by different crate tests"
-)]
-
-use purrdf_testkit::rng::splitmix64_next;
+use crate::{BlankScope, RdfTextDirection, TermBox, TermValue};
 
 /// Which positions of a generated triple term [`term_value`] may fill with which terms.
-#[doc(hidden)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum TermShape {
+pub enum TermShape {
     /// Any term in any position, a non-IRI predicate included — a walk that refuses one
     /// meets it.
     Any,
@@ -24,8 +26,9 @@ pub(crate) enum TermShape {
     WellFormed,
 }
 
-/// A term value drawn from the [`splitmix64_next`] stream at `state`, holding at most
-/// `budget` triple terms, its triple terms shaped by `shape`.
+/// A term value drawn from the caller's deterministic stream — `next` advances
+/// `state` and returns the next draw — holding at most `budget` triple terms, its
+/// triple terms shaped by `shape`.
 ///
 /// Every IRI is absolute and under `http://example.org/`; blank nodes come in two
 /// labels over three scopes; literals are plain, language-tagged (with and without a
@@ -34,18 +37,17 @@ pub(crate) enum TermShape {
 ///
 /// This draws recursively: a generated term nests at most `budget` levels, and the
 /// generator is for tests of the walks, not one of them.
-#[doc(hidden)]
-pub(crate) fn term_value(
+pub fn term_value(
     state: &mut u64,
+    next: fn(&mut u64) -> u64,
     budget: &mut usize,
     shape: TermShape,
-) -> purrdf_core::TermValue {
-    use purrdf_core::{BlankScope, RdfTextDirection, TermBox, TermValue};
+) -> TermValue {
     const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
     const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
     const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
-    let draw = |state: &mut u64, n: u64| splitmix64_next(state) % n;
+    let draw = |state: &mut u64, n: u64| next(state) % n;
     if *budget > 0 && draw(state, 3) == 0 {
         *budget -= 1;
         let s = match shape {
@@ -56,15 +58,15 @@ pub(crate) fn term_value(
                 label: format!("b{}", draw(state, 2)),
                 scope: BlankScope(u32::try_from(draw(state, 3)).unwrap_or(0)),
             },
-            TermShape::Any | TermShape::IriPredicates => term_value(state, budget, shape),
+            TermShape::Any | TermShape::IriPredicates => term_value(state, next, budget, shape),
         };
         let p = match shape {
-            TermShape::Any => term_value(state, budget, shape),
+            TermShape::Any => term_value(state, next, budget, shape),
             TermShape::IriPredicates | TermShape::WellFormed => {
                 TermValue::iri(format!("http://example.org/p{}", draw(state, 2)))
             }
         };
-        let o = term_value(state, budget, shape);
+        let o = term_value(state, next, budget, shape);
         return TermValue::Triple {
             s: TermBox::new(s),
             p: TermBox::new(p),
@@ -101,10 +103,8 @@ pub(crate) fn term_value(
 /// slot under the subject `http://example.org/s` and the predicate
 /// `http://example.org/p`, around the innermost object `http://example.org/o`. Built
 /// by a loop, so any depth is cheap to make.
-#[doc(hidden)]
 #[must_use]
-pub(crate) fn triple_chain(levels: usize) -> purrdf_core::TermValue {
-    use purrdf_core::{TermBox, TermValue};
+pub fn triple_chain(levels: usize) -> TermValue {
     let mut term = TermValue::iri("http://example.org/o");
     for _ in 0..levels {
         term = TermValue::Triple {

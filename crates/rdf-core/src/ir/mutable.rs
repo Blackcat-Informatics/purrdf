@@ -109,16 +109,16 @@ pub(crate) struct QuadKey {
 struct DeltaBuilder {
     /// The sole owner of each delta term value, in mint order.
     values: Vec<TermValue>,
-    /// Reverse hash→id index, mirroring the base's `value_index` in `dataset.rs`:
-    /// keyed by a canonical hash of the term VALUE with `Vec<DeltaTermId>` collision
-    /// buckets, so interning and lookup are O(1) expected instead of a linear scan.
-    /// The hash is in-memory only (never persisted), so a fixed-seed `DefaultHasher`
-    /// is fine and matches the `dataset.rs` precedent.
+    /// Reverse hash→id index: keyed by a hash of the term VALUE with
+    /// `Vec<DeltaTermId>` collision buckets, so interning and lookup are O(1) expected
+    /// instead of a linear scan. The hash only chooses a bucket and is never
+    /// persisted; equal values always meet in one bucket and are then compared by
+    /// `==`, so the hasher's choice affects speed, never results.
     index: std::collections::HashMap<u64, Vec<DeltaTermId>>,
 }
 
 impl DeltaBuilder {
-    /// Canonical hash of a [`TermValue`], matching the base's `value_index` keying.
+    /// The bucket hash of a [`TermValue`]: equal values hash alike.
     fn hash_of(value: &TermValue) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -396,7 +396,7 @@ impl MutableDataset {
         }
         // Hash-indexed delta lookup (O(1) expected) — no linear scan, no per-term
         // value rebuild: the delta stores `TermValue`s by value and indexes them by
-        // their canonical hash, just like the base's `value_index`.
+        // their hash, as the base's store-once table indexes its terms.
         self.delta.find(value).map(MutTermId::Delta)
     }
 
@@ -1670,7 +1670,7 @@ mod term_walk_tests {
 
     use super::{MutableDataset, check_value_absolute, intern_value};
     use crate::backend::TermFactory as _;
-    use crate::test_terms::TermShape;
+    use crate::term_fixture::TermShape;
     use crate::{RdfDataset, RdfDatasetBuilder, TermBox, TermId, TermRef, TermValue};
 
     fn reference_base(base: &RdfDataset, id: TermId) -> TermValue {
@@ -1731,8 +1731,12 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value =
-                crate::test_terms::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let value = crate::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                TermShape::WellFormed,
+            );
             let mut builder = RdfDatasetBuilder::new();
             let object = builder.intern_value(&value);
             let holder = builder.intern_iri("http://example.org/holder");
@@ -1777,7 +1781,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
+                let value = crate::term_fixture::triple_chain(LEVELS);
                 assert!(check_value_absolute(&value).is_ok());
                 let mut builder = RdfDatasetBuilder::new();
                 assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);

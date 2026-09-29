@@ -298,7 +298,7 @@ mod term_walk_tests {
     //! thousand levels on a 128 KiB thread.
 
     use super::TermFactory;
-    use crate::test_terms::TermShape;
+    use crate::term_fixture::TermShape;
     use crate::{RdfDatasetBuilder, TermId, TermValue};
 
     fn reference(builder: &mut RdfDatasetBuilder, value: &TermValue) -> TermId {
@@ -320,7 +320,12 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(&mut state, &mut budget, TermShape::Any);
+            let value = crate::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                TermShape::Any,
+            );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
                 found.intern_value(&value),
@@ -344,7 +349,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
+                let value = crate::term_fixture::triple_chain(LEVELS);
                 let mut builder = RdfDatasetBuilder::new();
                 assert_eq!(builder.intern_value(&value).index(), LEVELS + 2);
             })

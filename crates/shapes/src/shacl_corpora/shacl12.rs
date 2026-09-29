@@ -35,10 +35,10 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
+use crate::data::{GraphFilter, native_quads};
+use crate::model::rdf;
+use crate::term::Term;
 use purrdf::RdfDataset;
-use purrdf_shapes::data::{GraphFilter, native_quads};
-use purrdf_shapes::model::rdf;
-use purrdf_shapes::term::Term;
 
 use super::{
     W3cCase, file_iri, iri_to_path, list_items, manifest_includes, mf, object, objects,
@@ -46,18 +46,17 @@ use super::{
 };
 
 /// The vendored SHACL 1.2 suite root.
-pub(crate) const SHACL12_DIR: &str =
-    concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/shacl12/tests");
+pub const SHACL12_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/shacl12/tests");
 
 /// Exact number of test entries the manifest roots must discover.
 ///
 /// The per-type split is pinned by [`W3C12_CASES_BY_TYPE`]; this is its sum.
 /// Bump only on a deliberate re-vendor (the corpus is byte-frozen).
-pub(crate) const W3C12_TOTAL_CASES: usize = 547;
+pub const W3C12_TOTAL_CASES: usize = 547;
 
 /// The discovered count of each test type, pinned so a walk that lost one kind
 /// of test while gaining another cannot keep the total.
-pub(crate) const W3C12_CASES_BY_TYPE: &[(&str, usize)] = &[
+pub const W3C12_CASES_BY_TYPE: &[(&str, usize)] = &[
     ("sht:Validate", 174),
     ("sht:EvalNodeExpr", 143),
     ("sht:Infer", 27),
@@ -72,12 +71,12 @@ pub(crate) const W3C12_CASES_BY_TYPE: &[(&str, usize)] = &[
 
 /// Manifests on disk that neither root reaches. Must stay empty; it is a named
 /// constant only so the assertion message can say what it expected.
-pub(crate) const W3C12_UNREACHED_MANIFESTS: &[&str] = &[];
+pub const W3C12_UNREACHED_MANIFESTS: &[&str] = &[];
 
 /// Nodes a reached manifest types as a test but lists in no `mf:entries`, each
 /// with the evidence that it is not a runnable test: `(id, why)`. Anything else
 /// typed-but-unlisted fails discovery.
-pub(crate) const W3C12_UNLISTED_TYPED_NODES: &[(&str, &str)] = &[(
+pub const W3C12_UNLISTED_TYPED_NODES: &[(&str, &str)] = &[(
     "sparql-rl/eval2/eval-assign-01",
     "sparql-rl/eval2/manifest.ttl types a stray :eval-assign-01 that its mf:entries \
      omits and whose srlt:ruleset (eval-assign-01.srl), srlt:data (data-empty.ttl) and \
@@ -95,7 +94,7 @@ pub(crate) const W3C12_UNLISTED_TYPED_NODES: &[(&str, &str)] = &[(
 /// `nodeValidator-001.ttl`, the same way (`shacl_corpora::W3C_PROPOSED_UNINCLUDED`). Running them is not counting them: their entries are
 /// discovered with `listed == false`, and the harness grades and reports them in
 /// a category of their own, never among the approved suite's passes.
-pub(crate) const W3C12_UNINCLUDED_MANIFESTS: &[(&str, &str)] = &[
+pub const W3C12_UNINCLUDED_MANIFESTS: &[(&str, &str)] = &[
     (
         "core/node/xone-002.ttl",
         "approved sh:xone test (empty sh:xone list); core/node/manifest.ttl includes \
@@ -138,7 +137,7 @@ const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
 
 /// The seven SPARQL 1.2 RL test types (`srlt:` vocabulary).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub(crate) enum SrlKind {
+pub enum SrlKind {
     PositiveSyntax,
     NegativeSyntax,
     PositiveWellFormedness,
@@ -180,7 +179,7 @@ impl SrlKind {
     }
 
     /// The `srlt:` local name.
-    pub(crate) fn local_name(self) -> &'static str {
+    pub fn local_name(self) -> &'static str {
         Self::ALL
             .iter()
             .find(|(kind, _)| *kind == self)
@@ -195,23 +194,25 @@ impl SrlKind {
 /// expression is a node (usually blank) of that very dataset, so the dataset the
 /// manifest was read from is carried: re-parsing the file would mint different
 /// blank nodes and `expr` would name nothing in them.
-pub(crate) struct NodeExprCase {
-    pub(crate) file: PathBuf,
-    pub(crate) dataset: Arc<RdfDataset>,
+#[derive(Debug)]
+pub struct NodeExprCase {
+    pub file: PathBuf,
+    pub dataset: Arc<RdfDataset>,
     /// `sht:nodeExpr`.
-    pub(crate) expr: Term,
+    pub expr: Term,
     /// `sht:focusNode`, when the entry gives one.
-    pub(crate) focus: Option<Term>,
+    pub focus: Option<Term>,
     /// Every `sht:scope-NAME value`, as `(NAME, value)`, in NAME order.
-    pub(crate) scope: Vec<(String, Term)>,
+    pub scope: Vec<(String, Term)>,
     /// The `mf:result` list, in list order.
-    pub(crate) expected: Vec<Term>,
+    pub expected: Vec<Term>,
     /// `sht:ignoreOrder true`.
-    pub(crate) ignore_order: bool,
+    pub ignore_order: bool,
 }
 
 /// What an `sht:Infer` entry expects.
-pub(crate) enum InferExpected {
+#[derive(Debug)]
+pub enum InferExpected {
     /// `mf:result sht:Failure` — loading or running the rules must fail.
     Failure,
     /// An inline list of `( s p o )` triples (possibly `rdf:nil`, i.e. none).
@@ -221,26 +222,29 @@ pub(crate) enum InferExpected {
 }
 
 /// One `sht:Infer` entry.
-pub(crate) struct InferCase {
-    pub(crate) shapes_path: PathBuf,
-    pub(crate) data_path: PathBuf,
-    pub(crate) shapes_graph_iri: String,
-    pub(crate) expected: InferExpected,
+#[derive(Debug)]
+pub struct InferCase {
+    pub shapes_path: PathBuf,
+    pub data_path: PathBuf,
+    pub shapes_graph_iri: String,
+    pub expected: InferExpected,
 }
 
 /// One SPARQL 1.2 RL entry.
-pub(crate) struct SrlCase {
-    pub(crate) kind: SrlKind,
+#[derive(Debug)]
+pub struct SrlCase {
+    pub kind: SrlKind,
     /// The `.srl` rule set under test.
-    pub(crate) ruleset: PathBuf,
+    pub ruleset: PathBuf,
     /// `srlt:data` of an evaluation test.
-    pub(crate) data: Option<PathBuf>,
+    pub data: Option<PathBuf>,
     /// `mf:result` of an evaluation test — the expected inference graph.
-    pub(crate) result: Option<PathBuf>,
+    pub result: Option<PathBuf>,
 }
 
 /// The body of a discovered case, by test type.
-pub(crate) enum Body {
+#[derive(Debug)]
+pub enum Body {
     Validate(W3cCase),
     NodeExpr(NodeExprCase),
     Infer(InferCase),
@@ -248,23 +252,24 @@ pub(crate) enum Body {
 }
 
 /// One discovered SHACL 1.2 test entry.
-pub(crate) struct Case12 {
+#[derive(Debug)]
+pub struct Case12 {
     /// Entry id relative to the suite root, e.g. `core/node/in-003`,
     /// `node-expr/shnex/var-bound`, `sparql-rl/eval/eval-basic-01`.
-    pub(crate) id: String,
+    pub id: String,
     /// The id's directory, e.g. `core/node`.
-    pub(crate) section: String,
-    pub(crate) body: Body,
+    pub section: String,
+    pub body: Body,
     /// Whether an upstream manifest lists the entry. `false` for the entries of
     /// [`W3C12_UNINCLUDED_MANIFESTS`], which no upstream manifest includes: they
     /// are graded, but they are not the approved suite, and a harness reports
     /// them apart from it.
-    pub(crate) listed: bool,
+    pub listed: bool,
 }
 
 impl Case12 {
     /// The manifest's test type, as a prefixed name.
-    pub(crate) fn type_label(&self) -> String {
+    pub fn type_label(&self) -> String {
         match &self.body {
             Body::Validate(_) => "sht:Validate".to_owned(),
             Body::NodeExpr(_) => "sht:EvalNodeExpr".to_owned(),
@@ -277,7 +282,7 @@ impl Case12 {
 // ── Discovery ─────────────────────────────────────────────────────────────────
 
 /// The suite root, canonicalized.
-pub(crate) fn shacl12_root() -> PathBuf {
+pub fn shacl12_root() -> PathBuf {
     Path::new(SHACL12_DIR)
         .canonicalize()
         .expect("vectors/shacl12/tests corpus directory must exist")
@@ -303,7 +308,7 @@ fn manifest_roots(root: &Path) -> Vec<(PathBuf, bool)> {
 ///
 /// Asserts [`W3C12_TOTAL_CASES`], [`W3C12_CASES_BY_TYPE`], id uniqueness, and the
 /// reachability and listed-ness guards in the module docs.
-pub(crate) fn shacl12_cases() -> Vec<Case12> {
+pub fn shacl12_cases() -> Vec<Case12> {
     let root = shacl12_root();
     let mut cases: Vec<Case12> = Vec::new();
     for (manifest, listed) in manifest_roots(&root) {

@@ -304,9 +304,5 @@ pub use ir::{
     ScopeBinding, ViewAccountingReport, ViewLimits, ViewStats, ViewWork,
 };
 
-#[cfg(test)]
-extern crate self as purrdf_core;
-
-#[cfg(test)]
-#[path = "../tests/support/term_fixture.rs"]
-mod test_terms;
+#[doc(hidden)]
+pub mod term_fixture;

@@ -203,10 +203,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;
-
 #[cfg(target_arch = "wasm32")]
 #[wasm_bindgen]
 extern "C" {

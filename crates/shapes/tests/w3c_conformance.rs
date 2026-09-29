@@ -61,7 +61,7 @@
 //! Run with `--nocapture` for the per-manifest-section scoreboard:
 //! `cargo test -p purrdf-shapes --test w3c_conformance -- --nocapture`
 
-mod shacl_corpora;
+use purrdf_shapes::shacl_corpora;
 
 use std::collections::BTreeMap;
 

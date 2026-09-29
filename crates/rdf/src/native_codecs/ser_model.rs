@@ -1841,10 +1841,11 @@ pub(crate) mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::IriPredicates,
+                purrdf_core::term_fixture::TermShape::IriPredicates,
             );
             nested += usize::from(budget < 7);
             let mut graph = SerGraph::default();
@@ -1870,7 +1871,7 @@ pub(crate) mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
+                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
                 let mut graph = SerGraph::default();
                 let id = lower(&mut graph, &value);
                 drop(value);

@@ -3163,7 +3163,7 @@ def jsonld_lens_claims() -> list[Claim]:
 
 
 _SHACL12_ROW = "SHACL 1.2 (Core, SPARQL, node expressions, rules, SPARQL RL)"
-_SHACL12_CORPUS = _REPO / "crates" / "shapes" / "tests" / "shacl_corpora" / "shacl12.rs"
+_SHACL12_CORPUS = _REPO / "crates" / "shapes" / "src" / "shacl_corpora" / "shacl12.rs"
 _SHAPES_README = _REPO / "crates" / "shapes" / "README.md"
 _BOOK_SHACL = _REPO / "docs" / "book" / "src" / "validation" / "shacl.md"
 
@@ -3179,9 +3179,9 @@ def load_shacl12_type_counts() -> dict[str, int]:
     """
     text = _read(_SHACL12_CORPUS)
     rel = _SHACL12_CORPUS.relative_to(_REPO)
-    total_match = re.search(r"pub\(crate\) const W3C12_TOTAL_CASES: usize = (\d+);", text)
+    total_match = re.search(r"pub const W3C12_TOTAL_CASES: usize = (\d+);", text)
     table_match = re.search(
-        r"pub\(crate\) const W3C12_CASES_BY_TYPE: &\[\(&str, usize\)\] = &\[(.*?)\];",
+        r"pub const W3C12_CASES_BY_TYPE: &\[\(&str, usize\)\] = &\[(.*?)\];",
         text,
         re.DOTALL,
     )
@@ -3219,7 +3219,7 @@ _SHACL12_HARNESS = _REPO / "crates" / "shapes" / "tests" / "w3c12_conformance.rs
 # the table of entries whose approved result spells a decimal non-canonically, and
 # its count pin.
 _SHACL12_NODE_EXPR_GRADER = (
-    _REPO / "crates" / "shapes" / "tests" / "shacl_corpora" / "node_expr_grading.rs"
+    _REPO / "crates" / "shapes" / "src" / "shacl_corpora" / "node_expr_grading.rs"
 )
 _SHACL12_UNLISTED_ROW = "SHACL 1.2 unlisted vendored files"
 
@@ -3269,7 +3269,7 @@ def shacl12_claims(matrix: dict[str, tuple[int, int]]) -> list[Claim]:
     mat = "the generated conformance-matrix block in docs/CONFORMANCE.md"
     pins = (
         "W3C12_TOTAL_CASES / W3C12_CASES_BY_TYPE in "
-        "crates/shapes/tests/shacl_corpora/shacl12.rs"
+        "crates/shapes/src/shacl_corpora/shacl12.rs"
     )
     catsrc = f"the category pins in {_SHACL12_HARNESS.relative_to(_REPO)}"
     if counts["total"] != listed + cats["unlisted"]:

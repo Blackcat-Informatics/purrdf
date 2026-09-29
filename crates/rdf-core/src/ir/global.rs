@@ -1201,15 +1201,17 @@ mod tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = crate::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                crate::term_fixture::TermShape::Any,
             );
-            let other = crate::test_terms::term_value(
+            let other = crate::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                crate::term_fixture::TermShape::Any,
             );
             nested += usize::from(budget < 7);
             let mut dict = GlobalDictionary::new();
@@ -1239,7 +1241,7 @@ mod tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
+                let value = crate::term_fixture::triple_chain(LEVELS);
                 let mut dict = GlobalDictionary::new();
                 let id = intern(&mut dict, &value);
                 assert_eq!(dict.reintern_validated(&value), id);

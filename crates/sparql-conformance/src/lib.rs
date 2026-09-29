@@ -186,7 +186,3 @@ fn verdict_of(case: &SparqlTestCase) -> Verdict {
 fn log_xfail(iri: &str, reason: XfailReason, msg: &str) {
     eprintln!("[xfail: {}] {iri} — {msg}", reason.label());
 }
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

@@ -3,6 +3,13 @@
 
 //! **The one reader for the two SHACL corpora this crate is graded against.**
 //!
+//! This is test support, not API: it is hidden from the documentation, carries no
+//! stability promise, and reads the corpora from this crate's source checkout. It
+//! lives in the library so that every harness that grades these corpora — this
+//! crate's conformance tests and the command-line crate's tests that drive the
+//! built binary over the same entries — imports one reader instead of compiling
+//! a copy of it.
+//!
 //! Two corpora exist, with two different discovery rules, and more than one
 //! harness needs to walk each of them:
 //!
@@ -47,35 +54,28 @@
 //!   entries whose approved result spells a decimal non-canonically, shared by the
 //!   library harness and the command-line harness.
 
-#![allow(
-    dead_code,
-    reason = "one corpus reader serves several test binaries; each uses the part \
-              of it that its own claim needs, and splitting the module per consumer \
-              would reintroduce the walker duplication it exists to prevent"
-)]
-
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
+use crate::data::{GraphFilter, native_quads};
 use purrdf::RdfDataset;
-use purrdf_shapes::data::{GraphFilter, native_quads};
 
-pub(crate) mod node_expr_grading;
-pub(crate) mod report_grading;
-pub(crate) mod shacl12;
-use purrdf_shapes::model::{BoxRoleVocab, rdf, sh};
-use purrdf_shapes::term::{NamedNode, Term};
+pub mod node_expr_grading;
+pub mod report_grading;
+pub mod shacl12;
+use crate::model::{BoxRoleVocab, rdf, sh};
+use crate::term::{NamedNode, Term};
 
 // ── Corpus locations ──────────────────────────────────────────────────────────
 
 /// The vendored W3C data-shapes suite plus the first-party `af/` seam.
-pub(crate) const VECTORS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/shacl");
+pub const VECTORS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/../../vectors/shacl");
 
 /// The first-party numbered-case corpus.
-pub(crate) const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus");
+pub const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus");
 
 /// Exact number of `sht:Validate` entries the manifest tree must discover.
 /// Bump only when the vendored corpus itself changes (it is byte-frozen).
@@ -88,7 +88,7 @@ pub(crate) const CORPUS_DIR: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/corpus
 /// The SHACL-AF seam at `af/` adds 9 more `sht:Validate` entries — 6 vendored
 /// from pySHACL's DASH tests and 3 first-party (no W3C SHACL-AF conformance
 /// suite exists; see `vectors/shacl/af/README.md`).
-pub(crate) const W3C_TOTAL_CASES: usize = 129;
+pub const W3C_TOTAL_CASES: usize = 129;
 
 /// Vendored SHACL 1.0 files that carry a `sht:Validate` entry no upstream manifest
 /// includes, and whose entry is `mf:status sht:proposed` rather than approved:
@@ -98,7 +98,7 @@ pub(crate) const W3C_TOTAL_CASES: usize = 129;
 /// walked as a manifest root of its own and its entry graded by the same grader as
 /// the approved suite ([`w3c_proposed_cases`]). Grading it is not counting it: it is
 /// reported as "proposed, graded", never among the approved suite's passes.
-pub(crate) const W3C_PROPOSED_UNINCLUDED: &[(&str, &str)] = &[(
+pub const W3C_PROPOSED_UNINCLUDED: &[(&str, &str)] = &[(
     "sparql/component/nodeValidator-001.ttl",
     "sht:proposed sh:nodeValidator test (a SELECT validator pre-binding a required \
      parameter); sparql/component/manifest.ttl does not include it",
@@ -112,7 +112,7 @@ const SHT_PROPOSED: &str = "http://www.w3.org/ns/shacl-test#proposed";
 /// Asserts that every file yields exactly one entry and that the entry IS
 /// `sht:proposed`: an entry upstream approves belongs in the approved walk, and a
 /// file that stopped yielding its entry would otherwise vanish.
-pub(crate) fn w3c_proposed_cases() -> Vec<W3cCase> {
+pub fn w3c_proposed_cases() -> Vec<W3cCase> {
     let root = w3c_root();
     let mut cases: Vec<W3cCase> = Vec::new();
     for (relative, _) in W3C_PROPOSED_UNINCLUDED {
@@ -148,7 +148,7 @@ pub(crate) fn w3c_proposed_cases() -> Vec<W3cCase> {
 /// Asserted rather than merely non-empty so a removed or renamed corpus
 /// directory fails fast instead of silently reducing coverage. Bump this when
 /// adding a case.
-pub(crate) const FIRST_PARTY_TOTAL_CASES: usize = 73;
+pub const FIRST_PARTY_TOTAL_CASES: usize = 73;
 
 // ── Vocabulary ────────────────────────────────────────────────────────────────
 
@@ -179,7 +179,7 @@ const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
 /// Comparison tuple: `(focus, path, value, component, severity, source shape)` —
 /// see [`norm`] for the normalization rules. A blank-node source shape compares as
 /// `_:`, like every other blank node.
-pub(crate) type Tuple = (
+pub type Tuple = (
     String,
     Option<String>,
     Option<String>,
@@ -189,7 +189,7 @@ pub(crate) type Tuple = (
 );
 
 /// Result multiset: tuple → occurrence count.
-pub(crate) type Multiset = BTreeMap<Tuple, usize>;
+pub type Multiset = BTreeMap<Tuple, usize>;
 
 /// One expected result as the `sh:detail` grader reads it: its comparison tuple
 /// and, when the expected report states any, its nested `sh:detail` results.
@@ -200,13 +200,14 @@ pub(crate) type Multiset = BTreeMap<Tuple, usize>;
 /// states at least one, in which case the produced result's details must be
 /// EXACTLY that multiset, recursively.
 #[derive(Clone, Debug)]
-pub(crate) struct ExpectedResult {
-    pub(crate) tuple: Tuple,
-    pub(crate) details: Option<Vec<Self>>,
+pub struct ExpectedResult {
+    pub tuple: Tuple,
+    pub details: Option<Vec<Self>>,
 }
 
 /// What the manifest says a case's outcome must be.
-pub(crate) enum Expected {
+#[derive(Debug)]
+pub enum Expected {
     /// `mf:result sht:Failure` — the validator must reject the input.
     Failure,
     /// A full expected `sh:ValidationReport`.
@@ -214,49 +215,51 @@ pub(crate) enum Expected {
 }
 
 /// One `sht:Validate` entry from the vendored manifest tree.
-pub(crate) struct W3cCase {
+#[derive(Debug)]
+pub struct W3cCase {
     /// Entry IRI relative to the corpus root, e.g. `core/node/and-001`.
-    pub(crate) id: String,
+    pub id: String,
     /// Manifest section, e.g. `core/node`.
-    pub(crate) section: String,
-    pub(crate) shapes_path: PathBuf,
-    pub(crate) data_path: PathBuf,
+    pub section: String,
+    pub shapes_path: PathBuf,
+    pub data_path: PathBuf,
     /// IRI supplied by `sht:shapesGraph` (often `<>` resolving to the test file),
     /// used as the named graph for `$shapesGraph` pre-binding in SHACL-SPARQL.
-    pub(crate) shapes_graph_iri: Option<String>,
-    pub(crate) expected: Expected,
+    pub shapes_graph_iri: Option<String>,
+    pub expected: Expected,
     /// The `sh:conformanceDisallows` IRIs of the EXPECTED report, which the suite
     /// uses as a validation parameter ("the test framework needs to use the
     /// values of sh:conformanceDisallows from the mf:result", W3C
     /// `core/validation-reports/conformance-disallows-001`). Empty when the
     /// expected report states none, which means the default set.
-    pub(crate) conformance_disallows: Vec<String>,
+    pub conformance_disallows: Vec<String>,
     /// Every expected result that carries `sh:resultMessage`, with its messages
     /// as [`message_key`]s — compared EXACTLY, as a set. The suite asks a harness "to preserve all
     /// sh:resultMessage triples that are mentioned in the 'expected' results
     /// graph" (W3C `core/misc/message-001`), so these are graded beside the tuple
     /// multiset.
-    pub(crate) expected_messages: Vec<(Tuple, BTreeSet<String>)>,
+    pub expected_messages: Vec<(Tuple, BTreeSet<String>)>,
     /// Every expected result that carries a SHACL-SPARQL result annotation — a
     /// predicate outside `rdf:type` and the SHACL namespaces (SHACL 1.2 SPARQL
     /// Extensions, "Annotation Properties": the processor "copies the binding …
     /// into the validation result") — with its `(property, value)` pairs,
     /// compared EXACTLY as a set, the way messages are.
-    pub(crate) expected_annotations: Vec<(Tuple, BTreeSet<(String, String)>)>,
+    pub expected_annotations: Vec<(Tuple, BTreeSet<(String, String)>)>,
     /// Every top-level expected result that states `sh:detail`, with its nested
     /// results — graded beside the tuple multiset: each must be carried by a
     /// distinct produced result with the same tuple whose details are exactly
     /// the stated ones (see [`ExpectedResult`]).
-    pub(crate) expected_details: Vec<ExpectedResult>,
+    pub expected_details: Vec<ExpectedResult>,
 }
 
 /// One numbered case directory from the first-party corpus.
-pub(crate) struct FirstPartyCase {
+#[derive(Debug)]
+pub struct FirstPartyCase {
     /// The directory name, e.g. `01-min-count`.
-    pub(crate) name: String,
-    pub(crate) shapes_path: PathBuf,
-    pub(crate) data_path: PathBuf,
-    pub(crate) expected_report_path: PathBuf,
+    pub name: String,
+    pub shapes_path: PathBuf,
+    pub data_path: PathBuf,
+    pub expected_report_path: PathBuf,
 }
 
 /// The first-party corpus fixtures' caller-supplied box-role vocabulary: the
@@ -264,18 +267,18 @@ pub(crate) struct FirstPartyCase {
 /// `https://example.org/meta/`. PurRDF mints no vocabulary of its own, so every
 /// harness over this corpus configures the vocab explicitly, exactly as a
 /// consumer would.
-pub(crate) fn first_party_box_role_vocab() -> BoxRoleVocab {
+pub fn first_party_box_role_vocab() -> BoxRoleVocab {
     BoxRoleVocab::for_namespace("https://example.org/meta/")
 }
 
 // ── Graph helpers ─────────────────────────────────────────────────────────────
 
-pub(crate) fn named(iri: &str) -> Term {
+pub fn named(iri: &str) -> Term {
     Term::NamedNode(NamedNode::new_unchecked(iri))
 }
 
 /// All objects of `(subject, predicate, ?)`.
-pub(crate) fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
+pub fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Term> {
     native_quads(
         g,
         Some(subject),
@@ -289,7 +292,7 @@ pub(crate) fn objects(g: &RdfDataset, subject: &Term, predicate: &str) -> Vec<Te
 }
 
 /// The first object of `(subject, predicate, ?)`, if any.
-pub(crate) fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
+pub fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<Term> {
     objects(g, subject, predicate).into_iter().next()
 }
 
@@ -300,7 +303,7 @@ pub(crate) fn object(g: &RdfDataset, subject: &Term, predicate: &str) -> Option<
 /// cell — is a discovery bug, not something to read around: stopping early would
 /// hand every consumer a SHORTER list (fewer entries, fewer expected results),
 /// and a shorter list is a greener harness. It panics instead.
-pub(crate) fn list_items(g: &RdfDataset, head: &Term) -> Vec<Term> {
+pub fn list_items(g: &RdfDataset, head: &Term) -> Vec<Term> {
     let mut items = Vec::new();
     let mut visited: BTreeSet<String> = BTreeSet::new();
     let mut node = head.clone();
@@ -334,7 +337,7 @@ pub(crate) fn list_items(g: &RdfDataset, head: &Term) -> Vec<Term> {
 /// Expected reports in the vendored suite use their own blank-node labels, which
 /// cannot match the engine's, so identity comparison is only possible for IRIs
 /// and literals.
-pub(crate) fn norm(t: &Term) -> String {
+pub fn norm(t: &Term) -> String {
     match t {
         Term::BlankNode(_) => "_:".to_owned(),
         other => other.to_string(),
@@ -343,11 +346,11 @@ pub(crate) fn norm(t: &Term) -> String {
 
 // ── IRI ↔ path mapping ────────────────────────────────────────────────────────
 
-pub(crate) fn file_iri(path: &Path) -> String {
+pub fn file_iri(path: &Path) -> String {
     format!("file://{}", path.display())
 }
 
-pub(crate) fn iri_to_path(iri: &str) -> PathBuf {
+pub fn iri_to_path(iri: &str) -> PathBuf {
     PathBuf::from(
         iri.strip_prefix("file://")
             .unwrap_or_else(|| panic!("expected a file:// IRI, got {iri}")),
@@ -356,7 +359,7 @@ pub(crate) fn iri_to_path(iri: &str) -> PathBuf {
 
 /// Parse a Turtle file with the workspace's own codec (dogfooding), resolving
 /// relative IRIs against the file's own `file://` location.
-pub(crate) fn parse_turtle_file(path: &Path) -> Result<Arc<RdfDataset>, String> {
+pub fn parse_turtle_file(path: &Path) -> Result<Arc<RdfDataset>, String> {
     let text =
         fs::read_to_string(path).map_err(|e| format!("cannot read {}: {e}", path.display()))?;
     purrdf::parse_dataset(text.as_bytes(), "text/turtle", Some(&file_iri(path)))
@@ -366,7 +369,7 @@ pub(crate) fn parse_turtle_file(path: &Path) -> Result<Arc<RdfDataset>, String> 
 // ── W3C manifest walking ──────────────────────────────────────────────────────
 
 /// The vendored corpus root, canonicalized.
-pub(crate) fn w3c_root() -> PathBuf {
+pub fn w3c_root() -> PathBuf {
     Path::new(VECTORS_DIR)
         .canonicalize()
         .expect("vectors/shacl corpus directory must exist")
@@ -377,7 +380,7 @@ pub(crate) fn w3c_root() -> PathBuf {
 /// Asserts [`W3C_TOTAL_CASES`] and, for the `af/` seam, that every case file on
 /// disk is reachable from a manifest — see
 /// [`af_case_files_are_all_reachable_from_a_manifest`].
-pub(crate) fn w3c_cases() -> Vec<W3cCase> {
+pub fn w3c_cases() -> Vec<W3cCase> {
     let root = w3c_root();
     let mut cases: Vec<W3cCase> = Vec::new();
     collect_manifest(&root.join("manifest.ttl"), &root, &mut cases);
@@ -457,10 +460,7 @@ fn manifest_includes(g: &RdfDataset, manifest_path: &Path) -> Vec<PathBuf> {
 /// The walker judges nothing about an entry — which test types a harness grades
 /// is the visitor's decision — so the two SHACL harnesses share one list-chasing
 /// implementation and differ only in what they keep.
-pub(crate) fn walk_manifest(
-    manifest_path: &Path,
-    visit: &mut dyn FnMut(&Arc<RdfDataset>, &Term, &Path),
-) {
+pub fn walk_manifest(manifest_path: &Path, visit: &mut dyn FnMut(&Arc<RdfDataset>, &Term, &Path)) {
     let g =
         parse_turtle_file(manifest_path).unwrap_or_else(|e| panic!("manifest walk failed: {e}"));
 
@@ -487,7 +487,7 @@ pub(crate) fn walk_manifest(
 }
 
 /// Parse one manifest entry into a [`W3cCase`] (skipping non-`sht:Validate`).
-pub(crate) fn parse_entry(
+pub fn parse_entry(
     g: &RdfDataset,
     entry: &Term,
     manifest_path: &Path,
@@ -611,7 +611,7 @@ fn expected_tuple(g: &RdfDataset, result: &Term) -> Tuple {
 /// One message as the grader compares it: the literal's N-Triples rendering, so
 /// the lexical form, the language tag, the base direction and the datatype all
 /// take part.
-pub(crate) fn message_key(message: &Term) -> String {
+pub fn message_key(message: &Term) -> String {
     message.to_string()
 }
 
@@ -632,7 +632,7 @@ fn expected_result_messages(g: &RdfDataset, report_node: &Term) -> Vec<(Tuple, B
 
 /// Whether `predicate` is a result-annotation property on an expected result:
 /// neither `rdf:type` nor a term of the SHACL or SHACL node-expression namespace.
-pub(crate) fn is_annotation_property(predicate: &str) -> bool {
+pub fn is_annotation_property(predicate: &str) -> bool {
     predicate != "http://www.w3.org/1999/02/22-rdf-syntax-ns#type"
         && !predicate.starts_with("http://www.w3.org/ns/shacl#")
         && !predicate.starts_with("http://www.w3.org/ns/shacl-node-expr#")
@@ -720,7 +720,7 @@ fn expected_multiset(g: &RdfDataset, report_node: &Term) -> Multiset {
 ///
 /// Both directions matter and both are checked: an unreferenced file, and a
 /// manifest that names a file that does not exist.
-pub(crate) fn af_case_files_are_all_reachable_from_a_manifest(af_root: &Path) {
+pub fn af_case_files_are_all_reachable_from_a_manifest(af_root: &Path) {
     let mut on_disk: BTreeSet<PathBuf> = BTreeSet::new();
     let mut referenced: BTreeSet<PathBuf> = BTreeSet::new();
     let mut manifests: Vec<PathBuf> = vec![af_root.join("manifest.ttl")];
@@ -798,7 +798,7 @@ pub(crate) fn af_case_files_are_all_reachable_from_a_manifest(af_root: &Path) {
 
 /// Every numbered case directory under [`CORPUS_DIR`], in sorted (case-name)
 /// order. Asserts [`FIRST_PARTY_TOTAL_CASES`].
-pub(crate) fn first_party_cases() -> Vec<FirstPartyCase> {
+pub fn first_party_cases() -> Vec<FirstPartyCase> {
     let corpus_path = Path::new(CORPUS_DIR);
     assert!(
         corpus_path.exists(),
@@ -842,7 +842,7 @@ pub(crate) fn first_party_cases() -> Vec<FirstPartyCase> {
 ///
 /// Its own namespace, distinct from the `example.org/ns#` the cases use for data, so
 /// no case can name it by accident and every case that names it means to.
-pub(crate) const CORPUS_REL: &str = "http://example.org/corpus/rel/flagged";
+pub const CORPUS_REL: &str = "http://example.org/corpus/rel/flagged";
 
 /// The one row the corpus relation answers with: `ex:flagged` is flagged.
 ///
@@ -852,7 +852,7 @@ pub(crate) const CORPUS_REL: &str = "http://example.org/corpus/rel/flagged";
 /// gradeable in a frozen corpus at all. A body whose call was lowered to an ordinary
 /// triple pattern would match nothing and score every focus node the same.
 #[derive(Debug)]
-pub(crate) struct CorpusRelation {
+pub struct CorpusRelation {
     modes: [purrdf_sparql_eval::BindingPattern; 1],
     opens: Arc<AtomicU64>,
 }
@@ -906,7 +906,7 @@ impl purrdf_sparql_eval::PropertyFunction for CorpusRelation {
 /// Every harness grading the corpus installs this, so the three of them cannot be
 /// validating the same cases under different environments — which they were, before a
 /// case existed that could tell.
-pub(crate) fn corpus_relations() -> (
+pub fn corpus_relations() -> (
     Arc<purrdf_sparql_eval::PropertyFunctionRegistry>,
     Arc<AtomicU64>,
 ) {

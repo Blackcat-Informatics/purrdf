@@ -58,7 +58,7 @@
 //! total. Run with `--nocapture` for the per-section and per-type scoreboard:
 //! `cargo test -p purrdf-shapes --test w3c12_conformance -- --nocapture`
 
-mod shacl_corpora;
+use purrdf_shapes::shacl_corpora;
 
 use std::collections::BTreeMap;
 use std::fs;
@@ -810,9 +810,8 @@ fn a_listed_entry_is_never_amended() {
         graded_expectation(id, false, tc).is_ok(),
         "the unlisted entry is graded through its delta"
     );
-    let error = graded_expectation(id, true, tc)
-        .err()
-        .expect("the same entry, were it listed, is refused");
+    let error =
+        graded_expectation(id, true, tc).expect_err("the same entry, were it listed, is refused");
     assert!(error.contains("an upstream manifest lists"), "{error}");
 }
 

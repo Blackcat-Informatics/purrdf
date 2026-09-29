@@ -6,7 +6,7 @@
 //! binary — the production check-only entry point, not the library harness's internals.
 //!
 //! Discovery is the library harness's own corpus reader
-//! (`crates/shapes/tests/shacl_corpora`, included here by path); the per-type counts are
+//! (`purrdf_shapes::shacl_corpora`, shared with the library harness); the per-type counts are
 //! pinned before anything runs, so this sweep cannot pass by checking fewer entries.
 //!
 //! A positive entry must exit 0 at the level its type asks about — a positive syntax test
@@ -20,8 +20,7 @@
 //! stratifiable and one is not well formed, so bare `--check` refuses exactly those
 //! fifteen — by a later stage, never the grammar — while `--check=syntax` accepts them.
 
-#[path = "../../shapes/tests/shacl_corpora/mod.rs"]
-mod shacl_corpora;
+use purrdf_shapes::shacl_corpora;
 
 use std::process::{Command, Output};
 

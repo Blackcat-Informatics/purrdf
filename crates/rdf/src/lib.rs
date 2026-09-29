@@ -279,7 +279,3 @@ pub mod ustar;
 pub mod prelude {
     pub use purrdf_core::prelude::*;
 }
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

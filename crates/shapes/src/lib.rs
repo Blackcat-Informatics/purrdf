@@ -60,6 +60,8 @@ pub mod rules;
 mod schema_catalog;
 pub mod schema_import;
 mod schema_surface;
+#[doc(hidden)]
+pub mod shacl_corpora;
 pub mod shape_union;
 pub mod shapes;
 pub mod sparql;
@@ -117,7 +119,3 @@ pub use typescript::{
 /// Crate version string for cache/toolchain salt parity with Python package
 /// versions (`metadata.version("purrdf-shapes")`).
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

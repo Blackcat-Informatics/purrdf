@@ -100,7 +100,7 @@
 //! Run with `--nocapture` for the scoreboard:
 //! `cargo test -p purrdf-shapes --test product_corpus_equivalence -- --nocapture`
 
-mod shacl_corpora;
+use purrdf_shapes::shacl_corpora;
 
 use std::collections::BTreeMap;
 use std::fs;

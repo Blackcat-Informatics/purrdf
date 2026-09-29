@@ -277,10 +277,11 @@ pub(crate) mod term_walk_tests {
         }
         let mut state = seed;
         let mut budget = 8;
-        to_qnode(&crate::test_terms::term_value(
+        to_qnode(&purrdf_core::term_fixture::term_value(
             &mut state,
+            purrdf_testkit::rng::splitmix64_next,
             &mut budget,
-            crate::test_terms::TermShape::Any,
+            purrdf_core::term_fixture::TermShape::Any,
         ))
     }
 
@@ -402,7 +403,7 @@ pub(crate) mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let pat = conclusion_node(crate::test_terms::triple_chain(LEVELS));
+                let pat = conclusion_node(purrdf_core::term_fixture::triple_chain(LEVELS));
                 assert_eq!(var_count(&pat), 0, "a chain of IRIs has no blank node");
                 dismantle(pat);
                 let pat = pattern_chain(LEVELS);

@@ -8781,10 +8781,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                purrdf_core::term_fixture::TermShape::Any,
             );
             let owned = to_owned_term(&value);
             assert_eq!(owned, reference_owned(&value), "seed {seed}");

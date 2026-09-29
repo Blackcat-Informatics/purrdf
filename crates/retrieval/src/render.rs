@@ -1014,7 +1014,7 @@ mod term_walk_tests {
     //! The term writers, the size hint and the canonical-lexical decoder against their
     //! recursive references, and at a hundred thousand levels on a 128 KiB thread.
 
-    use crate::test_terms::TermShape;
+    use purrdf_core::term_fixture::TermShape;
     use purrdf_core::{TermBox, TermValue};
 
     use super::{
@@ -1083,7 +1083,12 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(&mut state, &mut budget, TermShape::Any);
+            let value = purrdf_core::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                TermShape::Any,
+            );
             assert_eq!(
                 lexical_size_hint(&value),
                 reference_hint(&value),
@@ -1132,7 +1137,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
+                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
                 let text = candidate_lexical(&value).expect("a chain of IRIs is spelled");
                 assert_eq!(lexical_size_hint(&value), text.len());
                 let mut written = String::new();

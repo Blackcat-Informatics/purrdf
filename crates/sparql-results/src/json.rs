@@ -1084,10 +1084,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                purrdf_core::term_fixture::TermShape::Any,
             );
             let (mut written, mut expected) = (String::new(), String::new());
             let result = json_binding(&value, &mut written);
@@ -1107,8 +1108,11 @@ mod term_walk_tests {
             .stack_size(128 * 1024)
             .spawn(|| {
                 let mut written = String::new();
-                json_binding(&crate::test_terms::triple_chain(LEVELS), &mut written)
-                    .expect("every predicate is an IRI");
+                json_binding(
+                    &purrdf_core::term_fixture::triple_chain(LEVELS),
+                    &mut written,
+                )
+                .expect("every predicate is an IRI");
                 assert_eq!(written.matches("\"type\":\"triple\"").count(), LEVELS);
                 assert!(written.ends_with(&"}}".repeat(LEVELS)));
             })

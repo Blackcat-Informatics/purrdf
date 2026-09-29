@@ -4248,10 +4248,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                purrdf_core::term_fixture::TermShape::Any,
             );
             let (mut found, mut expected) = (Vec::new(), Vec::new());
             encode_term(&mut found, &value);
@@ -4271,7 +4272,7 @@ mod term_walk_tests {
                 let mut leaf = Vec::new();
                 encode_term(&mut leaf, &TermValue::iri("http://example.org/s"));
                 let mut out = Vec::new();
-                encode_term(&mut out, &crate::test_terms::triple_chain(LEVELS));
+                encode_term(&mut out, &purrdf_core::term_fixture::triple_chain(LEVELS));
                 assert_eq!(out.len(), LEVELS * (1 + 2 * leaf.len()) + leaf.len());
                 assert_eq!(out.first(), Some(&TERM_TRIPLE));
             })

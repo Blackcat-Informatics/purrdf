@@ -1518,10 +1518,11 @@ pub(crate) mod term_walk_tests {
     pub(crate) fn generated(seed: u64) -> Term {
         let mut state = seed;
         let mut budget = 8;
-        native(&crate::test_terms::term_value(
+        native(&purrdf_core::term_fixture::term_value(
             &mut state,
+            purrdf_testkit::rng::splitmix64_next,
             &mut budget,
-            crate::test_terms::TermShape::WellFormed,
+            purrdf_core::term_fixture::TermShape::WellFormed,
         ))
     }
 
@@ -1660,7 +1661,7 @@ pub(crate) mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
+                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
                 let mut term = Term::NamedNode(NamedNode::new_unchecked("http://example.org/o"));
                 for _ in 0..LEVELS {
                     term = Term::Triple(Box::new(Triple::new(

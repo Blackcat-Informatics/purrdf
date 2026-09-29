@@ -14,7 +14,7 @@
 //! departure from exact equality is [`NON_CANONICAL_EXPECTATIONS`], applied by
 //! [`canonical_expectation`].
 
-use purrdf_shapes::term::{Literal, Term};
+use crate::term::{Literal, Term};
 
 /// The clause every current entry cites. XSD 1.1 Part 2 §3.3.3.1 states that
 /// "for integers, the decimal point and fractional part are prohibited" in the
@@ -22,7 +22,7 @@ use purrdf_shapes::term::{Literal, Term};
 /// decimalCanonicalMap", which §E.1 defines: "If d is an integer, then return
 /// noDecimalPtCanonicalMap(d)". SPARQL's CEIL, FLOOR, ROUND, numeric division,
 /// SECONDS and SUM over decimals all yield `xsd:decimal`.
-pub(crate) const DECIMAL_CANONICAL_MAP: &str = "XSD 1.1 Part 2 §3.3.3.1 + §E.1 decimalCanonicalMap: \
+pub const DECIMAL_CANONICAL_MAP: &str = "XSD 1.1 Part 2 §3.3.3.1 + §E.1 decimalCanonicalMap: \
      an integer-valued xsd:decimal maps through noDecimalPtCanonicalMap (no decimal point)";
 
 /// NON-CANONICAL EXPECTED DECIMALS: node-expression entries whose approved result
@@ -51,7 +51,7 @@ pub(crate) const DECIMAL_CANONICAL_MAP: &str = "XSD 1.1 Part 2 §3.3.3.1 + §E.1
 /// expected form is non-canonical and that the stated canonical form is what the XSD 1.1
 /// canonical mapping produces, and each harness proves the engine's output equals the
 /// canonical form term for term.
-pub(crate) const NON_CANONICAL_EXPECTATIONS: &[(&str, &str, &str, &str)] = &[
+pub const NON_CANONICAL_EXPECTATIONS: &[(&str, &str, &str, &str)] = &[
     (
         "node-expr/shnex-sparql/ceil-example",
         "4.0",
@@ -92,12 +92,12 @@ pub(crate) const NON_CANONICAL_EXPECTATIONS: &[(&str, &str, &str, &str)] = &[
 
 /// [`NON_CANONICAL_EXPECTATIONS`] pinned by count, so an entry cannot be added or
 /// dropped without this number moving with it.
-pub(crate) const NON_CANONICAL_EXPECTATIONS_COUNT: usize = 6;
+pub const NON_CANONICAL_EXPECTATIONS_COUNT: usize = 6;
 
 /// Replace each expected literal an entry of [`NON_CANONICAL_EXPECTATIONS`]
 /// names with its canonical form. An entry that matches no expected literal of
 /// its test is a stale entry and an error.
-pub(crate) fn canonical_expectation(id: &str, expected: &[Term]) -> Result<Vec<Term>, String> {
+pub fn canonical_expectation(id: &str, expected: &[Term]) -> Result<Vec<Term>, String> {
     let Some((_, lexical, canonical, _)) = NON_CANONICAL_EXPECTATIONS
         .iter()
         .find(|(entry, ..)| *entry == id)
@@ -126,7 +126,7 @@ pub(crate) fn canonical_expectation(id: &str, expected: &[Term]) -> Result<Vec<T
 
 /// Compare produced node-expression output against the expected list: exact RDF
 /// 1.2 term equality, in order, or as a multiset under `ignore_order`.
-pub(crate) fn compare_outputs(
+pub fn compare_outputs(
     produced: &[Term],
     expected: &[Term],
     ignore_order: bool,
@@ -160,4 +160,4 @@ pub(crate) fn compare_outputs(
 
 /// The focus node of an entry that gives no `sht:focusNode`: a blank node each harness
 /// proves occurs nowhere in the test graph (see `w3c12_conformance.rs`'s module docs).
-pub(crate) const ABSENT_FOCUS: &str = "shacl12-harness-absent-focus-node";
+pub const ABSENT_FOCUS: &str = "shacl12-harness-absent-focus-node";

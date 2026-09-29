@@ -509,7 +509,3 @@ pub use purrdf_sparql_eval::{Completeness, OrderFidelity, RankFidelity};
 // declaration back off a registry must be able to name the type without
 // depending on the evaluator crate.
 pub use purrdf_sparql_eval::ExclusionBasis;
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

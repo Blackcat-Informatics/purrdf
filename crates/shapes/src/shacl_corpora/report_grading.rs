@@ -73,12 +73,12 @@
 
 use std::fs;
 
-use purrdf_shapes::engine::ValidationOptions;
-use purrdf_shapes::report::{ConformanceDisallows, ValidationReport, ValidationResult};
+use crate::engine::ValidationOptions;
+use crate::report::{ConformanceDisallows, ValidationReport, ValidationResult};
 
 use std::collections::BTreeSet;
 
-use purrdf_shapes::term::Term;
+use crate::term::Term;
 
 use super::{Expected, ExpectedResult, Multiset, Tuple, W3cCase, file_iri, norm};
 
@@ -87,7 +87,7 @@ use super::{Expected, ExpectedResult, Multiset, Tuple, W3cCase, file_iri, norm};
 /// Turtle that does not parse.
 type LoadedShapes = (
     std::sync::Arc<purrdf::RdfDataset>,
-    Result<purrdf_shapes::shapes::Shapes, purrdf_shapes::ShapesError>,
+    Result<crate::shapes::Shapes, crate::ShapesError>,
 );
 
 /// Read and parse a case's shapes graph and load it with an empty import table: no
@@ -95,28 +95,25 @@ type LoadedShapes = (
 fn load_shapes(tc: &W3cCase) -> Result<LoadedShapes, String> {
     let shapes_text = fs::read_to_string(&tc.shapes_path)
         .map_err(|e| format!("cannot read shapes {}: {e}", tc.shapes_path.display()))?;
-    let purrdf_shapes::text_ingest::TurtleDocument {
+    let crate::text_ingest::TurtleDocument {
         dataset: shapes_dataset,
         prefixes: doc_prefixes,
         ..
-    } = purrdf_shapes::text_ingest::parse_turtle_document(
-        &shapes_text,
-        Some(&file_iri(&tc.shapes_path)),
-    )
-    .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
-    let shapes = purrdf_shapes::shapes::from_dataset_with_base(
+    } = crate::text_ingest::parse_turtle_document(&shapes_text, Some(&file_iri(&tc.shapes_path)))
+        .map_err(|errors| format!("shapes graph parse error: {}", errors.join("; ")))?;
+    let shapes = crate::shapes::from_dataset_with_base(
         &shapes_dataset,
         None,
         &doc_prefixes,
         None,
         tc.shapes_graph_iri.clone(),
-        &purrdf_shapes::ShapesImports::new(),
+        &crate::ShapesImports::new(),
     );
     Ok((shapes_dataset, shapes))
 }
 
 /// Load graphs, run the engine. `Err` carries the parse/validation error.
-pub(crate) fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
+pub fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
     let (shapes_dataset, shapes) = load_shapes(tc)?;
     let shapes = shapes.map_err(|e| format!("shapes parse error: {e}"))?;
     let shapes_graph_iri = tc.shapes_graph_iri.as_deref();
@@ -137,7 +134,7 @@ pub(crate) fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
         );
     }
 
-    purrdf_shapes::engine::validate_dataset_with_shapes_graph(
+    crate::engine::validate_dataset_with_shapes_graph(
         data_dataset.as_ref(),
         &shapes,
         shapes_graph_iri,
@@ -150,9 +147,8 @@ pub(crate) fn validate_case(tc: &W3cCase) -> Result<ValidationReport, String> {
 /// carried.
 fn grade_report_details(tc: &W3cCase, report: &ValidationReport) -> Result<(), String> {
     if !tc.conformance_disallows.is_empty() {
-        let echoed =
-            purrdf_shapes::report::conformance_disallows_from_dataset(&report.to_dataset())
-                .map_err(|e| format!("the report's own sh:conformanceDisallows: {e}"))?;
+        let echoed = crate::report::conformance_disallows_from_dataset(&report.to_dataset())
+            .map_err(|e| format!("the report's own sh:conformanceDisallows: {e}"))?;
         let requested = ConformanceDisallows::from_iris(&tc.conformance_disallows)
             .map_err(|e| format!("the expected report's sh:conformanceDisallows: {e}"))?;
         if echoed != requested {
@@ -376,7 +372,7 @@ fn produced_multiset(report: &ValidationReport) -> Multiset {
 ///
 /// No known case panics; the guard stays so a regression reads as a FAIL with a
 /// message instead of a harness abort that hides every later verdict.
-pub(crate) fn no_panic<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
+pub fn no_panic<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, String> {
     std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)).unwrap_or_else(|payload| {
         let msg = payload
             .downcast_ref::<String>()
@@ -388,14 +384,14 @@ pub(crate) fn no_panic<T>(f: impl FnOnce() -> Result<T, String>) -> Result<T, St
 }
 
 /// Grade one `sht:Validate` case to a pass (`Ok`) / fail-with-reason (`Err`).
-pub(crate) fn run_validate_case(tc: &W3cCase) -> Result<(), String> {
+pub fn run_validate_case(tc: &W3cCase) -> Result<(), String> {
     grade_against(tc, &tc.expected)
 }
 
 /// Grade one `sht:Validate` case against `expected` — the approved expectation,
 /// or an amended one — with the [`grade`] comparison and the report details the
 /// case itself asks for.
-pub(crate) fn grade_against(tc: &W3cCase, expected: &Expected) -> Result<(), String> {
+pub fn grade_against(tc: &W3cCase, expected: &Expected) -> Result<(), String> {
     let report = no_panic(|| validate_case(tc));
     grade(
         expected,
@@ -413,17 +409,14 @@ pub(crate) fn grade_against(tc: &W3cCase, expected: &Expected) -> Result<(), Str
 /// Run the engine over one case and reduce its report to what [`grade`]
 /// compares: `sh:conforms` and the result multiset. `Err` is a load or
 /// validation error (or an engine panic).
-pub(crate) fn produce(tc: &W3cCase) -> Result<(bool, Multiset), String> {
+pub fn produce(tc: &W3cCase) -> Result<(bool, Multiset), String> {
     no_panic(|| validate_case(tc)).map(|report| (report.conforms, produced_multiset(&report)))
 }
 
 /// Grade an engine outcome against an expectation — the one comparison both
 /// harnesses use, split from [`produce`] so a harness that must grade against an
 /// AMENDED expectation compares with exactly the same rule.
-pub(crate) fn grade(
-    expected: &Expected,
-    outcome: Result<(bool, Multiset), String>,
-) -> Result<(), String> {
+pub fn grade(expected: &Expected, outcome: Result<(bool, Multiset), String>) -> Result<(), String> {
     match (expected, outcome) {
         (Expected::Failure, Err(_)) => Ok(()),
         (Expected::Failure, Ok(_)) => {

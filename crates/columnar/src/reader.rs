@@ -1046,10 +1046,11 @@ mod term_walk_tests {
         for seed in 0..400_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value = crate::test_terms::term_value(
+            let value = purrdf_core::term_fixture::term_value(
                 &mut state,
+                purrdf_testkit::rng::splitmix64_next,
                 &mut budget,
-                crate::test_terms::TermShape::Any,
+                purrdf_core::term_fixture::TermShape::Any,
             );
             let (mut found, mut expected) = (RdfDatasetBuilder::new(), RdfDatasetBuilder::new());
             assert_eq!(
@@ -1093,7 +1094,7 @@ mod term_walk_tests {
                     (vec![0u8; records.len()], vec![None; records.len()]);
                 let value = resolve_term_record(root, &records, &mut states, &mut values)
                     .expect("the chain resolves");
-                assert_eq!(value, crate::test_terms::triple_chain(LEVELS));
+                assert_eq!(value, purrdf_core::term_fixture::triple_chain(LEVELS));
             })
             .expect("the thread starts")
             .join()
@@ -1108,7 +1109,7 @@ mod term_walk_tests {
         std::thread::Builder::new()
             .stack_size(128 * 1024)
             .spawn(|| {
-                let value = crate::test_terms::triple_chain(LEVELS);
+                let value = purrdf_core::term_fixture::triple_chain(LEVELS);
                 let mut builder = RdfDatasetBuilder::new();
                 assert_eq!(intern_value(&mut builder, &value).index(), LEVELS + 2);
             })

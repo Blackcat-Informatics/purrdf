@@ -2766,7 +2766,3 @@ mod tests {
         }
     }
 }
-
-#[cfg(test)]
-#[path = "../../rdf-core/tests/support/term_fixture.rs"]
-mod test_terms;

@@ -1335,7 +1335,7 @@ mod term_walk_tests {
         existing_blanks, reintern, remap_composite_lexical,
     };
     use crate::backend::TermFactory as _;
-    use crate::test_terms::TermShape;
+    use crate::term_fixture::TermShape;
 
     /// A mapper that interns every term unchanged and logs every call it receives.
     #[derive(Default)]
@@ -1432,8 +1432,12 @@ mod term_walk_tests {
         for seed in 0..300_u64 {
             let mut state = seed;
             let mut budget = 8;
-            let value =
-                crate::test_terms::term_value(&mut state, &mut budget, TermShape::WellFormed);
+            let value = crate::term_fixture::term_value(
+                &mut state,
+                purrdf_testkit::rng::splitmix64_next,
+                &mut budget,
+                TermShape::WellFormed,
+            );
             let mut builder = RdfDatasetBuilder::new();
             let object = builder.intern_value(&value);
             let holder = builder.intern_iri("http://example.org/holder");
