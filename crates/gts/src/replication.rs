@@ -8,6 +8,7 @@
 //! dependencies.
 
 use ciborium::value::Value;
+use purrdf_hash::Domain;
 use purrdf_iri::json_escape::{JsonEscapes, push_string};
 
 pub use crate::model::ByteRange;
@@ -330,6 +331,10 @@ pub fn inventory(data: &[u8]) -> Inventory {
     }
 }
 
+/// The hash domain of the aggregate over every segment head: the first element
+/// of its CBOR array.
+const SEGMENT_HEADS_DOMAIN: Domain = Domain::new(b"gts-segment-heads-v1");
+
 fn aggregate_digest(inventory: &Inventory) -> Vec<u8> {
     let heads: Vec<Value> = inventory
         .segments
@@ -338,7 +343,7 @@ fn aggregate_digest(inventory: &Inventory) -> Vec<u8> {
         .map(|head| Value::Bytes(head.clone()))
         .collect();
     blake3_256(&canonical(&Value::Array(vec![
-        "gts-segment-heads-v1".into(),
+        SEGMENT_HEADS_DOMAIN.as_str().into(),
         Value::Array(heads),
     ])))
     .to_vec()

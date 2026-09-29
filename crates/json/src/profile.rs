@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 use purrdf_core::{BaseIri, ContentDigest};
+use purrdf_hash::Domain;
 
 use crate::JsonError;
 
@@ -202,7 +203,7 @@ impl Profile {
     pub fn canonical_bytes(&self) -> Vec<u8> {
         let mut bytes = Vec::new();
         for field in [
-            "purrdf-json-profile-v1",
+            PROFILE_DOMAIN.as_str(),
             "rfc8259-utf8-no-bom-scalar-member-names",
             "preorder-occurrences-rfc6901-duplicates",
             "scalar-lexical-cover-sha256-sized-containers-fragment-v-s",
@@ -224,7 +225,7 @@ impl Profile {
 
     pub(crate) fn document_id(&self, source: &str, digest: &ContentDigest) -> String {
         let mut bytes = Vec::new();
-        frame(&mut bytes, b"purrdf-json-document-v1");
+        frame(&mut bytes, DOCUMENT_DOMAIN.as_bytes());
         frame(&mut bytes, source.as_bytes());
         bytes.extend_from_slice(self.identity.as_bytes());
         bytes.extend_from_slice(digest.as_bytes());
@@ -239,6 +240,13 @@ impl Profile {
         )
     }
 }
+
+/// The hash domain leading [`Profile::canonical_bytes`], the profile
+/// identity preimage `SPEC.md` specifies.
+const PROFILE_DOMAIN: Domain = Domain::new(b"purrdf-json-profile-v1");
+
+/// The hash domain leading a document identifier's preimage.
+const DOCUMENT_DOMAIN: Domain = Domain::new(b"purrdf-json-document-v1");
 
 fn frame(output: &mut Vec<u8>, bytes: &[u8]) {
     output.extend_from_slice(&(bytes.len() as u64).to_le_bytes());

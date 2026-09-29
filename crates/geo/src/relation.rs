@@ -70,6 +70,7 @@ use core::convert::Infallible;
 use core::ops::ControlFlow;
 use core::slice;
 use purrdf_core::TermBox;
+use purrdf_hash::Domain;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -107,7 +108,7 @@ const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
 /// FNV-1a's 64-bit prime.
 const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// The domain-separation prefix of the index source digest.
-const DIGEST_DOMAIN: &str = "purrdf-geo/index-source/v1";
+const DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-geo/index-source/v1");
 
 /// Digest tag for [`GraphSelector::Any`].
 const SELECTOR_ANY: u8 = 0x01;
@@ -155,7 +156,7 @@ impl Digest {
         let mut digest = Self {
             state: FNV_OFFSET_BASIS,
         };
-        digest.field(DIGEST_DOMAIN);
+        digest.field(DIGEST_DOMAIN.as_str());
         digest
     }
 

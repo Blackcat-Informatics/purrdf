@@ -31,6 +31,9 @@ name = "purrdf_markdown"
 # The content digest of every span and identity preimage, and the
 # chunking-contract domain the profile's identity is derived under.
 purrdf-core.workspace = true
+# The workspace root: each node kind is the registered `purrdf_hash::Domain`
+# leading its identity preimage.
+purrdf-hash.workspace = true
 
 [dev-dependencies]
 # The report-only profiling harness in `benches/`. Never a gate: nothing there

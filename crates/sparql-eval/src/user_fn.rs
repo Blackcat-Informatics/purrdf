@@ -52,6 +52,7 @@
 //! the enclosing operator, not the body, decides which of those two outcomes a
 //! given `Ok(None)` produces.
 
+use purrdf_hash::Domain;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
@@ -963,7 +964,7 @@ impl FnPopulation {
 /// The domain separator every user-function content fingerprint opens with â see
 /// `crate::property_fn_plan`'s constant of the same name for why each registry kind
 /// needs its own.
-const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/user-function-registry";
+const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/user-function-registry");
 
 /// A **content-only** fingerprint of one [`FnPopulation`] of `functions`: every
 /// entry's IRI, kind, declared arity and declared type constraints, IRI-sorted,

@@ -117,6 +117,7 @@
 
 mod metric;
 
+use purrdf_hash::Domain;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -194,7 +195,8 @@ const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
 /// digest can never equal a digest of another kind that happens to fold a
 /// structurally identical field sequence — the same discipline
 /// `crate::property_fn_plan`'s registry fingerprint follows.
-const SPACE_GENERATION_DOMAIN: &str = "purrdf-sparql-eval/embedding-space-generation/v1";
+const SPACE_GENERATION_DOMAIN: Domain =
+    Domain::new(b"purrdf-sparql-eval/embedding-space-generation/v1");
 
 // ---------------------------------------------------------------------------
 // The guard
@@ -913,7 +915,8 @@ fn space_generation(
 /// The domain separator a [`EmbeddingSpace::from_vectors`] generation opens with. It
 /// differs from [`SPACE_GENERATION_DOMAIN`] so the two constructions can never attest
 /// one generation, however their folded fields happen to line up.
-const VECTORS_GENERATION_DOMAIN: &str = "purrdf-sparql-eval/embedding-space-vectors-generation/v1";
+const VECTORS_GENERATION_DOMAIN: Domain =
+    Domain::new(b"purrdf-sparql-eval/embedding-space-vectors-generation/v1");
 
 /// The generation one [`EmbeddingSpace::from_vectors`] space attests.
 ///

@@ -10,6 +10,7 @@
 
 use std::io::{Seek, SeekFrom, Write};
 
+use purrdf_hash::Domain;
 use sha2::{Digest as _, Sha256};
 
 use crate::ContentDigest;
@@ -19,9 +20,10 @@ use crate::distance::{Arithmetic as _, Exact, Resolved, Scalar};
 use super::contract::{PrefixPostprocessing, VectorDtype};
 use super::error::{DigestKind, EmbeddingError, EmbeddingWriteError};
 use super::identity::{
-    ArtifactRoot, FamilyId, MatrixContentDigest, MatrixId, ProjectionContentDigest, ProjectionId,
-    TargetId, TargetSetId, VectorSpaceId, derive_matrix_content_digest, derive_matrix_id,
-    derive_projection_id, derive_target_set_id, derive_vector_space_id,
+    ArtifactRoot, D_MATRIX_CONTENT, D_PROJECTION_CONTENT, D_TARGET_SET, FamilyId,
+    MatrixContentDigest, MatrixId, ProjectionContentDigest, ProjectionId, TargetId, TargetSetId,
+    VectorSpaceId, derive_matrix_content_digest, derive_matrix_id, derive_projection_id,
+    derive_target_set_id, derive_vector_space_id,
 };
 use super::metadata::CanonicalMetadataInput;
 use super::wire::{
@@ -39,10 +41,6 @@ const PROJECTION_RECORD_LENGTH: u64 = 152;
 const PROJECTION_ID_INDEX_RECORD_LENGTH: u64 = 40;
 const MATRIX_KEY_INDEX_RECORD_LENGTH: u64 = 72;
 const EFFECTIVE_PROJECTION_INDEX_RECORD_LENGTH: u64 = 72;
-
-const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
-const D_MATRIX_CONTENT: &[u8] = b"purrdf.purremb.v1.matrix-content\0";
-const D_PROJECTION_CONTENT: &[u8] = b"purrdf.purremb.v1.projection-content\0";
 
 /// One caller extension section retained byte-for-byte by the writer.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1322,9 +1320,9 @@ struct FramedHasher {
 }
 
 impl FramedHasher {
-    fn new(domain: &[u8]) -> Self {
+    fn new(domain: Domain) -> Self {
         let mut hasher = Sha256::new();
-        hasher.update(domain);
+        hasher.update(domain.as_bytes());
         Self { hasher }
     }
 

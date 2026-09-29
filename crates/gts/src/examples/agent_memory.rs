@@ -17,6 +17,7 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use ciborium::value::Value;
+use purrdf_hash::Domain;
 
 use crate::model::{Graph, Term, TermKind};
 use crate::reader::{SegmentAppendState, read, read_file_segments, segment_append_state};
@@ -44,6 +45,11 @@ const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
 const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
 const PROFILE: &str = "ai-package";
 const INLINE_PAYLOAD_BUDGET: usize = 4096;
+/// The kind of an assertion id: the hash domain leading its digest and the kind
+/// segment of its `urn:purrdf:` IRI.
+const ASSERTION_KIND: Domain = Domain::new(b"assertion");
+/// The kind of a tool-call id. See [`ASSERTION_KIND`].
+const TOOLCALL_KIND: Domain = Domain::new(b"toolcall");
 /// Declared zstd level for the default authoring profile — the measured knee
 /// (see `purrdf_rdf::gts_compose::DIST_ZSTD_LEVEL`).
 const DEFAULT_ZSTD_LEVEL: i32 = 12;
@@ -439,8 +445,8 @@ impl Memory {
         let created = now_rfc3339();
         let file_len = self.file_len()?;
         let confidence_text = options.confidence.map(|value| value.to_string());
-        let assertion = self.digest_id(
-            "assertion",
+        let assertion = Self::digest_id(
+            ASSERTION_KIND,
             file_len,
             [
                 text,
@@ -581,8 +587,8 @@ impl Memory {
         let created = now_rfc3339();
         let arguments = inline_or_digest(options.arguments);
         let result = inline_or_digest(options.result);
-        let call = self.digest_id(
-            "toolcall",
+        let call = Self::digest_id(
+            TOOLCALL_KIND,
             self.file_len()?,
             [
                 tool,
@@ -871,9 +877,10 @@ impl Memory {
         Ok(())
     }
 
+    /// The id of a `kind` record: BLAKE3 over the kind (its hash domain), the file
+    /// length the record was appended at, and each part, NUL-separated.
     fn digest_id<'a>(
-        &self,
-        kind: &str,
+        kind: Domain,
         file_len: u64,
         parts: impl IntoIterator<Item = &'a str>,
     ) -> String {
@@ -885,7 +892,8 @@ impl Memory {
             hasher.update(part.as_bytes());
         }
         format!(
-            "urn:purrdf:{kind}:blake3:{}",
+            "urn:purrdf:{}:blake3:{}",
+            kind.as_str(),
             purrdf_hash::hex::Lower(hasher.finalize().as_bytes())
         )
     }

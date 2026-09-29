@@ -19,6 +19,9 @@ workspace = true
 
 [dependencies]
 purrdf-core.workspace = true
+# The workspace root: the profile and document identity preimages open under
+# registered `purrdf_hash::Domain` constants.
+purrdf-hash.workspace = true
 
 [dev-dependencies]
 # The workspace's shared counting allocator, for the `ordered_json_alloc` bench

@@ -71,6 +71,7 @@
 //! rather than leaving it implied.
 
 use purrdf_core::TermBox;
+use purrdf_hash::Domain;
 use std::cmp::Ordering;
 
 use purrdf_core::{
@@ -84,9 +85,9 @@ use crate::ranking::{FIELD_LENGTH_MAX, FieldInput, MAX_FIELDS, PreparedCorpus, R
 use crate::term_bytes::{FINGERPRINT_BYTES, encode_term, push_str};
 
 /// Domain-separation prefix for [`TextIndex::fingerprint`].
-const INDEX_DIGEST_DOMAIN: &str = "purrdf-text/index/v2";
+const INDEX_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/index/v2");
 /// Domain-separation prefix for [`TextIndex::source_fingerprint`].
-const SOURCE_DIGEST_DOMAIN: &str = "purrdf-text/source/v1";
+const SOURCE_DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-text/source/v1");
 
 /// Digest tag for [`GraphSelector::Any`].
 const SELECTOR_ANY: u8 = 0x01;
@@ -655,7 +656,8 @@ impl TextIndex {
     /// Tokenization identity, independent of ranking and predicate routing.
     /// Includes the complete Unicode table versions.
     pub fn analyzer_fingerprint(&self) -> [u8; FINGERPRINT_BYTES] {
-        let mut digest = Digest::new(crate::ANALYZER_PROFILE_ID);
+        let mut digest = Digest::bare();
+        digest.text(crate::ANALYZER_PROFILE_ID);
         for version in [
             self.unicode.core,
             self.unicode.normalization,
@@ -1822,13 +1824,19 @@ struct Digest {
 impl Digest {
     /// A digest opened under `domain`, so two digests of different things over
     /// the same bytes cannot coincide.
-    fn new(domain: &str) -> Self {
-        let mut digest = Self {
+    fn new(domain: Domain) -> Self {
+        let mut digest = Self::bare();
+        digest.text(domain.as_str());
+        digest
+    }
+
+    /// A digest with no domain of its own, for an identity whose first absorbed
+    /// field is the published identifier it is named by.
+    fn bare() -> Self {
+        Self {
             hasher: purrdf_hash::blake3::Hasher::new(),
             scratch: Vec::new(),
-        };
-        digest.text(domain);
-        digest
+        }
     }
 
     /// Absorb a one-byte tag.

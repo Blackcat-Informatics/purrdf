@@ -20,8 +20,19 @@
 
 use purrdf_core::ContentDigest;
 use purrdf_core::embedding::ChunkingContractId;
+use purrdf_hash::Domain;
 
 use crate::profile::Vocabulary;
+
+/// The node kind of a unit: the hash domain of its identity preimage (its
+/// first field) and the kind segment of its IRI.
+pub(crate) const UNIT_KIND: Domain = Domain::new(b"unit");
+/// The node kind of a section. See [`UNIT_KIND`].
+pub(crate) const SECTION_KIND: Domain = Domain::new(b"section");
+/// The node kind of a citation edge. See [`UNIT_KIND`].
+pub(crate) const CITATION_KIND: Domain = Domain::new(b"citation");
+/// The node kind of a structure node. See [`UNIT_KIND`].
+pub(crate) const STRUCTURE_KIND: Domain = Domain::new(b"structure");
 
 /// The identity of a unit, with the digest algorithm inside both the
 /// preimage and the IRI. A consumer re-derives it from the bytes at a
@@ -43,7 +54,7 @@ pub fn unit_iri(
     span: &[u8],
 ) -> String {
     node_iri(
-        vocabulary, "unit", source_id, contract, byte_start, byte_end, span,
+        vocabulary, UNIT_KIND, source_id, contract, byte_start, byte_end, span,
     )
 }
 
@@ -77,7 +88,7 @@ pub fn section_iri(
 ) -> String {
     node_iri(
         vocabulary,
-        "section",
+        SECTION_KIND,
         source_id,
         contract,
         byte_start,
@@ -157,7 +168,7 @@ pub fn citation_iri(
     }
     node_iri_of_digest(
         vocabulary,
-        "citation",
+        CITATION_KIND,
         source_id,
         contract,
         row_start,
@@ -188,7 +199,7 @@ pub fn structure_iri(
 ) -> String {
     node_iri(
         vocabulary,
-        "structure",
+        STRUCTURE_KIND,
         source_id,
         contract,
         byte_start,
@@ -199,7 +210,7 @@ pub fn structure_iri(
 
 fn node_iri(
     vocabulary: &Vocabulary,
-    kind: &str,
+    kind: Domain,
     source_id: &str,
     contract: &ChunkingContractId,
     byte_start: u64,
@@ -225,7 +236,7 @@ fn node_iri(
 /// the one [`unit_iri`] builds, byte for byte.
 pub(crate) fn node_iri_of_digest(
     vocabulary: &Vocabulary,
-    kind: &str,
+    kind: Domain,
     source_id: &str,
     contract: &ChunkingContractId,
     byte_start: u64,
@@ -241,8 +252,9 @@ pub(crate) fn node_iri_of_digest(
     push_field(&mut preimage, crate::DIGEST_ALGORITHM.as_bytes());
     push_field(&mut preimage, digest.as_bytes());
     format!(
-        "{}{kind}:{}:{}",
+        "{}{}:{}:{}",
         vocabulary.node_base,
+        kind.as_str(),
         crate::DIGEST_ALGORITHM,
         ContentDigest::of(&preimage).to_hex()
     )
@@ -360,7 +372,7 @@ mod tests {
         assert_eq!(
             node_iri_of_digest(
                 &v,
-                "unit",
+                UNIT_KIND,
                 SOURCE,
                 &contract,
                 3,

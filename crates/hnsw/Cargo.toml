@@ -21,6 +21,10 @@ purrdf-sparql-eval = { workspace = true }
 # surfaces emit byte-identical distance literals.
 purrdf-xsd = { workspace = true }
 rayon = { workspace = true }
+# The workspace root: the relation's space-generation hash domain is a registered
+# `purrdf_hash::Domain` (the tests also read `purrdf_hash::dispatch::REQUIRE_SIMD_PATHS`,
+# the name of the variable the path-requirement test reports under).
+purrdf-hash = { workspace = true }
 
 [dev-dependencies]
 # The conformance gate emits a machine-checkable receipt, and a receipt is JSON because
@@ -32,10 +36,6 @@ serde_json = { workspace = true }
 # natively and on wasm32-unknown-unknown alike. Path-only and unpublished, so it is
 # stripped from the packaged manifest; wasm32-clean, so it needs no target gate.
 purrdf-testkit = { workspace = true }
-# The name of the variable the path-requirement test reports under
-# (`purrdf_hash::dispatch::REQUIRE_SIMD_PATHS`); the requirement itself is read
-# through `purrdf_core::distance::required_paths`.
-purrdf-hash = { workspace = true }
 
 [lints]
 workspace = true

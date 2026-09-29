@@ -84,6 +84,7 @@
 //! stop agreeing; on either carrier it is what makes the exact per-graph
 //! invalidation below sound.
 
+use purrdf_hash::Domain;
 use std::collections::BTreeMap;
 use std::fmt;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -148,7 +149,7 @@ const SEP_SECTION: u8 = 0x1d;
 /// to record an empty declaration at all. A declaration-only graph whose name is a
 /// BLANK node is invisible to both, for the same reason: it owns no row, and its
 /// name is not addressable.
-pub const PIPELINE_ROOT_DOMAIN: &str = "purrdf.pipeline-root.v1";
+pub const PIPELINE_ROOT_DOMAIN: Domain = Domain::new(b"purrdf.pipeline-root.v1");
 
 /// The key identifying the named graph a typed handle backs. An IRI string is the
 /// stable, dataset-independent name of the graph the handle projects.

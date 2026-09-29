@@ -7,6 +7,7 @@
 //! with a tiny schema-local parser instead of a general JSON library.
 
 use ciborium::value::Value;
+use purrdf_hash::Domain;
 use purrdf_iri::json_escape::{JsonEscapes, push_body};
 
 use crate::wire::{
@@ -18,9 +19,12 @@ use crate::wire::{
 pub const PROOF_SCHEMA: &str = "gts-mmr-proof-v1";
 const HASH_ALGORITHM: &str = "blake3-256";
 const PREIMAGE_VERSION: &str = "gts-mmr-v1";
-const LEAF_DOMAIN: &str = "gts-mmr-leaf-v1";
-const PARENT_DOMAIN: &str = "gts-mmr-parent-v1";
-const ROOT_DOMAIN: &str = "gts-mmr-root-v1";
+/// The hash domain of a leaf preimage: the first element of its CBOR array.
+const LEAF_DOMAIN: Domain = Domain::new(b"gts-mmr-leaf-v1");
+/// The hash domain of an interior node preimage.
+const PARENT_DOMAIN: Domain = Domain::new(b"gts-mmr-parent-v1");
+/// The hash domain of the root preimage over the peaks.
+const ROOT_DOMAIN: Domain = Domain::new(b"gts-mmr-root-v1");
 
 /// One peak of the Merkle Mountain Range committed by `index.mmr`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -90,7 +94,7 @@ fn uint(n: usize) -> Value {
 
 fn leaf_hash(index: usize, frame_id: &[u8]) -> Vec<u8> {
     blake3_256(&canonical(&Value::Array(vec![
-        LEAF_DOMAIN.into(),
+        LEAF_DOMAIN.as_str().into(),
         uint(index),
         Value::Bytes(frame_id.to_vec()),
     ])))
@@ -99,7 +103,7 @@ fn leaf_hash(index: usize, frame_id: &[u8]) -> Vec<u8> {
 
 fn parent_hash(parent_height: usize, left: &[u8], right: &[u8]) -> Vec<u8> {
     blake3_256(&canonical(&Value::Array(vec![
-        PARENT_DOMAIN.into(),
+        PARENT_DOMAIN.as_str().into(),
         uint(parent_height),
         Value::Bytes(left.to_vec()),
         Value::Bytes(right.to_vec()),
@@ -113,7 +117,7 @@ fn root_hash(count: usize, peaks: &[MmrPeak]) -> Vec<u8> {
         .map(|peak| Value::Array(vec![uint(peak.height), Value::Bytes(peak.hash.clone())]))
         .collect();
     blake3_256(&canonical(&Value::Array(vec![
-        ROOT_DOMAIN.into(),
+        ROOT_DOMAIN.as_str().into(),
         uint(count),
         Value::Array(peak_values),
     ])))

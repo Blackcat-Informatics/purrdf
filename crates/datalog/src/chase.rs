@@ -117,6 +117,7 @@
 //! no wall clock, no RNG, no filesystem and no thread: the module is
 //! `wasm32-unknown-unknown`-clean.
 
+use purrdf_hash::Domain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
 
@@ -524,7 +525,7 @@ const WITNESS_LABEL_BYTES: usize = 16;
 ///
 /// Framed like every other field, so a witness digest can never coincide with some other
 /// BLAKE3 digest this crate computes over a different kind of value.
-const WITNESS_DIGEST_TAG: &str = "purrdf-datalog restricted chase witness v1";
+const WITNESS_DIGEST_TAG: Domain = Domain::new(b"purrdf-datalog restricted chase witness v1");
 
 /// Lowercase hex digits, for rendering a witness label without a formatter.
 ///

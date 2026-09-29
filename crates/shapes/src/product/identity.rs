@@ -231,6 +231,7 @@ use ::purrdf::PackDigest;
 use purrdf_core::ContentDigest;
 use purrdf_core::artifact::identity::{Identity, IdentityMismatch};
 use purrdf_core::ir::pack::bits::write_varint;
+use purrdf_hash::Domain;
 use purrdf_sparql_algebra::ParserOptions;
 use purrdf_sparql_eval::user_fn::FnPopulation;
 use purrdf_sparql_eval::{
@@ -535,7 +536,7 @@ fn encode_included_graphs(iris: &[String]) -> Vec<u8> {
 
 /// The domain separator the class-catalog digest opens with, so its preimage can
 /// never coincide with another content fingerprint's.
-const CLASS_CATALOG_DOMAIN: &str = "purrdf-shapes/product/class-catalog";
+const CLASS_CATALOG_DOMAIN: Domain = Domain::new(b"purrdf-shapes/product/class-catalog");
 
 /// A content digest over `catalog`'s key-sorted entries: every planned class IRI and
 /// the position it was assigned.

@@ -37,6 +37,7 @@
 use purrdf_cdt::CdtFn;
 use purrdf_core::ContentDigest;
 use purrdf_core::binding_pattern::BindingPattern;
+use purrdf_hash::Domain;
 use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
     AggregateExpression, AggregateFunction, Expression, Function, GraphPattern, Literal,
@@ -3249,7 +3250,7 @@ pub(crate) fn registry_fingerprint(
 /// happens to fold a structurally identical field sequence (an empty
 /// property-function registry and an empty aggregate registry would otherwise
 /// collide, and a caller binding both would be unable to tell which it had).
-const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/property-function-registry";
+const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/property-function-registry");
 
 /// The schema version of the field sequence this fingerprint folds.
 ///

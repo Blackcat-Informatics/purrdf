@@ -66,6 +66,7 @@
 
 use purrdf_core::TermBox;
 use purrdf_core::{RdfDataset, TermValue};
+use purrdf_hash::Domain;
 use std::convert::Infallible;
 use std::ops::ControlFlow;
 
@@ -93,7 +94,7 @@ use crate::report::Construct;
 /// is a kind byte and its own components, and an axiom writes exactly the terms its kind
 /// carries. Bytes written under `v1` therefore cannot be read as if they were current, which is
 /// what the tag is for.
-const SERVICE_ENCODING_TAG: &str = "purrdf-dl-service-proof-v2";
+const SERVICE_ENCODING_TAG: Domain = Domain::new(b"purrdf-dl-service-proof-v2");
 
 /// Wire kind for [`TermValue::Iri`].
 const TERM_IRI: u8 = 0;

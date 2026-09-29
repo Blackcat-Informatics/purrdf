@@ -49,6 +49,9 @@ regex = { workspace = true }
 # translation a second time (ETHOS §O). Previously reached only transitively
 # via `purrdf-sparql-eval`/`purrdf`; now a direct dependency of this crate.
 purrdf-core = { workspace = true }
+# The workspace root: the class-catalog and schema-compilation-key preimages open
+# under registered `purrdf_hash::Domain` constants.
+purrdf-hash = { workspace = true }
 # XSD value-space machinery: temporal (xsd:dateTime/date/time) value comparison
 # for the sh:minInclusive / sh:maxInclusive / sh:minExclusive / sh:maxExclusive
 # facets (W3C core/node/minInclusive-002/-003 — timezone-aware partial order;

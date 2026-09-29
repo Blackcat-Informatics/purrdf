@@ -65,6 +65,7 @@
 //! [`PropertyFunction::open`] — so a call whose ceiling is already exhausted performs no
 //! work and is charged none, and the count resets only when the engine takes it.
 
+use purrdf_hash::Domain;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
@@ -1400,7 +1401,7 @@ fn append_framed(out: &mut Vec<u8>, tag: &[u8], value: &[u8]) {
 
 /// The domain separator every HNSW space generation opens with, so this digest
 /// can never equal a digest of the same bytes taken for another purpose.
-const SPACE_GENERATION_DOMAIN: &str = "purrdf-hnsw/space-generation-v1";
+const SPACE_GENERATION_DOMAIN: Domain = Domain::new(b"purrdf-hnsw/space-generation-v1");
 
 /// Everything [`HnswRelation::ranked_declaration`] cannot derive: the five facts
 /// a host states about its own corpus and pipeline when it registers a space as

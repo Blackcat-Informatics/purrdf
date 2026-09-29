@@ -870,6 +870,7 @@ dependencies = [
  "criterion",
  "purrdf-alloc-probe",
  "purrdf-core",
+ "purrdf-hash",
  "purrdf-rdf",
  "purrdf-sparql-eval",
  "purrdf-testkit",
@@ -893,6 +894,7 @@ version = "2.0.2"
 dependencies = [
  "criterion",
  "purrdf-core",
+ "purrdf-hash",
  "purrdf-rdf",
  "purrdf-testkit",
 ]
@@ -972,6 +974,7 @@ dependencies = [
  "purrdf-core",
  "purrdf-datalog",
  "purrdf-gts",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-jsonschema",
  "purrdf-rdf",

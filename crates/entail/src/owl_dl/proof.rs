@@ -130,6 +130,7 @@
 //! a clock, so [`DlProof::encode`] is byte-identical run to run and on `wasm32`, exactly as
 //! the `Decision` it accompanies is.
 
+use purrdf_hash::Domain;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -151,10 +152,10 @@ use crate::report::Construct;
 ///
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can
 /// never be decoded as if they were current.
-const PROOF_ENCODING_TAG: &str = "purrdf-owl-dl-proof-v3";
+const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-owl-dl-proof-v3");
 
 /// Domain-separation tag for [`contract_digest`].
-const CONTRACT_DIGEST_TAG: &str = "purrdf-owl-dl-contract-v1";
+const CONTRACT_DIGEST_TAG: Domain = Domain::new(b"purrdf-owl-dl-contract-v1");
 
 /// The identity of the DECISION CALCULUS a proof term was produced under.
 ///

@@ -12,6 +12,7 @@
 //! kind, which is what the per-domain prefix buys.
 
 use core::fmt;
+use purrdf_hash::Domain;
 
 /// The canonical plan layout this build writes and understands.
 ///
@@ -90,7 +91,7 @@ pub const PLAN_VERSION: u16 = 4;
 /// only if their bytes did, but prefixing the domain is what makes a plan digest
 /// *not* a digest of the same bytes under any other purpose — the discipline the
 /// crate's other content identities follow.
-pub const PLAN_ID_DOMAIN: &str = "purrdf:plan:v1";
+pub const PLAN_ID_DOMAIN: Domain = Domain::new(b"purrdf:plan:v1");
 
 /// The length of a [`PlanId`] digest in bytes.
 pub const PLAN_ID_BYTES: usize = 32;
@@ -157,7 +158,7 @@ pub const FUSION_PROFILE_VERSION: u16 = 1;
 ///
 /// Namespaced apart from [`PLAN_ID_DOMAIN`] so the same canonical bytes hashed
 /// for a plan and for a fusion profile never produce the same identity.
-pub const FUSION_PROFILE_ID_DOMAIN: &str = "purrdf:fusion-profile:v1";
+pub const FUSION_PROFILE_ID_DOMAIN: Domain = Domain::new(b"purrdf:fusion-profile:v1");
 
 /// The length of a [`FusionProfileId`] digest in bytes.
 pub const FUSION_PROFILE_ID_BYTES: usize = 32;
@@ -232,7 +233,7 @@ pub const EVIDENCE_VERSION: u16 = 1;
 /// that the same canonical bytes read as evidence, as a plan and as a profile
 /// never produce the same identity — the three answer different questions and
 /// must never compare equal by accident.
-pub const EVIDENCE_ID_DOMAIN: &str = "purrdf:evidence:v1";
+pub const EVIDENCE_ID_DOMAIN: Domain = Domain::new(b"purrdf:evidence:v1");
 
 /// The length of an [`EvidenceId`] digest in bytes.
 pub const EVIDENCE_ID_BYTES: usize = 32;

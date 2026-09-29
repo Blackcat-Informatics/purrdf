@@ -10,27 +10,32 @@
 
 use core::fmt;
 
+use purrdf_hash::Domain;
 use sha2::{Digest as _, Sha256};
 
 use crate::ContentDigest;
 
-const D_ARTIFACT: &[u8] = b"purrdf.purremb.v1.artifact\0";
-const D_FAMILY_CONTRACT: &[u8] = b"purrdf.purremb.v1.family-contract\0";
-const D_FAMILY: &[u8] = b"purrdf.purremb.v1.family\0";
-const D_CHUNKING: &[u8] = b"purrdf.purremb.v1.chunking\0";
-const D_SPACE: &[u8] = b"purrdf.purremb.v1.vector-space\0";
-const D_TARGET_IDENTITY: &[u8] = b"purrdf.purremb.v1.target-identity\0";
-const D_TARGET: &[u8] = b"purrdf.purremb.v1.target\0";
-const D_TARGET_SET: &[u8] = b"purrdf.purremb.v1.target-set\0";
-const D_RELATION_ROLE: &[u8] = b"purrdf.purremb.v1.relation-role\0";
-const D_MATRIX_CONTENT: &[u8] = b"purrdf.purremb.v1.matrix-content\0";
-const D_MATRIX: &[u8] = b"purrdf.purremb.v1.matrix\0";
-const D_PROJECTION_CONTENT: &[u8] = b"purrdf.purremb.v1.projection-content\0";
-const D_PROJECTION: &[u8] = b"purrdf.purremb.v1.projection\0";
-const D_EXTERNAL_CONTRACT: &[u8] = b"purrdf.purremb.v1.external-contract\0";
-const D_EXTERNAL: &[u8] = b"purrdf.purremb.v1.external-binding\0";
-const D_INDEX_GUARD: &[u8] = b"purrdf.purremb.v1.index-guard\0";
-const D_INDEX: &[u8] = b"purrdf.purremb.v1.index\0";
+// The hash domains of the PURREMB identities: `docs/PURREMB.md` names each one,
+// and each is the prefix `hash_fold` opens its preimage with. The writer and the
+// verifier stream three of them through their own framed hashers.
+const D_ARTIFACT: Domain = Domain::new(b"purrdf.purremb.v1.artifact\0");
+const D_FAMILY_CONTRACT: Domain = Domain::new(b"purrdf.purremb.v1.family-contract\0");
+const D_FAMILY: Domain = Domain::new(b"purrdf.purremb.v1.family\0");
+const D_CHUNKING: Domain = Domain::new(b"purrdf.purremb.v1.chunking\0");
+const D_SPACE: Domain = Domain::new(b"purrdf.purremb.v1.vector-space\0");
+const D_TARGET_IDENTITY: Domain = Domain::new(b"purrdf.purremb.v1.target-identity\0");
+const D_TARGET: Domain = Domain::new(b"purrdf.purremb.v1.target\0");
+pub(super) const D_TARGET_SET: Domain = Domain::new(b"purrdf.purremb.v1.target-set\0");
+const D_RELATION_ROLE: Domain = Domain::new(b"purrdf.purremb.v1.relation-role\0");
+pub(super) const D_MATRIX_CONTENT: Domain = Domain::new(b"purrdf.purremb.v1.matrix-content\0");
+const D_MATRIX: Domain = Domain::new(b"purrdf.purremb.v1.matrix\0");
+pub(super) const D_PROJECTION_CONTENT: Domain =
+    Domain::new(b"purrdf.purremb.v1.projection-content\0");
+const D_PROJECTION: Domain = Domain::new(b"purrdf.purremb.v1.projection\0");
+const D_EXTERNAL_CONTRACT: Domain = Domain::new(b"purrdf.purremb.v1.external-contract\0");
+const D_EXTERNAL: Domain = Domain::new(b"purrdf.purremb.v1.external-binding\0");
+const D_INDEX_GUARD: Domain = Domain::new(b"purrdf.purremb.v1.index-guard\0");
+const D_INDEX: Domain = Domain::new(b"purrdf.purremb.v1.index\0");
 
 macro_rules! identity_type {
     ($(#[$meta:meta])* $name:ident) => {
@@ -394,9 +399,9 @@ pub fn derive_artifact_root(header_zero_root: &[u8], directory: &[u8]) -> Artifa
     ArtifactRoot(hash_fold(D_ARTIFACT, &[header_zero_root, directory]))
 }
 
-fn hash_fold(domain: &[u8], fields: &[&[u8]]) -> [u8; 32] {
+fn hash_fold(domain: Domain, fields: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Sha256::new();
-    hasher.update(domain);
+    hasher.update(domain.as_bytes());
     for field in fields {
         let length = u64::try_from(field.len()).expect("an in-memory slice length fits u64");
         hasher.update(length.to_le_bytes());

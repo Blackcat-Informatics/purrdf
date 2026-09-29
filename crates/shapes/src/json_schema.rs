@@ -142,6 +142,7 @@
 //! A property whose `sh:class` or ontology `rdfs:range` is such a vocabulary emits
 //! a `$ref` to its enum `$def`, cardinality preserved.
 
+use purrdf_hash::Domain;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
@@ -884,7 +885,7 @@ pub struct SchemaCompilation {
     pub key: SchemaCompilationKey,
 }
 
-const SCHEMA_KEY_SALT: &str = "purrdf-shapes/schema-compilation-key/v1";
+const SCHEMA_KEY_SALT: Domain = Domain::new(b"purrdf-shapes/schema-compilation-key/v1");
 const SCHEMA_POLICY_SALT: &str =
     "rdf12;json-schema-2020-12;openapi-3.1;surface-limits-v1;owl-rdfs-fragment-v1";
 pub(crate) const MAX_SCHEMA_PROPERTIES: usize = 65_536;

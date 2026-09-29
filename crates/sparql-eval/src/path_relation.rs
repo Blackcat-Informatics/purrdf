@@ -345,6 +345,7 @@
 //! See each relation's own emission-order contract for the resulting row order.
 
 use purrdf_core::TermBox;
+use purrdf_hash::Domain;
 use std::collections::VecDeque;
 use std::sync::{Arc, OnceLock};
 
@@ -371,7 +372,7 @@ const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 /// offered as an answer to the other. The `-v1` suffix is what makes the layout revisable:
 /// a future change takes a new domain, so old and new values are unequal by construction
 /// rather than silently interchangeable.
-const PATH_SNAPSHOT_DOMAIN_V1: &[u8] = b"path-snapshot-edge-set-v1";
+const PATH_SNAPSHOT_DOMAIN_V1: Domain = Domain::new(b"path-snapshot-edge-set-v1");
 
 // ---------------------------------------------------------------------------
 // The step definition
@@ -1156,7 +1157,7 @@ fn canonical_edges<D: DatasetView>(
 /// slowdown, it is a mispaired snapshot certified as correct.
 fn edge_set_digest(edges: &[(TermValue, TermValue, TermValue)]) -> [u8; 32] {
     let mut state = Sha256::new();
-    state.update(PATH_SNAPSHOT_DOMAIN_V1);
+    state.update(PATH_SNAPSHOT_DOMAIN_V1.as_bytes());
     state.update((edges.len() as u64).to_le_bytes());
     let mut bytes = Vec::new();
     for (from, to, statement) in edges {
@@ -1194,12 +1195,12 @@ fn dense_index(table: &[TermValue], value: &TermValue) -> u32 {
 /// to one minted by a different scheme over the same bytes. The `-v1` suffix is what
 /// makes the encoding revisable: a future layout change takes a new domain, so old and
 /// new identifiers are unequal by construction rather than silently interchangeable.
-const PATH_ID_DOMAIN_V1: &[u8] = b"path-witness-identifier-v1";
+const PATH_ID_DOMAIN_V1: Domain = Domain::new(b"path-witness-identifier-v1");
 
 /// The digest state of a zero-hop prefix rooted at `node`.
 fn seed_digest(graph: &PathGraph, node: u32) -> Sha256 {
     let mut state = Sha256::new();
-    state.update(PATH_ID_DOMAIN_V1);
+    state.update(PATH_ID_DOMAIN_V1.as_bytes());
     let mut bytes = Vec::new();
     graph.nodes[node as usize].canonical_bytes(&mut bytes);
     state.update(&bytes);

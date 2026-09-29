@@ -66,6 +66,7 @@
 //! and rejects an engine that decided negation too early.
 
 use core::hash::Hasher;
+use purrdf_hash::Domain;
 use std::collections::btree_map::Entry;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -86,7 +87,7 @@ use crate::store::{Bound, Fact, RelationStore};
 ///
 /// Bumped whenever the encoding changes shape, so bytes written under an older layout can
 /// never be decoded as if they were current.
-const PROOF_ENCODING_TAG: &str = "purrdf-datalog-proof-v1";
+const PROOF_ENCODING_TAG: Domain = Domain::new(b"purrdf-datalog-proof-v1");
 
 /// Wire kind byte: an axiom (assertion) leaf.
 const KIND_AXIOM: u8 = 0;

@@ -35,7 +35,7 @@ use std::collections::BTreeMap;
 use purrdf_core::embedding::ChunkingContractId;
 use purrdf_core::{ContentDigest, RdfLiteral, RdfTerm, RdfTriple, emit_term};
 
-use crate::identity::{citation_iri, node_iri_of_digest, structure_iri};
+use crate::identity::{SECTION_KIND, UNIT_KIND, citation_iri, node_iri_of_digest, structure_iri};
 use crate::model::{Document, Section, Span, Unit};
 use crate::profile::{Profile, Vocabulary};
 use crate::{Claim, ClaimKind};
@@ -79,7 +79,7 @@ pub fn render(document: &Document<'_>) -> Vec<Claim> {
             let span = s.heading_span();
             node_iri_of_digest(
                 &profile.vocabulary,
-                "section",
+                SECTION_KIND,
                 document.id(),
                 &contract,
                 span.start,
@@ -94,7 +94,7 @@ pub fn render(document: &Document<'_>) -> Vec<Claim> {
         .map(|u| {
             node_iri_of_digest(
                 &profile.vocabulary,
-                "unit",
+                UNIT_KIND,
                 document.id(),
                 &contract,
                 u.span().start,

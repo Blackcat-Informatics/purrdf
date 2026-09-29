@@ -10,6 +10,16 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **hash:** `purrdf_hash::Domain`, a `const` newtype naming one hash preimage
+  family. Every hash domain-separation string in the workspace is a registered
+  `Domain` constant beside the construction it separates, byte-identical to the
+  literal it replaces, so no digest, identity or golden moves. A domain is UTF-8
+  text (`Domain::new` refuses other bytes at compile time for a `const`), and
+  `as_str` serves the constructions that carry it as a CBOR text string or an
+  IRI segment. `scripts/check-hash-domains.py` (in `make check` and CI) holds the
+  set unique and prefix-free, refuses a domain-shaped literal handed to a hasher
+  without a `Domain`, and keeps the registry table in `crates/hash/README.md`
+  equal to the source. New domains are spelt `purrdf-<crate>/<purpose>/v<N>`.
 - **jsonschema:** `MAX_REF_CHAIN` (250), the longest run of `$ref`,
   `$dynamicRef` and `$recursiveRef` resolutions followed at one instance
   location. Past it the evaluation stops with an `EvaluationError` whose new
@@ -1076,6 +1086,12 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **retrieval:** `PLAN_ID_DOMAIN`, `FUSION_PROFILE_ID_DOMAIN` and
+  `EVIDENCE_ID_DOMAIN` are `purrdf_hash::Domain` constants rather than `&str`;
+  their bytes, and every `PlanId`, `FusionProfileId` and `EvidenceId`, are
+  unchanged. `as_bytes()` reads them as before, and `as_str()` gives the text.
+- **core:** `PIPELINE_ROOT_DOMAIN` is a `purrdf_hash::Domain` rather than a
+  `&str`, with the same bytes and the same pipeline roots.
 - **jsonschema:** `EvaluationError::cause` is an `EvaluationCause` rather than
   a `PatternError`; a matcher budget error is `EvaluationCause::Pattern`.
 - **jsonschema:** the evaluator keeps the subschemas it is evaluating on a heap

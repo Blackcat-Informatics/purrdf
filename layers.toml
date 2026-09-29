@@ -168,11 +168,11 @@ deps = ["purrdf-core", "purrdf-hash"]
 
 [[crate]]
 name = "purrdf-json"
-deps = ["purrdf-core"]
+deps = ["purrdf-core", "purrdf-hash"]
 
 [[crate]]
 name = "purrdf-markdown"
-deps = ["purrdf-core"]
+deps = ["purrdf-core", "purrdf-hash"]
 
 [[crate]]
 name = "purrdf-shex"
@@ -223,6 +223,7 @@ deps = [
 name = "purrdf-hnsw"
 deps = [
     "purrdf-core",
+    "purrdf-hash",
     "purrdf-sparql-eval",
     "purrdf-xsd",
 ]
@@ -273,6 +274,7 @@ name = "purrdf-shapes"
 deps = [
     "purrdf-core",
     "purrdf-datalog",
+    "purrdf-hash",
     "purrdf-iri",
     "purrdf-rdf",
     "purrdf-slice",

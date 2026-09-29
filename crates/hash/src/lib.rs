@@ -14,6 +14,10 @@
 //! | [`fnv`] | FNV-1a, 64-bit | Fowler, Noll and Vo (`draft-eastlake-fnv`) | a `u64` |
 //! | [`mix`] | the SplitMix64 generator and finaliser | Steele, Lea and Flood (OOPSLA 2014) | a `u64` |
 //!
+//! [`Domain`] is the one spelling of a hash domain-separation string: every
+//! domain the workspace hashes under is a registered `Domain` constant, unique
+//! and prefix-free across the workspace, and never renamed once published.
+//!
 //! [`hex::Lower`] renders any byte string, a digest included, as lowercase
 //! base16 (RFC 4648 §8) through `Display`, without allocating.
 //!
@@ -73,6 +77,7 @@ pub mod backend;
 pub mod blake3;
 pub mod crc32;
 pub mod dispatch;
+mod domain;
 pub mod fixed;
 pub mod fnv;
 pub mod hex;
@@ -83,3 +88,4 @@ pub mod sha3;
 
 pub use digest::{Digest, MAX_OUTPUT_LEN};
 pub use dispatch::Backend;
+pub use domain::Domain;

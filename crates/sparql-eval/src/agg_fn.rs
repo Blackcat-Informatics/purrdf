@@ -122,6 +122,7 @@
 //! through a typed `Err`, not a panic, it degrades cleanly on every target
 //! regardless of panic strategy.
 
+use purrdf_hash::Domain;
 use std::sync::Arc;
 
 use purrdf_core::{ContentDigest, TermValue};
@@ -952,7 +953,7 @@ pub(crate) fn registry_fingerprint(aggregates: &AggregateRegistry) -> Result<Str
 /// The domain separator every custom-aggregate content fingerprint opens with — see
 /// `crate::property_fn_plan`'s constant of the same name for why each registry kind
 /// needs its own.
-const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/aggregate-registry";
+const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/aggregate-registry");
 
 /// A **content-only** fingerprint of `aggregates`: the identical declared descriptor
 /// fields `registry_fingerprint` folds — every registered IRI's declared arity,

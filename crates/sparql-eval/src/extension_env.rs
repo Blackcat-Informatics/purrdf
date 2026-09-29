@@ -76,6 +76,7 @@
 //! requires — which is how a prepared shapes product refuses to restore under a
 //! host whose declared namespaces differ from the ones it was written under.
 
+use purrdf_hash::Domain;
 use std::borrow::Cow;
 use std::sync::OnceLock;
 
@@ -90,7 +91,7 @@ use crate::registry_id::{RegistryId, append_framed_part};
 /// The domain separator this environment's content digest opens with, so it can
 /// never collide with a digest of any other kind that happens to fold a
 /// structurally identical field sequence.
-const CONTENT_DOMAIN: &str = "purrdf-sparql-eval/extension-env";
+const CONTENT_DOMAIN: Domain = Domain::new(b"purrdf-sparql-eval/extension-env");
 
 /// The schema version of the field sequence [`ExtensionEnv::content_fingerprint`]
 /// folds. Length-framing makes each version's encoding injective *within* a
