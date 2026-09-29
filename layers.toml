@@ -199,6 +199,7 @@ deps = [
 name = "purrdf-geo"
 deps = [
     "purrdf-core",
+    "purrdf-hash",
     "purrdf-iri",
     "purrdf-sparql-eval",
     "purrdf-xsd",

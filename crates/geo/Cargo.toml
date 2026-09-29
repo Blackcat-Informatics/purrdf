@@ -41,6 +41,10 @@ purrdf-iri = { workspace = true }
 # functions return, and `XSD_NS`/`XsdDatatype` for the datatype IRIs they carry.
 # Zero-dependency leaf, so this edge adds nothing to the wasm surface.
 purrdf-xsd = { workspace = true }
+# FNV-1a (`purrdf_hash::fnv`), the specified function the determinism digest
+# folds its output bytes through. The zero-dependency root, already under
+# purrdf-core, so this edge adds nothing to the build.
+purrdf-hash = { workspace = true }
 
 [dev-dependencies]
 criterion = { workspace = true }

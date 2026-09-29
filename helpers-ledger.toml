@@ -159,6 +159,51 @@ fingerprints = []
 names = []
 
 [[job]]
+id = "splitmix64"
+summary = "The SplitMix64 generator, its self-composed step and its 64-bit finaliser"
+home = "purrdf_hash::mix"
+entry_points = [
+    "purrdf_hash::mix::splitmix64_next",
+    "purrdf_hash::mix::splitmix64_step",
+    "purrdf_hash::mix::splitmix64_finalize",
+    "purrdf_testkit::rng::splitmix64_next",
+    "purrdf_testkit::rng::splitmix64_step",
+]
+spec = "SplitMix64 (Steele, Lea and Flood, OOPSLA 2014): golden-ratio increment 0x9E3779B97F4A7C15, finaliser multipliers 0xBF58476D1CE4E5B9 and 0x94D049BB133111EB with shifts 30, 27 and 31"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = false
+
+[job.forbidden]
+constants = ["0x9e37_79b9_7f4a_7c15", "0xbf58_476d_1ce4_e5b9", "0x94d0_49bb_1331_11eb"]
+fingerprints = []
+names = []
+
+[[job]]
+id = "fnv1a64"
+summary = "FNV-1a 64-bit over bytes, from the offset basis or folded into a caller's state"
+home = "purrdf_hash::fnv"
+entry_points = [
+    "purrdf_hash::fnv::fnv1a64",
+    "purrdf_hash::fnv::fold",
+    "purrdf_hash::fnv::BASIS",
+    "purrdf_hash::fnv::PRIME",
+]
+spec = "FNV-1a 64-bit (Fowler, Noll and Vo; draft-eastlake-fnv): offset basis 0xCBF29CE484222325, prime 0x100000001B3, XOR then multiply modulo 2^64"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = false
+
+[job.forbidden]
+constants = ["0xcbf2_9ce4_8422_2325", "0x100_0000_01b3"]
+fingerprints = []
+names = []
+
+[[job]]
 id = "md5"
 summary = "MD5 message digest, one-shot and streaming"
 home = "purrdf_hash::md5::Md5"

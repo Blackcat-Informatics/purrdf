@@ -155,6 +155,7 @@ dependencies = [
 name = "purrdf-testkit"
 version = "2.0.2"
 dependencies = [
+ "purrdf-hash",
  "regex-syntax",
  "sha2",
  "wasm-bindgen",

@@ -790,6 +790,7 @@ version = "2.0.2"
 dependencies = [
  "criterion",
  "purrdf-core",
+ "purrdf-hash",
  "purrdf-iri",
  "purrdf-rdf",
  "purrdf-shapes",
@@ -1097,6 +1098,7 @@ dependencies = [
 name = "purrdf-testkit"
 version = "2.0.2"
 dependencies = [
+ "purrdf-hash",
  "regex",
  "regex-syntax",
  "sha2",

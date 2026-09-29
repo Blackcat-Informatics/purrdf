@@ -2,46 +2,19 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! The workspace's one deterministic pseudo-random stream for tests and
-//! benches: a SplitMix64 finaliser and a xoshiro256** generator seeded
-//! through it.
+//! benches: SplitMix64 and a xoshiro256** generator seeded through it.
 //!
 //! Every crate that needs a fixed-seed stream for generated test inputs draws
-//! from here rather than hand-copying the mixing step, so there is exactly
-//! one place that defines what "the stream" means. [`prop`](crate::prop)
-//! itself is built on this module.
+//! from here, and the SplitMix64 function itself is [`purrdf_hash::mix`], so
+//! there is exactly one place that defines what "the stream" means.
+//! [`prop`](crate::prop) itself is built on this module.
 //!
 //! Nothing here is cryptographically secure, and nothing here ships in a
 //! release artifact's data path: it exists only behind `[dev-dependencies]`.
 
-/// The SplitMix64 finalizer, without the golden-ratio increment: two
-/// xor-shift-multiply rounds and a final xor-shift.
-const fn mix_rounds(z: u64) -> u64 {
-    let mut z = z;
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
-
-/// A deterministic SplitMix64 step (Steele, Lea and Flood) over a plain
-/// counter: `state` is advanced by the golden-ratio increment, then the
-/// advanced value is mixed and returned. The next call advances the SAME raw
-/// counter again, not the mixed output.
-#[must_use]
-pub const fn splitmix64_next(state: &mut u64) -> u64 {
-    *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    mix_rounds(*state)
-}
-
-/// A self-composed SplitMix64 step: the golden-ratio increment is added to
-/// `state` and the result mixed, and the caller is expected to feed the
-/// returned value back in as the next `state` — so the counter itself is the
-/// fully mixed value, not a raw increment. This is a DIFFERENT stream from
-/// [`splitmix64_next`]'s (that one re-mixes a plain incrementing counter from
-/// scratch on every call); the two are not interchangeable.
-#[must_use]
-pub const fn splitmix64_step(state: u64) -> u64 {
-    mix_rounds(state.wrapping_add(0x9E37_79B9_7F4A_7C15))
-}
+/// The SplitMix64 generator and its self-composed step, from
+/// [`purrdf_hash::mix`], where the function and its pinned outputs live.
+pub use purrdf_hash::mix::{splitmix64_next, splitmix64_step};
 
 /// One value in `[-1, 1)` from the [`splitmix64_next`] counter stream: the
 /// top 53 bits of the next output as a fraction of 2^53, doubled and shifted
@@ -150,7 +123,7 @@ impl Xoshiro256 {
 
 #[cfg(test)]
 mod tests {
-    use super::{SplitMix64, Xoshiro256, signed_unit_stream, splitmix64_next, splitmix64_step};
+    use super::{SplitMix64, Xoshiro256, signed_unit_stream};
 
     #[test]
     fn splitmix64_matches_the_reference_outputs() {
@@ -181,90 +154,6 @@ mod tests {
         }
         assert_eq!(seen, [true; 5]);
         assert_eq!(generator.up_to(0), 0);
-    }
-
-    /// `purrdf-iri`, `purrdf-columnar`, `purrdf-entail` and
-    /// `purrdf-sparql-results` share this exact SplitMix64 body — one
-    /// golden-ratio increment and the SplitMix64 finalizer — through this
-    /// module. This test pins the first 16 outputs from seed 0 and from
-    /// `0x9E3779B97F4A7C15`, so a future edit to this module cannot silently
-    /// change what any of those crates' existing tests generate.
-    #[test]
-    fn splitmix64_next_matches_the_pinned_reference_outputs() {
-        const SEED_ZERO: [u64; 16] = [
-            0xE220_A839_7B1D_CDAF,
-            0x6E78_9E6A_A1B9_65F4,
-            0x06C4_5D18_8009_454F,
-            0xF88B_B8A8_724C_81EC,
-            0x1B39_896A_51A8_749B,
-            0x53CB_9F0C_747E_A2EA,
-            0x2C82_9ABE_1F45_32E1,
-            0xC584_133A_C916_AB3C,
-            0x3EE5_7890_41C9_8AC3,
-            0xF3B8_488C_368C_B0A6,
-            0x657E_ECDD_3CB1_3D09,
-            0xC2D3_26E0_055B_DEF6,
-            0x8621_A03F_E0BB_DB7B,
-            0x8E1F_7555_983A_A92F,
-            0xB54E_0F16_00CC_4D19,
-            0x84BB_3F97_971D_80AB,
-        ];
-        const SEED_GOLDEN_RATIO: [u64; 16] = [
-            0x6E78_9E6A_A1B9_65F4,
-            0x06C4_5D18_8009_454F,
-            0xF88B_B8A8_724C_81EC,
-            0x1B39_896A_51A8_749B,
-            0x53CB_9F0C_747E_A2EA,
-            0x2C82_9ABE_1F45_32E1,
-            0xC584_133A_C916_AB3C,
-            0x3EE5_7890_41C9_8AC3,
-            0xF3B8_488C_368C_B0A6,
-            0x657E_ECDD_3CB1_3D09,
-            0xC2D3_26E0_055B_DEF6,
-            0x8621_A03F_E0BB_DB7B,
-            0x8E1F_7555_983A_A92F,
-            0xB54E_0F16_00CC_4D19,
-            0x84BB_3F97_971D_80AB,
-            0x7D29_825C_7552_1255,
-        ];
-        let mut state = 0u64;
-        let seed_zero: [u64; 16] = std::array::from_fn(|_| splitmix64_next(&mut state));
-        assert_eq!(seed_zero, SEED_ZERO);
-
-        let mut state = 0x9E37_79B9_7F4A_7C15_u64;
-        let seed_golden_ratio: [u64; 16] = std::array::from_fn(|_| splitmix64_next(&mut state));
-        assert_eq!(seed_golden_ratio, SEED_GOLDEN_RATIO);
-    }
-
-    /// `purrdf-core` and `purrdf-sparql-eval` each use this self-composed
-    /// stream under the name `splitmix64_step`. This test pins its output
-    /// from state `0xC057`.
-    #[test]
-    fn splitmix64_step_matches_the_pinned_reference_outputs() {
-        const FROM_0XC057: [u64; 16] = [
-            0x1C22_A3B7_31BC_110E,
-            0x5973_9F6F_16CD_4B42,
-            0x6F5F_6C53_8C96_CFA8,
-            0xAE1A_77B8_EB2F_2665,
-            0x7E4E_CF20_F8E6_7C2F,
-            0xFE83_248D_BB90_6BF0,
-            0x2B62_FEC6_6B02_87AD,
-            0x1D53_503C_ADFA_1E99,
-            0x1BB6_C297_3F03_A2BA,
-            0xC0A4_B544_205C_859B,
-            0xF2D0_474A_D47E_8818,
-            0xCF18_FF27_6E5E_0796,
-            0x7713_D23D_9B4D_FF82,
-            0x9C99_5235_29DC_7B13,
-            0x311B_A5D7_578A_F63A,
-            0x106C_1FC2_2115_832A,
-        ];
-        let mut state = 0xC057_u64;
-        let observed: [u64; 16] = std::array::from_fn(|_| {
-            state = splitmix64_step(state);
-            state
-        });
-        assert_eq!(observed, FROM_0XC057);
     }
 
     /// `purrdf-sparql-eval`'s kNN tests draw their fixture

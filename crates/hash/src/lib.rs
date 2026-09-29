@@ -11,6 +11,8 @@
 //! | [`sha3`] | SHA3-224, SHA3-256, SHA3-384, SHA3-512 and Keccak-f\[1600\] | FIPS 202 | 28 / 32 / 48 / 64 bytes |
 //! | [`crc32`] | CRC-32/ISO-HDLC | the reflected polynomial `0xEDB88320` | a `u32` |
 //! | [`fixed`] | the fixed-key table hasher | this crate (folded multiplies; AES rounds on AES builds) | a `u64` |
+//! | [`fnv`] | FNV-1a, 64-bit | Fowler, Noll and Vo (`draft-eastlake-fnv`) | a `u64` |
+//! | [`mix`] | the SplitMix64 generator and finaliser | Steele, Lea and Flood (OOPSLA 2014) | a `u64` |
 //!
 //! [`hex::Lower`] renders any byte string, a digest included, as lowercase
 //! base16 (RFC 4648 §8) through `Display`, without allocating.
@@ -44,7 +46,11 @@
 //! Pure integer arithmetic over caller-supplied bytes: no allocation, no
 //! threads, no filesystem, no clock and no entropy (the table hasher's keys
 //! are compile-time constants), so the crate builds for
-//! `wasm32-unknown-unknown`. MD5 and SHA-1 are provided because protocols
+//! `wasm32-unknown-unknown`.
+//!
+//! The crate has zero dependencies and is the root of the workspace's crate
+//! layering: every crate may depend on it. Besides the digests it holds the
+//! small specified kernels shared across the workspace ([`fnv`], [`mix`]). MD5 and SHA-1 are provided because protocols
 //! name them (SPARQL's `MD5()`/`SHA1()`, OpenPGP v4 fingerprints), not as
 //! security primitives: both are broken for collision resistance.
 
@@ -63,8 +69,10 @@ pub mod backend;
 pub mod blake3;
 pub mod crc32;
 pub mod fixed;
+pub mod fnv;
 pub mod hex;
 pub mod md5;
+pub mod mix;
 pub mod sha1;
 pub mod sha3;
 
