@@ -57,6 +57,12 @@ purrdf-events = { workspace = true }
 # SipHash on hot value-index paths without introducing runtime randomness. A
 # zero-dependency leaf, so the kernel's graph gains no third-party package.
 purrdf-hash = { workspace = true }
+# The workspace's one first-mismatch index (`purrdf_deflate::common_prefix_len`),
+# the word-parallel compare behind the pack dictionary's front coding. It is
+# `#[inline]` with no dispatch, so each short record compare compiles into the
+# encoder's loop. A leaf over `purrdf-hash` only, with no edge back to the
+# core, and wasm-clean.
+purrdf-deflate = { workspace = true }
 # Raw `HashTable` for the store-once builder interner/dedup: each term/
 # row is owned ONCE by its `Vec`, the table holds only indices. (`HashTable` was
 # introduced in hashbrown 0.14.2; the workspace tracks 0.17.)

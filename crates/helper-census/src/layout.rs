@@ -2,7 +2,8 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0 OR MulanPSL-2.0
 
 //! Byte-layout rules: syntactic properties of shipping code that hold framing,
-//! fixed-width integer access and layout arithmetic to their single homes.
+//! fixed-width integer access, layout arithmetic and the word-parallel byte
+//! compare to their single homes.
 //!
 //! Test code is out of scope — `tests/`, `benches/`, `examples/` and
 //! `generated/` directories and `#[cfg(test)]`/`#[test]` items: a test that
@@ -35,6 +36,12 @@
 //! * `div-ceil-by-hand`: `(n + d - 1) / d`, which overflows where `n + d`
 //!   does — `div_ceil` on unsigned types, and on the signed ones (whose
 //!   `div_ceil` is not stable) retrieval's `reciprocal_rank::ceil_div`.
+//! * `xor-first-mismatch`: the first-mismatch index by hand — an XOR of two
+//!   words each loaded by `uN::from_{le,ne,be}_bytes` (in place, or through a
+//!   local bound to the load), in a function that also takes a
+//!   `trailing_zeros`/`leading_zeros` count. `purrdf_deflate::common_prefix_len`
+//!   is the one word-parallel common-prefix length, and its home package holds
+//!   the body.
 
 use syn::visit::Visit;
 
@@ -48,14 +55,32 @@ pub(crate) const LE_SLICE_INT: &str = "rule:le-slice-int";
 pub(crate) const ALIGN_UP_MASK: &str = "rule:align-up-mask";
 /// Ceiling division by hand.
 pub(crate) const DIV_CEIL_BY_HAND: &str = "rule:div-ceil-by-hand";
+/// The first-mismatch index by hand: an XOR of two loaded words and a zero
+/// count.
+pub(crate) const XOR_FIRST_MISMATCH: &str = "rule:xor-first-mismatch";
 
 /// Every rule this module computes.
-pub(crate) const RULES: [&str; 4] = [
+pub(crate) const RULES: [&str; 5] = [
     LENGTH_PREFIX_FRAME,
     LE_SLICE_INT,
     ALIGN_UP_MASK,
     DIV_CEIL_BY_HAND,
+    XOR_FIRST_MISMATCH,
 ];
+
+/// The word loads `xor-first-mismatch` reads.
+const WORD_LOADS: [&str; 3] = ["from_le_bytes", "from_ne_bytes", "from_be_bytes"];
+
+/// What `xor-first-mismatch` has seen of one function body.
+#[derive(Default)]
+struct MismatchFrame {
+    /// The locals bound to a word load.
+    loads: Vec<String>,
+    /// The lines of each XOR of two loaded words.
+    xors: Vec<usize>,
+    /// Whether the body takes a trailing- or leading-zero count.
+    counts_zeros: bool,
+}
 
 /// The formatting macros whose arguments `length-prefix-frame` reads.
 const FORMAT_MACROS: [&str; 4] = ["format", "format_args", "write", "writeln"];
@@ -274,6 +299,7 @@ struct Layout<'a> {
     file: &'a str,
     scope: Vec<String>,
     hits: Vec<RuleHit>,
+    mismatch: Vec<MismatchFrame>,
 }
 
 impl Layout<'_> {
@@ -293,7 +319,7 @@ impl Layout<'_> {
             // The framing's home package holds the framings themselves; every
             // other rule's home computes through the standard library and
             // holds no copy either.
-            home_exempt: rule == LENGTH_PREFIX_FRAME,
+            home_exempt: rule == LENGTH_PREFIX_FRAME || rule == XOR_FIRST_MISMATCH,
         });
     }
 
@@ -301,6 +327,40 @@ impl Layout<'_> {
         self.scope.push(name);
         walk(self);
         self.scope.pop();
+    }
+
+    /// Walk one function body with its own `xor-first-mismatch` frame, and
+    /// report its XORs of loaded words when the body also counts zeros.
+    fn function(&mut self, walk: impl FnOnce(&mut Self)) {
+        self.mismatch.push(MismatchFrame::default());
+        walk(self);
+        let frame = self.mismatch.pop().unwrap_or_default();
+        if frame.counts_zeros {
+            for line in frame.xors {
+                self.hit(
+                    XOR_FIRST_MISMATCH,
+                    line,
+                    "an XOR of two loaded words ended by a zero count: the first-mismatch \
+                     index by hand; call purrdf_deflate::common_prefix_len"
+                        .to_owned(),
+                );
+            }
+        }
+    }
+
+    /// Whether `expr` is a word load: `uN::from_le_bytes(…)` (or `ne`/`be`),
+    /// through parentheses, or a local of this function bound to one.
+    fn is_word_load(&self, expr: &syn::Expr) -> bool {
+        match expr {
+            syn::Expr::Paren(inner) => self.is_word_load(&inner.expr),
+            syn::Expr::Call(call) => is_word_load_call(call),
+            syn::Expr::Path(path) => path.path.get_ident().is_some_and(|ident| {
+                self.mismatch
+                    .last()
+                    .is_some_and(|frame| frame.loads.contains(&ident.to_string()))
+            }),
+            _ => false,
+        }
     }
 
     /// `length-prefix-frame` over one block's statements.
@@ -455,6 +515,12 @@ impl<'ast> Visit<'ast> for Layout<'_> {
     }
 
     fn visit_expr_method_call(&mut self, node: &'ast syn::ExprMethodCall) {
+        if (node.method == "trailing_zeros" || node.method == "leading_zeros")
+            && node.args.is_empty()
+            && let Some(frame) = self.mismatch.last_mut()
+        {
+            frame.counts_zeros = true;
+        }
         if node.method == "copy_from_slice"
             && is_range_slice(&node.receiver)
             && node.args.first().is_some_and(|argument| {
@@ -477,6 +543,13 @@ impl<'ast> Visit<'ast> for Layout<'_> {
     }
 
     fn visit_expr_binary(&mut self, node: &'ast syn::ExprBinary) {
+        if let syn::BinOp::BitXor(token) = node.op
+            && self.is_word_load(&node.left)
+            && self.is_word_load(&node.right)
+            && let Some(frame) = self.mismatch.last_mut()
+        {
+            frame.xors.push(token.span.start().line);
+        }
         match node.op {
             syn::BinOp::BitAnd(token)
                 if is_rounded(&node.left) && is_low_mask_complement(&node.right) =>
@@ -500,12 +573,27 @@ impl<'ast> Visit<'ast> for Layout<'_> {
         syn::visit::visit_expr_binary(self, node);
     }
 
+    fn visit_local(&mut self, node: &'ast syn::Local) {
+        let pattern = match &node.pat {
+            syn::Pat::Type(typed) => typed.pat.as_ref(),
+            other => other,
+        };
+        if let syn::Pat::Ident(binding) = pattern
+            && let Some(init) = &node.init
+            && self.is_word_load(&init.expr)
+            && let Some(frame) = self.mismatch.last_mut()
+        {
+            frame.loads.push(binding.ident.to_string());
+        }
+        syn::visit::visit_local(self, node);
+    }
+
     fn visit_item_fn(&mut self, node: &'ast syn::ItemFn) {
         if crate::source::is_test_only(&node.attrs) {
             return;
         }
         self.scoped(node.sig.ident.to_string(), |this| {
-            syn::visit::visit_item_fn(this, node);
+            this.function(|this| syn::visit::visit_item_fn(this, node));
         });
     }
 
@@ -514,7 +602,7 @@ impl<'ast> Visit<'ast> for Layout<'_> {
             return;
         }
         self.scoped(node.sig.ident.to_string(), |this| {
-            syn::visit::visit_impl_item_fn(this, node);
+            this.function(|this| syn::visit::visit_impl_item_fn(this, node));
         });
     }
 
@@ -532,6 +620,25 @@ impl<'ast> Visit<'ast> for Layout<'_> {
             syn::visit::visit_item_mod(this, node);
         });
     }
+}
+
+/// Whether `call` is `uN::from_le_bytes(…)`, `from_ne_bytes` or
+/// `from_be_bytes` on an integer type.
+fn is_word_load_call(call: &syn::ExprCall) -> bool {
+    let syn::Expr::Path(function) = call.func.as_ref() else {
+        return false;
+    };
+    let segments: Vec<String> = function
+        .path
+        .segments
+        .iter()
+        .map(|segment| segment.ident.to_string())
+        .collect();
+    matches!(
+        segments.as_slice(),
+        [.., integer, method]
+            if WORD_LOADS.contains(&method.as_str()) && INTEGERS.contains(&integer.as_str())
+    )
 }
 
 /// The line of a call's path.
@@ -612,6 +719,7 @@ pub(crate) fn layout_rules(package: &str, file: &str, parsed: &syn::File) -> Vec
         file,
         scope: Vec::new(),
         hits: Vec::new(),
+        mismatch: Vec::new(),
     };
     visitor.visit_file(parsed);
     visitor.hits
@@ -619,7 +727,10 @@ pub(crate) fn layout_rules(package: &str, file: &str, parsed: &syn::File) -> Vec
 
 #[cfg(test)]
 mod tests {
-    use super::{ALIGN_UP_MASK, DIV_CEIL_BY_HAND, LE_SLICE_INT, LENGTH_PREFIX_FRAME, layout_rules};
+    use super::{
+        ALIGN_UP_MASK, DIV_CEIL_BY_HAND, LE_SLICE_INT, LENGTH_PREFIX_FRAME, XOR_FIRST_MISMATCH,
+        layout_rules,
+    };
 
     fn hits(source: &str) -> Vec<(&'static str, usize)> {
         let parsed = syn::parse_file(source).expect("fixture parses");
@@ -701,6 +812,32 @@ fn k(n: u64, d: u64) -> u64 { n.div_ceil(d) }
                 (ALIGN_UP_MASK, 4),
                 (DIV_CEIL_BY_HAND, 9),
             ]
+        );
+    }
+
+    #[test]
+    fn a_first_mismatch_by_hand_is_found_and_its_neighbours_are_not() {
+        let source = "\
+fn a(x: &[u8; 8], y: &[u8; 8]) -> u32 {
+    (u64::from_le_bytes(*x) ^ u64::from_le_bytes(*y)).trailing_zeros() / 8
+}
+fn b(p: &[u8], q: &[u8]) -> usize {
+    let x = u64::from_le_bytes(*p.first_chunk().unwrap());
+    let y: u64 = u64::from_ne_bytes(*q.first_chunk().unwrap());
+    let diff = x ^ y;
+    diff.trailing_zeros() as usize / 8
+}
+fn c(r: u32, b: &[u8; 4]) -> u32 { (r ^ u32::from_le_bytes(*b)).leading_zeros() }
+fn d(x: &[u8; 8], y: &[u8; 8]) -> u64 { u64::from_le_bytes(*x) ^ u64::from_le_bytes(*y) }
+fn e(w: &[u8; 8]) -> u32 { u64::from_le_bytes(*w).trailing_zeros() / 8 }
+#[cfg(test)]
+fn oracle(x: &[u8; 8], y: &[u8; 8]) -> u32 {
+    (u64::from_le_bytes(*x) ^ u64::from_le_bytes(*y)).trailing_zeros() / 8
+}
+";
+        assert_eq!(
+            hits(source),
+            vec![(XOR_FIRST_MISMATCH, 2), (XOR_FIRST_MISMATCH, 7)]
         );
     }
 }

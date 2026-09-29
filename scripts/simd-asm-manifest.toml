@@ -1934,54 +1934,6 @@ summary = "`hex::encode_portable`, the compare-select base16 loop behind every e
   forbid_relaxed = true
 
 [[site]]
-id = "core.pack-dict-prefix"
-summary = "`pack::dict::encode_values` with its inlined `common_prefix_len` front coding: eight-byte XOR words, the first difference by a 64-bit trailing-zero count"
-
-  # SWAR, not vector: the word loop exits on a 64-bit trailing-zero count (`bsfq`; hashbrown's group probes, which the count also holds, use 32-bit `bsfl` on a 16-bit mask). The vector ops are hashbrown's. Measured v66.
-  [[site.measure]]
-  label = "swar"
-  configs = ["x86_64"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::pack::dict::encode_values"
-  min_vector_ops = 0
-  require_mnemonics = ["rep bsfq"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # The same exit as `tzcntq`. Measured v58 (x86_64-v3), v24 (x86_64-v4).
-  [[site.measure]]
-  label = "swar"
-  configs = ["x86_64-v3", "x86_64-v4"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::pack::dict::encode_values"
-  min_vector_ops = 0
-  require_mnemonics = ["tzcntq"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # The trailing-zero count as `rbit` + `clz`. Measured v23 (aarch64), v18 (aarch64-neoverse-v1).
-  [[site.measure]]
-  label = "swar"
-  configs = ["aarch64", "aarch64-neoverse-v1"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::pack::dict::encode_values"
-  min_vector_ops = 0
-  require_mnemonics = ["rbit", "clz"]
-  max_fma = 0
-  forbid_relaxed = true
-
-  # The trailing-zero count as `i64.ctz`. Measured v0 (wasm32), v3 (wasm32-simd128).
-  [[site.measure]]
-  label = "swar"
-  configs = ["wasm32", "wasm32-simd128"]
-  crate = "purrdf_core"
-  symbol = "purrdf_core::ir::pack::dict::encode_values"
-  min_vector_ops = 0
-  require_mnemonics = ["i64.ctz"]
-  max_fma = 0
-  forbid_relaxed = true
-
-[[site]]
 id = "core.pack-select-in-word"
 summary = "`pack::bits::select_in_word`, the broadword in-word select: SWAR byte popcounts, a multiply prefix sum, a compare-and-count for the byte, a 256×8 table for the bit"
 
@@ -6272,7 +6224,7 @@ summary = "the decoder's back-reference copy: wide unaligned load/store pairs, p
 
 [[site]]
 id = "deflate.match-length"
-summary = "the encoder's candidate compare: byte-lane equality folded to a mask, trailing zeros of its complement"
+summary = "the workspace's one first-mismatch index: the encoder's candidate compare, byte-lane equality folded to a mask with trailing zeros of its complement, and `common_prefix_len`, eight-byte XOR words with the first difference by a 64-bit trailing-zero count, inlined into the pack dictionary's front coding and the vector paths' tails"
 
   [[site.measure]]
   label = "compare sse2"
@@ -6350,6 +6302,51 @@ summary = "the encoder's candidate compare: byte-lane equality folded to a mask,
   symbol = "purrdf_deflate::arch::wasm32::match_length_simd128"
   min_vector_ops = 1
   require_mnemonics = ["i8x16.eq", "i8x16.bitmask"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # SWAR, not vector: `common_prefix_len`'s word loop, inlined into the out-of-line
+  # portable kernel, exits on a 64-bit trailing-zero count (`bsfq` as `rep bsfq`).
+  [[site.measure]]
+  label = "swar"
+  configs = ["x86_64"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::kernels::match_length_portable"
+  min_vector_ops = 0
+  require_mnemonics = ["rep bsfq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The same exit as `tzcntq`.
+  [[site.measure]]
+  label = "swar"
+  configs = ["x86_64-v3", "x86_64-v4"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::kernels::match_length_portable"
+  min_vector_ops = 0
+  require_mnemonics = ["tzcntq"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The trailing-zero count as `rbit` + `clz`.
+  [[site.measure]]
+  label = "swar"
+  configs = ["aarch64", "aarch64-neoverse-v1"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::kernels::match_length_portable"
+  min_vector_ops = 0
+  require_mnemonics = ["rbit", "clz"]
+  max_fma = 0
+  forbid_relaxed = true
+
+  # The trailing-zero count as `i64.ctz`.
+  [[site.measure]]
+  label = "swar"
+  configs = ["wasm32", "wasm32-simd128"]
+  crate = "purrdf_deflate"
+  symbol = "purrdf_deflate::kernels::match_length_portable"
+  min_vector_ops = 0
+  require_mnemonics = ["i64.ctz"]
   max_fma = 0
   forbid_relaxed = true
 

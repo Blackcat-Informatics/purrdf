@@ -354,7 +354,7 @@ entry_points = ["purrdf_deflate::Deflater", "purrdf_deflate::GzipDecoder", "purr
 spec = "RFC 1951 (DEFLATE) and RFC 1952 (gzip)"
 vectors = []
 bench = ["purrdf-deflate:gzip"]
-sites = ["deflate.match-copy", "deflate.match-length", "deflate.hash-windows"]
+sites = ["deflate.match-copy", "deflate.hash-windows"]
 replaces_external = ["flate2", "miniz_oxide", "adler2", "simd-adler32"]
 enforced = true
 
@@ -362,6 +362,23 @@ enforced = true
 constants = []
 fingerprints = []
 names = []
+
+[[job]]
+id = "match-length"
+summary = "The first-mismatch index: the length of the common prefix of two byte strings, word-parallel inline for short keys and vector-dispatched for the encoder's candidate windows"
+home = "purrdf_deflate::common_prefix_len"
+entry_points = ["purrdf_deflate::backend::Backend::match_length"]
+spec = "the index of the first differing byte of two byte strings, or the shorter length when one is a prefix of the other; the frozen answers in match_length_vectors.txt, replayed by every kernel path"
+vectors = ["crates/deflate/tests/vectors/match_length_vectors.txt"]
+bench = ["purrdf-deflate:gzip", "purrdf-core:pack_query"]
+sites = ["deflate.match-length"]
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:xor-first-mismatch"]
+names = ['^(common_prefix_len|match_length_portable)$']
 
 [[job]]
 id = "csvw-dialect-csv"

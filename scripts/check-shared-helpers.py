@@ -1053,6 +1053,96 @@ def unicode_fixture_cases() -> list[tuple[str, bool]]:
     ]
 
 
+# A seeded workspace for the first-mismatch rule, run through the real census:
+# every line marked POSITIVE must be reported and nothing else. Beside each
+# refusal sits a valid neighbour: an XOR of two loaded words with no zero count
+# (a mix, not a compare), a zero count of one loaded word (a byte-class scan), an
+# XOR of a register with one load (a CRC step), test code, and the word loop
+# inside the home package.
+MISMATCH_FIXTURE_LEDGER = """
+[[job]]
+id = "match-length"
+summary = "s"
+home = "fixture_deflate::common_prefix_len"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:xor-first-mismatch"]
+names = []
+"""
+
+MISMATCH_FIXTURE_FILES = {
+    "crates/deflate/Cargo.toml": '[package]\nname = "fixture-deflate"\n',
+    "crates/deflate/src/lib.rs": (
+        "/// The one first-mismatch index.\n"
+        "pub fn common_prefix_len(a: &[u8; 8], b: &[u8; 8]) -> usize {\n"
+        "    let diff = u64::from_le_bytes(*a) ^ u64::from_le_bytes(*b);\n"
+        "    (diff.trailing_zeros() / 8) as usize\n"
+        "}\n"
+    ),
+    "crates/user/Cargo.toml": '[package]\nname = "fixture-user"\n',
+    "crates/user/src/lib.rs": (
+        "pub fn inline(a: &[u8; 8], b: &[u8; 8]) -> usize {\n"
+        "    let diff = u64::from_le_bytes(*a) ^ u64::from_le_bytes(*b); // POSITIVE\n"
+        "    (diff.trailing_zeros() / u8::BITS) as usize\n"
+        "}\n"
+        "pub fn bound(a: &[u8], b: &[u8]) -> usize {\n"
+        "    let x = u64::from_le_bytes(*a.first_chunk().unwrap());\n"
+        "    let y: u64 = u64::from_ne_bytes(*b.first_chunk().unwrap());\n"
+        "    let diff = x ^ y; // POSITIVE\n"
+        "    diff.trailing_zeros() as usize / 8\n"
+        "}\n"
+        "pub fn mix(a: &[u8; 8], b: &[u8; 8]) -> u64 { u64::from_le_bytes(*a) ^ u64::from_le_bytes(*b) }\n"
+        "pub fn scan(w: &[u8; 8]) -> u32 { (u64::from_le_bytes(*w) & HIGH).trailing_zeros() / 8 }\n"
+        "pub fn crc(r: u32, b: &[u8; 4]) -> u32 { (r ^ u32::from_le_bytes(*b)).trailing_zeros() }\n"
+        "#[cfg(test)]\n"
+        "mod tests { fn oracle(a: &[u8; 8], b: &[u8; 8]) -> u32 { (u64::from_le_bytes(*a) ^ u64::from_le_bytes(*b)).trailing_zeros() } }\n"
+    ),
+    "crates/user/tests/it.rs": "fn oracle(a: &[u8; 8], b: &[u8; 8]) -> u32 { (u64::from_le_bytes(*a) ^ u64::from_le_bytes(*b)).trailing_zeros() }\n",
+}
+
+
+def mismatch_rule_fixture_cases() -> list[tuple[str, bool]]:
+    """Run the census over the seeded first-mismatch workspace and compare its
+    hits with the lines marked POSITIVE."""
+    with tempfile.TemporaryDirectory(prefix="helper-census-mismatch-fixture-") as directory:
+        root = Path(directory)
+        expected: set[tuple[str, int]] = set()
+        for relative, text in MISMATCH_FIXTURE_FILES.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            expected |= {
+                (relative, number)
+                for number, line in enumerate(text.splitlines(), start=1)
+                if line.endswith("// POSITIVE")
+            }
+        (root / "helpers-ledger.toml").write_text(MISMATCH_FIXTURE_LEDGER, encoding="utf-8")
+        try:
+            index = json.loads(run_census("--index", root=root))
+        except (CensusError, json.JSONDecodeError) as exc:
+            return [(f"the census runs over the seeded first-mismatch workspace ({exc})", False)]
+    job = index["jobs"]["match-length"]
+    copies = {(match["file"], match["line"]) for match in job["matches"] if not match["in_home"]}
+    home = [match for match in job["matches"] if match["in_home"]]
+    return [
+        ("every hand-written first-mismatch word loop, in place or through bound loads, is reported", expected <= copies),
+        (
+            "a word mix with no zero count, a one-load byte scan, a CRC step and test code are not",
+            copies <= expected,
+        ),
+        ("the word loop inside the home package is the home's", len(home) == 1),
+        ("each hand-written loop is a copy of the enforced job", job["copies"] == len(expected)),
+    ]
+
+
 def fixture_ledger() -> dict:
     return {
         "job": [
@@ -1313,6 +1403,7 @@ def self_test() -> int:
     cases.extend(lex_rule_fixture_cases())
     cases.extend(layout_rule_fixture_cases())
     cases.extend(unicode_fixture_cases())
+    cases.extend(mismatch_rule_fixture_cases())
 
     failed = 0
     for name, held in cases:
