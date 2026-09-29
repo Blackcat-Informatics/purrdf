@@ -17,6 +17,7 @@ use std::sync::{Arc, OnceLock};
 
 use ::purrdf::RdfLocation;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
+use purrdf_hash::fnv::fnv1a64;
 use purrdf_xsd::ieee::Binary64Scope;
 use serde_json::{Map, Number, Value};
 
@@ -387,7 +388,10 @@ impl<'a> ImportContext<'a> {
     fn nested_shape_id(&mut self, path: &str) -> Term {
         let id = self.nested_shape_counter;
         self.nested_shape_counter += 1;
-        Term::blank(format!("schema-import-{id:08x}-{}", fnv1a(path.as_bytes())))
+        Term::blank(format!(
+            "schema-import-{id:08x}-{}",
+            fnv1a64(path.as_bytes())
+        ))
     }
 }
 
@@ -412,15 +416,6 @@ fn pointer_escape(value: &str) -> Cow<'_, str> {
     } else {
         Cow::Borrowed(value)
     }
-}
-
-fn fnv1a(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    hash
 }
 
 /// An imported property has no source RDF node. Preserve its source shape and
@@ -4319,50 +4314,5 @@ mod tests {
             "{}",
             imported.losses.render_json()
         );
-    }
-}
-
-/// The copy in this module against the frozen differential vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_differential {
-    use super::*;
-
-    /// The frozen FNV-1a differential vectors of `purrdf-hash-conformance`: every
-    /// input's bytes and its three answers (plain, folded from `0x10000001`, and
-    /// with one `0xFF` separator appended).
-    fn frozen_fnv_vectors() -> Vec<(Vec<u8>, [u64; 3])> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/fnv1a64_differential_vectors.txt"
-        )))
-        .expect("the frozen FNV-1a vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let data = if fields[0] == "scalars" {
-                    let (first, last) = fields[1].split_once('-').expect("a scalar range");
-                    let first = u32::from_str_radix(first, 16).expect("a hexadecimal scalar");
-                    let last = u32::from_str_radix(last, 16).expect("a hexadecimal scalar");
-                    (first..=last)
-                        .filter_map(char::from_u32)
-                        .collect::<String>()
-                        .into_bytes()
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let answer =
-                    |index: usize| u64::from_str_radix(fields[index], 16).expect("a hex answer");
-                (data, [answer(2), answer(3), answer(4)])
-            })
-            .collect()
-    }
-
-    #[test]
-    fn fnv1a_reproduces_the_frozen_vectors() {
-        for (data, [plain, _, _]) in frozen_fnv_vectors() {
-            assert_eq!(fnv1a(&data), plain);
-        }
     }
 }

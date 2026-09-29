@@ -41,6 +41,9 @@ roxmltree = { workspace = true }
 purrdf-iri = { workspace = true }
 
 [dev-dependencies]
+# FNV-1a, the fixed digest the governor-corpus and evaluator-trace sweeps pin
+# their partial rows by.
+purrdf-hash = { workspace = true }
 # The libtest-compatible runner the `harness = false` `sparql_conformance` target
 # hands its discovered manifests to.
 purrdf-testkit = { workspace = true }

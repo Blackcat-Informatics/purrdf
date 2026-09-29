@@ -242,9 +242,8 @@ fn round_top64(top: u64, exponent: i32, format: Format) -> u64 {
 mod tests {
     use super::{decimal_to_f32, decimal_to_f64};
 
-    // A deterministic SplitMix64 stream (this zero-dependency crate ships no
-    // RNG; the workspace's shared test-only stream comes in through
-    // `purrdf-testkit`, a dev-dependency).
+    // A deterministic SplitMix64 stream: the workspace's shared test stream,
+    // through `purrdf-testkit` (a dev-dependency).
     use purrdf_testkit::rng::splitmix64_next as splitmix64;
 
     /// The independent oracle: Rust's decimal-to-float parser is correctly

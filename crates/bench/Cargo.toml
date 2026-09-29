@@ -21,10 +21,15 @@ workspace = true
 name = "bench-corpus"
 path = "src/main.rs"
 
+[dependencies]
+# The generator's one dependency: its SplitMix64 stream is
+# `purrdf_hash::mix`, the zero-dependency root every crate may reach.
+# Everything else is pure arithmetic and formatting.
+purrdf-hash = { workspace = true }
+
 [dev-dependencies]
 # Test-only round-trip validation: every generated row must satisfy the
-# project's own strict N-Quads reader. The generator itself has zero
-# dependencies — pure arithmetic and formatting.
+# project's own strict N-Quads reader.
 purrdf-rdf = { workspace = true }
 # Test-only: parse the --manifest JSON contract in the CLI integration tests.
 serde_json = { workspace = true }

@@ -7,13 +7,13 @@
 //! over-aligned, variance, auto-trait and overflow cases.
 
 use std::cell::{Cell, RefCell};
-use std::hash::{Hash, Hasher};
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
 
 use purrdf_testkit::prop::prelude::*;
 
 use super::{Array, IdVec, IntoIter, SmallVec};
+use crate::hash::hash_of;
 
 /// Cases per property; fewer under Miri, whose interpreter is slow.
 const CASES: u32 = if cfg!(miri) { 6 } else { 256 };
@@ -32,12 +32,6 @@ fn op_sequences() -> impl Strategy<Value = Vec<Op>> {
         ),
         0..max_ops,
     )
-}
-
-fn hash_of<T: Hash + ?Sized>(value: &T) -> u64 {
-    let mut hasher = purrdf_hash::fixed::FixedHasher::default();
-    value.hash(&mut hasher);
-    hasher.finish()
 }
 
 /// Every observable property of `sv` agrees with the model.

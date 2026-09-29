@@ -92,7 +92,8 @@ fn the_digest_is_not_vacuous() {
         "an all-zero golden would be satisfied by a digest that folded nothing"
     );
     assert_ne!(
-        GOLDEN_DIGEST, 0xcbf2_9ce4_8422_2325,
+        GOLDEN_DIGEST,
+        purrdf_hash::fnv::BASIS,
         "the golden must differ from FNV-1a's unfolded offset basis"
     );
 }

@@ -47,8 +47,9 @@ update the affected golden files, visibly.
 
 `purrdf-core` must never depend on oxigraph or PyO3 — the whole workspace is
 oxigraph-free, and a hygiene gate asserts the dependency tree. The
-foundation leaves `purrdf-lex`, `purrdf-xsd` and `purrdf-events` keep **zero
-runtime dependencies**, and `purrdf-iri` depends on `purrdf-lex` alone. Diagnostics stay structured and SARIF-free in the
+foundation leaves `purrdf-lex` and `purrdf-events` keep **zero runtime
+dependencies**, `purrdf-iri` depends on `purrdf-lex` alone, and `purrdf-xsd` on
+`purrdf-hash` alone. Diagnostics stay structured and SARIF-free in the
 kernel; the SARIF boundary is the `purrdf-validate` leaf.
 
 ## Everything is wasm-able

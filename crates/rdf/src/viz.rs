@@ -1854,14 +1854,11 @@ fn compact_iri(iri: &str) -> String {
         .to_owned()
 }
 
-/// Compute a deterministic non-cryptographic hash over text.
+/// Compute a deterministic non-cryptographic hash over text: the FNV-1a 64-bit
+/// digest ([`purrdf_hash::fnv::fnv1a64`]) of its UTF-8 bytes, as sixteen
+/// lowercase hexadecimal digits.
 pub fn stable_hash_hex(input: &str) -> String {
-    let mut hash = 0xcbf2_9ce4_8422_2325u64;
-    for byte in input.as_bytes() {
-        hash ^= u64::from(*byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    format!("{:016x}", purrdf_hash::fnv::fnv1a64(input.as_bytes()))
 }
 
 #[cfg(test)]
@@ -2610,52 +2607,5 @@ mod term_walk_tests {
             .expect("the thread starts")
             .join()
             .expect("no walk overflowed the thread's stack");
-    }
-}
-
-/// The copy in this module against the frozen differential vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_differential {
-    use super::*;
-
-    /// The frozen FNV-1a differential vectors of `purrdf-hash-conformance`: every
-    /// input's bytes and its three answers (plain, folded from `0x10000001`, and
-    /// with one `0xFF` separator appended).
-    fn frozen_fnv_vectors() -> Vec<(Vec<u8>, [u64; 3])> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/fnv1a64_differential_vectors.txt"
-        )))
-        .expect("the frozen FNV-1a vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let data = if fields[0] == "scalars" {
-                    let (first, last) = fields[1].split_once('-').expect("a scalar range");
-                    let first = u32::from_str_radix(first, 16).expect("a hexadecimal scalar");
-                    let last = u32::from_str_radix(last, 16).expect("a hexadecimal scalar");
-                    (first..=last)
-                        .filter_map(char::from_u32)
-                        .collect::<String>()
-                        .into_bytes()
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let answer =
-                    |index: usize| u64::from_str_radix(fields[index], 16).expect("a hex answer");
-                (data, [answer(2), answer(3), answer(4)])
-            })
-            .collect()
-    }
-
-    #[test]
-    fn stable_hash_hex_reproduces_the_frozen_vectors() {
-        for (data, [plain, _, _]) in frozen_fnv_vectors() {
-            if let Ok(text) = std::str::from_utf8(&data) {
-                assert_eq!(stable_hash_hex(text), format!("{plain:016x}"));
-            }
-        }
     }
 }

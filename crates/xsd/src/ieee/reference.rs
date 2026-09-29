@@ -787,12 +787,9 @@ pub fn successor_midpoint_decimal(x: f64) -> String {
 struct Draws(u64);
 
 impl Draws {
+    /// The next draw: [`purrdf_hash::mix::splitmix64_next`] over the counter.
     const fn next(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
+        purrdf_hash::mix::splitmix64_next(&mut self.0)
     }
 
     /// A positive finite binary64 with a decimal exponent in `[−300, 300]`.
@@ -942,50 +939,4 @@ pub fn x87_fast_path_decimals(count: usize) -> Vec<String> {
     }
     assert_eq!(found.len(), count, "x87 fast-path decimals found");
     found
-}
-
-/// The copy in this module against the frozen differential vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_differential {
-    use super::*;
-
-    /// The frozen SplitMix64 differential vectors of `purrdf-hash-conformance`
-    /// for `stream`: each seed and its 10,000 draws, in file order.
-    fn frozen_splitmix_vectors(stream: &str) -> Vec<(u64, Vec<u64>)> {
-        let text = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/splitmix64_differential_vectors.txt"
-        ));
-        let mut seeds: Vec<(u64, Vec<u64>)> = Vec::new();
-        for line in text.lines().filter(|line| !line.starts_with('#')) {
-            let fields: Vec<&str> = line.split('\t').collect();
-            if fields[0] != stream {
-                continue;
-            }
-            let seed = u64::from_str_radix(fields[1], 16).expect("a hexadecimal seed");
-            if seeds.last().is_none_or(|(last, _)| *last != seed) {
-                seeds.push((seed, Vec::new()));
-            }
-            let draws = &mut seeds.last_mut().expect("a seed").1;
-            assert_eq!(draws.len().to_string(), fields[2], "records are in order");
-            draws.extend(
-                fields[3..]
-                    .iter()
-                    .map(|draw| u64::from_str_radix(draw, 16).expect("a hexadecimal draw")),
-            );
-        }
-        assert!(seeds.iter().all(|(_, draws)| draws.len() == 10_000));
-        seeds
-    }
-
-    #[test]
-    fn draws_reproduce_the_frozen_next_vectors() {
-        for (seed, frozen) in frozen_splitmix_vectors("next") {
-            let mut draws = Draws(seed);
-            for draw in frozen {
-                assert_eq!(draws.next(), draw);
-            }
-        }
-    }
 }

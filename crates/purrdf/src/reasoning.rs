@@ -2934,14 +2934,8 @@ mod term_walk_tests {
         }
     }
 
-    /// A SplitMix64 draw from the counter at `state`.
-    const fn splitmix64(state: &mut u64) -> u64 {
-        *state = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-        let mut z = *state;
-        z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-        z ^ (z >> 31)
-    }
+    // A SplitMix64 draw from the counter at `state`.
+    use purrdf_testkit::rng::splitmix64_next as splitmix64;
 
     /// A generated owned term of at most `budget` triple terms, its blank nodes drawn
     /// from `w0`, `w1` and `b`.
@@ -3003,46 +2997,5 @@ mod term_walk_tests {
             .expect("the thread starts")
             .join()
             .expect("the search did not overflow the thread's stack");
-    }
-
-    /// The frozen SplitMix64 differential vectors of `purrdf-hash-conformance`
-    /// for `stream`: each seed and its 10,000 draws, in file order.
-    fn frozen_splitmix_vectors(stream: &str) -> Vec<(u64, Vec<u64>)> {
-        let text = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/splitmix64_differential_vectors.txt"
-        ));
-        let mut seeds: Vec<(u64, Vec<u64>)> = Vec::new();
-        for line in text.lines().filter(|line| !line.starts_with('#')) {
-            let fields: Vec<&str> = line.split('\t').collect();
-            if fields[0] != stream {
-                continue;
-            }
-            let seed = u64::from_str_radix(fields[1], 16).expect("a hexadecimal seed");
-            if seeds.last().is_none_or(|(last, _)| *last != seed) {
-                seeds.push((seed, Vec::new()));
-            }
-            let draws = &mut seeds.last_mut().expect("a seed").1;
-            assert_eq!(draws.len().to_string(), fields[2], "records are in order");
-            draws.extend(
-                fields[3..]
-                    .iter()
-                    .map(|draw| u64::from_str_radix(draw, 16).expect("a hexadecimal draw")),
-            );
-        }
-        assert!(seeds.iter().all(|(_, draws)| draws.len() == 10_000));
-        seeds
-    }
-
-    /// The copy above against the frozen differential vectors of
-    /// `purrdf-hash-conformance`.
-    #[test]
-    fn splitmix64_reproduces_the_frozen_next_vectors() {
-        for (seed, draws) in frozen_splitmix_vectors("next") {
-            let mut state = seed;
-            for draw in draws {
-                assert_eq!(splitmix64(&mut state), draw);
-            }
-        }
     }
 }

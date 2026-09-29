@@ -45,6 +45,7 @@ use std::path::{Path, PathBuf};
 
 use purrdf_core::DistanceMetric;
 use purrdf_core::distance::{Arithmetic, Exact, Reassociated};
+use purrdf_hash::fnv::fnv1a64;
 use purrdf_hnsw::level::splitmix64;
 use purrdf_hnsw::{
     HnswIndex, IMPLEMENTATION_ID, IMPLEMENTATION_ID_REASSOCIATED, INDEX_MEDIA_TYPE, Params,
@@ -68,17 +69,6 @@ const SEED: u64 = 0x0c0f_5e2a_9d71_4b83;
 struct Fixture {
     name: &'static str,
     matrix: VectorMatrix,
-}
-
-/// FNV-1a over the canonical payload bytes: fixed constants, no hasher choice to drift.
-const fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    let mut index = 0;
-    while index < bytes.len() {
-        hash = (hash ^ bytes[index] as u64).wrapping_mul(0x0000_0100_0000_01b3);
-        index += 1;
-    }
-    hash
 }
 
 /// A uniform family in `[-1, 1)` from the splitmix64 stream, exact zero displaced.
@@ -396,7 +386,7 @@ fn run_regime_under<A: Arithmetic>(
     }
 
     let recall = hits as f64 / (rows * k) as f64;
-    let digest = fnv1a_64(&index.canonical_image());
+    let digest = fnv1a64(&index.canonical_image());
     let run = json!({
         "fixture": fixture.name,
         "index_identity": {

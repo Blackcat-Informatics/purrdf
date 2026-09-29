@@ -412,15 +412,10 @@ mod tags {
     pub(super) const BLANK: u64 = 0xB1A4_0009;
 }
 
-/// `splitmix64` — the classic public-domain mixing step: deterministic,
-/// allocation-free, and identical on every target.
-#[must_use]
-pub const fn splitmix64(state: u64) -> u64 {
-    let mut z = state.wrapping_add(0x9E37_79B9_7F4A_7C15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xBF58_476D_1CE4_E5B9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94D0_49BB_1331_11EB);
-    z ^ (z >> 31)
-}
+/// `splitmix64` — one self-composed SplitMix64 step,
+/// [`purrdf_hash::mix::splitmix64_step`]: deterministic, allocation-free, and
+/// identical on every target.
+pub use purrdf_hash::mix::splitmix64_step as splitmix64;
 
 /// Mixes the seed with a stream tag and an index into one draw.
 const fn draw(seed: u64, tag: u64, index: u64) -> u64 {
@@ -1583,10 +1578,7 @@ mod tests {
              itself may hold fewer: identical rows deduplicate under set
              semantics)"
         );
-        let mut hash = 0xcbf2_9ce4_8422_2325u64;
-        for byte in text.bytes() {
-            hash = (hash ^ u64::from(byte)).wrapping_mul(0x0000_0100_0000_01B3);
-        }
+        let hash = purrdf_hash::fnv::fnv1a64(text.as_bytes());
         assert_eq!(
             hash, 0xEA2E_E654_BA6F_44D3,
             "byte-level FNV pin moved: {CORPUS_PROFILE_ID} must be bumped"
@@ -2101,52 +2093,5 @@ mod tests {
             "a reserved-octet percent-escape must survive verbatim, not silently decoded; \
              found no such term (example seen: {percent_escape_example:?})"
         );
-    }
-}
-
-/// The copy in this module against the frozen differential vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_differential {
-    use super::*;
-
-    /// The frozen SplitMix64 differential vectors of `purrdf-hash-conformance`
-    /// for `stream`: each seed and its 10,000 draws, in file order.
-    fn frozen_splitmix_vectors(stream: &str) -> Vec<(u64, Vec<u64>)> {
-        let text = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/splitmix64_differential_vectors.txt"
-        ));
-        let mut seeds: Vec<(u64, Vec<u64>)> = Vec::new();
-        for line in text.lines().filter(|line| !line.starts_with('#')) {
-            let fields: Vec<&str> = line.split('\t').collect();
-            if fields[0] != stream {
-                continue;
-            }
-            let seed = u64::from_str_radix(fields[1], 16).expect("a hexadecimal seed");
-            if seeds.last().is_none_or(|(last, _)| *last != seed) {
-                seeds.push((seed, Vec::new()));
-            }
-            let draws = &mut seeds.last_mut().expect("a seed").1;
-            assert_eq!(draws.len().to_string(), fields[2], "records are in order");
-            draws.extend(
-                fields[3..]
-                    .iter()
-                    .map(|draw| u64::from_str_radix(draw, 16).expect("a hexadecimal draw")),
-            );
-        }
-        assert!(seeds.iter().all(|(_, draws)| draws.len() == 10_000));
-        seeds
-    }
-
-    #[test]
-    fn splitmix64_reproduces_the_frozen_step_vectors() {
-        for (seed, draws) in frozen_splitmix_vectors("step") {
-            let mut state = seed;
-            for draw in draws {
-                state = splitmix64(state);
-                assert_eq!(state, draw);
-            }
-        }
     }
 }

@@ -33,21 +33,16 @@
 //! unbounded layer; the index identity stays exactly `M`, `M0`, `ef_construction`,
 //! `ef_search`.
 
-/// The SplitMix64 finalizer: a bijective integer mix with no state and no entropy.
+/// The level hash: one self-composed SplitMix64 step,
+/// [`purrdf_hash::mix::splitmix64_step`], a bijective integer mix with no state and
+/// no entropy.
 ///
-/// This is `seed` mapped directly through the finalizer (the reference implementation's
-/// `next()` with its counter folded in), not SplitMix64's stateful generator — a level is
-/// a pure function of the row index, so there is no generator state to advance.
-///
-/// The constants are the published SplitMix64 constants; the shifts and multiplies are
-/// wrapping so the function is total over `u64`.
-#[must_use]
-pub const fn splitmix64(seed: u64) -> u64 {
-    let mut z = seed.wrapping_add(0x9e37_79b9_7f4a_7c15);
-    z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-    z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-    z ^ (z >> 31)
-}
+/// It is `seed` plus the golden-ratio increment mapped through the finalizer (the
+/// reference implementation's `next()` with its counter folded in), not SplitMix64's
+/// stateful generator: a level is a pure function of the row index, so there is no
+/// generator state to advance. Wrapping arithmetic only, so it is total over `u64`
+/// and the same on every target.
+pub use purrdf_hash::mix::splitmix64_step as splitmix64;
 
 /// Bits of hash consumed per level: the largest `k` with `2^k <= m`, i.e.
 /// `floor(log2(m))`.
@@ -118,26 +113,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn splitmix64_matches_known_answers() {
-        // Published SplitMix64 finalizer outputs; pinned by bits so a drift is a failure
-        // rather than an approximation.
-        assert_eq!(splitmix64(0), 0xe220_a839_7b1d_cdaf);
-        assert_eq!(splitmix64(1), 0x910a_2dec_8902_5cc1);
-        assert_eq!(splitmix64(2), 0x9758_35de_1c97_56ce);
-        assert_eq!(splitmix64(3), 0x1d0b_14e4_db01_8fed);
-    }
-
-    #[test]
-    fn splitmix64_is_a_bijection_onto_a_large_prefix() {
-        // Distinct inputs must give distinct outputs over a prefix for the level mapping
-        // to be meaningful at all.
-        let mut seen = purrdf_core::FastSet::default();
-        for i in 0..4096_u64 {
-            assert!(seen.insert(splitmix64(i)), "collision at {i}");
-        }
-    }
-
-    #[test]
     fn bits_per_level_is_floor_log2() {
         assert_eq!(bits_per_level(2), 1);
         assert_eq!(bits_per_level(3), 1);
@@ -199,52 +174,5 @@ mod tests {
     #[should_panic(expected = "m >= 2")]
     fn level_cap_rejects_m_below_two_in_debug() {
         let _ = level_cap(10, 1);
-    }
-}
-
-/// The copy in this module against the frozen differential vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_differential {
-    use super::*;
-
-    /// The frozen SplitMix64 differential vectors of `purrdf-hash-conformance`
-    /// for `stream`: each seed and its 10,000 draws, in file order.
-    fn frozen_splitmix_vectors(stream: &str) -> Vec<(u64, Vec<u64>)> {
-        let text = include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/splitmix64_differential_vectors.txt"
-        ));
-        let mut seeds: Vec<(u64, Vec<u64>)> = Vec::new();
-        for line in text.lines().filter(|line| !line.starts_with('#')) {
-            let fields: Vec<&str> = line.split('\t').collect();
-            if fields[0] != stream {
-                continue;
-            }
-            let seed = u64::from_str_radix(fields[1], 16).expect("a hexadecimal seed");
-            if seeds.last().is_none_or(|(last, _)| *last != seed) {
-                seeds.push((seed, Vec::new()));
-            }
-            let draws = &mut seeds.last_mut().expect("a seed").1;
-            assert_eq!(draws.len().to_string(), fields[2], "records are in order");
-            draws.extend(
-                fields[3..]
-                    .iter()
-                    .map(|draw| u64::from_str_radix(draw, 16).expect("a hexadecimal draw")),
-            );
-        }
-        assert!(seeds.iter().all(|(_, draws)| draws.len() == 10_000));
-        seeds
-    }
-
-    #[test]
-    fn splitmix64_reproduces_the_frozen_step_vectors() {
-        for (seed, draws) in frozen_splitmix_vectors("step") {
-            let mut state = seed;
-            for draw in draws {
-                state = splitmix64(state);
-                assert_eq!(state, draw);
-            }
-        }
     }
 }

@@ -25,6 +25,8 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
+use purrdf_hash::fnv;
+
 use crate::iri_escape::is_iriref_escape_required;
 use crate::model::RdfTextDirection;
 use crate::{FastMap, RdfDataset, TermId, TermRef};
@@ -686,7 +688,7 @@ fn blank_signatures(
                             ground(obj.id)
                         };
                         // Commutative fold across statements.
-                        acc ^= pg.wrapping_mul(0x100_0000_01b3) ^ og.rotate_left(17);
+                        acc ^= pg.wrapping_mul(fnv::PRIME) ^ og.rotate_left(17);
                     }
                 }
             }
@@ -697,14 +699,6 @@ fn blank_signatures(
     sig
 }
 
-fn fnv(mut hash: u64, bytes: &[u8]) -> u64 {
-    for &b in bytes {
-        hash ^= u64::from(b);
-        hash = hash.wrapping_mul(0x100_0000_01b3);
-    }
-    hash
-}
-
 /// A grounded content hash for the blank-signature fold: IRIs/literals by their
 /// lexical content, an RDF-1.2 quoted triple by its `(s, p, o)` content (so reifier
 /// blanks that reify DIFFERENT statements get distinct signatures — without this they
@@ -712,13 +706,13 @@ fn fnv(mut hash: u64, bytes: &[u8]) -> u64 {
 /// own signature carries it). Depth-capped against pathological nested triple terms.
 fn ground_sig(dataset: &RdfDataset, id: TermId, depth: usize) -> u64 {
     match dataset.resolve(id) {
-        TermRef::Iri(iri) => fnv(0xcbf2_9ce4_8422_2325, iri.as_bytes()),
-        TermRef::Literal { lexical, .. } => fnv(0x1000_0001, lexical.as_bytes()),
+        TermRef::Iri(iri) => fnv::fnv1a64(iri.as_bytes()),
+        TermRef::Literal { lexical, .. } => fnv::fold(0x1000_0001, lexical.as_bytes()),
         TermRef::Triple { s, p, o } if depth < 8 => {
             let s = ground_sig(dataset, s, depth + 1);
             let p = ground_sig(dataset, p, depth + 1);
             let o = ground_sig(dataset, o, depth + 1);
-            0x3000_0001u64 ^ s.wrapping_mul(0x100_0000_01b3) ^ p.rotate_left(11) ^ o.rotate_left(23)
+            0x3000_0001u64 ^ s.wrapping_mul(fnv::PRIME) ^ p.rotate_left(11) ^ o.rotate_left(23)
         }
         _ => 0, // blank, or a triple deeper than the cap: carried by its own signature
     }
@@ -910,51 +904,5 @@ mod tests {
         );
         assert!(out.contains('\n'), "{out}");
         assert!(out.contains("\\u0000"), "{out}");
-    }
-}
-
-/// The copy in this module against the frozen differential vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_differential {
-    use super::*;
-
-    /// The frozen FNV-1a differential vectors of `purrdf-hash-conformance`: every
-    /// input's bytes and its three answers (plain, folded from `0x10000001`, and
-    /// with one `0xFF` separator appended).
-    fn frozen_fnv_vectors() -> Vec<(Vec<u8>, [u64; 3])> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/fnv1a64_differential_vectors.txt"
-        )))
-        .expect("the frozen FNV-1a vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let data = if fields[0] == "scalars" {
-                    let (first, last) = fields[1].split_once('-').expect("a scalar range");
-                    let first = u32::from_str_radix(first, 16).expect("a hexadecimal scalar");
-                    let last = u32::from_str_radix(last, 16).expect("a hexadecimal scalar");
-                    (first..=last)
-                        .filter_map(char::from_u32)
-                        .collect::<String>()
-                        .into_bytes()
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let answer =
-                    |index: usize| u64::from_str_radix(fields[index], 16).expect("a hex answer");
-                (data, [answer(2), answer(3), answer(4)])
-            })
-            .collect()
-    }
-
-    #[test]
-    fn fnv_reproduces_the_frozen_vectors() {
-        for (data, [plain, seeded, _]) in frozen_fnv_vectors() {
-            assert_eq!(fnv(0xcbf2_9ce4_8422_2325, &data), plain);
-            assert_eq!(fnv(0x1000_0001, &data), seeded);
-        }
     }
 }

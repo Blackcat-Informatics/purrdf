@@ -44,7 +44,7 @@ deps = []
 
 [[crate]]
 name = "purrdf-bench"
-deps = []
+deps = ["purrdf-hash"]
 
 [[crate]]
 name = "purrdf-hash"
@@ -99,7 +99,7 @@ external = ["regex-syntax", "sha2", "wasm-bindgen"]
 name = "purrdf-xsd"
 deps = [
     { name = "purrdf-lex", pending = true },
-    { name = "purrdf-hash", pending = true },
+    "purrdf-hash",
 ]
 external = []
 

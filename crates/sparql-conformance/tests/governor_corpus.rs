@@ -2954,14 +2954,9 @@ fn fuel_sweep_points(total: u64) -> Vec<u64> {
     points.into_iter().collect()
 }
 
-/// FNV-1a, 64-bit: a fixed, dependency-free digest for a sweep point's rows.
+/// FNV-1a, 64-bit ([`purrdf_hash::fnv`]): a fixed digest for a sweep point's rows.
 fn fnv1a(text: &str) -> String {
-    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
-    for byte in text.bytes() {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
-    }
-    format!("{hash:016x}")
+    format!("{:016x}", purrdf_hash::fnv::fnv1a64(text.as_bytes()))
 }
 
 /// The per-node ledger of `case`'s metered explanation, wired to the same seam

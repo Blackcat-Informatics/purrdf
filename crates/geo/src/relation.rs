@@ -70,7 +70,7 @@ use core::convert::Infallible;
 use core::ops::ControlFlow;
 use core::slice;
 use purrdf_core::TermBox;
-use purrdf_hash::Domain;
+use purrdf_hash::{Domain, fnv};
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
@@ -103,10 +103,6 @@ const REWRITE_ARITY: PfArity = PfArity::new(1, 1);
 // Digest
 // ---------------------------------------------------------------------------
 
-/// FNV-1a's 64-bit offset basis.
-const FNV_OFFSET_BASIS: u64 = 0xcbf2_9ce4_8422_2325;
-/// FNV-1a's 64-bit prime.
-const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// The domain-separation prefix of the index source digest.
 const DIGEST_DOMAIN: Domain = Domain::new(b"purrdf-geo/index-source/v1");
 
@@ -130,7 +126,7 @@ const ABSENT: u8 = 0x20;
 /// Digest presence byte for a present optional field.
 const PRESENT: u8 = 0x21;
 
-/// A hand-rolled FNV-1a accumulator.
+/// An FNV-1a accumulator over [`purrdf_hash::fnv`].
 ///
 /// FNV-1a rather than `std::hash::DefaultHasher` or the workspace's `FixedHasher`
 /// because a fingerprint is compared against one computed by a *different run* of
@@ -138,9 +134,9 @@ const PRESENT: u8 = 0x21;
 /// releases, and `FixedHasher` computes a different function on a build whose
 /// target enables AES than on one that does not. Either would make
 /// [`verify_binding`] answer "different dataset" for a dataset that is in fact
-/// identical, the moment a toolchain moved. FNV-1a is a few lines of fully
-/// specified integer arithmetic, so the fingerprint is a pure function of the
-/// bytes fed to it on every target and every release.
+/// identical, the moment a toolchain moved. FNV-1a is fully specified integer
+/// arithmetic, pinned by its reference test values, so the fingerprint is a pure
+/// function of the bytes fed to it on every target and every release.
 ///
 /// Every variable-length field is written **length-prefixed**, so no two distinct
 /// field sequences can produce the same byte stream by concatenation.
@@ -153,19 +149,14 @@ struct Digest {
 impl Digest {
     /// A fresh accumulator, domain-separated.
     fn new() -> Self {
-        let mut digest = Self {
-            state: FNV_OFFSET_BASIS,
-        };
+        let mut digest = Self { state: fnv::BASIS };
         digest.field(DIGEST_DOMAIN.as_str());
         digest
     }
 
     /// Absorb raw bytes.
     fn bytes(&mut self, bytes: &[u8]) {
-        for &byte in bytes {
-            self.state ^= u64::from(byte);
-            self.state = self.state.wrapping_mul(FNV_PRIME);
-        }
+        self.state = fnv::fold(self.state, bytes);
     }
 
     /// Absorb a one-byte tag.
@@ -604,7 +595,7 @@ impl GeoIndex {
 
     /// A digest of the source data this index was built from.
     ///
-    /// A hand-rolled FNV-1a over the configuration, the sorted entries (each
+    /// FNV-1a ([`purrdf_hash::fnv`]) over the configuration, the sorted entries (each
     /// subject and each of its geometries in canonical WKT), and the sorted
     /// asserted pairs. FNV-1a rather than a hasher whose output is a function of
     /// its own version, because the value is compared against one computed by a
@@ -2943,56 +2934,5 @@ mod term_walk_tests {
             .expect("the thread starts")
             .join()
             .expect("the digest did not overflow the thread's stack");
-    }
-}
-
-/// The copy in this module against the frozen differential vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_differential {
-    use super::*;
-
-    /// The frozen FNV-1a differential vectors of `purrdf-hash-conformance`: every
-    /// input's bytes and its three answers (plain, folded from `0x10000001`, and
-    /// with one `0xFF` separator appended).
-    fn frozen_fnv_vectors() -> Vec<(Vec<u8>, [u64; 3])> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/fnv1a64_differential_vectors.txt"
-        )))
-        .expect("the frozen FNV-1a vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let data = if fields[0] == "scalars" {
-                    let (first, last) = fields[1].split_once('-').expect("a scalar range");
-                    let first = u32::from_str_radix(first, 16).expect("a hexadecimal scalar");
-                    let last = u32::from_str_radix(last, 16).expect("a hexadecimal scalar");
-                    (first..=last)
-                        .filter_map(char::from_u32)
-                        .collect::<String>()
-                        .into_bytes()
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let answer =
-                    |index: usize| u64::from_str_radix(fields[index], 16).expect("a hex answer");
-                (data, [answer(2), answer(3), answer(4)])
-            })
-            .collect()
-    }
-
-    #[test]
-    fn digest_bytes_reproduces_the_frozen_vectors() {
-        for (data, [plain, _, separated]) in frozen_fnv_vectors() {
-            let mut digest = Digest {
-                state: FNV_OFFSET_BASIS,
-            };
-            digest.bytes(&data);
-            assert_eq!(digest.state, plain);
-            digest.bytes(&[0xFF]);
-            assert_eq!(digest.state, separated);
-        }
     }
 }

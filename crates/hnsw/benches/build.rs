@@ -51,7 +51,7 @@
 //! index, with the exact binary64 expression the crate's own digest corpus uses. No
 //! random-number crate, no clock and no entropy source is consulted, so the same scale
 //! measures the same vectors on every run and every host. The reported `graph` column is
-//! an FNV-1a fold of the canonical payload image, which proves each scale built a real,
+//! the FNV-1a digest ([`purrdf_hash::fnv`]) of the canonical payload image, which proves each scale built a real,
 //! non-empty graph rather than timing an allocation.
 
 #![allow(missing_docs)]
@@ -65,6 +65,7 @@ use purrdf_core::DistanceMetric;
 mod corpus;
 
 use corpus::CorpusShape;
+use purrdf_hash::fnv::fnv1a64;
 use purrdf_hnsw::{HnswIndex, Params, VectorMatrix};
 
 /// The index identity every scale is built under.
@@ -80,21 +81,6 @@ const EF_SEARCH: usize = 64;
 
 /// The seed of the fixture stream.
 const SEED: u64 = 0x484e_5357_5f42_5549;
-
-/// FNV-1a over the canonical payload bytes: six lines, fixed constants, no state.
-///
-/// The same doctrine as `purrdf_hnsw::determinism` and `purrdf_geo::determinism`: the
-/// digest must be a function of the bytes and nothing else, so it is hand-rolled rather
-/// than a `DefaultHasher` or `FixedHasher` whose value is a property of the build.
-const fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    let mut index = 0;
-    while index < bytes.len() {
-        hash = (hash ^ bytes[index] as u64).wrapping_mul(0x0000_0100_0000_01b3);
-        index += 1;
-    }
-    hash
-}
 
 fn main() {
     let params = Params::new(M, M0, EF_CONSTRUCTION, EF_SEARCH)
@@ -178,7 +164,7 @@ fn report(
     build: std::time::Duration,
     image: &[u8],
 ) {
-    let digest = fnv1a_64(black_box(image));
+    let digest = fnv1a64(black_box(image));
     println!(
         "{scale:>10}  {dims:>6}  {:>12.3}  {arithmetic:>22}  {:>12.3}  {:>10.1}  {:>16}",
         generate.as_secs_f64(),

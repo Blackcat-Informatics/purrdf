@@ -12,14 +12,16 @@
 //! fixed corpus through the full build path, serializes the canonical payload image, and
 //! folds the bytes into one `u64`.
 //!
-//! # Why the digest is hand-rolled FNV-1a
+//! # Why the digest is FNV-1a
 //!
 //! The digest must be a function of the bytes and **nothing else**. `DefaultHasher` is
 //! SipHash with an unspecified per-process key, and the table hasher `FixedHasher` is a
-//! different function on a build with AES than on one without; either would make the digest move for reasons that have nothing to do with
-//! the graph, which is the exact false signal this harness exists to remove. FNV-1a is
-//! six lines of integer arithmetic with published constants, so a golden that moves is a
-//! serialization defect and never a hasher change.
+//! different function on a build with AES than on one without; either would make the
+//! digest move for reasons that have nothing to do with the graph, which is the exact
+//! false signal this harness exists to remove. The digest is [`purrdf_hash::fnv`]:
+//! FNV-1a 64-bit, integer arithmetic with published constants, pinned by that module's
+//! reference test values, so a golden that moves is a serialization defect and never a
+//! hasher change.
 //!
 //! The corpus is generated from a seeded splitmix64 integer stream rather than committed
 //! as a multi-hundred-megabyte binary: 5,000 rows at 4,096 dimensions. This is the
@@ -36,6 +38,7 @@
 //! for the first time, so there is no external target to reproduce.
 
 use purrdf_core::distance::Exact;
+use purrdf_hash::fnv::fnv1a64;
 use purrdf_sparql_eval::knn::Kernel;
 
 use crate::graph::VectorMatrix;
@@ -95,7 +98,7 @@ pub fn digest_with_batch(batch: Option<usize>) -> u64 {
         Compiled::<Exact>::here(),
     )
     .expect("the digest corpus is valid and builds");
-    fnv1a_64(&index.canonical_image())
+    fnv1a64(&index.canonical_image())
 }
 
 /// The number of corpus members the digest folds, so the harness can prove the digest is
@@ -130,60 +133,4 @@ pub fn corpus() -> VectorMatrix {
         data.push(if value == 0.0 { 0.25 } else { value });
     }
     VectorMatrix::new(CORPUS_ROWS, CORPUS_DIMS, data).expect("the corpus shape is valid")
-}
-
-/// FNV-1a over the canonical payload bytes: six lines, published constants, no state.
-const fn fnv1a_64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    let mut index = 0;
-    while index < bytes.len() {
-        hash = (hash ^ bytes[index] as u64).wrapping_mul(0x0000_0100_0000_01b3);
-        index += 1;
-    }
-    hash
-}
-
-/// The copy in this module against the frozen differential vectors of
-/// `purrdf-hash-conformance`.
-#[cfg(test)]
-mod frozen_differential {
-    use super::*;
-
-    /// The frozen FNV-1a differential vectors of `purrdf-hash-conformance`: every
-    /// input's bytes and its three answers (plain, folded from `0x10000001`, and
-    /// with one `0xFF` separator appended).
-    fn frozen_fnv_vectors() -> Vec<(Vec<u8>, [u64; 3])> {
-        let file = purrdf_testkit::vectors::VectorFile::parse(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../hash-conformance/tests/vectors/fnv1a64_differential_vectors.txt"
-        )))
-        .expect("the frozen FNV-1a vectors parse");
-        file.records()
-            .iter()
-            .map(|record| {
-                let fields = &record.fields;
-                let data = if fields[0] == "scalars" {
-                    let (first, last) = fields[1].split_once('-').expect("a scalar range");
-                    let first = u32::from_str_radix(first, 16).expect("a hexadecimal scalar");
-                    let last = u32::from_str_radix(last, 16).expect("a hexadecimal scalar");
-                    (first..=last)
-                        .filter_map(char::from_u32)
-                        .collect::<String>()
-                        .into_bytes()
-                } else {
-                    purrdf_testkit::vectors::decode_bytes(fields[1]).expect("an encoded input")
-                };
-                let answer =
-                    |index: usize| u64::from_str_radix(fields[index], 16).expect("a hex answer");
-                (data, [answer(2), answer(3), answer(4)])
-            })
-            .collect()
-    }
-
-    #[test]
-    fn fnv1a_64_reproduces_the_frozen_vectors() {
-        for (data, [plain, _, _]) in frozen_fnv_vectors() {
-            assert_eq!(fnv1a_64(&data), plain);
-        }
-    }
 }

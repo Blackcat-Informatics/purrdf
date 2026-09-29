@@ -714,9 +714,8 @@ mod tests {
     }
 
     // A deterministic SplitMix64 counter stream for the float-conversion
-    // tests — this zero-dependency crate ships no RNG; the workspace's
-    // shared test-only stream comes in through `purrdf-testkit`, a
-    // dev-dependency.
+    // tests: the workspace's shared test stream, through `purrdf-testkit` (a
+    // dev-dependency).
     use purrdf_testkit::rng::splitmix64_next as splitmix64;
 
     /// The exact `BigInt` `Σ words[i] × 2^(64 i)`, negated when `negative`.
