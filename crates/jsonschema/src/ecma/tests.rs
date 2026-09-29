@@ -5,9 +5,17 @@ use super::*;
 
 #[test]
 fn deeply_nested_groups_fail_as_a_resource_error() {
-    let at_limit = format!("{}x{}", "(".repeat(250), ")".repeat(250));
+    let at_limit = format!(
+        "{}x{}",
+        "(".repeat(MAX_GROUP_NESTING),
+        ")".repeat(MAX_GROUP_NESTING)
+    );
     assert!(compile(&at_limit).is_ok());
-    let over_limit = format!("{}x{}", "(".repeat(251), ")".repeat(251));
+    let over_limit = format!(
+        "{}x{}",
+        "(".repeat(MAX_GROUP_NESTING + 1),
+        ")".repeat(MAX_GROUP_NESTING + 1)
+    );
     assert!(matches!(
         parse(&over_limit),
         Err(PatternError::Resource { .. })
@@ -22,6 +30,25 @@ fn deeply_nested_groups_fail_as_a_resource_error() {
     ));
     assert!(matches!(
         compile("a{4294967296}"),
+        Err(PatternError::Resource { .. })
+    ));
+}
+
+#[test]
+fn groups_nested_to_the_limit_translate_whatever_lies_between_them() {
+    // Each level wraps its group in a repetition, an alternation and a
+    // sequence, so the expression is several times deeper than its groups.
+    let mut pattern = "x".to_owned();
+    for _ in 0..MAX_GROUP_NESTING {
+        pattern = format!("(?:a|{pattern}b)*");
+    }
+    translate(&pattern).expect("group nesting at the limit translates");
+    let compiled = compile(&pattern).expect("group nesting at the limit compiles");
+    let mut limits = MatchLimits::default();
+    assert_eq!(compiled.is_match("xbbb", &mut limits), Ok(true));
+    let deeper = format!("(?:a|{pattern}b)*");
+    assert!(matches!(
+        compile(&deeper),
         Err(PatternError::Resource { .. })
     ));
 }

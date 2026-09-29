@@ -252,6 +252,16 @@ fn syntax<T>(offset: usize, message: impl Into<String>) -> Result<T, PatternErro
 }
 
 /// Parse `pattern` as an ECMA-262 `Pattern[+UnicodeMode, +NamedCaptureGroups]`.
+/// How deeply groups — capturing, non-capturing, lookaround and modifier
+/// groups alike — may nest in one pattern.
+///
+/// The parser descends once per group and every later pass over the parsed
+/// expression follows the same shape, so the bound keeps the thread's stack
+/// safe on every target, a wasm32 host's included. A pattern nested deeper is
+/// valid ECMA-262 and is refused with [`PatternError::Resource`], never
+/// reported as a syntax error.
+pub const MAX_GROUP_NESTING: usize = 250;
+
 pub(crate) fn parse(pattern: &str) -> Result<Ast, PatternError> {
     let chars: Vec<char> = pattern.chars().collect();
     let census = census(&chars);
@@ -544,10 +554,10 @@ impl Parser {
     }
 
     fn group_body(&mut self, start: usize) -> Result<Ast, PatternError> {
-        if self.depth >= 250 {
+        if self.depth >= MAX_GROUP_NESTING {
             return Err(PatternError::Resource {
                 offset: start,
-                message: "group nesting exceeds 250".to_owned(),
+                message: format!("group nesting exceeds {MAX_GROUP_NESTING}"),
             });
         }
         self.depth += 1;
