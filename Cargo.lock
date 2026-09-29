@@ -627,6 +627,7 @@ dependencies = [
  "hashbrown",
  "purrdf-alloc-probe",
  "purrdf-cdt",
+ "purrdf-deflate",
  "purrdf-events",
  "purrdf-hash",
  "purrdf-iri",

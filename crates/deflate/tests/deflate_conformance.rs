@@ -14,8 +14,8 @@ use std::io::{Read, Write};
 
 use purrdf_deflate::backend::Backend;
 use purrdf_deflate::{
-    Deflater, Error, GzipDecoder, GzipReader, GzipWriter, Inflater, Level, Status, deflate, gzip,
-    inflate,
+    Deflater, Error, GzipDecoder, GzipReader, GzipWriter, Inflater, Level, Status,
+    common_prefix_len, deflate, gzip, inflate,
 };
 use purrdf_hash::Backend as _;
 use purrdf_hash::crc32::Crc32;
@@ -1253,6 +1253,237 @@ fn match_length_kernels_match_portable() {
     }
 }
 
+// --- The first-mismatch index: frozen vectors --------------------------------
+
+/// The frozen answers of the common-prefix length: the index of the first
+/// differing byte of two byte strings, or the shorter length when one is a
+/// prefix of the other.
+const MATCH_LENGTH_VECTORS: &str = include_str!("vectors/match_length_vectors.txt");
+
+/// The `split` base: forty bytes with no two neighbours alike.
+fn split_base() -> Vec<u8> {
+    (0..40_u8)
+        .map(|i| i.wrapping_mul(37).wrapping_add(11))
+        .collect()
+}
+
+/// The first `len` bytes of the little-endian SplitMix64 `next` stream from
+/// the seed `len`.
+fn stream_bytes(len: usize) -> Vec<u8> {
+    let mut state = len as u64;
+    let mut out = Vec::with_capacity(len + 8);
+    while out.len() < len {
+        out.extend_from_slice(&purrdf_hash::mix::splitmix64_next(&mut state).to_le_bytes());
+    }
+    out.truncate(len);
+    out
+}
+
+/// The mismatch positions of a `window` of `len` bytes: the start, a third,
+/// the middle, the last byte and none, without repeats.
+fn window_mismatches(len: usize) -> Vec<usize> {
+    let mut at = vec![0, len / 3, len / 2, len.saturating_sub(1), len];
+    at.dedup();
+    at.sort_unstable();
+    at.dedup();
+    at
+}
+
+/// The two byte strings an input stands for. `split` `LEN:SPLIT:BIT` is the
+/// first `LEN` bytes of [`split_base`] against the same bytes with bit `BIT`
+/// of byte `SPLIT` flipped (none flipped when `SPLIT = LEN`); `prefix`
+/// `LEN:SPLIT` is the first `SPLIT` of those bytes against all `LEN`;
+/// `window` `LEN:AT` is the output of [`stream_bytes`] for `LEN` against the
+/// same bytes with bit `AT % 8` of byte `AT` flipped (none when `AT = LEN`);
+/// `alphabet` `SEED` is
+/// two strings over the bytes 0, 1 and 2 drawn from the SplitMix64 `next`
+/// stream from the seed `SEED`: the first length (`next % 49`), its bytes
+/// (`next % 3` each), then the second length and its bytes.
+fn match_length_input(kind: &str, spec: &str) -> (Vec<u8>, Vec<u8>) {
+    let numbers: Vec<usize> = spec
+        .split(':')
+        .map(|n| n.parse().expect("a decimal field"))
+        .collect();
+    match (kind, numbers.as_slice()) {
+        ("split", &[len, split, bit]) => {
+            let a = split_base()[..len].to_vec();
+            let mut b = a.clone();
+            if split < len {
+                b[split] ^= 1 << bit;
+            }
+            (a, b)
+        }
+        ("prefix", &[len, split]) => {
+            let a = split_base()[..len].to_vec();
+            (a[..split].to_vec(), a)
+        }
+        ("window", &[len, at]) => {
+            let a = stream_bytes(len);
+            let mut b = a.clone();
+            if at < len {
+                b[at] ^= 1 << (at % 8);
+            }
+            (a, b)
+        }
+        ("alphabet", &[seed]) => {
+            let mut state = seed as u64;
+            let mut draw =
+                |modulus: u64| (purrdf_hash::mix::splitmix64_next(&mut state) % modulus) as usize;
+            let mut string = || {
+                let len = draw(49);
+                (0..len).map(|_| draw(3) as u8).collect::<Vec<u8>>()
+            };
+            let a = string();
+            (a, string())
+        }
+        _ => panic!("unknown match-length input {kind} {spec}"),
+    }
+}
+
+/// Every input, in file order: its kind and its spec.
+fn match_length_inputs() -> Vec<(&'static str, String)> {
+    let mut inputs = Vec::new();
+    for len in 0..=40usize {
+        for split in 0..=len {
+            for bit in 0..8 {
+                inputs.push(("split", format!("{len}:{split}:{bit}")));
+            }
+        }
+    }
+    for len in 0..=40usize {
+        for split in 0..=len {
+            inputs.push(("prefix", format!("{len}:{split}")));
+        }
+    }
+    for len in 0..=258usize {
+        for at in window_mismatches(len) {
+            inputs.push(("window", format!("{len}:{at}")));
+        }
+    }
+    for seed in 0..512 {
+        inputs.push(("alphabet", seed.to_string()));
+    }
+    inputs
+}
+
+/// The common prefix by definition, one byte at a time: the oracle.
+fn common_prefix_bytewise(a: &[u8], b: &[u8]) -> usize {
+    a.iter().zip(b).take_while(|(x, y)| x == y).count()
+}
+
+/// The answers for one input under `prefix`: `a` against `b`, then `b`
+/// against `a`.
+fn match_length_answers(a: &[u8], b: &[u8], prefix: impl Fn(&[u8], &[u8]) -> usize) -> Vec<String> {
+    vec![prefix(a, b).to_string(), prefix(b, a).to_string()]
+}
+
+/// The file is the bytewise definition over every input, in order.
+fn match_length_vectors_are_the_definition() {
+    let file = purrdf_testkit::vectors::VectorFile::parse(MATCH_LENGTH_VECTORS)
+        .unwrap_or_else(|error| panic!("match_length: {error}"));
+    let replayed = file
+        .replay(2, |fields| {
+            let (a, b) = match_length_input(fields[0], fields[1]);
+            match_length_answers(&a, &b, common_prefix_bytewise)
+        })
+        .unwrap_or_else(|mismatch| panic!("match_length: {mismatch}"));
+    let expected = match_length_inputs();
+    assert_eq!(replayed, expected.len(), "every input replayed");
+    for (record, (kind, spec)) in file.records().iter().zip(&expected) {
+        assert_eq!((record.fields[0], record.fields[1]), (*kind, spec.as_str()));
+    }
+}
+
+/// [`common_prefix_len`], inlined into its caller with no dispatch, and every
+/// available kernel path reproduce the frozen answers: every split point and
+/// bit of every length to 40 in both orders, every strict prefix, the
+/// encoder's windows to 258 bytes, and random strings over a small alphabet.
+fn match_length_paths_reproduce_the_vectors() {
+    let file = purrdf_testkit::vectors::VectorFile::parse(MATCH_LENGTH_VECTORS)
+        .unwrap_or_else(|error| panic!("match_length: {error}"));
+    let replayed = file
+        .replay(2, |fields| {
+            let (a, b) = match_length_input(fields[0], fields[1]);
+            match_length_answers(&a, &b, common_prefix_len)
+        })
+        .unwrap_or_else(|mismatch| panic!("common_prefix_len: {mismatch}"));
+    assert_eq!(replayed, match_length_inputs().len());
+    for backend in Backend::all_available() {
+        let replayed = file
+            .replay(2, |fields| {
+                let (a, b) = match_length_input(fields[0], fields[1]);
+                match_length_answers(&a, &b, |x, y| {
+                    backend.match_length(x, y).expect("available")
+                })
+            })
+            .unwrap_or_else(|mismatch| panic!("match_length {}: {mismatch}", backend.name()));
+        assert_eq!(replayed, match_length_inputs().len());
+    }
+}
+
+/// Writes the vector file instead of replaying it, when asked to.
+#[cfg(not(target_arch = "wasm32"))]
+fn record_match_length_vectors_when_asked() {
+    if std::env::var_os("PURRDF_RECORD_MATCH_LENGTH").as_deref() != Some("1".as_ref()) {
+        return;
+    }
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/vectors");
+    let mut recorder = purrdf_testkit::vectors::Recorder::new();
+    for comment in [
+        "The common-prefix length: the index of the first differing byte of two",
+        "byte strings, or the shorter length when one is a prefix of the other.",
+        "",
+        "Answers: the bytewise definition, recorded by `tests/deflate_conformance.rs`",
+        "with PURRDF_RECORD_MATCH_LENGTH=1, every available kernel path agreeing.",
+        "",
+        "Inputs, by kind (the byte strings each stands for are defined in",
+        "`match_length_input` of that file):",
+        "  split     LEN:SPLIT:BIT  forty bytes i*37+11 (mod 256), cut to LEN,",
+        "            against the same with bit BIT of byte SPLIT flipped",
+        "  prefix    LEN:SPLIT      the first SPLIT of those LEN bytes against all",
+        "  window    LEN:AT         LEN = 0..=258 bytes of the little-endian",
+        "            splitmix64_next stream from the seed LEN, against the same",
+        "            with bit AT%8 of byte AT flipped (none when AT = LEN)",
+        "  alphabet  SEED           two strings over the bytes 0..=2 drawn from",
+        "            the splitmix64_next stream from SEED: a length next%49, its",
+        "            bytes next%3 each, then the second length and bytes",
+        "",
+        "Fields: kind, input, the prefix length of the first string against the",
+        "second, and of the second against the first.",
+    ] {
+        recorder.comment(comment).expect("a one-line comment");
+    }
+    recorder
+        .header("oracle", "the bytewise definition (self-recorded)")
+        .expect("an oracle header");
+    for (kind, spec) in match_length_inputs() {
+        let (a, b) = match_length_input(kind, &spec);
+        let answers = match_length_answers(&a, &b, common_prefix_bytewise);
+        assert_eq!(
+            match_length_answers(&a, &b, common_prefix_len),
+            answers,
+            "common_prefix_len {kind} {spec}"
+        );
+        for backend in Backend::all_available() {
+            assert_eq!(
+                match_length_answers(&a, &b, |x, y| backend
+                    .match_length(x, y)
+                    .expect("available")),
+                answers,
+                "{} {kind} {spec}",
+                backend.name()
+            );
+        }
+        let mut record = vec![kind.to_owned(), spec];
+        record.extend(answers);
+        recorder.record(&record).expect("an encodable record");
+    }
+    std::fs::create_dir_all(&dir).expect("the vector directory");
+    std::fs::write(dir.join("match_length_vectors.txt"), recorder.render())
+        .expect("the vector file is written");
+    purrdf_testkit::harness::print_line("recorded the match-length vectors");
+}
+
 fn hash_kernels_match_portable() {
     for backend in Backend::all_available() {
         for len in 4..300usize {
@@ -1397,6 +1628,10 @@ purrdf_testkit::harness_main!(
     decompressed_limit_accepts_large_valid,
     copy_kernels_match_portable,
     match_length_kernels_match_portable,
+    #[cfg(not(target_arch = "wasm32"))]
+    record_match_length_vectors_when_asked,
+    match_length_vectors_are_the_definition,
+    match_length_paths_reproduce_the_vectors,
     hash_kernels_match_portable,
     selected_backend_is_reported,
 );

@@ -140,12 +140,12 @@ deps = [
 name = "purrdf-core"
 deps = [
     "purrdf-cdt",
+    "purrdf-deflate",
     "purrdf-events",
     "purrdf-hash",
     "purrdf-iri",
     "purrdf-xsd",
     { name = "purrdf-lex", pending = true },
-    { name = "purrdf-deflate", pending = true },
 ]
 
 [[crate]]

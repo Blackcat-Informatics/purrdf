@@ -1118,6 +1118,17 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **deflate, core:** the common-prefix length of two byte strings has one
+  implementation, `purrdf_deflate::common_prefix_len`, now public: eight-byte
+  XOR words and a trailing-zero count, `#[inline]` with no dispatch. It is the
+  encoder's portable match-length compare and the tail of its SSE2, AVX2, NEON
+  and simd128 compares, and the pack dictionary's front coding calls it, so
+  `purrdf-core` now depends on `purrdf-deflate`. No compressed byte, pack
+  dictionary byte or golden changed. The frozen answers in
+  `crates/deflate/tests/vectors/match_length_vectors.txt` (9,546 inputs) are
+  replayed by every kernel path, natively and on wasm32, and
+  `check-shared-helpers.py` refuses a hand-written copy of the word loop
+  (`rule:xor-first-mismatch`).
 - **core, gts:** base16 has one implementation, `purrdf_hash::hex`, and the
   copies are gone. **Breaking API:** the `purrdf_core::hex` module is removed
   (`purrdf_core::hex::lower(bytes)` is `purrdf_hash::hex::encode(bytes)`, the

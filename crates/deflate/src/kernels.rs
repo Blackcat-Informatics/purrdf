@@ -70,25 +70,48 @@ pub(crate) fn copy_match_portable(buf: &mut [u8], dst: usize, dist: usize, len: 
     }
 }
 
-/// Portable match length: eight bytes at a time by XOR and trailing zeros.
+/// The length of the common prefix of `a` and `b`: the index of the first
+/// byte at which they differ, or the shorter length when one is a prefix of
+/// the other.
+///
+/// Word-parallel: both slices are walked in eight-byte words, and a word pair
+/// is compared as one `u64` XOR. A zero XOR is eight shared bytes; the first
+/// non-zero XOR ends the prefix, and because the words are read little-endian
+/// the first differing byte is the lowest non-zero byte of the XOR, so its
+/// offset in the word is the XOR's trailing-zero count over 8. The bytes after
+/// the last whole word pair are compared one at a time.
+///
+/// This is the workspace's one first-mismatch index. It is `#[inline]` with no
+/// dispatch, so a short key (a front-coded dictionary record, a few dozen
+/// bytes) compiles into its caller's loop with no indirect call, and it is the
+/// portable path of the encoder's match-length kernel and the tail of every
+/// vector path after its last whole vector.
+#[inline]
+#[must_use]
+pub fn common_prefix_len(a: &[u8], b: &[u8]) -> usize {
+    let len = a.len().min(b.len());
+    let (a, b) = (&a[..len], &b[..len]);
+    let (a_words, a_tail) = a.as_chunks::<8>();
+    let (b_words, b_tail) = b.as_chunks::<8>();
+    for (k, (x, y)) in a_words.iter().zip(b_words).enumerate() {
+        let diff = u64::from_le_bytes(*x) ^ u64::from_le_bytes(*y);
+        if diff != 0 {
+            return k * 8 + (diff.trailing_zeros() / u8::BITS) as usize;
+        }
+    }
+    a_words.len() * 8
+        + a_tail
+            .iter()
+            .zip(b_tail)
+            .take_while(|(x, y)| x == y)
+            .count()
+}
+
+/// Portable match length: [`common_prefix_len`] out of line, at the stable
+/// path the asm audit measures.
 #[inline(never)]
 pub(crate) fn match_length_portable(a: &[u8], b: &[u8]) -> usize {
-    let n = a.len().min(b.len());
-    let (a, b) = (&a[..n], &b[..n]);
-    let mut i = 0;
-    while i + 8 <= n {
-        let x = u64::from_le_bytes(*a[i..].first_chunk().expect("eight bytes"));
-        let y = u64::from_le_bytes(*b[i..].first_chunk().expect("eight bytes"));
-        let diff = x ^ y;
-        if diff != 0 {
-            return i + (diff.trailing_zeros() / 8) as usize;
-        }
-        i += 8;
-    }
-    while i < n && a[i] == b[i] {
-        i += 1;
-    }
-    i
+    common_prefix_len(a, b)
 }
 
 /// Portable window hashing.
