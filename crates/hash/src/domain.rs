@@ -108,15 +108,15 @@ impl AsRef<[u8]> for Domain {
 mod tests {
     use super::Domain;
 
-    const NUL_TERMINATED: Domain = Domain::new(b"purrdf.example.v1.record\0");
+    const NUL_TERMINATED: Domain = Domain::new(b"example.org.v1.record\0");
     const SLASHED: Domain = Domain::new(b"purrdf-example/record/v1");
 
     /// The bytes come back exactly as written: no terminator, separator or
     /// length prefix is added or removed.
     #[test]
     fn the_bytes_are_returned_exactly_as_registered() {
-        assert_eq!(NUL_TERMINATED.as_bytes(), b"purrdf.example.v1.record\0");
-        assert_eq!(NUL_TERMINATED.len(), 25);
+        assert_eq!(NUL_TERMINATED.as_bytes(), b"example.org.v1.record\0");
+        assert_eq!(NUL_TERMINATED.len(), 22);
         assert_eq!(SLASHED.as_bytes(), b"purrdf-example/record/v1");
         assert_eq!(SLASHED.as_ref(), SLASHED.as_bytes());
         assert!(!SLASHED.is_empty());
