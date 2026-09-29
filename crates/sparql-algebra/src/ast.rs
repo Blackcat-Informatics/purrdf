@@ -18,12 +18,12 @@ use std::sync::Arc;
 use crate::error::{ParseError, Result};
 use crate::tree::Child;
 
-/// A datatype IRI literal used for plain (non-typed) literals: `xsd:string`.
-pub const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// The datatype IRI for language-tagged strings: `rdf:langString`.
-pub const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 /// The datatype IRI for base-direction strings (RDF 1.2): `rdf:dirLangString`.
-pub const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+pub use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+/// The datatype IRI for language-tagged strings: `rdf:langString`.
+pub use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+/// A datatype IRI literal used for plain (non-typed) literals: `xsd:string`.
+pub use purrdf_xsd::datatype::XSD_STRING;
 
 /// An absolute IRI in term position (e.g. a predicate, a class, a datatype).
 ///
@@ -161,14 +161,9 @@ impl core::fmt::Debug for Variable {
     }
 }
 
-/// The base text direction of an RDF 1.2 directional language-tagged string.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
-pub enum BaseDirection {
-    /// Left-to-right (`--ltr`).
-    Ltr,
-    /// Right-to-left (`--rtl`).
-    Rtl,
-}
+/// The base text direction of an RDF 1.2 directional language-tagged string:
+/// the stack's one direction type, defined in `purrdf-cdt`.
+pub use purrdf_cdt::TextDirection as BaseDirection;
 
 /// An RDF literal: a lexical form plus a datatype, language tag and RDF 1.2
 /// base direction where required by that datatype.
@@ -222,11 +217,9 @@ impl Literal {
         language: impl Into<String>,
         direction: Option<BaseDirection>,
     ) -> Self {
-        let datatype = NamedNode::new_unchecked(if direction.is_some() {
-            RDF_DIR_LANG_STRING
-        } else {
-            RDF_LANG_STRING
-        });
+        let datatype = NamedNode::new_unchecked(purrdf_iri::vocab::language_datatype_iri(
+            direction.is_some(),
+        ));
         Self {
             value: value.into().into(),
             datatype,

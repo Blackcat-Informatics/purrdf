@@ -106,7 +106,7 @@ use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::row_ingest::{GovernedRowIngest, IngestVerdict};
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// Evaluate `UNFOLD(expression AS ?element[, ?companion])` over `inner`.
 ///

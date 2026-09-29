@@ -38,8 +38,7 @@
 use crate::numeric::Decimal;
 use crate::value::XsdValue;
 
-/// The `owl:rational` datatype IRI.
-pub const OWL_RATIONAL: &str = "http://www.w3.org/2002/07/owl#rational";
+pub use crate::datatype::OWL_RATIONAL;
 
 /// An exact rational: `numerator / denominator`, reduced, `denominator > 0`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]

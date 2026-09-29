@@ -76,12 +76,12 @@ use purrdf_entail::reasoner::Reasoner;
 /// its own, and a reserved-for-documentation authority is the only one it may put in a term.
 const EX: &str = "http://example.org/";
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
-const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
-const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ON_PROPERTY;
+use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOME_VALUES_FROM;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::DOMAIN as RDFS_DOMAIN;
+use purrdf_iri::vocab::rdfs::RANGE as RDFS_RANGE;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// How many individuals the FIXED ABox holds, whatever `pairs` is.
 const ABOX_INDIVIDUALS: usize = 10;

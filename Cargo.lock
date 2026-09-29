@@ -558,7 +558,9 @@ name = "purrdf-bench"
 version = "2.0.2"
 dependencies = [
  "purrdf-hash",
+ "purrdf-iri",
  "purrdf-rdf",
+ "purrdf-xsd",
  "serde_json",
 ]
 

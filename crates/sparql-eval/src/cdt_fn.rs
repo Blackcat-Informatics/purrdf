@@ -70,7 +70,7 @@
 
 use purrdf_cdt::{
     CDT_LIST, CDT_MAP, CdtDatatype, CdtError, CdtLiteral, CdtOutcome, CdtTerm, CdtTripleTerm,
-    CdtValue, MapRemoval, TextDirection,
+    CdtValue, MapRemoval,
 };
 use purrdf_core::TermBox;
 use purrdf_core::{BlankScope, DatasetView, RdfTextDirection, TermValue};
@@ -80,8 +80,8 @@ use crate::error::EvalError;
 use crate::eval::EvalCtx;
 use crate::scratch::SolutionTerm;
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// Evaluate a SEP-0009 composite-datatype function call.
 ///
@@ -507,10 +507,7 @@ pub(crate) fn from_cdt_term(term: &CdtTerm) -> Option<TermValue> {
                 lexical_form: literal.lexical.clone(),
                 datatype: literal.datatype.clone(),
                 language: literal.language.clone(),
-                direction: literal.direction.map(|d| match d {
-                    TextDirection::Ltr => RdfTextDirection::Ltr,
-                    TextDirection::Rtl => RdfTextDirection::Rtl,
-                }),
+                direction: literal.direction,
             }),
             OutJob::Visit(CdtTerm::Composite(value)) => {
                 done.push(composite_literal(value.as_ref()));
@@ -680,10 +677,7 @@ fn cdt_literal(
         lexical: lexical.to_owned(),
         datatype: datatype.to_owned(),
         language: language.map(str::to_owned),
-        direction: direction.map(|d| match d {
-            RdfTextDirection::Ltr => TextDirection::Ltr,
-            RdfTextDirection::Rtl => TextDirection::Rtl,
-        }),
+        direction,
     }
 }
 

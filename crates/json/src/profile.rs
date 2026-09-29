@@ -10,9 +10,8 @@ use crate::JsonError;
 /// opt-in constructor; no API silently supplies a namespace.
 pub const STANDARD_NAMESPACE: &str = "https://w3id.org/purrdf/json#";
 
-pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-pub(crate) const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-pub(crate) const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+pub(crate) use purrdf_core::datatype::{XSD_INTEGER, XSD_STRING};
+pub(crate) use purrdf_core::vocab::rdf::TYPE as RDF_TYPE;
 pub(crate) const TERMS: [&str; 20] = [
     "Document",
     "Value",

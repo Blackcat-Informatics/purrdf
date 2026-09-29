@@ -5503,8 +5503,8 @@ mod iterative_walk_tests {
 
     // ── Fixtures ───────────────────────────────────────────────────────────────────
 
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_xsd::datatype::XSD_BOOLEAN;
+    use purrdf_xsd::datatype::XSD_INTEGER;
     /// A `(1, 1)` relation computable only with its subject bound.
     const REL_BOUND: &str = "http://example.org/rel/bound";
     /// A `(1, 1)` relation computable in every access pattern.

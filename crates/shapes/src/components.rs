@@ -32,14 +32,6 @@ use crate::sparql::{run_ask_with_shacl_prebinding_view, run_select_with_shacl_pr
 use crate::term::{Literal, NamedNode, Term, term_value_to_native};
 use crate::validator_alternatives::{AlternativeValidator, ValidatorLanguage};
 
-/// `sh:JSValidator`, the SHACL JavaScript Extensions validator class. Not a SHACL 1.2
-/// term, so it has no `model::sh` constant; it is named here so the refusal of a
-/// validator of that class says what it is. It is not a validator of any attachment:
-/// "The values of sh:validator must be ASK-based validators" and the values of
-/// `sh:nodeValidator` / `sh:propertyValidator` "must be SELECT-based validators"
-/// (SHACL 1.2 SPARQL Extensions, "Summary of Syntax Rules").
-const JS_VALIDATOR: &str = "http://www.w3.org/ns/shacl#JSValidator";
-
 /// Discriminator for a SPARQL validator's query form.
 #[derive(Debug, Clone, Copy)]
 pub(crate) enum ValidatorKind {
@@ -919,7 +911,7 @@ fn validator_kind(
         };
         is_ask |= is_subclass_of(data, class.as_str(), sh::SPARQL_ASK_VALIDATOR, memo);
         is_select |= is_subclass_of(data, class.as_str(), sh::SPARQL_SELECT_VALIDATOR, memo);
-        is_js |= is_subclass_of(data, class.as_str(), JS_VALIDATOR, memo);
+        is_js |= is_subclass_of(data, class.as_str(), sh::JS_VALIDATOR, memo);
     }
     match (is_ask, is_select) {
         (true, true) => Err(format!(

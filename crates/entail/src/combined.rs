@@ -589,12 +589,12 @@ mod tests {
     };
 
     const NS: &str = "http://example.org/combined#";
-    const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-    const OWL_RESTRICTION_IRI: &str = "http://www.w3.org/2002/07/owl#Restriction";
-    const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-    const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
-    const RDFS_SUBCLASSOF_IRI: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+    use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+    use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ON_PROPERTY;
+    use purrdf_iri::vocab::owl::RESTRICTION as OWL_RESTRICTION_IRI;
+    use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOME_VALUES_FROM;
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE_IRI;
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF_IRI;
 
     /// `A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty r ; owl:someValuesFrom B ]`,
     /// `a : A` — the load-bearing shape: `a` is a certain answer of

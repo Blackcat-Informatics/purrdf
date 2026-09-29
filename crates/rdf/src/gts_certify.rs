@@ -45,7 +45,7 @@ use crate::gts::dataset_from_gts_graph;
 use crate::gts_core::diagnostics_to_error;
 use crate::{CanonError, CanonHash, RdfDiagnostic, canonicalize_with, try_canonicalize_with};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Blank-node count above which [`refold_digest`] refuses to canonicalize the
 /// content projection (a cheap structural pre-reject; RDFC-1.0's n-degree

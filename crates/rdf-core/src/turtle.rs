@@ -261,7 +261,7 @@ fn write_dataset_predicate<W: TextOut + ?Sized>(dataset: &RdfDataset, id: TermId
 }
 
 /// The `rdf:reifies` IRI every reifier binding is written under.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// Append `s p o [g] .\n` — the one statement writer behind every `write_dataset_*`
 /// entry point below, so the N-Triples and N-Quads spellings of a row cannot drift

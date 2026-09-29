@@ -1598,9 +1598,9 @@ fn component_results(report: &ValidationReport, component: &str) -> Vec<(String,
     out
 }
 
-const SINGLE_LINE: &str = "http://www.w3.org/ns/shacl#SingleLineConstraintComponent";
-const ROOT_CLASS: &str = "http://www.w3.org/ns/shacl#RootClassConstraintComponent";
-const SOME_VALUE: &str = "http://www.w3.org/ns/shacl#SomeValueConstraintComponent";
+use purrdf_iri::vocab::sh::ROOT_CLASS_CONSTRAINT_COMPONENT as ROOT_CLASS;
+use purrdf_iri::vocab::sh::SINGLE_LINE_CONSTRAINT_COMPONENT as SINGLE_LINE;
+use purrdf_iri::vocab::sh::SOME_VALUE_CONSTRAINT_COMPONENT as SOME_VALUE;
 
 /// `sh:singleLine true` reports each literal whose lexical form holds a line
 /// feed, carriage return, form feed or vertical tab, with the literal as
@@ -1924,11 +1924,11 @@ fn a_shape_with_every_non_validating_property_loads_and_validates_unchanged() {
 
 // ── SHACL 1.2 path-valued property pairs and sh:subsetOf ─────────────────────
 
-const EQUALS: &str = "http://www.w3.org/ns/shacl#EqualsConstraintComponent";
-const DISJOINT: &str = "http://www.w3.org/ns/shacl#DisjointConstraintComponent";
-const SUBSET_OF: &str = "http://www.w3.org/ns/shacl#SubsetOfConstraintComponent";
-const LESS_THAN: &str = "http://www.w3.org/ns/shacl#LessThanConstraintComponent";
-const LESS_THAN_OR_EQUALS: &str = "http://www.w3.org/ns/shacl#LessThanOrEqualsConstraintComponent";
+use purrdf_iri::vocab::sh::DISJOINT_CONSTRAINT_COMPONENT as DISJOINT;
+use purrdf_iri::vocab::sh::EQUALS_CONSTRAINT_COMPONENT as EQUALS;
+use purrdf_iri::vocab::sh::LESS_THAN_CONSTRAINT_COMPONENT as LESS_THAN;
+use purrdf_iri::vocab::sh::LESS_THAN_OR_EQUALS_CONSTRAINT_COMPONENT as LESS_THAN_OR_EQUALS;
+use purrdf_iri::vocab::sh::SUBSET_OF_CONSTRAINT_COMPONENT as SUBSET_OF;
 
 fn x(local: &str) -> String {
     format!("<http://example.org/ns#{local}>")

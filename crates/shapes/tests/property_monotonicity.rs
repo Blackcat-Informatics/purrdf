@@ -50,7 +50,7 @@ ex:ThingShape a sh:NodeShape ;
     ] .
 "#;
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 const EX: &str = "https://example.org/";
 
 /// A single generated data assertion, rendered as one N-Triples line.

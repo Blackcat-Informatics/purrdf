@@ -28,6 +28,12 @@ use crate::shapes::{
     PropertyShape, Shape, annotation_for,
 };
 use crate::term::{Literal, NamedNode, Term, canonical_cmp_ids, term_id_to_native};
+use purrdf_xsd::datatype::{
+    XSD_BOOLEAN, XSD_BYTE, XSD_DATE, XSD_DATE_TIME, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_INT,
+    XSD_INTEGER, XSD_LONG, XSD_NEGATIVE_INTEGER, XSD_NON_NEGATIVE_INTEGER,
+    XSD_NON_POSITIVE_INTEGER, XSD_NS, XSD_POSITIVE_INTEGER, XSD_SHORT, XSD_STRING, XSD_TIME,
+    XSD_UNSIGNED_BYTE, XSD_UNSIGNED_INT, XSD_UNSIGNED_LONG, XSD_UNSIGNED_SHORT,
+};
 
 /// Internal value-node currency for the constraint layer.
 ///
@@ -3514,25 +3520,24 @@ fn check_datatype_parts(lex: &str, stored_dt: &str, dt_iri: &NamedNode) -> bool 
     xsd_lexical_valid(dt_iri.as_str(), lex)
 }
 
-/// The XSD integer-derived datatype IRIs whose VALUE space is narrower than
-/// `xsd:integer` (so an exact datatype match still requires a range check).
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-
+/// Whether `dt` is an XSD integer-derived datatype IRI whose VALUE space is
+/// narrower than `xsd:integer` (so an exact datatype match still requires a range
+/// check).
 fn is_derived_integer_type(dt: &str) -> bool {
     matches!(
         dt,
-        "http://www.w3.org/2001/XMLSchema#nonNegativeInteger"
-            | "http://www.w3.org/2001/XMLSchema#positiveInteger"
-            | "http://www.w3.org/2001/XMLSchema#nonPositiveInteger"
-            | "http://www.w3.org/2001/XMLSchema#negativeInteger"
-            | "http://www.w3.org/2001/XMLSchema#long"
-            | "http://www.w3.org/2001/XMLSchema#int"
-            | "http://www.w3.org/2001/XMLSchema#short"
-            | "http://www.w3.org/2001/XMLSchema#byte"
-            | "http://www.w3.org/2001/XMLSchema#unsignedLong"
-            | "http://www.w3.org/2001/XMLSchema#unsignedInt"
-            | "http://www.w3.org/2001/XMLSchema#unsignedShort"
-            | "http://www.w3.org/2001/XMLSchema#unsignedByte"
+        XSD_NON_NEGATIVE_INTEGER
+            | XSD_POSITIVE_INTEGER
+            | XSD_NON_POSITIVE_INTEGER
+            | XSD_NEGATIVE_INTEGER
+            | XSD_LONG
+            | XSD_INT
+            | XSD_SHORT
+            | XSD_BYTE
+            | XSD_UNSIGNED_LONG
+            | XSD_UNSIGNED_INT
+            | XSD_UNSIGNED_SHORT
+            | XSD_UNSIGNED_BYTE
     )
 }
 
@@ -3540,19 +3545,15 @@ fn is_derived_integer_type(dt: &str) -> bool {
 /// accepted (no lexical facet enforced).
 fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
     match dt {
-        "http://www.w3.org/2001/XMLSchema#integer" => is_xsd_integer_lexical(lex),
-        "http://www.w3.org/2001/XMLSchema#decimal" => is_xsd_decimal_lexical(lex),
+        XSD_INTEGER => is_xsd_integer_lexical(lex),
+        XSD_DECIMAL => is_xsd_decimal_lexical(lex),
         // `xsd:double` / `xsd:float` / `xsd:boolean` each fix
         // `whiteSpace` = `collapse` (XSD 1.1 Part 2 §3.3.5, §3.3.4, §3.3.2), so
         // they are trimmed with the four code points `collapse` names and not
         // with `str::trim`'s Unicode `White_Space` property.
-        "http://www.w3.org/2001/XMLSchema#double" => {
-            purrdf_xsd::parse_double_xsd10(purrdf_iri::terminals::trim_ws(lex)).is_ok()
-        }
-        "http://www.w3.org/2001/XMLSchema#float" => {
-            purrdf_xsd::parse_float_xsd10(purrdf_iri::terminals::trim_ws(lex)).is_ok()
-        }
-        "http://www.w3.org/2001/XMLSchema#boolean" => {
+        XSD_DOUBLE => purrdf_xsd::parse_double_xsd10(purrdf_iri::terminals::trim_ws(lex)).is_ok(),
+        XSD_FLOAT => purrdf_xsd::parse_float_xsd10(purrdf_iri::terminals::trim_ws(lex)).is_ok(),
+        XSD_BOOLEAN => {
             matches!(
                 purrdf_iri::terminals::trim_ws(lex),
                 "true" | "false" | "1" | "0"
@@ -3567,7 +3568,6 @@ fn xsd_lexical_valid(dt: &str, lex: &str) -> bool {
 /// against the derived type's value space. Every XSD integer-derived type
 /// canonicalizes to `xsd:integer` in oxigraph; only that base is considered here.
 fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> bool {
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
     if stored_dt != XSD_INTEGER || !is_xsd_integer_lexical(lex) {
         return false;
     }
@@ -3583,18 +3583,18 @@ fn derived_integer_matches(stored_dt: &str, required_dt: &str, lex: &str) -> boo
     let is_positive = || value.map_or_else(|| !trimmed.starts_with('-'), |n| n > 0);
     let is_zero = || value == Some(0);
     match required_dt {
-        "http://www.w3.org/2001/XMLSchema#nonNegativeInteger" => !is_negative(),
-        "http://www.w3.org/2001/XMLSchema#positiveInteger" => is_positive(),
-        "http://www.w3.org/2001/XMLSchema#nonPositiveInteger" => is_negative() || is_zero(),
-        "http://www.w3.org/2001/XMLSchema#negativeInteger" => is_negative(),
-        "http://www.w3.org/2001/XMLSchema#long" => trimmed.parse::<i64>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#int" => trimmed.parse::<i32>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#short" => trimmed.parse::<i16>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#byte" => trimmed.parse::<i8>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#unsignedLong" => trimmed.parse::<u64>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#unsignedInt" => trimmed.parse::<u32>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#unsignedShort" => trimmed.parse::<u16>().is_ok(),
-        "http://www.w3.org/2001/XMLSchema#unsignedByte" => trimmed.parse::<u8>().is_ok(),
+        XSD_NON_NEGATIVE_INTEGER => !is_negative(),
+        XSD_POSITIVE_INTEGER => is_positive(),
+        XSD_NON_POSITIVE_INTEGER => is_negative() || is_zero(),
+        XSD_NEGATIVE_INTEGER => is_negative(),
+        XSD_LONG => trimmed.parse::<i64>().is_ok(),
+        XSD_INT => trimmed.parse::<i32>().is_ok(),
+        XSD_SHORT => trimmed.parse::<i16>().is_ok(),
+        XSD_BYTE => trimmed.parse::<i8>().is_ok(),
+        XSD_UNSIGNED_LONG => trimmed.parse::<u64>().is_ok(),
+        XSD_UNSIGNED_INT => trimmed.parse::<u32>().is_ok(),
+        XSD_UNSIGNED_SHORT => trimmed.parse::<u16>().is_ok(),
+        XSD_UNSIGNED_BYTE => trimmed.parse::<u8>().is_ok(),
         _ => false,
     }
 }
@@ -3849,7 +3849,6 @@ pub(crate) fn numeric_value(term: &Term) -> Option<f64> {
 /// of [`ValueNode::literal_parts`], so a conforming value node is compared without
 /// ever being materialized into an owned [`Term`].
 fn numeric_parts(lexical: &str, datatype: &str) -> Option<f64> {
-    const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
     // The full XSD numeric lattice: the primitives plus EVERY derived integer
     // datatype. The set must match the rest of the engine (see
     // `instance.rs::numeric_or_bool_scalar`); the previous list omitted the
@@ -3957,11 +3956,7 @@ fn temporal_parts_cmp(
     b_lexical: &str,
     b_datatype: &str,
 ) -> Option<std::cmp::Ordering> {
-    const TEMPORAL: [&str; 3] = [
-        "http://www.w3.org/2001/XMLSchema#dateTime",
-        "http://www.w3.org/2001/XMLSchema#date",
-        "http://www.w3.org/2001/XMLSchema#time",
-    ];
+    const TEMPORAL: [&str; 3] = [XSD_DATE_TIME, XSD_DATE, XSD_TIME];
     if !TEMPORAL.contains(&a_datatype) || !TEMPORAL.contains(&b_datatype) {
         return None;
     }
@@ -3994,7 +3989,7 @@ const UNIQUE_LANG_INLINE: usize = 8;
 /// duplicated values are `rdf:dirLangString`s (`ar--ltr`), so the message names
 /// exactly the group the result is about.
 fn duplicate_language_message(lang: &str, direction: Option<RdfTextDirection>) -> String {
-    let lang = lang.to_ascii_lowercase();
+    let lang = purrdf_iri::langtag::identity_fold(lang);
     match direction {
         Some(direction) => format!("duplicate language tag: {lang}--{}", direction.as_str()),
         None => format!("duplicate language tag: {lang}"),
@@ -4288,13 +4283,7 @@ fn compare_literal_views(
     a: Option<LiteralView<'_>>,
     b: Option<LiteralView<'_>>,
 ) -> Option<std::cmp::Ordering> {
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-    const TEMPORAL: [&str; 3] = [
-        "http://www.w3.org/2001/XMLSchema#dateTime",
-        "http://www.w3.org/2001/XMLSchema#date",
-        "http://www.w3.org/2001/XMLSchema#time",
-    ];
+    const TEMPORAL: [&str; 3] = [XSD_DATE_TIME, XSD_DATE, XSD_TIME];
 
     let (Some(a), Some(b)) = (a, b) else {
         return None;
@@ -4400,8 +4389,8 @@ mod tests {
     }
 
     const EX: &str = "http://example.org/ns#";
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
-    const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    use purrdf_iri::vocab::rdf::NS as RDF;
+    use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn nn(iri: &str) -> Term {
         Term::NamedNode(NamedNode::new_unchecked(iri))
@@ -5839,10 +5828,10 @@ mod tests {
     /// `whiteSpace` = `collapse` names, not with the Unicode property.
     #[test]
     fn xsd_lexical_forms_collapse_over_xml_s_only() {
-        const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-        const DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-        const DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-        const BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+        use purrdf_xsd::datatype::{
+            XSD_BOOLEAN as BOOLEAN, XSD_DECIMAL as DECIMAL, XSD_DOUBLE as DOUBLE,
+            XSD_INTEGER as INTEGER,
+        };
 
         // The valid neighbours, unchanged: `collapse` still strips every one of
         // `#x20`, `#x9`, `#xD` and `#xA`, in any combination and at either end.
@@ -5891,9 +5880,10 @@ mod tests {
     /// gate does, so the two cannot disagree about one literal.
     #[test]
     fn derived_integer_bounds_trim_the_same_class_as_the_lexical_gate() {
-        const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-        const NON_NEGATIVE: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
-        const POSITIVE: &str = "http://www.w3.org/2001/XMLSchema#positiveInteger";
+        use purrdf_xsd::datatype::{
+            XSD_INTEGER as INTEGER, XSD_NON_NEGATIVE_INTEGER as NON_NEGATIVE,
+            XSD_POSITIVE_INTEGER as POSITIVE,
+        };
 
         // Valid neighbours: XML `S` padding still reaches the bound check.
         assert!(derived_integer_matches(INTEGER, NON_NEGATIVE, " 7\t"));

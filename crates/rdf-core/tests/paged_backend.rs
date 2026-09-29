@@ -30,9 +30,9 @@ use purrdf_core::{
 
 // The standard RDF Collection vocabulary (crate-internal constants are not public;
 // these are the well-known IRIs).
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
 
 /// An `example.org` IRI value.
 fn iri(name: &str) -> TermValue {

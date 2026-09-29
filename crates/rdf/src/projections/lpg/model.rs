@@ -11,7 +11,7 @@ use super::super::{
 };
 
 const LPG_SCHEMA_VERSION: u32 = 1;
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_FLOAT, XSD_NS as XSD};
 
 /// Mandatory policy and resource boundary for the canonical LPG mapping.
 ///
@@ -1052,7 +1052,7 @@ pub(super) fn property_atom(term: &ProjectionTerm) -> Result<LpgPropertyAtom, Pr
         ));
     };
     Ok(match datatype.as_str() {
-        concat!("http://www.w3.org/2001/XMLSchema#", "boolean") => match lexical.as_str() {
+        XSD_BOOLEAN => match lexical.as_str() {
             "true" | "1" => LpgPropertyAtom::Boolean { value: true },
             "false" | "0" => LpgPropertyAtom::Boolean { value: false },
             _ => LpgPropertyAtom::String {
@@ -1073,7 +1073,7 @@ pub(super) fn property_atom(term: &ProjectionTerm) -> Result<LpgPropertyAtom, Pr
                 }
             }
         }
-        concat!("http://www.w3.org/2001/XMLSchema#", "decimal") => {
+        XSD_DECIMAL => {
             if is_decimal_lexical(lexical) {
                 LpgPropertyAtom::Decimal {
                     lexical: lexical.clone(),
@@ -1084,16 +1084,14 @@ pub(super) fn property_atom(term: &ProjectionTerm) -> Result<LpgPropertyAtom, Pr
                 }
             }
         }
-        concat!("http://www.w3.org/2001/XMLSchema#", "float")
-        | concat!("http://www.w3.org/2001/XMLSchema#", "double") => parse_float(lexical)
-            .map_or_else(
-                || LpgPropertyAtom::String {
-                    value: lexical.clone(),
-                },
-                |value| LpgPropertyAtom::Float {
-                    bits: value.to_bits(),
-                },
-            ),
+        XSD_FLOAT | XSD_DOUBLE => parse_float(lexical).map_or_else(
+            || LpgPropertyAtom::String {
+                value: lexical.clone(),
+            },
+            |value| LpgPropertyAtom::Float {
+                bits: value.to_bits(),
+            },
+        ),
         _ => LpgPropertyAtom::String {
             value: lexical.clone(),
         },

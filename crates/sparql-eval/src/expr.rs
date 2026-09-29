@@ -55,11 +55,11 @@ use crate::governor::lift::{Evaluated, Lift, Truncation};
 use crate::scratch::SolutionTerm;
 use crate::solution::{Solution, SolutionSeq, VarSchema};
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_INTEGER;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Evaluate an expression over a solution, compiling and linking it for this one call.
 /// See the [module docs](self) for the `Ok(Some)` / `Ok(None)` / `Err` contract. The
@@ -3576,9 +3576,7 @@ pub(crate) fn outer_bindings_for_substitution<D: DatasetView + Sync>(
 /// sees a value read back out of `ctx.scratch`), matching
 /// `outer_bindings_for_substitution`'s sibling `Expression` construction.
 fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebra::GroundTerm> {
-    use purrdf_sparql_algebra::{
-        BaseDirection, BlankNode, GroundTerm, GroundTriple, Literal, NamedNode,
-    };
+    use purrdf_sparql_algebra::{BlankNode, GroundTerm, GroundTriple, Literal, NamedNode};
 
     /// One step of the build: convert a value, or assemble a quoted triple under its
     /// predicate IRI from the two ground terms built last — its object, then its
@@ -3605,16 +3603,9 @@ fn ground_term_from_term_value(value: &TermValue) -> Option<purrdf_sparql_algebr
                 direction,
             }) => {
                 let lit = if let Some(lang) = language {
-                    // The algebra's `BaseDirection` and the IR's `RdfTextDirection` are
-                    // the same two-value RDF 1.2 base-direction enum in two crates;
-                    // `crate::convert::map_direction` maps the OTHER way (algebra → IR,
-                    // for a query-authored literal reaching the dataset lookup key), so
-                    // this direction gets the mirrored match inline.
-                    let dir = direction.map(|d| match d {
-                        RdfTextDirection::Ltr => BaseDirection::Ltr,
-                        RdfTextDirection::Rtl => BaseDirection::Rtl,
-                    });
-                    Literal::new_lang(lexical_form, lang, dir)
+                    // The algebra's `BaseDirection` and the IR's `RdfTextDirection`
+                    // are the one base-direction type, so the direction passes through.
+                    Literal::new_lang(lexical_form, lang, *direction)
                 } else {
                     Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
                 };
@@ -3879,7 +3870,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 Some(off_min) => Ok(Some(typed_term(
                     ctx,
                     &format_daytime_duration(off_min),
-                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
                 ))),
                 None => Ok(None), // SPARQL §17.4.5.7: no timezone → error
             },
@@ -3887,7 +3878,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 Some(off_min) => Ok(Some(typed_term(
                     ctx,
                     &format_daytime_duration(off_min),
-                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
                 ))),
                 None => Ok(None),
             },
@@ -3895,7 +3886,7 @@ pub(crate) fn apply_function<D: DatasetView + Sync>(
                 Some(off_min) => Ok(Some(typed_term(
                     ctx,
                     &format_daytime_duration(off_min),
-                    "http://www.w3.org/2001/XMLSchema#dayTimeDuration",
+                    purrdf_xsd::datatype::XSD_DAY_TIME_DURATION,
                 ))),
                 None => Ok(None),
             },
@@ -4908,7 +4899,7 @@ const LANGTAG_PROFILE: purrdf_iri::langtag::Profile =
 ///
 /// # Case
 ///
-/// Called on the tag **as the query wrote it**, before `to_ascii_lowercase`.
+/// Called on the tag **as the query wrote it**, before `identity_fold`.
 /// That is not a coin-flip: under [`LANGTAG_PROFILE`] every production is
 /// defined over case-insensitive character classes (`ALPHA` is `[a-zA-Z]`, the
 /// terminal's later subtags are `[a-zA-Z0-9]`) and the only other rule is a
@@ -4948,12 +4939,16 @@ fn eval_str_lang<D: DatasetView + Sync>(
     if !well_formed_langtag(&lang) {
         return Ok(None); // not a language tag at all — see `well_formed_langtag`
     }
-    Ok(make_string(ctx, lex, Some(lang.to_ascii_lowercase())))
+    Ok(make_string(
+        ctx,
+        lex,
+        Some(purrdf_iri::langtag::identity_fold(&lang)),
+    ))
 }
 
 /// `STRLANGDIR(lexical, lang, dir)` — RDF 1.2 directional-language-string
-/// constructor. An empty `dir` yields a plain `rdf:langString`; `ltr`/`rtl`
-/// (case-insensitive) yield an `rdf:dirLangString`; any other direction errors.
+/// constructor. `ltr`/`rtl` (case-sensitive) yield an `rdf:dirLangString`; any
+/// other direction, including an empty one, errors.
 ///
 /// The language half is held to [`LANGTAG_PROFILE`] exactly as [`eval_str_lang`]
 /// holds it, and refuses the same way — unbound, not a query abort. A direction
@@ -4978,17 +4973,15 @@ fn eval_str_lang_dir<D: DatasetView + Sync>(
     }
     // The base direction must be exactly `ltr`/`rtl` (case-sensitive); anything
     // else, including an empty string, is a type error (unbound).
-    let direction = match dir.as_str() {
-        "ltr" => RdfTextDirection::Ltr,
-        "rtl" => RdfTextDirection::Rtl,
-        _ => return Ok(None),
+    let Some(direction) = RdfTextDirection::from_str_token(&dir) else {
+        return Ok(None);
     };
     Ok(intern_leaf(
         ctx,
         TermValue::Literal {
             lexical_form: lex,
             datatype: RDF_DIR_LANG_STRING.to_owned(),
-            language: Some(lang.to_ascii_lowercase()),
+            language: Some(purrdf_iri::langtag::identity_fold(&lang)),
             direction: Some(direction),
         },
     ))
@@ -5411,7 +5404,7 @@ mod tests {
         }
     }
 
-    const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
     #[test]
     fn numeric_comparison_uses_value_space() {
@@ -5478,8 +5471,8 @@ mod tests {
         // treats NaN as unordered (`f64`/`f32` `partial_cmp`, correctly, for
         // `<`/`>`/`ORDER BY`). Regression guard for the gap `sparql_value_eq`
         // closes: this used to evaluate to a type error (unbound), not `true`.
-        const XDOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-        const XFLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDOUBLE;
+        use purrdf_xsd::datatype::XSD_FLOAT as XFLOAT;
         let ds = empty_ds();
         let eq = Expression::Equal(
             Child::new(typed_lit("NaN", XDOUBLE)),
@@ -5563,8 +5556,8 @@ mod tests {
     fn lang_matches_byte_comparison_matches_lowercased_semantics() {
         // The reference: what the allocation-based implementation computed.
         fn reference(tag: &str, range: &str) -> bool {
-            let tag = tag.to_ascii_lowercase();
-            let range = range.to_ascii_lowercase();
+            let tag = purrdf_iri::langtag::identity_fold(tag);
+            let range = purrdf_iri::langtag::identity_fold(range);
             range == "*" || tag == range || tag.starts_with(&(range + "-"))
         }
         let cases: &[(&str, &str, bool)] = &[
@@ -6006,7 +5999,7 @@ mod tests {
         assert_eq!(lex(&ds, &expr), Some("fallback".to_owned()));
     }
 
-    const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+    use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
 
     // ---- arithmetic: positive tests ----------------------------------------
 
@@ -6250,8 +6243,8 @@ mod tests {
     /// `=` is total).
     fn temporal_graph() -> Arc<RdfDataset> {
         use purrdf_core::RdfLiteral;
-        const XDATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
-        const XDURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+        use purrdf_xsd::datatype::XSD_DATE_TIME as XDATETIME;
+        use purrdf_xsd::datatype::XSD_DURATION as XDURATION;
         let mut b = RdfDatasetBuilder::new();
         let start = b.intern_iri("http://ex/start");
         let end = b.intern_iri("http://ex/end");
@@ -6662,7 +6655,7 @@ mod tests {
 
     // ---- hash functions -------------------------------------------------
 
-    const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+    use purrdf_xsd::datatype::XSD_DATE_TIME as XSD_DATETIME;
 
     #[test]
     fn md5_abc() {
@@ -6959,10 +6952,10 @@ mod tests {
     // Functions and Operators §9.6); see `Function::Adjust` and
     // `adjust_timezone_arg` for the full source trail.
 
-    const XSD_DATE: &str = "http://www.w3.org/2001/XMLSchema#date";
-    const XSD_TIME: &str = "http://www.w3.org/2001/XMLSchema#time";
-    const XSD_DAYTIME_DURATION: &str = "http://www.w3.org/2001/XMLSchema#dayTimeDuration";
-    const XSD_YEARMONTH_DURATION: &str = "http://www.w3.org/2001/XMLSchema#yearMonthDuration";
+    use purrdf_xsd::datatype::XSD_DATE;
+    use purrdf_xsd::datatype::XSD_DAY_TIME_DURATION as XSD_DAYTIME_DURATION;
+    use purrdf_xsd::datatype::XSD_TIME;
+    use purrdf_xsd::datatype::XSD_YEAR_MONTH_DURATION as XSD_YEARMONTH_DURATION;
 
     fn adjust(value: Expression, timezone: Expression) -> Expression {
         Expression::FunctionCall(Function::Adjust, vec![value, timezone].into())
@@ -7103,7 +7096,7 @@ mod tests {
 
     // ---- SEP-0002 date/time/duration arithmetic, wired through `+ - * /` --
 
-    const XSD_DURATION: &str = "http://www.w3.org/2001/XMLSchema#duration";
+    use purrdf_xsd::datatype::XSD_DURATION;
 
     #[test]
     fn datetime_plus_year_month_duration_clamps_to_month_end() {
@@ -7243,7 +7236,7 @@ mod tests {
     #[test]
     fn duration_times_a_double_factor_is_a_type_error() {
         let ds = empty_ds();
-        const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DOUBLE;
         // The exact-tier rule: an inexact binary factor cannot scale an exact
         // duration without silent rounding, so this is a type error, not a
         // coerced multiplication.
@@ -8795,7 +8788,7 @@ mod tests {
         use purrdf_core::RdfLiteral;
         use purrdf_sparql_algebra::{NamedNodePattern, TermPattern, TriplePattern};
 
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         let mut b = RdfDatasetBuilder::new();
         let val = b.intern_iri("http://ex/val");
@@ -9645,7 +9638,7 @@ mod tests {
                 .unwrap_or_else(|| panic!("STRLANG(\"x\", {tag:?}) must still bind"));
             assert_eq!(
                 tag_of(&value),
-                Some(tag.to_ascii_lowercase().as_str()),
+                Some(purrdf_iri::langtag::identity_fold(tag).as_str()),
                 "the gate must not change which tag STRLANG produces, only \
                  whether it produces one"
             );
@@ -9674,7 +9667,10 @@ mod tests {
                 let value = str_lang_dir(&ds, "x", tag, dir).unwrap_or_else(|| {
                     panic!("STRLANGDIR(\"x\", {tag:?}, {dir:?}) must still bind")
                 });
-                assert_eq!(tag_of(&value), Some(tag.to_ascii_lowercase().as_str()));
+                assert_eq!(
+                    tag_of(&value),
+                    Some(purrdf_iri::langtag::identity_fold(tag).as_str())
+                );
             }
         }
     }
@@ -9689,8 +9685,8 @@ mod tests {
         for tag in ACCEPTED_TAGS.iter().chain(REFUSED_TAGS) {
             assert_eq!(
                 well_formed_langtag(tag),
-                well_formed_langtag(&tag.to_ascii_lowercase()),
-                "gating before vs after `to_ascii_lowercase` must accept the same \
+                well_formed_langtag(&purrdf_iri::langtag::identity_fold(tag)),
+                "gating before vs after `identity_fold` must accept the same \
                  set, else the order of the two lines would be load-bearing ({tag:?})"
             );
         }
@@ -9860,7 +9856,7 @@ mod tests {
     /// The data the strictness samples read: the one-member `rdf:List` headed by
     /// `<https://example.org/list>`, holding `"a"`.
     fn list_ds() -> Arc<RdfDataset> {
-        const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+        use purrdf_iri::vocab::rdf::NS as RDF;
         let mut builder = RdfDatasetBuilder::new();
         let head = builder.intern_iri("https://example.org/list");
         let first = builder.intern_iri(&format!("{RDF}first"));
@@ -9890,7 +9886,7 @@ mod tests {
     #[allow(clippy::too_many_lines)] // one table row per built-in, kept together
     fn strictness_samples(function: &Function) -> Vec<Vec<Expression>> {
         use purrdf_cdt::CdtFn;
-        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        use purrdf_xsd::datatype::XSD_NS as XSD;
         let int = |n: &str| typed_lit(n, &format!("{XSD}integer"));
         let date_time = || typed_lit("2020-01-02T03:04:05Z", &format!("{XSD}dateTime"));
         let cdt = |kind: CdtFn, args: Vec<Expression>| {
@@ -10224,7 +10220,7 @@ mod tests {
     /// effective boolean value and compared.
     #[test]
     fn a_constant_s_effective_boolean_value_is_the_evaluator_s() {
-        const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+        use purrdf_xsd::datatype::XSD_NS as XSD;
         let ds = empty_ds();
         let literals = [
             Literal::new_simple(""),
@@ -10249,7 +10245,7 @@ mod tests {
 
     // ---- n-ary chains are the left fold of their binary operator ---------------
 
-    const XBOOL: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_xsd::datatype::XSD_BOOLEAN as XBOOL;
 
     /// A `true`, `false` or type-error operand, by its three-valued value.
     fn truth(value: Option<bool>) -> Expression {
@@ -10369,9 +10365,9 @@ mod tests {
     /// doubles on both sides of a rounding tie, `NaN`, zero (for division), and a
     /// string, which is a type error.
     fn arithmetic_operand(index: usize) -> Expression {
-        const XDEC: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-        const XFLT: &str = "http://www.w3.org/2001/XMLSchema#float";
-        const XDBL: &str = "http://www.w3.org/2001/XMLSchema#double";
+        use purrdf_xsd::datatype::XSD_DECIMAL as XDEC;
+        use purrdf_xsd::datatype::XSD_DOUBLE as XDBL;
+        use purrdf_xsd::datatype::XSD_FLOAT as XFLT;
         match index % 11 {
             0 => typed_lit("7", XINT),
             1 => typed_lit("-3", XINT),
@@ -10483,8 +10479,8 @@ mod walk_tests {
 
     use purrdf_core::{BlankScope, RdfTextDirection, TermBox, TermValue};
     use purrdf_sparql_algebra::{
-        AggregateExpression, AggregateFunction, BaseDirection, BlankNode, Chain, Child, Expression,
-        Function, GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
+        AggregateExpression, AggregateFunction, BlankNode, Chain, Child, Expression, Function,
+        GraphPattern, GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern,
         OrderExpression, PropertyFunctionCall, TermPattern, TriplePattern, Variable,
     };
 
@@ -10715,11 +10711,7 @@ mod walk_tests {
                 direction,
             } => {
                 let lit = if let Some(lang) = language {
-                    let dir = direction.map(|d| match d {
-                        RdfTextDirection::Ltr => BaseDirection::Ltr,
-                        RdfTextDirection::Rtl => BaseDirection::Rtl,
-                    });
-                    Literal::new_lang(lexical_form, lang, dir)
+                    Literal::new_lang(lexical_form, lang, *direction)
                 } else {
                     Literal::new_typed(lexical_form, NamedNode::new_unchecked(datatype))
                 };

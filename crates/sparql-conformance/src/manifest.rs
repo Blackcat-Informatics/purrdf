@@ -49,12 +49,12 @@ const UT: &str = "http://www.w3.org/2009/sparql/tests/test-update#";
 
 /// The RDF Schema namespace; `rdfs:label` carries the graph IRI of a
 /// `ut:graphData` entry in an update test.
-const RDFS_LABEL_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
+use purrdf_iri::vocab::rdfs::NS as RDFS_LABEL_NS;
 
 /// The SPARQL service-description namespace; `sd:entailmentRegime` on a query
 /// test's action lists the entailment regimes under which its expected result
 /// holds (an RDF list of `http://www.w3.org/ns/entailment/*` IRIs).
-const SD_NS: &str = "http://www.w3.org/ns/sparql-service-description#";
+use purrdf_iri::vocab::sd::NS as SD_NS;
 
 /// This harness's own manifest-EXTENSION vocabulary, for fields the W3C `mf:`/`qt:`
 /// vocabulary has no slot for. Test-INFRASTRUCTURE metadata that configures this

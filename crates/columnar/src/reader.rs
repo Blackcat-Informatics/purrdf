@@ -9,6 +9,7 @@ use std::convert::Infallible;
 use std::str;
 use std::sync::Arc;
 
+use purrdf_core::langtag::is_identity_folded;
 use purrdf_core::{
     BlankScope, ContentDigest, ContentStore, LossLedger, Nested, RdfDataset, RdfDatasetBuilder,
     RdfLiteral, RdfTextDirection, TermId, TermValue, try_fold_nested,
@@ -393,7 +394,7 @@ fn resolve_term_record(
                     ));
                 };
                 if let Some(language) = &language {
-                    if language.is_empty() || language != &language.to_lowercase() {
+                    if language.is_empty() || !is_identity_folded(language) {
                         return Err(ColumnarError::malformed(
                             "terms.lang",
                             format!("literal row {index} has a non-canonical language tag"),
@@ -860,6 +861,7 @@ mod term_walk_tests {
     //! The term-record resolution and the re-interning against their recursive
     //! references, and at a hundred thousand levels on a 128 KiB thread.
 
+    use purrdf_core::langtag::is_identity_folded;
     use purrdf_core::{
         BlankScope, RdfDatasetBuilder, RdfLiteral, RdfTextDirection, TermBox, TermId, TermValue,
     };
@@ -901,7 +903,7 @@ mod term_walk_tests {
                     ));
                 };
                 if let Some(language) = &language {
-                    if language.is_empty() || language != &language.to_lowercase() {
+                    if language.is_empty() || !is_identity_folded(language) {
                         return Err(ColumnarError::malformed(
                             "terms.lang",
                             format!("literal row {index} has a non-canonical language tag"),
@@ -996,6 +998,44 @@ mod term_walk_tests {
 
     /// Every generated record table resolves — every record, in order — to exactly the
     /// values, the memo and the refusal the recursive reference reaches.
+    /// A literal row naming `rdf:langString` with the given tag.
+    fn language_literal_table(tag: &str) -> Vec<TermRecord> {
+        vec![
+            TermRecord::Iri(purrdf_core::vocab::rdf::LANG_STRING.to_owned()),
+            TermRecord::Literal {
+                lexical: "chat".to_owned(),
+                datatype: 0,
+                language: Some(tag.to_owned()),
+                direction: None,
+            },
+        ]
+    }
+
+    #[test]
+    fn a_language_tag_with_an_ascii_uppercase_letter_is_refused_as_non_canonical() {
+        let refused = resolve_term_records(&language_literal_table("en-GB"))
+            .expect_err("an unfolded tag is not the canonical identity");
+        assert!(
+            refused.to_string().contains("non-canonical language tag"),
+            "{refused}"
+        );
+    }
+
+    #[test]
+    fn an_identity_folded_language_tag_resolves() {
+        let values = resolve_term_records(&language_literal_table("en-gb"))
+            .expect("a folded tag is canonical");
+        assert_eq!(
+            values[1],
+            TermValue::Literal {
+                lexical_form: "chat".to_owned(),
+                datatype: purrdf_core::vocab::rdf::LANG_STRING.to_owned(),
+                language: Some("en-gb".to_owned()),
+                direction: None,
+            }
+        );
+    }
+
     #[test]
     fn resolution_agrees_with_its_recursive_reference_on_generated_tables() {
         let (mut resolved, mut refused) = (0, 0);

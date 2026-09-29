@@ -362,7 +362,7 @@ use crate::user_fn::Volatility;
 /// it reifies. A well-known RDF vocabulary IRI (PurRDF mints none of its own); it is named
 /// here only to decide whether a step alternative can draw edges from the reifier
 /// side-table at all, since every row of that table carries exactly this predicate.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// The domain-separation prefix a snapshot's edge-set digest is taken under.
 ///

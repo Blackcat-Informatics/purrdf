@@ -21,8 +21,8 @@ use super::research_object::{
 };
 use super::util::canonical_json_bounded;
 use super::{
-    ConstructViewConfig, ProjectionDirection, ProjectionError, ProjectionLimits,
-    RdfDescriptionProjection, project_construct_view, stable_identifier, validate_absolute_iri,
+    ConstructViewConfig, ProjectionError, ProjectionLimits, RdfDescriptionProjection,
+    project_construct_view, stable_identifier, validate_absolute_iri,
 };
 
 /// Mandatory target-core vocabulary and output bound for mapped DCAT RDF.
@@ -546,10 +546,7 @@ fn rdf_literal(value: &ResearchText) -> RdfLiteral {
         lexical_form: value.value.clone(),
         datatype: Some(value.datatype.clone()),
         language: value.language.clone(),
-        direction: value.direction.map(|direction| match direction {
-            ProjectionDirection::Ltr => RdfTextDirection::Ltr,
-            ProjectionDirection::Rtl => RdfTextDirection::Rtl,
-        }),
+        direction: value.direction.map(RdfTextDirection::from),
     }
 }
 

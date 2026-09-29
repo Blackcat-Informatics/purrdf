@@ -36,8 +36,8 @@ use purrdf::sparql::{
 use purrdf::{BlankScope, RdfDataset, RdfDatasetBuilder, SparqlRequest, SparqlResult, TermValue};
 use purrdf::{ClosureRelations, GovernedEntailment, QueryEntailment, query_with_entailment};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDFS_SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS;
 const NS: &str = "http://example.org/";
 
 /// A three-instance class hierarchy: enough rows for an answer cap to cut, and enough
@@ -567,10 +567,10 @@ fn a_signal_that_never_fires_changes_no_closure() {
 
 // ── The combined approach's witnesses cannot escape through a PARTIAL answer ───────────
 
-const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-const OWL_RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
-const OWL_ON_PROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-const OWL_SOME_VALUES_FROM: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
+use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ON_PROPERTY;
+use purrdf_iri::vocab::owl::RESTRICTION as OWL_RESTRICTION;
+use purrdf_iri::vocab::owl::SOME_VALUES_FROM as OWL_SOME_VALUES_FROM;
 
 /// `A ⊑ ∃r.B` with three `A` instances — the shape the combined approach answers by minting
 /// an existential witness. When `with_named_answers` is true, each instance also has an asserted
@@ -783,8 +783,8 @@ fn witness_triples_are_in_the_closure_the_scrub_runs_over() {
 
 // ── The closure is taken over the premise's `owl:imports` closure ──────────────────
 
-const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
-const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
+use purrdf_iri::vocab::owl::IMPORTS as OWL_IMPORTS;
+use purrdf_iri::vocab::owl::ONTOLOGY as OWL_ONTOLOGY;
 
 /// `ex:o a owl:Ontology ; owl:imports ex:schema . ex:tom a ex:Cat .` — the schema that makes
 /// `tom` an `Animal` lives only in the imported document.

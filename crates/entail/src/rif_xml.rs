@@ -33,10 +33,10 @@ use crate::{
     Atom, EntailError, Fact, Materialization, Regime, RifTerm, Rule, RuleSet, materialize,
 };
 
-const RIF_NS: &str = "http://www.w3.org/2007/rif#";
-const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_iri::vocab::rif::NS as RIF_NS;
 /// The reserved XML namespace `xml:base` lives in (XML Base, §3).
-const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
+use purrdf_iri::vocab::xml::NS as XML_NS;
+use purrdf_xsd::datatype::XSD_NS;
 
 /// One RIF `Import` directive. Fetching its location is deliberately caller-owned.
 #[derive(Debug, Clone, PartialEq, Eq)]

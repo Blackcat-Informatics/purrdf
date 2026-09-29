@@ -35,8 +35,8 @@ use purrdf_core::{
 use crate::engine::NativeSparqlEngine;
 use crate::parallel::{PARALLEL_MIN_ROWS, force_parallel_for_test};
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_xsd::datatype::XSD_INTEGER;
 const EX: &str = "https://example.org/";
 
 /// Entity count for this gate's dataset. Small enough to build/evaluate the

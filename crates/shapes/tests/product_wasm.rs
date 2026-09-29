@@ -148,8 +148,8 @@ mod shacl12_subset {
     use purrdf_shapes::term::{NamedNode, Term};
     use purrdf_shapes::text_ingest::parse_turtle_document;
 
-    const SH: &str = "http://www.w3.org/ns/shacl#";
-    const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    use purrdf_iri::vocab::rdf::NS as RDF;
+    use purrdf_iri::vocab::sh::NS as SH;
     const MF: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
     const SHT: &str = "http://www.w3.org/ns/shacl-test#";
 

@@ -44,7 +44,7 @@ deps = []
 
 [[crate]]
 name = "purrdf-bench"
-deps = ["purrdf-hash"]
+deps = ["purrdf-hash", "purrdf-iri", "purrdf-xsd"]
 
 [[crate]]
 name = "purrdf-hash"

@@ -61,7 +61,7 @@ pub use delta_view::{DeltaDatasetView, DeltaViewId};
 /// value/id they already hold). A delta-added row shaped `_ rdf:reifies <<( … )>>`
 /// is the RDF 1.2 reifier declaration `freeze` folds out of the flat quad delta (see
 /// [`MutableDataset::freeze`]).
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// A dense index into a [`MutableDataset`]'s OWN delta term interner. Newtype (not a
 /// bare `u32`) so it can never be confused with a base [`TermId`]; only ever wrapped

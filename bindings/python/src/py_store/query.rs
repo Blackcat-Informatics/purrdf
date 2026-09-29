@@ -1193,7 +1193,7 @@ pub(crate) fn term_value_to_rdf(value: TermValue) -> RdfTerm {
     }
 }
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_core::datatype::XSD_STRING;
 
 /// Drop the `TermValue` synthetic datatype IRI when it is the one the owned model
 /// leaves implicit: `xsd:string` for a plain literal, and the language datatype

@@ -23,25 +23,19 @@ use crate::model::{rdf, rdfs};
 use crate::shapes::{ClosedMode, Constraint, Path, Shape, Target};
 use crate::term::{NamedNode, Term};
 
-const RDF_PROPERTY: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Property";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
-const RDFS_SUB_PROPERTY_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
-const RDFS_DATATYPE: &str = "http://www.w3.org/2000/01/rdf-schema#Datatype";
-const RDFS_LITERAL: &str = "http://www.w3.org/2000/01/rdf-schema#Literal";
-const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-const OWL_DATA_RANGE: &str = "http://www.w3.org/2002/07/owl#DataRange";
-const OWL_OBJECT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
-const OWL_DATATYPE_PROPERTY: &str = "http://www.w3.org/2002/07/owl#DatatypeProperty";
-const OWL_ANNOTATION_PROPERTY: &str = "http://www.w3.org/2002/07/owl#AnnotationProperty";
-const OWL_FUNCTIONAL_PROPERTY: &str = "http://www.w3.org/2002/07/owl#FunctionalProperty";
-const OWL_INVERSE_FUNCTIONAL_PROPERTY: &str =
-    "http://www.w3.org/2002/07/owl#InverseFunctionalProperty";
-const OWL_EQUIVALENT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#equivalentProperty";
-const OWL_INVERSE_OF: &str = "http://www.w3.org/2002/07/owl#inverseOf";
-const OWL_EQUIVALENT_CLASS: &str = "http://www.w3.org/2002/07/owl#equivalentClass";
-const OWL_UNION_OF: &str = "http://www.w3.org/2002/07/owl#unionOf";
-const OWL_INTERSECTION_OF: &str = "http://www.w3.org/2002/07/owl#intersectionOf";
+use purrdf_iri::vocab::owl::{
+    ANNOTATION_PROPERTY as OWL_ANNOTATION_PROPERTY, CLASS as OWL_CLASS,
+    DATA_RANGE as OWL_DATA_RANGE, DATATYPE_PROPERTY as OWL_DATATYPE_PROPERTY,
+    EQUIVALENT_CLASS as OWL_EQUIVALENT_CLASS, EQUIVALENT_PROPERTY as OWL_EQUIVALENT_PROPERTY,
+    FUNCTIONAL_PROPERTY as OWL_FUNCTIONAL_PROPERTY, INTERSECTION_OF as OWL_INTERSECTION_OF,
+    INVERSE_FUNCTIONAL_PROPERTY as OWL_INVERSE_FUNCTIONAL_PROPERTY, INVERSE_OF as OWL_INVERSE_OF,
+    OBJECT_PROPERTY as OWL_OBJECT_PROPERTY, UNION_OF as OWL_UNION_OF,
+};
+use purrdf_iri::vocab::rdf::{LANG_STRING as RDF_LANG_STRING, PROPERTY as RDF_PROPERTY};
+use purrdf_iri::vocab::rdfs::{
+    DATATYPE as RDFS_DATATYPE, DOMAIN as RDFS_DOMAIN, LITERAL as RDFS_LITERAL,
+    SUB_PROPERTY_OF as RDFS_SUB_PROPERTY_OF,
+};
 
 /// Exact bounded class expression supported for ontology domains and ranges.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]

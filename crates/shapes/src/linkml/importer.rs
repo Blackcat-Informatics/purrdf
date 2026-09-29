@@ -6,6 +6,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ::purrdf::RdfLocation;
+use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
 use serde_json::{Map, Value};
 
@@ -1782,7 +1783,9 @@ impl NativeImporter {
                 "properties": {
                     "@value": { "type": "string" },
                     "@language": { "type": "string" },
-                    "@direction": { "enum": ["ltr", "rtl"] }
+                    "@direction": {
+                        "enum": [RdfTextDirection::Ltr.as_str(), RdfTextDirection::Rtl.as_str()]
+                    }
                 },
                 "required": ["@value", "@language", "@direction"]
             })));
@@ -2137,7 +2140,7 @@ mod tests {
     use crate::shapes::{Constraint, Path};
     use serde_json::json;
 
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+    use purrdf_xsd::datatype::XSD_NS as XSD;
 
     fn config() -> SchemaImportConfig {
         let namespaces = Namespaces::new(

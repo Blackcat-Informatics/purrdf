@@ -30,6 +30,14 @@ before judging it. A variant row whose detector is one of that script's rules
 (``shared-hash-domain``, ``undomained-digest``) sanctions the hit it names and is
 STALE when the script no longer matches it.
 
+The census computes two literal rules itself, over shipping code:
+``rule:vocabulary-literal`` (a string literal equal to or starting with a
+namespace the job's home and entry-point modules declare as a ``NS``/``*_NS``
+constant, outside those modules; an embedded Turtle/SPARQL document is exempt)
+and ``rule:home-literal`` (a string literal equal to one the home item's own
+bodies spell, outside the home item). The self-test drives both over a seeded
+workspace.
+
 It also enforces the cross-package include rule over every first-party ``.rs``
 file, tests and benches included: a ``#[path = "…"]`` attribute whose resolved
 path leaves the declaring crate's own directory compiles one crate's source into
@@ -420,6 +428,153 @@ def rule_fixture_cases() -> list[tuple[str, bool]]:
             reported <= expected,
         ),
         ("each hit is a copy of the enforced job", index["jobs"]["fixed-hasher-everywhere"]["copies"] == len(expected)),
+    ]
+
+
+# A seeded workspace for the literal rules, run through the real census:
+# `rule:vocabulary-literal` reads its namespaces from the `NS`/`*_NS` constants of
+# the job's home and entry-point modules, and `rule:home-literal` reads its tokens
+# from the home item's own bodies. Every line marked POSITIVE must be reported for
+# its job and nothing else; the NEGATIVE lines are the neighbours that must not be.
+LITERAL_FIXTURE_LEDGER = """
+[[job]]
+id = "vocab"
+summary = "s"
+home = "fixture_vocab::vocab"
+entry_points = ["fixture_vocab::datatype"]
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:vocabulary-literal"]
+names = []
+
+[[job]]
+id = "direction"
+summary = "s"
+home = "fixture_vocab::Direction"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:home-literal"]
+names = []
+
+[[job]]
+id = "nothing"
+summary = "s"
+home = "fixture_vocab::Direction"
+entry_points = []
+spec = "s"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:vocabulary-literal"]
+names = []
+"""
+
+LITERAL_FIXTURE_FILES = {
+    "crates/vocab/Cargo.toml": '[package]\nname = "fixture-vocab"\n',
+    "crates/vocab/src/lib.rs": (
+        "/// Terms.\npub mod vocab {\n"
+        "    /// The namespace.\n    pub mod ex {\n"
+        '        pub const NS: &str = "http://example.org/ns#";\n'
+        '        pub const THING: &str = "http://example.org/ns#Thing";\n'
+        "    }\n}\n"
+        "/// Datatypes.\npub mod datatype {\n"
+        '    pub const DT_NS: &str = "http://example.org/dt#";\n'
+        '    pub const DT_TEXT: &str = "http://example.org/dt#text";\n'
+        "}\n"
+        "/// A direction.\npub enum Direction { Up, Down }\n"
+        "impl Direction {\n"
+        '    pub const fn as_str(&self) -> &str { match self { Self::Up => "up", Self::Down => "down" } }\n'
+        "}\n"
+    ),
+    "crates/user/Cargo.toml": '[package]\nname = "fixture-user"\n',
+    "crates/user/src/lib.rs": (
+        'pub const THING: &str = "http://example.org/ns#Thing"; // POSITIVE vocab\n'
+        'pub fn ns() -> &\'static str { "http://example.org/ns#" } // POSITIVE vocab\n'
+        'pub fn typed(x: &str) -> String { format!("http://example.org/dt#{x}") } // POSITIVE vocab\n'
+        'pub fn raw() -> &\'static str { r"http://example.org/dt#text" } // POSITIVE vocab\n'
+        'pub fn parse(s: &str) -> bool { s == "up" } // POSITIVE direction\n'
+        'pub fn bracketed() -> &\'static str { "<http://example.org/ns#Thing>" } // NEGATIVE\n'
+        'pub fn sibling() -> &\'static str { "http://example.org/nsX" } // NEGATIVE\n'
+        'pub fn upper() -> &\'static str { "upward" } // NEGATIVE\n'
+        'pub const DOC: &str = "PREFIX ex: <http://example.org/ns#>\\nSELECT * { ?s ?p ?o }"; // NEGATIVE\n'
+        'pub const EMBEDDED: &str = "http://example.org/ns#\\nSELECT * { ?s ?p ?o }"; // NEGATIVE\n'
+        "#[cfg(test)]\nmod tests {\n"
+        '    const THING: &str = "http://example.org/ns#Thing"; // NEGATIVE\n'
+        "}\n"
+    ),
+    "crates/user/tests/it.rs": 'const THING: &str = "http://example.org/ns#Thing"; // NEGATIVE\n',
+}
+
+
+def literal_fixture_cases() -> list[tuple[str, bool]]:
+    """Run the census over the seeded literal-rule workspace and compare each
+    job's hits with the lines marked POSITIVE for it."""
+    with tempfile.TemporaryDirectory(prefix="helper-census-literals-") as directory:
+        root = Path(directory)
+        expected: dict[str, set[tuple[str, int]]] = {"vocab": set(), "direction": set()}
+        for relative, text in LITERAL_FIXTURE_FILES.items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(text, encoding="utf-8")
+            for number, line in enumerate(text.splitlines(), start=1):
+                for job in expected:
+                    if line.endswith(f"// POSITIVE {job}"):
+                        expected[job].add((relative, number))
+        (root / "helpers-ledger.toml").write_text(LITERAL_FIXTURE_LEDGER, encoding="utf-8")
+        try:
+            index = json.loads(run_census("--index", root=root))
+        except (CensusError, json.JSONDecodeError) as exc:
+            return [(f"the census runs over the seeded literal-rule workspace ({exc})", False)]
+    reported = {
+        job: {(match["file"], match["line"]) for match in index["jobs"][job]["matches"]} for job in expected
+    }
+    return [
+        (
+            "every seeded vocabulary literal (a retyped term, a namespace, a format string, a raw string) is reported",
+            reported["vocab"] == expected["vocab"],
+        ),
+        (
+            "a bracketed term, a sibling namespace, an embedded document and test-only code are not vocabulary hits",
+            not any(
+                line.endswith("// NEGATIVE")
+                for relative, number in reported["vocab"] | reported["direction"]
+                for line in [LITERAL_FIXTURE_FILES[relative].splitlines()[number - 1]]
+            ),
+        ),
+        (
+            "a token the home spells is reported outside it, and a longer word is not",
+            reported["direction"] == expected["direction"],
+        ),
+        (
+            "a vocabulary job whose modules declare no namespace constant is itself a copy",
+            index["jobs"]["nothing"]["copies"] == 1
+            and "declare no namespace constant" in index["jobs"]["nothing"]["matches"][0]["reasons"][0],
+        ),
+        (
+            "each literal hit is a copy of its enforced job",
+            index["jobs"]["vocab"]["copies"] == len(expected["vocab"])
+            and index["jobs"]["direction"]["copies"] == len(expected["direction"]),
+        ),
     ]
 
 
@@ -909,6 +1064,7 @@ def self_test() -> int:
     )
 
     cases.extend(rule_fixture_cases())
+    cases.extend(literal_fixture_cases())
     cases.extend(hex_rule_fixture_cases())
     cases.extend(lex_rule_fixture_cases())
 

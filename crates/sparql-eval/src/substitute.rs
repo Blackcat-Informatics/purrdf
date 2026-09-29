@@ -29,9 +29,9 @@
 use purrdf_core::{DatasetView, RdfDiagnostic, RdfTextDirection, TermRef, TermValue};
 use purrdf_sparql_algebra::Child;
 use purrdf_sparql_algebra::{
-    AggregateExpression, AggregateParts, BaseDirection, BlankNode, Expression, GraphPattern,
-    GroundTerm, GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression,
-    PropertyFunctionCall, Query, TermPattern, TriplePattern, Variable,
+    AggregateExpression, AggregateParts, BlankNode, Expression, GraphPattern, GroundTerm,
+    GroundTriple, Literal, NamedNode, NamedNodePattern, OrderExpression, PropertyFunctionCall,
+    Query, TermPattern, TriplePattern, Variable,
 };
 
 /// The pre-binding list, in whichever of the two shapes the caller has.
@@ -2890,7 +2890,7 @@ fn substitute_in_expression(expr: &mut Expression, expr_subs: &ExprSubs) {
 fn true_literal() -> Expression {
     Expression::Literal(Literal::new_typed(
         "true",
-        NamedNode::new_unchecked("http://www.w3.org/2001/XMLSchema#boolean"),
+        NamedNode::new_unchecked(purrdf_xsd::datatype::XSD_BOOLEAN),
     ))
 }
 
@@ -3104,14 +3104,7 @@ fn literal_from_value(
     direction: Option<RdfTextDirection>,
 ) -> Result<Literal, RdfDiagnostic> {
     match (language, direction) {
-        (Some(language), dir) => Ok(Literal::new_lang(
-            lexical_form,
-            lang(language)?,
-            dir.map(|d| match d {
-                RdfTextDirection::Ltr => BaseDirection::Ltr,
-                RdfTextDirection::Rtl => BaseDirection::Rtl,
-            }),
-        )),
+        (Some(language), dir) => Ok(Literal::new_lang(lexical_form, lang(language)?, dir)),
         (None, _) => Ok(Literal::new_typed(lexical_form, node(datatype)?)),
     }
 }
@@ -3159,7 +3152,7 @@ mod tests {
     use purrdf_sparql_algebra::Child;
 
     /// `http://www.w3.org/2001/XMLSchema#string`, for a plain literal fixture.
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_STRING;
 
     /// The five ground values the classification distinguishes, as `(label, term)`.
     ///
@@ -3523,8 +3516,8 @@ mod walk_tests {
 
     use super::*;
 
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    use purrdf_xsd::datatype::XSD_STRING;
     const SMALL_STACK: usize = 128 * 1024;
     const DEEP: usize = 100_000;
 
@@ -4395,7 +4388,7 @@ mod walk_tests {
             0 => Literal::new_simple(format!("v{}", choices.choose(4))),
             1 => Literal::new_typed("42", NamedNode::new_unchecked(XSD_INTEGER)),
             2 => Literal::new_lang("hi", "en", None),
-            _ => Literal::new_lang("hi", "en", Some(BaseDirection::Rtl)),
+            _ => Literal::new_lang("hi", "en", Some(purrdf_sparql_algebra::BaseDirection::Rtl)),
         }
     }
 

@@ -11,22 +11,12 @@
 //! matches the dataset's interned (already-lowercased) form.
 
 use purrdf_core::TermBox;
-use purrdf_core::{RdfTextDirection, TermValue};
+use purrdf_core::TermValue;
 use purrdf_sparql_algebra::{
-    BaseDirection, Child, GroundTerm, Literal, NamedNode, NamedNodePattern, TermPattern,
-    TriplePattern,
+    Child, GroundTerm, Literal, NamedNode, NamedNodePattern, TermPattern, TriplePattern,
 };
 
 use crate::error::EvalError;
-
-/// Map the algebra's RDF-1.2 base direction to the IR's.
-#[inline]
-pub(crate) fn map_direction(direction: BaseDirection) -> RdfTextDirection {
-    match direction {
-        BaseDirection::Ltr => RdfTextDirection::Ltr,
-        BaseDirection::Rtl => RdfTextDirection::Rtl,
-    }
-}
 
 /// An IRI term value.
 #[inline]
@@ -95,8 +85,8 @@ pub(crate) fn literal_to_value(lit: &Literal) -> TermValue {
     TermValue::Literal {
         lexical_form,
         datatype: datatype.to_owned(),
-        language: lit.language().map(str::to_ascii_lowercase),
-        direction: lit.direction().map(map_direction),
+        language: lit.language().map(purrdf_iri::langtag::identity_fold),
+        direction: lit.direction(),
     }
 }
 

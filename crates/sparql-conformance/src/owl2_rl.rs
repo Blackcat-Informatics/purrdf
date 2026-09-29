@@ -998,8 +998,8 @@ pub fn vendored_imports(root: &Path) -> Result<purrdf_entail::ImportMap, String>
 
 /// The one named `owl:Ontology` subject of `ds`, or `None` if it does not have exactly one.
 fn ontology_iri(ds: &purrdf_core::RdfDataset) -> Option<String> {
-    let ty = ds.term_id_by_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#type")?;
-    let ontology = ds.term_id_by_iri("http://www.w3.org/2002/07/owl#Ontology")?;
+    let ty = ds.term_id_by_iri(purrdf_iri::vocab::rdf::TYPE)?;
+    let ontology = ds.term_id_by_iri(purrdf_iri::vocab::owl::ONTOLOGY)?;
     let mut found: Option<String> = None;
     for quad in ds.quads().filter(|quad| quad.p == ty && quad.o == ontology) {
         let purrdf_core::TermValue::Iri(iri) = ds.term_value(quad.s) else {

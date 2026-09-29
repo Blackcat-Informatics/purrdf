@@ -1385,14 +1385,22 @@ class GtsFoldViewNative:
     # back an object whose every renderer is a process kill. `from_bytes` cannot
     # normally hit it (the GTS reader refuses the row that closes the loop), but a
     # term table assembled by the caller and handed to `from_parts` can.
+    #
+    # `curie_prefixes` are the caller's `(prefix, namespace)` CURIE entries,
+    # consulted first; built in are only the W3C namespaces rdf, rdfs, owl, xsd
+    # and skos, so any other vocabulary (schema.org included) compacts only when
+    # the caller supplies its prefix.
     @staticmethod
-    def from_bytes(data: bytes) -> GtsFoldViewNative: ...
+    def from_bytes(
+        data: bytes, curie_prefixes: list[tuple[str, str]] = ...
+    ) -> GtsFoldViewNative: ...
     @staticmethod
     def from_parts(
         terms: list[_InputTermRow],
         quads: list[_QuadRow],
         reifiers: list[_FoldReifierRow],
         annotations: list[_AnnotationRow],
+        curie_prefixes: list[tuple[str, str]] = ...,
     ) -> GtsFoldViewNative: ...
     def term_count(self) -> int: ...
     def quad_count(self) -> int: ...

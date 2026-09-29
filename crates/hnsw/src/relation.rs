@@ -134,10 +134,9 @@ const HNSW_MODE: &str = "fbbf";
 /// the ranked declaration.
 const HNSW_MEMBERSHIP_MODE: &str = "bbff";
 
-/// `xsd:double`, the datatype every emitted distance carries.
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-/// `xsd:integer`, the only datatype a neighbour count may carry.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+// `xsd:double` is the datatype every emitted distance carries; `xsd:integer` is the
+// only datatype a neighbour count may carry.
+use purrdf_xsd::datatype::{XSD_DOUBLE, XSD_INTEGER};
 
 // ---------------------------------------------------------------------------
 // The space

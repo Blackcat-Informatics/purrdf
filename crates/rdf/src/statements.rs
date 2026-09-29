@@ -28,13 +28,13 @@ use crate::{
     NativeRdfFormat, RdfDiagnostic, RdfLiteral, RdfQuad, RdfTerm, RdfTriple, parse_dataset,
 };
 
-const OWL_AXIOM: &str = "http://www.w3.org/2002/07/owl#Axiom";
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const OWL_ANNOTATED_SOURCE: &str = "http://www.w3.org/2002/07/owl#annotatedSource";
-const OWL_ANNOTATED_PROPERTY: &str = "http://www.w3.org/2002/07/owl#annotatedProperty";
-const OWL_ANNOTATED_TARGET: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::owl::ANNOTATED_PROPERTY as OWL_ANNOTATED_PROPERTY;
+use purrdf_iri::vocab::owl::ANNOTATED_SOURCE as OWL_ANNOTATED_SOURCE;
+use purrdf_iri::vocab::owl::ANNOTATED_TARGET as OWL_ANNOTATED_TARGET;
+use purrdf_iri::vocab::owl::AXIOM as OWL_AXIOM;
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Parse a Turtle document (incl. RDF 1.2 triple terms) into model quads.
 ///

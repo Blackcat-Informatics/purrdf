@@ -13,11 +13,11 @@ use crate::{
     RdfTextDirection, TermId, TermRef,
 };
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_DATE_TIME as XSD_DATETIME;
+use purrdf_xsd::datatype::XSD_DECIMAL;
+use purrdf_xsd::datatype::XSD_INTEGER;
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Result of projecting an RDF 1.2 dataset into an OKF Markdown bundle.
 #[derive(Clone, Debug, PartialEq, Eq)]

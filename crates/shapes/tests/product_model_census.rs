@@ -940,7 +940,8 @@ fn string_consts_in_module(source: &syn::File, module: &str) -> BTreeMap<String,
 ///
 /// Two halves, both read out of the live sources:
 ///
-/// * every `sh:…ConstraintComponent` IRI `crates/shapes/src/model.rs` declares —
+/// * every `sh:…ConstraintComponent` IRI the shared W3C vocabulary
+///   (`crates/iri/src/vocab.rs`, re-exported as `purrdf_shapes::model::sh`) declares —
 ///   the component identities a validation result is reported under; and
 /// * the native metadata-cardinality table in
 ///   `crates/shapes/src/shapes/parser/cardinality.rs`, resolved to the IRIs it
@@ -960,14 +961,14 @@ fn string_consts_in_module(source: &syn::File, module: &str) -> BTreeMap<String,
 /// # Panics
 ///
 /// Panics when a table cannot be located or is implausibly small, or when a table
-/// entry names a constant `model.rs` does not declare.
+/// entry names a constant `vocab.rs` does not declare.
 #[must_use]
 pub fn constraint_component_parameter_table() -> Vec<(String, String)> {
     let root = repo_root();
-    let model_path = root.join("crates/shapes/src/model.rs");
+    let model_path = root.join("crates/iri/src/vocab.rs");
     let model_text = std::fs::read_to_string(&model_path)
         .unwrap_or_else(|error| panic!("read {}: {error}", model_path.display()));
-    let model = syn::parse_file(&model_text).expect("model.rs parses as Rust");
+    let model = syn::parse_file(&model_text).expect("vocab.rs parses as Rust");
     let sh = string_consts_in_module(&model, "sh");
     assert!(
         sh.len() > 100,
@@ -1028,7 +1029,7 @@ pub fn constraint_component_parameter_table() -> Vec<(String, String)> {
                 .ident
                 .to_string();
             let iri = sh.get(&name).unwrap_or_else(|| {
-                panic!("`{want}[{index}]` names `sh::{name}`, which model.rs does not declare")
+                panic!("`{want}[{index}]` names `sh::{name}`, which vocab.rs does not declare")
             });
             table.push((format!("{want}[{index}] sh::{name}"), iri.clone()));
         }

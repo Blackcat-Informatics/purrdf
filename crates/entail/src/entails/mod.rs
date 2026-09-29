@@ -1257,12 +1257,12 @@ mod tests {
     use crate::owl_dl::query::{QNode, QTriple};
     use crate::{EntailError, Regime};
 
-    const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const SUBCLASS: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-    const DISJOINT: &str = "http://www.w3.org/2002/07/owl#disjointWith";
-    const SOMEVALUES: &str = "http://www.w3.org/2002/07/owl#someValuesFrom";
-    const ONPROPERTY: &str = "http://www.w3.org/2002/07/owl#onProperty";
-    const RESTRICTION: &str = "http://www.w3.org/2002/07/owl#Restriction";
+    use purrdf_iri::vocab::owl::DISJOINT_WITH as DISJOINT;
+    use purrdf_iri::vocab::owl::ON_PROPERTY as ONPROPERTY;
+    use purrdf_iri::vocab::owl::RESTRICTION;
+    use purrdf_iri::vocab::owl::SOME_VALUES_FROM as SOMEVALUES;
+    use purrdf_iri::vocab::rdf::TYPE;
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUBCLASS;
 
     fn graph(triples: &[(&str, &str, &str)]) -> Arc<RdfDataset> {
         let mut b = RdfDatasetBuilder::new();
@@ -1503,17 +1503,17 @@ mod tests {
 
     // ── COMPOSITION: entailment is monotone over the conjunction a conclusion graph is ───
 
-    const COMPLEMENTOF: &str = "http://www.w3.org/2002/07/owl#complementOf";
-    const DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
-    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
-    const OBJECT_PROPERTY: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
-    const TRANSITIVE: &str = "http://www.w3.org/2002/07/owl#TransitiveProperty";
-    const REFLEXIVE: &str = "http://www.w3.org/2002/07/owl#ReflexiveProperty";
-    const CHAIN: &str = "http://www.w3.org/2002/07/owl#propertyChainAxiom";
-    const ONEOF: &str = "http://www.w3.org/2002/07/owl#oneOf";
-    const FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-    const REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-    const NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+    use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+    use purrdf_iri::vocab::owl::COMPLEMENT_OF as COMPLEMENTOF;
+    use purrdf_iri::vocab::owl::DIFFERENT_FROM as DIFFERENTFROM;
+    use purrdf_iri::vocab::owl::OBJECT_PROPERTY;
+    use purrdf_iri::vocab::owl::ONE_OF as ONEOF;
+    use purrdf_iri::vocab::owl::PROPERTY_CHAIN_AXIOM as CHAIN;
+    use purrdf_iri::vocab::owl::REFLEXIVE_PROPERTY as REFLEXIVE;
+    use purrdf_iri::vocab::owl::TRANSITIVE_PROPERTY as TRANSITIVE;
+    use purrdf_iri::vocab::rdf::FIRST;
+    use purrdf_iri::vocab::rdf::NIL;
+    use purrdf_iri::vocab::rdf::REST;
 
     const BOY: &str = "http://example.org/Boy";
     const GIRL: &str = "http://example.org/Girl";
@@ -1859,13 +1859,13 @@ mod tests {
 
     // ── `entails` IS `certain_answers` WITH NOTHING TO PROJECT ───────────────────────────
 
-    const RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
-    const DATATYPE_PROPERTY: &str = "http://www.w3.org/2002/07/owl#DatatypeProperty";
-    const UNIONOF: &str = "http://www.w3.org/2002/07/owl#unionOf";
-    const RDF_LIST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#List";
-    const XSD_BYTE: &str = "http://www.w3.org/2001/XMLSchema#byte";
-    const XSD_SHORT: &str = "http://www.w3.org/2001/XMLSchema#short";
-    const IRREFLEXIVE: &str = "http://www.w3.org/2002/07/owl#IrreflexiveProperty";
+    use purrdf_iri::vocab::owl::DATATYPE_PROPERTY;
+    use purrdf_iri::vocab::owl::IRREFLEXIVE_PROPERTY as IRREFLEXIVE;
+    use purrdf_iri::vocab::owl::UNION_OF as UNIONOF;
+    use purrdf_iri::vocab::rdf::LIST as RDF_LIST;
+    use purrdf_iri::vocab::rdfs::RANGE;
+    use purrdf_xsd::datatype::XSD_BYTE;
+    use purrdf_xsd::datatype::XSD_SHORT;
     const A: &str = "http://example.org/a";
 
     /// The conclusion graph `ds` as the basic graph pattern `patterns(C)`.

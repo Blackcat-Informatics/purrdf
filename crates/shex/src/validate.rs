@@ -132,7 +132,7 @@ impl ResultShapeMap {
 }
 
 /// `xsd:string`, the implicit datatype omitted from a literal's term syntax.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Append `s` as a JSON string literal (serde_json handles escaping).
 fn push_json_string(out: &mut String, s: &str) {

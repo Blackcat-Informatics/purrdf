@@ -1304,7 +1304,7 @@ impl PyQuadIter {
 
 // ── conversion helpers (native owned model ⇄ MutableDataset value model) ──────────
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_core::datatype::XSD_STRING;
 
 fn empty_mutable() -> PyResult<MutableDataset> {
     let base = RdfDatasetBuilder::new()

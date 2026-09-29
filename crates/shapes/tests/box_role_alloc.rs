@@ -166,7 +166,7 @@ const NS: &str = "http://example.org/purrdf/box-role#";
 const META: &str = "http://example.org/purrdf/box-role/meta#";
 
 /// `rdf:type`, spelled out because the measured fixture is built id-natively.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Mirrors `PARALLEL_MIN_FOCUS_NODES` in `crates/shapes/src/parallel.rs`.
 ///

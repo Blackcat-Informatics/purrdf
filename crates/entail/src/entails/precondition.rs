@@ -105,7 +105,7 @@ use crate::vocab::{
 };
 
 /// The `rdf:` namespace prefix a container-membership property is built on.
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+use purrdf_iri::vocab::rdf::NS as RDF_NS;
 
 /// Why a failed match does not refute.
 ///

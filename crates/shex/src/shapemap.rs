@@ -113,7 +113,7 @@ use crate::statement;
 use crate::validate::{ResultShapeMap, ShapeSelector, ValidationOptions, validate_with};
 
 /// `rdf:type`, the expansion of the `a` predicate keyword.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// A shape-map node selector: a concrete node or a triple-pattern query.
 #[derive(Clone, Debug, PartialEq, Eq)]

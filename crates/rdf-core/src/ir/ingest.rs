@@ -82,10 +82,19 @@ impl RawTerm {
 }
 
 /// Map the protocol's [`TextDirection`] onto the IR's [`RdfTextDirection`].
-fn map_direction(direction: TextDirection) -> RdfTextDirection {
+const fn map_direction(direction: TextDirection) -> RdfTextDirection {
     match direction {
         TextDirection::Ltr => RdfTextDirection::Ltr,
         TextDirection::Rtl => RdfTextDirection::Rtl,
+    }
+}
+
+/// Map the IR's [`RdfTextDirection`] onto the protocol's [`TextDirection`]; the
+/// inverse of [`map_direction`].
+const fn event_direction(direction: RdfTextDirection) -> TextDirection {
+    match direction {
+        RdfTextDirection::Ltr => TextDirection::Ltr,
+        RdfTextDirection::Rtl => TextDirection::Rtl,
     }
 }
 
@@ -513,10 +522,7 @@ impl<'a> FrozenDatasetSource<'a> {
                         lexical,
                         datatype: datatype_iri,
                         language,
-                        direction: direction.map(|d| match d {
-                            RdfTextDirection::Ltr => TextDirection::Ltr,
-                            RdfTextDirection::Rtl => TextDirection::Rtl,
-                        }),
+                        direction: direction.map(event_direction),
                     },
                 )
             }

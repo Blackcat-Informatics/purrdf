@@ -30,7 +30,7 @@ use purrdf::{
 };
 
 const NS: &str = "http://example.org/";
-const RDFS_SUBPROPERTY: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
+use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTY;
 const WALK: &str = "http://example.org/pf#walk";
 
 /// `ex:sub rdfs:subPropertyOf ex:p . ex:a ex:p ex:b . ex:b ex:sub ex:c .`

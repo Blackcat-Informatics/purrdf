@@ -55,8 +55,8 @@ use purrdf_core::{
 const P: &str = "http://example.org/p";
 const CONFIDENCE: &str = "http://example.org/confidence";
 const HIGH: &str = "http://example.org/high";
-const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-const LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+use purrdf_iri::vocab::rdf::LANG_STRING;
+use purrdf_iri::vocab::rdf::REIFIES;
 
 /// An `example.org` IRI value, for terms this file's fixtures need to name but do
 /// not otherwise intern through a builder.

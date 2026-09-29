@@ -48,7 +48,7 @@ const VOCABULARY_FILES: [&str; 3] = [
     include_str!("../spec/shnex-sparql.ttl"),
 ];
 
-const SPARQL_NS: &str = "http://www.w3.org/ns/sparql#";
+use purrdf_iri::vocab::sparql::NS as SPARQL_NS;
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 

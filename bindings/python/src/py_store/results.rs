@@ -15,6 +15,7 @@
 //! writers), so goldens are stable. Reads support JSON and XML (the two formats
 //! the native crate can parse); CSV/TSV reads stay deferred on the Python side.
 
+use purrdf_core::langtag::identity_fold;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyDict, PyList, PyTuple};
@@ -54,7 +55,7 @@ fn rdf_term_to_value(term: &RdfTerm) -> TermValue {
         RdfTerm::Literal(lit) => TermValue::Literal {
             lexical_form: lit.lexical_form.clone(),
             datatype: lit.datatype_iri().to_owned(),
-            language: lit.language.as_deref().map(str::to_ascii_lowercase),
+            language: lit.language.as_deref().map(identity_fold),
             direction: lit.direction,
         },
         RdfTerm::Triple(t) => TermValue::Triple {

@@ -11,23 +11,23 @@
 //! (`rdf_list`, `rdf_container_members`, `members`) so every backend inherits one
 //! id-native, graph-scoped, cycle-guarded, validating walker — no per-backend copy.
 
-/// `rdf:first` — the head edge of a Collection cons cell.
-pub(crate) const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-/// `rdf:rest` — the tail edge of a Collection cons cell.
-pub(crate) const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-/// `rdf:nil` — the empty-list / list terminator resource.
-pub(crate) const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-/// `rdf:type` — used to recognize a typed Container.
-pub(crate) const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-/// `rdf:Seq` — an ordered Container class.
-pub(crate) const RDF_SEQ: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Seq";
-/// `rdf:Bag` — an unordered Container class.
-pub(crate) const RDF_BAG: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Bag";
 /// `rdf:Alt` — an alternatives Container class.
-pub(crate) const RDF_ALT: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#Alt";
+pub(crate) use purrdf_iri::vocab::rdf::ALT as RDF_ALT;
+/// `rdf:Bag` — an unordered Container class.
+pub(crate) use purrdf_iri::vocab::rdf::BAG as RDF_BAG;
+/// `rdf:first` — the head edge of a Collection cons cell.
+pub(crate) use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+/// `rdf:nil` — the empty-list / list terminator resource.
+pub(crate) use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+/// `rdf:rest` — the tail edge of a Collection cons cell.
+pub(crate) use purrdf_iri::vocab::rdf::REST as RDF_REST;
+/// `rdf:Seq` — an ordered Container class.
+pub(crate) use purrdf_iri::vocab::rdf::SEQ as RDF_SEQ;
+/// `rdf:type` — used to recognize a typed Container.
+pub(crate) use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// The `rdf:_<n>` container-membership property prefix (`rdf:_1`, `rdf:_2`, …).
-const RDF_MEMBER_PREFIX: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#_";
+use purrdf_iri::vocab::rdf::MEMBER_PREFIX as RDF_MEMBER_PREFIX;
 
 /// Parse the numeric suffix of an `rdf:_<n>` container-membership property IRI.
 ///
@@ -86,7 +86,7 @@ mod tests {
     use crate::{BlankScope, DatasetView, GraphMatch};
 
     /// The RDF namespace (`rdf:`) prefix, for building fixture IRIs.
-    const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+    use purrdf_iri::vocab::rdf::NS as RDF_NS;
 
     fn iri(b: &mut RdfDatasetBuilder, n: &str) -> TermId {
         b.intern_iri(&format!("http://example.org/{n}"))

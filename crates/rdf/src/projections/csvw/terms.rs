@@ -14,7 +14,7 @@ use purrdf_core::loss::{
     LOSS_CSVW_TERMS_SUBJECT_UNSELECTED,
 };
 use purrdf_core::{
-    DatasetView, LossEntry, LossLedger, RdfLocation, check_ledger_sound,
+    DatasetView, LossEntry, LossLedger, RdfLocation, RdfTextDirection, check_ledger_sound,
     rdf_to_csvw_terms_loss_ledger,
 };
 use serde::{Deserialize, Deserializer, Serialize};
@@ -1575,10 +1575,7 @@ fn row_url(table_url: &str, source_number: usize) -> Result<String, ProjectionEr
 }
 
 fn direction_to_csvw(direction: ProjectionDirection) -> CsvwTextDirection {
-    match direction {
-        ProjectionDirection::Ltr => CsvwTextDirection::Ltr,
-        ProjectionDirection::Rtl => CsvwTextDirection::Rtl,
-    }
+    RdfTextDirection::from(direction).into()
 }
 
 fn resolve_term<D: DatasetView>(

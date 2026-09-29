@@ -2225,10 +2225,10 @@ mod tests {
     const EX_FISH: &str = "http://example.org/Fish";
     /// A fixture individual.
     const EX_TOM: &str = "http://example.org/tom";
-    /// `rdfs:subClassOf`.
-    const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
     /// `rdf:type`.
-    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+    /// `rdfs:subClassOf`.
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS_OF;
 
     /// `Cat ⊑ Animal`, `Fish ⊑ Animal`, `tom : Cat` — consistent, with a real taxonomy and a
     /// real realization to bind.

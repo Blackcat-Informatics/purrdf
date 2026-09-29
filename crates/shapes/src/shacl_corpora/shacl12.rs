@@ -130,8 +130,8 @@ mod srlt {
     pub(crate) const DATA: &str = "http://www.w3.org/ns/sparql-rl-tests#data";
 }
 
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_xsd::datatype::XSD_BOOLEAN;
 
 // ── The case models ───────────────────────────────────────────────────────────
 

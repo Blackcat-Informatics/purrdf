@@ -85,10 +85,10 @@ impl RdfCodec for RdfXmlCodec {
     }
 }
 
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const XML_NS: &str = "http://www.w3.org/XML/1998/namespace";
-const ITS_NS: &str = "http://www.w3.org/2005/11/its";
-const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_iri::vocab::its::NS as ITS_NS;
+use purrdf_iri::vocab::rdf::NS as RDF_NS;
+use purrdf_iri::vocab::xml::NS as XML_NS;
+use purrdf_xsd::datatype::XSD_NS;
 
 const RDF_DESCRIPTION: &str = "Description";
 const RDF_ABOUT: &str = "about";
@@ -128,14 +128,6 @@ fn serialize_err(detail: impl Into<String>) -> RdfDiagnostic {
 // ───────────────────────────────────────────────────────────────────────────────
 // First-party RDF/XML term + row model (the parser's in-memory accumulation)
 // ───────────────────────────────────────────────────────────────────────────────
-
-/// RDF 1.2 base direction, parsed off `its:dir`. Mapped to the IR's
-/// [`RdfTextDirection`] when a row interns.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum BaseDirection {
-    Ltr,
-    Rtl,
-}
 
 /// A first-party RDF term the parser accumulates before interning into the IR.
 #[derive(Clone, Debug)]
@@ -276,7 +268,7 @@ struct ParseContext {
     /// for that element's subtree only, which falls out of the per-child clone.
     base: purrdf_iri::BaseScope,
     language: Option<String>,
-    direction: Option<BaseDirection>,
+    direction: Option<RdfTextDirection>,
     /// `rdf:version="1.2"` declared on this element or an ancestor: gates the RDF 1.2
     /// features (triple terms via `parseType="Triple"`, ITS base direction).
     rdf_version_12: bool,
@@ -307,11 +299,8 @@ impl ParseContext {
             next.language = (!language.is_empty()).then(|| language.to_string());
         }
         if let Some(direction) = attr_its(element, ITS_DIR) {
-            let parsed = match direction {
-                "ltr" => BaseDirection::Ltr,
-                "rtl" => BaseDirection::Rtl,
-                other => return Err(parse_err(format!("invalid ITS direction {other:?}"))),
-            };
+            let parsed = RdfTextDirection::from_str_token(direction)
+                .ok_or_else(|| parse_err(format!("invalid ITS direction {direction:?}")))?;
             // RDF 1.2 base direction is suppressed in ITS 2.0 mode (`its:version`)
             // unless the document explicitly opts into RDF 1.2 via `rdf:version="1.2"`.
             next.direction = if next.its_version && !next.rdf_version_12 {
@@ -829,15 +818,11 @@ impl RdfXmlParser {
             validate_language_tag(language)?;
             // A directional language-tagged literal carries the RDF 1.2 base direction;
             // the IR expands the datatype to rdf:langString on intern (C0.1).
-            let direction = context.direction.map(|d| match d {
-                BaseDirection::Ltr => RdfTextDirection::Ltr,
-                BaseDirection::Rtl => RdfTextDirection::Rtl,
-            });
             return Ok(RdfLiteral {
                 lexical_form: lexical.to_owned(),
                 datatype: None,
                 language: Some(language.clone()),
-                direction,
+                direction: context.direction,
             });
         }
         Ok(RdfLiteral::simple(lexical))

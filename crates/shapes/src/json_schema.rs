@@ -148,6 +148,7 @@ use std::fmt::Write as _;
 
 use ::purrdf::RdfDataset;
 use ::purrdf::RdfLocation;
+use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -169,20 +170,14 @@ mod temporal_order;
 
 use numeric_order::{BoundNumber, Decimal, Facet, Threshold, order_pattern};
 
-const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const RDFS_NS: &str = "http://www.w3.org/2000/01/rdf-schema#";
-const OWL_NS: &str = "http://www.w3.org/2002/07/owl#";
-const SH_NS: &str = "http://www.w3.org/ns/shacl#";
-/// The two datatype IRIs whose literals project as a bare JSON string (no alloc
-/// per literal — see [`crate::instance`] for the matching projection convention).
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-const XSD_FLOAT: &str = "http://www.w3.org/2001/XMLSchema#float";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::owl::NS as OWL_NS;
+use purrdf_iri::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, LANG_STRING as RDF_LANG_STRING, NIL as RDF_NIL,
+    NS as RDF_NS,
+};
+use purrdf_iri::vocab::rdfs::NS as RDFS_NS;
+use purrdf_iri::vocab::sh::NS as SH_NS;
+use purrdf_xsd::datatype::{XSD_DOUBLE, XSD_FLOAT, XSD_INTEGER, XSD_NS, XSD_STRING};
 
 /// The `xsd:integer`-derived datatypes (local names) with the bounds of their
 /// value spaces, `None` where unbounded (XSD 1.1 Part 2 §3.4).
@@ -1651,7 +1646,7 @@ fn named_range_schema(iri: &str, property: &SurfaceProperty, ctx: &Ctx<'_>) -> V
     if let Some(enum_key) = ctx.value_vocab_enums.get(iri) {
         return json!({ "$ref": format!("#/$defs/{enum_key}") });
     }
-    if iri == "http://www.w3.org/2000/01/rdf-schema#Literal" {
+    if iri == rdfs::LITERAL {
         return general_literal_schema();
     }
     if iri == RDF_LANG_STRING || iri == RDF_DIR_LANG_STRING {
@@ -5531,7 +5526,9 @@ fn datatype_value_schema(dt_iri: &str, ns: &Namespaces) -> Value {
             "properties": {
                 "@value": { "type": "string" },
                 "@language": { "type": "string" },
-                "@direction": { "enum": ["ltr", "rtl"] }
+                "@direction": {
+                    "enum": [RdfTextDirection::Ltr.as_str(), RdfTextDirection::Rtl.as_str()]
+                }
             },
             "required": ["@value", "@language", "@direction"]
         });

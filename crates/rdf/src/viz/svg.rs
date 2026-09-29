@@ -811,10 +811,7 @@ fn render_text(
         write!(
             out,
             " direction=\"{}\"",
-            match direction {
-                VizTextDirection::Ltr => "ltr",
-                VizTextDirection::Rtl => "rtl",
-            }
+            RdfTextDirection::from(direction).as_str()
         )
         .expect("writing to String cannot fail");
     }

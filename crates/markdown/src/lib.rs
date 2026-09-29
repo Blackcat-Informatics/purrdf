@@ -293,21 +293,21 @@ pub const DEFAULT_OVERLAP: usize = 128;
 /// identity, in both the preimage and the IRI.
 pub const DIGEST_ALGORITHM: &str = "sha256";
 
-/// `rdf:type`, one of the four IRIs the slicer emits that are the
-/// standard's, not the caller's.
-pub const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+/// `xsd:hexBinary`, the datatype of a unit's content digest stated as
+/// data. The lexical form is the same lowercase hex the unit's IRI
+/// carries, so a consumer compares the two without re-encoding either.
+pub use purrdf_core::datatype::XSD_HEX_BINARY;
+/// `xsd:integer`, the datatype of every ordinal, level, byte offset, and
+/// scalar offset.
+pub use purrdf_core::datatype::XSD_INTEGER;
 /// `rdf:reifies`, the RDF 1.2 predicate binding a citation node to the
 /// triple term it reifies. Like [`RDF_TYPE`] it is the standard's IRI
 /// and never a vocabulary field: reification is a shape of the data
 /// model, not a term a deployment gets to rename.
-pub const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-/// `xsd:integer`, the datatype of every ordinal, level, byte offset, and
-/// scalar offset.
-pub const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-/// `xsd:hexBinary`, the datatype of a unit's content digest stated as
-/// data. The lexical form is the same lowercase hex the unit's IRI
-/// carries, so a consumer compares the two without re-encoding either.
-pub const XSD_HEX_BINARY: &str = "http://www.w3.org/2001/XMLSchema#hexBinary";
+pub use purrdf_core::vocab::rdf::REIFIES as RDF_REIFIES;
+/// `rdf:type`, one of the four IRIs the slicer emits that are the
+/// standard's, not the caller's.
+pub use purrdf_core::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Which node a claim describes.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

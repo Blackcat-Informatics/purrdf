@@ -20,16 +20,16 @@ use ciborium::value::Value;
 
 use crate::codec::{Codec, CodecError, decode_chain};
 
-/// Well-known `xsd:string` datatype IRI used by the literal-defaulting rule (§7.1).
-pub const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// Well-known `rdf:langString` datatype IRI implied by a language tag (§7.1).
-pub const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
 /// Well-known `rdf:dirLangString` datatype IRI implied by a base direction (§7.1).
-pub const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+pub use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+/// Well-known `rdf:langString` datatype IRI implied by a language tag (§7.1).
+pub use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+/// Well-known `xsd:string` datatype IRI used by the literal-defaulting rule (§7.1).
+pub use purrdf_xsd::datatype::XSD_STRING;
 
 /// Return whether `direction` is a valid RDF 1.2 base direction token.
 pub fn is_literal_direction(direction: &str) -> bool {
-    matches!(direction, "ltr" | "rtl")
+    purrdf_events::TextDirection::from_token(direction).is_some()
 }
 
 /// The profile a container's `"l"` field (§7.1, "literal language tag (BCP 47)")
@@ -720,12 +720,11 @@ impl Graph {
                 .and_then(|term| term.value.as_deref())
                 .unwrap_or(XSD_STRING);
         }
-        if t.lang.is_some()
-            && matches!(t.direction.as_deref(), Some(direction) if is_literal_direction(direction))
-        {
-            RDF_DIR_LANG_STRING
-        } else if t.lang.is_some() {
-            RDF_LANG_STRING
+        if t.lang.is_some() {
+            purrdf_iri::vocab::language_datatype_iri(matches!(
+                t.direction.as_deref(),
+                Some(direction) if is_literal_direction(direction)
+            ))
         } else {
             XSD_STRING
         }

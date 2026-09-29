@@ -52,15 +52,10 @@ use crate::lexer::{Spanned, Token, tokenize};
 use crate::tree::Child;
 use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, IriError, LineIndex, langtag};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_iri::vocab::rdf::{
+    FIRST as RDF_FIRST, NIL as RDF_NIL, REIFIES as RDF_REIFIES, REST as RDF_REST, TYPE as RDF_TYPE,
+};
+use purrdf_xsd::datatype::{XSD_BOOLEAN, XSD_DECIMAL, XSD_DOUBLE, XSD_INTEGER};
 
 /// Parse-time configuration for the SPARQL front-end.
 ///
@@ -3767,17 +3762,18 @@ fn is_modifier_terminator_word(w: &str) -> bool {
 /// a query may write is a tag a document may hold.
 fn split_lang_dir(tag: &str, at: usize) -> Result<(String, Option<BaseDirection>)> {
     let (lang, dir) = match tag.split_once("--") {
-        Some((lang, "ltr")) => (lang, Some(BaseDirection::Ltr)),
-        Some((lang, "rtl")) => (lang, Some(BaseDirection::Rtl)),
-        Some((_, dir)) => {
-            return Err(ParseError::syntax(
-                format!(
-                    "invalid base direction `--{dir}` in `@{tag}`: \
-                     must be exactly `ltr` or `rtl` (lower case)"
-                ),
-                at,
-            ));
-        }
+        Some((lang, dir)) => match BaseDirection::from_str_token(dir) {
+            Some(direction) => (lang, Some(direction)),
+            None => {
+                return Err(ParseError::syntax(
+                    format!(
+                        "invalid base direction `--{dir}` in `@{tag}`: \
+                         must be exactly `ltr` or `rtl` (lower case)"
+                    ),
+                    at,
+                ));
+            }
+        },
         None => (tag, None),
     };
     if let Err(error) = langtag::parse_with(lang, LANGTAG_PROFILE) {

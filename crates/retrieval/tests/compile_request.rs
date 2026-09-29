@@ -37,7 +37,7 @@ use purrdf_sparql_eval::{
 
 mod common;
 
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_core::datatype::XSD_INTEGER;
 
 // ---------------------------------------------------------------------------
 // Fixtures

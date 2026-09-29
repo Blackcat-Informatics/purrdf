@@ -39,8 +39,8 @@ const SEARCH: &str = "http://example.org/pf#search";
 /// The one predicate whose literals the fixture indexes.
 const NOTE: &str = "http://example.org/note";
 
-/// The datatype `?rank` comes back as.
-const INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+// The datatype `?rank` comes back as.
+use purrdf_core::datatype::XSD_INTEGER as INTEGER;
 
 // ── rendering ────────────────────────────────────────────────────────────────
 

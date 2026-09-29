@@ -947,13 +947,13 @@ mod tests {
     const X: &str = "http://example.org/x";
     const Y: &str = "http://example.org/y";
 
-    /// `owl:sameAs` — `eq-diff1`'s first premise.
-    const OWL_SAMEAS: &str = "http://www.w3.org/2002/07/owl#sameAs";
     /// `owl:differentFrom` — what the one extension rule concludes.
-    const OWL_DIFFERENTFROM: &str = "http://www.w3.org/2002/07/owl#differentFrom";
+    use purrdf_iri::vocab::owl::DIFFERENT_FROM as OWL_DIFFERENTFROM;
+    /// `owl:sameAs` — `eq-diff1`'s first premise.
+    use purrdf_iri::vocab::owl::SAME_AS as OWL_SAMEAS;
 
-    const RDFS_DOMAIN: &str = "http://www.w3.org/2000/01/rdf-schema#domain";
-    const RDFS_RANGE: &str = "http://www.w3.org/2000/01/rdf-schema#range";
+    use purrdf_iri::vocab::rdfs::DOMAIN as RDFS_DOMAIN;
+    use purrdf_iri::vocab::rdfs::RANGE as RDFS_RANGE;
 
     #[test]
     fn rdfs_subclass_is_transitive_and_types_instances() {
@@ -2571,11 +2571,11 @@ mod tests {
     const SAYS: &str = "http://example.org/says";
     /// Fixture property `example.org/mentions`, the super-property of `says`.
     const MENTIONS: &str = "http://example.org/mentions";
-    /// `rdfs:subPropertyOf`, the axiom that drives the rewrite.
-    const RDFS_SUBPROPERTYOF: &str = "http://www.w3.org/2000/01/rdf-schema#subPropertyOf";
     /// `rdfs:Resource` — the IRI the old fold substituted for a triple term. Named here
     /// only so its ABSENCE can be asserted.
-    const RDFS_RESOURCE: &str = "http://www.w3.org/2000/01/rdf-schema#Resource";
+    use purrdf_iri::vocab::rdfs::RESOURCE as RDFS_RESOURCE;
+    /// `rdfs:subPropertyOf`, the axiom that drives the rewrite.
+    use purrdf_iri::vocab::rdfs::SUB_PROPERTY_OF as RDFS_SUBPROPERTYOF;
 
     /// `says ⊑ mentions` plus `x says <o>`, where `o` is whatever term `object` interns.
     ///

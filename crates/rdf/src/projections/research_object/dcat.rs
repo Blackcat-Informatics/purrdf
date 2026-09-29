@@ -703,11 +703,9 @@ fn encode_text(value: &ResearchText) -> Value {
         object.insert(
             "@direction".to_owned(),
             Value::String(
-                match direction {
-                    super::super::ProjectionDirection::Ltr => "ltr",
-                    super::super::ProjectionDirection::Rtl => "rtl",
-                }
-                .to_owned(),
+                purrdf_core::RdfTextDirection::from(direction)
+                    .as_str()
+                    .to_owned(),
             ),
         );
     }
@@ -1204,17 +1202,19 @@ impl DcatDecoder<'_> {
             None => None,
         };
         let direction = match object.remove("@direction") {
-            Some(Value::String(direction)) if direction == "ltr" => {
-                Some(super::super::ProjectionDirection::Ltr)
-            }
-            Some(Value::String(direction)) if direction == "rtl" => {
-                Some(super::super::ProjectionDirection::Rtl)
-            }
-            Some(_) => {
-                self.unsupported(&json_pointer(pointer, "@direction"));
-                return Ok(None);
-            }
             None => None,
+            Some(value) => {
+                match value
+                    .as_str()
+                    .and_then(purrdf_core::RdfTextDirection::from_str_token)
+                {
+                    Some(direction) => Some(super::super::ProjectionDirection::from(direction)),
+                    None => {
+                        self.unsupported(&json_pointer(pointer, "@direction"));
+                        return Ok(None);
+                    }
+                }
+            }
         };
         let explicit_datatype = match object.remove("@type") {
             Some(Value::String(datatype)) => Some(datatype),

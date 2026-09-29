@@ -1697,16 +1697,16 @@ mod tests {
     use crate::report::Construct;
 
     const NS: &str = "http://example.org/test#";
-    const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const RDFS_SUBCLASSOF_IRI: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
-    const OWL_CLASS_IRI: &str = "http://www.w3.org/2002/07/owl#Class";
-    const OWL_OBJECTPROPERTY_IRI: &str = "http://www.w3.org/2002/07/owl#ObjectProperty";
-    const OWL_RESTRICTION_IRI: &str = "http://www.w3.org/2002/07/owl#Restriction";
-    const OWL_ONPROPERTY_IRI: &str = "http://www.w3.org/2002/07/owl#onProperty";
-    const OWL_MAXCARDINALITY_IRI: &str = "http://www.w3.org/2002/07/owl#maxCardinality";
-    const OWL_HASSELF_IRI: &str = "http://www.w3.org/2002/07/owl#hasSelf";
-    const XSD_NON_NEGATIVE_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#nonNegativeInteger";
-    const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+    use purrdf_iri::vocab::owl::CLASS as OWL_CLASS_IRI;
+    use purrdf_iri::vocab::owl::HAS_SELF as OWL_HASSELF_IRI;
+    use purrdf_iri::vocab::owl::MAX_CARDINALITY as OWL_MAXCARDINALITY_IRI;
+    use purrdf_iri::vocab::owl::OBJECT_PROPERTY as OWL_OBJECTPROPERTY_IRI;
+    use purrdf_iri::vocab::owl::ON_PROPERTY as OWL_ONPROPERTY_IRI;
+    use purrdf_iri::vocab::owl::RESTRICTION as OWL_RESTRICTION_IRI;
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE_IRI;
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASSOF_IRI;
+    use purrdf_xsd::datatype::XSD_BOOLEAN;
+    use purrdf_xsd::datatype::XSD_NON_NEGATIVE_INTEGER;
 
     /// `A rdfs:subClassOf [ a owl:Restriction ; owl:onProperty p ; <facet> "<lexical>"^^<dt> ]`.
     fn restriction_ontology(

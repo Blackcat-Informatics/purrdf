@@ -2741,7 +2741,7 @@ ex:S a sh:NodeShape ; sh:targetClass ex:Person ; ex:marker ex:secret ;
     /// beside one, and two selectors beside one.
     #[test]
     fn wasm_eval_node_expr_selectors() {
-        const SH: &str = "http://www.w3.org/ns/shacl#";
+        use purrdf_core::vocab::sh::NS as SH;
         let eval = |expr: ExprInputs<'_>| {
             eval_node_expr_impl(
                 TOOLS_SHAPES,

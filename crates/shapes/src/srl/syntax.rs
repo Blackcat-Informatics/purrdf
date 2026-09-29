@@ -1228,8 +1228,11 @@ impl<'t> SrlParser<'t> {
     /// syntax language-tag profile, the profile every other RDF reader here applies.
     fn lang_dir(&self, tag: &str) -> Parse<(String, Option<RdfTextDirection>)> {
         let (language, direction) = match tag.split_once("--") {
-            Some((language, "ltr")) => (language, Some(RdfTextDirection::Ltr)),
-            Some((language, "rtl")) => (language, Some(RdfTextDirection::Rtl)),
+            Some((language, token))
+                if let Some(direction) = RdfTextDirection::from_str_token(token) =>
+            {
+                (language, Some(direction))
+            }
             Some((_, other)) => {
                 return self.error(format!(
                     "`@{tag}`: the base direction `--{other}` is neither `ltr` nor `rtl` (RDF 1.2 \

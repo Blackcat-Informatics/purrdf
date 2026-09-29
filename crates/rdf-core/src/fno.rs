@@ -36,23 +36,23 @@ use crate::{RdfLiteral, RdfQuad, RdfTerm, turtle};
 // Vocabulary
 // --------------------------------------------------------------------------- //
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
-const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
-const RDFS_COMMENT: &str = "http://www.w3.org/2000/01/rdf-schema#comment";
-const RDFS_SEE_ALSO: &str = "http://www.w3.org/2000/01/rdf-schema#seeAlso";
+use purrdf_iri::vocab::rdfs::COMMENT as RDFS_COMMENT;
+use purrdf_iri::vocab::rdfs::LABEL as RDFS_LABEL;
+use purrdf_iri::vocab::rdfs::SEE_ALSO as RDFS_SEE_ALSO;
 
-const SKOS_DEFINITION: &str = "http://www.w3.org/2004/02/skos/core#definition";
+use purrdf_iri::vocab::skos::DEFINITION as SKOS_DEFINITION;
 
-const OWL_ONTOLOGY: &str = "http://www.w3.org/2002/07/owl#Ontology";
+use purrdf_iri::vocab::owl::ONTOLOGY as OWL_ONTOLOGY;
 
 const DCTERMS_IS_PART_OF: &str = "http://purl.org/dc/terms/isPartOf";
 const DCTERMS_FORMAT: &str = "http://purl.org/dc/terms/format";
 
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+use purrdf_xsd::datatype::XSD_BOOLEAN;
 
 /// The `https://w3id.org/function/ontology#` (fno) namespace.
 const FNO: &str = "https://w3id.org/function/ontology#";

@@ -4,10 +4,10 @@
 //! The two composite datatypes, and the vocabulary IRIs the grammar pins.
 //!
 //! Every IRI constant here is a **third-party, spec-defined** string: the two CDT
-//! datatype IRIs come from SEP-0009 and the three RDF/XSD ones from the W3C
-//! Recommendations. PurRDF mints no vocabulary, and hard-coding these is not
-//! minting — they are the fixed spelling the grammar itself is written in, exactly
-//! as `purrdf-xsd` hard-codes the XML Schema namespace. They are **not**
+//! datatype IRIs come from SEP-0009, and the RDF/XSD ones are re-exported from
+//! `purrdf_iri::vocab` and `purrdf_xsd::datatype`, where the W3C spellings live.
+//! PurRDF mints no vocabulary, and naming these is not minting — they are the
+//! fixed spelling the grammar itself is written in. They are **not**
 //! caller-supplied configuration and there is no default to fabricate.
 
 /// The SEP-0009 composite-datatype namespace.
@@ -20,26 +20,26 @@ pub const CDT_LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
 pub const CDT_MAP: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map";
 
 /// `xsd:string` — the datatype a `String` with no `LANGTAG` and no `^^` denotes.
-pub const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+pub use purrdf_xsd::datatype::XSD_STRING;
 
 /// `xsd:integer` — the datatype the `INTEGER` numeric shorthand denotes.
-pub const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+pub use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// `xsd:decimal` — the datatype the `DECIMAL` numeric shorthand denotes.
-pub const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
+pub use purrdf_xsd::datatype::XSD_DECIMAL;
 
 /// `xsd:double` — the datatype the `DOUBLE` numeric shorthand denotes.
-pub const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+pub use purrdf_xsd::datatype::XSD_DOUBLE;
 
 /// `xsd:boolean` — the datatype the `BooleanLiteral` shorthand denotes.
-pub const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
+pub use purrdf_xsd::datatype::XSD_BOOLEAN;
 
 /// `rdf:langString` — the datatype of a language-tagged string with no direction.
-pub const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+pub use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 
 /// `rdf:dirLangString` — the RDF 1.2 datatype of a *directional* language-tagged
 /// string (`"lex"@lang--ltr` / `"lex"@lang--rtl`).
-pub const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+pub use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
 
 /// The SEP-0009 composite datatypes.
 ///

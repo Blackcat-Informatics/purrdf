@@ -22,7 +22,7 @@ use std::hash::Hash;
 use std::sync::Arc;
 
 use hashbrown::HashTable;
-use purrdf_iri::IriError;
+use purrdf_iri::{IriError, langtag};
 
 use crate::blank_label::LabelAlphabet;
 use crate::{
@@ -131,19 +131,6 @@ enum OwnedStep<'t> {
     Term(&'t RdfTerm),
     Predicate(&'t str),
     Assemble,
-}
-
-/// Whether `s` is its own lowercase image, tested WITHOUT building that image.
-///
-/// `str::to_lowercase` always allocates, even when it is about to return a copy of
-/// its input. A BCP 47 language tag reaching an interner has normally already been
-/// lowercased at ingress, so the copy is the common case and the comparison is what
-/// the caller actually wanted.
-/// Shared with the LOOKUP path (`RdfDataset::term_id_by_literal`) on purpose: a lookup
-/// that folded tags differently from the interner would report a term absent that this
-/// dataset holds, which is the disagreement the canonicalization exists to prevent.
-pub(crate) fn is_lowercase(s: &str) -> bool {
-    s.chars().flat_map(char::to_lowercase).eq(s.chars())
 }
 
 /// Whether a stored term equals a lookup, resolving the stored ranges through `arena`.
@@ -710,10 +697,13 @@ impl RdfDatasetBuilder {
     /// the `xsd:string` default are applied here, so both entry points expand the
     /// datatype the same way rather than each spelling the rule.
     ///
-    /// The language tag is lowercased for the key ONLY when it is not already its own
-    /// lowercase image. BCP 47 tags are case-insensitive and ingress normalizes them,
-    /// so the common case is a tag that is already lowercase and a `to_lowercase`
-    /// whose output is a copy of its input.
+    /// The language tag is folded for the key ([`langtag::identity_fold`]) ONLY when
+    /// it is not already its own fold. BCP 47 tags are case-insensitive and ingress
+    /// normalizes them, so the common case is a tag that is already folded and a
+    /// fold whose output is a copy of its input. The LOOKUP path
+    /// (`RdfDataset::term_id_by_literal`) folds with the same function on purpose: a
+    /// lookup that folded tags differently from the interner would report a term
+    /// absent that this dataset holds.
     ///
     /// Crate-internal: the owned form is the published ingress, and a second public
     /// spelling of the same operation would be surface with no caller.
@@ -747,8 +737,8 @@ impl RdfDatasetBuilder {
         }
 
         let lowered = language
-            .filter(|tag| !is_lowercase(tag))
-            .map(str::to_lowercase);
+            .filter(|tag| !langtag::is_identity_folded(tag))
+            .map(langtag::identity_fold);
         self.interner.intern(TermLookup::Literal {
             lexical,
             datatype: datatype_id,
@@ -1388,8 +1378,7 @@ impl RdfDatasetBuilder {
     /// triple)` in two distinct graphs is two bindings.
     pub fn push_reifier_in_graph(&mut self, reifier: TermId, triple: TermId, g: Option<TermId>) {
         if self.reifies_predicate.is_none() {
-            self.reifies_predicate =
-                Some(self.intern_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies"));
+            self.reifies_predicate = Some(self.intern_iri(purrdf_iri::vocab::rdf::REIFIES));
         }
         let binding = (reifier, triple, g);
         store_once(&mut self.reifiers, &mut self.reifier_index, binding);

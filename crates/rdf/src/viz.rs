@@ -115,6 +115,24 @@ pub enum VizTextDirection {
     Rtl,
 }
 
+impl From<RdfTextDirection> for VizTextDirection {
+    fn from(direction: RdfTextDirection) -> Self {
+        match direction {
+            RdfTextDirection::Ltr => Self::Ltr,
+            RdfTextDirection::Rtl => Self::Rtl,
+        }
+    }
+}
+
+impl From<VizTextDirection> for RdfTextDirection {
+    fn from(direction: VizTextDirection) -> Self {
+        match direction {
+            VizTextDirection::Ltr => Self::Ltr,
+            VizTextDirection::Rtl => Self::Rtl,
+        }
+    }
+}
+
 /// Visualization role attached to a term or statement.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1652,18 +1670,11 @@ fn viz_term_value(value: TermValue) -> Result<VizTermValue, VizError> {
             lexical_form,
             datatype,
             language,
-            direction: direction.map(viz_direction),
+            direction: direction.map(VizTextDirection::from),
         }),
         TermValue::Triple { .. } => Err(VizError::InvalidPredicate(
             "triple terms are represented as statements, not ordinary terms".to_owned(),
         )),
-    }
-}
-
-fn viz_direction(direction: RdfTextDirection) -> VizTextDirection {
-    match direction {
-        RdfTextDirection::Ltr => VizTextDirection::Ltr,
-        RdfTextDirection::Rtl => VizTextDirection::Rtl,
     }
 }
 

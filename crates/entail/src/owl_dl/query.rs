@@ -1012,8 +1012,8 @@ mod tests {
     use purrdf_core::RdfDatasetBuilder;
 
     const NS: &str = "http://example.org/dl#";
-    const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const OWL_CLASS: &str = "http://www.w3.org/2002/07/owl#Class";
+    use purrdf_iri::vocab::owl::CLASS as OWL_CLASS;
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE_IRI;
 
     /// The constructs a run raised, in the report's own order.
     fn constructs(report: &ReasoningReport) -> Vec<Construct> {

@@ -16,6 +16,7 @@ use super::{
     context_limit, validate_absolute_iri,
 };
 use crate::RdfDiagnostic;
+use purrdf_iri::langtag::identity_fold;
 // The codec's one language-tag judgement, not a second copy of it: `expand.rs`
 // already holds every value-side `@language` to
 // `langtag::Profile::ConcreteSyntaxLangtagBounded`, and a context's `@language`
@@ -565,7 +566,7 @@ impl Compiler<'_> {
                     // Ask the grammar, exactly as the value side does. The folded
                     // tag is what is judged, because the folded tag is what the
                     // context holds and what a compacted document would carry.
-                    let language = language.to_ascii_lowercase();
+                    let language = identity_fold(language);
                     validate_context_language_tag(&language, "@context @language")?;
                     Some(language)
                 }
@@ -578,7 +579,7 @@ impl Compiler<'_> {
             active.default_direction = match value {
                 Value::Null => None,
                 Value::String(direction) => {
-                    Some(JsonLdDirection::parse(direction).ok_or_else(|| {
+                    Some(JsonLdDirection::from_str_token(direction).ok_or_else(|| {
                         context_error("JSON-LD @direction must be `ltr`, `rtl`, or null")
                     })?)
                 }
@@ -1427,7 +1428,7 @@ fn compile_language_mapping(
             // The per-term half of the same gate; `carrier.rs` serializes a term
             // definition's `@language` into a compacted document just as it does
             // the default one.
-            let language = language.to_ascii_lowercase();
+            let language = identity_fold(language);
             validate_context_language_tag(&language, &format!("term `{term}` @language"))?;
             Ok(JsonLdNullable::Value(language))
         }
@@ -1443,7 +1444,7 @@ fn compile_direction_mapping(
 ) -> Result<JsonLdNullable<JsonLdDirection>, RdfDiagnostic> {
     match value {
         Value::Null => Ok(JsonLdNullable::Null),
-        Value::String(direction) => JsonLdDirection::parse(direction)
+        Value::String(direction) => JsonLdDirection::from_str_token(direction)
             .map(JsonLdNullable::Value)
             .ok_or_else(|| {
                 context_error(format!(
@@ -1679,7 +1680,7 @@ fn build_inverse_context(active: &ActiveContext) -> InverseContext {
             (Some(language), None) => {
                 let key = match language {
                     JsonLdNullable::Null => "@null".to_owned(),
-                    JsonLdNullable::Value(language) => language.to_ascii_lowercase(),
+                    JsonLdNullable::Value(language) => identity_fold(language),
                 };
                 selection
                     .languages
@@ -1706,7 +1707,7 @@ fn build_inverse_context(active: &ActiveContext) -> InverseContext {
                 } else {
                     selection
                         .languages
-                        .entry(default_language.to_ascii_lowercase())
+                        .entry(identity_fold(default_language))
                         .or_insert_with(|| term.clone());
                 }
                 selection
@@ -1738,9 +1739,9 @@ fn explicit_language_direction_key(
 ) -> String {
     match (language, direction) {
         (JsonLdNullable::Value(language), JsonLdNullable::Value(direction)) => {
-            format!("{}_{}", language.to_ascii_lowercase(), direction.as_str())
+            format!("{}_{}", identity_fold(language), direction.as_str())
         }
-        (JsonLdNullable::Value(language), JsonLdNullable::Null) => language.to_ascii_lowercase(),
+        (JsonLdNullable::Value(language), JsonLdNullable::Null) => identity_fold(language),
         (JsonLdNullable::Null, JsonLdNullable::Value(direction)) => {
             format!("_{}", direction.as_str())
         }

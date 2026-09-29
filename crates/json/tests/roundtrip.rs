@@ -20,7 +20,7 @@ use purrdf_rdf::{NativeRdfFormat, parse_dataset, serialize_dataset_to_format};
 
 const SOURCE: &str = "https://example.org/doc.json";
 const BASE: &str = "https://example.org/json#";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_core::datatype::XSD_INTEGER;
 const CORPUS: [&str; 19] = [
     r#"["\uD800","\uDC00","\uD800\u0041","\uD800\uDC00"]"#,
     "null",

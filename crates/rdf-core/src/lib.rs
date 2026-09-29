@@ -227,6 +227,10 @@ pub use provenance::{
     DatasetProvenance, OriginKind, OriginSetId, OriginSetInterner, ProvenanceError, UnitId,
     UnitInterner, check_provenance,
 };
+/// The BCP 47 language-tag grammar and the RDF 1.2 identity fold of a tag
+/// ([`langtag::identity_fold`]), re-exported so every crate above the kernel
+/// folds and judges tags by the one law the kernel interns under.
+pub use purrdf_iri::langtag;
 /// The exact Turtle/SPARQL terminal character classes (`WS`, `PN_CHARS_BASE`,
 /// `PN_CHARS_U`, `PN_CHARS`, `VARNAME`), re-exported from [`purrdf_iri`].
 ///
@@ -240,6 +244,10 @@ pub use provenance::{
 /// same productions as the EGRESS contract, and the two are checked against
 /// each other.
 pub use purrdf_iri::terminals;
+/// The W3C vocabulary terms every crate above the kernel names, one module per
+/// namespace, re-exported so a crate that reaches the kernel reaches the one
+/// spelling of each term without a second dependency edge.
+pub use purrdf_iri::vocab;
 /// The IRI law this kernel interns under, and the typed failure its mutation
 /// surfaces return.
 ///
@@ -256,6 +264,9 @@ pub use purrdf_iri::terminals;
 /// [`purrdf_iri::parse`] under a name that stays unambiguous in this crate's flat
 /// root.
 pub use purrdf_iri::{BaseIri, Iri, IriError, parse as parse_iri};
+/// The XSD datatype and constraining-facet IRIs, re-exported for the same reason
+/// as [`vocab`].
+pub use purrdf_xsd::datatype;
 pub use small::{IdVec, SmallVec};
 pub use sssom::{
     SSSOM_DEFAULT_VALIDATION_TYPES, SssomColumnLayout, SssomColumnLayoutError, SssomCommentError,

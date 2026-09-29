@@ -17,8 +17,13 @@ use std::fmt;
 use std::sync::{Arc, OnceLock};
 
 use ::purrdf::RdfLocation;
+use ::purrdf::RdfTextDirection;
 use ::purrdf::loss::{LossEntry, LossLedger, check_ledger_sound, schema_to_shacl_loss_ledger};
 use purrdf_hash::fnv::fnv1a64;
+use purrdf_iri::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, FIRST as RDF_FIRST, LANG_STRING as RDF_LANG_STRING,
+    NIL as RDF_NIL, REST as RDF_REST, TYPE as RDF_TYPE,
+};
 use purrdf_xsd::ieee::Binary64Scope;
 use serde_json::{Map, Number, Value};
 
@@ -34,9 +39,6 @@ const JSON_SCHEMA_DIALECT: &str = "https://json-schema.org/draft/2020-12/schema"
 /// A property schema split into its per-value schema, `minItems`, `maxItems`,
 /// and the `sh:hasValue` constants an array form states under `contains`.
 type CardinalitySplit = (Value, Option<u64>, Option<u64>, Vec<Value>);
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
 const JSON_SCHEMA_SOURCE: &str = "json-schema";
 const MAX_SCHEMA_BYTES: usize = 16 * 1024 * 1024;
 const MAX_DEFINITIONS: usize = 65_536;
@@ -1789,15 +1791,9 @@ impl ImportContext<'_> {
         else {
             return Ok(false);
         };
-        let first = self
-            .config
-            .namespaces
-            .compact_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#first");
-        let rest = self
-            .config
-            .namespaces
-            .compact_iri("http://www.w3.org/1999/02/22-rdf-syntax-ns#rest");
-        let nil = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+        let first = self.config.namespaces.compact_iri(RDF_FIRST);
+        let rest = self.config.namespaces.compact_iri(RDF_REST);
+        let nil = RDF_NIL;
         let nil_form = serde_json::json!({
             "type": "object",
             "properties": {
@@ -2842,8 +2838,8 @@ fn is_dir_lang_string_schema(value: &Value) -> bool {
                             .get("@direction")
                             .and_then(|schema| schema.get("enum"))
                             == Some(&Value::Array(vec![
-                                Value::String("ltr".to_owned()),
-                                Value::String("rtl".to_owned()),
+                                Value::String(RdfTextDirection::Ltr.as_str().to_owned()),
+                                Value::String(RdfTextDirection::Rtl.as_str().to_owned()),
                             ]))
                 })
             && is_exact_required(
@@ -3566,6 +3562,7 @@ fn validate_unique_string_array(value: &Value, path: &str) -> Result<(), SchemaI
 #[cfg(test)]
 mod tests {
     use super::*;
+    use purrdf_xsd::datatype::XSD_NS as XSD;
     use serde_json::json;
 
     #[test]
@@ -3579,8 +3576,6 @@ mod tests {
         assert_eq!(case_insensitive_tag("\\u{41}").as_deref(), Some("A"));
         assert_eq!(case_insensitive_tag("\\u{0041}-1").as_deref(), Some("A-1"));
     }
-
-    const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
     fn config() -> SchemaImportConfig {
         let namespaces = Namespaces::new(

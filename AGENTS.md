@@ -60,7 +60,7 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
 | `purrdf-markdown` (`crates/markdown`) | Structural Markdown-to-RDF 1.2 slicer under a shipped specification: a typed stand-off model over verbatim byte spans, projected to claims; sole runtime dependency is `purrdf-core` |
 | `purrdf-hash` | The zero-dependency root |
 | `purrdf-lex` (`crates/lex`) | Native lexical foundations shared by every grammar, over the zero-dependency `purrdf-hash` root: the exact Turtle/SPARQL/XML terminal classes and escape decoders (`terminals`: `decode_uchar`, `echar_value`, `decode_char_ref`, `skip_ws`/`trim_ws`, `is_ncname`, `in_ranges`), the chunked byte-class scanners and `ByteClass` kernel that lower to packed compares on SSE2/AVX2/AVX-512, NEON and wasm simd128, with `find_byte`/`find_byte2` for needles known at run time (`scan`), the RFC 8259 JSON string escaper and decoder every JSON writer and reader shares (`json_escape`), RFC 6901 JSON Pointer tokens (`json_pointer`) and RFC 3986 percent-encoding (`percent`); its scope is the workspace's lexical layer — byte-class scanning, terminals, term syntax, literal/IRI escaping, percent encoding, JSON strings and pointers, a JSON reader/writer, an XML reader and Unicode normalisation |
-| `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags, IDNA2008); runtime dependencies are `purrdf-lex`, whose `terminals`, `scan`, `json_escape`, `json_pointer` and `percent` it re-exports, and the `purrdf-hash` root |
+| `purrdf-iri` (`crates/iri`) | IRI/URI value space (RFC 3987/3986 parse, resolution, normalization, CURIEs, BCP 47 tags and their RDF 1.2 identity fold, IDNA2008) and `vocab`, the W3C vocabulary terms (one module per W3C namespace; XSD datatype IRIs live in `purrdf_xsd::datatype`); runtime dependencies are `purrdf-lex`, whose `terminals`, `scan`, `json_escape`, `json_pointer` and `percent` it re-exports, and the `purrdf-hash` root |
 | `purrdf-xsd` | Foundation over `purrdf-hash` alone |
 | `purrdf-events` | Zero-dependency foundation |
 | `purrdf-deflate` | Leaf over `purrdf-hash` alone |
@@ -157,7 +157,10 @@ Crate map (all under `crates/`, published names in `Cargo.toml`):
   exercised without its vocabulary hard-errors or stays inactive. Never
   hardcode a `blackcatinformatics.ca` namespace in library code (the GMEOW
   ontology is a *consumer*; the dependency arrow never points from purrdf to
-  it). Test fixtures use `example.org`.
+  it). Test fixtures use `example.org`. W3C Recommendation terms are the one
+  built-in vocabulary: name them through `purrdf_iri::vocab` (and XSD through
+  `purrdf_xsd::datatype`), never as string literals — the helper census
+  (`w3c-vocab`) refuses a literal that spells a term or namespace of either.
 * **Generated artifacts** under `generated/` are projections — never hand-edit;
   regenerate via `make metadata` (`scripts/check-generated.sh` gates drift).
 * **Dependency versions live in one place**: `[workspace.dependencies]` in the

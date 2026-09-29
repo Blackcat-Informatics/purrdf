@@ -31,8 +31,8 @@ use crate::iri_escape::is_iriref_escape_required;
 use crate::model::RdfTextDirection;
 use crate::{FastMap, RdfDataset, TermId, TermRef};
 
-const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_iri::vocab::rdf::NS as RDF;
+use purrdf_xsd::datatype::XSD_NS as XSD;
 
 fn rdf(local: &str) -> String {
     format!("{RDF}{local}")

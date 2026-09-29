@@ -34,6 +34,38 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 - **hash:** `purrdf_hash::hex::parse_u32`, the number one or more hex digits
   spell, with no sign, prefix or whitespace (`u32::from_str_radix` accepts a
   leading `+`).
+- **iri:** `purrdf_iri::vocab`, the W3C vocabulary terms the workspace names,
+  one module per namespace (`rdf`, `rdfs`, `owl`, `sh`, `shnex`, `sparql`,
+  `sd`, `xpath`, `skos`, `prov`, `rif`, `its`, `xml`, `dcat`, `org`, `oa`,
+  `odrl`, `time`, `sosa`, `ssn`, `ma`, `activitystreams`, `did`, `cred`), each
+  with its namespace as `NS` and one constant per term. Every namespace is a
+  W3C Recommendation's; nothing outside a W3C namespace is a constant here.
+  `vocab::language_datatype_iri(has_direction)` gives the RDF 1.2 datatype of
+  a language-tagged string (`rdf:dirLangString` with a base direction,
+  `rdf:langString` without). The shapes crate's public `sh`, `shnex`,
+  `sparql_ns`, `rdf`, `rdfs` and `xsd` modules re-export these constants under
+  their existing names.
+- **iri:** `langtag::identity_fold` and `langtag::is_identity_folded`, the
+  RDF 1.2 value-space fold of a language tag (ASCII lowercase, equal to
+  Unicode lowercase on every well-formed tag). Every place the workspace folds
+  or compares a language tag by case now uses them.
+- **xsd:** `datatype::{XSD_ANY_URI, XSD_NORMALIZED_STRING, XSD_TOKEN,
+  XSD_LANGUAGE, XSD_NAME, XSD_NCNAME, XSD_NMTOKEN, XSD_DATE_TIME_STAMP}`, the
+  fourteen constraining facets of XML Schema 1.1 Part 2 §4.3 (`XSD_LENGTH`
+  through `XSD_EXPLICIT_TIMEZONE`), and `OWL_REAL`/`OWL_RATIONAL`, the two
+  datatypes the OWL 2 datatype map adds. `rational::OWL_RATIONAL` re-exports
+  the latter.
+- **core:** `purrdf_core::vocab`, `purrdf_core::datatype` and
+  `purrdf_core::langtag` re-export the three homes above, so every crate that
+  reaches the kernel names each term, and folds each tag, the one way.
+- **gates:** the helper census gains two literal rules. `rule:vocabulary-literal`
+  (ledger job `w3c-vocab`, enforced) refuses a string literal in shipping code
+  that equals or starts with a namespace declared in `purrdf_iri::vocab` or
+  `purrdf_xsd::datatype` outside those modules, reading the namespaces from
+  their `NS`/`*_NS` constants; a multi-line literal holding a Turtle or SPARQL
+  keyword is an embedded document and exempt. `rule:home-literal` (job
+  `text-direction`) refuses the `ltr`/`rtl` tokens outside
+  `purrdf_cdt::TextDirection`, the one base-direction type.
 - **hash:** `purrdf_hash::hex` is the workspace's base16 (RFC 4648 §8) codec.
   Rendering: `Lower` and `Upper` (`Display`, no allocation), `encode` /
   `encode_upper` (an owned `String`), `encode_into` / `encode_upper_into`
@@ -1155,6 +1187,25 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
   answers through `purrdf_lex::terminals::is_ncname`; the SHACL, OWL and CSVW
   lexical-form trims are `trim_ws`. HTTP Basic credentials in `SERVICE`
   requests are encoded by `purrdf_xsd::canonical_base64`.
+- **rdf, python (BREAKING):** `GtsFoldView` compacts IRIs to CURIEs only under the W3C
+  namespaces it builds in — `rdf`, `rdfs`, `owl`, `xsd` and `skos`, taken from
+  `purrdf_iri::vocab` and `purrdf_xsd::datatype` — and under the prefixes the
+  caller supplies in `GtsFoldViewConfig::curie_prefixes`. The built-in
+  `schema:` prefix for `https://schema.org/` is gone: PurRDF supplies no
+  vocabulary that is not a W3C Recommendation's, so a schema.org IRI is now
+  returned in full by `GtsFoldView::curie` and `PublicValue::Iri` unless the
+  caller supplies `("schema", "https://schema.org/")`. `rdfs:label` and the
+  other W3C terms compact as before. Python's `GtsFoldViewNative.from_bytes`
+  and `from_parts` take the caller's prefixes as a new optional
+  `curie_prefixes` list of `(prefix, namespace)` pairs.
+- **rdf (BREAKING):** `JsonLdDirection` is a re-export of the one RDF 1.2
+  base-direction type (`purrdf_core::RdfTextDirection`): its variants are
+  `Ltr`/`Rtl` rather than `LeftToRight`/`RightToLeft`, and it gains
+  `from_str_token`. `as_str` and the JSON-LD bytes are unchanged.
+- **core, sparql-algebra:** `RdfTextDirection` and `BaseDirection` are
+  re-exports of `purrdf_cdt::TextDirection`, the one RDF 1.2 base-direction
+  type; `as_str` is a `const fn`, `from_str_token` reads the `ltr`/`rtl`
+  token, and `BaseDirection` gains `PartialOrd`/`Ord`.
 - **core, gts:** base16 has one implementation, `purrdf_hash::hex`, and the
   copies are gone. **Breaking API:** the `purrdf_core::hex` module is removed
   (`purrdf_core::hex::lower(bytes)` is `purrdf_hash::hex::encode(bytes)`, the

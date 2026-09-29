@@ -697,7 +697,9 @@ fn diagnosed_by(
     result: &ShaclShaclResult,
     diagnostics: &[MandatoryDiagnostic],
 ) -> Option<&'static str> {
-    if result.component != SH_MIN_LIST_LENGTH_COMPONENT {
+    // `sh:MinListLengthConstraintComponent` is the component `shacl-shacl.ttl`
+    // reports an empty `sh:in` or `sh:xone` list under.
+    if result.component != sh::MIN_LIST_LENGTH_CONSTRAINT_COMPONENT {
         return None;
     }
     let Some(Term::NamedNode(path)) = &result.path else {
@@ -711,11 +713,6 @@ fn diagnosed_by(
         .any(|diagnostic| diagnostic.rule == *rule && diagnostic.shape == result.focus)
         .then_some(*rule)
 }
-
-/// `sh:MinListLengthConstraintComponent`, the component `shacl-shacl.ttl` reports an empty
-/// `sh:in` or `sh:xone` list under.
-const SH_MIN_LIST_LENGTH_COMPONENT: &str =
-    "http://www.w3.org/ns/shacl#MinListLengthConstraintComponent";
 
 /// Every shape of `dataset` — the shapes graph's whole `owl:imports` closure — with an
 /// empty `sh:in` or `sh:xone` list, ordered by rule id and then canonically by shape.
@@ -767,7 +764,7 @@ fn shacl_shacl() -> Result<Shapes, String> {
         .map_err(|errors| format!("shacl-shacl.ttl does not parse: {}", errors.join("; ")))?;
     let mut imports = ShapesImports::new();
     imports
-        .insert_turtle(SH_NAMESPACE, SHACL_VOCABULARY)
+        .insert_turtle(sh::NS, SHACL_VOCABULARY)
         .map_err(|e| format!("shacl.ttl does not load as shacl-shacl.ttl's import: {e}"))?;
     from_dataset_with_base(
         &document.dataset,
@@ -780,11 +777,8 @@ fn shacl_shacl() -> Result<Shapes, String> {
     .map_err(|e| format!("shacl-shacl.ttl does not load as a shapes graph: {e}"))
 }
 
-/// The ontology IRI `shacl-shacl.ttl` imports.
-const SH_NAMESPACE: &str = "http://www.w3.org/ns/shacl#";
-
 /// The W3C SHACL vocabulary, vendored byte-exact: the document that declares
-/// [`SH_NAMESPACE`] an ontology.
+/// [`sh::NS`], the ontology IRI `shacl-shacl.ttl` imports, an ontology.
 const SHACL_VOCABULARY: &str = include_str!("../spec/shacl.ttl");
 
 #[cfg(test)]
@@ -858,7 +852,7 @@ mod tests {
     fn a_data_graph_import_without_an_ontology_type_is_an_info_finding() {
         const SHSH_DATA_GRAPH_IMPORTS: &str =
             "<http://www.w3.org/ns/shacl-shacl#DataGraphImportsShape>";
-        const SH_INFO: &str = "http://www.w3.org/ns/shacl#Info";
+        use purrdf_iri::vocab::sh::INFO as SH_INFO;
         let flagged = report(
             &format!("ex:D a sh:DataGraph ; owl:imports <{LIB}> .\n"),
             &ShapesImports::new(),

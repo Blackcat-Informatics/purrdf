@@ -40,12 +40,9 @@ use crate::spec::ValueRule;
 use crate::spec::census::{self, Role, Site, TermClass};
 use crate::term::{NamedNode, Term, term_id_to_native};
 
-/// `rdf:langString`.
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-/// `rdf:dirLangString`.
-const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
-/// `rdf:HTML`.
-const RDF_HTML: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#HTML";
+use purrdf_iri::vocab::rdf::{
+    DIR_LANG_STRING as RDF_DIR_LANG_STRING, HTML as RDF_HTML, LANG_STRING as RDF_LANG_STRING,
+};
 
 /// The terms a SPARQL-based constraint node carries (SHACL 1.2 SPARQL
 /// Extensions, "SPARQL-based Constraints" and "Annotation Properties"): its query
@@ -240,7 +237,9 @@ impl Parser<'_> {
                     continue;
                 };
                 if let Some(tag) = literal.language() {
-                    *tags.entry(tag.to_ascii_lowercase()).or_default() += 1;
+                    *tags
+                        .entry(purrdf_iri::langtag::identity_fold(tag))
+                        .or_default() += 1;
                 } else if literal.datatype_str() == xsd::STRING {
                     strings += 1;
                 }

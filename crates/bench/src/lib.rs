@@ -624,11 +624,11 @@ fn predicate_of(seed: u64, slot: u64) -> &'static str {
 /// The RDF 1.2 reification predicate. W3C standard vocabulary: using it is
 /// what the spec requires, not a vocabulary this project mints. Every *data*
 /// IRI in the corpus stays under `example.org`.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// The XML Schema datatype namespace — again W3C standard vocabulary, used as
 /// the specs require.
-const XSD_NAMESPACE: &str = "http://www.w3.org/2001/XMLSchema#";
+use purrdf_xsd::datatype::XSD_NS as XSD_NAMESPACE;
 
 /// The datatypes typed-literal rows cycle over, as local names under
 /// [`XSD_NAMESPACE`]. Positions here are the arms of [`write_typed_literal`].

@@ -39,7 +39,7 @@ use crate::{
     query_with_entailment_closure_governed, serialize_dataset_with,
 };
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_core::datatype::XSD_STRING;
 
 /// A COW mutable RDF dataset over the native `purrdf-core` IR.
 #[pyclass(name = "MutableDataset")]

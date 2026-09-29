@@ -37,7 +37,7 @@ use crate::ast::{IriExclusion, LanguageExclusion, LiteralExclusion, StemValue};
 use crate::error::{Result, ShexError};
 use crate::lexer::{CodeName, Spanned, Token, tokenize};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Deepest allowed expression nesting; beyond this the parser hard-fails
 /// rather than risking stack exhaustion on hostile input. Each syntactic
@@ -901,7 +901,7 @@ impl Parser<'_> {
                             // Language-tagged literals carry lowercase tags
                             // in the RDF data model (and the ShExJ ground
                             // truth).
-                            language: Some(tag.to_ascii_lowercase()),
+                            language: Some(purrdf_iri::langtag::identity_fold(&tag)),
                             datatype: None,
                         })
                     }

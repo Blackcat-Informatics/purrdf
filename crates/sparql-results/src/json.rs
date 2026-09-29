@@ -59,7 +59,7 @@ use purrdf_iri::json_escape::{JsonEscapes, escape_body};
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
 /// BARE — no `"datatype"` member — per the SPARQL 1.2 Query Results JSON
 /// Format spec's own encoding table (see the module docs).
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_core::datatype::XSD_STRING;
 
 /// Serialize a [`SparqlResult`] to SPARQL Results JSON, appending the additive
 /// provenance extension — keyed under `namespace.prefix` — when `provenance` is
@@ -487,8 +487,8 @@ mod tests {
     use purrdf_core::terminals::find_first_json_string_special;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+    use purrdf_core::datatype::XSD_INTEGER;
+    use purrdf_core::vocab::rdf::LANG_STRING as RDF_LANGSTRING;
 
     fn json_text(result: &SparqlResult, prov: &ResultProvenance) -> String {
         let outcome = to_json(result, prov, None).expect("serialization succeeds");

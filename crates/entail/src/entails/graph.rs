@@ -59,10 +59,10 @@ fn implicit_datatype(
     language: Option<&String>,
     direction: Option<RdfTextDirection>,
 ) -> &'static str {
-    match (language, direction) {
-        (Some(_), Some(_)) => crate::vocab::RDF_DIRLANGSTRING,
-        (Some(_), None) => crate::vocab::RDF_LANGSTRING,
-        (None, _) => crate::vocab::XSD_STRING,
+    if language.is_some() {
+        purrdf_iri::vocab::language_datatype_iri(direction.is_some())
+    } else {
+        crate::vocab::XSD_STRING
     }
 }
 
@@ -159,11 +159,7 @@ mod tests {
     ) -> TermValue {
         TermValue::Literal {
             lexical_form: lexical_form.to_owned(),
-            datatype: if direction.is_some() {
-                crate::vocab::RDF_DIRLANGSTRING.to_owned()
-            } else {
-                crate::vocab::RDF_LANGSTRING.to_owned()
-            },
+            datatype: purrdf_iri::vocab::language_datatype_iri(direction.is_some()).to_owned(),
             language: Some(language.to_owned()),
             direction,
         }

@@ -1383,7 +1383,7 @@ fn separate(out: &mut String, first: &mut bool) {
 }
 
 /// The datatype a simple literal carries.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// What one endpoint contributed to the clause.
 enum Block<I: purrdf_core::ViewTermId> {
@@ -1535,7 +1535,7 @@ mod tests {
     use crate::remote::{RemoteError, ResolvedBindings, ServiceRequest, ServiceResolver};
 
     const EX: &str = "http://example.org/";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_xsd::datatype::XSD_STRING;
 
     /// `ex:g1 → ex:e1`, `ex:g2 → ex:e2`, `ex:g3 → ex:e1` (a repeated endpoint), `ex:g4 →
     /// ex:e3` (an endpoint that answers nothing) and `ex:g5 → ex:down` (an endpoint that

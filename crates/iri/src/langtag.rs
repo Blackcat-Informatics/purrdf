@@ -1805,6 +1805,40 @@ pub fn is_well_formed(tag: &str) -> bool {
     parse(tag).is_ok()
 }
 
+/// The RDF 1.2 identity fold of a language tag: its ASCII lowercase spelling.
+///
+/// RDF 1.2 Concepts §3.3 gives language tags a lowercase value space — two
+/// literals whose tags differ only in case are the same term — and every
+/// `Language-Tag` this module accepts is ASCII, so the fold is ASCII
+/// lowercasing: on a well-formed tag it agrees with Unicode lowercasing byte for
+/// byte. This is the key under which a store identifies a tag and under which
+/// two tags compare case-insensitively (a language-range match, a
+/// language-keyed map); it is not the §2.1.1 presentation case, which
+/// [`canonical_case`] writes. It never judges the tag: fold what the grammar has
+/// accepted.
+///
+/// # Examples
+///
+/// ```rust
+/// use purrdf_iri::langtag::{identity_fold, is_identity_folded};
+///
+/// assert_eq!(identity_fold("en-US"), "en-us");
+/// assert_eq!(identity_fold("zh-Hant-TW"), "zh-hant-tw");
+/// assert!(is_identity_folded("en-us"));
+/// assert!(!is_identity_folded("en-US"));
+/// ```
+#[must_use]
+pub fn identity_fold(tag: &str) -> String {
+    tag.to_ascii_lowercase()
+}
+
+/// `true` when `tag` is already its own [`identity_fold`], tested without
+/// building the folded copy.
+#[must_use]
+pub fn is_identity_folded(tag: &str) -> bool {
+    !tag.bytes().any(|byte| byte.is_ascii_uppercase())
+}
+
 /// `true` when `tag` matches the `Language-Tag` production as `profile` draws
 /// it. [`is_well_formed`] is this with [`Profile::Rfc5646`].
 ///
@@ -2584,9 +2618,34 @@ fn is_private_use_subtag(text: &str, profile: Profile) -> bool {
 mod tests {
     use super::{
         Extension, GRANDFATHERED, LanguageTagBuf, LanguageTagError, Profile, TagForm,
-        canonical_case, canonical_case_with, is_well_formed, is_well_formed_with, parse,
-        parse_with,
+        canonical_case, canonical_case_with, identity_fold, is_identity_folded, is_well_formed,
+        is_well_formed_with, parse, parse_with,
     };
+
+    /// The identity fold agrees with Unicode lowercasing on every well-formed
+    /// tag, is idempotent, and is what `is_identity_folded` tests.
+    #[test]
+    fn the_identity_fold_is_unicode_lowercase_on_well_formed_tags() {
+        for tag in [
+            "en",
+            "EN-us",
+            "zh-Hant-TW",
+            "sgn-BE-FR",
+            "de-CH-x-Phonebk",
+            "i-KLINGON",
+            "en-US-u-CA-gregory",
+            "x-Whatever",
+        ] {
+            assert!(is_well_formed(tag), "{tag}");
+            let folded = identity_fold(tag);
+            assert_eq!(folded, tag.to_lowercase(), "{tag}");
+            assert_eq!(identity_fold(&folded), folded, "{tag}");
+            assert!(is_identity_folded(&folded), "{tag}");
+            assert_eq!(is_identity_folded(tag), folded == tag, "{tag}");
+        }
+        assert_eq!(identity_fold(""), "");
+        assert!(is_identity_folded(""));
+    }
 
     #[test]
     fn langtag_sections_are_reported_as_slices_of_the_input() {

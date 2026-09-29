@@ -17,7 +17,7 @@ use purrdf_core::{RdfLiteral, RdfTerm, RdfTriple, TermValue, emit_term};
 /// non-language) literal. The egress model always populates `datatype`, so a
 /// plain literal arrives as a literal carrying this IRI; the owned model and
 /// Turtle/N-Triples abbreviate it to a bare `"lex"` form.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_core::datatype::XSD_STRING;
 
 /// Bridge an egress [`TermValue`] into the owned [`RdfTerm`] model.
 ///

@@ -37,7 +37,7 @@ const TEXT_PRODUCER: &str = "https://example.org/pf/search";
 const TEXT_STRATUM: &str = "https://example.org/stratum/lexical";
 const HNSW_PRODUCER: &str = "https://example.org/pf/nearest";
 const HNSW_STRATUM: &str = "https://example.org/stratum/vector";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// The entities BOTH producers name. One corpus, ranked twice under two laws,
 /// which is the shape a fused answer exists for.

@@ -35,6 +35,23 @@
 //! Macro arguments are parsed as expressions where they are expressions
 //! (`assert_eq!(m, HashMap::from(…))`), so a constructor inside one is seen.
 //!
+//! `vocabulary-literal` finds a vocabulary term written out as a string where
+//! the vocabulary's constant should be named. Its namespaces are not listed
+//! here: they are read from the job's home and entry-point modules, every
+//! `const` named `NS` or ending in `_NS` declared under them. A string literal in
+//! shipping source outside those modules that equals one of those namespaces or
+//! starts with one is a hit — it is a term, or a namespace, typed a second
+//! time. A literal holding a line break and a Turtle or SPARQL keyword is an
+//! embedded document (a test query, a shapes graph) and is not a hit: the
+//! namespaces inside it are that document's own text.
+//!
+//! `home-literal` finds a token the job's home spells written out again: a
+//! string literal in shipping source outside the home item that equals one of
+//! the string literals the home item's own bodies hold. A home whose job is to
+//! spell and read a closed set of tokens (the `ltr`/`rtl` of a base direction)
+//! is the one place those tokens are typed; anywhere else a literal equal to
+//! one of them is a second spelling or a second parser.
+//!
 //! Three rules hold base16 to its one home, `purrdf_hash::hex`:
 //!
 //! * `hex-format-loop`: a formatting macro (`format!`, `write!`, `writeln!`,
@@ -87,6 +104,65 @@ pub(crate) const STD_DEFAULT_HASHER: &str = "rule:std-default-hasher";
 /// that script alone.
 pub(crate) const DELEGATED_RULES: [&str; 2] = ["rule:raw-hash-domain", "rule:shared-hash-domain"];
 
+/// The rule id a ledger job's `forbidden.fingerprints` names to forbid a
+/// vocabulary term or namespace written out as a string literal.
+pub(crate) const VOCABULARY_LITERAL: &str = "rule:vocabulary-literal";
+
+/// The rule id a ledger job's `forbidden.fingerprints` names to forbid a
+/// literal its home item spells, written out anywhere else.
+pub(crate) const HOME_LITERAL: &str = "rule:home-literal";
+
+/// The keywords that mark a multi-line literal as an embedded Turtle, TriG or
+/// SPARQL document; compared case-insensitively, as whole words.
+const DOCUMENT_KEYWORDS: [&str; 15] = [
+    "@prefix",
+    "@base",
+    "prefix",
+    "base",
+    "select",
+    "construct",
+    "ask",
+    "describe",
+    "insert",
+    "delete",
+    "where",
+    "load",
+    "clear",
+    "create",
+    "drop",
+];
+
+/// Whether a string literal is an embedded document: it spans lines and holds
+/// a Turtle or SPARQL keyword as a whole word.
+pub(crate) fn is_embedded_document(text: &str) -> bool {
+    text.contains('\n')
+        && text
+            .split(|c: char| !(c.is_ascii_alphanumeric() || c == '@' || c == '_'))
+            .any(|word| {
+                DOCUMENT_KEYWORDS
+                    .iter()
+                    .any(|keyword| word.eq_ignore_ascii_case(keyword))
+            })
+}
+
+/// Whether `name` names a namespace constant.
+pub(crate) fn is_namespace_name(name: &str) -> bool {
+    name == "NS" || name.ends_with("_NS")
+}
+
+/// The namespace `literal` equals or starts with, if any: the longest, so the
+/// report names the most specific vocabulary.
+pub(crate) fn vocabulary_namespace<'a>(literal: &str, namespaces: &'a [String]) -> Option<&'a str> {
+    if is_embedded_document(literal) {
+        return None;
+    }
+    namespaces
+        .iter()
+        .filter(|namespace| literal.starts_with(namespace.as_str()))
+        .max_by_key(|namespace| namespace.len())
+        .map(String::as_str)
+}
+
 /// A two-digit hex format spec inside a loop or closure.
 pub(crate) const HEX_FORMAT_LOOP: &str = "rule:hex-format-loop";
 /// `u8::from_str_radix(_, 16)`.
@@ -101,8 +177,10 @@ pub(crate) const JSON_POINTER_ESCAPE: &str = "rule:json-pointer-escape";
 pub(crate) const HEX_DIGIT_RADIX: &str = "rule:hex-digit-radix";
 
 /// Every rule the census computes itself.
-pub(crate) const RULES: [&str; 7] = [
+pub(crate) const RULES: [&str; 9] = [
     STD_DEFAULT_HASHER,
+    VOCABULARY_LITERAL,
+    HOME_LITERAL,
     HEX_FORMAT_LOOP,
     HEX_PAIR_RADIX,
     HEX_TABLE,
@@ -921,7 +999,63 @@ pub(crate) fn lex_rules(package: &str, file: &str, parsed: &syn::File) -> Vec<Ru
 
 #[cfg(test)]
 mod tests {
-    use super::std_default_hasher;
+    use super::{is_embedded_document, std_default_hasher, vocabulary_namespace};
+
+    #[test]
+    fn a_literal_equal_to_or_under_a_namespace_is_a_hit_and_a_neighbour_is_not() {
+        let namespaces = vec![
+            "http://example.org/ns#".to_owned(),
+            "http://example.org/ns#sub/".to_owned(),
+        ];
+        assert_eq!(
+            vocabulary_namespace("http://example.org/ns#", &namespaces),
+            Some("http://example.org/ns#")
+        );
+        assert_eq!(
+            vocabulary_namespace("http://example.org/ns#term", &namespaces),
+            Some("http://example.org/ns#")
+        );
+        assert_eq!(
+            vocabulary_namespace("http://example.org/ns#sub/x", &namespaces),
+            Some("http://example.org/ns#sub/")
+        );
+        assert_eq!(
+            vocabulary_namespace("http://example.org/nsX", &namespaces),
+            None
+        );
+        assert_eq!(
+            vocabulary_namespace("<http://example.org/ns#term>", &namespaces),
+            None
+        );
+        assert_eq!(
+            vocabulary_namespace("xhttp://example.org/ns#", &namespaces),
+            None
+        );
+    }
+
+    #[test]
+    fn an_embedded_document_needs_a_line_break_and_a_keyword() {
+        assert!(is_embedded_document(
+            "@prefix ex: <http://example.org/ns#> .\nex:a ex:b ex:c ."
+        ));
+        assert!(is_embedded_document(
+            "http://example.org/ns#\nselect * { ?s ?p ?o }"
+        ));
+        assert!(!is_embedded_document(
+            "PREFIX ex: <http://example.org/ns#> SELECT * {}"
+        ));
+        assert!(!is_embedded_document(
+            "http://example.org/ns#a\nhttp://example.org/ns#b"
+        ));
+        assert!(!is_embedded_document("http://example.org/ns#\nselected"));
+        assert_eq!(
+            vocabulary_namespace(
+                "http://example.org/ns#\nSELECT ?s WHERE { ?s ?p ?o }",
+                &["http://example.org/ns#".to_owned()]
+            ),
+            None
+        );
+    }
 
     fn lines(source: &str) -> Vec<usize> {
         let parsed = syn::parse_file(source).expect("fixture parses");

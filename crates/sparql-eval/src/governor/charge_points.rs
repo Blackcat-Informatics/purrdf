@@ -1302,7 +1302,7 @@ fn a_zero_fuel_ceiling_never_enters_the_relation_at_all() {
 /// An integer literal, typed exactly as `RdfDatasetBuilder` mints one from a bare Turtle
 /// integer — the shape [`agg_group_dataset`]'s `ex:val` and `SUM`'s numeric fold both
 /// expect.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// `groups × rows_per_group` rows, `ex:catN` grouping `ex:s{i}` into `groups` equal-sized
 /// buckets via `ex:cat`, each row also carrying its own value on `ex:val` — the same shape

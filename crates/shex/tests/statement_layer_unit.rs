@@ -41,7 +41,7 @@ const SOURCE: &str = "http://example.org/source";
 const R1: &str = "http://example.org/r1";
 const R2: &str = "http://example.org/r2";
 const R3: &str = "http://example.org/r3";
-const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES;
 
 /// The fixture graph.
 ///

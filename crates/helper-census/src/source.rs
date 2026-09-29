@@ -131,6 +131,8 @@ pub(crate) struct Unit {
     pub(crate) constants: BTreeSet<u128>,
     /// The hex-digit tables it holds.
     pub(crate) tables: BTreeSet<&'static str>,
+    /// Every string literal it holds, decoded, with its 1-based line.
+    pub(crate) strings: Vec<(String, usize)>,
 }
 
 /// One named item in the index.
@@ -584,6 +586,7 @@ impl Workspace {
         let mut tables = BTreeSet::new();
         normalize::integer_constants(&body, &mut constants);
         normalize::hex_tables(&body, &mut tables);
+        let strings = absolute_lines(&body, block.brace_token.span.join().start().line);
         Unit {
             symbol,
             name: signature.ident.to_string(),
@@ -594,6 +597,7 @@ impl Workspace {
             print: Some(normalize::body_print(&body, &params.0)),
             constants,
             tables,
+            strings,
         }
     }
 
@@ -609,6 +613,7 @@ impl Workspace {
         let mut tables = BTreeSet::new();
         normalize::integer_constants(&tokens, &mut constants);
         normalize::hex_tables(&tokens, &mut tables);
+        let strings = absolute_lines(&tokens, expr.span().start().line);
         Unit {
             symbol: format!("{}::{ident}", place.module),
             name: ident.to_string(),
@@ -619,6 +624,7 @@ impl Workspace {
             print: None,
             constants,
             tables,
+            strings,
         }
     }
 
@@ -790,6 +796,17 @@ fn relex(source: &str, span: proc_macro2::Span, strip_braces: bool) -> TokenStre
         .get(start..end.max(start))
         .and_then(|slice| TokenStream::from_str(slice).ok())
         .unwrap_or_default()
+}
+
+/// The string literals of a re-lexed stream whose first line is `first_line` of
+/// its file, each carrying its line in the file.
+fn absolute_lines(stream: &TokenStream, first_line: usize) -> Vec<(String, usize)> {
+    let mut strings = Vec::new();
+    normalize::string_literals(stream, &mut strings);
+    for (_, line) in &mut strings {
+        *line += first_line.saturating_sub(1);
+    }
+    strings
 }
 
 fn item_attrs(item: &syn::Item) -> &[syn::Attribute] {

@@ -30,9 +30,8 @@ use crate::stream;
 use crate::wire::{blake3_256, digest_label, digest_str, map_get};
 use crate::writer::{self, FrameOptions, Writer, WriterOptions};
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_xsd::datatype::{XSD_DATE_TIME as XSD_DATETIME, XSD_INTEGER};
 
 /// The conventional in-band pack dictionary name for a single-dictionary plan.
 pub const DEFAULT_DICT_NAME: &str = "pack";

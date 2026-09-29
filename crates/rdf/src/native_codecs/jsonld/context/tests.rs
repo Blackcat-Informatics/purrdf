@@ -88,10 +88,7 @@ fn full_context_compiles_type_language_container_reverse_nest_and_scope() {
     assert_eq!(compiled.base_iri(), Some("https://example.org/doc/"));
     assert_eq!(compiled.vocab_mapping(), Some("https://example.org/vocab/"));
     assert_eq!(compiled.default_language(), Some("en"));
-    assert_eq!(
-        compiled.default_direction(),
-        Some(JsonLdDirection::LeftToRight)
-    );
+    assert_eq!(compiled.default_direction(), Some(JsonLdDirection::Ltr));
     assert!(compiled.term("schema").expect("schema").is_prefix());
     assert_eq!(compiled.term("id").expect("id").iri_mapping(), Some("@id"));
     assert_eq!(
@@ -110,7 +107,7 @@ fn full_context_compiles_type_language_container_reverse_nest_and_scope() {
     assert_eq!(name.language_mapping(), Some(JsonLdNullable::Null));
     assert_eq!(
         name.direction_mapping(),
-        Some(JsonLdNullable::Value(JsonLdDirection::RightToLeft))
+        Some(JsonLdNullable::Value(JsonLdDirection::Rtl))
     );
     assert!(name.is_protected());
     assert_eq!(

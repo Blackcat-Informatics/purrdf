@@ -46,11 +46,11 @@ use crate::template::{
 use crate::{DetHashMap, DetHashSet};
 
 /// The `rdf:reifies` predicate IRI — the reification-layer indirection edge.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 /// `rdf:type`.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 /// `xsd:string` — the datatype of an emitted loss-code literal.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// Evaluate a `CONSTRUCT` query to a frozen IR dataset.
 ///
@@ -2185,8 +2185,8 @@ mod tests {
 
     // ── Loss-aware CONSTRUCT ──────────────────────────────────────────────────
 
-    const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
-    const RDF_TYPE_IRI: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    use purrdf_iri::vocab::rdf::REIFIES;
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE_IRI;
     /// A pure-fixture (example.org) standpoint vocabulary: the `according_to`
     /// predicate is caller-supplied configuration, not an engine constant.
     const ACCORDING_TO: &str = "http://example.org/accordingTo";

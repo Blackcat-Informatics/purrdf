@@ -37,7 +37,7 @@ use purrdf_iri::{BaseIri, BaseOrigin, BaseScope, ScopedBase};
 
 /// The `rdf:reifies` predicate IRI: a triple-term object under this predicate is the
 /// RDF 1.2 reifier binding the statement layer folds out of the base quad table.
-pub(crate) const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+pub(crate) use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// A subject/object node presented to [`fold_statement_layer`], already interned into
 /// the builder.
@@ -910,17 +910,15 @@ fn parse_gts_direction(
     value: Option<&str>,
     language: Option<&str>,
 ) -> Result<Option<RdfTextDirection>, RdfDiagnostic> {
-    let direction = match value {
-        None => return Ok(None),
-        Some("ltr") => RdfTextDirection::Ltr,
-        Some("rtl") => RdfTextDirection::Rtl,
-        Some(other) => {
-            return Err(RdfDiagnostic::error(
-                "native-codec-invalid-direction",
-                format!("unrecognized GTS literal base direction {other:?}"),
-            ));
-        }
+    let Some(value) = value else {
+        return Ok(None);
     };
+    let direction = RdfTextDirection::from_str_token(value).ok_or_else(|| {
+        RdfDiagnostic::error(
+            "native-codec-invalid-direction",
+            format!("unrecognized GTS literal base direction {value:?}"),
+        )
+    })?;
     if language.is_none_or(str::is_empty) {
         return Err(RdfDiagnostic::error(
             "native-codec-direction-without-language",

@@ -205,14 +205,44 @@ impl Default for ScopeId {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub struct EventTermId(pub u32);
 
-/// RDF 1.2 base direction for directional language-tagged literals. Mirrors the IR
-/// engine's `RdfTextDirection` by value so this crate stays dependency-free.
+/// RDF 1.2 base direction for directional language-tagged literals.
+///
+/// The protocol's own copy of the stack's one direction type,
+/// `purrdf_cdt::TextDirection` (which `purrdf-core` re-exports as
+/// `RdfTextDirection`): this crate sits below `purrdf-cdt` in the layering and
+/// may depend on nothing but `purrdf-hash`, so it cannot name that type. The two
+/// agree variant for variant, `purrdf-core`'s ingest maps between them in one
+/// place, and [`TextDirection::from_token`] is the protocol side's one reading
+/// of the `ltr`/`rtl` token for producers below `purrdf-cdt` (the GTS reader).
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum TextDirection {
     /// Left-to-right.
     Ltr,
     /// Right-to-left.
     Rtl,
+}
+
+impl TextDirection {
+    /// Read the RDF 1.2 base-direction token (`ltr` or `rtl`, the exact
+    /// lowercase spelling RDF 1.2 Concepts §3.3 gives), or `None` for any
+    /// other text.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// use purrdf_events::TextDirection;
+    ///
+    /// assert_eq!(TextDirection::from_token("rtl"), Some(TextDirection::Rtl));
+    /// assert_eq!(TextDirection::from_token("RTL"), None);
+    /// ```
+    #[must_use]
+    pub fn from_token(token: &str) -> Option<Self> {
+        match token {
+            "ltr" => Some(Self::Ltr),
+            "rtl" => Some(Self::Rtl),
+            _ => None,
+        }
+    }
 }
 
 /// A **reified statement** — a triple (s, p, o) of [`EventTermId`]s, NOT a quad.
@@ -777,6 +807,17 @@ pub trait RdfEventSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Only the exact lowercase tokens name a direction; a case variant, a
+    /// padded token and the empty string are refused.
+    #[test]
+    fn only_the_exact_lowercase_tokens_read_as_a_direction() {
+        assert_eq!(TextDirection::from_token("ltr"), Some(TextDirection::Ltr));
+        assert_eq!(TextDirection::from_token("rtl"), Some(TextDirection::Rtl));
+        for refused in ["LTR", "Rtl", " ltr", "rtl ", "", "auto", "--ltr"] {
+            assert_eq!(TextDirection::from_token(refused), None, "{refused:?}");
+        }
+    }
 
     /// A trivial in-memory sink used to exercise the default methods and the
     /// object-safe path within this dependency-free crate.

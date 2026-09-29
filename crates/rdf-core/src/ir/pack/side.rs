@@ -93,7 +93,7 @@ use super::dict::{PackDict, PackTermId};
 
 /// The `rdf:reifies` predicate IRI — see the identical local constant (and its
 /// doc comment explaining the duplication) in `super::dict`.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 // ---------------------------------------------------------------------------
 // Errors

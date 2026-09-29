@@ -25,9 +25,9 @@ const LOSS_NON_PROFILE_QUAD_DROPPED: &str = "okf-non-profile-quad-dropped";
 const LOSS_REIFIER_DROPPED: &str = "okf-reifier-dropped";
 const LOSS_ANNOTATION_DROPPED: &str = "okf-annotation-dropped";
 
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-const XSD_DECIMAL: &str = "http://www.w3.org/2001/XMLSchema#decimal";
-const XSD_DATETIME: &str = "http://www.w3.org/2001/XMLSchema#dateTime";
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_DATE_TIME as XSD_DATETIME;
+use purrdf_xsd::datatype::XSD_DECIMAL;
 
 /// Deterministic execution counts for one OKF terms projection.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
@@ -1324,8 +1324,8 @@ mod tests {
         ProjectionLimits,
     };
 
-    const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+    use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+    use purrdf_xsd::datatype::XSD_STRING;
     const CLASS: &str = "https://example.org/Class";
     const PROPERTY: &str = "https://example.org/Property";
     const LABEL: &str = "https://example.org/label";

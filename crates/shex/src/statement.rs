@@ -39,7 +39,7 @@ use purrdf_core::{RdfDataset, TermId, TermRef};
 /// triple term it reifies. A well-known RDF vocabulary IRI (PurRDF mints none
 /// of its own); the reifier side-table denotes exactly this predicate, so it is
 /// the only predicate a reifier row can carry.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// Call `emit(s, p, o)` for every RDF 1.2 statement-layer virtual triple
 /// matching the `(s, p, o)` probe (`None` = unconstrained).

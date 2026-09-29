@@ -18,9 +18,9 @@ use super::{
 use crate::{RdfLiteral, RdfTextDirection, RdfTriple};
 use purrdf_iri::langtag;
 
-const XSD_BOOLEAN: &str = "http://www.w3.org/2001/XMLSchema#boolean";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_BOOLEAN;
+use purrdf_xsd::datatype::XSD_DOUBLE;
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 pub(super) fn expand_document(
     mut document: JsonValue,
@@ -989,7 +989,7 @@ fn expand_language_map(
             values.push(Value::plain(Term::Literal(Literal {
                 lexical: lexical.to_owned(),
                 datatype: None,
-                language: (language != "@none").then(|| language.to_ascii_lowercase()),
+                language: (language != "@none").then(|| langtag::identity_fold(language)),
                 direction: direction.map(str::to_owned),
             })));
         }
@@ -1096,7 +1096,7 @@ fn expand_value_object(
             entry
                 .value
                 .as_str()
-                .map(str::to_ascii_lowercase)
+                .map(langtag::identity_fold)
                 .ok_or_else(|| decode("@language must be a string"))
         })
         .transpose()?;
@@ -1106,7 +1106,7 @@ fn expand_value_object(
                 .value
                 .as_str()
                 .ok_or_else(|| decode("@direction must be a string"))?;
-            if !matches!(direction, "ltr" | "rtl") {
+            if JsonLdDirection::from_str_token(direction).is_none() {
                 return Err(decode("@direction must be `ltr` or `rtl`"));
             }
             Ok(direction.to_owned())
@@ -1199,8 +1199,7 @@ fn effective_direction(
 ) -> Option<&'static str> {
     match definition.and_then(JsonLdTermDefinition::direction_mapping) {
         Some(JsonLdNullable::Null) => None,
-        Some(JsonLdNullable::Value(JsonLdDirection::LeftToRight)) => Some("ltr"),
-        Some(JsonLdNullable::Value(JsonLdDirection::RightToLeft)) => Some("rtl"),
+        Some(JsonLdNullable::Value(direction)) => Some(direction.as_str()),
         None => context.default_direction().map(JsonLdDirection::as_str),
     }
 }
@@ -1702,11 +1701,8 @@ fn lower_literal(literal: &Literal) -> Result<RdfTerm, RdfDiagnostic> {
         literal.datatype.as_deref(),
     ) {
         (Some(language), Some(direction), _) => {
-            let direction = match direction {
-                "ltr" => RdfTextDirection::Ltr,
-                "rtl" => RdfTextDirection::Rtl,
-                _ => return Err(decode(format!("invalid direction `{direction}`"))),
-            };
+            let direction = RdfTextDirection::from_str_token(direction)
+                .ok_or_else(|| decode(format!("invalid direction `{direction}`")))?;
             RdfLiteral {
                 lexical_form: literal.lexical.clone(),
                 datatype: None,

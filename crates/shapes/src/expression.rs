@@ -1339,8 +1339,7 @@ pub fn is_true(terms: &[Term]) -> bool {
 ///
 /// A static `match` over `&'static str` — wasm-clean, no runtime allocation.
 pub(crate) fn builtin_keyword(iri: &str) -> Option<&'static str> {
-    const FN: &str = "http://www.w3.org/2005/xpath-functions#";
-    let local = iri.strip_prefix(FN)?;
+    let local = iri.strip_prefix(purrdf_iri::vocab::xpath::NS)?;
     Some(match local {
         "string-length" => "STRLEN",
         "contains" => "CONTAINS",

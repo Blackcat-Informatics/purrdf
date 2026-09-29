@@ -44,8 +44,15 @@
 #                  over shipping code (from scripts/check-hash-domains.py:
 #                  `rule:raw-hash-domain`, a domain-shaped literal handed to a
 #                  hasher without a purrdf_hash::Domain; `rule:shared-hash-domain`,
-#                  one domain opening hashers in two functions of its file). A
-#                  body or shim fingerprint must still match some unit.
+#                  one domain opening hashers in two functions of its file), or
+#                  a literal rule over shipping code (`rule:vocabulary-literal`:
+#                  a string literal equal to or starting with a namespace
+#                  constant — a `NS` or `*_NS` const — declared under the job's
+#                  home and entry-point modules, outside those modules, an
+#                  embedded Turtle/SPARQL document excepted; `rule:home-literal`:
+#                  a string literal equal to one the home item's own bodies
+#                  spell, outside the home item). A body or shim fingerprint
+#                  must still match some unit.
 #   names        = regular expressions over function names.
 #
 # [[job.variant]] — a sanctioned second implementation; each is re-checked on
@@ -651,3 +658,45 @@ enforced = true
 constants = []
 fingerprints = []
 names = ['^(find_first_byte|find_first_of|memchr[23]?)$']
+
+[[job]]
+id = "w3c-vocab"
+summary = "The W3C vocabulary terms and namespaces, and the XSD datatype IRIs, named by constant rather than spelt out as strings"
+home = "purrdf_iri::vocab"
+entry_points = ["purrdf_xsd::datatype", "purrdf_core::vocab", "purrdf_core::datatype"]
+spec = "the namespace documents of the W3C Recommendations each vocab module names (RDF 1.2 Concepts, RDF 1.2 Schema, OWL 2, SHACL, SKOS, PROV-O and the rest) and XML Schema 1.1 Part 2 for the datatypes"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:vocabulary-literal"]
+names = []
+
+[[job]]
+id = "text-direction"
+summary = "The RDF 1.2 base direction: one enum, its ltr/rtl token and the parse of that token"
+home = "purrdf_cdt::TextDirection"
+entry_points = ["purrdf_core::RdfTextDirection", "purrdf_sparql_algebra::ast::BaseDirection"]
+spec = "RDF 1.2 Concepts section 3.3 (the base direction of a directional language-tagged string is ltr or rtl)"
+vectors = []
+bench = []
+sites = []
+replaces_external = []
+enforced = true
+
+[job.forbidden]
+constants = []
+fingerprints = ["rule:home-literal"]
+names = []
+
+[[job.variant]]
+symbol = "purrdf_events::TextDirection::from_token"
+file = "crates/rdf-events/src/lib.rs"
+detector = "forbidden"
+criterion = "layering"
+anchor = "purrdf_events::TextDirection"
+reason = "The event protocol sits below purrdf-cdt and may depend on nothing but purrdf-hash, so it keeps its own direction enum and its own reading of the token for the producers below purrdf-cdt; purrdf-core's ingest maps the two enums in one place."

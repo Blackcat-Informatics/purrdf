@@ -130,7 +130,7 @@ pub use purrdf_core::imports::{VersionConflict, VersionConflictKind};
 use purrdf_core::ir::{TermRef, TermValue};
 
 /// `sh:shapesGraph`: on a data-graph anchor, a link to a graph the shapes graph includes.
-pub const SH_SHAPES_GRAPH_LINK: &str = "http://www.w3.org/ns/shacl#shapesGraph";
+pub use purrdf_iri::vocab::sh::SHAPES_GRAPH_PROPERTY as SH_SHAPES_GRAPH_LINK;
 
 /// The documents a shapes graph's `owl:imports` resolve to, and the IRIs the shapes graph
 /// was read from.

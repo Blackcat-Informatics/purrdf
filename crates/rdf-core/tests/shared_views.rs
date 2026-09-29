@@ -22,7 +22,7 @@ use purrdf_core::{
 const P: &str = "http://example.org/p";
 const LIST: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/List";
 const MAP: &str = "http://w3id.org/awslabs/neptune/SPARQL-CDTs/Map";
-const REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES;
 type Row = (TermValue, TermValue, TermValue, Option<TermValue>);
 
 fn iri(local: &str) -> TermValue {

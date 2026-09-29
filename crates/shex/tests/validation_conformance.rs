@@ -54,7 +54,7 @@ const XFAIL: &[(&str, &str)] = &[];
 
 const MF: &str = "http://www.w3.org/2001/sw/DataAccess/tests/test-manifest#";
 const SHT: &str = "http://www.w3.org/ns/shacl/test-suite#";
-const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
+use purrdf_iri::vocab::rdf::NS as RDF;
 
 fn corpus_dir() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../vectors/shexTest")

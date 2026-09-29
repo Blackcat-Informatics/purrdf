@@ -6,13 +6,10 @@
 use std::sync::{Arc, OnceLock};
 
 use purrdf::{SerializeGraph, serialize_dataset};
-use purrdf_core::{
-    GraphMatch, RdfDataset, RdfTextDirection, SparqlEngine, SparqlRequest, SparqlResult, TermValue,
-};
+use purrdf_core::{GraphMatch, RdfDataset, SparqlEngine, SparqlRequest, SparqlResult, TermValue};
 use purrdf_entail::{QNode, QTriple};
 use purrdf_sparql_algebra::{
-    BaseDirection, GraphPattern, Literal, NamedNodePattern, Query, SparqlParser, TermPattern,
-    TriplePattern,
+    GraphPattern, Literal, NamedNodePattern, Query, SparqlParser, TermPattern, TriplePattern,
 };
 use purrdf_sparql_eval::{
     LossVocabulary, MemoryRelation, NativeSparqlEngine, ParserOptions, PropertyFunctionRegistry,
@@ -784,7 +781,7 @@ fn query_is_top_level_ordered(query_text: &str, options: &ParserOptions) -> bool
 
 /// The RIF vocabulary predicate a `qt:data` graph uses to reference the `.rif`
 /// document(s) whose rules govern the case.
-const RIF_USED_WITH_PROFILE: &str = "http://www.w3.org/2007/rif#usedWithProfile";
+use purrdf_iri::vocab::rif::USED_WITH_PROFILE as RIF_USED_WITH_PROFILE;
 
 /// Build the combined RIF [`RuleSet`](purrdf_entail::RuleSet) for a `Rif`-regime
 /// case by scanning `dataset` for `?doc rif:usedWithProfile ?profile` triples,
@@ -937,11 +934,8 @@ fn literal_to_term_value(l: &Literal) -> TermValue {
         Some(lang) => TermValue::Literal {
             lexical_form: l.value().to_owned(),
             datatype: l.datatype().as_str().to_owned(),
-            language: Some(lang.to_ascii_lowercase()),
-            direction: l.direction().map(|d| match d {
-                BaseDirection::Ltr => RdfTextDirection::Ltr,
-                BaseDirection::Rtl => RdfTextDirection::Rtl,
-            }),
+            language: Some(purrdf_iri::langtag::identity_fold(lang)),
+            direction: l.direction(),
         },
         None => TermValue::typed_literal(l.value(), l.datatype().as_str()),
     }

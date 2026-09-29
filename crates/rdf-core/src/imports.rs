@@ -171,9 +171,9 @@ use crate::ir::{
 use crate::model::RdfLiteral;
 
 /// `owl:imports`.
-const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
+use purrdf_iri::vocab::owl::IMPORTS as OWL_IMPORTS;
 /// `owl:versionIRI`.
-const OWL_VERSIONIRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
+use purrdf_iri::vocab::owl::VERSION_IRI as OWL_VERSIONIRI;
 
 /// The documents an `owl:imports` resolves to, and the IRIs the importing graph was read
 /// from.
@@ -469,7 +469,7 @@ impl ImportMap {
 }
 
 /// `owl:incompatibleWith`.
-const OWL_INCOMPATIBLE_WITH: &str = "http://www.w3.org/2002/07/owl#incompatibleWith";
+use purrdf_iri::vocab::owl::INCOMPATIBLE_WITH as OWL_INCOMPATIBLE_WITH;
 
 /// Two graphs of one import closure that the closure should not hold together.
 ///
@@ -1651,7 +1651,7 @@ mod tests {
         const LIB_1: &str = "http://example.org/lib/1";
         const LIB_2: &str = "http://example.org/lib/2";
         const OLD: &str = "http://example.org/old";
-        const OWL_INCOMPATIBLE_WITH: &str = "http://www.w3.org/2002/07/owl#incompatibleWith";
+        use purrdf_iri::vocab::owl::INCOMPATIBLE_WITH as OWL_INCOMPATIBLE_WITH;
         let importer = |second: &str| {
             triples(&[
                 (SHAPES, RDF_TYPE, OWL_ONTOLOGY),

@@ -84,9 +84,8 @@ use crate::data::{GraphFilter, native_quads};
 use crate::model::{sh, xsd};
 use crate::term::{NamedNode, Term};
 
-const OWL_IMPORTS: &str = "http://www.w3.org/2002/07/owl#imports";
-const OWL_VERSION_IRI: &str = "http://www.w3.org/2002/07/owl#versionIRI";
-const XSD_ANY_URI: &str = "http://www.w3.org/2001/XMLSchema#anyURI";
+use purrdf_iri::vocab::owl::{IMPORTS as OWL_IMPORTS, VERSION_IRI as OWL_VERSION_IRI};
+use purrdf_xsd::datatype::XSD_ANY_URI;
 
 /// One collection of prefix mappings: label → (namespace, the declaration node that
 /// bound it). The declaration is kept for the conflict diagnostic.

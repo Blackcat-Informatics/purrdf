@@ -875,7 +875,7 @@ impl Folder<'_, '_, '_> {
             // value here can only have come from a foreign container, which is
             // precisely the case a diagnostic is for.
             let direction = match map_get(entries, "dir").and_then(as_text) {
-                Some(value) if matches!(value, "ltr" | "rtl") => Some(value.to_string()),
+                Some(value) if crate::model::is_literal_direction(value) => Some(value.to_string()),
                 Some(value) => {
                     self.diag(
                         "DamagedFrame",

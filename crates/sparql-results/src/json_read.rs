@@ -32,9 +32,8 @@ use purrdf_iri::json_escape;
 use crate::error::Error;
 use crate::model::{ProvenanceNamespace, ResultProvenance, SolutionProvenance};
 
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const RDF_DIR_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+use purrdf_core::datatype::XSD_STRING;
+use purrdf_core::vocab::language_datatype_iri;
 
 /// Dense decoded row and bounded row-prefix result aliases keep the streaming reader's
 /// signatures readable without changing the public model.
@@ -478,9 +477,10 @@ fn decode_binding_node(value: &Json) -> Result<BindingNode<'_>, Error> {
                 .or_else(|| obj_get(obj, "dir"))
                 .and_then(Json::as_str)
             {
-                Some("ltr") => Some(RdfTextDirection::Ltr),
-                Some("rtl") => Some(RdfTextDirection::Rtl),
-                Some(other) => return Err(fmt(&format!("unknown base direction `{other}`"))),
+                Some(token) => Some(
+                    RdfTextDirection::from_str_token(token)
+                        .ok_or_else(|| fmt(&format!("unknown base direction `{token}`")))?,
+                ),
                 None => None,
             };
             let datatype = obj_get(obj, "datatype").and_then(Json::as_str);
@@ -513,8 +513,7 @@ fn binding_value(obj: &[(String, Json)]) -> Result<&str, Error> {
 fn resolve_datatype(datatype: Option<&str>, has_lang: bool, has_dir: bool) -> String {
     match datatype {
         Some(dt) => dt.to_owned(),
-        None if has_lang && has_dir => RDF_DIR_LANGSTRING.to_owned(),
-        None if has_lang => RDF_LANGSTRING.to_owned(),
+        None if has_lang => language_datatype_iri(has_dir).to_owned(),
         None => XSD_STRING.to_owned(),
     }
 }
@@ -1111,6 +1110,9 @@ mod tests {
     use crate::json::to_json;
     use purrdf_core::SparqlResult;
     use purrdf_core::TermBox;
+    use purrdf_core::vocab::rdf::{
+        DIR_LANG_STRING as RDF_DIR_LANGSTRING, LANG_STRING as RDF_LANGSTRING,
+    };
 
     fn parse_string_at(input: &[u8]) -> Result<(String, usize), Error> {
         let mut parser = JsonParser::new(input);

@@ -9,7 +9,9 @@ use purrdf_xsd::{XsdDatatype, parse as parse_xsd, value_cmp};
 use regex::Regex;
 use serde_json::{Map, Value};
 
+use purrdf_core::RdfTextDirection;
 use purrdf_iri::BaseIri;
+use purrdf_iri::langtag::identity_fold;
 
 use super::super::{ProjectionError, validate_absolute_iri};
 use super::config::{CsvwConfig, CsvwContext};
@@ -1911,10 +1913,18 @@ fn parse_text_direction(
 ) -> Option<CsvwTextDirection> {
     match value {
         None => fallback,
-        Some(Value::String(value)) if value == "auto" => Some(CsvwTextDirection::Auto),
-        Some(Value::String(value)) if value == "ltr" => Some(CsvwTextDirection::Ltr),
-        Some(Value::String(value)) if value == "rtl" => Some(CsvwTextDirection::Rtl),
-        Some(Value::String(value)) if value == "inherit" => Some(CsvwTextDirection::Inherit),
+        Some(Value::String(value)) => match value.as_str() {
+            "auto" => Some(CsvwTextDirection::Auto),
+            "inherit" => Some(CsvwTextDirection::Inherit),
+            token => {
+                if let Some(direction) = RdfTextDirection::from_str_token(token) {
+                    Some(direction.into())
+                } else {
+                    invalid_warning(resource, location, "CSVW text direction", warnings);
+                    fallback
+                }
+            }
+        },
         Some(Value::Null) => None,
         Some(_) => {
             invalid_warning(resource, location, "CSVW text direction", warnings);
@@ -1933,8 +1943,14 @@ fn parse_table_direction(
     match value {
         None => fallback,
         Some(Value::String(value)) if value == "auto" => CsvwTableDirection::Auto,
-        Some(Value::String(value)) if value == "ltr" => CsvwTableDirection::Ltr,
-        Some(Value::String(value)) if value == "rtl" => CsvwTableDirection::Rtl,
+        Some(Value::String(value)) => {
+            if let Some(direction) = RdfTextDirection::from_str_token(value) {
+                direction.into()
+            } else {
+                invalid_warning(resource, location, "CSVW table direction", warnings);
+                fallback
+            }
+        }
         Some(_) => {
             invalid_warning(resource, location, "CSVW table direction", warnings);
             fallback
@@ -1964,7 +1980,7 @@ fn natural_language_property(
     warnings: &mut Vec<CsvwWarning>,
 ) -> CsvwNaturalLanguage {
     let mut result = CsvwNaturalLanguage::new();
-    let default_key = default_language.unwrap_or("und").to_ascii_lowercase();
+    let default_key = identity_fold(default_language.unwrap_or("und"));
     match value {
         None => {}
         Some(Value::String(value)) => {
@@ -2027,7 +2043,7 @@ fn natural_language_property(
                     }
                 };
                 if !strings.is_empty() {
-                    result.insert(language.to_ascii_lowercase(), strings);
+                    result.insert(identity_fold(language), strings);
                 }
             }
         }
@@ -2042,7 +2058,7 @@ fn name_from_titles(
     number: usize,
 ) -> String {
     let title = default_language
-        .and_then(|language| titles.get(&language.to_ascii_lowercase()))
+        .and_then(|language| titles.get(&identity_fold(language)))
         .or_else(|| titles.get("und"))
         .and_then(|values| values.first());
     title.map_or_else(

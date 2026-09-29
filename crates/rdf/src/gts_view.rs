@@ -7,11 +7,25 @@
 //! and relational projection shims: scoped quad lookup, term accessors, language
 //! tag projection, RDF list walking, statement-layer access, and the compact
 //! dictionary-encoded database rows.
+//!
+//! IRI compaction ([`GtsFoldView::curie`]) consults the caller's
+//! [`GtsFoldViewConfig::curie_prefixes`] first and then a built-in table of W3C
+//! Recommendation namespaces only (`rdf`, `rdfs`, `owl`, `xsd`, `skos`); any other
+//! vocabulary, schema.org included, compacts only when the caller supplies its
+//! prefix.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 
 use purrdf_gts::model::{BlobEntry, Graph, Quad, Term, TermKind, Triple3, language_tag_refusal};
+use purrdf_iri::langtag::identity_fold;
+#[cfg(test)]
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+use purrdf_iri::vocab::rdf::{
+    FIRST as RDF_FIRST, NIL as RDF_NIL, REST as RDF_REST, TYPE as RDF_TYPE,
+};
+use purrdf_iri::vocab::{owl, rdf, rdfs, skos};
+use purrdf_xsd::datatype::XSD_NS as XSD;
 
 use crate::RdfDiagnostic;
 use crate::gts_resolve::ensure_terms_terminate;
@@ -20,15 +34,6 @@ use crate::gts_resolve::ensure_terms_terminate;
 pub const DEFAULT_SCOPE: &str = "";
 /// Sentinel scope name selecting every quad regardless of graph.
 pub const ALL_SCOPE: &str = "__all__";
-
-const RDF: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
-#[cfg(test)]
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 
 /// The consumer-ontology language vocabulary the fold view scans to build its
 /// internal→BCP-47 retag map (mirrors the `StatementMetadataVocab` pattern in
@@ -64,13 +69,15 @@ impl LanguageVocab {
 
 /// Consumer configuration for [`GtsFoldView`]: the optional language vocabulary
 /// (drives the retag map) and any extra CURIE prefix entries consulted (in
-/// order, before the built-in W3C/schema.org table) when compacting IRIs for
+/// order, before the built-in W3C Recommendation table) when compacting IRIs for
 /// [`PublicValue::Iri`] / [`GtsFoldView::curie`].
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct GtsFoldViewConfig {
     /// The language vocabulary; `None` leaves the retag map empty.
     pub language_vocab: Option<LanguageVocab>,
-    /// Extra `(prefix, namespace)` CURIE entries, highest priority first.
+    /// Extra `(prefix, namespace)` CURIE entries, highest priority first. Any
+    /// namespace outside the built-in W3C table (schema.org, an application
+    /// ontology, …) compacts only when it is listed here.
     pub curie_prefixes: Vec<(String, String)>,
 }
 
@@ -248,7 +255,7 @@ fn ensure_language_tags_readable(graph: &Graph) -> Result<(), RdfDiagnostic> {
 impl GtsFoldView {
     /// A view with no consumer vocabulary: the retag map stays empty (no
     /// namespace scanning is fabricated) and CURIE compaction uses only the
-    /// built-in W3C/schema.org prefixes. Pass a [`GtsFoldViewConfig`] via
+    /// built-in W3C Recommendation prefixes. Pass a [`GtsFoldViewConfig`] via
     /// [`GtsFoldView::with_config`] to supply the consumer's language vocab
     /// and CURIE prefixes.
     ///
@@ -416,7 +423,7 @@ impl GtsFoldView {
     }
 
     /// Compact an IRI to a CURIE using the consumer-supplied prefixes first,
-    /// then the built-in W3C/schema.org table; unmatched IRIs are returned
+    /// then the built-in W3C Recommendation table; unmatched IRIs are returned
     /// unchanged.
     pub fn curie(&self, iri: &str) -> String {
         for (prefix, namespace) in &self.curie_prefixes {
@@ -590,7 +597,7 @@ impl GtsFoldView {
                 lang.clone()
             };
             if !public.eq_ignore_ascii_case("en") {
-                tags.insert(public.to_ascii_lowercase());
+                tags.insert(identity_fold(&public));
             }
         }
         tags
@@ -750,7 +757,7 @@ impl GtsFoldView {
         let mut by_bcp: BTreeMap<String, Vec<LitRow>> = BTreeMap::new();
         for &tid in candidates {
             let bcp = self.public_bcp47_for(tid);
-            let key = bcp.as_deref().unwrap_or("").to_ascii_lowercase();
+            let key = identity_fold(bcp.as_deref().unwrap_or(""));
             let original = self.lang(tid).unwrap_or("").to_string();
             by_bcp
                 .entry(key)
@@ -767,10 +774,7 @@ impl GtsFoldView {
         if requested.is_empty() {
             return vec!["en".to_string()];
         }
-        requested
-            .iter()
-            .map(|tag| tag.to_ascii_lowercase())
-            .collect()
+        requested.iter().map(|tag| identity_fold(tag)).collect()
     }
 
     fn select_literal(
@@ -915,7 +919,7 @@ fn term_kind_int(kind: TermKind) -> u8 {
 }
 
 fn is_internal_tag(lang: &str) -> bool {
-    let lower = lang.to_ascii_lowercase();
+    let lower = identity_fold(lang);
     let Some(suffix) = lower.strip_prefix("x-purrdf-") else {
         return false;
     };
@@ -926,7 +930,7 @@ fn is_internal_tag(lang: &str) -> bool {
 }
 
 fn rank_language(lang: &str) -> (u8, String) {
-    let lower = lang.to_ascii_lowercase();
+    let lower = identity_fold(lang);
     let rank = u8::from(lower != "x-purrdf-english");
     (rank, lower)
 }
@@ -1049,16 +1053,15 @@ fn curie(iri: &str) -> String {
     iri.to_string()
 }
 
-/// Built-in CURIE prefixes: well-known public vocabularies only. Consumer
-/// namespaces (e.g. an application ontology) are supplied via
-/// [`GtsFoldViewConfig::curie_prefixes`] and are consulted first.
+/// Built-in CURIE prefixes: W3C Recommendation namespaces only. Every other
+/// namespace (schema.org, an application ontology, …) is caller-supplied via
+/// [`GtsFoldViewConfig::curie_prefixes`], which is consulted first.
 const PREFIXES: &[(&str, &str)] = &[
-    ("schema", "https://schema.org/"),
-    ("rdf", RDF),
-    ("rdfs", "http://www.w3.org/2000/01/rdf-schema#"),
-    ("owl", "http://www.w3.org/2002/07/owl#"),
+    ("rdf", rdf::NS),
+    ("rdfs", rdfs::NS),
+    ("owl", owl::NS),
     ("xsd", XSD),
-    ("skos", "http://www.w3.org/2004/02/skos/core#"),
+    ("skos", skos::NS),
 ];
 
 #[cfg(test)]
@@ -1068,7 +1071,7 @@ mod tests {
     use purrdf_gts::writer::Writer;
 
     const EX: &str = "https://example.org/";
-    const RDFS_LABEL: &str = "http://www.w3.org/2000/01/rdf-schema#label";
+    use purrdf_iri::vocab::rdfs::LABEL as RDFS_LABEL;
 
     fn iri(value: &str) -> Term {
         Term {
@@ -1281,6 +1284,59 @@ mod tests {
         let bare = GtsFoldView::new(purrdf_gts::reader::read(&bytes, true, None))
             .expect("the fixture graph's terms terminate");
         assert!(bare.tag_map().is_empty());
+    }
+
+    /// A one-term graph holding the schema.org `Person` class IRI.
+    fn schema_org_graph() -> Graph {
+        let mut writer = Writer::new("dist");
+        writer.add_terms(&[iri("https://schema.org/Person")]);
+        purrdf_gts::reader::read(&writer.to_bytes(), true, None)
+    }
+
+    #[test]
+    fn a_schema_org_iri_stays_a_full_iri_without_a_caller_prefix() {
+        let view = GtsFoldView::new(schema_org_graph()).expect("terms terminate");
+        assert_eq!(
+            view.curie("https://schema.org/Person"),
+            "https://schema.org/Person"
+        );
+        assert_eq!(
+            view.public_value(0),
+            PublicValue::Iri("https://schema.org/Person".to_string())
+        );
+    }
+
+    #[test]
+    fn a_schema_org_iri_compacts_under_a_caller_supplied_prefix() {
+        let view = GtsFoldView::with_config(
+            schema_org_graph(),
+            GtsFoldViewConfig {
+                language_vocab: None,
+                curie_prefixes: vec![("schema".to_string(), "https://schema.org/".to_string())],
+            },
+        )
+        .expect("terms terminate");
+        assert_eq!(view.curie("https://schema.org/Person"), "schema:Person");
+        assert_eq!(
+            view.public_value(0),
+            PublicValue::Iri("schema:Person".to_string())
+        );
+    }
+
+    #[test]
+    fn w3c_recommendation_iris_compact_without_a_caller_prefix() {
+        let view = GtsFoldView::new(schema_org_graph()).expect("terms terminate");
+        assert_eq!(view.curie(RDFS_LABEL), "rdfs:label");
+        assert_eq!(view.curie(RDF_TYPE), "rdf:type");
+        assert_eq!(view.curie(&(XSD.to_string() + "integer")), "xsd:integer");
+        assert_eq!(
+            view.curie("http://www.w3.org/2002/07/owl#Class"),
+            "owl:Class"
+        );
+        assert_eq!(
+            view.curie("http://www.w3.org/2004/02/skos/core#Concept"),
+            "skos:Concept"
+        );
     }
 
     #[test]

@@ -87,7 +87,7 @@ use super::bits::{IntVector, IntVectorRef, PackBitsError, bits_for, read_varint,
 /// tuple stores it directly (`RdfDataset::reifier_quads` looks it up by value).
 /// [`PackDict::encode`]'s side-table closure fold-in (below) mirrors that same
 /// condition so [`super::side::SideTables`] can mint a unified id for it.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 /// The unified term-identity space this module mints: a plain, 1-based `u64` (id `0`
 /// is never assigned). A pure type alias, not a newtype — the outer `PackView` seam
@@ -1176,11 +1176,9 @@ impl PackDict {
                         *direction,
                     )
                     .map_err(PackDictError::Malformed)?;
-                    // Test the lowercase fixed point without allocating a second
-                    // tag. Ingress lowercases language tags for RDF term identity.
-                    if language.is_some_and(|tag| {
-                        !tag.chars().flat_map(char::to_lowercase).eq(tag.chars())
-                    }) {
+                    // Test the identity-fold fixed point without allocating a
+                    // second tag. Ingress folds language tags for RDF term identity.
+                    if language.is_some_and(|tag| !purrdf_iri::langtag::is_identity_folded(tag)) {
                         return Err(PackDictError::Malformed(
                             "dict: language tag is not lowercase",
                         ));

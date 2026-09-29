@@ -8,7 +8,7 @@ use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBool, PyBytes, PyDict, PyList};
 
-use crate::gts_view::{ALL_SCOPE, GtsFoldView, PublicValue, RelationalRows};
+use crate::gts_view::{ALL_SCOPE, GtsFoldView, GtsFoldViewConfig, PublicValue, RelationalRows};
 
 type PyTermRow = (
     u8,
@@ -38,28 +38,37 @@ pub struct PyGtsFoldView {
 #[pymethods]
 #[allow(clippy::needless_pass_by_value)] // binding ABI receives owned values
 impl PyGtsFoldView {
+    /// `curie_prefixes` are the caller's `(prefix, namespace)` CURIE entries,
+    /// highest priority first; the view builds in only the W3C namespaces.
     #[staticmethod]
-    fn from_bytes(py: Python<'_>, data: &[u8]) -> PyResult<Self> {
+    #[pyo3(signature = (data, curie_prefixes = Vec::new()))]
+    fn from_bytes(
+        py: Python<'_>,
+        data: &[u8],
+        curie_prefixes: Vec<(String, String)>,
+    ) -> PyResult<Self> {
         py.detach(|| {
             let graph = purrdf_gts::reader::read(data, true, None);
             Ok(Self {
-                inner: fold_view(graph)?,
+                inner: fold_view(graph, curie_prefixes)?,
             })
         })
     }
 
     #[staticmethod]
+    #[pyo3(signature = (terms, quads, reifiers, annotations, curie_prefixes = Vec::new()))]
     fn from_parts(
         py: Python<'_>,
         terms: Vec<PyTermRow>,
         quads: Vec<(usize, usize, usize, Option<usize>)>,
         reifiers: Vec<PyReifierRow>,
         annotations: Vec<PyAnnotationRow>,
+        curie_prefixes: Vec<(String, String)>,
     ) -> PyResult<Self> {
         py.detach(|| {
             let graph = graph_from_parts(terms, quads, reifiers, annotations)?;
             Ok(Self {
-                inner: fold_view(graph)?,
+                inner: fold_view(graph, curie_prefixes)?,
             })
         })
     }
@@ -330,8 +339,13 @@ pub(crate) fn register(m: &Bound<'_, PyModule>) -> PyResult<()> {
 /// straight from the caller, so this is the boundary where that is stopped: term ids
 /// are range-checked in [`validate_terms`], and the shape they describe is checked for
 /// termination here.
-fn fold_view(graph: Graph) -> PyResult<GtsFoldView> {
-    GtsFoldView::new(graph).map_err(|diagnostic| PyValueError::new_err(diagnostic.to_string()))
+fn fold_view(graph: Graph, curie_prefixes: Vec<(String, String)>) -> PyResult<GtsFoldView> {
+    let config = GtsFoldViewConfig {
+        language_vocab: None,
+        curie_prefixes,
+    };
+    GtsFoldView::with_config(graph, config)
+        .map_err(|diagnostic| PyValueError::new_err(diagnostic.to_string()))
 }
 
 fn graph_from_parts(

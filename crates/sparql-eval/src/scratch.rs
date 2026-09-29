@@ -831,9 +831,9 @@ mod term_walk_tests {
     use std::sync::Arc;
 
     const EX: &str = "http://example.org/";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+    use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    use purrdf_xsd::datatype::XSD_STRING;
     const DEPTH: usize = 100_000;
     const SMALL_STACK: usize = 128 * 1024;
 

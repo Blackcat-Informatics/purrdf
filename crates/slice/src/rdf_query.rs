@@ -32,7 +32,7 @@ use crate::error::SliceError;
 
 /// The `rdf:reifies` predicate IRI — re-materialized when flattening the RDF 1.2
 /// statement overlay back to plain quads for canonicalization.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 
 // ── Native NamedNode ───────────────────────────────────────────────────────────
 
@@ -947,7 +947,7 @@ impl Default for DatasetAccumulator {
 
 // ── Media-type routing ──────────────────────────────────────────────────────────
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// Map a file extension to the native RDF media type, defaulting to Turtle.
 ///

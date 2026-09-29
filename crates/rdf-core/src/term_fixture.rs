@@ -43,10 +43,10 @@ pub fn term_value(
     budget: &mut usize,
     shape: TermShape,
 ) -> TermValue {
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
-    const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+    use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
+    use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    use purrdf_xsd::datatype::XSD_STRING;
     let draw = |state: &mut u64, n: u64| next(state) % n;
     if *budget > 0 && draw(state, 3) == 0 {
         *budget -= 1;

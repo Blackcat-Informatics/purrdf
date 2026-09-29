@@ -60,7 +60,7 @@ fn iri(text: &str) -> Iri {
 
 const DOCS: &str = "stratum/docs";
 const PRODUCER: &str = "pf/docs";
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_core::datatype::XSD_INTEGER;
 
 /// The needle this file plans with. It carries a predicate, so the producer's
 /// declaration can accept it by shape and place it into an argument position.

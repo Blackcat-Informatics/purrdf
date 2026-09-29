@@ -85,11 +85,11 @@ use std::ops::ControlFlow;
 
 /// The `xsd:string` IRI; a literal carrying it (with no language) serializes
 /// bare (no `datatype` attribute), matching the JSON/Turtle abbreviation.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_core::datatype::XSD_STRING;
 
 /// The ITS (Internationalization Tag Set) namespace IRI the SPARQL 1.2 Query
 /// Results specification uses for the `dir` attribute — see the module docs.
-const ITS_NS: &str = "http://www.w3.org/2005/11/its";
+use purrdf_core::vocab::its::NS as ITS_NS;
 
 /// Whether `result` carries at least one directional literal anywhere in its
 /// bound terms (recursing into triple-term components). Determines whether
@@ -467,8 +467,8 @@ mod tests {
     use purrdf_core::TermBox;
     use purrdf_core::{BlankScope, RdfDatasetBuilder, RdfQuad, RdfTerm, RdfTextDirection};
 
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
-    const RDF_LANGSTRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+    use purrdf_core::datatype::XSD_INTEGER;
+    use purrdf_core::vocab::rdf::LANG_STRING as RDF_LANGSTRING;
 
     /// A namespace used by the populated-provenance tests below — caller-chosen,
     /// `example.org`-scoped per repository convention (never a fabricated

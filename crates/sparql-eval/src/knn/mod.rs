@@ -184,12 +184,12 @@ const KNN_MODE: &str = "fbbf";
 const KNN_MEMBERSHIP_MODE: &str = "bbff";
 
 /// `xsd:double`, the datatype every emitted distance carries.
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+use purrdf_xsd::datatype::XSD_DOUBLE;
 
 /// `xsd:integer`, the datatype the count position carries in a membership answer. The
 /// ranked path never mints one: it echoes the caller's own count term verbatim, datatype
 /// and all. See [`universe_size`].
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// The domain separator every [`EmbeddingSpace`] generation opens with, so this
 /// digest can never equal a digest of another kind that happens to fold a

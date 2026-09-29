@@ -61,12 +61,12 @@ use crate::{RdfDiagnostic, RdfLiteral, RdfLocation, RdfQuad, RdfSeverity, RdfTer
 // Vocabulary
 // --------------------------------------------------------------------------- //
 
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
-const OWL_AXIOM: &str = "http://www.w3.org/2002/07/owl#Axiom";
-const OWL_ANNOTATED_SOURCE: &str = "http://www.w3.org/2002/07/owl#annotatedSource";
-const OWL_ANNOTATED_PROPERTY: &str = "http://www.w3.org/2002/07/owl#annotatedProperty";
-const OWL_ANNOTATED_TARGET: &str = "http://www.w3.org/2002/07/owl#annotatedTarget";
-const XSD_DOUBLE: &str = "http://www.w3.org/2001/XMLSchema#double";
+use purrdf_iri::vocab::owl::ANNOTATED_PROPERTY as OWL_ANNOTATED_PROPERTY;
+use purrdf_iri::vocab::owl::ANNOTATED_SOURCE as OWL_ANNOTATED_SOURCE;
+use purrdf_iri::vocab::owl::ANNOTATED_TARGET as OWL_ANNOTATED_TARGET;
+use purrdf_iri::vocab::owl::AXIOM as OWL_AXIOM;
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
+use purrdf_xsd::datatype::XSD_DOUBLE;
 
 /// The `https://w3id.org/sssom/` metadata namespace.
 const SSSOM_NS: &str = "https://w3id.org/sssom/";

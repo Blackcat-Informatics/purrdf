@@ -11,7 +11,7 @@ use serde::{Deserialize, Serialize};
 use super::util::canonical_json_bounded;
 use super::{ProjectionError, ProjectionLimits, validate_absolute_iri};
 
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+use purrdf_iri::vocab::rdf::LANG_STRING as RDF_LANG_STRING;
 
 /// Portable RDF 1.2 literal base direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -345,7 +345,7 @@ impl ProjectionTerm {
                 }
                 if let Some(language) = language {
                     validate_language_tag(language)?;
-                    if language != &language.to_lowercase() {
+                    if !langtag::is_identity_folded(language) {
                         return Err(ProjectionError::term(
                             "language tag must use lowercase canonical form",
                         ));

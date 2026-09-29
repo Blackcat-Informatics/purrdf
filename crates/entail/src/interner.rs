@@ -178,7 +178,7 @@ mod tests {
     /// The predicate the round-trip fixtures hang their object term under.
     const EX_HOLDS: &str = "http://example.org/holds";
     /// RDF 1.2 datatype for language-tagged literals with a base direction.
-    const RDF_DIR_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#dirLangString";
+    use purrdf_iri::vocab::rdf::DIR_LANG_STRING as RDF_DIR_LANG_STRING;
 
     /// A triple term over three IRIs, by value.
     fn quoted(s: &str, p: &str, o: &str) -> TermValue {

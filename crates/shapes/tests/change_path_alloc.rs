@@ -291,23 +291,23 @@ fn measure_min<T>(mut operation: impl FnMut() -> T) -> (T, Measurement) {
 const NS: &str = "http://example.org/purrdf/change-path#";
 
 /// `rdf:type`, spelled out because the fixtures are built id-natively.
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 
 /// `rdf:first`, the member cell of a SHACL list.
-const RDF_FIRST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#first";
+use purrdf_iri::vocab::rdf::FIRST as RDF_FIRST;
 
 /// `rdf:rest`, the tail cell of a SHACL list.
-const RDF_REST: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#rest";
+use purrdf_iri::vocab::rdf::REST as RDF_REST;
 
 /// `rdf:nil`, the empty SHACL list.
-const RDF_NIL: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#nil";
+use purrdf_iri::vocab::rdf::NIL as RDF_NIL;
 
 /// `rdfs:subClassOf`, which the seam fixture needs to reach the class-membership
 /// index at all; see [`seam_dataset`].
-const RDFS_SUBCLASS_OF: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
+use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as RDFS_SUBCLASS_OF;
 
 /// `xsd:integer`, for the numeric-range and datatype cases.
-const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+use purrdf_xsd::datatype::XSD_INTEGER;
 
 /// The class every generated focus node carries and every generated shape targets.
 const FOCUS_CLASS: &str = "Focus";

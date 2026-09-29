@@ -4033,7 +4033,7 @@ mod tests {
             Variable,
         };
 
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         let mut b = RdfDatasetBuilder::new();
         let name = b.intern_iri("http://ex/name");
@@ -4201,7 +4201,7 @@ mod tests {
             Expression, NamedNode, NamedNodePattern, TermPattern, TriplePattern, Variable,
         };
 
-        const XINT: &str = "http://www.w3.org/2001/XMLSchema#integer";
+        use purrdf_xsd::datatype::XSD_INTEGER as XINT;
 
         // :a :knows :b (age 50) — passes the OPTIONAL filter (age > 40).
         // :a :knows :c (age 10) — right row exists but fails the filter ⇒ left-alone.
@@ -4500,8 +4500,8 @@ mod term_value_walk_tests {
     use std::sync::Arc;
 
     const EX: &str = "http://example.org/";
-    const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-    const XSD_INTEGER: &str = "http://www.w3.org/2001/XMLSchema#integer";
+    use purrdf_xsd::datatype::XSD_INTEGER;
+    use purrdf_xsd::datatype::XSD_STRING;
 
     /// A deterministic choice sequence.
     struct Choices {

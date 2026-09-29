@@ -160,7 +160,7 @@ use crate::iri_escape::push_escaped;
 use purrdf_iri::terminals::{ByteClass, byte_run_count};
 
 /// `xsd:string` — the implicit datatype that N-Quads writes bare (no `^^<…>`).
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// The IRI namespace the RDF 1.2 overlay lowers into, reserved by this profile.
 ///
@@ -190,7 +190,7 @@ const SENTINEL_ANNOTATION_GRAPH: &str = "urn:purrdf:rdfc:annotation";
 /// IRI at all — so it is rendered as literal text ([`Component::FlatReifier`]) rather
 /// than resolved through an interned [`TermId`], the same mechanism
 /// [`SENTINEL_REIFIES`] itself already uses for the overlay shape.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
 /// The canonical blank-label prefix (`c14n0`, `c14n1`, …) mandated by RDFC-1.0.
 const CANON_PREFIX: &str = "c14n";
 /// The temporary-issuer prefix used inside the n-degree search (RDFC-1.0 §4.5/4.8).
@@ -1058,10 +1058,7 @@ impl<R: FnMut(RelabelSource<'_>, TermId)> TermMapper for CanonicalRelabeler<'_, 
 
     fn record_reifier_predicate(&mut self, builder: &super::builder::RdfDatasetBuilder) {
         if let Some(target) = builder.reifies_predicate() {
-            (self.record)(
-                RelabelSource::IndirectIri("http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies"),
-                target,
-            );
+            (self.record)(RelabelSource::IndirectIri(RDF_REIFIES), target);
         }
     }
 }

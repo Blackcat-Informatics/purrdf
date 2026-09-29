@@ -3263,7 +3263,7 @@ pub fn project_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
     for reifier in data.owned_reifiers() {
         builder.push_owned_quad(&RdfQuad::new(
             reifier.reifier,
-            RDF_REIFIES,
+            crate::model::rdf::REIFIES,
             RdfTerm::triple(reifier.statement),
         ));
     }
@@ -3284,10 +3284,6 @@ pub fn project_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
 pub(crate) fn shacl_dataset_from_dataset(data: &RdfDataset) -> Result<Arc<RdfDataset>, String> {
     project_dataset(data)
 }
-
-/// The `rdf:reifies` predicate IRI, used to project reifier bindings into the
-/// quad table so SHACL's reifier-shape lookups can find them.
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
 
 /// Parse a SHACL shapes graph from a Turtle string, resolving its relative IRI
 /// references against `base`.

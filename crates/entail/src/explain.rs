@@ -1058,10 +1058,10 @@ mod tests {
     use super::*;
     use purrdf_core::RdfDatasetBuilder;
 
-    /// `rdfs:subClassOf`.
-    const SUB: &str = "http://www.w3.org/2000/01/rdf-schema#subClassOf";
     /// `rdf:type`.
-    const TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+    use purrdf_iri::vocab::rdf::TYPE;
+    /// `rdfs:subClassOf`.
+    use purrdf_iri::vocab::rdfs::SUB_CLASS_OF as SUB;
     /// A fixture class.
     const CAT: &str = "http://example.org/Cat";
     /// A fixture class.

@@ -342,10 +342,7 @@ fn attr_local<'a>(element: Node<'a, '_>, local: &str) -> Option<&'a str> {
 fn attr_xml_lang<'a>(element: Node<'a, '_>) -> Option<&'a str> {
     element
         .attributes()
-        .find(|attr| {
-            attr.name() == "lang"
-                && attr.namespace() == Some("http://www.w3.org/XML/1998/namespace")
-        })
+        .find(|attr| attr.name() == "lang" && attr.namespace() == Some(purrdf_iri::vocab::xml::NS))
         .map(|attr| attr.value())
 }
 

@@ -15,7 +15,7 @@ use purrdf_shex::{
 };
 
 const P1: &str = "http://a.example/p1";
-const RDF_TYPE: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#type";
+use purrdf_iri::vocab::rdf::TYPE as RDF_TYPE;
 const CLASS: &str = "http://a.example/C";
 
 fn iri(s: &str) -> TermValue {

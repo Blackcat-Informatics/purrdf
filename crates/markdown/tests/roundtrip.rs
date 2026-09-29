@@ -16,6 +16,7 @@
 //! plain literals exactly the content, split chains present in the
 //! graphs that claim to exercise them.
 
+use purrdf_core::datatype::XSD_STRING;
 use purrdf_core::ir::RdfDataset;
 use purrdf_markdown::{
     Claim, ClaimKind, DecodeError, Profile, SourceDocument, Vocabulary, decode_document,
@@ -25,7 +26,6 @@ use purrdf_rdf::parse_dataset;
 
 const DOC_ID: &str = "https://example.org/doc/roundtrip";
 const SLICE_BASE: &str = "https://example.org/slice/";
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
 
 fn v() -> Vocabulary {
     Vocabulary::under(SLICE_BASE).expect("a vocabulary")

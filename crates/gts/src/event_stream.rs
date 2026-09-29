@@ -70,16 +70,7 @@ use crate::model::{ByteRange, Diagnostic, OpaqueNode, Signature, StreamableInfo,
 use crate::reader::{FrameContext, ReadOptions, StreamingReadResult, read_to_sink_with_options};
 use crate::segment_decode::{ResolvedSink, SegmentResolver};
 
-/// Well-known `xsd:string` datatype IRI implied by a plain literal (RDF §7.1).
-///
-/// This is RDF's own datatype IRI, mirrored from
-/// `crates/rdf/src/native_codecs/hextuples.rs`; it is NOT fabricated PurRDF
-/// vocabulary.
-const XSD_STRING: &str = "http://www.w3.org/2001/XMLSchema#string";
-/// Well-known `rdf:langString` datatype IRI implied by a language tag (RDF §7.1).
-///
-/// RDF's own datatype IRI (see [`XSD_STRING`]), not fabricated vocabulary.
-const RDF_LANG_STRING: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#langString";
+use purrdf_xsd::datatype::XSD_STRING;
 
 /// A GTS-aware event sink: an [`RdfEventSink`] that also receives per-frame GTS
 /// provenance and the GTS-specific frames that have no neutral RDF event.
@@ -317,10 +308,9 @@ impl<'s> EventEmitter<'s> {
                     EventError::message("GTS literal datatype must resolve to an IRI")
                 })
             }
-            None if lang.is_some() && direction.is_some() => {
-                Ok(crate::model::RDF_DIR_LANG_STRING.to_owned())
+            None if lang.is_some() => {
+                Ok(purrdf_iri::vocab::language_datatype_iri(direction.is_some()).to_owned())
             }
-            None if lang.is_some() => Ok(RDF_LANG_STRING.to_owned()),
             None => Ok(XSD_STRING.to_owned()),
         }
     }
@@ -337,13 +327,9 @@ fn parse_direction(
 ) -> Result<Option<TextDirection>, EventError> {
     let parsed = match direction {
         None => return Ok(None),
-        Some("ltr") => TextDirection::Ltr,
-        Some("rtl") => TextDirection::Rtl,
-        Some(other) => {
-            return Err(EventError::message(format!(
-                "unrecognized GTS literal base direction {other:?}"
-            )));
-        }
+        Some(token) => TextDirection::from_token(token).ok_or_else(|| {
+            EventError::message(format!("unrecognized GTS literal base direction {token:?}"))
+        })?,
     };
     if lang.is_none_or(str::is_empty) {
         return Err(EventError::message(

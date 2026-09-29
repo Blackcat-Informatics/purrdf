@@ -15,7 +15,7 @@ use purrdf_core::sink::TextOut;
 use purrdf_core::terminals::{ByteClass, byte_run_count};
 use purrdf_iri::BaseIri;
 
-use crate::{FastHasher, FastMap, RdfDiagnostic};
+use crate::{FastHasher, FastMap, RdfDiagnostic, RdfTextDirection};
 
 /// The kind of a serialization term.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -274,13 +274,13 @@ pub(crate) fn deterministic_blank_label(counter: usize) -> String {
     deterministic_blank_label_with_prefix("gts_", counter)
 }
 
-const RDF_NS: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#";
-const XSD_NS: &str = "http://www.w3.org/2001/XMLSchema#";
-const RDF_REIFIES: &str = "http://www.w3.org/1999/02/22-rdf-syntax-ns#reifies";
+use purrdf_iri::vocab::rdf::NS as RDF_NS;
+use purrdf_iri::vocab::rdf::REIFIES as RDF_REIFIES;
+use purrdf_xsd::datatype::XSD_NS;
 
 /// Return whether `direction` is a valid RDF 1.2 base direction token.
 fn is_literal_direction(direction: &str) -> bool {
-    matches!(direction, "ltr" | "rtl")
+    RdfTextDirection::from_str_token(direction).is_some()
 }
 
 /// The bytes that can begin a scalar a literal lexical form escapes, as a class
