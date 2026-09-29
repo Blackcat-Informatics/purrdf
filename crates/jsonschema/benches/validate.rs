@@ -118,6 +118,22 @@ fn bench_is_valid(c: &mut Criterion) {
                 .count()
         });
     });
+    // One recursive subschema per level of a 1,000-deep instance: the cost
+    // of the evaluator's own bookkeeping per level of nesting.
+    let tree = Schema::from_document(
+        &set,
+        "https://example.org/tree.json",
+        json!({"type": "object", "properties": {"child": {"$ref": "#"}}}),
+    )
+    .expect("compiles");
+    let mut deep = json!({});
+    for _ in 0..1_000 {
+        deep = json!({"child": deep});
+    }
+    group.throughput(Throughput::Elements(1_000));
+    group.bench_function("tree_1000", |b| {
+        b.iter(|| tree.is_valid(black_box(&deep)).expect("evaluation"));
+    });
     group.finish();
 }
 

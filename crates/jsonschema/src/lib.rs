@@ -103,6 +103,13 @@
 //!   backreferences and scoped modifiers. Unicode properties use vendored
 //!   Unicode 17 ranges. [`Schema::is_valid`] and [`Schema::evaluate`] return
 //!   [`EvaluationError`] if matching exhausts its resource budget.
+//! * **Depth costs memory, not stack.** Subschemas in progress live on a heap
+//!   work stack, and `const`, `enum` and `uniqueItems` compare and hash values
+//!   on one too, so an instance of any nesting depth is evaluated without
+//!   growing the thread's stack. More than [`MAX_REF_CHAIN`] references
+//!   followed in a row at one instance location stops with an
+//!   [`EvaluationError`] naming the [`EvaluationCause`], never a guessed
+//!   verdict.
 //! * **`format` is an annotation** by default, as every supported draft
 //!   specifies. [`Registry::set_format_assertion`] makes every format the
 //!   dialect defines assert — `hostname`, `idn-hostname` and `idn-email`
@@ -140,11 +147,12 @@ mod schema;
 mod validate;
 
 pub use dialect::Dialect;
-pub use error::{EvaluationError, SchemaError};
+pub use error::{EvaluationCause, EvaluationError, SchemaError};
 pub use meta_set::Metaschemas;
 pub use output::{Output, OutputFormat, OutputUnit};
 pub use registry::{DRAFT_2020_12, Registry};
 pub use schema::Schema;
+pub use validate::MAX_REF_CHAIN;
 
 impl Registry {
     /// Compile the schema at the absolute URI `uri`. A fragment selects a

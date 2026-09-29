@@ -7,7 +7,8 @@
 use std::sync::OnceLock;
 
 use purrdf_jsonschema::{
-    Dialect, Metaschemas, OutputFormat, Registry, Schema, SchemaError,
+    Dialect, EvaluationCause, MAX_REF_CHAIN, Metaschemas, OutputFormat, Registry, Schema,
+    SchemaError,
     ecma::{MatchLimits, PatternError},
 };
 use serde_json::{Value, json};
@@ -526,7 +527,10 @@ fn matcher_exhaustion_is_an_error_not_an_invalid_verdict() {
         .is_valid_with_limits(&input, limits)
         .expect_err("budget exceeded");
     assert!(error.keyword_location.ends_with("/pattern"));
-    assert!(matches!(error.cause, PatternError::Resource { .. }));
+    assert!(matches!(
+        error.cause,
+        EvaluationCause::Pattern(PatternError::Resource { .. })
+    ));
     assert!(schema.evaluate_with_limits(&input, limits).is_err());
 }
 
@@ -542,7 +546,179 @@ fn overdeep_regex_format_is_a_resource_error() {
         .expect("schema");
     let pattern = format!("{}x{}", "(".repeat(251), ")".repeat(251));
     let error = schema.is_valid(&json!(pattern)).expect_err("depth limit");
-    assert!(matches!(error.cause, PatternError::Resource { .. }));
+    assert!(matches!(
+        error.cause,
+        EvaluationCause::Pattern(PatternError::Resource { .. })
+    ));
+}
+
+/// A schema whose root starts a chain of `links` references, each to the
+/// next definition, ending at a definition that requires a string.
+fn reference_chain(links: usize) -> Value {
+    let mut definitions = serde_json::Map::new();
+    for link in 1..links {
+        definitions.insert(
+            format!("d{link}"),
+            json!({"$ref": format!("#/$defs/d{}", link + 1)}),
+        );
+    }
+    definitions.insert(format!("d{links}"), json!({"type": "string"}));
+    json!({"$ref": "#/$defs/d1", "$defs": definitions})
+}
+
+#[test]
+fn a_reference_chain_past_its_bound_stops_and_one_at_the_bound_validates() {
+    let at_bound = compile(reference_chain(MAX_REF_CHAIN)).expect("schema");
+    assert!(at_bound.is_valid(&json!("text")).expect("evaluation"));
+    assert!(!at_bound.is_valid(&json!(1)).expect("evaluation"));
+    assert!(
+        at_bound
+            .evaluate(&json!("text"))
+            .expect("evaluation")
+            .is_valid()
+    );
+
+    let past = compile(reference_chain(MAX_REF_CHAIN + 1)).expect("schema");
+    let error = past.is_valid(&json!("text")).expect_err("chain bound");
+    assert_eq!(error.cause, EvaluationCause::ReferenceChain);
+    assert!(error.keyword_location.ends_with("/$ref"), "{error}");
+    assert_eq!(error.instance_location, "");
+    assert_eq!(
+        past.evaluate(&json!("text"))
+            .expect_err("chain bound")
+            .cause,
+        EvaluationCause::ReferenceChain
+    );
+}
+
+#[test]
+fn descending_into_the_instance_starts_a_new_reference_chain() {
+    // Every level of the instance follows one reference, so a chain never
+    // grows past one link however deep the instance is.
+    let schema = compile(json!({
+        "type": "array",
+        "items": {"$ref": "#"}
+    }))
+    .expect("schema");
+    let mut instance = json!([]);
+    for _ in 0..2 * MAX_REF_CHAIN {
+        instance = Value::Array(vec![instance]);
+    }
+    assert!(schema.is_valid(&instance).expect("evaluation"));
+}
+
+/// `depth` single-property objects nested inside one another.
+fn tree(depth: usize) -> Value {
+    let mut instance = json!({});
+    for _ in 0..depth {
+        let mut node = serde_json::Map::new();
+        node.insert("child".to_owned(), instance);
+        instance = Value::Object(node);
+    }
+    instance
+}
+
+#[test]
+fn a_recursive_schema_validates_a_thousand_deep_instance_on_a_small_stack() {
+    let schema = compile(json!({
+        "type": "object",
+        "properties": {"child": {"$ref": "#"}},
+        "unevaluatedProperties": false
+    }))
+    .expect("schema");
+    // 256 KiB of stack: the evaluator keeps its subschemas in progress on the
+    // heap, so an instance's depth must not demand machine stack.
+    let evaluation = std::thread::Builder::new()
+        .stack_size(256 * 1024)
+        .spawn(move || {
+            let deep = tree(1_000);
+            assert!(schema.is_valid(&deep).expect("evaluation"));
+            let output = schema.evaluate(&deep).expect("evaluation");
+            assert!(output.is_valid());
+            drop(output);
+
+            // The verdict is real, not a default: a wrong leaf a thousand levels
+            // down fails the whole instance, and says where.
+            let mut bad = json!({"child": 1});
+            for _ in 0..999 {
+                let mut node = serde_json::Map::new();
+                node.insert("child".to_owned(), bad);
+                bad = Value::Object(node);
+            }
+            assert!(!schema.is_valid(&bad).expect("evaluation"));
+            let output = schema.evaluate(&bad).expect("evaluation");
+            let deepest = output
+                .errors()
+                .map(|unit| unit.instance_location.len())
+                .max()
+                .expect("errors");
+            assert_eq!(deepest, "/child".len() * 1_000);
+        });
+    evaluation
+        .expect("thread")
+        .join()
+        .expect("the evaluation completes on a small stack");
+}
+
+/// `depth` arrays nested inside one another around `1`.
+fn nested(depth: usize) -> Value {
+    let mut value = json!(1);
+    for _ in 0..depth {
+        value = Value::Array(vec![value]);
+    }
+    value
+}
+
+/// A one-member object holding `value` under `keyword`.
+fn keyword(keyword: &str, value: Value) -> Value {
+    let mut schema = serde_json::Map::new();
+    schema.insert(keyword.to_owned(), value);
+    Value::Object(schema)
+}
+
+#[test]
+fn const_enum_and_unique_items_decide_ten_thousand_deep_values() {
+    // Built level by level and never passed through `json!`, `clone` or
+    // serialization, which recurse per level on their own.
+    const DEPTH: usize = 10_000;
+    let schemas = [
+        keyword("const", nested(DEPTH)),
+        keyword("enum", Value::Array(vec![json!(0), nested(DEPTH)])),
+    ];
+    for document in schemas {
+        let schema = compile(document).expect("schema");
+        assert!(schema.is_valid(&nested(DEPTH)).expect("evaluation"));
+        // A leaf a level shallower, or a different leaf at the same depth,
+        // is a different value.
+        assert!(!schema.is_valid(&nested(DEPTH - 1)).expect("evaluation"));
+        let mut other = json!(2);
+        for _ in 0..DEPTH {
+            other = Value::Array(vec![other]);
+        }
+        assert!(!schema.is_valid(&other).expect("evaluation"));
+    }
+
+    let unique = compile(json!({"uniqueItems": true})).expect("schema");
+    assert!(
+        !unique
+            .is_valid(&Value::Array(vec![nested(DEPTH), nested(DEPTH)]))
+            .expect("evaluation")
+    );
+    assert!(
+        unique
+            .is_valid(&Value::Array(vec![nested(DEPTH), nested(DEPTH - 1)]))
+            .expect("evaluation")
+    );
+    // Past sixteen items the check buckets by hash before comparing.
+    let mut items: Vec<Value> = (0..20).map(|n| json!(n)).collect();
+    items.push(nested(DEPTH));
+    assert!(
+        unique
+            .is_valid(&Value::Array(items.clone()))
+            .expect("evaluation")
+    );
+    items.push(nested(DEPTH));
+    assert!(!unique.is_valid(&Value::Array(items)).expect("evaluation"));
 }
 
 #[test]

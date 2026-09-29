@@ -10,6 +10,13 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Added
 
+- **jsonschema:** `MAX_REF_CHAIN` (250), the longest run of `$ref`,
+  `$dynamicRef` and `$recursiveRef` resolutions followed at one instance
+  location. Past it the evaluation stops with an `EvaluationError` whose new
+  `EvaluationCause` names the bound (`ReferenceChain`, or `Pattern` for the
+  matcher budget), never a guessed verdict. `ecma::MAX_GROUP_NESTING` names the
+  pattern parser's group-nesting limit.
+- **testkit:** `prop::parse_cases`, the parser behind `PURRDF_PROP_CASES`.
 - **iri:** `purrdf_iri::idna`, IDNA2008 without third-party code: RFC 5891
   label validation over the RFC 5892 derived property, the Appendix A
   contextual rules, the RFC 5893 Bidi rule, RFC 3492 Punycode between A-labels
@@ -1069,6 +1076,19 @@ bump is bugfix-only. The C ABI (`purrdf.h`) is versioned separately and remains
 
 ### Changed
 
+- **jsonschema:** `EvaluationError::cause` is an `EvaluationCause` rather than
+  a `PatternError`; a matcher budget error is `EvaluationCause::Pattern`.
+- **jsonschema:** the evaluator keeps the subschemas it is evaluating on a heap
+  work stack instead of the call stack, so an instance's nesting depth costs
+  memory, not thread stack: a 1,000-level recursive instance validates on a
+  256 KiB thread (it needed more than 4 MiB before). `const`, `enum` and
+  `uniqueItems` compare and hash values on a heap stack too, so values nested
+  100,000 levels deep compare on a 256 KiB thread. The keyword named by an
+  `EvaluationError` is rendered only when one is raised; `is_valid` over the
+  `validate` bench's 1k instances takes 345 µs where it took 682 µs, and the new
+  `is_valid/tree_1000` bench measures the deep case.
+- **jsonschema:** a regex-parser resource error for too-deep group nesting
+  reads `group nesting exceeds 250` wherever it is raised.
 - **text:** the analyzer profile is `purrdf-compatibility-caseless-uax29-v2`.
   Case folding moves from `CaseFolding.txt` 16.0.0 to 17.0.0, level with the
   normalization and word-break tables, and the word filter's alphanumeric
@@ -1578,6 +1598,13 @@ Peak allocator bytes, from the deterministic counting allocator rather than timi
 
 ### Fixed
 
+- **jsonschema:** a pattern whose groups nest within the parser's limit but
+  wrap repetitions, alternations and sequences between them (for example 250
+  levels of `(?:a|…b)*`) is compiled; it was refused as a resource error
+  because the translator counted every expression node as a nesting level.
+- **testkit:** `PURRDF_PROP_SEED` and `PURRDF_PROP_CASES` refuse a sign: `+5`,
+  `0x+ff` and `-0xff` were accepted by the standard integer parsers' leading
+  `+`; `5` and `0xff` still parse.
 - **retrieval:** the term decoder that reads an entity seed and a fused candidate's
   canonical lexical stepped over the character before a datatype IRI without checking
   that it was `<`. Text cut off after `^^` panicked past the end of the input, and
