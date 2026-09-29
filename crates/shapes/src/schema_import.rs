@@ -3310,9 +3310,16 @@ fn case_insensitive_tag(value: &str) -> Option<String> {
         } else {
             let escape = rest.strip_prefix("\\u{")?;
             let end = escape.find('}')?;
-            output.push(char::from_u32(
-                u32::from_str_radix(&escape[..end], 16).ok()?,
-            )?);
+            // ECMA-262 `\u{ CodePoint }`: one or more hex digits, no sign.
+            let digits = &escape[..end];
+            if digits.is_empty() {
+                return None;
+            }
+            let code = digits.bytes().try_fold(0_u32, |value, byte| {
+                let digit = purrdf_hash::hex::nibble(byte)?;
+                value.checked_mul(16)?.checked_add(u32::from(digit))
+            })?;
+            output.push(char::from_u32(code)?);
             rest = &escape[end + 1..];
         }
     }
@@ -3588,6 +3595,18 @@ fn validate_unique_string_array(value: &Value, path: &str) -> Result<(), SchemaI
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn a_signed_code_point_escape_is_refused() {
+        assert_eq!(case_insensitive_tag("\\u{+41}"), None);
+        assert_eq!(case_insensitive_tag("\\u{}"), None);
+    }
+
+    #[test]
+    fn an_unsigned_code_point_escape_still_decodes() {
+        assert_eq!(case_insensitive_tag("\\u{41}").as_deref(), Some("A"));
+        assert_eq!(case_insensitive_tag("\\u{0041}-1").as_deref(), Some("A-1"));
+    }
 
     const XSD: &str = "http://www.w3.org/2001/XMLSchema#";
 

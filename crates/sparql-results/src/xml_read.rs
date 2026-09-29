@@ -759,14 +759,28 @@ fn unescape(s: &str) -> Result<String, Error> {
             "quot" => out.push('"'),
             "apos" => out.push('\''),
             _ if entity.starts_with("#x") || entity.starts_with("#X") => {
-                let code = u32::from_str_radix(&entity[2..], 16)
-                    .map_err(|_| fmt("bad hex character reference"))?;
+                // `[0-9a-fA-F]+`: a sign is not a digit.
+                let digits = &entity[2..];
+                let code = (!digits.is_empty())
+                    .then_some(digits)
+                    .and_then(|digits| {
+                        digits.bytes().try_fold(0_u32, |value, byte| {
+                            let digit = purrdf_hash::hex::nibble(byte)?;
+                            value.checked_mul(16)?.checked_add(u32::from(digit))
+                        })
+                    })
+                    .ok_or_else(|| fmt("bad hex character reference"))?;
                 out.push(char::from_u32(code).ok_or_else(|| fmt("invalid character reference"))?);
             }
             _ if entity.starts_with('#') => {
-                let code = entity[1..]
-                    .parse::<u32>()
-                    .map_err(|_| fmt("bad character reference"))?;
+                // `[0-9]+`: a sign is not a digit.
+                let digits = &entity[1..];
+                let code = digits
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit())
+                    .then(|| digits.parse::<u32>().ok())
+                    .flatten()
+                    .ok_or_else(|| fmt("bad character reference"))?;
                 out.push(char::from_u32(code).ok_or_else(|| fmt("invalid character reference"))?);
             }
             other => return Err(fmt(&format!("unknown entity &{other};"))),
@@ -783,6 +797,22 @@ mod tests {
     use crate::xml::to_xml;
     use purrdf_core::SparqlResult;
     use purrdf_core::TermBox;
+
+    #[test]
+    fn a_signed_character_reference_is_refused() {
+        for text in ["&#x+41;", "&#+65;", "&#x-41;", "&#-65;"] {
+            assert!(unescape(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn an_unsigned_character_reference_still_decodes() {
+        // The decimal form is spelled through `format!` so the source holds no
+        // `#` followed by digits.
+        for text in ["&#x41;".to_owned(), format!("&#{};", 65)] {
+            assert_eq!(unescape(&text).expect("a lawful reference"), "A", "{text}");
+        }
+    }
 
     /// Provenance round-trip: what [`crate::xml::to_xml`] writes under a namespace,
     /// [`provenance_from_xml`] reads back — the writer no longer emits

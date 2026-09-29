@@ -678,8 +678,13 @@ impl<'a> Cursor<'a> {
             .rest()
             .get(2..2 + width)
             .ok_or_else(|| format!("truncated escape at byte {}", self.position))?;
-        let code_point = u32::from_str_radix(digits, 16)
-            .map_err(|_| format!("`{digits}` is not hexadecimal at byte {}", self.position))?;
+        // `HEX ::= [0-9] | [A-F] | [a-f]`, every digit: a sign is not a digit.
+        let code_point = digits
+            .bytes()
+            .try_fold(0_u32, |value, byte| {
+                purrdf_hash::hex::nibble(byte).map(|digit| (value << 4) | u32::from(digit))
+            })
+            .ok_or_else(|| format!("`{digits}` is not hexadecimal at byte {}", self.position))?;
         let resolved = char::from_u32(code_point)
             .ok_or_else(|| format!("`{digits}` is not a Unicode scalar value"))?;
         self.position += 2 + width;
@@ -747,6 +752,24 @@ mod tests {
 
     fn rendered(value: &TermValue) -> String {
         sparql_term(value).expect("the fixture value renders")
+    }
+
+    #[test]
+    fn a_signed_uchar_is_refused() {
+        for text in ["\"\\u+041\"", "\"\\U+0000041\""] {
+            assert!(decode_term(text).is_err(), "{text}");
+        }
+    }
+
+    #[test]
+    fn an_unsigned_uchar_still_decodes() {
+        for text in ["\"\\u0041\"", "\"\\U00000041\""] {
+            assert_eq!(
+                decode_term(text).expect("a lawful UCHAR"),
+                TermValue::simple_literal("A"),
+                "{text}"
+            );
+        }
     }
 
     #[test]
@@ -1183,8 +1206,7 @@ mod escape_frozen_vectors {
     /// Whether this copy is known to answer `input` differently from the vectors.
     fn skipped(input: &str) -> bool {
         let _ = input;
-        // `u32::from_str_radix` admits a leading `+`, which UCHAR's HEX does not.
-        input.as_bytes().get(2) == Some(&b'+')
+        false
     }
 
     #[test]

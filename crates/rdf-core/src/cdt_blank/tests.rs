@@ -6,8 +6,8 @@
 //! assertion it reproduces at the lexical layer.
 
 use super::{
-    BlankBinding, CdtBlankError, bind_cdt_blank_labels, cdt_embedded_blanks, is_cdt_datatype,
-    rewrite_cdt_blank_terms,
+    BlankBinding, CdtBlankError, bind_cdt_blank_labels, cdt_embedded_blanks, decode_escape,
+    is_cdt_datatype, rewrite_cdt_blank_terms, unescape_iri,
 };
 use crate::blank_label::{LabelAlphabet, encode_blank_label};
 use crate::ir::term::BlankScope;
@@ -369,4 +369,18 @@ fn rewriting_can_skolemize_an_embedded_blank() {
 fn a_no_op_rewrite_borrows() {
     let out = rewrite_cdt_blank_terms("[_:b, 42]", LIST, &mut |_| None);
     assert!(matches!(out, std::borrow::Cow::Borrowed(_)));
+}
+
+#[test]
+fn a_signed_uchar_is_not_an_escape() {
+    assert_eq!(decode_escape("\\u+041", 0), ('\\', 1));
+    assert_eq!(decode_escape("\\U+0000041", 0), ('\\', 1));
+    assert_ne!(unescape_iri("urn:\\u+041"), "urn:A");
+}
+
+#[test]
+fn an_unsigned_uchar_still_decodes() {
+    assert_eq!(decode_escape("\\u0041", 0), ('A', 6));
+    assert_eq!(decode_escape("\\U00000041", 0), ('A', 10));
+    assert_eq!(unescape_iri("urn:\\u0041"), "urn:A");
 }

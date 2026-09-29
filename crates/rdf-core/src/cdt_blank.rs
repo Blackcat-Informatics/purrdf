@@ -803,7 +803,7 @@ fn unescape_iri(raw: &str) -> Cow<'_, str> {
                 }
             };
             let hex = raw.get(i + 2..i + 2 + width).unwrap_or("");
-            if let Some(ch) = u32::from_str_radix(hex, 16).ok().and_then(char::from_u32) {
+            if let Some(ch) = hex_scalar(hex) {
                 out.push(ch);
             }
             i += 2 + width;
@@ -814,6 +814,19 @@ fn unescape_iri(raw: &str) -> Cow<'_, str> {
         }
     }
     Cow::Owned(out)
+}
+
+/// The scalar a `UCHAR`'s digits name: every byte a `HEX` digit (no sign), the
+/// value a Unicode scalar. An empty digit run names nothing.
+fn hex_scalar(hex: &str) -> Option<char> {
+    if hex.is_empty() {
+        return None;
+    }
+    hex.bytes()
+        .try_fold(0_u32, |value, byte| {
+            purrdf_hash::hex::nibble(byte).map(|digit| (value << 4) | u32::from(digit))
+        })
+        .and_then(char::from_u32)
 }
 
 /// Build the scan region for an embedded composite literal: its content
@@ -867,10 +880,7 @@ fn decode_escape(raw: &str, at: usize) -> (char, usize) {
         Some(marker @ (b'u' | b'U')) => {
             let width = if *marker == b'u' { 4 } else { 8 };
             let hex = raw.get(at + 2..at + 2 + width).unwrap_or("");
-            u32::from_str_radix(hex, 16)
-                .ok()
-                .and_then(char::from_u32)
-                .map_or(('\\', 1), |ch| (ch, 2 + width))
+            hex_scalar(hex).map_or(('\\', 1), |ch| (ch, 2 + width))
         }
         _ => ('\\', 1),
     }
@@ -911,8 +921,7 @@ mod escape_frozen_vectors {
     /// Whether this copy is known to answer `input` differently from the vectors.
     fn skipped(input: &str) -> bool {
         let _ = input;
-        // `u32::from_str_radix` admits a leading `+`, which UCHAR's HEX does not.
-        input.as_bytes().get(2) == Some(&b'+')
+        false
     }
 
     #[test]
